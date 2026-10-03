@@ -6,6 +6,7 @@
 #pragma once
 
 #include "oa/core/world.h"
+#include "oa/data/match_rules.hpp"
 
 #include <cstdint>
 
@@ -80,6 +81,11 @@ struct OrderCursorHooks {
     // Whether the unit has a movement object (Unit.movement, made only for
     // bmcode 1 types). Null reads Unit.movement.
     bool (*movement_object)(void* context, const World& world, const Unit& unit){};
+    /// The rules the match plays by (Match::rules_view); unset, 3.1c's.
+    data::match_rules::MatchRulesView rules{};
+    /// A flyer over an air base shows the load cursor instead of the unload
+    /// one (ui.interface-fixes pad-cursor, a view rule of this machine).
+    bool pad_load_cursor{};
 };
 
 /// Returns the armed order command (Game.pointer_command).
@@ -228,6 +234,10 @@ can_load_unit(const World& world, const Unit& actor, const Unit& target) noexcep
 /// Returns the cursor one actor shows for a command over a target unit and map position.
 ///
 /// The default order re-enters as ATTACK or RECLAIM by context, at most twice.
+/// Rules of hooks.rules that change it: orders.reclaim-command-any-unit makes
+/// the Reclaim command show the reclaim cursor over every unit;
+/// air.no-repair-retreat-flag keeps the Move command's pad cursor from the
+/// aircraft it marks, which then show the load, guard or move cursor.
 ///
 /// @param world world the units live in
 /// @param command armed command
@@ -236,6 +246,10 @@ can_load_unit(const World& world, const Unit& actor, const Unit& target) noexcep
 /// @param position map position under the pointer, 16.16 world coordinates
 /// @param hooks visibility, feature and range services
 /// @return the cursor; lower values take precedence across a selection
+/// @quirk Under orders.reclaim-command-any-unit the Reclaim command shows the
+///        reclaim cursor over any unit for any actor, even one that cannot
+///        reclaim; the click then issues the command, and only reclaimers get
+///        the order.
 [[nodiscard]] OrderCursor order_cursor(
     const World& world,
     OrderCommand command,
@@ -324,6 +338,10 @@ enum class UnitOrder : uint8_t {
 /// Resolves the order one actor takes for a command over a target unit and map position.
 ///
 /// The default order re-enters as ATTACK, RECLAIM or REPAIR by context.
+/// Rules of hooks.rules that change it: orders.resurrector-reclaims-features
+/// makes the Reclaim command reclaim a feature that a resurrector would
+/// otherwise resurrect; air.no-repair-retreat-flag keeps the Move command's
+/// pad landing from the aircraft it marks, which then load, guard or move.
 ///
 /// @param world world the units live in
 /// @param command armed command
@@ -332,6 +350,9 @@ enum class UnitOrder : uint8_t {
 /// @param position map position under the pointer, or null
 /// @param hooks visibility, feature and range services
 /// @return the order, or UnitOrder::none
+/// @quirk air.no-repair-retreat-flag changes the Move command only: the
+///        default order of the right-click interface and the Unload command
+///        still land a marked aircraft on an allied pad.
 [[nodiscard]] UnitOrder unit_order(
     const World& world,
     OrderCommand command,

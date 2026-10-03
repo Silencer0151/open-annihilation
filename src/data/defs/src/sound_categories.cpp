@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/data/defs/sound_categories.hpp"
+#include "oa/data/defs/layout.hpp"
 #include "oa/base/text.hpp"
 
 #include <cstdint>
@@ -94,7 +95,9 @@ bool load_sound_categories(
     table->categories = nullptr;
     table->count = 0;
     char path[path_capacity];
-    build_variant_path(files, path, sizeof path, "gamedata", "sound", "tdf", variant);
+    build_variant_path(
+        files, path, sizeof path, directory_name(DataDirectory::gamedata), "sound", "tdf", variant
+    );
     formats::tdf::Document document;
     formats::tdf::document_init(&document);
     bool ok = load_tdf_file(files, path, &document, nullptr);
@@ -121,7 +124,15 @@ void load_all_sounds(
 ) noexcept {
     cache.clear(cache.context);
     char path[path_capacity];
-    build_variant_path(files, path, sizeof path, "gamedata", "allsound", "TDF", variant);
+    build_variant_path(
+        files,
+        path,
+        sizeof path,
+        directory_name(DataDirectory::gamedata),
+        "allsound",
+        "TDF",
+        variant
+    );
     formats::tdf::Document document;
     formats::tdf::document_init(&document);
     if (load_tdf_file(files, path, &document, nullptr)) {

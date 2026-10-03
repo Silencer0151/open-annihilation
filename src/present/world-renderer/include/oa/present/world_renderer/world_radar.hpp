@@ -160,6 +160,16 @@ struct RadarContactHost {
     /// @param position signed 16.16 world position
     /// @return true when the point is seen
     bool (*point_visible)(void* user, const FixedVec3& position) = nullptr;
+    /// Tests whether a projectile is left off the radar (weapons.no-map-alert).
+    ///
+    /// @param user RadarContactHost::user
+    /// @param shot the projectile
+    /// @return true when it is not drawn; null draws every projectile
+    bool (*projectile_hidden)(void* user, const Projectile& shot) = nullptr;
+    /// Units whose owner allies the viewpoint player are shown as its own
+    /// (ui.allied-unit-display): Player.alliance of the owner, which holds the
+    /// owner itself. False: only the viewpoint player's own units.
+    bool allied_units_shown = false;
 };
 
 /// Composes the final radar image.

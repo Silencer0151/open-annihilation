@@ -83,6 +83,18 @@ int main() {
     long_text[79] = '\0';
     post_message(*w, long_text, 0, 0, sender_none, h);
     CHECK(std::strlen(message_line(w->game, 5)->text) == 0x3f);
+    // A UTF-8 character the 63rd byte would split goes whole: here a
+    // three-byte one from byte 62 on.
+    std::memset(long_text, 'a', 61);
+    std::memcpy(long_text + 61, "\xE4\xB8\xAD\xE6\x97\xA5", 6);
+    long_text[67] = '\0';
+    post_message(*w, long_text, 0, 0, sender_none, h);
+    CHECK(std::strlen(message_line(w->game, 6)->text) == 61);
+    // Bytes of an 8-bit code page are cut at the 63rd byte as before.
+    std::memset(long_text, '\xE9', 70);
+    long_text[70] = '\0';
+    post_message(*w, long_text, 0, 0, sender_none, h);
+    CHECK(std::strlen(message_line(w->game, 7)->text) == 0x3f);
 
     // Wrapping: a space within reach splits after it; otherwise 51 characters.
     World* v = world_create();

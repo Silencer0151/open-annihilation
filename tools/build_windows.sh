@@ -5,8 +5,9 @@
 # Cross-build the project for Windows from macOS or Linux with a mingw-w64
 # cross-compiler: for x86-64, or for 32-bit x86 with
 # OA_MINGW_TRIPLE=i686-w64-mingw32, and with --xp for executables that also
-# run on Windows XP. zlib and SDL3 are built for the target into
-# local/deps/<name> on first use; the tree (or the project that --source
+# run on Windows XP. zlib, SDL3 and FreeType are built for the target into
+# local/deps/<name> on first use, and the text fonts, the same for every
+# target, into local/deps/text-fonts; the tree (or the project that --source
 # names, which adds this one) is configured in build-<name> with
 # cmake/toolchains/<triple>.cmake and every target is compiled. <name> is
 # windows for x86-64 and windows-i686 for 32-bit x86, with -xp added for
@@ -182,6 +183,7 @@ printf 'Preparing Windows dependencies (%s) under %s...\n' "$target" "$deps"
 mkdir -p "$deps"
 printf '%s\n' "$target" >"$deps_record"
 python3 "$repo_dir/tools/bootstrap_windows_deps.py" "${bootstrap_args[@]}"
+python3 "$repo_dir/tools/bootstrap_text_fonts.py" --fonts-only
 
 printf 'Configuring %s (%s, %s)...\n' "$build_dir" "$target" "$build_type"
 cmake -S "$source_dir" -B "$build_dir" ${generator_args[@]+"${generator_args[@]}"} -DCMAKE_TOOLCHAIN_FILE="$toolchain" \

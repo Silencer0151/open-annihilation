@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "oa/data/match_rules.hpp"
 #include "oa/ui/frontend_state/initialization.hpp"
 
 namespace oa::ui::frontend_state::skirmish_ui {
@@ -169,6 +170,13 @@ class Host : public game_entry::SkirmishHost {
     /// @param label "Easy", "Medium" or "Hard".
     /// @param value Second argument, always 1.
     virtual void select_difficulty_label(std::string_view label, int32_t value) = 0;
+
+    /// Returns which of 3.1c's names each difficulty carries (ai.difficulty-names).
+    ///
+    /// @return the names; 3.1c's unless overridden
+    [[nodiscard]] virtual data::match_rules::AiDifficultyNames difficulty_names() const {
+        return {};
+    }
 
     /// Sets a side button's stage.
     ///

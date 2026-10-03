@@ -80,6 +80,18 @@ class NetworkPlay {
     /// their battle room takes the "-t" player timeout either way.
     void net_bind_multiplayer();
 
+    /// Binds what the multiplayer screens and the session read of the
+    /// profile the game plays (Runtime::mod_profile, Runtime::ui_rules): its
+    /// network rules, its setup and team rules, and the battle room buttons
+    /// its display rules add.
+    void bind_profile_rules();
+
+    /// Binds the profile's rules again once they differ from those bound:
+    /// the settings' Developer Mode lays its overrides over the profile as
+    /// the settings are read, after the screens are first bound, and changes
+    /// them while the game runs, outside a match. Run every frame.
+    void follow_profile_rules();
+
     /// Runs one frame of the network match; nothing without an active match.
     ///
     /// While loading it runs the load barrier and finishes the load once the
@@ -92,14 +104,52 @@ class NetworkPlay {
     /// extension's pause_changed); a menu, and a finished game holding on its
     /// outcome until its final economy settles, send no pause: the other
     /// players play on, and the timeouts still drop a player who stops
-    /// answering.
+    /// answering. Each frame of the match also shares the cameras
+    /// (share_cameras).
     void net_frame();
+
+    /// Shares this machine's camera and takes the other machines' cameras
+    /// (ui.camera-sharing): the camera's centre goes to the match, which
+    /// sends it with the recorder's traffic, and the cameras received go to
+    /// the runtime's minimap, camera lock and resource panel.
+    void share_cameras();
 
     /// Runs one simulation tick through the network binding.
     ///
-    /// @return True when the networked binding ran the tick; false without a
-    ///         running (loaded) network match.
+    /// Under the lag guard (network.lag-guard) a step while every other
+    /// player has been silent for the guard's period runs at most once per
+    /// period; a step it holds runs no tick and still counts as the
+    /// binding's.
+    ///
+    /// @return True when the networked binding ran or held the tick; false
+    ///         without a running (loaded) network match.
     bool net_simulation_step();
+
+    /// Returns the wall clock the lag guard measures with.
+    ///
+    /// @return milliseconds on the steady clock
+    [[nodiscard]] static uint32_t lag_guard_clock_ms();
+
+    /// Returns how long the remote players have all been silent.
+    ///
+    /// @return milliseconds since any remote player still in the game was
+    ///         last heard; 0 with none
+    [[nodiscard]] uint32_t net_remote_silence_ms() const;
+
+    /// Shares the Pause key's pause with the other players.
+    ///
+    /// While the lag guard holds the game the key does nothing: the bit the
+    /// engine flipped is put back. Otherwise the pause goes to every player
+    /// (net_match_set_pause), which may keep the game paused under the
+    /// recorder's autopause.
+    ///
+    /// @param paused The pause bit after the key flipped it.
+    void net_pause_key(bool paused);
+
+    /// Tells whether the lag guard holds the game, which keeps the Pause key from working.
+    ///
+    /// @return false without a running network match or with the guard off
+    [[nodiscard]] bool net_lag_guard_closed() const;
 
     /// Tests whether the local player of the active network match only watches.
     ///
@@ -377,6 +427,11 @@ class NetworkPlay {
     std::unique_ptr<DemoState, void (*)(DemoState*) noexcept> demo_{nullptr, destroy_demo_session};
     // The last chat line handed to the match report.
     std::string reported_chat_;
+    // The profile whose rules are bound (bind_profile_rules), null for
+    // 3.1c's, its sim hash, and the battle room buttons bound.
+    const oa::data::mod_profile::ModProfile* bound_profile_ = nullptr;
+    oa::base::sha256::Digest bound_sim_hash_{};
+    uint8_t bound_lobby_buttons_ = 0;
 };
 
 } // namespace oa::app

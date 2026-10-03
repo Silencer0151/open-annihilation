@@ -4,6 +4,7 @@
 // In-game options panel, exit menu, confirmations, restart and settings sheet.
 #include "oa/ui/frontend/ingame_menu.hpp"
 
+#include "oa/data/match_rules/difficulty_names.hpp"
 #include "oa/ui/campaign/frontend_host.hpp"
 #include "oa/ui/campaign/single_player.hpp"
 
@@ -291,7 +292,7 @@ void ingame_enter_restart(Panel& panel, IngameContext& context, std::string_view
     if (context.preferences != nullptr) {
         const auto host = panel_host(panel);
         const auto difficulty = static_cast<int32_t>(context.preferences->difficulty);
-        campaign::show_difficulty(difficulty, &host);
+        campaign::show_difficulty(difficulty, &host, context.difficulty_names);
     }
     panel.dirty = true;
 }
@@ -444,7 +445,16 @@ void ingame_build_game_settings(
         value(allowed[view.watching_allowed ? 1 : 0], y);
     } else {
         label("Difficulty:", y);
-        value(pick(difficulty, 3, view.difficulty), y);
+        value(
+            pick(
+                difficulty,
+                3,
+                static_cast<uint32_t>(data::match_rules::difficulty_name_index(
+                    view.difficulty_names, static_cast<int32_t>(view.difficulty)
+                ))
+            ),
+            y
+        );
     }
     y = static_cast<uint16_t>(y + kSettingsRowStep);
     char map[kControlTextBytes];

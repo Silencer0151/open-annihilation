@@ -34,18 +34,36 @@ void settle_economy_block(oa::UnitEconomy& block, const std::array<float, 10>& r
 }
 } // namespace
 
-void Match::credit_metal(oa::Unit& target, float amount) {
+void Match::credit_metal(
+    oa::Unit& target, float amount, const sim::unit_health::ComputerIncomeScales* scales
+) {
     const auto owner = credit_owner(state(), target.economy);
-    (void)sim::unit_health::credit_metal(
-        target.economy.metal.produced, amount, owner.present, owner.status, state().game.difficulty
-    );
+    auto& produced = target.economy.metal.produced;
+    const auto difficulty = state().game.difficulty;
+    if (scales != nullptr)
+        (void)sim::unit_health::credit_metal(
+            produced, amount, owner.present, owner.status, difficulty, *scales
+        );
+    else
+        (void)sim::unit_health::credit_metal(
+            produced, amount, owner.present, owner.status, difficulty
+        );
 }
 
-void Match::credit_energy(oa::Unit& target, float amount) {
+void Match::credit_energy(
+    oa::Unit& target, float amount, const sim::unit_health::ComputerIncomeScales* scales
+) {
     const auto owner = credit_owner(state(), target.economy);
-    (void)sim::unit_health::credit_energy(
-        target.economy.energy.produced, amount, owner.present, owner.status, state().game.difficulty
-    );
+    auto& produced = target.economy.energy.produced;
+    const auto difficulty = state().game.difficulty;
+    if (scales != nullptr)
+        (void)sim::unit_health::credit_energy(
+            produced, amount, owner.present, owner.status, difficulty, *scales
+        );
+    else
+        (void)sim::unit_health::credit_energy(
+            produced, amount, owner.present, owner.status, difficulty
+        );
 }
 
 void Match::update_player_economy(size_t player_index) {
@@ -54,6 +72,21 @@ void Match::update_player_economy(size_t player_index) {
     const bool owner_present = player.in_use != 0;
     const auto owner_status = player.status;
     const auto difficulty = world.game.difficulty;
+    // Every production credit below scales a computer player's income alike,
+    // energy or metal; a mod's income multipliers replace the scaling.
+    const auto& income = rules().ai.income_multipliers;
+    const auto* production = income.enabled ? &income.production : nullptr;
+    const auto credit = [&](float& accumulator, float amount) {
+        if (production != nullptr)
+            (void)sim::unit_health::credit_metal(
+                accumulator, amount, owner_present, owner_status, difficulty, *production
+            );
+        else
+            (void)sim::unit_health::credit_metal(
+                accumulator, amount, owner_present, owner_status, difficulty
+            );
+    };
+    const bool cloak_after_build = rules().units.init_cloaked_after_build.enabled;
 
     player.metal_storage = 0.0F;
     player.energy_storage = 0.0F;
@@ -77,9 +110,7 @@ void Match::update_player_economy(size_t player_index) {
             if (active || (unit.flags & OA_UNIT_FLAG_MOVE_RATE_MASK) != 0) {
                 const auto use = def.energy_use;
                 if (use < 0.0F) {
-                    (void)sim::unit_health::credit_energy(
-                        energy.produced, -use, owner_present, owner_status, difficulty
-                    );
+                    credit(energy.produced, -use);
                 } else {
                     energy.requested += use;
                     if (energy.gate <= 0.0F)
@@ -92,9 +123,7 @@ void Match::update_player_economy(size_t player_index) {
             const auto use = def.energy_use;
             bool powered = false;
             if (use < 0.0F) {
-                (void)sim::unit_health::credit_energy(
-                    energy.produced, -use, owner_present, owner_status, difficulty
-                );
+                credit(energy.produced, -use);
             } else {
                 energy.requested += use;
                 powered = energy.gate <= 0.0F;
@@ -103,48 +132,22 @@ void Match::update_player_economy(size_t player_index) {
             }
             if (def.extracts_metal > 0.0F) {
                 if (powered)
-                    (void)sim::unit_health::credit_metal(
-                        metal.produced,
-                        unit.extracted_metal,
-                        owner_present,
-                        owner_status,
-                        difficulty
-                    );
+                    credit(metal.produced, unit.extracted_metal);
             } else if (def.makes_metal != 0) {
                 if (powered)
-                    (void)sim::unit_health::credit_metal(
-                        metal.produced,
-                        static_cast<float>(static_cast<uint8_t>(def.makes_metal)),
-                        owner_present,
-                        owner_status,
-                        difficulty
+                    credit(
+                        metal.produced, static_cast<float>(static_cast<uint8_t>(def.makes_metal))
                     );
             } else if (def.wind_generator > 0.0F) {
-                (void)sim::unit_health::credit_energy(
-                    energy.produced,
-                    def.wind_generator * environment_wind_.normalized_strength,
-                    owner_present,
-                    owner_status,
-                    difficulty
-                );
+                credit(energy.produced, def.wind_generator * environment_wind_.normalized_strength);
             } else if (def.tidal_generator > 0.0F) {
-                (void)sim::unit_health::credit_energy(
-                    energy.produced,
-                    def.tidal_generator * world.game.tidal_strength,
-                    owner_present,
-                    owner_status,
-                    difficulty
-                );
+                credit(energy.produced, def.tidal_generator * world.game.tidal_strength);
             }
         }
 
         if (unit.build_remaining == 0.0F) {
-            (void)sim::unit_health::credit_energy(
-                energy.produced, def.energy_make, owner_present, owner_status, difficulty
-            );
-            (void)sim::unit_health::credit_metal(
-                metal.produced, def.metal_make, owner_present, owner_status, difficulty
-            );
+            credit(energy.produced, def.energy_make);
+            credit(metal.produced, def.metal_make);
             player.metal_storage += def.metal_storage;
             player.energy_storage += def.energy_storage;
         }
@@ -153,8 +156,12 @@ void Match::update_player_economy(size_t player_index) {
         // unpaid tick drops activation mask 4. Mirrored players skip it.
         if (!owner_present || owner_status != OA_PLAYER_STATUS_MIRRORED) {
             bool paid = false;
+            // Under the cloak-after-build rule a unit with any build left
+            // (any bit of its build fraction set, so -0 counts) does not cloak.
+            const bool unfinished =
+                cloak_after_build && std::bit_cast<uint32_t>(unit.build_remaining) != 0;
             if ((unit.flags & OA_UNIT_FLAG_CLOAK_RUNNING) != 0 &&
-                (unit.flags & OA_UNIT_FLAG_CLOAK_LOCKED) == 0 &&
+                (unit.flags & OA_UNIT_FLAG_CLOAK_LOCKED) == 0 && !unfinished &&
                 unit.decloak_until_tick <= world.game.tick) {
                 const auto cost = (unit.flags & OA_UNIT_FLAG_MOVE_RATE_MASK) != 0
                                       ? def.cloak_cost_moving
@@ -255,6 +262,13 @@ void Match::update_player_economy(size_t player_index) {
         auto& unit = match_unit(*this, index);
         if ((unit.flags & OA_UNIT_FLAG_LIVE) != 0)
             settle_economy_block(unit.economy, totals);
+    }
+    // What the staging block took in this tick, from allies sharing, leaves
+    // the produced totals; income and storage keep it. Each amount is widened
+    // to double and subtracted at double precision, metal first.
+    if (rules().economy.stats_exclude_shared_income.enabled) {
+        player.metal_produced_total -= static_cast<double>(staging.metal.produced);
+        player.energy_produced_total -= static_cast<double>(staging.energy.produced);
     }
     settle_economy_block(staging, totals);
 }

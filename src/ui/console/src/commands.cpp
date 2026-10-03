@@ -5,6 +5,7 @@
 #include "oa/ui/console/console.hpp"
 #include "oa/core/map_plot.h"
 #include "oa/ui/console/game_fields.hpp"
+#include "oa/data/match_rules/difficulty_names.hpp"
 
 #include "oa/sim/ai.hpp"
 #include "oa/data/mission_types.hpp"
@@ -13,6 +14,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <tuple>
 
 namespace oa::ui::console {
 namespace {
@@ -720,15 +722,19 @@ void toggle_full_radar(TokenLine* /*line*/) {
     toggle_console_flag(console_flag::full_radar);
 }
 
-/// Adds 1000 energy and 1000 metal to the viewed player ("ATM").
+/// Adds Console::atm_amount (1000) energy and metal to the viewed player ("ATM").
+///
+/// The amount is single precision and so is each sum. A mod's amount far above
+/// any storage leaves both full once the economy clamps them to storage.
 ///
 /// @param line Command tokens (unused).
 void add_atm_resources(TokenLine* /*line*/) {
     const auto index = game().viewpoint_player;
     if (index >= OA_PLAYER_COUNT)
         return;
-    game().players[index].energy += kAtmAmount;
-    game().players[index].metal += kAtmAmount;
+    Player& player = game().players[index];
+    player.energy += active().atm_amount;
+    player.metal += active().atm_amount;
 }
 
 /// Views the game as another active player ("View <player>").
@@ -1208,7 +1214,8 @@ void place_feature(TokenLine* line) {
 /// Starts an AI-profile plan section ("plan <level>...").
 ///
 /// The plan matches when a token after the directive names the current
-/// difficulty (easy, medium or hard, ignoring case) or token 1 is "any";
+/// difficulty (easy, medium or hard, ignoring case, by the keyword
+/// ai.difficulty-names gives it) or token 1 is "any";
 /// token 1 is re-tested for "any" on every pass, so "any" in a later position
 /// does not count.
 ///
@@ -1219,7 +1226,9 @@ void ai_plan(TokenLine* line) {
     for (int32_t i = 1; i < line->count; ++i) {
         if (equal_nocase(token(line, 1), "any"))
             console.ai_plan_matches = true;
-        const int32_t difficulty = game().difficulty;
+        const int32_t difficulty = data::match_rules::difficulty_name_index(
+            host().difficulty_names, static_cast<int32_t>(game().difficulty)
+        );
         if (difficulty == OA_DIFFICULTY_EASY && equal_nocase(token(line, i), "easy"))
             console.ai_plan_matches = true;
         if (difficulty == OA_DIFFICULTY_MEDIUM && equal_nocase(token(line, i), "medium"))
@@ -1404,6 +1413,7 @@ bool console_init(Console* console, World* world, const ConsoleHost* host) noexc
     std::memset(static_cast<void*>(console), 0, sizeof *console);
     console->world = world;
     console->host = host;
+    console->atm_amount = kAtmAmount;
     bool ok = services::command_table_register(&console->commands, kOptionCommands);
     ok = services::command_table_register(&console->commands, kCheatCommands) && ok;
     ok = services::command_table_register(&console->commands, kDeveloperCommands) && ok;
@@ -1414,6 +1424,25 @@ bool console_init(Console* console, World* world, const ConsoleHost* host) noexc
     if (host != nullptr && host->extend != nullptr)
         host->extend(host->extension_context, console);
     return ok;
+}
+
+float console_atm_amount(const data::match_rules::MatchRules& rules) noexcept {
+    const auto& atm = rules.console.atm_amount;
+    return atm.enabled ? static_cast<float>(atm.amount) : kAtmAmount;
+}
+
+void console_apply_rules(Console* console, const data::match_rules::MatchRules& rules) noexcept {
+    auto* table = &console->commands;
+    const bool ai_cheats = rules.console.ai_control_cheat_group.enabled;
+    const uint32_t ai_class = ai_cheats ? command_class::cheat : command_class::developer;
+    std::ignore = services::command_table_set(table, "AI", toggle_computer_control, ai_class);
+    std::ignore = services::command_table_set(table, "Control", take_control, ai_class);
+    const uint32_t los_class =
+        rules.console.lostype_cheat_group.enabled ? command_class::cheat : kOptionList;
+    std::ignore = services::command_table_set(table, "LOSType", toggle_los_type, los_class);
+    console->atm_amount = console_atm_amount(rules);
+    console->key_remaps = rules.console.key_remaps.enabled;
+    console->team_menu_every_game = rules.teams.alliance_menu_all_game_types.enabled;
 }
 
 uint32_t console_execute(Console* console, const char* text, uint32_t mask) noexcept {

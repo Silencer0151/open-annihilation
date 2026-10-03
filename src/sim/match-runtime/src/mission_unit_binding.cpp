@@ -52,6 +52,7 @@ input::OrderCursorHooks order_cursor_hooks(MissionUnitBinding& binding) {
     hooks.movement_object = [](void* context, const World&, const Unit& unit) {
         return movement_object(binding_of(context).match, unit);
     };
+    hooks.rules = binding.match.rules_view();
     return hooks;
 }
 

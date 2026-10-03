@@ -103,6 +103,8 @@ struct SaveDialogContext {
     bool in_game = false;
     bool hold_game = false; // Game.sim_run_flags bit 0
     SaveList list;
+    // Which of 3.1c's names each saved difficulty carries (ai.difficulty-names).
+    data::match_rules::AiDifficultyNames difficulty_names{};
 };
 
 /// Lists the *.SAV files, newest first, keeping those whose summary has a Description.
@@ -200,18 +202,34 @@ struct SaveDialogResult {
 /// @return cancelled, invalid, or load with the save's game type and path; none otherwise.
 SaveDialogResult savegame_on_load_click(Panel& panel, SaveDialogContext& context);
 
-/// Handles a click on the save dialog.
+/// Handles the activation of a control of the save dialog.
 ///
 /// Closing releases the lists. CANCEL plays "Previous". DELETE removes the
 /// selected save, relists, keeps the selection in range and refreshes the
-/// preview. LOAD, GAMES or GAMENAME plays "smlbutton" and returns the path
-/// "<directory>\<GAMENAME>.SAV" (any extension replaced); an empty name does
-/// nothing.
+/// preview. LOAD (OK), GAMES or GAMENAME plays "smlbutton" and returns the
+/// path "<directory>\<GAMENAME>.SAV" (any extension replaced); an empty name
+/// does nothing. GAMENAME is activated by Return at the end of the name, never
+/// by a press on it (savegame_on_save_press).
 ///
 /// @param[in,out] panel The loaded dialog.
 /// @param[in,out] context Directory services, list, summary reader and host.
 /// @return cancelled, refreshed, or save with the path to write; none otherwise.
 SaveDialogResult savegame_on_save_click(Panel& panel, SaveDialogContext& context);
+
+/// Handles a press of the pointer on a control of the save dialog, as 3.1c's
+/// controls take a press.
+///
+/// A press on a button (OK, CANCEL, DELETE) activates it through
+/// savegame_on_save_click. A press on GAMENAME only gives the name field the
+/// keys, so a game is saved only by OK or by Return at the end of the name.
+/// A press on any other control does nothing; a GAMES row is chosen apart
+/// (savegame_on_games_selected).
+///
+/// @param[in,out] panel The loaded dialog.
+/// @param[in,out] context Directory services, list, summary reader and host.
+/// @param control index of the pressed record, from 1 to the panel's record count
+/// @return what savegame_on_save_click returns for a button; none otherwise.
+SaveDialogResult savegame_on_save_press(Panel& panel, SaveDialogContext& context, int32_t control);
 
 // Summary fields the loader copies into the game before starting it.
 struct LoadSummary {

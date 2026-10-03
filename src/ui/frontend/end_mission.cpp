@@ -121,8 +121,13 @@ int32_t pack_scroll_list_items(
 
 void pack_missions(EndMissionContext& context) {
     auto names = std::make_unique<char[][data::campaign::kCampaignNameBytes]>(kMissionEntries);
-    const int32_t count =
-        data::campaign::campaign_load_mission_list(context.campaign, names.get(), kMissionEntries);
+    // The missions as players see them in the game's language.
+    const char* language = context.env != nullptr && context.env->files != nullptr
+                               ? context.env->files->language
+                               : nullptr;
+    const int32_t count = data::campaign::campaign_load_mission_titles(
+        context.campaign, language, names.get(), kMissionEntries
+    );
     context.mission_count = pack_scroll_list_items(
         names.get(), context.world->game.mission_results, count, context.missions
     );
@@ -176,7 +181,12 @@ void end_mission_enter(Panel& panel, EndMissionContext& context) noexcept {
                 static_cast<int16_t>(game.mission_index + (game.victory != 0 ? 1 : 0));
         }
         const auto host = panel_host(panel);
-        campaign::show_difficulty(context.difficulty, &host);
+        campaign::show_difficulty(
+            context.difficulty,
+            &host,
+            context.env != nullptr ? context.env->difficulty_names
+                                   : data::match_rules::AiDifficultyNames{}
+        );
     }
     if (!context.saved_games_offered) {
         panel_set_grayed(panel, "LoadGame", true);

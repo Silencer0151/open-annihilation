@@ -137,7 +137,7 @@ bool same_camera(const CameraState& left, const CameraState& right) {
 /// @param right the second
 /// @return true when identical
 bool same_script(const Script& left, const Script& right) {
-    if (left.input.recording != right.input.recording ||
+    if (left.input.recording != right.input.recording || left.input.stage != right.input.stage ||
         !same_decimal(left.input.tickrate, right.input.tickrate))
         return false;
     if (left.output.width != right.output.width || left.output.height != right.output.height ||
@@ -440,6 +440,25 @@ void test_errors() {
         4,
         3,
         __LINE__
+    );
+    // A stage in place of the recording; never both.
+    {
+        const Script staged{read_ok(edited("demo: game.rec", "stage: battles/fight.stage"))};
+        CHECK(staged.input.stage == "battles/fight.stage" && staged.input.recording.empty());
+    }
+    expect_error(
+        edited("demo: game.rec", "demo: game.rec\n  stage: fight.stage"),
+        "input.stage",
+        "cannot be given with a demo: a script plays one or the other",
+        4,
+        10,
+        __LINE__
+    );
+    expect_error(
+        edited("demo: game.rec", "stage: ''"), "input.stage", "must not be empty", 3, 10, __LINE__
+    );
+    expect_error(
+        edited("demo: game.rec", "stage: [a]"), "input.stage", "must be a string", 3, 10, __LINE__
     );
 
     // output.
@@ -1232,6 +1251,18 @@ void test_round_trips() {
             read_script(bytes_of(write_script(script, form)), again, again_report) &&
             same_script(again, script)
         );
+    }
+    // A stage is written in place of the recording and reads back.
+    {
+        Script staged{script};
+        staged.input.recording.clear();
+        staged.input.stage = "stages/fight.stage";
+        Script again{};
+        DecodeReport again_report{};
+        const std::string text{write_script(staged, DocumentForm::yaml)};
+        CHECK(text.find("stage: stages/fight.stage") != std::string::npos);
+        CHECK(text.find("demo:") == std::string::npos);
+        CHECK(read_script(bytes_of(text), again, again_report) && same_script(again, staged));
     }
     // The tree the encoder builds is the tree its text reads back as.
     Node read{};

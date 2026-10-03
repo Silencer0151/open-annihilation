@@ -5,6 +5,7 @@
 
 #include "oa/sim/combat_state.hpp"
 #include "oa/base/game_math.hpp"
+#include "oa/sim/unit_health/veterancy.hpp"
 #include "oa/sim/weapon_execution/interceptor.hpp"
 #include "oa/sim/unit_movement/movement.hpp"
 
@@ -170,11 +171,15 @@ AimAngles apply_accuracy_spread(
     const WeaponDef& weapon,
     AimAngles slot_aim,
     RandomBounded random,
-    void* random_context
+    void* random_context,
+    const data::match_rules::MatchRulesView& rules
 ) {
     slot_aim.heading = static_cast<int16_t>(slot_aim.heading + static_cast<int16_t>(unit.heading));
     const auto spread = sim::combat_state::accuracy_spread(
-        weapon.accuracy, unit.health, type.max_damage, unit.veteran_level
+        weapon.accuracy,
+        unit.health,
+        type.max_damage,
+        sim::unit_health::veteran_accuracy_divisor(rules, unit.type_index, unit.veteran_level)
     );
     if (spread == 0)
         return slot_aim;
@@ -194,11 +199,16 @@ std::array<int32_t, 2> rock_unit_arguments(const Unit& unit, uint16_t slot_headi
     };
 }
 
-bool lead_applies(const WeaponDef& weapon, const Unit& shooter, bool target_has_movement) noexcept {
-    constexpr uint16_t minimum_leading_veteran_level = 5;
+bool lead_applies(
+    const WeaponDef& weapon,
+    const Unit& shooter,
+    bool target_has_movement,
+    const data::match_rules::MatchRulesView& rules
+) noexcept {
     const uint32_t flags = weapon.flags;
     return (flags & OA_WEAPON_FLAG_CRUISE) == 0 && target_has_movement &&
-           shooter.veteran_level > minimum_leading_veteran_level && weapon.weapon_velocity != 0;
+           sim::unit_health::veteran_leads(rules, shooter.type_index, shooter.veteran_level) &&
+           weapon.weapon_velocity != 0;
 }
 
 FixedVector veteran_lead_offset(
@@ -304,24 +314,25 @@ FlightMode flight_mode(const WeaponDef& weapon) noexcept {
     return FlightMode::inert;
 }
 
-int32_t
-projectile_damage(int32_t amount, float scale, const Unit* source, const Game& game) noexcept {
-    constexpr int32_t veteran_step = 5;
-    constexpr int32_t maximum_veteran_steps = 5;
-    constexpr int32_t percent_per_step = 6;
-    constexpr int32_t whole_percent = 100;
+int32_t projectile_damage(
+    int32_t amount,
+    float scale,
+    const Unit* source,
+    const Game& game,
+    const data::match_rules::MatchRulesView& rules
+) noexcept {
+    constexpr int32_t whole_percent = sim::unit_health::whole_percent;
     const auto scaled = static_cast<double>(amount) * static_cast<double>(scale);
     // Out-of-range conversions give 0x80000000.
     auto damage = std::isfinite(scaled) && std::fabs(scaled) < 2147483648.0
                       ? static_cast<int32_t>(std::trunc(scaled))
                       : static_cast<int32_t>(0x80000000U);
     if (source != nullptr) {
-        auto steps = static_cast<int32_t>(source->veteran_level) / veteran_step;
-        if (steps > maximum_veteran_steps)
-            steps = maximum_veteran_steps;
+        const auto percent = sim::unit_health::veteran_damage_dealt_percent(
+            rules, source->type_index, source->veteran_level
+        );
         damage = std::bit_cast<int32_t>(
-                     std::bit_cast<uint32_t>(steps * percent_per_step + whole_percent) *
-                     std::bit_cast<uint32_t>(damage)
+                     std::bit_cast<uint32_t>(percent) * std::bit_cast<uint32_t>(damage)
                  ) /
                  whole_percent;
     }
@@ -452,19 +463,20 @@ ShotPlan plan_weapon_shot(
     int32_t unit_speed,
     const World& world,
     RandomBounded random,
-    void* random_context
+    void* random_context,
+    const data::match_rules::MatchRulesView& rules
 ) {
     const Game& game = world.game;
     const auto& weapon_slot = unit.weapons[slot];
     ShotPlan plan;
     plan.slot_aim = {weapon_slot.aim_heading, weapon_slot.aim_pitch};
-    switch (select_fire_mode(weapon.flags)) {
+    switch (select_fire_mode(weapon.flags, rules.rules().weapons.vlaunch_before_turret.enabled)) {
     case FireMode::none:
         return plan;
     case FireMode::turret: {
         plan.spends_aim = true;
         plan.slot_aim =
-            apply_accuracy_spread(unit, type, weapon, plan.slot_aim, random, random_context);
+            apply_accuracy_spread(unit, type, weapon, plan.slot_aim, random, random_context, rules);
         auto aimed = weapon_slot;
         aimed.aim_heading = plan.slot_aim.heading;
         aimed.aim_pitch = plan.slot_aim.pitch;

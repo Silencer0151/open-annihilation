@@ -4,14 +4,19 @@
 // The in-game message log (Game.chat_lines) drawn over the battlefield, and
 // the game speed keys that post to it.
 #include "oa/app/asset_files.hpp"
+#include "oa/data/defs/layout.hpp"
 #include "oa/app/hook_call.hpp"
 #include "oa/ui/decoded.hpp"
 #include "oa/app/runtime.hpp"
+#include "oa/data/languages/unit_texts.hpp"
+#include "oa/app/view_rules.hpp"
 #include "oa/present/model/mesh_raster.hpp"
 #include "oa/sim/speed.hpp"
 #include "oa/ui/console/console.hpp"
 #include "oa/ui/hud/chat_panel.hpp"
 #include "oa/ui/frontend_renderer/gadget_draw.hpp"
+#include "oa/ui/frontend_renderer/game_text.hpp"
+#include "oa/present/game_text.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
@@ -25,6 +30,8 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 namespace oa::app {
@@ -47,7 +54,7 @@ load_engine_font(oa::AssetStore& assets, const char* name, const char* language)
 
 // The interface's texts by language, and the language when the command line
 // names none.
-constexpr const char* kTranslationFile = "gamedata\\translate.tdf";
+constexpr const char* kTranslationFile = "translate.tdf";
 constexpr const char* kDefaultLanguage = "English";
 
 /// Returns the step from one message log line to the next: the height in the
@@ -66,7 +73,7 @@ constexpr int kGuiTextRowsBelowPen = 32;
 } // namespace
 
 void Runtime::load_common_fonts() {
-    const char* language = oa::app::command_line::launch_language(options_.launch);
+    const char* language = game_language();
     message_font_ = load_engine_font(assets_, "COMIX", language);
     small_font_ = load_engine_font(assets_, "smlfont", language);
 }
@@ -76,20 +83,24 @@ void Runtime::load_translations(const char* language) {
     // have no translation file, so only one that is there and does not load
     // is reported.
     const auto files = asset_files(assets_);
+    const auto path =
+        std::string(oa::data::defs::directory_name(oa::data::defs::DataDirectory::gamedata)) +
+        '\\' + kTranslationFile;
     if (!oa::data::defs::load_locale_table(
             &files,
             &translations_.table,
-            kTranslationFile,
+            path.c_str(),
             language != nullptr ? language : kDefaultLanguage
         ) &&
-        files.exists != nullptr && files.exists(files.context, kTranslationFile))
-        std::cerr << "open-annihilation: " << kTranslationFile
+        files.exists != nullptr && files.exists(files.context, path.c_str()))
+        std::cerr << "open-annihilation: " << path
                   << " did not load in full; the texts it misses stay as they are\n";
 }
 
 messages::Hooks Runtime::message_hooks() {
     messages::Hooks hooks{};
     hooks.context = this;
+    hooks.side_name = [](void*, uint8_t side) { return oa::data::defs::side_name(side); };
     hooks.play_sound = [](void* context, const char* name) {
         static_cast<Runtime*>(context)->play_match_interface_sound(name);
     };
@@ -104,6 +115,9 @@ messages::Hooks Runtime::message_hooks() {
     hooks.random = [](void* context) -> uint32_t {
         return static_cast<Runtime*>(context)->message_random_.next();
     };
+    // The log's own phrases, such as the elimination taunts and the speed
+    // line, in the game's language, as gamedata\translate.tdf gives them.
+    hooks.translate = translation_hook;
     // The extension adds its hooks to a copy, which replaces the engine's
     // only when the hook returns: one that throws leaves the log with the
     // engine's own hooks for this call. The report goes to standard error
@@ -173,11 +187,21 @@ void Runtime::post_match_message(
 }
 
 void Runtime::post_unit_report(uint16_t unit, std::string_view text) {
-    const auto* definition = definition_for(unit);
-    const std::string name = definition != nullptr && !definition->display_name.empty()
-                                 ? definition->display_name
-                                 : unit_info_name(unit);
-    post_match_message(name + ": " + std::string(text), messages::kind_unit_report, unit);
+    // The unit's name in the player's language, as its file gives it there,
+    // and the caption as gamedata\translate.tdf gives it.
+    std::string name;
+    if (match_ && unit != 0 && unit < match_->world().slots.size()) {
+        const auto& slot = match_->world().slots[unit];
+        if (slot.unit != nullptr)
+            if (const auto* def = oa::world_unit_def_of(&match_->state(), &slot.record))
+                name = std::string(oa::data::languages::unit_display_name(*def));
+    }
+    if (name.empty()) {
+        const auto* definition = definition_for(unit);
+        name = definition != nullptr && !definition->display_name.empty() ? definition->display_name
+                                                                          : unit_info_name(unit);
+    }
+    post_match_message(name + ": " + translate_ui(text), messages::kind_unit_report, unit);
 }
 
 std::vector<std::string> Runtime::match_message_lines() {
@@ -201,10 +225,70 @@ const oa::formats::fnt::Font& Runtime::message_font() {
     return *message_font_;
 }
 
+int32_t Runtime::message_log_step() {
+    return oa::present::sized_length(
+        message_line_step(message_font()), oa::present::game_text_size()
+    );
+}
+
+std::vector<std::string> Runtime::message_log_rows(std::string_view text, int32_t x) {
+    std::vector<std::string> rows;
+    if (!match_ || text.empty())
+        return rows;
+    const bool gui = !gui_font_.sequences.empty();
+    const auto runs = renderer::split_game_text(
+        text,
+        gui ? renderer::gui_font_characters(gui_font_)
+            : renderer::fnt_font_characters(message_font()),
+        true
+    );
+    if (runs.size() != 1 || !runs.front().modern)
+        return rows;
+    const auto& run = runs.front();
+    const auto face =
+        gui ? renderer::gui_font_face(gui_font_) : renderer::fnt_font_face(message_font());
+    // Each row reaches the battlefield's right edge from where the line's
+    // text starts.
+    const int scale = hud_text_scale();
+    const auto corner = oa::ui::display_layout::source_to_canvas(
+        match_layout_, oa::ui::hud::kMessageLogLeft, oa::ui::hud::kMessageLogTop
+    );
+    const int right = match_layout_.left + match_layout_.battlefield_width();
+    const int width = right - (corner.x + (x - oa::ui::hud::kMessageLogLeft) * scale);
+    for (const auto& span :
+         oa::present::modern_text_rows(run.text, face, scale, painted_text_size(run), width))
+        rows.push_back(run.text.substr(span.offset, span.bytes));
+    return rows;
+}
+
+int32_t Runtime::message_log_most_rows(int32_t step) {
+    const auto corner = oa::ui::display_layout::source_to_canvas(
+        match_layout_, oa::ui::hud::kMessageLogLeft, oa::ui::hud::kMessageLogTop
+    );
+    int bottom = match_layout_.top + match_layout_.battlefield_height();
+    // The rows stop a row above the clock while it shows.
+    const int scale = hud_text_scale();
+    if (const auto clock = console_clock_pen_row())
+        bottom = std::min(bottom, *clock - scale);
+    return std::max((bottom - corner.y) / std::max(step * scale, 1), 1);
+}
+
 void Runtime::draw_match_message_log() {
     if (!match_)
         return;
     ensure_gui_font();
+
+    // A row of a line's text, written once every backdrop is laid, so that
+    // no row's backdrop covers the row above's descenders and shadow.
+    struct Line {
+        oa::ui::display_layout::Point pen{};
+        std::string text{};
+        std::array<uint8_t, 3> color{};
+        bool boxed{};
+        /// UTF-8 of a row of a line the modern fonts draw whole, broken at
+        /// the battlefield's right edge; else the line's game text
+        bool row{};
+    };
 
     struct Paint {
         Runtime* runtime{};
@@ -212,20 +296,26 @@ void Runtime::draw_match_message_log() {
         std::array<uint8_t, 3> color{};
         oa::ui::display_layout::Point corner{};
         int scale{};
+        int32_t step{};               ///< source rows from one row to the next
+        int32_t size{};               ///< the text size, in percent
+        oa::present::TextFace face{}; ///< the modern face the log's font stands for
+        std::vector<Line> lines{};
     };
 
+    const bool gui = !gui_font_.sequences.empty();
     Paint paint{
         this,
         &message_font(),
         {255, 255, 255},
         hud_canvas(oa::ui::hud::kMessageLogLeft, oa::ui::hud::kMessageLogTop),
-        hud_text_scale()
+        hud_text_scale(),
+        message_log_step(),
+        oa::present::game_text_size(),
+        gui ? renderer::gui_font_face(gui_font_) : renderer::fnt_font_face(message_font()),
     };
     oa::ui::hud::MessageLogSink sink{};
     sink.user = &paint;
-    sink.font_height = [](void* user) {
-        return message_line_step(*static_cast<Paint*>(user)->font);
-    };
+    sink.font_height = [](void* user) { return static_cast<Paint*>(user)->step; };
     sink.set_color = [](void* user, uint8_t color) {
         auto& target = *static_cast<Paint*>(user);
         target.color = target.runtime->palette_rgb(color);
@@ -268,22 +358,95 @@ void Runtime::draw_match_message_log() {
                 &logo
             );
         };
+    // While the modern fonts draw game text whole, a line wider than the
+    // battlefield leaves it is broken into rows, and the log keeps the rows
+    // that fit above the clock or the battlefield's bottom.
+    if (game_text_settings().style.modern_fonts) {
+        sink.rows = [](void* user, const char* text, int32_t x) {
+            const auto rows = static_cast<Paint*>(user)->runtime->message_log_rows(text, x);
+            return std::max(static_cast<int32_t>(rows.size()), int32_t{1});
+        };
+        sink.most_rows = message_log_most_rows(paint.step);
+    }
     // Gadget text: the GUI's font when it has one, else a label in the
     // line's colour.
     sink.text = [](void* user, const char* text, int32_t x, int32_t y) {
         auto& target = *static_cast<Paint*>(user);
         auto& runtime = *target.runtime;
-        const oa::ui::display_layout::Point pen{
-            target.corner.x + (x - oa::ui::hud::kMessageLogLeft) * target.scale,
-            target.corner.y + (y - oa::ui::hud::kMessageLogTop) * target.scale
-        };
-        if (!runtime.gui_font_.sequences.empty()) {
-            runtime.overlay_gui_text(runtime.gui_font_, pen, text, kGuiTextRowsBelowPen);
-            return;
+        // The message log's backdrop, which the profile's accessible chat
+        // forces on and the background setting asks for, lies under each
+        // row: a black box a little wider and taller than its text.
+        const auto settings = runtime.game_text_settings();
+        const bool boxed = runtime.chat_backdrop_shown() ||
+                           (settings.style.background && settings.style.modern_fonts);
+        auto rows = runtime.message_log_rows(text, x);
+        const bool broken = !rows.empty();
+        if (!broken)
+            rows.emplace_back(text);
+        for (std::size_t row = 0; row < rows.size(); ++row) {
+            const int32_t row_y = y + static_cast<int32_t>(row) * target.step;
+            const oa::ui::display_layout::Point pen{
+                target.corner.x + (x - oa::ui::hud::kMessageLogLeft) * target.scale,
+                target.corner.y + (row_y - oa::ui::hud::kMessageLogTop) * target.scale
+            };
+            if (boxed) {
+                int32_t width = 0;
+                if (broken) {
+                    if (const auto layers = oa::present::modern_text(
+                            rows[row], target.face, target.scale, target.size, false
+                        ))
+                        width = (layers->advance + target.scale - 1) / target.scale;
+                } else if (!runtime.gui_font_.sequences.empty()) {
+                    width = runtime.gui_text_width(runtime.gui_font_, text);
+                } else {
+                    width = (runtime.match_text_width(*target.font, text, target.scale) +
+                             target.scale - 1) /
+                            target.scale;
+                }
+                const auto backdrop = view_rules::chat_backdrop_rect(
+                    x != oa::ui::hud::kMessageLogLeft, row_y, width, target.step
+                );
+                runtime.fill_hud_rect(
+                    target.corner.x + (backdrop.x - oa::ui::hud::kMessageLogLeft) * target.scale,
+                    target.corner.y + (backdrop.y - oa::ui::hud::kMessageLogTop) * target.scale,
+                    backdrop.width * target.scale,
+                    backdrop.height * target.scale,
+                    view_rules::chat_backdrop_color
+                );
+            }
+            target.lines.push_back({pen, std::move(rows[row]), target.color, boxed, broken});
         }
-        runtime.paint_text(*target.font, pen.x, pen.y, text, target.color, target.scale);
     };
     oa::ui::hud::draw_message_log(match_->state(), sink);
+    // The rows over the backdrops, which lay their own boxes.
+    const int32_t font_baseline =
+        gui ? renderer::gui_font_baseline(gui_font_) : renderer::fnt_font_baseline(*paint.font);
+    for (const auto& line : paint.lines) {
+        if (line.row) {
+            // A row of a broken line: the modern fonts at the text size,
+            // its top at the pen, in the colour the line takes.
+            if (const auto layers = oa::present::modern_text(
+                    line.text, paint.face, paint.scale, paint.size, !line.boxed
+                )) {
+                std::ignore = paint_modern_text(
+                    *layers,
+                    line.pen.x,
+                    line.pen.y + painted_baseline(font_baseline, paint.size) * paint.scale,
+                    gui ? oa::present::gui_font_color : line.color
+                );
+                continue;
+            }
+        }
+        // A row the modern fonts cannot draw shows in the font, as the code
+        // page holds it.
+        const std::string text =
+            line.row ? oa::present::encode_game_text(line.text, game_text_utf8()) : line.text;
+        if (gui) {
+            overlay_gui_text(gui_font_, line.pen, text, kGuiTextRowsBelowPen, !line.boxed);
+            continue;
+        }
+        paint_text(*paint.font, line.pen.x, line.pen.y, text, line.color, paint.scale, !line.boxed);
+    }
 }
 
 CanvasRect Runtime::message_log_rect(std::size_t lines) {
@@ -292,7 +455,7 @@ CanvasRect Runtime::message_log_rect(std::size_t lines) {
     );
     const int right = match_layout_.left + match_layout_.battlefield_width();
     const int bottom = match_layout_.top + match_layout_.battlefield_height();
-    const auto height = static_cast<std::size_t>(message_line_step(message_font())) *
+    const auto height = static_cast<std::size_t>(message_log_step()) *
                         static_cast<std::size_t>(hud_text_scale()) * lines;
     return {
         corner.x,

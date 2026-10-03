@@ -402,6 +402,78 @@ int32_t text_width(const TextFont& font, std::string_view text) noexcept {
     return text_width(font.font, text);
 }
 
+bool picture_drawable(const RgbaPicture& picture) noexcept {
+    if (picture.width == 0 || picture.height == 0)
+        return false;
+    return picture.pixels.size() / picture_pixel_bytes / picture.width >= picture.height;
+}
+
+void draw_picture(
+    Surface& surface, const Placement& placement, const SourceRect& rect, const RgbaPicture& picture
+) noexcept {
+    if (placement.scale < 1 || rect.width <= 0 || rect.height <= 0 || !picture_drawable(picture) ||
+        !whole(surface))
+        return;
+    Span64 source{rect.x, rect.y, int64_t{rect.x} + rect.width, int64_t{rect.y} + rect.height};
+    clip_to_placement(source, placement);
+    if (source.left >= source.right || source.top >= source.bottom)
+        return;
+    const int64_t scale = placement.scale;
+    // The whole rectangle on the surface, and the part of it drawn.
+    const int64_t rect_left = placement.x + int64_t{rect.x} * scale;
+    const int64_t rect_top = placement.y + int64_t{rect.y} * scale;
+    const int64_t rect_columns = int64_t{rect.width} * scale;
+    const int64_t rect_rows = int64_t{rect.height} * scale;
+    const int64_t left = std::max<int64_t>(placement.x + source.left * scale, 0);
+    const int64_t top = std::max<int64_t>(placement.y + source.top * scale, 0);
+    const int64_t right =
+        std::min<int64_t>(placement.x + source.right * scale, int64_t{surface.width});
+    const int64_t bottom =
+        std::min<int64_t>(placement.y + source.bottom * scale, int64_t{surface.height});
+    const int64_t picture_columns = picture.width;
+    const int64_t picture_rows = picture.height;
+    constexpr uint64_t opaque = 255;
+    for (int64_t row = top; row < bottom; ++row) {
+        const int64_t shown_row = row - rect_top;
+        const int64_t first_row = shown_row * picture_rows / rect_rows;
+        const int64_t end_row = std::max(first_row + 1, (shown_row + 1) * picture_rows / rect_rows);
+        for (int64_t column = left; column < right; ++column) {
+            const int64_t shown_column = column - rect_left;
+            const int64_t first_column = shown_column * picture_columns / rect_columns;
+            const int64_t end_column =
+                std::max(first_column + 1, (shown_column + 1) * picture_columns / rect_columns);
+            uint64_t alpha_sum = 0;
+            std::array<uint64_t, 3> color_sums{};
+            for (int64_t from_row = first_row; from_row < end_row; ++from_row) {
+                const uint8_t* from =
+                    picture.pixels.data() +
+                    static_cast<std::size_t>(from_row * picture_columns + first_column) *
+                        picture_pixel_bytes;
+                for (int64_t from_column = first_column; from_column < end_column;
+                     ++from_column, from += picture_pixel_bytes) {
+                    const uint64_t alpha = from[3];
+                    alpha_sum += alpha;
+                    for (std::size_t channel = 0; channel < color_sums.size(); ++channel)
+                        color_sums[channel] += from[channel] * alpha;
+                }
+            }
+            if (alpha_sum == 0)
+                continue;
+            const auto count =
+                static_cast<uint64_t>((end_row - first_row) * (end_column - first_column));
+            const uint64_t alpha = (alpha_sum + count / 2) / count;
+            uint8_t* to = surface.rgb.data() +
+                          static_cast<std::size_t>(row * int64_t{surface.width} + column) * 3U;
+            for (std::size_t channel = 0; channel < color_sums.size(); ++channel) {
+                const uint64_t color = (color_sums[channel] + alpha_sum / 2) / alpha_sum;
+                to[channel] = static_cast<uint8_t>(
+                    (color * alpha + to[channel] * (opaque - alpha) + opaque / 2) / opaque
+                );
+            }
+        }
+    }
+}
+
 void draw_mark(
     Surface& surface, const Placement& placement, const Mark& mark, int32_t x, int32_t y, Rgb color
 ) noexcept {

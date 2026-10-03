@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
+#include "ground_missions.hpp"
 #include "tick_internal.hpp"
 
 #include <vector>
@@ -28,7 +29,6 @@ constexpr uint32_t speech_reclaiming = 11;
 
 constexpr uint32_t facing_period = 150;
 constexpr uint16_t facing_offset = 0x2492; // hover position swings about 51 degrees off the bearing
-constexpr uint32_t blocked_site_retries = 10;
 constexpr uint32_t reclaim_retry_ticks = 0x1e;
 constexpr int32_t reclaim_damage_threshold = 0xe;
 constexpr uint8_t reclaim_damage_kind = 5;
@@ -384,6 +384,7 @@ class TickHost::VtolBuildMissions {
             victim.health,
             &type
         };
+        projected.type_index = victim_slot.record.type_index;
         HealthHost health(match, victim_slot.unit_index);
         sim::unit_health::submit_damage(&source, projected, amount, reclaim_damage_kind, health, 0);
         health.store();
@@ -659,11 +660,14 @@ class TickHost::VtolBuildMissions {
                 return 8;
             ConstructionAdapter adapter(host, s, record);
             if (!adapter.site_clear()) {
+                const auto& kickout = host.match.rules().orders.build_site_kickout;
+                if (kickout.kickout)
+                    GroundMissions::clear_build_site(
+                        host, adapter.footprint_x(), adapter.footprint_z(), record.extra.destination
+                    );
                 if (record.construction.blocked_retries == 0)
                     speak(speech_failed, "Waiting for target area to clear");
-                else if (
-                    record.construction.blocked_retries > static_cast<int32_t>(blocked_site_retries)
-                ) {
+                else if (record.construction.blocked_retries > kickout.retry_limit) {
                     speak(speech_failed, "Target area was blocked");
                     return 8;
                 }
@@ -846,6 +850,10 @@ class TickHost::VtolBuildMissions {
     /// sprays it, biting off health once more than 14 ticks of spraying
     /// have built up.
     ///
+    /// It says "working" as it sets off; under display rules that hold the
+    /// voice back, it says it once on arrival instead and reclaims in a
+    /// stage 3 of their own.
+    ///
     /// @param events Events raised on the order since its last step.
     /// @return 1 (next phase), 2 (keep waiting), 0 (restart: out of reach),
     ///     9 (retry: no path), 5 (done: target gone or an abort event),
@@ -877,11 +885,24 @@ class TickHost::VtolBuildMissions {
             );
             fly_to(goal_at(point_of(victim->record.position)));
             order.wait_events |= goal_events | reclaim_abort_events;
-            speak(speech_reclaiming);
+            // The display rules may hold the voice back until reclaiming
+            // starts, in stage 2.
+            if (!match.display_rules().vtol_reclaim_voice_at_start)
+                speak(speech_reclaiming);
             return 1;
-        case 2: {
+        case 2:
+        case 3: {
+            // Stage 3 is the display rules' own: reached after the voice
+            // they hold back until the aircraft is there to reclaim.
+            const bool voice_at_start = match.display_rules().vtol_reclaim_voice_at_start;
+            if (order.phase == 3 && !voice_at_start)
+                return 7;
             if (events & sim::ground_orders::path_failed_event)
                 return 9;
+            if (order.phase == 2 && voice_at_start) {
+                order.phase = 3;
+                speak(speech_reclaiming);
+            }
             order.wait_events |= reclaim_abort_events;
             const auto reach = static_cast<int32_t>(build_distance());
             if (reach * reach < squared_world_distance(unit.position, victim->record.position) ||
@@ -990,13 +1011,17 @@ class TickHost::VtolBuildMissions {
         order.wait_events |= goal_events;
         const auto& d = def();
         if (static_cast<uint32_t>(static_cast<int32_t>(unit.health)) < (d.max_damage >> 2) * 3 &&
-            land_at_repair_pad())
+            !never_retreats_to_repair(host.match.rules(), d.abilities) && land_at_repair_pad())
             return 0;
         auto* owner = oa::world_unit_owner(&world(), &unit);
         if (!owner)
             return 2;
-        if (static_cast<double>(owner->energy_storage) * reserve_fraction <=
-            static_cast<double>(owner->energy)) {
+        // orders.con-patrol-guard-options: reclaim only skips the repair and
+        // assist search, assist only stops before the reclaim search.
+        const auto choice = ground::patrol_choice(host.match.rules(), unit);
+        if (choice != ground::patrol_reclaim_only &&
+            static_cast<double>(owner->energy_storage) * reserve_fraction <=
+                static_cast<double>(owner->energy)) {
             const auto candidates = repair_candidates(
                 static_cast<oa_fixed>(static_cast<int32_t>(d.sight_distance) << 16)
             );
@@ -1012,6 +1037,8 @@ class TickHost::VtolBuildMissions {
                 }
             }
         }
+        if (choice == ground::patrol_assist_only)
+            return 2;
         FeatureChoice energy, metal;
         if (!select_reclaim_features(unit.position, feature_scan_radius, energy, metal))
             return 2;

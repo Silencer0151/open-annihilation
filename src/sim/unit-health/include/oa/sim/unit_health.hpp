@@ -3,7 +3,12 @@
 
 #pragma once
 
+#include "oa/data/match_rules.hpp"
+
+#include <array>
+#include <cstddef>
 #include <cstdint>
+#include <span>
 
 namespace oa::sim::unit_health {
 using UnitIdentity = uint16_t;
@@ -15,11 +20,6 @@ inline constexpr uint8_t unshared_damage_kind = 11;
 inline constexpr uint8_t mirrored_owner_status = 3;
 inline constexpr uint8_t damage_scaling_flag = 0x02;
 inline constexpr int32_t damage_scaling_limit = 30000;
-inline constexpr uint32_t veteran_divisor = 5;
-inline constexpr uint32_t maximum_veteran_reduction = 5;
-inline constexpr int32_t base_damage_percent = 25;
-inline constexpr int32_t damage_percent_scale = 4;
-inline constexpr int32_t percent_divisor = 100;
 
 // The requested, accepted and gate words of a unit's ResourceAccumulator.
 struct EconomyDebit {
@@ -112,6 +112,78 @@ scale_computer_credit(float amount, uint8_t player_status, int32_t difficulty) n
     int32_t difficulty
 ) noexcept;
 
+/// A computer player's income multipliers by difficulty: easy (0), medium (1),
+/// then every other difficulty.
+using ComputerIncomeScales = std::array<double, 3>;
+
+/// The multipliers credit_metal and credit_energy apply: easy 0.5, medium 0.7
+/// and the rest unscaled.
+inline constexpr ComputerIncomeScales computer_credit_scales{
+    computer_easy_credit_scale, computer_medium_credit_scale, 1.0
+};
+
+/// Returns which of a ComputerIncomeScales applies to a difficulty.
+///
+/// @param difficulty computer difficulty
+/// @return 0 for easy (0), 1 for medium (1), 2 for any other difficulty
+[[nodiscard]] constexpr size_t computer_income_index(int32_t difficulty) noexcept {
+    return difficulty == 0 ? 0 : difficulty == 1 ? 1 : 2;
+}
+
+/// Scales a computer player's credit by its difficulty's multiplier.
+///
+/// @param amount credit before scaling
+/// @param difficulty computer difficulty
+/// @param scales the multipliers by difficulty
+/// @return the amount times the difficulty's multiplier
+/// @quirk The float is multiplied as a double and rounded back to float, so a
+///        multiplier of 1 leaves the amount exactly as it was.
+[[nodiscard]] float scale_computer_income(
+    float amount, int32_t difficulty, const ComputerIncomeScales& scales
+) noexcept;
+
+/// Credits metal into a target economy's produced metal, scaled by a mod's
+/// income multipliers.
+///
+/// A computer owner (status 2) scales the amount by its difficulty's multiplier,
+/// whatever the difficulty; an absent owner record or another status takes the
+/// amount unscaled.
+///
+/// @param[in,out] metal_accumulator the target economy's metal word
+/// @param amount metal before scaling
+/// @param owner_present whether the owner record is present (Player.in_use)
+/// @param owner_status the owner's Player.status
+/// @param difficulty computer difficulty
+/// @param scales the multipliers by difficulty
+/// @return the amount actually added
+[[nodiscard]] float credit_metal(
+    float& metal_accumulator,
+    float amount,
+    bool owner_present,
+    uint8_t owner_status,
+    int32_t difficulty,
+    const ComputerIncomeScales& scales
+) noexcept;
+
+/// Credits energy into a target economy's produced energy, scaled by a mod's
+/// income multipliers as the credit_metal overload with multipliers does.
+///
+/// @param[in,out] energy_accumulator the target economy's energy word
+/// @param amount energy before scaling
+/// @param owner_present whether the owner record is present (Player.in_use)
+/// @param owner_status the owner's Player.status
+/// @param difficulty computer difficulty
+/// @param scales the multipliers by difficulty
+/// @return the amount actually added
+[[nodiscard]] float credit_energy(
+    float& energy_accumulator,
+    float amount,
+    bool owner_present,
+    uint8_t owner_status,
+    int32_t difficulty,
+    const ComputerIncomeScales& scales
+) noexcept;
+
 /// Bit of a unit's event flags (the high byte of Unit.events) that a hit sets
 /// when its amount exceeds twice its threshold.
 inline constexpr uint8_t hit_reaction_over_double = 0x40;
@@ -183,6 +255,9 @@ struct Unit {
     float build_remaining{}; // Unit.build_remaining; 1.0 unfinished, 0 finished
     uint16_t events{};       // Unit.events
     uint32_t flags{};        // Unit.flags
+    /// Unit.type_index; selects the type's own veterancy thresholds. 0 takes
+    /// the match-wide ones.
+    uint16_t type_index{};
 };
 
 struct HealthEvent {
@@ -197,6 +272,8 @@ struct HealthEvent {
 // other health and death handling is a required boundary.
 struct DamageHost {
     virtual ~DamageHost() = default;
+    /// The rules the match plays by (Match::rules_view); unset, 3.1c's.
+    data::match_rules::MatchRulesView rules{};
     /// Tests whether the target can still take a health event.
     ///
     /// @param target unit hit
@@ -237,22 +314,25 @@ struct DamageHost {
 /// Builds a health event, scaling damage the way the game does.
 ///
 /// For kinds other than healing: a target with state flag 0x02 scales an amount under
-/// 30000 by its type's 16.16 damage scale; then the amount is multiplied by
-/// 25 - min(veteran / 5, 5) and by 4 and divided by 100.
+/// 30000 by its type's 16.16 damage scale; then the amount is multiplied by the
+/// percentage a veteran target still takes (veteran_damage_taken_percent under the
+/// rules of `host`; 100 - 4 * min(kills / 5, 5) in 3.1c) and divided by 100.
 ///
 /// @param source unit responsible, or null
 /// @param target unit hit; its type must be set
 /// @param amount damage, or health for healing
 /// @param kind damage kind; 10 heals
 /// @param direction_word hit direction; its high byte is kept
+/// @param rules the match's rules; unset, 3.1c's
 /// @return the event, with the amount narrowed to 16 bits
-/// @quirk The multiplications wrap at 32 bits.
+/// @quirk The multiplication wraps at 32 bits.
 [[nodiscard]] HealthEvent make_health_event(
     const Unit* source,
     const Unit& target,
     int32_t amount,
     uint32_t kind,
-    uint32_t direction_word = 0
+    uint32_t direction_word = 0,
+    const data::match_rules::MatchRulesView& rules = {}
 ) noexcept;
 /// Builds and submits a health event.
 ///
@@ -287,7 +367,26 @@ bool submit_damage(
 [[nodiscard]] int16_t
 healed_health(int16_t health, int16_t amount, uint32_t maximum_health) noexcept;
 
+/// One target a repairer carries a heal remainder for, under repair.rate
+/// exact-remainder.
+struct RepairRemainder {
+    uint32_t target{};   ///< the target's unit index plus one; 0 for an unused entry
+    int32_t remainder{}; ///< heal owed, in parts of a point; below the target's build time
+};
+
+/// Targets one repairer carries heal remainders for.
+inline constexpr size_t repair_remainder_targets = 2;
+
+/// The heal remainders one repairer carries, for its latest targets.
+struct RepairRemainders {
+    std::array<RepairRemainder, repair_remainder_targets> targets{};
+};
+
 struct RecoveryHost : DamageHost {
+    /// Each unit's heal remainders, indexed by its unit index, under repair.rate
+    /// exact-remainder; empty otherwise. A repairer with index 0 or past the
+    /// table carries none.
+    std::span<RepairRemainders> repair_remainders{};
     /// Returns the repairer's energy accumulator (Unit.economy.energy).
     ///
     /// @param repairer unit paying for the repair
@@ -302,22 +401,42 @@ struct RecoveryResult {
     bool target_untyped{}; // the target has no type, and nothing was done
 };
 
-/// Runs one repair step.
+/// Runs one repair step, under the match's repair.rate rule.
 ///
-/// Below maximum health, the repairer pays at most one energy for at most one health,
-/// applied as a kind-10 event. Natural regeneration supplies
-/// `float((uint16(heal_time) * 8) / 30)` as the rate; repair orders use their own.
+/// Health and energy start as trunc((maximum × rate - 1) / build time + 1) and
+/// trunc((energy cost × rate - 1) / build time + 1), each at 53 bits.
+///
+/// - clamp-max-1 (3.1c): below maximum health, the repairer pays at most one
+///   energy for at most one health.
+/// - clamp-min-1: as clamp-max-1, but each amount is at least one instead.
+/// - exact-remainder: the energy is at least one; the heal is
+///   trunc(rate) × maximum / build time (64-bit, truncated, low 32 bits kept),
+///   and the remainder of that division is added to what the repairer carries
+///   for this target (repair_remainders), one more health each time it reaches
+///   the build time. A repairer that carries none heals one more for any
+///   remainder, at least 1. A rate below 1 pays and heals nothing; a heal is
+///   at most 0xffff. A zero or negative build time does nothing.
+///
+/// The health is applied as a kind-10 event. Natural regeneration supplies its
+/// own rate (TickHost::regenerate_health); repair orders pass the repairer's
+/// worker time / 30.
 ///
 /// A target without a type is not repaired.
 ///
 /// @param repairer unit paying for the repair
 /// @param[in,out] target unit repaired
 /// @param rate worker time this step
-/// @param host economy and damage services
+/// @param host economy and damage services; its rules choose the mode
 /// @return whether the repair happened, the health and energy amounts, and whether
 ///         the target had no type
-/// @quirk A zero build time divides by zero; the out-of-range conversions leave both
-///        amounts zero.
+/// @quirk Under clamp-max-1 and clamp-min-1 a zero build time divides by zero; the
+///        out-of-range conversions leave both amounts zero.
+/// @quirk Under exact-remainder refused energy does nothing and the step has not
+///        happened, but a step that pays and heals nothing (a rate below 1, or a
+///        carried heal still short of a point) has.
+/// @quirk Under exact-remainder a repairer carries remainders for two targets; a
+///        third takes the first entry's place with nothing carried, and an entry
+///        stays with its unit slot when the unit dies.
 [[nodiscard]] RecoveryResult
 recover_health(Unit& repairer, Unit& target, float rate, RecoveryHost& host);
 

@@ -179,6 +179,11 @@ struct SightContext {
     const AltitudeSightData* altitude{};            // altitude heights and los.tdf rays
     uint16_t visibility_flags{};
     uint8_t minimum_height_cell{};
+    // Allied vision (intel.allied-los-sharing): a stamp is counted for
+    // every player its owner allies and then for the owner, as the players
+    // of grid->game stand. Off, or without a game, a stamp counts for its
+    // owner alone.
+    bool allied_vision{};
 };
 
 /// Checks that stamps can go through a context.
@@ -206,10 +211,20 @@ project_sight_cell(const SightStamp& stamp, const SightContext& context) noexcep
 /// A viewpoint player's stamp marks the fog and radar stale before anything is
 /// counted.
 ///
+/// Under allied vision (SightContext.allied_vision) the stamp is counted
+/// first in the coverage of each player in use, in player order, whose row
+/// the owner's alliance row names, then in the owner's. A player another
+/// machine simulates (status mirrored) is counted only while it is the
+/// viewpoint player (Game.viewpoint_player), the owner included. Every count
+/// marks the fog and radar stale.
+///
 /// @param stamp descriptor to add, at its stored cell and band
 /// @param[in,out] context coverage grids and tables
 void add_area_coverage(const SightStamp& stamp, SightContext& context) noexcept;
 /// Counts the stamp once less in each cell of the owner's coverage it saw.
+///
+/// Allied vision takes it out of the same players' coverage as
+/// add_area_coverage puts it in.
 ///
 /// @param stamp descriptor to remove, at its stored cell and band
 /// @param[in,out] context coverage grids and tables
@@ -237,15 +252,19 @@ void share_mapped_cells(PlayerSightGrid& grid, uint8_t from, uint8_t to) noexcep
 /// The stamp is removed and added again under the line-of-sight rule, then
 /// mapped under the mapping rule.
 ///
-/// @param[in,out] stamp descriptor; its cell and band are updated
+/// @param[in,out] stamp descriptor; its cell and band are updated, and under allied vision its
+///        owner may be too
 /// @param[in,out] context coverage grids and tables
 /// @quirk Altitude sight keeps a stamp whose altitude moved by less than 6 in the same cell, and never removes a stamp stored at altitude 0.
+/// @quirk Under allied vision, when the owner's own coverage is not kept here, the removal leaves the descriptor's owner at the last ally it was taken from, so the stamp is added again for that ally and its allies and mapped for that ally.
 void update_area_coverage(SightStamp& stamp, SightContext& context) noexcept;
 /// Stamps a descriptor afresh under the line-of-sight rule.
 ///
-/// @param[in,out] stamp descriptor; its cell and band are recomputed
+/// @param[in,out] stamp descriptor; its cell and band are recomputed, and under allied vision its
+///        owner may be too
 /// @param[in,out] context coverage grids and tables
 /// @quirk The standard stamp is mapped whatever the mapping rule.
+/// @quirk Under allied vision, when the owner's own coverage is not kept here, the stamp is mapped for the last ally it was counted for.
 void refresh_area_coverage(SightStamp& stamp, SightContext& context) noexcept;
 
 /// Stamps a unit's sight afresh, as creation and the grid rebuild do.

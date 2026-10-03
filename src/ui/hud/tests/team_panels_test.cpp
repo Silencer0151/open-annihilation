@@ -237,6 +237,38 @@ void test_tab_menu() {
     ));
     CHECK(!panel.active["ALLIES"] && !panel.active["SHARE"] && !panel.active["CONTROL"]);
     CHECK(sounds.played.size() == 4 && sounds.played[0] == "SmallButton");
+    // Under the alliance-menu rule the watcher keeps ALLIES; SHARE and
+    // CONTROL stay hidden.
+    game.world.game().gui_flags = 0;
+    CHECK(toggle_tab_menu(
+        *game.world.world,
+        oa::data::campaign::SessionKind::multiplayer,
+        true,
+        panel.loader(),
+        panel.controls(),
+        sounds.events(),
+        true
+    ));
+    CHECK(panel.active["ALLIES"] && !panel.active["SHARE"] && !panel.active["CONTROL"]);
+    // Outside multiplayer, 3.1c hides all three; the rule shows ALLIES alone.
+    game.info(0).options = 0;
+    for (const auto kind :
+         {oa::data::campaign::SessionKind::skirmish, oa::data::campaign::SessionKind::campaign}) {
+        for (const bool every_game : {false, true}) {
+            game.world.game().gui_flags = 0;
+            CHECK(toggle_tab_menu(
+                *game.world.world,
+                kind,
+                true,
+                panel.loader(),
+                panel.controls(),
+                sounds.events(),
+                every_game
+            ));
+            CHECK(panel.active["ALLIES"] == every_game);
+            CHECK(!panel.active["SHARE"] && !panel.active["CONTROL"]);
+        }
+    }
 }
 
 void test_allies_rows() {

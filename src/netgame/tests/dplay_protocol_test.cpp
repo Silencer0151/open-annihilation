@@ -324,6 +324,16 @@ void join_and_description_messages_carry_what_the_game_sends() {
     deliver_all(0);
     CHECK(client->engine.desc.user[0] == 0x0e020400);
 
+    // Under the session-description rule the host publishes the
+    // description again with its password field 0 and no password.
+    host->engine.publish_without_password = true;
+    CHECK(engine_set_session_desc(&host->engine, changed, "Game  Map", "") == result::ok);
+    CHECK(last_sent(command::session_desc_changed, &m, &bytes));
+    CHECK(m.desc.password_pointer == 0 && m.desc.name_pointer == session_desc_changed_name_offset);
+    CHECK((m.desc.flags & session_flag::password_required) == 0);
+    host->engine.publish_without_password = false;
+    deliver_all(0);
+
     // An advertised address is written as it is.
     auto fixed = make_node(3, 2302, 17);
     wire.nodes[2] = fixed.get();

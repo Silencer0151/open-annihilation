@@ -175,6 +175,9 @@ struct ConstructionOrderState {
     int32_t remaining{};                   // second parameter: BuildingBuild repeat count
     int32_t blocked_retries{};             // third parameter
     int8_t pad_piece{-1};                  // QueryBuildInfo piece, kept as a signed char
+    // Quarter turns from south the building is placed facing
+    // (units.build-rotation; Match::set_build_facing); 0 in 3.1c.
+    uint8_t facing{};
 };
 
 /// Snaps a build site's x and z to the footprint-centred cell grid, as

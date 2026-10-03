@@ -157,12 +157,23 @@ bool Executor::open(SDL_Renderer* renderer, uint32_t texture_limit) {
         SDL_BLENDFACTOR_ONE,
         SDL_BLENDOPERATION_ADD
     );
+    // Minimum: each channel the lesser of the source's and the
+    // destination's, the destination's alpha kept.
+    minimum_mode_ = SDL_ComposeCustomBlendMode(
+        SDL_BLENDFACTOR_ONE,
+        SDL_BLENDFACTOR_ONE,
+        SDL_BLENDOPERATION_MINIMUM,
+        SDL_BLENDFACTOR_ZERO,
+        SDL_BLENDFACTOR_ONE,
+        SDL_BLENDOPERATION_ADD
+    );
     SDL_Texture* probe = SDL_CreateTexture(renderer, page_format, SDL_TEXTUREACCESS_STATIC, 1, 1);
     if (probe == nullptr) {
         renderer_ = nullptr;
         return fail("SDL_CreateTexture of the blend probe");
     }
     capabilities_.darken_composed = SDL_SetTextureBlendMode(probe, darken_mode_);
+    capabilities_.minimum_composed = SDL_SetTextureBlendMode(probe, minimum_mode_);
 #if SDL_VERSION_ATLEAST(3, 4, 0)
     capabilities_.pixel_art_sampling = SDL_SetTextureScaleMode(probe, SDL_SCALEMODE_PIXELART);
 #endif
@@ -737,6 +748,8 @@ SDL_BlendMode Executor::blend_mode(Blend blend) const noexcept {
         return SDL_BLENDMODE_MOD;
     case Blend::darken:
         return capabilities_.darken_composed ? darken_mode_ : SDL_BLENDMODE_MUL;
+    case Blend::minimum:
+        return capabilities_.minimum_composed ? minimum_mode_ : SDL_BLENDMODE_BLEND;
     }
     return SDL_BLENDMODE_NONE;
 }

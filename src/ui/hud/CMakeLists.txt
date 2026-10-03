@@ -7,8 +7,8 @@ add_library(oa::ui::hud ALIAS oa-ui-hud)
 target_link_libraries(oa-ui-hud PRIVATE oa-base-game-math)
 target_include_directories(oa-ui-hud PUBLIC include)
 target_link_libraries(oa-ui-hud PUBLIC oa-core-types oa-data-campaign oa-data-persist
-  PRIVATE oa-data-defs oa-formats-tdf oa-sim-feature-runtime oa-sim-messages oa-sim-unit-movement oa-ui-console
-  oa-options)
+  PRIVATE oa-data-defs oa-data-languages oa-formats-tdf oa-sim-feature-runtime oa-sim-messages
+  oa-sim-unit-movement oa-ui-console oa-options)
 target_compile_features(oa-ui-hud PUBLIC cxx_std_20)
 
 if(BUILD_TESTING)
@@ -20,8 +20,8 @@ if(BUILD_TESTING)
     string(REGEX REPLACE "_test$" "" test_case "${test_name}")
     string(REPLACE "_" "-" test_case "${test_case}")
     add_executable(oa-ui-hud-${test_case}-test "${test_source}")
-    target_link_libraries(oa-ui-hud-${test_case}-test PRIVATE oa-ui-hud oa-data-defs oa-sim-feature-runtime
-      oa-sim-messages oa-base-text oa-options)
+    target_link_libraries(oa-ui-hud-${test_case}-test PRIVATE oa-ui-hud oa-data-defs oa-data-languages
+      oa-sim-feature-runtime oa-sim-messages oa-base-text oa-options)
     add_test(NAME ui-hud-${test_case} COMMAND oa-ui-hud-${test_case}-test)
   endforeach()
   # The installed game's side layouts and build pages.

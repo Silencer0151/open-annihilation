@@ -3,6 +3,8 @@
 
 // Runtime construction, main loop and screen loading.
 #include "oa/app/runtime.hpp"
+#include "oa/app/view_rules.hpp"
+#include "oa/data/defs/layout.hpp"
 #include "map_picture_state.hpp"
 #include "oa/app/asset_files.hpp"
 #include "oa/app/game_directory.hpp"
@@ -143,6 +145,9 @@ Runtime::Runtime(
     : options_(std::move(options)), assets_(assets), extension_(extension),
       unit_sound_catalog_(oa::audio::game_audio::UnitSoundCatalog::load(assets)),
       audio_player_(assets), offline_effects_(effect_boundary_, effect_boundary_) {
+    // The capacities a mod's profile set, before anything reads them.
+    if (options_.mod_profile)
+        limits_ = options_.mod_profile->limits;
     if (extension_.frontend_game == nullptr)
         frontend_game_ = std::make_unique<oa::Game>();
     if (const uint32_t draw_threads = options_.draw_threads.value_or(
@@ -183,12 +188,25 @@ Runtime::Runtime(
     load_logo_textures();
     discover_first_map();
     load_side_table();
-    load_translations(oa::app::command_line::launch_language(options_.launch));
-    load_common_fonts();
+    // The language the game shows its text in, which loads the translation
+    // table and the fonts: 3.1c's command line, else the setting, else the
+    // operating system's.
+    start_language();
     init::reset_player_slots(state_, player_storage_, false);
-    init::load_preferences(state_, skirmish_settings_, preferences_, *this);
+    init::load_preferences(
+        state_,
+        skirmish_settings_,
+        preferences_,
+        *this,
+        view_rules::display_mode_setting(ui_rules())
+    );
     // The Open Annihilation settings, after the frontend's preferences hold SwitchAlt.
     load_engine_settings();
+    // The settings the profile's display rules let the player change.
+    load_view_settings();
+    // The GUI text loops hand characters outside the 8-bit fonts to the
+    // system's fonts when the profile's text rendering asks for it.
+    install_game_text_hooks();
     // Session start sets the display gamma from the saved Gamma.
     apply_saved_gamma();
     audio_player_.set_volume(wave_volume_, preferences_.fx_volume);
@@ -352,6 +370,11 @@ int Runtime::run() {
         flush_preferences();
         return 0;
     }
+    if (options_.check_unit_speech) {
+        check_unit_speech();
+        flush_preferences();
+        return 0;
+    }
     if (options_.check_download_builds) {
         check_download_builds();
         flush_preferences();
@@ -359,6 +382,11 @@ int Runtime::run() {
     }
     if (options_.check_side_column) {
         check_side_column();
+        flush_preferences();
+        return 0;
+    }
+    if (!options_.check_unit_language.empty()) {
+        check_unit_language();
         flush_preferences();
         return 0;
     }
@@ -465,6 +493,11 @@ void Runtime::dispatch_event(SDL_Event& event, bool& running) {
     // The macOS application menu's Settings… item asks for the settings on
     // whatever screen shows.
     if (take_engine_settings_request(event)) {
+        apply_screen_request();
+        return;
+    }
+    // Keys the profile's display rules take on every screen come next.
+    if (handle_view_rule_key(event)) {
         apply_screen_request();
         return;
     }
@@ -667,6 +700,8 @@ void Runtime::advance_match_clock(uint32_t now_ms) {
             if (!stepped) {
                 ++match_timing_.tick;
                 match_->simulation().tick = match_timing_.tick;
+                // A stage's lines timed for this tick run before it.
+                run_due_stage_lines();
                 match_->tick();
             }
             // A fault the step's tick noted, here or in the extension, ends
@@ -696,6 +731,8 @@ void Runtime::advance_match_clock(uint32_t now_ms) {
     }
     if (match_timing_.pending_steps != 0)
         oa::sim::messages::expire_oldest_message(match_->state().game);
+    // The map's timed units are placed once a frame, as they come due.
+    step_timed_map_units();
 }
 
 void Runtime::observe_unit_playout() noexcept {
@@ -840,12 +877,13 @@ void Runtime::load(Screen screen) {
         const char* background = desc->background != nullptr
                                      ? desc->background(&context, desc->state)
                                      : desc->assets.background;
+        // A layout named without a folder lies in the GUI directory.
+        const std::string_view named_layout = desc->assets.layout;
+        const auto layout = named_layout.find_first_of("/\\") == std::string_view::npos
+                                ? oa::data::defs::gui_path(named_layout)
+                                : std::string(named_layout);
         const renderer::ScreenAssetNames names{
-            desc->assets.layout,
-            "",
-            desc->assets.palette,
-            desc->assets.sprites,
-            desc->assets.shared_sprites
+            layout, "", desc->assets.palette, desc->assets.sprites, desc->assets.shared_sprites
         };
         resources_ = renderer::load_screen(assets_, names);
         // A panel's first draw binds its scroll bars: at once for a panel

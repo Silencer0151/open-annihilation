@@ -71,14 +71,19 @@ void scan_map_file(void* context, const char* file_name) {
     auto& scan = *static_cast<ScanState*>(context);
     if (scan.stopped)
         return;
+    // A map's rules come from its own folder: the language's folders hold
+    // only what players read and hear, so that the language never changes a
+    // game.
+    CampaignFiles rules = *scan.files;
+    rules.language = nullptr;
     char path[kCampaignPathBytes];
-    build_variant_path(scan.files, path, sizeof(path), kMapsDirectory, file_name, kOtaExtension);
+    build_variant_path(&rules, path, sizeof(path), kMapsDirectory, file_name, kOtaExtension);
     oa::formats::tdf::Document ota{};
     oa::formats::tdf::document_init(&ota);
     if (load_tdf(scan.files, &ota, path) &&
         find_matching_schema(SessionKind::multiplayer, &ota, 0, 0, nullptr, 0)) {
         char name[kCampaignNameBytes];
-        display_name(*scan.files, file_name, name, sizeof(name));
+        display_name(rules, file_name, name, sizeof(name));
         append_name(*scan.list, name);
         if (scan.first_only)
             scan.stopped = true;

@@ -272,6 +272,10 @@ void Runtime::play_match_interface_sound(std::string_view name) {
 }
 
 void Runtime::place_pending_build_at(const oa::sim::ground_orders::Point& target) {
+    place_pending_build_at(target, queueing());
+}
+
+void Runtime::place_pending_build_at(const oa::sim::ground_orders::Point& target, bool queue) {
     if (!match_ || pending_build_type_ == 0 || selected_match_unit_ == 0)
         return;
     const auto site = pending_build_site(target);
@@ -296,12 +300,20 @@ void Runtime::place_pending_build_at(const oa::sim::ground_orders::Point& target
                 unit_def != nullptr && (unit_def->flags & OA_UNIT_DEF_FLAG_CAN_FLY) != 0;
             const auto order = flies ? oa::sim::gameplay_input::UnitOrder::vtol_mobile_build
                                      : oa::sim::gameplay_input::UnitOrder::mobile_build;
-            if (!cancels_queued_order(id, order, 0, site->world, queueing()))
-                match_->issue_mobile_build(id, pending_build_type_, site->world, queueing());
+            // The building is placed facing as the player turned it
+            // (units.build-rotation).
+            if (!cancels_queued_order(id, order, 0, site->world, queue))
+                match_->issue_mobile_build(
+                    id,
+                    pending_build_type_,
+                    site->world,
+                    queue,
+                    static_cast<uint8_t>(pending_build_facing())
+                );
         });
         play_match_interface_sound("oktobuild");
         status_ = "Build " + spawn_type_names_.at(pending_build_type_);
-        if (!queueing()) {
+        if (!queue) {
             reset_match_command();
             pending_build_type_ = 0;
         }
@@ -399,6 +411,11 @@ void Runtime::place_pending_build(float x, float y) {
         return;
     if (const auto world = radar_world_point(x, y)) {
         place_pending_build_at(*world);
+        return;
+    }
+    // The profile's click snap may move the building onto metal or a vent.
+    if (const auto snapped = snapped_build_site(x, y)) {
+        place_pending_build_at(snapped->world);
         return;
     }
     if (const auto site = build_site_under(x, y))

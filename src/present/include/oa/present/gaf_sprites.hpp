@@ -22,8 +22,10 @@ inline constexpr size_t gaf_header_size = 0x0C;
 inline constexpr size_t gaf_sequence_size = 0x28; // frame slots follow the record
 inline constexpr size_t gaf_frame_slot_size = 8;
 inline constexpr size_t gaf_frame_header_size = 0x18;
-// Loader bounds; the game's largest GAF is 5.5 MB with 5183 headers.
-inline constexpr size_t gaf_max_bytes = 64 * 1024 * 1024;
+// Loader bounds; the game's largest GAF is 5.5 MB with 5183 headers, and a
+// mod's effects file can pass 80 MB. The byte bound is the GAF reader's
+// input bound (oa::formats::gaf::limit::input_bytes).
+inline constexpr size_t gaf_max_bytes = 256 * 1024 * 1024;
 inline constexpr size_t gaf_max_headers = 256 * 1024;
 
 // One entry of a sequence's frame list.

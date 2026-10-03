@@ -347,6 +347,7 @@ int32_t fog_map_span(uint32_t zoom_fp, int32_t count) noexcept {
 
 FogGrid build_fog_grid(
     const sim::visibility_state::PlayerSightGrid& sight,
+    uint8_t viewer,
     std::span<const uint8_t> coverage,
     FogOptions options,
     int32_t camera_x,
@@ -368,7 +369,7 @@ FogGrid build_fog_grid(
     grid.tiles.assign(
         static_cast<std::size_t>(grid.width) * static_cast<std::size_t>(grid.height), FogTile{}
     );
-    const auto viewer_bit = static_cast<uint16_t>(1u << (sight.viewpoint_player & 0x1fu));
+    const auto viewer_bit = static_cast<uint16_t>(1u << (viewer & 0x1fu));
     const auto cells = static_cast<std::size_t>(sight.width > 0 ? sight.width : 0) *
                        static_cast<std::size_t>(sight.height > 0 ? sight.height : 0);
     for (int32_t row = 0; row < grid.height; ++row) {

@@ -187,6 +187,20 @@ void single_player_tests() {
     check_cheat_code(setup, &host, "DRDEATX");
     expect((setup->unlock_flags & kAllMissionsUnlocked) == 0, "wrong code ignored");
 
+    // ai.difficulty-names: the radio label is the name the difficulty carries.
+    r = {};
+    show_difficulty(0, &host);
+    expect(logged(r, "group Easy"), "difficulty 0 shows Easy");
+    using Names = oa::data::match_rules::AiDifficultyNamesNames;
+    oa::data::match_rules::AiDifficultyNames swapped{};
+    swapped.names = {Names::hard, Names::medium, Names::easy};
+    r = {};
+    show_difficulty(0, &host, swapped);
+    expect(logged(r, "group Hard") && !logged(r, "group Easy"), "swapped: 0 shows Hard");
+    r = {};
+    show_difficulty(1, &host, swapped);
+    expect(logged(r, "group Medium"), "swapped: 1 shows Medium");
+
     r = {};
     setup->difficulty = 2;
     campaign_setup_click(setup, &host, "Difficulty");

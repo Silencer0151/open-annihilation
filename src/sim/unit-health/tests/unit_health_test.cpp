@@ -122,6 +122,65 @@ int main() {
         CHECK(credit_metal(accumulate, 75.0F, true, 1, 0) == 75.0F);
         CHECK(accumulate == 85.0F);
     }
+    // A mod's income multipliers: easy, medium, then every other difficulty.
+    CHECK(computer_income_index(0) == 0 && computer_income_index(1) == 1);
+    CHECK(computer_income_index(2) == 2 && computer_income_index(3) == 2);
+    CHECK(computer_income_index(-1) == 2);
+    {
+        // The multipliers at 3.1c's values credit exactly what 3.1c does, at
+        // every difficulty, status and presence, the accumulator included.
+        const float amounts[] = {0.0F, 0.1F, 1.0F / 3.0F, 20.0F, 75.0F, 600.0F, 1e-30F, 3e38F};
+        for (const auto amount : amounts)
+            for (int32_t difficulty = -1; difficulty <= 3; ++difficulty)
+                for (uint8_t status = 0; status <= 3; ++status)
+                    for (const bool present : {false, true}) {
+                        float base_metal = 2.5F, base_energy = 2.5F;
+                        float metal = 2.5F, energy = 2.5F;
+                        const auto base =
+                            credit_metal(base_metal, amount, present, status, difficulty);
+                        (void)credit_energy(base_energy, amount, present, status, difficulty);
+                        const auto scaled = credit_metal(
+                            metal, amount, present, status, difficulty, computer_credit_scales
+                        );
+                        (void)credit_energy(
+                            energy, amount, present, status, difficulty, computer_credit_scales
+                        );
+                        CHECK(std::bit_cast<uint32_t>(base) == std::bit_cast<uint32_t>(scaled));
+                        CHECK(
+                            std::bit_cast<uint32_t>(base_metal) == std::bit_cast<uint32_t>(metal)
+                        );
+                        CHECK(
+                            std::bit_cast<uint32_t>(base_energy) == std::bit_cast<uint32_t>(energy)
+                        );
+                    }
+        // Each difficulty takes its own multiplier, the third for any other
+        // difficulty, and only a present computer owner scales.
+        const ComputerIncomeScales scales{4.0, 2.0, 1.5};
+        CHECK(scale_computer_income(20.0F, 0, scales) == 80.0F);
+        CHECK(scale_computer_income(20.0F, 1, scales) == 40.0F);
+        CHECK(scale_computer_income(20.0F, 2, scales) == 30.0F);
+        CHECK(scale_computer_income(20.0F, 7, scales) == 30.0F);
+        float hard = 1.0F;
+        CHECK(credit_metal(hard, 20.0F, true, 2, 2, scales) == 30.0F && hard == 31.0F);
+        float easy = 1.0F;
+        CHECK(credit_energy(easy, 20.0F, true, 2, 0, scales) == 80.0F && easy == 81.0F);
+        float human = 1.0F;
+        CHECK(credit_metal(human, 20.0F, true, 1, 0, scales) == 20.0F && human == 21.0F);
+        float absent = 1.0F;
+        CHECK(credit_energy(absent, 20.0F, false, 2, 0, scales) == 20.0F && absent == 21.0F);
+        float mirrored = 1.0F;
+        CHECK(credit_metal(mirrored, 20.0F, true, 3, 0, scales) == 20.0F && mirrored == 21.0F);
+        // The float is widened, multiplied as a double and rounded back once:
+        // 1.85f * 0.7 rounds to 0x1.4b852p+0f, where multiplying in float
+        // after rounding 0.7 to float gives 0x1.4b851ep+0f.
+        const ComputerIncomeScales seventh{0.7, 0.7, 0.7};
+        const auto rounded = scale_computer_income(1.85F, 0, seventh);
+        CHECK(rounded == 0x1.4b852p+0F && rounded != 1.85F * 0.7F);
+        // A zero multiplier takes all income away.
+        const ComputerIncomeScales none{0.0, 0.0, 0.0};
+        float starved = 5.0F;
+        CHECK(credit_metal(starved, 600.0F, true, 2, 1, none) == 0.0F && starved == 5.0F);
+    }
     uint8_t reaction = 0;
     record_hit_reaction(reaction, 10, 0);
     CHECK((reaction & 0x40) != 0);

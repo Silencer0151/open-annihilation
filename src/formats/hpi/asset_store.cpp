@@ -29,10 +29,6 @@ constexpr std::string_view kCurrentDirectory = ".";
 constexpr std::string_view kParentDirectory = "..";
 constexpr std::string_view kDiscoveryGp3 = ".GP3";
 constexpr std::string_view kDiscoveryGp3Prefix = "rev";
-constexpr std::string_view kDiscoveryCcx = "*.CCX";
-constexpr std::string_view kDiscoveryUfo = "*.UFO";
-constexpr std::string_view kDiscoveryHpi = "*.HPI";
-constexpr std::string_view kDiscoveryRemovable = "*.hpi";
 // Mount-time mark on an archive file that a loose file of the same path hides.
 constexpr uint8_t kShadowedByLoose = 0x02;
 
@@ -219,6 +215,82 @@ std::vector<LooseItem> loose_listing(const std::filesystem::path& directory) {
     return items;
 }
 
+/// Tests whether a listing entry is the "." or ".." entry.
+bool dot_entry(const LooseItem& item) noexcept {
+    return item.name == kCurrentDirectory || item.name == kParentDirectory;
+}
+
+/// Lists folders layered in order as one folder, in NTFS order, led by "."
+/// and "..": an entry the folders share by name, compared without case, takes
+/// the earliest folder's file and the latest folder's spelling, as copying
+/// the folders over each other from the last to the first would leave it.
+/// One folder is listed as loose_listing() lists it.
+///
+/// @param folders the folders, highest precedence first; a missing one adds nothing
+/// @return the entries; empty when no folder exists
+std::vector<LooseItem> merged_listing(std::span<const std::filesystem::path> folders) {
+    if (folders.size() == 1)
+        return loose_listing(folders.front());
+    std::unordered_map<std::string, LooseItem> merged;
+    bool present = false;
+    for (auto folder = folders.rbegin(); folder != folders.rend(); ++folder) {
+        auto items = loose_listing(*folder);
+        if (items.empty())
+            continue;
+        present = true;
+        for (auto& item : items) {
+            if (dot_entry(item))
+                continue;
+            auto [slot, inserted] = merged.try_emplace(normalized_path(item.name), item);
+            if (!inserted) {
+                slot->second.path = std::move(item.path);
+                slot->second.directory = item.directory;
+                slot->second.size = item.size;
+            }
+        }
+    }
+    std::vector<LooseItem> items;
+    if (!present)
+        return items;
+    items.reserve(merged.size() + 2);
+    for (auto& [key, item] : merged)
+        items.push_back(std::move(item));
+    std::sort(items.begin(), items.end(), [](const LooseItem& a, const LooseItem& b) {
+        return ntfs_less(a.name, b.name);
+    });
+    const auto& first = folders.front();
+    items.insert(items.begin(), LooseItem{std::string(kParentDirectory), first / "..", true, 0});
+    items.insert(items.begin(), LooseItem{std::string(kCurrentDirectory), first, true, 0});
+    return items;
+}
+
+/// Finds a folder below a root by a folded relative path, each part matched without case.
+///
+/// @param root the folder searched from
+/// @param key '/'-separated path, ASCII lower case; empty for the root itself
+/// @return the host folder, or nullopt when a part is missing or not a folder
+std::optional<std::filesystem::path>
+find_loose_directory(const std::filesystem::path& root, const std::string& key) {
+    auto candidate = root;
+    for (std::size_t begin = 0; begin < key.size();) {
+        const auto end = key.find('/', begin);
+        const auto part = key.substr(begin, end == std::string::npos ? end : end - begin);
+        bool present = false;
+        for (const auto& item : loose_listing(candidate))
+            if (item.directory && !dot_entry(item) && normalized_path(item.name) == part) {
+                candidate = item.path;
+                present = true;
+                break;
+            }
+        if (!present)
+            return std::nullopt;
+        if (end == std::string::npos)
+            break;
+        begin = end + 1;
+    }
+    return candidate;
+}
+
 } // namespace
 
 struct ResourceFile {
@@ -313,8 +385,36 @@ void AssetStore::LooseIndex::reset() {
 }
 
 AssetStore::AssetStore(std::filesystem::path loose_root, std::size_t loose_index_limit)
-    : loose_root_(std::filesystem::absolute(std::move(loose_root))),
+    : loose_roots_{std::filesystem::absolute(std::move(loose_root))},
       loose_index_(std::make_unique<LooseIndex>(loose_index_limit)) {
+}
+
+AssetStore::AssetStore(
+    std::vector<std::filesystem::path> loose_roots, std::size_t loose_index_limit
+)
+    : loose_roots_(std::move(loose_roots)),
+      loose_index_(std::make_unique<LooseIndex>(loose_index_limit)) {
+    if (loose_roots_.empty())
+        fail("an asset store needs a folder");
+    for (auto& root : loose_roots_)
+        root = std::filesystem::absolute(root);
+}
+
+std::span<const std::filesystem::path> AssetStore::loose_roots() const noexcept {
+    return loose_roots_;
+}
+
+void AssetStore::observe_lookups(LookupObserver observer) noexcept {
+    observer_ = observer;
+}
+
+void AssetStore::note_lookup(std::string_view name) const {
+    if (observer_.looked_up != nullptr)
+        observer_.looked_up(observer_.context, name);
+}
+
+std::optional<std::filesystem::path> AssetStore::loose_file(std::string_view resource) const {
+    return loose_path(resource);
 }
 
 bool AssetStore::loose_index_enabled() const noexcept {
@@ -384,13 +484,22 @@ void AssetStore::drop_vanished_mounts() {
 std::vector<DiscoveredArchive> AssetStore::discover(
     std::string_view version, std::span<const std::filesystem::path> removable_roots
 ) {
+    DiscoveryPlan plan;
+    plan.revision_archive =
+        std::string(kDiscoveryGp3Prefix) + std::string(version) + std::string(kDiscoveryGp3);
+    return discover(plan, removable_roots);
+}
+
+std::vector<DiscoveredArchive> AssetStore::discover(
+    const DiscoveryPlan& plan, std::span<const std::filesystem::path> removable_roots
+) {
     drop_vanished_mounts();
     std::vector<DiscoveredArchive> report;
     const auto scan =
-        [&](const std::filesystem::path& directory, std::string_view pattern, int limit) {
+        [&](const std::vector<LooseItem>& items, std::string_view pattern, int limit) {
             int remaining = limit;
-            for (const auto& item : loose_listing(directory)) {
-                if (!match_host_pattern(item.name, pattern))
+            for (const auto& item : items) {
+                if (dot_entry(item) || !match_host_pattern(item.name, pattern))
                     continue;
                 DiscoveredArchive outcome{item.path, false, {}, is_mounted(item.path)};
                 if (!outcome.already_mounted)
@@ -400,14 +509,15 @@ std::vector<DiscoveredArchive> AssetStore::discover(
                     break;
             }
         };
-    const std::string revision =
-        std::string(kDiscoveryGp3Prefix) + std::string(version) + std::string(kDiscoveryGp3);
-    scan(loose_root_, revision, -1);
-    scan(loose_root_, kDiscoveryCcx, -1);
-    scan(loose_root_, kDiscoveryUfo, -1);
-    scan(loose_root_, kDiscoveryHpi, formats::hpi::PlainArchiveMountLimit);
+    const auto folders = merged_listing(loose_roots_);
+    scan(folders, plan.revision_archive, -1);
+    scan(folders, plan.ccx_pattern, -1);
+    scan(folders, plan.ufo_pattern, -1);
+    scan(folders, plan.hpi_pattern, plan.hpi_limit);
     for (const auto& root : removable_roots)
-        scan(root, kDiscoveryRemovable, -1);
+        scan(loose_listing(root), plan.disc_pattern, -1);
+    if (plan.folders_as_disc)
+        scan(folders, plan.disc_pattern, -1);
     mark_loose_shadows();
     return report;
 }
@@ -418,7 +528,8 @@ void AssetStore::mark_loose_shadows() {
     for (auto& mounted : mounts_)
         mounted.marks.assign(mounted.archive.nodes().size(), 0);
     if (!mounts_.empty())
-        mark_loose_directory("", loose_root_);
+        for (const auto& root : loose_roots_)
+            mark_loose_directory("", root);
 }
 
 void AssetStore::mark_loose_directory(
@@ -448,16 +559,28 @@ const HpiArchive& AssetStore::mounted(std::size_t index) const {
 }
 
 std::optional<std::filesystem::path> AssetStore::loose_path(std::string_view resource) const {
+    note_lookup(resource);
     if (resource.empty() || resource.front() == '/' || resource.front() == '\\' ||
         resource.find(':') != std::string_view::npos ||
         resource.find('\0') != std::string_view::npos || resource.size() > kMaxPathLength)
         fail("invalid asset resource path");
     const auto key = normalized_path(resource);
+    for (std::size_t root = 0; root < loose_roots_.size(); ++root)
+        if (auto found = loose_path_in(root, key))
+            return found;
+    return std::nullopt;
+}
+
+std::optional<std::filesystem::path>
+AssetStore::loose_path_in(std::size_t root, const std::string& key) const {
     if (!loose_index_ || !loose_index_->enabled.load())
-        return loose_path_listed(key);
+        return loose_path_listed_in(root, key);
     const base::threads::LockGuard guard(loose_index_->lock);
-    auto loose = loose_root_;
-    std::string folder;
+    auto loose = loose_roots_[root];
+    // Each folder's listings are kept under its own index, so that layered
+    // folders never answer for each other.
+    const std::string tag = std::to_string(root) + '|';
+    std::string folder = tag;
     for (std::size_t begin = 0; begin < key.size();) {
         const auto end = key.find('/', begin);
         const auto part = key.substr(begin, end == std::string::npos ? end : end - begin);
@@ -465,7 +588,7 @@ std::optional<std::filesystem::path> AssetStore::loose_path(std::string_view res
             fail("asset path contains traversal");
         const auto* listing = loose_index_->listing(folder, loose);
         if (listing == nullptr)
-            return loose_index_->enabled.load() ? std::nullopt : loose_path_listed(key);
+            return loose_index_->enabled.load() ? std::nullopt : loose_path_listed_in(root, key);
         const auto child = listing->children.find(part);
         if (child == listing->children.end())
             return std::nullopt;
@@ -476,14 +599,15 @@ std::optional<std::filesystem::path> AssetStore::loose_path(std::string_view res
         if (!child->second.directory)
             return std::nullopt;
         loose = child->second.path;
-        folder = key.substr(0, end);
+        folder = tag + key.substr(0, end);
         begin = end + 1;
     }
     return std::nullopt;
 }
 
-std::optional<std::filesystem::path> AssetStore::loose_path_listed(const std::string& key) const {
-    auto loose = loose_root_;
+std::optional<std::filesystem::path>
+AssetStore::loose_path_listed_in(std::size_t root, const std::string& key) const {
+    auto loose = loose_roots_[root];
     for (std::size_t begin = 0; begin < key.size();) {
         const auto end = key.find('/', begin);
         const auto part = key.substr(begin, end == std::string::npos ? end : end - begin);
@@ -622,6 +746,7 @@ bool AssetStore::read_chunk(
 }
 
 std::vector<FoundEntry> AssetStore::find(std::string_view pattern, FindScope scope) const {
+    note_lookup(pattern);
     std::vector<FoundEntry> found;
     const std::size_t split = last_separator(pattern);
     const std::string_view directory = pattern.substr(0, split);
@@ -629,36 +754,20 @@ std::vector<FoundEntry> AssetStore::find(std::string_view pattern, FindScope sco
     if (spec == kAllFilesPattern)
         spec = "*";
     if (scope.first_mount < 0) {
-        std::optional<std::filesystem::path> loose = loose_root_;
-        if (!directory.empty()) {
+        std::vector<std::filesystem::path> folders;
+        if (directory.empty()) {
+            folders = loose_roots_;
+        } else {
             const std::string trimmed(directory.substr(0, directory.size() - 1));
-            loose.reset();
             if (!trimmed.empty() && trimmed.find(':') == std::string::npos) {
-                auto candidate = loose_root_;
-                bool present = true;
                 const auto key = normalized_path(trimmed);
-                for (std::size_t begin = 0; present && begin < key.size();) {
-                    const auto end = key.find('/', begin);
-                    const auto part =
-                        key.substr(begin, end == std::string::npos ? end : end - begin);
-                    present = false;
-                    for (const auto& item : loose_listing(candidate))
-                        if (item.directory && item.name != kCurrentDirectory &&
-                            item.name != kParentDirectory && normalized_path(item.name) == part) {
-                            candidate = item.path;
-                            present = true;
-                            break;
-                        }
-                    if (end == std::string::npos)
-                        break;
-                    begin = end + 1;
-                }
-                if (present)
-                    loose = candidate;
+                for (const auto& root : loose_roots_)
+                    if (auto folder = find_loose_directory(root, key))
+                        folders.push_back(std::move(*folder));
             }
         }
-        if (loose)
-            for (const auto& item : loose_listing(*loose))
+        if (!folders.empty())
+            for (const auto& item : merged_listing(folders))
                 if (match_host_pattern(item.name, spec))
                     found.push_back(
                         {item.name, item.directory, item.directory ? 0 : item.size, -1}
@@ -904,32 +1013,38 @@ std::vector<std::string> AssetStore::list_resources(
         (!directory.empty() && directory.front() == '/') ||
         extension.find_first_of("/\\:\0", 0, 4) != std::string_view::npos)
         fail("invalid asset listing path");
+    note_lookup(directory);
     auto prefix = normalized_path(directory);
-    auto loose = loose_root_;
-    bool present = true;
     for (std::size_t begin = 0; begin < prefix.size();) {
         const auto end = prefix.find('/', begin);
         const auto part = prefix.substr(begin, end == std::string::npos ? end : end - begin);
         if (part.empty() || part == "." || part == "..")
             fail("asset listing contains traversal");
-        if (present) {
+        if (end == std::string::npos)
+            break;
+        begin = end + 1;
+    }
+    // The folder below each layered root that the listing names.
+    const auto folder_in = [&](const std::filesystem::path& root) {
+        std::optional<std::filesystem::path> loose = root;
+        for (std::size_t begin = 0; loose && begin < prefix.size();) {
+            const auto end = prefix.find('/', begin);
+            const auto part = prefix.substr(begin, end == std::string::npos ? end : end - begin);
             std::optional<std::filesystem::path> match;
-            if (std::filesystem::is_directory(loose))
-                for (const auto& item : std::filesystem::directory_iterator(loose))
+            if (std::filesystem::is_directory(*loose))
+                for (const auto& item : std::filesystem::directory_iterator(*loose))
                     if (normalized_path(item.path().filename().string()) == part) {
                         if (match)
                             fail("ambiguous loose asset directory: " + prefix);
                         match = item.path();
                     }
-            if (match)
-                loose = *match;
-            else
-                present = false;
+            loose = match;
+            if (end == std::string::npos)
+                break;
+            begin = end + 1;
         }
-        if (end == std::string::npos)
-            break;
-        begin = end + 1;
-    }
+        return loose;
+    };
     if (!prefix.empty())
         prefix += '/';
     const auto suffix = normalized_path(extension);
@@ -940,16 +1055,24 @@ std::vector<std::string> AssetStore::list_resources(
     };
     std::set<std::string> keys;
     std::vector<std::string> result;
-    if (present && std::filesystem::is_directory(loose)) {
+    for (const auto& root : loose_roots_) {
+        const auto found = folder_in(root);
+        if (!found || !std::filesystem::is_directory(*found))
+            continue;
+        const auto& loose = *found;
+        // Names that differ only in case are ambiguous within one folder;
+        // across layered folders they are one file.
+        std::set<std::string> folder_keys;
         const auto append = [&](const auto& item) {
             if (!item.is_regular_file())
                 return;
             const auto key =
                 prefix + normalized_path(item.path().lexically_relative(loose).generic_string());
             if (matches(key)) {
-                if (!keys.insert(key).second)
+                if (!folder_keys.insert(key).second)
                     fail("ambiguous loose asset case: " + key);
-                result.push_back(key);
+                if (keys.insert(key).second)
+                    result.push_back(key);
             }
         };
         if (recursive)

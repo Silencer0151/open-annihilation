@@ -56,9 +56,10 @@ constexpr float kDefaultDisplayGamma = 1.0F;
 /// priority is heard.
 constexpr uint8_t kDefaultUnitChat = 10;
 /// How director mode presents unit announcements: with sound at the default
-/// unit chat level, the speech switch on, and no caption.
+/// unit chat level, the speech switch on, no caption and each unit's own
+/// sounds.
 constexpr game_audio::AnnouncementPresentationGates kDirectorAnnouncementGates{
-    kDefaultUnitChat, 0, true, true, false, false
+    kDefaultUnitChat, 0, true, true, false, false, game_audio::novelty_voice_sounds
 };
 
 /// Copies part of a drawn frame into a director frame through a gamma table.

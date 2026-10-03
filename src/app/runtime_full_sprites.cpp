@@ -382,6 +382,9 @@ struct SpriteFrame::Impl {
     /// @param sprite the sprite
     /// @param blended the planner blends it through the alpha table
     void emit_sprite(const SpriteDraw& sprite, bool blended) {
+        // A frame drawn too far out for shadows draws no feature's shadow.
+        if (sprite.shadow && !shadows_drawn(*inputs.list))
+            return;
         if (sprite.frame == nullptr || hooks.card_page == nullptr) {
             ++result.refused;
             return;
@@ -417,10 +420,16 @@ struct SpriteFrame::Impl {
             static_cast<float>(sprite.screen.x) - static_cast<float>(sprite.frame->origin_x) * zoom;
         const float top =
             static_cast<float>(sprite.screen.y) - static_cast<float>(sprite.frame->origin_y) * zoom;
-        const card::Colour opaque{1.0F, 1.0F, 1.0F, 1.0F};
-        const card::Colour translucent{
-            translucent_level, translucent_level, translucent_level, translucent_level
-        };
+        // A feature's shadow frame draws as dark as the list's shadow
+        // level: under the premultiplied blend, a vertex colour and alpha of
+        // the level's strength mix that much of the frame (or of its blend)
+        // into what is under it.
+        const float strength =
+            sprite.shadow ? oa::present::model::shadow_level_strength(inputs.list->shadow_level)
+                          : 1.0F;
+        const card::Colour opaque{strength, strength, strength, strength};
+        const float level = translucent_level * strength;
+        const card::Colour translucent{level, level, level, level};
         emitter.quad(
             {page, card::Blend::alpha_premultiplied, sampling},
             emitter.place_x(left),

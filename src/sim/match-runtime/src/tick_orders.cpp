@@ -55,6 +55,8 @@ constexpr uint8_t flags_secondary = 0x04;
 constexpr uint8_t order_target_seen = 0x20;
 // A queued order cancels one already queued within 16 pixels (16.16).
 constexpr uint32_t cancel_reach = 0x100000;
+// Whole pixels a snapped click may lie from a queued order's point.
+constexpr uint32_t snapped_cancel_reach = 8;
 
 /// Tells whether the command resolver picks the VTOL construction, repair
 /// and reclaim missions for this unit.
@@ -372,12 +374,24 @@ sim::simulation_state::Order& Match::issue_order(
 }
 
 bool Match::cancel_queued_order(
-    uint16_t index, uint8_t kind, uint16_t target, const sim::ground_orders::Point* point
+    uint16_t index,
+    uint8_t kind,
+    uint16_t target,
+    const sim::ground_orders::Point* point,
+    bool snapped_point
 ) {
     auto& unit = units_.at(index);
     const sim::simulation_state::Unit* aimed = target != 0 ? &units_.at(target) : nullptr;
     // Both differences are taken with 32-bit wraparound, as 3.1c takes them.
-    const auto near = [](sim::ground_orders::Fixed a, sim::ground_orders::Fixed b) {
+    // A snapped click compares whole pixels, the order's less the click's.
+    const auto near = [snapped_point](sim::ground_orders::Fixed a, sim::ground_orders::Fixed b) {
+        if (snapped_point) {
+            const auto click =
+                static_cast<uint32_t>(static_cast<uint16_t>(std::bit_cast<uint32_t>(a) >> 16));
+            const auto order =
+                static_cast<uint32_t>(static_cast<uint16_t>(std::bit_cast<uint32_t>(b) >> 16));
+            return order - click + snapped_cancel_reach < 2 * snapped_cancel_reach;
+        }
         return std::bit_cast<uint32_t>(a) - std::bit_cast<uint32_t>(b) + cancel_reach <=
                2 * cancel_reach;
     };
@@ -469,13 +483,19 @@ void Match::note_order_target_seen(uint16_t index, std::size_t position, int16_t
 }
 
 sim::simulation_state::Order& Match::issue_mobile_build(
-    uint16_t index, uint16_t type, const sim::ground_orders::Point& destination, bool queue
+    uint16_t index,
+    uint16_t type,
+    const sim::ground_orders::Point& destination,
+    bool queue,
+    uint8_t facing
 ) {
     const auto kind = aircraft_builder(state(), index) ? vtol_mobile_build_kind : mobile_build_kind;
     auto& order = issue_queued_command(index, kind, destination, queue, mobile_build_flags);
     for (auto& candidate : orders_)
-        if (&candidate->order == &order)
+        if (&candidate->order == &order) {
             candidate->construction.type_index = type;
+            candidate->construction.facing = static_cast<uint8_t>(facing & 3U);
+        }
     return order;
 }
 

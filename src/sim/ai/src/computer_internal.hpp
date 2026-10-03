@@ -24,13 +24,21 @@ computer_type(const ComputerPlayers* state, uint16_t type) noexcept;
 /// Builds a controller with one task per squad.
 ///
 /// Structures, a land strike group with its rally, construction, an idle task for armed
-/// structures, a naval strike group with its rally, air raids and the siege, whose
-/// target, search point and search step all start at the map's centre.
+/// structures (the structures task under ai.squad5-factory-tick), a naval strike group
+/// with its rally, air raids and the siege, whose target, search point and search step
+/// all start at the map's centre. Both strike groups may attack from 4 members and always
+/// attack from 6 (ai.attack-wave-size).
 ///
 /// @param[out] ai controller to build
 /// @param player player index
 /// @param game map size in world units (Game.map_width_world, Game.map_height_world)
-void computer_player_create(ComputerPlayer& ai, uint8_t player, const oa::Game& game) noexcept;
+/// @param rules the match's ai.* rules
+void computer_player_create(
+    ComputerPlayer& ai,
+    uint8_t player,
+    const oa::Game& game,
+    const data::match_rules::AiRules& rules
+) noexcept;
 
 /// Converts a double to a 32-bit integer, truncating toward zero.
 ///

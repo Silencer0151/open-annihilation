@@ -35,6 +35,10 @@ uint32_t TickHost::GroundMissions::reclaim() {
     case 2:
         return wait_for_build_stance(0);
     case 3:
+        // The display rules may say "working" once: the next steps reclaim
+        // in stage 4, which also gets to stage 5 one step sooner.
+        if (host.match.display_rules().reclaim_voice_once)
+            order.phase = 4;
         speak(ground::speech_work_started);
         [[fallthrough]];
     case 4:
@@ -115,6 +119,17 @@ uint32_t TickHost::GroundMissions::resurrect() {
         wait_ticks(1);
         return ground::keep_waiting;
     case 5: {
+        // A building rises facing as its wreck lies (units.build-rotation).
+        const auto& wreck_point = record.extra.destination;
+        if (const auto wreck = plot_index(
+                wreck_point[0] >> ground::cell_shift, wreck_point[2] >> ground::cell_shift
+            ))
+            if (const auto* placed = sim::feature_runtime::feature_record(
+                    world(), world().plots[feature_origin(*wreck)].feature_record
+                ))
+                record.construction.facing = host.match.build_facing_of_heading(
+                    static_cast<uint16_t>(type), static_cast<uint16_t>(placed->orientation[1])
+                );
         auto* raised = ConstructionAdapter(host, s, record).spawn_nanoframe();
         set_target(raised);
         if (!raised) {
@@ -189,7 +204,10 @@ uint32_t TickHost::GroundMissions::repair_patrol() {
                static_cast<double>(stored);
     };
     const int32_t radius = static_cast<int32_t>(static_cast<uint32_t>(def().sight_distance) << 16);
-    if (!low(owner->energy, owner->energy_storage)) {
+    // orders.con-patrol-guard-options: reclaim only skips the repair and
+    // assist search, assist only stops before the reclaim search.
+    const auto choice = patrol_choice();
+    if (choice != ground::patrol_reclaim_only && !low(owner->energy, owner->energy_storage)) {
         const auto candidates = repair_candidates(radius);
         if (!candidates.empty()) {
             auto& patient = *candidates[random(static_cast<uint32_t>(candidates.size()))];
@@ -198,10 +216,12 @@ uint32_t TickHost::GroundMissions::repair_patrol() {
                 return queue_repair(patient) ? ground::rotate_mission : ground::retry_later;
         }
     }
+    if (choice == ground::patrol_assist_only)
+        return ground::keep_waiting;
     if (!low(owner->energy, owner->energy_storage) && !low(owner->metal, owner->metal_storage))
         return ground::keep_waiting;
-    const auto choice = choose_reclaim_features(ground::position_of(s.record), radius);
-    if (!choice.found)
+    const auto features = choose_reclaim_features(ground::position_of(s.record), radius);
+    if (!features.found)
         return ground::keep_waiting;
     const auto fits = [](const FeatureChoice& feature, float stored, float storage) {
         return !(
@@ -210,14 +230,14 @@ uint32_t TickHost::GroundMissions::repair_patrol() {
         );
     };
     const FeatureChoice* chosen = nullptr;
-    if (choice.metal.site && low(owner->metal, owner->metal_storage))
-        chosen = &choice.metal;
-    else if (choice.energy.site && low(owner->energy, owner->energy_storage))
-        chosen = &choice.energy;
-    else if (choice.metal.site && fits(choice.metal, owner->metal, owner->metal_storage))
-        chosen = &choice.metal;
-    else if (choice.energy.site && fits(choice.energy, owner->energy, owner->energy_storage))
-        chosen = &choice.energy;
+    if (features.metal.site && low(owner->metal, owner->metal_storage))
+        chosen = &features.metal;
+    else if (features.energy.site && low(owner->energy, owner->energy_storage))
+        chosen = &features.energy;
+    else if (features.metal.site && fits(features.metal, owner->metal, owner->metal_storage))
+        chosen = &features.metal;
+    else if (features.energy.site && fits(features.energy, owner->energy, owner->energy_storage))
+        chosen = &features.energy;
     if (!chosen)
         return ground::keep_waiting;
     install_goal(nullptr);

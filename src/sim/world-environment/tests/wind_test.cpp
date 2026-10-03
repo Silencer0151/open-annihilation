@@ -214,5 +214,44 @@ int main() {
         update_sea_occupy(unit, def, 20, host);
         require(calls.count == 6, "unchanged occupy does not call the script");
     }
+    {
+        // The water state rules' reordered checks, beside 3.1c's, at sea level 20.
+        struct Case {
+            int16_t height;
+            int8_t water_line;
+            int16_t model_top;
+            int32_t base;
+            int32_t reordered;
+            const char* what;
+        };
+
+        const Case cases[] = {
+            {10, 0, 20, 7, sea_occupy_waterline, "deep unit with its waterline below the sea"},
+            {17, 3, 4, sea_occupy_waterline, sea_occupy_surface, "shallow floater at the surface"},
+            {18, 0, 4, sea_occupy_surface, sea_occupy_surface, "waterline below within 5"},
+            {10, 0, 0, sea_occupy_submerged, sea_occupy_submerged, "model top below the sea"},
+            {12, 30, 20, 7, 7, "waterline above the sea, deeper than 5"},
+            {21, 0, 4, sea_occupy_above, sea_occupy_above, "above the sea"},
+        };
+        for (const auto& c : cases)
+            for (const bool reordered : {false, true}) {
+                SeaOccupyHost host{};
+                host.reordered = reordered;
+                oa::Unit unit{};
+                oa::UnitDef def{};
+                unit.flags = sea_occupy_ground_layer;
+                const int32_t seven = 7;
+                std::memcpy(unit.last_occupy_code, &seven, sizeof(seven));
+                unit.position.y = static_cast<oa::oa_fixed>(
+                    static_cast<uint32_t>(static_cast<uint16_t>(c.height)) << 16
+                );
+                def.water_line = c.water_line;
+                def.model_height = static_cast<oa::oa_fixed>(
+                    static_cast<uint32_t>(static_cast<uint16_t>(c.model_top)) << 16
+                );
+                update_sea_occupy(unit, def, 20, host);
+                require(sea_occupy(unit) == (reordered ? c.reordered : c.base), c.what);
+            }
+    }
     std::cout << "world environment wind tests passed\n";
 }

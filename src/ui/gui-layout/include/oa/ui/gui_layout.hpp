@@ -292,6 +292,14 @@ struct ParseResult {
 // holds the source string; nullopt stands for a missing table or key.
 using TranslationLookup = std::function<std::optional<std::string>(std::string_view source)>;
 
+/// Returns the lookup that translates a GUI file's texts as the game shows
+/// them: through the game's own translation in the language shown
+/// (oa/data/languages/translation.hpp), each translation cut to the record's
+/// limit::text_bytes as the game's record holds it.
+///
+/// @return the lookup; it translates nothing while no translation is installed
+[[nodiscard]] TranslationLookup game_translation_lookup();
+
 /// Parses a text GUI layout (a .GUI file) into gadget records.
 ///
 /// String fields are bounded to the game's record widths and text fields are

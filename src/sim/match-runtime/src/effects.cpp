@@ -316,7 +316,9 @@ bool Match::spawn_weapon_explosion(
             sim::effect_particles::spawn_white_smoke(
                 effects(), state().game, host, point, sim::effect_particles::layer_smoke
             );
-            return true;
+            // The puff alone, unless the display rules show the explosion too.
+            if (!input_.display.end_smoke_explosion)
+                return true;
         }
         sim::effect_particles::log_explosion(
             effects(),

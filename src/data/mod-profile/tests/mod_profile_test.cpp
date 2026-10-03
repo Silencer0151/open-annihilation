@@ -1,0 +1,1002 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// The resolver: every way to write a limit or hack (true, false, a preset
+// with overrides, a shorthand scalar), settings bindings with registry seeds
+// and clamping, the host's match options, script-extension mounts, data keys,
+// every refusal, the records it fills, the canonical form and the hashes.
+// The hashes pinned here are the ones the reference resolver gives for the
+// same profiles and registry.
+//
+// With --references, resolves every profile in the folders under the folder
+// OA_MOD_PROFILES_DIR names and checks each against the pinned hashes of the
+// reference profiles; without that folder it skips (exit 77).
+
+#include "oa/data/mod_profile.hpp"
+#include "oa/data/mod_profile/registry.hpp"
+#include "oa/platform/system.hpp"
+#include "oa/test/check.hpp"
+
+#include <algorithm>
+#include <cctype>
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <initializer_list>
+#include <iostream>
+#include <iterator>
+#include <set>
+#include <span>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+namespace {
+
+using namespace oa::data::mod_profile;
+namespace fs = std::filesystem;
+
+/// Returns a hack this engine does not carry out yet, which a profile turns
+/// on with true.
+///
+/// @return its ID, or empty once every hack is implemented
+std::string_view unimplemented_hack() {
+    for (const registry::Entry& entry : registry::table().entries)
+        if (entry.kind == registry::EntryKind::hack && !entry.implemented && !entry.visual)
+            return entry.id;
+    return {};
+}
+
+/// Counts the hacks among some IDs that this engine does not carry out yet.
+///
+/// @param ids hack IDs
+/// @return how many the registry marks not implemented
+size_t unimplemented_among(std::initializer_list<std::string_view> ids) {
+    size_t count = 0;
+    for (const auto id : ids)
+        if (const registry::Entry* entry = registry::find_entry(id);
+            entry != nullptr && !entry->implemented)
+            ++count;
+    return count;
+}
+
+/// The test profile's head, then its blocks.
+constexpr std::string_view head = "oamod: 1\n"
+                                  "id: {id}\n"
+                                  "name: t\n"
+                                  "version: \"1\"\n"
+                                  "requires: {base: ta-3.1c, catalogue: 1}\n";
+
+/// A profile with every way of writing limits and hacks, and settings bindings.
+constexpr std::string_view single_body =
+    "limits:\n"
+    "  units-per-player: {default: 1000, max: 1200, min: 30}\n"
+    "  path-search-budget: 5000\n"
+    "  effects: true\n"
+    "  unit-types: true\n"
+    "hacks:\n"
+    "  units.id-reuse-delay: 90\n"
+    "  orders.weapons-free-while-busy: {preset: baseline, states: "
+    "[repair, nanolathe]}\n"
+    "  teams.team-number-alliances: true\n"
+    "  repair.rate: false\n"
+    "  console.game-speed-range: true\n"
+    "  recorder.ta-demo-recorder: true\n"
+    "settings:\n"
+    "  limits.units-per-player.default: {registry: UnitLimit}\n"
+    "  limits.unit-types.bitset-bits: {ini: Preferences/UnitType}\n"
+    "  limits.effects.queue: {ini: Preferences/SfxLimit}\n"
+    "  registry-seeds: {UnitLimit: 1100}\n";
+
+/// Makes a profile's text from the head and a body.
+///
+/// @param id the profile's id
+/// @param body the blocks after the head
+/// @return the text
+std::string profile_text(std::string_view id, std::string_view body = {}) {
+    std::string text{head};
+    text.replace(text.find("{id}"), 4, id);
+    return text + std::string{body};
+}
+
+/// Resolves a profile's text, accepting hacks that are not implemented yet.
+///
+/// @param text the profile
+/// @param options further options
+/// @return the result
+ResolveResult resolve(std::string_view text, ResolveOptions options = {}) {
+    options.accept_unimplemented_hacks = true;
+    return resolve_profile(
+        std::span<const uint8_t>{reinterpret_cast<const uint8_t*>(text.data()), text.size()},
+        "test.oamod",
+        options
+    );
+}
+
+/// Tells whether resolving a profile fails with an error containing a needle.
+///
+/// @param text the profile
+/// @param needle text the error must contain
+/// @param options further options
+/// @return true when it does
+bool refused_with(std::string_view text, std::string_view needle, ResolveOptions options = {}) {
+    const ResolveResult result = resolve(text, std::move(options));
+    for (const Diagnostic& diagnostic : result.errors) {
+        if (format_diagnostic(diagnostic).find(needle) != std::string::npos)
+            return !result.resolution.has_value();
+    }
+    std::fprintf(
+        stderr, "no error containing '%.*s'; got:\n", static_cast<int>(needle.size()), needle.data()
+    );
+    for (const Diagnostic& diagnostic : result.errors)
+        std::fprintf(stderr, "  %s\n", format_diagnostic(diagnostic).c_str());
+    return false;
+}
+
+/// Follows a path of keys through the effective profile.
+///
+/// @param resolution the resolved profile
+/// @param keys the keys
+/// @return the value, or null
+const Value* at(const Resolution& resolution, std::initializer_list<std::string_view> keys) {
+    const Value* value = &resolution.effective;
+    for (const std::string_view key : keys) {
+        if (value == nullptr)
+            return nullptr;
+        value = find_member(*value, key);
+    }
+    return value;
+}
+
+/// Writes a value's canonical text, or "absent".
+///
+/// @param value the value, or null
+/// @return its text
+std::string text_of(const Value* value) {
+    return value != nullptr ? canonical_json(*value) : "absent";
+}
+
+/// Returns the provenance of a path.
+///
+/// @param resolution the resolved profile
+/// @param path the path
+/// @return which step set it, or empty
+std::string source_of(const Resolution& resolution, std::string_view path) {
+    for (const Provenance& provenance : resolution.provenance) {
+        if (provenance.path == path)
+            return provenance.source;
+    }
+    return {};
+}
+
+void test_canonical_form() {
+    Value value = make_map();
+    Value list = make_list();
+    list.items.push_back(make_integer(1));
+    list.items.push_back(make_string("\xE2\x82\xAC\n"));
+    set_member(value, "b", std::move(list));
+    set_member(value, "a", Value{});
+    set_member(value, "\xC3\xA9", make_boolean(true));
+    OA_CHECK(
+        canonical_json(value) == "{\"a\":null,\"b\":[1,\"\xE2\x82\xAC\\n\"],\"\xC3\xA9\":true}"
+    );
+    // Keys sort by UTF-16 code units: a supplementary character sorts before U+FF61.
+    Value keys = make_map();
+    set_member(keys, "\xEF\xBD\xA1", make_integer(1));
+    set_member(keys, "\xF0\x9F\x98\x80", make_integer(2));
+    set_member(keys, "\x7F", make_integer(3));
+    OA_CHECK(canonical_json(keys) == "{\"\x7F\":3,\"\xF0\x9F\x98\x80\":2,\"\xEF\xBD\xA1\":1}");
+    Value control = make_string(std::string{"\x01\"\\", 3});
+    OA_CHECK(canonical_json(control) == "\"\\u0001\\\"\\\\\"");
+}
+
+void test_single_profile() {
+    const std::string single = profile_text("single", single_body);
+    const ResolveResult result = resolve(single);
+    OA_CHECK(result.errors.empty());
+    if (!result.resolution)
+        return;
+    const Resolution& r = *result.resolution;
+    OA_CHECK(
+        text_of(at(r, {"limits", "units-per-player"})) ==
+        "{\"default\":1100,\"limits-screen-fallback\":1500,\"max\":1200,\"min\":30}"
+    );
+    OA_CHECK(text_of(at(r, {"limits", "path-search-budget"})) == "{\"nodes\":5000}");
+    OA_CHECK(
+        text_of(at(r, {"limits", "build-list-entries"})) ==
+        "{\"copy\":30,\"overflow\":\"truncate\"}"
+    );
+    OA_CHECK(text_of(at(r, {"hacks", "units.id-reuse-delay"})) == "{\"ticks\":90}");
+    OA_CHECK(
+        text_of(at(r, {"hacks", "teams.team-number-alliances", "bit7-keeps-alliances"})) == "true"
+    );
+    OA_CHECK(at(r, {"hacks", "repair.rate"}) == nullptr);
+    // An explicit parameter beats the preset; a set lists its values in the registry's order.
+    OA_CHECK(
+        text_of(at(r, {"hacks", "orders.weapons-free-while-busy", "states"})) ==
+        "[\"nanolathe\",\"repair\"]"
+    );
+    OA_CHECK(source_of(r, "hacks.units.id-reuse-delay.ticks") == "single");
+    OA_CHECK(source_of(r, "limits.units-per-player.default") == "settings registry:UnitLimit");
+    OA_CHECK(source_of(r, "limits.build-list-entries.copy") == "baseline");
+    OA_CHECK(source_of(r, "identity.network-version") == "baseline");
+    OA_CHECK(
+        digest_text(r.profile.sim_hash) ==
+        "cdee39782c4639170ac6b57ab6f3813bd1bfee630c2c62c197763952d1c37274"
+    );
+    OA_CHECK(
+        digest_text(r.profile.full_hash) ==
+        "1c3ee80ad599278f8ddd283c1774e0751beb7627920684584f7e095b162026eb"
+    );
+    // Every hack turned on here that waits for its implementation says so.
+    OA_CHECK(
+        result.warnings.size() >= unimplemented_among(
+                                      {"units.id-reuse-delay",
+                                       "orders.weapons-free-while-busy",
+                                       "teams.team-number-alliances",
+                                       "console.game-speed-range",
+                                       "recorder.ta-demo-recorder"}
+                                  )
+    );
+
+    // The records.
+    const ModProfile& profile = r.profile;
+    OA_CHECK(profile.id == "single" && profile.name == "t" && profile.version == "1");
+    OA_CHECK(profile.limits.units_per_player.default_limit == 1100);
+    OA_CHECK(profile.limits.units_per_player.minimum == 30);
+    OA_CHECK(profile.limits.path_search.nodes == 5000);
+    OA_CHECK(profile.limits.effects.reserve == 204800);
+    OA_CHECK(profile.rules.units.id_reuse_delay.enabled);
+    OA_CHECK(profile.rules.units.id_reuse_delay.ticks == 90);
+    OA_CHECK(!profile.rules.repair.rate.enabled);
+    OA_CHECK(profile.rules.orders.weapons_free_while_busy.states.contains(
+        oa::data::match_rules::OrdersWeaponsFreeWhileBusyStates::repair
+    ));
+    OA_CHECK(profile.rules.console.game_speed_range.minimum == 0);
+    OA_CHECK(profile.recorder.ta_demo_recorder.enabled);
+    OA_CHECK(profile.recorder.ta_demo_recorder.auto_extension == ".tad");
+    OA_CHECK(profile.registry_seeds.size() == 1 && profile.registry_seeds[0].value == "1100");
+    OA_CHECK(profile.registry_seeds[0].integer);
+
+    // The player's settings: the unit-type bits step, a limit above the
+    // maximum clamped, and the reserve following the queue.
+    ResolveOptions settings{};
+    settings.settings.ini = {{"preferences/unittype", "2000"}, {"Preferences/SfxLimit", "16000"}};
+    settings.settings.registry = {{"UnitLimit", "3000"}};
+    const ResolveResult r2 = resolve(single, settings);
+    OA_CHECK(r2.resolution.has_value());
+    if (r2.resolution) {
+        OA_CHECK(text_of(at(*r2.resolution, {"limits", "unit-types", "bitset-bits"})) == "2048");
+        OA_CHECK(text_of(at(*r2.resolution, {"limits", "units-per-player", "default"})) == "1200");
+        OA_CHECK(
+            text_of(at(*r2.resolution, {"limits", "effects"})) ==
+            "{\"queue\":16000,\"reserve\":160000}"
+        );
+        OA_CHECK(r2.resolution->profile.sim_hash != r.profile.sim_hash);
+        OA_CHECK(
+            digest_text(r2.resolution->profile.sim_hash) ==
+            "a9857b147eb8e5a18205568cda9ea0053e0bb65b41b2f433d66fcf59001868aa"
+        );
+        OA_CHECK(
+            digest_text(r2.resolution->profile.full_hash) ==
+            "a1f92126d5b13aeb390ddcb99687ea652669b1287620f6002903f3d835fd945e"
+        );
+        bool clamped = false;
+        for (const Diagnostic& warning : r2.warnings)
+            clamped = clamped || format_diagnostic(warning).find("clamped to [min, max] = 1200") !=
+                                     std::string::npos;
+        OA_CHECK(clamped);
+    }
+    // A view-scope setting changes only the full hash.
+    ResolveOptions view{};
+    view.settings.ini = {{"Preferences/SfxLimit", "300"}};
+    const ResolveResult r3 = resolve(single, view);
+    OA_CHECK(r3.resolution && r3.resolution->profile.sim_hash == r.profile.sim_hash);
+    OA_CHECK(r3.resolution && r3.resolution->profile.full_hash != r.profile.full_hash);
+    OA_CHECK(
+        r3.resolution && digest_text(r3.resolution->profile.full_hash) ==
+                             "0648408b4bfe2c2e6496f583621592c78333b7bca18ab441d870b5c3538eadb4"
+    );
+    // A setting that does not read as its type is ignored with a warning.
+    ResolveOptions junk{};
+    junk.settings.ini = {{"Preferences/SfxLimit", "lots"}};
+    const ResolveResult r_junk = resolve(single, junk);
+    OA_CHECK(r_junk.resolution && r_junk.resolution->profile.full_hash == r.profile.full_hash);
+    OA_CHECK(!r_junk.warnings.empty());
+
+    // The host's options for one game.
+    ResolveOptions match{};
+    match.match = {
+        *parse_match_option("limits.units-per-player.default=400"),
+        *parse_match_option("console.game-speed-range.min=5")
+    };
+    const ResolveResult r4 = resolve(single, match);
+    OA_CHECK(r4.resolution.has_value());
+    if (r4.resolution) {
+        OA_CHECK(text_of(at(*r4.resolution, {"limits", "units-per-player", "default"})) == "400");
+        OA_CHECK(text_of(at(*r4.resolution, {"hacks", "console.game-speed-range", "min"})) == "5");
+        OA_CHECK(
+            digest_text(r4.resolution->profile.sim_hash) ==
+            "fc779dd9c7b923719351fdf77c7e0fbffe5e32dfad2f9e93458dd279279571df"
+        );
+        OA_CHECK(r4.resolution->profile.limits.units_per_player.default_limit == 400);
+        OA_CHECK(source_of(*r4.resolution, "limits.units-per-player.default") == "match");
+    }
+    ResolveOptions fixed{};
+    fixed.match = {*parse_match_option("limits.path-search-budget.nodes=10")};
+    OA_CHECK(refused_with(single, "not match", fixed));
+    ResolveOptions bounds{};
+    bounds.match = {*parse_match_option("console.game-speed-range.min=30")};
+    OA_CHECK(refused_with(single, "outside", bounds));
+    ResolveOptions absent{};
+    absent.match = {*parse_match_option("repair.rate.mode=exact-remainder")};
+    OA_CHECK(refused_with(single, "the parameter is fixed, not match", absent));
+    OA_CHECK(!parse_match_option("no-equals").has_value());
+}
+
+void test_base_profile() {
+    // A profile that changes nothing resolves to 3.1c's records.
+    const ResolveResult result = resolve(profile_text("minimal"));
+    OA_CHECK(result.resolution.has_value() && result.warnings.empty());
+    if (!result.resolution)
+        return;
+    const ModProfile& profile = result.resolution->profile;
+    OA_CHECK(profile.rules == oa::data::match_rules::MatchRules{});
+    OA_CHECK(profile.limits == oa::data::limits::Limits{});
+    OA_CHECK(profile.identity == Identity{} && profile.layout == Layout{});
+    OA_CHECK(profile.strings == Strings{} && profile.media == Media{});
+    OA_CHECK(profile.network == NetworkRules{} && profile.recorder == RecorderRules{});
+    OA_CHECK(profile.ui == UiRules{} && profile.data_keys == DataKeyBindings{});
+    OA_CHECK(
+        digest_text(profile.sim_hash) ==
+        "1502111e3b1f69bd93be99405e3c61e0c6337698a7c8502f9f6320e80600094d"
+    );
+    OA_CHECK(
+        digest_text(profile.full_hash) ==
+        "4d9a38630ed077e14712df16d3528b1750af60642f241acca9b3716de6518803"
+    );
+    OA_CHECK(
+        describe_resolution(*result.resolution).find("sha256-sim  1502111e") != std::string::npos
+    );
+}
+
+void test_blocks() {
+    const std::string text = profile_text(
+        "blocks",
+        "identity:\n"
+        "  network-version: [10, 2]\n"
+        "  side-names: [North, South]\n"
+        "layout:\n"
+        "  revision-archive: MOD.gp3\n"
+        "  directories: {units: unitsX, weapons: weaponX}\n"
+        "  archive-patterns: {ufo: \"*.XYZ\"}\n"
+        "  cd-check: false\n"
+        "strings:\n"
+        "  status: {nanolathing: Building}\n"
+        "media:\n"
+        "  movies: {intro: \"\"}\n"
+        "limits:\n"
+        "  units-per-player: {limits-screen-fallback: 1000}\n"
+        "script-extensions:\n"
+        "  get: [unit.kills-x100, unit.my-id]\n"
+        "  set: {}\n"
+        "data-keys:\n"
+        "  unit:\n"
+        "    Thresholds: veterancy.thresholds\n"
+        "  weapon:\n"
+        "    nottoair: weapons.not-to-air\n"
+        "    unused: false\n"
+        "hacks:\n"
+        "  veterancy.model: {preset: baseline, damage-dealt-per-level: 10}\n"
+        "  ai.difficulty-names: true\n"
+        "  network.vercheck: periodic-challenge\n"
+    );
+    const ResolveResult result = resolve(text);
+    OA_CHECK(result.errors.empty());
+    if (!result.resolution)
+        return;
+    const Resolution& r = *result.resolution;
+    const ModProfile& profile = r.profile;
+    OA_CHECK(text_of(at(r, {"identity", "network-version"})) == "[10,2]");
+    OA_CHECK(text_of(at(r, {"layout", "directories", "units"})) == "\"unitsX\"");
+    OA_CHECK(text_of(at(r, {"layout", "directories", "guis"})) == "\"guis\"");
+    OA_CHECK(
+        text_of(at(r, {"script-extensions", "get"})) ==
+        "{\"32\":\"unit.kills-x100\",\"71\":\"unit.my-id\"}"
+    );
+    OA_CHECK(text_of(at(r, {"script-extensions", "fidelity"})) == "\"exact\"");
+    OA_CHECK(text_of(at(r, {"data-keys", "weapon"})) == "{\"nottoair\":\"weapons.not-to-air\"}");
+    OA_CHECK(
+        source_of(r, "hacks.veterancy.model.default-thresholds").find("per-unit key Thresholds") !=
+        std::string::npos
+    );
+    OA_CHECK(source_of(r, "hacks.veterancy.model.damage-dealt-cap") == "preset baseline (blocks)");
+    OA_CHECK(source_of(r, "layout.directories.units") == "profile");
+
+    OA_CHECK(profile.identity.network_version[0] == 10 && profile.identity.network_version[1] == 2);
+    OA_CHECK(profile.identity.side_names[1] == "South");
+    OA_CHECK(profile.identity.settings_file == "totala.ini");
+    OA_CHECK(profile.layout.revision_archive == "MOD.gp3");
+    OA_CHECK(profile.layout.directories.units == "unitsX");
+    OA_CHECK(profile.layout.directories.weapons == "weaponX");
+    OA_CHECK(profile.layout.directories.gamedata == "gamedata");
+    OA_CHECK(profile.layout.archive_patterns.ufo == "*.XYZ");
+    OA_CHECK(!profile.layout.cd_check);
+    OA_CHECK(profile.strings.status.nanolathing == "Building");
+    OA_CHECK(profile.strings.status.paralyzed == "Paralyzed");
+    OA_CHECK(profile.media.movies.intro.empty() && profile.media.movies.logo == "1.zrb");
+    OA_CHECK(profile.limits.units_per_player.limits_screen_fallback == 1000);
+    OA_CHECK(profile.limits.units_per_player.default_limit == 1500);
+    OA_CHECK(profile.data_keys.veterancy_thresholds == "Thresholds");
+    OA_CHECK(profile.data_keys.weapons_not_to_air == "nottoair");
+    OA_CHECK(profile.data_keys.weapons_surface_fire.empty());
+    OA_CHECK(profile.rules.veterancy.model.enabled);
+    OA_CHECK(profile.rules.veterancy.model.damage_dealt_per_level == 10);
+    OA_CHECK(profile.rules.veterancy.model.damage_dealt_cap == 5);
+    OA_CHECK(
+        profile.rules.ai.difficulty_names.names[0] ==
+        oa::data::match_rules::AiDifficultyNamesNames::hard
+    );
+    OA_CHECK(profile.network.vercheck.enabled);
+    OA_CHECK(profile.network.vercheck.revision == NetworkVercheckRevision::periodic_challenge);
+    using oa::data::match_rules::ScriptExtension;
+    OA_CHECK(profile.rules.script_get.count == 2);
+    OA_CHECK(profile.rules.script_get.find(32) == ScriptExtension::unit_kills_x100);
+    OA_CHECK(profile.rules.script_get.find(71) == ScriptExtension::unit_my_id);
+    OA_CHECK(profile.rules.script_get.find(69) == ScriptExtension::none);
+    OA_CHECK(profile.rules.script_set.count == 0);
+
+    // The index-map form mounts at the indices given; false leaves one empty.
+    const ResolveResult indexed = resolve(profile_text(
+        "indexed", "script-extensions:\n  fidelity: safe\n  get: {33: unit.my-id, 40: false}\n"
+    ));
+    OA_CHECK(indexed.resolution.has_value());
+    if (indexed.resolution) {
+        OA_CHECK(
+            text_of(at(*indexed.resolution, {"script-extensions", "get"})) ==
+            "{\"33\":\"unit.my-id\"}"
+        );
+        OA_CHECK(
+            indexed.resolution->profile.rules.script_get.find(33) == ScriptExtension::unit_my_id
+        );
+        OA_CHECK(
+            indexed.resolution->profile.rules.script_fidelity ==
+            oa::data::match_rules::ScriptFidelity::safe
+        );
+    }
+    // A string the simulation reads, kept in place.
+    const ResolveResult named =
+        resolve(profile_text("named", "hacks:\n  setup.ai-player-name-format: \"AI:%s %d\"\n"));
+    OA_CHECK(
+        named.resolution &&
+        named.resolution->profile.rules.setup.ai_player_name_format.format.view() == "AI:%s %d"
+    );
+}
+
+void test_comments_and_true() {
+    const std::string text = "# a comment line\n" + profile_text("c") +
+                             "hacks:\n  units.id-reuse-delay: true   # trailing comment\n";
+    const ResolveResult result = resolve(text);
+    OA_CHECK(
+        result.resolution &&
+        text_of(at(*result.resolution, {"hacks", "units.id-reuse-delay"})) == "{\"ticks\":150}"
+    );
+}
+
+void test_unimplemented() {
+    const std::string hack{unimplemented_hack()};
+    if (hack.empty())
+        return;
+    const std::string text = profile_text("dev", "hacks:\n  " + hack + ": true\n");
+    const auto bytes =
+        std::span<const uint8_t>{reinterpret_cast<const uint8_t*>(text.data()), text.size()};
+    const ResolveResult refused = resolve_profile(bytes, "dev.oamod");
+    OA_CHECK(!refused.resolution.has_value() && refused.errors.size() == 1);
+    OA_CHECK(
+        !refused.errors.empty() &&
+        format_diagnostic(refused.errors[0]) ==
+            "dev.oamod:7:3: hacks." + hack + ": this engine does not implement the hack yet"
+    );
+    ResolveOptions options{};
+    options.accept_unimplemented_hacks = true;
+    const ResolveResult accepted = resolve_profile(bytes, "dev.oamod", options);
+    OA_CHECK(accepted.resolution.has_value() && accepted.warnings.size() == 1);
+    // A hack written false is off, implemented or not.
+    const std::string off = profile_text("off", "hacks:\n  " + hack + ": false\n");
+    OA_CHECK(resolve_profile(
+                 std::span<const uint8_t>{reinterpret_cast<const uint8_t*>(off.data()), off.size()},
+                 "off.oamod"
+    )
+                 .resolution.has_value());
+}
+
+void test_baseline_profile() {
+    // Every limit and hack that can play as 3.1c while on, at its baseline
+    // preset: each value resolves from the preset, the limits are 3.1c's and
+    // the hacks are on.
+    const std::string text = baseline_profile_text();
+    const auto bytes =
+        std::span<const uint8_t>{reinterpret_cast<const uint8_t*>(text.data()), text.size()};
+    ResolveOptions options{};
+    options.accept_unimplemented_hacks = true;
+    const ResolveResult result = resolve_profile(bytes, "baseline.oamod", options);
+    for (const Diagnostic& error : result.errors)
+        std::cerr << format_diagnostic(error) << '\n';
+    OA_CHECK(result.resolution.has_value());
+    if (!result.resolution)
+        return;
+    const ModProfile& profile = result.resolution->profile;
+    OA_CHECK(profile.id == "baseline-rules");
+    OA_CHECK(profile.limits == oa::data::limits::Limits{});
+    OA_CHECK(profile.rules.repair.rate.enabled);
+    OA_CHECK(profile.rules.repair.rate.mode == oa::data::match_rules::RepairRateMode::clamp_max_1);
+    OA_CHECK(profile.rules.units.id_reuse_delay.enabled);
+    OA_CHECK(profile.rules.units.id_reuse_delay.ticks == 0);
+    size_t from_preset = 0;
+    for (const Provenance& value : result.resolution->provenance) {
+        if (!value.path.starts_with("hacks.") && !value.path.starts_with("limits."))
+            continue;
+        const bool baseline =
+            value.source == "baseline" || value.source.starts_with("preset baseline ");
+        if (!baseline)
+            std::cerr << value.path << " resolves from " << value.source << '\n';
+        OA_CHECK(baseline);
+        from_preset += value.source.starts_with("preset baseline ") ? 1 : 0;
+    }
+    OA_CHECK(from_preset > 0);
+}
+
+void test_refusals() {
+    struct Case {
+        std::string_view body;
+        std::string_view needle;
+    };
+
+    const Case cases[] = {
+        {"hacks: {nope.nope: true}", "unknown hack"},
+        {"hacks: {units.id-reuse-delay: {tick: 5}}", "unknown parameter"},
+        {"hacks: {units.id-reuse-delay: {ticks: -1}}", "outside"},
+        {"hacks: {units.id-reuse-delay: {ticks: 1.5}}", "integer"},
+        {"hacks: {repair.rate: {mode: fast}}", "not one of"},
+        {"hacks: {repair.rate: {preset: unknown-preset}}", "unknown preset"},
+        {"hacks: {ai.squad5-factory-tick: 3}", "expected true, false"},
+        {"hacks: {orders.weapons-free-while-busy: {states: [repair, repair]}}", "repeated"},
+        {"hacks: {veterancy.model: {default-thresholds: [5, 5]}}", "ascend"},
+        {"hacks: {ai.income-multipliers: {production: [1, 2]}}", "3 items"},
+        {"limits: {units-per-player: {default: 100, min: 200}}", "break"},
+        {"limits: {unit-types: {bitset-bits: 1000}}", "multiple of"},
+        {"script-extensions: {get: {32: unit.min-id, '32': unit.max-id}}", "twice"},
+        {"script-extensions: {get: {5: unit.min-id}}", "3.1c range"},
+        {"script-extensions: {get: {40: unit.min-id, 41: unit.min-id}}", "mounted at"},
+        {"script-extensions: {set: {40: unit.min-id}}", "get extension"},
+        {"script-extensions: {get: [unit.nothing]}", "unknown script extension"},
+        {"script-extensions: {fidelity: loose}", "exact or safe"},
+        {"script-extensions: {get: {'x': unit.min-id}}", "not a decimal integer"},
+        {"data-keys: {unit: {Foo: weapons.not-to-air}}", "not a unit"},
+        {"data-keys: {unit: {VeterancyThresholds: veterancy.thresholds}}", "which is off"},
+        {"data-keys: {feature: {}}", "unit or weapon"},
+        {"settings: {limits.build-list-entries.copy: {ini: A/B}}", "fixed"},
+        {"settings: {limits.effects.queue: {ini: NoSection}}", "Section/Key"},
+        {"settings: {limits.effects.queue: {file: x}}", "expected {ini"},
+        {"settings: {limits.effects.nothing: {ini: A/B}}", "unknown parameter"},
+        {"settings: {registry-seeds: {UnitLimit: true}}", "integers or strings"},
+        {"identity: {network-version: [3, 1, 0]}", "2 items"},
+        {"identity: {display-version: 3.1}", "expected a string"},
+        {"layout: {directories: {maps: maps}}", "unknown key"},
+        {"layout: {archive-patterns: {ufo: SWX}}", "does not match"},
+        {"layout: [a]", "layout must be an object"},
+        {"colour: red", "unknown top-level"},
+        {"extends: [base]", "unknown top-level"},
+        {"detect: {all: [{file: a.gp3}]}", "unknown top-level"},
+        {"notes: text", "unknown top-level"},
+        {"5: five", "unknown top-level"},
+    };
+    for (const Case& refusal : cases) {
+        const bool refused =
+            refused_with(profile_text("bad", std::string{refusal.body} + "\n"), refusal.needle);
+        if (!refused)
+            std::fprintf(
+                stderr, "  case: %.*s\n", static_cast<int>(refusal.body.size()), refusal.body.data()
+            );
+        OA_CHECK(refused);
+    }
+    // The head.
+    std::string unquoted = profile_text("vers");
+    unquoted.replace(unquoted.find("\"1\""), 3, "1");
+    OA_CHECK(refused_with(unquoted, "version must be a string"));
+    std::string grammar = profile_text("grammar");
+    grammar.replace(0, 8, "oamod: 2");
+    OA_CHECK(refused_with(grammar, "oamod must be 1"));
+    OA_CHECK(refused_with(profile_text("Not_Kebab"), "id must be kebab-case"));
+    std::string base = profile_text("base");
+    base.replace(base.find("ta-3.1c"), 7, "ta-3.0");
+    OA_CHECK(refused_with(base, "does not match base"));
+    // The reader's refusals name the rule and position.
+    const ResolveResult anchored = resolve("oamod: 1\nid: &a x\n");
+    OA_CHECK(
+        !anchored.errors.empty() &&
+        format_diagnostic(anchored.errors[0]) == "test.oamod:2:5: anchors (&) are not allowed"
+    );
+    // A validation error names the offending path and where it is written.
+    const ResolveResult bounded =
+        resolve(profile_text("pos", "hacks:\n  units.id-reuse-delay:\n    ticks: 40000\n"));
+    OA_CHECK(
+        !bounded.errors.empty() &&
+        format_diagnostic(bounded.errors[0]) ==
+            "test.oamod:8:12: hacks.units.id-reuse-delay.ticks: 40000 is outside [0, 30000]"
+    );
+    const ResolveResult listed =
+        resolve(profile_text("pos", "hacks:\n  veterancy.model: {default-thresholds: [5, x]}\n"));
+    OA_CHECK(
+        !listed.errors.empty() &&
+        format_diagnostic(listed.errors[0])
+                .find("hacks.veterancy.model.default-thresholds[1]: expected an integer") !=
+            std::string::npos
+    );
+}
+
+/// The hashes the reference resolver gives each reference profile: sim, then full.
+constexpr std::pair<std::string_view, std::string_view> reference_hashes[] = {
+    {"f7a558e891e845b270f26fc5faf59cf39b5911733d5f3e51778ffc435749449f",
+     "9232c1040ed73e2898b3784e74462a700bcf5f2d761625645007aa83df12d926"},
+    {"237a8fa4ba09d0951d7bfcd1b2a5aafb84bba9861758024eeab443b5ba6296d7",
+     "b22ffb22baa72d6510194157782f7c819634735ac6972b643db060411e1bd428"},
+    {"7bd577f653cf4ca28223b9e9631346374446278b9bca92d4d06c87d494c2ec02",
+     "0f8a3204da1c53d4fa574e761d091052636ee6ab6b39ddf3edd8e5f85a977a77"},
+};
+
+/// Resolves every reference profile and checks it against its pinned hashes.
+///
+/// @return the program's exit status: 77 when no reference folder is named
+int test_references() {
+    const auto named = oa::platform::environment_value("OA_MOD_PROFILES_DIR");
+    const std::string folder = named.value_or("");
+    if (folder.empty() || !fs::is_directory(folder)) {
+        std::printf("data-mod-profile-references: skipped; OA_MOD_PROFILES_DIR names no folder\n");
+        return 77;
+    }
+    std::set<std::pair<std::string, std::string>> found;
+    size_t profiles = 0;
+    for (const auto& directory : fs::directory_iterator{folder}) {
+        if (!directory.is_directory())
+            continue;
+        for (const auto& file : fs::directory_iterator{directory.path()}) {
+            std::string name = file.path().filename().string();
+            std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            });
+            if (name != "oamod.yaml")
+                continue;
+            std::ifstream in{file.path(), std::ios::binary};
+            const std::string text{std::istreambuf_iterator<char>{in}, {}};
+            const ResolveResult result = resolve(text);
+            ++profiles;
+            for (const Diagnostic& diagnostic : result.errors)
+                std::fprintf(
+                    stderr,
+                    "%s: %s\n",
+                    file.path().string().c_str(),
+                    format_diagnostic(diagnostic).c_str()
+                );
+            OA_CHECK(result.resolution.has_value());
+            if (!result.resolution)
+                continue;
+            const auto pair = std::pair{
+                digest_text(result.resolution->profile.sim_hash),
+                digest_text(result.resolution->profile.full_hash)
+            };
+            std::printf(
+                "%s\n  sha256-sim  %s\n  sha256-full %s\n",
+                file.path().string().c_str(),
+                pair.first.c_str(),
+                pair.second.c_str()
+            );
+            found.insert(pair);
+            // The profile with the most rules: values a reader of the profile can check by eye.
+            if (pair.first == reference_hashes[0].first) {
+                const Resolution& r = *result.resolution;
+                OA_CHECK(
+                    text_of(at(r, {"hacks", "veterancy.model", "damage-dealt-cap"})) == "\"none\""
+                );
+                OA_CHECK(!r.profile.rules.veterancy.model.damage_dealt_cap.has_value());
+                OA_CHECK(
+                    text_of(at(r, {"hacks", "orders.weapons-free-while-busy", "states"})) ==
+                    "[\"nanolathe\"]"
+                );
+                OA_CHECK(r.profile.limits.units_per_player.limits_screen_fallback == 1000);
+                OA_CHECK(
+                    text_of(at(r, {"script-extensions", "get", "32"})) == "\"unit.kills-x100\""
+                );
+                OA_CHECK(
+                    source_of(r, "hacks.veterancy.model.default-thresholds")
+                        .find("per-unit key VeterancyThresholds") != std::string::npos
+                );
+            }
+        }
+    }
+    OA_CHECK(profiles == std::size(reference_hashes));
+    for (const auto& [sim, full] : reference_hashes)
+        OA_CHECK(found.contains({std::string{sim}, std::string{full}}));
+    return oa::test::check_exit_status();
+}
+
+} // namespace
+
+/// Makes a list of numbers.
+///
+/// @param numbers the numbers' texts, as a profile writes them
+/// @return the list
+Value number_list(std::initializer_list<std::string_view> numbers) {
+    Value list = make_list();
+    for (const std::string_view text : numbers) {
+        oa::formats::oamod::Number number{};
+        OA_CHECK(
+            oa::formats::oamod::parse_number(text, number) == oa::formats::oamod::NumberStatus::ok
+        );
+        list.items.push_back(make_number(number));
+    }
+    return list;
+}
+
+/// Counts the warnings that say an override was left out, with a text.
+///
+/// @param result the result
+/// @param needle text the warning must contain
+/// @return how many do
+size_t left_out_with(const ResolveResult& result, std::string_view needle) {
+    size_t count = 0;
+    for (const Diagnostic& warning : result.warnings) {
+        const std::string line = format_diagnostic(warning);
+        if (line.find("the override is left out") != std::string::npos &&
+            line.find(needle) != std::string::npos)
+            ++count;
+    }
+    return count;
+}
+
+void test_overrides() {
+    // A profile with two hacks on, and every way an override changes one.
+    const std::string text =
+        profile_text("overridden", "hacks:\n  units.id-reuse-delay: 90\n  repair.rate: true\n");
+    const ResolveResult plain = resolve(text);
+    OA_CHECK(plain.resolution.has_value());
+    if (!plain.resolution)
+        return;
+    ResolveOptions options{};
+    // On over the profile's own values: the parameter it names, the rest kept.
+    options.overrides.push_back(
+        HackOverride{"units.id-reuse-delay", true, {{"ticks", make_integer(120)}}}
+    );
+    // Off, as false in the profile.
+    options.overrides.push_back(HackOverride{"repair.rate", false, {}});
+    // On where the profile has it off: its defaults, the parameter it names.
+    options.overrides.push_back(
+        HackOverride{"ai.attack-wave-size", true, {{"units", make_integer(40)}}}
+    );
+    const ResolveResult laid = resolve(text, options);
+    OA_CHECK(laid.errors.empty() && laid.warnings.empty());
+    if (!laid.resolution)
+        return;
+    const Resolution& r = *laid.resolution;
+    OA_CHECK(text_of(at(r, {"hacks", "units.id-reuse-delay", "ticks"})) == "120");
+    OA_CHECK(at(r, {"hacks", "repair.rate"}) == nullptr);
+    OA_CHECK(text_of(at(r, {"hacks", "ai.attack-wave-size", "units"})) == "40");
+    OA_CHECK(source_of(r, "hacks.units.id-reuse-delay.ticks") == "override");
+    OA_CHECK(source_of(r, "hacks.ai.attack-wave-size.units") == "override");
+    OA_CHECK(r.profile.rules.units.id_reuse_delay.enabled);
+    OA_CHECK(r.profile.rules.units.id_reuse_delay.ticks == 120);
+    OA_CHECK(!r.profile.rules.repair.rate.enabled);
+    OA_CHECK(r.profile.rules.ai.attack_wave_size.enabled);
+    OA_CHECK(r.profile.rules.ai.attack_wave_size.units == 40);
+    OA_CHECK(r.profile.sim_hash != plain.resolution->profile.sim_hash);
+    OA_CHECK(r.profile.full_hash != plain.resolution->profile.full_hash);
+    // The same values written in the profile give the same hashes.
+    const ResolveResult written = resolve(profile_text(
+        "overridden", "hacks:\n  units.id-reuse-delay: 120\n  ai.attack-wave-size: 40\n"
+    ));
+    OA_CHECK(written.resolution.has_value());
+    if (written.resolution) {
+        OA_CHECK(written.resolution->profile.sim_hash == r.profile.sim_hash);
+        OA_CHECK(written.resolution->profile.full_hash == r.profile.full_hash);
+        OA_CHECK(written.resolution->canonical == r.canonical);
+    }
+
+    // A display (view-scope) hack changes the full hash and keeps the sim hash.
+    ResolveOptions view{};
+    view.overrides.push_back(HackOverride{"ui.whiteboard", true, {}});
+    const ResolveResult shown = resolve(text, view);
+    OA_CHECK(shown.resolution.has_value());
+    if (shown.resolution) {
+        OA_CHECK(shown.resolution->profile.ui.whiteboard.enabled);
+        OA_CHECK(shown.resolution->profile.sim_hash == plain.resolution->profile.sim_hash);
+        OA_CHECK(shown.resolution->profile.full_hash != plain.resolution->profile.full_hash);
+    }
+
+    // Each override that does not fit is left out whole, with a warning,
+    // and the others apply.
+    ResolveOptions bad{};
+    bad.overrides = {
+        HackOverride{"units.no-such-hack", true, {}},
+        HackOverride{"units.id-reuse-delay", true, {{"ticks", make_integer(-1)}}},
+        HackOverride{"units.id-reuse-delay", true, {{"nothing", make_integer(1)}}},
+        HackOverride{
+            "console.game-speed-range", true, {{"min", make_integer(15)}, {"max", make_integer(5)}}
+        },
+        HackOverride{"ai.attack-wave-size", true, {{"units", make_string("many")}}},
+        HackOverride{"ai.patrol-group-size", true, {{"units", make_integer(9)}}},
+    };
+    const ResolveResult refused = resolve(text, bad);
+    OA_CHECK(refused.errors.empty() && refused.resolution.has_value());
+    OA_CHECK(left_out_with(refused, "hacks.units.no-such-hack: unknown hack") == 1);
+    OA_CHECK(left_out_with(refused, "is outside [0, 30000]") == 1);
+    OA_CHECK(left_out_with(refused, "hacks.units.id-reuse-delay.nothing: unknown parameter") == 1);
+    OA_CHECK(left_out_with(refused, "break min <= max") == 1);
+    OA_CHECK(left_out_with(refused, "expected an integer") == 1);
+    OA_CHECK(refused.warnings.size() == 5);
+    if (refused.resolution) {
+        const ModProfile& profile = refused.resolution->profile;
+        OA_CHECK(profile.rules.units.id_reuse_delay.ticks == 90);
+        OA_CHECK(!profile.rules.ai.attack_wave_size.enabled);
+        OA_CHECK(!profile.rules.console.game_speed_range.enabled);
+        OA_CHECK(profile.rules.ai.patrol_group_size.enabled);
+        OA_CHECK(profile.rules.ai.patrol_group_size.units == 9);
+    }
+
+    // A hack a data key the profile maps needs stays on.
+    const std::string keyed = profile_text(
+        "keyed",
+        "data-keys:\n  unit:\n    Thresholds: veterancy.thresholds\n"
+        "hacks:\n  veterancy.model: true\n"
+    );
+    ResolveOptions off{};
+    off.overrides.push_back(HackOverride{"veterancy.model", false, {}});
+    const ResolveResult kept = resolve(keyed, off);
+    OA_CHECK(kept.errors.empty() && kept.resolution.has_value());
+    OA_CHECK(left_out_with(kept, "data-keys.unit.Thresholds needs the hack on") == 1);
+    if (kept.resolution)
+        OA_CHECK(at(*kept.resolution, {"hacks", "veterancy.model"}) != nullptr);
+
+    // A hack this engine does not implement is turned on only while such
+    // hacks are accepted.
+    if (const std::string_view hack = unimplemented_hack(); !hack.empty()) {
+        ResolveOptions strict{};
+        strict.overrides.push_back(HackOverride{std::string{hack}, true, {}});
+        const ResolveResult result = resolve_profile(
+            std::span<const uint8_t>{reinterpret_cast<const uint8_t*>(text.data()), text.size()},
+            "test.oamod",
+            strict
+        );
+        OA_CHECK(left_out_with(result, "does not implement") == 1);
+    }
+
+    // The plain 3.1c baseline: 3.1c's records and the sim hash of a profile
+    // that changes nothing; an override turns a hack on over it.
+    const std::string base = base_game_profile_text();
+    const ResolveResult baseline = resolve(base);
+    OA_CHECK(baseline.resolution.has_value() && baseline.warnings.empty());
+    if (baseline.resolution) {
+        OA_CHECK(baseline.resolution->profile.id == "base-game");
+        OA_CHECK(baseline.resolution->profile.rules == oa::data::match_rules::MatchRules{});
+        OA_CHECK(
+            digest_text(baseline.resolution->profile.sim_hash) ==
+            "1502111e3b1f69bd93be99405e3c61e0c6337698a7c8502f9f6320e80600094d"
+        );
+    }
+    ResolveOptions over_base{};
+    over_base.overrides.push_back(
+        HackOverride{
+            "ai.income-multipliers", true, {{"production", number_list({"1", "2", "3.5"})}}
+        }
+    );
+    const ResolveResult on_base = resolve(base, over_base);
+    OA_CHECK(on_base.resolution.has_value() && on_base.warnings.empty());
+    if (on_base.resolution) {
+        OA_CHECK(
+            text_of(at(*on_base.resolution, {"hacks", "ai.income-multipliers", "production"})) ==
+            "[1,2,3.5]"
+        );
+        OA_CHECK(
+            text_of(at(*on_base.resolution, {"hacks", "ai.income-multipliers", "reclaim"})) ==
+            "[0.5,1,4]"
+        );
+    }
+}
+
+void test_override_text_and_states() {
+    // The text the settings keep: one object, its members sorted, read back.
+    const std::vector<HackOverride> overrides{
+        HackOverride{"ui.whiteboard", true, {}},
+        HackOverride{"repair.rate", false, {}},
+        HackOverride{
+            "ai.income-multipliers", true, {{"production", number_list({"0.5", "1", "2"})}}
+        },
+    };
+    const std::string text = overrides_text(overrides);
+    OA_CHECK(
+        text == "{\"ai.income-multipliers\":{\"production\":[0.5,1,2]},\"repair.rate\":false,"
+                "\"ui.whiteboard\":true}"
+    );
+    const std::vector<HackOverride> read = read_overrides(text);
+    OA_CHECK(read.size() == overrides.size());
+    for (const HackOverride& override : overrides) {
+        const HackOverride* found = find_override(read, override.hack);
+        OA_CHECK(found != nullptr && *found == override);
+    }
+    OA_CHECK(overrides_text({}) == "{}");
+    OA_CHECK(read_overrides("{}").empty());
+    OA_CHECK(read_overrides("not a mapping").empty());
+    OA_CHECK(read_overrides("[1, 2]").empty());
+    OA_CHECK(read_overrides("{\"a\": true, \"a\": false}").empty());
+    const std::vector<HackOverride> partly = read_overrides("{\"a\": 3, \"b\": true}");
+    OA_CHECK(partly.size() == 1 && partly[0].hack == "b" && partly[0].on);
+
+    // Every hack of the registry, in its order; 3.1c's states are all off
+    // at their baselines.
+    const auto hacks = standard_hacks();
+    size_t registry_hacks = 0;
+    for (const registry::Entry& entry : registry::table().entries)
+        if (entry.kind == registry::EntryKind::hack)
+            ++registry_hacks;
+    OA_CHECK(hacks.size() == registry_hacks);
+    for (size_t index = 0; index < hacks.size(); ++index) {
+        OA_CHECK(hacks[index]->kind == registry::EntryKind::hack);
+        OA_CHECK(standard_hack_index(hacks[index]->id) == index);
+        OA_CHECK(hacks[index]->id.starts_with(std::string{hacks[index]->area} + "."));
+    }
+    OA_CHECK(!standard_hack_index("units.no-such-hack").has_value());
+    const std::vector<HackState> base = base_hack_states();
+    OA_CHECK(base.size() == hacks.size());
+    for (size_t index = 0; index < base.size(); ++index) {
+        OA_CHECK(!base[index].on);
+        const auto parameters = registry::parameters_of(*hacks[index]);
+        OA_CHECK(base[index].values.size() == parameters.size());
+        for (size_t at = 0; at < parameters.size() && at < base[index].values.size(); ++at)
+            OA_CHECK(values_equal(
+                base[index].values[at], registry::literal_value(parameters[at].value.baseline)
+            ));
+    }
+
+    // A profile's states, and an override laid over one as the resolver lays it.
+    const ResolveResult result =
+        resolve(profile_text("states", "hacks:\n  units.id-reuse-delay: 90\n"));
+    OA_CHECK(result.resolution.has_value());
+    if (!result.resolution)
+        return;
+    const std::vector<HackState> states = hack_states(result.resolution->effective);
+    const auto delay = standard_hack_index("units.id-reuse-delay");
+    const auto wave = standard_hack_index("ai.attack-wave-size");
+    OA_CHECK(delay.has_value() && wave.has_value());
+    if (!delay || !wave)
+        return;
+    OA_CHECK(states[*delay].on && text_of(&states[*delay].values[0]) == "90");
+    OA_CHECK(!states[*wave].on && text_of(&states[*wave].values[0]) == "6");
+    const registry::Entry& wave_hack = *hacks[*wave];
+    OA_CHECK(text_of(&on_values(wave_hack, states[*wave])[0]) == "10");
+    const HackOverride turned_on{"ai.attack-wave-size", true, {}};
+    const HackState on = overridden_state(wave_hack, states[*wave], &turned_on);
+    OA_CHECK(on.on && text_of(&on.values[0]) == "10");
+    const HackOverride set{"ai.attack-wave-size", true, {{"units", make_integer(33)}}};
+    OA_CHECK(text_of(&overridden_state(wave_hack, states[*wave], &set).values[0]) == "33");
+    const HackOverride turned_off{"units.id-reuse-delay", false, {}};
+    const HackState off = overridden_state(*hacks[*delay], states[*delay], &turned_off);
+    OA_CHECK(!off.on && text_of(&off.values[0]) == "0");
+    OA_CHECK(overridden_state(*hacks[*delay], states[*delay], nullptr).on);
+}
+
+int main(int argc, char** argv) {
+    if (argc > 1 && std::string_view{argv[1]} == "--references")
+        return test_references();
+    test_canonical_form();
+    test_baseline_profile();
+    test_single_profile();
+    test_base_profile();
+    test_blocks();
+    test_comments_and_true();
+    test_unimplemented();
+    test_refusals();
+    test_overrides();
+    test_override_text_and_states();
+    return oa::test::check_exit_status();
+}

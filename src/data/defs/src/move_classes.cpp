@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/data/defs/move_classes.hpp"
+#include "oa/data/defs/layout.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -84,7 +85,15 @@ bool load_move_classes(
 ) noexcept {
     move_class_table_init(table);
     char path[path_capacity];
-    build_variant_path(files, path, sizeof path, "gamedata", "moveinfo", "tdf", variant);
+    build_variant_path(
+        files,
+        path,
+        sizeof path,
+        directory_name(DataDirectory::gamedata),
+        "moveinfo",
+        "tdf",
+        variant
+    );
     formats::tdf::Document document;
     formats::tdf::document_init(&document);
     const bool loaded = load_tdf_file(files, path, &document, error);

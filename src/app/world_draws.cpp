@@ -10,6 +10,7 @@
 #include "oa/present/world_renderer/world_overlays.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -117,7 +118,8 @@ void blit_world_frame(
     int destination_x,
     int destination_y,
     const oa::PaletteBytes& palette,
-    float scale
+    float scale,
+    uint32_t shadow_level
 ) noexcept {
     if (scale <= 0.0F)
         scale = 1.0F;
@@ -177,9 +179,10 @@ void blit_world_frame(
             if (offset >= readable || coverage[offset] == 0)
                 continue;
             const auto pal = static_cast<std::size_t>(pixels[offset]) * 4U;
-            out[0] = palette[pal];
-            out[1] = palette[pal + 1];
-            out[2] = palette[pal + 2];
+            for (std::size_t channel = 0; channel < 3; ++channel)
+                out[channel] = model_render::fade_shadow_channel(
+                    out[channel], palette[pal + channel], shadow_level
+                );
         }
     }
 }
@@ -189,7 +192,8 @@ void blit_world_hotspot(
     const oa::formats::gaf::RenderedFrame& frame,
     const oa::present::world_renderer::ScreenPoint& screen,
     const oa::PaletteBytes& palette,
-    float scale
+    float scale,
+    uint32_t shadow_level
 ) noexcept {
     if (scale <= 0.0F)
         scale = 1.0F;
@@ -201,7 +205,7 @@ void blit_world_hotspot(
         screen.y - static_cast<int>(
                        std::lround(static_cast<double>(frame.origin_y) * static_cast<double>(scale))
                    );
-    blit_world_frame(target, frame, x, y, palette, scale);
+    blit_world_frame(target, frame, x, y, palette, scale, shadow_level);
 }
 
 void blit_world_blended_hotspot(
@@ -211,7 +215,8 @@ void blit_world_blended_hotspot(
     float scale,
     const model_render::ModelDisplay& display,
     model_render::RgbBridge& bridge,
-    model_render::BridgeBand* band
+    model_render::BridgeBand* band,
+    uint32_t shadow_level
 ) {
     const auto& context = display.context;
     if ((context.flags & oa::present::display_flag_alpha_table) == 0)
@@ -270,11 +275,34 @@ void blit_world_blended_hotspot(
                 palette
                     .entries[context.alpha_table
                                  [static_cast<std::size_t>(frame.pixels[offset]) * 0x100 + under]];
-            pixel[0] = blended.r;
-            pixel[1] = blended.g;
-            pixel[2] = blended.b;
+            pixel[0] = model_render::fade_shadow_channel(pixel[0], blended.r, shadow_level);
+            pixel[1] = model_render::fade_shadow_channel(pixel[1], blended.g, shadow_level);
+            pixel[2] = model_render::fade_shadow_channel(pixel[2], blended.b, shadow_level);
         }
     }
+}
+
+void set_frame_shadows(
+    WorldDrawList& list,
+    model_render::ModelRenderer& renderer,
+    model_render::ShadowTable& table,
+    const model_render::ModelDisplay& display,
+    const oa::Sprite* projectile_shadow,
+    float zoom
+) {
+    list.shadow_level = model_render::shadow_level(zoom);
+    renderer.shadow_table = nullptr;
+    if (list.shadow_level == 0) {
+        renderer.graphics_flags =
+            static_cast<uint16_t>(renderer.graphics_flags & ~model_render::graphics_shadows);
+        return;
+    }
+    // The models' silhouettes are drawn in colour 0; the projectiles'
+    // shadow sprite in its own colours.
+    std::array<bool, 256> colours{};
+    colours[0] = true;
+    model_render::note_shadow_colours(projectile_shadow, colours);
+    renderer.shadow_table = table.prepare(display, list.shadow_level, colours);
 }
 
 void clear_world_draws(WorldDrawList& list) {
@@ -363,13 +391,31 @@ void draw_world_band(
         }
         case WorldDrawKind::sprite: {
             const SpriteDraw& sprite = list.sprites[draw.index];
-            blit_world_hotspot(target, *sprite.frame, sprite.screen, *frame.palette, frame.scale);
+            if (sprite.shadow && !shadows_drawn(list))
+                break;
+            blit_world_hotspot(
+                target,
+                *sprite.frame,
+                sprite.screen,
+                *frame.palette,
+                frame.scale,
+                sprite.shadow ? list.shadow_level : model_render::shadow_full_level
+            );
             break;
         }
         case WorldDrawKind::blended_sprite: {
             const SpriteDraw& sprite = list.sprites[draw.index];
+            if (sprite.shadow && !shadows_drawn(list))
+                break;
             blit_world_blended_hotspot(
-                target, *sprite.frame, sprite.screen, frame.scale, *frame.display, bridge, &band
+                target,
+                *sprite.frame,
+                sprite.screen,
+                frame.scale,
+                *frame.display,
+                bridge,
+                &band,
+                sprite.shadow ? list.shadow_level : model_render::shadow_full_level
             );
             break;
         }
@@ -431,10 +477,20 @@ void draw_world_band(
         case WorldDrawKind::projectile: {
             const ProjectileDraw& shot = list.projectiles[draw.index];
             model_render::bridge_open(bridge, band, shot.region);
-            if (shot.shadow)
-                oa::present::draw_sprite_blended(
-                    surface, frame.projectile_shadow, shot.x, shot.shadow_y
-                );
+            if (shot.shadow && shadows_drawn(list)) {
+                if (renderer.shadow_table != nullptr)
+                    oa::present::draw_sprite_blended_through(
+                        surface,
+                        frame.projectile_shadow,
+                        shot.x,
+                        shot.shadow_y,
+                        renderer.shadow_table
+                    );
+                else
+                    oa::present::draw_sprite_blended(
+                        surface, frame.projectile_shadow, shot.x, shot.shadow_y
+                    );
+            }
             model_render::draw_projectile_model(
                 renderer, surface, shot.position, *shot.object, *shot.prepared, shot.rotation
             );

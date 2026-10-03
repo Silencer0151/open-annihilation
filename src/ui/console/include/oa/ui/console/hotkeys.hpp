@@ -25,8 +25,10 @@ inline constexpr uint32_t control_f5 = 0xd2;   // Ctrl+F1 .. Ctrl+F12 are 0xce..
 inline constexpr uint32_t control_f10 = 0xd7;
 inline constexpr uint32_t f1 = 0xe2; // F1 .. F12 are 0xe2..0xed
 inline constexpr uint32_t f5 = 0xe6;
+inline constexpr uint32_t f10 = 0xeb;
 inline constexpr uint32_t f11 = 0xec;
 inline constexpr uint32_t f12 = 0xed;
+inline constexpr uint32_t insert = 0xee;
 inline constexpr uint32_t pause = 0xf8;
 } // namespace hotkey
 
@@ -102,11 +104,15 @@ struct HotkeyHost {
 ///    tells set_command_panel_debug whether they are off; F12 clears the
 ///    messages; Pause toggles the simulation pause and reports it through
 ///    send_pause.
+///  - Under Console::key_remaps, Insert re-runs the last console line as '\'
+///    did and F10 toggles the debug keys as F11 does, while '\' does nothing.
+///  - Under Console::team_menu_every_game, Tab opens the team menu in every
+///    game type.
 ///
 /// @param[in,out] console Console whose world's Game block the keys change.
 /// @param host Systems the keys drive; null skips every host call.
-/// @param code Engine key code (ASCII or a hotkey:: value); 0 does nothing.
-void hotkey_dispatch(Console* console, const HotkeyHost* host, uint32_t code) noexcept;
+/// @param pressed Engine key code (ASCII or a hotkey:: value); 0 does nothing.
+void hotkey_dispatch(Console* console, const HotkeyHost* host, uint32_t pressed) noexcept;
 
 /// Handles the keys of debug-key mode (F11 after the passphrase).
 ///

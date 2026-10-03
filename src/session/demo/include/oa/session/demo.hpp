@@ -18,6 +18,8 @@
 #include "oa/sim/match_runtime.hpp"
 #include "oa/netgame/match/match_binding.hpp"
 #include "oa/formats/tad.hpp"
+#include "oa/netgame/records.hpp"
+#include "oa/netgame/wire_rules.hpp"
 #include "oa/ui/frontend_multiplayer/lobby.hpp"
 
 #include <array>
@@ -77,7 +79,59 @@ struct DemoPlayback {
     std::size_t cursor{};
     uint32_t tick{}; // local tick being delivered for
     PlaybackStats stats;
+    /// How a recording of ten players is watched (recorder.ten-player-replay);
+    /// off refuses one, as the viewer then has no slot of its own.
+    netgame::TenPlayerReplay ten_player_replay{};
 };
+
+/// Tells how the match sees a playback's viewer: as a slotless viewer when every slot belongs to a
+/// recorded player (recorder.ten-player-replay), a watcher under watcher-view and every recorded
+/// player's ally under allied-fake-player; otherwise as the viewer's own seated slot.
+///
+/// @param playback Loaded playback.
+/// @return SlotlessViewer::none unless demo_watches_without_slot holds.
+[[nodiscard]] sim::match_runtime::SlotlessViewer
+demo_slotless_viewer(const DemoPlayback& playback) noexcept;
+
+/// The ticks between two settlements of a player's economy.
+inline constexpr uint32_t economy_settlement_ticks = 30;
+
+/// A recorded player's last economy record (0x28), from which a watching
+/// viewer's income figures for that player follow.
+struct EconomySample {
+    bool taken{};    ///< a record has been seen
+    uint32_t tick{}; ///< the local tick it arrived at
+    float energy_produced_total{};
+    float energy_requested_total{};
+    float metal_produced_total{};
+    float metal_requested_total{};
+};
+
+/// Gives a recorded player the income figures its economy records imply
+/// (recorder.ten-player-replay watcher-view).
+///
+/// A player simulated on another machine settles no economy here, so its
+/// production and use per settlement stay unknown; its economy records
+/// carry only running totals. From the second record on, each of the
+/// player's four per-settlement figures (energy and metal produced and
+/// requested) becomes the growth of its total since the previous record,
+/// scaled to one settlement (economy_settlement_ticks). A record arriving
+/// at the same tick as the previous one changes nothing.
+///
+/// @param[in,out] sample The player's previous record, replaced by this one.
+/// @param[in,out] player The player whose figures are set.
+/// @param record The economy record.
+/// @param tick The local tick it arrived at.
+void demo_follow_economy(
+    EconomySample* sample, Player* player, const netgame::EconomyRecord& record, uint32_t tick
+) noexcept;
+
+/// Tells whether a playback watches without a slot of its own: a recording of ten players under the
+/// ten-player rule.
+///
+/// @param playback Loaded playback.
+/// @return True when every slot belongs to a recorded player.
+[[nodiscard]] bool demo_watches_without_slot(const DemoPlayback& playback) noexcept;
 
 /// Tells whether bytes are a TA Demo recording by their magic.
 ///
@@ -171,11 +225,14 @@ struct UnitTableCheck {
 /// recorded ids and lobby blocks, one local watcher slot follows them, and
 /// free slots take the -1 id. The host block's options apply as at a
 /// multiplayer launch, and the watcher, local and viewing, sees the whole
-/// map as a launched watcher does.
+/// map as a launched watcher does. A recording of ten players under the
+/// ten-player rule leaves no slot for the watcher: the view is the first
+/// recorded player's slot, which stays remote, with the whole map shown, and
+/// watcher_slot is OA_PLAYER_COUNT.
 ///
 /// @param playback Loaded playback.
 /// @param[in,out] world Match world whose player records and Game fields are set.
-/// @param[out] watcher_slot The watcher's slot.
+/// @param[out] watcher_slot The watcher's slot, or OA_PLAYER_COUNT for none.
 /// @return False for a null world, no players or no free watcher slot.
 [[nodiscard]] bool
 demo_bind_players(const DemoPlayback& playback, World* world, uint8_t* watcher_slot) noexcept;
@@ -219,6 +276,9 @@ struct DemoSession {
     std::vector<FixedVec3> placed_at;  // by unit slot: position of that record
     uint16_t tracked_unit{};           // first recorded player's first unit
     std::vector<FullRecordSample> tracked;
+    // Each slot's last economy record, under recorder.ten-player-replay
+    // watcher-view (demo_follow_economy).
+    std::array<EconomySample, OA_PLAYER_COUNT> economy_samples{};
 };
 
 /// Binds a match to the recording: player table, unit ranges, the packet layer over the recording and the
@@ -227,6 +287,12 @@ struct DemoSession {
 /// The match must be built at the recording's unit limit with its outcomes
 /// already configured with defeat disabled. demo_session_end releases the
 /// packet layer.
+///
+/// Under recorder.ten-player-replay the match learns how a viewer without a
+/// slot of its own sees (demo_slotless_viewer). Such a viewer is shown every
+/// recorded chat line, as a seated watcher is. Under watcher-view each
+/// recorded player's economy records also give it income figures
+/// (demo_follow_economy), with a slot for the viewer or without.
 ///
 /// @param[in,out] session Session holding a loaded playback; any previous binding is ended first.
 /// @param match Match runtime to drive.

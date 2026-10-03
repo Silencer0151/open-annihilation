@@ -6,6 +6,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <string_view>
 
 namespace oa::sim::messages {
 namespace {
@@ -128,8 +129,13 @@ void post_message(
     MessageLine* line = message_line(game, game.chat_head);
     if (line == nullptr)
         return;
-    oa::base::text::copy_padded(line->text, text, text_bytes);
-    line->text[text_bytes - 1] = '\0';
+    // A line keeps its first text_bytes - 1 bytes, less the start of a
+    // UTF-8 character the cut would split.
+    constexpr std::size_t lookahead = 4;
+    const std::string_view whole(text, strnlen(text, text_bytes + lookahead));
+    const std::size_t kept = oa::base::text::whole_characters(whole, text_bytes - 1);
+    std::memcpy(line->text, text, kept);
+    std::memset(line->text + kept, 0, text_bytes - kept);
     line->tick = game.tick;
     line->kind = static_cast<uint8_t>((line->kind & ~kind_mask) | (kind & kind_mask));
     line->value = value;
@@ -173,7 +179,10 @@ void post_notice(World& world, const char* text, const Hooks& hooks) {
 
 void post_elimination(World& world, const Player& player, const Hooks& hooks) {
     const PlayerSetupInfo* info = world_player_info(&world, &player);
-    const char* side = info != nullptr && info->side == 0 ? side_name_arm : side_name_core;
+    const uint8_t slot = info != nullptr && info->side == 0 ? 0 : 1;
+    const char* side = hooks.side_name != nullptr ? hooks.side_name(hooks.context, slot)
+                       : slot == 0                ? side_name_arm
+                                                  : side_name_core;
     const uint32_t roll = hooks.random != nullptr ? hooks.random(hooks.context) : 0;
     const char* taunt = translate(hooks, elimination_messages[roll % elimination_message_count]);
     char line[formatted_bytes];

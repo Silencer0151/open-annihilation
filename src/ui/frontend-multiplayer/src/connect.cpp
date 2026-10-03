@@ -374,7 +374,7 @@ bool game_list_update(Lobby& lobby, ConnectState& state, Panel& panel) noexcept 
         const uint32_t flags =
             static_cast<uint32_t>(info->options) | static_cast<uint32_t>(info->status) << 16;
         const char* status_text = "Open";
-        if (!info_version_compatible(*info, lobby.local_version_major))
+        if (!info_version_compatible(*info, lobby.local_version_major, lobby.wire_rules))
             status_text = "VER!";
         else if ((flags & option::game_closed) != 0)
             status_text = "Lock";
@@ -425,7 +425,8 @@ void game_list_refresh_join(Lobby& lobby, ConnectState& state, Panel& panel) noe
     PlayerSetupInfo scratch{};
     const bool empty = row < 0;
     const auto* info = empty ? &scratch : session_info(state.sessions[row], scratch);
-    const bool compatible = !empty && info_version_compatible(*info, lobby.local_version_major);
+    const bool compatible =
+        !empty && info_version_compatible(*info, lobby.local_version_major, lobby.wire_rules);
     const uint32_t options = info->options;
     if (auto* watch = panel_control(panel, "WATCH")) {
         const auto high = ((~options & option::watching_allowed) | (options >> 8)) >> 3;
@@ -504,7 +505,7 @@ ConnectAction choose_listed_game(
         message(lobby, "You must join this game via the Boneyards.");
         return ConnectAction::none;
     }
-    if (!info_version_compatible(*info, lobby.local_version_major)) {
+    if (!info_version_compatible(*info, lobby.local_version_major, lobby.wire_rules)) {
         message(lobby, "You do not have a compatible version for this game.");
         return ConnectAction::none;
     }

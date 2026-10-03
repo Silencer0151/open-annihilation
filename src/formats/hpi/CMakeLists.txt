@@ -30,4 +30,8 @@ if(BUILD_TESTING)
   add_executable(oa-hpi-read-node-test tests/read_node_test.cpp)
   target_link_libraries(oa-hpi-read-node-test PRIVATE oa-formats-hpi oa-options)
   add_test(NAME hpi-read-node COMMAND oa-hpi-read-node-test)
+  # A mod folder layered over a base folder reads as a copied install.
+  add_executable(oa-hpi-layering-test tests/layering_test.cpp)
+  target_link_libraries(oa-hpi-layering-test PRIVATE oa-formats-hpi oa-options)
+  add_test(NAME hpi-layering COMMAND oa-hpi-layering-test)
 endif()

@@ -8,8 +8,9 @@
 // frame rate, mixes the match's sounds from the director's camera and
 // writes the video's chunks. Both reach the recording only through the
 // extension that replays it (Extension::open_recording), on the fixed clock
-// and seed. --check-director-render renders a small script over the
-// headless skirmish instead of a recording.
+// and seed; a script that names a stage in place of a recording renders the
+// headless skirmish that stage sets up and plays out. --check-director-render
+// renders a small script over the headless skirmish instead of a recording.
 #include "oa/app/runtime.hpp"
 #include "director_state.hpp"
 #include "match_models.hpp"
@@ -76,6 +77,9 @@ struct Runtime::DirectorRender {
     RunDescription run{};   ///< what the run manifest says besides the chunks
     bool mute{};            ///< the sound is silence: no sound reaches the mix
     bool quiet{};           ///< print no line for each chunk
+    /// The frames also written as stills (write_still), in increasing order;
+    /// each lies in a chunk drawn.
+    std::vector<uint64_t> stills{};
 
     // What the render did.
     std::vector<ChunkSummary> chunks{};
@@ -430,6 +434,38 @@ struct VisibilityGlue {
 
 } // namespace
 
+struct Runtime::MatchReplay {
+    Runtime* runtime{};
+    uint32_t errors{};        ///< ticks that failed
+    std::string last_error{}; ///< the last failure's text
+};
+
+ReplayHooks Runtime::match_replay_hooks(MatchReplay& replay) {
+    return {
+        &replay,
+        [](void* context) {
+            auto& self = *static_cast<MatchReplay*>(context);
+            try {
+                self.runtime->step_match_simulation();
+            } catch (const std::exception& error) {
+                ++self.errors;
+                self.last_error = error.what();
+                self.runtime->report_match_tick_error(error.what());
+            }
+            return self.runtime->match_ != nullptr;
+        },
+        [](void* context, RecordingStatus& status) {
+            const auto& self = *static_cast<const MatchReplay*>(context);
+            status.tick = self.runtime->match_ ? self.runtime->match_->state().game.tick : 0;
+            status.clean = self.errors == 0;
+            status.paced = true;
+            status.errors = self.errors;
+            status.last_error = self.last_error.empty() ? nullptr : self.last_error.c_str();
+        },
+        [](void*) {}
+    };
+}
+
 uint64_t Runtime::director_world_digest() {
     const auto kept_x = match_camera_x_;
     const auto kept_z = match_camera_z_;
@@ -585,6 +621,18 @@ void Runtime::render_director_frames(DirectorRender& render, const ReplayHooks& 
             set_presentation_alpha(1.0F);
             output.add_frame(frame, cameras.tick, picture);
             ++render.frames_drawn;
+            if (std::binary_search(render.stills.begin(), render.stills.end(), frame)) {
+                const auto still = write_still(
+                    render.output.paths, frame, picture, output_size.width, output_size.height
+                );
+                std::printf(
+                    "director: still of frame %llu, tick %u: %s\n",
+                    static_cast<unsigned long long>(frame),
+                    cameras.tick,
+                    path_to_utf8(still).c_str()
+                );
+                std::fflush(stdout);
+            }
         }
         // The mix runs on through frames that are not drawn, so that the
         // sound of a chunk does not depend on the chunks drawn before it.
@@ -635,6 +683,8 @@ int Runtime::run_render_script() {
     const bool silent = options_.mute;
     options_.mute = true;
     ReplayHooks replay{};
+    // The match's own ticks, when the script plays a stage.
+    MatchReplay played{this, 0, {}};
     bool replay_open = false;
     bool teardown_failed = false;
     // The replay closes before its match is torn down, and director mode is
@@ -691,21 +741,35 @@ int Runtime::run_render_script() {
                                       : diagnostic_text(script_name, report.errors.front())
             );
         }
-        const std::string& recording_name = script.input.recording;
+        // A script plays a recording or, in its place, a stage, which has no
+        // end of its own.
+        const bool staged = !script.input.stage.empty();
+        if (staged && bundled)
+            throw std::runtime_error(script_name + ": a bundle carries a recording, not a stage");
+        if (staged && !script.director.end_tick)
+            throw std::runtime_error(
+                script_name + ": a script that plays a stage ends at director.endTick"
+            );
+        const std::string& recording_name = staged ? script.input.stage : script.input.recording;
+        const fs::path input_path = file.parent_path() / path_from_utf8(recording_name);
         const std::vector<uint8_t> recording =
-            bundled ? read_bundle_entry(archive, bundle, recording_name)
-                    : read_bounded(
-                          file.parent_path() / path_from_utf8(recording_name),
-                          zip::max_entry_bytes,
-                          "recording"
-                      );
+            bundled
+                ? read_bundle_entry(archive, bundle, recording_name)
+                : read_bounded(input_path, zip::max_entry_bytes, staged ? "stage" : "recording");
         archive = {};
         const auto encoder = encoder_settings_from_environment();
         if (encoder.enabled)
             run_encoder({director_encoder, "-hide_banner", "-loglevel", "error", "-version"});
 
         RecordingInfo info{};
-        open_recording(extension_, *this, recording_name, recording, replay, info);
+        if (staged) {
+            // The headless skirmish, which the stage sets up and plays out.
+            options_.stage_file = input_path;
+            prepare_headless_match();
+            replay = match_replay_hooks(played);
+        } else {
+            open_recording(extension_, *this, recording_name, recording, replay, info);
+        }
         replay_open = true;
         const auto& game = match_->state().game;
         const director::MapBounds bounds{game.map_pixel_width, game.map_pixel_height};
@@ -787,9 +851,26 @@ int Runtime::run_render_script() {
                 );
         }
 
+        // Each still lies in the video and in a chunk drawn.
+        for (const uint64_t still : options_.director_stills) {
+            if (still >= shots.frame_count)
+                throw std::runtime_error(
+                    "--stills " + std::to_string(still) + ": the video has " +
+                    std::to_string(shots.frame_count) + " frames, 0 to " +
+                    std::to_string(shots.frame_count - 1)
+                );
+            const uint32_t chunk = director::chunk_of_frame(shots.clock, shots.chunks, still);
+            if (chunk < first_chunk || chunk > last_chunk)
+                throw std::runtime_error(
+                    "--stills " + std::to_string(still) + ": the frame is in chunk " +
+                    std::to_string(chunk) + ", which the render does not draw"
+                );
+        }
+
         DirectorRender render{};
         render.script = &script;
         render.shots = &shots;
+        render.stills = options_.director_stills;
         fs::path directory = options_.director_output;
         if (directory.empty())
             directory = file.parent_path() / file.stem();
@@ -1109,14 +1190,6 @@ constexpr uint64_t kRenderCheckTickrate = 30;
 constexpr uint64_t kRenderCheckChunkFrames =
     kRenderCheckChunkTicks * kRenderCheckFramerate / kRenderCheckTickrate;
 
-/// The replay --check-director-render hands the render: the headless
-/// skirmish's own ticks.
-struct SkirmishReplay {
-    Runtime* runtime{};
-    uint32_t errors{};
-    std::string last_error{};
-};
-
 /// Returns the check's script: two shots over the fight, a spring and a
 /// cut with a dissolve, in two chunks.
 ///
@@ -1203,30 +1276,8 @@ void Runtime::check_director_render() {
         leave_match();
         load(Screen::main_menu);
     };
-    SkirmishReplay skirmish{this, 0, {}};
-    const ReplayHooks replay{
-        &skirmish,
-        [](void* context) {
-            auto& self = *static_cast<SkirmishReplay*>(context);
-            try {
-                self.runtime->step_match_simulation();
-            } catch (const std::exception& error) {
-                ++self.errors;
-                self.last_error = error.what();
-                self.runtime->report_match_tick_error(error.what());
-            }
-            return self.runtime->match_ != nullptr;
-        },
-        [](void* context, RecordingStatus& status) {
-            const auto& self = *static_cast<const SkirmishReplay*>(context);
-            status.tick = self.runtime->match_ ? self.runtime->match_->state().game.tick : 0;
-            status.clean = self.errors == 0;
-            status.paced = true;
-            status.errors = self.errors;
-            status.last_error = self.last_error.empty() ? nullptr : self.last_error.c_str();
-        },
-        [](void*) {}
-    };
+    MatchReplay skirmish{this, 0, {}};
+    const ReplayHooks replay = match_replay_hooks(skirmish);
 
     // Where the check writes: beside --snapshot when given, else a
     // temporary folder removed afterwards.
@@ -1299,7 +1350,7 @@ void Runtime::check_director_render() {
         render->run.end_tick = shots.end_tick;
         render->run.frame_count = shots.frame_count;
         render->run.chunk_count = 2;
-        skirmish = SkirmishReplay{this, 0, {}};
+        skirmish = MatchReplay{this, 0, {}};
         render_director_frames(*render, replay);
         require(!director_mode(), "the render left the match in director mode");
         require(skirmish.errors == 0, "a tick failed: " + skirmish.last_error);

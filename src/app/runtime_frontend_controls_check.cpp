@@ -402,7 +402,7 @@ void Runtime::check_frontend_controls() {
     load_translations("German");
     preview_map_index(chosen_index);
     const auto german_summary = label_text("SIZE");
-    load_translations(command_line::launch_language(options_.launch));
+    load_translations(game_language());
     preview_map_index(chosen_index);
     std::cout << "frontend controls check: the map summary reads '" << summary << "', in German '"
               << german_summary << "'\n";

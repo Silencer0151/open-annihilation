@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/sim/ai.hpp"
+#include "oa/data/match_rules/difficulty_names.hpp"
 #include "oa/sim/combat_state.hpp"
 #include "oa/sim/unit_movement/movement.hpp"
 #include "oa/test/game_assets.hpp"
@@ -64,6 +65,7 @@ struct Fake {
     uint8_t strength[TYPE_COUNT][3]{};
     bool allies[10][10]{};
     bool holds_order[64]{};        // the unit has a primary order
+    bool holds_secondary[64]{};    // the unit has a secondary order
     uint32_t knowledge_tick[10]{}; // the match's Sightings.refreshed_tick
 
     Fake() {
@@ -154,6 +156,7 @@ ComputerHost host_for(Fake& fake) {
     host.primary_order = [](void* c, uint16_t u, uint8_t*, uint8_t*) {
         return fake_of(c)->holds_order[u];
     };
+    host.secondary_order = [](void* c, uint16_t u) { return fake_of(c)->holds_secondary[u]; };
     host.unit_visible = [](void*, uint8_t, uint16_t) { return true; };
     host.strengths = [](void* c, uint8_t, uint16_t t) -> const uint8_t* {
         return t < TYPE_COUNT ? fake_of(c)->strength[t] : nullptr;
@@ -243,6 +246,50 @@ constexpr const char* kBuildLists = R"(
 		}
 	}
 )";
+
+/// Checks the computer players' build lists against the build-list limits: 30
+/// entries in 3.1c, a raised copy, the largest copy, and every entry.
+void test_build_list_limits() {
+    // ARMCOM lists 1100 entries, cycling through the catalog's types.
+    constexpr uint32_t listed = 1100;
+    std::string text = "[CANBUILD]{[ARMCOM]{";
+    const char* names[] = {"ARMMEX", "ARMSOLAR", "ARMLAB", "ARMPW", "ARMCK"};
+    const uint16_t ids[] = {ARMMEX, ARMSOLAR, ARMLAB, ARMPW, ARMCK};
+    for (uint32_t index = 0; index < listed; ++index)
+        text += "canbuild" + std::to_string(index + 1) + "=" + names[index % 5] + ";";
+    text += "}}";
+
+    struct Case {
+        oa::data::limits::BuildLists lists;
+        uint32_t expected{};
+    };
+
+    const Case cases[] = {
+        {{}, 30},
+        {{36, oa::data::limits::BuildListOverflow::truncate}, 36},
+        {{oa::data::limits::highest_build_list_copy, oa::data::limits::BuildListOverflow::truncate},
+         oa::data::limits::highest_build_list_copy},
+        {{30, oa::data::limits::BuildListOverflow::dynamic},
+         oa::data::limits::highest_build_list_copy},
+    };
+    for (const auto& c : cases) {
+        Fake fake;
+        fake.player(1, OA_PLAYER_STATUS_COMPUTER, 10, 30);
+        ComputerPlayers state{};
+        describe_catalog(state);
+        state.build_lists = c.lists;
+        check(computer_players_configure(&state, "", text), "long list: configure");
+        check(computer_players_initialize(&state, host_for(fake)), "long list: initialize");
+        const auto& com = state.types[ARMCOM];
+        check(com.build_count == c.expected, "long list: entries kept");
+        bool in_order = com.build_ids != nullptr;
+        for (uint32_t index = 0; in_order && index < com.build_count; ++index)
+            in_order = com.build_ids[index] == ids[index % 5];
+        check(in_order, "long list: the first entries, in order");
+        check(state.types[ARMLAB].build_count == 0, "long list: other builders keep theirs");
+        computer_players_release(&state);
+    }
+}
 
 void test_sort_squads() {
     ComputerPlayers state{};
@@ -1088,6 +1135,465 @@ void test_installed_data(const oa::AssetStore& assets) {
     check(k.weight_percent[ARMPW] < 100, "the installed ARM weight applied");
     computer_players_release(&state);
 }
+
+// --- ai.* rules -------------------------------------------------------------
+
+using oa::data::match_rules::MatchRules;
+
+// Counts the orders of one kind given to one unit.
+uint32_t orders_of(const Fake& fake, const char* kind, uint16_t unit) {
+    uint32_t count = 0;
+    for (const auto& order : fake.orders)
+        count += order.kind == kind && order.unit == unit ? 1u : 0u;
+    return count;
+}
+
+// ai.difficulty-names: the plan keyword, the report label and the menu label a
+// difficulty carries follow the names; the baseline names keep 3.1c's.
+void test_difficulty_names() {
+    using Names = oa::data::match_rules::AiDifficultyNamesNames;
+    oa::data::match_rules::AiDifficultyNames swapped{};
+    swapped.enabled = true;
+    swapped.names = {Names::hard, Names::medium, Names::easy};
+    check(oa::data::match_rules::difficulty_name_index({}, 0) == 0, "3.1c: difficulty 0 is easy");
+    check(oa::data::match_rules::difficulty_name_index({}, 2) == 2, "3.1c: difficulty 2 is hard");
+    check(oa::data::match_rules::difficulty_name_index(swapped, 0) == 2, "swapped: 0 is hard");
+    check(oa::data::match_rules::difficulty_name_index(swapped, 1) == 1, "swapped: 1 is medium");
+    check(oa::data::match_rules::difficulty_name_index(swapped, 2) == 0, "swapped: 2 is easy");
+    check(
+        oa::data::match_rules::difficulty_name_index(swapped, 3) == 3, "past the names unchanged"
+    );
+    check(oa::data::match_rules::difficulty_name_index(swapped, -1) == -1, "negative unchanged");
+    oa::data::match_rules::AiDifficultyNames rotated{};
+    rotated.names = {Names::medium, Names::hard, Names::easy};
+    check(oa::data::match_rules::difficulty_name_index(rotated, 0) == 1, "any order: 0 is medium");
+
+    const char* profile = "plan easy\nlimit ARMMEX 8\nplan hard\nlimit ARMMEX 1\n"
+                          "plan medium\nlimit ARMSOLAR 4\n";
+
+    struct Case {
+        oa::data::match_rules::AiDifficultyNames names;
+        int32_t difficulty;
+        int32_t mex_limit;
+        int32_t solar_limit;
+        const char* label;
+    };
+
+    oa::data::match_rules::AiDifficultyNames baseline_on{};
+    baseline_on.enabled = true;
+    const Case cases[] = {
+        {{}, OA_DIFFICULTY_EASY, 8, -1, "'EASY'"},
+        {baseline_on, OA_DIFFICULTY_EASY, 8, -1, "'EASY'"},
+        {swapped, 0, 1, -1, "'HARD'"},
+        {swapped, 1, -1, 4, "'MEDIUM'"},
+        {swapped, 2, 8, -1, "'EASY'"},
+    };
+    const auto scratch = oa::test::make_scratch_directory("oa-ai-difficulty-names");
+    for (const auto& c : cases) {
+        Fake fake;
+        fake.player(1, OA_PLAYER_STATUS_COMPUTER, 10, 30);
+        auto host = host_for(fake);
+        host.difficulty = c.difficulty;
+        MatchRules rules{};
+        rules.ai.difficulty_names = c.names;
+        ComputerPlayers state{};
+        state.rules.match = &rules;
+        describe_catalog(state);
+        check(computer_players_configure(&state, profile, kBuildLists), "names: configure");
+        check(computer_players_initialize(&state, host), "names: initialize");
+        const auto& k = state.players[1].knowledge;
+        check(k.limits[ARMMEX] == c.mex_limit, "names: the plan the difficulty's keyword selects");
+        check(k.limits[ARMSOLAR] == c.solar_limit, "names: medium keeps its plan");
+        std::FILE* out = oa::platform::open_file(scratch / "weights.txt", "w+b");
+        computer_write_report(&state, host, 1, {}, out);
+        const auto text = read_all(out);
+        std::fclose(out);
+        check(
+            text.find(std::string("Challenge level: ") + c.label) != std::string::npos,
+            "names: the report's label"
+        );
+        computer_players_release(&state);
+    }
+    std::error_code removal;
+    std::filesystem::remove_all(scratch, removal);
+}
+
+// ai.squad5-factory-tick: squad 5 (armed structures) runs the structures task, so an
+// armed building with a build list queues picks; in 3.1c it never does.
+void test_squad5_factory_tick() {
+    for (const bool on : {false, true}) {
+        Fake fake;
+        fake.player(1, OA_PLAYER_STATUS_COMPUTER, 10, 40);
+        auto host = host_for(fake);
+        MatchRules rules{};
+        rules.ai.squad5_factory_tick.enabled = on;
+        ComputerPlayers state{};
+        state.rules.match = &rules;
+        describe_catalog(state);
+        check(computer_players_configure(&state, "", kBuildLists), "squad 5: configure");
+        // An armed factory, as a silo that builds its own stockpile is.
+        fake.spawn(11, 1, ARMLAB, 240, 200, OA_UNIT_FLAG_BUILDING | OA_UNIT_FLAG_HAS_WEAPONS);
+        fake.rolls.assign(4096, 7);
+        check(computer_players_initialize(&state, host), "squad 5: initialize");
+        check(
+            state.players[1].tasks[5].kind == (on ? TaskKind::structures : TaskKind::idle),
+            "squad 5: the task"
+        );
+        tick_until(state, fake, host, 1, 120);
+        check(fake.units[11].squad == static_cast<int32_t>(Squad::armed_structures), "squad 5");
+        check((orders_of(fake, "factory", 11) != 0) == on, "squad 5: the armed factory's picks");
+        computer_players_release(&state);
+    }
+}
+
+// ai.factory-tick-filter: skip-busy-background-queue leaves a building whose secondary
+// queue holds an order alone; power-toggle energy-use-32 switches buildings by EnergyUse
+// (its float's top byte as a signed number, at least 0x42) instead of MakesMetal.
+void test_factory_tick_filter() {
+    using Toggle = oa::data::match_rules::AiFactoryTickFilterPowerToggle;
+    for (const bool skip : {false, true}) {
+        Fake fake;
+        fake.player(1, OA_PLAYER_STATUS_COMPUTER, 10, 40);
+        auto host = host_for(fake);
+        MatchRules rules{};
+        rules.ai.factory_tick_filter.enabled = true;
+        rules.ai.factory_tick_filter.skip_busy_background_queue = skip;
+        ComputerPlayers state{};
+        state.rules.match = &rules;
+        describe_catalog(state);
+        check(computer_players_configure(&state, "", kBuildLists), "filter: configure");
+        fake.spawn(11, 1, ARMLAB, 240, 200, OA_UNIT_FLAG_BUILDING);
+        fake.spawn(12, 1, ARMLAB, 300, 200, OA_UNIT_FLAG_BUILDING);
+        fake.holds_secondary[12] = true;
+        fake.rolls.assign(4096, 7);
+        check(computer_players_initialize(&state, host), "filter: initialize");
+        tick_until(state, fake, host, 1, 120);
+        check(orders_of(fake, "factory", 11) != 0, "filter: the idle factory picks");
+        check(
+            (orders_of(fake, "factory", 12) != 0) == !skip,
+            "filter: a factory with a secondary order picks only without the filter"
+        );
+        computer_players_release(&state);
+    }
+
+    struct Building {
+        uint16_t type;
+        int8_t makes_metal;
+        float energy_use;
+        bool toggles_by_makes_metal;
+        bool toggles_by_energy_use;
+    };
+
+    // The structures task's toggle switches these buildings off: the player's energy
+    // (1000) is not above twice its metal (500).
+    const Building buildings[] = {
+        {ARMSOLAR, 1, 0.0F, true, false}, // a metal maker using no energy
+        {ARMMEX, 0, 32.0F, false, true},
+        {ARMLLT, 0, 31.99F, false, false},
+        {CORMEX, 0, -40.0F, false, false}, // a negative EnergyUse fails the signed test
+    };
+    for (const auto toggle : {Toggle::makes_metal, Toggle::energy_use_32}) {
+        Fake fake;
+        fake.player(1, OA_PLAYER_STATUS_COMPUTER, 10, 40);
+        auto host = host_for(fake);
+        MatchRules rules{};
+        rules.ai.factory_tick_filter.enabled = true;
+        rules.ai.factory_tick_filter.power_toggle = toggle;
+        ComputerPlayers state{};
+        state.rules.match = &rules;
+        describe_catalog(state);
+        check(computer_players_configure(&state, "", kBuildLists), "toggle: configure");
+        uint16_t slot = 11;
+        for (const auto& building : buildings) {
+            state.types[building.type].makes_metal = building.makes_metal;
+            state.types[building.type].energy_use = building.energy_use;
+            fake.spawn(slot, 1, building.type, 200 + slot * 20, 200, OA_UNIT_FLAG_BUILDING);
+            ++slot;
+        }
+        fake.rolls.assign(4096, 7);
+        check(computer_players_initialize(&state, host), "toggle: initialize");
+        tick_until(state, fake, host, 1, 60);
+        slot = 11;
+        for (const auto& building : buildings) {
+            const bool expected = toggle == Toggle::makes_metal ? building.toggles_by_makes_metal
+                                                                : building.toggles_by_energy_use;
+            check(
+                (orders_of(fake, "off", slot) != 0) == expected, "toggle: which buildings switch"
+            );
+            ++slot;
+        }
+        computer_players_release(&state);
+    }
+}
+
+// ai.builder-withhold-threshold: a capturing builder takes build jobs only while the player
+// has fewer build-capable units than the threshold; once idle it still circles the base
+// from five.
+void test_builder_withhold_threshold() {
+    for (const int32_t threshold : {5, 10}) {
+        Fake fake;
+        fake.player(0, OA_PLAYER_STATUS_LOCAL, 1, 9);
+        fake.player(1, OA_PLAYER_STATUS_COMPUTER, 10, 40);
+        auto host = host_for(fake);
+        MatchRules rules{};
+        rules.ai.builder_withhold_threshold.enabled = threshold != 5;
+        rules.ai.builder_withhold_threshold.builders = threshold;
+        ComputerPlayers state{};
+        state.rules.match = &rules;
+        describe_catalog(state);
+        check(computer_players_configure(&state, "", kBuildLists), "withhold: configure");
+        // The commander's list holds another side's type; it never picks it.
+        fake.strength[CORMEX][0] = fake.strength[CORMEX][1] = fake.strength[CORMEX][2] = 0;
+        fake.spawn(10, 1, ARMCOM, 200, 200, 0);
+        // Six more build-capable units: seven in all.
+        for (uint32_t slot = 11; slot < 17; ++slot)
+            fake.spawn(slot, 1, ARMCK, 260 + static_cast<int32_t>(slot), 260, 0);
+        fake.rolls.assign(4096, 7);
+        check(computer_players_initialize(&state, host), "withhold: initialize");
+        tick_until(state, fake, host, 1, 200);
+        check(state.players[1].knowledge.builder_count == 7, "withhold: seven builders");
+        check(
+            (orders_of(fake, "build", 10) != 0) == (threshold == 10),
+            "withhold: the commander builds only under the threshold"
+        );
+        check(orders_of(fake, "move", 10) != 0, "withhold: an idle commander circles from five");
+        computer_players_release(&state);
+    }
+}
+
+// ai.attack-wave-size: both strike tasks launch at the wave size; the may-attack floor
+// stays 3.
+void test_attack_wave_size() {
+    for (const int32_t wave : {6, 10}) {
+        Fake fake;
+        fake.player(0, OA_PLAYER_STATUS_LOCAL, 1, 9);
+        fake.player(1, OA_PLAYER_STATUS_COMPUTER, 10, 40);
+        auto host = host_for(fake);
+        MatchRules rules{};
+        rules.ai.attack_wave_size.enabled = wave != 6;
+        rules.ai.attack_wave_size.units = wave;
+        ComputerPlayers state{};
+        state.rules.match = &rules;
+        describe_catalog(state);
+        check(computer_players_configure(&state, "", kBuildLists), "wave: configure");
+        fake.spawn(1, 0, ARMLLT, 900, 900, OA_UNIT_FLAG_BUILDING | OA_UNIT_FLAG_HAS_WEAPONS);
+        fake.spawn(10, 1, ARMSOLAR, 200, 200, OA_UNIT_FLAG_BUILDING);
+        for (uint32_t slot = 12; slot < 19; ++slot)
+            fake.spawn(
+                slot, 1, ARMPW, 300 + static_cast<int32_t>(slot), 300, OA_UNIT_FLAG_HAS_WEAPONS
+            );
+        fake.rolls.assign(4096, 7);
+        check(computer_players_initialize(&state, host), "wave: initialize");
+        const auto& tasks = state.players[1].tasks;
+        check(
+            tasks[2].launch_size == wave && tasks[6].launch_size == wave,
+            "wave: both strike tasks launch at the wave size"
+        );
+        check(tasks[2].min_size == 3 && tasks[6].min_size == 3, "wave: the floor stays 3");
+        tick_until(state, fake, host, 1, 301);
+        check(fake.squads[{1, 2}].size() == 7, "wave: seven recruits");
+        const bool attacked = orders_of(fake, "attack", 12) != 0;
+        check(attacked == (wave == 6), "wave: seven attack at 6 and rally home at 10");
+        computer_players_release(&state);
+    }
+}
+
+// The aircraft task's run, with the wing and base given.
+struct AirRun {
+    Fake fake;
+    ComputerPlayers state{};
+    MatchRules rules{};
+
+    AirRun(uint32_t wing, bool with_base) {
+        fake.player(0, OA_PLAYER_STATUS_LOCAL, 1, 9);
+        fake.player(1, OA_PLAYER_STATUS_COMPUTER, 10, 40);
+        fake.spawn(1, 0, ARMLLT, 500, 600, OA_UNIT_FLAG_BUILDING | OA_UNIT_FLAG_HAS_WEAPONS);
+        for (uint32_t i = 0; i < wing; ++i) {
+            fake.spawn(11 + i, 1, ARMFIG, 300 + static_cast<int32_t>(i), 300, 0);
+            fake.set_squad(static_cast<uint16_t>(11 + i), static_cast<int>(Squad::aircraft));
+        }
+        state.rules.match = &rules;
+        describe_catalog(state);
+        check(computer_players_configure(&state, "", kBuildLists), "air: configure");
+        fake.rolls.assign(4096, 3);
+        check(computer_players_initialize(&state, host_for(fake)), "air: initialize");
+        if (with_base)
+            state.players[1].knowledge.base_position = {200 << 16, 0, 200 << 16};
+    }
+
+    ~AirRun() { computer_players_release(&state); }
+
+    // Runs the order tick once at tick 1, when only the aircraft task (and the others,
+    // on empty squads) is due.
+    void run() {
+        fake.world.game.tick = 1;
+        fake.roll = 0;
+        auto host = host_for(fake);
+        computer_player_tick_orders(&state, host, 1);
+    }
+};
+
+// ai.patrol-group-size: a wing patrols to a map edge from the group size; below it, it
+// scouts around the base (a move, then queued patrols).
+void test_patrol_group_size() {
+    for (const int32_t size : {5, 15}) {
+        AirRun air(6, true);
+        air.rules.ai.patrol_group_size.enabled = size != 5;
+        air.rules.ai.patrol_group_size.units = size;
+        air.run();
+        const bool scouts = orders_of(air.fake, "move", 11) != 0;
+        check(scouts == (size == 15), "patrol size: six scout below 15 and raid from 5");
+        bool edge = false;
+        for (const auto& order : air.fake.orders)
+            edge |= order.kind == "patrol" && order.unit == 11 && !order.queue;
+        check(edge == (size == 5), "patrol size: the raid is one patrol in place of orders");
+    }
+}
+
+// ai.patrol-null-enemy-skip: without a base a small wing patrols to a random map edge,
+// drawing as a large wing does, in place of a queued patrol to the nearest enemy.
+void test_patrol_null_enemy_skip() {
+    for (const bool on : {false, true}) {
+        AirRun air(2, false);
+        air.rules.ai.patrol_null_enemy_skip.enabled = on;
+        air.run();
+        bool to_enemy = false, to_edge = false;
+        for (const auto& order : air.fake.orders) {
+            if (order.unit != 11 || order.kind != "patrol")
+                continue;
+            to_enemy |= order.queue && order.at.x == (500 << 16) && order.at.z == (600 << 16);
+            // The draws all give 3: an odd random(2) picks a random x on the z = 0 edge.
+            to_edge |= !order.queue && order.at.x == (3 << 16) && order.at.z == 0;
+        }
+        check(to_enemy == !on, "null enemy: 3.1c patrols to the nearest enemy");
+        check(to_edge == on, "null enemy: the rule patrols to a map edge");
+        // The aircraft task's rescheduling draw, the edge's three draws, then the siege
+        // task's rescheduling draw.
+        check(air.fake.roll == (on ? 5u : 2u), "null enemy: the edge's draws");
+    }
+}
+
+// ai.squad-assignment role-squads: the sort table, and standing orders keyed on the
+// commander ability.
+void test_squad_assignment() {
+    using SquadRules = oa::data::match_rules::AiSquadAssignmentRules;
+    constexpr auto role = SquadRules::role_squads;
+    ComputerType type{};
+    oa::Unit building{};
+    building.flags = OA_UNIT_FLAG_BUILDING;
+    type.flags = OA_UNIT_DEF_FLAG_BUILDER;
+    check(computer_sort_squad(building, type, role) == Squad::structures, "role: a factory");
+    type.flags = 0;
+    type.energy_use = 58.5F;
+    check(computer_sort_squad(building, type, role) == Squad::structures, "role: 58.5 energy");
+    type.energy_use = 58.49F; // high word 0x4269
+    check(computer_sort_squad(building, type, role) == Squad::armed_structures, "role: 58.49");
+    type.energy_use = -200.0F;
+    check(computer_sort_squad(building, type, role) == Squad::armed_structures, "role: producer");
+    building.flags |= OA_UNIT_FLAG_HAS_WEAPONS;
+    type.energy_use = 1000.0F;
+    check(computer_sort_squad(building, type, role) == Squad::structures, "role: armed user");
+    check(
+        computer_sort_squad(building, type, SquadRules::base) == Squad::armed_structures,
+        "base: an armed building is a defence"
+    );
+    oa::Unit mobile{};
+    type = {};
+    type.flags = OA_UNIT_DEF_FLAG_BUILDER | OA_UNIT_DEF_FLAG_CAN_FLY;
+    check(computer_sort_squad(mobile, type, role) == Squad::builders, "role: builder first");
+    type.flags = OA_UNIT_DEF_FLAG_CAN_FLY;
+    check(computer_sort_squad(mobile, type, role) == Squad::aircraft, "role: aircraft");
+    type.flags = 0;
+    type.min_water_depth = 1;
+    check(computer_sort_squad(mobile, type, role) == Squad::navy, "role: needs water");
+    type.min_water_depth = -10;
+    type.max_water_depth = 128;
+    check(computer_sort_squad(mobile, type, role) == Squad::navy, "role: dives 128");
+    check(
+        computer_sort_squad(mobile, type, SquadRules::base) == Squad::none, "base: unarmed diver"
+    );
+    type.max_water_depth = 127;
+    check(computer_sort_squad(mobile, type, role) == Squad::land_army, "role: an unarmed tank");
+    type.flags = OA_UNIT_DEF_FLAG_AMPHIBIOUS;
+    check(computer_sort_squad(mobile, type, role) == Squad::navy, "role: amphibious");
+    check(
+        computer_sort_squad(mobile, type, SquadRules::base) == Squad::none,
+        "base: unarmed amphibian"
+    );
+
+    for (const auto rules_value : {SquadRules::base, SquadRules::role_squads}) {
+        Fake fake;
+        fake.player(1, OA_PLAYER_STATUS_COMPUTER, 10, 40);
+        auto host = host_for(fake);
+        MatchRules rules{};
+        rules.ai.squad_assignment.enabled = rules_value != SquadRules::base;
+        rules.ai.squad_assignment.rules = rules_value;
+        ComputerPlayers state{};
+        state.rules.match = &rules;
+        describe_catalog(state);
+        // ARMCOM captures; ARMCK is a commander that does not.
+        state.types[ARMCK].abilities = OA_UNIT_DEF_ABILITY_COMMANDER;
+        check(computer_players_configure(&state, "", kBuildLists), "orders: configure");
+        auto& com = fake.spawn(10, 1, ARMCOM, 200, 200, 0);
+        auto& ck = fake.spawn(11, 1, ARMCK, 220, 200, 0);
+        auto& tank = fake.spawn(12, 1, ARMPW, 240, 200, 0);
+        fake.rolls.assign(4096, 7);
+        check(computer_players_initialize(&state, host), "orders: initialize");
+        tick_until(state, fake, host, 1, 30);
+        const bool role_rules = rules_value == SquadRules::role_squads;
+        check(standing_move(com) == (role_rules ? 2u : 1u), "orders: the capturer");
+        check(standing_move(ck) == (role_rules ? 1u : 2u), "orders: the commander");
+        check(standing_fire(com) == 2 && standing_fire(ck) == 2, "orders: fire at will");
+        check(
+            tank.squad == (role_rules ? static_cast<int32_t>(Squad::land_army) : 0),
+            "orders: an unarmed tank joins the army only by the role rules"
+        );
+        computer_players_release(&state);
+    }
+}
+
+// ai.nearest-enemy-filter skip-submerged: the land strike passes over a fully submerged
+// enemy and over move-rate tiers 2 and 3; the naval strike still finds the submerged one.
+void test_nearest_enemy_filter() {
+    using Filter = oa::data::match_rules::AiNearestEnemyFilterRules;
+    for (const auto filter : {Filter::base, Filter::skip_submerged}) {
+        for (const bool naval : {false, true}) {
+            Fake fake;
+            fake.player(0, OA_PLAYER_STATUS_LOCAL, 1, 9);
+            fake.player(1, OA_PLAYER_STATUS_COMPUTER, 10, 40);
+            auto host = host_for(fake);
+            MatchRules rules{};
+            rules.ai.nearest_enemy_filter.enabled = filter != Filter::base;
+            rules.ai.nearest_enemy_filter.rules = filter;
+            ComputerPlayers state{};
+            state.rules.match = &rules;
+            describe_catalog(state);
+            check(computer_players_configure(&state, "", kBuildLists), "nearest: configure");
+            // Nearest first: a submerged sub, a fast mover, then a tower.
+            auto& sub = fake.spawn(1, 0, ARMPT, 400, 300, OA_UNIT_FLAG_HAS_WEAPONS);
+            const uint32_t submerged = 3;
+            std::memcpy(sub.last_occupy_code, &submerged, sizeof submerged);
+            constexpr uint32_t move_rate_tier_2 = 0x8u;
+            fake.spawn(2, 0, ARMPW, 500, 300, OA_UNIT_FLAG_HAS_WEAPONS | move_rate_tier_2);
+            fake.spawn(3, 0, ARMLLT, 600, 300, OA_UNIT_FLAG_BUILDING | OA_UNIT_FLAG_HAS_WEAPONS);
+            const auto type = naval ? ARMPT : ARMPW;
+            for (uint32_t slot = 12; slot < 19; ++slot)
+                fake.spawn(
+                    slot, 1, type, 300 + static_cast<int32_t>(slot), 300, OA_UNIT_FLAG_HAS_WEAPONS
+                );
+            fake.rolls.assign(4096, 7);
+            check(computer_players_initialize(&state, host), "nearest: initialize");
+            tick_until(state, fake, host, 1, 301);
+            uint16_t target = 0;
+            for (const auto& order : fake.orders)
+                if (order.kind == "attack" && order.unit == 12)
+                    target = order.arg;
+            const uint16_t expected = filter == Filter::base ? 1 : naval ? 1 : 3;
+            check(target == expected, "nearest: the strike's target");
+            computer_players_release(&state);
+        }
+    }
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1102,6 +1608,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     test_sort_squads();
+    test_build_list_limits();
     test_profile();
     test_downloadable_directives();
     test_weight_report();
@@ -1115,6 +1622,15 @@ int main(int argc, char** argv) {
     test_profile_reload();
     test_sighted_weight();
     test_siege();
+    test_difficulty_names();
+    test_squad5_factory_tick();
+    test_factory_tick_filter();
+    test_builder_withhold_threshold();
+    test_attack_wave_size();
+    test_patrol_group_size();
+    test_patrol_null_enemy_skip();
+    test_squad_assignment();
+    test_nearest_enemy_filter();
     if (failures != 0) {
         std::fprintf(stderr, "%d failure(s)\n", failures);
         return 1;

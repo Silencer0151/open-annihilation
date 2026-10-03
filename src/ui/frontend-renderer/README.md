@@ -124,10 +124,54 @@ fill its size is left as it is.
 - `draw_mark` draws a one-bit picture. `oa_mark_thin` (9x5, strokes one
   pixel wide) and `oa_mark_bold` (13x7, uprights two pixels wide) hold the
   letters "OA" of the OA mark.
+- `draw_picture` draws an RGBA picture (`RgbaPicture`), such as the Open
+  Annihilation icon, scaled to fill a rectangle at the surface's own
+  resolution, not in source pixel blocks: each surface pixel shows the
+  alpha-weighted mean of the picture's pixels its share covers, laid over
+  the surface by their mean alpha, so a large picture shrinks smoothly and
+  its clear parts leave the surface as it is.
 
 `artless_test.cpp` (`frontend-artless-draw`) checks every primitive pixel by
-pixel at several placements and scales, clipping to the surface and to a
+pixel at several placements and scales, a picture's means, its blend and
+its surface-resolution columns included, clipping to the surface and to a
 placement's clip included, against synthetic fonts; with the installed game
 (`frontend-artless-draw-data`), it checks that text in `hattfont12` and
 `hattfont11` covers exactly what `raster_text` covers and blends each pixel
 at its ink.
+
+## Game text
+
+[game_text.hpp](include/oa/ui/frontend_renderer/game_text.hpp) draws game
+text as the player's Language & Text settings choose
+([oa/present/game_text.hpp](../../present/include/oa/present/game_text.hpp)):
+
+- `gui_font_characters` and `fnt_font_characters` give the characters a GUI
+  or FNT font draws, with the byte of each glyph (a GUI font's glyph that is
+  the picture of glyph 0, its box, is none); `gui_font_baseline` and
+  `fnt_font_baseline` the rows from the pen down to the font's baseline;
+  `gui_font_face` and `fnt_font_face` the modern face that stands for it.
+- `split_game_text` reads the bytes as the settings say and splits them into
+  the font's runs and the modern fonts' runs: game text the settings draw in
+  the modern fonts is one modern run, at the settings' Text size; a
+  character the font lacks is drawn at the font's own size. `needs_text_runs`
+  tells whether a text needs splitting at all: text of ASCII that keeps the
+  font is drawn as before.
+- The screens' gadgets are laid out for the game's fonts, so the drawing
+  here holds modern text to their size (`screen_text_size`) and keeps it on
+  the font's baseline; a smaller Text size draws it smaller.
+- `draw_gadget_text` takes a `game_text` flag: the match's own text, what
+  players type and send and their names are game text, the labels of menus
+  and dialogs are not, and keep the font for every character it has. The
+  loading screen's labels, and a network load's names and status, are drawn
+  as labels, so the loading screen keeps the game's fonts.
+  `draw_gadget_glyphs` draws a font's bytes as they are.
+- `draw_fnt_game_text` and `measure_fnt_game_text` do the same with an FNT
+  font on the RGB screens; the battle room's chat (`ListPresentation`) and
+  its players' names (`ButtonPresentation`) set `game_text`, and so does its
+  chat entry.
+
+`frontend-gadget-draw` (`test_gadget_text_game_runs`) checks a missing
+character drawn in the modern fonts on the font's baseline, the text after
+it, a width limit, game text drawn whole and a label kept in the font, and
+game text at the Text size, held to the game fonts' size, with a missing
+character kept at the font's.

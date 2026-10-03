@@ -3,6 +3,8 @@
 
 #include "oa/ui/gui_layout.hpp"
 
+#include "oa/data/languages/translation.hpp"
+
 #include <algorithm>
 #include <bit>
 #include <charconv>
@@ -613,6 +615,15 @@ skin_tiles(int32_t width, int32_t height, int32_t tile_width, int32_t tile_heigh
         y += tile_height;
     } while (y < height);
     return tiles;
+}
+
+TranslationLookup game_translation_lookup() {
+    return [](std::string_view source) -> std::optional<std::string> {
+        auto translated = oa::data::languages::translation_of(source);
+        if (translated && translated->size() > limit::text_bytes)
+            translated->resize(limit::text_bytes);
+        return translated;
+    };
 }
 
 } // namespace oa::ui::gui_layout

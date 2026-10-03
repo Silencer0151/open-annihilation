@@ -307,23 +307,33 @@ class Decoder {
         if (!expect(node, NodeKind::mapping, path))
             return;
         bool has_recording{};
+        const Node* stage{};
         for (const Node& entry : node.children) {
             const std::string entry_path{child_path(path, entry.key)};
-            if (entry.key == "demo") {
-                has_recording = true;
+            if (entry.key == "demo" || entry.key == "stage") {
+                if (entry.key == "demo")
+                    has_recording = true;
+                else
+                    stage = &entry;
                 if (!expect(entry, NodeKind::string, entry_path))
                     continue;
                 if (entry.text.empty())
                     error(entry_path, entry.position, "must not be empty");
                 else
-                    input.recording = entry.text;
+                    (entry.key == "demo" ? input.recording : input.stage) = entry.text;
             } else if (entry.key == "tickrate") {
                 (void)read_limited(entry, entry_path, max_tickrate, input.tickrate);
             } else {
                 unknown(entry, entry_path);
             }
         }
-        if (!has_recording)
+        if (has_recording && stage != nullptr)
+            error(
+                child_path(path, "stage"),
+                stage->position,
+                "cannot be given with a demo: a script plays one or the other"
+            );
+        else if (!has_recording && stage == nullptr)
             missing(child_path(path, "demo"));
     }
 

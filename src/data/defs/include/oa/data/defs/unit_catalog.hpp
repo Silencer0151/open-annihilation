@@ -9,16 +9,23 @@
 #include "oa/data/defs/categories.hpp"
 #include "oa/data/defs/files.hpp"
 #include "oa/data/defs/unit_def_loader.hpp"
+#include "oa/data/limits.hpp"
 
 #include <cstdint>
 
 namespace oa::data::defs {
 
-// UnitDef.build_ids holds up to this many type ids; the download pass appends
-// while build_id_count is below it.
-inline constexpr uint32_t build_list_capacity = 31;
-// The CANBUILD pass collects at most this many type ids.
-inline constexpr uint32_t canbuild_list_capacity = 30;
+/// Returns how many type ids a builder's UnitDef.build_ids holds: the CANBUILD
+/// entries it keeps and one more, which only the download menus may fill. 31
+/// for 3.1c's 30 CANBUILD entries.
+///
+/// @param lists the build-list limits
+/// @return type ids a list holds
+[[nodiscard]] constexpr uint32_t
+build_list_entries(const data::limits::BuildLists& lists) noexcept {
+    return data::limits::build_list_kept(lists) + 1;
+}
+
 inline constexpr uint32_t download_menu_entries = 5;
 inline constexpr uint32_t download_unit_name_capacity = 0x20;
 
@@ -91,25 +98,31 @@ void unit_def_tables_free(UnitDefTables* tables) noexcept;
 ///
 /// @param tables tables holding the record's data blocks
 /// @param unit unit record
-/// @return build_list_capacity type ids, of which build_id_count are used;
-///     null when the unit has no list
+/// @return build_list_entries type ids, for the limits the lists were loaded
+///     with, of which build_id_count are used; null when the unit has no list
 [[nodiscard]] uint16_t*
 unit_def_build_ids(const UnitDefTables* tables, const UnitDef& unit) noexcept;
 
 /// Gives every builder a build list from GAMEDATA/SIDEDATA.TDF [CANBUILD].
 ///
 /// Each builder's [CANBUILD] [<unitname>] canbuild1, canbuild2, ... entries
-/// that name a loaded unit are collected, at most canbuild_list_capacity of
-/// them; non-builders lose any list they had.
+/// that name a loaded unit are collected, at most build_list_kept(lists) of
+/// them (30 in 3.1c); non-builders lose any list they had.
 ///
 /// @param files file boundary
 /// @param variant game-data variant suffix; null or empty for none
 /// @param[in,out] tables unit tables with a sorted catalog
+/// @param lists how many entries a list keeps
 /// @return false when SIDEDATA.TDF is missing or a list cannot be allocated
 /// @quirk Every list is copied whole from one scratch list reused across
 ///     builders, so the slots past a builder's count hold the ids of earlier
 ///     builders.
-bool load_build_lists(const Files* files, const char* variant, UnitDefTables* tables) noexcept;
+bool load_build_lists(
+    const Files* files,
+    const char* variant,
+    UnitDefTables* tables,
+    const data::limits::BuildLists& lists = {}
+) noexcept;
 
 /// Reads every DOWNLOAD\*.TDF into tables->downloads and applies the menus.
 ///
@@ -121,8 +134,14 @@ bool load_build_lists(const Files* files, const char* variant, UnitDefTables* ta
 /// @param files file boundary
 /// @param variant game-data variant suffix; null or empty for none
 /// @param[in,out] tables unit tables with a sorted catalog and build lists
+/// @param lists the build-list limits the lists were loaded with
 /// @return false when the listing or the group allocation fails
-bool load_download_menu(const Files* files, const char* variant, UnitDefTables* tables) noexcept;
+bool load_download_menu(
+    const Files* files,
+    const char* variant,
+    UnitDefTables* tables,
+    const data::limits::BuildLists& lists = {}
+) noexcept;
 
 // Replaces one type's COB with the named scripts\<unitname>.COB.
 struct UnitScriptLoader {
@@ -157,9 +176,12 @@ void mark_downloadable_units(UnitDefTables* tables) noexcept;
 /// Appends each download menu unit to the build list of the builder its UNITMENU names.
 ///
 /// Type ids are appended in file and section order while the list has room
-/// (build_list_capacity); names are not deduplicated and unknown ones are skipped.
+/// (build_list_entries); names are not deduplicated and unknown ones are skipped.
 ///
 /// @param[in,out] tables unit tables with build lists and loaded download menus
-void append_download_build_ids(UnitDefTables* tables) noexcept;
+/// @param lists the build-list limits the lists were loaded with
+void append_download_build_ids(
+    UnitDefTables* tables, const data::limits::BuildLists& lists = {}
+) noexcept;
 
 } // namespace oa::data::defs

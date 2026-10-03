@@ -86,9 +86,11 @@ bool promote_on_kill_board(oa::World& world, oa::Player& killer) noexcept;
 
 /// Decides whether a session's chat line may run cheat commands, as its mission start sets it.
 ///
-/// Never in a campaign, always in a skirmish, and in a multiplayer game as the host's
-/// CHEATING option says, for every player alike: the host starts through the same
-/// branch and reads its own record (on when no player holds the host role).
+/// Always in a single-player game, a campaign or a skirmish, and in a
+/// multiplayer game as the host's CHEATING option says, for every player
+/// alike: the host starts through the same branch and reads its own record
+/// (on when no player holds the host role). 3.1c refuses cheats in a
+/// campaign; the engine runs them there as in a skirmish (VARIANCES.md).
 ///
 /// @param kind session kind
 /// @param world players and their options

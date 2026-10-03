@@ -20,10 +20,12 @@ namespace {
 namespace panel_flag = oa::ui::gui_input::panel_flag;
 
 // Panel flags the load dialog opens with: centred, with a backdrop,
-// darkening the panel below.
+// darkening the panel below. Over a match the save dialog opens with them
+// too, centred on the screen (VARIANCES.md).
 constexpr uint32_t kLoadDialogFlags =
     panel_flag::shade_below | panel_flag::centre | panel_flag::modal_backdrop;
-// The save dialog opens at its authored position.
+// Over the end of a mission the save dialog opens at its authored position,
+// as in 3.1c.
 constexpr uint32_t kSaveDialogFlags = panel_flag::shade_below | panel_flag::modal_backdrop;
 
 bool frame_valid(const renderer::Surface& frame) {
@@ -79,8 +81,8 @@ void Runtime::enter_load_game() {
     if (resources_.layout.gadgets.empty())
         return;
     auto& root = resources_.layout.gadgets.front().common;
-    const auto flags =
-        (save_dialog_open() ? kSaveDialogFlags : kLoadDialogFlags) | panel_flag::first_draw;
+    const bool authored = save_dialog_open() && options_parent_ != Screen::match;
+    const auto flags = (authored ? kSaveDialogFlags : kLoadDialogFlags) | panel_flag::first_draw;
     oa::ui::gui_input::place_root(
         root.x,
         root.y,

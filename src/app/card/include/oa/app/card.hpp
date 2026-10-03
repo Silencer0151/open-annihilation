@@ -109,10 +109,16 @@ enum class Blend : uint8_t {
     /// What is under it times one less the source alpha: the shade a shadow
     /// casts. The source colour is ignored.
     darken,
+    /// Each channel the lesser of the source colour and what is under it:
+    /// what is under it held to a colour at the most, as the outline of
+    /// game text in the modern fonts holds the picture. The alpha is
+    /// ignored. Where the renderer cannot (Capabilities::minimum_composed),
+    /// it draws as alpha.
+    minimum,
 };
 
 /// The number of blend modes; a Blend value is below it.
-inline constexpr uint8_t blend_count = 6;
+inline constexpr uint8_t blend_count = 7;
 
 /// How a draw reads a page's texels where it enlarges or reduces them.
 enum class Sampling : uint8_t {

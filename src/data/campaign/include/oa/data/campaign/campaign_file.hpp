@@ -6,6 +6,7 @@
 #pragma once
 
 #include "oa/data/campaign/directory_list.hpp"
+#include "oa/data/match_rules.hpp"
 
 #include "oa/formats/tdf.hpp"
 
@@ -172,6 +173,8 @@ struct CampaignEnv {
     Game* game{};
     int32_t difficulty{};   // 0 easy, 1 medium, 2 hard
     int32_t player_count{}; // skirmish/multiplayer schema match; 0 = any
+    // The schema type each difficulty's preference order names (ai.difficulty-names).
+    match_rules::AiDifficultyNames difficulty_names{};
 };
 
 // Game.session_record entries a mission's GlobalHeader sets when the map loads.
@@ -216,9 +219,11 @@ bool campaign_load_file(CampaignFile* file, const CampaignEnv* env, const char* 
 /// @return the mission count, at most 256; 0 without a campaign
 [[nodiscard]] int32_t campaign_count_missions(CampaignFile* file) noexcept;
 
-/// Writes each mission's display name into rows of kCampaignNameBytes.
+/// Writes each mission's own name (its missionname) into rows of kCampaignNameBytes.
 ///
-/// Unnamed missions get a placeholder.
+/// Unnamed missions get a placeholder. Saves name a mission this way and
+/// campaign_select_mission finds it by it, in every language;
+/// campaign_load_mission_titles gives the names players see.
 ///
 /// @param[in,out] file campaign object
 /// @param[out] names rows receiving the names; may be null
@@ -227,6 +232,33 @@ bool campaign_load_file(CampaignFile* file, const CampaignEnv* env, const char* 
 /// @quirk A section that vanishes mid-walk yields zero, as the game does.
 int32_t campaign_load_mission_list(
     CampaignFile* file, char (*names)[kCampaignNameBytes], int32_t capacity
+) noexcept;
+
+/// Writes the name a mission of the campaign shows under in a language: its
+/// "<language>missionname", which wins when present, else its missionname,
+/// else the unnamed mission's placeholder, as 3.1c's mission lists show it.
+///
+/// @param[in,out] file campaign object; its cursor is moved
+/// @param index the mission, from 0
+/// @param language the language's word, as "German"; null or empty for the
+///     mission's own name
+/// @param[out] out the name, cut to `capacity - 1` characters; empty on failure
+/// @param capacity size of `out` in bytes
+/// @return false without a loaded campaign or such a mission
+bool campaign_mission_title(
+    CampaignFile* file, int32_t index, const char* language, char* out, std::size_t capacity
+) noexcept;
+
+/// Writes each mission's name as players see it in a language
+/// (campaign_mission_title) into rows of kCampaignNameBytes.
+///
+/// @param[in,out] file campaign object
+/// @param language the language's word; null or empty for the missions' own names
+/// @param[out] names rows receiving the names; may be null
+/// @param capacity rows in `names`; missions past it are counted but not written
+/// @return the mission count
+int32_t campaign_load_mission_titles(
+    CampaignFile* file, const char* language, char (*names)[kCampaignNameBytes], int32_t capacity
 ) noexcept;
 
 /// Tests whether a mission index is inside the campaign.
@@ -370,7 +402,8 @@ bool load_tdf(const CampaignFiles* files, oa::formats::tdf::Document* document, 
 
 /// Picks the schema for a session kind and writes its name.
 ///
-/// Campaigns take the first schema of the difficulty's type in preference order.
+/// Campaigns take the first schema of the difficulty's type in preference order; the
+/// types are named by the difficulty names, Easy, Medium and Hard in 3.1c.
 /// Skirmish and multiplayer sessions take a multiplayer schema whose start-position
 /// count matches `players`, else the one with the most start positions, and leave the
 /// document cursor on it.
@@ -382,14 +415,19 @@ bool load_tdf(const CampaignFiles* files, oa::formats::tdf::Document* document, 
 /// @param[out] schema_name receives "Schema N"; null makes skirmish and multiplayer kinds
 ///        report the first multiplayer schema without counting start positions
 /// @param capacity bytes of `schema_name`
+/// @param names which of 3.1c's names each difficulty carries (ai.difficulty-names);
+///        3.1c's when left out
 /// @return false when no schema matches
+/// @quirk The names replace the types the preference order tries, not the order: with
+///        Easy and Hard swapped, difficulty 1 tries Medium, Hard, Easy.
 bool find_matching_schema(
     SessionKind kind,
     oa::formats::tdf::Document* ota,
     int32_t difficulty,
     int32_t players,
     char* schema_name,
-    std::size_t capacity
+    std::size_t capacity,
+    const match_rules::AiDifficultyNames& names = {}
 );
 
 /// Selects the schema for a difficulty and leaves the cursor on it.

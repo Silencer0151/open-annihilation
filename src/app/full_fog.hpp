@@ -45,6 +45,10 @@ struct FogPlacement {
     float origin_x{};   ///< target pixel the camera's map pixel lands on
     float origin_y{};
     float scale{1.0F}; ///< target pixels per map pixel, above 0
+    /// Every quad's edges on whole target pixels, each edge where its map
+    /// pixel lands rounded to the nearest, so that the quads of a zoom
+    /// whose tiles span a fraction of a pixel meet on every renderer.
+    bool whole_pixels{};
 };
 
 /// One level of the greyed terrain pages the greyed pass draws from, and

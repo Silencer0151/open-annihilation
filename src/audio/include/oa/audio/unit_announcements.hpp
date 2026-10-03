@@ -129,15 +129,26 @@ enum class AnnouncementEnqueueStatus : uint8_t {
     duplicate_category,
 };
 
+/// The two sounds 3.1c's novelty voice ("+Sing") plays, named as below the
+/// sounds directory: honk on one 30-tick window in eight and sing on the
+/// others.
+inline constexpr std::array<std::string_view, 2> novelty_voice_sounds{"honk", "sing"};
+
 struct AnnouncementPresentationGates {
     uint8_t unit_sound_volume{}; // Game.unit_sound_volume, range 0..10
     uint8_t unit_text_volume{};  // Game.unit_text_volume, range 0..10
     bool play_audio{};           // the presenter's play-audio argument
     bool unit_speech_mode{};     // the speechfx bit (sound_flag::speech) of Game.sound_flags
     bool show_text{};            // the presenter's show-text argument
-    // Novelty voice toggled by sound_toggle_novelty_voice(): every announcement plays "honk" on
-    // one 30-tick window in eight and "sing" otherwise.
+    // The novelty voice "+Sing" toggles: an announcement whose sound plays
+    // plays novelty_sounds[0] on one 30-tick window in eight and
+    // novelty_sounds[1] on the others instead of the unit's own sound; its
+    // caption is the unit's own.
     bool novelty_voice{};
+    /// The novelty voice's two sounds, named as below the sounds directory:
+    /// 3.1c's honk and sing, or a mod profile's (strings.cheat.sing-sounds).
+    /// The names are viewed, not copied: they must outlive the gates' use.
+    std::array<std::string_view, 2> novelty_sounds{novelty_voice_sounds};
 };
 
 struct UnitAnnouncement {

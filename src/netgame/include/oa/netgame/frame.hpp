@@ -157,6 +157,10 @@ struct PeerRecords {
     uint32_t from_id{};
     uint32_t to_id{};
     uint32_t copy_size{};
+    /// Records of the recorder (0xf6, 0xf9..0xff) are split out by their own
+    /// lengths instead of ending the frame, as a machine running the recorder
+    /// splits them.
+    bool recorder_records{};
     // Two spare bytes: a 0x2c record at the very end of a frame takes its
     // length from the bytes after the frame, which keep what an earlier,
     // longer frame left there, as in 3.1c.
@@ -178,7 +182,8 @@ enum class UnpackOutcome : uint8_t {
 /// When the ring still holds records the frame is not parsed: the waiting
 /// records are re-stamped with tick instead. Otherwise the frame is copied
 /// into the ring. The split stops at a byte <= 0x01 or >= 0x2d, or at a
-/// record that does not fit (dropping the rest). Beyond 0x200 records, that
+/// record that does not fit (dropping the rest); with the ring's
+/// recorder_records set, recorder records are split out by their lengths. Beyond 0x200 records, that
 /// many 0x2c records are dropped from the front. A zero-length record would
 /// never advance the split, so it reports zero_length_record.
 ///
@@ -229,6 +234,9 @@ struct FrameReceiver {
     // taken: a slot whose peer no player's player_id names is reclaimed.
     // Null reclaims nothing.
     const Player* players{};
+    /// Every peer's frames are split with the recorder's records
+    /// (PeerRecords::recorder_records).
+    bool recorder_records{};
 };
 
 struct FrameDelivery {

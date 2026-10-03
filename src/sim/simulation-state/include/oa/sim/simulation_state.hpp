@@ -4,6 +4,7 @@
 #pragma once
 
 #include "oa/core/world.h"
+#include "oa/data/match_rules.hpp"
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -95,12 +96,24 @@ struct OrderQueue {
 /// @return the mark, or 0 when every mark is taken
 [[nodiscard]] uint8_t lowest_unused_player_mark(const oa::World& world) noexcept;
 
+/// Which units nearest_candidate_unit passes over beyond 3.1c's tests; a default
+/// filter passes over none.
+struct CandidateFilter {
+    /// Pass over a unit whose occupancy bits hold state 2 or 3, or whose move-rate
+    /// bits hold tier 2 or 3, in place of 3.1c's occupancy state 2 alone.
+    bool widened_flags{};
+    /// Pass over a fully submerged unit: one whose last water state
+    /// (Unit.last_occupy_code) is 3.
+    bool skip_submerged{};
+};
+
 /// Finds the nearest candidate unit of the players a relation row admits.
 ///
 /// A unit qualifies when it is live (OA_UNIT_FLAG_LIVE), its occupancy bits are not
 /// 2, it is not flagged OA_UNIT_FLAG_NOT_SELECTABLE and it is not cloaked
-/// (OA_UNIT_STATE_CLOAKED). Rank is the sum of the high halves of the signed X and Z
-/// squares; Y is ignored. The first strict minimum wins.
+/// (OA_UNIT_STATE_CLOAKED), and the filter does not pass over it. Rank is the sum of
+/// the high halves of the signed X and Z squares; Y is ignored. The first strict
+/// minimum wins.
 ///
 /// @param world world whose players are searched
 /// @param relation the reference player's Player.alliance table, indexed by each
@@ -108,9 +121,14 @@ struct OrderQueue {
 ///        cover every tested index
 /// @param x reference point X, 16.16
 /// @param z reference point Z, 16.16
+/// @param filter the units passed over besides; none when left out
 /// @return the nearest unit, or null
 [[nodiscard]] oa::Unit* nearest_candidate_unit(
-    oa::World& world, std::span<const uint8_t> relation, int32_t x, int32_t z
+    oa::World& world,
+    std::span<const uint8_t> relation,
+    int32_t x,
+    int32_t z,
+    const CandidateFilter& filter = {}
 ) noexcept;
 
 /// Averages a list of unit positions.
@@ -238,6 +256,8 @@ struct OrderQueue {
 // Operations owned by other systems; all are mandatory, never default no-ops.
 struct Host {
     virtual ~Host() = default;
+    /// The rules the match plays by (Match::rules_view); unset, 3.1c's.
+    data::match_rules::MatchRulesView rules{};
     /// Runs one step of an order's mission handler.
     ///
     /// @param world world the unit lives in
@@ -281,7 +301,8 @@ struct Host {
     /// @param amount damage before scaling
     /// @param kind damage kind; 11 for environment damage below sea level
     virtual void apply_scaled_damage(oa::Unit& unit, int32_t amount, uint32_t kind) = 0;
-    /// Regenerates a damaged unit's health (every eighth tick when its type heals).
+    /// Regenerates a damaged unit's health when self_heal_due says so, at
+    /// self_heal_rate.
     ///
     /// @param unit damaged unit
     virtual void regenerate_health(oa::Unit& unit) = 0;
@@ -488,6 +509,44 @@ StepFault secondary_orders(
 /// @param host terrain queries
 /// @return untyped_unit, with nothing changed, for a unit without a type; else none
 StepFault update_height(oa::World& world, oa::Unit& unit, Host& host);
+/// Tells whether a unit regenerates health this tick, under the match's
+/// repair.healtime-self-heal rule.
+///
+/// Its type must heal (a nonzero heal time) and its health, sign-extended and
+/// compared without sign, must be below the maximum. In 3.1c (cadence
+/// every-8-ticks) it then regenerates when tick & 7 is 0; with cadence
+/// healtime-mask, when tick & (heal time & 0xff) is 0, so 1 regenerates every
+/// 2 ticks, 3 every 4, 7 every 8 and 15 every 16. With skip-under-construction
+/// an unfinished unit does not regenerate.
+///
+/// @param rule the match's self-heal rule
+/// @param heal_time the type's heal time (UnitDef.heal_time)
+/// @param health the unit's health
+/// @param maximum_health the type's maximum health
+/// @param build_remaining the unit's build fraction left (Unit.build_remaining)
+/// @param tick the game tick
+/// @return true when it regenerates
+/// @quirk An unfinished unit is one whose build fraction is not +0.0: a fraction
+///        of -0.0 counts as unfinished.
+[[nodiscard]] bool self_heal_due(
+    const data::match_rules::RepairHealtimeSelfHeal& rule,
+    int16_t heal_time,
+    int16_t health,
+    uint32_t maximum_health,
+    float build_remaining,
+    uint32_t tick
+) noexcept;
+/// Returns the work one regeneration step passes to the repair step.
+///
+/// (heal time × 8 × work-multiplier) / 30, truncated, as a float. In 3.1c the heal
+/// time is read without sign and the multiplier is 1; with cadence healtime-mask
+/// the heal time is read with its sign, the quotient truncated toward zero.
+///
+/// @param rule the match's self-heal rule
+/// @param heal_time the type's heal time (UnitDef.heal_time)
+/// @return the work, worker time per step
+[[nodiscard]] float
+self_heal_rate(const data::match_rules::RepairHealtimeSelfHeal& rule, int16_t heal_time) noexcept;
 /// Runs one unit's tick.
 ///
 /// In order: script, counters, selectability, the health percentage (every 30 ticks),

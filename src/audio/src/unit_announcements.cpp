@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/audio/unit_announcements.hpp"
+#include "oa/data/defs/layout.hpp"
 #include "oa/audio/game_audio.hpp"
 
 #include "oa/formats/tdf.hpp"
@@ -13,6 +14,11 @@
 
 namespace oa::audio::game_audio {
 namespace {
+
+/// The novelty voice's windows: the first of its sounds plays in the first
+/// window of every novelty_windows, each novelty_window_ticks ticks long.
+constexpr uint32_t novelty_window_ticks = 30;
+constexpr uint32_t novelty_windows = 8;
 
 constexpr std::array<UnitAnnouncementDescriptor, 24> descriptors{{
     {},
@@ -63,7 +69,9 @@ unit_announcement_category(uint32_t category_number) noexcept {
 }
 
 UnitSoundCatalog UnitSoundCatalog::load(const oa::AssetStore& assets) {
-    const auto data = assets.read("gamedata/sound.tdf");
+    const auto data = assets.read(
+        oa::data::defs::data_path(oa::data::defs::DataDirectory::gamedata, "sound.tdf")
+    );
     return parse_sound_tdf(
         std::string_view(reinterpret_cast<const char*>(data.bytes.data()), data.bytes.size())
     );
@@ -185,8 +193,10 @@ std::optional<UnitAnnouncement> AnnouncementQueue::present_front(
         if (!gates.novelty_voice)
             output.sound_resource = sound_resource(choice->sound);
         else
-            output.sound_resource =
-                sound_resource((current_tick / 30U & 7U) == 0 ? "honk" : "sing");
+            output.sound_resource = sound_resource(
+                gates.novelty_sounds
+                    [(current_tick / novelty_window_ticks) % novelty_windows == 0 ? 0 : 1]
+            );
         next_allowed_tick_[static_cast<std::size_t>(entry.category)] =
             current_tick + static_cast<uint32_t>(details->cooldown_seconds) * 30U;
     }

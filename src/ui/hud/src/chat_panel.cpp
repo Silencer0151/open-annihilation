@@ -8,7 +8,10 @@
 
 #include "oa/sim/messages.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cctype>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -26,7 +29,6 @@ constexpr int32_t kTalkPanelFlags = 0x880;
 constexpr int32_t kTeamTalkPanelFlags = 0x800;
 /// Characters that end a target prefix ("a:", "e;", "3,").
 constexpr const char* kTargetSeparators = ",:;";
-constexpr size_t kTypedTextBytes = 0x100;
 /// Chat send modes the SENDTYPE control can select.
 constexpr uint8_t kLastSendType = 4;
 constexpr double kLogoScale = 0.8;
@@ -69,7 +71,7 @@ void set_control(const PanelControls& controls, const char* name, int32_t value)
 
 void send_chat_line(World& world, const char* typed, const ChatHost& host) {
     Game& game = world.game;
-    char buffer[kTypedTextBytes];
+    char buffer[typed_text_bytes];
     std::snprintf(buffer, sizeof buffer, "%s", typed != nullptr ? typed : "");
     const char* text = buffer;
     while (*text == ' ')
@@ -247,12 +249,24 @@ void draw_message_log(const World& world, const MessageLogSink& sink) {
         index = index == 0 ? OA_CHAT_LINE_COUNT - 1 : index - 1;
     const int32_t line_height = sink.font_height != nullptr ? sink.font_height(sink.user) : 0;
     const int32_t filter = message_filter(game);
-    bool showing = true;
-    int32_t y = kMessageLogTop;
-    while (game.chat_head != index) {
+
+    // The lines the filter shows, oldest first, with where each one's text
+    // starts and the rows it takes.
+    struct Shown {
         sim::messages::MessageLine line{};
-        std::memcpy(&line, game.chat_lines[index], sizeof line);
-        const uint8_t kind = line.kind & 0x0f;
+        int32_t x{};
+        int32_t logo{}; ///< the logo's side; 0 for a line without a sender
+        int32_t rows{};
+    };
+
+    std::array<Shown, OA_CHAT_LINE_COUNT> shown{};
+    std::size_t count = 0;
+    bool showing = true;
+    while (game.chat_head != index && count < shown.size()) {
+        Shown& entry = shown[count];
+        std::memcpy(&entry.line, game.chat_lines[index], sizeof entry.line);
+        index = index + 1 == OA_CHAT_LINE_COUNT ? 0 : index + 1;
+        const uint8_t kind = entry.line.kind & 0x0f;
         bool visible = false;
         if (filter == 1) {
             if (kind != 2)
@@ -263,31 +277,48 @@ void draw_message_log(const World& world, const MessageLogSink& sink) {
         } else if (filter == 3) {
             visible = message_show_all(game) != 0 || kind == 1 || kind == 4 || kind == 8;
         }
-        if (visible) {
-            if (sink.set_color != nullptr)
-                sink.set_color(
-                    sink.user, game.ui_colors[(line.kind & kMessageHighlight) != 0 ? 10 : 15]
-                );
-            int32_t x = kMessageLogLeft;
-            if (line.sender != sim::messages::sender_none && line.sender < OA_PLAYER_COUNT) {
-                const auto size = static_cast<int32_t>(line_height * kLogoScale);
-                x = static_cast<int32_t>(size * kLogoGap + kMessageLogLeft);
-                if (sink.logo != nullptr)
-                    sink.logo(
-                        sink.user,
-                        game.players[line.sender],
-                        kMessageLogLeft,
-                        y,
-                        kMessageLogLeft + size,
-                        y + size
-                    );
-            }
-            line.text[sizeof line.text - 1] = '\0';
-            if (sink.text != nullptr)
-                sink.text(sink.user, line.text, x, y);
-            y += line_height;
+        if (!visible)
+            continue;
+        entry.x = kMessageLogLeft;
+        if (entry.line.sender != sim::messages::sender_none &&
+            entry.line.sender < OA_PLAYER_COUNT) {
+            entry.logo = static_cast<int32_t>(line_height * kLogoScale);
+            entry.x = static_cast<int32_t>(entry.logo * kLogoGap + kMessageLogLeft);
         }
-        index = index + 1 == OA_CHAT_LINE_COUNT ? 0 : index + 1;
+        entry.line.text[sizeof entry.line.text - 1] = '\0';
+        entry.rows = sink.rows != nullptr
+                         ? std::max(sink.rows(sink.user, entry.line.text, entry.x), int32_t{1})
+                         : 1;
+        ++count;
+    }
+    // Past the most rows, the oldest lines go first; the newest stays.
+    std::size_t first = 0;
+    if (sink.most_rows > 0) {
+        int32_t rows = 0;
+        for (std::size_t at = 0; at < count; ++at)
+            rows += shown[at].rows;
+        while (first + 1 < count && rows > sink.most_rows)
+            rows -= shown[first++].rows;
+    }
+    int32_t y = kMessageLogTop;
+    for (std::size_t at = first; at < count; ++at) {
+        const Shown& entry = shown[at];
+        if (sink.set_color != nullptr)
+            sink.set_color(
+                sink.user, game.ui_colors[(entry.line.kind & kMessageHighlight) != 0 ? 10 : 15]
+            );
+        if (entry.logo != 0 && sink.logo != nullptr)
+            sink.logo(
+                sink.user,
+                game.players[entry.line.sender],
+                kMessageLogLeft,
+                y,
+                kMessageLogLeft + entry.logo,
+                y + entry.logo
+            );
+        if (sink.text != nullptr)
+            sink.text(sink.user, entry.line.text, entry.x, y);
+        y += line_height * entry.rows;
     }
 }
 

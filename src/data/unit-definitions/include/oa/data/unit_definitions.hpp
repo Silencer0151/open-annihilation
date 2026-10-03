@@ -197,16 +197,22 @@ unit_definition_from(const UnitDef& unit, const UnitDefinitionSources& sources);
 /// The record already holds its movement class's footprint, depth and
 /// maximum slopes; the class adds its bad slopes, and a type without one
 /// takes half of each maximum. A building's yard is the yard map block the
-/// FBI loader compiled.
+/// FBI loader compiled; so is a mobile unit's when the loader gave it one
+/// (units.mobile-unit-yardmap). A building the loader gave none because its
+/// file has no YardMap key (units.skip-empty-yardmap) has a yard of empty
+/// cells, which claim and refuse nothing, as a building whose YardMap text
+/// has no cell letters.
 ///
 /// @param unit record data::defs::load_unit_def filled
 /// @param movement_classes the classes UnitDef.move_class refers to
 /// @param blocks the blocks UnitDef.yard_map refers to
-/// @return the metadata, or an error for a building whose yard map did not load
+/// @param yard_maps which units the loader gave a yard map
+/// @return the metadata, or an error for a unit whose yard map did not load
 [[nodiscard]] Result<RuntimeDefinitionMetadata> resolve_runtime_metadata(
     const UnitDef& unit,
     const defs::MoveClassTable& movement_classes,
-    const defs::UnitDefBlocks& blocks
+    const defs::UnitDefBlocks& blocks,
+    const defs::YardMapRules& yard_maps = defs::YardMapRules{}
 );
 
 // 3.1c merges loose files and ordered archives before it lists units/*.FBI.
@@ -230,15 +236,15 @@ class CatalogAssetReader {
     [[nodiscard]] virtual Result<std::string> read(std::string_view logical_path) const = 0;
 };
 
-inline constexpr std::size_t category_mask_words = 16; // a 64-byte mask, as in 3.1c
-inline constexpr std::size_t category_mask_bits = category_mask_words * 32;
-
+/// A copy of one category mask: bit n of the words is unit type id n. It
+/// holds as many words as the category registry's masks (16 for 3.1c's
+/// 512 type ids), or none for a category the type does not name.
 struct UnitCategoryMask {
-    std::array<uint32_t, category_mask_words> words{};
+    std::vector<uint32_t> words;
     /// Tests whether a unit type is in the category.
     ///
     /// @param type_id unit type id
-    /// @return true when its bit is set; false past the mask
+    /// @return true when its bit is set; false past the mask's words
     [[nodiscard]] bool contains(uint16_t type_id) const noexcept;
 };
 

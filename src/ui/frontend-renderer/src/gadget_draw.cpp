@@ -5,11 +5,17 @@
 
 #include "oa/present/blit.hpp"
 #include "oa/present/raster.hpp"
+#include "oa/present/display.hpp"
+#include "oa/present/game_text.hpp"
+#include "oa/ui/frontend_renderer/game_text.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
+#include <string>
 #include <string_view>
+#include <tuple>
 
 namespace oa::ui::frontend_renderer {
 namespace {
@@ -153,32 +159,30 @@ oa::present::GafStatus load_gui_font(std::span<const uint8_t> file, oa::present:
     return status;
 }
 
-void draw_gadget_text(
+namespace {
+
+constexpr unsigned char first_glyph = 0x20;
+constexpr unsigned char space = 0x20;
+
+/// Draws bytes glyph by glyph; returns false once a glyph does not fit.
+bool draw_glyphs(
     oa::Surface* target,
-    const oa::present::GafSprites* font,
-    const char* text,
-    int32_t x,
+    const present::GafSequence* glyphs,
+    std::string_view bytes,
+    int32_t& x,
     int32_t y,
-    int32_t max_width,
+    int32_t& max_width,
     int32_t light_level
 ) {
-    constexpr unsigned char first_glyph = 0x20;
-    constexpr unsigned char space = 0x20;
-    if (font == nullptr) {
-        present::draw_text(target, text, x, y, present::text_width_unbounded);
-        return;
-    }
-    const present::GafSequence* glyphs =
-        font->sequences.empty() ? nullptr : &font->sequences.front();
-    for (const auto* p = reinterpret_cast<const unsigned char*>(text); *p != 0; ++p) {
-        if (*p < first_glyph)
+    for (const unsigned char byte : bytes) {
+        if (byte < first_glyph)
             continue;
-        const oa::Sprite* glyph = present::gaf_frame(glyphs, *p);
+        const oa::Sprite* glyph = present::gaf_frame(glyphs, byte);
         if (glyph == nullptr)
             continue;
         if (max_width != gadget_text_unbounded && glyph->width > max_width)
-            return;
-        if (*p != space) {
+            return false;
+        if (byte != space) {
             if (light_level == 0)
                 present::draw_sprite(target, glyph, x, y);
             else
@@ -187,10 +191,139 @@ void draw_gadget_text(
         if (max_width != gadget_text_unbounded) {
             max_width -= glyph->width;
             if (max_width < 0)
-                return;
+                return false;
         }
         x += glyph->width;
     }
+    return true;
+}
+
+/// Lays a modern line on a surface, or on the locked display for none.
+void lay_on(
+    oa::Surface* target,
+    const present::TextLayers& layers,
+    int32_t x,
+    int32_t baseline,
+    int32_t light_level
+) {
+    const auto& hooks = present::game_text_hooks();
+    if (hooks.palette == nullptr)
+        return;
+    const auto palette = hooks.palette(hooks.context);
+    oa::Surface locked{};
+    oa::Surface* surface = target;
+    if (surface == nullptr) {
+        if (present::lock_display_surface(locked) == 0)
+            return;
+        surface = &locked;
+    }
+    auto canvas = present::indexed_canvas(*surface, palette);
+    present::lay_text(
+        canvas, layers, x, baseline, lit_text_color(present::gui_font_color, palette, light_level)
+    );
+    if (surface == &locked)
+        present::unlock_display_surface();
+}
+
+} // namespace
+
+void draw_gadget_text(
+    oa::Surface* target,
+    const oa::present::GafSprites* font,
+    const char* text,
+    int32_t x,
+    int32_t y,
+    int32_t max_width,
+    int32_t light_level,
+    bool game_text
+) {
+    if (font == nullptr) {
+        present::draw_text(target, text, x, y, present::text_width_unbounded);
+        return;
+    }
+    const present::GafSequence* glyphs =
+        font->sequences.empty() ? nullptr : &font->sequences.front();
+    const std::string_view line(text != nullptr ? text : "");
+    if (!needs_text_runs(line, game_text)) {
+        std::ignore = draw_glyphs(target, glyphs, line, x, y, max_width, light_level);
+        return;
+    }
+    // Gadgets are laid out for the game's fonts: modern text is held to
+    // their size and keeps the font's baseline.
+    const int32_t baseline = y + gui_font_baseline(*font);
+    const auto face = gui_font_face(*font);
+    for (const auto& run : split_game_text(line, gui_font_characters(*font), game_text)) {
+        const int32_t size = screen_text_size(run);
+        std::optional<present::TextLayers> layers;
+        if (run.modern)
+            layers = present::modern_text(run.text, face, 1, size);
+        if (!layers) {
+            const std::string bytes =
+                run.modern ? present::encode_game_text(run.text, false) : run.text;
+            if (!draw_glyphs(target, glyphs, bytes, x, y, max_width, light_level))
+                return;
+            continue;
+        }
+        if (max_width != gadget_text_unbounded && layers->advance > max_width) {
+            const std::size_t fitted = present::modern_text_fit(run.text, face, 1, size, max_width);
+            if (fitted != 0)
+                if (const auto part =
+                        present::modern_text(run.text.substr(0, fitted), face, 1, size))
+                    lay_on(target, *part, x, baseline, light_level);
+            return;
+        }
+        lay_on(target, *layers, x, baseline, light_level);
+        x += layers->advance;
+        if (max_width != gadget_text_unbounded)
+            max_width -= layers->advance;
+    }
+}
+
+int32_t draw_gadget_glyphs(
+    oa::Surface* target,
+    const oa::present::GafSprites& font,
+    std::string_view bytes,
+    int32_t x,
+    int32_t y,
+    int32_t max_width,
+    int32_t light_level
+) {
+    const present::GafSequence* glyphs = font.sequences.empty() ? nullptr : &font.sequences.front();
+    std::ignore = draw_glyphs(target, glyphs, bytes, x, y, max_width, light_level);
+    return x;
+}
+
+int32_t measure_gadget_glyphs(const oa::present::GafSprites& font, std::string_view bytes) {
+    const present::GafSequence* glyphs = font.sequences.empty() ? nullptr : &font.sequences.front();
+    int32_t width = 0;
+    for (const unsigned char byte : bytes)
+        if (const oa::Sprite* glyph =
+                byte >= first_glyph ? present::gaf_frame(glyphs, byte) : nullptr)
+            width += glyph->width;
+    return width;
+}
+
+int32_t measure_gadget_text(const oa::present::GafSprites* font, const char* text, bool game_text) {
+    if (font == nullptr || font->sequences.empty() || text == nullptr)
+        return 0;
+    const auto glyph_width = [font](std::string_view bytes) {
+        return measure_gadget_glyphs(*font, bytes);
+    };
+    const std::string_view line(text);
+    if (!needs_text_runs(line, game_text))
+        return glyph_width(line);
+    int32_t width = 0;
+    for (const auto& run : split_game_text(line, gui_font_characters(*font), game_text)) {
+        if (run.modern)
+            if (const auto layers = present::modern_text(
+                    run.text, gui_font_face(*font), 1, screen_text_size(run)
+                )) {
+                width += layers->advance;
+                continue;
+            }
+        width += glyph_width(run.modern ? present::encode_game_text(run.text, false) : run.text);
+    }
+    return width;
 }
 
 } // namespace oa::ui::frontend_renderer

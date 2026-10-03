@@ -53,7 +53,8 @@ version values.
 
 The reader caps input at 256 MiB, sequences at 4,096, frames per sequence at
 4,096, all recursively reached frame records at 131,072, depth at 32, a single
-decoded frame at 64 MiB of indices, and all decoded buffers at 256 MiB. It checks
+decoded frame at 64 MiB of indices, and all decoded buffers a parse keeps at
+256 MiB; a checked parse keeps none, so its frames may decode past that. It checks
 all offsets, row lengths, run widths, pointer cycles and model sizes.
 
 The parsed and rendered coverage masks are needed to draw as the game does: raw

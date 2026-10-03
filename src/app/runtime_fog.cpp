@@ -41,9 +41,11 @@ void Runtime::apply_match_fog(
     const bool card_fog = full_frame_drawn();
     const bool dithered =
         (match_->state().game.graphics_flags & init::preference_flags::dithered_fog) != 0;
+    // The fog shows the view player's sight and mapped terrain.
+    const auto viewer = match_view_player();
     std::span<const uint8_t> coverage;
     try {
-        coverage = match_->player_coverage(static_cast<uint8_t>(match_view_player()));
+        coverage = match_->player_coverage(viewer);
     } catch (const std::exception&) {
         if (card_fog)
             note_full_fog_grid({}, 0, 0, dithered);
@@ -74,6 +76,7 @@ void Runtime::apply_match_fog(
     };
     auto grid = oa::present::world_renderer::build_fog_grid(
         sight,
+        viewer,
         coverage,
         {los_on, mapping_on},
         view.camera_x,
@@ -211,9 +214,28 @@ bool Runtime::feature_hidden_by_fog(uint16_t feature_index, int32_t cell_x, int3
     if (cell_x >= 0 && cell_z >= 0 && spatial.terrain_width != 0) {
         const auto plot = static_cast<std::size_t>(cell_z) * spatial.terrain_width +
                           static_cast<std::size_t>(cell_x);
+        const auto& ignore_los = ui_rules().map_features_ignore_los;
+        oa::present::world_renderer::FeatureOwnerRule rule{};
+        rule.enabled = ignore_los.enabled;
+        rule.map_owner = static_cast<uint8_t>(ignore_los.feature_owner);
+        // A feature counts as the map's while its plot holds the feature the
+        // map put there; the plots keep 3.1c's owner slot, which the match
+        // hashes and saves.
+        const auto map_plot = static_cast<std::size_t>(cell_z) * selected_tnt_->attribute_width +
+                              static_cast<std::size_t>(cell_x);
+        const bool placed_by_map =
+            rule.enabled && prepared_map_ && map_plot < prepared_map_->collision_plots.size() &&
+            prepared_map_->collision_plots[map_plot].feature_word == feature_index;
         if (plot < spatial.plots.size() &&
-            ((spatial.plots[plot].flags & OA_PLOT_FLAG_PLAYER_FEATURE_MASK) >>
-             oa::sim::feature_runtime::plot_player_shift) == match_view_player())
+            oa::present::world_renderer::feature_drawn_without_sight(
+                static_cast<uint8_t>(
+                    (spatial.plots[plot].flags & OA_PLOT_FLAG_PLAYER_FEATURE_MASK) >>
+                    oa::sim::feature_runtime::plot_player_shift
+                ),
+                placed_by_map,
+                static_cast<uint8_t>(match_view_player()),
+                rule
+            ))
             return false;
     }
     uint8_t plot_height = 0;
@@ -240,11 +262,15 @@ bool Runtime::feature_hidden_by_fog(uint16_t feature_index, int32_t cell_x, int3
 }
 
 bool Runtime::match_mapping_on() const {
+    if (match_ && watched_sight_ != WatchedSight::game)
+        return watched_sight_ == WatchedSight::player;
     return match_ &&
            (match_->state().game.visibility_flags & oa::ui::console::visibility_flag::mapping) != 0;
 }
 
 bool Runtime::match_line_of_sight_on() const {
+    if (match_ && watched_sight_ != WatchedSight::game)
+        return watched_sight_ == WatchedSight::player;
     return match_ && (match_->state().game.visibility_flags &
                       oa::ui::console::visibility_flag::line_of_sight) != 0;
 }

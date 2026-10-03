@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/netgame/sync/unit_checksum.hpp"
+#include "oa/data/defs/layout.hpp"
 
 #include "oa/formats/tdf.hpp"
 
@@ -113,7 +114,9 @@ Result<uint32_t> mix_unit_file_checksum(
     uint32_t mixed = 0;
     if (auto cob = assets.read(std::string("scripts/") + std::string(unit_name) + ".cob"))
         mixed ^= unit_file_checksum(cob.value);
-    auto guis = assets.list_effective("guis", ".gui");
+    auto guis = assets.list_effective(
+        oa::data::defs::directory_name(oa::data::defs::DataDirectory::guis), ".gui"
+    );
     if (!guis) {
         result.error = std::move(guis.error);
         return result;
@@ -129,7 +132,11 @@ Result<uint32_t> mix_unit_file_checksum(
         if (auto gui = assets.read(path))
             mixed ^= unit_file_checksum(gui.value);
     }
-    if (auto download = assets.read(std::string("download/") + std::string(unit_name) + ".tdf")) {
+    if (auto download = assets.read(
+            oa::data::defs::data_path(
+                oa::data::defs::DataDirectory::download, std::string(unit_name) + ".tdf"
+            )
+        )) {
         if (!download.value.empty() &&
             download.value.size() <= static_cast<std::size_t>(std::numeric_limits<int32_t>::max()))
             mixed ^= unit_file_checksum(download.value);

@@ -224,14 +224,20 @@ void abandoned_game_countdown() {
     CHECK(deathmatch_state.countdown == -1 && deathmatch_state.flags == 0);
 }
 
-// Mission start: 0 for a campaign, 1 for a skirmish, and for a multiplayer game
-// bit 0x2000 of the options of the first seated player with role bit 0.
+// Mission start: on for a campaign and a skirmish, whatever came before, and
+// for a multiplayer game bit 0x2000 of the options of the first seated player
+// with role bit 0. 3.1c turns it off for a campaign (VARIANCES.md).
 void session_cheat_flag() {
     using oa::data::campaign::SessionKind;
     Game4 g;
     g.infos[0].options = OA_SETUP_OPTION_CHEATS_ALLOWED;
-    CHECK(!session_cheats_allowed(SessionKind::campaign, *g.world, true));
+    CHECK(session_cheats_allowed(SessionKind::campaign, *g.world, false));
     CHECK(session_cheats_allowed(SessionKind::skirmish, *g.world, false));
+    // A single-player game ignores every player's CHEATING option.
+    g.infos[0].options = 0;
+    CHECK(session_cheats_allowed(SessionKind::campaign, *g.world, false));
+    CHECK(session_cheats_allowed(SessionKind::skirmish, *g.world, false));
+    g.infos[0].options = OA_SETUP_OPTION_CHEATS_ALLOWED;
     // No host seated: the flag stays on.
     CHECK(session_cheats_allowed(SessionKind::multiplayer, *g.world, false));
     g.infos[2].role = 0x01;

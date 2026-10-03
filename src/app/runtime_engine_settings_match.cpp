@@ -90,9 +90,11 @@ void Runtime::register_engine_settings_match_overlay() {
     overlay_register(&screens_, &cleanup);
 }
 
-void Runtime::open_engine_settings_in_match() {
+void Runtime::open_engine_settings_in_match(settings::DialogKind kind) {
     if (screen_ != Screen::match || !match_ || match_finished_ ||
         engine_settings_dialog() != nullptr || engine_settings_fonts() == nullptr)
+        return;
+    if (kind == settings::DialogKind::mod_options && !ui_rules().options_dialog.enabled)
         return;
     if (!ingame_menu_column_shown()) {
         // From play only: a panel the menu opened, a team panel or a message
@@ -104,7 +106,7 @@ void Runtime::open_engine_settings_in_match() {
             return;
     }
     // The dialog is drawn and fed from engine_settings_dialog().
-    open_engine_settings_dialog();
+    open_engine_settings_dialog(kind);
     play_ui_sound(kOpenSound, 0);
     auto& host = engine_settings_match_host();
     host.dialog_open = true;
@@ -124,6 +126,8 @@ settings::Locks Runtime::engine_settings_locks() const {
     const auto report = acceleration_report();
     state.acceleration_unavailable = report.acceleration_unavailable;
     state.vertical_sync_unavailable = report.vertical_sync_unavailable;
+    state.language_from_command_line =
+        oa::app::command_line::launch_language(options_.launch) != nullptr;
     return settings::settings_locks(state);
 }
 
@@ -140,6 +144,32 @@ Runtime::EngineSettingsMatchHost::button_rect(const layout::MatchLayout& match) 
         scaled_length(settings::ingame_button_side, match.scale),
         scaled_length(settings::ingame_button_side, match.scale)
     };
+}
+
+oa::ui::frontend_renderer::Surface Runtime::EngineSettingsMatchHost::button_face(
+    const layout::MatchLayout& match,
+    settings::ButtonLook look,
+    bool darkened,
+    const settings::DialogFonts& fonts,
+    const oa::ui::frontend_renderer::RgbaPicture& icon
+) {
+    namespace renderer = oa::ui::frontend_renderer;
+    const int32_t scale = std::max(1, static_cast<int32_t>(std::ceil(match.scale)));
+    const renderer::Placement placement{0, 0, scale};
+    renderer::Surface face;
+    face.width = static_cast<uint32_t>(settings::ingame_button_side * scale);
+    face.height = face.width;
+    face.rgb.assign(static_cast<std::size_t>(face.width) * face.height * 3U, 0);
+    settings::draw_oa_button(face, placement, settings::ingame_button_side, look, fonts, icon);
+    if (darkened)
+        renderer::blend_source_rect(
+            face,
+            placement,
+            {0, 0, settings::ingame_button_side, settings::ingame_button_side},
+            settings::backdrop_color,
+            settings::ingame_backdrop_opacity
+        );
+    return face;
 }
 
 layout::Rect
@@ -253,6 +283,12 @@ bool Runtime::EngineSettingsMatchHost::take_input(Runtime& runtime, const Screen
     if (input.kind == ScreenInputKind::key_down &&
         engine_settings_shortcut(input.key, input.modifiers)) {
         runtime.open_engine_settings_in_match();
+        return true;
+    }
+    // Ctrl+F2 opens the mod options while the profile offers them.
+    if (input.kind == ScreenInputKind::key_down && input.key == SDLK_F2 &&
+        (input.modifiers & SDL_KMOD_CTRL) != 0 && runtime.ui_rules().options_dialog.enabled) {
+        runtime.open_engine_settings_in_match(settings::DialogKind::mod_options);
         return true;
     }
     const bool pointer = input.kind == ScreenInputKind::pointer_move ||
@@ -384,25 +420,13 @@ bool Runtime::EngineSettingsMatchHost::refresh_layer(Runtime& runtime) {
     host.layer_rgba.assign(pixels * 4U, 0);
     namespace renderer = oa::ui::frontend_renderer;
     const renderer::Placement unscaled{0, 0, 1};
-    renderer::Surface button;
-    button.width = static_cast<uint32_t>(settings::ingame_button_side);
-    button.height = static_cast<uint32_t>(settings::ingame_button_side);
-    button.rgb.assign(static_cast<std::size_t>(button.width) * button.height * 3U, 0);
-    settings::draw_oa_button(
-        button,
-        unscaled,
-        settings::ingame_button_side,
+    const renderer::Surface button = button_face(
+        match,
         static_cast<settings::ButtonLook>(look.button_look),
-        *fonts
+        look.dialog_shown,
+        *fonts,
+        runtime.engine_settings_icon()
     );
-    if (look.dialog_shown)
-        renderer::blend_source_rect(
-            button,
-            unscaled,
-            {0, 0, settings::ingame_button_side, settings::ingame_button_side},
-            settings::backdrop_color,
-            settings::ingame_backdrop_opacity
-        );
     const auto button_at = button_rect(match);
     host.layer_bounds = button_at;
     if (look.dialog_shown) {
@@ -422,7 +446,7 @@ bool Runtime::EngineSettingsMatchHost::refresh_layer(Runtime& runtime) {
         drawn.width = static_cast<uint32_t>(settings::dialog_width);
         drawn.height = static_cast<uint32_t>(settings::dialog_height);
         drawn.rgb.assign(static_cast<std::size_t>(drawn.width) * drawn.height * 3U, 0);
-        settings::draw_dialog(drawn, unscaled, *dialog, *fonts);
+        settings::draw_dialog(drawn, unscaled, *dialog, *fonts, runtime.engine_settings_icon());
         stamp(host.layer_rgba, look.width, look.height, drawn, dialog_rect(match));
     }
     host.drawn = look;

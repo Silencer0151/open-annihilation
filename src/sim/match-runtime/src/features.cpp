@@ -139,11 +139,14 @@ features::FeatureHost Match::feature_host() noexcept {
     host.burn_weapon = [](void* context, oa_ref32 weapon, const FixedVec3* position) {
         feature_match(context).burn_weapon_blast(weapon, *position);
     };
-    // Energy, then metal, into the reclaiming unit's economy block.
+    // Energy, then metal, into the reclaiming unit's economy block; a mod's
+    // reclaim multipliers replace the computer players' scaling.
     host.credit_reclaim = [](void* context, Unit* unit, float energy, float metal) {
         auto& m = feature_match(context);
-        m.credit_energy(*unit, energy);
-        m.credit_metal(*unit, metal);
+        const auto& income = m.rules().ai.income_multipliers;
+        const auto* reclaim = income.enabled ? &income.reclaim : nullptr;
+        m.credit_energy(*unit, energy, reclaim);
+        m.credit_metal(*unit, metal, reclaim);
     };
     // A weapon hit on a feature that another player's machine settles.
     host.feature_hit_elsewhere = [](void* context,

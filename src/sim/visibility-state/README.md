@@ -20,6 +20,15 @@ routines themselves do not throw.
   remembered-sight table; `expire_remembered_sight` lets it lapse through
   `remembered_sight_expired` and `compact_remembered_sight`.
 
+Under allied vision (`SightContext::allied_vision`, the hack
+`intel.allied-los-sharing`) every count of a stamp goes to each player in
+use whose row the owner's alliance row names, in player order, then to the
+owner, and marks the fog and radar stale. A player another machine
+simulates is counted only while it is the viewpoint player, the owner
+included; when the owner is not counted the descriptor stays owned by the
+last ally counted, so the rest of the same move or fresh stamp (its second
+count and its mapping) goes to that ally.
+
 The match (`src/sim/match-runtime`) stamps units on creation and movement,
 clears a dying unit's stamp and remembers the viewer's dead for 60 ticks, and
 expires that memory every tick.

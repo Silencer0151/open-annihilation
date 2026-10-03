@@ -917,6 +917,18 @@ void queued_order_cancels_its_match() {
     CHECK(kinds() == std::vector<uint8_t>{qmove_kind});
     CHECK(f.match->cancel_queued_order(id, qmove_kind, 0, &edge) && kinds().empty());
     CHECK(!f.match->cancel_queued_order(id, qmove_kind, 0, nullptr));
+    // A click a mod's click snap moved matches only an order whose whole
+    // pixels lie from 8 before the click's to 7 after them.
+    f.match->issue_or_cancel_order(id, qmove_kind, true, 0, &a, 0, 0);
+    const auto far = point(159, 100);
+    const auto near = point(142, 100);
+    CHECK(!f.match->cancel_queued_order(id, qmove_kind, 0, &far, true));
+    CHECK(!f.match->cancel_queued_order(id, qmove_kind, 0, &near, true));
+    const auto inside = point(158, 93);
+    CHECK(f.match->cancel_queued_order(id, qmove_kind, 0, &inside, true) && kinds().empty());
+    f.match->issue_or_cancel_order(id, qmove_kind, true, 0, &a, 0, 0);
+    const auto other_edge = point(143, 108);
+    CHECK(f.match->cancel_queued_order(id, qmove_kind, 0, &other_edge, true) && kinds().empty());
 }
 
 void built_factory_produces() {

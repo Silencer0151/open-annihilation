@@ -9,6 +9,7 @@
 
 #include "oa/sim/scenario/commander_rules.hpp"
 #include "oa/sim/match_runtime.hpp"
+#include "oa/ui/console/console.hpp"
 #include "oa/ui/frontend/ingame_menu.hpp"
 
 #include <SDL3/SDL.h>
@@ -25,7 +26,6 @@ namespace oa::app {
 namespace {
 
 constexpr int kSessionWaitSteps = 200;
-constexpr float kAtmMetal = 1000.0F;
 
 /// Fails the console cheat check unless a condition holds.
 ///
@@ -109,11 +109,18 @@ void NetworkPlay::check_console_session_cheats(
     const auto prefix = speaker_prefix(world);
     const std::string atm = prefix + "+atm";
     require(reported_chat_ != prefix + "+clock", "an option command's echo was reported");
+    // Each console adds its ATM amount: 1000, or a mod profile's.
+    const auto atm_amount = [](const Runtime& side) {
+        const auto* profile = side.mod_profile();
+        return oa::ui::console::console_atm_amount(
+            profile != nullptr ? profile->rules : oa::data::match_rules::MatchRules{}
+        );
+    };
     const auto viewer = game.viewpoint_player;
     const float metal = game.players[viewer].metal;
     runtime_.enter_console_check_line("+atm");
     require(
-        game.players[viewer].metal == metal + (allowed ? kAtmMetal : 0.0F),
+        game.players[viewer].metal == metal + (allowed ? atm_amount(runtime_) : 0.0F),
         allowed ? "+atm did not run with cheats allowed" : "+atm ran with cheats disallowed"
     );
     require(reported_chat_ == atm, "the +atm line was not reported");
@@ -137,7 +144,8 @@ void NetworkPlay::check_console_session_cheats(
         const std::string peer_atm = speaker_prefix(peer.match_->state()) + "+atm";
         peer.enter_console_check_line("+atm");
         require(
-            peer_game.players[peer_viewer].metal == peer_metal + (allowed ? kAtmMetal : 0.0F),
+            peer_game.players[peer_viewer].metal ==
+                peer_metal + (allowed ? atm_amount(peer) : 0.0F),
             "the peer's +atm did not follow the host's CHEATING option"
         );
         wait(

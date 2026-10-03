@@ -5,6 +5,7 @@
 #pragma once
 
 #include "oa/app/command_line.hpp"
+#include "oa/data/mod_profile.hpp"
 #include "oa/ui/frontend_renderer.hpp"
 #include "oa/ui/frontend_state/game_entry.hpp"
 #include "oa/ui/frontend_state/initialization.hpp"
@@ -17,9 +18,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <vector>
+
+namespace oa::data::mod_profile {
+struct ModProfile;
+} // namespace oa::data::mod_profile
 
 namespace oa::app {
 
@@ -177,6 +183,28 @@ struct Options {
     // platform's per-user data folder.
     std::optional<fs::path> data_dir;
     std::vector<fs::path> archives;
+    // A mod profile (oamod.yaml) resolved instead of the game folder's
+    // (--mod); empty for none.
+    fs::path mod_file;
+    // A mod folder layered over the game folder (--mod-dir); empty to play
+    // the one the preferences remember, if any.
+    fs::path mod_dir;
+    // Plays the game folder without the remembered mod folder (--base-game).
+    bool base_game = false;
+    // The folders loose files come from, highest precedence first: the mod
+    // folder, then game_dir. main() fills it; empty means game_dir alone.
+    std::vector<fs::path> game_folders;
+    // The mod profile the game plays, resolved from --mod or the folders'
+    // own oamod.yaml before any archive is mounted: its limits size the
+    // game's tables and its rules reach every match. Null for base 3.1c.
+    std::shared_ptr<const oa::data::mod_profile::ModProfile> mod_profile;
+    // Prints the resolved profile of --mod, or of the --game-dir folder,
+    // with its hashes, then exits (--print-profile).
+    bool print_profile = false;
+    // Resolves a profile that turns on hacks this build does not implement
+    // yet, warning about each instead of refusing it, for development
+    // (--accept-unimplemented-hacks).
+    bool accept_unimplemented_hacks = false;
     fs::path snapshot;
     std::optional<fs::path> preferences_file;
     std::optional<std::size_t> frame_limit;
@@ -203,6 +231,20 @@ struct Options {
     // peewee, and its army starts selected with selection boxes shown, so
     // that the run's frames draw every kind of battlefield draw.
     bool busy_combat = false;
+    // --stage FILE: after the headless skirmish starts (and any --combat
+    // armies), the actions the file lists, one a line: "unit PLAYER TYPE DX
+    // DZ [FROM]" places a finished unit of a player DX, DZ map pixels from
+    // where the first unit of player FROM (the owner by default) stood when
+    // the stage began, "build TYPE DX DZ" queues the last unit placed to
+    // build a type DX, DZ map pixels from it, "stockpile ROUNDS"
+    // has the last unit placed build rounds for its first weapon, and
+    // "console LINE" enters a chat line as the local player. "place PLAYER
+    // TYPE X Z [FACING]" places a finished unit at a map pixel, "group NAME"
+    // gathers the units placed after it, "move GROUP X Z", "patrol GROUP X Z"
+    // and "attack GROUP TARGETS" order a group's live units, and "at TICK"
+    // before any action runs it before that match tick instead
+    // (src/app/README.md).
+    fs::path stage_file;
     bool reclaim_check = false;
     // Headless camera placement: map pixel at the view's top-left.
     std::optional<std::pair<int, int>> camera;
@@ -261,6 +303,10 @@ struct Options {
     // Gives a Kbot Lab a move through the SDL presenter and checks the unit it
     // builds carries it out.
     bool check_factory_orders = false;
+    // Selects the commander and sends it to open ground through the SDL
+    // presenter, in two skirmishes one after the other, and checks the
+    // select and order lines it says.
+    bool check_unit_speech = false;
     // Opens a download page and a missile silo's page through the SDL
     // presenter, builds a download unit and queues and removes a missile.
     bool check_download_builds = false;
@@ -269,6 +315,11 @@ struct Options {
     bool check_side_column = false;
     // Presses F4 in a skirmish and checks the kills board at the top right.
     bool check_kill_board = false;
+    // Starts a skirmish and checks, through the SDL presenter, that the
+    // build menu, the bottom bar and the unit panel show units' names and
+    // descriptions in the language this BCP-47 tag names, as the unit files
+    // give them there; empty for no check.
+    std::string check_unit_language;
     // Sends a construction kbot on PATROL through the SDL presenter with the
     // metal store low and checks it reclaims a feature on its way.
     bool check_patrol_reclaim = false;
@@ -341,7 +392,14 @@ struct Options {
     // --chunks A-B (or A): the chunks --render-script draws and encodes,
     // counted from 0, both included; unset for all.
     std::optional<std::pair<uint32_t, uint32_t>> director_chunks;
+    // --stills F[,F...]: the frames --render-script also writes as lossless
+    // pictures (director_output.hpp), counted from 0, in increasing order;
+    // empty for none.
+    std::vector<uint64_t> director_stills;
     bool trace_input = false;
+    // Writes every game file and listing the run looks up, one a line, to
+    // this file (--trace-lookups); empty for none.
+    fs::path trace_lookups;
     bool debug_order_lines = false;
     // The most frames a second the application loop draws (--max-fps); 0
     // for no limit. While nothing moves on its own and no input comes, the

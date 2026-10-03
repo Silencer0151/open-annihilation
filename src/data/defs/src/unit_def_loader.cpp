@@ -114,13 +114,18 @@ int32_t wrapping_sub(int32_t left, int32_t right) noexcept {
 }
 
 void load_yard_map(
-    const formats::tdf::Block* block, UnitDef& unit, UnitDefBlocks* blocks
+    const formats::tdf::Block* block,
+    UnitDef& unit,
+    UnitDefBlocks* blocks,
+    const YardMapRules& rules
 ) noexcept {
     unit.yard_map = 0;
-    if (unit.bm_code != 0)
+    if (unit.bm_code != 0 && !rules.mobile_units)
         return;
     char text[yard_map_text_capacity];
-    formats::tdf::get_string(block, "YardMap", text, sizeof text, "");
+    const bool found = formats::tdf::get_string(block, "YardMap", text, sizeof text, "");
+    if (rules.skip_without_key && (!found || unit.footprint_x == 0 || unit.footprint_z == 0))
+        return;
     const int32_t cells = static_cast<int32_t>(unit.footprint_z) * unit.footprint_x;
     if (cells <= 0 || static_cast<uint32_t>(cells) > yard_map_cell_limit)
         return;
@@ -193,6 +198,7 @@ bool load_unit_def(
     get_localized_string(
         block, sources.language, "description", unit.description, sizeof unit.description, nullptr
     );
+    read_unit_texts(block, unit.unit_name, sources.texts);
     formats::tdf::get_string(block, "defaultmissiontype", text, sizeof text, "");
     unit.default_mission_type = static_cast<int8_t>(data::mission_types::index_for_name(text));
     formats::tdf::get_string(
@@ -460,7 +466,7 @@ bool load_unit_def(
                        unit.weapon3 != no_weapon_ref;
     unit.flags = with_bit(unit.flags, OA_UNIT_DEF_FLAG_HAS_WEAPONS, armed ? 1 : 0);
 
-    load_yard_map(block, unit, sources.blocks);
+    load_yard_map(block, unit, sources.blocks, sources.yard_maps);
     unit.bounds_min_x = footprint_min(unit.footprint_x);
     unit.bounds_min_z = footprint_min(unit.footprint_z);
     unit.bounds_max_x = footprint_max(unit.footprint_x);

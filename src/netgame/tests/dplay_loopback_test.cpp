@@ -7,7 +7,8 @@
 // header carries its sender's address and stream port. A client that
 // searches instead of naming an address finds a host on the same machine.
 // When the host of three machines leaves, another takes its place and a
-// fourth machine joins through it.
+// fourth machine joins through it. A machine that leaves keeps its streams
+// open after its departure, so the others read it before the connection ends.
 
 #include "oa/netgame/frame.hpp"
 #include "oa/netgame/records.hpp"
@@ -527,8 +528,110 @@ void host_leaves_and_another_machine_hosts_over_loopback() {
 
 } // namespace
 
+// Set while a closing machine lingers: at every step of the clock the
+// machine that stays reads what has arrived, and must still have its
+// connection from the leaving one.
+sock::Host* g_staying = nullptr;
+const sock::Connection* g_watched = nullptr;
+bool g_ended_early = false;
+
+// A 3.1c machine takes a departure only when it reads it before the
+// connection ends. A client leaves and closes: its DeletePlayer messages go
+// out on its stream to the host, and that stream stays open, the clock
+// running, until close_linger_ms after them; then it ends.
+void leaving_machine_keeps_its_streams_open_after_its_departure() {
+    current_test = "leaving_machine_keeps_its_streams_open_after_its_departure";
+    auto host_machine = std::make_unique<sock::Host>();
+    auto client_machine = std::make_unique<sock::Host>();
+    g_hosts[0] = host_machine.get();
+    g_hosts[1] = client_machine.get();
+
+    sock::HostConfig config{};
+    config.clock = shared_clock();
+    config.clock.advance = [](void*, uint32_t ms) {
+        if (g_staying != nullptr) {
+            sock::host_pump(g_staying, 0);
+            if (g_watched->fd == sock::invalid_socket)
+                g_ended_early = true;
+        }
+        g_now_ms += ms;
+    };
+    const uint8_t loopback[4] = {127, 0, 0, 1};
+    std::memcpy(config.bind_ip, loopback, 4);
+    std::memcpy(config.enum_target, loopback, 4);
+    config.stream_port_first = config.datagram_port_first = config.enum_port = 0;
+    config.seed = 0x15;
+    CHECK(sock::host_open(host_machine.get(), config));
+    config.seed = 0x16;
+    CHECK(sock::host_open(client_machine.get(), config));
+
+    dplay::Guid app{};
+    std::memcpy(app.bytes, application_guid, 16);
+    auto host = std::make_unique<ses::Session>();
+    auto client = std::make_unique<ses::Session>();
+    ses::session_init_multiplay(host.get(), backend_for(host_machine.get()), app);
+    ses::session_init_defaults(host.get());
+    ses::session_init_multiplay(client.get(), backend_for(client_machine.get()), app);
+    ses::session_init_defaults(client.get());
+    CHECK(ses::session_create_game(host.get(), "Linger", "", 0, 0xd, 0, 0));
+    client_machine->engine.config.enum_port = host_machine->enum_port_bound;
+    uint32_t host_player = 0;
+    CHECK(
+        ses::session_add_player(
+            host.get(), &host_player, "hoster", "hoster", "", 0, create_player_version_high
+        )
+    );
+    ses::GameEntry games[ses::max_game_entries]{};
+    CHECK(ses::session_get_games(client.get(), games, ses::max_game_entries) == 1);
+    CHECK(ses::session_join_game(client.get(), games[0].instance));
+    uint32_t client_player = 0;
+    CHECK(
+        ses::session_add_player(
+            client.get(), &client_player, "joiner", "joiner", "", 0, create_player_version_high
+        )
+    );
+    const NetTransport host_transport = ses::session_transport(host.get());
+    Received created;
+    CHECK(receive_system(host_transport, SystemMessageType::player_created, &created));
+
+    // The host's connection from the client: the one its stream arrives on.
+    const sock::Connection* from_client = nullptr;
+    for (const auto& c : host_machine->connections)
+        if (c.fd != sock::invalid_socket && !c.outbound)
+            from_client = &c;
+    CHECK(from_client != nullptr);
+
+    // The client leaves and closes at once, as a surrender does.
+    CHECK(ses::session_quit_game(client.get()));
+    ses::session_uninit(client.get());
+    g_hosts[1] = nullptr;
+    const uint32_t left_at = g_now_ms;
+    g_staying = host_machine.get();
+    g_watched = from_client;
+    g_ended_early = false;
+    sock::host_close(client_machine.get());
+    g_staying = nullptr;
+    g_watched = nullptr;
+    CHECK(!g_ended_early);
+    CHECK(g_now_ms - left_at >= sock::close_linger_ms);
+
+    // The host reads the departure, then the end of the stream.
+    Received destroyed;
+    CHECK(receive_system(host_transport, SystemMessageType::player_destroyed, &destroyed));
+    CHECK(destroyed.bytes.size() >= 12 && load_u32(destroyed.bytes.data() + 8) == client_player);
+    CHECK(pump_until([&] {
+        return from_client == nullptr || from_client->fd == sock::invalid_socket;
+    }));
+
+    ses::session_uninit(host.get());
+    sock::host_close(host_machine.get());
+    for (auto& machine_host : g_hosts)
+        machine_host = nullptr;
+}
+
 int main() {
     native_host_and_client_play_over_loopback();
+    leaving_machine_keeps_its_streams_open_after_its_departure();
     client_search_finds_host_on_this_machine();
     host_leaves_and_another_machine_hosts_over_loopback();
     if (failures != 0) {

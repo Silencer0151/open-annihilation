@@ -147,6 +147,26 @@ int main() {
             require(saved);
             require(oa::platform::preferences::load(folder / bare) == values);
         }
+        {
+            // A file whose lines end in CR LF, as one edited on Windows
+            // keeps them, reads as with LF; a CR inside quotes is the value's.
+            std::ofstream(file, std::ios::binary) << "open-annihilation-preferences 1\r\n"
+                                                     "\"open-annihilation.modern-fonts\" \"0\"\r\n"
+                                                     "\"open-annihilation.text-shadow\" \"1\"\r\n"
+                                                     "\"quoted\" \"a\r\nb\"\r\n";
+            const oa::platform::preferences::Values crlf{
+                {"open-annihilation.modern-fonts", "0"},
+                {"open-annihilation.text-shadow", "1"},
+                {"quoted", "a\r\nb"},
+            };
+            require(oa::platform::preferences::load(file) == crlf);
+            // The header alone, in CR LF, is an empty file's.
+            std::ofstream(file, std::ios::binary) << "open-annihilation-preferences 1\r\n";
+            require(oa::platform::preferences::load(file).empty());
+            // Another header is still refused.
+            std::ofstream(file, std::ios::binary) << "open-annihilation-preferences 2\r\n";
+            rejects([&] { (void)oa::platform::preferences::load(file); });
+        }
         std::ofstream(
             file
         ) << "open-annihilation-preferences 1\n\"duplicate\" \"a\"\n\"duplicate\" \"b\"\n";

@@ -4,7 +4,9 @@
 #include "full_fog.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
+#include <utility>
 #include <vector>
 
 namespace oa::app::full_fog {
@@ -164,6 +166,25 @@ void open_batch(
     );
 }
 
+/// Returns where a quad's edge and its span land along one axis.
+///
+/// @param placement the placement
+/// @param horizontal across, else down
+/// @param map the map pixel of the quad's first edge
+/// @param span the map pixels the quad spans
+/// @return the target pixel of the first edge, and the target pixels to the
+///         other: on whole pixels for FogPlacement::whole_pixels
+[[nodiscard]] std::pair<float, float>
+placed_span(const FogPlacement& placement, bool horizontal, int32_t map, int32_t span) noexcept {
+    const float origin = horizontal ? placement.origin_x : placement.origin_y;
+    const int32_t camera = horizontal ? placement.camera_x : placement.camera_z;
+    const float start = placed(origin, map, camera, placement.scale);
+    if (!placement.whole_pixels)
+        return {start, static_cast<float>(static_cast<double>(span) * placement.scale)};
+    const float first = std::round(start);
+    return {first, std::round(placed(origin, map + span, camera, placement.scale)) - first};
+}
+
 /// One piece of the greyed pass: a terrain tile, or a quarter of one under
 /// a fog tile, with the alphas at its corners.
 struct GreyedPiece {
@@ -298,13 +319,12 @@ uint32_t append_solid_pass(
     uint32_t quads = 0;
     card::Batch* batch = nullptr;
     card::PageHandle batch_page{};
-    const float tile_span = static_cast<float>(static_cast<double>(tile_pixels) * placement.scale);
     const auto coloured = [&](float alpha) {
         return card::Colour{colour.red, colour.green, colour.blue, alpha * factor};
     };
     for (int32_t row = 0; row < grid.height; ++row) {
         const int32_t tile_z = placement.camera_z + grid.offset_z + row * tile_pixels;
-        const float y = placed(placement.origin_y, tile_z, placement.camera_z, placement.scale);
+        const auto [y, tile_high] = placed_span(placement, false, tile_z, tile_pixels);
         for (int32_t column = 0; column < grid.width;) {
             const uint8_t mask = mask_of(grid.at(column, row), layer);
             if (mask == 0) {
@@ -312,17 +332,23 @@ uint32_t append_solid_pass(
                 continue;
             }
             const int32_t tile_x = placement.camera_x + grid.offset_x + column * tile_pixels;
-            const float x = placed(placement.origin_x, tile_x, placement.camera_x, placement.scale);
+            const auto [x, tile_wide] = placed_span(placement, true, tile_x, tile_pixels);
             open_batch(frame, batch, batch_page, {}, 0, card::Sampling::nearest, target, scissor);
             if (mask == wr::fog_mask_full) {
                 int32_t end = column + 1;
                 while (end < grid.width && mask_of(grid.at(end, row), layer) == wr::fog_mask_full)
                     ++end;
-                const int32_t end_x = tile_x + (end - column) * tile_pixels;
-                const float right =
-                    placed(placement.origin_x, end_x, placement.camera_x, placement.scale);
+                const auto run =
+                    placement.whole_pixels
+                        ? placed_span(placement, true, tile_x, (end - column) * tile_pixels).second
+                        : placed(
+                              placement.origin_x,
+                              tile_x + (end - column) * tile_pixels,
+                              placement.camera_x,
+                              placement.scale
+                          ) - x;
                 card::append_quad(
-                    frame, x, y, right - x, tile_span, 0.0F, 0.0F, 0.0F, 0.0F, coloured(1.0F)
+                    frame, x, y, run, tile_high, 0.0F, 0.0F, 0.0F, 0.0F, coloured(1.0F)
                 );
                 column = end;
             } else {
@@ -331,8 +357,8 @@ uint32_t append_solid_pass(
                     frame,
                     x,
                     y,
-                    tile_span,
-                    tile_span,
+                    tile_wide,
+                    tile_high,
                     0.0F,
                     0.0F,
                     0.0F,
@@ -438,14 +464,14 @@ uint32_t append_unseen_terrain(
                 colours[corner] = {
                     1.0F, 1.0F, 1.0F, pass_alpha(piece.alphas[corner], drawn.share, later)
                 };
-            const float span =
-                static_cast<float>(static_cast<double>(piece.span) * placement.scale);
+            const auto [left, wide] = placed_span(placement, true, piece.map_x, piece.span);
+            const auto [top, high] = placed_span(placement, false, piece.map_z, piece.span);
             append_corner_quad(
                 frame,
-                placed(placement.origin_x, piece.map_x, placement.camera_x, placement.scale),
-                placed(placement.origin_y, piece.map_z, placement.camera_z, placement.scale),
-                span,
-                span,
+                left,
+                top,
+                wide,
+                high,
                 static_cast<float>(texel_x) / level_width,
                 static_cast<float>(texel_y) / level_height,
                 static_cast<float>(texel_x + edge) / level_width,

@@ -16,7 +16,7 @@ add_library(oa-audio
 add_library(oa::audio ALIAS oa-audio)
 target_include_directories(oa-audio PUBLIC include)
 target_link_libraries(oa-audio PUBLIC oa-formats-hpi oa-options oa-core-types
-  PRIVATE oa-base-bytes oa-formats-tdf)
+  PRIVATE oa-base-bytes oa-formats-tdf oa-data-defs)
 
 # The offline mix of the game's sound effects that director renders take
 # their sound from: integer decoding, resampling and mixing, with no sound
@@ -136,7 +136,15 @@ if(BUILD_TESTING)
   endforeach()
   # Every WAV the installed game provides.
   target_link_libraries(oa-audio-wave-chunks-test PRIVATE oa-test-game-data)
-  target_link_libraries(oa-audio-music-session-test PRIVATE oa-test-support)
+  target_link_libraries(oa-audio-music-session-test PRIVATE oa-platform-shims oa-test-support)
+  # The numbered MP3 files of the game folder OA_MOD_GAME_DIR names, with a
+  # mod installed over it; skipped without it.
+  add_test(NAME audio-music-session-mod-install COMMAND oa-audio-music-session-test --mod-install)
+  set_tests_properties(audio-music-session-mod-install PROPERTIES SKIP_RETURN_CODE 77)
+  if(DEFINED OA_MOD_GAME_DIR)
+    set_tests_properties(audio-music-session-mod-install PROPERTIES
+      ENVIRONMENT "OA_MOD_GAME_DIR=${OA_MOD_GAME_DIR}")
+  endif()
   oa_add_game_data_test(audio-wave-chunks-data oa-audio-wave-chunks-test --data)
   if(OA_BUILD_PLATFORM)
     add_executable(oa-audio-sdl-sink-test tests/sdl_sink_test.cpp)

@@ -133,6 +133,14 @@ void Runtime::bind_respawn_view() {
                     }
                 );
             }
+            if (notice == oa::sim::match_runtime::Match::WatchNotice::host_watching)
+                self.show_frontend_message(
+                    "You have been defeated.  You stay in the game as a watcher so that it goes "
+                    "on for the other players.",
+                    kWatchMessageWidth,
+                    1,
+                    1
+                );
             if (notice == oa::sim::match_runtime::Match::WatchNotice::hosting_computers)
                 self.show_frontend_message(
                     "You are placed in watch mode because you are hosting AI players which are "

@@ -254,7 +254,11 @@ void copy_track_type(
 }
 
 void load_preferences(
-    State& state, game_entry::SkirmishSettings& settings, Preferences& p, PreferencesHost& h
+    State& state,
+    game_entry::SkirmishSettings& settings,
+    Preferences& p,
+    PreferencesHost& h,
+    const DisplayModeSetting& display_mode
 ) {
     const auto number = [&](std::string_view key, uint32_t fallback, bool persist = false) {
         const auto value = h.read_number(general_section, key);
@@ -298,8 +302,12 @@ void load_preferences(
     p.interface_type = std::min(std::bit_cast<int32_t>(interface.value_or(0)), 1);
     if (!interface)
         h.write_number(general_section, "Interface Type", 0);
-    assign(p.display_width, "DisplaymodeWidth", 640, true);
-    assign(p.display_height, "DisplaymodeHeight", 480, true);
+    assign(p.display_width, "DisplaymodeWidth", display_mode.width, true);
+    assign(p.display_height, "DisplaymodeHeight", display_mode.height, true);
+    if (display_mode.raise_smaller) {
+        p.display_width = std::max(p.display_width, display_mode.width);
+        p.display_height = std::max(p.display_height, display_mode.height);
+    }
     assign(p.side, "side", 0, true);
     assign(p.difficulty, "Difficulty", 1, true);
     p.difficulty &= 0xffffU;

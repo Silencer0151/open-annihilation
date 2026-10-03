@@ -178,6 +178,8 @@ launch_dropped_projectile(const Unit& unit, int32_t unit_speed) noexcept;
 /// @param slot_aim slot's aim, heading relative to the unit
 /// @param random synced random stream
 /// @param random_context passed to `random`
+/// @param rules the match's rules, for the veteran divisor
+///        (sim::unit_health::veteran_accuracy_divisor); unset, 3.1c's
 /// @return the spread angles
 [[nodiscard]] AimAngles apply_accuracy_spread(
     const Unit& unit,
@@ -185,7 +187,8 @@ launch_dropped_projectile(const Unit& unit, int32_t unit_speed) noexcept;
     const WeaponDef& weapon,
     AimAngles slot_aim,
     RandomBounded random,
-    void* random_context
+    void* random_context,
+    const data::match_rules::MatchRulesView& rules = {}
 );
 
 /// Returns the arguments of the RockUnit script call after a shot.
@@ -202,10 +205,16 @@ rock_unit_arguments(const Unit& unit, uint16_t slot_heading) noexcept;
 /// @param weapon weapon definition
 /// @param shooter firing unit
 /// @param target_has_movement whether the target has a movement object
-/// @return true for veterans above level 5 against a moving target, except cruise and
-///         zero-velocity weapons
-[[nodiscard]] bool
-lead_applies(const WeaponDef& weapon, const Unit& shooter, bool target_has_movement) noexcept;
+/// @param rules the match's rules, for the veterancy gate
+///        (sim::unit_health::veteran_leads); unset, 3.1c's
+/// @return true for veterans (above 5 kills in 3.1c) against a moving target, except
+///         cruise and zero-velocity weapons
+[[nodiscard]] bool lead_applies(
+    const WeaponDef& weapon,
+    const Unit& shooter,
+    bool target_has_movement,
+    const data::match_rules::MatchRulesView& rules = {}
+) noexcept;
 
 /// Returns the lead a veteran adds to its aim point.
 ///
@@ -289,11 +298,20 @@ enum class FlightMode : uint8_t {
 /// @param scale area damage scale
 /// @param source firing unit, or null
 /// @param game game record, for the damage cheats
-/// @return amount * scale truncated, plus the source's veteran bonus of 6% per five levels
-///         up to 30%, then doubled or halved by the damage cheats
-/// @quirk An out-of-range conversion gives 0x80000000.
-[[nodiscard]] int32_t
-projectile_damage(int32_t amount, float scale, const Unit* source, const Game& game) noexcept;
+/// @param rules the match's rules, for the source's veteran bonus
+///        (sim::unit_health::veteran_damage_dealt_percent); unset, 3.1c's
+/// @return amount * scale truncated, times the source's veteran percentage (6% per five
+///         kills up to 30% in 3.1c) over 100, then doubled or halved by the damage
+///         cheats
+/// @quirk An out-of-range conversion gives 0x80000000; the veteran product wraps at
+///        32 bits.
+[[nodiscard]] int32_t projectile_damage(
+    int32_t amount,
+    float scale,
+    const Unit* source,
+    const Game& game,
+    const data::match_rules::MatchRulesView& rules = {}
+) noexcept;
 
 /// Returns the area damage scale at a distance from the blast.
 ///
@@ -429,6 +447,8 @@ plan_dropped_shot(const Unit& unit, uint8_t slot, int32_t unit_speed) noexcept;
 /// @param world world, for gravity, the tick and the interceptor search
 /// @param random synced random stream
 /// @param random_context passed to `random`
+/// @param rules the match's rules, for the turret spread and
+///        weapons.vlaunch-before-turret (select_fire_mode); unset, 3.1c's
 /// @return the plan; `fired` is false when nothing launches
 [[nodiscard]] ShotPlan plan_weapon_shot(
     const WeaponDef& weapon,
@@ -440,7 +460,8 @@ plan_dropped_shot(const Unit& unit, uint8_t slot, int32_t unit_speed) noexcept;
     int32_t unit_speed,
     const World& world,
     RandomBounded random,
-    void* random_context
+    void* random_context,
+    const data::match_rules::MatchRulesView& rules = {}
 );
 
 } // namespace oa::sim::weapon_execution

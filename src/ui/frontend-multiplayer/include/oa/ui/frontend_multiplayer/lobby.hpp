@@ -10,17 +10,23 @@
 #pragma once
 
 #include "oa/data/campaign/campaign_file.hpp"
+#include "oa/data/match_rules.hpp"
 #include "oa/core/game_state.h"
 #include "oa/core/types.h"
 #include "oa/core/unit_def.h"
+#include "oa/netgame/recorder_session.hpp"
+#include "oa/netgame/wire_rules.hpp"
 #include "oa/ui/frontend_multiplayer/launch_block.hpp"
 #include "oa/ui/frontend_multiplayer/lobby_net.hpp"
 #include "oa/ui/frontend_multiplayer/panel.hpp"
+#include "oa/ui/frontend_multiplayer/team_rules.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <span>
 #include <cstring>
+#include <string>
+#include <string_view>
 
 namespace oa::ui::frontend_multiplayer {
 
@@ -227,6 +233,19 @@ struct LobbyServices {
     /// translate.tdf table gives it; the result stays valid until the next
     /// call. Null, or a null result, leaves the text as it is.
     const char* (*translate)(void* context, const char* text){};
+    /// Draws a value from 0 to bound - 1 for the teams +autoteam and
+    /// +randomteam deal; null deals in slot order.
+    uint32_t (*random_below)(void* context, uint32_t bound){};
+    /// Reads the file the host's .base names: an absolute host path when one
+    /// is there, or else a file of the game's folders. Null, or false back,
+    /// reads nothing.
+    ///
+    /// @param context LobbyServices.context
+    /// @param name the file's name as typed
+    /// @param limit the most bytes read; a longer file is not read
+    /// @param[out] contents the file's bytes
+    /// @return true when the file was read
+    bool (*read_file)(void* context, const char* name, std::size_t limit, std::string* contents){};
 };
 
 // The multiplayer map context (Game.game_options).
@@ -279,6 +298,16 @@ struct LaunchLink {
 inline constexpr std::size_t kChatLines = 30;
 inline constexpr std::size_t kChatLineBytes = 0x48;
 
+/// The battle room buttons a mod's display rules may add (ui.share-dialog-
+/// and-lobby-buttons), as bits of Lobby::lobby_buttons; each works only when
+/// the battle room's GUI has a gadget of its name.
+namespace lobby_button {
+inline constexpr uint8_t autoteam = 0x01;   ///< AUTOTEAM says "+autoteam"
+inline constexpr uint8_t autopause = 0x02;  ///< AUTOPAUSE says ".autopause"
+inline constexpr uint8_t randomteam = 0x04; ///< RANDOMTEAM says "+randomteam"
+inline constexpr uint8_t crcreport = 0x08;  ///< CRCREPORT says ".crcreport"
+} // namespace lobby_button
+
 struct Lobby {
     Game* game{};
     PlayerSetupInfo infos[kSlotCount];
@@ -312,6 +341,21 @@ struct Lobby {
     uint32_t refused_joiner{};
     /// The launch and its service.
     LaunchLink launch_link;
+    /// The mod profile's rules the battle room keeps; null keeps 3.1c's.
+    const data::match_rules::MatchRules* rules{};
+    /// Whether map-placed units are on (+spawnon, +spawnoff) while the
+    /// profile places them.
+    bool map_units_on{true};
+    /// The battle room already seated a computer player for a map's neutral units.
+    bool neutral_computer_seated{};
+    /// The battle room buttons a mod's display rules add, as lobby_button
+    /// bits; none in 3.1c.
+    uint8_t lobby_buttons{};
+    /// The game's network rules: the version bytes and how they compare, the
+    /// private chat channel and the recorder. Value-initialised: 3.1c.
+    netgame::WireRules wire_rules{};
+    /// The recorder's session, which the match takes over at the start.
+    netgame::RecorderSession recorder{};
 };
 
 // ---------------------------------------------------------------------------
@@ -501,13 +545,62 @@ void slot_set_status(Lobby& lobby, Player& player, uint8_t status) noexcept;
 /// @return False without a launch block.
 [[nodiscard]] bool lobby_launch_block_active(const Lobby& lobby) noexcept;
 
-/// Tells whether a host's version byte is at least the local version.
+/// Tells whether a host's version byte lets the local game join.
 ///
-/// @param info The host's lobby block; the launch-only status bit biases its version by 100.
+/// By 3.1c's rules the host's major must be at least the local one, and a
+/// launch-only session's major is biased by 100. A game whose rules compare
+/// for equality needs the same major, and without the launch bias reads the
+/// byte as it is.
+///
+/// @param info The host's lobby block.
 /// @param local_major Local major version, compared as a signed byte.
+/// @param rules The local game's network rules; 3.1c's by default.
 /// @return True when the local game may join.
-[[nodiscard]] bool
-info_version_compatible(const PlayerSetupInfo& info, uint32_t local_major) noexcept;
+[[nodiscard]] bool info_version_compatible(
+    const PlayerSetupInfo& info, uint32_t local_major, const netgame::WireRules& rules = {}
+) noexcept;
+
+/// Reads a battle-room chat line for the recorder's commands, as every recorder reads each line it
+/// sends or hears.
+///
+/// Only with the recorder presented (Lobby::wire_rules). Host commands
+/// (.syncon, .syncoff, .autopause, .cmdwarp, .f1off) change the session's
+/// options when the host sent them, and the host's own machine answers with
+/// a chat line saying so; .cmdwarp turns the warp on or off, and only under
+/// setup.commander-warp. Under setup.recorder-prebuilt-base the host's .base
+/// offers every seated player the standard base, or the base file it names
+/// (LobbyServices::read_file), and .baseoff takes every base back for the
+/// session. .report is answered by this machine for its player; .votego and
+/// .forcego make watchers count as ready; the host's .randmap picks a map
+/// from the list at random. The opt-in session commands need
+/// network.recorder-session-commands, and .syncon and .syncoff need
+/// WireRules::speed_lock.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param sender_slot Slot of the player who sent the line; -1 reads nothing.
+/// @param text The line, as shown ("<Name> .cmd args").
+/// @return True when the line held a command this machine read.
+bool recorder_chat_line(Lobby& lobby, int32_t sender_slot, const char* text) noexcept;
+
+/// Notes a player's battle-room setup block for the recorder: the player's recorder protocol, and on
+/// the host's machine the host's options sent once to a player whose recorder takes them.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param slot The player's slot.
+void recorder_note_block(Lobby& lobby, int32_t slot) noexcept;
+
+/// Reads a recorder record another machine sent to the battle room: the host's options and warp-done.
+///
+/// The host's speed lock among its options is taken only under WireRules::speed_lock.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param sender_slot Slot of the sender; -1 reads nothing.
+/// @param data The record.
+/// @param size Its length.
+/// @return True when the record changed the session.
+bool recorder_lobby_record(
+    Lobby& lobby, int32_t sender_slot, const uint8_t* data, std::size_t size
+) noexcept;
 
 /// Returns the password field of the local lobby block.
 ///
@@ -926,7 +1019,9 @@ void lobby_publish_session(Lobby& lobby) noexcept;
 /// remote. The seated player's reject reason clears, its arrival time is
 /// stamped, it is counted, and the local players' info goes out again. The
 /// slot's own reset (Player and info defaults) follows the lobby
-/// rules. Players already in a joined session arrive the same way.
+/// rules. Players already in a joined session arrive the same way. A
+/// player seated from another machine takes back the prebuilt bases the
+/// host offered, which the host's recorder announces.
 ///
 /// @param[in,out] lobby Lobby state.
 /// @param player_id Session player id.
@@ -1159,5 +1254,50 @@ void unit_sync_mark_units(const UnitSync& sync, UnitDef* records, uint32_t count
 /// @return The shortfall (out or a static message), "OK", or null for a client.
 [[nodiscard]] const char*
 unit_sync_diagnostic(Lobby& lobby, char* out, std::size_t capacity) noexcept;
+
+// ---------------------------------------------------------------------------
+// Setup and team rules of a mod profile (Lobby::rules)
+
+/// Returns the battle room's slots as the team rules read them.
+///
+/// @param lobby Lobby state.
+/// @return Each slot's seat, status, watching, setup state, team, alliances and name.
+[[nodiscard]] team_rules::TeamSlots lobby_team_slots(Lobby& lobby) noexcept;
+
+/// Sets a player's alliance with another and announces it, as the team rules do.
+///
+/// A player this machine runs takes the alliance and sends it to everyone
+/// (both-sides word 0); a player on this machine at the other end takes it
+/// as it would from the record. A player of another machine is asked by
+/// its machine to set it: the record goes to that player with the
+/// both-sides word team_rules::alliance_request.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param[in,out] from The player whose alliance changes.
+/// @param[in,out] to The other player.
+/// @param value 1 allied, 0 not.
+void lobby_announce_alliance(Lobby& lobby, Player& from, Player& to, uint8_t value) noexcept;
+
+/// Carries out team steps in order: alliance steps through
+/// lobby_announce_alliance, team steps by storing the team and sending it
+/// from the local player with team_rules::team_keeps_alliances set.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param steps The steps.
+void lobby_apply_team_steps(Lobby& lobby, const team_rules::TeamSteps& steps) noexcept;
+
+/// Runs a battle-room chat line that is one of the profile's setup commands.
+///
+/// With teams.team-number-alliances, "+autoteam [N]" and "+randomteam [N]"
+/// deal the counted players into N teams (2 to 5, 2 by default) in a
+/// random order, on the host's machine only; elsewhere they answer that
+/// only the host can use them. With setup.map-scripted-units, "+spawnoff"
+/// and "+spawnon" turn map-placed units off and on. Commands match without
+/// case; each posts its notice as a local chat line.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param text The typed line.
+/// @return true when the line was such a command.
+bool lobby_run_setup_command(Lobby& lobby, std::string_view text) noexcept;
 
 } // namespace oa::ui::frontend_multiplayer

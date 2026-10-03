@@ -15,6 +15,10 @@
 //   NAME.manifest       what was rendered and the hashes of every chunk's
 //                       frames and sound, when every chunk was rendered
 //
+// and, for each frame --stills names, NAME-still-000000.png ...: the frame as
+// drawn, an 8-bit RGB PNG, its number with at least still_number_digits
+// digits.
+//
 // While they are needed, each chunk's encoded frames (NAME-000.video.mp4),
 // the chunks' sound joined (NAME.wav) and the list of chunks to join
 // (NAME.concat.txt) are kept beside them too; they are removed once the
@@ -62,6 +66,8 @@ inline constexpr const char* director_encoder_variable = "OA_DIRECTOR_ENCODER";
 inline constexpr const char* director_encoder_off = "none";
 /// The fewest digits of a chunk's number in its files' names.
 inline constexpr size_t chunk_number_digits = 3;
+/// The fewest digits of a frame's number in a still's name.
+inline constexpr size_t still_number_digits = 6;
 /// Sample frames a second of a render's sound.
 inline constexpr uint32_t director_sample_rate = 48000;
 /// Channels of a render's sound: left and right.
@@ -135,6 +141,34 @@ chunk_video_only_path(const DirectorPaths& paths, uint32_t chunk);
 /// @param paths the render's paths
 /// @return the path
 [[nodiscard]] std::filesystem::path concat_list_path(const DirectorPaths& paths);
+
+/// Returns a still of a frame: <stem>-still-<frame>.png, the frame's number
+/// with at least still_number_digits digits.
+///
+/// @param paths the render's paths
+/// @param frame the frame, counted from 0
+/// @return the path, such as out/game-still-000120.png
+[[nodiscard]] std::filesystem::path still_path(const DirectorPaths& paths, uint64_t frame);
+
+/// Writes a frame as a still: an 8-bit RGB PNG of it as drawn, without
+/// loss, at still_path; the directory is made when it is missing.
+///
+/// Throws std::logic_error when the frame is not width * height * 3 bytes,
+/// and std::runtime_error when the file cannot be written.
+///
+/// @param paths the render's paths
+/// @param frame the frame, counted from 0
+/// @param rgb the frame's bytes, row by row from the top
+/// @param width frame width in pixels
+/// @param height frame height in pixels
+/// @return the file written
+std::filesystem::path write_still(
+    const DirectorPaths& paths,
+    uint64_t frame,
+    std::span<const uint8_t> rgb,
+    uint32_t width,
+    uint32_t height
+);
 
 /// Returns how many frames make half a second, the encoder's group length.
 ///

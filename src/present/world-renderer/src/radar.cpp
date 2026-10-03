@@ -106,7 +106,8 @@ void draw_projectiles(
     for (int32_t index = 0; index < count; ++index) {
         const Projectile& shot = world.projectiles[index];
         const WeaponDef* weapon = world_weapon_def(&world, shot.def);
-        if (weapon == nullptr)
+        if (weapon == nullptr ||
+            (host.projectile_hidden != nullptr && host.projectile_hidden(host.user, shot)))
             continue;
         const auto x = radar_column(game, shot.position);
         const auto y = radar_row(game, shot.position);
@@ -129,6 +130,15 @@ void draw_projectiles(
                 y
             );
     }
+}
+
+/// Tells whether a unit's blip shows as the viewer's own: its owner is the
+/// viewer or, when allied units are shown, its owner allies the viewer.
+bool shown_as_own(const World& world, const Unit& unit, uint8_t viewer, bool allied) noexcept {
+    if (!allied)
+        return unit.owner_index == viewer;
+    const Player* owner = world_unit_owner(&world, &unit);
+    return owner != nullptr && viewer < sizeof owner->alliance && owner->alliance[viewer] != 0;
 }
 
 } // namespace
@@ -293,7 +303,7 @@ uint32_t radar_compose_final(
         if (unit.type_index == 0)
             continue;
         if (!full_radar && limited && (unit.flags & radar_contact_flags) == 0 &&
-            unit.owner_index != viewer)
+            !shown_as_own(world, unit, viewer, host.allied_units_shown))
             continue;
         const auto x = radar_column(game, unit.position);
         const auto y = radar_row(game, unit.position);

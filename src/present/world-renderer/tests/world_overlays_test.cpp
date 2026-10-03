@@ -216,6 +216,16 @@ void test_display_modes() {
     for (int i = 0; i < 5; ++i)
         OA_CHECK(modes[i].width == expected[i][0] && modes[i].height == expected[i][1]);
 
+    // Kept only from 768 rows: any width at that height or taller stays.
+    wr::DisplayMode tall[] = {
+        {1024, 768, 8}, {800, 600, 8}, {640, 800, 8}, {1280, 720, 8}, {1280, 1024, 8}
+    };
+    const auto tall_count = wr::sort_display_modes(tall, 5, wr::tall_minimum_mode_height);
+    OA_CHECK(tall_count == 3);
+    const int32_t tall_expected[3][2] = {{640, 800}, {1024, 768}, {1280, 1024}};
+    for (int i = 0; i < 3; ++i)
+        OA_CHECK(tall[i].width == tall_expected[i][0] && tall[i].height == tall_expected[i][1]);
+
     wr::DisplayMode list[] = {{800, 600, 8}, {640, 480, 8}, {1024, 768, 8}};
     wr::DisplayMode chosen{};
     OA_CHECK(wr::cycle_display_mode(list, 3, 1024, 768, false, chosen));

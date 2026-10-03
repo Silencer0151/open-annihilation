@@ -21,7 +21,9 @@ existing behaviour changes.
   `alpha_premultiplied`: the source's colour multiplied by its alpha
   already, as the sprite pages hold theirs; `additive`, `modulate`,
   `darken`: what is under the draw times one less the source alpha, the
-  shade a shadow casts), a `Sampling` (`nearest`, `linear`, `pixel_art`:
+  shade a shadow casts; `minimum`: each channel the lesser of the
+  source's and what is under the draw, the outline of game text in the
+  modern fonts over the battlefield), a `Sampling` (`nearest`, `linear`, `pixel_art`:
   how the draw reads the page where it enlarges or reduces it, the draw's
   own, so that one page is drawn differently at different zooms) and an
   optional scissor; a `clear` of a target; a `resolve`, which draws a
@@ -54,7 +56,11 @@ existing behaviour changes.
   one less the source alpha) and finds whether the renderer takes it
   (`Capabilities::darken_composed`); where it does not, darken runs as
   SDL's multiply mode over a copy of the batch's vertices with their
-  colours black, which gives the same pixels. On SDL 3.4 and later it also
+  colours black, which gives the same pixels. It composes the minimum
+  blend mode too (source and destination factors one, the minimum
+  operation) and finds whether the renderer takes it
+  (`Capabilities::minimum_composed`); where it does not, as on SDL's
+  software renderer, a minimum draw blends as alpha. On SDL 3.4 and later it also
   tells the renderer to clamp texture coordinates, so that no draw makes
   the renderer read every vertex to decide, and finds whether the renderer
   takes the pixel-art sampling mode (`Capabilities::pixel_art_sampling`);
@@ -183,9 +189,9 @@ bytes of the supersampled targets, which it never checks.
   picture on SDL's software renderer alone (`native-render-tiers`,
   `src/app/README.md`); the golden images of whole frames the design
   names are not made yet.
-- The composed darken mode and the pixel-art sampling mode are exercised
-  only on renderers that take them; the software renderer takes neither,
-  so the fallbacks are what the test covers.
+- The composed darken and minimum modes and the pixel-art sampling mode
+  are exercised only on renderers that take them; the software renderer
+  takes none of them, so the fallbacks are what the test covers.
 - The one-pixel read-back of a new render target copies the whole target
   into memory on SDL's `direct3d` renderer, once at creation. The design's
   4x4 check target for that renderer, drawn into from the new target and

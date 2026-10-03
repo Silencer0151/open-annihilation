@@ -600,16 +600,24 @@ struct BuildPanelHost {
     bool (*stockpiles)(void* user, const Unit& unit){};
     /// Rewrites the loaded page's queued counts.
     void (*format_counts)(void* user, const Unit& builder){};
+    /// units.placement-by-builder: the panel unit's type, not the clicked
+    /// item's, decides between placement and the queue.
+    bool placement_by_builder{};
+    /// Queue step of a click with shift held: 5, or 100 while Ctrl is held
+    /// under ui.selection-shortcuts.
+    int32_t shift_step{5};
 };
 
 /// Handles a click on a button of the loaded build or order page.
 ///
 /// PREV, NEXT, ORDERS and BUILD raise their frame_flags requests (the last two
 /// with a sound). A building type arms placement, even when the panel unit is
-/// not selected. Any other button the order handlers do not take changes the
-/// panel unit's queue by one (five with shift), down with the right button,
-/// while that unit is selected; the counts are then rewritten for a building
-/// or a stockpiling unit only.
+/// not selected; with host.placement_by_builder, any unit type arms placement
+/// when the panel unit's type is mobile (bm_code not 0), and none does when it
+/// is a building, whose clicks queue. Any other button the order handlers do
+/// not take changes the panel unit's queue by one (BuildPanelHost::shift_step
+/// with shift), down with the right button, while that unit is selected; the
+/// counts are then rewritten for a building or a stockpiling unit only.
 ///
 /// @param[in,out] state Order panel words; page and menu requests are set here.
 /// @param table Unit pool and type table.

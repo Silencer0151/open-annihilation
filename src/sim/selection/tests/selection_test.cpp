@@ -180,7 +180,22 @@ int main() {
         w->units[1].flags |= OA_UNIT_FLAG_SELECTED;
         select_matching_types(*w, h);
         CHECK(selected(*w, 1) && !selected(*w, 2) && selected(*w, 3));
-        TypeMask mask{};
+        // A type id past the bitset's 512 is left out; the widest bitset holds it.
+        for (const uint16_t type : {uint16_t{600}, uint16_t{65535}}) {
+            w->units[1].type_index = type;
+            w->units[3].type_index = type;
+            w->units[3].flags &= ~OA_UNIT_FLAG_SELECTED;
+            select_matching_types(*w, h);
+            CHECK(!selected(*w, 3));
+            select_matching_types(*w, h, data::limits::highest_type_bits);
+            CHECK(selected(*w, 3));
+            w->units[3].flags &= ~OA_UNIT_FLAG_SELECTED;
+        }
+        w->units[1].type_index = 1;
+        w->units[3].type_index = 1;
+        w->units[3].flags |= OA_UNIT_FLAG_SELECTED;
+        data::defs::CategoryMaskStorage storage;
+        TypeMask mask = data::defs::category_mask_over(storage, data::limits::base_type_bits);
         data::defs::category_mask_set(&mask, 2);
         apply_type_mask_selection(*w, mask, true, h);
         CHECK(selected(*w, 1) && selected(*w, 2));
@@ -422,7 +437,8 @@ int main() {
         // select_squad with the skip mask on type 2 (unit 2).
         World* w = make_world();
         r = Recorder{};
-        TypeMask skip{};
+        data::defs::CategoryMaskStorage storage;
+        TypeMask skip = data::defs::category_mask_over(storage, data::limits::base_type_bits);
         data::defs::category_mask_set(&skip, 2);
         w->units[1].squad = 4;
         w->units[2].squad = 4;

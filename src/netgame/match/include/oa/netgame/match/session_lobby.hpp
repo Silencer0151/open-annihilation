@@ -15,6 +15,7 @@
 #include "oa/netgame/match/packet_layer.hpp"
 #include "oa/netgame/session.hpp"
 #include "oa/netgame/socket_host.hpp"
+#include "oa/netgame/wire_rules.hpp"
 #include "oa/ui/frontend_multiplayer/lobby_net.hpp"
 
 namespace oa::netgame::match {
@@ -52,6 +53,9 @@ struct NetConnection {
     /// joiners into a closed game. Null answers false.
     void* launch_context{};
     bool (*launch_active)(void* context){};
+    /// The network rules every session of the connection plays by
+    /// (net_connection_set_rules).
+    WireRules rules{};
 };
 
 struct SessionLobbyConfig {
@@ -93,6 +97,16 @@ session_lobby_net(NetConnection* connection) noexcept;
 /// @param sends_per_second 0 means one send per 200 ms; otherwise clamped to 2..30.
 /// @return False, changing nothing, for a negative rate.
 bool net_connection_set_packet_rate(NetConnection* connection, int32_t sends_per_second) noexcept;
+
+/// Sets the network rules of the connection's sessions.
+///
+/// The receiver splits the recorder's records out of every frame when the
+/// rules present the recorder; the match copies the rules as it begins. A
+/// published session's description keeps an empty password either way.
+///
+/// @param[in,out] connection Connection whose rules change.
+/// @param rules The rules.
+void net_connection_set_rules(NetConnection* connection, const WireRules& rules) noexcept;
 
 /// Returns the transport clock in 1/30 s ticks (the game's time base at rate 30).
 ///

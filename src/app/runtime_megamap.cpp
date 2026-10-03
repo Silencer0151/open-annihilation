@@ -1,0 +1,657 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// ui.megamap in a running match: Tab and the wheel open and close it; open,
+// it draws the whole map over the battlefield with the sight shading, the
+// category icons of the units the minimap shows, the selection's sensor
+// rings and the main view's rectangle; its clicks select and give orders at
+// the map point they stand for. The enhanced minimap redraws the radar's
+// picture at its own size.
+
+#include "oa/app/runtime.hpp"
+#include "oa/present/world_renderer/world_radar.hpp"
+#include "oa/sim/selection/shortcuts.hpp"
+#include "oa/ui/hud/megamap.hpp"
+#include "oa/ui/hud/shared_views.hpp"
+
+#include <SDL3/SDL.h>
+
+#include <algorithm>
+#include <array>
+#include <cctype>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <exception>
+#include <span>
+#include <string>
+#include <tuple>
+
+namespace oa::app {
+namespace {
+
+namespace hud = oa::ui::hud;
+namespace wr = oa::present::world_renderer;
+
+/// The icon file's place in the game folder.
+constexpr const char* kIconFolder = "Icon/";
+constexpr const char* kIconConfig = "Icon/iconcfg.ini";
+/// The built-in icon set's files (the icon file's UseDefaultIcon).
+constexpr const char* kDefaultCommanderIcon = "COMMANDER.PCX";
+constexpr const char* kDefaultAirCombatIcon = "AIRCRAFTCOMBAT.PCX";
+constexpr const char* kDefaultAirBuilderIcon = "AIRCONS.PCX";
+constexpr const char* kDefaultBuilderIcon = "CONS.PCX";
+constexpr const char* kDefaultCombatIcon = "MOBILECOMBAT.PCX";
+constexpr const char* kDefaultFactoryIcon = "FACTORY.PCX";
+constexpr const char* kDefaultBuildingIcon = "BUILDING.PCX";
+constexpr const char* kDefaultNothingIcon = "NONE.PCX";
+constexpr const char* kDefaultUnknownIcon = "UNKNOWN.PCX";
+/// Interface sounds of opening and closing the megamap.
+constexpr const char* kOpenSound = "Options";
+constexpr const char* kCloseSound = "Previous";
+/// Map pixels of a footprint cell.
+constexpr int32_t kCellPixels = 16;
+/// Map pixels of a sight cell of the radar's grids.
+constexpr int32_t kSightCellPixels = 32;
+/// Battlefield pixels the pointer may move and still click.
+constexpr int32_t kClickSlack = 3;
+/// Characters of a unit type's side the commander icons compare.
+constexpr std::size_t kSideNameCompared = 8;
+
+bool same_side(const char* side, const char* name) {
+    for (std::size_t index = 0; index < kSideNameCompared; ++index) {
+        const auto a = std::tolower(static_cast<unsigned char>(side[index]));
+        const auto b = std::tolower(static_cast<unsigned char>(name[index]));
+        if (a != b)
+            return false;
+        if (a == 0)
+            return true;
+    }
+    return true;
+}
+
+bool commander_type(const oa::UnitDef& def) {
+    return (def.abilities & OA_UNIT_DEF_ABILITY_SHOW_PLAYER_NAME) != 0 &&
+           (def.flags & OA_UNIT_DEF_FLAG_HIDE_DAMAGE) != 0;
+}
+
+void add_type(const oa::data::defs::CategoryMask& mask, uint16_t type_id) {
+    const uint32_t word = type_id >> 5;
+    if (word < mask.word_count)
+        mask.words[word] |= 1u << (type_id & 31u);
+}
+
+} // namespace
+
+bool Runtime::megamap_on() const {
+    return match_ && ui_rules().megamap.enabled;
+}
+
+bool Runtime::megamap_shown() const {
+    return megamap_open_ && megamap_on();
+}
+
+MegamapIcon Runtime::load_megamap_icon(const std::string& file) {
+    MegamapIcon icon;
+    if (file.empty())
+        return icon;
+    try {
+        const auto asset = assets_.read(std::string(kIconFolder) + file);
+        const auto decoded = oa::decode_pcx(asset.bytes);
+        if (!decoded.ok() || decoded.value->indices.empty())
+            return icon;
+        const auto& image = *decoded.value;
+        icon.width = std::min<int32_t>(static_cast<int32_t>(image.width), kMegamapIconLimit);
+        icon.height = std::min<int32_t>(static_cast<int32_t>(image.height), kMegamapIconLimit);
+        icon.pixels.resize(
+            static_cast<std::size_t>(icon.width) * static_cast<std::size_t>(icon.height)
+        );
+        for (int32_t y = 0; y < icon.height; ++y)
+            for (int32_t x = 0; x < icon.width; ++x)
+                icon.pixels[static_cast<std::size_t>(y * icon.width + x)] =
+                    image.indices
+                        [static_cast<std::size_t>(y) * image.width + static_cast<std::size_t>(x)];
+    } catch (const std::exception&) {
+        icon = {};
+    }
+    return icon;
+}
+
+void Runtime::prepare_megamap() {
+    auto& state = megamap_;
+    if (state.prepared || !match_)
+        return;
+    state.prepared = true;
+    const auto& rules = ui_rules().megamap;
+    std::string text;
+    try {
+        const auto asset = assets_.read(kIconConfig);
+        text.assign(asset.bytes.begin(), asset.bytes.end());
+    } catch (const std::exception&) {
+        text.clear();
+    }
+    state.config =
+        hud::parse_icon_config(text, static_cast<uint32_t>(std::max(0, rules.icon_categories)));
+    const auto& world = match_->state();
+    auto& categories = unit_table_.tables.categories;
+    const uint32_t type_bits = categories.words_per_mask * 32U;
+    // The sets made here first, so that their masks keep their places.
+    const auto& game = world.game;
+    const uint32_t sides = std::min<uint32_t>(game.side_count, std::size(game.sides));
+    const bool built_in = state.config.options.default_icons;
+    const std::size_t own_count = built_in ? 7 : sides;
+    state.own_words.assign(own_count, {});
+    state.own_masks.clear();
+    state.own_masks.reserve(own_count);
+    for (auto& words : state.own_words)
+        state.own_masks.push_back(oa::data::defs::category_mask_over(words, type_bits));
+    state.entries.clear();
+    if (built_in) {
+        oa::sim::selection::ShortcutSets sets;
+        oa::sim::selection::build_shortcut_sets(world, categories, type_bits, sets);
+        const char* files[] = {
+            kDefaultCommanderIcon,
+            kDefaultAirCombatIcon,
+            kDefaultAirBuilderIcon,
+            kDefaultBuilderIcon,
+            kDefaultCombatIcon,
+            kDefaultFactoryIcon,
+            kDefaultBuildingIcon,
+        };
+        for (uint32_t index = 0; index < world.unit_def_count; ++index) {
+            const auto& def = world.unit_defs[index];
+            const bool flies = (def.flags & OA_UNIT_DEF_FLAG_CAN_FLY) != 0;
+            const bool builds = (def.flags & OA_UNIT_DEF_FLAG_BUILDER) != 0;
+            if (commander_type(def))
+                add_type(state.own_masks[0], def.type_id);
+            if (flies && (def.flags & OA_UNIT_DEF_FLAG_HAS_WEAPONS) != 0 && !builds)
+                add_type(state.own_masks[1], def.type_id);
+            if (flies && builds)
+                add_type(state.own_masks[2], def.type_id);
+            if (oa::data::defs::category_mask_contains(&sets.constructors, def.type_id))
+                add_type(state.own_masks[3], def.type_id);
+            if (oa::data::defs::category_mask_contains(&sets.mobile_combat, def.type_id))
+                add_type(state.own_masks[4], def.type_id);
+            if (oa::data::defs::category_mask_contains(&sets.factories, def.type_id))
+                add_type(state.own_masks[5], def.type_id);
+            if (def.yard_map != 0 && !commander_type(def))
+                add_type(state.own_masks[6], def.type_id);
+        }
+        for (std::size_t index = 0; index < own_count; ++index)
+            state.entries.push_back({load_megamap_icon(files[index]), &state.own_masks[index]});
+        state.unknown = load_megamap_icon(kDefaultUnknownIcon);
+        state.nothing = load_megamap_icon(kDefaultNothingIcon);
+    } else {
+        // Each side's commanders first, under the side's name.
+        for (uint32_t side = 0; side < sides; ++side) {
+            for (uint32_t index = 0; index < world.unit_def_count; ++index) {
+                const auto& def = world.unit_defs[index];
+                if (commander_type(def) && same_side(def.side, game.sides[side].name))
+                    add_type(state.own_masks[side], def.type_id);
+            }
+            std::string name(
+                game.sides[side].name,
+                ::strnlen(game.sides[side].name, sizeof game.sides[side].name)
+            );
+            state.entries.push_back({load_megamap_icon(name + ".PCX"), &state.own_masks[side]});
+        }
+        for (const auto& line : state.config.lines)
+            state.entries.push_back(
+                {load_megamap_icon(line.file),
+                 oa::data::defs::category_registry_find_or_add(&categories, line.category.c_str())}
+            );
+        state.unknown = load_megamap_icon(state.config.unknown_file);
+        state.nothing = load_megamap_icon(state.config.nothing_file);
+    }
+    // The features the map placed, which its picture shows as they stood.
+    state.features.clear();
+    if (rules.feature_blobs) {
+        const auto width = static_cast<int32_t>(game.map_width);
+        const auto cells = static_cast<std::size_t>(game.map_width) * game.map_height;
+        for (std::size_t index = 0; index < cells && width > 0; ++index) {
+            const auto feature = world.plots[index].feature;
+            if (feature >= OA_PLOT_FEATURE_RESERVED || feature >= world.feature_def_count)
+                continue;
+            const auto& def = world.feature_defs[feature];
+            state.features.push_back(
+                {static_cast<int32_t>(index % static_cast<std::size_t>(width)),
+                 static_cast<int32_t>(index / static_cast<std::size_t>(width)),
+                 std::max<int32_t>(1, def.footprint_x),
+                 std::max<int32_t>(1, def.footprint_z),
+                 hud::feature_blob_color(def)}
+            );
+        }
+    }
+    state.terrain.clear();
+    state.layout = {};
+}
+
+uint8_t Runtime::map_terrain_pixel(int32_t map_x, int32_t map_z) const {
+    const auto& map = *selected_tnt_;
+    const auto tiles_per_row = static_cast<int32_t>(map.tile_width);
+    const auto tile_slot = static_cast<std::size_t>((map_z / 32) * tiles_per_row + map_x / 32);
+    if (tile_slot >= map.tile_indices.size())
+        return 0;
+    auto tile = static_cast<std::size_t>(map.tile_indices[tile_slot]);
+    if (tile >= map.tile_count)
+        tile = 0;
+    const auto at = tile * 1024U + static_cast<std::size_t>((map_z % 32) * 32 + map_x % 32);
+    return at < map.tile_palette_indices.size() ? map.tile_palette_indices[at] : uint8_t{0};
+}
+
+void Runtime::build_megamap_terrain(const oa::ui::hud::MegamapLayout& layout) {
+    auto& state = megamap_;
+    state.layout = layout;
+    state.terrain.clear();
+    if (!selected_tnt_ || layout.width <= 0 || layout.height <= 0)
+        return;
+    hud::TerrainSource source{};
+    source.user = this;
+    source.pixel = [](void* user, int32_t x, int32_t z) {
+        return static_cast<const Runtime*>(user)->map_terrain_pixel(x, z);
+    };
+    state.terrain = hud::downscale_terrain(
+        source,
+        layout.map_width,
+        layout.map_height,
+        layout.width,
+        layout.height,
+        match_palette_,
+        ui_rules().megamap.dither
+    );
+    // The features' blobs over it, each at least a pixel.
+    for (const auto& feature : state.features) {
+        const auto from =
+            hud::megamap_point(layout, feature.cell_x * kCellPixels, feature.cell_z * kCellPixels);
+        const auto to = hud::megamap_point(
+            layout,
+            (feature.cell_x + feature.width) * kCellPixels,
+            (feature.cell_z + feature.height) * kCellPixels
+        );
+        for (int32_t y = from[1]; y < std::max(to[1], from[1] + 1); ++y)
+            for (int32_t x = from[0]; x < std::max(to[0], from[0] + 1); ++x) {
+                const int32_t px = x - layout.left, py = y - layout.top;
+                if (px >= 0 && py >= 0 && px < layout.width && py < layout.height)
+                    state.terrain[static_cast<std::size_t>(py * layout.width + px)] = feature.color;
+            }
+    }
+}
+
+void Runtime::set_megamap_open(bool open) {
+    if (open == megamap_open_ || !megamap_on())
+        return;
+    megamap_open_ = open;
+    megamap_.pressed = false;
+    play_match_interface_sound(open ? kOpenSound : kCloseSound);
+}
+
+bool Runtime::megamap_key(const SDL_KeyboardEvent& key) {
+    if (!megamap_on() || key.key != SDLK_TAB)
+        return false;
+    set_megamap_open(!megamap_open_);
+    return true;
+}
+
+bool Runtime::megamap_wheel(float amount, float x, float y) {
+    if (!megamap_on() || amount == 0.0F)
+        return false;
+    if (amount < 0.0F) {
+        set_megamap_open(true);
+        return true;
+    }
+    if (!megamap_open_)
+        return false;
+    // Rolled away: back to the battlefield, centred where the pointer was.
+    const auto point = hud::megamap_map_point(
+        megamap_.layout,
+        static_cast<int32_t>(x) - match_layout_.left,
+        static_cast<int32_t>(y) - match_layout_.top
+    );
+    set_megamap_open(false);
+    if (point)
+        set_camera_position(
+            (*point)[0] - visible_map_width() / 2, (*point)[1] - visible_map_height() / 2, 0
+        );
+    return true;
+}
+
+void Runtime::draw_megamap() {
+    if (!megamap_open_ || !megamap_on() || !selected_tnt_)
+        return;
+    prepare_megamap();
+    auto& state = megamap_;
+    auto& world = match_->state();
+    const auto& game = world.game;
+    const auto layout = hud::megamap_layout(
+        0,
+        0,
+        match_layout_.battlefield_width(),
+        match_layout_.battlefield_height(),
+        game.map_pixel_width,
+        game.map_pixel_height
+    );
+    if (layout.width <= 0)
+        return;
+    if (state.terrain.empty() || layout.width != state.layout.width ||
+        layout.height != state.layout.height || layout.left != state.layout.left ||
+        layout.top != state.layout.top)
+        build_megamap_terrain(layout);
+    // The bars, then the terrain shaded by what the viewer has mapped and sees.
+    const uint8_t unexplored = game.ui_colors[wr::ui_color_unexplored];
+    fill_hud_rect(
+        0, 0, match_layout_.battlefield_width(), match_layout_.battlefield_height(), unexplored
+    );
+    auto& target = paint_target();
+    const auto& radar = radar_state_;
+    const int grid_w = std::max(1, game.map_width / 2);
+    const int grid_h = std::max(1, game.map_height / 2);
+    const auto viewer_bit = static_cast<uint16_t>(1u << (match_view_player() & 0x1fu));
+    for (int32_t y = 0; y < layout.height; ++y) {
+        const int32_t py = layout.top + y;
+        if (py < 0 || py >= static_cast<int32_t>(target.height))
+            continue;
+        const auto map_z =
+            static_cast<int32_t>(static_cast<int64_t>(y) * layout.map_height / layout.height);
+        const int gy = std::min(grid_h - 1, map_z / kSightCellPixels);
+        for (int32_t x = 0; x < layout.width; ++x) {
+            const int32_t px = layout.left + x;
+            if (px < 0 || px >= static_cast<int32_t>(target.width))
+                continue;
+            const auto map_x =
+                static_cast<int32_t>(static_cast<int64_t>(x) * layout.map_width / layout.width);
+            const int gx = std::min(grid_w - 1, map_x / kSightCellPixels);
+            const auto cell = static_cast<std::size_t>(gy) * static_cast<std::size_t>(grid_w) +
+                              static_cast<std::size_t>(gx);
+            uint8_t color = state.terrain[static_cast<std::size_t>(y * layout.width + x)];
+            if (cell < radar.sight_bits.size() && (radar.sight_bits[cell] & viewer_bit) == 0)
+                color = unexplored;
+            else if (cell < radar.coverage.size() && radar.coverage[cell] == 0)
+                color = radar.gray_table[color];
+            const auto pal = static_cast<std::size_t>(color) * 4U;
+            const auto di =
+                (static_cast<std::size_t>(py) * target.width + static_cast<std::size_t>(px)) * 3U;
+            target.rgb[di] = match_palette_[pal];
+            target.rgb[di + 1] = match_palette_[pal + 1];
+            target.rgb[di + 2] = match_palette_[pal + 2];
+        }
+    }
+    // The units the minimap shows, by their icons; the hovered one is found as they are drawn.
+    const bool full_radar = (game.console_flags & wr::console_flag_full_radar) != 0;
+    const bool limited = (game.visibility_flags & wr::visibility_flags_radar_limited) != 0;
+    const bool allied = ui_rules().allied_unit_display.enabled;
+    const auto viewer = match_view_player();
+    const auto pointer_x = state.pointer_x;
+    const auto pointer_y = state.pointer_y;
+    state.hovered = 0;
+    std::vector<const oa::data::defs::CategoryMask*> masks;
+    masks.reserve(state.entries.size());
+    for (const auto& entry : state.entries)
+        masks.push_back(entry.types);
+    const auto draw_icon = [&](const MegamapIcon& icon,
+                               int32_t cx,
+                               int32_t cy,
+                               uint8_t dot,
+                               bool selected,
+                               bool hovered) {
+        if (icon.pixels.empty()) {
+            // A missing picture draws a square of the owner's colour.
+            fill_hud_rect(cx - 2, cy - 2, 5, 5, dot);
+            return;
+        }
+        const int32_t left = cx - icon.width / 2, top = cy - icon.height / 2;
+        for (int32_t y = 0; y < icon.height; ++y)
+            for (int32_t x = 0; x < icon.width; ++x) {
+                const auto shown = hud::icon_pixel(
+                    state.config.options,
+                    icon.pixels[static_cast<std::size_t>(y * icon.width + x)],
+                    dot,
+                    selected,
+                    hovered
+                );
+                if (shown)
+                    fill_hud_rect(left + x, top + y, 1, 1, *shown);
+            }
+    };
+    for (uint32_t slot = 0; slot < world.unit_slot_count; ++slot) {
+        const oa::Unit& unit = world.units[slot];
+        if (unit.type_index == 0)
+            continue;
+        const auto* owner = oa::world_unit_owner(&world, &unit);
+        const bool own = allied ? owner != nullptr && viewer < sizeof owner->alliance &&
+                                      owner->alliance[viewer] != 0
+                                : unit.owner_index == viewer;
+        if (!full_radar && limited && (unit.flags & OA_UNIT_FLAG_RADAR_CONTACT) == 0 && !own)
+            continue;
+        bool visible = own;
+        if (!visible) {
+            try {
+                visible = match_->unit_visible(viewer, unit.id);
+            } catch (const std::exception&) {
+                visible = false;
+            }
+        }
+        const auto at = hud::megamap_point(layout, unit.position.x >> 16, unit.position.z >> 16);
+        std::size_t line = 0;
+        const auto choice = hud::choose_icon(visible, unit.type_index, masks, line);
+        const MegamapIcon& icon = choice == hud::IconChoice::category  ? state.entries[line].icon
+                                  : choice == hud::IconChoice::unknown ? state.unknown
+                                                                       : state.nothing;
+        const int32_t half_w = std::max(2, icon.width / 2), half_h = std::max(2, icon.height / 2);
+        const bool hovered = pointer_x >= at[0] - half_w && pointer_x < at[0] + half_w &&
+                             pointer_y >= at[1] - half_h && pointer_y < at[1] + half_h;
+        if (hovered)
+            state.hovered = unit.id;
+        const bool selected = (unit.flags & OA_UNIT_FLAG_SELECTED) != 0;
+        draw_icon(
+            icon, at[0], at[1], hud::player_dot_color(world, unit.owner_index), selected, hovered
+        );
+        if (hovered && state.config.options.circle_hover)
+            draw_megamap_ring(
+                at[0], at[1], std::max(half_w, half_h) + 1, state.config.options.hover_color
+            );
+        // The selection's sensor and anti-nuke rings.
+        const auto* def = oa::world_unit_def_of(&world, &unit);
+        if (selected && def != nullptr) {
+            std::array<hud::MegamapRing, 5> rings{};
+            const auto& minimums = ui_rules().megamap.ring_minimums;
+            const auto count = hud::megamap_rings(world, unit, *def, minimums, rings);
+            for (uint32_t index = 0; index < count; ++index)
+                draw_megamap_ring(
+                    at[0],
+                    at[1],
+                    static_cast<int32_t>(
+                        static_cast<int64_t>(rings[index].radius) * layout.width / layout.map_width
+                    ),
+                    rings[index].color
+                );
+        }
+    }
+    // The main view's rectangle.
+    const auto from = hud::megamap_point(layout, match_camera_x_, match_camera_z_);
+    const auto to = hud::megamap_point(
+        layout, match_camera_x_ + visible_map_width(), match_camera_z_ + visible_map_height()
+    );
+    const uint8_t marks = game.ui_colors[wr::ui_color_radar_marks];
+    fill_hud_rect(from[0], from[1], to[0] - from[0] + 1, 1, marks);
+    fill_hud_rect(from[0], to[1], to[0] - from[0] + 1, 1, marks);
+    fill_hud_rect(from[0], from[1], 1, to[1] - from[1] + 1, marks);
+    fill_hud_rect(to[0], from[1], 1, to[1] - from[1] + 1, marks);
+    // A drag box being drawn.
+    if (state.pressed && (std::abs(pointer_x - state.press_x) > kClickSlack ||
+                          std::abs(pointer_y - state.press_y) > kClickSlack)) {
+        const int32_t left = std::min(pointer_x, state.press_x),
+                      right = std::max(pointer_x, state.press_x);
+        const int32_t top = std::min(pointer_y, state.press_y),
+                      bottom = std::max(pointer_y, state.press_y);
+        fill_hud_rect(left, top, right - left + 1, 1, marks);
+        fill_hud_rect(left, bottom, right - left + 1, 1, marks);
+        fill_hud_rect(left, top, 1, bottom - top + 1, marks);
+        fill_hud_rect(right, top, 1, bottom - top + 1, marks);
+    }
+}
+
+void Runtime::draw_megamap_ring(int32_t x, int32_t y, int32_t radius, uint8_t color) {
+    if (radius <= 0)
+        return;
+    // Eight points of the ring per step around a quarter.
+    int32_t dx = radius, dy = 0, error = 1 - radius;
+    while (dx >= dy) {
+        const std::array<std::array<int32_t, 2>, 8> points{{
+            {x + dx, y + dy},
+            {x + dy, y + dx},
+            {x - dy, y + dx},
+            {x - dx, y + dy},
+            {x - dx, y - dy},
+            {x - dy, y - dx},
+            {x + dy, y - dx},
+            {x + dx, y - dy},
+        }};
+        for (const auto& point : points)
+            fill_hud_rect(point[0], point[1], 1, 1, color);
+        ++dy;
+        if (error < 0) {
+            error += 2 * dy + 1;
+        } else {
+            --dx;
+            error += 2 * (dy - dx) + 1;
+        }
+    }
+}
+
+bool Runtime::megamap_pointer(const SDL_Event& event, float x, float y) {
+    if (!megamap_open_ || !megamap_on())
+        return false;
+    auto& state = megamap_;
+    const int32_t px = static_cast<int32_t>(x) - match_layout_.left;
+    const int32_t py = static_cast<int32_t>(y) - match_layout_.top;
+    if (event.type == SDL_EVENT_MOUSE_MOTION) {
+        state.pointer_x = px;
+        state.pointer_y = py;
+        return state.pressed;
+    }
+    if (!battlefield_contains(x, y) && !(state.pressed && event.type == SDL_EVENT_MOUSE_BUTTON_UP))
+        return false;
+    auto& world = match_->state();
+    world.game.local_player_index = match_local_player_;
+    state.pointer_x = px;
+    state.pointer_y = py;
+    const bool shift = (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
+    if (event.button.button == SDL_BUTTON_RIGHT) {
+        if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+            // The default order, or the armed one, at the map point.
+            const auto point = hud::megamap_map_point(state.layout, px, py);
+            std::ignore = issue_map_orders(
+                point ? map_world_point((*point)[0], (*point)[1]) : std::nullopt, state.hovered
+            );
+        }
+        return true;
+    }
+    if (event.button.button != SDL_BUTTON_LEFT)
+        return true;
+    if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+        if (event.button.clicks >= 2 && event.button.clicks % 2 == 0 && state.hovered != 0) {
+            // A double-click on one of the viewer's units selects every unit of its type.
+            const auto* unit = oa::world_unit_at(&world, state.hovered);
+            if (unit != nullptr && unit->owner_index == match_local_player_) {
+                const auto type = unit->type_index;
+                select_units_matching([&](const oa::sim::unit_spawn::Slot& slot) {
+                    return slot.unit && slot.unit->type_index == type;
+                });
+            }
+            state.pressed = false;
+            return true;
+        }
+        state.pressed = true;
+        state.press_x = px;
+        state.press_y = py;
+        return true;
+    }
+    if (event.type != SDL_EVENT_MOUSE_BUTTON_UP || !state.pressed)
+        return true;
+    state.pressed = false;
+    const bool dragged =
+        std::abs(px - state.press_x) > kClickSlack || std::abs(py - state.press_y) > kClickSlack;
+    if (!shift)
+        clear_local_selection();
+    if (dragged) {
+        const int32_t left = std::min(px, state.press_x), right = std::max(px, state.press_x);
+        const int32_t top = std::min(py, state.press_y), bottom = std::max(py, state.press_y);
+        for (auto& slot : match_->world().slots) {
+            if (slot.unit_index == 0 || slot.unit == nullptr ||
+                slot.owner_index != match_local_player_ || !match_->selectable(slot.unit_index))
+                continue;
+            const auto& record = world.units[slot.unit_index];
+            const auto at =
+                hud::megamap_point(state.layout, record.position.x >> 16, record.position.z >> 16);
+            if (at[0] >= left && at[0] <= right && at[1] >= top && at[1] <= bottom)
+                slot.unit->flags |= OA_UNIT_FLAG_SELECTED;
+        }
+    } else if (state.hovered != 0) {
+        auto& slot = match_->world().slots[state.hovered];
+        if (slot.unit != nullptr && slot.owner_index == match_local_player_ &&
+            match_->selectable(state.hovered))
+            slot.unit->flags ^= OA_UNIT_FLAG_SELECTED;
+    }
+    selected_match_unit_ = 0;
+    adopt_selected_units();
+    return true;
+}
+
+void Runtime::enhance_radar_picture() {
+    if (!match_ || !selected_tnt_ || !ui_rules().megamap.enabled ||
+        !ui_rules().megamap.enhanced_minimap)
+        return;
+    auto* picture = radar_state_.surfaces.picture;
+    const auto& game = match_->state().game;
+    if (picture == nullptr || picture->pixels == nullptr || game.map_pixel_width <= 0 ||
+        game.map_pixel_height <= 0)
+        return;
+    const auto& map = *selected_tnt_;
+    hud::TerrainSource source{};
+    int32_t source_w = game.map_pixel_width, source_h = game.map_pixel_height;
+
+    struct Minimap {
+        const uint8_t* pixels;
+        int32_t stride;
+    } minimap{nullptr, 0};
+
+    if (map.minimap.has_value() && map.minimap->width > 0 && map.minimap->height > 0 &&
+        map.minimap->palette_indices.size() >=
+            static_cast<std::size_t>(map.minimap->width) * map.minimap->height) {
+        // The map file's own minimap, as far as it shows the map.
+        minimap = {map.minimap->palette_indices.data(), static_cast<int32_t>(map.minimap->width)};
+        source_w = 2 * game.radar_width;
+        source_h = 2 * game.radar_height;
+        source.user = &minimap;
+        source.pixel = [](void* user, int32_t x, int32_t z) {
+            const auto& from = *static_cast<const Minimap*>(user);
+            return from.pixels
+                [static_cast<std::size_t>(z) * static_cast<std::size_t>(from.stride) +
+                 static_cast<std::size_t>(x)];
+        };
+    } else {
+        source.user = this;
+        source.pixel = [](void* user, int32_t x, int32_t z) {
+            return static_cast<const Runtime*>(user)->map_terrain_pixel(x, z);
+        };
+    }
+    const auto pixels = hud::downscale_terrain(
+        source,
+        source_w,
+        source_h,
+        picture->width,
+        picture->height,
+        match_palette_,
+        ui_rules().megamap.dither
+    );
+    if (pixels.empty())
+        return;
+    for (int32_t y = 0; y < picture->height; ++y)
+        std::memcpy(
+            picture->pixels + y * picture->pitch,
+            pixels.data() + static_cast<std::size_t>(y) * picture->width,
+            static_cast<std::size_t>(picture->width)
+        );
+}
+
+} // namespace oa::app

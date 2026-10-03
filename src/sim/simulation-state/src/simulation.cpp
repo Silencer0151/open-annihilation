@@ -6,6 +6,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 
 namespace oa::sim::simulation_state {
 namespace {
@@ -56,8 +57,19 @@ uint8_t lowest_unused_player_mark(const oa::World& w) noexcept {
 }
 
 oa::Unit* nearest_candidate_unit(
-    oa::World& w, std::span<const uint8_t> relation, int32_t x, int32_t z
+    oa::World& w,
+    std::span<const uint8_t> relation,
+    int32_t x,
+    int32_t z,
+    const CandidateFilter& filter
 ) noexcept {
+    // The occupancy bit set in states 2 and 3, and the move-rate bit set in tiers 2 and 3.
+    constexpr uint32_t occupancy_upper_states = 0x2u;
+    constexpr uint32_t move_rate_upper_tiers = 0x8u;
+    constexpr uint32_t widened_skip =
+        occupancy_upper_states | move_rate_upper_tiers | OA_UNIT_FLAG_NOT_SELECTABLE;
+    // Unit.last_occupy_code of a unit fully under water.
+    constexpr uint32_t submerged_occupy_code = 3;
     oa::Unit* best = nullptr;
     auto best_metric = static_cast<int32_t>(0x7fffffff);
     for (uint8_t index = 0; index < OA_PLAYER_COUNT; ++index) {
@@ -69,10 +81,23 @@ oa::Unit* nearest_candidate_unit(
         for (uint32_t i = 0; i < count; ++i) {
             auto& unit = units[i];
             const auto flags = unit.flags;
-            if ((flags & OA_UNIT_FLAG_LIVE) == 0 || (flags & OA_UNIT_FLAG_OCCUPANCY_MASK) == 2 ||
-                (flags & OA_UNIT_FLAG_NOT_SELECTABLE) != 0 ||
-                (unit.state_flags & OA_UNIT_STATE_CLOAKED) != 0)
+            if ((flags & OA_UNIT_FLAG_LIVE) == 0 || (unit.state_flags & OA_UNIT_STATE_CLOAKED) != 0)
                 continue;
+            if (filter.widened_flags) {
+                if ((flags & widened_skip) != 0)
+                    continue;
+            } else if (
+                (flags & OA_UNIT_FLAG_OCCUPANCY_MASK) == 2 ||
+                (flags & OA_UNIT_FLAG_NOT_SELECTABLE) != 0
+            ) {
+                continue;
+            }
+            if (filter.skip_submerged) {
+                uint32_t occupy_code = 0;
+                std::memcpy(&occupy_code, unit.last_occupy_code, sizeof occupy_code);
+                if (occupy_code == submerged_occupy_code)
+                    continue;
+            }
             const auto dx =
                 static_cast<int32_t>(static_cast<uint32_t>(x) - position_word(unit.position.x));
             const auto dz =
@@ -314,6 +339,43 @@ StepFault update_height(oa::World& w, oa::Unit& u, Host& h) {
     return StepFault::none;
 }
 
+bool self_heal_due(
+    const data::match_rules::RepairHealtimeSelfHeal& rule,
+    int16_t heal_time,
+    int16_t health,
+    uint32_t maximum_health,
+    float build_remaining,
+    uint32_t tick
+) noexcept {
+    constexpr uint32_t base_cadence_mask = 7;
+    constexpr uint32_t heal_time_mask_bits = 0xff;
+    if (heal_time == 0 || static_cast<uint32_t>(static_cast<int32_t>(health)) >= maximum_health)
+        return false;
+    if (rule.skip_under_construction && std::bit_cast<uint32_t>(build_remaining) != 0)
+        return false;
+    if (rule.cadence == data::match_rules::RepairHealtimeSelfHealCadence::healtime_mask)
+        return (tick & (static_cast<uint32_t>(static_cast<uint16_t>(heal_time)) &
+                        heal_time_mask_bits)) == 0;
+    return (tick & base_cadence_mask) == 0;
+}
+
+float self_heal_rate(
+    const data::match_rules::RepairHealtimeSelfHeal& rule, int16_t heal_time
+) noexcept {
+    constexpr int64_t work_per_heal_time = 8;
+    constexpr int64_t ticks_per_worker_second = 30;
+    const int64_t multiplier = rule.work_multiplier;
+    if (rule.cadence == data::match_rules::RepairHealtimeSelfHealCadence::healtime_mask) {
+        const int64_t work = static_cast<int64_t>(heal_time) * work_per_heal_time * multiplier;
+        return static_cast<float>(static_cast<int32_t>(work / ticks_per_worker_second));
+    }
+    const auto work = static_cast<uint64_t>(static_cast<uint16_t>(heal_time)) *
+                      static_cast<uint64_t>(work_per_heal_time) * static_cast<uint64_t>(multiplier);
+    return static_cast<float>(
+        static_cast<uint32_t>(work / static_cast<uint64_t>(ticks_per_worker_second))
+    );
+}
+
 StepFault update_unit(oa::World& w, OrderQueue& q, oa::Unit& u, Host& h) {
     if (u.script)
         h.tick_script(u, 1);
@@ -348,9 +410,14 @@ StepFault update_unit(oa::World& w, OrderQueue& q, oa::Unit& u, Host& h) {
         def = type(w, u);
         if (!def)
             return StepFault::untyped_unit;
-        if (def->heal_time &&
-            static_cast<uint32_t>(static_cast<int32_t>(u.health)) < def->max_damage &&
-            (w.game.tick & 7) == 0)
+        if (self_heal_due(
+                h.rules.rules().repair.healtime_self_heal,
+                def->heal_time,
+                u.health,
+                def->max_damage,
+                u.build_remaining,
+                w.game.tick
+            ))
             h.regenerate_health(u);
         if (const auto fault = primary_orders(w, q, u, h); fault != StepFault::none)
             return fault;

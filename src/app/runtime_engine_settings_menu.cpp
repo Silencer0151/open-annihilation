@@ -157,7 +157,12 @@ void Runtime::EngineSettingsMenuHost::button_draw(ScreenContext* context, void*)
         look = host.button_pressed ? settings::ButtonLook::pressed : settings::ButtonLook::hovered;
     const auto rect = button_rect(runtime);
     settings::draw_oa_button(
-        *context->surface, {rect.x, rect.y, 1}, rect.width, look, *runtime.engine_settings_fonts()
+        *context->surface,
+        {rect.x, rect.y, 1},
+        rect.width,
+        look,
+        *runtime.engine_settings_fonts(),
+        runtime.engine_settings_icon()
     );
 }
 
@@ -259,7 +264,9 @@ void Runtime::EngineSettingsMenuHost::dialog_draw(ScreenContext* context, void*)
         settings::backdrop_color,
         settings::menu_backdrop_opacity
     );
-    settings::draw_dialog(frame, dialog_placement(), *dialog, *fonts);
+    settings::draw_dialog(
+        frame, dialog_placement(), *dialog, *fonts, runtime.engine_settings_icon()
+    );
 }
 
 void Runtime::register_engine_settings_overlays() {

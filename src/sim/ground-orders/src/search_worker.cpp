@@ -316,7 +316,7 @@ void SearchWorker::expand_neighbor(
         const auto handle = heap_.insert(
             pack_node(static_cast<int16_t>(x), static_cast<int16_t>(z), g, f, extra, run)
         );
-        cell.handle = static_cast<uint16_t>(handle);
+        cell.handle = handle;
         return;
     }
     if (visit != SearchCellVisit::open)
@@ -593,7 +593,7 @@ SearchAdvance SearchWorker::begin(
     // the start cell is closed on first pop and closed cells are not reopened.
     const auto handle =
         heap_.insert(pack_node(start_[0], start_[1], 0, start_cost, 0, search_start_run));
-    start_cell.handle = static_cast<uint16_t>(handle);
+    start_cell.handle = handle;
     fan_ = search_initial_fan;
     return SearchAdvance::in_progress;
 }

@@ -7,14 +7,20 @@
 // the dialog that shows them is in oa/ui/engine_settings/dialog.hpp.
 #pragma once
 
+#include "oa/data/languages.hpp"
+#include "oa/data/limits.hpp"
+#include "oa/data/mod_profile/overrides.hpp"
 #include "oa/platform/preferences.hpp"
+#include "oa/present/text_style.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace oa::ui::engine_settings {
 
@@ -38,12 +44,36 @@ inline constexpr std::string_view frame_stats = "open-annihilation.frame-stats";
 /// "desktop", or the width and height in decimal joined by an "x", as
 /// "800x600" (EngineSettings::screen_size).
 inline constexpr std::string_view screen_size = "open-annihilation.screen-size";
+/// The mod folder played from the next start, as a UTF-8 path; absent for
+/// none (EngineSettings::mod).
+inline constexpr std::string_view mod_directory = "open-annihilation.mod-directory";
 /// "off", "basic" or "full" (EngineSettings::hardware_acceleration). A
 /// whole number reads as the On and Off switch the setting was before: 1
 /// or any number above 0 is "full", 0 or below "off".
 inline constexpr std::string_view hardware_acceleration = "open-annihilation.hardware-acceleration";
 /// 1 or 0 (EngineSettings::vertical_sync).
 inline constexpr std::string_view vertical_sync = "open-annihilation.vertical-sync";
+/// 1 or 0 (EngineSettings::modern_fonts).
+inline constexpr std::string_view modern_fonts = "open-annihilation.modern-fonts";
+/// 1 or 0 (EngineSettings::text_outline).
+inline constexpr std::string_view text_outline = "open-annihilation.text-outline";
+/// 1 or 0 (EngineSettings::text_shadow).
+inline constexpr std::string_view text_shadow = "open-annihilation.text-shadow";
+/// 1 or 0 (EngineSettings::text_background).
+inline constexpr std::string_view text_background = "open-annihilation.text-background";
+/// Percent of the game fonts' sizes, decimal (EngineSettings::text_size).
+inline constexpr std::string_view text_size = "open-annihilation.text-size";
+/// "system" for the operating system's choice, or a language's BCP-47 tag,
+/// as "de" (EngineSettings::language).
+inline constexpr std::string_view language = "open-annihilation.language";
+/// 1 or 0 (EngineSettings::developer_mode).
+inline constexpr std::string_view developer_mode = "open-annihilation.developer-mode";
+/// The start of the key a profile's overrides of its standard hacks are
+/// kept under, which the profile's id ends (Inputs::profile_id), as
+/// "open-annihilation.hack-overrides.ta-3.1c": their text as
+/// oa::data::mod_profile::overrides_text writes it
+/// (EngineSettings::hack_overrides).
+inline constexpr std::string_view hack_overrides = "open-annihilation.hack-overrides.";
 } // namespace key
 
 /// Path nodes the path search may visit in a game tick, all players
@@ -57,7 +87,8 @@ inline constexpr int32_t highest_path_search_nodes =
 
 /// The lowest unit limit the setting offers, in units per player.
 inline constexpr uint16_t lowest_unit_limit = 50;
-/// The highest unit limit the setting offers, in units per player.
+/// The highest unit limit the setting offers, in units per player, unless a
+/// mod's limits allow more (highest_offered_unit_limit).
 inline constexpr uint16_t highest_unit_limit = 1500;
 /// The unit limit setting's step, in units per player.
 inline constexpr uint16_t unit_limit_step = 50;
@@ -65,7 +96,7 @@ inline constexpr uint16_t unit_limit_step = 50;
 inline constexpr uint16_t default_unit_limit = 250;
 /// The lowest unit limit the preferences keep, in units per player: the
 /// lowest an installation's totala.ini can set, below the setting's stops.
-inline constexpr uint16_t lowest_stored_unit_limit = 21;
+inline constexpr uint16_t lowest_stored_unit_limit = 20;
 
 /// The lowest maximum frame rate the setting offers, in frames a second:
 /// the simulation's ticks a second, a frame for each tick.
@@ -79,6 +110,17 @@ inline constexpr uint32_t frame_rate_step = 5;
 inline constexpr uint32_t raspberry_pi_frame_rate = 60;
 /// The maximum frame rate a light machine starts with, in frames a second.
 inline constexpr uint32_t light_machine_frame_rate = 60;
+
+/// The smallest text size the setting offers, in percent of the game fonts'
+/// sizes.
+inline constexpr int32_t lowest_text_size = oa::present::lowest_text_size;
+/// The largest text size the setting offers, in percent.
+inline constexpr int32_t highest_text_size = oa::present::highest_text_size;
+/// The text size setting's step, in percent.
+inline constexpr int32_t text_size_step = 10;
+/// The text size a player starts with, in percent: a fifth smaller than the
+/// game fonts.
+inline constexpr int32_t default_text_size = oa::present::default_text_size;
 
 /// The size the game's window, or the screen in full screen, is set to, in
 /// pixels; zero by zero is the desktop's own size, the game's default.
@@ -130,14 +172,73 @@ inline constexpr std::array<AntiAliasing, 5> anti_aliasing_levels{
     AntiAliasing::x16,
 };
 
+/// A key the mod options' key settings offer: its SDL key code and name.
+struct OptionKey {
+    uint32_t code{};         ///< the SDL key code
+    std::string_view name{}; ///< what the dialog shows
+};
+
+/// The keys the mod options' key settings offer, in the order their
+/// sliders step through them: the modifier keys, Tab, letters and marks.
+inline constexpr std::array<OptionKey, 16> option_keys{{
+    {0x400000e2U, "Alt"},
+    {0x400000e0U, "Ctrl"},
+    {0x400000e1U, "Shift"},
+    {'\t', "Tab"},
+    {'b', "B"},
+    {'c', "C"},
+    {'e', "E"},
+    {'f', "F"},
+    {'g', "G"},
+    {'q', "Q"},
+    {'r', "R"},
+    {'v', "V"},
+    {'x', "X"},
+    {'z', "Z"},
+    {'/', "/"},
+    {'\\', "\\"},
+}};
+
+/// The most cells the mod options' snap radii go up to.
+inline constexpr int32_t most_snap_radius = 9;
+
+/// The settings a mod's display rules let the player change (its options
+/// dialog, ui.options-dialog), as the mod options' sections show them. The
+/// game keeps them with the mod's own settings, not with these; a dialog
+/// opened for the engine's settings leaves them as they are.
+struct ModOptions {
+    uint32_t snap_override_key{}; ///< SDL key code held to stop a click snapping
+    uint32_t autoclick_key{};     ///< SDL key code held to lay lines and rings
+    uint32_t rotate_build_key{};  ///< SDL key code that turns a building
+    /// Patrolling builders under Hold position, Maneuver and Roam: 0 reclaim
+    /// only, 1 both, 2 assist only.
+    std::array<uint8_t, 3> patrol{};
+    /// Guarding builders under Hold position, Maneuver and Roam: 0 stay, 1
+    /// as the game does, 2 scatter.
+    std::array<uint8_t, 3> guard{};
+    int32_t mex_snap_radius{};   ///< cells, 0 to mex_snap_most
+    int32_t wreck_snap_radius{}; ///< cells, 0 to wreck_snap_most
+    int32_t mex_snap_most{};     ///< the mod's most; the player cannot change it
+    int32_t wreck_snap_most{};   ///< the mod's most; the player cannot change it
+    bool optimize_dt_rows{};     ///< 2x2 lines lay out as a staggered double row
+    bool full_rings{};           ///< rings include their corner places
+    bool chat_backdrop{};        ///< chat lines get a dark backdrop
+    uint8_t panel_background{};  ///< 0 none, 1 text, 2 solid
+
+    friend bool operator==(const ModOptions&, const ModOptions&) = default;
+};
+
 /// Hardware acceleration: how much of each frame the graphics card takes
 /// on. The processor still draws every pixel the game decides at Off and
 /// Basic.
 enum class HardwareAcceleration : uint8_t {
     off,   ///< the processor draws and scales every frame, as without the setting
     basic, ///< the graphics card scales and composes the frames, where it is able to
-    /// The graphics card also draws the battlefield. This build has no
-    /// Full tier: Full draws as Basic, and the status says so.
+    /// The graphics card also draws the battlefield. Where it cannot, Basic
+    /// draws instead and the status says why: the game cannot save its
+    /// files, there is too little memory, the card lacks a feature Full
+    /// needs, or Full stopped in this run or failed before on the driver;
+    /// a shared game or a replay takes Full from the next game.
     full,
 };
 
@@ -168,6 +269,40 @@ struct EngineSettings {
     /// Each frame waits for the display to be ready for it, so that no frame
     /// tears, and the frame rate keeps just below the display's.
     bool vertical_sync{};
+    /// Game text is drawn in the modern fonts, which hold the letters of
+    /// many languages, rather than the game's own 8-bit fonts. On by default
+    /// with the player's own preferences file (default_settings).
+    bool modern_fonts{};
+    bool text_outline{true}; ///< modern text has a dark outline round each letter
+    bool text_shadow{true};  ///< modern text casts a dark shadow
+    bool text_background{};  ///< each line of modern text is drawn on a shaded box
+    /// The size of game text in the modern fonts, in percent of the game
+    /// fonts' sizes, lowest_text_size to highest_text_size; the game's own
+    /// fonts keep their sizes.
+    int32_t text_size{default_text_size};
+    /// The language the game shows its text in: system_choice
+    /// (oa/data/languages.hpp) for the operating system's preferred
+    /// language, else a known language's tag; English, the game's own,
+    /// unless default_settings says otherwise. It changes only what players
+    /// read: the simulation, a saved game and what a shared game sends are
+    /// the same in every language.
+    std::string language{oa::data::languages::english().tag};
+    /// The mod folder played from the next start: 0 for none, else its place
+    /// among Inputs::mod_folders, counted from 1.
+    uint16_t mod{};
+    /// Developer Mode: the player's overrides of the standard hacks
+    /// (hack_overrides) are laid over the profile the game plays. Off, the
+    /// profile plays as it ships, and the overrides are kept.
+    bool developer_mode{};
+    /// The player's overrides of the standard hacks of the profile the game
+    /// plays, or of the plain 3.1c baseline without a mod: at most one for
+    /// each hack, kept under the profile's id (Inputs::profile_id). They
+    /// apply while developer_mode is on: a display (view-scope) hack's at
+    /// once, a rule (sim-scope) hack's from the next match's start.
+    std::vector<oa::data::mod_profile::HackOverride> hack_overrides;
+    /// The mod's own options, which only a dialog opened for them changes;
+    /// read_settings and write_settings leave them out.
+    ModOptions mod_options{};
 
     friend bool operator==(const EngineSettings&, const EngineSettings&) = default;
 };
@@ -188,14 +323,36 @@ struct Inputs {
     bool light_machine{};
     /// The desktop's size; zero by zero when it is not known.
     ScreenSize desktop{};
+    /// The unit limits the game allows: the limit a player starts with, and
+    /// the range a stored or installation limit is clamped to. 3.1c's by
+    /// default; a mod's profile may raise them.
+    oa::data::limits::UnitsPerPlayer units_per_player{};
+    /// The mod folders the game folder offers, as the preferences keep a
+    /// chosen one (an absolute UTF-8 path), in the order the setting offers
+    /// them.
+    std::span<const std::string> mod_folders{};
+    /// The id of the profile the game plays, which its overrides are kept
+    /// under (key::hack_overrides): the mod's, or
+    /// oa::data::mod_profile::base_game_id without a mod. Empty reads no
+    /// overrides.
+    std::string_view profile_id{};
 };
+
+/// Returns the highest unit limit the setting offers and keeps.
+///
+/// @param units the unit limits the game allows
+/// @return highest_unit_limit, or the limits' maximum when that is higher
+[[nodiscard]] constexpr uint16_t
+highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexcept {
+    return units.maximum > highest_unit_limit ? units.maximum : highest_unit_limit;
+}
 
 /// Returns the settings a player has before changing any.
 ///
 /// Escape opens the game menu by default on macOS with the player's own
 /// preferences file; the unit limit is the installation's
 /// (installation_unit_limit) with the player's own file, else
-/// default_unit_limit. On a Raspberry Pi with the player's own file the
+/// the limits' default_limit (default_unit_limit for 3.1c). On a Raspberry Pi with the player's own file the
 /// maximum frame rate is raspberry_pi_frame_rate and enhanced
 /// anti-aliasing is off. On a light machine with the player's own file the
 /// maximum frame rate is light_machine_frame_rate, enhanced anti-aliasing is
@@ -203,7 +360,12 @@ struct Inputs {
 /// small_desktop_screen_size on a known desktop narrower or shorter than it.
 /// Hardware acceleration is Full with the player's own file, on every
 /// machine, and Off with a named one; whether the graphics card is used is
-/// decided apart from the setting. Vertical sync is Off everywhere.
+/// decided apart from the setting. Vertical sync is Off everywhere. Modern
+/// fonts for game text are On with the player's own file and Off with a
+/// named one; their outline and shadow are On, their background Off and
+/// their size default_text_size everywhere. The language is the operating
+/// system's choice with the player's own file and English, the game's own
+/// default, with a named one. Developer Mode is Off, with no overrides.
 ///
 /// @param inputs the platform, the preferences file and the installation
 /// @return the defaults
@@ -214,8 +376,8 @@ struct Inputs {
 /// A key that is absent, or whose value is not a whole decimal number,
 /// gives the default; a value out of a setting's range is clamped into it.
 /// The ranges: path nodes base_path_search_nodes to
-/// highest_path_search_nodes; unit limit lowest_stored_unit_limit to
-/// highest_unit_limit; frame rate lowest_frame_rate to highest_frame_rate;
+/// highest_path_search_nodes; unit limit the limits' minimum
+/// (lowest_stored_unit_limit for 3.1c) to highest_offered_unit_limit; frame rate lowest_frame_rate to highest_frame_rate;
 /// anti-aliasing the highest level not above the stored number, off below
 /// 2; a switch is on for a number above 0. A value between a setting's
 /// stops is kept as stored. The screen size is "desktop" or one of
@@ -223,6 +385,15 @@ struct Inputs {
 /// Hardware acceleration is "off", "basic" or "full"
 /// (hardware_acceleration_from_text), or a whole number as the switch it
 /// was before: Full above 0, else Off; any other value gives the default.
+/// The mod is the stored folder's place among the offered ones; a folder
+/// not offered reads as none. The Language & Text switches (modern fonts,
+/// text outline, shadow and background) and Developer Mode read as every
+/// switch does, and the text size as every number, lowest_text_size to
+/// highest_text_size. The language is stored_language's. The overrides are
+/// read from the key that Inputs::profile_id ends, as
+/// oa::data::mod_profile::read_overrides reads them: none without the key,
+/// from a text the profile grammar does not read as a mapping (one that
+/// names a hack twice among them), or with an empty profile id.
 ///
 /// @param values the preferences
 /// @param inputs the platform, the preferences file and the installation
@@ -238,8 +409,12 @@ struct Inputs {
 /// setting at its default has its key erased; otherwise a setting that
 /// differs from `opened` has its key written, in decimal, a switch as 1 or
 /// 0, the screen size as "desktop" or "WIDTHxHEIGHT", hardware
-/// acceleration as "off", "basic" or "full". Every other key is left as it
-/// is. switch_alt is never written here:
+/// acceleration as "off", "basic" or "full", the mod as its folder's path,
+/// or erased for none. The overrides, when they differ from `opened`, are
+/// written under the key `profile_id` ends, as
+/// oa::data::mod_profile::overrides_text writes them, or that key is
+/// erased when none are left; Restore defaults leaves them as they are.
+/// Every other key is left as it is. switch_alt is never written here:
 /// 3.1c's SwitchAlt key goes with the frontend's own preferences.
 ///
 /// @param[in,out] values the preferences
@@ -247,13 +422,47 @@ struct Inputs {
 /// @param chosen the settings the player keeps
 /// @param defaults the defaults (default_settings)
 /// @param restored Restore defaults was pressed while the dialog was open
+/// @param mod_folders the offered mod folders (Inputs::mod_folders)
+/// @param profile_id the id the overrides are kept under (Inputs::profile_id);
+///     empty writes no overrides
 void write_settings(
     oa::platform::preferences::Values& values,
     const EngineSettings& opened,
     const EngineSettings& chosen,
     const EngineSettings& defaults,
-    bool restored
+    bool restored,
+    std::span<const std::string> mod_folders = {},
+    std::string_view profile_id = {}
 );
+
+/// Returns the language the preferences choose: the language key's value
+/// when it is oa::data::languages::system_choice or the tag of a language
+/// this build draws, matched without regard to case; else, a file without
+/// the key or with any other value, the default.
+///
+/// @param values the preferences
+/// @param players_own_profile the preferences file is the player's own
+///     (Inputs::players_own_profile)
+/// @return system_choice or a known tag, as the registry writes it; the
+///     default is system_choice with the player's own file and "en" with a
+///     named one
+[[nodiscard]] std::string
+stored_language(const oa::platform::preferences::Values& values, bool players_own_profile);
+
+/// Returns how game text is drawn under the settings.
+///
+/// @param settings the settings in effect
+/// @return modern fonts, their outline, shadow, background and size as the
+///     settings' Language & Text section sets them
+[[nodiscard]] constexpr oa::present::TextStyle text_style(const EngineSettings& settings) noexcept {
+    return {
+        .modern_fonts = settings.modern_fonts,
+        .outline = settings.text_outline,
+        .shadow = settings.text_shadow,
+        .background = settings.text_background,
+        .size = settings.text_size,
+    };
+}
 
 /// Returns the text the preferences keep a screen size as.
 ///
@@ -287,13 +496,17 @@ hardware_acceleration_from_text(std::string_view text) noexcept;
 /// Reads [Preferences] UnitLimit, the section and key matched without
 /// regard to case, from the first [Preferences] section; the first
 /// UnitLimit line there counts. The value is its leading whole number, 0 when it has none or is negative,
-/// clamped to 3.1c's own range of 21 to 500. Lines may end in CR LF or LF;
+/// clamped to the game's range, 3.1c's own 20 to 500 by default. Lines may end in CR LF or LF;
 /// a line starting with ';' is a comment. Only the first
 /// installation_ini_limit bytes are read.
 ///
 /// @param ini_text the file's text
+/// @param units the unit limits the game allows; the value is clamped to
+///     their minimum and maximum
 /// @return the limit in units per player; nothing when the file sets none
-[[nodiscard]] std::optional<uint16_t> installation_unit_limit(std::string_view ini_text);
+[[nodiscard]] std::optional<uint16_t> installation_unit_limit(
+    std::string_view ini_text, const oa::data::limits::UnitsPerPlayer& units = {}
+);
 
 /// Returns the Pathfinding cycles a path credit shows as.
 ///
@@ -304,13 +517,22 @@ hardware_acceleration_from_text(std::string_view text) noexcept;
 
 /// Returns the path credit a match plays at.
 ///
+/// The setting's Pathfinding cycles multiply the game's own credit, which a
+/// mod's limits may raise (data::limits::PathSearch::nodes).
+///
 /// @param settings the settings in effect
 /// @param shared_or_replay the match is played with other machines or
 ///     replays a recording
-/// @return base_path_search_nodes in a shared game or a replay, else the
-///     setting's path_search_nodes
-[[nodiscard]] int32_t
-match_path_search_nodes(const EngineSettings& settings, bool shared_or_replay) noexcept;
+/// @param game_nodes the game's own path nodes a tick: base_path_search_nodes
+///     for 3.1c
+/// @return game_nodes in a shared game or a replay, else the setting's
+///     path_search_nodes scaled by game_nodes / base_path_search_nodes,
+///     truncated and held to data::limits::highest_path_search_nodes
+[[nodiscard]] int32_t match_path_search_nodes(
+    const EngineSettings& settings,
+    bool shared_or_replay,
+    int32_t game_nodes = base_path_search_nodes
+) noexcept;
 
 /// Why a setting cannot be changed now.
 enum class Lock : uint8_t {
@@ -322,6 +544,10 @@ enum class Lock : uint8_t {
     /// acceleration, for this run
     command_line,
     unavailable, ///< nothing in the game could make the setting help this run
+    set_by_mod,  ///< the mod allows no other value
+    /// The modern fonts are off: the game's own fonts, which draw game text
+    /// then, have fixed sizes.
+    needs_modern_fonts,
 };
 
 /// The game the dialog opens over.
@@ -340,6 +566,9 @@ struct GameState {
     /// The renderer cannot wait for the display, as far as the game can tell,
     /// or cannot change it without resetting its device.
     bool vertical_sync_unavailable{};
+    /// 3.1c's command line names the language, which then decides it for the
+    /// run.
+    bool language_from_command_line{};
 };
 
 /// What the dialog cannot change, and what its header says of the game.
@@ -350,6 +579,12 @@ struct Locks {
     bool shared_game{};           ///< the header says the shared game is still running
     Lock hardware_acceleration{}; ///< Hardware acceleration
     Lock vertical_sync{};         ///< Vertical sync
+    Lock mex_snap{};              ///< the mod options' Mex snap radius
+    Lock wreck_snap{};            ///< the mod options' Wreck snap radius
+    /// Text size: the dialog itself locks it needs_modern_fonts while it
+    /// shows Use modern fonts for game text Off.
+    Lock text_size{};
+    Lock language{}; ///< Language
 };
 
 /// Returns the locks a game state puts on the settings.
@@ -361,7 +596,9 @@ struct Locks {
 /// the game could help, and never by a game, so that it can always be set
 /// to Off. Vertical sync is locked unavailable where the renderer
 /// cannot wait for the display, else in_game in a shared game or a replay,
-/// where its value holds until the match ends.
+/// where its value holds until the match ends. The language is locked
+/// command_line while 3.1c's command line names one, and never by a game:
+/// it changes only what players read.
 ///
 /// @param state the game the dialog opens over
 /// @return the locks

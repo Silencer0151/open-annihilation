@@ -4,9 +4,14 @@
 #include "audio_test_support.hpp"
 #include "oa/audio/music_disc.hpp"
 #include "oa/audio/music_session.hpp"
+#include "oa/platform/system.hpp"
 #include "oa/test/scratch_directory.hpp"
 
+#include <cstdlib>
 #include <filesystem>
+#include <iostream>
+#include <string>
+#include <string_view>
 #include <fstream>
 #include <memory>
 #include <utility>
@@ -261,9 +266,71 @@ void disc_scan() {
     std::filesystem::remove_all(root);
 }
 
+void numbered_disc_scan() {
+    const auto root = oa::test::make_scratch_directory("oa-music-numbered-test");
+    for (const char* name : {"1.mp3", "2.MP3", "3.mp3", "4.ogg", "5.mp3", "readme.txt"})
+        std::ofstream(root / name) << name;
+    const MusicDisc disc = music_disc_scan_numbered(root);
+    require(disc.track_count == 3, "1.mp3 to 3.mp3; 4 is no MP3, so the scan stops there");
+    require(disc.tracks[1].empty(), "track 1 is the data track");
+    require(disc.tracks[2].filename() == "2.MP3", "names match without case");
+    require(music_disc_present(disc) && disc.disc_id != 0, "a disc with an identity");
+    std::filesystem::remove(root / "1.mp3");
+    require(!music_disc_present(music_disc_scan_numbered(root)), "no 1.mp3, no disc");
+    std::ofstream(root / "01.mp3") << "01";
+    require(!music_disc_present(music_disc_scan_numbered(root)), "01.mp3 is not track 1");
+    std::ofstream(root / "1.mp3") << "1";
+    std::filesystem::remove(root / "2.MP3");
+    require(!music_disc_present(music_disc_scan_numbered(root)), "1.mp3 alone plays nothing");
+    std::filesystem::remove_all(root);
+}
+
+void folder_disc_scan() {
+    const auto root = oa::test::make_scratch_directory("oa-music-folder-test");
+    for (const char* name : {"b.mp3", "10.mp3", "2.mp3", "A.MP3", "c.ogg", "notes.txt"})
+        std::ofstream(root / name) << name;
+    const MusicDisc disc = music_disc_scan_folder(root);
+    require(disc.track_count == 5, "four MP3 files after the data track");
+    require(disc.tracks[0].empty() && disc.tracks[1].empty(), "no files for tracks 0 and 1");
+    require(disc.tracks[2].filename() == "10.mp3", "10.mp3 sorts before 2.mp3");
+    require(disc.tracks[3].filename() == "2.mp3", "then 2.mp3");
+    require(disc.tracks[4].filename() == "A.MP3", "names sort without case");
+    require(disc.tracks[5].filename() == "b.mp3", "the last file");
+    require(music_disc_present(disc) && disc.disc_id != 0, "a disc with an identity");
+    require(!music_disc_present(music_disc_scan_folder(root / "missing")), "no directory, no disc");
+    std::filesystem::remove_all(root);
+}
+
+// The numbered MP3 files of the game folder OA_MOD_GAME_DIR names, with a
+// mod that plays them installed: 1.mp3 holds the data track's place, and
+// every track up to the first missing number plays.
+int numbered_disc_of_mod_install() {
+    const auto named = oa::platform::environment_value("OA_MOD_GAME_DIR");
+    const std::string folder = named.value_or("");
+    if (folder.empty() || !std::filesystem::is_directory(folder)) {
+        std::cout << "skipped audio-music-session-mod-install: OA_MOD_GAME_DIR names no folder\n";
+        return 77;
+    }
+    const auto directory = music_disc_directory(folder);
+    const MusicDisc disc = music_disc_scan_numbered(directory);
+    require(music_disc_present(disc), "the mod's music folder holds numbered MP3 files");
+    for (int32_t track = 1; track <= disc.track_count; ++track) {
+        const auto name = std::to_string(track) + ".mp3";
+        require(std::filesystem::exists(directory / name), "every track up to the last exists");
+    }
+    require(
+        !std::filesystem::exists(directory / (std::to_string(disc.track_count + 1) + ".mp3")),
+        "the scan stops at the first missing number"
+    );
+    std::cout << "numbered MP3 disc of the mod install: " << disc.track_count << " tracks\n";
+    return 0;
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc > 1 && std::string_view(argv[1]) == "--mod-install")
+        return numbered_disc_of_mod_install();
     by_kind_follows_combat();
     consecutive_matches_are_independent();
     small_forces_stay_calm();
@@ -271,5 +338,7 @@ int main() {
     sequential_and_controls();
     selected_mode_panel();
     disc_scan();
+    numbered_disc_scan();
+    folder_disc_scan();
     return 0;
 }

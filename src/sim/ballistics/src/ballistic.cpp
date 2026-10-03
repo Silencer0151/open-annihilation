@@ -64,15 +64,20 @@ bool acceptable_first_angle(double angle, float minimum_angle) noexcept {
            !(angle > maximum_ballistic_angle_radians);
 }
 
-// The second angle is compared before it is rounded to a double.
-bool acceptable_second_angle(const std::optional<Extended>& angle, float minimum_angle) noexcept {
-    // A NaN angle or minimum is rejected before the upper-bound comparison.
+// The second angle is compared before it is rounded to a double. A high arc
+// must lie above the quarter turn's bound, a flat one at or below it.
+bool acceptable_second_angle(
+    const std::optional<Extended>& angle, float minimum_angle, bool high_arc
+) noexcept {
+    // A NaN angle or minimum is rejected before the bound comparison.
     if (!angle || std::isnan(minimum_angle))
         return false;
     using base::game_math::compare;
     using base::game_math::to_extended;
-    return compare(*angle, to_extended(static_cast<double>(minimum_angle))) > 0 &&
-           compare(*angle, to_extended(maximum_ballistic_angle_radians)) <= 0;
+    if (compare(*angle, to_extended(static_cast<double>(minimum_angle))) <= 0)
+        return false;
+    const auto against_bound = compare(*angle, to_extended(maximum_ballistic_angle_radians));
+    return high_arc ? against_bound > 0 : against_bound <= 0;
 }
 
 int16_t pitch_from_radians(double angle) noexcept {
@@ -126,7 +131,9 @@ launch_pitch(const BallisticParameters& parameters, int32_t dx, int32_t dy, int3
     const auto second = launch_angle(second_root, velocity);
     if (acceptable_first_angle(first, parameters.minimum_barrel_angle_radians))
         return pitch_from_radians(first);
-    if (acceptable_second_angle(second, parameters.minimum_barrel_angle_radians))
+    if (acceptable_second_angle(
+            second, parameters.minimum_barrel_angle_radians, parameters.accept_high_arc
+        ))
         return pitch_from_radians(stored_angle(second));
     return invalid_launch_pitch;
 }
@@ -154,20 +161,30 @@ bool weapon_can_reach(
     const auto target_y = static_cast<int32_t>(integral_coordinate(target.position[1]));
     const auto sea = static_cast<int32_t>(sea_level);
 
+    const bool airborne = (target.unit_flags & target_air_state_mask) == target_air_state;
     if ((weapon.weapon_flags & water_weapon_flag) == 0U) {
         if (source_y + source.model_maximum_y <= sea || target_y + target.model_maximum_y <= sea)
             return false;
-        if ((weapon.weapon_flags & to_air_weapon_flag) != 0U &&
-            (target.unit_flags & target_air_state_mask) != target_air_state)
+        if (weapon.keys.not_to_air && airborne)
+            return false;
+        if ((weapon.weapon_flags & to_air_weapon_flag) != 0U && !airborne)
             return false;
         if ((weapon.weapon_flags & ballistic_weapon_flag) != 0U &&
             !ballistic_feasible(weapon.ballistic, source.position, target.position))
             return false;
     } else {
-        if ((target.type_flags & target_type_floats_flag) == 0U && target_y > sea)
-            return false;
-        if ((target.type_flags & target_type_hover_flag) != 0U &&
-            target_y + (static_cast<int32_t>(target.model_maximum_y) >> 1) > sea)
+        // A surface-firing water weapon skips both above-sea tests, except
+        // against an airborne target when it may not fire at aircraft.
+        const bool above_sea_allowed =
+            weapon.keys.surface_fire && !(weapon.keys.not_to_air && airborne);
+        if (!above_sea_allowed) {
+            if ((target.type_flags & target_type_floats_flag) == 0U && target_y > sea)
+                return false;
+            if ((target.type_flags & target_type_hover_flag) != 0U &&
+                target_y + (static_cast<int32_t>(target.model_maximum_y) >> 1) > sea)
+                return false;
+        }
+        if (weapon.keys.not_to_underwater && target_y + target.model_maximum_y <= sea)
             return false;
     }
 
@@ -186,7 +203,8 @@ bool fire_can_reach(
     uint8_t sea_level
 ) noexcept {
     // Target-minus-source X/Z high squares against range^2, then the
-    // non-water source-height and ballistic gates. Water weapons stop at range.
+    // non-water source-height and ballistic gates. Water weapons, and those
+    // with the surface_fire key, stop at range.
     const auto x = wrapped_difference(target[0], source.position[0]);
     const auto z = wrapped_difference(target[2], source.position[2]);
     const auto distance = signed_bits(signed_square_high(x) + signed_square_high(z));
@@ -194,7 +212,7 @@ bool fire_can_reach(
     const auto range_squared = signed_bits(range * range);
     if (range_squared < distance)
         return false;
-    if ((weapon.weapon_flags & water_weapon_flag) == 0U) {
+    if ((weapon.weapon_flags & water_weapon_flag) == 0U && !weapon.keys.surface_fire) {
         const auto source_y = static_cast<int32_t>(integral_coordinate(source.position[1]));
         const auto sea = static_cast<int32_t>(sea_level);
         if (source_y + static_cast<int32_t>(source.model_maximum_y) <= sea)

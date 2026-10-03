@@ -582,6 +582,47 @@ int main() {
         match.stop_orders(id);
     }
 
+    // Display rules that say "working" once: stage 3 speaks and moves to
+    // stage 4, which reclaims silently and reaches stage 5 one step sooner.
+    {
+        std::vector<sim::spatial_state::Plot> quiet_plots(map_cells * map_cells);
+        place_features(quiet_plots);
+        input.collision_plots = quiet_plots;
+        input.display.reclaim_voice_once = true;
+        Services quiet_services;
+        sim::match_runtime::Match quiet(input, quiet_services);
+        quiet.set_speech_hooks({&quiet_services, &Services::speak});
+        quiet.state().unit_defs[1].abilities =
+            OA_UNIT_DEF_ABILITY_CAN_MOVE | OA_UNIT_DEF_ABILITY_CAN_RECLAMATE;
+        quiet.configure_strategic_environment({0, 0.5f, 0});
+        for (uint8_t p = 0; p < 2; ++p) {
+            quiet.simulation().players[p].present = true;
+            quiet.simulation().players[p].status = p == 0 ? 1 : 2;
+        }
+        quiet.state().game.tick = 100;
+        auto* worker = quiet.create({0, 1, {(120u << 16), 0, (120u << 16)}, true, 1, 0});
+        CHECK(worker != nullptr);
+        auto& order = quiet.issue_feature_reclaim(worker->unit_index, cell_point(9, 9), false);
+        CHECK(step(quiet, *worker, order) == 1);
+        CHECK(step(quiet, *worker, order) == 1);
+        CHECK(step(quiet, *worker, order) == 1 && order.phase == 3);
+        quiet_services.speech.clear();
+        CHECK(step(quiet, *worker, order) == 2 && order.phase == 4);
+        CHECK(quiet_services.speech == std::vector<uint32_t>{0x0b});
+        uint32_t steps = 0;
+        uint32_t result = 2;
+        while (result == 2 && steps < 100) {
+            result = step(quiet, *worker, order);
+            ++steps;
+        }
+        // The same 45 ticks of work, with no further voice and no extra step.
+        CHECK(result == 1 && steps == 22 && order.phase == 5);
+        CHECK(quiet_services.speech == std::vector<uint32_t>{0x0b});
+        CHECK(step(quiet, *worker, order) == 5);
+        CHECK(worker->record.economy.metal.produced == 50.0F);
+        quiet.stop_orders(worker->unit_index);
+    }
+
     std::cout << "ground missions passed\n";
     return 0;
 }

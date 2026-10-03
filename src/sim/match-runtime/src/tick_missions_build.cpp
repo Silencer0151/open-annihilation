@@ -4,6 +4,7 @@
 // Construction, repair, reclaim and capture orders of the ground block of the
 // mission table.
 #include "ground_missions.hpp"
+#include "oa/sim/unit_health/veterancy.hpp"
 
 namespace oa::sim::match_runtime {
 
@@ -23,8 +24,8 @@ constexpr uint32_t capture_moving_wait = 0x1e;
 constexpr uint32_t reclaim_approach_wait = 0xf;
 constexpr uint32_t reclaim_retry_wait = 0xf;
 constexpr uint32_t nano_step = 2;
-constexpr int32_t blocked_site_retries = 10;
 constexpr uint8_t all_weapons = 3;
+using BusyState = data::match_rules::OrdersWeaponsFreeWhileBusyStates;
 constexpr uint8_t reclaim_damage_kind = static_cast<uint8_t>(DeathKind::reclaim);
 // A reclaim bite lands once this many ticks of spraying have built up.
 constexpr int32_t reclaim_bite_ticks = 15;
@@ -38,8 +39,6 @@ constexpr float capture_energy_weight = 0.0005F;
 constexpr float capture_metal_weight = 1.0F / 140.0F;
 constexpr float capture_base_ticks = 150.0F;
 constexpr int32_t capture_tick_cap = 0x708;
-constexpr int32_t veteran_levels_per_step = 5;
-constexpr int32_t capture_veteran_base = 10;
 
 bool finished(const oa::Unit& unit) {
     return unit.build_remaining == 0.0F;
@@ -62,6 +61,11 @@ uint32_t TickHost::GroundMissions::mobile_build() {
     auto& blocked = record.construction.blocked_retries;
     auto& site = record.extra.destination;
     ConstructionAdapter builder(host, s, record);
+    // A building placed facing east or west has its footprint's width and
+    // depth swapped (units.build-rotation).
+    const bool turned = (builder.facing() & 1U) != 0;
+    const auto built_x = turned ? built.footprint_z : built.footprint_x;
+    const auto built_z = turned ? built.footprint_x : built.footprint_z;
     switch (order.phase) {
     case 0: {
         const auto cell_of = [](int32_t world, int16_t footprint) {
@@ -70,26 +74,29 @@ uint32_t TickHost::GroundMissions::mobile_build() {
                 ground::cell_shift
             );
         };
-        const auto cell_x = cell_of(site[0], built.footprint_x);
-        const auto cell_z = cell_of(site[2], built.footprint_z);
-        site[0] = (built.footprint_x + cell_x * 2) << ground::half_cell_shift;
-        site[2] = (built.footprint_z + cell_z * 2) << ground::half_cell_shift;
+        const auto cell_x = cell_of(site[0], built_x);
+        const auto cell_z = cell_of(site[2], built_z);
+        site[0] = (built_x + cell_x * 2) << ground::half_cell_shift;
+        site[2] = (built_z + cell_z * 2) << ground::half_cell_shift;
         blocked = 0;
-        outline_goal({cell_x, cell_z}, {built.footprint_x, built.footprint_z});
+        outline_goal({cell_x, cell_z}, {built_x, built_z});
         order.wait_events = ground::goal_events;
         return ground::next_phase;
     }
     case 1: {
         if ((events & ground::path_failed_event) &&
-            build_gap(site, built.footprint_x, built.footprint_z) >
+            build_gap(site, built_x, built_z) >
                 static_cast<int32_t>(static_cast<uint16_t>(def().build_distance))) {
             speak(ground::speech_failed, "I can't reach the construction site");
             return ground::mission_failed;
         }
         if (!builder.site_clear()) {
+            const auto& kickout = rules().orders.build_site_kickout;
+            if (kickout.kickout)
+                clear_build_site(host, built_x, built_z, site);
             if (blocked == 0)
                 speak(ground::speech_failed, "Waiting for target area to clear");
-            else if (blocked > build::blocked_site_retries) {
+            else if (blocked > kickout.retry_limit) {
                 speak(ground::speech_failed, "Target area was blocked");
                 return ground::mission_failed;
             }
@@ -97,7 +104,7 @@ uint32_t TickHost::GroundMissions::mobile_build() {
             wait_ticks(build::site_blocked_wait);
             return ground::keep_waiting;
         }
-        AttackAdapter(host, s, record).release_weapon_targets(build::all_weapons);
+        occupy_weapons_while_busy(build::BusyState::nanolathe);
         builder.snap_build_height();
         auto* frame = builder.spawn_nanoframe();
         set_target(frame);
@@ -169,7 +176,7 @@ uint32_t TickHost::GroundMissions::help_build() {
         }
         if (build::finished(frame->record))
             return ground::mission_done;
-        AttackAdapter(host, s, record).release_weapon_targets(build::all_weapons);
+        occupy_weapons_while_busy(build::BusyState::help_build);
         start_building_toward(ground::position_of(frame->record));
         refresh_selection();
         return ground::next_phase;
@@ -227,12 +234,14 @@ uint32_t TickHost::GroundMissions::capture() {
         const auto scaled =
             (static_cast<uint32_t>(static_cast<int32_t>(prize->record.health)) + maximum) *
             static_cast<uint32_t>(capped) / (maximum * 2);
-        const auto veterancy = static_cast<uint32_t>(
-            static_cast<int32_t>(prize->record.veteran_level) / build::veteran_levels_per_step +
-            build::capture_veteran_base
-        );
+        // The prize's veteran level (kills / 5 in 3.1c) raises the base of 10.
+        const auto veterancy =
+            sim::unit_health::veteran_capture_level(
+                host.match.rules_view(), prize->record.type_index, prize->record.veteran_level
+            ) +
+            static_cast<uint32_t>(sim::unit_health::capture_base_level);
         needed = static_cast<int32_t>(veterancy * scaled * 10u) / 100;
-        AttackAdapter(host, s, record).release_weapon_targets(build::all_weapons);
+        occupy_weapons_while_busy(build::BusyState::capture);
         outline_goal(
             {prize->record.cell_x, prize->record.cell_z},
             {prize->record.footprint_x, prize->record.footprint_z}
@@ -286,7 +295,7 @@ uint32_t TickHost::GroundMissions::reclaim_unit() {
         if (s.record.movement && (def().abilities & OA_UNIT_DEF_ABILITY_CAN_RECLAMATE)) {
             if (can_reclaim(victim->record)) {
                 announce("Reclaiming");
-                AttackAdapter(host, s, record).release_weapon_targets(build::all_weapons);
+                occupy_weapons_while_busy(build::BusyState::reclaim_unit);
                 return ground::next_phase;
             }
             speak(ground::speech_failed, "That unit cannot be reclaimed");
@@ -373,7 +382,7 @@ uint32_t TickHost::GroundMissions::repair_unit() {
         if (events & ground::path_failed_event)
             return ground::mission_failed;
         if (within_build_distance(patient->record)) {
-            AttackAdapter(host, s, record).release_weapon_targets(build::all_weapons);
+            occupy_weapons_while_busy(build::BusyState::repair);
             start_building_toward(ground::position_of(patient->record));
             return ground::next_phase;
         }

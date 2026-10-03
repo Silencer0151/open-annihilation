@@ -5,7 +5,7 @@ add_library(oa-sim-weapon-execution src/weapon_execution.cpp src/weapon_launch.c
     src/interceptor.cpp src/projectile_contact.cpp src/projectile_pool.cpp src/retaliation.cpp)
 add_library(oa::sim::weapon_execution ALIAS oa-sim-weapon-execution)
 target_include_directories(oa-sim-weapon-execution PUBLIC include)
-target_link_libraries(oa-sim-weapon-execution PUBLIC oa-sim-combat-state)
+target_link_libraries(oa-sim-weapon-execution PUBLIC oa-sim-combat-state oa-data-match-rules oa-sim-unit-health)
 target_compile_features(oa-sim-weapon-execution PUBLIC cxx_std_20)
 target_link_libraries(oa-sim-weapon-execution PUBLIC oa-core-types oa-base-game-math oa-sim-unit-movement oa-sim-combat-state
   oa-options)

@@ -3,6 +3,8 @@
 
 // SINGLE.GUI menu and the NEWGAME.GUI campaign setup panel.
 #include "oa/ui/campaign/single_player.hpp"
+#include "oa/data/defs/layout.hpp"
+#include "oa/data/match_rules/difficulty_names.hpp"
 
 #include <cctype>
 #include <cstdint>
@@ -163,21 +165,25 @@ void apply_side_selection(CampaignSetup* setup, const FrontendHost* host) {
     if (setup->side == 0) {
         setup->player_side[0] = 0;
         setup->player_side[1] = 1;
-        host_select_group(host, "Arm");
+        host_select_group(host, oa::data::defs::side_name(0));
         host_select_group(host, "Side0");
     } else {
         setup->player_side[0] = 1;
         setup->player_side[1] = 0;
-        host_select_group(host, "Core");
+        host_select_group(host, oa::data::defs::side_name(1));
         host_select_group(host, "Side1");
     }
 }
 
-void show_difficulty(int32_t difficulty, const FrontendHost* host) {
+void show_difficulty(
+    int32_t difficulty, const FrontendHost* host, const data::match_rules::AiDifficultyNames& names
+) {
     static constexpr const char* kLabels[] = {"Easy", "Medium", "Hard"};
     if (difficulty >= 0 && difficulty <= 2) {
         host_stage(host, "Difficulty", static_cast<uint8_t>(difficulty));
-        host_select_group(host, kLabels[difficulty]);
+        host_select_group(
+            host, kLabels[data::match_rules::difficulty_name_index(names, difficulty)]
+        );
     }
     host_mark_dirty(host);
 }
@@ -295,8 +301,12 @@ void populate_mission_list(CampaignSetup* setup, const FrontendHost* host) {
     oa::data::campaign::campaign_load_file(
         setup->campaign, &setup->env, name != nullptr ? name : ""
     );
-    setup->mission_count = oa::data::campaign::campaign_load_mission_list(
-        setup->campaign, setup->missions, oa::data::campaign::kMaxCampaignMissions
+    // The missions as players see them in the game's language.
+    setup->mission_count = oa::data::campaign::campaign_load_mission_titles(
+        setup->campaign,
+        setup->env.files != nullptr ? setup->env.files->language : nullptr,
+        setup->missions,
+        oa::data::campaign::kMaxCampaignMissions
     );
     if (setup->mission_count > oa::data::campaign::kMaxCampaignMissions)
         setup->mission_count = oa::data::campaign::kMaxCampaignMissions;
@@ -358,7 +368,7 @@ void new_game_enter(CampaignSetup* setup, const FrontendHost* host, bool any_mis
         host->zero_sequence_origins(host->context, "Side1");
     }
     apply_side_selection(setup, host);
-    show_difficulty(setup->difficulty, host);
+    show_difficulty(setup->difficulty, host, setup->env.difficulty_names);
     const char* focus = setup->fixed_side_campaign ? "Difficulty" : "Campaign";
     if (!setup->fixed_side_campaign || any_mission) {
         host_control_value(host, "Campaign", 1);
@@ -402,8 +412,8 @@ void campaign_setup_click(CampaignSetup* setup, const FrontendHost* host, const 
                 setup->difficulty = 2;
             else if (setup->difficulty == 2)
                 setup->difficulty = 0;
-        } else if (named(control, "Side0") || named(control, "Arm")) {
-            host_select_group(host, "Arm");
+        } else if (named(control, "Side0") || named(control, oa::data::defs::side_name(0))) {
+            host_select_group(host, oa::data::defs::side_name(0));
             host_select_group(host, "Side0");
             host_sound(host, "SideSelect");
             setup->side = 0;
@@ -413,8 +423,8 @@ void campaign_setup_click(CampaignSetup* setup, const FrontendHost* host, const 
             host_control_value(host, "Campaign", setup->fixed_side_campaign ? 0 : 1);
             if (setup->any_mission)
                 populate_mission_list(setup, host);
-        } else if (named(control, "Side1") || named(control, "Core")) {
-            host_select_group(host, "Core");
+        } else if (named(control, "Side1") || named(control, oa::data::defs::side_name(1))) {
+            host_select_group(host, oa::data::defs::side_name(1));
             host_select_group(host, "Side1");
             host_sound(host, "SideSelect2");
             setup->side = 1;

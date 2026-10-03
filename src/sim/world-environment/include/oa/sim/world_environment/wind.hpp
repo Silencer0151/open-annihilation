@@ -6,7 +6,9 @@
 #include "oa/core/game_state.h"
 #include "oa/core/unit.h"
 #include "oa/core/unit_def.h"
+#include "oa/core/world.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 
@@ -95,6 +97,96 @@ class WindRandomHost {
     virtual uint32_t shared_random(uint32_t exclusive_limit) = 0;
 };
 
+/// Words of the shared wind generator's state.
+inline constexpr size_t wind_generator_words = 624;
+/// A shared-generator change comes shared_cadence_bias_ticks plus
+/// cadence_tick_scale times (draw mod shared_cadence_steps) ticks after the
+/// last deadline: 150 to 420 ticks, as the rand() schedule gives.
+inline constexpr uint32_t shared_cadence_bias_ticks = 150;
+inline constexpr uint32_t shared_cadence_steps = 10;
+/// The host's record, whose network id seeds the shared generator: its
+/// Player.machine_group (low byte) is the host's machine and its setup state
+/// (PlayerSetupInfo.state) a player on that machine.
+inline constexpr int8_t host_machine_group = 1;
+inline constexpr uint8_t host_setup_state = 1;
+
+/// The shared wind generator: the 32-bit Mersenne Twister MT19937, which a
+/// mod's deterministic-wind rule draws every wind change from.
+///
+/// Its bytes are fixed-width words without padding, so a save and the state
+/// digest keep it as it is.
+struct WindGenerator {
+    uint32_t seeded{}; ///< 1 once seeded; 0 seeds it at the first change
+    /// The next word to draw; wind_generator_words regenerates the block first.
+    uint32_t next{};
+    std::array<uint32_t, wind_generator_words> words{};
+};
+
+static_assert(sizeof(WindGenerator) == (2 + wind_generator_words) * sizeof(uint32_t));
+
+/// Seeds the shared wind generator as MT19937's standard seeding does.
+///
+/// @param[out] generator the generator, seeded and set to regenerate its block
+///        at the first draw
+/// @param seed the seed
+void seed_wind_generator(WindGenerator& generator, uint32_t seed) noexcept;
+
+/// Draws the next 32-bit output of the shared wind generator.
+///
+/// @param[in,out] generator a seeded generator
+/// @return MT19937's next tempered output
+uint32_t draw_wind_generator(WindGenerator& generator) noexcept;
+
+/// Tells whether a generator's bookkeeping words are in range, as a save must
+/// hold them.
+///
+/// @param generator the generator
+/// @return true when seeded is 0 or 1 and next at most wind_generator_words
+[[nodiscard]] bool wind_generator_valid(const WindGenerator& generator) noexcept;
+
+/// Returns the seed of the shared wind generator: the host's network id.
+///
+/// The host is the first player slot in use whose machine group is the
+/// host's machine and whose setup state is host_setup_state.
+///
+/// @param world the match's records
+/// @param fallback the seed when no slot is the host, or the host's network
+///        id is not above 0 as a signed number
+/// @return the seed
+/// @quirk Without a host record a seed of the session's own is used; this
+///        engine takes the match's random seed for it, so that a replay or a
+///        save plays the same wind.
+[[nodiscard]] uint32_t shared_wind_seed(const World& world, uint32_t fallback) noexcept;
+
+/// Runs the wind scheduler for one tick under a mod's deterministic-wind rule,
+/// drawing from the shared generator only.
+///
+/// The deadline test, the vector and the normalized strength are those of
+/// refresh_wind. Once the deadline passes, the deadline advances by
+/// 150 + 30 * (draw mod 10) ticks; the strength is the minimum plus a draw
+/// modulo (maximum - minimum), or the minimum when the maximum is not above
+/// it (as signed numbers, with no draw); a nonzero strength takes the low 16
+/// bits of a further draw as its direction.
+///
+/// @param[in,out] state wind fields, map limits and current tick
+/// @param[in,out] generator the shared generator, seeded with `seed` first
+///        when it has not been
+/// @param seed the generator's seed (shared_wind_seed)
+/// @return as refresh_wind
+/// @quirk The draw modulo the range is unsigned; a calm (zero) strength
+///        keeps the previous direction.
+WindRefresh refresh_shared_wind(WindState& state, WindGenerator& generator, uint32_t seed) noexcept;
+
+/// Sets up the wind at game start under a mod's deterministic-wind rule, as
+/// initialize_wind does, then runs refresh_shared_wind.
+///
+/// @param[in,out] state wind fields, map limits and current tick
+/// @param[in,out] generator the shared generator
+/// @param seed the generator's seed (shared_wind_seed)
+/// @return how the first run of the scheduler ended
+WindRefresh
+initialize_shared_wind(WindState& state, WindGenerator& generator, uint32_t seed) noexcept;
+
 /// Runs the wind scheduler for one tick.
 ///
 /// Once the tick passes the change deadline, the deadline advances by
@@ -155,6 +247,9 @@ struct SeaOccupyHost {
     /// Runs the unit script's setSFXoccupy with the new code; null runs
     /// nothing, and the code is still kept.
     void (*set_sfx_occupy)(void* context, Unit& unit, int32_t occupy_code){};
+    /// The water state rules' reordered checks (units.water-state-rules);
+    /// false runs 3.1c's.
+    bool reordered{};
 };
 
 /// Returns the last occupy code sent to the unit's script (Unit.last_occupy_code).
@@ -169,6 +264,12 @@ struct SeaOccupyHost {
 /// in order and the last match wins: less than 5 below the sea is the surface
 /// (1), the waterline at sea level is the waterline (2), and a model top below
 /// the sea is submerged (3). Any other layer is none (0).
+///
+/// With SeaOccupyHost::reordered the waterline check comes first and also
+/// matches a waterline below sea level, so every unit at or below its
+/// waterline has a code: the waterline at or below sea level is the waterline
+/// (2), less than 5 below the sea is the surface (1), and a model top below
+/// the sea is submerged (3), the last match winning.
 ///
 /// @param[in,out] unit unit whose code (Unit.last_occupy_code) is updated
 /// @param def the unit's type, for its waterline and model height

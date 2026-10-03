@@ -236,9 +236,12 @@ class TickHost::AirAttackMissions {
         return weapon ? weapon->range_world_units : 0;
     }
 
+    // Below three quarters of its health an aircraft breaks off for a repair
+    // pad, unless air.no-repair-retreat-flag exempts its type.
     bool health_low() const {
         const auto health = static_cast<uint32_t>(static_cast<int32_t>(unit.health));
-        return health < (def().max_damage >> 2) * 3;
+        return health < (def().max_damage >> 2) * 3 &&
+               !never_retreats_to_repair(host.match.rules(), def().abilities);
     }
 
     bool leash_exceeded() const {

@@ -149,23 +149,28 @@ uint32_t append_terrain_tiles(
     frame.indices.resize(next);
     const card::Colour colour{1.0F, 1.0F, 1.0F, pass.alpha};
     const auto tile_pixels = static_cast<float>(static_cast<double>(gw::tile_edge) * view.scale);
-    for (uint32_t row = range.first_row; row < range.end_row; ++row) {
-        const auto y = static_cast<float>(
-            static_cast<double>(view.origin_y) +
-            (static_cast<double>(row) * gw::tile_edge - static_cast<double>(view.camera_y)) *
-                view.scale
+    // Where a tile edge lands, and, on whole pixels, rounded to the nearest.
+    const auto edge_at = [&](uint32_t tile, float origin, uint32_t camera) {
+        const auto at = static_cast<float>(
+            static_cast<double>(origin) +
+            (static_cast<double>(tile) * gw::tile_edge - static_cast<double>(camera)) * view.scale
         );
+        return view.whole_pixels ? std::round(at) : at;
+    };
+    for (uint32_t row = range.first_row; row < range.end_row; ++row) {
+        const float y = edge_at(row, view.origin_y, view.camera_y);
+        const float high =
+            view.whole_pixels ? edge_at(row + 1, view.origin_y, view.camera_y) - y : tile_pixels;
         for (uint32_t column = range.first_column; column < range.end_column; ++column) {
             const auto cell = static_cast<std::size_t>(row) * atlas.grid_width + column;
             const auto rect = gw::tile_rect(atlas, atlas.grid[cell], pass.level);
             if (!rect || rect->page >= atlas.pages.size())
                 continue;
             const auto& level = atlas.pages[rect->page].levels[pass.level];
-            const auto x = static_cast<float>(
-                static_cast<double>(view.origin_x) +
-                (static_cast<double>(column) * gw::tile_edge - static_cast<double>(view.camera_x)) *
-                    view.scale
-            );
+            const float x = edge_at(column, view.origin_x, view.camera_x);
+            const float wide = view.whole_pixels
+                                   ? edge_at(column + 1, view.origin_x, view.camera_x) - x
+                                   : tile_pixels;
             const float level_width = static_cast<float>(level.width);
             const float level_height = static_cast<float>(level.height);
             const float u0 = static_cast<float>(rect->x) / level_width;
@@ -177,9 +182,9 @@ uint32_t append_terrain_tiles(
             // bottom-right corner, with the indices in the page's run.
             const auto first = static_cast<card::Index>(frame.vertices.size());
             frame.vertices.push_back({x, y, colour, u0, v0});
-            frame.vertices.push_back({x + tile_pixels, y, colour, u1, v0});
-            frame.vertices.push_back({x + tile_pixels, y + tile_pixels, colour, u1, v1});
-            frame.vertices.push_back({x, y + tile_pixels, colour, u0, v1});
+            frame.vertices.push_back({x + wide, y, colour, u1, v0});
+            frame.vertices.push_back({x + wide, y + high, colour, u1, v1});
+            frame.vertices.push_back({x, y + high, colour, u0, v1});
             card::Index* run = frame.indices.data() + run_next[rect->page];
             run[0] = first;
             run[1] = first + 1;

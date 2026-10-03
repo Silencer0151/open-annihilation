@@ -155,6 +155,22 @@ int main() {
     CHECK(get_unit_value(state, slots[0], slots, 17, 0, 0, values) == 50);
     CHECK(get_unit_value(state, slots[0], slots, 7, 0, 0, values) == 0x11fffe);
     CHECK(get_unit_value(state, slots[0], slots, 16, 0x12fffe, 0, values) == 42 * 65536);
+    // An index outside 1..20 reads the extension the profile mounts there.
+    CHECK(get_unit_value(state, slots[0], slots, 71, 0, 0, values) == 0);
+    oa::data::match_rules::ScriptExtensionTable extensions{};
+    extensions.mounts[extensions.count++] = {
+        71, oa::data::match_rules::ScriptExtension::unit_my_id
+    };
+    extensions.mounts[extensions.count++] = {
+        69, oa::data::match_rules::ScriptExtension::unit_min_id
+    };
+    oa::data::match_rules::MatchRules rules{};
+    rules.script_get = extensions;
+    values.value_rules.match = &rules;
+    CHECK(get_unit_value(state, slots[0], slots, 71, 0, 0, values) == slots[0].record.id);
+    CHECK(get_unit_value(state, slots[0], slots, 69, 0, 0, values) == 1);
+    CHECK(get_unit_value(state, slots[0], slots, 70, 0, 0, values) == 0);
+    values.value_rules = {};
     set_unit_value(slots[0], 6, 3, values);
     CHECK(slots[0].record.build_flags == 2 && unit.events == 4);
     set_unit_value(slots[0], 1, 3, values);

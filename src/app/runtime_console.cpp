@@ -10,10 +10,12 @@
 #include "oa/app/hook_call.hpp"
 #include "oa/app/match_console.hpp"
 #include "oa/app/asset_files.hpp"
+#include "oa/base/text.hpp"
 #include "oa/formats/cob.hpp"
 
 #include "oa/sim/ai.hpp"
 #include "oa/data/campaign/campaign_file.hpp"
+#include "oa/data/defs/categories.hpp"
 #include "oa/sim/feature_runtime.hpp"
 #include "oa/sim/match_runtime.hpp"
 #include "oa/sim/match_runtime/mission_unit_binding.hpp"
@@ -28,6 +30,7 @@
 #include "oa/ui/hud/status_panel.hpp"
 #include "oa/ui/hud/share_panel.hpp"
 #include "oa/platform/files.hpp"
+#include "oa/present/game_text.hpp"
 #include "match_fault.hpp"
 
 #include <SDL3/SDL.h>
@@ -40,6 +43,7 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -127,6 +131,7 @@ console::Console* Runtime::match_console() {
         auto& host = console_->host;
         host = {};
         host.context = this;
+        host.difficulty_names = difficulty_names();
         // The options save reads the Game block: the match's option fields go
         // into the preferences first, and Film and FilmSpeed flag theirs for
         // this save.
@@ -371,6 +376,11 @@ console::Console* Runtime::match_console() {
                 console::command_class::option | console::command_class::private_echo
             ))
             throw std::runtime_error("the console's command table refused Stats");
+        // A mod's rules move commands between classes and change ATM and
+        // the console keys.
+        console::console_apply_rules(
+            &console_->state, match_ ? match_->rules() : oa::data::match_rules::MatchRules{}
+        );
         console_->bound_world = world;
         restore_console_carry();
     }
@@ -397,6 +407,10 @@ oa::data::campaign::SessionKind Runtime::match_session_kind() const {
 bool Runtime::local_player_watches() const {
     if (!match_)
         return false;
+    // A replay that leaves the viewer no slot of its own seats it in a
+    // recorded player's slot, but it only watches.
+    if (match_->slotless_viewer() != oa::sim::match_runtime::SlotlessViewer::none)
+        return true;
     const oa::World& world = match_->state();
     const auto* local = oa::world_player_record(&world, world.game.local_player_index);
     const auto* info = local != nullptr ? oa::world_player_info(&world, local) : nullptr;
@@ -465,7 +479,10 @@ void Runtime::console_reload_unit_type(uint16_t type) {
         &unit_table_.sound_categories,
         &unit_table_.tables.categories,
         &unit_table_.tables.blocks,
-        &corpses
+        &corpses,
+        mod_profile() != nullptr ? oa::data::defs::yard_map_rules(mod_profile()->rules.units)
+                                 : oa::data::defs::YardMapRules{},
+        unit_text_sink()
     };
     const oa::data::defs::UnitScriptLoader scripts{
         this, [](void* context, uint16_t reloaded, const char* path) {
@@ -567,6 +584,7 @@ void Runtime::open_chat_line() {
         return;
     chat_composing_ = true;
     chat_buffer_.clear();
+    chat_composition_.clear();
     status_ = "Message";
     if (sdl_.window != nullptr)
         SDL_StartTextInput(sdl_.window);
@@ -575,12 +593,16 @@ void Runtime::open_chat_line() {
 void Runtime::close_chat_line() {
     chat_composing_ = false;
     chat_buffer_.clear();
+    chat_composition_.clear();
     if (sdl_.window != nullptr)
         SDL_StopTextInput(sdl_.window);
 }
 
 void Runtime::submit_chat_line() {
-    const std::string line = chat_buffer_;
+    // The typed line goes out as game text, cut where the chat line's
+    // buffer ends without splitting a character.
+    std::string line = typed_game_text(chat_buffer_);
+    line.resize(oa::base::text::whole_characters(line, oa::ui::hud::typed_text_bytes - 1));
     close_chat_line();
     if (!match_)
         return;
@@ -602,13 +624,40 @@ void Runtime::submit_chat_line() {
                         uint8_t kind,
                         const char* target) {
         auto* runtime = runtime_of(user);
-        if (!runtime->match_)
+        if (!runtime->match_ || runtime->refuse_take_line(text))
             return;
         const auto hooks = runtime->message_hooks();
         oa::sim::messages::post_chat(runtime->match_->state(), speaker, text, kind, target, hooks);
         runtime->status_ = text;
+        runtime->read_speed_lock_line(text);
     };
     oa::ui::hud::send_chat_line(match_->state(), line.c_str(), host);
+}
+
+bool Runtime::refuse_take_line(const char* text) {
+    if (!match_ || !match_->rules().sharing.take_requires_live_commander.enabled ||
+        !oa::ui::hud::is_take_command(text))
+        return false;
+    auto& world = match_->state();
+    const auto* commanders =
+        oa::data::defs::category_registry_find(&unit_table_.tables.categories, "Commander");
+    const uint8_t fallen = oa::ui::hud::commander_destroyed_elsewhere(
+        world, world.game.local_player_index, commanders != nullptr ? commanders->words : nullptr
+    );
+    if (fallen >= OA_PLAYER_COUNT)
+        return false;
+    char notice[96];
+    oa::ui::hud::format_take_refusal(notice, sizeof notice, world.game.players[fallen]);
+    oa::sim::messages::post_message(
+        world,
+        notice,
+        oa::sim::messages::kind_unit_report,
+        0,
+        oa::sim::messages::sender_none,
+        message_hooks()
+    );
+    status_ = notice;
+    return true;
 }
 
 void Runtime::list_save_files(
@@ -640,28 +689,34 @@ bool Runtime::handle_console_hotkey(const SDL_KeyboardEvent& key) {
     const oa::Game& game = con->world->game;
     const bool developer = (console::console_flags(game) & console::console_flag::developer) != 0;
     const bool debug_keys = (game.outcome_flags & console::outcome_flag::debug_keys) != 0;
-    // A multiplayer game's team menu (Tab) and share panel ('h').
+    // A multiplayer game's team menu (Tab) and share panel ('h'); a mod's
+    // rules may open the team menu in every game type.
     const bool multiplayer = multiplayer_session();
+    // A mod's key remaps leave '\' to other uses, re-run the last line on
+    // Insert and toggle the debug keys on F10 as well.
+    const bool remaps = con->key_remaps;
+    const bool f10 = key.key == SDLK_F10 || key.scancode == SDL_SCANCODE_F10;
     uint32_t code = 0;
     if (key.key == SDLK_F4 || key.scancode == SDL_SCANCODE_F4)
         code = console::hotkey::f1 + 3;
     else if (key.key == SDLK_PAUSE || key.scancode == SDL_SCANCODE_PAUSE)
         code = console::hotkey::pause;
-    else if (multiplayer && key.key == SDLK_TAB)
+    else if ((multiplayer || con->team_menu_every_game) && key.key == SDLK_TAB)
         code = console::hotkey::tab;
     else if (multiplayer && key.key == SDLK_H)
         code = 'h';
     else if (key.key == SDLK_GRAVE)
         code = '`';
-    else if (developer && key.key == SDLK_BACKSLASH)
+    else if (developer && !remaps && key.key == SDLK_BACKSLASH)
         code = console::hotkey::repeat_command;
+    else if (developer && remaps && key.key == SDLK_INSERT)
+        code = console::hotkey::insert;
     else if (developer && key.key == SDLK_F11)
         code = console::hotkey::f11;
-    else if (
-        (SDL_GetModState() & SDL_KMOD_CTRL) != 0 &&
-        (key.key == SDLK_F10 || key.scancode == SDL_SCANCODE_F10)
-    )
+    else if ((SDL_GetModState() & SDL_KMOD_CTRL) != 0 && f10)
         code = console::hotkey::control_f10;
+    else if (developer && remaps && f10)
+        code = console::hotkey::f10;
     else if (debug_keys && key.key == SDLK_EQUALS)
         code = '=';
     else if (debug_keys && key.key == SDLK_RIGHTBRACKET)
@@ -733,17 +788,38 @@ const oa::formats::fnt::Font* Runtime::console_clock_font() {
     return match_label_font();
 }
 
-void Runtime::draw_console_clock() {
+std::optional<int> Runtime::console_clock_pen_row() {
     namespace hud = oa::ui::hud;
     namespace layout = oa::ui::display_layout;
     if (!match_)
-        return;
+        return std::nullopt;
     const oa::Game& game = match_->state().game;
     if ((console::console_flags(game) & console::console_flag::clock) == 0)
-        return;
+        return std::nullopt;
     const oa::formats::fnt::Font* font = console_clock_font();
     if (font == nullptr)
+        return std::nullopt;
+    // The pen's rows above the bottom bar; the glyphs start the font's lift
+    // above the pen. Text larger than the font rises by what it adds.
+    const auto height = static_cast<uint8_t>(std::min(
+        oa::present::sized_length(
+            static_cast<uint8_t>(font->nominal_height), oa::present::game_text_size()
+        ),
+        int32_t{UINT8_MAX}
+    ));
+    const int pen_rise =
+        layout::kSourceBottomBarY - hud::clock_pen_row(layout::kSourceHeight, height);
+    return match_layout_.bottom_bar_y() - pen_rise * hud_text_scale();
+}
+
+void Runtime::draw_console_clock() {
+    namespace hud = oa::ui::hud;
+    namespace layout = oa::ui::display_layout;
+    const auto pen_row = console_clock_pen_row();
+    if (!pen_row)
         return;
+    const oa::Game& game = match_->state().game;
+    const oa::formats::fnt::Font* font = console_clock_font();
 
     struct Label {
         Runtime* runtime;
@@ -764,14 +840,8 @@ void Runtime::draw_console_clock() {
     );
     ensure_ui_colors();
     const auto scale = hud_text_scale();
-    const auto height = static_cast<uint8_t>(font->nominal_height);
-    // The pen's rows above the bottom bar; the glyphs start the font's lift
-    // above the pen.
-    const int pen_rise =
-        layout::kSourceBottomBarY - hud::clock_pen_row(layout::kSourceHeight, height);
     const auto at = canvas_paint(
-        match_layout_.left + (hud::kClockLeft - layout::kSourceLeft) * scale,
-        match_layout_.bottom_bar_y() - pen_rise * scale
+        match_layout_.left + (hud::kClockLeft - layout::kSourceLeft) * scale, *pen_row
     );
     draw_match_text(font, at.x, at.y, text, ui_colors_[hud::kClockColorSlot], scale);
 }
@@ -817,8 +887,10 @@ void Runtime::check_console_commands() {
     const float metal_before = match_->state().game.players[player].metal;
     enter_line("+atm");
     const float metal_after = match_->state().game.players[player].metal;
-    if (metal_after != metal_before + 1000.0f)
-        throw std::runtime_error("console check: +atm did not add 1000 metal");
+    // The console adds its ATM amount: 1000, or a mod profile's.
+    const auto* con = match_console();
+    if (con == nullptr || metal_after != metal_before + con->atm_amount)
+        throw std::runtime_error("console check: +atm did not add the ATM amount of metal");
     oa::World& world = match_->state();
     const uint8_t giver = game.local_player_index;
     uint8_t other = OA_PLAYER_COUNT;

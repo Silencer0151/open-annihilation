@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 # SPDX-License-Identifier: GPL-3.0-only
 
-add_library(oa-sim-mission-units src/mission_units.cpp)
+add_library(oa-sim-mission-units src/mission_units.cpp src/map_units.cpp)
 add_library(oa::sim::mission_units ALIAS oa-sim-mission-units)
 target_include_directories(oa-sim-mission-units PUBLIC include)
 target_compile_features(oa-sim-mission-units PUBLIC cxx_std_20)
@@ -13,4 +13,7 @@ if(BUILD_TESTING)
   add_executable(oa-sim-mission-scripts-test tests/mission_scripts_test.cpp)
   target_link_libraries(oa-sim-mission-scripts-test PRIVATE oa-base-text oa-sim-mission-units oa-data-mission-types oa-options)
   add_test(NAME sim-mission-scripts COMMAND oa-sim-mission-scripts-test)
+  add_executable(oa-sim-mission-map-units-test tests/map_units_test.cpp)
+  target_link_libraries(oa-sim-mission-map-units-test PRIVATE oa-sim-mission-units oa-options)
+  add_test(NAME sim-mission-map-units COMMAND oa-sim-mission-map-units-test)
 endif()

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/sim/unit_spawn/spawn_runtime.hpp"
+#include "oa/data/defs/layout.hpp"
 #include <algorithm>
 #include <bit>
 #include <cstdint>
@@ -110,13 +111,14 @@ LoadedType load_runtime_type(
     result.model = std::make_shared<const formats::objects3d::Model>(std::move(*model.value));
     t.model = reinterpret_cast<AssetHandle>(result.model.get());
     // Page zero is probed first, then consecutive pages starting at one.
-    const auto zero_bytes = assets.read("guis/" + unit + "0.GUI");
+    const auto zero_bytes = assets.read(oa::data::defs::gui_path(unit + "0.GUI"));
     const bool page_zero = zero_bytes && !zero_bytes->empty();
     if (page_zero)
         t.simulation.flags |= gui_zero_mask;
     uint32_t page = 1;
     while (true) {
-        const auto page_bytes = assets.read("guis/" + unit + std::to_string(page) + ".GUI");
+        const auto page_bytes =
+            assets.read(oa::data::defs::gui_path(unit + std::to_string(page) + ".GUI"));
         if (!page_bytes || page_bytes->empty())
             break;
         ++page;

@@ -6,11 +6,14 @@
 #include "oa/core/game_state.h"
 #include "oa/core/unit.h"
 #include "oa/core/world.h"
+#include "oa/data/limits.hpp"
 #include "oa/sim/unit_movement/movement.hpp"
 #include "oa/formats/gaf.hpp"
 #include "oa/sim/sprite_animation.hpp"
 
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 
 namespace oa::formats::objects3d {
 struct Model;
@@ -70,8 +73,9 @@ inline constexpr uint32_t fx_count = static_cast<uint32_t>(Fx::count);
 [[nodiscard]] const char* fx_name(Fx entry) noexcept;
 
 inline constexpr uint16_t layer_count = 10;
-inline constexpr uint16_t layer_evict_above = 400; // queue_emitter drops the oldest past this
-inline constexpr uint16_t layer_capacity = layer_evict_above + 1;
+// 3.1c's layer limit: queue_emitter drops a layer's oldest emitter past this
+// many (data::limits::Effects::queue).
+inline constexpr uint32_t layer_evict_above = 400;
 inline constexpr uint16_t layer_wake = 2;
 inline constexpr uint16_t layer_feature_smoke = 4; // geothermal vents
 inline constexpr uint16_t layer_teleport = 5;
@@ -82,9 +86,10 @@ inline constexpr uint16_t layer_smoke = 9;
 
 inline constexpr uint16_t no_record = 0xffffU;
 
-// Every emitter takes a slot of one shared pool of 1000; the "SFX" console
-// command makes the pool refuse every request.
-inline constexpr uint16_t emitter_pool_capacity = 1000;
+// Every emitter takes a slot of one shared pool, 1000 in 3.1c
+// (data::limits::Effects::reserve); the "SFX" console command makes the pool
+// refuse every request.
+inline constexpr uint32_t emitter_pool_capacity = 1000;
 
 // Particle of the teleport trail. step_trail_particle steps it.
 struct TrailParticle {
@@ -171,12 +176,49 @@ struct Emitter {
     int32_t variant{};         // smoke: 1 selects smoke 2; wake: 1 lit
 };
 
-// One of the ten lists, oldest first, as a ring.
+// One of the ten lists, oldest first, as a ring of EffectWorld::layer_slots
+// emitters in the world's emitter block.
 struct Layer {
-    Emitter emitters[layer_capacity]{};
-    uint16_t head{};
-    uint16_t count{};
+    uint32_t head{};  // ring slot of the oldest emitter
+    uint32_t count{}; // emitters held
 };
+
+// The emitter slots of the ten layers' rings, one block an effect world owns
+// and copies with itself.
+struct EmitterBlock {
+    std::unique_ptr<Emitter[]> slots;
+    std::size_t count{}; // slots held; 0 when the block could not be allocated
+
+    EmitterBlock() = default;
+    /// Allocates a block of emitter slots.
+    ///
+    /// @param slot_count slots to hold; a block that cannot be allocated holds none
+    explicit EmitterBlock(std::size_t slot_count) noexcept;
+    /// Copies another block's slots.
+    ///
+    /// @param other the block to copy; a copy that cannot be allocated holds none
+    EmitterBlock(const EmitterBlock& other) noexcept;
+    /// Replaces this block's slots with a copy of another's.
+    ///
+    /// @param other the block to copy; a copy that cannot be allocated holds none
+    /// @return this block
+    EmitterBlock& operator=(const EmitterBlock& other) noexcept;
+    EmitterBlock(EmitterBlock&&) noexcept = default;
+    EmitterBlock& operator=(EmitterBlock&&) noexcept = default;
+    ~EmitterBlock() = default;
+};
+
+/// Returns the ring slots each layer needs for a set of effect limits.
+///
+/// A layer holds one emitter more than `queue` at most, and never more than
+/// the pool hands out, so a ring holds the lower of `queue` and `reserve`,
+/// plus one: 401 for 3.1c's 400 and 1000.
+///
+/// @param limits emitters a layer holds before evicting, and the pool's size
+/// @return slots of one layer's ring
+[[nodiscard]] constexpr uint32_t layer_ring_slots(const data::limits::Effects& limits) noexcept {
+    return (limits.queue < limits.reserve ? limits.queue : limits.reserve) + 1U;
+}
 
 // Fixed pool of one particle class, shared by every emitter of that class;
 // 3.1c keeps each emitter's particles without a limit, so the capacity is the
@@ -310,6 +352,13 @@ struct ShatterPiece {
 
 struct EffectWorld {
     Layer layers[layer_count]{};
+    // The rings of the ten layers, layer_slots each, in layer order.
+    EmitterBlock emitter_block{
+        std::size_t{layer_count} * layer_ring_slots(data::limits::Effects{})
+    };
+    uint32_t layer_slots{layer_ring_slots(data::limits::Effects{})};
+    uint32_t evict_above{layer_evict_above};       // a layer drops its oldest past this many
+    uint32_t pool_capacity{emitter_pool_capacity}; // emitter pool slots there are
     ParticlePool<TrailParticle, trail_pool_capacity> trail{};
     ParticlePool<NanoParticle, nano_pool_capacity> nano{};
     ParticlePool<FlameParticle, flame_pool_capacity> flame{};
@@ -323,9 +372,41 @@ struct EffectWorld {
     const formats::gaf::Sequence* flash_tiers[flash_tier_count]{};
     bool lava_world{};           // OTA lavaworld
     bool no_sea_level_trigger{}; // OTA nosealeveltrigger
-    uint16_t pooled_emitters{};  // emitter pool slots handed out
-    bool emitters_refused{};     // the "SFX" console toggle
+    // Each explosion log_explosion records above sea level raises a short
+    // smoke column, as in 3.1c; a mod's display rules may turn it off.
+    bool explosion_smoke_column{true};
+    uint32_t pooled_emitters{}; // emitter pool slots handed out
+    bool emitters_refused{};    // the "SFX" console toggle
 };
+
+/// Sizes an effect world's layers and emitter pool from a mod's limits.
+///
+/// Call it on a world with no emitters, before the match first ticks. Without
+/// it a world keeps 3.1c's sizes: 400 emitters a layer before eviction and
+/// 1000 in the pool.
+///
+/// @param[in,out] world the world to size; its layers are emptied
+/// @param limits emitters a layer holds before evicting, and the pool's size
+/// @return false when the layers' rings cannot be allocated; the world then
+///     queues no emitter
+bool size_effect_world(EffectWorld& world, const data::limits::Effects& limits) noexcept;
+
+/// Returns one emitter of a layer, oldest first.
+///
+/// @param world layers
+/// @param layer layer index 0..9
+/// @param index position in the layer, below Layer::count
+/// @return the emitter
+[[nodiscard]] const Emitter&
+layer_emitter(const EffectWorld& world, uint16_t layer, uint32_t index) noexcept;
+
+/// Returns one emitter of a layer, oldest first.
+///
+/// @param[in,out] world layers
+/// @param layer layer index 0..9
+/// @param index position in the layer, below Layer::count
+/// @return the emitter
+[[nodiscard]] Emitter& layer_emitter(EffectWorld& world, uint16_t layer, uint32_t index) noexcept;
 
 /// Advances every emitter layer by one tick.
 ///
@@ -340,8 +421,9 @@ void tick_particles(EffectWorld& world, const oa::Game& game, const EffectHost& 
 /// Appends an emitter to a layer.
 ///
 /// The emitter must already hold an emitter pool slot. When the layer holds more
-/// than 400 emitters its oldest is deleted first; an emitter for a layer out of
-/// range is deleted instead.
+/// than EffectWorld::evict_above emitters (400 in 3.1c) its oldest is deleted
+/// first; an emitter for a layer out of range, or for a world whose rings could
+/// not be allocated, is deleted instead.
 ///
 /// @param[in,out] world layers and pools
 /// @param layer layer index 0..9
@@ -715,8 +797,8 @@ void init_explosion_tables(
 
 /// Appends an explosion sprite record, with a flash unless none is asked for.
 ///
-/// A land explosion above sea level also raises a short smoke column. A full table
-/// drops the record.
+/// A land explosion above sea level also raises a short smoke column, unless
+/// the world's explosion_smoke_column is off. A full table drops the record.
 ///
 /// @param[in,out] world explosion table and emitter layers
 /// @param game current tick and sea level

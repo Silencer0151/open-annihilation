@@ -4,6 +4,7 @@
 // The headless checks of the Pause key, the menus' hold on the match clock
 // and the team panels, over the navigation check's skirmish.
 #include "oa/app/runtime.hpp"
+#include "oa/data/defs/layout.hpp"
 #include "oa/sim/match_runtime.hpp"
 #include "oa/ui/console/game_fields.hpp"
 #include "oa/ui/display_layout.hpp"
@@ -127,7 +128,10 @@ void Runtime::check_pause_key() {
     key(SDLK_ESCAPE, SDL_SCANCODE_ESCAPE);
     require(!match_paused_, "Escape opened a menu");
     key(SDLK_F2, SDL_SCANCODE_F2);
-    require(match_paused_ && match_hud_panel_ == "guis/ARMOPT.GUI", "F2 did not open ARMOPT.GUI");
+    require(
+        match_paused_ && match_hud_panel_ == oa::data::defs::gui_path("ARMOPT.GUI"),
+        "F2 did not open ARMOPT.GUI"
+    );
     require(
         !match_clock_steps() && ticks_in_one_second() == 0,
         "the options menu did not hold the skirmish"
@@ -404,7 +408,8 @@ void Runtime::check_team_panels() {
         auto before = title_pixels();
         key(SDLK_F2, SDL_SCANCODE_F2);
         require(
-            match_paused_ && match_hud_panel_ == "guis/ARMOPT.GUI", "F2 did not open ARMOPT.GUI"
+            match_paused_ && match_hud_panel_ == oa::data::defs::gui_path("ARMOPT.GUI"),
+            "F2 did not open ARMOPT.GUI"
         );
         // The menu opened over the running game, as it shows in the side column.
         const auto menu_root = hud_root();
@@ -421,7 +426,8 @@ void Runtime::check_team_panels() {
         // tab's sub-panel. Escape takes them back to the menu.
         click("PREFS");
         require(
-            screen_ == Screen::match && match_paused_ && match_hud_panel_ == "guis/PREFS.GUI",
+            screen_ == Screen::match && match_paused_ &&
+                match_hud_panel_ == oa::data::defs::gui_path("PREFS.GUI"),
             "PREFS did not open PREFS.GUI over the match"
         );
         const auto preference_ticks = ticks_in_one_second();
@@ -461,7 +467,8 @@ void Runtime::check_team_panels() {
         preferences_.current_game_speed = opened_preferences.current_game_speed;
         flush_preferences();
         require(
-            screen_ == Screen::match && match_paused_ && match_hud_panel_ == "guis/ARMOPT.GUI",
+            screen_ == Screen::match && match_paused_ &&
+                match_hud_panel_ == oa::data::defs::gui_path("ARMOPT.GUI"),
             "leaving the preferences did not return to ARMOPT.GUI"
         );
         key(SDLK_ESCAPE, SDL_SCANCODE_ESCAPE);
@@ -493,7 +500,7 @@ void Runtime::check_team_panels() {
         const auto side_panel = hud_now();
         key(SDLK_TAB, SDL_SCANCODE_TAB);
         require(
-            team_panel_open() && match_hud_panel_ == "guis/TABMENU.GUI",
+            team_panel_open() && match_hud_panel_ == oa::data::defs::gui_path("TABMENU.GUI"),
             "Tab did not open TABMENU.GUI"
         );
         require(
@@ -517,7 +524,7 @@ void Runtime::check_team_panels() {
         const auto tab_menu = hud_now();
         click("OPTIONS");
         require(
-            match_paused_ && match_hud_panel_ == "guis/ARMOPT.GUI",
+            match_paused_ && match_hud_panel_ == oa::data::defs::gui_path("ARMOPT.GUI"),
             "the tab menu's OPTIONS did not open ARMOPT.GUI"
         );
         require(
@@ -581,7 +588,8 @@ void Runtime::check_team_panels() {
         me.metal = kGiftMetal;
         key(SDLK_H, SDL_SCANCODE_H);
         require(
-            team_panel_open() && match_hud_panel_ == "guis/SHARE.GUI", "'h' did not open SHARE.GUI"
+            team_panel_open() && match_hud_panel_ == oa::data::defs::gui_path("SHARE.GUI"),
+            "'h' did not open SHARE.GUI"
         );
         require(ticks_in_one_second() > 0, "SHARE.GUI held the match");
         click("PLYRLIST", 4, 3);
@@ -648,7 +656,7 @@ void Runtime::check_team_panels() {
         key(SDLK_TAB, SDL_SCANCODE_TAB);
         click("ALLIES");
         require(
-            team_panel_open() && match_hud_panel_ == "guis/ALLIES.GUI",
+            team_panel_open() && match_hud_panel_ == oa::data::defs::gui_path("ALLIES.GUI"),
             "ALLIES did not open ALLIES.GUI"
         );
         const auto toggle = "LIVEALLY" + std::to_string(computer);
@@ -691,7 +699,7 @@ void Runtime::check_team_panels() {
         const auto control_tab_menu = hud_now();
         click("CONTROL");
         require(
-            team_panel_open() && match_hud_panel_ == "guis/CONTROL.GUI",
+            team_panel_open() && match_hud_panel_ == oa::data::defs::gui_path("CONTROL.GUI"),
             "CONTROL did not open CONTROL.GUI"
         );
         // The tab menu stays under it, darkened.
@@ -709,7 +717,10 @@ void Runtime::check_team_panels() {
             "WATCHING did not change watching"
         );
         click(row);
-        require(match_hud_panel_ == "guis/YESORNO.GUI", "a player's row did not ask to remove it");
+        require(
+            match_hud_panel_ == oa::data::defs::gui_path("YESORNO.GUI"),
+            "a player's row did not ask to remove it"
+        );
         require(
             text_of("TITLE").find(player_name(other)) != std::string::npos,
             "the removal question does not name the player"
@@ -717,8 +728,8 @@ void Runtime::check_team_panels() {
         snapshot("native-team-removal.ppm");
         click("CHOICE1");
         require(
-            team_panel_open() && match_hud_panel_ == "guis/CONTROL.GUI" && match_paused_ &&
-                match_panels_keyboard_,
+            team_panel_open() && match_hud_panel_ == oa::data::defs::gui_path("CONTROL.GUI") &&
+                match_paused_ && match_panels_keyboard_,
             "Yes did not return to CONTROL.GUI"
         );
         // It comes back over the panels it was opened over, and no more.

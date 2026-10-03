@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/ui/frontend_renderer.hpp"
+#include "oa/ui/frontend_renderer/game_text.hpp"
 #include "oa/ui/decoded.hpp"
+#include "oa/data/defs/layout.hpp"
+#include "oa/data/languages/translation.hpp"
 
 #include "oa/ui/frontend_renderer/gadget_draw.hpp"
 #include "oa/ui/frontend_renderer/scroll_bars.hpp"
@@ -25,7 +28,7 @@
 namespace oa::ui::frontend_renderer {
 namespace {
 
-constexpr std::string_view main_menu_layout = "guis/mainmenu.gui";
+constexpr std::string_view main_menu_layout_file = "mainmenu.gui";
 constexpr std::string_view main_menu_background = "bitmaps/frontendx.pcx";
 constexpr std::string_view main_menu_palette = "palettes/guipal.pal";
 constexpr std::string_view main_menu_sprites = "anims/mainmenu.gaf";
@@ -350,7 +353,8 @@ void draw_button_text(
     const PaletteBytes& active_palette,
     std::size_t selected_stage,
     char quick_key,
-    const std::array<uint8_t, 3>& underline
+    const std::array<uint8_t, 3>& underline,
+    bool game_text
 ) {
     const auto* fields = std::get_if<ui::gui_layout::ButtonFields>(&gadget.fields);
     if (fields == nullptr || fields->text.empty())
@@ -358,7 +362,7 @@ void draw_button_text(
     const auto text = staged_caption(fields->text, selected_stage);
     if (text.empty())
         return;
-    const auto text_width = formats::fnt::measure_text(selected_font, text);
+    const auto text_width = measure_fnt_game_text(selected_font, text, game_text);
     const auto text_height = formats::fnt::line_height(selected_font);
     const int depressed_offset = condition == ButtonCondition::pressed ? 1 : 0;
     // A caption is placed within the record's inclusive rectangle, whose far
@@ -381,6 +385,25 @@ void draw_button_text(
     }
     const int y =
         gadget.common.y + (rectangle_span_y - static_cast<int>(text_height)) / 2 + depressed_offset;
+    // Game text, or text with characters past ASCII, goes through the game
+    // text's runs; its caption has no quick key underlined.
+    if (needs_text_runs(text, game_text)) {
+        std::ignore = draw_fnt_game_text(
+            surface,
+            selected_font,
+            text,
+            x,
+            y,
+            palette_rgb(active_palette, formats::fnt::foreground_index),
+            active_palette,
+            {0,
+             0,
+             static_cast<int32_t>(surface.width) - 1,
+             static_cast<int32_t>(surface.height) - 1},
+            game_text
+        );
+        return;
+    }
 
     const auto pixel_count = static_cast<std::size_t>(surface.width) * surface.height;
     std::vector<uint8_t> indices(pixel_count);
@@ -478,10 +501,27 @@ void draw_clipped_text(
     int y,
     const Rectangle& clip,
     const PaletteBytes& active_palette,
-    const uint8_t* light_row = nullptr
+    const uint8_t* light_row = nullptr,
+    bool game_text = false
 ) {
     if (text.empty() || clip.left > clip.right || clip.top > clip.bottom)
         return;
+    if (needs_text_runs(text, game_text)) {
+        const uint8_t index = light_row != nullptr ? light_row[formats::fnt::foreground_index]
+                                                   : formats::fnt::foreground_index;
+        std::ignore = draw_fnt_game_text(
+            surface,
+            selected_font,
+            text,
+            x,
+            y,
+            palette_rgb(active_palette, index),
+            active_palette,
+            {clip.left, clip.top, clip.right, clip.bottom},
+            game_text
+        );
+        return;
+    }
     // Glyphs are drawn up to the first one that does not wholly fit the width
     // left; that glyph and the rest of the text are dropped, never clipped.
     const auto available = std::max(0, clip.right - x + 1);
@@ -691,9 +731,10 @@ void shade_rectangle(Surface& surface, const Rectangle& rectangle, GrayedShade& 
     std::string_view text,
     const formats::fnt::Font& selected_font,
     int left_inset,
-    int right_inset
+    int right_inset,
+    bool game_text = false
 ) {
-    const auto width = static_cast<int>(formats::fnt::measure_text(selected_font, text));
+    const auto width = measure_fnt_game_text(selected_font, text, game_text);
     const auto attributes = static_cast<uint32_t>(gadget.common.attributes);
     constexpr uint32_t align_left = 1U;
     constexpr uint32_t align_center = 2U;
@@ -819,9 +860,11 @@ void draw_list_box(
          index < list.items.size() && remaining_height >= font_line_height;
          ++index, y += item_height, remaining_height -= item_height) {
         const auto& text = list.items[index];
-        const int x = aligned_text_x(gadget, text, selected_font, 2, 2);
+        const int x = aligned_text_x(gadget, text, selected_font, 2, 2, list.game_text);
         const Rectangle row_clip{clip.left, y, clip.right, std::min(clip.bottom, y + item_height)};
-        draw_clipped_text(surface, selected_font, text, x, y, row_clip, active_palette);
+        draw_clipped_text(
+            surface, selected_font, text, x, y, row_clip, active_palette, nullptr, list.game_text
+        );
         // A text list lights the whole selected row at light level 0x1E after
         // drawing it.
         if (list.selected && *list.selected == index)
@@ -833,9 +876,16 @@ ScreenResources load_screen_with_layout(
     AssetStore& assets, const ScreenAssetNames& names, std::span<const uint8_t> layout
 ) {
     ScreenResources result;
-    if (!names.background.empty())
+    if (!names.background.empty()) {
+        // The background in the language's folder when the game data has it
+        // there (bitmaps-German), as 3.1c looks first.
+        std::string background = names.background;
+        if (const auto variant = data::languages::language_folder_path(background);
+            variant && assets.file_size(*variant) > 0)
+            background = *variant;
         result.background =
-            ui::decoded::require(decode_pcx(assets.read(names.background).bytes), names.background);
+            ui::decoded::require(decode_pcx(assets.read(background).bytes), background);
+    }
 
     const auto palette = assets.read(names.palette).bytes;
     if (palette.size() != result.gui_palette.size()) {
@@ -843,7 +893,9 @@ ScreenResources load_screen_with_layout(
     }
     std::copy(palette.begin(), palette.end(), result.gui_palette.begin());
 
-    auto parsed_layout = ui::gui_layout::parse(layout);
+    // The panel's texts in the game's language, as 3.1c's GUI loader
+    // translates them.
+    auto parsed_layout = ui::gui_layout::parse(layout, ui::gui_layout::game_translation_lookup());
     if (!parsed_layout.ok()) {
         throw std::runtime_error(
             "cannot parse GUI layout '" + names.layout + "': " + parsed_layout.error->message
@@ -968,10 +1020,11 @@ main_menu_layout_in(const AssetStore& assets, const std::filesystem::path& archi
         if (mounts[index] != archive)
             continue;
         const auto& mounted = assets.mounted(index);
-        const auto node = mounted.lookup(main_menu_layout);
+        const auto layout = oa::data::defs::gui_path(main_menu_layout_file);
+        const auto node = mounted.lookup(layout);
         if (!node || mounted.nodes()[*node].directory())
             return std::nullopt;
-        return ui::decoded::require(mounted.read_node(*node), main_menu_layout);
+        return ui::decoded::require(mounted.read_node(*node), layout);
     }
     return std::nullopt;
 }
@@ -979,6 +1032,7 @@ main_menu_layout_in(const AssetStore& assets, const std::filesystem::path& archi
 } // namespace
 
 MainMenuResources load_main_menu(AssetStore& assets, MainMenuLayout layout) {
+    const auto main_menu_layout = oa::data::defs::gui_path(main_menu_layout_file);
     auto gui = assets.read(main_menu_layout);
     // With no overlay, an archived layout goes with the archived background
     // it was drawn for, when that archive holds one.
@@ -990,7 +1044,7 @@ MainMenuResources load_main_menu(AssetStore& assets, MainMenuLayout layout) {
     }
     auto result = load_screen_with_layout(
         assets,
-        {std::string(main_menu_layout),
+        {main_menu_layout,
          std::string(main_menu_background),
          std::string(main_menu_palette),
          std::string(main_menu_sprites),
@@ -1178,7 +1232,8 @@ void render_screen_into(
                 active_palette,
                 text_stage,
                 quick_key,
-                underline
+                underline,
+                state != nullptr && state->game_text
             );
             // A grayed-out button is darkened too, except one that cycles its
             // frames or plain CHECKBOX art.
@@ -1222,7 +1277,8 @@ void render_screen_into(
             active_palette,
             text_stage,
             quick_key,
-            underline
+            underline,
+            state != nullptr && state->game_text
         );
     }
     // The focus marker goes on last, over the records, inside the root. A

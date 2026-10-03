@@ -192,8 +192,8 @@ void log_explosion_adds_smoke_over_land() {
     check(record.flash.sequence == &f.tiers[0], "flash tier 0");
     const auto& smoke = f.world->layers[layer_smoke];
     check(
-        smoke.count == 1 && smoke.emitters[smoke.head].interval == 7 &&
-            smoke.emitters[smoke.head].deadline == 65,
+        smoke.count == 1 && layer_emitter(*f.world, layer_smoke, 0).interval == 7 &&
+            layer_emitter(*f.world, layer_smoke, 0).deadline == 65,
         "a land explosion raises a fifteen-tick column at interval seven"
     );
     log_explosion(*f.world, f.game, f.host(), units(5, 30, 5), &f.explosion, -1, true);
@@ -203,6 +203,21 @@ void log_explosion_adds_smoke_over_land() {
     for (int32_t i = 0; i < 400; ++i)
         log_explosion(*f.world, f.game, f.host(), units(0, 0, 0), &f.explosion, -1, true);
     check(f.world->explosion_count == explosion_capacity, "the table holds 300 records");
+}
+
+void explosion_smoke_column_can_be_turned_off() {
+    Fixture f;
+    f.world->explosion_smoke_column = false;
+    const auto calls = f.stream.calls;
+    log_explosion(*f.world, f.game, f.host(), units(5, 30, 5), &f.explosion, 0, false);
+    check(f.world->explosion_count == 1, "the explosion is still logged");
+    check(
+        f.world->layers[layer_smoke].count == 0 && f.stream.calls == calls,
+        "without the smoke column a land explosion queues no emitter and draws nothing"
+    );
+    f.world->explosion_smoke_column = true;
+    log_explosion(*f.world, f.game, f.host(), units(5, 30, 5), &f.explosion, 0, false);
+    check(f.world->layers[layer_smoke].count == 1, "turned back on, it smokes again");
 }
 
 void records_expire_after_their_frames() {
@@ -720,6 +735,7 @@ int main() {
     draw_explosions_culls_by_the_centre();
     tables_build_three_tiers();
     log_explosion_adds_smoke_over_land();
+    explosion_smoke_column_can_be_turned_off();
     records_expire_after_their_frames();
     cob_bitmaps_log_large_flashes();
     debris_flies_bounces_and_explodes();

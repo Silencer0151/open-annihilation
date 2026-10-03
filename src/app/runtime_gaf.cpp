@@ -92,19 +92,67 @@ Runtime::gaf_sequence(const oa::formats::gaf::Archive& archive, std::string_view
     return nullptr;
 }
 
-const oa::formats::gaf::Archive& Runtime::explosion_gaf_archive(std::string_view name) {
+namespace {
+
+[[nodiscard]] std::string lowered(std::string_view name) {
     std::string key(name);
     for (auto& c : key)
         if (c >= 'A' && c <= 'Z')
             c = static_cast<char>(c + ('a' - 'A'));
+    return key;
+}
+
+} // namespace
+
+void Runtime::load_explosion_gaf(std::string_view name) {
+    auto key = lowered(name);
+    if (key.empty() || key == "fx" || match_explosion_gafs_.count(key) != 0)
+        return;
+    auto& loaded = match_explosion_gafs_[key];
+    const auto path = "anims/" + std::string(name) + ".GAF";
+    try {
+        auto file = assets_.read(path).bytes;
+        // Every frame is decoded once to check it; none is kept.
+        auto parsed = oa::formats::gaf::parse(file, oa::formats::gaf::PixelData::checked);
+        if (!parsed.ok()) {
+            std::cerr << "match HUD GAF '" << path << "' parse failed: " << parsed.error->message
+                      << '\n';
+            return;
+        }
+        loaded.path = path;
+        loaded.archive = std::move(*parsed.archive);
+    } catch (const std::exception& error) {
+        const std::string_view what = error.what();
+        if (what.find("asset not found") == std::string_view::npos)
+            std::cerr << "match HUD GAF '" << path << "' unavailable: " << error.what() << '\n';
+    }
+}
+
+const oa::formats::gaf::Sequence*
+Runtime::explosion_sequence(std::string_view archive, std::string_view entry) {
+    const auto key = lowered(archive);
     if (key.empty() || key == "fx")
-        return match_fx_;
-    auto found = match_explosion_gafs_.find(key);
-    if (found != match_explosion_gafs_.end())
-        return found->second;
-    auto& archive = match_explosion_gafs_[key];
-    append_gaf_file(archive, "anims/" + std::string(name) + ".GAF");
-    return archive;
+        return gaf_sequence(match_fx_, entry);
+    load_explosion_gaf(archive);
+    auto& loaded = match_explosion_gafs_[key];
+    const auto* listed = gaf_sequence(loaded.archive, entry);
+    if (listed == nullptr)
+        return nullptr;
+    const auto index = static_cast<std::size_t>(listed - loaded.archive.sequences.data());
+    if (const auto found = loaded.decoded.find(index); found != loaded.decoded.end())
+        return &found->second;
+    // The file passed its check when it loaded, so its sequence decodes; the
+    // file is read again for it and its bytes are let go once it has decoded.
+    try {
+        const auto file = assets_.read(loaded.path).bytes;
+        auto decoded = oa::formats::gaf::parse_sequence(file, index);
+        if (!decoded.ok())
+            return nullptr;
+        return &loaded.decoded.emplace(index, std::move(*decoded.sequence)).first->second;
+    } catch (const std::exception& error) {
+        std::cerr << "match HUD GAF '" << loaded.path << "' unavailable: " << error.what() << '\n';
+        return nullptr;
+    }
 }
 
 void Runtime::append_gaf_file(oa::formats::gaf::Archive& destination, std::string_view path) {
@@ -233,6 +281,9 @@ void Runtime::bind_gui_context() {
         static_cast<Runtime*>(context)->cursor_image_ = image;
     };
     host.cursor_image = [](void* context) { return static_cast<Runtime*>(context)->cursor_image_; };
+    // Gadget texts the game sets, and each stage of a multi-stage caption, in
+    // the game's language, as gamedata\translate.tdf gives them.
+    host.translate = translation_hook;
 }
 
 const oa::formats::gaf::Sequence* Runtime::cursor_sequence(uint8_t index) const {

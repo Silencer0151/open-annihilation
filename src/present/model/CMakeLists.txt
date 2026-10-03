@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 add_library(oa-present-model src/mesh_raster.cpp src/model_library.cpp src/model_draw.cpp src/rgb_bridge.cpp
-  src/sprite_placement.cpp src/unit_supersampling.cpp)
+  src/shadow_fade.cpp src/sprite_placement.cpp src/unit_supersampling.cpp)
 add_library(oa::present::model ALIAS oa-present-model)
 target_link_libraries(oa-present-model PRIVATE oa-base-game-math)
 target_include_directories(oa-present-model PUBLIC include)
 target_link_libraries(oa-present-model PUBLIC oa-present oa-formats-objects3d oa-formats-gaf oa-sim-sprite-animation oa-formats-hpi
-  oa-sim-model-runtime oa-core-types oa-sim-effect-particles
+  oa-sim-model-runtime oa-core-types oa-sim-effect-particles oa-data-limits
   PRIVATE oa-base-geometry oa-options oa-sim-feature-runtime)
 target_compile_features(oa-present-model PUBLIC cxx_std_20)
 

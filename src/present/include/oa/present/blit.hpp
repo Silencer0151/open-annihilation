@@ -164,6 +164,20 @@ void draw_sprite(Surface* target, const Sprite* sprite, int32_t x, int32_t y) no
 /// @param y target row of the sprite hotspot
 void draw_sprite_blended(Surface* target, const Sprite* sprite, int32_t x, int32_t y) noexcept;
 
+/// Draws a sprite blended through a given table laid out as the display
+/// alpha table: each pixel takes table[sprite colour * 256 + target colour].
+///
+/// Composite sprites draw each child blended through the same table.
+///
+/// @param[in,out] target target surface; null for the locked display surface
+/// @param sprite sprite to draw; null draws nothing
+/// @param x target column of the sprite hotspot
+/// @param y target row of the sprite hotspot
+/// @param table 256 rows of 256 colours; null draws nothing
+void draw_sprite_blended_through(
+    Surface* target, const Sprite* sprite, int32_t x, int32_t y, const uint8_t* table
+) noexcept;
+
 /// Draws a sprite through one row of the display light table.
 ///
 /// Nothing is drawn unless display_flag_light_table is set. Row-RLE sprites

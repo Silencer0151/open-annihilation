@@ -10,6 +10,7 @@
 #include "oa/present/surface.hpp"
 #include "oa/present/world_renderer/world_camera.hpp"
 #include "oa/present/world_renderer/world_fog.hpp"
+#include "oa/sim/weapon_execution/weapon_keys.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -117,6 +118,7 @@ void Runtime::ensure_radar_surfaces() {
     }
     const auto host = radar_host();
     wr::radar_build_picture(game, radar.surfaces, source, host);
+    enhance_radar_picture();
     wr::radar_init_surfaces(game, radar.surfaces, host);
     radar.well =
         radar_host_create(nullptr, nullptr, wr::radar_picture_size, wr::radar_picture_size);
@@ -201,6 +203,16 @@ void Runtime::compose_radar_final() {
             return false;
         }
     };
+    host.projectile_hidden = [](void* user, const oa::Projectile& shot) {
+        const auto& self = *static_cast<Runtime*>(user);
+        const auto& world = self.match_->state();
+        const auto* weapon = oa::world_weapon_def(&world, shot.def);
+        return weapon != nullptr &&
+               oa::sim::weapon_execution::silent_ownerless_shot(
+                   shot, *weapon, self.match_->rules_view().weapon(weapon->weapon_id)
+               );
+    };
+    host.allied_units_shown = ui_rules().allied_unit_display.enabled;
     radar.hot_unit_count = oa::present::world_renderer::radar_compose_final(
         match_->state(), radar.surfaces, radar.sprites, host, radar.hot_units
     );

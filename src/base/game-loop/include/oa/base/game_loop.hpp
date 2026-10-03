@@ -190,6 +190,36 @@ enum class LoopError : uint8_t {
 /// @quirk The expression runs with the significand Timing::precision sets; the whole part is
 ///        truncated through 64 bits and only its low 32 bits kept.
 [[nodiscard]] LoopError update_timing(Timing& timing, uint32_t now) noexcept;
+
+/// The lag guard of a network game (network.lag-guard): while no remote player
+/// has been heard for a while, the game steps at most once per period.
+struct LagGuard {
+    uint32_t last_step_ms{}; ///< wall clock of the last step let through while closed
+    bool closed{};           ///< the remote players have been silent for the period
+    uint32_t closed_at_ms{}; ///< wall clock the guard closed at
+};
+
+/// What lag_guard_step decided for one step.
+enum class LagGuardStep : uint8_t {
+    run,     ///< the step runs
+    held,    ///< the step is held: the guard is closed and stepped within the period
+    closing, ///< the guard closes now; the step runs, the first of the gap
+    opening, ///< the guard opens again now; the step runs
+};
+
+/// Decides whether one simulation step runs under the lag guard.
+///
+/// The guard closes once the remote players have been silent for gap_ms and
+/// opens as soon as one is heard again. While closed, a step runs once
+/// gap_ms have passed since the last one it let through.
+///
+/// @param[in,out] guard the guard
+/// @param gap_ms the period in milliseconds; 0 turns the guard off
+/// @param now_ms wall clock in milliseconds
+/// @param silent_ms milliseconds since any remote player was last heard
+/// @return what happens to the step
+[[nodiscard]] LagGuardStep
+lag_guard_step(LagGuard& guard, uint32_t gap_ms, uint32_t now_ms, uint32_t silent_ms) noexcept;
 /// Runs the pending simulation steps through the fixed per-tick subsystem order.
 ///
 /// Each step advances the tick counter and runs, in order: player commands (live

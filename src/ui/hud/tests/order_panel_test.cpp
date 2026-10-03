@@ -736,6 +736,19 @@ void test_build_panel_clicks() {
     CHECK(clicks.changes[2] == std::make_pair(std::string("ARMMAKENUKE"), -1));
     CHECK(clicks.counts == 3);
 
+    // ui.selection-shortcuts: Ctrl with shift steps the queue by the host's step.
+    auto hundred = clicks.host();
+    hundred.shift_step = 100;
+    clicks.shift = true;
+    CHECK(
+        on_build_panel_click(state, pool.table(), "ARMPW", false, hundred, recorder.events())
+            .action == BuildPanelClick::queued
+    );
+    clicks.shift = false;
+    CHECK(clicks.changes.back() == std::make_pair(std::string("ARMPW"), -100));
+    clicks.changes.pop_back();
+    --clicks.counts;
+
     // A mobile panel unit rewrites its counts only when it stockpiles.
     pool.units[2].flags = kUnitFlagPanelSelected;
     CHECK(click("ARMMAKEANTI", true).action == BuildPanelClick::queued && clicks.counts == 3);
@@ -752,6 +765,53 @@ void test_build_panel_clicks() {
     state.unit_id = 0;
     CHECK(click("ARMPW", true).action == BuildPanelClick::none);
     CHECK(clicks.changes.size() == 5);
+}
+
+// units.placement-by-builder: the panel unit's type decides between placement
+// and the queue; a mobile builder places every type, a factory queues them.
+void test_build_panel_placement_by_builder() {
+    Pool pool;
+    pool.defs[1].bm_code = 0; // ARMSOLAR, a building
+    pool.defs[2].bm_code = 0; // the factory
+    pool.defs[3].bm_code = 1; // ARMPW, mobile
+    pool.units[2].type_index = 2;
+    pool.units[2].id = 2;
+    pool.units[2].flags = kUnitFlagPanelSelected | OA_UNIT_FLAG_BUILDING;
+    ClickHost clicks;
+    Recorder recorder;
+    OrderPanelState state{2, 2, 0, 0, 0};
+    auto host = clicks.host();
+    const auto click = [&](const char* name) {
+        return on_build_panel_click(state, pool.table(), name, true, host, recorder.events());
+    };
+
+    // 3.1c: the clicked item decides, whatever builds it.
+    state.unit_type = 3;
+    CHECK(click("ARMSOLAR").action == BuildPanelClick::place);
+    CHECK(click("ARMPW").action == BuildPanelClick::queued);
+
+    host.placement_by_builder = true;
+    const auto mobile = click("ARMPW");
+    CHECK(mobile.action == BuildPanelClick::place && mobile.type == 3);
+    CHECK(recorder.sounds.back() == "addbuild");
+    const auto building = click("ARMSOLAR");
+    CHECK(building.action == BuildPanelClick::place && building.type == 1);
+
+    // A factory queues every item, buildings too.
+    state.unit_type = 2;
+    const auto changes = clicks.changes.size();
+    CHECK(click("ARMSOLAR").action == BuildPanelClick::queued);
+    CHECK(click("ARMPW").action == BuildPanelClick::queued);
+    CHECK(clicks.changes.size() == changes + 2);
+    CHECK(clicks.changes.back() == std::make_pair(std::string("ARMPW"), 1));
+
+    // A panel type past the table places nothing.
+    state.unit_type = 9;
+    CHECK(click("ARMPW").action == BuildPanelClick::queued);
+    // Names that are no unit type keep their own handling.
+    state.unit_type = 3;
+    CHECK(click("ARMMAKENUKE").action == BuildPanelClick::queued);
+    CHECK(click("ARMBUILD").action == BuildPanelClick::build);
 }
 
 } // namespace
@@ -772,5 +832,6 @@ int main(int argc, char** argv) {
     test_build_page_buttons();
     test_download_build_page();
     test_build_panel_clicks();
+    test_build_panel_placement_by_builder();
     return 0;
 }

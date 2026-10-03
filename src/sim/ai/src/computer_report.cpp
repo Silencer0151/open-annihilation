@@ -4,6 +4,8 @@
 // The console's per-player AI weight report.
 #include "oa/sim/ai.hpp"
 
+#include "oa/data/match_rules/difficulty_names.hpp"
+
 namespace oa::sim::ai {
 namespace {
 
@@ -63,7 +65,12 @@ void computer_write_report(
     std::fprintf(
         out,
         "Challenge level: '%s'\r\n",
-        printable(known_difficulty ? difficulty_labels[host.difficulty] : nullptr)
+        printable(
+            known_difficulty ? difficulty_labels[data::match_rules::difficulty_name_index(
+                                   state->rules.rules().ai.difficulty_names, host.difficulty
+                               )]
+                             : nullptr
+        )
     );
     std::fprintf(out, "================================================\r\n");
     std::fprintf(

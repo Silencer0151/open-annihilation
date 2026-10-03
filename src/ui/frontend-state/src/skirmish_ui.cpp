@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/ui/frontend_state/skirmish_ui.hpp"
+#include "oa/data/match_rules/difficulty_names.hpp"
 #include <algorithm>
 #include <bit>
 #include <stdexcept>
@@ -332,7 +333,12 @@ void setup(State&, Settings& s, Preferences& p, UiState& ui, Host& h) {
     if (p.difficulty <= 2) {
         constexpr std::string_view names[] = {"Easy", "Medium", "Hard"};
         h.set_button_stage("Difficulty", static_cast<uint8_t>(p.difficulty));
-        h.select_difficulty_label(names[p.difficulty], 1);
+        h.select_difficulty_label(
+            names[data::match_rules::difficulty_name_index(
+                h.difficulty_names(), static_cast<int32_t>(p.difficulty)
+            )],
+            1
+        );
     }
     h.invalidate_menu();
     if (h.select_map(s.map_name) == 0) {

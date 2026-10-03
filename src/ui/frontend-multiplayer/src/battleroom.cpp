@@ -6,8 +6,12 @@
 
 #include "oa/base/game_loop.hpp"
 #include "oa/netgame/player_slots.hpp"
+#include "oa/netgame/private_channel.hpp"
 #include "oa/netgame/records.hpp"
+#include "oa/netgame/recorder_messages.hpp"
 #include "oa/ui/frontend_multiplayer/dialogs.hpp"
+#include "oa/ui/frontend_multiplayer/team_rules.hpp"
+#include "oa/sim/mission_units/map_units.hpp"
 #include "oa/base/text.hpp"
 
 #include <algorithm>
@@ -16,6 +20,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
+#include <string>
 
 namespace oa::ui::frontend_multiplayer {
 
@@ -24,6 +30,8 @@ namespace {
 // Where the accessors below find their Game and Player fields, which the
 // packed records may leave unaligned.
 constexpr std::size_t kChatRingOffset = offsetof(Game, chat_lines);
+// Bytes of the longest UTF-8 character.
+constexpr std::size_t kLongestCharacter = 4;
 constexpr std::size_t kSessionPlayersOffset = offsetof(Game, session_player_limit);
 constexpr std::size_t kPlayerCountOffset = offsetof(Game, player_count);
 constexpr std::size_t kChatHeadOffset = offsetof(Game, chat_head);
@@ -124,6 +132,21 @@ enum RowKey {
 };
 
 // Host-only option buttons grayed for clients.
+/// The battle room buttons a mod's display rules may add, and what each
+/// says when the host presses it, as if typed.
+struct ModLobbyButton {
+    uint8_t bit{};
+    const char* name{};
+    const char* line{};
+};
+
+constexpr ModLobbyButton kModLobbyButtons[] = {
+    {lobby_button::autoteam, "AUTOTEAM", "+autoteam"},
+    {lobby_button::autopause, "AUTOPAUSE", ".autopause"},
+    {lobby_button::randomteam, "RANDOMTEAM", "+randomteam"},
+    {lobby_button::crcreport, "CRCREPORT", ".crcreport"},
+};
+
 constexpr const char* kHostOptionButtons[] = {
     "COMMANDER", "MAPPING", "LOSTYPE", "WATCHING", "CHEATING", "FIXEDLOC", "GAMEOPEN"
 };
@@ -306,6 +329,41 @@ int32_t remote_count(Lobby& lobby) noexcept {
     return count;
 }
 
+/// Counts the seated slots whose status, read as a signed byte, is below
+/// a computer player's: the local humans, as the start gate counts them
+/// when a game may start with one human and computer players.
+///
+/// @param lobby Lobby state.
+/// @return The count.
+int32_t local_human_count(Lobby& lobby) noexcept {
+    int32_t count = 0;
+    for (int32_t slot = 0; slot < kSlotCount; ++slot) {
+        const auto& player = slot_player(lobby, slot);
+        if (player.in_use != 0 &&
+            static_cast<int8_t>(player.status) < static_cast<int8_t>(kSlotComputer))
+            ++count;
+    }
+    return count;
+}
+
+/// The setup rules of the lobby's profile; 3.1c's without one.
+///
+/// @param lobby Lobby state.
+/// @return The rules.
+const data::match_rules::SetupRules& setup_rules(const Lobby& lobby) noexcept {
+    static constexpr data::match_rules::SetupRules base{};
+    return lobby.rules != nullptr ? lobby.rules->setup : base;
+}
+
+/// The team rules of the lobby's profile; 3.1c's without one.
+///
+/// @param lobby Lobby state.
+/// @return The rules.
+const data::match_rules::TeamsRules& teams_rules(const Lobby& lobby) noexcept {
+    static constexpr data::match_rules::TeamsRules base{};
+    return lobby.rules != nullptr ? lobby.rules->teams : base;
+}
+
 /// Counts the occupied local slots and the remote slots whose info reports them playing.
 ///
 /// @param lobby Lobby state.
@@ -443,7 +501,280 @@ void set_host_options(Game& game, uint16_t options) noexcept {
     store(kUnmappedOptionOffset, (options & option::unmapped) >> 8);
 }
 
+// ---------------------------------------------------------------------------
+// The recorder in the battle room (Lobby::wire_rules.recorder_protocol)
+
+// A recorder sends the host's options to machines whose recorder is at least this version.
+constexpr uint8_t kRecorderOptionsProtocol = 5;
+// A chat line keeps a NUL in its last byte.
+constexpr std::size_t kChatLineChars = sizeof(netgame::ChatRecord::text) - 1;
+
+/// Sends a plain chat line from the local player to everyone and shows it here.
+///
+/// @param lobby Lobby state.
+/// @param line The line; cut at 63 characters.
+void recorder_say(Lobby& lobby, const char* line) noexcept {
+    netgame::ChatRecord record{};
+    std::memcpy(record.text, line, ::strnlen(line, kChatLineChars));
+    uint8_t wire[80];
+    std::size_t written = 0;
+    if (netgame::encode_record(record, wire, sizeof(wire), &written) == netgame::WireError::ok)
+        send(lobby, local_player(lobby).player_id, kBroadcastId, wire, written);
+    flush(lobby);
+    lobby_post_chat(lobby, line);
+}
+
+/// Tells whether the profile makes the recorder's commander warp available (setup.commander-warp).
+///
+/// @param lobby Lobby state.
+/// @return True when the rule is on with its available parameter.
+bool commander_warp_available(const Lobby& lobby) noexcept {
+    const auto& warp = setup_rules(lobby).commander_warp;
+    return warp.enabled && warp.available;
+}
+
+/// Tells whether the profile makes the recorder's prebuilt bases available (setup.recorder-prebuilt-base).
+///
+/// @param lobby Lobby state.
+/// @return True when the rule is on with its available parameter.
+bool prebuilt_base_available(const Lobby& lobby) noexcept {
+    const auto& base = setup_rules(lobby).recorder_prebuilt_base;
+    return base.enabled && base.available;
+}
+
+/// The most bytes of a base file .base reads.
+constexpr std::size_t kBaseFileLimit = 64 * 1024;
+
+/// Carries out the host's .base: loads the standard base, or the base file
+/// the command names, and offers a base to every player seated.
+///
+/// @param lobby Lobby state; this machine hosts.
+/// @param line The command.
+/// @param[out] answer The line the host's recorder answers with.
+/// @param capacity Its size.
+void recorder_offer_base(
+    Lobby& lobby, const netgame::RecorderCommandLine& line, char* answer, std::size_t capacity
+) noexcept {
+    auto& base = lobby.recorder.base;
+    if (line.argument[0] == '\0') {
+        netgame::recorder_standard_base(base);
+        std::snprintf(answer, capacity, "Standard base initiated .baseoff to disable");
+    } else {
+        std::string text;
+        if (lobby.services.read_file == nullptr ||
+            !lobby.services.read_file(
+                lobby.services.context, line.argument, kBaseFileLimit, &text
+            )) {
+            std::snprintf(answer, capacity, "Unable to open file %s", line.argument);
+            return;
+        }
+        const auto outcome = netgame::recorder_read_base(text, base);
+        if (outcome != netgame::RecorderBaseRead::read) {
+            std::snprintf(answer, capacity, "%s", netgame::recorder_base_read_text(outcome));
+            return;
+        }
+        std::snprintf(
+            answer, capacity, "Fast base initiated from %s .baseoff to disable", line.argument
+        );
+    }
+    for (int32_t slot = 0; slot < kSlotCount; ++slot)
+        base.available[slot] = slot_player(lobby, slot).in_use != 0;
+}
+
+/// Picks a map at random from the list and makes it the game's, as the host's map dialog does.
+///
+/// @param lobby Lobby state; this machine hosts.
+void recorder_random_map(Lobby& lobby) noexcept {
+    auto& maps = lobby.maps;
+    if (maps.count == nullptr || maps.at == nullptr || maps.select == nullptr)
+        return;
+    const auto count = maps.count(maps.context);
+    if (count <= 0)
+        return;
+    const auto pick = static_cast<int32_t>(milliseconds(lobby) % static_cast<uint32_t>(count));
+    const char* name = maps.at(maps.context, pick);
+    if (name == nullptr || !maps.select(maps.context, name))
+        return;
+    auto& mine = local_info(lobby);
+    std::snprintf(mine.map_name, sizeof(mine.map_name), "%s", name);
+    mine.map_hash = maps.content_hash != nullptr ? maps.content_hash(maps.context) : 0;
+    lobby_send_player_info(lobby);
+    lobby_publish_session(lobby);
+}
+
 } // namespace
+
+bool recorder_chat_line(Lobby& lobby, int32_t sender_slot, const char* text) noexcept {
+    const auto& rules = lobby.wire_rules;
+    if (rules.recorder_protocol == netgame::recorder_protocol_plain || sender_slot < 0 ||
+        sender_slot >= kSlotCount)
+        return false;
+    const auto line = netgame::parse_recorder_command(text);
+    if (line.command == netgame::RecorderCommand::none)
+        return false;
+    if (netgame::recorder_session_command(line.command) && !rules.recorder_session_commands)
+        return false;
+    if (netgame::recorder_speed_command(line.command) && !rules.speed_lock)
+        return false;
+    const bool from_host = lobby_host_slot(lobby) == sender_slot;
+    const bool from_here = local_or_computer(slot_player(lobby, sender_slot));
+    auto& session = lobby.recorder;
+    char answer[kChatLineBytes];
+    answer[0] = '\0';
+    switch (line.command) {
+    case netgame::RecorderCommand::report:
+    case netgame::RecorderCommand::report_mod:
+        if (session.program[0] != '\0') {
+            const auto& me = local_player(lobby);
+            std::snprintf(
+                answer,
+                sizeof answer,
+                "*** %s uses %s",
+                std::string(text_view(me.name, sizeof(me.name))).c_str(),
+                session.program
+            );
+        }
+        break;
+    case netgame::RecorderCommand::vote_go:
+    case netgame::RecorderCommand::force_go:
+        session.watchers_ready = true;
+        break;
+    case netgame::RecorderCommand::record:
+        // The local player's .record names the game's recording.
+        if (from_here && line.argument[0] != '\0') {
+            std::snprintf(session.record_name, sizeof session.record_name, "%s", line.argument);
+            std::snprintf(answer, sizeof answer, "Recording to %s", session.record_name);
+        }
+        break;
+    case netgame::RecorderCommand::random_map:
+    case netgame::RecorderCommand::random_map_ex:
+        if (from_host && from_here)
+            recorder_random_map(lobby);
+        break;
+    case netgame::RecorderCommand::base_file:
+        if (!prebuilt_base_available(lobby) || !from_host)
+            return false;
+        if (from_here)
+            recorder_offer_base(lobby, line, answer, sizeof answer);
+        break;
+    case netgame::RecorderCommand::base_off:
+        if (!prebuilt_base_available(lobby) || !from_host)
+            return false;
+        session.base.enabled = false;
+        std::fill(std::begin(session.base.available), std::end(session.base.available), false);
+        if (from_here)
+            std::snprintf(answer, sizeof answer, "Quick base disabled");
+        break;
+    default:
+        if (!netgame::recorder_command_host_only(line.command) || !from_host)
+            return false;
+        if (line.command == netgame::RecorderCommand::commander_warp &&
+            !commander_warp_available(lobby))
+            return false;
+        if (!netgame::recorder_apply_host_command(session, line) || !from_here)
+            return true;
+        // The host's recorder says what its command did.
+        switch (line.command) {
+        case netgame::RecorderCommand::speed_lock: {
+            std::snprintf(
+                answer,
+                sizeof answer,
+                "Speed locked between %d and %d",
+                static_cast<int8_t>(session.options.speed_low),
+                static_cast<int8_t>(session.options.speed_high)
+            );
+            break;
+        }
+        case netgame::RecorderCommand::speed_unlock:
+            std::snprintf(answer, sizeof answer, "Speed unlocked");
+            break;
+        case netgame::RecorderCommand::autopause:
+            std::snprintf(
+                answer, sizeof answer, "Autopause enabled - At the start only the host can unpause"
+            );
+            break;
+        case netgame::RecorderCommand::commander_warp:
+            std::snprintf(
+                answer,
+                sizeof answer,
+                session.options.commander_warp != 0 ? "Cmd warping enabled" : "Cmd warping disabled"
+            );
+            break;
+        default:
+            break;
+        }
+        break;
+    }
+    if (answer[0] != '\0')
+        recorder_say(lobby, answer);
+    return true;
+}
+
+void recorder_note_block(Lobby& lobby, int32_t slot) noexcept {
+    if (lobby.wire_rules.recorder_protocol == netgame::recorder_protocol_plain || slot < 0 ||
+        slot >= kSlotCount)
+        return;
+    auto& session = lobby.recorder;
+    auto* bytes = reinterpret_cast<uint8_t*>(slot_info(lobby, slot));
+    if (bytes == nullptr)
+        return;
+    const auto protocol = bytes[netgame::player_info_recorder_protocol_offset];
+    session.peer_protocol[slot] = protocol;
+    // After .votego or .forcego a watcher counts as ready.
+    auto& info = *reinterpret_cast<PlayerSetupInfo*>(bytes);
+    if (session.watchers_ready && (info.options & option::watcher) != 0)
+        info.options |= option::ready;
+    if (!host_is_local(lobby) || protocol < kRecorderOptionsProtocol ||
+        session.host_options_sent[slot])
+        return;
+    session.host_options_sent[slot] = true;
+    uint8_t payload[netgame::recorder_host_options_bytes];
+    netgame::encode_recorder_host_options(session.options, payload);
+    uint8_t record[netgame::recorder_message_header_bytes + sizeof payload];
+    std::size_t written = 0;
+    if (netgame::encode_recorder_message(
+            netgame::RecorderMessageKind::host_options,
+            payload,
+            sizeof payload,
+            record,
+            sizeof record,
+            &written
+        ) != netgame::WireError::ok)
+        return;
+    flush(lobby);
+    send(lobby, local_player(lobby).player_id, slot_player(lobby, slot).player_id, record, written);
+    flush(lobby);
+}
+
+bool recorder_lobby_record(
+    Lobby& lobby, int32_t sender_slot, const uint8_t* data, std::size_t size
+) noexcept {
+    if (sender_slot < 0 || sender_slot >= kSlotCount || size == 0)
+        return false;
+    netgame::RecorderMessage message{};
+    if (data[0] != static_cast<uint8_t>(netgame::RecorderRecordType::message) ||
+        netgame::decode_recorder_message(data, size, &message) != netgame::WireError::ok)
+        return false;
+    if (message.kind == netgame::RecorderMessageKind::host_options &&
+        lobby_host_slot(lobby) == sender_slot) {
+        netgame::RecorderHostOptions options{};
+        if (netgame::decode_recorder_host_options(message.payload, message.size, &options) !=
+            netgame::WireError::ok)
+            return false;
+        // Without the rules' speed lock the host's lock is not taken.
+        if (!lobby.wire_rules.speed_lock)
+            options.speed_lock = 0;
+        lobby.recorder.options = options;
+        return true;
+    }
+    if (message.kind == netgame::RecorderMessageKind::warp_done) {
+        lobby.recorder.warp_done[sender_slot] = true;
+        return true;
+    }
+    return false;
+}
+
+namespace {} // namespace
 
 // ---------------------------------------------------------------------------
 // Accessors
@@ -593,6 +924,11 @@ void lobby_reset(Lobby& lobby, Game& game) noexcept {
         game.player_timeout_seconds = kDefaultPlayerTimeoutSeconds;
     lobby.row_base = 0;
     lobby.refused_joiner = 0;
+    // The recorder's session starts again; the line it answers with stays.
+    char program[sizeof lobby.recorder.program];
+    std::memcpy(program, lobby.recorder.program, sizeof program);
+    lobby.recorder = netgame::RecorderSession{};
+    std::memcpy(lobby.recorder.program, program, sizeof program);
 }
 
 void lobby_seat_local(Lobby& lobby, int32_t slot, bool host, const char* nickname) noexcept {
@@ -670,11 +1006,15 @@ bool lobby_launch_block_active(const Lobby& lobby) noexcept {
     return lobby.launch_link.block != nullptr && lobby_launch_active(lobby);
 }
 
-bool info_version_compatible(const PlayerSetupInfo& info, uint32_t local_major) noexcept {
+bool info_version_compatible(
+    const PlayerSetupInfo& info, uint32_t local_major, const netgame::WireRules& rules
+) noexcept {
     int32_t version = info.version_major;
-    if ((info.status & status::launch_only) != 0)
+    if (rules.launch_version_bias && (info.status & status::launch_only) != 0)
         version -= 100;
-    return static_cast<int32_t>(static_cast<int8_t>(local_major)) <= version;
+    auto compared = rules;
+    compared.version_major = static_cast<uint8_t>(local_major);
+    return netgame::version_admits(compared, version);
 }
 
 char* local_password_field(Lobby& lobby) noexcept {
@@ -789,7 +1129,10 @@ void lobby_update_ally_matrix(Lobby& lobby) noexcept {
             info_of(lobby, player).status |= status::allied_victory;
             ++mate;
         }
-        if (team_member_count(lobby, lobby_player_team(player)) < 2)
+        // teams.allied-victory-kept leaves the player's Allied Victory
+        // setting as it is here; leaving a team still clears it.
+        if (team_member_count(lobby, lobby_player_team(player)) < 2 &&
+            !teams_rules(lobby).allied_victory_kept.enabled)
             info_of(lobby, player).status &= static_cast<uint16_t>(~status::allied_victory);
     }
 }
@@ -1259,7 +1602,10 @@ void lobby_update_status(Lobby& lobby, Panel& panel) noexcept {
 }
 
 bool lobby_ready_to_start(Lobby& lobby) noexcept {
-    if (remote_count(lobby) == 0)
+    // With setup.allow-start-with-ai the gate asks for a local human
+    // instead of a remote player, so one human and computer players start.
+    const bool with_computers = setup_rules(lobby).allow_start_with_ai.enabled;
+    if ((with_computers ? local_human_count(lobby) : remote_count(lobby)) == 0)
         return false;
     bool everyone_watching = true;
     for (int32_t slot = 0; slot < kSlotCount; ++slot) {
@@ -1324,6 +1670,10 @@ void lobby_enter_battleroom(Lobby& lobby, Panel& panel) noexcept {
     if (!host || lobby_options_locked(lobby))
         for (const char* name : kHostOptionButtons)
             panel_set_grayed(panel, name, true);
+    // The buttons a mod's display rules add are the host's alone.
+    for (const auto& button : kModLobbyButtons)
+        if ((lobby.lobby_buttons & button.bit) != 0)
+            panel_set_grayed(panel, button.name, !host);
     lobby_update_option_buttons(lobby, panel);
     if (auto* mem = panel_control(panel, "MEMx"))
         mem->color = info.memory_mb < map_memory(lobby) ? kWarningColor : 0;
@@ -1390,6 +1740,59 @@ namespace {
 /// @return True when they match ignoring case.
 bool same_nocase(std::string_view text, std::string_view word) noexcept {
     return text.size() == word.size() && starts_nocase(text, word);
+}
+
+LobbyAction handle_panel_event(Lobby& lobby, Panel& panel) noexcept;
+
+/// The clicks on an open slot's PLAYER control that seat a computer player:
+/// the first blocks the slot, the second opens it with a computer player.
+constexpr int32_t kNeutralSeatClicks = 2;
+
+/// Seats a computer player for the selected map's neutral units as START is
+/// pressed (setup.map-scripted-units).
+///
+/// With the rule's auto-neutral-ai it acts once per battle room, while
+/// map-placed units are on, when the
+/// selected map places units, some of them for the neutral player, and no
+/// slot's block names a computer player: the first open slot's PLAYER
+/// control is clicked as the host clicks it to seat one, and three notices
+/// tell the host. START then does nothing else.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param[in,out] panel The battle room panel.
+/// @return true when a slot was clicked and START stops there.
+bool seat_neutral_computer(Lobby& lobby, Panel& panel) noexcept {
+    const auto& units = setup_rules(lobby).map_scripted_units;
+    if (!units.enabled || !units.auto_neutral_ai || !lobby.map_units_on ||
+        lobby.neutral_computer_seated || lobby.maps.map_context == nullptr)
+        return false;
+    const auto* map = lobby.maps.map_context(lobby.maps.context);
+    if (map == nullptr || map->unit_count <= 0 || map->units == nullptr)
+        return false;
+    if (!sim::mission_units::has_neutral_map_units(map->units, map->unit_count))
+        return false;
+    for (int32_t slot = 0; slot < kSlotCount; ++slot)
+        if (info_of(lobby, slot_player(lobby, slot)).state == team_rules::setup_computer)
+            return false;
+    int32_t open = -1;
+    for (int32_t slot = 0; slot < kSlotCount && open < 0; ++slot)
+        if (slot_player(lobby, slot).status == kSlotOpen)
+            open = slot;
+    if (open < 0)
+        return false;
+    char name[64];
+    format(name, "PLAYER%d", open);
+    const auto control = panel_find(panel, name);
+    for (int32_t click = 0; click < kNeutralSeatClicks; ++click) {
+        panel.selected = control;
+        if (control != kNoControl)
+            (void)handle_panel_event(lobby, panel);
+    }
+    lobby_post_chat(lobby, "An AI has been added to accept neutral units for this map");
+    lobby_post_chat(lobby, "Remove the AI now if you don't want it");
+    lobby_post_chat(lobby, "Use +spawnoff to disable extra unit spawn in general");
+    lobby.neutral_computer_seated = true;
+    return true;
 }
 
 /// Handles a click on the battle room panel; lobby_handle_event flushes what it queued.
@@ -1459,7 +1862,8 @@ LobbyAction handle_panel_event(Lobby& lobby, Panel& panel) noexcept {
                     publish = false;
                 } else if (
                     (host_options & option::commander_mask) != option::commander_deathmatch &&
-                    computer_count(lobby) == 0 && !lobby.option_4
+                    (computer_count(lobby) == 0 || setup_rules(lobby).multiple_local_ai.enabled) &&
+                    !lobby.option_4
                 ) {
                     // The game colours the slot and notifies whether or
                     // not the session took the player.
@@ -1603,6 +2007,18 @@ LobbyAction handle_panel_event(Lobby& lobby, Panel& panel) noexcept {
         game.frontend_pending_signal = 3;
         return LobbyAction::leave;
     }
+    for (const auto& button : kModLobbyButtons) {
+        if ((lobby.lobby_buttons & button.bit) == 0 || !panel_selected_is(panel, button.name))
+            continue;
+        const auto* control = panel_control(panel, button.name);
+        if (control == nullptr || control->grayed)
+            return action;
+        play(lobby, "Multi");
+        lobby_say(lobby, me, button.line);
+        game.gui_flags |= 1U;
+        panel.selected = kNoControl;
+        return action;
+    }
     if (panel_selected_is(panel, "MESSAGE")) {
         auto* entry = panel_control(panel, "MESSAGE");
         const auto text = std::string(control_text(*entry));
@@ -1616,8 +2032,12 @@ LobbyAction handle_panel_event(Lobby& lobby, Panel& panel) noexcept {
                 char diagnostic[kChatLineBytes];
                 if (const char* line = unit_sync_diagnostic(lobby, diagnostic, sizeof diagnostic))
                     lobby_post_chat(lobby, line);
-            } else if (!command)
+            } else if (!command) {
+                // A profile's setup command runs here and still goes out
+                // as a chat line.
+                (void)lobby_run_setup_command(lobby, text);
                 lobby_say(lobby, me, text.c_str());
+            }
             game.gui_flags |= 1U;
             set_control_text(*entry, "");
         }
@@ -1675,6 +2095,10 @@ LobbyAction handle_panel_event(Lobby& lobby, Panel& panel) noexcept {
         return action;
     }
     if (panel_selected_is(panel, "START")) {
+        if (seat_neutral_computer(lobby, panel)) {
+            panel.selected = kNoControl;
+            return action;
+        }
         play(lobby, "BigButton");
         int32_t discs = 0;
         for (int32_t slot = 0; slot < kSlotCount; ++slot) {
@@ -1975,10 +2399,28 @@ void lobby_send_player_info(Lobby& lobby) noexcept {
         std::memcpy(
             record.info_tail, bytes + netgame::player_info_tail_offset, sizeof(record.info_tail)
         );
+        // A recorder stamps its protocol on every battle-room block it sends.
+        record.info_tail
+            [netgame::player_info_recorder_protocol_offset - netgame::player_info_tail_offset] =
+            lobby.wire_rules.recorder_protocol;
         uint8_t wire[kLobbyRecordBytes];
         std::size_t written = 0;
         if (netgame::encode_record(record, wire, sizeof(wire), &written) == netgame::WireError::ok)
             send(lobby, player.player_id, kBroadcastId, wire, written);
+        const auto& teams = teams_rules(lobby).team_number_alliances;
+        if (teams.enabled)
+            lobby_apply_team_steps(
+                lobby,
+                team_rules::resend_alliances(
+                    lobby_team_slots(lobby),
+                    static_cast<uint8_t>(slot),
+                    teams.lobby_rebroadcast ==
+                            data::match_rules::TeamsTeamNumberAlliancesLobbyRebroadcast::
+                                recompute_from_teams
+                        ? team_rules::AllianceResend::from_teams
+                        : team_rules::AllianceResend::stored
+                )
+            );
         lobby_send_team(lobby, player);
     }
     lobby_request_machine_groups(lobby);
@@ -2092,6 +2534,153 @@ void lobby_set_alliance(
     // The game reports only in a multiplayer session, which the lobby and
     // the in-game allies panel always are.
     notify(lobby, 4);
+}
+
+team_rules::TeamSlots lobby_team_slots(Lobby& lobby) noexcept {
+    team_rules::TeamSlots slots{};
+    for (int32_t slot = 0; slot < kSlotCount; ++slot) {
+        auto& player = slot_player(lobby, slot);
+        const auto& info = info_of(lobby, player);
+        auto& view = slots[static_cast<std::size_t>(slot)];
+        view.in_use = player.in_use != 0;
+        view.status = player.status;
+        view.watcher = (info.options & option::watcher) != 0;
+        view.setup_state = info.state;
+        view.team = static_cast<int8_t>(lobby_player_team(player));
+        std::memcpy(view.alliance.data(), player.alliance, view.alliance.size());
+        static_assert(sizeof(player.name) <= sizeof(view.name));
+        std::memcpy(view.name.data(), player.name, sizeof(player.name));
+    }
+    return slots;
+}
+
+void lobby_announce_alliance(Lobby& lobby, Player& from, Player& to, uint8_t value) noexcept {
+    if (from.index >= kSlotCount || to.index >= kSlotCount)
+        return;
+    netgame::AllianceRecord record{};
+    record.player_id_a = from.player_id;
+    record.player_id_b = to.player_id;
+    record.value = value;
+    uint8_t wire[32];
+    std::size_t written = 0;
+    if (local_or_computer(from)) {
+        from.alliance[to.index] = value;
+        if (netgame::encode_record(record, wire, sizeof(wire), &written) == netgame::WireError::ok)
+            send(lobby, from.player_id, kBroadcastId, wire, written);
+        // A player on this machine takes it as it would from the record.
+        if (local_or_computer(to))
+            lobby_set_alliance(lobby, from, to, value, false);
+    } else {
+        record.both_sides = team_rules::alliance_request;
+        if (netgame::encode_record(record, wire, sizeof(wire), &written) == netgame::WireError::ok)
+            send(lobby, local_player(lobby).player_id, from.player_id, wire, written);
+    }
+    flush(lobby);
+    lobby.game->gui_flags |= 1U;
+}
+
+void lobby_apply_team_steps(Lobby& lobby, const team_rules::TeamSteps& steps) noexcept {
+    for (uint16_t i = 0; i < steps.count; ++i) {
+        const auto& step = steps.items[i];
+        auto& from = slot_player(lobby, step.from);
+        if (step.kind == team_rules::TeamStep::Kind::alliance) {
+            lobby_announce_alliance(lobby, from, slot_player(lobby, step.to), step.value);
+            continue;
+        }
+        lobby_player_team(from) = step.value;
+        netgame::PlayerTeamRecord record{};
+        record.player_id = from.player_id;
+        record.value = static_cast<uint8_t>(step.value | team_rules::team_keeps_alliances);
+        uint8_t wire[16];
+        std::size_t written = 0;
+        if (netgame::encode_record(record, wire, sizeof(wire), &written) == netgame::WireError::ok)
+            send(lobby, local_player(lobby).player_id, kBroadcastId, wire, written);
+        flush(lobby);
+    }
+    lobby.game->gui_flags |= 1U;
+}
+
+namespace {
+
+/// Draws for the team deal through the lobby's services.
+///
+/// @param context The lobby.
+/// @param bound Exclusive upper limit.
+/// @return The draw.
+uint32_t lobby_random_below(void* context, uint32_t bound) {
+    auto& lobby = *static_cast<Lobby*>(context);
+    return lobby.services.random_below(lobby.services.context, bound);
+}
+
+/// Deals the counted players into teams in a random order (+autoteam, +randomteam).
+///
+/// @param[in,out] lobby Lobby state.
+/// @param command The command's name, for its refusal.
+/// @param argument The command's argument.
+/// @param notice The notice posted as the teams are dealt.
+void deal_random_teams(
+    Lobby& lobby, std::string_view command, std::string_view argument, const char* notice
+) noexcept {
+    if (local_player(lobby).machine_group != kHostMachineGroup) {
+        char line[kChatLineBytes];
+        std::snprintf(
+            line,
+            sizeof line,
+            "%.*s can only be used by host",
+            static_cast<int>(command.size()),
+            command.data()
+        );
+        lobby_post_chat(lobby, line);
+        return;
+    }
+    const int32_t teams = team_rules::dealt_team_count(argument);
+    lobby_post_chat(lobby, notice);
+    std::array<int32_t, team_rules::slot_count> order{0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+    team_rules::ShuffleRandom random{};
+    if (lobby.services.random_below != nullptr)
+        random = {&lobby, lobby_random_below};
+    team_rules::shuffle_slots(order, random);
+    lobby_apply_team_steps(lobby, team_rules::deal_teams(lobby_team_slots(lobby), order, teams));
+}
+
+} // namespace
+
+bool lobby_run_setup_command(Lobby& lobby, std::string_view text) noexcept {
+    const auto space = text.find(' ');
+    const auto command = text.substr(0, space);
+    auto argument = space == std::string_view::npos ? std::string_view{} : text.substr(space + 1);
+    while (!argument.empty() && argument.front() == ' ')
+        argument.remove_prefix(1);
+    const auto is = [&](std::string_view word) {
+        return command.size() == word.size() && starts_nocase(command, word);
+    };
+    if (lobby.rules == nullptr)
+        return false;
+    if (lobby.rules->teams.team_number_alliances.enabled) {
+        if (is("+autoteam")) {
+            deal_random_teams(
+                lobby, "+autoteam", argument, "Autobalance not available. Setting random teams"
+            );
+            return true;
+        }
+        if (is("+randomteam")) {
+            deal_random_teams(lobby, "+randomteam", argument, "Setting random teams");
+            return true;
+        }
+    }
+    if (lobby.rules->setup.map_scripted_units.enabled) {
+        if (is("+spawnoff")) {
+            lobby.map_units_on = false;
+            lobby_post_chat(lobby, "Unit spawn is disabled ...");
+            return true;
+        }
+        if (is("+spawnon")) {
+            lobby.map_units_on = true;
+            lobby_post_chat(lobby, "Unit spawn is enabled ...");
+            return true;
+        }
+    }
+    return false;
 }
 
 void lobby_send_alliance(
@@ -2222,7 +2811,13 @@ void lobby_reject(Lobby& lobby, uint32_t player_id, uint8_t reason) noexcept {
 void lobby_post_chat(Lobby& lobby, const char* line) noexcept {
     auto& game = *lobby.game;
     const uint16_t head = lobby_chat_head(game);
-    copy_text(lobby_chat_line(game, head), kChatLineBytes, line);
+    // A line keeps what fits, less a UTF-8 character the cut would split.
+    const std::string_view text(line, ::strnlen(line, kChatLineBytes + kLongestCharacter));
+    copy_text(
+        lobby_chat_line(game, head),
+        kChatLineBytes,
+        text.substr(0, base::text::whole_characters(text, kChatLineBytes - 1))
+    );
     auto next = static_cast<uint16_t>((head + 1U) % kChatLines);
     lobby_chat_head(game) = next;
     if (next == static_cast<uint16_t>(lobby_chat_tail(game)))
@@ -2240,15 +2835,23 @@ void lobby_say(Lobby& lobby, const Player& speaker, const char* text) noexcept {
         text
     );
     // The record carries the line's first 64 bytes, the rest zero, with no
-    // terminator when the line fills it.
+    // terminator when the line fills it; a UTF-8 character the 64th byte
+    // would split is left out whole.
     netgame::ChatRecord record{};
-    std::memcpy(record.text, line, ::strnlen(line, sizeof(record.text)));
+    std::memcpy(
+        record.text,
+        line,
+        base::text::whole_characters(
+            std::string_view(line, ::strnlen(line, sizeof(line))), sizeof(record.text)
+        )
+    );
     uint8_t wire[80];
     std::size_t written = 0;
     if (netgame::encode_record(record, wire, sizeof(wire), &written) == netgame::WireError::ok)
         send(lobby, speaker.player_id, kBroadcastId, wire, written);
     flush(lobby);
     lobby_post_chat(lobby, line);
+    recorder_chat_line(lobby, slot_for_player_id(lobby, speaker.player_id), line);
 }
 
 void lobby_session_description(Lobby& lobby, char* name, uint8_t* user) noexcept {
@@ -2256,7 +2859,7 @@ void lobby_session_description(Lobby& lobby, char* name, uint8_t* user) noexcept
     auto& info = local_info(lobby);
     // While a launch is active the session is marked launch-only and its
     // version biased.
-    const bool launched = lobby_launch_active(lobby);
+    const bool launched = lobby_launch_active(lobby) && lobby.wire_rules.launch_version_bias;
     info.version_major = static_cast<uint8_t>(
         static_cast<int32_t>(lobby.local_version_major) + (launched ? kLaunchVersionBias : 0)
     );
@@ -2318,9 +2921,18 @@ void lobby_add_computer(Lobby& lobby, int32_t slot) noexcept {
     auto& player = slot_player(lobby, slot);
     slot_set_status(lobby, player, kSlotComputer);
     char name[kComputerNameBytes + 1]{};
-    // The name is cut to the field; a failed format leaves it empty.
-    if (std::snprintf(name, sizeof(name), "AI:%s", local_player(lobby).name) < 0)
+    const auto& naming = setup_rules(lobby).ai_player_name_format;
+    if (naming.enabled) {
+        // setup.ai-player-name-format: the profile's format, with the local
+        // player's name and this slot, cut to the field.
+        static_assert(kComputerNameBytes == team_rules::computer_name_bytes);
+        team_rules::format_computer_name(
+            name, naming.format.view(), local_player(lobby).name, slot
+        );
+    } else if (std::snprintf(name, sizeof(name), "AI:%s", local_player(lobby).name) < 0) {
+        // The name is cut to the field; a failed format leaves it empty.
         name[0] = '\0';
+    }
     auto& info = info_of(lobby, player);
     const auto host_role = slot == lobby_host_slot(lobby) ? kRoleHost : 0;
     info.role = static_cast<uint8_t>((info.role & ~kRoleHost) | host_role);
@@ -2333,6 +2945,9 @@ void lobby_add_computer(Lobby& lobby, int32_t slot) noexcept {
         (info.options & ~(option::player_count_mask | option::game_closed)) | count
     );
     info.max_units = kSeatedMaxUnits;
+    // A computer player reports its machine's memory, as the local player
+    // does, so no machine marks it short of the map's memory.
+    info.memory_mb = local_info(lobby).memory_mb;
     const auto password = lobby_password(game)[0] != '\0' ? status::password : 0;
     const auto launch_only = lobby_launch_active(lobby) ? status::launch_only : 0;
     info.status = static_cast<uint16_t>(
@@ -2535,6 +3150,14 @@ bool lobby_add_player(Lobby& lobby, uint32_t player_id, const char* name) noexce
     player.player_id = player_id;
     player.last_update_time = now(lobby);
     lobby_player_count(game) = static_cast<uint16_t>(lobby_player_count(game) + 1);
+    // A player joining takes back the prebuilt bases the host offered.
+    auto& base = lobby.recorder.base;
+    const auto local = game.local_player_index;
+    if (player.status == kSlotRemote && local < kSlotCount && base.available[local]) {
+        if (host_is_local(lobby))
+            recorder_say(lobby, "New player. Quick base toggled off");
+        std::fill(std::begin(base.available), std::end(base.available), false);
+    }
     lobby_send_player_info(lobby);
     return true;
 }
@@ -2604,6 +3227,10 @@ bool lobby_apply_event(Lobby& lobby, const LobbyEvent& event) noexcept {
     const auto type = static_cast<netgame::RecordType>(event.data[0]);
     switch (type) {
     case netgame::RecordType::chat: {
+        // Private messages are for the match; the battle room shows none.
+        if (lobby.wire_rules.private_channel != netgame::PrivateChannel::none &&
+            netgame::is_private_chat(event.data, event.size))
+            return false;
         netgame::ChatRecord record{};
         if (netgame::decode_record(event.data, event.size, &record) != netgame::WireError::ok)
             return false;
@@ -2611,6 +3238,7 @@ bool lobby_apply_event(Lobby& lobby, const LobbyEvent& event) noexcept {
         std::memcpy(line, record.text, sizeof(record.text));
         line[sizeof(record.text)] = '\0';
         lobby_post_chat(lobby, line);
+        recorder_chat_line(lobby, slot_for_player_id(lobby, event.player_id), line);
         return true;
     }
     case netgame::RecordType::player_info: {
@@ -2629,6 +3257,7 @@ bool lobby_apply_event(Lobby& lobby, const LobbyEvent& event) noexcept {
             bytes + netgame::player_info_tail_offset, record.info_tail, sizeof(record.info_tail)
         );
         note_shared_machines(game);
+        recorder_note_block(lobby, slot);
         return true;
     }
     case netgame::RecordType::machine_group_request: {
@@ -2661,6 +3290,22 @@ bool lobby_apply_event(Lobby& lobby, const LobbyEvent& event) noexcept {
         const auto slot = slot_for_player_id(lobby, record.player_id);
         if (slot < 0)
             return false;
+        const auto& teams = teams_rules(lobby).team_number_alliances;
+        if (teams.enabled) {
+            // teams.team-number-alliances: the team decides this machine's
+            // players' alliances with the sender.
+            const auto result = team_rules::receive_team_number(
+                lobby_team_slots(lobby),
+                static_cast<uint8_t>(slot),
+                record.value,
+                teams.bit7_keeps_alliances
+            );
+            if (result.store)
+                lobby_player_team(slot_player(lobby, slot)) = static_cast<uint8_t>(result.team);
+            lobby_apply_team_steps(lobby, result.steps);
+            game.gui_flags |= 1U;
+            return true;
+        }
         lobby_player_team(slot_player(lobby, slot)) = record.value;
         return true;
     }
@@ -2672,6 +3317,17 @@ bool lobby_apply_event(Lobby& lobby, const LobbyEvent& event) noexcept {
         const auto to = slot_for_player_id(lobby, record.player_id_b);
         if (from < 0 || to < 0)
             return false;
+        if (teams_rules(lobby).team_number_alliances.enabled &&
+            team_rules::alliance_requested(
+                lobby_team_slots(lobby)[static_cast<std::size_t>(from)], record.both_sides
+            )) {
+            // A request for one of this machine's players: it sets the
+            // alliance and announces it.
+            lobby_announce_alliance(
+                lobby, slot_player(lobby, from), slot_player(lobby, to), record.value != 0 ? 1 : 0
+            );
+            return true;
+        }
         if (record.value != 0)
             play(lobby, "Ally");
         auto& sender = slot_player(lobby, from);
@@ -2748,6 +3404,11 @@ bool lobby_apply_event(Lobby& lobby, const LobbyEvent& event) noexcept {
         game.frontend_pending_signal = 0x11;
         return true;
     default:
+        if (lobby.wire_rules.recorder_protocol != netgame::recorder_protocol_plain &&
+            netgame::is_recorder_record_type(event.data[0]))
+            return recorder_lobby_record(
+                lobby, slot_for_player_id(lobby, event.player_id), event.data, event.size
+            );
         return false;
     }
 }

@@ -147,7 +147,11 @@ Node encode_script(const Script& script) {
     root.children.push_back(whole_entry("oascript", script_version));
 
     Node input{mapping_entry("input")};
-    input.children.push_back(string_entry("demo", script.input.recording));
+    // A script names its recording, or else its stage.
+    if (script.input.stage.empty())
+        input.children.push_back(string_entry("demo", script.input.recording));
+    else
+        input.children.push_back(string_entry("stage", script.input.stage));
     input.children.push_back(number_entry("tickrate", script.input.tickrate));
     root.children.push_back(std::move(input));
 

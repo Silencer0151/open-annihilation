@@ -6,6 +6,7 @@
 // and the read-only game settings sheet.
 #pragma once
 
+#include "oa/data/match_rules.hpp"
 #include "oa/ui/frontend_state/dispatcher.hpp"
 #include "oa/ui/frontend/options.hpp"
 
@@ -58,6 +59,8 @@ struct IngameContext {
     bool restart_requested = false; // Game.restart_requested
     // The game data holds LOADGAME.GUI, the dialog SAVEGAME and LOADGAME open.
     bool saved_games_offered = true;
+    // Which of 3.1c's names each difficulty carries (ai.difficulty-names).
+    data::match_rules::AiDifficultyNames difficulty_names{};
 };
 
 namespace quit_flag {
@@ -253,6 +256,8 @@ struct GameSettingsView {
     uint32_t starting_metal = 0;
     uint32_t starting_energy = 0;
     uint16_t max_units = 0; // Game.units_per_player
+    // Which of 3.1c's names each difficulty carries (ai.difficulty-names).
+    data::match_rules::AiDifficultyNames difficulty_names{};
 };
 
 struct SettingsEntry {

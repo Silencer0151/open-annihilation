@@ -78,16 +78,21 @@ status instead of failing silently.
 
 CMake 3.24 or newer, a C++20 compiler, zlib and Python 3.12 or newer. The
 engine decodes the movies and the music itself. SDL3 is built
-locally by `tools/bootstrap_sdl.py` into the ignored `local/deps` directory;
-nothing is installed globally. On macOS the Xcode Command Line Tools provide
+locally by `tools/bootstrap_sdl.py`, and FreeType and the fonts that travel
+with the game by `tools/bootstrap_text_fonts.py`, into the ignored
+`local/deps` directory; nothing is installed globally. The fonts bootstrap
+installs the fontTools it cuts the CJK font with into a virtual environment
+there, which needs Python's `venv` module. On macOS the Xcode Command Line Tools provide
 the compiler and zlib.
 
 ## Build and test
 
-Build the pinned SDL once, then configure, build and run every test:
+Build the pinned SDL, FreeType and fonts once, then configure, build and
+run every test:
 
 ```sh
 python3 tools/bootstrap_sdl.py
+python3 tools/bootstrap_text_fonts.py
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug \
     -DCMAKE_PREFIX_PATH="$PWD/local/deps/sdl-install" \
     -DOA_GAME_DIR="/path/to/Total Annihilation"
@@ -122,7 +127,8 @@ Run a sanitizer build's tests as the CI sanitizer job does, because
 ASAN_OPTIONS=detect_leaks=0:handle_sigfpe=0 ctest --test-dir build --output-on-failure
 ```
 
-The core builds without SDL or game data:
+The core builds without SDL or game data; it still needs FreeType and the
+fonts:
 
 ```sh
 cmake -S . -B build-core -DOA_BUILD_PLATFORM=OFF -DOA_BUILD_INTRO_PLAYER=OFF -DCMAKE_BUILD_TYPE=Debug
@@ -131,7 +137,9 @@ ctest --test-dir build-core --output-on-failure
 ```
 
 On Windows, install zlib with `vcpkg install zlib:x64-windows`, build SDL with
-`python tools/bootstrap_sdl.py` and configure with the vcpkg toolchain:
+`python tools/bootstrap_sdl.py`, FreeType and the fonts with
+`python tools/bootstrap_text_fonts.py`, and configure with the vcpkg
+toolchain:
 
 ```powershell
 cmake -S . -B build -DCMAKE_PREFIX_PATH="$pwd/local/deps/sdl-install" -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows

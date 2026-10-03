@@ -3,6 +3,7 @@
 
 #include "oa/sim/visibility_state.hpp"
 #include <cstdint>
+#include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -464,6 +465,136 @@ void context_errors() {
 }
 } // namespace
 
+// Seats players 0..count-1 in a game: in use, local, each allied with itself.
+void seat_players(oa::Game& game, uint8_t count) {
+    for (uint8_t player = 0; player < count; ++player) {
+        auto& record = game.players[player];
+        record.index = player;
+        record.in_use = 1;
+        record.status = OA_PLAYER_STATUS_LOCAL;
+        record.alliance[player] = 1;
+    }
+}
+
+// Allied vision (intel.allied-los-sharing): a stamp counts for every player
+// its owner allies, one way, then for the owner; players another machine
+// simulates count only while viewed, and every count marks the views.
+void allied_vision_stamps() {
+    const SightMask masks[1]{{1, 1, 0, 0, 0, {1}}};
+    const auto game = std::make_unique<oa::Game>();
+    seat_players(*game, 4);
+    game->viewpoint_player = 0;
+    auto grid = make_grid(4, 3, 0);
+    grid.game = game.get();
+    std::vector<std::vector<uint8_t>> others;
+    auto context = make_context(grid, others, masks, update_sight_grid);
+    // Player 1 allies 0 and 2; 0 allies 1 back; 3 allies 1 but 1 does not ally 3.
+    game->players[1].alliance[0] = 1;
+    game->players[1].alliance[2] = 1;
+    game->players[0].alliance[1] = 1;
+    game->players[3].alliance[1] = 1;
+    constexpr std::size_t cell = 5;
+    SightStamp stamp{1, 0, 0, 160, 0, 0, 1 * 0x200000, 65536, 1 * 0x200000};
+
+    // Off, the stamp counts for its owner alone.
+    auto plain = stamp;
+    refresh_area_coverage(plain, context);
+    CHECK(others[1][cell] == 1 && grid.coverage[cell] == 0 && others[2][cell] == 0);
+    remove_area_coverage(plain, context);
+    CHECK(others[1][cell] == 0);
+
+    context.allied_vision = true;
+    clear_marks(grid);
+    refresh_area_coverage(stamp, context);
+    CHECK(others[1][cell] == 1 && grid.coverage[cell] == 1 && others[2][cell] == 1);
+    CHECK(others[3][cell] == 0 && stamp.owner == 1);
+    // The owner's own row decides: player 0's stamp reaches 1, not 3.
+    SightStamp own{0, 0, 0, 160, 0, 0, 2 * 0x200000, 65536, 1 * 0x200000};
+    refresh_area_coverage(own, context);
+    CHECK(grid.coverage[cell + 1] == 1 && others[1][cell + 1] == 1 && others[3][cell + 1] == 0);
+    // Removal takes it out of the same grids.
+    remove_area_coverage(stamp, context);
+    CHECK(others[1][cell] == 0 && grid.coverage[cell] == 0 && others[2][cell] == 0);
+
+    // Another player's stamp marks the views under allied vision even when
+    // it reaches no one else.
+    SightStamp lone{3, 3, 2, 160, 0, 0, 3 * 0x200000, 65536, 2 * 0x200000};
+    clear_marks(grid);
+    add_area_coverage(lone, context);
+    CHECK(others[3][11] == 1 && marked(grid));
+
+    // A player not in use is skipped.
+    game->players[2].in_use = 0;
+    add_area_coverage(stamp, context);
+    CHECK(others[2][cell] == 0 && others[1][cell] == 1 && grid.coverage[cell] == 1);
+    remove_area_coverage(stamp, context);
+    game->players[2].in_use = 1;
+
+    // A player another machine simulates counts only while viewed.
+    game->players[2].status = OA_PLAYER_STATUS_MIRRORED;
+    add_area_coverage(stamp, context);
+    CHECK(others[2][cell] == 0 && others[1][cell] == 1);
+    remove_area_coverage(stamp, context);
+    game->viewpoint_player = 2;
+    add_area_coverage(stamp, context);
+    CHECK(others[2][cell] == 1);
+    remove_area_coverage(stamp, context);
+    game->viewpoint_player = 0;
+    game->players[2].status = OA_PLAYER_STATUS_LOCAL;
+
+    // An owner another machine simulates keeps no coverage here unless viewed.
+    game->players[1].status = OA_PLAYER_STATUS_MIRRORED;
+    add_area_coverage(stamp, context);
+    CHECK(others[1][cell] == 0 && grid.coverage[cell] == 1 && others[2][cell] == 1);
+    remove_area_coverage(stamp, context);
+    game->viewpoint_player = 1;
+    add_area_coverage(stamp, context);
+    CHECK(others[1][cell] == 1);
+    std::cout << "allied vision stamps passed\n";
+}
+
+// Under allied vision a stamp whose owner keeps no coverage here is left
+// owned by the last ally it was counted for: a move adds it again for that
+// ally and the ally's own allies, and mapping marks the ally's cells.
+void allied_vision_keeps_last_ally() {
+    const SightMask masks[1]{{1, 1, 0, 0, 0, {1}}};
+    const auto game = std::make_unique<oa::Game>();
+    seat_players(*game, 3);
+    game->viewpoint_player = 0;
+    // Player 1 is simulated elsewhere and allies 0; 0 allies 2; 1 does not ally 2.
+    game->players[1].status = OA_PLAYER_STATUS_MIRRORED;
+    game->players[1].alliance[0] = 1;
+    game->players[0].alliance[2] = 1;
+    auto grid = make_grid(4, 3, 0);
+    grid.game = game.get();
+    std::vector<std::vector<uint8_t>> others;
+    auto context = make_context(grid, others, masks, update_sight_grid | terrain_mapping);
+    context.allied_vision = true;
+    SightStamp stamp{1, 0, 0, 160, 0, 0, 1 * 0x200000, 65536, 1 * 0x200000};
+    refresh_area_coverage(stamp, context);
+    // Counted for player 0 only, then mapped for player 0, whose stamp it now is.
+    CHECK(grid.coverage[5] == 1 && others[1][5] == 0 && others[2][5] == 0);
+    CHECK(stamp.owner == 0 && grid.player_bits[5] == 0x0001);
+
+    // A fresh descriptor of the same unit moves one cell: the removal comes
+    // out of player 0's coverage, and the stamp goes back in for player 0's
+    // allies (player 2) and player 0.
+    SightStamp moved{
+        1, stamp.center_x, stamp.center_z, 160, 0, stamp.band, 2 * 0x200000, 65536, 1 * 0x200000
+    };
+    update_area_coverage(moved, context);
+    CHECK(grid.coverage[5] == 0 && grid.coverage[6] == 1 && others[2][6] == 1);
+    CHECK(others[1][6] == 0 && moved.owner == 0 && grid.player_bits[6] == 0x0001);
+
+    // Owned by a player kept here, the stamp ends with its own owner.
+    game->players[1].status = OA_PLAYER_STATUS_LOCAL;
+    SightStamp local{1, 0, 0, 160, 0, 0, 3 * 0x200000, 65536, 1 * 0x200000};
+    refresh_area_coverage(local, context);
+    CHECK(local.owner == 1 && others[1][7] == 1 && grid.coverage[7] == 1);
+    CHECK(grid.player_bits[7] == 0x0002);
+    std::cout << "allied vision keeps the last ally passed\n";
+}
+
 int main() {
     std::vector<TerrainCell> cells(9);
     for (unsigned i = 0; i < 9; ++i)
@@ -517,4 +648,6 @@ int main() {
     remembered_sight();
     remembered_altitude_sight();
     context_errors();
+    allied_vision_stamps();
+    allied_vision_keeps_last_ally();
 }

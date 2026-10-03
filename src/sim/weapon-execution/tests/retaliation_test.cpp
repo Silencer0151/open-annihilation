@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/sim/weapon_execution/retaliation.hpp"
+#include "oa/sim/weapon_execution/weapon_keys.hpp"
 
 #include "oa/core/player.h"
 #include "oa/core/unit_def.h"
 #include "oa/core/weapon_def.h"
 
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 
@@ -146,10 +148,10 @@ void slot_helpers() {
     CHECK(slot_target_unit(*w, victim, 0) == nullptr);
     CHECK(slot_target_unit(*w, victim, 3) == nullptr);
 
-    CHECK(slot_reaches_unit(*w, victim, attacker, 0));
+    CHECK(slot_reaches_unit(*w, victim, attacker, 0, {}));
     attacker.position.x = fx(101);
-    CHECK(!slot_reaches_unit(*w, victim, attacker, 0));
-    CHECK(!slot_reaches_unit(*w, victim, attacker, 1));
+    CHECK(!slot_reaches_unit(*w, victim, attacker, 0, {}));
+    CHECK(!slot_reaches_unit(*w, victim, attacker, 1, {}));
     world_destroy(w);
 }
 
@@ -167,13 +169,63 @@ void ground_point_helpers() {
     aim_slot_at_point(victim, {fx(2), 0, fx(3)}, 3);
     CHECK(victim.weapons[0].target_a == 1);
 
-    CHECK(slot_reaches_point(*w, victim, {fx(100), fx(500), 0}, 0));
-    CHECK(slot_reaches_point(*w, victim, {fx(60), 0, fx(80)}, 0));
-    CHECK(!slot_reaches_point(*w, victim, {fx(101), 0, 0}, 0));
-    CHECK(!slot_reaches_point(*w, victim, {fx(10), 0, 0}, 1));
+    CHECK(slot_reaches_point(*w, victim, {fx(100), fx(500), 0}, 0, {}));
+    CHECK(slot_reaches_point(*w, victim, {fx(60), 0, fx(80)}, 0, {}));
+    CHECK(!slot_reaches_point(*w, victim, {fx(101), 0, 0}, 0, {}));
+    CHECK(!slot_reaches_point(*w, victim, {fx(10), 0, 0}, 1, {}));
     w->game.sea_level = 10; // the model top (10) is not above the sea
-    CHECK(!slot_reaches_point(*w, victim, {fx(10), 0, 0}, 0));
+    CHECK(!slot_reaches_point(*w, victim, {fx(10), 0, 0}, 0, {}));
     world_destroy(w);
+}
+
+// The match's rules reach the reach tests: the weapon's own keys by its weapon
+// ID, and weapons.high-arc-ballistic through the launch solver's inputs.
+void reach_under_rules() {
+    World* w = make_world();
+    Unit& victim = w->units[victim_slot];
+    Unit& attacker = w->units[attacker_slot];
+    const auto gun_id = w->game.weapon_defs[gun_def - 1].weapon_id;
+    std::array<data::match_rules::WeaponTypeRules, OA_WEAPON_DEF_COUNT> keys{};
+    const data::match_rules::MatchRulesView keyed{nullptr, {}, keys};
+    // not-to-air: an airborne attacker is out of reach.
+    attacker.flags = (attacker.flags & ~3u) | 2u;
+    CHECK(slot_reaches_unit(*w, victim, attacker, 0, keyed));
+    keys[gun_id].not_to_air = true;
+    CHECK(!slot_reaches_unit(*w, victim, attacker, 0, keyed));
+    CHECK(slot_reaches_unit(*w, victim, attacker, 0, {}));
+    // surface-fire: a point reached from below the sea.
+    w->game.sea_level = 10;
+    CHECK(!slot_reaches_point(*w, victim, {fx(10), 0, 0}, 0, keyed));
+    keys[gun_id].surface_fire = true;
+    CHECK(slot_reaches_point(*w, victim, {fx(10), 0, 0}, 0, keyed));
+    CHECK(!slot_reaches_point(*w, victim, {fx(101), 0, 0}, 0, keyed));
+
+    const auto& gun = w->game.weapon_defs[gun_def - 1];
+    data::match_rules::MatchRules lobbing{};
+    const auto plain = reach_parameters(gun, w->game.gravity, keyed);
+    CHECK(plain.weapon_flags == gun.flags && plain.range_world_units == gun.range);
+    CHECK(!plain.ballistic.accept_high_arc && plain.keys.surface_fire && plain.keys.not_to_air);
+    CHECK(!plain.keys.not_to_underwater);
+    lobbing.weapons.high_arc_ballistic.enabled = true;
+    const auto lobbed = reach_parameters(gun, w->game.gravity, {&lobbing, {}, keys});
+    CHECK(lobbed.ballistic.accept_high_arc && lobbed.keys.surface_fire);
+    world_destroy(w);
+}
+
+// weapons.no-map-alert: an ownerless shot of a keyed weapon whose [DAMAGE]
+// default is 0 is silent; a source unit, a nonzero default or no key is not.
+void silent_shots() {
+    WeaponDef weapon{};
+    Projectile shot{};
+    data::match_rules::WeaponTypeRules keyed{};
+    keyed.no_map_alert = true;
+    CHECK(silent_ownerless_shot(shot, weapon, keyed));
+    CHECK(!silent_ownerless_shot(shot, weapon, {}));
+    shot.source = 5;
+    CHECK(!silent_ownerless_shot(shot, weapon, keyed));
+    shot.source = 0;
+    weapon.damage_default = 1;
+    CHECK(!silent_ownerless_shot(shot, weapon, keyed));
 }
 
 void chase_and_retarget() {
@@ -364,14 +416,41 @@ void alerts_and_notice() {
     CHECK(retaliate(*w, victim, nullptr, hooks).attack_notice);
     world_destroy(w);
 }
+
+// ai.commander-keeps-orders-when-damaged: a computer-owned capturer raises no alert and
+// draws nothing; the rest of the reaction runs as before. Turned off, the record keeps
+// 3.1c's alert.
+void commander_keeps_orders() {
+    World* w = make_world();
+    Unit& victim = w->units[victim_slot];
+    Unit& attacker = w->units[attacker_slot];
+    w->unit_defs[1].abilities = OA_UNIT_DEF_ABILITY_CAN_CAPTURE;
+    w->game.players[0].status = OA_PLAYER_STATUS_COMPUTER;
+    for (const bool on : {false, true}) {
+        Recorder r;
+        auto hooks = hooks_for(r);
+        oa::data::match_rules::MatchRules rules{};
+        rules.ai.commander_keeps_orders_when_damaged.enabled = on;
+        hooks.rules.match = &rules;
+        victim.weapons[0].target_a = 0;
+        const auto result = retaliate(*w, victim, &attacker, hooks);
+        CHECK(result.computer_alert == !on && r.alerts == (on ? 0 : 1));
+        CHECK(r.random_draws == (on ? 0 : 1));
+        CHECK(result.retargeted_slots == 1);
+    }
+    world_destroy(w);
+}
 } // namespace
 
 int main() {
     slot_helpers();
     ground_point_helpers();
+    reach_under_rules();
+    silent_shots();
     chase_and_retarget();
     slot_rules();
     alerts_and_notice();
+    commander_keeps_orders();
     if (failures != 0) {
         std::fprintf(stderr, "%d failures\n", failures);
         return 1;

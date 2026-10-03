@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "fixture.hpp"
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <vector>
@@ -36,7 +37,211 @@ struct StartFixture : StartHost {
     }
 };
 
+// A pool of three slots per player over one available structure type, 2 cells
+// wide and 3 deep, for the unit rules' tests.
+struct RuledWorld {
+    SpawnWorld world{unit_pool_size(3), 2};
+    std::vector<int32_t> reuse_ticks = std::vector<int32_t>(OA_PLAYER_COUNT * 3);
+    Fixture host;
+
+    RuledWorld() {
+        for (std::size_t i = 0; i < OA_PLAYER_COUNT; ++i)
+            world.player(i).index = static_cast<uint8_t>(i);
+        CHECK(init_unit_pool(*world, 3));
+        auto& type = world.types[1];
+        type.simulation.flags = OA_UNIT_DEF_FLAG_AVAILABLE;
+        type.simulation.maximum_health = 10;
+        type.footprint_x = 2;
+        type.footprint_z = 3;
+        type.model = 10;
+        world.load_types();
+    }
+
+    /// Creates a unit of type 1.
+    ///
+    /// @param player owning player
+    /// @param slot exact slot, 0 for the first free one
+    /// @return the slot taken, 0 for none
+    uint32_t create_unit(uint8_t player, uint16_t slot = 0) {
+        Request request;
+        request.player = player;
+        request.type = 1;
+        request.finished = true;
+        request.state = ground_occupancy_state;
+        request.requested_slot = slot;
+        auto* unit = create(*world, world.tables, request, host);
+        return unit != nullptr ? oa::world_unit_slot(&*world, unit) : 0;
+    }
+
+    /// Tears a unit down as a death does: the reuse tick, then an empty slot.
+    ///
+    /// @param slot the dead unit's slot
+    void kill(uint32_t slot) {
+        record_slot_death(*world, world.tables, world.units[slot]);
+        world.units[slot].type_index = 0;
+    }
+
+    /// Sets the game tick.
+    ///
+    /// @param tick the tick
+    void at(uint32_t tick) { (*world).game.tick = tick; }
+};
+
+// units.id-reuse-delay: a dead unit's place waits for its tick before a local
+// creation takes it again.
+void slot_reuse_waits_for_its_tick() {
+    {
+        // 3.1c: the first free slot, at once.
+        RuledWorld r;
+        r.at(10);
+        CHECK(r.create_unit(0) == 1);
+        r.kill(1);
+        CHECK(r.create_unit(0) == 1);
+    }
+    for (const int32_t delay : {150, 1}) {
+        RuledWorld r;
+        r.world.tables.rules.reuse_ticks = r.reuse_ticks;
+        r.world.tables.rules.reuse_delay_ticks = delay;
+        r.at(10);
+        CHECK(r.create_unit(0) == 1);
+        r.kill(1);
+        CHECK(r.reuse_ticks[0] == 10 + delay);
+        // The place waits; the next free one is taken instead.
+        CHECK(r.create_unit(0) == 2);
+        r.at(static_cast<uint32_t>(9 + delay));
+        CHECK(r.create_unit(0) == 3);
+        // Every free place is waiting: the creation fails.
+        CHECK(r.create_unit(0) == 0);
+        // An exact slot, as another player's machine names it, does not wait.
+        r.kill(3);
+        CHECK(r.create_unit(0, 3) == 3);
+        r.at(static_cast<uint32_t>(10 + delay));
+        CHECK(r.create_unit(0) == 1);
+    }
+    {
+        // The delay goes in player 0's row whoever owned the unit, so player
+        // 1 takes its own place again at once while player 0's same place
+        // waits.
+        RuledWorld r;
+        r.world.tables.rules.reuse_ticks = r.reuse_ticks;
+        r.world.tables.rules.reuse_delay_ticks = 150;
+        r.at(200);
+        CHECK(r.create_unit(1) == 4);
+        r.kill(4);
+        CHECK(r.reuse_ticks[0] == 350 && r.reuse_ticks[3] == 0);
+        CHECK(r.create_unit(1) == 4);
+        CHECK(r.create_unit(0) == 2);
+        // Bits 8 to 23 of the capture cooldown name the row: 1 here.
+        r.world.units[4].capture_cooldown = 0x100;
+        r.kill(4);
+        CHECK(r.reuse_ticks[3] == 350);
+        CHECK(r.create_unit(1) == 5);
+        // A row past 9 records nothing.
+        r.world.units[5].capture_cooldown = 0xa00;
+        r.reuse_ticks.assign(r.reuse_ticks.size(), 0);
+        r.kill(5);
+        CHECK(std::all_of(r.reuse_ticks.begin(), r.reuse_ticks.end(), [](int32_t tick) {
+            return tick == 0;
+        }));
+    }
+    {
+        // At game tick 0 a death or a creation first clears every reuse tick.
+        RuledWorld r;
+        r.world.tables.rules.reuse_ticks = r.reuse_ticks;
+        r.world.tables.rules.reuse_delay_ticks = 150;
+        r.reuse_ticks[2] = 99;
+        r.at(0);
+        CHECK(r.create_unit(0) == 1);
+        CHECK(r.reuse_ticks[2] == 0);
+        r.kill(1);
+        CHECK(r.reuse_ticks[0] == 150);
+        CHECK(r.create_unit(0) == 1);
+    }
+}
+
+// units.water-state-rules start-submerged: a unit created with its model top
+// under the sea starts with sea occupy code 3 in the code's first byte.
+void created_under_the_sea_starts_submerged() {
+    for (const bool rule : {false, true})
+        for (const int16_t height : {int16_t{10}, int16_t{40}}) {
+            RuledWorld r;
+            r.world.tables.rules.start_submerged = rule;
+            (*r.world).game.sea_level = 50;
+            r.world.defs[1].model_height = 12 << 16;
+            auto& unit = r.world.units[1];
+            unit.last_occupy_code[0] = unit.last_occupy_code[1] = 7;
+            Request request;
+            request.type = 1;
+            request.position = {0, static_cast<uint32_t>(height) << 16, 0};
+            CHECK(
+                initialize_numeric(*r.world, unit, request, r.host, r.world.tables.rules) ==
+                SpawnFault::none
+            );
+            const uint8_t expected = !rule ? 7 : height + 12 < 50 ? 3 : 0;
+            CHECK(unit.last_occupy_code[0] == expected && unit.last_occupy_code[1] == 7);
+        }
+    // The sea level is read as a word: a debug overlay mode lifts it by 256.
+    RuledWorld r;
+    r.world.tables.rules.start_submerged = true;
+    (*r.world).game.sea_level = 50;
+    (*r.world).game.debug_overlay = 1;
+    r.world.defs[1].model_height = 12 << 16;
+    Request request;
+    request.type = 1;
+    request.position = {0, 40u << 16, 0};
+    auto& unit = r.world.units[1];
+    CHECK(
+        initialize_numeric(*r.world, unit, request, r.host, r.world.tables.rules) ==
+        SpawnFault::none
+    );
+    CHECK(unit.last_occupy_code[0] == 3);
+}
+
+// Records the heading a unit holds as it takes its place on the map.
+struct PlacingFixture : Fixture {
+    uint16_t placed_heading{};
+
+    void register_occupancy(oa::Unit& unit) override {
+        placed_heading = unit.heading;
+        Fixture::register_occupancy(unit);
+    }
+};
+
+// units.build-rotation: a facing swaps the footprint east and west and joins
+// the heading before the unit takes its place.
+void facing_turns_the_footprint_and_heading() {
+    struct Case {
+        uint8_t facing;
+        int16_t footprint_x, footprint_z;
+        uint16_t heading;
+    };
+
+    for (const Case c :
+         {Case{facing_south, 2, 3, 0x8000},
+          Case{facing_east, 3, 2, 0xc000},
+          Case{facing_north, 2, 3, 0x0000},
+          Case{facing_west, 3, 2, 0x4000}}) {
+        RuledWorld r;
+        PlacingFixture host;
+        Request request;
+        request.type = 1;
+        request.finished = true;
+        request.state = ground_occupancy_state;
+        request.position = {48u << 16, 0, 48u << 16};
+        request.facing = c.facing;
+        auto* unit = create(*r.world, r.world.tables, request, host);
+        CHECK(unit != nullptr);
+        CHECK(unit->footprint_x == c.footprint_x && unit->footprint_z == c.footprint_z);
+        CHECK(unit->heading == c.heading && host.placed_heading == c.heading);
+        // The cell is the footprint's top-left corner round the position.
+        CHECK(unit->cell_x == 3 - c.footprint_x / 2 && unit->cell_z == 3 - c.footprint_z / 2);
+    }
+}
+
 int main() {
+    slot_reuse_waits_for_its_tick();
+    created_under_the_sea_starts_submerged();
+    facing_turns_the_footprint_and_heading();
     SpawnWorld sw(4, 3);
     auto& w = *sw;
     auto& units = sw.units;

@@ -3,6 +3,8 @@
 
 // Unit build restrictions (RESTRICT2.GUI).
 #include "oa/ui/frontend_multiplayer/restrict.hpp"
+#include "oa/data/defs/layout.hpp"
+#include "oa/data/languages/unit_texts.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -10,6 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace oa::ui::frontend_multiplayer {
@@ -133,11 +136,16 @@ void restrict_open(Lobby& lobby, RestrictPanel& restrict, Panel& panel) noexcept
             continue;
         auto& entry = restrict.entries[restrict.count];
         entry = RestrictEntry{};
+        // The unit's name in the player's language, as its file gives it there.
+        const std::string_view name = oa::data::languages::unit_display_name(
+            unit.unit_name != nullptr ? unit.unit_name : "", unit.name
+        );
         std::snprintf(
             entry.text,
             sizeof(entry.text),
-            "%s\r%s %dM  %dE",
-            unit.name,
+            "%.*s\r%s %dM  %dE",
+            static_cast<int>(name.size()),
+            name.data(),
             unit.side != nullptr ? unit.side : "",
             static_cast<int>(unit.cost_metal),
             static_cast<int>(unit.cost_energy)
@@ -189,7 +197,11 @@ void restrict_on_count_slider(
     if (value < kRestrictNoLimit) {
         std::snprintf(text, sizeof(text), "%d", static_cast<int>(value));
     } else {
-        std::snprintf(text, sizeof(text), "%s", "No Limit");
+        // "No Limit" in the game's language, as gamedata\translate.tdf gives it.
+        const char* no_limit = lobby.services.translate != nullptr
+                                   ? lobby.services.translate(lobby.services.context, "No Limit")
+                                   : nullptr;
+        std::snprintf(text, sizeof(text), "%s", no_limit != nullptr ? no_limit : "No Limit");
         value = -1;
     }
     auto& entry = restrict.entries[row];
@@ -235,7 +247,12 @@ void restrict_load_next_picture(Lobby& lobby, RestrictPanel& restrict, Panel& pa
     const char* name = lobby.units[unit].unit_name != nullptr ? lobby.units[unit].unit_name : "";
     char path[data::campaign::kCampaignPathBytes];
     data::campaign::build_variant_path(
-        lobby.services.files, path, sizeof path, "unitpics", name, "PCX"
+        lobby.services.files,
+        path,
+        sizeof path,
+        oa::data::defs::directory_name(oa::data::defs::DataDirectory::unitpics),
+        name,
+        "PCX"
     );
     int32_t width = 0;
     int32_t height = 0;

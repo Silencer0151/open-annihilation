@@ -182,7 +182,7 @@ uint64_t match_state_hash(
     mix_value(hash, camera_z);
     if (meteor != nullptr)
         mix_value(hash, *meteor);
-    return hash;
+    return match.fold_rule_state(hash);
 }
 
 } // namespace oa::sim::trace

@@ -309,7 +309,8 @@ void log_explosion(
     if (flash_tier >= 0 && flash_tier < flash_tier_count)
         start_span(record.flash, world.flash_tiers[flash_tier]);
     record.fragment = no_fragment;
-    if (!underwater && whole_units(position.y) > static_cast<int32_t>(game.sea_level))
+    if (world.explosion_smoke_column && !underwater &&
+        whole_units(position.y) > static_cast<int32_t>(game.sea_level))
         spawn_smoke_column(
             world,
             game,

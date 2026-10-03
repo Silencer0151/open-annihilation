@@ -6,8 +6,18 @@
 
 #include "oa/data/defs/files.hpp"
 #include "oa/base/text.hpp"
+#include "oa/present/game_text.hpp"
+#include "oa/ui/frontend_renderer/game_text.hpp"
 
 #include <cstring>
+#include <map>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <utility>
+#include <vector>
 
 namespace oa::ui::gadget_render {
 
@@ -62,6 +72,41 @@ void fill_clipped(Surface* target, const Rect32& rect, uint8_t color) {
         present::unlock_display_surface();
 }
 
+int32_t font_baseline(const GadgetRenderer& renderer, const void* glyphs) {
+    const Sprite* glyph = art_frame(renderer, glyphs, kReferenceGlyph);
+    return glyph != nullptr ? glyph->height : 0;
+}
+
+present::TextFace font_face(const GadgetRenderer& renderer, const void* glyphs) {
+    return font_baseline(renderer, glyphs) >= kMessageFaceHeight ? present::TextFace::message
+                                                                 : present::TextFace::status;
+}
+
+present::FontCharacters font_characters(const GadgetRenderer& renderer, const void* glyphs) {
+    struct Kept {
+        std::mutex mutex{};
+        std::map<const void*, present::FontCharacters> fonts{};
+    };
+
+    static Kept kept;
+    const std::lock_guard lock(kept.mutex);
+    if (const auto found = kept.fonts.find(glyphs); found != kept.fonts.end())
+        return found->second;
+    const Sprite* box = art_frame(renderer, glyphs, 0);
+    auto characters = present::FontCharacters::gui_font([&](uint8_t byte) {
+        const Sprite* glyph = art_frame(renderer, glyphs, byte);
+        return glyph != nullptr && glyph->width != 0 && !present::same_glyph(glyph, box);
+    });
+    return kept.fonts.emplace(glyphs, std::move(characters)).first->second;
+}
+
+std::vector<present::TextRun>
+text_runs(const GadgetRenderer& renderer, const void* glyphs, std::string_view text) {
+    if (!frontend_renderer::needs_text_runs(text, false))
+        return {{false, std::string(text), present::game_font_text_size}};
+    return frontend_renderer::split_game_text(text, font_characters(renderer, glyphs), false);
+}
+
 int32_t measure_with_font(const GadgetRenderer& renderer, const void* gaf_font, const char* text) {
     if (text == nullptr)
         return 0;
@@ -73,9 +118,22 @@ int32_t measure_with_font(const GadgetRenderer& renderer, const void* gaf_font, 
                              ? renderer.art.first_sequence(renderer.art.context, gaf_font)
                              : nullptr;
     int32_t width = 0;
-    for (const auto* p = reinterpret_cast<const uint8_t*>(text); *p != 0; ++p) {
-        if (const Sprite* glyph = art_frame(renderer, glyphs, *p))
-            width += glyph->width;
+    for (const auto& run : text_runs(renderer, glyphs, text)) {
+        if (run.modern)
+            if (const auto layers = present::modern_text(
+                    run.text,
+                    font_face(renderer, glyphs),
+                    1,
+                    frontend_renderer::screen_text_size(run)
+                )) {
+                width += layers->advance;
+                continue;
+            }
+        const std::string bytes =
+            run.modern ? present::encode_game_text(run.text, false) : run.text;
+        for (const unsigned char byte : bytes)
+            if (const Sprite* glyph = art_frame(renderer, glyphs, byte))
+                width += glyph->width;
     }
     return width;
 }
@@ -132,26 +190,56 @@ void draw_text(
         return;
     }
     const void* glyphs = active_glyphs(renderer, panel);
-    for (const auto* p = reinterpret_cast<const uint8_t*>(text); *p != 0; ++p) {
-        if (*p < kFirstPrintable)
-            continue;
-        const Sprite* glyph = art_frame(renderer, glyphs, *p);
-        if (glyph == nullptr)
-            continue;
-        if (max_width != kNoLimit && max_width < glyph->width)
-            return;
-        if (*p != ' ') {
-            if (level == 0)
-                present::draw_sprite(target, glyph, x, y);
-            else
-                present::draw_sprite_lit(target, glyph, x, y, level);
-        }
-        if (max_width != kNoLimit) {
-            max_width -= glyph->width;
-            if (max_width < 0)
+    const int32_t baseline = y + font_baseline(renderer, glyphs);
+    for (const auto& run : text_runs(renderer, glyphs, text)) {
+        std::optional<present::TextLayers> layers;
+        if (run.modern)
+            layers = present::modern_text(
+                run.text, font_face(renderer, glyphs), 1, frontend_renderer::screen_text_size(run)
+            );
+        if (layers) {
+            if (max_width != kNoLimit && max_width < layers->advance)
                 return;
+            const auto& hooks = present::game_text_hooks();
+            if (target != nullptr && hooks.palette != nullptr) {
+                const auto palette = hooks.palette(hooks.context);
+                auto canvas = present::indexed_canvas(*target, palette);
+                present::lay_text(
+                    canvas,
+                    *layers,
+                    x,
+                    baseline,
+                    frontend_renderer::lit_text_color(present::gui_font_color, palette, level)
+                );
+            }
+            if (max_width != kNoLimit)
+                max_width -= layers->advance;
+            x += layers->advance;
+            continue;
         }
-        x += glyph->width;
+        const std::string bytes =
+            run.modern ? present::encode_game_text(run.text, false) : run.text;
+        for (const unsigned char byte : bytes) {
+            if (byte < kFirstPrintable)
+                continue;
+            const Sprite* glyph = art_frame(renderer, glyphs, byte);
+            if (glyph == nullptr)
+                continue;
+            if (max_width != kNoLimit && max_width < glyph->width)
+                return;
+            if (byte != ' ') {
+                if (level == 0)
+                    present::draw_sprite(target, glyph, x, y);
+                else
+                    present::draw_sprite_lit(target, glyph, x, y, level);
+            }
+            if (max_width != kNoLimit) {
+                max_width -= glyph->width;
+                if (max_width < 0)
+                    return;
+            }
+            x += glyph->width;
+        }
     }
 }
 

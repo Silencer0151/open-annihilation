@@ -33,6 +33,10 @@ struct CommandSource {
     int16_t waterline{};        // FBI waterline; can_repair_target's source_waterline
     uint8_t capacity{}, size{}; // UnitDef.transport_capacity, transport_size
     uint32_t loaded_count{};    // units the source carries
+    // The primary weapon has the surface-fire key (weapons.surface-fire): a
+    // hovering unit with a water weapon may then attack a target at or above
+    // sea level.
+    bool primary_surface_fire{};
 };
 
 struct CommandTarget {

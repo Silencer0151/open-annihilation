@@ -6,8 +6,9 @@ explains them and shows how to follow them.
 
 ## Running the tests
 
-Build the pinned SDL once (`python3 tools/bootstrap_sdl.py`, see
-[CONTRIBUTING.md](../../CONTRIBUTING.md#build-and-test)), then:
+Build the pinned SDL, FreeType and fonts once
+(`python3 tools/bootstrap_sdl.py` and `python3 tools/bootstrap_text_fonts.py`,
+see [CONTRIBUTING.md](../../CONTRIBUTING.md#build-and-test)), then:
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug \
@@ -80,7 +81,8 @@ its default, the seeded skirmish writes the same trace stream and draws the
 same frame as with no file, and the director render keeps its pinned frames
 and sound. With a named file Hardware acceleration and Vertical sync are
 Off, and the windowed checks' `SDL_RENDER_DRIVER=software` locks both, so no
-check draws through the graphics card or waits for the display. Four
+check draws through the graphics card or waits for the display; game text
+keeps the game's own fonts there too, as modern fonts are Off. Five
 checks pass `--force-capable`, which lifts those locks:
 `native-engine-settings`, so that it can turn Vertical sync On and read it
 back, and set Hardware acceleration to Basic, Full and Off through the
@@ -92,20 +94,31 @@ step leaving it Off; `native-kill-board-full`, which pins the kill board
 in the Full tier and holds the card's darkening of the world under it to
 the shade level's share within 2, where `native-kill-board` holds the
 processor's shade exactly; and `native-render-tiers`,
-`native-render-tiers-density` and `native-demo-render-tiers`, which with
-`--hardware-acceleration` run the start-up function test on SDL's software
-renderer and draw in the accelerated tier, switching it off and on as the
-flags would. That flag names Full: the Basic cases run at `basic`, and the Full cases,
-the whole battlefield drawn by the card (the terrain, the fog, the
-sprites, the models and the darkening under the kill board and the
-+stats panel) with the painters' overlay canvas laid over it, at `full`,
-held to the standard tier's picture of the same moment beside the card's
-own draws. With the bare flag `native-render-tiers` and
-`native-demo-render-tiers` also set Enhanced anti-aliasing to 2x and 4x,
-where the card draws the battlefield into a world target at that factor
-and the check holds the battlefield to the target read back and reduced
-on the processor as the card reduces it (see
-[src/app/README.md](../../src/app/README.md)).
+`native-render-tiers-density`, `native-render-tiers-visual-rules`,
+`native-render-tiers-modern-fonts` and `native-demo-render-tiers`, which with `--hardware-acceleration` run the
+start-up function test on SDL's software renderer and draw in the
+accelerated tier, switching it off and on as the flags would. That flag
+names Full: the Basic cases run at `basic`, and the Full cases, the whole
+battlefield drawn by the card (the terrain, the fog, the sprites, the
+models and the darkening under the kill board and the +stats panel) with
+the painters' overlay canvas laid over it, at `full`, held to the standard
+tier's picture of the same moment beside the card's own draws. With the
+bare flag `native-render-tiers` and `native-demo-render-tiers` also set
+Enhanced anti-aliasing to 2x and 4x, where the card draws the battlefield
+into a world target at that factor and the check holds the battlefield to
+the target read back and reduced on the processor as the card reduces it
+(see [src/app/README.md](../../src/app/README.md)).
+`native-render-tiers-visual-rules` runs under a mod profile, written into
+its folder of the build tree, that turns the visual rules on over the
+installed game, and checks their overlays in every tier as well, the Full
+tier's at its zoom floor too and with the shadow, outline and letter edges
+of modern text drawn by the card as asked (`check_visual_rule_overlays`).
+`native-render-tiers-modern-fonts` runs the same profile with the modern
+fonts on, so that every line of game text, the clock and the resource
+panel among them, leaves to the card in the Full tier what of it lies over
+the battlefield, and the cases above hold it to what it asks: beside the
+processor's picture, under the fog, over the never-mapped ground's black
+and over the kill board.
 
 No window of a check opens at the display's own pixel density but
 `native-render-tiers-density`'s, which `--native-density` opens so: on the
@@ -216,6 +229,62 @@ installer, or the wrong file, fails them. Each carries the ctest label
 when `OA_DEMO_INSTALLER` names no file, and a demo test that skips fails.
 `demo-installer` covers the same code over a synthetic installer and runs
 everywhere.
+
+### Mod profiles
+
+`OA_MOD_PROFILES_DIR` names a folder of reference mod profiles: one folder
+per mod, each holding its `oamod.yaml`. Set it in the environment, or pass it
+to CMake as `-DOA_MOD_PROFILES_DIR=PATH`, which the test then receives.
+`data-mod-profile-references` resolves every profile it finds there and
+checks each against the hashes the engine pins for the reference profiles;
+without the variable it reports skipped. The engine names no mod: the
+profiles stay outside the repository, and the test knows them only by their
+hashes. The other mod-profile tests (`formats-oamod`, `data-match-rules`,
+`data-mod-profile`, `data-mod-profile-bindings`, `app-mod-profile`,
+`mod-registry-sync` and `mod-docs-sync`) need nothing and always run.
+`mod-registry-sync` fails while the tables and records
+`tools/gen_mod_registry.py` writes from the hack registry differ from the
+files in the tree, and `mod-docs-sync` while a generated block of the
+[standard hack pages](../mods/README.md) or their table differs from what
+`tools/gen_mod_docs.py` writes, or a page names no hack; running the script
+brings each back in step.
+
+`OA_MOD_GAME_DIR` names a mod's copied install: an `OA_GAME_DIR`
+installation with the mod's files copied over it. With it and
+`OA_MOD_PROFILES_DIR`, `native-mod-layout-data`
+(`tools/check_native_mod_layout.py`) picks the profile whose revision
+archive the install holds and starts a headless skirmish twice: on the
+copied install with `--mod`, and on `OA_GAME_DIR` with `--mod-dir` naming a
+scratch mod folder of hard links to the files the install adds or changes.
+Both must load the same unit types, mount every archive, and never look up
+a directory the profile renames by its base name (`--trace-lookups`). It
+reports skipped without a matching profile, or when the scratch folder
+cannot link to the install's files. With the same two settings,
+`native-mod-net-loopback` (`tools/check_native_mod_loopback.py`) runs
+`--net-loopback-check` on the copied install with that profile: host and
+joiner must end with equal worlds under the profile's network and recorder
+rules, and every recording the two machines made must play back with
+`--play-demo`. The layering and layout rules
+themselves are covered without game data by `hpi-layering`, `defs-layout`
+and `game-directory`.
+
+`OA_MOD_GAME_DIR` may be set in the environment or passed to CMake like
+`OA_MOD_PROFILES_DIR`. The other tests that read a mod's own files find the
+reference profile the same way, and skip without both variables:
+
+- `defs-rule-keys-mod-install` reads every unit and weapon file in the
+  directories the profile names with the data keys it binds; every bound key
+  must read without a problem and agree with a plain scan of the text, and
+  it prints how many files hold each key;
+- `unit-script-extensions-mod-install` runs every unit script of the mod in
+  the interpreter for a minute of game time, in a world of allied,
+  unallied, local, computer and remote players, and checks each GET at an
+  index the profile mounts against the extension table; then it runs the
+  scripts that walk every unit id again at 1500 units per player, where each
+  walk must still finish within its tick.
+
+`defs-rule-keys` and `unit-script-extensions` cover the same readers with
+made-up files and scripts and always run.
 
 ### Network play
 

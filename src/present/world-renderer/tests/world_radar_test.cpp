@@ -290,6 +290,7 @@ struct RadarScene {
     std::vector<oa::RadarHotUnit> hot = std::vector<oa::RadarHotUnit>(8);
     uint32_t listed_count{};
     bool point_seen = false;
+    const oa::Projectile* hidden = nullptr; // the shot the host leaves off the radar
 
     RadarScene() {
         oa::WorldCapacity capacity{8, 3, 0};
@@ -326,6 +327,7 @@ struct RadarScene {
         record.type_index = 1;
         record.id = static_cast<uint16_t>(slot);
         record.owner_index = owner;
+        record.owner = oa::oa_ref_from_index(owner);
         record.position = {x << 16, y << 16, z << 16};
         return record;
     }
@@ -341,12 +343,19 @@ struct RadarScene {
         return found;
     }
 
+    bool allied_units_shown = false;
+
     void compose(const Blips& blips) {
         wr::RadarContactHost host{};
+        host.allied_units_shown = allied_units_shown;
         host.user = this;
         host.point_visible = [](void* user, const oa::FixedVec3&) {
             return static_cast<RadarScene*>(user)->point_seen;
         };
+        if (hidden != nullptr)
+            host.projectile_hidden = [](void* user, const oa::Projectile& shot) {
+                return &shot == static_cast<RadarScene*>(user)->hidden;
+            };
         listed_count = wr::radar_compose_final(*world, surfaces, blips.sprites(), host, hot);
     }
 
@@ -393,6 +402,35 @@ void compose_units() {
     scene.compose(blips);
     OA_CHECK(scene.listed() == 1 && scene.hot[0].unit_id == 1);
     OA_CHECK(scene.at(20, 20) == 0xa1 && scene.at(30, 30) == 0xb0);
+}
+
+// ui.allied-unit-display: under limited sight the units of a player who
+// allies the viewer show without contact bits; the viewer allying the owner
+// shows nothing.
+void compose_allied_units() {
+    RadarScene scene;
+    Blips blips;
+    auto& game = scene.world->game;
+    game.visibility_flags = wr::visibility_flags_radar_limited;
+    game.players[0].alliance[0] = 1;
+    game.players[1].alliance[1] = 1;
+    scene.unit(1, 0, 160, 16, 320);
+    scene.unit(2, 1, 320, 0, 320);
+    game.players[0].alliance[1] = 1;
+    scene.allied_units_shown = true;
+    scene.compose(blips);
+    OA_CHECK(scene.at(10, 19) == 0xa0 && scene.at(20, 20) == mapped_fill && scene.listed() == 1);
+    game.players[1].alliance[0] = 1;
+    scene.allied_units_shown = false;
+    scene.compose(blips);
+    OA_CHECK(scene.at(20, 20) == mapped_fill && scene.listed() == 1);
+    scene.allied_units_shown = true;
+    scene.compose(blips);
+    OA_CHECK(scene.at(10, 19) == 0xa0 && scene.at(20, 20) == 0xa1 && scene.listed() == 2);
+    // An owner that withdraws its own entry hides even the viewer's units.
+    game.players[0].alliance[0] = 0;
+    scene.compose(blips);
+    OA_CHECK(scene.at(10, 19) == mapped_fill && scene.listed() == 1);
 }
 
 void compose_damage_blink() {
@@ -475,6 +513,15 @@ void compose_projectiles() {
     scene.compose(blips);
     OA_CHECK(scene.at(20, 20) == ui_marks && scene.at(40, 20) == 0xc3);
     OA_CHECK(scene.at(30, 20) == mapped_fill);
+    // A projectile the host hides (weapons.no-map-alert) draws neither its
+    // dot nor its icon.
+    scene.hidden = &world.projectiles[3];
+    scene.compose(blips);
+    OA_CHECK(scene.at(40, 20) == mapped_fill);
+    OA_CHECK(scene.at(10, 20) == ui_marks && scene.at(20, 20) == ui_marks);
+    scene.hidden = &world.projectiles[0];
+    scene.compose(blips);
+    OA_CHECK(scene.at(10, 20) == mapped_fill && scene.at(40, 20) == 0xc3);
 }
 
 void draw_final_image() {
@@ -513,6 +560,7 @@ int main(int argc, char** argv) {
     halving_mixes_rows_then_columns();
     blink_clock();
     compose_units();
+    compose_allied_units();
     compose_damage_blink();
     compose_rings();
     compose_projectiles();

@@ -24,7 +24,7 @@ inline void require(bool condition, const std::string& message) {
 }
 
 // Piece state and callback log for a script bound to one unit.
-struct RecordingHost final : sim::script_vm::Host {
+struct RecordingHost : sim::script_vm::Host {
     /// Builds a host with zeroed state for a number of pieces.
     ///
     /// @param pieces script piece count

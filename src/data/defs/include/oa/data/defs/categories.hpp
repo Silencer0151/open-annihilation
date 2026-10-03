@@ -1,21 +1,46 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// Unit category registry: named 512-bit masks of unit type ids.
+// Unit category registry: named masks of unit type ids, 512 type ids wide
+// as in 3.1c unless the registry is made wider before its first category.
 #pragma once
 
 #include "oa/core/unit_def.h"
+#include "oa/data/limits.hpp"
 
 #include <cstdint>
 
 namespace oa::data::defs {
 
-inline constexpr uint32_t category_mask_words = 16; // 64-byte masks
+/// Words of a 3.1c category mask: 512 type ids, 64 bytes.
+inline constexpr uint32_t category_mask_words = 16;
+/// Words of the widest category mask a registry may keep.
+inline constexpr uint32_t max_category_mask_words =
+    data::limits::type_words(data::limits::highest_type_bits);
 inline constexpr uint32_t category_token_capacity = 256;
 
+/// A category mask: bit n of its words is unit type id n. The words belong to
+/// the registry that issued the mask, or to a CategoryMaskStorage; a mask
+/// with no words holds no type.
 struct CategoryMask {
-    uint32_t words[category_mask_words]{};
+    uint32_t* words{};     ///< word_count words
+    uint32_t word_count{}; ///< words held; type ids from word_count * 32 are left out
 };
+
+/// Words for a category mask made outside a registry, as wide as the widest
+/// a registry may keep.
+struct CategoryMaskStorage {
+    uint32_t words[max_category_mask_words]{};
+};
+
+/// Returns an empty mask over a storage block, holding a count of type ids.
+///
+/// @param[in,out] storage the words the mask uses; cleared
+/// @param type_bits type ids the mask holds, rounded up to whole words and
+///     capped at the storage
+/// @return the mask
+[[nodiscard]] CategoryMask
+category_mask_over(CategoryMaskStorage& storage, uint32_t type_bits) noexcept;
 
 struct Category {
     char* name{};
@@ -26,20 +51,25 @@ struct Category {
 // mask reference (index + 1, as UnitDef stores it) survives later inserts.
 struct CategoryRegistry {
     Category* entries{};
-    CategoryMask* masks{};
-    uint32_t count{}; // entries and masks
+    CategoryMask* masks{};  // count masks, over mask_words
+    uint32_t* mask_words{}; // words_per_mask words for each mask, in mask order
+    uint32_t count{};       // entries and masks
     uint32_t capacity{};
+    uint32_t words_per_mask{category_mask_words};
 };
 
 /// Sets a unit type's bit in a category mask.
 ///
-/// Type ids of 512 and above do not fit the 64-byte mask and are ignored.
+/// A type id past the mask's words is ignored, as 3.1c ignores type ids of
+/// 512 and above in its 64-byte masks.
 ///
 /// @param[in,out] mask mask to add the type to
 /// @param type_id sorted catalog index of the unit type
 void category_mask_set(CategoryMask* mask, uint16_t type_id) noexcept;
 
 /// ORs every bit of one category mask into another.
+///
+/// Bits past the receiving mask's words are dropped.
 ///
 /// @param[in,out] mask mask that receives the bits
 /// @param other mask whose bits are added
@@ -49,17 +79,27 @@ void category_mask_or(CategoryMask* mask, const CategoryMask* other) noexcept;
 ///
 /// @param mask mask to test
 /// @param type_id sorted catalog index of the unit type
-/// @return true when the type's bit is set; false for type ids of 512 and above
+/// @return true when the type's bit is set; false for type ids past the mask's words
 [[nodiscard]] bool category_mask_contains(const CategoryMask* mask, uint16_t type_id) noexcept;
 
-/// Empties a registry without freeing anything.
+/// Empties a registry without freeing anything, keeping its mask width.
 ///
 /// @param[out] registry registry to reset; its previous storage is not released
 void category_registry_init(CategoryRegistry* registry) noexcept;
 
+/// Sets how many unit type ids each mask of an empty registry holds.
+///
+/// @param[in,out] registry registry to size; it must hold no category yet
+/// @param type_bits type ids each mask holds (CategoryMasks::types), rounded
+///     up to whole words
+/// @return false, changing nothing, when the registry already holds a
+///     category or type_bits is 0 or past data::limits::highest_type_bits
+bool category_registry_set_mask_types(CategoryRegistry* registry, uint32_t type_bits) noexcept;
+
 /// Frees every category name and the entry and mask arrays, then empties the registry.
 ///
-/// @param[in,out] registry registry to clear; left as category_registry_init leaves it
+/// @param[in,out] registry registry to clear; left as category_registry_init
+///     leaves it, with its mask width
 void category_registry_clear(CategoryRegistry* registry) noexcept;
 
 /// Returns the reference of a named category mask, creating an empty one.

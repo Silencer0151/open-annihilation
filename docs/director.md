@@ -5,7 +5,10 @@ video: `--generate-script RECORDING` watches the recording from start to end
 and plans where the camera looks, writing a director script, and
 `--render-script SCRIPT` replays the recording and draws the script's shots
 at its size and frame rate, with the game's sound heard from the camera,
-into MP4 files. A script can also be written or edited by hand.
+into MP4 files. A script can also be written or edited by hand, and can
+name a stage in place of a recording: a file of units placed and orders
+given at set ticks, which the game plays out over a skirmish
+([Rendering a stage](#rendering-a-stage)).
 
 Both need two things besides the game:
 
@@ -100,6 +103,7 @@ default the script's folder and stem (`videos/game/` for
 | `NAME-000.frames`, ... | each chunk's frames, one line a frame: `<frame> <tick> <sha256>`, the frame's RGB bytes hashed |
 | `NAME.mp4` | every chunk joined: the chunks' frames as they are and the joined sound encoded once |
 | `NAME.manifest` | the engine version, the script's and recording's SHA-256, the size and rates, the ticks and frames, and each chunk's frame range, frame-manifest SHA-256 and sound SHA-256, then the whole sound's |
+| `NAME-still-000120.png`, ... | each frame `--stills` names, as drawn: an 8-bit RGB PNG of the frame's size, without loss; the frame's number has at least six digits |
 
 Chunk numbers have at least three digits. The joined video and the run
 manifest are made only when every chunk was rendered. While they are
@@ -108,6 +112,12 @@ needed, each chunk's encoded frames (`NAME-000.video.mp4`), the joined sound
 they are removed once the render is done, and a render that stops on an
 error leaves them.
 
+`--stills F,F...` also writes the frames it names, counted from 0 and in
+increasing order, as pictures; each must lie in the video and in a chunk
+the render draws, and the run prints a line for each with the tick it
+shows. Frame *f* of the video is *f* frames after the first shot's tick
+began, so at the default 60 frames a second frame 2 × *t* shows tick
+*first* + *t*.
 `--chunks A-B` (or `--chunks A`) draws and encodes chunks A to B alone,
 counted from 0. The ticks before them are still replayed, and their sound
 still mixed, so that a chunk rendered alone sounds as it does in a whole
@@ -181,7 +191,8 @@ director:
 | Key | Meaning | Default and limits |
 |---|---|---|
 | `oascript` | the format's version | required; 1 |
-| `input.demo` | the recording: its absolute path, its path relative to the script's folder, or its entry name in a bundle | required |
+| `input.demo` | the recording: its absolute path, its path relative to the script's folder, or its entry name in a bundle | required unless `input.stage` is given |
+| `input.stage` | a stage file to play in place of a recording: its absolute path or its path relative to the script's folder ([Rendering a stage](#rendering-a-stage)) | none; a script names a demo or a stage, not both, and a bundle carries a recording only |
 | `input.tickrate` | game ticks a second of video: 30 is the game's normal speed | 30; above 0, at most 3000, at most 3 decimal places |
 | `output.resolution` | `width` and `height` of the frames, pixels | 1920 by 1080; even, 16 to 16384 |
 | `output.framerate` | frames a second | 60; above 0, at most 240, at most 3 decimal places |
@@ -230,6 +241,43 @@ Scripts are read and written by `src/formats/oascript` (the grammar and
 every limit are in its headers), and compiled into cameras by
 `src/media` (`oa/media/director.hpp`, `clock.hpp`, `transition.hpp`).
 
+## Rendering a stage
+
+A script whose `input.stage` names a stage file renders a fight set up for
+the video instead of a recorded game. The run starts the two-player
+skirmish the headless checks start, on the map, sides and starting
+resources the run's preferences file gives (`--preferences-file`), carries
+out the stage's lines as `--stage` does, and plays the match on the fixed
+clock and seed, the stage's lines timed for later ticks running as their
+ticks come. Its actions ([src/app/README.md](../src/app/README.md)) place
+units by map pixel or from a player's first unit, gather them into groups
+and give the groups orders; for example:
+
+```text
+# Three of the local player's units hold a line; the other player's
+# arrive in two waves, ten seconds apart, and attack the nearest of them.
+group line
+place 0 ARMPW 2400 2000 north
+place 0 ARMPW 2480 2000 north
+place 0 ARMPW 2560 2000 north
+group wave1
+place 1 CORAK 2400 1200
+place 1 CORAK 2480 1200
+attack wave1 line
+at 300 group wave2
+at 300 place 1 CORTHUD 2440 1100
+at 300 attack wave2 line
+```
+
+A stage has no end of its own, so its script must set `director.endTick`,
+and the render keeps on to that tick whatever happens; `stage:` lines
+report what the stage did as it goes. A stage plays out alike on every run
+and platform, drawn or not, as a recording does. The other player is a
+computer player, whose own decisions reach its units beside the stage's
+orders, unless a `console` line of the stage hands it to no one: the
+console's `+AI 1` does where the game's rules let that command be typed
+in a skirmish.
+
 ## Sound
 
 The sound is the game's sound effects as heard from the director's camera:
@@ -265,7 +313,9 @@ A script and its render are the same on every platform and every run:
 
 `native-director-render` renders a small script over the headless skirmish
 with encoding off, whole and its second chunk alone, and pins the frames'
-and the sound's hashes; `native-director-render-relative` renders it with
+and the sound's hashes; `native-stage-render` renders a script that names a
+stage, twice, with two stills, and checks that both renders draw the same
+frames; `native-director-render-relative` renders it with
 its files and preferences named relative to the working directory and pins
 the same hashes; `native-director-view` checks the frames director mode
 draws; `app-director-output` checks the files, the encoder's arguments and
@@ -299,7 +349,8 @@ bundles.
 
 ## Code
 
-`src/app/runtime_director.cpp` runs both options and the render check;
+`src/app/runtime_director.cpp` runs both options and the render check, and
+starts a stage's skirmish (`src/app/runtime_stage.cpp` plays its lines);
 `src/app/runtime_director_view.cpp` is director mode (the camera, the
 drawing and the sound routes, `director_presentation.hpp`);
 `src/app/director_output.cpp` writes the files and runs `ffmpeg`

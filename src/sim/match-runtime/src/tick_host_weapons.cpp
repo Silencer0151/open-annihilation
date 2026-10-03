@@ -4,6 +4,7 @@
 #include "tick_internal.hpp"
 #include "oa/sim/weapon_execution/interceptor.hpp"
 #include "oa/sim/weapon_execution/projectile_pool.hpp"
+#include "oa/sim/weapon_execution/weapon_keys.hpp"
 
 #include <cstdint>
 #include <utility>
@@ -27,7 +28,9 @@ class WeaponTickHost final : public sim::weapon_execution::Host {
 
   public:
 
-    WeaponTickHost(Match& world, sim::unit_spawn::Slot& slot) : match(world), source(slot) {}
+    WeaponTickHost(Match& world, sim::unit_spawn::Slot& slot) : match(world), source(slot) {
+        rules = world.rules_view();
+    }
 
     bool resolve_target(uint8_t index, sim::weapon_execution::Target& out) override {
         const auto& weapon_slot = source.record.weapons[index];
@@ -51,7 +54,9 @@ class WeaponTickHost final : public sim::weapon_execution::Host {
             const auto* mover = match.ground_runtime(target.unit_index);
             if (definition) {
                 const auto& weapon = match.state().game.weapon_defs[definition->registry_index];
-                if (sim::weapon_execution::lead_applies(weapon, source.record, mover != nullptr)) {
+                if (sim::weapon_execution::lead_applies(
+                        weapon, source.record, mover != nullptr, rules
+                    )) {
                     const auto lead = sim::weapon_execution::veteran_lead_offset(
                         weapon,
                         source.record,
@@ -107,9 +112,12 @@ class WeaponTickHost final : public sim::weapon_execution::Host {
         const auto goal = as_position(target.point);
         const auto solution = sim::ballistics::turret_aim(
             definition->flags,
-            {definition->projectile_velocity,
-             definition->minimum_barrel_angle_radians,
-             match.state().game.gravity},
+            sim::weapon_execution::ballistic_parameters(
+                definition->projectile_velocity,
+                definition->minimum_barrel_angle_radians,
+                match.state().game.gravity,
+                rules.rules()
+            ),
             {{signed_word(aim[0]), signed_word(aim[1]), signed_word(aim[2])},
              {signed_word(goal[0]), signed_word(goal[1]), signed_word(goal[2])},
              static_cast<int16_t>(heading())}
@@ -197,12 +205,17 @@ class WeaponTickHost final : public sim::weapon_execution::Host {
         if (!definition)
             return false;
         const auto& def = match_unit_def(match, source.record);
+        const auto& record = match.state().game.weapon_defs[definition->registry_index];
         return sim::ballistics::fire_can_reach(
             {definition->flags,
              definition->range_world_units,
-             {definition->projectile_velocity,
-              definition->minimum_barrel_angle_radians,
-              match.state().game.gravity}},
+             sim::weapon_execution::ballistic_parameters(
+                 definition->projectile_velocity,
+                 definition->minimum_barrel_angle_radians,
+                 match.state().game.gravity,
+                 rules.rules()
+             ),
+             sim::weapon_execution::reach_keys(rules.weapon(record.weapon_id))},
             {from.fixed, high_word(static_cast<uint32_t>(def.model_height)), 0, 0},
             target.point.fixed,
             match.simulation_.sea_level
@@ -250,7 +263,8 @@ class WeaponTickHost final : public sim::weapon_execution::Host {
             ground ? ground->movement.speed : 0,
             world,
             random,
-            &match
+            &match,
+            rules
         );
         slot.aim_heading = plan.slot_aim.heading;
         slot.aim_pitch = plan.slot_aim.pitch;
@@ -278,8 +292,9 @@ class WeaponTickHost final : public sim::weapon_execution::Host {
         // The shot is then shared, a fixed line weapon's with the unit's
         // position as the start.
         ShotEvent shared{};
-        shared.start = sim::weapon_execution::select_fire_mode(definition->flags) ==
-                               sim::weapon_execution::FireMode::line
+        shared.start = sim::weapon_execution::select_fire_mode(
+                           definition->flags, rules.rules().weapons.vlaunch_before_turret.enabled
+                       ) == sim::weapon_execution::FireMode::line
                            ? source.record.position
                            : muzzle_point;
         shared.target = target_point;
@@ -486,6 +501,7 @@ void TickHost::tick_weapon_aim(oa::Unit& record) {
     sim::weapon_execution::UnitState state;
     state.position = as_point(u.position);
     state.veteran_level = s.record.veteran_level;
+    state.type_index = s.record.type_index;
     state.health = u.health;
     state.maximum_health = u.type->maximum_health ? u.type->maximum_health : 1;
     state.shot_event_bits = u.events;

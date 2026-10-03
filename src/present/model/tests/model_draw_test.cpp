@@ -50,6 +50,40 @@ std::shared_ptr<oa::formats::objects3d::Model> square_model() {
 
 constexpr uint8_t barrel_ink = 0x66;
 
+// A square of a side in units with a 4x12 barrel two units up beside its
+// centre, the barrel drawn every frame through the composite once the
+// building is made a turret building (make_turret_building).
+std::shared_ptr<oa::formats::objects3d::Model> wide_turret_model(int32_t side) {
+    auto model = std::make_shared<oa::formats::objects3d::Model>();
+    oa::formats::objects3d::Object base;
+    const int32_t h = side / 2 * unit_fixed;
+    base.vertices = {{-h, 0, -h}, {h, 0, -h}, {h, 0, h}, {-h, 0, h}};
+    oa::formats::objects3d::Primitive square;
+    square.vertex_indices = {0, 3, 2, 1};
+    square.color_index = ink;
+    square.is_colored = 1;
+    base.primitives.push_back(square);
+    base.first_child = 1;
+    oa::formats::objects3d::Object barrel;
+    const int32_t w = 2 * unit_fixed;
+    const int32_t y = 2 * unit_fixed;
+    barrel.vertices = {
+        {-w, y, 2 * unit_fixed},
+        {w, y, 2 * unit_fixed},
+        {w, y, 14 * unit_fixed},
+        {-w, y, 14 * unit_fixed}
+    };
+    oa::formats::objects3d::Primitive bar;
+    bar.vertex_indices = {0, 3, 2, 1};
+    bar.color_index = barrel_ink;
+    bar.is_colored = 1;
+    barrel.primitives.push_back(bar);
+    barrel.parent = 0;
+    model->objects.push_back(base);
+    model->objects.push_back(barrel);
+    return model;
+}
+
 // A building with a turret: the square as its base, and as the base's child
 // a 4x12 barrel two units up that reaches from beside the base's centre
 // towards one edge, so that a turn about the vertical axis moves it on
@@ -274,6 +308,152 @@ void test_build_effect() {
     CHECK(nano > 0);
 }
 
+// How many times a colour of the pulse comes back to the bright end of the
+// ramp over `ticks` ticks from `start`: the times it reaches 0xa0 from
+// another colour.
+int bright_returns(uint32_t start, uint32_t ticks, uint32_t id, bool second) {
+    int returns = 0;
+    uint8_t before = 0;
+    for (uint32_t tick = start; tick <= start + ticks; ++tick) {
+        const BuildPulseColours colours = build_pulse_colours(tick, id);
+        const uint8_t colour = second ? colours.second : colours.first;
+        if (tick != start && colour == 0xa0 && before != 0xa0)
+            ++returns;
+        before = colour;
+    }
+    return returns;
+}
+
+// The pulse's colours at a tick, as 3.1c sets them: each walks 0xa0..0xaf
+// and back, the first 33 steps every 30 ticks, the second 57, each unit from
+// its own place.
+void test_build_pulse_colours() {
+    // Tick 0: the waves start at the id mixed with 5 and 9.
+    CHECK(build_pulse_colours(0, 0).first == 0xa5);
+    CHECK(build_pulse_colours(0, 0).second == 0xa9);
+    // Tick 30: 33 and 57 steps on, at steps 38 and 66, both on their way
+    // down the ramp; step 16 turns back up from black.
+    CHECK(build_pulse_colours(30, 0).first == 0xa6);
+    CHECK(build_pulse_colours(30, 0).second == 0xa2);
+    CHECK(build_pulse_colours(10, 0).first == 0xaf - 0x0);
+    CHECK(build_pulse_colours(13, 0).first == 0xaf - 0x3);
+    // Another id starts elsewhere.
+    CHECK(build_pulse_colours(0, 3).first == 0xa6);
+    // Every colour is on the ramp, and a colour moves at most two steps of
+    // it from one tick to the next.
+    for (uint32_t tick = 0; tick < 2000; ++tick) {
+        const BuildPulseColours now = build_pulse_colours(tick, 41);
+        const BuildPulseColours next = build_pulse_colours(tick + 1, 41);
+        CHECK(now.first >= 0xa0 && now.first <= 0xaf);
+        CHECK(now.second >= 0xa0 && now.second <= 0xaf);
+        CHECK(std::abs(int{next.first} - int{now.first}) <= 2);
+        CHECK(std::abs(int{next.second} - int{now.second}) <= 2);
+    }
+    // The rate: over 960 ticks, 32 seconds at 30 ticks a second, the first
+    // colour comes back to bright green 33 times and the second 57, whatever
+    // the unit and wherever the count starts.
+    for (const uint32_t id : {0U, 7U, 300U})
+        for (const uint32_t start : {0U, 17U, 54000U}) {
+            CHECK(bright_returns(start, 960, id, false) == 33);
+            CHECK(bright_returns(start, 960, id, true) == 57);
+        }
+}
+
+// The colours a run of frames shows: one sample a frame, the game's tick
+// moving on 30 times a second whatever the frame rate, with the build
+// effect's clock moved on at every frame.
+std::vector<uint8_t> pulse_by_tick(uint32_t frames_per_second, float zoom, uint32_t ticks) {
+    BuildPulseClock clock;
+    std::vector<uint8_t> by_tick(ticks + 1, 0);
+    std::vector<bool> seen(ticks + 1, false);
+    const uint32_t frames = ticks * frames_per_second / 30;
+    for (uint32_t frame = 0; frame <= frames; ++frame) {
+        const uint32_t tick = frame * 30 / frames_per_second;
+        const uint32_t lag = advance_build_pulse(clock, tick, zoom);
+        const uint8_t colour = build_pulse_colours(tick - lag, 11).second;
+        // Every frame of a tick shows the same colour.
+        CHECK(!seen[tick] || by_tick[tick] == colour);
+        seen[tick] = true;
+        by_tick[tick] = colour;
+    }
+    return by_tick;
+}
+
+// The pulse runs by the game's ticks, not the frames drawn: at 30, 60, 144
+// and 240 frames a second the colours tick by tick are the same, at zoom 1
+// and zoomed out.
+void test_build_pulse_frame_rate() {
+    for (const float zoom : {1.0F, 2.0F, 0.5F, 0.25F}) {
+        const std::vector<uint8_t> at_30 = pulse_by_tick(30, zoom, 600);
+        for (const uint32_t rate : {60U, 144U, 240U})
+            CHECK(pulse_by_tick(rate, zoom, 600) == at_30);
+    }
+    // At zoom 1 they are 3.1c's.
+    const std::vector<uint8_t> at_one = pulse_by_tick(144, 1.0F, 600);
+    for (uint32_t tick = 0; tick <= 600; ++tick)
+        CHECK(at_one[tick] == build_pulse_colours(tick, 11).second);
+}
+
+// The pulse's rate by zoom: 3.1c's at zoom 1 and in, the zoom's share of
+// it zoomed out, and a quarter of it from four times out.
+void test_build_pulse_rate() {
+    CHECK(build_pulse_rate(1.0F) == 1.0F);
+    CHECK(build_pulse_rate(4.0F) == 1.0F);
+    CHECK(build_pulse_rate(0.5F) == 0.5F);
+    CHECK(build_pulse_rate(0.25F) == 0.25F);
+    CHECK(build_pulse_rate(1.0F / 6.0F) == build_pulse_least_rate);
+    // Zoom 1 and in: no lag, tick for tick.
+    BuildPulseClock clock;
+    for (uint32_t tick = 100; tick < 400; ++tick)
+        CHECK(advance_build_pulse(clock, tick, 1.0F) == 0);
+    // Half way out, the pulse moves one tick for every two of the game's.
+    uint32_t lag = 0;
+    for (uint32_t tick = 400; tick <= 2400; tick += 2)
+        lag = advance_build_pulse(clock, tick, 0.5F);
+    CHECK(lag == 1000);
+    // Ticks seen together count as ticks seen one by one.
+    BuildPulseClock together;
+    BuildPulseClock one_by_one;
+    advance_build_pulse(together, 0, 0.3F);
+    advance_build_pulse(one_by_one, 0, 0.3F);
+    advance_build_pulse(together, 77, 0.3F);
+    for (uint32_t tick = 1; tick <= 77; ++tick)
+        advance_build_pulse(one_by_one, tick, 0.3F);
+    CHECK(together.lag == one_by_one.lag && together.lag_fraction == one_by_one.lag_fraction);
+    // Four times out and beyond, a quarter of the rate.
+    BuildPulseClock far;
+    advance_build_pulse(far, 0, 1.0F / 6.0F);
+    CHECK(advance_build_pulse(far, 400, 1.0F / 6.0F) == 300);
+    // Back at zoom 1 the lag goes at once: the pulse is 3.1c's again.
+    CHECK(advance_build_pulse(far, 401, 1.0F) == 0);
+    // A game loaded at an earlier tick starts the clock again.
+    CHECK(advance_build_pulse(far, 801, 0.5F) == 200);
+    CHECK(advance_build_pulse(far, 50, 0.5F) == 0);
+    CHECK(advance_build_pulse(far, 52, 0.5F) == 1);
+}
+
+// The effect draws the pulse's colours at the renderer's tick less its lag.
+void test_build_effect_lag() {
+    const auto drawn_at = [](uint32_t tick, uint32_t lag) {
+        Scene scene;
+        scene.unit->flags2 |= OA_UNIT_FLAG2_Z_BUFFER;
+        CHECK(prepare_model_image(scene.renderer, scene.ref(), false, pass_all_pieces));
+        scene.unit->build_remaining = 0.9F;
+        Sprite& image = scene.state.image.sprite;
+        scene.renderer.tick = tick;
+        scene.renderer.build_pulse_lag = lag;
+        CHECK(apply_build_effect(scene.renderer, image, scene.ref()));
+        const auto* pixels = static_cast<const uint8_t*>(image.data);
+        return std::vector<uint8_t>(
+            pixels, pixels + static_cast<std::size_t>(image.width) * image.height
+        );
+    };
+    const std::vector<uint8_t> lagging = drawn_at(500, 120);
+    CHECK(lagging == drawn_at(380, 0));
+    // The pulse moves the colours: the frame 9 ticks on differs.
+    CHECK(lagging != drawn_at(389, 0));
+}
+
 void test_shift_threshold() {
     Scene scene;
     const ModelRef model = scene.ref();
@@ -357,6 +537,80 @@ void test_finished_turret_draws_as_fresh() {
     CHECK(built.state.image.sprite.aux == nullptr);
     CHECK(built.pixel(100, 88) == barrel_ink);
     CHECK(built.pixel(100, 111) == ground);
+}
+
+// ui.interface-fixes nanoframe-raster: an unfinished mobile unit's moving
+// pieces are drawn plain over its nanoframe image every frame in 3.1c; under
+// the fix only once it is built, as a building's are.
+void test_mobile_nanoframe_moving_pieces() {
+    const auto draw = [](bool fix, float remaining) {
+        auto scene = std::make_unique<Scene>(turret_model());
+        make_turret_building(*scene);
+        scene->unit->flags &= ~OA_UNIT_FLAG_BUILDING;
+        scene->unit->build_remaining = remaining;
+        scene->renderer.moving_pieces_once_built = fix;
+        draw_turret(*scene, 0);
+        return scene;
+    };
+    const auto base = draw(false, 0.5F);
+    const auto fixed = draw(true, 0.5F);
+    CHECK(base->pixel(100, 108) == barrel_ink);
+    CHECK(fixed->pixel(100, 108) != barrel_ink);
+    // Built, both draw the barrel.
+    CHECK(draw(true, 0.0F)->screen.pixels == draw(false, 0.0F)->screen.pixels);
+}
+
+/// Draws a 100-unit turret building with a composite of the given limits.
+///
+/// @param limits the composite's size and clamp
+/// @return the scene, drawn once
+std::unique_ptr<Scene> draw_wide_turret(const oa::data::limits::ModelComposite& limits) {
+    auto scene = std::make_unique<Scene>(wide_turret_model(100));
+    scene->renderer.composite_limits = limits;
+    CHECK(init_composite_buffer(scene->renderer));
+    make_turret_building(*scene);
+    // Unshaded and without a shadow, so that the model alone draws, in ink,
+    // and with a depth plane, which draws through the composite.
+    scene->renderer.graphics_flags = 0;
+    scene->unit->flags2 |= OA_UNIT_FLAG2_Z_BUFFER;
+    draw_turret(*scene, 0);
+    return scene;
+}
+
+// The composite starts at its limits' size: 600x600 as in 3.1c, up to the
+// largest a profile may name. Without the clamp a smaller composite grows to
+// fit the model and draws it whole; with it the model keeps the composite's
+// width and height from its top left.
+void test_composite_limits() {
+    const auto base = draw_wide_turret({});
+    CHECK(
+        base->renderer.composite.pixels.size() == std::size_t{2} * composite_side * composite_side
+    );
+    CHECK(base->pixel(60, 60) == ink && base->pixel(140, 140) == ink);
+
+    const auto grown = draw_wide_turret({64, 64, false});
+    CHECK(grown->screen.pixels == base->screen.pixels);
+
+    const auto cut = draw_wide_turret({64, 64, true});
+    CHECK(cut->renderer.composite.pixels.size() == std::size_t{2} * 64 * 64);
+    CHECK(cut->pixel(60, 60) == ink);
+    CHECK(cut->pixel(140, 140) == ground);
+
+    constexpr int32_t largest = oa::data::limits::highest_composite_side;
+    for (const bool clamp : {false, true}) {
+        const auto wide = draw_wide_turret({largest, largest, clamp});
+        CHECK(wide->renderer.composite.pixels.size() == std::size_t{2} * largest * largest);
+        CHECK(wide->renderer.composite.sprite.data != nullptr);
+        CHECK(wide->screen.pixels == base->screen.pixels);
+    }
+
+    // A renderer of its own takes the same limits.
+    ModelRenderer copy;
+    copy_renderer_settings(cut->renderer, copy);
+    CHECK(
+        copy.composite_limits.clamp_oversize &&
+        copy.composite.pixels.size() == std::size_t{2} * 64 * 64
+    );
 }
 
 void test_sparse_depth() {
@@ -498,6 +752,7 @@ void test_shatter_fragment() {
 } // namespace
 
 int main() {
+    test_mobile_nanoframe_moving_pieces();
     test_bounds();
     test_image_planes();
     test_linked_draw();
@@ -505,9 +760,14 @@ int main() {
     test_building_shadow();
     test_remap_depth_bands();
     test_build_effect();
+    test_build_pulse_colours();
+    test_build_pulse_frame_rate();
+    test_build_pulse_rate();
+    test_build_effect_lag();
     test_shift_threshold();
     test_piece_changes();
     test_finished_turret_draws_as_fresh();
+    test_composite_limits();
     test_sparse_depth();
     test_projectile_and_debris();
     test_shatter_fragment();

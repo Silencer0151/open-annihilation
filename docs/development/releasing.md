@@ -28,22 +28,26 @@ expanded and checked, and the notary service's logs.
 1. **Builds the game.** The tree must have no uncommitted changes;
    `--allow-local-changes` builds one anyway, for a test and never for a
    release. The script says whether `HEAD` carries the version's tag.
-   `tools/bootstrap_macos_deps.py` builds the pinned zlib and SDL3
-   as static libraries for both architectures and macOS 11.0 under
+   `tools/bootstrap_macos_deps.py` builds the pinned zlib, SDL3 and
+   FreeType as static libraries for both architectures and macOS 11.0 under
    `local/deps/macos-11.0` (the first run downloads their archives and
    checks each against its SHA-256). Each library's folder records in
    `build-settings.json` the version, archive checksum, deployment target,
    architectures and options it was built with, and a library is built
    again whenever these differ from the pins and options of the tools, so
-   the notices never name a version the application does not hold. The
+   the notices never name a version the application does not hold.
+   `tools/bootstrap_text_fonts.py --fonts-only` puts the text fonts in
+   `local/deps/text-fonts`, and the build copies them into the bundle's
+   `Contents/Resources/fonts`. The
    `oa-game` target is then built in `build-release-macos`, its CMake cache
    cleared first and its bundle made afresh: a Release build without
    tests, for both architectures, linking those libraries and no others
    (never Homebrew's).
 2. **Checks the build:** both architectures, macOS 11.0 as the oldest
    release in each and in `Info.plist`, only the system's libraries linked,
-   the source's notices in `Contents/Resources`, and nothing else in the
-   bundle. The notices are `LICENSE`, `ATTRIBUTIONS.md` and the files of
+   the source's notices in `Contents/Resources`, the text fonts in its
+   `fonts` folder, each the bootstrap's byte for byte, and nothing else in
+   the bundle. The notices are `LICENSE`, `ATTRIBUTIONS.md` and the files of
    `licenses/` that Git tracks; a file Git does not track there, a
    `.DS_Store` for one, stops the script, since the build would put it in
    the application.

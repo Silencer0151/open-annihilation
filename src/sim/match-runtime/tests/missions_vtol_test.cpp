@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
+#include "match_tick_access.hpp"
 #include "oa/sim/match_runtime.hpp"
 #include <cstdint>
 #include <iostream>
@@ -234,6 +235,41 @@ int main() {
         static_cast<uint8_t>(sim::air::layer_ground << sim::air::driver_sent_layer_shift);
     run(1);
     CHECK((driver->flags & sim::air::driver_resend) != 0);
+
+    // A landing that finds no free pad says cannot comply, or the voice the
+    // match's display rules name.
+    const auto landing_voice = [&](sim::match_runtime::Match& played, Services& heard) {
+        auto* flier = played.create({0, aircraft_type, at(40, 120), true, 1, 0});
+        auto* base = played.create({0, pad_type, at(72, 120), true, 1, 0});
+        CHECK(flier && base);
+        auto& land = played.issue_order(
+            flier->unit_index,
+            sim::ground_orders::vtol_landing_kind,
+            false,
+            base->unit_index,
+            nullptr,
+            0,
+            0
+        );
+        CHECK(land.kind == sim::ground_orders::vtol_landing_kind);
+        land.phase = 3;
+        heard.speech.clear();
+        sim::match_runtime::MatchTickAccess host(played);
+        CHECK(host.dispatch_mission(played.state(), flier->record, land, 0) == 0);
+        const auto spoken = heard.spoken_by(flier->unit_index);
+        CHECK(spoken.size() == 1);
+        return spoken.front();
+    };
+    CHECK(landing_voice(match, services) == 7);
+    input.display.landing_fail_voice = 6;
+    Services arrived_services;
+    sim::match_runtime::Match arrived(input, arrived_services);
+    arrived.configure_strategic_environment({0, 0.5F, 0});
+    arrived.simulation().players[0].present = true;
+    arrived.simulation().players[0].status = 1;
+    arrived.configure_player_alliances(0, allies);
+    CHECK(landing_voice(arrived, arrived_services) == 6);
+
     std::cout << "vtol missions ok\n";
     return 0;
 }

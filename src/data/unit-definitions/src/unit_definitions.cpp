@@ -259,7 +259,8 @@ UnitDefinition unit_definition_from(const UnitDef& unit, const UnitDefinitionSou
 Result<RuntimeDefinitionMetadata> resolve_runtime_metadata(
     const UnitDef& unit,
     const defs::MoveClassTable& movement_classes,
-    const defs::UnitDefBlocks& blocks
+    const defs::UnitDefBlocks& blocks,
+    const defs::YardMapRules& yard_maps
 ) {
     Result<RuntimeDefinitionMetadata> result;
     auto& out = result.value;
@@ -283,13 +284,22 @@ Result<RuntimeDefinitionMetadata> resolve_runtime_metadata(
     out.sonar_distance = unit.sonar_distance;
     out.radar_distance_jam = unit.radar_distance_jam;
     out.sonar_distance_jam = unit.sonar_distance_jam;
-    if (unit.bm_code == 0) {
+    const bool building = unit.bm_code == 0;
+    if (building || (yard_maps.mobile_units && unit.yard_map != 0)) {
         const auto cells = static_cast<std::size_t>(std::max<int32_t>(unit.footprint_x, 0)) *
                            static_cast<std::size_t>(std::max<int32_t>(unit.footprint_z, 0));
         const uint8_t* yard = defs::unit_def_block(&blocks, unit.yard_map);
+        if (building && yard == nullptr && yard_maps.skip_without_key) {
+            out.yard_cells.assign(cells, 0);
+            return result;
+        }
         if (cells != 0 &&
             (yard == nullptr || defs::unit_def_block_size(&blocks, unit.yard_map) < cells)) {
-            result.error = {ErrorCode::malformed, 0, "building yard map did not load"};
+            result.error = {
+                ErrorCode::malformed,
+                0,
+                building ? "building yard map did not load" : "mobile unit yard map did not load"
+            };
             return result;
         }
         out.yard_cells.assign(yard, yard + cells);
@@ -302,7 +312,7 @@ target_category_masks(const UnitDef& unit, const defs::CategoryRegistry& categor
     UnitTargetCategoryMasks masks;
     const auto copy = [&categories](oa_ref32 ref, UnitCategoryMask& mask) {
         if (const auto* source = defs::category_registry_mask(&categories, ref))
-            std::copy(std::begin(source->words), std::end(source->words), mask.words.begin());
+            mask.words.assign(source->words, source->words + source->word_count);
     };
     copy(unit.primary_bad_target_category, masks.primary_bad);
     copy(unit.secondary_bad_target_category, masks.secondary_bad);
@@ -313,7 +323,7 @@ target_category_masks(const UnitDef& unit, const defs::CategoryRegistry& categor
 
 bool UnitCategoryMask::contains(uint16_t type_id) const noexcept {
     const auto index = static_cast<std::size_t>(type_id);
-    return index < category_mask_bits && (words[index >> 5U] & (1U << (index & 31U))) != 0;
+    return (index >> 5U) < words.size() && (words[index >> 5U] & (1U << (index & 31U))) != 0;
 }
 
 } // namespace oa::data::unit_definitions

@@ -254,6 +254,40 @@ void test_tiles() {
     OA_CHECK(blended.batches.front().blend == card::Blend::alpha);
     OA_CHECK(blended.batches.front().target.value == 7);
 
+    // At a sixth with whole pixels, where a tile spans 5 1/3 pixels: every
+    // corner on a whole pixel, and each tile's right and bottom edges the
+    // left and top edges of the next, so that no row or column lies
+    // between them; without, the corners keep their fractions.
+    ft::TerrainView sixth = view;
+    sixth.scale = 1.0F / 6.0F;
+    sixth.camera_x = 0;
+    sixth.camera_y = 0;
+    sixth.origin_x = 0.0F;
+    sixth.origin_y = 0.0F;
+    sixth.whole_pixels = true;
+    card::CardFrame snapped;
+    OA_CHECK(
+        ft::append_terrain_tiles(
+            snapped, atlas, pages, sixth, level_1, card::TargetHandle{}, nullptr
+        ) == 6
+    );
+    for (const auto& vertex : snapped.vertices)
+        OA_CHECK(vertex.x == std::round(vertex.x) && vertex.y == std::round(vertex.y));
+    // The tiles in grid order, four corners each: the first row's three,
+    // then the second's.
+    OA_CHECK(snapped.vertices[1].x == snapped.vertices[4].x);
+    OA_CHECK(snapped.vertices[5].x == snapped.vertices[8].x);
+    OA_CHECK(snapped.vertices[3].y == snapped.vertices[12].y);
+    OA_CHECK(near(snapped.vertices[1].x, 5.0F) && near(snapped.vertices[5].x, 11.0F));
+    sixth.whole_pixels = false;
+    card::CardFrame fractional;
+    OA_CHECK(
+        ft::append_terrain_tiles(
+            fractional, atlas, pages, sixth, level_1, card::TargetHandle{}, nullptr
+        ) == 6
+    );
+    OA_CHECK(near(fractional.vertices[1].x, 32.0F / 6.0F));
+
     // A view that starts in the last tile shows that tile alone, and one
     // past the map shows nothing; a view narrower than a tile shows the
     // tile under it and the one its far edge touches.

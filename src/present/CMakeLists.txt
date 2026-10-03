@@ -26,6 +26,7 @@ if(BUILD_TESTING)
     set_tests_properties(present-${test_case} PROPERTIES TIMEOUT 120)
   endforeach()
   target_link_libraries(oa-present-gaf-sprites-test PRIVATE oa-formats-gaf)
+  target_link_libraries(oa-present-game-text-test PRIVATE oa-test-support)
   # The installed game's GAF files (compared with the GAF reader), palette
   # tables and PCX images.
   foreach(test_case IN ITEMS gaf-sprites palette-tables pcx)

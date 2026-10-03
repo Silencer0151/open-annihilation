@@ -10,17 +10,22 @@
 #include "frame_pacing.hpp"
 #include "full_screen.hpp"
 #include "match_model_draws.hpp"
+#include "megamap_state.hpp"
 #include "offline_services.hpp"
 #include "scaled_world.hpp"
 #include "video_capture.hpp"
+#include "view_rules.hpp"
 #include "web_link.hpp"
 #include "world_scaling.hpp"
 #include "oa/ui/display_layout.hpp"
 #include "oa/audio/sdl_audio.hpp"
 #include "oa/base/game_loop.hpp"
 #include "oa/data/defs/locale.hpp"
+#include "oa/data/defs/rule_keys.hpp"
 #include "oa/data/defs/sides.hpp"
 #include "oa/data/defs/unit_catalog.hpp"
+#include "oa/data/languages.hpp"
+#include "oa/data/limits.hpp"
 #include "oa/sim/gameplay_input/input.hpp"
 #include "oa/sim/gameplay_input/order_cursor.hpp"
 #include "oa/ui/gui_input/gadget_panel.hpp"
@@ -34,6 +39,7 @@
 #include "oa/present/display.hpp"
 #include "oa/present/gaf_sprites.hpp"
 #include "oa/present/surface.hpp"
+#include "oa/present/game_text.hpp"
 #include "oa/present/unit_playout.hpp"
 #include "oa/present/model/unit_supersampling.hpp"
 #include "oa/present/world_renderer/scene_filter.hpp"
@@ -57,7 +63,12 @@
 #include "oa/ui/frontend_renderer/scroll_bars.hpp"
 #include "oa/present/world_renderer/world_radar.hpp"
 #include "oa/sim/messages.hpp"
+#include "oa/sim/mission_units/map_units.hpp"
 #include "oa/sim/selection.hpp"
+#include "oa/sim/speed.hpp"
+#include "oa/sim/selection/shortcuts.hpp"
+#include "oa/ui/hud/resource_panel.hpp"
+#include "oa/ui/hud/whiteboard.hpp"
 #include <SDL3/SDL.h>
 #include <array>
 #include <chrono>
@@ -188,6 +199,19 @@ struct SessionDisplay {
     ~SessionDisplay();
 };
 
+// Keeps a runtime's game-text hooks installed for the text loops while it
+// lives (oa/present/game_text.hpp; runtime_game_text.cpp).
+struct GameTextHooksInstall {
+    const void* runtime{}; ///< the runtime the installed hooks call; null when none
+
+    GameTextHooksInstall() = default;
+    GameTextHooksInstall(const GameTextHooksInstall&) = delete;
+    GameTextHooksInstall& operator=(const GameTextHooksInstall&) = delete;
+
+    /// Removes the hooks when they are still this runtime's.
+    ~GameTextHooksInstall();
+};
+
 // The last frame the headless display sink received, with its palette.
 struct CapturedFrame {
     oa::present::SurfaceBuffer frame{};
@@ -283,6 +307,266 @@ class Runtime final : public menu::Host,
     ///     ScreenServices::quit asked for
     int run();
 
+    /// Returns the mod profile the game plays (--mod), which every view of
+    /// the rules starts from: the lobby, the HUD, the console, network play
+    /// and saves read it here, and each match is built with its rules.
+    /// While Developer Mode is on, the player's overrides of its standard
+    /// hacks are laid over it, its rules' from the next match's start: a
+    /// running match keeps the profile it started with. A game without a mod
+    /// plays by the plain 3.1c baseline with the overrides once they change
+    /// one of its rules. The display rules, which change at once, are
+    /// ui_rules().
+    ///
+    /// @return the resolved profile, or null when the game plays 3.1c's rules
+    [[nodiscard]] const oa::data::mod_profile::ModProfile* mod_profile() const noexcept;
+
+    /// Tells whether Developer Mode is on: the player's overrides of the
+    /// profile's standard hacks apply, and a network lobby is told so.
+    ///
+    /// @return the Developer Mode setting in effect; false before the
+    ///     settings are read
+    [[nodiscard]] bool developer_mode() const noexcept;
+
+    /// Returns which of 3.1c's names each difficulty carries: the folder profile's
+    /// ai.difficulty-names, or 3.1c's without a profile.
+    ///
+    /// @return the names
+    [[nodiscard]] oa::data::match_rules::AiDifficultyNames difficulty_names() const override;
+
+    /// Readies a skirmish or multiplayer match for the map's placed units
+    /// (setup.map-scripted-units; runtime_map_units.cpp): with the rule on
+    /// and a map whose schema lists units, the start positions placed here
+    /// are noted from now on and the timed entries are ordered. A resumed
+    /// game leaves out the timed entries already due.
+    ///
+    /// @param resumed whether the match resumes a saved game
+    void begin_map_units(bool resumed);
+
+    /// Places a player's map units at the start, in place of its commander.
+    ///
+    /// The player takes the neutral units instead of its own when the map
+    /// has some and it is a computer player this machine runs, not
+    /// watching, placed at the last start position of the counted players.
+    /// Each unit's InitialMission script then runs.
+    ///
+    /// @param player the player slot, one this machine runs
+    /// @param start_position its start position
+    /// @return true when the map lists start units for it, so it gets no commander
+    bool place_map_units(uint8_t player, int32_t start_position);
+
+    /// Moves the computer player this machine runs last before a commander
+    /// is placed, on a map with neutral units whose start positions are not
+    /// fixed (oa::sim::mission_units::move_computer_last).
+    ///
+    /// @param[in,out] positions each slot's start position
+    /// @param[in,out] placing the start position of the player being placed
+    void move_map_unit_computer_last(std::array<int32_t, 10>& positions, int32_t& placing);
+
+    /// Tells whether the match's map places units for the neutral player,
+    /// which the team start positions read.
+    ///
+    /// @return true with the rule on and such units in the map's schema
+    [[nodiscard]] bool map_places_neutral_units();
+
+    /// Places the timed map units that are due, once a frame: each goes to
+    /// the player this machine placed at its start position, or to the
+    /// neutral player, when this machine runs it and it is not watching.
+    void step_timed_map_units();
+
+    /// Returns the speeds the running match may be set to: its rules' console.game-speed-range,
+    /// or 1..20 without a match or with the rule off, narrowed by the host's speed lock while
+    /// one is on (lock_game_speed). Network play clamps the speeds it sends and receives to the
+    /// same range.
+    ///
+    /// @return the range every speed change is clamped to
+    [[nodiscard]] oa::sim::speed::Range game_speed_range() const;
+
+    /// Narrows the speeds the running match may be set to, for the rest of the match or until
+    /// unlock_game_speed: the host's speed lock (.syncon) under console.game-speed-range's
+    /// syncon. Network play sets the lock its match keeps; a single-player game's own
+    /// .syncon line sets it there. The lock is lifted as each match starts and ends. The
+    /// game speed itself is left as it is.
+    ///
+    /// @param lock the speeds the lock allows; game_speed_range() keeps the part of it within
+    ///        the rules' range
+    void lock_game_speed(oa::sim::speed::Range lock);
+
+    /// Lifts the host's speed lock (.syncoff): the rules' range applies again.
+    void unlock_game_speed();
+
+    /// Handles the keys the profile's display rules give their own meaning
+    /// in every screen (runtime_view_rules.cpp), before any screen sees them.
+    ///
+    /// @param event a key event
+    /// @return true when the key is taken
+    bool handle_view_rule_key(const SDL_Event& event);
+
+    /// Reads the settings the profile's display rules let the player change
+    /// (view_settings_) from the preferences, under the Eye section.
+    void load_view_settings();
+
+    /// Writes view_settings_ to the preferences, under the Eye section.
+    void save_view_settings();
+
+    /// Tells whether a key the display-rule settings name is held; an Alt,
+    /// Ctrl or Shift key stands for either key of its kind.
+    ///
+    /// @param key the SDL key code
+    /// @return true while it is held
+    [[nodiscard]] bool view_key_held(uint32_t key) const;
+
+    /// Tells whether the key held to stop a click snapping is down
+    /// (ViewSettings::snap_override_key).
+    ///
+    /// @return true while it is held
+    [[nodiscard]] bool snap_override_held() const;
+
+    /// Takes a build click for the line and ring build tools
+    /// (ui.build-tools): with the autoclick key held, a click gives the ring
+    /// laid around the unit under the cursor, or gives the line drawn so far
+    /// and starts the next one there, or starts a line.
+    ///
+    /// @param x canvas column of the click
+    /// @param y canvas row of the click
+    /// @return true when the tools took the click
+    bool build_tool_click(float x, float y);
+
+    /// Follows the pointer with the line or ring build tool: a line drawn
+    /// ends at the cursor; with the autoclick key held over a unit, a ring
+    /// is laid around it.
+    ///
+    /// @param x canvas column
+    /// @param y canvas row
+    void build_tool_motion(float x, float y);
+
+    /// Takes the line and ring build tools' keys in a match: the mouse wheel,
+    /// Page Up and Page Down change the spacing while the autoclick key is
+    /// held, letting it go drops the line or ring, and the key itself types
+    /// nothing in build mode.
+    ///
+    /// @param event a key or wheel event
+    /// @return true when the tools took the event
+    bool handle_build_tool_key(const SDL_Event& event);
+
+    /// Returns the facings the pending building may be placed in, as
+    /// match_rules::build_facing bits: those the match lets its type take
+    /// (Match::build_facings), so the cursor, the preview and the order
+    /// agree; south alone without a match or a profile's.
+    ///
+    /// @return the facings
+    [[nodiscard]] uint8_t pending_build_facings() const;
+
+    /// Returns the facing the pending building is placed in
+    /// (ui.build-preview); south when the type allows only that.
+    ///
+    /// @return the facing
+    [[nodiscard]] view_rules::BuildFacing pending_build_facing() const;
+
+    /// Turns the pending building to its next allowed facing, playing MORE,
+    /// as the rotate key and Alt with the wheel do (ui.build-preview).
+    ///
+    /// @param direction above 0 forward (south, east, north, west), else back
+    /// @return true when the facing changed
+    bool rotate_pending_build(int32_t direction);
+
+    /// Readies the building being placed for its frame as the profile's build
+    /// preview draws it (ui.build-preview): its type's model at its site,
+    /// turned to its facing, showing only the pieces the type's preview keys
+    /// name, and drawn as a nanoframe whose build sweeps again every
+    /// second; with the preview's fill the sweep fills the model, else it
+    /// keeps to its outline and a band near its top.
+    ///
+    /// @param[in,out] models the match's renderer state
+    /// @return true when the preview is drawn this frame
+    bool ready_build_preview(MatchModels& models);
+
+    /// Lays the line or ring again from the tool's state and spacing.
+    void lay_build_tool();
+
+    /// Returns the pending building's footprint, its sides swapped when it
+    /// faces east or west (ui.build-preview).
+    ///
+    /// @return width and depth in cells, at least 1 each
+    [[nodiscard]] std::array<int32_t, 2> pending_build_footprint() const;
+
+    /// Takes a press and release of the left button with the snap override
+    /// key held (ui.build-tools): a press on one of the local player's own
+    /// units with a movement object picks it up, and the release sends it
+    /// to the terrain under the pointer ahead of its orders
+    /// (Match::send_ahead_of_orders).
+    ///
+    /// @param event a mouse event
+    /// @param x canvas column
+    /// @param y canvas row
+    /// @return true when the drag took the event
+    bool order_drag_pointer(const SDL_Event& event, float x, float y);
+
+    /// Gives every building of the line or ring as a queued build order,
+    /// a line of 2 by 2 buildings reordered as a staggered double row when
+    /// the setting says so.
+    void give_build_tool_orders();
+
+    /// Tells whether the message log's lines get the accessible chat's
+    /// backdrop (ui.text-rendering chat-backdrop, as the player set it).
+    ///
+    /// @return true when they do
+    [[nodiscard]] bool chat_backdrop_shown() const;
+
+    /// Tells whether game text may hold UTF-8 (ui.text-rendering unicode):
+    /// typed text is sent as UTF-8, and well-formed UTF-8 in game text is
+    /// read as its characters. Without it, game text is the game's 8-bit
+    /// code page.
+    ///
+    /// @return true when it may
+    [[nodiscard]] bool game_text_utf8() const;
+
+    /// Tells whether the bundled modern fonts open.
+    ///
+    /// @return true once they have opened
+    [[nodiscard]] static bool modern_fonts_open();
+
+    /// Returns how game text is drawn now: the Language & Text settings,
+    /// with modern fonts only while the bundled fonts open, and whether game
+    /// text holds UTF-8.
+    ///
+    /// @return the settings
+    [[nodiscard]] oa::present::TextSettings game_text_settings() const;
+
+    /// Converts typed text, UTF-8, to the game text it is posted and sent as
+    /// (oa::present::encode_game_text).
+    ///
+    /// @param typed the typed text
+    /// @return the game text
+    [[nodiscard]] std::string typed_game_text(std::string_view typed) const;
+
+    /// Returns how game text is drawn, as the player's Language & Text
+    /// settings choose it now; the text drawing reads it each frame. It
+    /// changes only what is drawn, never the simulation, a saved game or
+    /// what a shared game sends.
+    ///
+    /// @return the style; the defaults' before load_engine_settings
+    [[nodiscard]] oa::present::TextStyle text_style() const;
+
+    /// Sends the chat macro (ui.options-dialog), as F11 does in a match:
+    /// each line shows in this player's message log as their chat, told to
+    /// no other player, and a line that starts with '+' is also run as a
+    /// console command.
+    void run_chat_macro();
+
+    /// Saves the frame on screen as an 8-bit PCX named by the date and, in a
+    /// match, the map and the players (view_rules::screenshot_file_name), in
+    /// the screenshots folder of the player's data folder, numbered with the
+    /// first unused index from 0 (ui.display-modes).
+    void capture_named_screenshot();
+
+    /// Returns the display rules the game plays by (the profile's ui.*
+    /// hacks), which view_rules.hpp turns into what each module does. While
+    /// Developer Mode is on they hold the player's overrides as they are
+    /// now, a running match's included.
+    ///
+    /// @return the profile's display rules; 3.1c's without a profile
+    [[nodiscard]] const oa::data::mod_profile::UiRules& ui_rules() const noexcept;
+
     /// Hands the runtime a video capture started before it, so that the capture's sound
     /// device opened first. The capture takes every frame the runtime presents from then on,
     /// and run() makes its video once the loop or the showcase ends.
@@ -328,6 +612,13 @@ class Runtime final : public menu::Host,
     /// Closes the save dialog: stops text input and returns to the screen it was opened over.
     void close_save_dialog();
 
+    /// Leaves the load or save dialog as its CANCEL does, and as Escape does.
+    ///
+    /// The save dialog closes to the screen it was opened over. The load
+    /// dialog returns to the in-game menu of the paused match it was opened
+    /// over, else to Single Player.
+    void leave_load_dialog();
+
     /// Replaces the text of a label on the current screen.
     ///
     /// @param name label gadget name; a screen without it is left alone
@@ -340,7 +631,9 @@ class Runtime final : public menu::Host,
     /// @return its translation, or the text itself when the language has none
     std::string translate_ui(std::string_view text) override;
 
-    /// Returns the directory that holds SAVEGAME: the one the preferences file is in.
+    /// Returns the directory that holds SAVEGAME: the one the preferences file
+    /// is in, or with a mod its mods/<id> folder, so that no two mods share
+    /// a list of saved games.
     ///
     /// @return that directory
     [[nodiscard]] fs::path save_game_root() const;
@@ -386,6 +679,39 @@ class Runtime final : public menu::Host,
     ///
     /// @return false without a running match
     [[nodiscard]] bool match_running() const;
+
+    /// Returns the centre of this machine's camera in map pixels, which
+    /// network play shares with the other players (ui.camera-sharing).
+    ///
+    /// @return x and y; nothing without a running match
+    [[nodiscard]] std::optional<std::array<int32_t, 2>> camera_centre() const;
+
+    /// Takes the cameras the other players' machines sent, for the minimap's
+    /// camera rectangles, the watcher's camera lock and the resource panel's
+    /// rows (hud::take_reported_cameras).
+    ///
+    /// @param reported each slot's camera, by slot
+    void
+    take_reported_cameras(const std::array<oa::ui::hud::ReportedCamera, OA_PLAYER_COUNT>& reported);
+
+    /// Takes the next batch of whiteboard records for network play to send
+    /// to the allies (hud::whiteboard_take_batch).
+    ///
+    /// @return the batch; empty when nothing waits
+    [[nodiscard]] std::vector<uint8_t> take_whiteboard_batch();
+
+    /// Applies a batch of whiteboard records another machine sent, echoing
+    /// its markers to the message log; nothing while no match runs or the
+    /// profile leaves ui.whiteboard off.
+    ///
+    /// @param batch the batch, its count byte first
+    void receive_whiteboard_batch(std::span<const uint8_t> batch);
+
+    /// Returns ui.whiteboard's marks, with the records drawn here that wait
+    /// to go to the other machines.
+    ///
+    /// @return the marks of the running match; empty before one starts
+    [[nodiscard]] oa::ui::hud::Whiteboard& match_whiteboard();
 
   private:
 
@@ -790,6 +1116,91 @@ class Runtime final : public menu::Host,
     /// @param per_side units in each line
     void spawn_combat_armies(std::size_t per_side);
 
+    /// Carries out the actions of the --stage file (Options::stage_file),
+    /// in order, printing a "stage:" line for each. A line timed for a later
+    /// tick ("at TICK ACTION") is kept, and runs before that tick
+    /// (run_due_stage_lines).
+    ///
+    /// Throws std::runtime_error naming the line for a file that cannot be
+    /// read, an action it does not know, a type the game lacks, a player
+    /// whose slot is not in use or a unit that cannot be placed.
+    void apply_stage();
+
+    /// One line of a stage file.
+    struct StageLine {
+        std::size_t number{}; ///< from 1
+        std::string text{};
+    };
+
+    /// A stage's state while its match runs (stage_state.hpp).
+    struct StageState;
+
+    /// Frees a stage's state.
+    ///
+    /// @param state state to free; null is allowed
+    static void destroy_stage_state(StageState* state) noexcept;
+
+    /// Starts a stage's state for the running match: records where each
+    /// player's first unit stands, the point a unit line's offsets are
+    /// measured from, with no timed lines, no groups and no unit placed.
+    void begin_stage_state();
+
+    /// Carries out stage lines in order, as apply_stage describes; a line
+    /// timed for a tick still to come is kept for it instead.
+    ///
+    /// Throws std::runtime_error naming the line, as apply_stage does.
+    ///
+    /// @param lines the lines, each with its number in the stage file
+    void run_stage_lines(std::span<const StageLine> lines);
+
+    /// Reads the tick of an "at TICK ACTION" stage line. A tick still to come
+    /// keeps the line for it; a tick come or past leaves the line to run
+    /// now, with its action read.
+    ///
+    /// Throws std::runtime_error naming the line when it gives no tick or no
+    /// action.
+    ///
+    /// @param[in,out] line the line after "at"; on true, after its action
+    /// @param where the file and line number, for the messages
+    /// @param source the whole line, kept for its tick
+    /// @param[out] action the line's action, on true
+    /// @return true when the action runs now
+    bool take_stage_tick(
+        std::istream& line, const std::string& where, const StageLine& source, std::string& action
+    );
+
+    /// Runs the stage lines timed for the tick the match is about to run
+    /// (match_timing_.tick), and any timed for earlier ticks, before it;
+    /// does nothing without a stage.
+    ///
+    /// Throws std::runtime_error naming the line, as apply_stage does.
+    void run_due_stage_lines();
+
+    /// Carries out the stage actions that place units by map pixel, gather
+    /// them into groups and order the groups (runtime_stage.cpp):
+    /// "place PLAYER TYPE X Z [FACING]", "group [NAME]", "move GROUP X Z",
+    /// "patrol GROUP X Z", "attack GROUP TARGETS", and "activate GROUP" and
+    /// "deactivate GROUP", the orders the order panel's ON/OFF button gives
+    /// (give_state_order).
+    ///
+    /// Throws std::runtime_error naming the line for one that does not
+    /// read, a type the game lacks, a player whose slot is not in use, a unit
+    /// that cannot be placed or a group no unit joined.
+    ///
+    /// @param action the line's action
+    /// @param[in,out] line the rest of the line
+    /// @param where the file and line number, for the messages
+    /// @return false for an action that is not one of these, read nothing of
+    bool
+    run_stage_direction(const std::string& action, std::istream& line, const std::string& where);
+
+    /// Adds a unit the stage placed to the group the stage's placements join,
+    /// and makes it the last unit placed. A unit earlier in its slot leaves
+    /// every group.
+    ///
+    /// @param unit the unit's slot
+    void join_stage_group(uint16_t unit);
+
     /// Adds --busy-combat's units to the combat armies around their centre.
     ///
     /// Four missile trucks stand behind each army; the local player gets a
@@ -914,9 +1325,10 @@ class Runtime final : public menu::Host,
     [[nodiscard]] int run_generate_script();
 
     /// Runs --render-script: reads the script or bundle, opens its recording
-    /// through the extension that replays it, and renders the chunks asked
-    /// for with their sound, frame hashes and, when every chunk is rendered,
-    /// the joined video.
+    /// through the extension that replays it, or starts the headless
+    /// skirmish and its stage when the script names a stage, and renders the
+    /// chunks asked for with their sound, frame hashes, the stills --stills
+    /// asks for and, when every chunk is rendered, the joined video.
     ///
     /// @return the process exit status: 0 when every chunk was rendered
     [[nodiscard]] int run_render_script();
@@ -924,6 +1336,19 @@ class Runtime final : public menu::Host,
     /// A render of a compiled director script: what it renders and where,
     /// and what it did (runtime_director.cpp).
     struct DirectorRender;
+
+    /// The running match's own ticks played as a director's replay, and the
+    /// ticks of it that failed (runtime_director.cpp).
+    struct MatchReplay;
+
+    /// Returns replay hooks that step the running match a tick at a time, a
+    /// stage's lines timed for each tick run before it, and count the ticks
+    /// that fail: a director render of the headless skirmish or of a stage.
+    ///
+    /// @param[in,out] replay where the failures are counted; it outlives the
+    ///        hooks
+    /// @return the hooks
+    [[nodiscard]] ReplayHooks match_replay_hooks(MatchReplay& replay);
 
     /// Renders a compiled director script's frames from the running match,
     /// which a replay steps: puts the match into director mode, steps the
@@ -1020,11 +1445,12 @@ class Runtime final : public menu::Host,
     ///     the session allows
     void bootstrap_match(const MatchBootstrap& bootstrap);
 
-    /// Returns whose sight, radar and economy the match view shows: the local slot, a replay's
-    /// watcher included.
+    /// Returns whose sight, radar and economy the match view shows: the player a watcher
+    /// switched to (ui.resource-panel), else the match's viewed player (Game.viewpoint_player),
+    /// which is the local slot, a replay's watcher included, unless "+View" chose another.
     ///
     /// @return player index
-    [[nodiscard]] uint8_t match_view_player() const noexcept { return match_local_player_; }
+    [[nodiscard]] uint8_t match_view_player() const noexcept;
 
     /// Starts --reclaim-check: orders the local commander to reclaim the nearest metal-bearing
     /// feature.
@@ -1200,15 +1626,27 @@ class Runtime final : public menu::Host,
     const oa::formats::gaf::Sequence*
     gaf_sequence(const oa::formats::gaf::Archive& archive, std::string_view name) const;
 
-    /// Returns an animation file from the cache, loading anims/<name>.gaf on first use.
+    /// Returns an explosion's sequence, found as gaf_sequence finds one.
     ///
-    /// The lookup ignores case; "fx" and an empty name are the match FX archive.
-    /// A missing file stays an empty archive; 3.1c stops with a fatal error
-    /// there.
+    /// "fx" and an empty file name are the match FX archive. Another file is
+    /// read and checked on first use (load_explosion_gaf), and each of its
+    /// sequences is decoded from a fresh read of the file the first time it
+    /// is asked for, then kept with the file's sequence list for later
+    /// matches. A missing file has no sequences; 3.1c
+    /// stops with a fatal error there.
     ///
-    /// @param name animation file name without extension
-    /// @return the cached archive
-    const oa::formats::gaf::Archive& explosion_gaf_archive(std::string_view name);
+    /// @param archive animation file name without extension, any case
+    /// @param entry sequence name
+    /// @return the decoded sequence, or null when the file or entry is missing
+    const oa::formats::gaf::Sequence*
+    explosion_sequence(std::string_view archive, std::string_view entry);
+
+    /// Reads and checks anims/<name>.gaf on first use, keeping the path it
+    /// was read from and its sequences without pixels, not its bytes; a
+    /// damaged file is reported on stderr once and then has no sequences.
+    ///
+    /// @param name animation file name without extension, any case
+    void load_explosion_gaf(std::string_view name);
 
     /// Appends the sequences of a GAF file to an archive.
     ///
@@ -1851,6 +2289,32 @@ class Runtime final : public menu::Host,
     /// @param gadget the bar's gadget
     void share_bar_moved(std::size_t gadget);
 
+    /// Readies the share panel's added gadgets, when the profile's share
+    /// dialog has them (ui.share-dialog-and-lobby-buttons): EN_SHAREMETAL and
+    /// EN_SHAREENERGY show the local player's share switches, EN_SHOOTALL and
+    /// EN_NOSHAKE the console's, and SRL_SETSHRMETAL and SRL_SETSHAREGRY run
+    /// over the stores with their knobs at the share thresholds, which SM#
+    /// and SE# show.
+    void prepare_share_dialog_extras();
+
+    /// Takes a click on the share panel's added gadgets before the panel's
+    /// own handling: each switch flips and gives its console command
+    /// (+sharemetal, +shareenergy, +shootall, +noshake), EN_READY says
+    /// ".ready", and OK gives +setsharemetal and +setshareenergy for a
+    /// threshold slider moved off its threshold.
+    ///
+    /// @param name the clicked gadget's name
+    /// @return true when the click was the added gadgets' alone
+    bool share_dialog_extras_click(const std::string& name);
+
+    /// Gives a line as the display rules' commands give it: shown in this
+    /// player's message log, told to the other players only when `share`,
+    /// and run as a console command when it starts with '+'.
+    ///
+    /// @param line the line
+    /// @param share tell the other players too
+    void give_view_command(const std::string& line, bool share);
+
     /// Returns the first row SHARE.GUI's recipient list shows.
     ///
     /// @return the row; 0 without the panel's scroll bars
@@ -1880,12 +2344,19 @@ class Runtime final : public menu::Host,
     /// @return true while a multiplayer session is open
     [[nodiscard]] bool multiplayer_session() const;
 
-    /// Opens TABMENU.GUI over a multiplayer match, or closes the team menu or
-    /// panel that is open (Tab).
+    /// Tells whether the match's rules open the team menu in every game type
+    /// (teams.alliance-menu-all-game-types).
+    ///
+    /// @return true while a match plays under the rule
+    [[nodiscard]] bool team_menu_every_game() const;
+
+    /// Opens TABMENU.GUI over a multiplayer match, or over any match under
+    /// team_menu_every_game, or closes the team menu or panel that is open (Tab).
     ///
     /// ALLIES and SHARE show for a local player who is not a watcher; CONTROL
     /// also needs this machine to host the game (ui::hud::toggle_tab_menu).
-    /// Nothing once the match is finished.
+    /// Under team_menu_every_game ALLIES also shows outside multiplayer and for
+    /// a watcher. Nothing once the match is finished.
     void toggle_team_menu();
 
     /// Opens SHARE.GUI over a multiplayer match ('h' and the tab menu's SHARE).
@@ -2105,6 +2576,29 @@ class Runtime final : public menu::Host,
     /// them in effect; the frontend's preferences are loaded first.
     void load_engine_settings();
 
+    /// Sets up the layers of the profile the game plays for Developer Mode:
+    /// reads again what the profile is resolved from (the plain 3.1c
+    /// baseline without a mod), the id its overrides are kept under and its
+    /// standard hacks as it resolves them. Until then the profile plays as
+    /// it ships.
+    void load_profile_layers();
+
+    /// Lays the overrides in effect over the profile, checked as the
+    /// resolver checks them, each one left out reported once on standard
+    /// error: the display rules take them at once, a running match's
+    /// included; the rules when no match runs, else as it ends.
+    void apply_hack_overrides();
+
+    /// Puts the profile with the overrides in effect into play, as a match
+    /// ends: the next match is built with its rules.
+    void play_latest_profile() noexcept;
+
+    /// Returns the profile the next match plays by: the one with the
+    /// overrides in effect now.
+    ///
+    /// @return the profile; null for 3.1c's rules
+    [[nodiscard]] const oa::data::mod_profile::ModProfile* next_match_profile() const noexcept;
+
     /// Returns the settings in effect.
     ///
     /// @return the settings; the defaults before load_engine_settings
@@ -2129,10 +2623,15 @@ class Runtime final : public menu::Host,
     );
 
     /// Opens the dialog over the settings in effect, with the locks the
-    /// game puts on them, on the section it showed last.
+    /// game puts on them, on the section it showed last; or, as the mod
+    /// options dialog (ui.options-dialog), over the player's view settings
+    /// with the locks the profile puts on them.
     ///
+    /// @param kind which settings it shows
     /// @return the dialog, open until take_engine_settings_action closes it
-    oa::ui::engine_settings::Dialog& open_engine_settings_dialog();
+    oa::ui::engine_settings::Dialog& open_engine_settings_dialog(
+        oa::ui::engine_settings::DialogKind kind = oa::ui::engine_settings::DialogKind::engine
+    );
 
     /// Returns the open dialog.
     ///
@@ -2141,7 +2640,8 @@ class Runtime final : public menu::Host,
 
     /// Does what a dialog event asks: puts changed settings in effect, saves
     /// and closes on OK (a failed save is reported on the screen it happens
-    /// on), and puts the opened settings back and closes on Cancel.
+    /// on), and puts the opened settings back and closes on Cancel. The mod
+    /// options dialog changes and saves the player's view settings alone.
     ///
     /// @param action what the event asked
     /// @return true when the dialog closed
@@ -2151,6 +2651,14 @@ class Runtime final : public menu::Host,
     ///
     /// @return the fonts; null when the game's files lack them
     [[nodiscard]] const oa::ui::engine_settings::DialogFonts* engine_settings_fonts();
+
+    /// Returns the Open Annihilation icon the settings dialog's header and
+    /// the OA buttons draw: the window icon's visible part, decoded on first
+    /// use.
+    ///
+    /// @return the icon's pixels, which last as long as the runtime; an
+    ///         empty picture, which draws the OA mark, when it cannot be decoded
+    [[nodiscard]] oa::ui::frontend_renderer::RgbaPicture engine_settings_icon();
 
     /// Returns the meaning a key has in the dialog.
     ///
@@ -2305,7 +2813,12 @@ class Runtime final : public menu::Host,
 
     /// Opens the dialog beside the darkened in-game menu, opening the menu
     /// first from play; a game played alone stays paused, a shared game runs on.
-    void open_engine_settings_in_match();
+    ///
+    /// @param kind which settings it shows; the mod options only while the
+    ///     profile turns ui.options-dialog on
+    void open_engine_settings_in_match(
+        oa::ui::engine_settings::DialogKind kind = oa::ui::engine_settings::DialogKind::engine
+    );
 
     /// Returns the locks the game shown puts on the settings.
     ///
@@ -2773,6 +3286,12 @@ class Runtime final : public menu::Host,
     /// @return the name, up to the field's size
     [[nodiscard]] std::string bound_mission_name();
 
+    /// Returns the name the campaign object's mission shows under in the
+    /// game's language (oa::data::campaign::campaign_mission_title).
+    ///
+    /// @return the name; the mission's own when no mission is bound
+    [[nodiscard]] std::string bound_mission_title();
+
     /// Returns the index of the campaign object's bound mission.
     ///
     /// @return mission index in the campaign's list
@@ -2921,10 +3440,59 @@ class Runtime final : public menu::Host,
         int scale
     );
 
-    /// Paints text into the paint target in one colour.
+    /// Where the game text the runtime paints lies, which sets how large it
+    /// may grow.
+    enum class TextPlace : uint8_t {
+        /// over the battlefield: at the player's text size, its top at the pen
+        battlefield,
+        /// in a fixed panel laid out for the game's fonts, such as the top
+        /// and bottom bars and the labels under units: at most the game
+        /// fonts' size, on their baseline
+        panel,
+    };
+
+    /// Paints the game text of a fixed panel while it lives
+    /// (TextPlace::panel), and gives back the place it found.
+    struct PanelText {
+        Runtime* runtime{};
+        TextPlace kept{};
+
+        /// Makes the runtime paint panel text.
+        ///
+        /// @param owner the runtime
+        explicit PanelText(Runtime& owner) noexcept;
+        /// Gives back the place the runtime painted text in before.
+        ~PanelText();
+        PanelText(const PanelText&) = delete;
+        PanelText& operator=(const PanelText&) = delete;
+    };
+
+    /// Gives the size a run of game text is painted at where text is
+    /// painted now.
+    ///
+    /// @param run the run
+    /// @return its size, held to the game fonts' own in a panel, in percent
+    [[nodiscard]] int32_t painted_text_size(const oa::present::TextRun& run) const noexcept;
+
+    /// Gives the rows from the pen down to a modern run's baseline where
+    /// text is painted now.
+    ///
+    /// @param font_baseline the rows from the pen to the game font's
+    ///        baseline, in source pixels
+    /// @param size the run's size, in percent
+    /// @return the rows at the size over the battlefield; the font's own in
+    ///         a panel
+    [[nodiscard]] int32_t painted_baseline(int32_t font_baseline, int32_t size) const noexcept;
+
+    /// Paints game text into the paint target in one colour.
     ///
     /// Glyph tops land on y; only glyph pixels are written, each font pixel
-    /// repeated as a scale x scale block.
+    /// repeated as a scale x scale block. The text is read as the game-text
+    /// settings say: the modern fonts draw all of it while the settings
+    /// choose them, at the size painted_text_size gives, and otherwise each
+    /// character the font lacks, at scale times their size on the font's
+    /// baseline, in the colour, with the borders the settings choose
+    /// (paint_modern_text).
     ///
     /// @param font font to draw with
     /// @param x paint column of the text's left edge
@@ -2932,7 +3500,28 @@ class Runtime final : public menu::Host,
     /// @param text text to paint
     /// @param color RGB colour
     /// @param scale pixel repeat; below 1 paints nothing
+    /// @param allow_background false leaves out the background box the
+    ///        settings may ask for, where the caller lays the box itself
     void paint_text(
+        const oa::formats::fnt::Font& font,
+        int x,
+        int y,
+        std::string_view text,
+        std::array<uint8_t, 3> color,
+        int scale,
+        bool allow_background = true
+    );
+
+    /// Paints text in an 8-bit font alone, as paint_text paints the bytes
+    /// the font draws.
+    ///
+    /// @param font font to draw with
+    /// @param x paint column of the text's left edge
+    /// @param y paint row of the glyph tops
+    /// @param text text to paint
+    /// @param color RGB colour
+    /// @param scale pixel repeat; below 1 paints nothing
+    void paint_font_text(
         const oa::formats::fnt::Font& font,
         int x,
         int y,
@@ -3181,11 +3770,17 @@ class Runtime final : public menu::Host,
         int16_t footprint_x{};
         int16_t footprint_z{};
         bool legal{};
+        /// the local player's own units let the site through, and a building
+        /// placed there has them moved off (orders.build-site-kickout)
+        bool over_own_units{};
     };
 
     // Game.ui_colors slots of the build rectangle.
     static constexpr uint8_t kBuildSiteClearColor = 10;
     static constexpr uint8_t kBuildSiteRefusedColor = 4;
+    // The rectangle of a site the local player's own units must leave
+    // (ui.build-tools).
+    static constexpr uint8_t kBuildSiteOverOwnUnitsColor = 14;
 
     /// Nested outlines of the build rectangle, drawn side by side in one colour.
     static constexpr int kBuildSiteOutlineCount = 2;
@@ -3225,6 +3820,34 @@ class Runtime final : public menu::Host,
     /// @param y canvas row
     /// @return the site, or nullopt off the map or without a pending building
     std::optional<PendingBuildSite> build_site_under(float x, float y) const;
+
+    /// Returns the terrain point the pointer picks at a battlefield screen
+    /// point, as the build ghost tests it.
+    ///
+    /// @param x canvas column
+    /// @param y canvas row
+    /// @return the 16.16 point, or nullopt off the map
+    std::optional<oa::sim::ground_orders::Point> build_cursor_point(float x, float y) const;
+
+    /// Returns where a build click snaps to (ui.click-snap): for a building
+    /// that extracts metal, the nearby place whose footprint holds the most
+    /// metal cells, kept only when snapping again from there agrees; for one
+    /// whose yard map holds a geothermal cell, the nearest place it may be
+    /// built.
+    ///
+    /// @param x canvas column of the click
+    /// @param y canvas row of the click
+    /// @return the snapped site; nothing when the click is not snapped
+    [[nodiscard]] std::optional<PendingBuildSite> snapped_build_site(float x, float y) const;
+
+    /// Returns where a reclaim click on ground with no feature snaps to: the
+    /// middle of the nearest reclaimable feature with metal or energy within
+    /// the wreck radius (ui.click-snap).
+    ///
+    /// @param ground the ground under the click
+    /// @return the feature's reclaim point; nothing when the click is not snapped
+    [[nodiscard]] std::optional<oa::sim::ground_orders::Point>
+    snapped_reclaim_point(const oa::sim::ground_orders::Point& ground) const;
 
     // The order overlays the battlefield draws while Shift is held
     // (runtime_order_overlays.cpp): what one pass drew.
@@ -3285,6 +3908,34 @@ class Runtime final : public menu::Host,
     void draw_build_ghost(
         oa::present::world_renderer::Surface& destination,
         const oa::present::world_renderer::BattlefieldViewport& viewport
+    );
+
+    /// Shows the facing of a building that may face more than one way at its
+    /// site's middle, and the rotate hint until the player has turned one
+    /// (ui.build-preview).
+    ///
+    /// @param[in,out] destination battlefield frame
+    /// @param viewport battlefield viewport
+    /// @param site the pending building's site
+    void draw_build_facing(
+        oa::present::world_renderer::Surface& destination,
+        const oa::present::world_renderer::BattlefieldViewport& viewport,
+        const PendingBuildSite& site
+    );
+
+    // Rows below a building's middle the rotate hint is drawn at.
+    static constexpr int kRotateHintRise = 12;
+
+    /// Outlines one building site as draw_build_ghost() does: green where it
+    /// may be placed, red where not.
+    ///
+    /// @param[in,out] destination battlefield frame
+    /// @param viewport battlefield viewport
+    /// @param site the site
+    void draw_build_site(
+        oa::present::world_renderer::Surface& destination,
+        const oa::present::world_renderer::BattlefieldViewport& viewport,
+        const PendingBuildSite& site
     );
 
     /// Adds the frame's projectiles drawn by their weapon render type to its draws.
@@ -3752,7 +4403,9 @@ class Runtime final : public menu::Host,
     /// Places the load-game dialog over the captured frame on its first draw.
     ///
     /// The root goes on the frame below and the bitmap's indices are shown in
-    /// the palette of that frame.
+    /// the palette of that frame. The load dialog, and over a match the save
+    /// dialog, are centred on the frame; the save dialog opened at the end of
+    /// a mission keeps its place from the GUI file, as in 3.1c.
     void enter_load_game();
 
     /// Drops the frame the load-game dialog was drawn over.
@@ -3799,17 +4452,21 @@ class Runtime final : public menu::Host,
     ///
     /// The load dialog centred over Single Player, which it darkens (with no save
     /// listed, MSGBOX.GUI says so over it); then through the SDL presenter over a
-    /// paused skirmish, the save dialog at its authored position and the load
-    /// dialog centred, each darkening only the options panel and showing its
-    /// bitmap in the match palette, with CANCEL, typed names, Return and a GAMES
-    /// row reached at their drawn positions. A save written as the game writes
-    /// one, chosen in the load dialog over Single Player, and the saves the
-    /// match writes, which hold the radar image the match shows and the local
-    /// player's side, are previewed with that image stretched over RADAR and
-    /// the side's name beside Side, in the save dialog and in the load dialog
-    /// over the match. Game data with no save and load dialog runs
-    /// check_saved_games_unavailable() instead. Throws std::runtime_error on a
-    /// failure.
+    /// paused skirmish, the save and load dialogs centred on the screen, each
+    /// darkening only the options panel and showing its bitmap in the match
+    /// palette, with CANCEL, OK, the name field, typed names, Return, Escape and
+    /// a GAMES row reached at their drawn positions. A click on the save
+    /// dialog's name field and CANCEL write no save; Return at the end of a
+    /// name and OK each write one; in the load dialog Escape returns to the
+    /// in-game menu and Return starts the selected save. A save written as the
+    /// game writes one, chosen in the load dialog over Single Player, and the
+    /// saves the match writes, which hold the radar image the match shows and
+    /// the local player's side, are previewed with that image stretched over
+    /// RADAR and the side's name beside Side, in the save dialog and in the load
+    /// dialog over the match. Last, both dialogs open centred over a paused
+    /// match on 640x480, 1280x960 and 1920x1080 windows. Game data with no save
+    /// and load dialog runs check_saved_games_unavailable() instead. Throws
+    /// std::runtime_error on a failure.
     void check_load_save();
 
     /// Checks, over game data with no save and load dialog such as the Total Annihilation demo
@@ -4068,8 +4725,87 @@ class Runtime final : public menu::Host,
     void load_side_table();
 
     /// Loads the two fonts the engine keeps for its whole run: COMIX, which the message log draws
-    /// in, and smlfont.
+    /// in, and smlfont, from the language folder of the game's language when it has them
+    /// (fonts-<Language>).
     void load_common_fonts();
+
+    // The language the game shows its text in (oa/data/languages.hpp,
+    // runtime_language.cpp): 3.1c's command line, else the player's
+    // setting, else the operating system's preferred locales.
+
+    /// The language's state (language_state.hpp).
+    struct LanguageState;
+
+    /// Frees the language's state, and the interface's lookups of its tables.
+    ///
+    /// @param state state to free; null is allowed
+    static void destroy_language_state(LanguageState* state) noexcept;
+
+    /// Returns the language's state, made on first use.
+    ///
+    /// @return the state
+    LanguageState& language_state();
+
+    /// Chooses the language at start, once the preferences file is read: asks
+    /// the operating system for its preferred locales, reads the interface
+    /// catalogue and the setting, and puts the language in effect.
+    void start_language();
+
+    /// Reads the interface catalogue files of the languages folder beside the
+    /// game's other files, in the order of their names; a file that does not
+    /// read is reported and skipped.
+    void read_interface_catalogue();
+
+    /// Takes the setting's choice of language and puts it in effect when it
+    /// changed.
+    ///
+    /// @param choice oa::data::languages::system_choice or a tag
+    void set_language_choice(std::string_view choice);
+
+    /// Puts the chosen language in effect: the translation table and the
+    /// fonts of the game data's word when it changed, and the words the
+    /// interface shows units' names and descriptions and its own words in.
+    void apply_language();
+
+    /// Translates one of the game's own texts through gamedata/translate.tdf in
+    /// the language shown, and its fallbacks' tables after it: by the exact
+    /// text, as 3.1c does.
+    ///
+    /// @param text the text; null translates to null
+    /// @return the translation, valid until the language changes; null for a
+    ///     text without one
+    [[nodiscard]] const char* game_translation(const char* text) const;
+
+    /// Translates one of the game's own texts, as the text hooks of the
+    /// interface's modules take it (game_translation).
+    ///
+    /// @param runtime the Runtime
+    /// @param text the text
+    /// @return the translation; null for a text without one
+    static const char* translation_hook(void* runtime, const char* text);
+
+    /// Returns the word the game data's lookups use for the language shown:
+    /// Translate.tdf's key, the units' key prefix and the language folders'
+    /// suffix.
+    ///
+    /// @return the word, as "German"; null for English
+    [[nodiscard]] const char* game_language() const;
+
+    /// Returns the language the game shows its text in.
+    ///
+    /// @return the language; English before start_language
+    [[nodiscard]] const oa::data::languages::Language& shown_language() const;
+
+    /// Returns the language the operating system's preferred locales choose.
+    ///
+    /// @return the language; English before start_language
+    [[nodiscard]] const oa::data::languages::Language& system_language() const;
+
+    /// Returns the sink the unit loaders hand each unit's names and
+    /// descriptions in other languages to, which fills the language's table.
+    ///
+    /// @return the sink, valid while the runtime lives
+    [[nodiscard]] const oa::data::defs::UnitTextSink* unit_text_sink();
 
     /// Loads the interface texts of gamedata/translate.tdf in a language, in place of those of
     /// the language loaded before.
@@ -4247,7 +4983,10 @@ class Runtime final : public menu::Host,
     /// has always drawn it; a check may ask for another draw scale
     /// (scene_draw_scale_), drawn apart. A match frame the accelerated
     /// presentation draws (accelerated_presentation()) draws as
-    /// accelerated_world_scaling gives at its rung's budget and magnify.
+    /// accelerated_world_scaling gives at its rung's budget and magnify,
+    /// except while the megamap covers the battlefield (megamap_shown()):
+    /// that frame draws at the zoom too, so that the megamap painted over
+    /// it is presented 1:1, as the processor composes it.
     ///
     /// @return the draw scale and the scene, from the live layout and zoom
     [[nodiscard]] WorldScaling world_scaling() const;
@@ -4839,6 +5578,24 @@ class Runtime final : public menu::Host,
     /// @param zoom screen pixels per map pixel
     void note_full_canvas(bool canvas, uint32_t camera_x, uint32_t camera_y, float zoom);
 
+    /// Notes where a canvas frame's overlay canvas holds its pixels once it
+    /// is cleared to the key colour, so that a painter after the fog that
+    /// paints them through a surface of its own still paints the canvas
+    /// (paints_full_canvas). Nothing for a frame that is not a canvas frame.
+    ///
+    /// @param pixels the canvas's first pixel
+    void note_full_canvas_pixels(const uint8_t* pixels) noexcept;
+
+    /// Tells whether the paint target is the Full tier's overlay canvas of
+    /// the frame being drawn: the battlefield layer, or a surface that holds
+    /// the canvas's pixels while a painter after the fog paints them. Over
+    /// it a painter that would shade or blend the world asks the card to
+    /// (paint_world_level, paint_world_blend), since the canvas holds no
+    /// world.
+    ///
+    /// @return true while painting the canvas of a Full frame
+    [[nodiscard]] bool paints_full_canvas();
+
     /// Keeps a frame's fog grid for the card's fog passes, in the Full tier
     /// (apply_match_fog): the processor builds the grid and draws nothing
     /// of the fog. An empty grid draws no fog.
@@ -4863,8 +5620,9 @@ class Runtime final : public menu::Host,
 
     /// Takes a painter's shading of the world under it, by a level of the
     /// display's shade or light tables, as a quad for the card to draw
-    /// (full_fog::level_quad), in the Full tier while the battlefield layer
-    /// is the paint target. Elsewhere the painter shades the layer itself.
+    /// (full_fog::level_quad), in the Full tier while the overlay canvas is
+    /// the paint target (paints_full_canvas). Elsewhere the painter shades
+    /// the layer itself.
     ///
     /// @param x the rectangle's left column, in pixels of the battlefield layer
     /// @param y its top row
@@ -4876,8 +5634,9 @@ class Runtime final : public menu::Host,
 
     /// Takes a painter's blend of a colour over the world under it, at an
     /// opacity in 256ths (frontend_renderer::blend_rect), as a quad for the
-    /// card to draw, in the Full tier while the battlefield layer is the
-    /// paint target. Elsewhere the painter blends the layer itself.
+    /// card to draw, in the Full tier while the overlay canvas is the paint
+    /// target (paints_full_canvas). Elsewhere the painter blends the layer
+    /// itself.
     ///
     /// @param x the rectangle's left column, in pixels of the battlefield layer
     /// @param y its top row
@@ -4889,6 +5648,21 @@ class Runtime final : public menu::Host,
     [[nodiscard]] bool paint_world_blend(
         int x, int y, int width, int height, std::array<uint8_t, 3> colour, uint32_t opacity
     );
+
+    /// Takes a painter's hold of the world under it to a colour at the
+    /// most, each channel the lesser of the world's and the colour's, as a
+    /// quad for the card to draw (card::Blend::minimum), in the Full tier
+    /// while the overlay canvas is the paint target (paints_full_canvas).
+    /// A renderer without the minimum blend draws the colour itself.
+    ///
+    /// @param x the rectangle's left column, in pixels of the battlefield layer
+    /// @param y its top row
+    /// @param width its columns
+    /// @param height its rows
+    /// @param colour the colour, before the display gamma
+    /// @return true when the card takes the quad
+    [[nodiscard]] bool
+    paint_world_minimum(int x, int y, int width, int height, std::array<uint8_t, 3> colour);
 
     /// Drops the Full tier for the rest of the run, to Basic: logs the
     /// reason once, frees what Full made, closes the stage of Full's first
@@ -5382,6 +6156,19 @@ class Runtime final : public menu::Host,
     /// @param value order value
     void apply_group_order(const char* tag, int32_t value);
 
+    /// Gives a named order of the order panel to one unit, at the head of its
+    /// orders, when the order reaches the unit's type, as apply_group_order
+    /// gives it to each selected unit. ACTIVATE and DEACTIVATE, the ON/OFF
+    /// button's, reach every type and switch the ones that can be switched
+    /// on and off.
+    ///
+    /// @param unit unit slot
+    /// @param tag order name
+    /// @param value order value
+    /// @return false for a name that is no order, a slot outside the units or
+    ///     a type the order does not reach
+    bool give_state_order(uint16_t unit, const char* tag, int32_t value);
+
     /// Gives a mission with no position to the selected local units, as "Assign" gives it.
     ///
     /// A mission that takes a target unit is aimed at the unit under the pointer,
@@ -5439,24 +6226,99 @@ class Runtime final : public menu::Host,
     /// font empty.
     void ensure_gui_font();
 
-    /// Writes a line of text in a GUI font over the paint target.
+    /// Writes a line of game text in a GUI font over the paint target.
     ///
     /// The glyphs are placed as gadget text places them, each lowered by the
     /// height of the font's 'I' and drawn in its own colours; a source pixel
     /// is a hud_text_scale() block from `pen`. Nothing is drawn for an empty
-    /// font.
+    /// font. The modern fonts draw the whole line while the settings choose
+    /// them, and otherwise each run of characters the font lacks, at
+    /// hud_text_scale() times their size, on the font's baseline, in
+    /// hattfont12's colour (paint_modern_text).
     ///
     /// @param font GUI font (gui_font_ or gui_label_font_)
     /// @param pen paint point of the pen
     /// @param text the line
     /// @param rows_below_pen source rows from the pen row down that may be
     ///        drawn; the rest are cut off
+    /// @param allow_background false leaves out the background box the
+    ///        settings may ask for, where the caller lays the box itself
     void overlay_gui_text(
+        const oa::present::GafSprites& font,
+        oa::ui::display_layout::Point pen,
+        std::string_view text,
+        int rows_below_pen,
+        bool allow_background = true
+    );
+
+    /// Overlays GUI-font text glyph by glyph, as overlay_gui_text overlays
+    /// the bytes the font draws.
+    ///
+    /// @param font GUI font
+    /// @param pen paint point of the pen
+    /// @param text the bytes
+    /// @param rows_below_pen source rows from the pen row down that may be drawn
+    /// @return the text's width in source pixels
+    int overlay_gui_glyphs(
         const oa::present::GafSprites& font,
         oa::ui::display_layout::Point pen,
         std::string_view text,
         int rows_below_pen
     );
+
+    /// Paints a line of the modern fonts on the paint target.
+    ///
+    /// Each pixel is the match palette's colour nearest what the line makes
+    /// of it (the colour itself without a match palette). On the Full tier's
+    /// overlay canvas (paints_full_canvas), which holds no world to read,
+    /// only a letter covering a pixel of the world whole is painted there:
+    /// over the world the card draws the line's shadow as a darkening at
+    /// the shadow's alpha and its letters' partial coverage as their colour
+    /// at that coverage (paint_world_blend), and holds the world under its
+    /// outline to the outline grey at the most (paint_world_minimum).
+    ///
+    /// @param layers the line (oa::present::modern_text)
+    /// @param x paint column of the pen
+    /// @param baseline_y paint row just below the capitals
+    /// @param color the letters' colour
+    /// @return the pixels the pen moves
+    int paint_modern_text(
+        const oa::present::TextLayers& layers, int x, int baseline_y, std::array<uint8_t, 3> color
+    );
+
+    /// Measures game text in an FNT font as paint_text paints it.
+    ///
+    /// @param font the font
+    /// @param text the game text
+    /// @param scale pixel repeat, 1 or more
+    /// @return the width in paint pixels
+    [[nodiscard]] int
+    match_text_width(const oa::formats::fnt::Font& font, std::string_view text, int scale) const;
+
+    /// Measures game text in a GUI font as overlay_gui_text writes it.
+    ///
+    /// @param font GUI font
+    /// @param text the game text
+    /// @return the width in source pixels, a modern run's rounded up
+    [[nodiscard]] int
+    gui_text_width(const oa::present::GafSprites& font, std::string_view text) const;
+
+    /// Installs the game-text hooks the text loops draw the modern fonts and
+    /// read the settings through.
+    void install_game_text_hooks();
+
+    /// Writes a line of the kills board in hattfont12, as the board's text
+    /// sink asks: the pen at a point of the board's 640x480 screen, the text
+    /// stopping before a glyph, or a modern character, wider than what is
+    /// left of the width, lit through the light table's flash row. Game
+    /// text goes as overlay_gui_text sends it to the modern fonts.
+    ///
+    /// @param text the game text
+    /// @param x board column of the pen
+    /// @param y board row of the pen
+    /// @param width board pixels the text may take
+    /// @param flash light-table row; 0 draws the glyphs plainly
+    void draw_board_text(std::string_view text, int32_t x, int32_t y, int32_t width, uint8_t flash);
 
     /// Converts a point of the kills board's 640x480 screen to the canvas.
     ///
@@ -5619,6 +6481,13 @@ class Runtime final : public menu::Host,
     ///
     /// @param target 16.16 world point of the click
     void place_pending_build_at(const oa::sim::ground_orders::Point& target);
+
+    /// Places the pending building at a site, as a build click does, queued
+    /// or not as asked rather than as Shift says.
+    ///
+    /// @param target 16.16 world point of the click
+    /// @param queue the order goes behind the builders' others
+    void place_pending_build_at(const oa::sim::ground_orders::Point& target, bool queue);
 
     /// Places the pending building under a canvas point: the radar's map point, else the
     /// battlefield's.
@@ -5916,6 +6785,14 @@ class Runtime final : public menu::Host,
     /// order table. Throws std::runtime_error on a failure.
     void check_pointer_picks();
 
+    /// Checks the commander placement (setup.commander-warp) through SDL
+    /// input in the running skirmish: held and opened as a networked start
+    /// opens it, a click on the battlefield moves the local commander's whole
+    /// x and z to the map point under it, the prompt and the Done button
+    /// draw, a click on Done ends the placing, and a tick closes it. Throws
+    /// std::runtime_error on a failure.
+    void check_commander_placement();
+
     /// Handles a left click on the game screen.
     ///
     /// The click first picks the unit under the pointer (the cursor unit), and
@@ -6172,6 +7049,209 @@ class Runtime final : public menu::Host,
     /// @param clicks click count (2 for a double click)
     void select_match_unit(float x, float y, int32_t clicks = 1);
 
+    /// Draws ui.camera-sharing's rectangles of the other players' cameras on the minimap.
+    void draw_shared_camera_rectangles();
+
+    /// Moves the camera onto the camera of the player a watcher locked onto
+    /// (ui.resource-panel with ui.camera-sharing).
+    void follow_shared_cameras();
+
+    /// Draws ui.resource-panel's panel over the battlefield.
+    void draw_resource_panel_overlay();
+
+    /// Draws ui.resource-panel's clock, wind and tidal line.
+    void draw_clock_line();
+
+    /// Takes a pointer event on ui.resource-panel's panel: a press on it
+    /// starts a drag, moves follow it, the release ends it, and a watcher's
+    /// double-click switches the view.
+    ///
+    /// @param event the pointer event
+    /// @param x pointer column on the canvas
+    /// @param y pointer row on the canvas
+    /// @return true when the panel took the event
+    bool resource_panel_pointer(const SDL_Event& event, float x, float y);
+
+    /// Takes F4 for ui.resource-panel (hud::resource_panel_f4).
+    ///
+    /// @return true when the panel took the key
+    bool resource_panel_f4_key();
+
+    /// Shows the view a watcher's double-click asked for.
+    ///
+    /// @param change the switch
+    void switch_watched_view(oa::ui::hud::ViewSwitch change);
+
+    /// Tells whether a match runs under ui.megamap.
+    [[nodiscard]] bool megamap_on() const;
+
+    /// Tells whether the megamap covers the battlefield: a match runs under
+    /// ui.megamap and the megamap is open.
+    [[nodiscard]] bool megamap_shown() const;
+
+    /// Reads one megamap icon from the game folder's icon folder, cut to
+    /// kMegamapIconLimit; empty when the file is missing or unreadable.
+    ///
+    /// @param file the picture's name in the icon folder
+    /// @return the icon
+    MegamapIcon load_megamap_icon(const std::string& file);
+
+    /// Reads the megamap's icon file and pictures, makes the unit sets of
+    /// the side commanders' (or the built-in) icons, and notes the features
+    /// the map placed, once a match.
+    void prepare_megamap();
+
+    /// Returns one map pixel's palette index from the map's tiles.
+    ///
+    /// @param map_x map pixel column
+    /// @param map_z map pixel row
+    /// @return the index
+    [[nodiscard]] uint8_t map_terrain_pixel(int32_t map_x, int32_t map_z) const;
+
+    /// Makes the megamap's terrain picture for a layout, with the noted features' blobs.
+    ///
+    /// @param layout where the picture goes
+    void build_megamap_terrain(const oa::ui::hud::MegamapLayout& layout);
+
+    /// Opens or closes the megamap, with its interface sound.
+    ///
+    /// @param open true to open
+    void set_megamap_open(bool open);
+
+    /// Takes Tab for ui.megamap: it opens and closes the megamap.
+    ///
+    /// @param key the key event
+    /// @return true when the megamap took the key
+    bool megamap_key(const SDL_KeyboardEvent& key);
+
+    /// Takes the wheel for ui.megamap: rolled toward the player it opens the
+    /// megamap; rolled away it closes it, the camera centred where the
+    /// pointer was.
+    ///
+    /// @param amount the wheel's roll, negative toward the player
+    /// @param x pointer column on the canvas
+    /// @param y pointer row on the canvas
+    /// @return true when the megamap took the roll
+    bool megamap_wheel(float amount, float x, float y);
+
+    /// Draws the open megamap over the battlefield.
+    void draw_megamap();
+
+    /// Draws a ring on the megamap.
+    ///
+    /// @param x centre column on the battlefield layer
+    /// @param y centre row
+    /// @param radius radius in pixels
+    /// @param color palette index
+    void draw_megamap_ring(int32_t x, int32_t y, int32_t radius, uint8_t color);
+
+    /// Takes a pointer event on the open megamap: the left button selects the
+    /// unit under it, a box, or with a double-click every unit of a type; the
+    /// right button gives the selection orders at the point.
+    ///
+    /// @param event the pointer event
+    /// @param x pointer column on the canvas
+    /// @param y pointer row on the canvas
+    /// @return true when the megamap took the event
+    bool megamap_pointer(const SDL_Event& event, float x, float y);
+
+    /// Redraws the radar's terrain picture at its own size from the map's
+    /// minimap (ui.megamap enhanced-minimap).
+    void enhance_radar_picture();
+
+    /// Tells whether ui.whiteboard takes the pointer: a match runs under it,
+    /// the megamap is closed and the local player plays.
+    [[nodiscard]] bool whiteboard_on() const;
+
+    /// Returns the map pixel under a canvas point, as the whiteboard keeps
+    /// its marks and the commander placement moves the commander: the
+    /// battlefield's place plus the camera, without heights. A view drawn
+    /// between map pixels (view_offset) adds its offset, so that the point
+    /// is the map pixel drawn under the pointer.
+    ///
+    /// @param x canvas column
+    /// @param y canvas row
+    /// @return map x and y
+    [[nodiscard]] std::array<int32_t, 2> battlefield_map_point(float x, float y) const;
+
+    /// Takes a pointer event for ui.whiteboard while its key is held or a
+    /// stroke runs: the left button draws, carries a marker or, double, writes
+    /// one; the middle button's release places a dot; the right button wipes
+    /// along its path or, double, erases a spot.
+    ///
+    /// @param event the pointer event
+    /// @param x pointer column on the canvas
+    /// @param y pointer row on the canvas
+    /// @return true when the whiteboard took the event
+    bool whiteboard_pointer(const SDL_Event& event, float x, float y);
+
+    /// Takes a key for ui.whiteboard: the open text editor's keys, and Ctrl
+    /// with the whiteboard key to the newest received marker.
+    ///
+    /// @param key the key event
+    /// @return true when the whiteboard took the key
+    bool whiteboard_key(const SDL_KeyboardEvent& key);
+
+    /// Takes typed text into ui.whiteboard's open text editor.
+    ///
+    /// @param event the text event
+    /// @return true when the editor took it
+    bool whiteboard_text(const SDL_Event& event);
+
+    /// Draws ui.whiteboard's lines and markers over the battlefield, where
+    /// the frame draws their map points.
+    ///
+    /// @param viewport the viewport the frame's painters after the fog place
+    ///     map points through: the battlefield's corner at the world layer's
+    ///     origin, moved by the offset of a view drawn between map pixels
+    void draw_whiteboard(const oa::present::world_renderer::BattlefieldViewport& viewport);
+
+    /// Takes a pointer event while the local player places its commander
+    /// (setup.commander-warp, Match::commander_placement): a left press on
+    /// the battlefield moves the commander to the map point under it, and a
+    /// left press and release on the Done button ends the placing. The
+    /// release of a press it took is its own as well, so no click reaches
+    /// the battlefield.
+    ///
+    /// @param event the pointer event
+    /// @param x pointer column on the canvas
+    /// @param y pointer row on the canvas
+    /// @return true when the placement took the event
+    bool commander_placement_pointer(const SDL_Event& event, float x, float y);
+
+    /// Draws the commander placement over the battlefield: while placing,
+    /// "Place your commander and click done" and the Done button; once done,
+    /// "Waiting for others to finish".
+    void draw_commander_placement();
+
+    /// Tells whether the profile turns on ui.selection-shortcuts while a match runs.
+    [[nodiscard]] bool selection_shortcuts_on() const;
+
+    /// Takes a double-click for ui.selection-shortcuts: on the second click of
+    /// a pair, over one of the local player's units in the battlefield and
+    /// without the line build key held, the selection becomes the local
+    /// player's finished units on screen of the selected types
+    /// (selection::select_selected_types_on_screen).
+    ///
+    /// @param x canvas column
+    /// @param y canvas row
+    /// @param clicks click count of the press
+    /// @return true when the double-click was taken, and the game's own click is skipped
+    bool selection_shortcut_double_click(float x, float y, int32_t clicks);
+
+    /// Takes Ctrl+S, Ctrl+B or Ctrl+F for ui.selection-shortcuts: the mobile
+    /// combat units on screen, the next idle constructor or the next idle
+    /// factory. With shift the game's own key runs instead.
+    ///
+    /// @param sym the key, pressed with Ctrl
+    /// @param shift shift is held
+    /// @return true when the key was taken
+    bool selection_shortcut_key(SDL_Keycode sym, bool shift);
+
+    /// Filters the selection a drag box just made by the W, B or Y key held
+    /// (ui.selection-shortcuts).
+    void selection_shortcut_drag_filter();
+
     /// Takes the selection the selection module left in the unit flags: each selected local unit
     /// refreshes its order panel, the primary unit stays when it is still selected (else the first
     /// selected unit takes its place), and the order panel shows the selection.
@@ -6200,12 +7280,22 @@ class Runtime final : public menu::Host,
     /// @param kind "attack" (enemy units), "reclaim" (any unit) or "repair" (local units)
     void area_order_units(int x0, int y0, int x1, int y1, std::string_view kind);
 
-    /// Steps the requested game speed (1..20, 10 normal) with '+' and '-'; the change is posted to
-    /// the message log, the next frame steps at the new rate and a key that set the speed reports
-    /// it through Extension::speed_changed.
+    /// Steps the requested game speed (10 normal) with '+' and '-' within game_speed_range(); the
+    /// change is posted to the message log, the next frame steps at the new rate and a key that set
+    /// the speed reports it through Extension::speed_changed.
     ///
     /// @param delta positive to raise, negative to lower
     void adjust_game_speed(int delta);
+
+    /// Carries out a single-player game's speed lock command typed as chat.
+    ///
+    /// Under console.game-speed-range with syncon on, in a game that is not
+    /// multiplayer, ".syncon low high" locks the speed to low + 10 to high + 10 within the
+    /// rules' range (sim::speed::locked) and ".syncoff" lifts the lock. A speed outside a
+    /// new lock is set to its nearest end, as the GAME slider sets a speed.
+    ///
+    /// @param text the typed line, after any chosen-player prefix
+    void read_speed_lock_line(const char* text);
 
     /// Saves a screenshot, as Ctrl+F9 does in the idle tick.
     ///
@@ -6225,6 +7315,17 @@ class Runtime final : public menu::Host,
     /// @param prefix file name prefix (SHOT, FRAM)
     /// @return false when there is no frame or it cannot be saved
     [[nodiscard]] bool save_numbered_frame(const char* directory, const char* prefix);
+
+    /// Makes the frame on screen an 8-bit picture: a match through the
+    /// palette the poster writes with, a frontend screen through its
+    /// background's palette.
+    ///
+    /// @param[out] capture display holding the palette and, as its active
+    ///     surface, the picture
+    /// @param[out] frame the picture's pixels
+    /// @return false when there is no frame
+    [[nodiscard]] bool
+    indexed_frame(oa::present::DisplayContext& capture, oa::present::SurfaceBuffer& frame);
 
     /// Runs the film step at the end of each game frame.
     ///
@@ -6312,8 +7413,36 @@ class Runtime final : public menu::Host,
     ///
     /// The chat panel opens TALK.GUI while a line is typed. Its root hangs above
     /// the bottom edge (a negative root y counts from the screen height), so the
-    /// CONSOLE picture and the TALK field cover the bottom bar.
+    /// CONSOLE picture and the TALK field cover the bottom bar. In the modern
+    /// fonts the typed line is drawn at the text size (chat_line_layers),
+    /// centred on the TALK field while the field and two rows above and
+    /// below it hold it; a taller line leaves the field empty and rises over
+    /// the battlefield (draw_risen_chat_line).
     void draw_chat_entry();
+
+    /// Returns the TALK field the chat line is typed in.
+    ///
+    /// @return its rectangle, in source pixels; none without TALK.GUI or a
+    ///         text box in it
+    [[nodiscard]] std::optional<HudRect> chat_text_box();
+
+    /// Draws the typed chat line, its cursor after it, in the modern fonts
+    /// at the text size, with no background: as much of its end as fits a
+    /// width (oa::present::modern_text_tail).
+    ///
+    /// @param scale screen pixels to a game pixel
+    /// @param width the room, in screen pixels
+    /// @return the line; none while the game's fonts draw it
+    [[nodiscard]] std::optional<oa::present::TextLayers> chat_line_layers(int scale, int width);
+
+    /// Draws the chat line over the battlefield while it is taller than the
+    /// TALK field and two rows above and below it: a black box across the
+    /// battlefield, standing on its bottom edge, as tall as the line with
+    /// two rows above and below it, and the line in it at the
+    /// battlefield's scale from the column the field's text starts at.
+    /// Drawn after the message log and the clock, it covers what lies under
+    /// it.
+    void draw_risen_chat_line();
 
     /// Checks the overlays the match draws over the battlefield and in the bars.
     ///
@@ -6418,7 +7547,8 @@ class Runtime final : public menu::Host,
     /// back no scene, overlay or prescale target is made or destroyed and
     /// none is drawn at zoom 2. Pictures of one moment at zoom 0.5, 1 and 2.5
     /// in both tiers go to the report directory as native-render-tiers-*.png.
-    /// Smooth panning follows (check_smooth_panning). Switched off again,
+    /// Smooth panning follows (check_smooth_panning), then the overlays of
+    /// the profile's visual rules (check_visual_rule_overlays). Switched off again,
     /// every frame equals the standard tier's. With --native-density, whose
     /// window opened at the display's own density, the main menu and the
     /// loading screen are checked as above and then the density case alone:
@@ -6544,8 +7674,9 @@ class Runtime final : public menu::Host,
     /// toward it; dithered, a tile wholly out of sight is the dither
     /// colour at alpha one half over the frame with the fog off; the kill
     /// board's foreground is painted on the overlay and the battlefield
-    /// under it darkened by the card at its shade level's alpha, with its
-    /// lit row left out, and its margin shaded battlefield alone; the
+    /// under it darkened by the card at its shade level's alpha, and further
+    /// at the shadow's alpha where its text in the modern fonts casts one,
+    /// with its lit row left out, and its margin shaded battlefield alone; the
     /// +stats panel's edges are on the overlay and its padding and graph
     /// darkened by the card at their opacities; and after each the world
     /// layer holds the key colour exactly where the overlay is transparent.
@@ -6562,6 +7693,54 @@ class Runtime final : public menu::Host,
         const std::function<renderer::Surface()>& presented,
         const std::function<renderer::Surface()>& composed,
         const fs::path& report_directory
+    );
+
+    /// Checks the overlays a profile's visual rules paint over the
+    /// battlefield, for --check-render-tiers under a profile that turns them
+    /// on, over its match and at its rung, in the tiers it is given; a
+    /// profile that turns none on is passed over, saying so.
+    ///
+    /// In each tier, at zoom 0.5, 1 and 2.5, in the Full tier at its zoom
+    /// floor of a sixth as well, and with the accelerated tier at zoom 4
+    /// with the view three quarters of a map pixel past the camera's:
+    /// a whiteboard dot (ui.whiteboard) changes only the world layer's
+    /// pixels around where the frame's painters after the fog draw its map
+    /// point, and the presented frame shows it there; the build tools' line
+    /// of sites (ui.build-tools) is outlined exactly over the sites as the
+    /// frame draws them. At the same zooms the building being placed
+    /// (ui.build-preview) is drawn around its site's middle at the scene's
+    /// draw scale: into the scene, or in the Full tier by the card, the
+    /// overlay canvas holding none of it. Between map pixels, the
+    /// pointer over the middle of the dot's drawn map pixel finds that map
+    /// pixel (battlefield_map_point). In the Full tier, where the modern
+    /// fonts draw game text with a shadow, a marker's label paints its
+    /// letters and outline on the canvas and the card darkens the
+    /// battlefield under its shadow at the shadow's share, changing nothing
+    /// else. The megamap (ui.megamap), open at zoom 0.5 and 2.5 in each
+    /// accelerated tier and at the Full tier's floor, is presented exactly
+    /// as compose_match_frame composes it; a chat line in the modern fonts
+    /// over its backdrop
+    /// (ui.text-rendering), where the modern fonts open, is presented as
+    /// composed at zoom 0.5, 1 and 2.5 in each accelerated tier, on the
+    /// magnified frame wherever the overlay holds it, which must be at
+    /// least nine tenths of the line, and in the Full tier changes the
+    /// frame beside the canvas only by the card's darkening under its
+    /// shadow; the line is taken away again after. A named screenshot
+    /// (ui.display-modes) keeps the standard tier's battlefield in each
+    /// accelerated tier. Ends in the last tier given. Throws
+    /// std::runtime_error on a failure.
+    ///
+    /// @param set_level sets the flag's level and decides the tier again
+    /// @param levels the tiers checked, by the level that draws in each
+    /// @param at_zoom sets a zoom and centres the camera on the check's unit
+    /// @param unit the unit the camera centres on, at whose map point the
+    ///        marks are drawn; once it has left the match, the local
+    ///        player's first unit still in it
+    void check_visual_rule_overlays(
+        const std::function<void(oa::ui::engine_settings::HardwareAcceleration)>& set_level,
+        std::span<const oa::ui::engine_settings::HardwareAcceleration> levels,
+        const std::function<void(float)>& at_zoom,
+        uint16_t unit
     );
 
     /// Checks the match presented through SDL layers: every presented frame must equal
@@ -6688,6 +7867,15 @@ class Runtime final : public menu::Host,
     /// Throws std::runtime_error on a failure.
     void check_factory_orders();
 
+    /// Starts a skirmish, plays it on for a while, selects the commander with a
+    /// left click and sends it to open ground with another: the commander must
+    /// say a select line and then an order line, each with a sound its sound
+    /// category offers. Then leaves for the main menu and does the same in a
+    /// second skirmish from its start, where nothing the first one said may
+    /// silence it, and selects the commander once more with "+Sing" on, which
+    /// must sing. Throws std::runtime_error on a failure.
+    void check_unit_speech();
+
     /// Places a finished structure of the local player's on the first free site in the rings of
     /// cells around a unit.
     ///
@@ -6755,6 +7943,20 @@ class Runtime final : public menu::Host,
     /// units, in mission order.
     void print_saved_orders() const;
 
+    /// Prints what the live units hold, so that a run shows which of its
+    /// game data and rules played:
+    ///
+    /// - "saveload: unit types T": how many units of each type, by name;
+    /// - "saveload: veterans V": units with a kill, how many reach each
+    ///   veterancy level under the match's rules, and the most kills;
+    /// - "saveload: stockpile weapons W": the weapons that stockpile, and
+    ///   the shots they hold;
+    /// - "saveload: buildings B": units without a movement object, by the
+    ///   facing each stands in (south, east, north, west);
+    /// - "saveload: health by player": the health of each player's units
+    ///   added up.
+    void print_saved_units() const;
+
     /// Starts the feature changes a save/load run saves while they play.
     ///
     /// In row order, the first flammable sprite with a burn sequence catches
@@ -6786,6 +7988,14 @@ class Runtime final : public menu::Host,
     /// missile with MAKENUKE and a right click takes it off again. Throws
     /// std::runtime_error on a failure.
     void check_download_builds();
+
+    /// Starts a skirmish in the language options_.check_unit_language names
+    /// and checks, through the SDL presenter, that the build menu's bottom
+    /// bar, the unit panel and the F1 panel show units' names and
+    /// descriptions as the unit files give them in that language, and in
+    /// English once the language is put back; throws std::runtime_error
+    /// naming what differed.
+    void check_unit_language();
 
     /// Checks the commander's build pages against the side column on windows of several sizes.
     ///
@@ -6863,8 +8073,18 @@ class Runtime final : public menu::Host,
     ///
     /// A '+' line runs as a console command first, whose echo reaches everyone
     /// after a cheat and this player alone after an option command; the line then
-    /// goes out through the chat formatter as "<name> text".
+    /// goes out through the chat formatter as "<name> text", unless
+    /// refuse_take_line holds it back; a single-player game then reads it for
+    /// the speed lock (read_speed_lock_line).
     void submit_chat_line();
+
+    /// Holds back a ".take" or ".takecmd" chat line while another player's
+    /// commander lies destroyed (sharing.take-requires-live-commander), and
+    /// tells this player why.
+    ///
+    /// @param text the chat line, after any chosen-player prefix
+    /// @return true when the line is held back and goes to no one
+    bool refuse_take_line(const char* text);
 
     /// Posts console output, chat or a notice to the match message log and the status line.
     ///
@@ -7063,8 +8283,37 @@ class Runtime final : public menu::Host,
     /// GUI's font, hattfont12.gaf, in the font's own colours; without it, in
     /// COMIX in the line's UI colour. A line with a sender starts with the
     /// logo of the sender's colour: the whole frame of the logo sequence
-    /// stretched over the square the log sets aside for it.
+    /// stretched over the square the log sets aside for it. While the modern
+    /// fonts draw game text, the lines step by message_log_step, a line
+    /// wider than the battlefield leaves is broken into rows
+    /// (message_log_rows), each with its own backdrop, and the oldest lines
+    /// give way while the rows do not fit (message_log_most_rows).
     void draw_match_message_log();
+
+    /// Returns the step from one row of the message log to the next: the
+    /// log font's height at the size game text is drawn at
+    /// (oa::present::game_text_size).
+    ///
+    /// @return the step, in source pixels
+    [[nodiscard]] int32_t message_log_step();
+
+    /// Breaks a line of the message log into the rows the modern fonts draw
+    /// it in, each reaching the battlefield's right edge from where the
+    /// line's text starts (oa::present::modern_text_rows).
+    ///
+    /// @param text the line's game text
+    /// @param x the source column the line's text starts at
+    /// @return each row's UTF-8 text; none while the game's fonts draw the
+    ///         line, which is never broken
+    [[nodiscard]] std::vector<std::string> message_log_rows(std::string_view text, int32_t x);
+
+    /// Returns the most rows the message log may take: those that fit
+    /// between its top and the battlefield's bottom, or a row above the
+    /// clock while it shows.
+    ///
+    /// @param step the step from one row to the next, in source pixels
+    /// @return the rows, 1 or more
+    [[nodiscard]] int32_t message_log_most_rows(int32_t step);
 
     /// Returns the canvas rectangle some log lines cover in the composed frame.
     ///
@@ -7094,8 +8343,15 @@ class Runtime final : public menu::Host,
     /// the side's font otherwise. Its pen is two pixels right of the side
     /// column and the font's height plus two above the bottom bar (screen x
     /// 0x82, y height-0x22-font), and its glyph rows start the font's row
-    /// lift above the pen; all scaled with the chrome.
+    /// lift above the pen; all scaled with the chrome. In the modern fonts
+    /// the height is the font's at the text size, so that a larger clock
+    /// rises clear of the bottom bar (console_clock_pen_row).
     void draw_console_clock();
+
+    /// Returns the canvas row of the console clock's pen while it shows.
+    ///
+    /// @return the row; none without a match, the Clock option or a font
+    [[nodiscard]] std::optional<int> console_clock_pen_row();
 
     /// Returns the font the console's clock is written in (oa::ui::hud::clock_font).
     ///
@@ -7238,7 +8494,8 @@ class Runtime final : public menu::Host,
     /// @param path wave file path; backslashes are allowed
     void play_wave_file(std::string_view path);
 
-    /// Flips the novelty voice ("Sing"): unit speech then plays honk and sing.
+    /// Flips the novelty voice ("Sing"): unit speech then plays its two
+    /// sounds, 3.1c's honk and sing or the mod profile's.
     void toggle_novelty_voice();
 
     /// Checks the Sound3D and Sing console commands.
@@ -7247,12 +8504,24 @@ class Runtime final : public menu::Host,
     /// stays the sound screen's mode (the options save writes Game.sound_flags & 7).
     /// With the switch on, a clip at the local commander plays at -585 from the
     /// middle of the view; off, it plays unplaced at -585 on screen and -1585 off
-    /// it. "Sing" flips the novelty voice: unit speech then plays honk on one
-    /// 30-tick window in eight and sing on the others. Throws std::runtime_error
-    /// on a failure.
+    /// it. "Sing" is then checked by check_console_sing_command. Throws
+    /// std::runtime_error on a failure.
     ///
     /// @param enter_line runs one console line
     void check_console_sound_commands(const std::function<void(const char*)>& enter_line);
+
+    /// Checks the Sing console command in the running match.
+    ///
+    /// "Sing" flips the novelty voice and posts nothing but its echo. While
+    /// it is on, a unit of the viewed player selected speaks the first of
+    /// the novelty voice's sounds on one 30-tick window in eight and the
+    /// second on the others: the mod profile's strings.cheat.sing-sounds, or
+    /// 3.1c's honk and sing. Off again, the unit speaks its own sound. Throws
+    /// std::runtime_error on a failure.
+    ///
+    /// @param enter_line runs one console line
+    /// @return what was heard, for the check's report
+    std::string check_console_sing_command(const std::function<void(const char*)>& enter_line);
 
     /// Lists the user directory's files that match a pattern, for movie, screenshot and poster
     /// numbering.
@@ -7356,21 +8625,47 @@ class Runtime final : public menu::Host,
     ///
     /// The mission start opened the cheat class to the chat line, so "+atm" runs
     /// and its echo goes to everyone; a word no list registers goes out as plain
-    /// chat, since the spawn fallback needs the developer class. The Game
-    /// Settings sheet MISSION opens shows the difficulty and no Cheat Codes row,
-    /// and its OK returns to the options panel. Throws std::runtime_error on a
-    /// failure.
+    /// chat, since the spawn fallback needs the developer class. Every cheat then
+    /// takes effect (check_console_cheat_effects). The Game Settings sheet
+    /// MISSION opens shows the difficulty and no Cheat Codes row, and its OK
+    /// returns to the options panel. Throws std::runtime_error on a failure.
     ///
     /// @param enter_line runs one console line
     void check_console_skirmish_cheats(const std::function<void(const char*)>& enter_line);
 
     /// Checks the cheat gate of a campaign.
     ///
-    /// The mission start closed the cheat class, so "+atm" changes nothing and
-    /// goes out as plain chat while option commands still run. The developer
-    /// passphrase opens cheats in a campaign too; "+Now" alone closes them again.
-    /// Throws std::runtime_error on a failure.
+    /// The mission start opened the cheat class to the chat line, as a
+    /// skirmish's does (3.1c closes it; VARIANCES.md): "+atm" adds its amount
+    /// and its echo goes to everyone, option commands such as "+clock" run,
+    /// every cheat takes effect (check_console_cheat_effects) and "+sing"
+    /// works (check_console_sing_command), all typed through the chat line
+    /// without the developer passphrase. Throws std::runtime_error on a
+    /// failure.
     void check_console_campaign_cheats();
+
+    /// Types every cheat 3.1c registers through the chat line and checks what
+    /// it does to the running match, leaving the match's rules as it found
+    /// them.
+    ///
+    /// "+atm" adds its amount of metal and energy to the viewed player;
+    /// "+radar" puts every unit on the minimap and takes those out of contact
+    /// off again; "+view" moves the view (its sight, units, economy and the
+    /// units that speak) to another player and back, and "+atm" then adds to
+    /// that player's stores; "+los" and "+mapping" switch their rules, which
+    /// the minimap and the sight grid follow; "+nowisee" shows every unit;
+    /// "+doubleshot" and "+halfshot" double and halve a shot's damage;
+    /// "+meteor 1" and "+meteor 0" turn storms on and off, and "+meteor"
+    /// alone drops a meteor with the next tick; "+makeposter" writes a
+    /// picture. Throws std::runtime_error on a failure.
+    ///
+    /// @param enter_line runs one console line
+    /// @param start_strike whether "+meteor" alone also starts a strike,
+    ///        which draws on the match's random stream and drops meteors
+    /// @return what each cheat did, for the check's report
+    std::string check_console_cheat_effects(
+        const std::function<void(const char*)>& enter_line, bool start_strike
+    );
 
     /// Sends a match key to the console's hotkeys.
     ///
@@ -7601,9 +8896,36 @@ class Runtime final : public menu::Host,
 
     /// Restores a saved session into the bootstrapped match, section by section.
     ///
+    /// The state the mod profile's rules keep comes back last
+    /// (restore_saved_rule_state).
+    ///
     /// @param bank the save's open bank
     /// @return true when the Players section was restored
     bool restore_saved_session(oa::data::persist::Bank* bank);
+
+    /// Writes the ModProfile account of a save made under a mod profile:
+    /// the profile's id, version, catalogue and hashes, and in a match each
+    /// rule-state table. A game without a profile writes none, so its saves
+    /// are 3.1c's.
+    ///
+    /// @param[in,out] bank the save being written
+    void save_mod_profile(oa::data::persist::Bank* bank) const;
+
+    /// Checks that a save may be played under the game's mod profile: one
+    /// written under a profile loads only under one of the same sim hash,
+    /// and one written without a profile (by 3.1c or by a mod's own
+    /// client) loads under any.
+    ///
+    /// @param[in,out] bank the save, read whole
+    /// @return false, with the status line naming both profiles, when it may not
+    bool check_saved_mod_profile(oa::data::persist::Bank* bank);
+
+    /// Restores each rule-state table of the match from the save's ModProfile
+    /// account; a table the save does not hold keeps its state as built.
+    ///
+    /// @param[in,out] bank the save
+    /// @throws std::runtime_error when a table's saved bytes do not fit it
+    void restore_saved_rule_state(oa::data::persist::Bank* bank);
 
     /// Restores the saved session in place of creating the mission's units, for a campaign mission
     /// started from a savegame (Game.saved_game).
@@ -7760,6 +9082,22 @@ class Runtime final : public menu::Host,
     /// @param y canvas row
     /// @return true when the click was used
     bool issue_radar_orders(float x, float y);
+
+    /// Gives the selection the armed command at a map point and on a unit, as
+    /// a radar click does (issue_radar_orders); the megamap's clicks use it.
+    ///
+    /// @param world the ground point, or none
+    /// @param target the unit clicked on, or 0
+    /// @return true when the click was used
+    bool
+    issue_map_orders(const std::optional<oa::sim::ground_orders::Point>& world, uint16_t target);
+
+    /// Returns the ground point under a map pixel.
+    ///
+    /// @param map_x map pixel column
+    /// @param map_z map pixel row
+    /// @return the point on the terrain, or none without a map
+    std::optional<oa::sim::ground_orders::Point> map_world_point(int32_t map_x, int32_t map_z);
 
     /// Centres the view on the map point under a radar click.
     ///
@@ -8010,6 +9348,15 @@ class Runtime final : public menu::Host,
     /// Puts the CD music into its match mode for the viewed player.
     void music_begin_match();
 
+    /// Pauses the CD music as a finished match leaves for its end screen,
+    /// when the profile's display rules (ui.audio) say so; 3.1c plays on.
+    void music_end_game();
+
+    /// Plays the "Victory Condition" sound as the victory banner is drawn,
+    /// when the profile's display rules (ui.audio) say so, at most once in
+    /// 300 ticks (view_rules::victory_announcement_due); 3.1c plays none.
+    void announce_victory();
+
     /// Steps the CD music once per idle pass.
     ///
     /// Ticks its timers and track end, takes the options screens' volume, music
@@ -8163,18 +9510,34 @@ class Runtime final : public menu::Host,
 
     /// Builds the preferences file key of a section's setting.
     ///
+    /// A mod whose profile names a registry root of its own keeps the
+    /// game's settings in a section of their own, as the mod keeps them
+    /// under its own registry key (registry_key_prefix()).
+    ///
     /// @param section preference section
     /// @param key value name
-    /// @return "<section>|<key>"
-    static std::string preference_key(std::string_view section, std::string_view key);
+    /// @return "<section>|<key>", after the mod's registry prefix
+    [[nodiscard]] std::string preference_key(std::string_view section, std::string_view key) const;
+    /// Finds a section's setting in the preferences: by its key, or with a mod
+    /// by its key matched without case, as registry value names are.
+    ///
+    /// @param section preference section
+    /// @param key value name
+    /// @return the entry, or the end of preference_values_
+    [[nodiscard]] std::map<std::string, std::string>::const_iterator
+    find_preference(std::string_view section, std::string_view key) const;
 
     /// Loads the preferences file, or imports the earlier settings file once when there is none.
     ///
     /// An explicit --preferences-file starts from defaults. Without a file, the
     /// game directory's open-annihilation.ini (1 MiB at most) is read once;
-    /// later reads and writes use the platform location only. Throws
+    /// later reads and writes use the platform location only. A mod's
+    /// registry seeds then fill the values its section lacks. Throws
     /// std::runtime_error when the legacy file is too large or unreadable.
     void load_preference_file();
+    /// Reads the preferences file into preference_values_, or imports the
+    /// earlier settings file once, as load_preference_file() describes.
+    void load_preference_values();
 
     /// Writes the preferences file when a setting changed since the last write.
     void flush_preferences();
@@ -8899,6 +10262,13 @@ class Runtime final : public menu::Host,
     ///
     /// @return true when either file is there
     [[nodiscard]] bool holds_disc_archive() const;
+    /// Finds a file or folder in the game's folders, each part of its path
+    /// matched without case: the first folder that holds it, a mod folder
+    /// before the game folder it layers over.
+    ///
+    /// @param relative '/'-separated path below a game folder
+    /// @return its host path, or nullopt when no folder holds it
+    [[nodiscard]] std::optional<std::filesystem::path> game_path(std::string_view relative) const;
 
     /// Looks for a game disc: its archive in the game directory.
     ///
@@ -9050,6 +10420,8 @@ class Runtime final : public menu::Host,
     NativeEffectBoundary effect_boundary_;
     oa::sim::unit_effects::OfflineEffects offline_effects_;
     std::unique_ptr<oa::sim::match_runtime::Match> match_;
+    /// The host's speed lock on the running match (lock_game_speed); empty while none is on.
+    std::optional<oa::sim::speed::Range> game_speed_lock_;
     init::PlayerStorage player_storage_{};
     init::Preferences preferences_{};
     entry::SkirmishSettings skirmish_settings_{};
@@ -9216,7 +10588,20 @@ class Runtime final : public menu::Host,
     std::shared_ptr<MatchModels> match_models_; // 3DO renderer state, runtime_match_render.cpp
     oa::formats::gaf::Archive match_fx_{};
     oa::formats::gaf::Archive match_fog_{};
-    std::map<std::string, oa::formats::gaf::Archive> match_explosion_gafs_{};
+
+    // An explosion animation file: the asset path it is read from, its
+    // sequences without pixels, and each sequence asked for, decoded, by its
+    // place in the file. The file's bytes are not held: a sequence asked for
+    // the first time is decoded from a fresh read of the file.
+    struct ExplosionGafFile {
+        std::string path;
+        oa::formats::gaf::Archive archive;
+        std::map<std::size_t, oa::formats::gaf::Sequence> decoded;
+    };
+
+    // The explosion animation files read so far, by name with letters
+    // lowered; they are kept from match to match.
+    std::map<std::string, ExplosionGafFile> match_explosion_gafs_{};
 
     struct MatchGafFeatureAnim {
         std::vector<oa::formats::gaf::RenderedFrame> frames;
@@ -9366,12 +10751,44 @@ class Runtime final : public menu::Host,
     };
 
     UnitTable unit_table_;
+    // The capacities a mod may raise: unit limits, type ids, category masks,
+    // effects, the path budget, build lists and the model composite. 3.1c's
+    // unless a mod's profile has filled it.
+    oa::data::limits::Limits limits_{};
+    // Each unit type's own rules from the data keys the mod profile binds,
+    // indexed by unit type index like spawn_types_; empty when no type has
+    // any, as without a profile. The match copies them as it is built.
+    std::vector<oa::data::match_rules::UnitTypeRules> unit_type_rules_;
+    // Each weapon's own rules from the data keys the mod profile binds,
+    // indexed by weapon ID; empty when no weapon has any. The match copies
+    // them as it is built.
+    std::vector<oa::data::match_rules::WeaponTypeRules> weapon_rules_;
+
+    // The map's placed units in this match (setup.map-scripted-units).
+    struct MapUnitRun {
+        // The rule is on and the map's schema lists units.
+        bool active{};
+        // The player this machine placed at each start position, -1 for none.
+        std::array<int32_t, oa::sim::mission_units::map_unit_players> player_at_position{};
+        // The player taking the neutral units, -1 for none.
+        int32_t neutral_player{-1};
+        // The map point the units' scripts share.
+        oa::sim::mission_units::ScriptPoint point{};
+        // The timed entries in the order they come due, and the next one.
+        std::vector<int32_t> timed;
+        std::size_t next_timed{};
+    };
+
+    MapUnitRun map_units_{};
     oa::sim::combat_state::WeaponRegistry weapon_registry_;
     // The 3DO model each weapon registry slot draws its shots with (TDF
     // `model`), read with the weapon definitions as the match starts.
     std::map<uint8_t, std::string> weapon_model_names_;
     // Each unit type's target-category masks, by type id.
     std::vector<oa::data::unit_definitions::UnitTargetCategoryMasks> unit_target_masks_;
+    // Each unit type's build-cursor preview keys, by type id; empty when the
+    // mod profile binds none.
+    std::vector<oa::data::defs::UnitPreviewKeys> unit_preview_keys_;
     map_modal::ModalState map_modal_{};
     std::vector<std::string> bound_map_names_;
     std::string pending_parent_map_name_;
@@ -9387,9 +10804,14 @@ class Runtime final : public menu::Host,
     // The 3D sound switch: "Sound Mode" 2, the sound screen's MODE and
     // "Sound3D" set it; play_sound_at places clips by it.
     int32_t sound_spatial_ = 0;
-    // The novelty voice "Sing" toggles: unit speech plays honk
-    // and sing while it is on.
+    // The novelty voice "Sing" toggles: unit speech plays the two novelty
+    // sounds while it is on. Like 3.1c's, it starts off with the program,
+    // lasts from match to match and through loads, and no save holds it.
     int32_t novelty_voice_ = 0;
+    // The novelty voice's two sounds, set as each match starts: the mod
+    // profile's strings.cheat.sing-sounds, else 3.1c's honk and sing. The
+    // announcement gates view them.
+    std::array<std::string, 2> novelty_sounds_{};
     uint32_t mixing_buffers_ = 0;
     uint32_t wave_volume_ = 65535;
     uint32_t cd_volume_ = 0;
@@ -9454,6 +10876,11 @@ class Runtime final : public menu::Host,
     uint32_t last_stream_sweep_ms_ = 0;
     oa::platform::MemoryStatusReport memory_report_{};
     bool match_paused_ = false;
+    /// The commander placement's Done button is held down (commander_placement_pointer).
+    bool commander_done_held_ = false;
+    /// A left press moved the commander while it was placed; the press's
+    /// release belongs to the placement too (commander_placement_pointer).
+    bool commander_place_held_ = false;
     bool match_finished_ = false;
     // A paused menu was on the HUD as the match finished (pause_menu_shown).
     bool outcome_over_menu_ = false;
@@ -9567,6 +10994,10 @@ class Runtime final : public menu::Host,
     std::optional<UnitInfoPanel> unit_info_panel_{};
     bool chat_composing_ = false;
     std::string chat_buffer_{};
+    // The input method's composition, shown after the chat line until the
+    // player commits it; empty otherwise. The line and the composition are
+    // the typed text, UTF-8, sent as typed_game_text gives it.
+    std::string chat_composition_{};
     std::shared_ptr<MatchConsole> console_;
     // What the team panels tell the other players' machines, filled by the
     // extension (Extension::team_panel_host) as each match starts.
@@ -9927,6 +11358,26 @@ class Runtime final : public menu::Host,
     uint32_t hook_error_repeats_{}; // times that line has been reported in a row
     uint8_t match_local_player_ = 0;
     uint16_t selected_match_unit_ = 0;
+    /// ui.resource-panel's panel, and what other machines report about their
+    /// players' views (ui.camera-sharing).
+    oa::ui::hud::ResourcePanel resource_panel_{};
+    oa::ui::hud::SharedPlayerViews shared_views_{};
+    /// The player a watcher shows (ui.resource-panel); OA_PLAYER_COUNT for the
+    /// local player's own view.
+    uint8_t watched_player_ = OA_PLAYER_COUNT;
+    /// How a watcher's switched view shows sight: as the watched player sees
+    /// with line of sight and mapping, or the whole map in their own view.
+    enum class WatchedSight : uint8_t { game, player, whole_map };
+    WatchedSight watched_sight_ = WatchedSight::game;
+    /// ui.whiteboard's marks and the pointer's stroke on it.
+    oa::ui::hud::Whiteboard whiteboard_{};
+    oa::ui::hud::WhiteboardInput whiteboard_input_{};
+    /// ui.megamap's view replaces the battlefield.
+    bool megamap_open_ = false;
+    MegamapState megamap_{};
+    /// Where Ctrl+B and Ctrl+F continue their idle cycles (ui.selection-shortcuts);
+    /// kept from one match to the next.
+    oa::sim::selection::IdleCycle idle_cycle_{};
     uint16_t hovered_match_unit_ = 0;
     float match_pointer_x_ = 0;
     float match_pointer_y_ = 0;
@@ -9949,6 +11400,33 @@ class Runtime final : public menu::Host,
     uint8_t cursor_index_ = 0xff;
     bool cursors_loaded_ = false;
     bool menu_music_playing_ = false;
+    // The settings the profile's display rules let the player change.
+    view_rules::ViewSettings view_settings_{};
+
+    // The line and ring build tools (ui.build-tools).
+    struct BuildToolState {
+        bool drawing_line{}; ///< a line follows the cursor from its start
+        bool ring{};         ///< a ring is laid around the unit under the cursor
+        uint16_t ring_unit{};
+        int32_t start_x{}, start_z{}; ///< map pixels
+        int32_t end_x{}, end_z{};     ///< map pixels
+        int32_t spacing{};            ///< extra cells between buildings
+        int32_t footprint_x{1}, footprint_z{1};
+        view_rules::BuildLine layout{};
+    };
+
+    BuildToolState build_tool_{};
+    // The unit the left button picked up with the snap override key held,
+    // to be sent where it comes up (ui.build-tools); 0 for none.
+    uint16_t order_drag_unit_{};
+    // The facing chosen for the building being placed (ui.build-preview).
+    view_rules::BuildFacing build_facing_{view_rules::BuildFacing::south};
+    // The reclaim click being given was snapped onto a feature: a queued
+    // order cancels only within 8 pixels of it.
+    bool reclaim_click_snapped_ = false;
+    // The match tick the victory banner was last drawn at, which
+    // announce_victory() gates on; kept from one match to the next.
+    uint32_t victory_banner_tick_ = 0;
     std::unique_ptr<MusicHost, void (*)(MusicHost*) noexcept> music_{nullptr, destroy_music_host};
 
     // Has the extensions release what they keep for this runtime as it is
@@ -9980,9 +11458,17 @@ class Runtime final : public menu::Host,
     std::unique_ptr<DirectorState, void (*)(DirectorState*) noexcept> director_{
         nullptr, destroy_director_state
     };
+    // The --stage file's state while its match runs; null without one.
+    std::unique_ptr<StageState, void (*)(StageState*) noexcept> stage_{
+        nullptr, destroy_stage_state
+    };
     // The Open Annihilation settings in effect and their dialog; null until first used.
     std::unique_ptr<EngineSettingsState, void (*)(EngineSettingsState*) noexcept> engine_settings_{
         nullptr, destroy_engine_settings_state
+    };
+    // The language the game shows its text in; null until start_language.
+    std::unique_ptr<LanguageState, void (*)(LanguageState*) noexcept> language_{
+        nullptr, destroy_language_state
     };
     // The main menu's OA button and dialog; null until first used.
     std::unique_ptr<EngineSettingsMenuHost, void (*)(EngineSettingsMenuHost*) noexcept>
@@ -10006,6 +11492,10 @@ class Runtime final : public menu::Host,
         oa::present::model::UnitSupersampling::off
     };
     SessionDisplay display_{};
+    GameTextHooksInstall game_text_hooks_{};
+    // Where the game text painted now lies; a PanelText in scope makes it a
+    // panel's.
+    TextPlace text_place_{TextPlace::battlefield};
     CapturedFrame captured_frame_{};
     IndexedOutput indexed_output_{};
     oa::present::SurfaceBuffer loading_background_{}; // Loadgame2bg.pcx

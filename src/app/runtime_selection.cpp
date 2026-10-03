@@ -59,9 +59,13 @@ void Runtime::handle_match_left_click(float x, float y, int32_t clicks) {
     // Off the radar and the battlefield a click gives nothing.
     if (!battlefield_contains(x, y))
         return;
+    if (selection_shortcut_double_click(x, y, clicks))
+        return;
     const uint16_t target = hovered_match_unit_;
     if (match_command_ == MatchCommand::build) {
-        place_pending_build(x, y);
+        // The profile's line and ring build tools take the click first.
+        if (!build_tool_click(x, y))
+            place_pending_build(x, y);
         return;
     }
     if (match_command_ == MatchCommand::dgun) {
@@ -109,9 +113,18 @@ void Runtime::handle_match_left_click(float x, float y, int32_t clicks) {
     if (match_command_ == MatchCommand::attack || match_command_ == MatchCommand::reclaim ||
         match_command_ == MatchCommand::capture || match_command_ == MatchCommand::load ||
         match_command_ == MatchCommand::unload) {
-        const auto issued = issue_selection_orders(
-            armed_command(match_command_), target, match_world_point(x, y), queueing()
-        );
+        auto ground = match_world_point(x, y);
+        // The profile's click snap may move a reclaim click on bare ground
+        // onto a nearby feature.
+        reclaim_click_snapped_ = false;
+        if (match_command_ == MatchCommand::reclaim && target == 0 && ground)
+            if (const auto snapped = snapped_reclaim_point(*ground)) {
+                ground = snapped;
+                reclaim_click_snapped_ = true;
+            }
+        const auto issued =
+            issue_selection_orders(armed_command(match_command_), target, ground, queueing());
+        reclaim_click_snapped_ = false;
         if (!issued.empty()) {
             status_ = std::string(issued);
             finish_issued_command();

@@ -114,7 +114,6 @@ bool session_cheats_allowed(
 ) noexcept {
     switch (kind) {
     case oa::data::campaign::SessionKind::campaign:
-        return false;
     case oa::data::campaign::SessionKind::skirmish:
         return true;
     case oa::data::campaign::SessionKind::multiplayer: {

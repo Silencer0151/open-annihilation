@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <vector>
 
 using namespace oa::sim::weapon_execution;
@@ -361,6 +362,68 @@ void damage_rules() {
     );
 }
 
+/// Returns rules with veterancy.model on at its defaults, and type 2's own
+/// thresholds (10 to 50) and accuracy rate (24).
+///
+/// @param[out] types the unit types' rules the view points at
+/// @return the match-wide rules
+oa::data::match_rules::MatchRules
+veterancy_rules(std::vector<oa::data::match_rules::UnitTypeRules>& types) {
+    namespace match_rules = oa::data::match_rules;
+    match_rules::MatchRules rules{};
+    auto& model = rules.veterancy.model;
+    model.enabled = true;
+    model.level_source = match_rules::VeterancyModelLevelSource::thresholds;
+    model.damage_taken_cap = 25;
+    model.damage_dealt_cap = std::nullopt;
+    model.reload_cap = 16;
+    model.lead_after = match_rules::VeterancyModelLeadAfter::first_threshold;
+    model.capture_level = match_rules::VeterancyModelCaptureLevel::extended;
+    types.assign(3, {});
+    types[2].veterancy_thresholds =
+        match_rules::FixedList<uint16_t, match_rules::max_veterancy_thresholds>{10, 20, 30, 40, 50};
+    types[2].veterancy_accuracy_rate = uint16_t{24};
+    return rules;
+}
+
+/// The shooter's type sets its lead gate, damage bonus and spread divisor
+/// under veterancy.model.
+void veterancy_rules_scale_shots() {
+    std::vector<oa::data::match_rules::UnitTypeRules> types;
+    const auto rules = veterancy_rules(types);
+    const oa::data::match_rules::MatchRulesView view{&rules, types};
+    WeaponDef weapon{};
+    weapon.weapon_velocity = units(10);
+    Unit shooter{};
+    shooter.type_index = 2;
+    shooter.veteran_level = 10;
+    check(!lead_applies(weapon, shooter, true, view), "first threshold does not lead");
+    check(lead_applies(weapon, shooter, true), "3.1c leads above 5 kills");
+    shooter.veteran_level = 11;
+    check(lead_applies(weapon, shooter, true, view), "past the first threshold leads");
+
+    auto game = make_game(0, 0);
+    shooter.veteran_level = 30;
+    check(projectile_damage(100, 1.0F, &shooter, *game, view) == 118, "three levels deal 118%");
+    check(projectile_damage(100, 1.0F, &shooter, *game) == 130, "3.1c caps at 130%");
+    shooter.type_index = 1;
+    check(projectile_damage(100, 1.0F, &shooter, *game, view) == 130, "default thresholds");
+
+    UnitDef type{};
+    type.max_damage = 100;
+    weapon.accuracy = 0x100;
+    shooter.health = 50;
+    shooter.type_index = 2;
+    shooter.veteran_level = 48;
+    const uint32_t spread = 0x100 - (50 << 11) / 100 + 0x800;
+    ScriptedRandom own{{0, 0}, {}, 0};
+    (void)apply_accuracy_spread(shooter, type, weapon, {0, 0}, scripted, &own, view);
+    check(own.limits.size() == 2 && own.limits[0] == spread / 2, "own rate 24 halves the spread");
+    ScriptedRandom base{{0, 0}, {}, 0};
+    (void)apply_accuracy_spread(shooter, type, weapon, {0, 0}, scripted, &base);
+    check(base.limits.size() == 2 && base.limits[0] == spread / 4, "3.1c divides by kills / 12");
+}
+
 void shot_plans_follow_the_installed_constructor() {
     auto world = make_world(10, 0x1fdb);
     auto weapon = line_weapon();
@@ -583,6 +646,7 @@ int main() {
     flight_modes();
     guided_projectiles_turn_at_their_rate();
     damage_rules();
+    veterancy_rules_scale_shots();
     shot_plans_follow_the_installed_constructor();
     turret_projectiles_take_the_flag_route();
     line_and_dropped_constructors();

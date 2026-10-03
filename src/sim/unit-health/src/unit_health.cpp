@@ -3,6 +3,8 @@
 
 #include "oa/sim/unit_health.hpp"
 #include "oa/base/game_math.hpp"
+#include "oa/sim/unit_health/veterancy.hpp"
+#include <algorithm>
 #include <bit>
 #include <cmath>
 #include <limits>
@@ -29,6 +31,95 @@ int32_t repair_quantity(double numerator, float rate, int32_t build_time) noexce
     // first; a separate statement keeps it from being fused.
     const double product = numerator * static_cast<double>(rate);
     return truncate_low32((product - 1.0) / static_cast<double>(build_time) + 1.0);
+}
+
+/// Returns a rate truncated toward zero, as the exact repair reads it.
+///
+/// @param rate worker time this step
+/// @return the whole part; a NaN or a value outside 32 bits gives INT32_MIN
+int32_t whole_rate(float rate) noexcept {
+    constexpr float limit = 2147483648.0F;
+    if (!(rate < limit && rate > -limit))
+        return std::numeric_limits<int32_t>::min();
+    return static_cast<int32_t>(rate);
+}
+
+/// Finds or claims the remainder a repairer carries for a target.
+///
+/// @param table each unit's remainders, indexed by unit index
+/// @param repairer the repairer's unit index
+/// @param target the target's unit index
+/// @return the remainder, or null when the repairer carries none
+int32_t* carried_remainder(
+    std::span<RepairRemainders> table, UnitIdentity repairer, UnitIdentity target
+) noexcept {
+    // The repairer's index is read as a signed 16-bit value.
+    if (static_cast<int16_t>(repairer) <= 0 || repairer >= table.size())
+        return nullptr;
+    auto& entries = table[repairer].targets;
+    const uint32_t key = static_cast<uint32_t>(target) + 1U;
+    for (auto& entry : entries) {
+        if (entry.target == key)
+            return &entry.remainder;
+    }
+    for (auto& entry : entries) {
+        if (entry.target == 0) {
+            entry = {key, 0};
+            return &entry.remainder;
+        }
+    }
+    // Both entries are taken: the first is given to the new target.
+    entries[0] = {key, 0};
+    return &entries[0].remainder;
+}
+
+/// Runs one repair step under repair.rate exact-remainder (see recover_health).
+///
+/// @param repairer unit paying for the repair
+/// @param[in,out] target unit repaired, below its maximum health
+/// @param rate worker time this step
+/// @param host economy and damage services and the remainder table
+/// @return whether the step happened and its amounts
+RecoveryResult
+recover_health_exactly(Unit& repairer, Unit& target, float rate, RecoveryHost& host) {
+    constexpr int32_t heal_limit = 0xffff;
+    const int32_t build_time = target.type->build_time;
+    if (build_time <= 0)
+        return {};
+    const int32_t whole = whole_rate(rate);
+    const int32_t energy = std::max(
+        repair_quantity(static_cast<double>(target.type->energy_cost), rate, build_time), 1
+    );
+    RecoveryResult result{false, 0, energy};
+    if (!debit_resource(host.energy_debit(repairer), static_cast<float>(energy)))
+        return result;
+    result.performed = true;
+    if (whole <= 0)
+        return result;
+    const int64_t product =
+        static_cast<int64_t>(whole) * std::bit_cast<int32_t>(target.type->maximum_health);
+    auto heal = static_cast<int32_t>(static_cast<uint32_t>(product / build_time));
+    const auto remainder = static_cast<int32_t>(product % build_time);
+    if (int32_t* carried =
+            carried_remainder(host.repair_remainders, repairer.identity, target.identity)) {
+        *carried = std::bit_cast<int32_t>(
+            static_cast<uint32_t>(*carried) + static_cast<uint32_t>(remainder)
+        );
+        if (*carried >= build_time) {
+            *carried -= build_time;
+            ++heal;
+        }
+        if (heal <= 0)
+            return result;
+    } else {
+        if (remainder > 0)
+            ++heal;
+        heal = std::max(heal, 1);
+    }
+    heal = std::min(heal, heal_limit);
+    result.health_amount = heal;
+    (void)submit_damage(&repairer, target, heal, healing_damage_kind, host, 0);
+    return result;
 }
 } // namespace
 
@@ -105,6 +196,44 @@ float credit_energy(
     return credited;
 }
 
+float scale_computer_income(
+    float amount, int32_t difficulty, const ComputerIncomeScales& scales
+) noexcept {
+    return static_cast<float>(
+        static_cast<double>(amount) * scales[computer_income_index(difficulty)]
+    );
+}
+
+float credit_metal(
+    float& metal_accumulator,
+    float amount,
+    bool owner_present,
+    uint8_t owner_status,
+    int32_t difficulty,
+    const ComputerIncomeScales& scales
+) noexcept {
+    auto credited = amount;
+    if (owner_present && owner_status == 2)
+        credited = scale_computer_income(amount, difficulty, scales);
+    metal_accumulator += credited;
+    return credited;
+}
+
+float credit_energy(
+    float& energy_accumulator,
+    float amount,
+    bool owner_present,
+    uint8_t owner_status,
+    int32_t difficulty,
+    const ComputerIncomeScales& scales
+) noexcept {
+    auto credited = amount;
+    if (owner_present && owner_status == 2)
+        credited = scale_computer_income(amount, difficulty, scales);
+    energy_accumulator += credited;
+    return credited;
+}
+
 void record_hit_reaction(uint8_t& event_flags, int amount, int threshold) noexcept {
     if (threshold * 2 < amount)
         event_flags = static_cast<uint8_t>(event_flags | hit_reaction_over_double);
@@ -137,7 +266,12 @@ bool within_unit_limit_row(
 }
 
 HealthEvent make_health_event(
-    const Unit* source, const Unit& target, int32_t amount, uint32_t kind, uint32_t direction_word
+    const Unit* source,
+    const Unit& target,
+    int32_t amount,
+    uint32_t kind,
+    uint32_t direction_word,
+    const data::match_rules::MatchRulesView& rules
 ) noexcept {
     int32_t adjusted = amount;
     if (kind != healing_damage_kind) {
@@ -145,11 +279,11 @@ HealthEvent make_health_event(
             const auto product = static_cast<int64_t>(target.type->damage_scale_16_16) * amount;
             adjusted = static_cast<int32_t>(product >> 16);
         }
-        auto reduction = static_cast<uint32_t>(target.veteran_level) / veteran_divisor;
-        if (reduction > maximum_veteran_reduction)
-            reduction = maximum_veteran_reduction;
-        adjusted = wrap_multiply(base_damage_percent - static_cast<int32_t>(reduction), adjusted);
-        adjusted = wrap_multiply(adjusted, damage_percent_scale) / percent_divisor;
+        // Wrapping at 32 bits, amount x percent equals 3.1c's
+        // amount x (25 - level) x 4.
+        const auto percent =
+            veteran_damage_taken_percent(rules, target.type_index, target.veteran_level);
+        adjusted = wrap_multiply(adjusted, percent) / whole_percent;
     }
     return {
         target.identity,
@@ -170,7 +304,7 @@ bool submit_damage(
 ) {
     if (!target.type)
         return false;
-    const auto event = make_health_event(source, target, amount, kind, direction_word);
+    const auto event = make_health_event(source, target, amount, kind, direction_word, host.rules);
     if (host.target_is_live(target)) {
         if (event.kind == healing_damage_kind)
             target.health = healed_health(target.health, event.amount, target.type->maximum_health);
@@ -201,16 +335,22 @@ RecoveryResult recover_health(Unit& repairer, Unit& target, float rate, Recovery
     }
     if (static_cast<int32_t>(target.health) >= std::bit_cast<int32_t>(target.type->maximum_health))
         return {};
+    const auto mode = host.rules.rules().repair.rate.mode;
+    if (mode == data::match_rules::RepairRateMode::exact_remainder)
+        return recover_health_exactly(repairer, target, rate, host);
     auto health = repair_quantity(
         static_cast<int32_t>(target.type->maximum_health), rate, target.type->build_time
     );
     auto energy = repair_quantity(
         static_cast<double>(target.type->energy_cost), rate, target.type->build_time
     );
-    if (health > 0)
-        health = 1;
-    if (energy > 0)
-        energy = 1;
+    if (mode == data::match_rules::RepairRateMode::clamp_min_1) {
+        health = std::max(health, 1);
+        energy = std::max(energy, 1);
+    } else {
+        health = std::min(health, 1);
+        energy = std::min(energy, 1);
+    }
     RecoveryResult result{false, health, energy};
     if (debit_resource(host.energy_debit(repairer), static_cast<float>(energy))) {
         (void)submit_damage(&repairer, target, health, healing_damage_kind, host, 0);

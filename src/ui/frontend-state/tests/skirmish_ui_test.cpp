@@ -100,6 +100,10 @@ struct TestHost final : ui::Host {
         calls.push_back("stage:" + std::string(widget) + ":" + std::to_string(stage));
     }
 
+    oa::data::match_rules::AiDifficultyNames names{};
+
+    oa::data::match_rules::AiDifficultyNames difficulty_names() const override { return names; }
+
     void select_difficulty_label(std::string_view text, int32_t value) override {
         check(value == 1, "difficulty selection");
         calls.push_back("difficulty:" + std::string(text));
@@ -297,6 +301,20 @@ void setup_tests() {
         "repeated frame zero"
     );
     check(h.calls.back() == "cursor:19" && h.saw("difficulty:Hard"), "setup completion");
+    {
+        // ai.difficulty-names: the label is the name the difficulty carries.
+        using Names = oa::data::match_rules::AiDifficultyNamesNames;
+        State named_state;
+        auto named_settings = settings();
+        ui::Preferences named_preferences;
+        named_preferences.skirmish_difficulty = 2;
+        ui::UiState named_ui;
+        TestHost named;
+        named.map_result = 0;
+        named.names.names = {Names::hard, Names::medium, Names::easy};
+        ui::setup(named_state, named_settings, named_preferences, named_ui, named);
+        check(named.saw("difficulty:Easy") && !named.saw("difficulty:Hard"), "swapped names");
+    }
     check(!h.saw("translate:Open") && !h.saw("translate:"), "literal empty/open setup fields");
     TestHost saved;
     auto enabled = settings();

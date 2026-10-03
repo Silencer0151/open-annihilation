@@ -1,16 +1,23 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// A director script (.oascript): the recording to replay, the video to make
-// of it and the camera's shots, read from and written as the document tree
-// of oascript/document.hpp. The keys, their defaults and their meaning:
+// A director script (.oascript): the recording to replay, or the stage to
+// play, the video to make of it and the camera's shots, read from and
+// written as the document tree of oascript/document.hpp. The keys, their
+// defaults and their meaning:
 //
 //   oascript: 1                 the script format's version; required
 //   input:
 //     demo: PATH                the recording an extension of this build
 //                               replays, absolute or relative to the
 //                               script's folder (or its name inside a
-//                               .oamovie bundle); required
+//                               .oamovie bundle); required unless stage
+//                               is given
+//     stage: PATH               a stage file the game plays out over a
+//                               skirmish in place of a recording, absolute
+//                               or relative to the script's folder; a
+//                               script names a recording or a stage, not
+//                               both
 //     tickrate: 30              game ticks a second of video shows
 //   output:
 //     resolution: { width: 1920, height: 1080 }   even, in pixels
@@ -176,6 +183,7 @@ struct Output {
 /// The input key.
 struct Input {
     std::string recording{}; ///< the demo key: the recording's path or bundle entry name
+    std::string stage{};     ///< the stage key: the stage file's path; empty for a recording
     Decimal tickrate{default_tickrate};
 };
 
@@ -224,9 +232,10 @@ struct DecodeReport {
 /// Builds the document tree of a script.
 ///
 /// Keys come in the order the file comment lists them. Every output key is
-/// written; a shot's motion only when it is a spring, its cameraStart and
-/// transition only when present, a camera's orientation only when present,
-/// and endTick only when set.
+/// written; the stage in place of the demo when the script names one, a
+/// shot's motion only when it is a spring, its cameraStart and transition
+/// only when present, a camera's orientation only when present, and endTick
+/// only when set.
 ///
 /// @param script the script
 /// @return its tree, which decode_script reads back into the same script

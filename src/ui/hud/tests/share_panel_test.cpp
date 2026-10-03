@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "check.hpp"
+#include "fixtures.hpp"
 
 #include "oa/ui/hud/order_panel.hpp"
 #include "oa/ui/hud/share_panel.hpp"
@@ -217,9 +218,63 @@ void test_panel_flow() {
 
 } // namespace
 
+// sharing.take-requires-live-commander: the chat lines it reads, the
+// destroyed commander it looks for and the notice it gives.
+void test_take_guard() {
+    CHECK(is_take_command(".take"));
+    CHECK(is_take_command("  \t.TakeCmd \r\n"));
+    CHECK(is_take_command(".TAKE  "));
+    CHECK(!is_take_command(".take 2"));
+    CHECK(!is_take_command(".takeover"));
+    CHECK(!is_take_command("take"));
+    CHECK(!is_take_command(". take"));
+    CHECK(!is_take_command(""));
+    CHECK(!is_take_command(nullptr));
+
+    hud_test::TestWorld w;
+    w.add_player(0, OA_PLAYER_STATUS_LOCAL);
+    w.add_player(1, OA_PLAYER_STATUS_MIRRORED);
+    w.add_player(2, OA_PLAYER_STATUS_COMPUTER);
+    w.give_range(0, 1, 4);
+    w.give_range(1, 5, 8);
+    w.give_range(2, 9, 12);
+    // Type 3 is the commander type.
+    const uint32_t commanders[1] = {1u << 3};
+    w.spawn(1, 3).health = 0;
+    w.spawn(6, 3).health = 5;
+    w.spawn(7, 2).health = 0;
+    w.spawn(10, 3).health = 10;
+    w.game().session_rules = 1;
+    // Our own fallen commander does not count; nor do another player's live
+    // commander and destroyed non-commander.
+    CHECK(commander_destroyed_elsewhere(*w.world, 0, commanders) == kNoPlayer);
+    w.unit(10).health = -3;
+    CHECK(commander_destroyed_elsewhere(*w.world, 0, commanders) == 2);
+    w.unit(6).health = 0;
+    CHECK(commander_destroyed_elsewhere(*w.world, 0, commanders) == 1);
+    CHECK(commander_destroyed_elsewhere(*w.world, 1, commanders) == 0);
+    // A unit no longer in the world, a slot not in use, no commander types
+    // and a game where commanders do not matter find nothing.
+    w.unit(6).flags &= ~OA_UNIT_FLAG_LIVE;
+    w.player(2).in_use = 0;
+    CHECK(commander_destroyed_elsewhere(*w.world, 0, commanders) == kNoPlayer);
+    w.unit(6).flags |= OA_UNIT_FLAG_LIVE;
+    CHECK(commander_destroyed_elsewhere(*w.world, 0, nullptr) == kNoPlayer);
+    w.game().session_rules = 0;
+    CHECK(commander_destroyed_elsewhere(*w.world, 0, commanders) == kNoPlayer);
+
+    char notice[96];
+    format_take_refusal(notice, sizeof notice, w.player(1));
+    CHECK(std::strcmp(notice, "Cannot take Player 1: their commander has been destroyed.") == 0);
+    w.player(1).name[0] = '\0';
+    format_take_refusal(notice, sizeof notice, w.player(1));
+    CHECK(std::strcmp(notice, "Cannot take that player: their commander has been destroyed.") == 0);
+}
+
 int main() {
     test_participation();
     test_transfers();
     test_panel_flow();
+    test_take_guard();
     return 0;
 }

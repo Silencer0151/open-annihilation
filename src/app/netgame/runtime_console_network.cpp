@@ -103,6 +103,34 @@ void NetworkPlay::bind_console_network_hooks(console::ConsoleHost& host) {
         if (hooks.page != nullptr)
             hooks.page(hooks.context, user, text);
     };
+    // teams.team-number-alliances: the host deals teams by start position.
+    const auto* profile = runtime_.mod_profile();
+    commands.deal_teams = nullptr;
+    if (profile != nullptr && profile->rules.teams.team_number_alliances.enabled)
+        commands.deal_teams =
+            [](void* context, const char* argument, char* notice, std::size_t capacity) {
+                auto& state = *play_of(context)->net_;
+                if (!state.active || !state.net) {
+                    std::snprintf(
+                        notice,
+                        capacity,
+                        "+autoteam is only available to the host of a multiplayer game"
+                    );
+                    return;
+                }
+                nm::net_match_deal_teams(
+                    state.net.get(),
+                    oa::ui::frontend_multiplayer::team_rules::dealt_team_count(argument),
+                    notice,
+                    capacity
+                );
+            };
+    commands.cast_vote = [](void* context, bool yes) {
+        auto* play = play_of(context);
+        const auto* state = play->session_net_match();
+        return state != nullptr &&
+               nm::net_match_cast_vote(play->net_->net.get(), state->vote_target, yes);
+    };
     host.extension_context = &commands;
     host.extend = oa::netgame::console::register_console_commands;
     net_->console_host = &host;

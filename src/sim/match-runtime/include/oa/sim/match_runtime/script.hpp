@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "oa/data/limits.hpp"
+#include "oa/data/match_rules.hpp"
 #include "oa/sim/match_runtime/fault.hpp"
 #include "oa/sim/script_vm.hpp"
 #include "oa/formats/cob.hpp"
@@ -165,6 +167,11 @@ class ScriptInstance {
 // Services the unit-value GET/SET handlers need outside the unit record.
 struct UnitValueHost {
     virtual ~UnitValueHost() = default;
+    /// The rules the match plays by, which reach the GET and SET handlers
+    /// (UnitValueServices::rules); unset, 3.1c's.
+    data::match_rules::MatchRulesView value_rules{};
+    /// The capacities the match was built with (UnitValueServices::limits); null for 3.1c's.
+    const data::limits::Limits* value_limits{};
     /// Returns the world position of a script piece of the unit.
     ///
     /// @param slot Unit whose piece is asked for.
@@ -208,7 +215,9 @@ struct UnitValueHost {
 /// @param world Canonical world the value is read from.
 /// @param slot Unit running the script; one bound to no unit reads 0.
 /// @param pool Unit slot pool (unused by the lookup).
-/// @param selector Unit-value selector; an unknown one reads 0.
+/// @param selector Unit-value selector, or an index an extension is mounted
+///     at (MatchRules::script_get, through UnitValueHost::value_rules); an
+///     unknown one reads 0.
 /// @param second First extra operand of the selector.
 /// @param third Second extra operand of the selector.
 /// @param host Piece, direction, distance and terrain services.

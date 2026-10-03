@@ -21,6 +21,13 @@ Namespace `oa::present::model`, headers in `include/oa/present/model/`:
 - `unit_supersampling.hpp`: enhanced anti-aliasing of units, drawn at several
   samples a pixel and reduced into the frame.
 - `rgb_bridge.hpp`: the bridge between the 8-bit surfaces and the RGB frame.
+- `shadow_fade.hpp`: how dark shadows are drawn at a zoom (`shadow_strength`,
+  `shadow_level`): the game's own at zoom 1 and closer, easing on a
+  smoothstep of the halvings of the zoom down to none at a quarter, and none
+  farther out; and the faded alpha table a renderer's shadows blend through
+  in between (`ShadowTable`, `ModelRenderer::shadow_table`), the display's
+  own with the rows of the shadows' colours mixed toward the colour under
+  them.
 
 ## The RGB bridge
 
@@ -120,7 +127,10 @@ drawn through the bridge band by band (2, 3, 4 and 7 bands) come out as
 those drawn whole, frame after frame with the copy kept, captures,
 polygons, lines, blended sprites, write-backs, writes into the frame and
 sampled regions among the draws, at scales of 1, 2, 0.5, 0.75, 1.1, 1.5 and
-0.3 and with the rectangle inset in the frame. `mesh_raster_test.cpp` draws
+0.3 and with the rectangle inset in the frame. `shadow_fade_test.cpp` holds
+the strength curve to its ends, its middle and its easing, the levels, the
+faded table to the mix of each colour and the display's own elsewhere, and a
+silhouette drawn through it. `mesh_raster_test.cpp` draws
 textured quads, twisted ones among them, whole and band by band. The native
 checks and the director render pin the frames the match draws through the
 bridge; `native-draw-threads` draws a fight on 1 to 7 bands.

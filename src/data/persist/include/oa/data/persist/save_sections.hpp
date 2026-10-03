@@ -459,6 +459,9 @@ struct SummaryHooks {
     const ImageRows* (*radar_image)(void* context) = nullptr;
     void (*write_stats_panel)(void* context, Bank* bank) = nullptr;
     void (*save_conditions)(void* context, Bank* bank) = nullptr;
+    /// Writes the ModProfile account of a game played under a mod's profile
+    /// (save_profile.hpp), last; null, or a game without a profile, writes none.
+    void (*save_profile)(void* context, Bank* bank) = nullptr;
 };
 
 inline constexpr int32_t game_mode_in_match = 6; // Game.mode for an in-match save
@@ -526,8 +529,9 @@ inline constexpr int32_t no_human_player = OA_PLAYER_COUNT;
 /// between-missions mark outside a match, the description, game id and game
 /// time. In a match (Game.mode game_mode_in_match) the radar image, camera,
 /// stats panel, units, terrain mapping, features, player features, metal
-/// plotmap, meteor state and campaign conditions follow. The bank is written
-/// with savegame_description and packed accounts.
+/// plotmap, meteor state and campaign conditions follow, then, under a mod's
+/// profile, its ModProfile account. The bank is written with
+/// savegame_description and packed accounts.
 ///
 /// @param[in,out] save save context holding the world and hooks
 /// @param summary campaign, UI and mission hooks

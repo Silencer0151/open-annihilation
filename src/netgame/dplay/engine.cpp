@@ -1362,7 +1362,8 @@ uint32_t engine_set_session_desc(
     // hold the strings' offsets, which receivers read the strings by.
     SessionDesc wire = wire_desc(e);
     wire.name_pointer = session_desc_changed_name_offset;
-    wire.password_pointer = session_desc_changed_password_offset(e->session_name);
+    wire.password_pointer =
+        e->publish_without_password ? 0 : session_desc_changed_password_offset(e->session_name);
     const std::size_t n = encode_session_desc_changed(
         own_stream(e), 0, wire, e->session_name, e->password, e->scratch, sizeof e->scratch
     );

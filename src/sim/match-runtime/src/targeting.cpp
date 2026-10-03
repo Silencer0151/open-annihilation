@@ -6,6 +6,7 @@
 #include "oa/sim/weapon_execution/interceptor.hpp"
 #include "oa/sim/unit_health/paralysis.hpp"
 #include "oa/sim/weapon_execution/retaliation.hpp"
+#include "oa/sim/weapon_execution/weapon_keys.hpp"
 #include <bit>
 #include <cstdint>
 #include "oa/sim/ballistics.hpp"
@@ -214,6 +215,12 @@ class TargetHost final : public sim::combat_state::IntelligenceHost,
         projected.secondary_weapon_flags = weapons.definitions[1]->flags;
         projected.type_primary_weapon_flags = weapons.definitions[0]->flags;
         projected.secondary_slot_flags = from.record.weapons[1].flags;
+        projected.primary_surface_fire =
+            match.rules_view()
+                .weapon(
+                    match.state().game.weapon_defs[weapons.definitions[0]->registry_index].weapon_id
+                )
+                .surface_fire;
         const auto source_cap = pack_command_capabilities(
             definition.can_attack,
             definition.can_guard,
@@ -302,12 +309,18 @@ class TargetHost final : public sim::combat_state::IntelligenceHost,
             match.fault_.note("target range requires initialized weapon definition");
             return false;
         }
+        const auto rules = match.rules_view();
+        const auto& record = match.state().game.weapon_defs[weapon->registry_index];
         const sim::ballistics::WeaponReachParameters reach{
             weapon->flags,
             weapon->range_world_units,
-            {weapon->projectile_velocity,
-             weapon->minimum_barrel_angle_radians,
-             match.state().game.gravity}
+            sim::weapon_execution::ballistic_parameters(
+                weapon->projectile_velocity,
+                weapon->minimum_barrel_angle_radians,
+                match.state().game.gravity,
+                rules.rules()
+            ),
+            sim::weapon_execution::reach_keys(rules.weapon(record.weapon_id))
         };
         return sim::ballistics::weapon_can_reach(
             reach, reach_geometry(from), reach_geometry(to), match.simulation_.sea_level
@@ -502,6 +515,9 @@ void Match::sweep_weapon_targets(uint8_t player, bool computer) {
     const auto first_slot = static_cast<uint16_t>(oa::world_unit_slot(&world, first));
     const auto last_slot = static_cast<uint16_t>(first_slot + count - 1u);
     auto& cursor = weapon_sweep_cursor_[player];
+    // weapons.retarget-out-of-range: a slot's unit target out of its reach is
+    // dropped, and the pass also takes units whose fire order is 3.
+    const bool drop_out_of_range = rules().weapons.retarget_out_of_range.enabled;
     for (uint32_t step = 0; step <= world.game.units_per_player / 30u; ++step) {
         cursor =
             cursor == 0 || cursor == last_slot ? first_slot : static_cast<uint16_t>(cursor + 1u);
@@ -509,9 +525,10 @@ void Match::sweep_weapon_targets(uint8_t player, bool computer) {
             continue;
         auto& unit = slots_[cursor];
         const auto& record = unit.record;
+        const auto fire_order = record.flags & OA_UNIT_FLAG_FIRE_ORDER_MASK;
         if (record.type_index == 0 || record.build_remaining != 0.0F ||
             (record.flags & OA_UNIT_FLAG_HAS_WEAPONS) == 0 ||
-            (record.flags & OA_UNIT_FLAG_FIRE_ORDER_MASK) != fire_at_will)
+            (drop_out_of_range ? (fire_order & fire_at_will) == 0 : fire_order != fire_at_will))
             continue;
         const auto& aims = record.weapons;
         for (uint8_t slot = 0; slot < std::size(aims); ++slot) {
@@ -526,7 +543,15 @@ void Match::sweep_weapon_targets(uint8_t player, bool computer) {
             // stunned. A dead target stays too; the weapon tick drops it.
             if (aims[slot].target_b == OA_UNIT_TARGET_IS_UNIT && aims[slot].target_a > 0 &&
                 static_cast<std::size_t>(aims[slot].target_a) < slots_.size()) {
-                const auto& target = slots_[static_cast<std::size_t>(aims[slot].target_a)].record;
+                const auto target_index = static_cast<uint16_t>(aims[slot].target_a);
+                // An out-of-reach target loses only the slot's target index:
+                // the slot is left without a target and no TargetCleared
+                // runs. The tests below still judge the old target, which
+                // keeps the slot empty until the pass comes round again.
+                if (drop_out_of_range && weapons_[cursor].definitions[slot] != nullptr &&
+                    !weapon_can_reach(cursor, target_index, slot))
+                    unit.record.weapons[slot].target_a = 0;
+                const auto& target = slots_[target_index].record;
                 const auto* target_owner = oa::world_unit_owner(&world, &target);
                 const auto* masks = fields(unit).target_masks;
                 const auto type = static_cast<uint16_t>(target.type_index);

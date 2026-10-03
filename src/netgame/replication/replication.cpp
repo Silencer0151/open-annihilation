@@ -263,6 +263,8 @@ WireError replication_apply_full_record(
     FullUnitRecord record{};
     if (read_full_unit_record(&record_reader, def_bits, false, &record) != WireError::ok)
         return WireError::truncated;
+    if (sim != nullptr && sim->full_record_read != nullptr)
+        sim->full_record_read(sim->context, world, unit, record);
     if (record.unit_def_index == 0) {
         if (unit->type_index != 0)
             unit->flags |= OA_UNIT_FLAG_DEATH_PENDING;

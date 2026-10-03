@@ -226,6 +226,9 @@ struct Engine {
     SessionDesc desc{};
     char session_name[max_name_chars + 1]{};
     char password[max_name_chars + 1]{};
+    /// Session descriptions published again leave their password field 0
+    /// (network.session-desc-clear).
+    bool publish_without_password{};
     uint32_t id_key{};
     uint16_t uniqueness[max_players]{};
     uint32_t system_id{};

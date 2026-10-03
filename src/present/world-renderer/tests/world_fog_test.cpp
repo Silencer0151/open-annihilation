@@ -32,7 +32,14 @@ struct SightMap {
         bool mapping = true
     ) const {
         return wr::build_fog_grid(
-            grid, grid.coverage, {los, mapping}, camera_x, camera_z, view_w, view_h
+            grid,
+            grid.viewpoint_player,
+            grid.coverage,
+            {los, mapping},
+            camera_x,
+            camera_z,
+            view_w,
+            view_h
         );
     }
 };
@@ -88,6 +95,26 @@ void unmapped_cells_use_the_black_mask() {
     const auto unmapped_ignored = map.build(64, 64, 128, 128, true, false);
     for (const auto& tile : unmapped_ignored.tiles)
         OA_CHECK(tile.unmapped == 0);
+}
+
+// The fog reads the mapped bit of the player whose view it shows, which
+// "+View" moves away from the sight grid's own viewer. A tile takes its
+// corners from its own cell, the cell to its right and the two below them.
+void mapped_terrain_follows_the_viewer() {
+    // Player 1 has mapped every cell, player 0 only cell (4, 4).
+    SightMap map(16, 16, 1, 0x2);
+    map.grid.player_bits[4 * 16 + 4] = 0x1 | 0x2;
+    const auto own = map.build(64, 64, 128, 128);
+    for (const auto& tile : own.tiles)
+        OA_CHECK(tile.unmapped == 0);
+    const auto viewed =
+        wr::build_fog_grid(map.grid, 0, map.grid.coverage, {true, true}, 64, 64, 128, 128);
+    const auto unmapped = [&](int32_t x, int32_t z) {
+        return viewed.at(x - viewed.first_cell_x, z - viewed.first_cell_z).unmapped;
+    };
+    OA_CHECK(unmapped(2, 2) == wr::fog_mask_full);
+    OA_CHECK(unmapped(4, 4) == (wr::fog_mask_full & ~wr::fog_corner_top_left));
+    OA_CHECK(unmapped(3, 3) == (wr::fog_mask_full & ~wr::fog_corner_bottom_right));
 }
 
 void map_border_extends_masks_outward() {
@@ -242,11 +269,35 @@ void dithered_fog_clears_alternate_map_pixels() {
 
 } // namespace
 
+// ui.map-features-ignore-los: a map-placed feature's owner slot decides
+// whether it skips the sight test.
+void feature_owner_rule_skips_the_sight_test() {
+    constexpr wr::FeatureOwnerRule base{};
+    // 3.1c: the map's owner 10 never matches a player.
+    OA_CHECK(!wr::feature_drawn_without_sight(10, true, 1, base));
+    OA_CHECK(wr::feature_drawn_without_sight(1, false, 1, base));
+    OA_CHECK(!wr::feature_drawn_without_sight(11, false, 1, base));
+    // Owner 11: map features show to everyone; replaced ones do not.
+    constexpr wr::FeatureOwnerRule free{true, 11};
+    OA_CHECK(wr::feature_drawn_without_sight(10, true, 1, free));
+    OA_CHECK(wr::feature_drawn_without_sight(10, true, 7, free));
+    OA_CHECK(!wr::feature_drawn_without_sight(10, false, 1, free));
+    OA_CHECK(wr::feature_drawn_without_sight(3, false, 3, free));
+    // Owner 10 under the rule leaves the sight test.
+    constexpr wr::FeatureOwnerRule inert{true, 10};
+    OA_CHECK(!wr::feature_drawn_without_sight(10, true, 1, inert));
+    // A player slot shows the map's features to that player alone.
+    constexpr wr::FeatureOwnerRule player{true, 2};
+    OA_CHECK(wr::feature_drawn_without_sight(10, true, 2, player));
+    OA_CHECK(!wr::feature_drawn_without_sight(10, true, 1, player));
+}
+
 int main() {
     placement_follows_camera();
     clear_when_everything_is_seen();
     one_unseen_cell_marks_four_corners();
     unmapped_cells_use_the_black_mask();
+    mapped_terrain_follows_the_viewer();
     map_border_extends_masks_outward();
     border_tile_follows_the_edge_cell_at_any_view_size();
     map_span_follows_the_terrain_dda();
@@ -254,5 +305,6 @@ int main() {
     drawing_scales_with_the_zoom();
     drawing_clips_to_the_surface_and_view();
     dithered_fog_clears_alternate_map_pixels();
+    feature_owner_rule_skips_the_sight_test();
     return oa::test::check_exit_status();
 }

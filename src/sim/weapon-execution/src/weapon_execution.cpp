@@ -4,6 +4,7 @@
 #include "oa/sim/weapon_execution.hpp"
 
 #include "oa/sim/combat_state.hpp"
+#include "oa/sim/unit_health/veterancy.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -11,10 +12,14 @@
 
 namespace oa::sim::weapon_execution {
 
-FireMode select_fire_mode(uint32_t weapon_flags) noexcept {
-    if ((weapon_flags & sim::combat_state::weapon_turret_flag) != 0)
+FireMode select_fire_mode(uint32_t weapon_flags, bool vlaunch_before_turret) noexcept {
+    const bool turret = (weapon_flags & sim::combat_state::weapon_turret_flag) != 0;
+    const bool vlaunch = (weapon_flags & sim::combat_state::weapon_vlaunch_flag) != 0;
+    if (vlaunch && vlaunch_before_turret)
+        return FireMode::vertical_launch;
+    if (turret)
         return FireMode::turret;
-    if ((weapon_flags & sim::combat_state::weapon_vlaunch_flag) != 0)
+    if (vlaunch)
         return FireMode::vertical_launch;
     if ((weapon_flags & sim::combat_state::weapon_line_of_sight_flag) == 0 &&
         (weapon_flags & sim::combat_state::weapon_selfprop_flag) == 0) {
@@ -57,12 +62,14 @@ uint16_t reload_ticks_after_shot(
     const uint16_t base,
     const uint16_t veteran_level,
     const int16_t health,
-    const uint32_t maximum_health
+    const uint32_t maximum_health,
+    const data::match_rules::MatchRulesView& rules,
+    const uint16_t type_index
 ) noexcept {
     if (!maximum_health)
         return 0;
-    const auto capped_level = std::min<uint32_t>(veteran_level / 5u, 5u);
-    const auto veteran_percent = 100 - 6 * static_cast<int32_t>(capped_level);
+    const auto veteran_percent =
+        sim::unit_health::veteran_reload_percent(rules, type_index, veteran_level);
     const auto experience_product = static_cast<uint32_t>(static_cast<int32_t>(health)) * 20u;
     const auto experience_percent = 120u - experience_product / maximum_health;
     auto ticks = std::bit_cast<int32_t>(
@@ -161,7 +168,9 @@ TickResult tick_weapons(UnitState& unit, Host& host) {
             result.slots[index] = SlotResult::insufficient_resources;
             continue;
         }
-        const auto mode = select_fire_mode(definition->flags);
+        const auto mode = select_fire_mode(
+            definition->flags, host.rules.rules().weapons.vlaunch_before_turret.enabled
+        );
         if (mode == FireMode::turret) {
             // The turret fires only once the Aim script it started has returned
             // nonzero, and only while the target stays within tolerance. Either
@@ -198,7 +207,12 @@ TickResult tick_weapons(UnitState& unit, Host& host) {
                 return result;
             }
             record.reload = reload_ticks_after_shot(
-                definition->base_reload_ticks, unit.veteran_level, unit.health, unit.maximum_health
+                definition->base_reload_ticks,
+                unit.veteran_level,
+                unit.health,
+                unit.maximum_health,
+                host.rules,
+                unit.type_index
             );
         }
         unit.shot_event_bits = static_cast<uint16_t>(

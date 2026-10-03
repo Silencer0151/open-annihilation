@@ -430,6 +430,38 @@ struct DiscoveredArchive {
     bool already_mounted = false;
 };
 
+/// The archive groups discovery mounts, in mount order: the revision archive,
+/// then the ccx, ufo and hpi groups, each in Windows NTFS name order, then
+/// the disc. A group's pattern names the archives it mounts, matched without
+/// case; a pattern that matches nothing mounts nothing.
+struct DiscoveryPlan {
+    /// File name of the revision archive, matched without case.
+    std::string revision_archive{"rev31.GP3"};
+    /// Pattern of the group mounted after the revision archive.
+    std::string ccx_pattern{"*.CCX"};
+    /// Pattern of the group mounted after the ccx group.
+    std::string ufo_pattern{"*.UFO"};
+    /// Pattern of the main group, of which at most hpi_limit mount.
+    std::string hpi_pattern{"*.HPI"};
+    /// Most archives of the hpi group mounted; a candidate that fails to open
+    /// does not count.
+    int hpi_limit{formats::hpi::PlainArchiveMountLimit};
+    /// Pattern of the archives mounted from each removable root, without limit.
+    std::string disc_pattern{"*.hpi"};
+    /// The store's own folders serve as the disc root after the removable
+    /// roots, as for an install without discs: archives of disc_pattern there
+    /// that did not mount yet mount last.
+    bool folders_as_disc{};
+};
+
+/// Watches the resources and listings a store is asked for.
+struct LookupObserver {
+    void* context{};
+    /// Receives each resource path or listing a lookup names, as the caller
+    /// wrote it, from the thread that looks it up; null watches nothing.
+    void (*looked_up)(void* context, std::string_view name){};
+};
+
 // Open-file handle over a loose file or an archive entry. Its reads and seeks
 // keep 3.1c's position rules, and it caches one decoded block.
 struct ResourceFile;
@@ -438,6 +470,12 @@ struct ResourceFile;
 // order. Callers supply that order explicitly (or use discover()): platform
 // directory enumeration order is not a portable replacement for the Windows
 // order the game lists files in.
+//
+// The loose files may come from several folders layered as if each were
+// copied over the next: a path, compared without case, resolves from the
+// first folder that holds it; listings and discovery merge the folders by
+// name, the earlier folder's file winning and the later folder's spelling
+// kept, as a copy over an existing file keeps its name.
 class AssetStore {
   public:
 
@@ -454,6 +492,17 @@ class AssetStore {
     /// @param loose_index_limit most folder entries the kept listings may hold
     explicit AssetStore(
         std::filesystem::path loose_root,
+        std::size_t loose_index_limit = formats::hpi::LooseIndexEntryLimit
+    );
+    /// Creates a store over folders layered in order, the first winning, with
+    /// no archives mounted.
+    ///
+    /// With one folder it is the store over that game directory.
+    ///
+    /// @param loose_roots the folders, highest precedence first; at least one
+    /// @param loose_index_limit most folder entries the kept listings may hold
+    explicit AssetStore(
+        std::vector<std::filesystem::path> loose_roots,
         std::size_t loose_index_limit = formats::hpi::LooseIndexEntryLimit
     );
     /// Unmounts every archive.
@@ -499,6 +548,33 @@ class AssetStore {
     /// @return one outcome per candidate, in scan order
     std::vector<DiscoveredArchive>
     discover(std::string_view version, std::span<const std::filesystem::path> removable_roots = {});
+    /// Scans the store's folders and removable roots for archives as a plan says.
+    ///
+    /// As discover(version, removable_roots), with the plan's revision
+    /// archive, group patterns and hpi limit. Each group's matches in every
+    /// folder of the store are merged by name, the earlier folder's file
+    /// winning, and mount in NTFS name order, so layered folders mount what
+    /// one folder holding the same files would.
+    ///
+    /// @param plan the archive names and patterns
+    /// @param removable_roots roots of removable drives searched after the folders' groups
+    /// @return one outcome per candidate, in scan order
+    std::vector<DiscoveredArchive> discover(
+        const DiscoveryPlan& plan, std::span<const std::filesystem::path> removable_roots = {}
+    );
+    /// Returns the folders loose files come from.
+    ///
+    /// @return absolute paths, highest precedence first
+    [[nodiscard]] std::span<const std::filesystem::path> loose_roots() const noexcept;
+    /// Finds the folder a loose file of a path comes from, and its host path.
+    ///
+    /// @param resource '\\'- or '/'-separated path, matched ignoring ASCII case
+    /// @return the host path of the loose file, or nullopt when no folder holds it
+    [[nodiscard]] std::optional<std::filesystem::path> loose_file(std::string_view resource) const;
+    /// Sets who watches the lookups; a default observer watches nothing.
+    ///
+    /// @param observer the observer
+    void observe_lookups(LookupObserver observer) noexcept;
     /// Recomputes which archive files a loose file of the same path hides from find().
     ///
     /// discover() does this after mounting.
@@ -694,14 +770,26 @@ class AssetStore {
     /// @param resource '\\'- or '/'-separated path
     /// @return the host path, or nullopt when no loose file exists
     [[nodiscard]] std::optional<std::filesystem::path> loose_path(std::string_view resource) const;
-    /// Resolves a folded resource path to a loose file by listing every folder on the way.
+    /// Resolves a folded resource path to a loose file in one folder.
+    ///
+    /// @param root index of the folder in loose_roots_
+    /// @param key resource path, '/'-separated and ASCII lower case
+    /// @return the host path, or nullopt when the folder holds no such file
+    [[nodiscard]] std::optional<std::filesystem::path>
+    loose_path_in(std::size_t root, const std::string& key) const;
+    /// Resolves a folded resource path in one folder by listing every folder on the way.
     ///
     /// Throws std::runtime_error for a traversing path or an ambiguous case collision.
     ///
+    /// @param root index of the folder in loose_roots_
     /// @param key resource path, '/'-separated and ASCII lower case
-    /// @return the host path, or nullopt when no loose file exists
+    /// @return the host path, or nullopt when the folder holds no such file
     [[nodiscard]] std::optional<std::filesystem::path>
-    loose_path_listed(const std::string& key) const;
+    loose_path_listed_in(std::size_t root, const std::string& key) const;
+    /// Tells the observer of a lookup.
+    ///
+    /// @param name the resource or listing looked up
+    void note_lookup(std::string_view name) const;
 
     struct ArchivedNode {
         std::size_t mount{};
@@ -756,7 +844,9 @@ class AssetStore {
         std::vector<uint8_t> marks;
     };
 
-    std::filesystem::path loose_root_;
+    // The folders loose files come from, highest precedence first.
+    std::vector<std::filesystem::path> loose_roots_;
+    LookupObserver observer_{};
     std::vector<Mount> mounts_;
     std::vector<std::filesystem::path> mount_paths_;
     // Folder listings kept by loose-file lookups; null in a moved-from store.
@@ -818,8 +908,9 @@ struct Image {
 ///         the first error at its file offset: a short header, a bad
 ///         manufacturer byte or version, an unsupported layout, an image
 ///         over the 64-megapixel limit, a missing 256-colour palette, pixel
-///         data that ends early, an invalid or scanline-crossing run, or
-///         bytes left over before the palette
+///         data that ends early, or an invalid or scanline-crossing run;
+///         bytes between the last row and the palette are ignored, as the
+///         game ignores them
 [[nodiscard]] base::bytes::Decoded<Image> decode_pcx(std::span<const uint8_t> data);
 
 } // namespace oa

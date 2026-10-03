@@ -8,13 +8,19 @@
 // places a setting takes effect call the static members below.
 #pragma once
 
+#include "oa/app/mod_profile_loader.hpp"
 #include "oa/app/runtime.hpp"
+#include "oa/app/window_icon.hpp"
+#include "oa/base/sha256.hpp"
+#include "oa/data/mod_profile.hpp"
 #include "oa/ui/engine_settings.hpp"
 #include "oa/ui/engine_settings/dialog.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace oa::app {
 
@@ -30,6 +36,11 @@ struct Runtime::EngineSettingsState {
     bool light_machine{};
     /// The desktop's size, as read once at start; zero by zero when unknown.
     oa::ui::engine_settings::ScreenSize desktop{};
+    /// The mod folders the game folder offers (list_mod_folders), as the
+    /// preferences keep a chosen one, read once at start.
+    std::vector<std::string> mod_folders;
+    /// Their folders' names, in the same order, as the dialog shows them.
+    std::vector<std::string> mod_names;
     /// The machine's physical memory in bytes, as read once at start; 0 when
     /// the system does not say.
     uint64_t physical_memory{};
@@ -45,6 +56,10 @@ struct Runtime::EngineSettingsState {
     oa::ui::engine_settings::Page last_page{oa::ui::engine_settings::Page::path_search};
     std::optional<oa::ui::engine_settings::DialogFonts> fonts; ///< loaded on first use
     bool fonts_missing{}; ///< loading the fonts failed; they are not tried again
+    /// The icon the header and the OA buttons draw: the window icon's
+    /// visible part, decoded on first use.
+    std::optional<WindowIcon> icon;
+    bool icon_missing{}; ///< decoding the icon failed; it is not tried again
 
     /// The battlefield's zoom when the dialog opened, which Cancel eases back to.
     float opened_zoom_target{};
@@ -54,6 +69,43 @@ struct Runtime::EngineSettingsState {
     /// The running match plays at the base path credit: it is shared, a
     /// replay, or was either since it started.
     bool path_credit_held{};
+
+    // Developer Mode: the player's overrides of the standard hacks, laid over
+    // the profile the game plays (Runtime::apply_hack_overrides).
+
+    /// The profile's layers are set up (Runtime::load_profile_layers);
+    /// before, the profile plays as it ships.
+    bool layered{};
+    /// What the profile is resolved from again with the overrides: the mod's
+    /// profile and the settings it binds, or the plain 3.1c baseline without
+    /// a mod. Empty when it cannot be read again, and no override applies.
+    std::optional<ProfileSource> profile_source;
+    /// The id the overrides are kept under (Inputs::profile_id).
+    std::string profile_id;
+    /// Every standard hack as the profile resolves it without overrides,
+    /// which Developer Mode shows.
+    std::vector<oa::data::mod_profile::HackState> profile_hacks;
+    /// Developer Mode's open areas and hacks and its filter when the dialog
+    /// last closed, which it opens with again.
+    std::optional<oa::ui::engine_settings::DeveloperList> last_developer_list;
+    /// The profile with the overrides in effect now: the display rules read
+    /// it at once. The profile as it ships while none apply; null for a game
+    /// without a mod while none apply.
+    std::shared_ptr<const oa::data::mod_profile::ModProfile> latest;
+    /// The profile the rules are played by (Runtime::mod_profile): a copy
+    /// of latest, held from a match's start until the match ends. It is one
+    /// object for the whole run, which each change is copied into, so that
+    /// what network play and the multiplayer screens bind to it stays valid
+    /// and follows it.
+    std::shared_ptr<oa::data::mod_profile::ModProfile> played;
+    /// The game plays 3.1c's rules and no profile: a game without a mod
+    /// whose overrides change none of them.
+    bool plays_base_rules{};
+    /// The plain 3.1c baseline's sim hash: a game without a mod whose
+    /// overrides change only display rules plays by no profile.
+    oa::base::sha256::Digest base_sim_hash{};
+    /// The overrides the last resolution left out, one line each, as reported.
+    std::vector<std::string> refused;
 
     /// Returns what the defaults depend on in this run.
     ///

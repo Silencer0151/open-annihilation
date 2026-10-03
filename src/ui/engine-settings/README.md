@@ -14,17 +14,33 @@ the locks a running game puts on them (`settings_locks`).
 
 | Section | Setting | Range | Default | Key |
 |---|---|---|---|---|
-| AI & Pathfinding | Pathfinding cycles | 1× to 8× of 1333 path nodes a tick | 1× | `open-annihilation.path-search-nodes` |
+| AI & Pathfinding | Pathfinding cycles | 1× to 8× of 1333 path nodes a tick, or of a mod's budget | 1× | `open-annihilation.path-search-nodes` |
 | Controls & Input | Mouse wheel zoom | Off, On | On | `open-annihilation.wheel-zoom` |
 | | Escape opens the game menu | Off, On | On on macOS, Off elsewhere and with `--preferences-file` | `open-annihilation.escape-opens-menu` |
 | | Select groups without Alt | Off, On | Off | 3.1c's SwitchAlt |
-| Gameplay | Unit limit | 50 to 1500 per player, steps of 50 | the installation's `totala.ini` UnitLimit, else 250 | `open-annihilation.unit-limit` |
+| Gameplay | Unit limit | 50 to 1500 per player, steps of 50, or on to a mod's higher maximum | the installation's `totala.ini` UnitLimit, else 250 or a mod's default | `open-annihilation.unit-limit` |
+| | Mod, from the next start | None, or one of the mod folders the game folder offers | None | `open-annihilation.mod-directory` (the folder's path; absent for None) |
 | Graphics | Maximum frame rate | 30 to 120, steps of 5 | 120; 60 on a Raspberry Pi or a light machine with the player's own preferences file | `open-annihilation.max-fps` |
-| | Enhanced anti-aliasing | Off, 2×, 3×, 4×, 8×, 16× | Off, a Raspberry Pi and a light machine included | `open-annihilation.anti-aliasing` |
+| | Enhanced anti-aliasing | Off, 2×, 4×, 8×, 16×; a stored level between reads as the one below it, a stored 3 as 2× | Off, a Raspberry Pi and a light machine included | `open-annihilation.anti-aliasing` |
 | | Screen size, from the next start | Desktop, 640×480, 800×600, 1024×768, 1280×1024 | Desktop; 800×600 on a light machine with the player's own preferences file, 640×480 when its desktop is smaller | `open-annihilation.screen-size` (`desktop` or `800x600`) |
 | | Hardware acceleration | Off, Basic, Full | Full with the player's own preferences file on every machine; Off with `--preferences-file` | `open-annihilation.hardware-acceleration` (`off`, `basic` or `full`) |
 | | Vertical sync | Off, On | Off | `open-annihilation.vertical-sync` |
-| Developer | Show performance statistics | Off, On | Off | `open-annihilation.frame-stats` |
+| Language & Text | Language | System default, English, Deutsch, Español, Français, Italiano | System default with the player's own preferences file; English with `--preferences-file` | `open-annihilation.language` (`system` or a language's tag, as `de`) |
+| | Use modern fonts for game text | Off, On | On with the player's own preferences file; Off with `--preferences-file` | `open-annihilation.modern-fonts` |
+| | Text size, of the modern fonts | 50% to 300% of the game fonts' sizes, steps of 10% | 80% | `open-annihilation.text-size` |
+| | Font outline | Off, On | On | `open-annihilation.text-outline` |
+| | Font shadow | Off, On | On | `open-annihilation.text-shadow` |
+| | Game text background | Off, On | Off | `open-annihilation.text-background` |
+| Developer | Enable Developer Mode | Off, On | Off | `open-annihilation.developer-mode` |
+| | Show performance statistics | Off, On | Off | `open-annihilation.frame-stats` |
+| | The overrides of the profile's standard hacks, in Developer Mode's list | any hack on or off, with its parameters | none | `open-annihilation.hack-overrides.<id>`, the id of the profile the game plays, `ta-3.1c` without a mod |
+
+A mod's limits (`oa::data::limits`, handed in through `Inputs::units_per_player`
+and `match_path_search_nodes`) change three things: the unit limit a player
+starts with, the range a stored or installation limit is clamped to (the
+mod's minimum and maximum; 20 to 500 for an installation's limit in 3.1c)
+with the slider's highest stop, and the credit the Pathfinding cycles
+multiply. Without a mod each is as above.
 
 A light machine (`oa/platform/machine.hpp`, `light_machine`) has one
 logical processor, a 32-bit x86 processor without SSE2 (a Pentium III or an
@@ -89,6 +105,54 @@ while it is in effect the frame rate keeps just below the display's. Off,
 the renderer is never asked, and the game paces its frames as without the
 setting.
 
+Language says which language the game shows its text in. System default
+is the language the operating system's preferred locales choose, which the
+drop-down names in itself: "System default (Deutsch)". The other choices
+are the languages the game knows and draws, each named in itself, English
+first and the others in the order of their names ([the languages
+page](../../../docs/languages.md) says what each shows). The key holds
+`system` or the language's tag; a file without it, as an earlier version
+wrote, reads as System default with the player's own preferences file, and
+a value the game does not know reads as the default but stays in the file
+until the setting is changed. A named preferences file starts in English,
+the game's own default, so that a check plays alike on every machine. The
+language changes only what players read, so no game locks it; 3.1c's
+command line naming a language (`open-annihilation german`) decides it for
+the run, and the row shows "Set on the command line". A new choice shows at
+once in what is drawn each frame; screens and panels already open show it
+once they open again.
+
+The rest of the Language & Text settings say how game text is drawn. Use modern fonts
+for game text draws it in modern fonts, which hold the letters of many
+languages, in place of the game's own 8-bit fonts; Text size scales every
+size those fonts are drawn at together, from half the game fonts' sizes to
+three times them; Font outline gives each letter of that text a dark
+outline, Font shadow a dark shadow, and Game text background lays a
+shaded box behind each line. `text_style` turns them into the one record
+the text drawing reads each frame (`oa::present::TextStyle`,
+`oa/present/text_style.hpp`), which the application gives through
+`Runtime::text_style`. They change only what is drawn: the simulation, a
+saved game and what a shared game sends are the same whatever they hold,
+so no game locks them. Modern fonts are On by default with the player's
+own preferences file, and Off with `--preferences-file`; the text starts at
+80%, a fifth smaller than the game's fonts. Both are departures from the
+game's look that VARIANCES.md lists.
+
+Text size applies to the modern fonts alone: the game's own fonts have
+fixed sizes. While the dialog shows Use modern fonts for game text Off, the
+slider is locked, faded with a padlock and "Needs modern fonts"
+(`Lock::needs_modern_fonts`, which the dialog sets itself in
+`Locks::text_size`), and its second hint line says the game's own fonts
+have fixed sizes; turning the modern fonts On lifts the lock at once.
+Restore defaults resets the size whatever the switch shows. A stored size
+is clamped to 50% to 300%, and one between the slider's steps is kept as
+stored; a file without the key reads as 80%. How each place in the game
+draws the size is in the application's README and on the
+[ui.text-rendering](../../../docs/mods/standard-hacks/ui.text-rendering.md)
+page.
+
+Developer Mode is described [below](#developer-mode).
+
 With every default the game plays as it does without the settings. Pathfinding
 cycles and Unit limit are locked during a game; a shared game or a replay
 always plays at 1× pathfinding and the host's unit limit. Vertical sync is
@@ -108,18 +172,33 @@ section heading, hints, locks, captions and the version, each readied for
 text in one colour. `src/geometry.hpp` places every part, so a control is
 pressed where it is drawn. `Dialog::section_hooks` (`SectionHooks`) lets the
 dialog's tests and the game's checks show rows and locks of their own in
-place of a section's; a host never sets it.
+place of a section's, on Developer in place of its list and the list's
+footer too; a host never sets it.
+
+The host hands both drawing functions the Open Annihilation icon as an
+RGBA picture: the game's window icon without its clear margin. They scale
+it with `draw_picture` to its place at the surface's own resolution, so a
+dialog drawn twice as large shows the icon twice as sharp. The OA button is
+a bevelled square with the icon 3 source pixels inside its edge: lit with
+a green ring inside the bevel under the pointer, and, while held, its bevel
+sunk and the icon a pixel right and down. Without the icon, an empty
+picture, the header and the button draw the OA mark instead: green "OA"
+letters in a green outlined square.
 
 It is 480 by 324 source pixels, a dark gunmetal panel with a one-pixel raised
 edge and hairline rules, and one green accent for what is selected:
 
-- the header: the OA mark, "OPEN ANNIHILATION SETTINGS" and the version, with
-  "Shared game - still running" in amber while a shared game keeps running;
-- the sections down the left, Developer after a line, the open one marked;
+- the header: the Open Annihilation icon, 20 by 20 source pixels, "OPEN
+  ANNIHILATION SETTINGS" and the version, with "Shared game - still
+  running" in amber while a shared game keeps running;
+- the sections down the left (AI & Pathfinding, Controls & Input,
+  Gameplay, Graphics, Language & Text), Developer after a line, the open
+  one marked;
 - the open section's heading and rows: a label, a hint of one or two lines,
-  and an Off/On switch, a level strip (Off, 2x, 3x, 4x, 8x, 16x for Enhanced
-  anti-aliasing; Off, Basic, Full for Hardware acceleration) or a slider
-  with stops and its value under the hint;
+  and an Off/On switch, a level strip (Off, 2x, 4x, 8x, 16x for Enhanced
+  anti-aliasing; Off, Basic, Full for Hardware acceleration), a slider
+  with stops and its value under the hint, or a drop-down under the hint:
+  a field showing the choice, with an arrow at its right;
 - Restore defaults, Cancel and OK along the bottom.
 
 A section holds any number of rows. They lie in a view under the section's
@@ -129,9 +208,11 @@ and the footer never move. A section whose rows, with 8 clear pixels under
 the last row's line, are taller than the view scrolls by whole source
 pixels, and shows a scroll bar in the margin right of its rows: a well like
 a switch's, its thumb as tall as the view's share of the section and never
-under 16 pixels. Graphics, with five rows, is the one section taller than
-its view, by 80 pixels; every other section fits and draws as if there were
-no scrolling, with no bar. Each section keeps its offset while the
+under 16 pixels. Graphics, with five rows, is taller than its view by 80
+pixels, and Language & Text, with the Language drop-down, four switches
+and the Text size slider, by 129; every other section fits and draws as if
+there were no scrolling,
+with no bar. Each section keeps its offset while the
 dialog is open, and every section starts at its top each time it opens. A
 row the view cuts shows the part inside it and takes a press only there;
 while the section is scrolled from its top, the view's first pixel row keeps
@@ -148,20 +229,27 @@ focus, and a press on it leaves the focus where it is. While a press is held
 the wheel and the scroll keys do nothing, so only a drag of the scroll bar
 scrolls then. No scroll changes a setting or moves the focus.
 
-Controls are numbered: the sections' entries 0 to 4, Restore defaults 5,
-Cancel 6, OK 7, the scroll bar 8, and the open section's rows from 9, with
-no upper end.
+Controls are numbered: the sections' entries 0 to 5 (a mod's options' 0
+to 4), Restore defaults 6, Cancel 7, OK 8, the scroll bar 9, and the open
+section's rows from 10, with no upper end.
 
-The game fonts have no "×" or "·", so the dialog writes "x" and "-".
+The game fonts have no "×" or "·", so the dialog writes "x" and "-". Its
+texts are UTF-8: each character the game font has a glyph for, a
+language's "ç" or "ñ" among them, is drawn with it, and any other in the
+modern fonts. The dialog's own words pass through the interface catalogue
+(`oa/data/languages/interface_text.hpp`), which shows them in the language
+chosen once a translation is given for it; none ships yet, so they show in
+English.
 
 A locked setting is faded, takes no press and no keyboard focus, and shows a
 padlock with "Locked during a game", "Set by the host", "Set on the command
 line" (the frame rate under `--max-fps`, Hardware acceleration under
 `--hardware-acceleration`, in any of its forms, or
-`--no-hardware-acceleration`) or "Not available here" (Hardware
+`--no-hardware-acceleration`), "Not available here" (Hardware
 acceleration when nothing in the game could help the run, and Vertical
 sync on SDL's software renderer or where each change would reset the
-graphics device). A locked slider shows the padlock at the right of its
+graphics device) or "Needs modern fonts" (Text size while the modern fonts
+are Off). A locked slider shows the padlock at the right of its
 label line. A locked switch keeps its switch, faded, with the padlock left
 of it, so that its value still shows: Vertical sync's. A locked row whose
 hint lines are its status, Hardware acceleration's strip, shows the padlock
@@ -171,7 +259,15 @@ keeps its strength.
 Changes show at once; OK keeps them, Cancel puts back what the dialog opened
 with, Restore defaults resets every setting that is not locked. A click on a
 switch's half sets it, and a click on a strip's level chooses it; a press on
-a slider moves its knob to the nearest stop and drags it. Every switch reads
+a slider moves its knob to the nearest stop and drags it. A click on a
+drop-down's field opens its list under the field, or over it where the list
+would reach below the footer's line: an item a line, as many as eight, the
+chosen one marked as the section list marks its open section and the one
+under the pointer lit. A click on an item chooses it and closes the list; a
+press anywhere else, the field included, closes the list and does nothing
+more. A longer list scrolls with the wheel, a notch an item, and shows a
+thumb at its right edge; the wheel over an open list never scrolls the
+section. Every switch reads
 and sets its value through one table, and every strip through another. Each
 press of Restore defaults, and each time Hardware acceleration passes to a
 higher level, from Off to Basic or Full or from Basic to Full, adds one to
@@ -186,10 +282,16 @@ acts on it.
 | Escape | Cancel |
 | Tab, Down | the focus to the next control: the section's rows, Restore defaults, Cancel, OK, then the sections |
 | Shift+Tab, Up | the focus to the previous control |
-| Left, Right | a switch Off or On, a slider or a level strip one step; along the footer's buttons |
-| Space | flips a switch, presses a button, opens a section |
+| Left, Right | a switch Off or On, a slider, a level strip or a drop-down one step; along the footer's buttons |
+| Space | flips a switch, presses a button, opens a section or a drop-down's list |
 | Page Down, Page Up | scroll the section 200 pixels down or up |
 | End, Home | scroll the section to its end or its top |
+
+While a drop-down's list is open, the keys work the list: Up and Down mark
+the item above or below, Page Up and Page Down a list's height of items
+away, Home and End the first and the last; Enter and Space choose the
+marked item and close the list; Escape closes it unchanged, leaving the
+dialog open; Tab and Shift+Tab close it and move the focus.
 
 The focus shows once a key moves it; the first key to the dialog only shows
 it. Page Up, Page Down, Home and End scroll whatever has the focus, and
@@ -197,26 +299,161 @@ never show or move it. A key that moves the focus onto a row, or acts on a
 focused row, first scrolls the least that shows the row whole; a key that
 moves it to a button or a section's entry does not scroll.
 
+## Developer Mode
+
+Developer Mode lets the player change the standard hacks of the profile
+the game plays: turn any hack on or off and set its parameters, without
+touching the mod's `oamod.yaml`. With no mod it changes the plain 3.1c
+baseline, so it can turn hacks on over 3.1c.
+
+It lies in the Developer section, which holds, top to bottom, in the
+dialog's own fonts, colours, switches and sliders:
+
+- at its top, **Enable Developer Mode**, an Off/On switch, Off by default,
+  with its hint, and under it **Show performance statistics**, which
+  Developer Mode leaves alone: two rows that never scroll, with half the
+  clear pixels of a section's rows round them, so that the list has room;
+- under them, the list of every standard hack of the registry
+  (`oa::data::mod_profile::standard_hacks`), in a view of its own that
+  scrolls as a long section does, with its scroll bar in the margin, and
+  two levels of parts that open and close, every one closed at first: an
+  area of the registry (`developer_areas`; its title, such as "Interface",
+  and how many of its hacks are on), and under it each hack: its title,
+  such as "Deterministic Wind", and its Off/On switch, and open, its id
+  (`economy.deterministic-wind`) in a quieter colour, the registry's
+  summary, "Applies at next match" in amber for a rule (sim-scope) hack,
+  and a control for each parameter. The areas, and the hacks within each,
+  follow their titles alphabetically as the language shown writes them;
+  the titles are the registry's, in English, and pass through the
+  interface catalogue like the dialog's other words;
+- at its foot, which never scrolls, **Show Active Only (X/Y)**, a switch
+  that shows only the hacks that are on and the areas that hold one, X the
+  hacks on as the section shows them and Y every standard hack (89), and
+  **Restore profile values**, which clears every override.
+
+A parameter's control follows its type: a switch for a boolean; a slider
+for a whole number, from its least to its most by its step, the hack's
+constraints with the other parameters (such as `min <= max`) narrowing it,
+and for an int-or-none with a first stop for none; a slider of the
+registry's values for an enumeration; for a decimal, a slider whose step
+is the power of ten that gives it from 1,000 to 10,000 stops across its
+range, with the registry's and the profile's own values among its stops;
+a slider of the values the registry, its
+presets and the profile give for a string; a switch for each value of a
+set; and for a list, a slider for each item, an ascending list's items
+kept in order, a list of distinct words swapping a word in with the item
+that held it, and a slider of its length when the registry lets it vary.
+Each value shows with its unit, and a hack that is off shows "Off: it plays
+as 3.1c." in place of its parameters. A summary is broken into lines of at
+most 45 characters, which fit the section in the game's small font; its
+degree, middle dot, multiplication and plus-minus signs, which the game's
+fonts lack, are written as " degrees", "*", "x" and "+/-".
+
+Off, the list is static: it shows the profile as it ships, and the
+overrides the settings keep are not laid over it. Its areas and hacks
+still open and close and its filter still works, so its values can be
+read, but no switch or slider of a hack takes a change, each fading as a
+locked setting does, and Restore profile values takes no press; Show
+performance statistics takes changes whatever Developer Mode is. On, the
+list's controls take changes and the overrides apply. Every change goes
+into `EngineSettings::hack_overrides`: one override for each hack whose
+state differs from the profile's, holding the parameters set to values
+the hack does not already have; a hack set back to the profile's state
+drops its override. Turning a hack off drops the
+parameters it set. Its changes show at once and Cancel puts them back, as
+the other settings' do; OK keeps them. An override that does not fit its
+hack as the resolver checks one (a parameter unknown or out of its bounds,
+a constraint broken) is shown as the profile's state. Restore defaults
+turns Developer Mode Off and keeps the overrides; only Restore profile
+values clears them. The host keeps which areas and hacks are open and the
+filter while the game runs (`DeveloperList`).
+
+Developer's controls are numbered from the open section's first row's:
+Enable Developer Mode 10, Show performance statistics 11, Show Active Only
+12, Restore profile values 13, and the list's rows that take input from
+14, in the list's order. Every header takes the focus and a press, which
+opens or closes it; a press on a hack's switch sets it. Space opens or
+closes an area or a hack and flips a switch; Left and Right close and open
+an area, turn a hack or a switch Off and On, and move a slider a stop.
+Page Up, Page Down, Home and End scroll the list, as they scroll a long
+section, the wheel over the dialog too; the two rows over it and its
+footer stay where they are. The focus moves through Enable Developer Mode,
+Show performance statistics, the list's rows, Show Active Only and, while
+Developer Mode is on, Restore profile values, then the footer's buttons
+and the sections.
+
+## Mod options
+
+A mod whose profile turns ui.options-dialog on has its own options, which
+the same dialog shows as a second kind (`DialogKind::mod_options`,
+`open_mod_options_dialog`): its list holds five sections of its own and no
+divider, and only `EngineSettings::mod_options` (`ModOptions`) change.
+
+| Section | Setting | Range |
+|---|---|---|
+| Keys | Snap override key, Autoclick key, Rotate build key | one of `option_keys` |
+| Patrolling | Hold position, Maneuver, Roam | Reclaim only, Both, Assist only |
+| Guarding | Hold position, Maneuver, Roam | Stay, Normal, Scatter |
+| Build tools | Optimize DT rows, Full rings | Off, On |
+| | Mex snap radius | 0 to the mod's most cells (`ModOptions::mex_snap_most`, at most `most_snap_radius`) |
+| Snap & chat | Wreck snap radius | 0 to the mod's most cells |
+| | Accessible chat | Off, On |
+| | Resource bar background | None, Text, Solid |
+
+A snap radius the mod gives no room shows "Set by the mod"
+(`Lock::set_by_mod`, `Locks::mex_snap` and `wreck_snap`). Restore defaults
+there resets the mod options alone, and the engine's settings keep their
+values. The application keeps the mod options with the player's other view
+settings; this library neither reads nor writes them.
+
 ## Tests
 
 `ui-engine-settings` covers the defaults, a Raspberry Pi's and a light
 machine's included, the keys read and written, Hardware acceleration's
 words and the numbers its switch once wrote, words that are no number, and
-the locks of a game, the flags and the renderer;
+the locks of a game, the flags and the renderer, and the Language & Text
+switches and text size: their defaults, 80% among them, a file without
+them, a file with CR LF line ends, the round trip, the size's range and
+clamping, Restore defaults and the text style they make; the language:
+its defaults, a file without it, the values read, a tag the game does not
+know kept in the file, the round trip, Restore defaults and the command
+line's lock; and Developer Mode's switch and overrides: a file without
+them, the overrides kept under each profile's id and read back, erased
+when none are left, and kept by Restore defaults;
 `ui-engine-settings-dialog` the dialog's layout (every part inside the
 panel and none overlapping), its sections, switches and their one table,
 slider stops, both level strips, keys, footer buttons, locks and the faces
-it draws; the Graphics section's five rows, their places at every offset
+it draws; the OA button's icon at its size in both buttons, at rest, under
+the pointer, held and twice as large, and the mark without it; with the
+installed game, the header's icon in its place and the mark without it; Language & Text's drop-down, four switches and Text size slider,
+their place in the list, their texts, clicks, drags and keys on them, the
+text style they set, the slider's 26 stops from 50% to 300%, and its lock
+while the modern fonts are Off, lifted as they turn On; the Language
+drop-down's choices, each language named in itself, its field and list,
+the pointer and the keys on them, a press off the list, the command line's
+lock, and lists that scroll or open over their field; the Graphics section's five rows, their places at every offset
 and under every lock, the focus scrolling them into view, both forms of a
 locked row, every status of Hardware acceleration, Full's included, and
-the requests to try the graphics card afresh; and, on sections of the test's own taller than the
+the requests to try the graphics card afresh; on sections of the test's own taller than the
 view (`SectionHooks`), its scrolling: the view and its limit, the wheel, the
 scroll bar, the scroll keys, the focus brought into view, rows the view
-cuts and the control numbers; and `ui-engine-settings-dialog-data` its
-fonts, and every text fitting its place in them, a scrolled section's at
-every offset included, and every status line in the 309 columns of a hint,
+cuts and the control numbers; and the mod options' sections, stops,
+Restore defaults and locks; Developer: its two rows and their places over
+the list, Show performance statistics taking changes whatever Developer
+Mode is, the list's areas closed at first and opening, the list static
+while Off, a hack turned on and off, a switch, a slider and a set's value
+set through the pointer and the keys, the overrides kept and dropped as
+the profile's own values come back, Restore profile values, Show Active
+Only and its count, the list's scrolling and focus, and its summaries'
+lines; and `ui-engine-settings-dialog-data` its fonts, and every text
+fitting its place in them, a scrolled section's at every offset included,
+every status line in the 309 columns of a hint, and every row of
+Developer Mode's list with every area and hack open and every hack on,
 over the installed game. `native-engine-settings` sends the wheel and the
 scroll keys through the main menu's and the match's dialog, turns Vertical
 sync On in the dialog and reads it back from the renderer, and sets
 Hardware acceleration to Full and to Basic in a shared game, where each
-waits for the game's end.
+waits for the game's end. It also finds Text size locked with the modern
+fonts Off, turns them On and raises the size a stop, which the text style
+reads at once and OK saves, and chooses Deutsch from the Language
+drop-down, which puts German in effect at once, and steps back to English.

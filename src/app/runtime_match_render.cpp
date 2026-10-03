@@ -3,6 +3,7 @@
 
 // Composition of the match battlefield frame.
 #include "oa/app/runtime.hpp"
+#include "oa/ui/hud/command_buttons.hpp"
 #include "director_state.hpp"
 #include "match_models.hpp"
 #include "oa/app/hook_call.hpp"
@@ -543,6 +544,7 @@ MatchModels& Runtime::match_models() {
         fresh.display, oa::present::palette_from_bytes(match_palette_)
     );
     oa::present::copy_alpha_table(fresh.display.context, display_.context.alpha_table);
+    fresh.renderer.composite_limits = limits_.model_composite;
     model_render::init_composite_buffer(fresh.renderer);
     fresh.renderer.user = &fresh;
     fresh.renderer.ground_height = terrain_height;
@@ -674,6 +676,16 @@ void Runtime::render_match_surface() {
     oa::base::float_precision::restore_program_float_control();
     mark_profile(OA_PROFILE_MISC);
     sync_match_wrecks();
+    follow_shared_cameras();
+    // ui.interface-fixes cursor-reset: an armed command, build placement
+    // included, is dropped once the unit the order panel shows is gone.
+    if (const auto& fixes = ui_rules().interface_fixes;
+        fixes.enabled &&
+        fixes.fixes.contains(oa::data::mod_profile::UiInterfaceFixesFixes::cursor_reset) &&
+        match_command_ != MatchCommand::none && oa::ui::hud::panel_unit_vanished(match_->state())) {
+        reset_match_command();
+        pending_build_type_ = 0;
+    }
     // Director mode draws from the director's camera, which it keeps on the
     // map itself, and without the interface unless its presentation asks
     // for it; its draws never start debris particles.
@@ -940,6 +952,7 @@ void Runtime::render_match_surface() {
         uint8_t* pixel = scene_layer.rgb.data();
         for (std::size_t left = terrain_pixels / 3U; left != 0; --left, pixel += 3)
             std::memcpy(pixel, key.data(), 3);
+        note_full_canvas_pixels(scene_layer.rgb.data());
     } else {
         std::memcpy(scene_layer.rgb.data(), match_terrain_cache_.rgb.data(), terrain_pixels);
     }
@@ -1065,7 +1078,7 @@ void Runtime::render_match_surface() {
                 2 * kProjectileReach,
                 2 * kProjectileReach
             );
-            drawn.shadow = models.projectile_shadow.data != nullptr;
+            drawn.shadow = models.projectile_shadow.data != nullptr && shadows_drawn(draw_list);
             drawn.x = x;
             drawn.shadow_y = shadow_y;
             // Type 3 draws unrotated.
@@ -1102,7 +1115,28 @@ void Runtime::render_match_surface() {
     auto& renderer = models.renderer;
     renderer.world = &world_record;
     renderer.graphics_flags = world_record.game.graphics_flags;
+    // Shadows lighten as the view zooms out and are not drawn from four
+    // times as far out as the game's view; at zoom 1 and closer they are
+    // the game's own.
+    set_frame_shadows(
+        draw_list,
+        renderer,
+        models.shadow_table,
+        models.display,
+        &models.projectile_shadow,
+        match_zoom()
+    );
+    {
+        const auto& fixes = ui_rules().interface_fixes;
+        renderer.moving_pieces_once_built =
+            fixes.enabled &&
+            fixes.fixes.contains(oa::data::mod_profile::UiInterfaceFixesFixes::nanoframe_raster);
+    }
     renderer.tick = match_->simulation().tick;
+    // The nanoframes pulse by the match's ticks, at 3.1c's rate at zoom 1
+    // and in, and slower zoomed out.
+    renderer.build_pulse_lag =
+        model_render::advance_build_pulse(models.build_pulse, renderer.tick, match_zoom());
     renderer.camera_x = static_cast<int32_t>(viewport.source_x);
     renderer.camera_y = static_cast<int32_t>(viewport.source_y);
     renderer.origin_x = 0;
@@ -1222,6 +1256,8 @@ void Runtime::render_match_surface() {
                 : nullptr;
         for (int32_t index = 0; index < plan.sprite_count; ++index) {
             const auto& sprite = plan.sprites[index];
+            if (sprite.shadow && !shadows_drawn(draw_list))
+                continue;
             const oa::formats::gaf::RenderedFrame* image = nullptr;
             if (sprite.frame == oa::present::model::FeatureFrame::placed) {
                 if (record != nullptr) {
@@ -1240,7 +1276,7 @@ void Runtime::render_match_surface() {
             }
             if (image == nullptr)
                 continue;
-            draw_list.sprites.push_back({image, screen});
+            draw_list.sprites.push_back({image, screen, sprite.shadow});
             add_draw(
                 sprite.translucent ? WorldDrawKind::blended_sprite : WorldDrawKind::sprite,
                 draw_list.sprites.size() - 1
@@ -1687,6 +1723,27 @@ void Runtime::render_match_surface() {
     plan_effect_layers(7, 7);
     for (const auto index : draw_plan.raised_units)
         plan_unit(units_to_draw[index]);
+    // The building being placed, as the profile's build preview shows it.
+    if (!bare && ready_build_preview(models)) {
+        auto& preview = models.build_preview;
+        const model_render::ModelRef model{
+            &preview.instance,
+            &model_render::prepare_model(models.library, preview.instance.model_handle()),
+            &preview.state,
+            &preview.unit,
+            oa::world_unit_def(&world_record, preview.unit.def)
+        };
+        model_render::note_piece_changes(model);
+        model_render::update_model_transforms(model);
+        draw_list.stand_ins.push_back(preview.unit);
+        add_model(
+            model,
+            unit_region(renderer, model, terrain_height(&models, preview.unit.position)),
+            false,
+            model_render::UnitSupersampling::off,
+            static_cast<int32_t>(draw_list.stand_ins.size() - 1)
+        );
+    }
     plan_effect_layers(8, 8);
     plan_effect_layers(9, 9);
     // Every band of the frame draws the list: on the drawing threads at
@@ -1817,8 +1874,13 @@ void Runtime::render_match_surface() {
     // Game.radar_offset_x and radar_offset_y, then the GUI's child gadgets last.
     paint_on(PaintLayer::hud);
     blit_match_minimap();
+    draw_shared_camera_rectangles();
     // The HUD overlay then clips to the game view and draws the status strip.
-    draw_status_panel();
+    // The panels' text keeps to the game fonts' size at most (PanelText).
+    {
+        const PanelText panel(*this);
+        draw_status_panel();
+    }
     if (selected_match_unit_ == 0 && !match_paused_)
         fill_source_rect(0, 128, 128, 352, 10);
     paint_on(PaintLayer::battlefield);
@@ -1863,7 +1925,9 @@ void Runtime::render_match_surface() {
             }
         }
         // The squad digit of the viewpoint player's own unit in a squad,
-        // below its bar.
+        // below its bar. The digits under and over the bar keep the game
+        // font's size at most, so that they stay clear of the bar.
+        const PanelText unit_labels(*this);
         if (oa::ui::hud::draws_squad_digit(match_->state(), slot.record))
             draw_match_label(
                 bar_x - 4, bar_y + 4, std::string(1, oa::ui::hud::squad_digit(slot.record)), 255
@@ -1871,18 +1935,30 @@ void Runtime::render_match_surface() {
         if (const auto count = match_->self_destruct_remaining(slot.unit_index); count != 0)
             draw_match_label(bar_x - 4, bar_y - 12, std::to_string(count), 1);
     }
+    // ui.megamap draws over the battlefield in its place.
+    draw_megamap();
     paint_on(PaintLayer::hud);
-    // The unit panel shows the unit under the cursor alone, never the
-    // selection.
-    draw_unit_panel();
-    draw_resource_readout();
-    draw_build_captions();
-    call_hook_or_report<&Extension::draw_match_hud>(extension_, hook_error_report(), *this);
+    {
+        // The bars' text keeps to the game fonts' size at most; the chat
+        // line follows the text size.
+        const PanelText panel(*this);
+        // The unit panel shows the unit under the cursor alone, never the
+        // selection.
+        draw_unit_panel();
+        draw_resource_readout();
+        draw_build_captions();
+        call_hook_or_report<&Extension::draw_match_hud>(extension_, hook_error_report(), *this);
+    }
     draw_chat_entry();
     paint_on(PaintLayer::battlefield);
+    draw_whiteboard(painted);
+    draw_commander_placement();
     draw_match_kill_board();
+    draw_resource_panel_overlay();
+    draw_clock_line();
     draw_chat_overlay();
     draw_extension_overlay();
+    draw_risen_chat_line();
     draw_unit_info_panel();
     draw_profile_bars();
     // The outcome, the paused title (a menu's hold or the pause bit) and the

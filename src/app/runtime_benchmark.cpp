@@ -4,7 +4,9 @@
 // Bounded frame-time benchmark and headless runs over live skirmish and
 // campaign matches.
 #include "oa/app/runtime.hpp"
+#include "engine_settings_state.hpp"
 #include "match_models.hpp"
+#include "stage_state.hpp"
 #include "oa/sim/selection.hpp"
 #include "oa/platform/files.hpp"
 #include "match_fault.hpp"
@@ -17,6 +19,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <optional>
+#include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -109,6 +115,8 @@ constexpr uint64_t kFramesDigestMultiplier = 0x9e3779b97f4a7c15ULL;
 void Runtime::step_match_simulation() {
     ++match_timing_.tick;
     match_->simulation().tick = match_timing_.tick;
+    // A stage's lines timed for this tick run before it.
+    run_due_stage_lines();
     tick_or_raise(*match_);
 }
 
@@ -237,6 +245,221 @@ void Runtime::spawn_combat_armies(std::size_t per_side) {
     match_camera_z_ = centre_z - visible_map_height() / 2;
 }
 
+void Runtime::apply_stage() {
+    std::ifstream file(options_.stage_file);
+    if (!file)
+        throw std::runtime_error("cannot read the stage file " + options_.stage_file.string());
+    // Each player's first unit, where it stands when the stage begins: the
+    // point a placement is measured from.
+    begin_stage_state();
+    std::vector<StageLine> lines;
+    std::string text;
+    for (std::size_t number = 1; std::getline(file, text); ++number)
+        lines.push_back({number, text});
+    run_stage_lines(lines);
+}
+
+void Runtime::run_stage_lines(std::span<const StageLine> lines) {
+    const auto& commanders = stage_->origins;
+    uint16_t& last = stage_->last_unit;
+    for (const auto& source : lines) {
+        const auto where = options_.stage_file.string() + ":" + std::to_string(source.number);
+        std::istringstream line(source.text);
+        std::string action;
+        if (!(line >> action) || action[0] == '#')
+            continue;
+        // A line timed for a later tick waits for it.
+        if (action == "at" && !take_stage_tick(line, where, source, action))
+            continue;
+        if (run_stage_direction(action, line, where))
+            continue;
+        if (action == "unit") {
+            int32_t player = -1;
+            std::string name;
+            int32_t dx = 0, dz = 0;
+            if (!(line >> player >> name >> dx >> dz))
+                throw std::runtime_error(where + ": unit takes PLAYER TYPE DX DZ [FROM]");
+            // The player whose first unit the offsets start from; the owner
+            // without one.
+            int32_t from = player;
+            if (!(line >> from))
+                from = player;
+            const auto type = oa::sim::unit_spawn::find_type_index(spawn_type_names_, name);
+            if (type == 0)
+                throw std::runtime_error(where + ": the game has no type " + name);
+            if (player < 0 || player >= OA_PLAYER_COUNT ||
+                match_->state().game.players[player].in_use == 0)
+                throw std::runtime_error(
+                    where + ": player " + std::to_string(player) + " is not playing"
+                );
+            const auto origin = commanders.find(from);
+            if (origin == commanders.end())
+                throw std::runtime_error(
+                    where + ": player " + std::to_string(from) + " has no starting unit"
+                );
+            const int32_t x = origin->second.first + dx;
+            const int32_t z = origin->second.second + dz;
+            oa::sim::unit_spawn::Request request;
+            request.player = static_cast<uint8_t>(player);
+            request.type = type;
+            request.finished = true;
+            request.state = kGroundOccupancyState;
+            request.position = {
+                static_cast<uint32_t>(x) << 16,
+                static_cast<uint32_t>(match_->map_height(
+                    static_cast<uint32_t>(x) << 16, static_cast<uint32_t>(z) << 16
+                )) << 16,
+                static_cast<uint32_t>(z) << 16
+            };
+            const auto* placed = match_->create(request);
+            if (placed == nullptr || placed->unit == nullptr)
+                throw std::runtime_error(where + ": " + name + " could not be placed");
+            join_stage_group(placed->unit_index);
+            std::printf(
+                "stage: unit %u %s of player %d at %d,%d\n",
+                static_cast<unsigned>(last),
+                name.c_str(),
+                player,
+                x,
+                z
+            );
+        } else if (action == "stockpile") {
+            int32_t rounds = 0;
+            if (!(line >> rounds) || rounds <= 0 || last == 0)
+                throw std::runtime_error(where + ": stockpile takes ROUNDS after a unit");
+            match_->issue_build_weapon(last, 0, rounds);
+            std::printf("stage: unit %u stockpiles %d\n", static_cast<unsigned>(last), rounds);
+        } else if (action == "build") {
+            std::string name;
+            int32_t dx = 0, dz = 0;
+            if (!(line >> name >> dx >> dz) || last == 0)
+                throw std::runtime_error(where + ": build takes TYPE DX DZ after a unit");
+            const auto type = oa::sim::unit_spawn::find_type_index(spawn_type_names_, name);
+            if (type == 0)
+                throw std::runtime_error(where + ": the game has no type " + name);
+            const auto* builder = match_->world().slots[last].unit;
+            const int32_t x = static_cast<int32_t>(builder->position[0] >> 16) + dx;
+            const int32_t z = static_cast<int32_t>(builder->position[2] >> 16) + dz;
+            const oa::sim::ground_orders::Point site{
+                x * 65536,
+                match_->map_height(static_cast<uint32_t>(x) << 16, static_cast<uint32_t>(z) << 16) *
+                    65536,
+                z * 65536
+            };
+            match_->issue_mobile_build(last, type, site, true);
+            std::printf(
+                "stage: unit %u builds %s at %d,%d\n",
+                static_cast<unsigned>(last),
+                name.c_str(),
+                x,
+                z
+            );
+        } else if (action == "console") {
+            std::string rest;
+            std::getline(line >> std::ws, rest);
+            enter_console_check_line(rest.c_str());
+            std::printf("stage: console %s\n", rest.c_str());
+        } else if (action == "type") {
+            // The chat line opened and the text typed into it, left open.
+            std::string rest;
+            std::getline(line >> std::ws, rest);
+            open_chat_line();
+            if (!chat_composing_)
+                throw std::runtime_error(where + ": the chat line did not open");
+            bool running = true;
+            SDL_Event event{};
+            event.type = SDL_EVENT_TEXT_INPUT;
+            event.text.text = rest.c_str();
+            handle_sdl_event(event, running);
+            std::printf("stage: type %s\n", rest.c_str());
+        } else if (action == "settings") {
+            // The settings dialog opened beside the in-game menu at a
+            // section, named as its list names it.
+            namespace settings = oa::ui::engine_settings;
+            std::string rest;
+            std::getline(line >> std::ws, rest);
+            settings::Dialog names;
+            settings::open_dialog(names, {}, {}, {}, {}, settings::Page::path_search);
+            const auto pages = settings::dialog_pages(settings::DialogKind::engine);
+            std::optional<settings::Page> page;
+            for (const auto& part : settings::dialog_layout(names)) {
+                const int32_t index = part.control - settings::first_page_control;
+                if (part.text == rest && index >= 0 &&
+                    static_cast<std::size_t>(index) < pages.size())
+                    page = pages[static_cast<std::size_t>(index)];
+            }
+            if (!page)
+                throw std::runtime_error(where + ": the settings have no section " + rest);
+            engine_settings_state().last_page = *page;
+            open_engine_settings_in_match();
+            if (engine_settings_dialog() == nullptr)
+                throw std::runtime_error(where + ": the settings dialog did not open");
+            std::printf("stage: settings %s\n", rest.c_str());
+        } else if (action == "pointer") {
+            // The pointer moved to a point of the window, whose unit the
+            // bottom bar then shows.
+            float x = 0.0F;
+            float y = 0.0F;
+            if (!(line >> x >> y))
+                throw std::runtime_error(where + ": pointer takes X Y");
+            bool running = true;
+            SDL_Event event{};
+            event.type = SDL_EVENT_MOUSE_MOTION;
+            event.motion.x = x;
+            event.motion.y = y;
+            handle_sdl_event(event, running);
+            std::printf("stage: pointer %g %g\n", static_cast<double>(x), static_cast<double>(y));
+        } else if (action == "click") {
+            // The pointer pressed and released at a point of the window, as
+            // a click of its left button, reaching first whatever dialog or
+            // menu shows there, as the player's click does.
+            float x = 0.0F;
+            float y = 0.0F;
+            if (!(line >> x >> y))
+                throw std::runtime_error(where + ": click takes X Y");
+            bool running = true;
+            SDL_Event event{};
+            event.type = SDL_EVENT_MOUSE_MOTION;
+            event.motion.x = x;
+            event.motion.y = y;
+            dispatch_event(event, running);
+            for (const bool down : {true, false}) {
+                SDL_Event press{};
+                press.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+                press.button.button = SDL_BUTTON_LEFT;
+                press.button.down = down;
+                press.button.clicks = 1;
+                press.button.x = x;
+                press.button.y = y;
+                dispatch_event(press, running);
+            }
+            std::printf("stage: click %g %g\n", static_cast<double>(x), static_cast<double>(y));
+        } else if (action == "key") {
+            // A key pressed and released, named as SDL names it: "Space",
+            // "Down", "Tab"; an open dialog or menu takes it first, as it
+            // takes the player's keys.
+            std::string name;
+            std::getline(line >> std::ws, name);
+            const SDL_Keycode code = SDL_GetKeyFromName(name.c_str());
+            if (code == SDLK_UNKNOWN)
+                throw std::runtime_error(where + ": no key " + name);
+            bool running = true;
+            for (const bool down : {true, false}) {
+                SDL_Event event{};
+                event.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+                event.key.key = code;
+                event.key.scancode = SDL_GetScancodeFromKey(code, nullptr);
+                event.key.down = down;
+                dispatch_event(event, running);
+            }
+            std::printf("stage: key %s\n", name.c_str());
+        } else {
+            throw std::runtime_error(where + ": no stage action " + action);
+        }
+    }
+    std::fflush(stdout);
+}
+
 void Runtime::spawn_busy_combat(int32_t centre_x, int32_t centre_z) {
     const uint8_t local = match_local_player_;
     const auto enemy = static_cast<uint8_t>(local == 0 ? 1 : 0);
@@ -301,6 +524,8 @@ void Runtime::prepare_headless_match() {
     match_zoom_target_ = match_zoom_;
     if (options_.combat_units != 0)
         spawn_combat_armies(options_.combat_units);
+    if (!options_.stage_file.empty())
+        apply_stage();
     if (options_.reclaim_check)
         begin_reclaim_check();
     if (options_.camera) {
@@ -749,9 +974,10 @@ int Runtime::run_headless_campaign(std::size_t ticks) {
                                  [name](const auto& gadget) { return gadget.common.name == name; }
                              );
     };
-    // --restart-at: the chat line refuses cheats in the campaign; then pause,
-    // EXIT, EXITMENU's RESTART, then RESTART.GUI's RESTART at the stored
-    // difficulty must start the mission over, with cheats still refused.
+    // --restart-at: every cheat typed through the chat line takes effect in
+    // the campaign; then pause, EXIT, EXITMENU's RESTART, then RESTART.GUI's
+    // RESTART at the stored difficulty must start the mission over, with
+    // cheats still allowed.
     const auto restart_mission = [&](std::size_t tick) {
         check_console_campaign_cheats();
         show_match_pause_menu();
@@ -766,8 +992,8 @@ int Runtime::run_headless_campaign(std::size_t ticks) {
         if (screen_ != Screen::match || !match_ || !campaign_mission_ ||
             match_->state().game.tick != 0 || preferences_.difficulty != difficulty)
             throw std::runtime_error("campaign restart did not start the mission over: " + status_);
-        if (session_cheats_allowed_)
-            throw std::runtime_error("campaign restart allowed cheats");
+        if (!session_cheats_allowed_)
+            throw std::runtime_error("campaign restart refused cheats");
         const auto again = census();
         if (again.live != start_units.live || again.owned[0] != start_units.owned[0] ||
             again.owned[1] != start_units.owned[1])

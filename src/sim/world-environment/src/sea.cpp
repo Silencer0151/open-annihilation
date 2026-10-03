@@ -38,9 +38,12 @@ void update_sea_occupy(
         if (height > sea) {
             next = sea_occupy_above;
         } else {
+            const auto waterline = static_cast<int32_t>(static_cast<uint8_t>(def.water_line));
+            if (host.reordered && waterline + height <= sea)
+                next = sea_occupy_waterline;
             if (height - sea > sea_surface_depth_limit)
                 next = sea_occupy_surface;
-            if (static_cast<int32_t>(static_cast<uint8_t>(def.water_line)) + height == sea)
+            if (!host.reordered && waterline + height == sea)
                 next = sea_occupy_waterline;
             if (high_word(def.model_height) + height < sea)
                 next = sea_occupy_submerged;

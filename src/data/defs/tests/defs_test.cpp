@@ -13,6 +13,7 @@
 #include "oa/data/defs/unit_def_loader.hpp"
 #include "oa/data/defs/unit_header.hpp"
 #include "oa/data/defs/unit_records.hpp"
+#include "oa/data/defs/unit_texts.hpp"
 #include "oa/data/defs/version.hpp"
 #include "oa/data/defs/weapons.hpp"
 
@@ -20,6 +21,7 @@
 #include "test_files.hpp"
 #include "oa/base/text.hpp"
 
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -198,13 +200,16 @@ void categories_register_and_resolve() {
     CHECK(arm != nullptr && category_mask_contains(arm, 1) && category_mask_contains(arm, 2));
     const CategoryMask* all = category_registry_find(&registry, "all");
     CHECK(all != nullptr && category_mask_contains(all, 1) && category_mask_contains(all, 2));
-    CategoryMask target{};
+    CategoryMaskStorage target_words;
+    CategoryMask target = category_mask_over(target_words, registry.words_per_mask * 32);
     CHECK(resolve_type_or_category(&target, &registry, records.data(), 3, "armpw"));
     CHECK(category_mask_contains(&target, 2) && !category_mask_contains(&target, 1));
-    CategoryMask kbots{};
+    CategoryMaskStorage kbot_words;
+    CategoryMask kbots = category_mask_over(kbot_words, registry.words_per_mask * 32);
     CHECK(!resolve_type_or_category(&kbots, &registry, records.data(), 3, "KBOT"));
     CHECK(category_mask_contains(&kbots, 2));
-    CategoryMask unknown{};
+    CategoryMaskStorage unknown_words;
+    CategoryMask unknown = category_mask_over(unknown_words, registry.words_per_mask * 32);
     CHECK(!resolve_type_or_category(&unknown, &registry, records.data(), 3, "NOSUCH"));
     CHECK(category_registry_find(&registry, "nosuch") != nullptr); // created empty
     category_registry_clear(&registry);
@@ -515,6 +520,106 @@ void locale_translate_and_reverse() {
     CHECK(std::strcmp(out, "War") == 0);
 }
 
+/// What a unit text sink receives: the unit, the language's place and the texts.
+struct ReceivedUnitText {
+    std::string unit;
+    uint32_t language{};
+    std::string name;
+    std::string description;
+    bool has_name{};
+    bool has_description{};
+};
+
+/// Collects what read_unit_texts hands its sink.
+///
+/// @param context the vector of ReceivedUnitText
+/// @param unit_name the unit's name
+/// @param language the language's place in the sink's list
+/// @param name the name, or null
+/// @param description the description, or null
+void receive_unit_text(
+    void* context,
+    const char* unit_name,
+    uint32_t language,
+    const char* name,
+    const char* description
+) {
+    auto& received = *static_cast<std::vector<ReceivedUnitText>*>(context);
+    received.push_back(
+        {unit_name,
+         language,
+         name != nullptr ? name : "",
+         description != nullptr ? description : "",
+         name != nullptr,
+         description != nullptr}
+    );
+}
+
+void unit_texts_read_language_keys() {
+    // 3.1c's Arm Commander, its French description keyed with a lower-case
+    // d as the game data has it, and no Italian text; a name longer than
+    // the field is cut as the field cuts it.
+    Doc fbi(
+        "[UNITINFO]{UnitName=ARMCOM;Name=Commander;Description=Commander;"
+        "GermanName=Commander;GermanDescription=Kommandant;FrenchName=Commandeur;"
+        "Frenchdescription=Commandant;SpanishName=Comandante;"
+        "PiglatinName=Ommandercay Ommandercay Ommandercay Ommandercay;}"
+    );
+    const formats::tdf::Block* block = formats::tdf::child_at(fbi.document.root, 0);
+    const std::array<const char*, 5> words{"German", "french", "Italian", "SPANISH", "piglatin"};
+    std::vector<ReceivedUnitText> received;
+    const UnitTextSink sink{
+        &received, words.data(), static_cast<uint32_t>(words.size()), receive_unit_text
+    };
+    read_unit_texts(block, "ARMCOM", &sink);
+    CHECK(received.size() == 4);
+    if (received.size() == 4) {
+        CHECK(received[0].unit == "ARMCOM" && received[0].language == 0);
+        CHECK(received[0].name == "Commander" && received[0].description == "Kommandant");
+        CHECK(received[1].language == 1 && received[1].name == "Commandeur");
+        CHECK(received[1].description == "Commandant");
+        CHECK(received[2].language == 3 && received[2].name == "Comandante");
+        CHECK(received[2].has_name && !received[2].has_description);
+        CHECK(received[3].language == 4);
+        CHECK(received[3].name.size() == unit_text_name_bytes - 1);
+    }
+    // No sink, no block or no languages read nothing.
+    read_unit_texts(block, "ARMCOM", nullptr);
+    read_unit_texts(nullptr, "ARMCOM", &sink);
+    const UnitTextSink none{&received, nullptr, 0, receive_unit_text};
+    read_unit_texts(block, "ARMCOM", &none);
+    CHECK(received.size() == 4);
+    // A word too long for a key reads nothing.
+    const std::string long_word(300, 'x');
+    const std::array<const char*, 1> long_words{long_word.c_str()};
+    const UnitTextSink long_sink{&received, long_words.data(), 1, receive_unit_text};
+    read_unit_texts(block, "ARMCOM", &long_sink);
+    CHECK(received.size() == 4);
+
+    // The unit loader hands its sink the same texts and keeps Name and
+    // Description in the record, whatever the language.
+    test::MemoryFiles files;
+    files.files = {
+        {"units\\armcom.fbi",
+         "[UNITINFO]{UnitName=ARMCOM;Name=Commander;Description=Commander;"
+         "FrenchName=Commandeur;Frenchdescription=Commandant;}",
+         true}
+    };
+    const Files view = files.view();
+    WeaponTdfSet weapons;
+    weapon_tdf_set_init(&weapons);
+    std::vector<ReceivedUnitText> loaded;
+    const UnitTextSink loader_sink{&loaded, words.data(), 2, receive_unit_text};
+    UnitHeaderSources header_sources{"", &weapons, 3, 1, false, false};
+    header_sources.texts = &loader_sink;
+    UnitDef header{};
+    bool refused = false;
+    CHECK(load_unit_header(&view, "units\\armcom.fbi", header, header_sources, &refused));
+    CHECK(std::strcmp(header.name, "Commander") == 0);
+    CHECK(loaded.size() == 1 && loaded[0].name == "Commandeur");
+    weapon_tdf_set_free(&weapons);
+}
+
 void paths_follow_the_game_quirks() {
     char path[path_capacity];
     oa::base::text::copy_terminated(path, "maps\\v1.0\\thing");
@@ -818,6 +923,82 @@ void catalog_build_lists_and_download_menu() {
     CHECK(tables.records == nullptr && tables.count == 0 && tables.blocks.count == 0);
 }
 
+/// Loads one builder's list of 1100 CANBUILD entries, and two download entries
+/// for it, under a set of build-list limits.
+///
+/// @param lists the build-list limits
+/// @param[out] count the builder's build_id_count after the CANBUILD pass
+/// @param[out] with_downloads its build_id_count after the download menus
+/// @param[out] in_order whether the kept entries are the first ones, in order
+void load_long_build_list(
+    const data::limits::BuildLists& lists, uint32_t& count, uint32_t& with_downloads, bool& in_order
+) {
+    constexpr uint32_t listed = 1100;
+    std::string sidedata = "[CANBUILD]{[BUILDER]{";
+    char entry[48];
+    for (uint32_t index = 0; index < listed; ++index) {
+        std::snprintf(entry, sizeof entry, "canbuild%u=U%04u;", index + 1, index);
+        sidedata += entry;
+    }
+    sidedata += "}}";
+    test::MemoryFiles memory;
+    memory.files = {
+        {"gamedata\\sidedata.tdf", sidedata},
+        {"download\\more.tdf",
+         "[MENUENTRY1]{UNITMENU=BUILDER; MENU=2; UNITNAME=U0001;}"
+         "[MENUENTRY2]{UNITMENU=BUILDER; MENU=2; UNITNAME=U0002;}"},
+    };
+    const Files files = memory.view();
+    UnitDefTables tables;
+    unit_def_tables_init(&tables);
+    CHECK(unit_def_tables_allocate(&tables, listed + 2));
+    oa::base::text::copy_terminated(tables.records[1].unit_name, "BUILDER");
+    tables.records[1].type_id = 1;
+    tables.records[1].flags = OA_UNIT_DEF_FLAG_BUILDER;
+    for (uint32_t index = 0; index < listed; ++index) {
+        UnitDef& unit = tables.records[index + 2];
+        std::snprintf(unit.unit_name, sizeof unit.unit_name, "U%04u", index);
+        unit.type_id = static_cast<uint16_t>(index + 2);
+    }
+    CHECK(load_build_lists(&files, nullptr, &tables, lists));
+    count = tables.records[1].build_id_count;
+    const uint16_t* list = unit_def_build_ids(&tables, tables.records[1]);
+    in_order = list != nullptr;
+    for (uint32_t index = 0; in_order && index < count; ++index)
+        in_order = list[index] == index + 2;
+    CHECK(load_download_menu(&files, nullptr, &tables, lists));
+    with_downloads = tables.records[1].build_id_count;
+    unit_def_tables_free(&tables);
+}
+
+void catalog_build_lists_follow_limits() {
+    uint32_t count = 0;
+    uint32_t with_downloads = 0;
+    bool in_order = false;
+    // 3.1c keeps 30 CANBUILD entries; the download menus add one more.
+    load_long_build_list({}, count, with_downloads, in_order);
+    CHECK(count == 30 && in_order && with_downloads == 31);
+    // A raised copy keeps 36, and still one download entry more.
+    load_long_build_list(
+        {36, data::limits::BuildListOverflow::truncate}, count, with_downloads, in_order
+    );
+    CHECK(count == 36 && in_order && with_downloads == 37);
+    // The largest copy a profile may name.
+    load_long_build_list(
+        {data::limits::highest_build_list_copy, data::limits::BuildListOverflow::truncate},
+        count,
+        with_downloads,
+        in_order
+    );
+    CHECK(count == data::limits::highest_build_list_copy && in_order);
+    CHECK(with_downloads == data::limits::highest_build_list_copy + 1);
+    // A list that keeps every entry stops at the largest copy too.
+    load_long_build_list(
+        {30, data::limits::BuildListOverflow::dynamic}, count, with_downloads, in_order
+    );
+    CHECK(count == data::limits::highest_build_list_copy && in_order);
+}
+
 void gamedata_tables_follow_tableinfo() {
     test::MemoryFiles memory;
     memory.files = {
@@ -1060,12 +1241,14 @@ int main() {
     sound_categories_collect_numbered_choices();
     all_sounds_cache_top_level_sections_with_a_sound();
     locale_translate_and_reverse();
+    unit_texts_read_language_keys();
     paths_follow_the_game_quirks();
     named_gaf_reads_from_the_gui_directory();
     load_tdf_file_refuses_empty_and_marks_archive();
     unit_def_loader_reads_kbot_keys();
     unit_def_loader_reads_building_keys();
     catalog_build_lists_and_download_menu();
+    catalog_build_lists_follow_limits();
     gamedata_tables_follow_tableinfo();
     palette_file_prefers_pal_then_pcx();
     unit_header_hashes_and_checks_each_file();

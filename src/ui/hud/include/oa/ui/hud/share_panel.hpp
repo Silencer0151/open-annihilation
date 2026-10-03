@@ -211,4 +211,37 @@ void give_selected_units(
     World& world, uint8_t recipient, const uint32_t* commander_types, const UnitTransfer& transfer
 );
 
+/// Tells whether a chat line asks to take over another player's units: a '.'
+/// after any spaces and tabs, then "takecmd" or "take" in any case, with
+/// nothing but spaces, tabs and line ends after it.
+///
+/// @param text the chat line as typed, after any chosen-player prefix
+/// @return true for ".take" and ".takecmd"
+[[nodiscard]] bool is_take_command(const char* text) noexcept;
+
+/// Finds a player whose commander lies destroyed but not yet removed
+/// (sharing.take-requires-live-commander).
+///
+/// In a game where losing the commander matters (Game.session_rules other
+/// than 0), every player slot in use other than `player` is searched, lowest
+/// first, for a live unit of a commander type with health 0 or less.
+///
+/// @param world players and units
+/// @param player the player asking, skipped
+/// @param commander_types bit mask of commander types, bit (type & 31) of
+///        word (type >> 5); null finds no commander
+/// @return the first such player's index, or kNoPlayer
+[[nodiscard]] uint8_t commander_destroyed_elsewhere(
+    const World& world, uint8_t player, const uint32_t* commander_types
+) noexcept;
+
+/// Writes the notice that refuses a take while a commander lies destroyed:
+/// "Cannot take <name>: their commander has been destroyed.", with "that
+/// player" for a player without a name.
+///
+/// @param[out] out the notice
+/// @param size bytes of `out`
+/// @param owner the player whose commander lies destroyed
+void format_take_refusal(char* out, size_t size, const Player& owner) noexcept;
+
 } // namespace oa::ui::hud

@@ -181,10 +181,9 @@ base::bytes::Decoded<Image> decode_pcx(std::span<const uint8_t> data) {
             }
         }
     }
-    if (cursor != encoded_end)
-        return DecodeError{
-            DecodeCode::malformed, cursor, "PCX contains trailing bytes before its palette"
-        };
+    // Bytes between the last row and the palette are ignored, as the game
+    // ignores them: it reads the rows from the header on and the palette
+    // from the end of the file.
     return image;
 }
 

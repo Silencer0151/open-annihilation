@@ -148,6 +148,8 @@ struct NativeHost {
     // Empty when none is known; `data_folder_problem` then says why.
     fs::path data_folder;
     std::string data_folder_problem;
+    // The mod folder and profile each candidate folder is inspected with.
+    ModChoice mod;
 };
 
 FolderPick
@@ -161,7 +163,7 @@ void tell_native_user(void* context, Notice kind, std::string_view text) {
 
 GameInstall inspect(void* context, const fs::path& folder) {
     const auto& host = *static_cast<NativeHost*>(context);
-    auto install = inspect_game_install(folder, host.data_folder);
+    auto install = inspect_game_install(folder, host.data_folder, demo_1997, host.mod);
     if (install.demo.outcome == DemoOutcome::unpack_failed && host.data_folder.empty())
         install.demo.problem += " (" + host.data_folder_problem + ")";
     return install;
@@ -182,13 +184,33 @@ std::optional<GameDirectory> find_game_directory(const Options& options) {
                                                    text_or_empty(SDL_getenv("CI")),
                                                    text_or_empty(SDL_GetHint(SDL_HINT_VIDEO_DRIVER))
                                                );
-    // An unattended run reads a stored folder only from a preferences file it
+    // An unattended run reads stored choices only from a preferences file it
     // was given, never from the player's own.
-    if (request.argument.empty() && (!request.unattended || options.preferences_file))
-        request.stored = stored_game_directory(
-            oa::platform::preferences::load(preference_file(options.preferences_file))
-        );
+    oa::platform::preferences::Values values;
+    if (!request.unattended || options.preferences_file)
+        values = oa::platform::preferences::load(preference_file(options.preferences_file));
+    if (request.argument.empty())
+        request.stored = stored_game_directory(values);
     NativeHost native;
+    native.mod.folder = chosen_mod_directory(options.mod_dir, options.base_game, values);
+    // A mod folder chosen earlier that is gone is dropped with a notice, and
+    // the game folder plays as it is; one named with --mod-dir must exist.
+    std::error_code missing;
+    if (options.mod_dir.empty() && !native.mod.folder.empty() &&
+        !fs::is_directory(native.mod.folder, missing)) {
+        const auto text = "The mod folder chosen earlier can no longer be found:\n\n" +
+                          path_to_utf8(native.mod.folder) +
+                          "\n\nThe game starts without it; choose a mod again in the "
+                          "Open Annihilation settings.";
+        if (request.unattended)
+            std::cerr << "open-annihilation: " << text << '\n';
+        else
+            tell_user(&native.dialogs, Notice::information, text);
+        native.mod.folder.clear();
+    }
+    native.mod.profile_file = options.mod_file;
+    native.mod.accept_unimplemented_hacks = options.accept_unimplemented_hacks;
+    native.mod.preferences = &values;
     if (options.data_dir) {
         native.data_folder = *options.data_dir;
     } else {

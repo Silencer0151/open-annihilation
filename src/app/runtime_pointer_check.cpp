@@ -3,9 +3,10 @@
 
 // The screen's edges scrolling the camera, the two interface types' pointer
 // buttons, the queued-order cancel and the factory queue's right click, then
-// the on-screen unit list, the pointer's pick and what they drive, through
-// synthetic SDL input.
+// the on-screen unit list, the pointer's pick and what they drive, and the
+// commander placement, through synthetic SDL input.
 #include "oa/app/runtime.hpp"
+#include "oa/data/defs/layout.hpp"
 #include "oa/core/map_plot.h"
 #include "oa/ui/decoded.hpp"
 #include "oa/sim/messages.hpp"
@@ -453,6 +454,7 @@ void Runtime::check_pointer_interfaces() {
                  "right-click interface deselect, default orders, guard, cancels and radar; "
                  "factory right click took ARMPW off ahead of ARMCK\n";
     check_pointer_picks();
+    check_commander_placement();
 }
 
 } // namespace oa::app
@@ -1065,8 +1067,8 @@ void Runtime::check_pointer_picks() {
     const auto* commander_def = oa::world_unit_def_of(&world, &slots[commander].record);
     require_pick(commander_def != nullptr, "the commander has no type");
     const auto picture_path =
-        "unitpics/" + std::string(commander_def->unit_name, strnlen(commander_def->unit_name, 32)) +
-        ".PCX";
+        oa::data::defs::directory_name(oa::data::defs::DataDirectory::unitpics) + std::string("/") +
+        std::string(commander_def->unit_name, strnlen(commander_def->unit_name, 32)) + ".PCX";
     const auto picture =
         oa::ui::decoded::require(oa::decode_pcx(assets_.read(picture_path).bytes), picture_path);
     const oa::ui::gui_layout::Gadget* hotr = nullptr;

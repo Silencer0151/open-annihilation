@@ -311,6 +311,10 @@ struct Machine {
     std::vector<sim::spatial_state::Plot> collision_plots;
     std::vector<sim::match_runtime::RuntimeTypeFields> fields;
     std::array<uint8_t, 1> yard{4};
+    // The rules a mod's profile sets, and each unit type's own; 3.1c's
+    // unless a test sets them before start.
+    data::match_rules::MatchRules rules{};
+    std::vector<data::match_rules::UnitTypeRules> unit_type_rules;
     sim::combat_state::WeaponRegistry weapons;
     std::vector<FeatureDef> feature_defs;
     Services services;
@@ -562,6 +566,8 @@ struct Machine {
             {}
         };
         input.feature_defs = feature_defs;
+        input.rules = rules;
+        input.unit_type_rules = unit_type_rules;
         // Both machines read the same uptime, so a hovercraft's bob agrees.
         input.uptime_milliseconds = [] { return kUptimeMilliseconds; };
         match = std::make_unique<sim::match_runtime::Match>(input, services);
@@ -1096,6 +1102,33 @@ void foreign_cargo_dies_with_its_carrier() {
 }
 } // namespace
 
+// A 0x0c death record naming unit 0 does nothing at all
+// (units.ignore-null-death-record, every machine's behaviour with or without
+// the rule): no unit dies and the record is not an error.
+void death_record_for_unit_zero_changes_nothing() {
+    Pair pair;
+    auto* owned = pair.host->match->create({0, 1, {40u << 16, 0, 40u << 16}, true, 1, 0});
+    CHECK(owned != nullptr);
+    for (uint32_t t = 0; t < 4; ++t) {
+        step(*pair.host);
+        step(*pair.joiner);
+    }
+    auto& world = pair.joiner->match->state();
+    const std::vector<Unit> before(world.units, world.units + world.unit_slot_count);
+    UnitKilledRecord killed{};
+    killed.unit_index = 0;
+    killed.killed_percent = 100;
+    killed.kind_and_wreck_level = static_cast<uint8_t>(kWeaponKind << unit_killed_kind_shift) | 1;
+    uint8_t bytes[64];
+    std::size_t written = 0;
+    CHECK(encode_record(killed, bytes, sizeof bytes, &written) == WireError::ok);
+    CHECK(net_match_send(pair.host->net.get(), kIds[0], broadcast_destination_id, bytes, written));
+    packet_layer_flush(pair.host->connection.packets, 0, true);
+    (void)net_match_pump(pair.joiner->net.get());
+    CHECK(std::memcmp(before.data(), world.units, before.size() * sizeof(Unit)) == 0);
+    CHECK(pair.joiner->net->record_errors == 0 && pair.joiner->match->fault() == nullptr);
+}
+
 // Records the owner sends as they are made reach the other machine's copy:
 // 0x10 starts a script function by its COB index with its four locals, the
 // count of them as arguments, and 0x0e sets off the shot aimed at its point
@@ -1556,6 +1589,32 @@ void create_into_live_slot_runs_the_kill() {
     CHECK(sent_of(host.inbox, RecordType::unit_killed).empty());
 }
 
+// Under the recorder's rules a 0x09 that repeats the copy already in its
+// slot (same owner, type and ground position) is dropped: the copy stays
+// and nothing is created. Without them the same record replaces the copy,
+// as above.
+void repeated_create_under_recorder_rules_is_dropped() {
+    for (const bool recorder : {true, false}) {
+        KillScene scene;
+        auto& host = *scene.pair.host;
+        auto& world = host.match->state();
+        auto& copy = world.units[scene.victim];
+        host.binding.net->rules.recorder_protocol =
+            recorder ? recorder_protocol_current : recorder_protocol_plain;
+        const auto created = host.binding.created_remote;
+        UnitCreatedRecord record{};
+        record.unit_def_index = copy.type_index;
+        record.unit_index = scene.victim;
+        record.position[0] = copy.position.x;
+        record.position[1] = copy.position.y;
+        record.position[2] = copy.position.z;
+        auto sim = match_binding_sim(&host.binding);
+        sim.create_unit(sim.context, &world, copy.owner_index, record);
+        CHECK(KillScene::live(host, scene.victim) && copy.type_index == record.unit_def_index);
+        CHECK(host.binding.created_remote == created + (recorder ? 0u : 1u));
+    }
+}
+
 // A machine whose player lacks the host role hands a weapon hit on a feature
 // to the host (0x0f with the weapon id, addressed to the host's id) and
 // leaves the feature as it is; the host applies it, destroys the corpse and
@@ -1957,6 +2016,54 @@ void finished_units_reach_the_copy() {
     pump_next_tick(joiner);
     CHECK(building_copy.build_remaining == 0.0F);
     CHECK(joiner.net->record_errors == 0);
+}
+
+// units.build-rotation over the wire: a building the host places facing
+// east carries the facing in the heading of its 0x09 record, and the
+// joiner's copy stands turned, its footprint's width and depth swapped.
+// Without the rule both machines place it facing south.
+void turned_buildings_reach_the_copy() {
+    constexpr uint16_t kStructure = 3;
+    // Two cells wide, one deep; turned east, one wide and two deep.
+    static constexpr std::array<uint8_t, 2> kLongYard{4, 4};
+    for (const bool rule : {true, false}) {
+        Machine host(kStructure);
+        Machine joiner(kStructure);
+        host.inbox.peer = &joiner.inbox;
+        joiner.inbox.peer = &host.inbox;
+        for (Machine* m : {&host, &joiner}) {
+            m->types[kStructure].footprint_x = 2;
+            m->types[kStructure].footprint_z = 1;
+            m->loaded[kStructure].type = m->types[kStructure];
+            m->structure_def.footprint_x = 2;
+            m->structure_def.footprint_z = 1;
+            m->fields[kStructure].yard_mask = kLongYard;
+            m->rules.units.build_rotation.enabled = rule;
+            m->unit_type_rules.resize(m->types.size());
+            m->unit_type_rules[kStructure].build_facings =
+                data::match_rules::build_facing::south | data::match_rules::build_facing::east;
+        }
+        host.start(0);
+        joiner.start(1);
+        const auto facing = host.match->build_facing(kStructure, sim::unit_spawn::facing_east);
+        CHECK(facing == (rule ? sim::unit_spawn::facing_east : sim::unit_spawn::facing_south));
+        auto* building =
+            host.match->create({0, kStructure, {128u << 16, 0, 128u << 16}, true, 1, 0, facing});
+        CHECK(building != nullptr);
+        if (building == nullptr)
+            continue;
+        const auto building_id = building->unit_index;
+        const auto& original = host.match->state().units[building_id];
+        CHECK(original.footprint_x == (rule ? 1 : 2) && original.footprint_z == (rule ? 2 : 1));
+        packet_layer_flush(host.connection.packets, 0, true);
+        (void)net_match_pump(joiner.net.get());
+        const auto& copy = joiner.match->state().units[building_id];
+        CHECK(copy.type_index == kStructure && copy.heading == original.heading);
+        CHECK(copy.footprint_x == original.footprint_x && copy.footprint_z == original.footprint_z);
+        CHECK(joiner.match->unit_build_facing(copy) == facing);
+        CHECK(host.match->unit_build_facing(original) == facing);
+        CHECK(joiner.net->record_errors == 0);
+    }
 }
 
 // A wreck a unit of the host raised back into a unit goes out as the
@@ -2405,16 +2512,19 @@ int main() {
     remote_aircraft_follow_their_owner();
     carried_copies_keep_their_drivers();
     remote_events_reach_the_copy();
+    death_record_for_unit_zero_changes_nothing();
     owner_script_starts_reach_the_copy();
     remote_shots_reach_the_copy();
     owner_kill_is_shared_with_its_wreck();
     received_kill_credits_the_record();
     create_into_live_slot_runs_the_kill();
+    repeated_create_under_recorder_rules_is_dropped();
     feature_hits_go_to_the_host();
     reclaims_go_out_from_the_reclaiming_unit_s_owner();
     interceptions_reach_the_shot_s_owner();
     carry_links_reach_the_copy();
     finished_units_reach_the_copy();
+    turned_buildings_reach_the_copy();
     resurrected_wrecks_leave_every_machine();
     departed_players_units_are_destroyed();
     a_pause_from_elsewhere_holds_the_tick();

@@ -42,6 +42,24 @@ void TraceRecorder::close() noexcept {
         units_.close();
 }
 
+bool rule_state_digest(const Match& match, trace::SectionDigest& digest) noexcept {
+    if (match.rule_state().count == 0)
+        return false;
+    digest.value = match.fold_rule_state(trace::digest_basis);
+    digest.items = match.rule_state().count;
+    return true;
+}
+
+trace::TickDigest match_tick_digest(const Match& match, std::span<trace::UnitSide> sides) {
+    const auto& world = match.state();
+    fill_trace_sides(match, sides);
+    const trace::RandomState random{match.random_state(), match.lcg_state()};
+    trace::SectionDigest rules{};
+    return trace::tick_digest(
+        world, sides.data(), random, rule_state_digest(match, rules) ? &rules : nullptr
+    );
+}
+
 bool TraceRecorder::open(const std::string& path, const std::string& unit_path, uint32_t seed) {
     close();
     stream_.open(path, std::ios::binary);
@@ -67,7 +85,10 @@ void TraceRecorder::sample(const Match& match) {
     uint8_t record[trace::record_size];
     trace::encode_tick_record(record, trace::sample_tick_record(world, sides_.data(), random.core));
     stream_.write(reinterpret_cast<const char*>(record), sizeof record);
-    const auto digest = trace::tick_digest(world, sides_.data(), random);
+    trace::SectionDigest rules{};
+    const auto digest = trace::tick_digest(
+        world, sides_.data(), random, rule_state_digest(match, rules) ? &rules : nullptr
+    );
     for (std::size_t index = 0; index < trace::section_count; ++index) {
         trace::encode_section_record(
             record, digest.tick, static_cast<trace::Section>(index), digest.sections[index]

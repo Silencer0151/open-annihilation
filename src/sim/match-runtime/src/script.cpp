@@ -225,7 +225,9 @@ oa::sim::unit_script::UnitValueServices services(ValueBridge& bridge) {
         bridge_distance,
         bridge_ground_height,
         bridge_state_flag,
-        bridge_yard
+        bridge_yard,
+        bridge.host.value_rules,
+        bridge.host.value_limits
     };
 }
 } // namespace

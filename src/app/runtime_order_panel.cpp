@@ -4,6 +4,8 @@
 // The order and build pages: the selection summary, the pages and their
 // download buttons, button states and clicks, through the order panel.
 #include "oa/app/runtime.hpp"
+#include "oa/sim/selection/shortcuts.hpp"
+#include "oa/data/defs/layout.hpp"
 
 #include "oa/sim/match_runtime/construction_orders.hpp"
 #include "oa/core/weapon_def.h"
@@ -36,7 +38,7 @@ std::string gui_panel_path(const char* name) {
     std::string stem(name);
     if (const auto dot = stem.rfind('.'); dot != std::string::npos)
         stem.resize(dot);
-    return "guis/" + stem + ".GUI";
+    return oa::data::defs::gui_path(stem + ".GUI");
 }
 
 bool ascii_iequals(std::string_view left, std::string_view right) {
@@ -112,17 +114,23 @@ oa::ui::hud::HudEvents Runtime::order_panel_events() {
 }
 
 void Runtime::apply_group_order(const char* tag, int32_t value) {
+    if (!match_)
+        return;
+    for_each_selected([&](uint16_t id) { give_state_order(id, tag, value); });
+}
+
+bool Runtime::give_state_order(uint16_t unit, const char* tag, int32_t value) {
     const auto kind = oa::data::mission_types::index_for_name(tag);
     if (!match_ || kind == oa::data::mission_types::unknown_mission)
-        return;
+        return false;
     const auto table = order_panel_table();
-    for_each_selected([&](uint16_t id) {
-        if (id >= table.unit_count)
-            return;
-        const auto* def = hud::unit_def(table, table.units[id]);
-        if (def != nullptr && hud::group_order_reaches(tag, *def))
-            match_->issue_state_order(id, kind, value);
-    });
+    if (unit >= table.unit_count)
+        return false;
+    const auto* def = hud::unit_def(table, table.units[unit]);
+    if (def == nullptr || !hud::group_order_reaches(tag, *def))
+        return false;
+    match_->issue_state_order(unit, kind, value);
+    return true;
 }
 
 void Runtime::issue_group_mission(uint8_t kind, int32_t parameter_1, int32_t parameter_2) {
@@ -255,6 +263,11 @@ oa::ui::hud::BuildPanelHost Runtime::build_panel_host() {
     host.shift_down = [](void* user) {
         return static_cast<Runtime*>(user)->control_key_down(oa::ui::gui_input::ControlKey::shift);
     };
+    // ui.selection-shortcuts: with Ctrl held a shift-click steps by 100.
+    if (ui_rules().selection_shortcuts.enabled)
+        host.shift_step = oa::sim::selection::shift_queue_step(
+            control_key_down(oa::ui::gui_input::ControlKey::control)
+        );
     host.change_queue = [](void* user, const char* name, oa::Unit& builder, int32_t count) {
         auto& self = *static_cast<Runtime*>(user);
         const auto type_for_name = [](void* context, const char* unit_name) {
@@ -296,6 +309,8 @@ oa::ui::hud::BuildPanelHost Runtime::build_panel_host() {
     host.format_counts = [](void* user, const oa::Unit&) {
         static_cast<Runtime*>(user)->refresh_build_page(false);
     };
+    if (const auto* profile = mod_profile())
+        host.placement_by_builder = profile->rules.units.placement_by_builder.enabled;
     return host;
 }
 

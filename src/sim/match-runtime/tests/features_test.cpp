@@ -316,7 +316,9 @@ void vent_smokes_every_five_ticks() {
     Fixture f(feature_options());
     const auto& layer = f.match->effects().layers[features::geothermal_smoke_layer];
     CHECK(layer.count == 1);
-    const auto& emitter = layer.emitters[layer.head];
+    const auto& emitter = sim::effect_particles::layer_emitter(
+        f.match->effects(), features::geothermal_smoke_layer, 0
+    );
     CHECK(
         emitter.kind == sim::effect_particles::EmitterKind::feature_smoke && emitter.interval == 5
     );

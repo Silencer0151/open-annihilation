@@ -209,6 +209,47 @@ void set_send_error(TokenLine* line) {
     game().send_error_percent = percent;
 }
 
+/// The line a command posts at most.
+constexpr std::size_t kNoticeBytes = 96;
+
+/// Deals teams by start position through the host ("autoteam [N]") and
+/// posts the outcome as a service message.
+///
+/// @param line Command tokens; token 1, when given, is the number of teams.
+void deal_teams(TokenLine* line) {
+    auto* console = ui::console_active();
+    if (console == nullptr)
+        return;
+    const CommandHost& host = host_of(console);
+    if (host.deal_teams == nullptr)
+        return;
+    char notice[kNoticeBytes] = {};
+    host.deal_teams(host.context, line->count > 1 ? token(line, 1) : kEmpty, notice, sizeof notice);
+    if (notice[0] != '\0')
+        ui::console_post(console, notice, ui::kMessageService);
+}
+
+/// Answers the open vote to reject a player ("Vote Yes" or "Vote No").
+///
+/// Any word but "Yes" (matched without case) is a no. Posts what happened as
+/// a notice.
+///
+/// @param line Command tokens; token 1 is the answer.
+void cast_vote(TokenLine* line) {
+    auto* console = ui::console_active();
+    const CommandHost& host = host_of(console);
+    const char* answer = token(line, 1);
+    const bool yes = (answer[0] == 'y' || answer[0] == 'Y') &&
+                     (answer[1] == 'e' || answer[1] == 'E') &&
+                     (answer[2] == 's' || answer[2] == 'S') && answer[3] == '\0';
+    const bool cast = host.cast_vote != nullptr && host.cast_vote(host.context, yes);
+    ui::console_post(
+        console,
+        cast ? (yes ? "You voted yes" : "You voted no") : "No vote is open",
+        ui::kMessageService
+    );
+}
+
 const services::CommandRegistration kCommands[] = {
     {"NetStats", reset_network_stats, kOptionList},
     {"Drop", set_drop, kOptionList},
@@ -216,6 +257,7 @@ const services::CommandRegistration kCommands[] = {
     {"BPS", toggle_show_bandwidth, kOptionList},
     {"Page", page_user, kOptionList},
     {"P", page_user, kOptionList},
+    {"Vote", cast_vote, kOptionList},
     {"Senderror", set_send_error, ui::command_class::developer},
     {nullptr, nullptr, 0},
 };
@@ -227,6 +269,8 @@ void register_console_commands(void* extension_context, ui::Console* console) no
     if (host != nullptr && host->reset_traffic_stats != nullptr)
         host->reset_traffic_stats(host->context);
     services::command_table_register(&console->commands, kCommands);
+    if (host != nullptr && host->deal_teams != nullptr)
+        (void)services::command_table_set(&console->commands, "autoteam", deal_teams, kOptionList);
 }
 
 void console_page_user(ui::Console* console, const char* text) noexcept {

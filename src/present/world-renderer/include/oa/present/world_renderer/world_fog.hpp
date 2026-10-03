@@ -156,7 +156,8 @@ struct FogView {
 /// 3.1c copies the corners of the first and last-but-one tile, which straddle
 /// the border only when the view is a whole number of tiles wide.
 ///
-/// @param sight the viewer's sight grid; the viewer is `sight.viewpoint_player`
+/// @param sight the match's sight grid, whose cells hold a mapped bit for each player
+/// @param viewer the player whose view the fog shows: its mapped bit is read
 /// @param coverage the viewer's per-cell count of units seeing it
 /// @param options line-of-sight and mapping rules
 /// @param camera_x camera map-pixel X
@@ -166,6 +167,7 @@ struct FogView {
 /// @return the fog grid
 [[nodiscard]] FogGrid build_fog_grid(
     const sim::visibility_state::PlayerSightGrid& sight,
+    uint8_t viewer,
     std::span<const uint8_t> coverage,
     FogOptions options,
     int32_t camera_x,
@@ -205,5 +207,44 @@ void draw_fog_grid(
 /// @param palette the game palette
 /// @param[out] levels palette index for each level (L, L, L)
 void build_gray_levels(const Palette& palette, std::array<uint8_t, OA_PALETTE_COLORS>& levels);
+
+/// Plot owner slot of a feature placed by the map loader in 3.1c.
+inline constexpr uint8_t map_feature_owner = 10;
+/// Plot owner slot of a feature drawn whatever the line of sight
+/// (ui.map-features-ignore-los).
+inline constexpr uint8_t sight_free_feature_owner = 11;
+
+/// How the owner slot of a map-placed feature decides whether it is drawn
+/// outside line of sight (ui.map-features-ignore-los); the default is 3.1c's.
+struct FeatureOwnerRule {
+    /// The rule applies: the map's features take `map_owner`, and a feature
+    /// whose owner is sight_free_feature_owner is drawn without a sight test.
+    bool enabled{};
+    /// The owner slot the map loader gives its features (0-15).
+    uint8_t map_owner{map_feature_owner};
+};
+
+/// Tells whether a feature that hides under the gray fog is drawn without its
+/// sight test.
+///
+/// The feature's plot owner slot is the one its plot records, or, for a feature the
+/// map placed while the rule applies, the rule's map owner. A feature whose
+/// owner is the viewer is drawn; under the rule, so is one whose owner is
+/// sight_free_feature_owner. A map owner of a player slot therefore shows the map's
+/// features to that player alone, and map_feature_owner leaves 3.1c's sight test.
+///
+/// @param plot_owner the owner slot the feature's plot records
+/// @param placed_by_map the map placed the feature and it has not been replaced
+/// @param viewer the viewpoint player
+/// @param rule the rule in force
+/// @return true when the feature is drawn whatever the sight
+[[nodiscard]] constexpr bool feature_drawn_without_sight(
+    uint8_t plot_owner, bool placed_by_map, uint8_t viewer, const FeatureOwnerRule& rule
+) noexcept {
+    const uint8_t owner = rule.enabled && placed_by_map && plot_owner == map_feature_owner
+                              ? static_cast<uint8_t>(rule.map_owner & 0xfu)
+                              : plot_owner;
+    return owner == viewer || (rule.enabled && owner == sight_free_feature_owner);
+}
 
 } // namespace oa::present::world_renderer

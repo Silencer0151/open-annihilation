@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/sim/ground_orders/search_worker.hpp"
+#include "oa/data/limits.hpp"
 
 #include <bit>
 #include <cstdlib>
@@ -54,6 +55,85 @@ SearchRecord make_record(
     oa::sim::simulation_state::Unit& unit, Navigation& navigation, Goal& goal, MovementMap& map
 ) {
     return {&unit, &navigation, &goal, &map};
+}
+
+/// A route the scan published, and the scans it took.
+struct ScheduledRoute {
+    std::vector<RoutePoint> points;
+    int scans{};
+    int published{};
+};
+
+/// Runs one unit's job through the scan at a fixed node credit a tick, round a
+/// wall across most of a 64 by 64 map, until the scan goes idle.
+///
+/// @param tick_credit path nodes a tick (SearchPlayerJobState::tick_credit)
+/// @return the published route and the scans it took
+ScheduledRoute route_at_credit(int32_t tick_credit) {
+    oa::sim::unit_spawn::LegacyWorld world(3);
+    auto& mover = world.unit(1);
+    mover.record.type_index = 1;
+    mover.object_present = true;
+    world.range(0, 1, 2);
+    auto& players = world.simulation().players;
+    players[0].present = true;
+    players[0].status = 1;
+
+    GridSampler sampler;
+    sampler.width = 64;
+    sampler.height = 64;
+    sampler.cells.assign(64 * 64, 3);
+    for (uint32_t z = 0; z < 60; ++z)
+        sampler.cells[z * 64 + 32] = 0;
+    MovementMap map(64, 64, 1, 1, sampler);
+    fill(map);
+    oa::sim::simulation_state::Order order;
+    Goal goal;
+    goal.order = &order;
+    goal.cell = {60, 2};
+    Navigation route;
+    route.goal = &goal;
+    route.flags = search_pending_flag;
+
+    struct Context {
+        oa::sim::simulation_state::Unit* mover;
+        Navigation* route;
+        MovementMap* map;
+        ScheduledRoute result;
+    } context{&mover, &route, &map, {}};
+
+    SearchUnitAccess access;
+    access.context = &context;
+    access.navigator = [](void* c, oa::sim::simulation_state::Unit& u) -> Navigation* {
+        auto* ctx = static_cast<Context*>(c);
+        return &u == ctx->mover ? ctx->route : nullptr;
+    };
+    access.prepare = [](void* c, oa::sim::simulation_state::Unit&, SearchBegin&, MovementMap*& m) {
+        place(*static_cast<Context*>(c)->mover, 2, 2);
+        m = static_cast<Context*>(c)->map;
+        return true;
+    };
+    access.publish =
+        [](void* c, oa::sim::simulation_state::Unit&, Navigation&, std::span<const RoutePoint> r) {
+            auto* ctx = static_cast<Context*>(c);
+            ++ctx->result.published;
+            ctx->result.points.assign(r.begin(), r.end());
+        };
+    SearchScheduler scheduler;
+    do {
+        scheduler.jobs.tick_credit = tick_credit;
+        (void)scan_player_jobs(
+            scheduler,
+            players,
+            1,
+            1,
+            100u + static_cast<uint32_t>(context.result.scans),
+            all_seen,
+            access
+        );
+        ++context.result.scans;
+    } while (!scheduler.controller.idle() && context.result.scans < 1000);
+    return context.result;
 }
 } // namespace
 
@@ -535,5 +615,25 @@ int main() {
         CHECK(
             context.last.back()[0] == (12 * 2 + 1) * 8 && context.last.back()[1] == (9 * 2 + 1) * 8
         );
+    }
+
+    {
+        // The node budget only slices a job: at 3.1c's 1,333 nodes a tick the
+        // route round the wall takes several scans, at the largest budget a
+        // profile may name it takes one, and the route is the same.
+        const auto base = route_at_credit(search_tick_credit);
+        const auto largest = route_at_credit(oa::data::limits::highest_path_search_nodes);
+        CHECK(base.published == 1 && largest.published == 1);
+        CHECK(base.scans > largest.scans && largest.scans <= 2);
+        CHECK(!base.points.empty() && base.points == largest.points);
+    }
+
+    {
+        // A cell keeps any handle the open set gives out, past 16 bits too.
+        SearchMapCell cell;
+        cell.handle = 70000;
+        CHECK(cell.handle == 70000);
+        cell.handle = SearchHeap::no_handle;
+        CHECK(cell.handle == SearchHeap::no_handle);
     }
 }

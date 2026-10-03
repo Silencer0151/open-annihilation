@@ -70,12 +70,37 @@ void multiplayer_bind_clock(const LobbyClock& clock) noexcept;
 ///        also applies until one is set.
 void multiplayer_bind_player_timeout(int32_t seconds) noexcept;
 
+/// Sets the battle room buttons a mod's display rules add (lobby_button
+/// bits), which the battle room offers its host when its GUI has them.
+///
+/// The value survives multiplayer_reset.
+///
+/// @param buttons the buttons; 0, as in 3.1c, for none
+void multiplayer_bind_lobby_buttons(uint8_t buttons) noexcept;
+
+/// Binds the network rules the battle room plays by: the version bytes it presents and how it compares
+/// them, the private chat channel and the recorder.
+///
+/// The binding survives multiplayer_reset; until one is bound the rules are 3.1c's.
+///
+/// @param rules The rules.
+/// @param program The line this machine's recorder answers .report with, such as "Program 1.0"; null
+///        for none.
+void multiplayer_bind_wire_rules(const netgame::WireRules& rules, const char* program) noexcept;
+
 /// Binds the launch the connection screens, the battle room and the session read.
 ///
 /// The binding survives multiplayer_reset.
 ///
 /// @param link The launch block and the launch's answers; a null block reads as empty.
 void multiplayer_bind_launch_link(const LaunchLink& link) noexcept;
+
+/// Binds the mod profile's rules the battle room keeps (Lobby::rules).
+///
+/// The binding survives multiplayer_reset.
+///
+/// @param rules The rules, or null for 3.1c's.
+void multiplayer_bind_rules(const data::match_rules::MatchRules* rules) noexcept;
 
 // The game's translation of interface text, which the screens' texts go
 // through (LobbyServices::translate).
@@ -93,6 +118,34 @@ struct TextTranslation {
 ///
 /// @param translation The game's translation.
 void multiplayer_bind_translation(const TextTranslation& translation) noexcept;
+
+// The line this machine says of its engine in the battle room's chat, which
+// the engine gives (multiplayer_bind_engine_banner).
+struct EngineBanner {
+    void* context{};
+    /// Returns the line, such as "[Engine: OpenAnnihilation v0.6.2]"; null,
+    /// or an empty line, says nothing.
+    std::string (*line)(void* context){};
+};
+
+/// Binds the line this machine says of its engine in the battle room: once
+/// as the battle room is entered, hosting or joining, and again each time the
+/// line changes while it shows. The line goes out as the local player's chat
+/// line through the battle room's own chat, so every player sees it,
+/// whatever game client they play.
+///
+/// The binding survives multiplayer_reset; until one is bound nothing is said.
+///
+/// @param banner The line's source; a null line says nothing.
+void multiplayer_bind_engine_banner(const EngineBanner& banner) noexcept;
+
+/// Returns the line an engine says of itself in the battle room's chat.
+///
+/// @param version The engine's version as the engine shows it, such as "v0.6.2".
+/// @param developer_mode Developer Mode is on.
+/// @return "[Engine: OpenAnnihilation <version>]", with " DEV MODE" before
+///         the closing bracket while Developer Mode is on
+[[nodiscard]] std::string engine_banner_line(std::string_view version, bool developer_mode);
 
 // Receives the lobby when the battle room starts a game (the host's START,
 // or the host's 0x08 on a client) and takes over from the frontend. Without

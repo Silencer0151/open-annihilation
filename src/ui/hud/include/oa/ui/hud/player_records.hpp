@@ -62,7 +62,8 @@ inline constexpr int32_t kRosterCapacity = OA_PLAYER_RECORD_COUNT;
 /// not ready and has no controller. Its info record takes the status (except
 /// for OA_PLAYER_STATUS_MIRRORED), and a local or computer player reports the
 /// machine's memory as physical_memory / 1 MiB + 1. In a campaign or skirmish
-/// a human is named "Player" and a computer "Arm" or "Core" after its side;
+/// a human is named "Player" and a computer after its side slot ("Arm" or
+/// "Core" in the base game, data::defs::side_name());
 /// the second name copies the name.
 ///
 /// @param[in,out] world World holding the player records and their info records.

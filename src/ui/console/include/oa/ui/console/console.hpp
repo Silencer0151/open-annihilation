@@ -9,6 +9,7 @@
 #pragma once
 
 #include "oa/core/world.h"
+#include "oa/data/match_rules.hpp"
 #include "oa/ui/services/commands.hpp"
 
 #include <cstddef>
@@ -101,6 +102,9 @@ struct ConsoleHost {
     void (*write_ai_weights)(void* context, uint8_t player, const char* path){};
     void (*apply_ai_weight)(void* context, uint8_t player, const char* unit_type, float percent){};
     void (*apply_ai_limit)(void* context, uint8_t player, const char* unit_type, int32_t limit){};
+    // Which of 3.1c's keywords each difficulty answers to in a "plan" directive
+    // (ai.difficulty-names).
+    data::match_rules::AiDifficultyNames difficulty_names{};
     // Files, capture and diagnostics.
     char* (*read_text_file)(void* context, const char* path, int32_t* length){};
     void (*free_text_file)(void* context, char* text){};
@@ -132,12 +136,21 @@ struct Console {
     const ConsoleHost* host{};
     ui::services::CommandTable commands;
     char last_command[kCommandTextBytes]{}; // re-run by the '\' hotkey
-    // The session's cheat flag: a skirmish, or a multiplayer game whose host
-    // allows cheats.
+    // The session's cheat flag: a campaign or a skirmish, or a multiplayer
+    // game whose host allows cheats.
     bool cheats_enabled{};
     bool sfx_flag{};             // "SFX": the emitter pool refuses new particle emitters
     int32_t contour_values[2]{}; // "Contour" spacing and phase in heights << 8
     bool ai_plan_matches{};      // the last "plan" directive named this difficulty
+    /// Energy and metal "ATM" adds to the viewed player: 1000, or a mod's
+    /// console.atm-amount (console_apply_rules).
+    float atm_amount{};
+    /// console.key-remaps: Insert re-runs the last console line and F10 also
+    /// toggles the debug keys, while '\' does nothing (hotkey_dispatch).
+    bool key_remaps{};
+    /// teams.alliance-menu-all-game-types: Tab opens the team menu in every
+    /// game type, not the options panel outside multiplayer (hotkey_dispatch).
+    bool team_menu_every_game{};
 };
 
 /// Clears `console`, registers every command list and the spawn fallback, then lets the host's extend add its commands.
@@ -154,6 +167,25 @@ struct Console {
 /// @return False if the command table refused one of the console's own entries;
 ///         entries the extension adds do not count.
 bool console_init(Console* console, World* world, const ConsoleHost* host) noexcept;
+
+/// Returns the metal and energy +atm adds under a match's rules.
+///
+/// @param rules The match's rules.
+/// @return 1000, or console.atm-amount's amount while the rule is on
+[[nodiscard]] float console_atm_amount(const data::match_rules::MatchRules& rules) noexcept;
+
+/// Applies the console rules of the match the console serves.
+///
+/// Sets the classes of "AI", "Control" and "LOSType" (cheats under
+/// console.ai-control-cheat-group and console.lostype-cheat-group, their
+/// developer and option classes otherwise), Console::atm_amount from
+/// console.atm-amount, Console::key_remaps from console.key-remaps and
+/// Console::team_menu_every_game from teams.alliance-menu-all-game-types.
+/// Applying 3.1c's rules leaves the console as console_init made it.
+///
+/// @param[in,out] console Console set up by console_init.
+/// @param rules The match's rules.
+void console_apply_rules(Console* console, const data::match_rules::MatchRules& rules) noexcept;
 
 /// Tokenises one command line and dispatches it under `mask`.
 ///

@@ -104,7 +104,11 @@ the player has not seen classify as passable (2). Cell classes come from
 classifier. The controller's player round-robin index (`round_robin`) is
 reused as the sight-test shift; isolated jobs pass `mask_bit` explicitly. The
 start node's payload extra is zero; it is never read, because the start cell
-is closed on first pop.
+is closed on first pop. The credit a tick (`SearchPlayerJobState::tick_credit`)
+is 1,333 path nodes in 3.1c; a match starts at its limits' budget
+(`oa::data::limits::PathSearch`), up to ten million. A cell keeps its open
+node's handle at the heap's full 32 bits, so no open set wraps a handle,
+whatever the budget.
 
 World spatial collision remains in `unit-movement::Host`. Ground-order Host
 operations are required for search-job cancellation, sounds, weapon events,

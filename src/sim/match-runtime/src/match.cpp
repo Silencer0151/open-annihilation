@@ -4,6 +4,8 @@
 #include "match_state.hpp"
 #include "oa/sim/ballistics.hpp"
 #include "oa/sim/weapon_execution/weapon_launch.hpp"
+#include <cstring>
+#include <span>
 #include <algorithm>
 #include <cstdint>
 #include "oa/base/game_math.hpp"
@@ -216,6 +218,8 @@ const char* Match::input_error(const OfflineInputs& input) noexcept {
         return "offline match requires actual scenario definitions";
     if (!input.collision_plots.empty() && input.collision_plots.size() != cells)
         return "collision terrain does not match map";
+    if (!input.unit_type_rules.empty() && input.unit_type_rules.size() != input.types.size())
+        return "unit type rules do not match the type table";
     return nullptr;
 }
 
@@ -315,6 +319,9 @@ Match::Match(const OfflineInputs& input, OfflineServices& services)
         fault_.note(refusal);
         return;
     }
+    keep_rules(input);
+    keep_repair_remainders();
+    keep_unit_rules();
     target_projection_.resize(slots_.size());
     const auto sighting_capacity = static_cast<uint32_t>(slots_.size());
     sighting_slots_.assign(std::size_t{2} * sightings_.size() * sighting_capacity, 0);
@@ -450,10 +457,22 @@ Match::Match(const OfflineInputs& input, OfflineServices& services)
     // LCG stream, since the tick counter still holds the last match's
     // count when the wind is scheduled; a match here always starts at tick 0
     // and draws nothing.
+    keep_wind_generator(input.rules.economy.deterministic_wind);
     MatchWindRandom wind_random{random_, lcg_seed_};
-    note_wind(sim::world_environment::initialize_wind(environment_wind_, wind_random));
+    if (wind_generator_)
+        note_wind(
+            sim::world_environment::initialize_shared_wind(
+                environment_wind_, *wind_generator_, shared_wind_seed()
+            )
+        );
+    else
+        note_wind(sim::world_environment::initialize_wind(environment_wind_, wind_random));
     effects_ = std::make_unique<sim::effect_particles::EffectWorld>();
+    if (!sim::effect_particles::size_effect_world(*effects_, input.limits.effects))
+        fault_.note("the effect layers cannot be allocated");
+    search_.jobs.tick_credit = input.limits.path_search.nodes;
     effects_->lava_world = lava_world_ != 0;
+    effects_->explosion_smoke_column = input.display.explosion_smoke_column;
     effects_->no_sea_level_trigger =
         input.scenario_definitions->integer("nosealeveltrigger", 0) != 0;
     allocate_flash_tiers();
@@ -469,6 +488,7 @@ Match::Match(const OfflineInputs& input, OfflineServices& services)
          environment_wind_.normalized_strength}
     );
     build_movement_maps();
+    add_allied_sight_state();
 }
 
 void Match::note_wind(sim::world_environment::WindRefresh result) noexcept {
@@ -580,10 +600,58 @@ void Match::tick_scripts(uint32_t elapsed) {
             bridge_->tick_script(slot, elapsed);
 }
 
+namespace {
+// The bytes of the shared wind generator, as its rule-state table keeps them.
+std::span<const uint8_t> wind_generator_bytes(void* context) {
+    const auto* generator = static_cast<const sim::world_environment::WindGenerator*>(context);
+    return {reinterpret_cast<const uint8_t*>(generator), sizeof *generator};
+}
+
+// Restores the shared wind generator from a save's table; false when the
+// bytes are not one generator in range.
+bool restore_wind_generator(void* context, std::span<const uint8_t> bytes) {
+    sim::world_environment::WindGenerator saved{};
+    if (bytes.size() != sizeof saved)
+        return false;
+    std::memcpy(&saved, bytes.data(), sizeof saved);
+    if (!sim::world_environment::wind_generator_valid(saved))
+        return false;
+    *static_cast<sim::world_environment::WindGenerator*>(context) = saved;
+    return true;
+}
+} // namespace
+
+void Match::keep_wind_generator(const data::match_rules::EconomyDeterministicWind& rule) {
+    if (!rule.enabled ||
+        rule.rng != data::match_rules::EconomyDeterministicWindRng::mt19937_host_id)
+        return;
+    wind_generator_ = std::make_unique<sim::world_environment::WindGenerator>();
+    if (!add_rule_state(
+            rule_state_,
+            {"wind-generator", wind_generator_.get(), wind_generator_bytes, restore_wind_generator}
+        ))
+        fault_.note("the wind generator's rule state cannot be kept");
+}
+
+uint32_t Match::shared_wind_seed() const {
+    // A seeded generator ignores the seed; only the first change looks the
+    // host up.
+    if (wind_generator_->seeded != 0)
+        return 0;
+    return sim::world_environment::shared_wind_seed(state(), input_.random_seed);
+}
+
 void Match::refresh_wind() {
     environment_wind_.current_tick = simulation_.tick;
     MatchWindRandom wind_random{random_, lcg_seed_};
-    note_wind(sim::world_environment::refresh_wind(environment_wind_, wind_random));
+    if (wind_generator_)
+        note_wind(
+            sim::world_environment::refresh_shared_wind(
+                environment_wind_, *wind_generator_, shared_wind_seed()
+            )
+        );
+    else
+        note_wind(sim::world_environment::refresh_wind(environment_wind_, wind_random));
     sim::world_environment::store_wind_state(state().game, environment_wind_);
     wind_.changed = environment_wind_.changed != 0;
     wind_.direction = environment_wind_.direction;
@@ -845,7 +913,7 @@ sim::spatial_state::Unit& Match::project_spatial(sim::unit_spawn::Slot& slot) {
         }
     s.flags = slot.unit->flags;
     s.yard_open = (slot.record.build_flags & 4) != 0;
-    s.yard_mask = fields(slot).yard_mask;
+    s.yard_mask = unit_yard(slot);
     return s;
 }
 
@@ -919,6 +987,59 @@ void Match::place_unit(
     register_occupancy(slot);
     slot.unit->flags |= OA_UNIT_FLAG_POSITION_DIRTY;
     update_moving_sight(slot);
+}
+
+void Match::begin_commander_placement() noexcept {
+    commander_placement_ = CommanderPlacement::none;
+    auto& world = state();
+    const auto local = world.game.local_player_index;
+    if (local >= OA_PLAYER_COUNT)
+        return;
+    uint32_t count = 0;
+    const Unit* first = world_player_units(&world, &world.game.players[local], &count);
+    if (first == nullptr || (first->flags & OA_UNIT_FLAG_LIVE) == 0)
+        return;
+    commander_placement_ = CommanderPlacement::placing;
+}
+
+bool Match::place_commander(int32_t x, int32_t z) noexcept {
+    if (commander_placement_ != CommanderPlacement::placing)
+        return false;
+    auto& world = state();
+    if (x < 0 || z < 0 || x >= world.game.map_pixel_width || z >= world.game.map_pixel_height)
+        return false;
+    uint32_t count = 0;
+    Unit* first =
+        world_player_units(&world, &world.game.players[world.game.local_player_index], &count);
+    if (first == nullptr || (first->flags & OA_UNIT_FLAG_LIVE) == 0)
+        return false;
+    auto& slot = slots_[world_unit_slot(&world, first)];
+    if (!slot.unit)
+        return false;
+    // The point's whole part with the commander's own fraction.
+    constexpr uint32_t fraction_mask = 0xffffu;
+    const auto with_whole = [](uint32_t word, int32_t whole) {
+        return std::bit_cast<int32_t>(
+            (static_cast<uint32_t>(whole) << 16) | (word & fraction_mask)
+        );
+    };
+    const std::array<uint32_t, 3> position = slot.unit->position;
+    place_unit(
+        slot,
+        with_whole(position[0], x),
+        std::bit_cast<int32_t>(position[1]),
+        with_whole(position[2], z),
+        static_cast<uint8_t>(slot.unit->flags & OA_UNIT_FLAG_OCCUPANCY_MASK)
+    );
+    return true;
+}
+
+void Match::finish_commander_placement() noexcept {
+    if (commander_placement_ != CommanderPlacement::placing)
+        return;
+    commander_placement_ = CommanderPlacement::waiting;
+    if (multiplayer.commander_placed != nullptr)
+        multiplayer.commander_placed(multiplayer.context);
 }
 
 void Match::refresh_restored_footprint(uint16_t index) {
@@ -1009,7 +1130,12 @@ bool Match::unit_visible(uint8_t player, uint16_t index) const {
     }
     const auto& slot = slots_.at(index);
     const auto& unit = *slot.unit;
-    if (unit.owner == &simulation_.players[player])
+    // Allied vision shows every unit whose owner allies the player, cloaked
+    // or out of sight; the player's own units pass through its own row.
+    if (rules().intel.allied_los_sharing.enabled) {
+        if (owner_allies(slot.record, player))
+            return true;
+    } else if (unit.owner == &simulation_.players[player])
         return true;
     if (slot.record.state_flags & 4)
         return false;
@@ -1102,6 +1228,14 @@ bool Match::point_mapped(const std::array<uint32_t, 3>& position) const {
     return (sight_.player_bits[*index] & (1u << sight_.viewpoint_player)) != 0;
 }
 
+bool Match::point_seen_by(uint8_t player, const std::array<uint32_t, 3>& position) const {
+    if (player == state().game.viewpoint_player ||
+        (state().game.visibility_flags & sim::visibility_state::update_sight_grid) != 0)
+        return point_visible(player, position);
+    const auto index = sight_cell(sight_, position);
+    return index && player < OA_PLAYER_COUNT && (sight_.player_bits[*index] & (1u << player)) != 0;
+}
+
 sim::visibility_state::SightContext Match::sight_context() {
     sim::visibility_state::SightContext context{};
     context.grid = &sight_;
@@ -1113,6 +1247,7 @@ sim::visibility_state::SightContext Match::sight_context() {
     context.altitude = input_.altitude_sight ? &*input_.altitude_sight : nullptr;
     context.visibility_flags = state().game.visibility_flags;
     context.minimum_height_cell = simulation_.sea_level;
+    context.allied_vision = rules().intel.allied_los_sharing.enabled;
     return context;
 }
 
@@ -1295,4 +1430,45 @@ uint32_t Match::loaded_child_count(uint16_t index) const {
     const auto& unit = match_unit(*this, index);
     return static_cast<uint32_t>(sim::unit_spawn::attached_child_count(state(), unit));
 }
+
+void Match::keep_rules(const OfflineInputs& input) {
+    unit_type_rule_count_ = input.unit_type_rules.size();
+    if (unit_type_rule_count_ != 0) {
+        unit_type_rules_ =
+            std::make_unique<data::match_rules::UnitTypeRules[]>(unit_type_rule_count_);
+        std::copy(
+            input.unit_type_rules.begin(), input.unit_type_rules.end(), unit_type_rules_.get()
+        );
+    }
+    weapon_rule_count_ = input.weapon_rules.size();
+    if (weapon_rule_count_ != 0) {
+        weapon_rules_ = std::make_unique<data::match_rules::WeaponTypeRules[]>(weapon_rule_count_);
+        std::copy(input.weapon_rules.begin(), input.weapon_rules.end(), weapon_rules_.get());
+    }
+    // The inputs the match keeps point at its own copies, never at the caller's.
+    input_.unit_type_rules = {unit_type_rules_.get(), unit_type_rule_count_};
+    input_.weapon_rules = {weapon_rules_.get(), weapon_rule_count_};
+    value_rules = rules_view();
+    value_limits = &input_.limits;
+    keep_build_site_kickout();
+    keep_structure_gifts();
+}
+
+data::match_rules::MatchRulesView Match::rules_view() const noexcept {
+    return {
+        &input_.rules,
+        {unit_type_rules_.get(), unit_type_rule_count_},
+        {weapon_rules_.get(), weapon_rule_count_}
+    };
+}
+
+uint64_t Match::fold_rule_state(uint64_t digest) const noexcept {
+    if (rule_state_.count == 0)
+        return digest;
+    std::span<const uint8_t> profile_hash{};
+    if (input_.profile_sim_hash)
+        profile_hash = *input_.profile_sim_hash;
+    return digest_rule_state(digest, rule_state_, profile_hash);
+}
+
 } // namespace oa::sim::match_runtime

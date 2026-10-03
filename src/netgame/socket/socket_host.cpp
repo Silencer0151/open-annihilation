@@ -382,6 +382,10 @@ void flush(Host* h, Connection* c) {
             return;
         }
         note_in_flight(h, sent);
+        if (sent > 0) {
+            h->last_stream_send_ms = host_now_ms(h);
+            h->stream_sent = true;
+        }
         std::memmove(c->tx, c->tx + sent, c->tx_used - static_cast<uint32_t>(sent));
         c->tx_used -= static_cast<uint32_t>(sent);
     }
@@ -937,18 +941,75 @@ uint32_t host_now_ms(const Host* h) noexcept {
     return static_cast<uint32_t>(clock_ms() - h->clock_origin);
 }
 
+namespace {
+
+/// Reads and drops what a closing host's connection has received.
+///
+/// @param[in,out] h closing host
+/// @param[in,out] c open connection; marked failed once its peer has closed it
+void discard_received(Host* h, Connection* c) {
+    uint8_t scratch[0x1000];
+    for (;;) {
+        const auto n = recv(native(c->fd), reinterpret_cast<char*>(scratch), sizeof scratch, 0);
+        if (n == 0 || (n < 0 && !would_block())) {
+            c->failed = true;
+            return;
+        }
+        if (n < 0)
+            return;
+        note_in_flight(h, -static_cast<int64_t>(n));
+    }
+}
+
+/// Keeps a closing host's open stream connections until close_linger_ms
+/// after the last bytes it sent, flushing what is queued and dropping what
+/// arrives, or until every peer has closed its end.
+///
+/// @param[in,out] h closing host, its listener and datagram sockets closed
+void linger_streams(Host* h) {
+    for (;;) {
+        SocketWait waits[max_connections]{};
+        Connection* owners[max_connections]{};
+        std::size_t count = 0;
+        for (auto& c : h->connections) {
+            if (!socket_valid(c.fd) || c.failed || c.connecting)
+                continue;
+            flush(h, &c);
+            if (c.failed)
+                continue;
+            waits[count].fd = native(c.fd);
+            waits[count].wanted = socket_readable | (c.tx_used != 0 ? socket_writable : 0u);
+            owners[count] = &c;
+            ++count;
+        }
+        const uint32_t elapsed = host_now_ms(h) - h->last_stream_send_ms;
+        if (count == 0 || !h->stream_sent || elapsed >= close_linger_ms)
+            return;
+        const uint32_t remaining = close_linger_ms - elapsed;
+        const HostClock& clock = h->config.clock;
+        const bool simulated = clock.advance != nullptr;
+        const int ready = wait_for_sockets(waits, count, simulated ? 0 : remaining);
+        if (simulated && ready <= 0)
+            clock.advance(clock.context, remaining);
+        for (std::size_t i = 0; i < count; ++i)
+            if ((waits[i].found & (socket_readable | socket_failed)) != 0)
+                discard_received(h, owners[i]);
+    }
+}
+
+} // namespace
+
 void host_close(Host* h) noexcept {
     dplay::engine_close(&h->engine);
-    for (auto& c : h->connections)
-        if (socket_valid(c.fd) && !c.connecting)
-            flush(h, &c);
+    close_socket(&h->listener);
+    close_socket(&h->datagram);
+    close_socket(&h->enumeration);
+    linger_streams(h);
     for (auto& c : h->connections) {
         close_socket(&c.fd);
         init_connection(&c, invalid_socket, Address{});
     }
-    close_socket(&h->listener);
-    close_socket(&h->datagram);
-    close_socket(&h->enumeration);
+    h->stream_sent = false;
 }
 
 NetTransport host_transport(Host* h) noexcept {

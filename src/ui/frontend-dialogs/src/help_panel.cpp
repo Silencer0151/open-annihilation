@@ -3,6 +3,7 @@
 
 // HELP.GUI: three pages of keyboard commands read from gamedata/help.tdf.
 #include "dialog_internal.hpp"
+#include "oa/data/defs/layout.hpp"
 
 #include "oa/formats/tdf.hpp"
 
@@ -15,9 +16,9 @@ namespace oa::ui::frontend_dialogs {
 
 namespace {
 
-constexpr const char* kLayout = "guis/help.gui";
+constexpr const char* kLayout = "help.gui";
 constexpr const char* kBackdrop = "bitmaps/dhelp.pcx";
-constexpr const char* kTextFile = "gamedata/help.tdf";
+constexpr const char* kTextFile = "help.tdf";
 constexpr const char* kSection = "Help";
 constexpr const char* kLineKey = "Line%d";
 constexpr const char* kPageButton = "Page";
@@ -67,7 +68,12 @@ void help_fill_lines(app::ScreenContext* ctx, Dialog& dialog, int32_t page, int3
         return;
     std::vector<uint8_t> bytes;
     try {
-        bytes = ctx->assets->read(kTextFile).bytes;
+        bytes =
+            ctx->assets
+                ->read(
+                    oa::data::defs::data_path(oa::data::defs::DataDirectory::gamedata, kTextFile)
+                )
+                .bytes;
     } catch (const std::exception&) {
         return;
     }
@@ -118,7 +124,7 @@ bool open_help(app::ScreenContext* ctx) {
     auto* dialog = dialog_push(
         ctx,
         DialogKind::help,
-        kLayout,
+        oa::data::defs::gui_path(kLayout).c_str(),
         kBackdrop,
         panel_flag::beside_hud | panel_flag::shade_below | panel_flag::modal_backdrop |
             panel_flag::first_draw

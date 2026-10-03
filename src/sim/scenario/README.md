@@ -5,6 +5,13 @@ unit event dispatch, victory and defeat tests, the commander rule's deathmatch
 branches, and the campaign file and map catalogue loaders. The map loader
 creates the controller before selecting the schema.
 
+`session_cheats_allowed` (commander_rules.hpp) decides, as each mission
+starts, whether the chat line runs cheats: in every single-player game, a
+campaign as well as a skirmish, and in a multiplayer game as the host's
+CHEATING option says, for every player alike. 3.1c refuses cheats in a
+campaign; [VARIANCES.md](../../../VARIANCES.md) lists the difference.
+`scenario-commander-rules` tests it for each kind of game.
+
 Call `register_conditions` with a DefinitionHost backed by the selected OTA
 GlobalHeader before spawning units. Absent condition keys produce the game's
 DestroyAllUnits victory object and AllUnitsKilled defeat object. The controller

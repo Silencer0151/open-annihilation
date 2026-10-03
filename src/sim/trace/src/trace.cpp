@@ -252,8 +252,12 @@ sample_tick_record(const World& world, const UnitSide* sides, uint32_t core_rand
     return record;
 }
 
-TickDigest
-tick_digest(const World& world, const UnitSide* sides, const RandomState& random) noexcept {
+TickDigest tick_digest(
+    const World& world,
+    const UnitSide* sides,
+    const RandomState& random,
+    const SectionDigest* rule_state
+) noexcept {
     TickDigest digest{};
     digest.tick = world.game.tick;
     for (SectionDigest& section : digest.sections)
@@ -271,6 +275,11 @@ tick_digest(const World& world, const UnitSide* sides, const RandomState& random
         fold_section(total, static_cast<uint32_t>(section.value));
         fold_section(total, static_cast<uint32_t>(section.value >> 32));
         fold_section(total, section.items);
+    }
+    if (rule_state != nullptr) {
+        fold_section(total, static_cast<uint32_t>(rule_state->value));
+        fold_section(total, static_cast<uint32_t>(rule_state->value >> 32));
+        fold_section(total, rule_state->items);
     }
     return digest;
 }

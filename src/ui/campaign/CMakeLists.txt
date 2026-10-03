@@ -3,10 +3,10 @@
 
 add_library(oa-ui-campaign briefing_text.cpp single_player.cpp campaign.cpp endgame.cpp screens.cpp)
 add_library(oa::ui::campaign ALIAS oa-ui-campaign)
-target_link_libraries(oa-ui-campaign PRIVATE oa-base-text oa-base-game-math)
+target_link_libraries(oa-ui-campaign PRIVATE oa-base-text oa-base-game-math oa-data-defs)
 target_include_directories(oa-ui-campaign PUBLIC include)
 target_compile_features(oa-ui-campaign PUBLIC cxx_std_20)
-target_link_libraries(oa-ui-campaign PUBLIC oa-data-campaign oa-core-types
+target_link_libraries(oa-ui-campaign PUBLIC oa-data-campaign oa-data-match-rules oa-core-types
   PRIVATE oa-ui-screen-registry oa-ui-frontend-renderer oa-ui-frontend-state oa-ui-gui-layout
   oa-present-model oa-sim-simulation-state oa-options)
 if(BUILD_TESTING)

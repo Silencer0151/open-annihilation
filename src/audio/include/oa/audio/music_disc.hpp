@@ -40,6 +40,29 @@ struct MusicDisc {
 /// @return The disc's track files, count and identity.
 [[nodiscard]] MusicDisc music_disc_scan(const std::filesystem::path& directory);
 
+/// Builds the disc of numbered MP3 files: 1.mp3, 2.mp3 and on, with no
+/// gap, are disc tracks 1, 2 and on, and track 1 is the data track.
+///
+/// The scan stops at the first number with no file, so a folder without
+/// 1.mp3 has no disc at all. Names are matched without case; files of
+/// other formats are not tracks. Tracks past music_disc_max_tracks are
+/// left out.
+///
+/// @param directory music directory to scan
+/// @return the disc's track files, count and identity
+[[nodiscard]] MusicDisc music_disc_scan_numbered(const std::filesystem::path& directory);
+
+/// Builds the disc of a folder's MP3 files, whatever their names: sorted by
+/// name without case, the first is disc track 2, the next track 3 and so
+/// on, after the data track.
+///
+/// Names are not read as numbers, so 10.mp3 comes before 2.mp3. Files past
+/// music_disc_max_tracks are left out.
+///
+/// @param directory music directory to scan
+/// @return the disc's track files, count and identity
+[[nodiscard]] MusicDisc music_disc_scan_folder(const std::filesystem::path& directory);
+
 /// Reports whether the disc has at least one playable track.
 ///
 /// @param disc Scanned music disc.

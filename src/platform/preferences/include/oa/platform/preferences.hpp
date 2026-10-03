@@ -46,7 +46,7 @@ std::filesystem::path data_directory();
 std::filesystem::path apple_data_directory(const std::filesystem::path& application_support);
 /// Reads a preferences file.
 ///
-/// Throws std::runtime_error for an unreadable, oversized, corrupt or
+/// Its lines may end in LF or CR LF. Throws std::runtime_error for an unreadable, oversized, corrupt or
 /// duplicate-key file.
 ///
 /// @param file preferences file

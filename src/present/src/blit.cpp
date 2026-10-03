@@ -310,14 +310,22 @@ void draw_sprite_blended(Surface* target, const Sprite* sprite, int32_t x, int32
     if (display == nullptr || (display->flags & display_flag_alpha_table) == 0) {
         return;
     }
-    const uint8_t* table = display->alpha_table;
+    draw_sprite_blended_through(target, sprite, x, y, display->alpha_table);
+}
+
+void draw_sprite_blended_through(
+    Surface* target, const Sprite* sprite, int32_t x, int32_t y, const uint8_t* table
+) noexcept {
+    if (table == nullptr) {
+        return;
+    }
     with_target(target, [&](Surface& surface) {
         if (sprite == nullptr) {
             return;
         }
         if (sprite->child_count != 0) {
             for (int32_t i = 0; i < sprite->child_count; ++i) {
-                draw_sprite_blended(&surface, child_of(*sprite, i), x, y);
+                draw_sprite_blended_through(&surface, child_of(*sprite, i), x, y, table);
             }
             return;
         }

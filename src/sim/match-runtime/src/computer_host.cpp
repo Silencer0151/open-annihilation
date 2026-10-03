@@ -65,6 +65,11 @@ bool host_primary_order(void* context, uint16_t unit, uint8_t* preserve, uint8_t
     return true;
 }
 
+/// Tells whether a unit's secondary order queue holds an order.
+bool host_secondary_order(void* context, uint16_t unit) {
+    return match_of(context).orders(unit).secondary != nullptr;
+}
+
 bool host_unit_visible(void* context, uint8_t player, uint16_t unit) {
     try {
         return match_of(context).unit_visible(player, unit);
@@ -183,7 +188,9 @@ const sim::detection::Sightings* host_sightings(void* context, uint8_t player) {
 bool host_weapon_reaches(void* context, uint16_t unit, const oa::FixedVec3* at) {
     const auto& world = match_of(context).state();
     const auto* shooter = oa::world_unit_at(&world, unit);
-    return shooter != nullptr && sim::weapon_execution::slot_reaches_point(world, *shooter, *at, 0);
+    return shooter != nullptr && sim::weapon_execution::slot_reaches_point(
+                                     world, *shooter, *at, 0, match_of(context).rules_view()
+                                 );
 }
 
 /// Orders an attack on a point with the order the Attack command resolves to over open
@@ -227,6 +234,7 @@ ComputerHost make_host(Match& match) noexcept {
     host.set_squad = host_set_squad;
     host.allied = host_allied;
     host.primary_order = host_primary_order;
+    host.secondary_order = host_secondary_order;
     host.unit_visible = host_unit_visible;
     host.strengths = host_strengths;
     host.site_clear = host_site_clear;
@@ -291,6 +299,8 @@ bool load_types(ComputerPlayers* state, Match& match) noexcept {
         );
         type.makes_metal = source->makes_metal;
         type.min_water_depth = source->min_water_depth;
+        type.max_water_depth = def.max_water_depth;
+        type.energy_use = def.energy_use;
         type.extracts_metal = source->extracts_metal;
     }
     return true;
@@ -315,7 +325,9 @@ ComputerPlayers* match_computer_players(Match& match) {
             destroy_players(static_cast<ComputerPlayers*>(p));
         });
     }
-    return static_cast<ComputerPlayers*>(slot.get());
+    auto* state = static_cast<ComputerPlayers*>(slot.get());
+    state->rules = match.rules_view();
+    return state;
 }
 
 bool configure_match_computer_players(
@@ -351,6 +363,7 @@ void prepare_match_computer_players(Match& match) {
     auto* state = match_computer_players(match);
     if (state->initialized || !load_types(state, match))
         return;
+    state->build_lists = match.limits().build_lists;
     for (uint8_t player = 0; player < OA_PLAYER_COUNT; ++player) {
         const auto& record = match.state().game.players[player];
         if (record.in_use == 0 || record.status != OA_PLAYER_STATUS_COMPUTER)

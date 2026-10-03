@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/data/defs/version.hpp"
+#include "oa/data/defs/layout.hpp"
 
 #include "oa/formats/tdf.hpp"
 
@@ -9,7 +10,9 @@ namespace oa::data::defs {
 
 bool revision_gpf_mismatch(const Files* files, const char* variant) noexcept {
     char path[path_capacity];
-    build_variant_path(files, path, sizeof path, "gamedata", "version", "tdf", variant);
+    build_variant_path(
+        files, path, sizeof path, directory_name(DataDirectory::gamedata), "version", "tdf", variant
+    );
     formats::tdf::Document document;
     formats::tdf::document_init(&document);
     bool mismatch = false;

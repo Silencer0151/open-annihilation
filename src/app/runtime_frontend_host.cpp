@@ -3,6 +3,7 @@
 
 // Frontend dispatcher, preferences, map list and main-menu host services.
 #include "oa/app/runtime.hpp"
+#include "oa/app/mod_profile_loader.hpp"
 #include "oa/app/hook_call.hpp"
 #include "oa/ui/decoded.hpp"
 #include "oa/app/game_directory.hpp"
@@ -14,6 +15,7 @@
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
@@ -153,12 +155,22 @@ void Runtime::shut_down(frontend::State&) {
     quit_application(nullptr);
 }
 
-std::string Runtime::preference_key(std::string_view section, std::string_view key) {
-    return std::string(section) + '|' + std::string(key);
+std::string Runtime::preference_key(std::string_view section, std::string_view key) const {
+    const auto prefix =
+        options_.mod_profile ? registry_key_prefix(*options_.mod_profile) : std::string();
+    return prefix + std::string(section) + '|' + std::string(key);
 }
 
 void Runtime::load_preference_file() {
     preference_path_ = preference_file(options_.preferences_file);
+    load_preference_values();
+    // A mod's first run finds the registry values its installer would have
+    // written; they are saved with the next change.
+    if (options_.mod_profile && seed_registry(*options_.mod_profile, preference_values_))
+        preferences_dirty_ = true;
+}
+
+void Runtime::load_preference_values() {
     if (std::filesystem::exists(preference_path_)) {
         preference_values_ = oa::platform::preferences::load(preference_path_);
         return;
@@ -212,8 +224,27 @@ void Runtime::flush_preferences() {
     preferences_dirty_ = false;
 }
 
+std::map<std::string, std::string>::const_iterator
+Runtime::find_preference(std::string_view section, std::string_view key) const {
+    const auto wanted = preference_key(section, key);
+    const auto found = preference_values_.find(wanted);
+    if (found != preference_values_.end() || !options_.mod_profile)
+        return found;
+    // Registry value names are matched without case, so a value a mod's
+    // registry seeds spelled otherwise is still found.
+    const auto same = [](char a, char b) {
+        return std::tolower(static_cast<unsigned char>(a)) ==
+               std::tolower(static_cast<unsigned char>(b));
+    };
+    for (auto entry = preference_values_.begin(); entry != preference_values_.end(); ++entry)
+        if (entry->first.size() == wanted.size() &&
+            std::equal(entry->first.begin(), entry->first.end(), wanted.begin(), same))
+            return entry;
+    return preference_values_.end();
+}
+
 std::optional<uint32_t> Runtime::read_number(std::string_view section, std::string_view key) {
-    const auto found = preference_values_.find(preference_key(section, key));
+    const auto found = find_preference(section, key);
     if (found == preference_values_.end())
         return std::nullopt;
     uint32_t value = 0;
@@ -231,7 +262,7 @@ void Runtime::write_number(std::string_view section, std::string_view key, uint3
 
 std::optional<std::string>
 Runtime::read_string(std::string_view section, std::string_view key, std::size_t capacity) {
-    const auto found = preference_values_.find(preference_key(section, key));
+    const auto found = find_preference(section, key);
     if (found == preference_values_.end() || found->second.size() >= capacity)
         return std::nullopt;
     return found->second;
@@ -349,7 +380,10 @@ init::MapListHandle Runtime::construct(init::MapListHandle handle, int32_t selec
 }
 
 void Runtime::discover_first_map() {
-    const auto files = oa::data::campaign::campaign_asset_files(assets_);
+    // The list keeps the maps' file names, which the screens find the maps
+    // by; a chosen map shows its translated name (campaign_localized_name).
+    auto files = oa::data::campaign::campaign_asset_files(assets_);
+    files.translate = nullptr;
     const oa::data::campaign::MapScanHost host{
         this, [](void* runtime, uint32_t animation) {
             static_cast<Runtime*>(runtime)->select_cursor_animation(animation);
@@ -439,15 +473,54 @@ constexpr const char* game_disc_archive = "totala1.hpi";
 } // namespace
 
 bool Runtime::holds_disc_archive() const {
-    return fs::is_regular_file(options_.game_dir / campaign_disc_archive) ||
-           fs::is_regular_file(options_.game_dir / game_disc_archive);
+    const auto regular = [this](const char* name) {
+        const auto found = game_path(name);
+        std::error_code error;
+        return found && fs::is_regular_file(*found, error);
+    };
+    return regular(campaign_disc_archive) || regular(game_disc_archive);
+}
+
+std::optional<fs::path> Runtime::game_path(std::string_view relative) const {
+    const auto lowered = [](std::string text) {
+        std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return text;
+    };
+    for (const auto& root : assets_.loose_roots()) {
+        fs::path at = root;
+        bool found = true;
+        for (std::string_view rest = relative; found && !rest.empty();) {
+            const auto end = rest.find('/');
+            const auto part = lowered(std::string(rest.substr(0, end)));
+            rest = end == std::string_view::npos ? std::string_view{} : rest.substr(end + 1);
+            found = false;
+            std::error_code error;
+            for (fs::directory_iterator entry{at, error}, last; !error && entry != last;
+                 entry.increment(error))
+                if (lowered(entry->path().filename().string()) == part) {
+                    at = entry->path();
+                    found = true;
+                    break;
+                }
+        }
+        if (found)
+            return at;
+    }
+    return std::nullopt;
 }
 
 uint32_t Runtime::find_disc(menu::Disc disc) {
+    // A mod that skips the disc check always finds its disc.
+    if (options_.mod_profile && !options_.mod_profile->layout.cd_check)
+        return 1;
     if (!holds_disc_archive())
         return 1;
     const auto archive = disc == menu::Disc::campaign ? campaign_disc_archive : game_disc_archive;
-    return fs::is_regular_file(options_.game_dir / archive) ? 1U : 0U;
+    const auto found = game_path(archive);
+    std::error_code error;
+    return found && fs::is_regular_file(*found, error) ? 1U : 0U;
 }
 
 int16_t Runtime::shift_key_state() {

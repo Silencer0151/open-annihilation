@@ -546,10 +546,14 @@ class TickHost final : public sim::simulation_state::Host,
 
   public:
 
-    /// Binds the host to a match for one simulation pass.
+    /// Binds the host to a match for one simulation pass and hands the
+    /// match's rules to the systems it serves.
     ///
     /// @param m the match
-    explicit TickHost(Match& m) : match(m) {}
+    explicit TickHost(Match& m) : match(m) {
+        sim::simulation_state::Host::rules = m.rules_view();
+        sim::ground_orders::Host::rules = m.rules_view();
+    }
 
     /// Returns the world queries the air goals and the air driver make, over this
     /// match.
@@ -574,6 +578,13 @@ class TickHost final : public sim::simulation_state::Host,
     /// @param s Builder.
     /// @param[in,out] order Its order.
     void stop_building(sim::unit_spawn::Slot& s, sim::simulation_state::Order& order);
+
+    /// Sends a unit to a point ahead of its orders, as the build-site
+    /// kickout sends a unit off a site (Match::send_ahead_of_orders).
+    ///
+    /// @param s the unit, one with a movement object
+    /// @param point signed 16.16 point; its whole x, y and z are the move's
+    void send_ahead(sim::unit_spawn::Slot& s, const sim::ground_orders::Point& point);
 
     /// Moves the unit's movement-rate bits (OA_UNIT_FLAG_MOVE_RATE_MASK) to its
     /// movement_rate and, on a change, runs StopMoving (rate 0), or
@@ -982,12 +993,21 @@ class TickHost::ConstructionAdapter {
     /// @return a negative worker-time rate
     float build_decay_rate(int32_t ticks) const;
 
-    /// Returns the footprint width of the order's type.
+    /// Returns the facing the order's building is placed in: the order's
+    /// (ConstructionOrderState::facing) when its type may take it
+    /// (Match::build_facing), else south.
+    ///
+    /// @return quarter turns from south, 0 to 3
+    uint8_t facing() const;
+
+    /// Returns the footprint width of the order's type, facing as it is
+    /// placed: its depth facing east or west.
     ///
     /// @return width in cells; 0, which is noted, for a type that is not loaded
     int16_t footprint_x() const;
 
-    /// Returns the footprint depth of the order's type.
+    /// Returns the footprint depth of the order's type, facing as it is
+    /// placed: its width facing east or west.
     ///
     /// @return depth in cells; 0, which is noted, for a type that is not loaded
     int16_t footprint_z() const;
@@ -1072,6 +1092,8 @@ class TickHost::HealthHost final : public sim::unit_health::ConstructionHost {
     /// @param index the paying unit's slot
     HealthHost(Match& match, uint16_t index)
         : match_(match), economy_(match_unit(match, index).economy) {
+        rules = match.rules_view();
+        repair_remainders = match.repair_remainders();
         debit_ = {economy_.energy.requested, economy_.energy.accepted, economy_.energy.gate};
         metal_ = {economy_.metal.requested, economy_.metal.accepted, economy_.metal.gate};
     }

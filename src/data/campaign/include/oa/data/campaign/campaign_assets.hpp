@@ -15,7 +15,9 @@ namespace oa::data::campaign {
 /// Returns file services reading through the mounted asset store.
 ///
 /// Directory listings enumerate in find order (loose files, then each archive) with
-/// stored capitalisation.
+/// stored capitalisation. The services translate the game's texts and look
+/// in the language's folders as the installed translation does
+/// (oa/data/languages/translation.hpp); without one, they do neither.
 ///
 /// @param assets mounted asset store; must outlive the services
 /// @return the services

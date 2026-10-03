@@ -1,0 +1,1641 @@
+# SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The OAMOD registry, catalogue 1: every meaning an oamod.yaml can name, with
+# its type, its 3.1c baseline and its default. tools/gen_mod_registry.py turns
+# it into the engine's tables (src/data/mod-profile/src/registry_table.inc) and
+# records (src/data/match-rules and src/data/mod-profile); the mod-registry-sync
+# test fails when they differ from what this file gives.
+#
+# One entry per meaning: identity and layout values, limits, unit-script
+# extensions, data keys, hacks (the ui.* hacks carry visual: true and view
+# scope), and visual strings and media.
+#
+# Parameter fields
+#   type        bool | int | decimal | string | enum | list<int> | list<decimal> | list<enum> | list<string> |
+#               set<enum> | int-or-none (an int or the string none)
+#   values      enum members; set<enum> values resolve in this order
+#   min, max    inclusive bounds (element-wise for lists); multiple-of, length (n or [lo, hi]), order,
+#               distinct, pattern and max-length (strings) further restrict a value
+#   unit        what a number counts
+#   baseline    the value that reproduces 3.1c; an absent entry behaves as if every parameter had it
+#   default     the value used when the entry is on and nothing sets the parameter
+#   default-from  {param, factor}: when nothing sets this parameter, it follows factor x that parameter
+#   adjustable  fixed (only the profile sets it) | install (the game reads it from its INI or registry;
+#               a profile binds it under settings) | match (as install, and the host may also change it for
+#               one game)
+#   scope       sim (part of the network-play hash) | view (local display, input, audio or files; not hashed)
+#   setting     the INI (Section/Key) or registry value the game reads, for settings bindings
+#   setting-transform  how a bound raw value becomes the parameter (see setting-transforms)
+#   clamp-between  [lo, hi] parameters a bound or match value is clamped into
+#   per-unit, per-weapon  the data-key meaning that overrides the parameter for one unit or weapon
+#
+# Entry fields: scope (sim | view) decides whether the entry's presence is hashed; ownership says which
+# machines run the behaviour in a multiplayer game. Hacks: title is the name players see, in English and
+# Title Case, unique among the hacks; area-titles names each area the same way; implemented says whether
+# this engine carries the behaviour out; a profile that turns on a hack that is not implemented is
+# refused unless the resolver is told to accept it. Limits and hacks: shorthand names the single
+# parameter a scalar value sets; constraints are checked after resolution; presets are complete
+# parameter sets named for what they do, never for a mod (baseline equals the baselines and exists only
+# when the entry can express 3.1c while on). Identity, layout, strings and media: key is the profile
+# key, value its type and 3.1c baseline. Script extensions: direction and the default-index a list-form
+# mount uses. Data keys: file (unit | weapon), standard-key (the usual spelling of the key), value
+# (type; absent = what applies without the key), overrides (the parameter it replaces per unit) and
+# requires (the hack that must be on).
+#
+# Resolution, lowest to highest: baseline (entry absent) -> default (entry on) -> preset -> profile file ->
+# settings binding -> match option -> per-unit or per-weapon data key.
+#
+# Defaults: turning an entry on with no parameters gives the variant most mods use; a mod whose values
+# differ writes them in its own profile.
+
+registry: 1
+catalogue: 1
+types: [bool, int, decimal, string, enum, list<int>, list<decimal>, list<enum>, set<enum>, int-or-none]
+resolution-order: [baseline, default, preset, profile, settings, match, per-unit]
+setting-transforms:
+  unit-type-bits: "raw v: 512 when v <= 512, else ((v >> 9) + 1) * 512"
+profile-defaults:
+  script-extensions: {fidelity: exact}
+script-indices: {min: 0, max: 65535, base-range: [1, 20]}
+# The name players see for each hack area, in English (the interface looks it
+# up in its catalogue).
+area-titles:
+  ai: AI
+  air: Aircraft
+  console: Console
+  economy: Economy
+  intel: Vision and Radar
+  network: Network
+  orders: Orders
+  recorder: Recorder
+  repair: Repair
+  setup: Game Setup
+  sharing: Sharing
+  teams: Teams
+  ui: Interface
+  units: Units
+  veterancy: Veterancy
+  weapons: Weapons
+
+entries:
+
+  # ---- identity (profile block identity)
+  identity.settings-file:
+    kind: identity
+    area: paths
+    summary: "Name of the configuration INI the game and its add-on libraries read."
+    ownership: local-view
+    scope: view
+    key: settings-file
+    value: {type: string, max-length: 64, baseline: totala.ini, scope: view}
+  identity.registry-root:
+    kind: identity
+    area: paths
+    summary: Registry root for TA settings renamed.
+    ownership: local-view
+    scope: view
+    key: registry-root
+    value: {type: string, max-length: 128, baseline: "Software\\\x43\x61\x76\x65\x64\x6F\x67 Entertainment", scope: view}
+  identity.network-version:
+    kind: identity
+    area: network
+    summary: "Multiplayer version bytes; peers must match, and replays present their own version."
+    ownership: all-machines
+    scope: sim
+    key: network-version
+    value: {type: list<int>, length: 2, min: 0, max: 255, baseline: [3, 1], scope: sim}
+  identity.replay-network-version:
+    kind: identity
+    area: network
+    summary: "Multiplayer version bytes a replay client reports to the replayer."
+    ownership: all-machines
+    scope: sim
+    key: replay-network-version
+    value: {type: list<int>, length: 2, min: 0, max: 255, baseline: [3, 1], scope: sim}
+  identity.display-version:
+    kind: identity
+    area: ui
+    summary: Main-menu version text.
+    ownership: local-view
+    scope: view
+    key: display-version
+    value: {type: string, max-length: 16, baseline: v3.1, scope: view}
+
+  # ---- layout (profile block layout)
+  layout.revision-archive:
+    kind: layout
+    area: paths
+    summary: "Revision-slot archive rev31.gp3 is replaced; rev31.gp3 is no longer mounted."
+    ownership: all-machines
+    scope: sim
+    key: revision-archive
+    value: {type: string, max-length: 64, baseline: rev31.gp3, scope: sim}
+  layout.directories.gamedata:
+    kind: layout
+    area: paths
+    summary: "Game-data directory (sidedata, moveinfo, sound, LOS, help, translate) is renamed with replace semantics."
+    ownership: all-machines
+    scope: sim
+    key: directories.gamedata
+    value: {type: string, max-length: 32, baseline: gamedata, scope: sim}
+  layout.directories.guis:
+    kind: layout
+    area: paths
+    summary: GUI (build-menu page) directory renamed.
+    ownership: all-machines
+    scope: sim
+    key: directories.guis
+    value: {type: string, max-length: 32, baseline: guis, scope: sim}
+  layout.directories.unitpics:
+    kind: layout
+    area: paths
+    summary: Build-picture directory renamed.
+    ownership: all-machines
+    scope: sim
+    key: directories.unitpics
+    value: {type: string, max-length: 32, baseline: unitpics, scope: sim}
+  layout.directories.weapons:
+    kind: layout
+    area: paths
+    summary: Weapon TDF directory and scan pattern renamed.
+    ownership: all-machines
+    scope: sim
+    key: directories.weapons
+    value: {type: string, max-length: 32, baseline: Weapons, scope: sim}
+  layout.directories.download:
+    kind: layout
+    area: paths
+    summary: Download (MENUENTRY build-menu TDF) directory renamed.
+    ownership: all-machines
+    scope: sim
+    key: directories.download
+    value: {type: string, max-length: 32, baseline: download, scope: sim}
+  layout.directories.units:
+    kind: layout
+    area: paths
+    summary: "Unit definition directory renamed."
+    ownership: all-machines
+    scope: sim
+    key: directories.units
+    value: {type: string, max-length: 32, baseline: units, scope: sim}
+  layout.directories.ai:
+    kind: layout
+    area: paths
+    summary: "AI profile directory renamed."
+    ownership: all-machines
+    scope: sim
+    key: directories.ai
+    value: {type: string, max-length: 32, baseline: ai, scope: sim}
+  layout.cd-check:
+    kind: layout
+    area: paths
+    summary: "CD archive branch and CD identity check are bypassed; archives always mount from the install directory."
+    ownership: all-machines
+    scope: sim
+    key: cd-check
+    value: {type: bool, baseline: true, scope: sim}
+  layout.map-units-section:
+    kind: layout
+    area: paths
+    summary: "Map schema section that holds mission unit placements; the original reuses the units directory string, so a mod that renames the directory renames the section too."
+    ownership: all-machines
+    scope: sim
+    key: map-units-section
+    value: {type: string, max-length: 32, baseline: units, scope: sim}
+
+  # ---- limits (profile block limits; ids without the limits. prefix)
+  limits.units-per-player:
+    kind: limit
+    area: limits
+    summary: "Per-player unit cap: the registry default, clamp test and clamp value (3.1c 250/500/500) all become 1500."
+    ownership: host + all-machines
+    scope: sim
+    params:
+      default: {type: int, min: 1, max: 6553, unit: units, baseline: 250, default: 1500, adjustable: match, scope: sim, setting: {registry: UnitLimit}, clamp-between: [min, max]}
+      min: {type: int, min: 1, max: 6553, unit: units, baseline: 20, default: 20, adjustable: fixed, scope: sim}
+      max: {type: int, min: 1, max: 6553, unit: units, baseline: 500, default: 1500, adjustable: fixed, scope: sim}
+      limits-screen-fallback: {type: int, min: 1, max: 6553, unit: units, baseline: 101, default: 1500, adjustable: install, scope: view, setting: {ini: Preferences/UnitLimit}}
+    constraints: [min <= default, default <= max]
+    presets:
+      baseline: {default: 250, min: 20, max: 500, limits-screen-fallback: 101}
+  limits.unit-types:
+    kind: limit
+    area: limits
+    summary: "Unit-type bitsets (AI type weight/limit commands, per-type category bitsets, same-type select) widen past 512 type ids."
+    ownership: all-machines
+    scope: sim
+    params:
+      bitset-bits: {type: int, min: 512, max: 65536, multiple-of: 512, unit: bits, baseline: 512, default: 16384, adjustable: install, scope: sim, setting: {ini: Preferences/UnitType}, setting-transform: unit-type-bits}
+      partial-widening: {type: bool, baseline: false, default: false, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {bitset-bits: 512, partial-widening: false}
+  limits.effects:
+    kind: limit
+    area: limits
+    summary: "Special-effect queue cap 400 -> 20480; the static effect-vector reserve becomes cap×10."
+    ownership: local-view
+    scope: view
+    params:
+      queue: {type: int, min: 1, max: 1000000, unit: effects, baseline: 400, default: 20480, adjustable: install, scope: view, setting: {ini: Preferences/SfxLimit}}
+      reserve: {type: int, min: 1, max: 10000000, unit: effects, baseline: 1000, default: 204800, default-from: {param: queue, factor: 10}, adjustable: fixed, scope: view}
+    presets:
+      baseline: {queue: 400, reserve: 1000}
+  limits.path-search-budget:
+    kind: limit
+    area: limits
+    summary: "Pathfinder node budget per search: 1333 -> 66650."
+    ownership: owner-only
+    scope: sim
+    shorthand: nodes
+    params:
+      nodes: {type: int, min: 1, max: 10000000, unit: nodes, baseline: 1333, default: 66650, adjustable: install, scope: sim, setting: {ini: Preferences/AISearchMapEntries}}
+    presets:
+      baseline: {nodes: 1333}
+  limits.model-composite:
+    kind: limit
+    area: limits
+    summary: "Unit model composite buffer 600×600 -> 1280×1280, optionally clamping oversize composites to the buffer."
+    ownership: local-view
+    scope: view
+    params:
+      width: {type: int, min: 64, max: 8192, unit: pixels, baseline: 600, default: 1280, adjustable: fixed, scope: view}
+      height: {type: int, min: 64, max: 8192, unit: pixels, baseline: 600, default: 1280, adjustable: fixed, scope: view}
+      clamp-oversize: {type: bool, baseline: false, default: true, adjustable: fixed, scope: view}
+    presets:
+      baseline: {width: 600, height: 600, clamp-oversize: false}
+  limits.build-list-entries:
+    kind: limit
+    area: limits
+    summary: "Per-builder SIDEDATA [CANBUILD] list (the skirmish AI build table) copies 36 entries instead of 30."
+    ownership: owner-only
+    scope: sim
+    params:
+      copy: {type: int, min: 1, max: 1024, unit: entries, baseline: 30, default: 36, adjustable: fixed, scope: sim}
+      overflow: {type: enum, values: [truncate, dynamic], baseline: truncate, default: truncate, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {copy: 30, overflow: truncate}
+  limits.category-mask-types:
+    kind: limit
+    area: limits
+    summary: "Unit type ids a category mask can hold; ids at or past the width lose category membership."
+    ownership: all-machines
+    scope: sim
+    shorthand: types
+    params:
+      types: {type: int, min: 512, max: 65536, multiple-of: 512, unit: type ids, baseline: 512, default: 512, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {types: 512}
+
+  # ---- script extensions (profile block script-extensions)
+  unit.kills-x100:
+    kind: script-ext
+    area: script
+    summary: "COB get 32 returns the calling unit's kill count × 100."
+    ownership: all-machines
+    scope: sim
+    direction: get
+    default-index: 32
+  unit.min-id:
+    kind: script-ext
+    area: script
+    summary: COB get 69 returns the lowest unit slot id (constant 1).
+    ownership: all-machines
+    scope: sim
+    direction: get
+    default-index: 69
+  unit.max-id:
+    kind: script-ext
+    area: script
+    summary: "COB get 70 returns the highest unit slot id: per-player unit maximum × 10."
+    ownership: all-machines
+    scope: sim
+    direction: get
+    default-index: 70
+  unit.my-id:
+    kind: script-ext
+    area: script
+    summary: "COB get 71 returns the calling unit's own slot id."
+    ownership: all-machines
+    scope: sim
+    direction: get
+    default-index: 71
+  unit.owner-of:
+    kind: script-ext
+    area: script
+    summary: COB get 72(id) returns the owner player index of unit id.
+    ownership: all-machines
+    scope: sim
+    direction: get
+    default-index: 72
+  unit.build-percent-left-of:
+    kind: script-ext
+    area: script
+    summary: "COB get 73(id) runs the base BUILD_PERCENT_LEFT formula on unit id (0 when complete, else 1 + trunc(99 × fraction))."
+    ownership: all-machines
+    scope: sim
+    direction: get
+    default-index: 73
+  unit.allied-with:
+    kind: script-ext
+    area: script
+    summary: "COB get 74(id) returns 1 when the caller's owner has allied the target's owner."
+    ownership: all-machines
+    scope: sim
+    direction: get
+    default-index: 74
+  unit.is-local:
+    kind: script-ext
+    area: script
+    summary: "COB get 75(id) returns 1 when the target unit's owner is simulated on this machine (controller 1 local human or 2 local AI)."
+    ownership: all-machines
+    scope: sim
+    direction: get
+    default-index: 75
+
+  # ---- data keys (profile block data-keys: file key -> meaning)
+  weapons.not-to-air:
+    kind: data-key
+    area: weapons
+    summary: "Weapon TDF key nottoair=1: the weapon may not target airborne units."
+    ownership: owner-only
+    scope: sim
+    file: weapon
+    standard-key: nottoair
+    value: {type: int, min: 0, max: 2147483647, absent: 0}
+  weapons.surface-fire:
+    kind: data-key
+    area: weapons
+    summary: "Weapon TDF key surfacefire=1: a waterweapon may also engage surface, air-above-water and ground-position targets, and its projectile flies normally above sea level."
+    ownership: owner-only + all-machines
+    scope: sim
+    file: weapon
+    standard-key: surfacefire
+    value: {type: int, min: 0, max: 2147483647, absent: 0}
+  weapons.not-to-underwater:
+    kind: data-key
+    area: weapons
+    summary: "Weapon TDF key nottounderwater=1: on the waterweapon path a target whose top is at or below sea level is out of range."
+    ownership: owner-only
+    scope: sim
+    file: weapon
+    standard-key: nottounderwater
+    value: {type: int, min: 0, max: 2147483647, absent: 0}
+  weapons.no-map-alert:
+    kind: data-key
+    area: weapons
+    summary: "Weapon TDF key nomapweaponalert=1: an ownerless projectile whose [DAMAGE] default is 0 skips the area explosion and draws no minimap weapon alert."
+    ownership: all-machines
+    scope: sim
+    file: weapon
+    standard-key: nomapweaponalert
+    value: {type: int, min: 0, max: 2147483647, absent: 0}
+  veterancy.thresholds:
+    kind: data-key
+    area: veterancy
+    summary: "FBI key VeterancyThresholds: ascending kill counts for each veterancy level of this unit type."
+    ownership: all-machines / owner-only
+    scope: sim
+    file: unit
+    standard-key: VeterancyThresholds
+    value: {type: list<int>, length: [0, 32], min: 0, max: 65535, order: ascending, unit: kills, absent: veterancy.model.default-thresholds}
+    overrides: veterancy.model.default-thresholds
+    requires: veterancy.model
+  veterancy.accuracy-rate:
+    kind: data-key
+    area: veterancy
+    summary: "FBI key VeterancyAccuracyBuffRate: kills per unit of ballistic spread reduction (0 = no accuracy buff)."
+    ownership: all-machines / owner-only
+    scope: sim
+    file: unit
+    standard-key: VeterancyAccuracyBuffRate
+    value: {type: int, min: 0, max: 65535, unit: kills, absent: veterancy.model.accuracy-rate-default}
+    overrides: veterancy.model.accuracy-rate-default
+    requires: veterancy.model
+  units.build-facings:
+    kind: data-key
+    area: units
+    summary: "FBI key Rotations: facings (letters from S E N W) a building may be placed in."
+    ownership: all-machines
+    scope: sim
+    file: unit
+    standard-key: Rotations
+    value: {type: string, pattern: "^[SENW]{1,4}$", absent: S}
+    requires: units.build-rotation
+  ui.preview-pieces:
+    kind: data-key
+    area: ui
+    visual: true
+    summary: "FBI keys PreviewPieces, PreviewPiecesS/E/N/W, PreviewObject3D, PreviewFaceOpponent: build-cursor ghost only."
+    ownership: local-view
+    scope: view
+    file: unit
+    standard-key: PreviewPieces
+    value: {type: string, absent: ""}
+    requires: ui.build-preview
+  ui.preview-pieces-by-facing:
+    kind: data-key
+    area: ui
+    visual: true
+    summary: "FBI keys PreviewPieces, PreviewPiecesS/E/N/W, PreviewObject3D, PreviewFaceOpponent: build-cursor ghost only."
+    ownership: local-view
+    scope: view
+    file: unit
+    standard-key: "PreviewPieces{S,E,N,W}"
+    value: {type: string, absent: ""}
+    requires: ui.build-preview
+  ui.preview-object:
+    kind: data-key
+    area: ui
+    visual: true
+    summary: "FBI keys PreviewPieces, PreviewPiecesS/E/N/W, PreviewObject3D, PreviewFaceOpponent: build-cursor ghost only."
+    ownership: local-view
+    scope: view
+    file: unit
+    standard-key: PreviewObject3D
+    value: {type: string, absent: ""}
+    requires: ui.build-preview
+  ui.preview-face-opponent:
+    kind: data-key
+    area: ui
+    visual: true
+    summary: "FBI keys PreviewPieces, PreviewPiecesS/E/N/W, PreviewObject3D, PreviewFaceOpponent: build-cursor ghost only."
+    ownership: local-view
+    scope: view
+    file: unit
+    standard-key: PreviewFaceOpponent
+    value: {type: int, absent: 0, min: 0, max: 1}
+    requires: ui.build-preview
+
+  # ---- hacks (profile block hacks)
+  ai.income-multipliers:
+    kind: hack
+    title: Income Multipliers
+    implemented: true
+    area: ai
+    summary: AI (controller type 2) production and feature-reclaim income multiplier per difficulty index.
+    ownership: owner-only
+    scope: sim
+    params:
+      production: {type: list<decimal>, min: 0, max: 100, length: 3, unit: x income, baseline: [0.5, 0.7, 1.0], default: [0.5, 1.0, 4.0], adjustable: fixed, scope: sim}
+      reclaim: {type: list<decimal>, min: 0, max: 100, length: 3, unit: x income, baseline: [0.5, 0.7, 1.0], default: [0.5, 1.0, 4.0], adjustable: fixed, scope: sim}
+    presets:
+      baseline: {production: [0.5, 0.7, 1.0], reclaim: [0.5, 0.7, 1.0]}
+  ai.difficulty-names:
+    kind: hack
+    title: Difficulty Names
+    implemented: true
+    area: ai
+    summary: "Difficulty index/name tables (AI profile keywords, upper-case keywords, display names): Easy and Hard swap places."
+    ownership: owner-only + local-view
+    scope: sim
+    shorthand: names
+    params:
+      names: {type: list<enum>, values: [easy, medium, hard], length: 3, distinct: true, baseline: [easy, medium, hard], default: [hard, medium, easy], adjustable: fixed, scope: sim}
+    presets:
+      baseline: {names: [easy, medium, hard]}
+  ai.squad5-factory-tick:
+    kind: hack
+    title: Commander Runs Factories
+    implemented: true
+    area: ai
+    summary: "The AI commander's third task (squad 5) runs the factory/economy tick instead of a no-op, so the AI builds and fires stockpile weapons from builder=1 silos."
+    ownership: owner-only
+    scope: sim
+    params: {}
+  ai.factory-tick-filter:
+    kind: hack
+    title: Factory Tick Filter
+    implemented: true
+    area: ai
+    summary: "AI factory/economy tick skips buildings with a non-empty background order queue and applies the energy on/off toggle to any building with EnergyUse >= 32 (3.1c: MakesMetal != 0)."
+    ownership: owner-only
+    scope: sim
+    params:
+      skip-busy-background-queue: {type: bool, baseline: false, default: true, adjustable: fixed, scope: sim}
+      power-toggle: {type: enum, values: [makes-metal, energy-use-32], baseline: makes-metal, default: energy-use-32, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {skip-busy-background-queue: false, power-toggle: makes-metal}
+  ai.builder-withhold-threshold:
+    kind: hack
+    title: Commander Builder Limit
+    implemented: true
+    area: ai
+    summary: A commander-class (cancapture) AI builder is withheld from builder jobs once the AI owns N builder-capable units.
+    ownership: owner-only
+    scope: sim
+    shorthand: builders
+    params:
+      builders: {type: int, min: 0, max: 1500, unit: builders, baseline: 5, default: 10, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {builders: 5}
+  ai.commander-keeps-orders-when-damaged:
+    kind: hack
+    title: Commander Keeps Orders When Hit
+    implemented: true
+    area: ai
+    summary: A damaged AI-owned cancapture unit no longer sets the AI response timer and clears its order queue.
+    ownership: owner-only
+    scope: sim
+    params: {}
+  ai.attack-wave-size:
+    kind: hack
+    title: Attack Wave Size
+    implemented: true
+    area: ai
+    summary: "Both AI group-attack tasks (land, naval) launch an attack wave at N units."
+    ownership: owner-only
+    scope: sim
+    shorthand: units
+    params:
+      units: {type: int, min: 1, max: 1500, unit: units, baseline: 6, default: 10, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {units: 6}
+  ai.patrol-group-size:
+    kind: hack
+    title: Patrol Group Size
+    implemented: true
+    area: ai
+    summary: The AI patrol/scout task sends its group to a random map-edge point only once it has N units.
+    ownership: owner-only
+    scope: sim
+    shorthand: units
+    params:
+      units: {type: int, min: 1, max: 1500, unit: units, baseline: 5, default: 15, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {units: 5}
+  ai.patrol-null-enemy-skip:
+    kind: hack
+    title: Patrol Edge Fallback
+    implemented: true
+    area: ai
+    summary: "When the AI force centroid is (0,0) the patrol task uses the random edge point instead of attacking the \"nearest enemy\" found from a possibly null result."
+    ownership: owner-only
+    scope: sim
+    params: {}
+  ai.squad-assignment:
+    kind: hack
+    title: Squad Assignment
+    implemented: true
+    area: ai
+    summary: Idle AI units are grouped and given standing orders by new rules.
+    ownership: owner-only
+    scope: sim
+    shorthand: rules
+    params:
+      rules: {type: enum, values: [base, role-squads], baseline: base, default: role-squads, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {rules: base}
+  ai.nearest-enemy-filter:
+    kind: hack
+    title: Ignore Submerged Targets
+    implemented: true
+    area: ai
+    summary: "AI nearest-enemy search: land attack groups ignore fully submerged enemies and the unit flag mask widens."
+    ownership: owner-only
+    scope: sim
+    shorthand: rules
+    params:
+      rules: {type: enum, values: [base, skip-submerged], baseline: base, default: skip-submerged, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {rules: base}
+  orders.selective-weapon-occupy:
+    kind: hack
+    title: Selective Weapon Use
+    implemented: true
+    area: orders
+    summary: "Attack and D-gun-ground orders occupy only the ordered weapon slot, leaving the other slots free to auto-target."
+    ownership: owner-only
+    scope: sim
+    params:
+      attack: {type: enum, values: [slots-0-and-2, ordered-slot-first-stage, ordered-slot-both-stages], baseline: slots-0-and-2, default: ordered-slot-both-stages, adjustable: fixed, scope: sim}
+      suppress: {type: enum, values: [all, slot-2], baseline: all, default: slot-2, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {attack: slots-0-and-2, suppress: all}
+  orders.weapons-free-while-busy:
+    kind: hack
+    title: Fire While Building
+    implemented: true
+    area: orders
+    summary: "A builder's weapons are freed (may auto-acquire) instead of occupied in busy order states."
+    ownership: owner-only
+    scope: sim
+    shorthand: states
+    params:
+      states: {type: set<enum>, values: [nanolathe, help-build, capture, reclaim-unit, repair], baseline: [], default: [nanolathe], adjustable: fixed, scope: sim}
+    presets:
+      baseline: {states: []}
+  orders.repairing-state-target-activity:
+    kind: hack
+    title: Repair Finish Check
+    implemented: true
+    area: orders
+    summary: "The repairing-state stage-0 gate (\"target is a fully built active builder -> occupy the acting unit's weapons and finish\") tests the target's active bit instead of the acting unit's."
+    ownership: owner-only
+    scope: sim
+    params: {}
+  orders.reclaim-command-any-unit:
+    kind: hack
+    title: Reclaim Cursor on Any Unit
+    implemented: true
+    area: orders
+    summary: "In explicit Reclaim mode the cursor and action over any unit is reclaim, even for commander-class or lifecycle-2 targets; the order is issued and the reclaim states still refuse such targets when run."
+    ownership: owner-only
+    scope: sim
+    params: {}
+  orders.resurrector-reclaims-features:
+    kind: hack
+    title: Resurrectors Reclaim Wrecks
+    implemented: true
+    area: orders
+    summary: "The Reclaim command (button or E) on a resurrectable feature by a resurrect-capable unit issues RECLAIM instead of RESURRECT; right-click still resurrects."
+    ownership: owner-only
+    scope: sim
+    params: {}
+  orders.build-site-kickout:
+    kind: hack
+    title: Build Site Kickout
+    implemented: true
+    area: orders
+    summary: "The local player may place buildings over own units; a blocked builder orders own units off the footprint; blocked-build retries 10 -> 20."
+    ownership: owner-only
+    scope: sim
+    params:
+      place-over-own-units: {type: bool, baseline: false, default: true, adjustable: fixed, scope: sim}
+      kickout: {type: bool, baseline: false, default: true, adjustable: fixed, scope: sim}
+      retry-limit: {type: int, min: 1, max: 1000, unit: attempts, baseline: 10, default: 20, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {place-over-own-units: false, kickout: false, retry-limit: 10}
+  orders.con-patrol-guard-options:
+    kind: hack
+    title: Builder Patrol and Guard Options
+    implemented: true
+    area: orders
+    summary: "Per-player options, per standing move order, for patrolling builders (reclaim only / both / assist only) and guarding builders (stay / base / scatter)."
+    ownership: owner-only
+    scope: sim
+    params:
+      patrol-hold-position: {type: enum, values: [reclaim-only, both, assist-only], baseline: both, default: reclaim-only, adjustable: install, scope: sim}
+      patrol-maneuver: {type: enum, values: [reclaim-only, both, assist-only], baseline: both, default: both, adjustable: install, scope: sim}
+      patrol-roam: {type: enum, values: [reclaim-only, both, assist-only], baseline: both, default: both, adjustable: install, scope: sim}
+      guard-hold-position: {type: enum, values: [stay, base, scatter], baseline: base, default: base, adjustable: install, scope: sim}
+      guard-maneuver: {type: enum, values: [stay, base, scatter], baseline: base, default: base, adjustable: install, scope: sim}
+      guard-roam: {type: enum, values: [stay, base, scatter], baseline: base, default: base, adjustable: install, scope: sim}
+      guard-hook: {type: bool, baseline: false, default: true, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {patrol-hold-position: both, patrol-maneuver: both, patrol-roam: both, guard-hold-position: base, guard-maneuver: base, guard-roam: base, guard-hook: false}
+  air.no-repair-retreat-flag:
+    kind: hack
+    title: No Repair Retreat
+    implemented: true
+    area: air
+    summary: "Aircraft whose unitdef has the flag never break off below 75% HP to find a repair pad, and get no pad land order or pad action."
+    ownership: owner-only
+    scope: sim
+    shorthand: flag
+    params:
+      flag: {type: enum, values: [none, cantbetransported], baseline: none, default: cantbetransported, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {flag: none}
+  air.guard-respects-hold-position:
+    kind: hack
+    title: Guard Respects Hold Position
+    implemented: true
+    area: air
+    summary: Guarding aircraft only engage an attacker when their standing move order is not Hold Position.
+    ownership: owner-only
+    scope: sim
+    params: {}
+  weapons.retarget-out-of-range:
+    kind: hack
+    title: Retarget Out of Range
+    implemented: true
+    area: weapons
+    summary: "The time-sliced targeting pass clears a weapon's target when the target is out of range, so the weapon re-acquires (\"target locking\" removed)."
+    ownership: owner-only
+    scope: sim
+    params: {}
+  weapons.high-arc-ballistic:
+    kind: hack
+    title: High-Arc Ballistics
+    implemented: true
+    area: weapons
+    summary: "Ballistic weapons accept the high (lob) solution when it is above 45° instead of reporting unreachable when the flat solution is below the minimum barrel angle."
+    ownership: owner-only
+    scope: sim
+    params: {}
+  weapons.timed-shell-detonation:
+    kind: hack
+    title: Timed Shell Detonation
+    implemented: true
+    area: weapons
+    summary: "A ballistic projectile whose weapontimer expires explodes unless noautorange=1 (3.1c: explodes only when burnblow=1, otherwise fizzles)."
+    ownership: all-machines + owner-only
+    scope: sim
+    shorthand: rule
+    params:
+      rule: {type: enum, values: [burnblow, not-noautorange], baseline: burnblow, default: not-noautorange, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {rule: burnblow}
+  weapons.vlaunch-before-turret:
+    kind: hack
+    title: Vertical Launch Before Turret
+    implemented: true
+    area: weapons
+    summary: Weapons with both vlaunch=1 and turret=1 get the vertical-launch fire/motion handler instead of the turret one.
+    ownership: all-machines
+    scope: sim
+    params: {}
+  repair.rate:
+    kind: hack
+    title: Repair Rate
+    implemented: true
+    area: repair
+    summary: "Repair heal per step becomes (WorkerTime/30)·MaxDamage/BuildTime with exact remainder carry, instead of 1 HP per step."
+    ownership: owner-only
+    scope: sim
+    shorthand: mode
+    params:
+      mode: {type: enum, values: [clamp-max-1, clamp-min-1, exact-remainder], baseline: clamp-max-1, default: exact-remainder, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {mode: clamp-max-1}
+  repair.healtime-self-heal:
+    kind: hack
+    title: Self-Repair by Heal Time
+    implemented: true
+    area: repair
+    summary: "HealTime self-repair skips units under construction, uses HealTime's low bits as the tick mask and 4× the per-call work amount."
+    ownership: owner-only
+    scope: sim
+    params:
+      skip-under-construction: {type: bool, baseline: false, default: true, adjustable: fixed, scope: sim}
+      cadence: {type: enum, values: [every-8-ticks, healtime-mask], baseline: every-8-ticks, default: healtime-mask, adjustable: fixed, scope: sim}
+      work-multiplier: {type: int, min: 1, max: 64, unit: x work, baseline: 1, default: 4, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {skip-under-construction: false, cadence: every-8-ticks, work-multiplier: 1}
+  veterancy.model:
+    kind: hack
+    title: Veterancy Model
+    implemented: true
+    area: veterancy
+    summary: "Veterancy level comes from per-type kill thresholds instead of kills/5, with new caps, tracking gate, accuracy rate and capture extrapolation."
+    ownership: owner-only
+    scope: sim
+    params:
+      level-source: {type: enum, values: [kills-div-5, thresholds], baseline: kills-div-5, default: thresholds, adjustable: fixed, scope: sim}
+      default-thresholds: {type: list<int>, min: 0, max: 65535, length: [1, 32], order: ascending, unit: kills, baseline: [5, 10, 15, 20, 25], default: [5, 10, 15, 20, 25], adjustable: fixed, scope: sim, per-unit: veterancy.thresholds}
+      damage-taken-per-level: {type: int, min: 0, max: 25, unit: percent, baseline: 4, default: 4, adjustable: fixed, scope: sim}
+      damage-dealt-per-level: {type: int, min: 0, max: 100, unit: percent, baseline: 6, default: 6, adjustable: fixed, scope: sim}
+      reload-per-level: {type: int, min: 0, max: 16, unit: percent, baseline: 6, default: 6, adjustable: fixed, scope: sim}
+      damage-taken-cap: {type: int, min: 0, max: 25, unit: levels, baseline: 5, default: 25, adjustable: fixed, scope: sim}
+      damage-dealt-cap: {type: int-or-none, min: 0, max: 1000, unit: levels, baseline: 5, default: none, adjustable: fixed, scope: sim}
+      reload-cap: {type: int, min: 0, max: 16, unit: levels, baseline: 5, default: 16, adjustable: fixed, scope: sim}
+      lead-after: {type: enum, values: [kills-gt-5, first-threshold], baseline: kills-gt-5, default: first-threshold, adjustable: fixed, scope: sim}
+      accuracy-rate-default: {type: int, min: 0, max: 65535, unit: kills, baseline: 12, default: 12, adjustable: fixed, scope: sim, per-unit: veterancy.accuracy-rate}
+      capture-level: {type: enum, values: [kills-div-5, extended], baseline: kills-div-5, default: extended, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {level-source: kills-div-5, default-thresholds: [5, 10, 15, 20, 25], damage-taken-per-level: 4, damage-dealt-per-level: 6, reload-per-level: 6, damage-taken-cap: 5, damage-dealt-cap: 5, reload-cap: 5, lead-after: kills-gt-5, accuracy-rate-default: 12, capture-level: kills-div-5}
+  economy.deterministic-wind:
+    kind: hack
+    title: Deterministic Wind
+    implemented: true
+    area: economy
+    summary: "Wind changes are drawn from one generator seeded identically on every machine instead of each machine's own RNGs."
+    ownership: all-machines by construction
+    scope: sim
+    shorthand: rng
+    params:
+      rng: {type: enum, values: [local-random, mt19937-host-id], baseline: local-random, default: mt19937-host-id, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {rng: local-random}
+  economy.stats-exclude-shared-income:
+    kind: hack
+    title: Statistics Exclude Shared Income
+    implemented: true
+    area: economy
+    summary: "Resources received through ally sharing are subtracted from the \"produced\" statistics each tick (stats only; income and storage unchanged)."
+    ownership: owner-only
+    scope: sim
+    params: {}
+  intel.allied-los-sharing:
+    kind: hack
+    title: Allied Line of Sight
+    implemented: true
+    area: intel
+    summary: "An alliance (X allies V, one-way) grants V X's true-sight LOS, merged radar/sonar coverage and unit visibility that bypasses the LOS and cloak tests, with no ShareRadar or .sharelos needed; alliance changes rebuild LOS."
+    ownership: local-view
+    scope: sim
+    params: {}
+  intel.allied-jammers-ignored:
+    kind: hack
+    title: Ignore Allied Jammers
+    implemented: true
+    area: intel
+    summary: "Radar/sonar jammers owned by the viewer or the viewer's allies no longer jam the viewer's radar picture; watchers and replays ignore all jamming."
+    ownership: local-view
+    scope: sim
+    params:
+      view-switch-branch: {type: bool, baseline: false, default: false, adjustable: fixed, scope: sim}
+  setup.team-start-positions:
+    kind: hack
+    title: Team Start Positions
+    implemented: true
+    area: setup
+    summary: "Start positions come from, in order: external-lobby shared memory TADemo-StartPositions, team numbers/alliances (team-mates adjacent, solitary local AIs last), sequential; an AI is moved to the last position on neutral-spawn maps."
+    ownership: host
+    scope: sim
+    shorthand: mode
+    params:
+      mode: {type: enum, values: [base, team-adjacent], baseline: base, default: team-adjacent, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {mode: base}
+  setup.map-scripted-units:
+    kind: hack
+    title: Map Scripted Units
+    implemented: true
+    area: setup
+    summary: "Maps whose OTA schema lists units spawn them per player number at start (replacing the default commander when any spawn) and at timed countdowns; player-11 units go to a neutral AI the lobby adds on START; +spawnoff/+spawnon toggle it."
+    ownership: owner-only + host
+    scope: sim
+    params:
+      timed-spawns: {type: bool, baseline: false, default: true, adjustable: fixed, scope: sim}
+      auto-neutral-ai: {type: bool, baseline: false, default: true, adjustable: fixed, scope: sim}
+  setup.allow-start-with-ai:
+    kind: hack
+    title: Start with One Human
+    implemented: true
+    area: setup
+    summary: "The battle-room start gate counts local AI players, so one human plus AIs can start a multiplayer game."
+    ownership: host
+    scope: sim
+    params: {}
+  setup.multiple-local-ai:
+    kind: hack
+    title: Several Local AI Players
+    implemented: true
+    area: setup
+    summary: A machine may add more than one AI player in the multiplayer battle room.
+    ownership: host
+    scope: sim
+    params: {}
+  setup.ai-player-name-format:
+    kind: hack
+    title: AI Player Names
+    implemented: true
+    area: setup
+    summary: "AI player names become \"AI:<local player name> <slot>\" (truncated to 16 characters) instead of \"AI:<name>\"."
+    ownership: owner-only
+    scope: sim
+    shorthand: format
+    params:
+      format: {type: string, max-length: 32, pattern: "^[^%]*%s[^%]*(%d[^%]*)?$", baseline: "AI:%s", default: "AI:%s %d", adjustable: fixed, scope: sim}
+    presets:
+      baseline: {format: "AI:%s"}
+  setup.commander-warp:
+    kind: hack
+    title: Commander Warp
+    implemented: true
+    area: setup
+    summary: "Opt-in .cmdwarp: the game starts paused, each player clicks to place the commander and presses Done."
+    ownership: all-machines
+    scope: sim
+    params:
+      available: {type: bool, baseline: false, default: true, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {available: false}
+  setup.recorder-prebuilt-base:
+    kind: hack
+    title: Prebuilt Base
+    implemented: true
+    area: setup
+    summary: "Opt-in .base (host loads base.txt), .dobase (spawns prebuilt structures through unit-create packets around the player's first structure), .baseoff."
+    ownership: host + all-machines
+    scope: sim
+    params:
+      available: {type: bool, baseline: false, default: true, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {available: false}
+  teams.team-number-alliances:
+    kind: hack
+    title: Team Number Alliances
+    implemented: true
+    area: teams
+    summary: "Team numbers (0-5) ride in the player-status packet; receivers store the team and ally same-team / unally other-team local players; alliance requests are reciprocated for local humans and AIs; host commands +autoteam [N] and +randomteam."
+    ownership: all-machines + host
+    scope: sim
+    params:
+      bit7-keeps-alliances: {type: bool, baseline: false, default: true, adjustable: fixed, scope: sim}
+      lobby-rebroadcast: {type: enum, values: [stored-matrix, recompute-from-teams], baseline: stored-matrix, default: stored-matrix, adjustable: fixed, scope: sim}
+  teams.allied-victory-kept:
+    kind: hack
+    title: Keep Allied Victory
+    implemented: true
+    area: teams
+    summary: "The lobby no longer clears a player's Allied Victory flag when their team has fewer than two live members or they have no team."
+    ownership: host
+    scope: sim
+    params: {}
+  teams.alliance-menu-all-game-types:
+    kind: hack
+    title: Alliance Menu Everywhere
+    implemented: true
+    area: teams
+    summary: "Tab opens the ALLIES/SHARE/CONTROL menu in every game type and ALLIES is never disabled, so players can ally or unally AIs outside multiplayer."
+    ownership: owner-only
+    scope: sim
+    params: {}
+  sharing.structure-gift-rate-limit:
+    kind: hack
+    title: Structure Gift Rate Limit
+    implemented: true
+    area: sharing
+    summary: "Share-dialog gifts of structures are batched; if structures sent in the last window plus the batch exceed the limit, the batch is deferred."
+    ownership: owner-only
+    scope: sim
+    params:
+      window-ticks: {type: int, min: 1, max: 30000, unit: ticks, baseline: 900, default: 900, adjustable: fixed, scope: sim}
+      immediate-max: {type: int, min: 0, max: 1500, unit: structures, baseline: 10, default: 10, adjustable: fixed, scope: sim}
+      defer-ticks: {type: int, min: 1, max: 30000, unit: ticks, baseline: 900, default: 900, adjustable: fixed, scope: sim}
+  sharing.take-requires-live-commander:
+    kind: hack
+    title: Take Waits for Commander Deaths
+    implemented: true
+    area: sharing
+    summary: Chat .take/.takecmd is refused while any other slot owns a commander-category unit that is in the world with HP <= 0.
+    ownership: owner-only
+    scope: sim
+    params: {}
+  sharing.recorder-take-give:
+    kind: hack
+    title: Take and Give Commands
+    implemented: true
+    area: sharing
+    summary: "Opt-in recorder commands: .give <nicks> grants, .stopgive revokes; a named player's .take/.takecmd claims a granted player who is silent for >= 30 s by injecting forged \"give\" data."
+    ownership: all-machines
+    scope: sim
+    params:
+      available: {type: bool, baseline: false, default: true, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {available: false}
+  units.id-reuse-delay:
+    kind: hack
+    title: Unit Slot Reuse Delay
+    implemented: true
+    area: units
+    summary: "A dead unit's slot is not reused by local allocation until the delay in ticks has passed since its death."
+    ownership: owner-only
+    scope: sim
+    shorthand: ticks
+    params:
+      ticks: {type: int, min: 0, max: 30000, unit: ticks, baseline: 0, default: 150, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {ticks: 0}
+  units.ignore-null-death-record:
+    kind: hack
+    title: Ignore Unit 0 Deaths
+    implemented: true
+    area: units
+    summary: A unit-death record for unit index 0 skips the whole death processing (3.1c processes it).
+    ownership: all-machines
+    scope: sim
+    params: {}
+  units.skip-empty-yardmap:
+    kind: hack
+    title: Skip Empty Yard Maps
+    implemented: true
+    area: units
+    summary: A unit definition with an empty YardMap or a zero footprint skips the yardmap build.
+    ownership: all-machines
+    scope: sim
+    params: {}
+  units.water-state-rules:
+    kind: hack
+    title: Water State Rules
+    implemented: true
+    area: units
+    summary: "The water state given to the unit script's SetSFXoccupy and kept per unit is recomputed with new ordering, and units created fully under water start in state 3."
+    ownership: all-machines
+    scope: sim
+    params:
+      rules: {type: enum, values: [base, reordered], baseline: base, default: reordered, adjustable: fixed, scope: sim}
+      start-submerged: {type: bool, baseline: false, default: true, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {rules: base, start-submerged: false}
+  units.placement-by-builder:
+    kind: hack
+    title: Placement by Builder
+    implemented: true
+    area: units
+    summary: "A build-menu click chooses map placement vs factory queue from the selected builder's BMcode instead of the item's: mobile builders place anything (including mobile units, as nanoframes), stationary factories queue everything."
+    ownership: owner-only
+    scope: sim
+    params: {}
+  units.mobile-unit-yardmap:
+    kind: hack
+    title: Mobile Unit Yard Maps
+    implemented: true
+    area: units
+    summary: "YardMap is parsed and the yard array allocated for mobile units too (3.1c: buildings only)."
+    ownership: all-machines
+    scope: sim
+    params: {}
+  units.build-rotation:
+    kind: hack
+    title: Build Rotation
+    implemented: true
+    area: units
+    summary: "Buildings may be placed facing S/E/N/W when their Rotations key allows; the facing rotates the yardmap and footprint and travels in the unit's heading."
+    ownership: all-machines
+    scope: sim
+    params: {}
+  units.init-cloaked-after-build:
+    kind: hack
+    title: Cloak After Build
+    implemented: true
+    area: units
+    summary: A unit still under construction neither cloaks nor pays cloak upkeep (nanoframes of units that start cloaked stay visible).
+    ownership: owner-only
+    scope: sim
+    params: {}
+  console.ai-control-cheat-group:
+    kind: hack
+    title: AI and Control Cheats
+    implemented: true
+    area: console
+    summary: "+AI and +Control move from the developer group (flag 4) to the classic cheat group (flag 2), so they work in multiplayer with the lobby Cheats option."
+    ownership: all-machines
+    scope: sim
+    params: {}
+  console.lostype-cheat-group:
+    kind: hack
+    title: LOS Type Cheat
+    implemented: true
+    area: console
+    summary: "+LOSType moves from the display group (flag 1, always allowed) to the cheat group (flag 2)."
+    ownership: all-machines
+    scope: sim
+    params: {}
+  console.atm-amount:
+    kind: hack
+    title: ATM Amount
+    implemented: true
+    area: console
+    summary: "+ATM adds about 4.3×10^12 metal and energy (fills storage) instead of 1000."
+    ownership: all-machines
+    scope: sim
+    shorthand: amount
+    params:
+      amount: {type: decimal, min: 0, max: 1000000000000000.0, unit: metal and energy, baseline: 1000, default: 4294967296000, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {amount: 1000}
+  console.key-remaps:
+    kind: hack
+    title: Key Remaps
+    implemented: true
+    area: console
+    summary: "\\ no longer repeats the last + line (freed for the whiteboard); Insert repeats it; F10 becomes a second key for the cheat-gated watch/debug toggle."
+    ownership: local-view
+    scope: sim
+    params: {}
+  console.game-speed-range:
+    kind: hack
+    title: Game Speed Range
+    implemented: true
+    area: console
+    summary: "Every speed change (keys, options slider, received speed packet) is clamped to [min, max]; .syncon lo hi sets [lo+10, hi+10] for all recorders, .syncoff restores 0..20."
+    ownership: all-machines
+    scope: sim
+    params:
+      min: {type: int, min: 0, max: 20, unit: speed steps (10 = normal), baseline: 1, default: 0, adjustable: match, scope: sim}
+      max: {type: int, min: 0, max: 20, unit: speed steps (10 = normal), baseline: 20, default: 20, adjustable: match, scope: sim}
+      syncon: {type: bool, baseline: false, default: true, adjustable: fixed, scope: sim}
+    constraints: [min <= max]
+    presets:
+      baseline: {min: 1, max: 20, syncon: false}
+  network.chat-extension-channel:
+    kind: hack
+    title: Chat Extension Channel
+    implemented: true
+    area: network
+    summary: "Private add-on messages ride inside the chat packet: first text byte 0, then a sub-id; binary payloads go to their handlers, other lines to text listeners."
+    ownership: all-machines
+    scope: sim
+    shorthand: framing
+    params:
+      framing: {type: enum, values: [none, sub-id-dispatch, integrity-only], baseline: none, default: sub-id-dispatch, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {framing: none}
+  network.vercheck:
+    kind: hack
+    title: Version Check
+    implemented: true
+    area: network
+    summary: "Integrity challenge/response: each client challenges every other in-game human; answers are keyed hashes of loaded modules, the revision archive and CSV dumps of unit/weapon/feature tables; mismatches are reported, never blocked."
+    ownership: all-machines
+    scope: sim
+    shorthand: revision
+    params:
+      revision: {type: enum, values: ["off", single-challenge, periodic-challenge], baseline: "off", default: single-challenge, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {revision: "off"}
+  network.vote-reject:
+    kind: hack
+    title: Vote to Remove Players
+    implemented: true
+    area: network
+    summary: "The host's single reject/timeout dialog becomes a vote: a timed-out player, or one someone asks to reject, is removed on a majority of yes votes (teammate consent where applicable)."
+    ownership: all-machines + host
+    scope: sim
+    params:
+      vote-timeout-s: {type: int, min: 1, max: 3600, unit: s, baseline: 60, default: 60, adjustable: fixed, scope: sim}
+      timeout-vote-s: {type: int, min: 1, max: 3600, unit: s, baseline: 90, default: 90, adjustable: fixed, scope: sim}
+  network.lag-guard:
+    kind: hack
+    title: Lag Guard
+    implemented: true
+    area: network
+    summary: "While no in-game remote player has been heard for 500 ms, the sim is allowed one step per 500 ms and the Pause hotkey is ignored."
+    ownership: local-view
+    scope: sim
+    shorthand: gap-ms
+    params:
+      gap-ms: {type: int, min: 0, max: 60000, unit: ms, baseline: 0, default: 500, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {gap-ms: 0}
+  network.commander-start-sync:
+    kind: hack
+    title: Commander Start Sync
+    implemented: true
+    area: network
+    summary: "At tick 90 each machine broadcasts position records for its local players' first units; receivers force the sender's first unit's integer x/z while tick < the per-player limit."
+    ownership: all-machines
+    scope: sim
+    shorthand: tick
+    params:
+      tick: {type: int, min: 0, max: 30000, unit: ticks, baseline: 0, default: 90, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {tick: 0}
+  network.preserve-remote-player-colour:
+    kind: hack
+    title: Keep Remote Player Colours
+    implemented: true
+    area: network
+    summary: "While a game runs, a remote player's colour and position slot is saved before and restored after a player-info packet."
+    ownership: all-machines
+    scope: sim
+    params: {}
+  network.session-desc-clear:
+    kind: hack
+    title: Clear Session Description
+    implemented: true
+    area: network
+    summary: "The host clears one field of the session description before publishing it."
+    ownership: host
+    scope: sim
+    params: {}
+  network.host-stays-as-watcher:
+    kind: hack
+    title: Host Stays as Watcher
+    implemented: true
+    area: network
+    summary: "A defeated host is kept in watch mode (with a message) instead of the exit prompt, so the session survives the host's defeat."
+    ownership: host
+    scope: sim
+    params: {}
+  network.recorder-session-commands:
+    kind: hack
+    title: Recorder Session Commands
+    implemented: true
+    area: network
+    summary: "Opt-in recorder session commands: .autopause/.voteready/.ready (pause gating), .forcego/.votego (start), .fakewatch, .forcecd (in-memory no-CD), .f1off, .randmap/.randmapex (weighted random map from maps.txt)."
+    ownership: all-machines
+    scope: sim
+    params:
+      available: {type: bool, baseline: false, default: true, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {available: false}
+  recorder.ta-demo-recorder:
+    kind: hack
+    title: Game Recorder
+    implemented: true
+    area: recorder
+    summary: "The recorder proxy is present: it records sessions, exchanges recorder-to-recorder traffic (status, cheat mask, reports, whiteboard and camera batches) and runs a memory cheat scanner."
+    ownership: all-machines
+    scope: sim
+    params:
+      header-version: {type: int, min: 1, max: 7, unit: version, baseline: 5, default: 5, adjustable: fixed, scope: sim}
+      manual-extension: {type: string, pattern: "^\\.[A-Za-z0-9]{1,8}$", baseline: .tad, default: .tad, adjustable: fixed, scope: view}
+      auto-extension: {type: string, pattern: "^\\.[A-Za-z0-9]{1,8}$", baseline: .tad, default: .tad, adjustable: fixed, scope: view}
+      registry-root: {type: string, baseline: "", default: "", adjustable: fixed, scope: view}
+      compress-files: {type: bool, baseline: true, default: true, adjustable: fixed, scope: view}
+      cheat-notices: {type: bool, baseline: true, default: true, adjustable: fixed, scope: view}
+      weapon-id-patch: {type: bool, baseline: false, default: false, adjustable: install, scope: sim, setting: {ini: Preferences/MultiGameWeapon}}
+  recorder.ten-player-replay:
+    kind: hack
+    title: Ten-Player Replay
+    implemented: true
+    area: recorder
+    summary: "Replay mode invents a local player id so a full 10-player recording can be watched: sends to it are dropped, the watcher has full radar, and received packets are filtered."
+    ownership: local-view
+    scope: sim
+    shorthand: form
+    params:
+      form: {type: enum, values: ["off", watcher-view, allied-fake-player], baseline: "off", default: watcher-view, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {form: "off"}
+
+  # ---- visual hacks (profile block hacks; view scope)
+  ui.megamap:
+    kind: hack
+    title: Megamap
+    implemented: true
+    area: ui
+    visual: true
+    summary: "Full-screen strategic map (megamap) with category icons, sensor rings and megamap picking, optionally re-rendering the built-in minimap."
+    ownership: local-view
+    scope: view
+    params:
+      enhanced-minimap: {type: bool, baseline: false, default: true, adjustable: fixed, scope: view}
+      dither: {type: bool, baseline: false, default: false, adjustable: fixed, scope: view}
+      feature-blobs: {type: bool, baseline: false, default: true, adjustable: fixed, scope: view}
+      ring-minimums: {type: list<int>, min: 0, max: 65535, length: 5, unit: pixels, baseline: [0, 0, 0, 0, 512], default: [128, 128, 64, 64, 512], adjustable: fixed, scope: view}
+      icon-categories: {type: int, min: 0, max: 64, unit: categories, baseline: 0, default: 9, adjustable: fixed, scope: view}
+  ui.whiteboard:
+    kind: hack
+    title: Whiteboard
+    implemented: true
+    area: ui
+    visual: true
+    summary: "Allied whiteboard: lines, dots, text markers, erase, jump to newest marker; carried by the recorder protocol; received text markers echoed to chat."
+    ownership: local-view
+    scope: view
+    params: {}
+  ui.resource-panel:
+    kind: hack
+    title: Resource Panel
+    implemented: true
+    area: ui
+    visual: true
+    summary: "Allied/spectator resource panel, clock/wind/tidal line, and spectator view switching and camera lock-on (watchers and replays only)."
+    ownership: local-view
+    scope: view
+    params: {}
+  ui.camera-sharing:
+    kind: hack
+    title: Camera Sharing
+    implemented: true
+    area: ui
+    visual: true
+    summary: Ally camera rectangles on the minimap (.sharemappos) and spectator lock-on (.lockon).
+    ownership: local-view
+    scope: view
+    params: {}
+  ui.allied-unit-display:
+    kind: hack
+    title: Allied Unit Display
+    implemented: true
+    area: ui
+    visual: true
+    summary: "Minimap draws units of players who ally the viewer; the info panel shows order target, health (including allied commanders) and kills for allied units."
+    ownership: local-view
+    scope: view
+    params: {}
+  ui.selection-shortcuts:
+    kind: hack
+    title: Selection Shortcuts
+    implemented: true
+    area: ui
+    visual: true
+    summary: "Double-click selects same type on screen, CTRL+S/B/F variants, W/B/Y drag filters, CTRL ±100 queue step, and optionally a same-type selection that works past type index 512."
+    ownership: local-view
+    scope: view
+    params:
+      same-type-bitset-fix: {type: bool, baseline: false, default: true, adjustable: fixed, scope: view}
+  ui.build-tools:
+    kind: hack
+    title: Build Tools
+    implemented: true
+    area: ui
+    visual: true
+    summary: "Line/ring build (Autoclick key, OptimizeDT, FullRings), Alt-drag of queued orders, and the yellow footprint when a placement needs a kickout."
+    ownership: local-view
+    scope: view
+    params: {}
+  ui.click-snap:
+    kind: hack
+    title: Click Snap
+    implemented: true
+    area: ui
+    visual: true
+    summary: "Build cursor snaps to the nearest metal spot and reclaim cursor to the nearest feature within configurable radii; Alt overrides."
+    ownership: local-view
+    scope: view
+    params:
+      mex-default: {type: int, min: 0, max: 9, unit: cells, baseline: 0, default: 0, adjustable: install, scope: view}
+      mex-max: {type: int, min: 0, max: 9, unit: cells, baseline: 0, default: 0, adjustable: fixed, scope: view}
+      wreck-default: {type: int, min: 0, max: 9, unit: cells, baseline: 0, default: 1, adjustable: install, scope: view}
+      wreck-max: {type: int, min: 0, max: 9, unit: cells, baseline: 0, default: 1, adjustable: fixed, scope: view}
+    constraints: [mex-default <= mex-max, wreck-default <= wreck-max]
+    presets:
+      baseline: {mex-default: 0, mex-max: 0, wreck-default: 0, wreck-max: 0}
+  ui.build-preview:
+    kind: hack
+    title: Build Preview
+    implemented: true
+    area: ui
+    visual: true
+    summary: "Nanoframe build preview under the cursor (\"BuildGhost\"), rotation ghost overlay and rotate key hint."
+    ownership: local-view
+    scope: view
+    params:
+      fill: {type: bool, baseline: false, default: false, adjustable: fixed, scope: view}
+  ui.options-dialog:
+    kind: hack
+    title: Options Dialog
+    implemented: true
+    area: ui
+    visual: true
+    summary: "CTRL+F2 settings dialog and options-menu page (keys, con options, snap radii, background, VSync) and the F11 chat macro (not relayed)."
+    ownership: local-view
+    scope: view
+    params: {}
+  ui.share-dialog-and-lobby-buttons:
+    kind: hack
+    title: Share Dialog and Lobby Buttons
+    implemented: true
+    area: ui
+    visual: true
+    summary: "Expanded share dialog (issues TA-native +sharemetal/+shareenergy/+setshare*/+shootall/+noshake and .ready) and battle-room buttons."
+    ownership: local-view
+    scope: view
+    params:
+      lobby-buttons: {type: set<enum>, values: [autoteam, autopause, randomteam, crcreport], baseline: [], default: [autoteam, autopause], adjustable: fixed, scope: view}
+  ui.text-rendering:
+    kind: hack
+    title: Text Rendering
+    implemented: true
+    area: ui
+    visual: true
+    summary: "Game text sent and read as UTF-8, and the message log's backdrop forced on."
+    ownership: local-view
+    scope: view
+    params:
+      unicode: {type: bool, baseline: false, default: false, adjustable: install, scope: view}
+      chat-backdrop: {type: bool, baseline: false, default: true, adjustable: install, scope: view}
+    presets:
+      baseline: {unicode: false, chat-backdrop: false}
+  ui.veterancy-label:
+    kind: hack
+    title: Veterancy Label
+    implemented: true
+    area: ui
+    visual: true
+    summary: "Info panel and tooltip show \"Vet<L>\" when the veterancy level is above 0 (3.1c: \"veteran\" when kills > 4)."
+    ownership: local-view
+    scope: view
+    params: {}
+  ui.map-features-ignore-los:
+    kind: hack
+    title: Map Features Always Drawn
+    implemented: true
+    area: ui
+    visual: true
+    summary: "Map-placed features are drawn regardless of LOS: the map loader stamps them with an owner slot that skips the LOS test."
+    ownership: local-view
+    scope: view
+    shorthand: feature-owner
+    params:
+      feature-owner: {type: int, min: 0, max: 15, unit: player slot, baseline: 10, default: 11, adjustable: fixed, scope: view}
+    presets:
+      baseline: {feature-owner: 10}
+  ui.unit-voice-fixes:
+    kind: hack
+    title: Unit Voice Fixes
+    implemented: true
+    area: ui
+    visual: true
+    summary: "Feature-reclaim \"working\" voice plays once; VTOL reclaim voice plays when reclaim starts; landing-failure messages may use the arrived voice instead of \"cannot comply\"."
+    ownership: local-view
+    scope: view
+    params:
+      reclaim-voice-once: {type: bool, baseline: false, default: true, adjustable: fixed, scope: view}
+      vtol-reclaim-voice-at-start: {type: bool, baseline: false, default: true, adjustable: fixed, scope: view}
+      landing-fail-voice: {type: int, min: 0, max: 255, unit: voice slot, baseline: 7, default: 6, adjustable: fixed, scope: view}
+    presets:
+      baseline: {reclaim-voice-once: false, vtol-reclaim-voice-at-start: false, landing-fail-voice: 7}
+  ui.effects-tweaks:
+    kind: hack
+    title: Effects Tweaks
+    implemented: true
+    area: ui
+    visual: true
+    summary: "endsmoke=1 weapons also spawn the explosion animation; the extra smoke puff per explosion animation is removed."
+    ownership: local-view
+    scope: view
+    params:
+      endsmoke-explosion: {type: bool, baseline: false, default: true, adjustable: fixed, scope: view}
+      explosion-smoke-puff: {type: bool, baseline: true, default: false, adjustable: fixed, scope: view}
+    presets:
+      baseline: {endsmoke-explosion: false, explosion-smoke-puff: true}
+  ui.interface-fixes:
+    kind: hack
+    title: Interface Fixes
+    implemented: true
+    area: ui
+    visual: true
+    summary: "Assorted display fixes: weapon-3 range ring gate, radius <= 0 circles skipped, mobile nanoframes not re-rasterised until built, resource-bar sprite clamp, air-pad cursor, cursor reset when the selected unit vanishes, toggle button in build mode, zero-filled DOWNLOADMENU allocation, \"Resurrection failed\" spelling."
+    ownership: local-view
+    scope: view
+    shorthand: fixes
+    params:
+      fixes: {type: set<enum>, values: [range-ring-3, radius-0, nanoframe-raster, bar-clamp, pad-cursor, cursor-reset, build-toggle, downloadmenu-zero, resurrect-spelling], baseline: [], default: [range-ring-3, radius-0, nanoframe-raster, bar-clamp, pad-cursor, cursor-reset, build-toggle, downloadmenu-zero], adjustable: fixed, scope: view}
+    presets:
+      baseline: {fixes: []}
+  ui.endgame-stats:
+    kind: hack
+    title: End-of-Game Statistics
+    implemented: true
+    area: ui
+    visual: true
+    summary: End-of-game statistics list dropped (and ejected) players.
+    ownership: local-view
+    scope: view
+    params: {}
+  ui.audio:
+    kind: hack
+    title: Audio
+    implemented: true
+    area: ui
+    visual: true
+    summary: "Audio: 3D sound buffers, CD pause on menu and end, music from numbered MP3 files or a scanned folder, Victory announcement at most every 300 ticks, sound-mode and mixing-buffer defaults, Mission Complete sound."
+    ownership: local-view
+    scope: view
+    shorthand: music
+    params:
+      music: {type: enum, values: [cd, numbered-mp3, folder-scan], baseline: cd, default: numbered-mp3, adjustable: install, scope: view}
+    presets:
+      baseline: {music: cd}
+  ui.display-modes:
+    kind: hack
+    title: Display Modes
+    implemented: true
+    area: ui
+    visual: true
+    summary: "Display: minimum 1024×768 modes, menu resolution, resolution override, screenshots (CTRL+F9/PrintScreen PCX), graphics-driver warning suppression."
+    ownership: local-view
+    scope: view
+    params:
+      min-height-768: {type: bool, baseline: false, default: true, adjustable: fixed, scope: view}
+      dx-warning: {type: bool, baseline: true, default: true, adjustable: fixed, scope: view}
+    presets:
+      baseline: {min-height-768: false, dx-warning: true}
+  ui.external-exports:
+    kind: hack
+    title: External Exports
+    implemented: true
+    area: ui
+    visual: true
+    summary: "External integrations: live export of unit state, lobby game-state export."
+    ownership: local-view
+    scope: view
+    params:
+      live-export: {type: bool, baseline: false, default: true, adjustable: fixed, scope: view}
+      lobby-state-export: {type: bool, baseline: false, default: true, adjustable: fixed, scope: view}
+    presets:
+      baseline: {live-export: false, lobby-state-export: false}
+  identity.side-names:
+    kind: identity
+    area: sides
+    summary: "Names of the two side slots that the game itself uses for AI player names, elimination messages and side-button gadget names (SIDEDATA keeps its own copies for everything else)."
+    ownership: all-machines
+    scope: sim
+    key: side-names
+    value: {type: list<string>, length: 2, max-length: 16, baseline: [Arm, Core], scope: sim}
+  layout.archive-patterns.ccx:
+    kind: layout
+    area: paths
+    summary: "Pattern of the mount group that holds Core Contingency and Battle Tactics overlays."
+    ownership: all-machines
+    scope: sim
+    key: archive-patterns.ccx
+    value: {type: string, max-length: 16, pattern: '^\*\.[A-Za-z0-9]{1,4}$', baseline: "*.CCX", scope: sim}
+  layout.archive-patterns.ufo:
+    kind: layout
+    area: paths
+    summary: "Pattern of the third mount group (third-party unit archives); a replaced pattern stops *.UFO archives mounting."
+    ownership: all-machines
+    scope: sim
+    key: archive-patterns.ufo
+    value: {type: string, max-length: 16, pattern: '^\*\.[A-Za-z0-9]{1,4}$', baseline: "*.UFO", scope: sim}
+  layout.archive-patterns.hpi:
+    kind: layout
+    area: paths
+    summary: "Pattern of the main archive group (first ten, then the rest, then the disc)."
+    ownership: all-machines
+    scope: sim
+    key: archive-patterns.hpi
+    value: {type: string, max-length: 16, pattern: '^\*\.[A-Za-z0-9]{1,4}$', baseline: "*.HPI", scope: sim}
+  layout.file-extensions.unit-definition:
+    kind: layout
+    area: paths
+    summary: "Extension of the unit definition files read from the units directory; with another extension, base .FBI units never load although their archives stay mounted."
+    ownership: all-machines
+    scope: sim
+    key: file-extensions.unit-definition
+    value: {type: string, max-length: 4, pattern: '^[A-Za-z0-9]{1,4}$', baseline: FBI, scope: sim}
+  strings.status.nanolathing:
+    kind: string
+    area: ui
+    summary: "Status-line word for building (three build order states share it)."
+    ownership: local-view
+    scope: view
+    key: status.nanolathing
+    value: {type: string, max-length: 11, baseline: Nanolathing, scope: view}
+  strings.status.paralyzed:
+    kind: string
+    area: ui
+    summary: "Status-line word for a paralysed unit."
+    ownership: local-view
+    scope: view
+    key: status.paralyzed
+    value: {type: string, max-length: 9, baseline: Paralyzed, scope: view}
+  strings.message.exit-confirm:
+    kind: string
+    area: ui
+    summary: "Exit confirmation prompt."
+    ownership: local-view
+    scope: view
+    key: message.exit-confirm
+    value: {type: string, max-length: 42, baseline: "Surrender this battle and exit to Windows?", scope: view}
+  strings.message.kill-lead:
+    kind: string
+    area: ui
+    summary: "Chat message when a player takes the kill lead (%s player, %d kills)."
+    ownership: local-view
+    scope: view
+    key: message.kill-lead
+    value: {type: string, max-length: 35, baseline: "%s has taken the lead with %d kills", scope: view}
+  strings.message.elimination:
+    kind: string
+    area: ui
+    summary: "Three phrases, one picked at random, printed after the side name when a player is eliminated."
+    ownership: local-view
+    scope: view
+    key: message.elimination
+    value: {type: list<string>, length: 3, max-length: 40, baseline: ["forces have been obliterated", "vermin have been exterminated", "forces have gone to a better place"], scope: view}
+  strings.gadget.credits:
+    kind: string
+    area: ui
+    summary: "Main-menu gadget name that opens the credits; a name no GUI uses disables the hotspot."
+    ownership: local-view
+    scope: view
+    key: gadget.credits
+    value: {type: string, max-length: 7, baseline: Credits, scope: view}
+  strings.cheat.sing-sounds:
+    kind: string
+    area: ui
+    summary: "The two speech sounds the +Sing cheat alternates between."
+    ownership: local-view
+    scope: view
+    key: cheat.sing-sounds
+    value: {type: list<string>, length: 2, max-length: 4, baseline: [honk, sing], scope: view}
+  media.movies.logo:
+    kind: media
+    area: ui
+    summary: "Boot logo movie; an empty name skips it."
+    ownership: local-view
+    scope: view
+    key: movies.logo
+    value: {type: string, max-length: 12, baseline: 1.zrb, scope: view}
+  media.movies.intro:
+    kind: media
+    area: ui
+    summary: "Intro movie; an empty name skips it."
+    ownership: local-view
+    scope: view
+    key: movies.intro
+    value: {type: string, max-length: 12, baseline: 2.zrb, scope: view}
+  media.movies.ending-a:
+    kind: media
+    area: ui
+    summary: "First campaign ending movie."
+    ownership: local-view
+    scope: view
+    key: movies.ending-a
+    value: {type: string, max-length: 12, baseline: 3.zrb, scope: view}
+  media.movies.ending-b:
+    kind: media
+    area: ui
+    summary: "Second campaign ending movie."
+    ownership: local-view
+    scope: view
+    key: movies.ending-b
+    value: {type: string, max-length: 12, baseline: 4.zrb, scope: view}
+  media.movies.credits:
+    kind: media
+    area: ui
+    summary: "Credits movie."
+    ownership: local-view
+    scope: view
+    key: movies.credits
+    value: {type: string, max-length: 12, baseline: 5.zrb, scope: view}

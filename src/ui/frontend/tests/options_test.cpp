@@ -294,6 +294,25 @@ OA_GAME_DATA_TEST(visuals_flags_and_display_modes) {
     OA_CHECK(preferences.gamma == 12 && recorder.volumes == volumes + 3);
 }
 
+// A mod's display rules that keep only modes of 768 rows or more.
+OA_GAME_DATA_TEST(visuals_offer_tall_modes_only) {
+    Panel panel;
+    if (!options_panel(panel, "visuals.gui"))
+        return;
+    prefs::Preferences preferences{};
+    preferences.display_width = 1024;
+    preferences.display_height = 768;
+    Recorder recorder;
+    recorder.modes = {{1024, 768, 0}, {800, 600, 0}, {1280, 1024, 0}, {640, 480, 0}};
+    auto context = make_context(preferences, recorder);
+    context.minimum_mode_height = oa::present::world_renderer::tall_minimum_mode_height;
+    options_enter_visuals(panel, context, false);
+    OA_CHECK(context.display_modes.count == 2);
+    const auto* video = panel_control(panel, "VIDSLDR");
+    OA_CHECK(video != nullptr && video->slider.maximum == 1);
+    OA_CHECK(text_of(panel, "VIDVAL") == "1024 X 768");
+}
+
 OA_GAME_DATA_TEST(visuals_in_game_hides_mode_controls) {
     Panel panel;
     if (!options_panel(panel, "visuals.gui"))

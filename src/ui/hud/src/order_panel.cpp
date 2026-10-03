@@ -706,8 +706,14 @@ BuildPanelClickResult on_build_panel_click(
         play_sound(events, "buildbutton");
         return {BuildPanelClick::build, 0};
     }
-    if (type != 0 && table.defs != nullptr && type < table.def_count &&
-        table.defs[type].bm_code == 0) {
+    // A building type is placed on the map; with placement-by-builder, every
+    // type a mobile builder's panel offers is, and none a factory's is.
+    const auto places = [&] {
+        if (!host.placement_by_builder)
+            return table.defs[type].bm_code == 0;
+        return state.unit_type < table.def_count && table.defs[state.unit_type].bm_code != 0;
+    };
+    if (type != 0 && table.defs != nullptr && type < table.def_count && places()) {
         play_sound(events, "addbuild");
         return {BuildPanelClick::place, type};
     }
@@ -719,7 +725,7 @@ BuildPanelClickResult on_build_panel_click(
     if ((unit.flags & kUnitFlagPanelSelected) == 0)
         return {BuildPanelClick::none, 0};
     const bool shift = host.shift_down != nullptr && host.shift_down(host.user);
-    const int32_t step = shift ? 5 : 1;
+    const int32_t step = shift ? host.shift_step : 1;
     if (host.change_queue != nullptr)
         host.change_queue(host.user, name, unit, left_button ? step : -step);
     const bool stockpiles = host.stockpiles != nullptr && host.stockpiles(host.user, unit);

@@ -20,6 +20,14 @@ Entry points:
   spawn and local camera positioning.
 * `create`: slot choice, `initialize_numeric`, `attach_model_script`, weapons,
   extraction rate, the movement object and the creation notifications.
+* `record_slot_death`: the tick from which a dead unit's place may be taken
+  again, when a mod's rules delay slot reuse.
+
+`Tables::rules` (`SpawnRules`) carries the unit rules a mod's profile sets, all
+3.1c's by default: the slots' reuse ticks (units.id-reuse-delay) and the sea
+occupy code of a unit created under the sea (units.water-state-rules). A
+`Request` may name a building's facing (units.build-rotation), which swaps its
+footprint east and west and joins its heading.
 * `attached_child_count`: count of the children on the unit's
   `attach_first_child`/`attach_next` chain whose `attach_parent` is the
   queried unit.

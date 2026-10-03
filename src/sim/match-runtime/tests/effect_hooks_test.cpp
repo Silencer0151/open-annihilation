@@ -41,8 +41,11 @@ const sim::effect_particles::Layer& smoke_layer(sim::match_runtime::Match& match
     return match.effects().layers[sim::effect_particles::layer_smoke];
 }
 
-const sim::effect_particles::Emitter& newest(const sim::effect_particles::Layer& layer) {
-    return layer.emitters[(layer.head + layer.count - 1) % sim::effect_particles::layer_capacity];
+const sim::effect_particles::Emitter&
+newest(const sim::effect_particles::EffectWorld& world, uint16_t layer_index) {
+    return sim::effect_particles::layer_emitter(
+        world, layer_index, world.layers[layer_index].count - 1
+    );
 }
 
 struct Art {
@@ -93,13 +96,16 @@ void weapon_explosions(
     CHECK(world.explosion_count == 1 && world.explosions[0].sprite.sequence == &art.blast);
     CHECK(world.explosions[0].flash.sequence == world.flash_tiers[0]);
     CHECK(smoke_layer(match).count == layered + 1);
-    const auto& column = newest(smoke_layer(match));
+    const auto& column = newest(match.effects(), sim::effect_particles::layer_smoke);
     CHECK(column.interval == 7 && column.deadline == match.state().game.tick + 15);
 
     weapon.flags = flags | OA_WEAPON_FLAG_END_SMOKE;
     CHECK(match.spawn_weapon_explosion(weapon, on_land, false));
     CHECK(world.explosion_count == 1);
-    CHECK(smoke_layer(match).count == layered + 2 && newest(smoke_layer(match)).interval == 1);
+    CHECK(
+        smoke_layer(match).count == layered + 2 &&
+        newest(match.effects(), sim::effect_particles::layer_smoke).interval == 1
+    );
     weapon.flags = flags;
 
     CHECK(match.spawn_weapon_explosion(weapon, in_water, false));
@@ -126,6 +132,32 @@ void weapon_explosions(
     std::cout << "detonation impact effects passed\n";
 }
 
+// A mod's display rules: an endsmoke weapon shows its explosion after its
+// puff, and an explosion raises no smoke column.
+void display_rule_explosions(sim::match_runtime::Match& match, const Art& art) {
+    CHECK(match.effects().explosion_smoke_column == false);
+    auto& weapon = match.state().game.weapon_defs[1];
+    const auto flags = weapon.flags;
+    auto& world = match.effects();
+    world.explosion_count = 0;
+    const std::array<uint32_t, 3> on_land{units(40), units(land_height), units(40)};
+    const auto layered = smoke_layer(match).count;
+    CHECK(match.spawn_weapon_explosion(weapon, on_land, false));
+    CHECK(world.explosion_count == 1 && world.explosions[0].sprite.sequence == &art.blast);
+    CHECK(smoke_layer(match).count == layered);
+    weapon.flags = flags | OA_WEAPON_FLAG_END_SMOKE;
+    CHECK(match.spawn_weapon_explosion(weapon, on_land, false));
+    CHECK(world.explosion_count == 2 && world.explosions[1].sprite.sequence == &art.blast);
+    CHECK(world.explosions[1].flash.sequence == world.flash_tiers[0]);
+    CHECK(
+        smoke_layer(match).count == layered + 1 &&
+        newest(match.effects(), sim::effect_particles::layer_smoke).interval == 1
+    );
+    weapon.flags = flags;
+    world.explosion_count = 0;
+    std::cout << "display rule explosions passed\n";
+}
+
 // spawn_corpse leaves the corpse where the unit stood and smokes it on land for
 // 900 ticks. Under water a 3DO corpse sinks and does not smoke, a sprite one
 // (which gets no record) still smokes, and a dismissed unit never smokes.
@@ -149,7 +181,7 @@ void wreck_smoke(sim::match_runtime::Match& match) {
     CHECK(record->orientation[1] == static_cast<int16_t>(on_land->record.heading));
     match.spawn_corpse(*on_land, 1, true);
     CHECK(smoke_layer(match).count == before + 1);
-    const auto& column = newest(smoke_layer(match));
+    const auto& column = newest(match.effects(), sim::effect_particles::layer_smoke);
     CHECK(column.interval == 15 && column.deadline == match.state().game.tick + 900);
     match.spawn_corpse(*sunk, 1, true);
     CHECK(smoke_layer(match).count == before + 1);
@@ -179,7 +211,7 @@ void feature_sprays(sim::match_runtime::Match& match, const FeatureDef& feature)
     const auto before = layer.count;
     match.spray_nano_feature(*worker, 2, 3, feature, true);
     CHECK(layer.count == before + 1);
-    const auto& inward = newest(layer);
+    const auto& inward = newest(match.effects(), sim::effect_particles::layer_nano);
     const int32_t low_x = 2 << 20, low_y = land_height << 16, low_z = 3 << 20;
     const int32_t span_x = feature.footprint_x << 20, span_y = feature.height << 16;
     const int32_t span_z = feature.footprint_z << 20;
@@ -193,7 +225,7 @@ void feature_sprays(sim::match_runtime::Match& match, const FeatureDef& feature)
         inward.target.x == static_cast<int32_t>(worker->unit->position[0])
     );
     match.spray_nano_feature(*worker, 2, 3, feature, false);
-    const auto& outward = newest(layer);
+    const auto& outward = newest(match.effects(), sim::effect_particles::layer_nano);
     CHECK(outward.target.x == inward.origin.x && outward.origin_extent.x == 0);
     std::cout << "feature nano sprays passed\n";
 }
@@ -235,7 +267,7 @@ void fired_shots(sim::match_runtime::Match& match, const Art& art) {
             created_tick_moved = created_tick_moved || record->created_tick != launch_tick;
         }
         const auto& layer = smoke_layer(match);
-        const auto& last = newest(layer);
+        const auto& last = newest(match.effects(), sim::effect_particles::layer_smoke);
         const bool fresh =
             layer.count != 0 && last.interval == 1 && last.deadline == match.simulation().tick;
         if (launched_at < 0) {
@@ -387,5 +419,12 @@ int main() {
     wreck_smoke(match);
     feature_sprays(match, features[0]);
     fired_shots(match, art);
+
+    input.display.end_smoke_explosion = true;
+    input.display.explosion_smoke_column = false;
+    Services tweaked_services;
+    sim::match_runtime::Match tweaked(input, tweaked_services);
+    tweaked.configure_strategic_environment({0, 0.5F, 0});
+    display_rule_explosions(tweaked, art);
     return 0;
 }

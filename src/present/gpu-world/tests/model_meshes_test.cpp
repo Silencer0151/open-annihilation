@@ -1298,7 +1298,7 @@ std::vector<std::string> installed_unit_models(const oa::AssetStore& assets) {
 struct Worst {
     std::string name;
     double value{};
-    Comparison comparison;
+    Comparison comparison{};
 };
 
 /// Keeps the larger of a worst so far and a model's value.

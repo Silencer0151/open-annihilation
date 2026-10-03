@@ -15,6 +15,8 @@ add_library(oa-netgame
   wire/frame.cpp
   wire/condenser.cpp
   wire/content_hash.cpp
+  wire/private_channel.cpp
+  wire/recorder_session.cpp
   wire/dplay.cpp
   dplay/protocol.cpp
   dplay/engine.cpp
@@ -72,6 +74,12 @@ if(BUILD_TESTING)
   target_link_libraries(oa-netgame-wire-malformed-test PRIVATE oa-netgame oa-formats-tad oa-test-support)
   add_test(NAME net-wire-malformed COMMAND oa-netgame-wire-malformed-test)
   set_tests_properties(net-wire-malformed PROPERTIES TIMEOUT 120)
+
+  # The wire forms a mod profile's network rules add.
+  add_executable(oa-netgame-wire-rules-test tests/wire_rules_test.cpp)
+  target_link_libraries(oa-netgame-wire-rules-test PRIVATE oa-netgame)
+  add_test(NAME net-wire-rules COMMAND oa-netgame-wire-rules-test)
+  set_tests_properties(net-wire-rules PROPERTIES TIMEOUT 30)
 
   # The condenser's datagram envelope, pinned for every platform.
   add_executable(oa-netgame-condenser-golden-test tests/condenser_golden_test.cpp)

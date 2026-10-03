@@ -8,6 +8,7 @@
 
 #include "oa/core/world.h"
 #include "oa/data/defs/categories.hpp"
+#include "oa/data/limits.hpp"
 
 #include <cstdint>
 
@@ -126,9 +127,16 @@ void select_all(World& world, const Hooks& hooks);
 
 /// Adds every selectable local unit whose type matches an already selected one.
 ///
+/// The selected types are gathered in a type bitset of `type_bits` type ids;
+/// a unit whose type id is past it neither adds its type nor is added, as in
+/// 3.1c past its 512 type ids.
+///
 /// @param[in,out] world units, players and game fields
 /// @param hooks sight, sound and panel services
-void select_matching_types(World& world, const Hooks& hooks);
+/// @param type_bits type ids the bitset holds (data::limits::UnitTypes::bitset_bits)
+void select_matching_types(
+    World& world, const Hooks& hooks, uint32_t type_bits = data::limits::base_type_bits
+);
 
 /// Selects selectable local units by type mask.
 ///

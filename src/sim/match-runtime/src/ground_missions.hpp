@@ -34,6 +34,61 @@ constexpr uint8_t patrol_kind = 29;
 constexpr uint8_t vtol_patrol_kind = 56;
 constexpr uint8_t vtol_repair_patrol_kind = 60;
 
+// What a builder on a repair patrol looks for (orders.con-patrol-guard-options).
+constexpr uint8_t patrol_reclaim_only = 0; // skips the repair and assist search
+constexpr uint8_t patrol_both = 1;         // as in 3.1c
+constexpr uint8_t patrol_assist_only = 2;  // skips the reclaim search
+// Where a guarding unit stands (orders.con-patrol-guard-options).
+constexpr uint8_t guard_stay = 0;    // 7/20 of the guard spacing out on each axis
+constexpr uint8_t guard_base = 1;    // as in 3.1c
+constexpr uint8_t guard_scatter = 2; // the whole guard spacing out on each axis
+
+/// Returns what a unit on a builder patrol looks for under its standing move
+/// order, by orders.con-patrol-guard-options: patrol_reclaim_only,
+/// patrol_both (3.1c's, also for a standing move order past roam) or
+/// patrol_assist_only.
+///
+/// @param rules the match's rules
+/// @param unit the patrolling unit
+/// @return the choice
+inline uint8_t patrol_choice(const data::match_rules::MatchRules& rules, const oa::Unit& unit) {
+    const auto& options = rules.orders.con_patrol_guard_options;
+    switch ((unit.flags & OA_UNIT_FLAG_MOVE_ORDER_MASK) >> OA_UNIT_FLAG_MOVE_ORDER_SHIFT) {
+    case 0:
+        return static_cast<uint8_t>(options.patrol_hold_position);
+    case 1:
+        return static_cast<uint8_t>(options.patrol_maneuver);
+    case 2:
+        return static_cast<uint8_t>(options.patrol_roam);
+    default:
+        return patrol_both;
+    }
+}
+
+/// Returns where a guarding unit stands under its standing move order, by
+/// orders.con-patrol-guard-options: guard_stay, guard_base (3.1c's, also
+/// without the guard hook and for a standing move order past roam) or
+/// guard_scatter.
+///
+/// @param rules the match's rules
+/// @param unit the guarding unit
+/// @return the choice
+inline uint8_t guard_choice(const data::match_rules::MatchRules& rules, const oa::Unit& unit) {
+    const auto& options = rules.orders.con_patrol_guard_options;
+    if (!options.guard_hook)
+        return guard_base;
+    switch ((unit.flags & OA_UNIT_FLAG_MOVE_ORDER_MASK) >> OA_UNIT_FLAG_MOVE_ORDER_SHIFT) {
+    case 0:
+        return static_cast<uint8_t>(options.guard_hold_position);
+    case 1:
+        return static_cast<uint8_t>(options.guard_maneuver);
+    case 2:
+        return static_cast<uint8_t>(options.guard_roam);
+    default:
+        return guard_base;
+    }
+}
+
 // Results read by the order sweep.
 constexpr uint32_t restart_mission = 0;
 constexpr uint32_t next_phase = 1;
@@ -335,6 +390,34 @@ class TickHost::GroundMissions {
         }
         host.write_flags(s, flags);
     }
+
+    /// Returns the match-wide rules the match plays by.
+    ///
+    /// @return the rules; 3.1c's without a profile
+    const data::match_rules::MatchRules& rules() const { return host.match.rules(); }
+
+    /// Occupies every weapon slot for a busy state (the slots fire only at
+    /// what an order gives them), or frees them all (they pick their own
+    /// targets) when orders.weapons-free-while-busy lists the state.
+    ///
+    /// @param state the busy state the order enters
+    void occupy_weapons_while_busy(data::match_rules::OrdersWeaponsFreeWhileBusyStates state) {
+        AttackAdapter weapons(host, s, record);
+        if (rules().orders.weapons_free_while_busy.states.contains(state))
+            weapons.reset_weapons();
+        else
+            weapons.release_weapon_targets(3);
+    }
+
+    /// Returns what the unit looks for on a builder patrol (ground::patrol_choice).
+    ///
+    /// @return the choice for the unit's standing move order
+    uint8_t patrol_choice() const { return ground::patrol_choice(rules(), s.record); }
+
+    /// Returns where the unit stands when it guards (ground::guard_choice).
+    ///
+    /// @return the choice for the unit's standing move order
+    uint8_t guard_choice() const { return ground::guard_choice(rules(), s.record); }
 
     /// Tells whether the unit's type can fly.
     ///
@@ -1188,7 +1271,124 @@ class TickHost::GroundMissions {
         push_order_front(entry);
     }
 
+    // tick_missions_kickout.cpp (orders.build-site-kickout)
+    /// Returns the order kind the move command (2) gives a unit.
+    ///
+    /// @param host the tick host
+    /// @param slot the unit
+    /// @return QMove for a unit without a movement object, the move kind, or 0
+    static uint8_t move_command_kind_of(TickHost& host, sim::unit_spawn::Slot& slot);
+    /// Tells whether a unit is on the move the kickout last sent it on: its
+    /// first order is the move command's kind and its point's whole x, z and
+    /// y are the ones kept for the unit. A unit on another move loses what
+    /// was kept for it.
+    ///
+    /// @param host the tick host
+    /// @param slot the unit
+    /// @return true when it is on the kept move
+    static bool on_kickout_move(TickHost& host, sim::unit_spawn::Slot& slot);
+    /// Tells whether a unit on the footprint leaves it: one moving to a point
+    /// in the footprint, an idle one, one whose order has no target or a
+    /// finished one, one working on a frame that has taken 600 or more of
+    /// its build energy, and one on a cheaper frame another of its owner's
+    /// units works on from phase 2 on.
+    ///
+    /// @param host the tick host
+    /// @param slot the unit
+    /// @param site_x whole x of the site's centre
+    /// @param site_z whole z of the site's centre
+    /// @param footprint_x the built type's footprint width, cells
+    /// @param footprint_z its depth, cells
+    /// @return true when it leaves
+    static bool kickout_moves(
+        TickHost& host,
+        sim::unit_spawn::Slot& slot,
+        int32_t site_x,
+        int32_t site_z,
+        int16_t footprint_x,
+        int16_t footprint_z
+    );
+    /// Finds where a unit leaving the footprint goes: the first free plot
+    /// (no unit, no feature with height, a slope the unit stands) on rings
+    /// around the site from the radius out to twice it, each walked from a
+    /// start angle outward on both sides until half a turn. The start
+    /// angle is random (one draw from the match's stream, made for every
+    /// unit that leaves) for a unit the kickout already sent, an eighth of
+    /// a turn off the course of a unit headed for a target, away from the
+    /// site for any other unit.
+    ///
+    /// @param host the tick host
+    /// @param slot the unit
+    /// @param site_x whole x of the site's centre
+    /// @param site_z whole z of the site's centre
+    /// @param radius the first ring's radius, world units
+    /// @return whole x and z of the spot, or none
+    static std::optional<std::array<int32_t, 2>> kickout_spot(
+        TickHost& host, sim::unit_spawn::Slot& slot, int32_t site_x, int32_t site_z, int32_t radius
+    );
+    /// Orders a unit to a point ahead of its orders and keeps where it sent
+    /// it.
+    ///
+    /// @param host the tick host
+    /// @param slot the unit
+    /// @param move the signed 16.16 point, whole x, y and z
+    static void send_off_site(
+        TickHost& host, sim::unit_spawn::Slot& slot, const sim::ground_orders::Point& move
+    );
+    /// Returns the move point for a spot: its whole x and z, the unit's
+    /// whole y, fractions zero.
+    ///
+    /// @param slot the unit
+    /// @param spot whole x and z
+    /// @return the signed 16.16 point
+    static sim::ground_orders::Point
+    whole_move_point(sim::unit_spawn::Slot& slot, std::array<int32_t, 2> spot);
+    /// Queues a move to a point ahead of a unit's orders.
+    ///
+    /// @param host the tick host
+    /// @param slot the unit
+    /// @param head the unit's first order
+    /// @param move_kind the move command's kind for the unit
+    /// @param move the signed 16.16 point
+    static void push_move_front(
+        TickHost& host,
+        sim::unit_spawn::Slot& slot,
+        sim::simulation_state::Order& head,
+        uint8_t move_kind,
+        const sim::ground_orders::Point& move
+    );
+
   public:
+
+    /// Clears a blocked build site of the local player's own units
+    /// (orders.build-site-kickout): each of its mobile units on the
+    /// footprint that kickout_moves picks is sent to the spot kickout_spot
+    /// finds. A builder whose frame is not started walks to its site again
+    /// behind the move; an order without a point gives way to it; a unit
+    /// the kickout already sent is sent on; any other order stops and is
+    /// given again from its start behind the move, a frame the unit worked
+    /// on as the repair command gives it. The unit's later orders are kept.
+    ///
+    /// @param host the tick host
+    /// @param footprint_x the built type's footprint width, cells
+    /// @param footprint_z its depth, cells
+    /// @param site signed 16.16 centre of the site
+    static void clear_build_site(
+        TickHost& host,
+        int16_t footprint_x,
+        int16_t footprint_z,
+        const sim::ground_orders::Point& site
+    );
+    /// Sends a unit to a point ahead of its orders, as the kickout sends a
+    /// unit off a site (ui.build-tools' drag with the snap override key):
+    /// its first order waits behind a move to the point's whole x, y and z,
+    /// and its later orders are kept.
+    ///
+    /// @param host the tick host
+    /// @param slot the unit
+    /// @param point signed 16.16 point
+    static void
+    send_ahead(TickHost& host, sim::unit_spawn::Slot& slot, const sim::ground_orders::Point& point);
 
     /// Binds the handlers to one unit's order for one step.
     ///
@@ -1204,6 +1404,10 @@ class TickHost::GroundMissions {
     // tick_missions_ground.cpp
     /// Runs one step of Reclaim: walks to the map feature at the order point,
     /// sprays it for a time set by its metal and energy, then reclaims it.
+    ///
+    /// @quirk Stage 3 says "working" at every step and, once the time runs
+    /// out, stage 4 takes one step more; display rules that say it once move
+    /// to stage 4 with the first step instead.
     ///
     /// @return 1 (next phase), 2 (keep waiting), 5 (done), 8 (failed: no
     ///     feature there, which is announced, one that cannot be reclaimed, or

@@ -16,6 +16,7 @@
 #include "oa/present/model/model_draw.hpp"
 #include "oa/present/model/model_library.hpp"
 #include "oa/present/model/rgb_bridge.hpp"
+#include "oa/present/model/shadow_fade.hpp"
 #include "oa/present/model/unit_supersampling.hpp"
 #include "oa/present/unit_playout.hpp"
 #include "oa/sim/match_runtime.hpp"
@@ -74,6 +75,9 @@ struct MatchModels {
     oa::present::model::ModelLibrary library;
     oa::present::model::ModelDisplay display;
     oa::present::model::ModelRenderer renderer;
+    /// The faded alpha table the renderer's shadows blend through while the
+    /// view is zoomed out (set_frame_shadows).
+    oa::present::model::ShadowTable shadow_table;
     oa::present::model::RgbBridge bridge;
     // The buffers of units drawn finer than the frame (enhanced anti-aliasing).
     oa::present::model::SupersampleScratch supersample;
@@ -96,6 +100,22 @@ struct MatchModels {
     // building owned by the viewpoint player, kept here in place of its part
     // of Game.search_context_block.
     oa::Unit feature_unit{};
+
+    // The building being placed, drawn at its site as a nanoframe
+    // (ui.build-preview): its type's model, the draw state begun for it and
+    // the unit record it draws through.
+    struct BuildPreview {
+        uint16_t type{}; ///< the type the instance was made for; 0 for none
+        view_rules::BuildFacing facing{};
+        oa::sim::model_runtime::Instance instance{};
+        oa::present::model::ModelState state{};
+        oa::Unit unit{};
+    };
+
+    BuildPreview build_preview{};
+    // The build effect's clock, which slows the nanoframes' pulse in a view
+    // zoomed out (advance_build_pulse).
+    oa::present::model::BuildPulseClock build_pulse{};
     uint32_t animation_tick{};
     bool animation_started{};
     std::unordered_map<uint8_t, std::shared_ptr<const oa::formats::objects3d::Model>> weapon_models;

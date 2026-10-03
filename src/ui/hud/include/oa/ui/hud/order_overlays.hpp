@@ -189,6 +189,12 @@ struct OverlayContext {
     SpriteSequence path_pips;
     const SpriteSequence* indicators{}; // by MissionOverlay.indicator
     bool show_ranges{};                 // debug range display (Game.show_ranges)
+    /// ui.interface-fixes range-ring-3: the third weapon's range circle is
+    /// gated on its own enable bit, not the first weapon's.
+    bool third_ring_own_weapon{};
+    /// ui.interface-fixes radius-0: a circle too small for one segment draws
+    /// its label alone instead of nothing.
+    bool segmentless_circle_label{};
 };
 
 struct ScreenPoint {
@@ -225,7 +231,8 @@ void draw_build_site_overlay(
 ///
 /// @param context World, view and drawing services.
 /// @param center Circle centre, 16.16 fixed-point per axis.
-/// @param radius Radius in pixels; under 2 draws nothing.
+/// @param radius Radius in pixels; under 2 draws no circle, and no label
+///        either unless OverlayContext::segmentless_circle_label is set.
 /// @param color Palette index of the lines.
 /// @param label Label text, or null for none.
 /// @param label_slot Which third of the segments the label follows.

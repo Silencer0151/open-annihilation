@@ -27,8 +27,9 @@
    - fill_polygon (and the range rings), fill_line and what draws through it
      (draw_clipped_line, draw_point, draw_rect_outline, outline_rect);
    - the sprite draws that place a sprite by the clip (draw_sprite,
-     draw_sprite_blended, draw_sprite_lit, draw_sprite_shadow,
-     draw_sprite_opaque, draw_sprite_gray, erase_sprite_dithered);
+     draw_sprite_blended, draw_sprite_blended_through, draw_sprite_lit,
+     draw_sprite_shadow, draw_sprite_opaque, draw_sprite_gray,
+     erase_sprite_dithered);
    - texture_quad (the model module's mesh_raster.hpp).
    The rectangle copies (copy_rect, copy_rect_keyed, blit_rect,
    blit_rect_keyed, remap_under_mask and the row decoders of rle.hpp) write

@@ -132,12 +132,13 @@ void mirror_player(Fixture& f, uint8_t player) {
     f.match->simulation().players[player].status = OA_PLAYER_STATUS_MIRRORED;
 }
 
-// The smoke columns over corpses among a layer's emitters.
-uint32_t smoke_columns(const sim::effect_particles::Layer& layer) {
+// The smoke columns over corpses among the smoke layer's emitters.
+uint32_t smoke_columns(const sim::effect_particles::EffectWorld& world) {
     uint32_t columns = 0;
-    for (uint16_t index = 0; index < layer.count; ++index) {
+    const auto& layer = world.layers[sim::effect_particles::layer_smoke];
+    for (uint32_t index = 0; index < layer.count; ++index) {
         const auto& emitter =
-            layer.emitters[(layer.head + index) % sim::effect_particles::layer_capacity];
+            sim::effect_particles::layer_emitter(world, sim::effect_particles::layer_smoke, index);
         if (emitter.kind == sim::effect_particles::EmitterKind::smoke &&
             emitter.interval == wreck_smoke_interval)
             ++columns;
@@ -454,9 +455,7 @@ struct Scene {
         return std::as_const(*f.match).effects();
     }
 
-    uint32_t columns() const {
-        return smoke_columns(effects().layers[sim::effect_particles::layer_smoke]);
-    }
+    uint32_t columns() const { return smoke_columns(effects()); }
 
     oa::Game& game() { return f.match->state().game; }
 

@@ -5,6 +5,7 @@
 
 #include "oa/core/unit.h"
 #include "oa/core/world.h"
+#include "oa/data/match_rules.hpp"
 
 #include <cstdint>
 
@@ -56,10 +57,15 @@ void aim_slot_at_point(Unit& shooter, const FixedVec3& point, uint8_t slot) noex
 /// @param shooter unit owning the slot
 /// @param target unit to reach
 /// @param slot weapon slot 0..2
+/// @param rules the match's rules and the weapon's own (reach_parameters)
 /// @return true when in reach
 [[nodiscard]]
 bool slot_reaches_unit(
-    const World& world, const Unit& shooter, const Unit& target, uint8_t slot
+    const World& world,
+    const Unit& shooter,
+    const Unit& target,
+    uint8_t slot,
+    const data::match_rules::MatchRulesView& rules
 ) noexcept;
 
 /// Tests whether a slot's weapon reaches a point from where the shooter stands.
@@ -68,10 +74,15 @@ bool slot_reaches_unit(
 /// @param shooter unit owning the slot
 /// @param target point to reach, 16.16 world coordinates
 /// @param slot weapon slot 0..2
+/// @param rules the match's rules and the weapon's own (reach_parameters)
 /// @return true when in reach
 [[nodiscard]]
 bool slot_reaches_point(
-    const World& world, const Unit& shooter, const FixedVec3& target, uint8_t slot
+    const World& world,
+    const Unit& shooter,
+    const FixedVec3& target,
+    uint8_t slot,
+    const data::match_rules::MatchRulesView& rules
 ) noexcept;
 
 struct RetaliationHooks {
@@ -89,6 +100,8 @@ struct RetaliationHooks {
     // owner's computer player gives the unit no build task, then clear the
     // unit's orders (not all).
     void (*computer_alert)(void* context, Unit& victim, uint32_t tick){};
+    /// The rules the match plays by (Match::rules_view); unset, 3.1c's.
+    data::match_rules::MatchRulesView rules{};
 };
 
 struct RetaliationResult {
@@ -101,7 +114,9 @@ struct RetaliationResult {
 
 /// Runs a damaged unit's automatic reaction to its attacker.
 ///
-/// A computer-owned capturer raises the computer alert. A finished, armed (or kamikaze),
+/// A computer-owned capturer raises the computer alert, drawing its delay from the
+/// match stream; under ai.commander-keeps-orders-when-damaged it raises none and draws
+/// nothing. A finished, armed (or kamikaze),
 /// locally simulated victim of a non-allied attacker then tries an attack order when
 /// its head order allows it, the attacker is not in nochasecategory or the primary
 /// bad-target category, and slot 0 reaches it. Failing that, unless holding fire, each

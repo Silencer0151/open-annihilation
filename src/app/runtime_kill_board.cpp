@@ -4,10 +4,13 @@
 // The kills board F4 slides in at the top right of the battlefield.
 #include "oa/app/runtime.hpp"
 #include "full_fog.hpp"
+#include "oa/app/view_rules.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
 #include "oa/ui/frontend_renderer/gadget_draw.hpp"
 #include "oa/present/model/mesh_raster.hpp"
 #include "oa/present/raster.hpp"
+#include "oa/present/game_text.hpp"
+#include "oa/ui/frontend_renderer/game_text.hpp"
 #include "oa/ui/console/game_fields.hpp"
 #include "oa/ui/hud/kill_board.hpp"
 #include "oa/ui/hud/resource_bar.hpp"
@@ -25,6 +28,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 
@@ -230,10 +234,66 @@ void Runtime::overlay_gui_text(
     const oa::present::GafSprites& font,
     oa::ui::display_layout::Point pen,
     std::string_view text,
-    int rows_below_pen
+    int rows_below_pen,
+    bool allow_background
 ) {
     if (font.sequences.empty() || text.empty() || rows_below_pen <= 0)
         return;
+    if (!renderer::needs_text_runs(text, true)) {
+        std::ignore = overlay_gui_glyphs(font, pen, text, rows_below_pen);
+        return;
+    }
+    // The modern fonts sit on the font's baseline, drawn at the text's
+    // scale and the size the text takes here, in hattfont12's colour.
+    const int scale = hud_text_scale();
+    const int32_t font_baseline = renderer::gui_font_baseline(font);
+    const auto face = renderer::gui_font_face(font);
+    for (const auto& run :
+         renderer::split_game_text(text, renderer::gui_font_characters(font), true)) {
+        if (run.modern) {
+            const int32_t size = painted_text_size(run);
+            if (const auto layers =
+                    oa::present::modern_text(run.text, face, scale, size, allow_background)) {
+                const int baseline = pen.y + painted_baseline(font_baseline, size) * scale;
+                pen.x += paint_modern_text(*layers, pen.x, baseline, oa::present::gui_font_color);
+                continue;
+            }
+        }
+        const std::string bytes =
+            run.modern ? oa::present::encode_game_text(run.text, false) : run.text;
+        pen.x += overlay_gui_glyphs(font, pen, bytes, rows_below_pen) * scale;
+    }
+}
+
+int Runtime::gui_text_width(const oa::present::GafSprites& font, std::string_view text) const {
+    const int scale = hud_text_scale();
+    if (!renderer::needs_text_runs(text, true))
+        return renderer::measure_gadget_glyphs(font, text);
+    int width = 0;
+    for (const auto& run :
+         renderer::split_game_text(text, renderer::gui_font_characters(font), true)) {
+        if (run.modern)
+            if (const auto layers = oa::present::modern_text(
+                    run.text, renderer::gui_font_face(font), scale, painted_text_size(run)
+                )) {
+                width += (layers->advance + scale - 1) / scale;
+                continue;
+            }
+        const std::string bytes =
+            run.modern ? oa::present::encode_game_text(run.text, false) : run.text;
+        width += renderer::measure_gadget_glyphs(font, bytes);
+    }
+    return width;
+}
+
+int Runtime::overlay_gui_glyphs(
+    const oa::present::GafSprites& font,
+    oa::ui::display_layout::Point pen,
+    std::string_view text,
+    int rows_below_pen
+) {
+    if (font.sequences.empty() || text.empty() || rows_below_pen <= 0)
+        return 0;
     const std::string line(text);
     const auto* glyphs = &font.sequences.front();
     int width = 0;
@@ -256,9 +316,9 @@ void Runtime::overlay_gui_text(
         width + 2 * kGlyphReach,
         [](void* context, oa::Surface& surface) {
             const auto& run = *static_cast<const Run*>(context);
-            renderer::draw_gadget_text(
+            std::ignore = renderer::draw_gadget_glyphs(
                 &surface,
-                run.font,
+                *run.font,
                 run.text,
                 kGlyphReach,
                 kGlyphReach,
@@ -268,52 +328,109 @@ void Runtime::overlay_gui_text(
         },
         const_cast<Run*>(&run)
     );
+    return width;
+}
+
+void Runtime::draw_board_text(
+    std::string_view text, int32_t x, int32_t y, int32_t width, uint8_t flash
+) {
+    const auto draw_glyphs = [this,
+                              y](int32_t pen, std::string_view bytes, int32_t room, uint8_t light) {
+        struct Line {
+            const oa::present::GafSprites* font;
+            std::string_view text;
+            int32_t width;
+            uint8_t flash;
+        } line{&gui_font_, bytes, room, light};
+        overlay_board_patch(
+            pen,
+            y - kGlyphReach,
+            room + kGlyphReach,
+            3 * kGlyphReach,
+            [](void* context, oa::Surface& surface) {
+                const auto& line = *static_cast<const Line*>(context);
+                std::ignore = renderer::draw_gadget_glyphs(
+                    &surface, *line.font, line.text, 0, kGlyphReach, line.width, line.flash
+                );
+            },
+            &line
+        );
+    };
+    if (!renderer::needs_text_runs(text, true)) {
+        draw_glyphs(x, text, width, flash);
+        return;
+    }
+    // Runs are laid one after another from the board's pen; the modern
+    // fonts' are painted at the text's scale on the font's baseline, lit as
+    // the glyphs are.
+    const int scale = hud_text_scale();
+    const auto face = renderer::gui_font_face(gui_font_);
+    const auto lit = renderer::lit_text_color(oa::present::gui_font_color, match_palette_, flash);
+    int32_t pen = x;
+    int32_t room = width;
+    for (const auto& run :
+         renderer::split_game_text(text, renderer::gui_font_characters(gui_font_), true)) {
+        const int32_t size = painted_text_size(run);
+        std::optional<oa::present::TextLayers> layers;
+        if (run.modern)
+            layers = oa::present::modern_text(run.text, face, scale, size);
+        if (!layers) {
+            const std::string bytes =
+                run.modern ? oa::present::encode_game_text(run.text, false) : run.text;
+            const int32_t advance = renderer::measure_gadget_glyphs(gui_font_, bytes);
+            draw_glyphs(pen, bytes, room, flash);
+            if (advance > room)
+                return;
+            pen += advance;
+            room -= advance;
+            continue;
+        }
+        const auto corner = board_canvas(pen, y);
+        const auto at = canvas_paint(corner.x, corner.y);
+        const int baseline =
+            at.y + painted_baseline(renderer::gui_font_baseline(gui_font_), size) * scale;
+        if (layers->advance > room * scale) {
+            const std::size_t fitted =
+                oa::present::modern_text_fit(run.text, face, scale, size, room * scale);
+            if (fitted != 0)
+                if (const auto part =
+                        oa::present::modern_text(run.text.substr(0, fitted), face, scale, size))
+                    std::ignore = paint_modern_text(*part, at.x, baseline, lit);
+            return;
+        }
+        const int32_t advance =
+            (paint_modern_text(*layers, at.x, baseline, lit) + scale - 1) / scale;
+        pen += advance;
+        room -= advance;
+    }
 }
 
 void Runtime::draw_match_kill_board() {
     if (!match_ || campaign_mission_)
         return;
     ensure_gui_font();
+    // Its rows are laid out for the game's font.
+    const PanelText panel(*this);
     auto& world = match_->state();
     hud::KillBoardSink sink{};
     sink.user = this;
+    // "Kills" and "Losses" in the game's language, as gamedata\translate.tdf
+    // gives them.
+    sink.localize = translation_hook;
     sink.play_sound = [](void* user, const char* name) {
         static_cast<Runtime*>(user)->play_match_interface_sound(name);
     };
     sink.shade = [](void* user, int32_t x0, int32_t y0, int32_t x1, int32_t y1, int32_t level) {
         static_cast<Runtime*>(user)->shade_board_rect(x0, y0, x1, y1, level);
     };
-    sink.text =
-        [](void* user, const char* text, int32_t x, int32_t y, int32_t width, uint8_t flash) {
-            struct Line {
-                const oa::present::GafSprites* font;
-                const char* text;
-                int32_t width;
-                uint8_t flash;
-            } line{&static_cast<Runtime*>(user)->gui_font_, text, width, flash};
-            static_cast<Runtime*>(user)->overlay_board_patch(
-                x,
-                y - kGlyphReach,
-                width + kGlyphReach,
-                3 * kGlyphReach,
-                [](void* context, oa::Surface& surface) {
-                    const auto& line = *static_cast<const Line*>(context);
-                    renderer::draw_gadget_text(
-                        &surface, line.font, line.text, 0, kGlyphReach, line.width, line.flash
-                    );
-                },
-                &line
-            );
-        };
-    // The advances of every byte the font has a glyph for.
+    sink.text = [](
+                    void* user, const char* text, int32_t x, int32_t y, int32_t width, uint8_t flash
+                ) { static_cast<Runtime*>(user)->draw_board_text(text, x, y, width, flash); };
+    // The advances of every byte the font has a glyph for, or as the modern
+    // fonts draw the text.
     sink.text_width = [](void* user, const char* text) {
-        const auto& font = static_cast<Runtime*>(user)->gui_font_;
-        const auto* glyphs = font.sequences.empty() ? nullptr : &font.sequences.front();
-        int32_t width = 0;
-        for (const auto* p = reinterpret_cast<const unsigned char*>(text); *p != 0; ++p)
-            if (const oa::Sprite* glyph = oa::present::gaf_frame(glyphs, *p))
-                width += glyph->width;
-        return width;
+        const auto& runtime = *static_cast<Runtime*>(user);
+        return static_cast<int32_t>(runtime.gui_text_width(runtime.gui_font_, text));
     };
     // The colour's logo, less its outer pixel, is stretched over the row.
     sink.logo =

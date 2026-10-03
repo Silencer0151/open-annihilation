@@ -337,6 +337,8 @@ void Runtime::draw_frame_stats() {
     frame_stats_place_.reset();
     if (!frame_stats_shown_ || !match_)
         return;
+    // The panel is laid out for the game's font.
+    const PanelText panel(*this);
     const oa::formats::fnt::Font* font = match_label_font();
     if (font == nullptr)
         return;

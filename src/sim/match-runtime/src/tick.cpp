@@ -15,6 +15,8 @@ constexpr uint32_t player_update_period = 30;
 } // namespace
 
 void Match::tick() {
+    // A running game has no commander to place.
+    commander_placement_ = CommanderPlacement::none;
     if (trace_)
         trace_->sample(*this);
     TickHost host(*this);
@@ -54,6 +56,9 @@ void Match::tick() {
     // whether the tick is drawn or not, from the debris table the tick leaves.
     sim::effect_particles::start_debris_particles(*effects_, state().game, effect_host());
     mark_profile(OA_PROFILE_SFX);
+    // Share-panel structure gifts that waited out their time go across after
+    // the tick (sharing.structure-gift-rate-limit).
+    give_due_structure_gifts();
 }
 
 void Match::update_player_slots() {
@@ -86,6 +91,9 @@ void Match::update_player_slots() {
             (outcome_state_.flags & sim::scenario::outcome_flag::finished) == 0 &&
             outcome_state_.countdown < 0)
             update_player_economy(player);
+        // Allied vision rebuilds the sight stamps here once an alliance or
+        // the viewpoint changed.
+        follow_alliances_in_sight();
         if (player == state().game.viewpoint_player)
             scan_contacts();
     }

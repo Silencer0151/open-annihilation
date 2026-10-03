@@ -370,6 +370,86 @@ void test_received_chat_line() {
     CHECK(log.logos == 0 && log.lines.size() == 3 && log.lines[0] == "older");
 }
 
+// A line the sink writes in several rows takes a font height for each, and
+// asks for its rows where its text starts, past a sender's logo. Past the
+// most rows the oldest lines are left out; the newest always shows.
+void test_message_log_rows() {
+    hud_test::TestWorld match;
+    Game& game = match.game();
+    constexpr uint8_t sender = 1;
+    put_line(game, 0, "one", sim::messages::kind_status, sim::messages::sender_none);
+    put_line(game, 1, "two rows", sim::messages::kind_status, sender);
+    put_line(game, 2, "three", sim::messages::kind_status, sim::messages::sender_none);
+    put_line(game, 3, "four rows", sim::messages::kind_status, sim::messages::sender_none);
+    game.chat_tail = 0;
+    game.chat_head = 4;
+    set_message_lines(game, 10);
+    game.message_filter = 2;
+
+    struct Rows {
+        int32_t most{};
+        std::vector<std::string> lines;
+        std::vector<int32_t> tops;
+        std::vector<int32_t> asked_at;
+        int logos = 0;
+
+        MessageLogSink sink() {
+            MessageLogSink s{};
+            s.user = this;
+            s.font_height = [](void*) { return 28; };
+            // A row for each word.
+            s.rows = [](void* u, const char* text, int32_t x) {
+                static_cast<Rows*>(u)->asked_at.push_back(x);
+                int32_t rows = 1;
+                for (const char* at = text; *at != '\0'; ++at)
+                    rows += *at == ' ' ? 1 : 0;
+                return rows;
+            };
+            s.logo = [](void* u, const Player&, int32_t, int32_t, int32_t, int32_t) {
+                ++static_cast<Rows*>(u)->logos;
+            };
+            s.text = [](void* u, const char* text, int32_t, int32_t y) {
+                static_cast<Rows*>(u)->lines.emplace_back(text);
+                static_cast<Rows*>(u)->tops.push_back(y);
+            };
+            s.most_rows = most;
+            return s;
+        }
+    };
+
+    Rows all;
+    draw_message_log(*match.world, all.sink());
+    CHECK(all.lines.size() == 4);
+    CHECK(
+        (all.tops ==
+         std::vector<int32_t>{
+             kMessageLogTop, kMessageLogTop + 28, kMessageLogTop + 3 * 28, kMessageLogTop + 4 * 28
+         })
+    );
+    // The sender's line asks for its rows past its logo, 0.8 of a 28-row line.
+    constexpr int32_t logo = 22;
+    CHECK(all.asked_at.size() == 4 && all.asked_at[1] == kMessageLogLeft + logo * 3 / 2);
+    CHECK(all.asked_at[0] == kMessageLogLeft && all.logos == 1);
+
+    // Six rows in five: the oldest line goes, and the rest move up.
+    Rows five;
+    five.most = 5;
+    draw_message_log(*match.world, five.sink());
+    CHECK(five.lines.size() == 3 && five.lines[0] == "two rows" && five.lines[2] == "four rows");
+    CHECK(
+        (five.tops ==
+         std::vector<int32_t>{kMessageLogTop, kMessageLogTop + 2 * 28, kMessageLogTop + 3 * 28})
+    );
+    // Two rows hold the newest line alone; one row still shows it.
+    for (const int32_t most : {2, 1}) {
+        Rows few;
+        few.most = most;
+        draw_message_log(*match.world, few.sink());
+        CHECK(few.lines.size() == 1 && few.lines[0] == "four rows" && few.logos == 0);
+        CHECK(few.tops == std::vector<int32_t>{kMessageLogTop});
+    }
+}
+
 void test_logo_blit() {
     const int32_t rect[4] = {10, 20, 30, 40};
     const auto blit = player_logo_blit(rect, 16, 12, 5);
@@ -386,6 +466,7 @@ int main() {
     test_open_panel();
     test_message_log();
     test_received_chat_line();
+    test_message_log_rows();
     test_logo_blit();
     return 0;
 }

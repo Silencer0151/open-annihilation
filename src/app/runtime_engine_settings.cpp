@@ -5,9 +5,14 @@
 // the dialog's session that both hosts share.
 
 #include "engine_settings_state.hpp"
+#include "oa/app/game_directory.hpp"
+#include "oa/app/mod_profile_loader.hpp"
 
 #include "oa/app/acceleration_status.hpp"
 #include "oa/app/runtime.hpp"
+#include "oa/app/view_rules.hpp"
+#include "oa/data/languages/interface_text.hpp"
+#include "oa/data/mod_profile/overrides.hpp"
 #include "render_host.hpp"
 #include "render_run.hpp"
 #include "screen_size.hpp"
@@ -24,6 +29,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -47,6 +53,9 @@ static_assert(
     static_cast<uint32_t>(settings::AntiAliasing::x16) ==
     oa::present::model::supersampling_factor(oa::present::model::UnitSupersampling::x16)
 );
+
+// The settings dialog keeps the mod folder the game starts with.
+static_assert(mod_directory_preference == settings::key::mod_directory);
 
 namespace {
 
@@ -89,6 +98,11 @@ settings::Inputs Runtime::EngineSettingsState::inputs(const Runtime& runtime) {
         inputs.raspberry_pi = runtime.engine_settings_->raspberry_pi;
         inputs.light_machine = runtime.engine_settings_->light_machine;
         inputs.desktop = runtime.engine_settings_->desktop;
+    }
+    inputs.units_per_player = runtime.limits_.units_per_player;
+    if (runtime.engine_settings_) {
+        inputs.mod_folders = runtime.engine_settings_->mod_folders;
+        inputs.profile_id = runtime.engine_settings_->profile_id;
     }
     return inputs;
 }
@@ -142,11 +156,14 @@ void Runtime::EngineSettingsState::save_frame_stats(Runtime& runtime, bool shown
 
 void Runtime::EngineSettingsState::report_failed_save(Runtime& runtime, const std::string& reason) {
     std::cerr << "open-annihilation: settings were not saved: " << reason << '\n';
+    // The engine's own words, in the player's language when the interface
+    // catalogue has them.
+    const std::string_view text = oa::data::languages::interface_text(kSaveFailedText);
     if (runtime.screen_ == Screen::match && runtime.match_)
-        runtime.post_match_message(kSaveFailedText, oa::sim::messages::kind_status);
+        runtime.post_match_message(text, oa::sim::messages::kind_status);
     else if (runtime.screen_ == Screen::main_menu)
         runtime.show_frontend_message(
-            runtime.translate_ui(std::string(kSaveFailedText)),
+            std::string(text),
             kSaveFailedMessageWidth,
             entry::message_show_ok,
             entry::message_fit_width
@@ -179,8 +196,9 @@ void Runtime::EngineSettingsState::start_path_credit(Runtime& runtime, bool shar
         return;
     auto& state = runtime.engine_settings_state();
     state.path_credit_held = shared_or_replay;
-    runtime.match_->path_search_jobs().tick_credit =
-        settings::match_path_search_nodes(state.current, shared_or_replay);
+    runtime.match_->path_search_jobs().tick_credit = settings::match_path_search_nodes(
+        state.current, shared_or_replay, runtime.limits_.path_search.nodes
+    );
 }
 
 void Runtime::EngineSettingsState::hold_path_credit(Runtime& runtime, uint32_t extension_bits) {
@@ -189,7 +207,7 @@ void Runtime::EngineSettingsState::hold_path_credit(Runtime& runtime, uint32_t e
         (extension_bits & (extension_state::shared_match | extension_state::replay)) == 0)
         return;
     state.path_credit_held = true;
-    runtime.match_->path_search_jobs().tick_credit = settings::base_path_search_nodes;
+    runtime.match_->path_search_jobs().tick_credit = runtime.limits_.path_search.nodes;
 }
 
 bool Runtime::EngineSettingsState::escape_opens_menu(Runtime& runtime) {
@@ -222,14 +240,36 @@ void Runtime::load_engine_settings() {
     state.raspberry_pi = start.raspberry_pi;
     state.light_machine = start.light_machine;
     state.desktop = start.desktop;
+    // The mods the game folder offers: the game folder is the last of the
+    // folders, below any mod folder layered over it.
+    state.mod_folders.clear();
+    state.mod_names.clear();
+    const auto& game_folder =
+        options_.game_folders.empty() ? options_.game_dir : options_.game_folders.back();
+    for (const auto& folder : list_mod_folders(game_folder)) {
+        state.mod_folders.push_back(path_to_utf8(fs::absolute(folder).lexically_normal()));
+        state.mod_names.push_back(path_to_utf8(folder.filename()));
+    }
     state.physical_memory = oa::platform::read_machine_traits().memory;
+    // The overrides are read under the profile's id, and laid over it as
+    // the settings are put in effect.
+    load_profile_layers();
     const bool switch_alt = (preferences_.graphics_flags & init::preference_flags::switch_alt) != 0;
     const auto read =
         settings::read_settings(preference_values_, EngineSettingsState::inputs(*this), switch_alt);
     apply_engine_settings(read);
+    // The layers start afresh: the overrides read are laid over the profile
+    // even when the settings in effect held them already.
+    apply_hack_overrides();
     // The run's unit limit starts at the setting.
     frontend_game().max_units_setting = read.unit_limit;
     show_frame_stats(read.frame_stats);
+}
+
+oa::present::TextStyle Runtime::text_style() const {
+    if (!engine_settings_)
+        return settings::text_style(settings::default_settings(EngineSettingsState::inputs(*this)));
+    return settings::text_style(engine_settings_->current);
 }
 
 const settings::EngineSettings& Runtime::engine_settings() {
@@ -274,6 +314,156 @@ void Runtime::apply_engine_settings(const settings::EngineSettings& chosen) {
     if (chosen.hardware_acceleration != before.hardware_acceleration)
         update_render_tier();
     apply_vertical_sync();
+    if (chosen.developer_mode != before.developer_mode ||
+        chosen.hack_overrides != before.hack_overrides)
+        apply_hack_overrides();
+    // The language shows at once in what is drawn each frame; screens and
+    // panels show it once they are opened again.
+    set_language_choice(chosen.language);
+}
+
+const oa::data::mod_profile::ModProfile* Runtime::mod_profile() const noexcept {
+    if (engine_settings_ && engine_settings_->layered)
+        return engine_settings_->plays_base_rules ? nullptr : engine_settings_->played.get();
+    return options_.mod_profile.get();
+}
+
+const oa::data::mod_profile::ModProfile* Runtime::next_match_profile() const noexcept {
+    if (!engine_settings_ || !engine_settings_->layered)
+        return options_.mod_profile.get();
+    const auto& state = *engine_settings_;
+    // A game without a mod plays 3.1c's rules, and no profile, while its
+    // overrides change none of them.
+    if (!options_.mod_profile && state.latest && state.latest->sim_hash == state.base_sim_hash)
+        return nullptr;
+    return state.latest.get();
+}
+
+void Runtime::play_latest_profile() noexcept {
+    if (!engine_settings_ || !engine_settings_->layered || !engine_settings_->played)
+        return;
+    auto& state = *engine_settings_;
+    const auto* next = next_match_profile();
+    state.plays_base_rules = next == nullptr;
+    // Copied into the one object the run plays by, which keeps its place.
+    if (next != nullptr && next != state.played.get()) {
+        try {
+            *state.played = *next;
+        } catch (const std::exception& error) {
+            std::cerr << "open-annihilation: developer mode: the rules cannot be put in play: "
+                      << error.what() << '\n';
+        }
+    }
+}
+
+const oa::data::mod_profile::UiRules& Runtime::ui_rules() const noexcept {
+    static const oa::data::mod_profile::UiRules base{};
+    if (engine_settings_ && engine_settings_->layered)
+        return engine_settings_->latest ? engine_settings_->latest->ui : base;
+    const auto* profile = options_.mod_profile.get();
+    return profile != nullptr ? profile->ui : base;
+}
+
+bool Runtime::developer_mode() const noexcept {
+    return engine_settings_ && engine_settings_->current.developer_mode;
+}
+
+void Runtime::load_profile_layers() {
+    namespace profiles = oa::data::mod_profile;
+    auto& state = engine_settings_state();
+    state.layered = true;
+    state.latest = options_.mod_profile;
+    state.played = std::make_shared<profiles::ModProfile>(
+        options_.mod_profile ? *options_.mod_profile : profiles::ModProfile{}
+    );
+    state.plays_base_rules = !options_.mod_profile;
+    state.refused.clear();
+    state.profile_id =
+        options_.mod_profile ? options_.mod_profile->id : std::string(profiles::base_game_id);
+    state.profile_hacks = profiles::base_hack_states();
+    // The plain 3.1c baseline, which a game without a mod lays its
+    // overrides over; its sim hash is the one 3.1c's rules give.
+    ProfileSource base{};
+    const std::string base_text = profiles::base_game_profile_text();
+    base.text.assign(base_text.begin(), base_text.end());
+    base.name = std::string(profiles::base_game_id);
+    base.options.accept_unimplemented_hacks = options_.accept_unimplemented_hacks;
+    const auto base_result = profiles::resolve_profile(base.text, base.name, base.options);
+    if (base_result.resolution)
+        state.base_sim_hash = base_result.resolution->profile.sim_hash;
+    if (!options_.mod_profile) {
+        state.profile_source = std::move(base);
+        return;
+    }
+    // A mod's profile is read again as the game folder's was, with the
+    // settings it binds.
+    state.profile_source = folder_profile_source(
+        options_.game_folders.empty() ? std::vector<fs::path>{options_.game_dir}
+                                      : options_.game_folders,
+        ModChoice{{}, options_.mod_file, options_.accept_unimplemented_hacks, &preference_values_}
+    );
+    if (!state.profile_source)
+        return;
+    const auto shipped = profiles::resolve_profile(
+        state.profile_source->text, state.profile_source->name, state.profile_source->options
+    );
+    if (shipped.resolution)
+        state.profile_hacks = profiles::hack_states(shipped.resolution->effective);
+    else
+        state.profile_source.reset();
+}
+
+void Runtime::apply_hack_overrides() {
+    namespace profiles = oa::data::mod_profile;
+    if (!engine_settings_ || !engine_settings_->layered)
+        return;
+    auto& state = *engine_settings_;
+    const auto& settings = state.current;
+    std::shared_ptr<const profiles::ModProfile> latest = options_.mod_profile;
+    std::vector<std::string> refused;
+    if (settings.developer_mode && !settings.hack_overrides.empty()) {
+        if (!state.profile_source) {
+            refused.emplace_back("the profile cannot be read again; no override applies");
+        } else {
+            auto options = state.profile_source->options;
+            options.overrides = settings.hack_overrides;
+            auto result = profiles::resolve_profile(
+                state.profile_source->text, state.profile_source->name, options
+            );
+            // The profile's own warnings were reported as the game started;
+            // those of the overrides are reported here.
+            constexpr std::string_view left_out = "the override is left out";
+            for (const auto& warning : result.warnings)
+                if (warning.message.find(left_out) != std::string::npos)
+                    refused.push_back(profiles::format_diagnostic(warning));
+            for (const auto& error : result.errors)
+                refused.push_back(profiles::format_diagnostic(error));
+            if (result.resolution)
+                latest = std::make_shared<const profiles::ModProfile>(
+                    std::move(result.resolution->profile)
+                );
+        }
+    }
+    if (refused != state.refused) {
+        for (const auto& line : refused)
+            std::cerr << "open-annihilation: developer mode: " << line << '\n';
+        state.refused = std::move(refused);
+    }
+    static const profiles::UiRules base_rules{};
+    const auto& display_before = state.latest ? state.latest->ui : base_rules;
+    const auto& display_after = latest ? latest->ui : base_rules;
+    const bool display_changed = !(display_before == display_after);
+    state.latest = std::move(latest);
+    // The rules wait for the running match to end; without one they apply now.
+    if (!match_)
+        play_latest_profile();
+    if (!display_changed)
+        return;
+    // The display rules apply at once, a running match's voices and
+    // explosions and the player's view settings included.
+    if (match_)
+        match_->set_display_rules(view_rules::match_display_rules(ui_rules()));
+    load_view_settings();
 }
 
 AccelerationFacts Runtime::acceleration_facts() const {
@@ -402,7 +592,9 @@ std::optional<std::string> Runtime::save_engine_settings(
         opened,
         chosen,
         settings::default_settings(EngineSettingsState::inputs(*this)),
-        restored
+        restored,
+        engine_settings_state().mod_folders,
+        engine_settings_state().profile_id
     );
     // SwitchAlt keeps 3.1c's own key, written only when it changed.
     if (chosen.switch_alt != opened.switch_alt || restored)
@@ -411,9 +603,26 @@ std::optional<std::string> Runtime::save_engine_settings(
     return EngineSettingsState::flush(*this);
 }
 
-settings::Dialog& Runtime::open_engine_settings_dialog() {
+settings::Dialog& Runtime::open_engine_settings_dialog(settings::DialogKind kind) {
     EngineSettingsState::take_live_settings(*this);
     auto& state = engine_settings_state();
+    if (kind == settings::DialogKind::mod_options) {
+        const auto& ui = ui_rules();
+        settings::EngineSettings current = state.current;
+        current.mod_options = view_rules::dialog_options(view_settings_, ui);
+        settings::EngineSettings defaults = current;
+        const auto* profile = mod_profile();
+        const oa::data::match_rules::OrdersConPatrolGuardOptions base_builders{};
+        const auto& builders =
+            profile != nullptr ? profile->rules.orders.con_patrol_guard_options : base_builders;
+        defaults.mod_options =
+            view_rules::dialog_options(view_rules::read_view_settings(ui, builders, {}), ui);
+        auto& dialog = state.dialog.emplace();
+        settings::open_mod_options_dialog(
+            dialog, current, defaults, view_rules::dialog_option_locks(ui), kVersionText
+        );
+        return dialog;
+    }
     state.opened_zoom_target = match_zoom_target_;
     state.opened_run_unit_limit = frontend_game().max_units_setting;
     auto& dialog = state.dialog.emplace();
@@ -426,8 +635,18 @@ settings::Dialog& Runtime::open_engine_settings_dialog() {
         engine_settings_locks(),
         kVersionText,
         state.last_page,
-        acceleration_report().status
+        acceleration_report().status,
+        settings::highest_offered_unit_limit(limits_.units_per_player),
+        state.mod_names,
+        state.profile_hacks,
+        &system_language()
     );
+    // Developer Mode opens as it was left: its open areas and hacks and its filter.
+    if (state.last_developer_list) {
+        dialog.developer.areas_open = state.last_developer_list->areas_open;
+        dialog.developer.hacks_open = state.last_developer_list->hacks_open;
+        dialog.developer.active_only = state.last_developer_list->active_only;
+    }
     return dialog;
 }
 
@@ -447,21 +666,43 @@ bool Runtime::take_engine_settings_action(settings::DialogAction action) {
     case settings::DialogAction::redraw:
         return false;
     case settings::DialogAction::changed:
+        if (dialog->kind == settings::DialogKind::mod_options) {
+            view_rules::apply_dialog_options(
+                dialog->chosen.mod_options, ui_rules(), view_settings_
+            );
+            return false;
+        }
         take_renderer_retry(*dialog);
         apply_engine_settings(dialog->chosen);
         return false;
     case settings::DialogAction::accepted: {
+        if (dialog->kind == settings::DialogKind::mod_options) {
+            view_rules::apply_dialog_options(
+                dialog->chosen.mod_options, ui_rules(), view_settings_
+            );
+            save_view_settings();
+            state.dialog.reset();
+            return true;
+        }
         take_renderer_retry(*dialog);
         keep_renderer_records();
         apply_engine_settings(dialog->chosen);
         const auto failure = save_engine_settings(dialog->opened, dialog->chosen, dialog->restored);
         state.last_page = dialog->page;
+        state.last_developer_list = dialog->developer;
         state.dialog.reset();
         if (failure)
             EngineSettingsState::report_failed_save(*this, *failure);
         return true;
     }
     case settings::DialogAction::cancelled: {
+        if (dialog->kind == settings::DialogKind::mod_options) {
+            view_rules::apply_dialog_options(
+                dialog->opened.mod_options, ui_rules(), view_settings_
+            );
+            state.dialog.reset();
+            return true;
+        }
         const bool zoom_changed = match_ && match_zoom_target_ != state.opened_zoom_target;
         restore_renderer_records();
         apply_engine_settings(dialog->opened);
@@ -471,6 +712,7 @@ bool Runtime::take_engine_settings_action(settings::DialogAction action) {
             EngineSettingsState::ease_zoom_about_centre(*this, state.opened_zoom_target);
         frontend_game().max_units_setting = state.opened_run_unit_limit;
         state.last_page = dialog->page;
+        state.last_developer_list = dialog->developer;
         state.dialog.reset();
         return true;
     }
@@ -490,6 +732,25 @@ const settings::DialogFonts* Runtime::engine_settings_fonts() {
         }
     }
     return state.fonts ? &*state.fonts : nullptr;
+}
+
+oa::ui::frontend_renderer::RgbaPicture Runtime::engine_settings_icon() {
+    auto& state = engine_settings_state();
+    if (!state.icon && !state.icon_missing) {
+        WindowIcon decoded;
+        std::string error;
+        if (decode_window_icon(window_icon_png(), decoded, error))
+            state.icon = visible_part(decoded);
+        if (!state.icon || state.icon->pixels.empty()) {
+            state.icon.reset();
+            state.icon_missing = true;
+            std::cerr << "open-annihilation: the settings' icon is missing"
+                      << (error.empty() ? std::string{} : ": " + error) << '\n';
+        }
+    }
+    if (!state.icon)
+        return {};
+    return {state.icon->width, state.icon->height, state.icon->pixels};
 }
 
 std::optional<settings::DialogKey>

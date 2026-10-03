@@ -168,6 +168,7 @@ bool unpack(
         return true;
     }
     UnpackOutcome outcome{};
+    peer->records.recorder_records = layer->receiver.recorder_records;
     const auto error =
         unpack_frame_records(&peer->records, frame, size, tick, from, to, fresh, &outcome);
     if (error != WireError::ok) {

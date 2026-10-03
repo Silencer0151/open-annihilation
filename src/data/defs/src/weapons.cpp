@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/data/defs/weapons.hpp"
+#include "oa/data/defs/layout.hpp"
 #include "oa/base/game_math.hpp"
 #include "oa/base/text.hpp"
 
@@ -368,6 +369,9 @@ bool weapon_load(
     weapon->shake_duration =
         static_cast<int32_t>(scaled(section, "shakeduration", weapon_ticks_per_second));
 
+    if (options != nullptr && options->data_keys != nullptr)
+        read_weapon_rule_keys(section, *options->data_keys, table->rule_data[id]);
+
     WeaponAssetNames& names = table->assets[id];
     keep_name(names.model, section, "model");
     char model[asset_name_capacity];
@@ -427,7 +431,7 @@ uint32_t load_weapon_defs(
 ) noexcept {
     weapon_table_init(table);
     FileList list{};
-    files->list(files->context, "weapons", "tdf", push_name, &list);
+    files->list(files->context, directory_name(DataDirectory::weapons), "tdf", push_name, &list);
     uint32_t loaded = 0;
     for (uint32_t index = 0; index < list.count; ++index) {
         char path[path_capacity];
@@ -435,7 +439,7 @@ uint32_t load_weapon_defs(
             files,
             path,
             sizeof path,
-            "weapons",
+            directory_name(DataDirectory::weapons),
             list.names[index],
             "tdf",
             options != nullptr ? options->variant : nullptr

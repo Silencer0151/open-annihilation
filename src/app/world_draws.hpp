@@ -21,6 +21,7 @@
 #include "oa/present/model/model_draw.hpp"
 #include "oa/present/model/model_library.hpp"
 #include "oa/present/model/rgb_bridge.hpp"
+#include "oa/present/model/shadow_fade.hpp"
 #include "oa/present/model/unit_supersampling.hpp"
 #include "oa/present/world_renderer.hpp"
 #include "oa/sim/effect_particles.hpp"
@@ -88,13 +89,18 @@ void draw_world_line(
 /// @param destination_y frame row of the frame's top edge
 /// @param palette 4 bytes per colour
 /// @param scale size factor; 0 or less draws at 1
+/// @param shadow_level how much of the frame's colour each covered pixel
+///     takes, in steps of 1 / oa::present::model::shadow_full_level
+///     (oa::present::model::fade_shadow_channel): the frame's colour
+///     alone at shadow_full_level, as every frame but a faded shadow draws
 void blit_world_frame(
     const WorldTarget& target,
     const oa::formats::gaf::RenderedFrame& frame,
     int destination_x,
     int destination_y,
     const oa::PaletteBytes& palette,
-    float scale
+    float scale,
+    uint32_t shadow_level = oa::present::model::shadow_full_level
 ) noexcept;
 
 /// Blits a rendered GAF frame onto the battlefield frame with its origin at a screen point.
@@ -104,12 +110,14 @@ void blit_world_frame(
 /// @param screen frame point the GAF origin lands on
 /// @param palette 4 bytes per colour
 /// @param scale size factor; 0 or less draws at 1
+/// @param shadow_level as blit_world_frame's
 void blit_world_hotspot(
     const WorldTarget& target,
     const oa::formats::gaf::RenderedFrame& frame,
     const oa::present::world_renderer::ScreenPoint& screen,
     const oa::PaletteBytes& palette,
-    float scale
+    float scale,
+    uint32_t shadow_level = oa::present::model::shadow_full_level
 ) noexcept;
 
 /// Blends a rendered GAF frame's covered pixels into the battlefield frame
@@ -117,7 +125,8 @@ void blit_world_hotspot(
 ///
 /// Each covered pixel takes table[source * 256 + destination], the
 /// destination's palette index read back from the frame through the model
-/// bridge's colour lookup. Nothing is drawn without an alpha table.
+/// bridge's colour lookup, mixed with the frame's colour under it by a
+/// shadow level. Nothing is drawn without an alpha table.
 ///
 /// @param target the frame and what may be written
 /// @param frame rendered frame
@@ -127,6 +136,8 @@ void blit_world_hotspot(
 /// @param[in,out] bridge the frame's model bridge, whose colour lookup remembers nearest entries
 /// @param[in,out] band the band being drawn, whose own colour memory is used
 ///     when it has one; null for the bridge's
+/// @param shadow_level how much of the blend each covered pixel takes, as
+///     blit_world_frame's: the blend alone at shadow_full_level
 void blit_world_blended_hotspot(
     const WorldTarget& target,
     const oa::formats::gaf::RenderedFrame& frame,
@@ -134,7 +145,8 @@ void blit_world_blended_hotspot(
     float scale,
     const oa::present::model::ModelDisplay& display,
     oa::present::model::RgbBridge& bridge,
-    oa::present::model::BridgeBand* band
+    oa::present::model::BridgeBand* band,
+    uint32_t shadow_level = oa::present::model::shadow_full_level
 );
 
 /// What one draw of the battlefield is; WorldDraw::index names it in the
@@ -173,6 +185,8 @@ struct SquareDraw {
 struct SpriteDraw {
     const oa::formats::gaf::RenderedFrame* frame{};
     oa::present::world_renderer::ScreenPoint screen{};
+    /// A feature's shadow frame, drawn as dark as the list's shadow_level.
+    bool shadow{};
 };
 
 /// A line of the frame (WorldDrawKind::line) in RGB, or of the bridge
@@ -236,6 +250,10 @@ struct FragmentDraw {
 
 /// The battlefield's draws of one frame, in order, and what they draw from.
 struct WorldDrawList {
+    /// How dark the frame's shadows are drawn, from 0 to
+    /// oa::present::model::shadow_full_level, as the game draws them; at 0
+    /// the list holds no shadow (set_frame_shadows).
+    uint32_t shadow_level{oa::present::model::shadow_full_level};
     std::vector<WorldDraw> draws; ///< in the order they draw
     std::vector<SquareDraw> squares;
     std::vector<SpriteDraw> sprites;
@@ -255,8 +273,45 @@ struct WorldDrawList {
 
 /// Empties a draw list for the next frame, keeping its buffers.
 ///
+/// The shadow level is left as it is.
+///
 /// @param[in,out] list the list
 void clear_world_draws(WorldDrawList& list);
+
+/// Sets how dark a frame's shadows are drawn, from the zoom the frame is
+/// drawn at (oa::present::model::shadow_level), before the frame's draws
+/// are worked out.
+///
+/// The list takes the level. At the game's own darkness the renderer's
+/// shadows blend through the display's alpha table, as the game draws
+/// them; lighter, through the table's faded rows for the models'
+/// silhouettes and the projectiles' shadow sprite; at 0 the renderer's
+/// shadow option is cleared for the frame, so that no unit or 3D feature
+/// casts one, and the planner adds no shadow of a sprite feature or a
+/// projectile (shadows_drawn).
+///
+/// @param[in,out] list the frame's list
+/// @param[in,out] renderer the models' renderer, its graphics flags already the game's
+/// @param[in,out] table the faded table, kept from frame to frame
+/// @param display the models' display: its alpha table and palette
+/// @param projectile_shadow the projectiles' shadow sprite; null or no data for none
+/// @param zoom window pixels per map pixel
+void set_frame_shadows(
+    WorldDrawList& list,
+    oa::present::model::ModelRenderer& renderer,
+    oa::present::model::ShadowTable& table,
+    const oa::present::model::ModelDisplay& display,
+    const oa::Sprite* projectile_shadow,
+    float zoom
+);
+
+/// Tells whether a list's frame draws any shadow.
+///
+/// @param list the list
+/// @return false at shadow level 0
+[[nodiscard]] inline bool shadows_drawn(const WorldDrawList& list) noexcept {
+    return list.shadow_level != 0;
+}
 
 /// Returns a GAF frame decoded for a frame's draws, decoding it the first time it is asked for.
 ///

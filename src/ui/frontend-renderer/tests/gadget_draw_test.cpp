@@ -2,16 +2,21 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/ui/frontend_renderer/gadget_draw.hpp"
+#include "oa/ui/frontend_renderer/game_text.hpp"
 
 #include "oa/present/display.hpp"
 #include "oa/present/palette_tables.hpp"
 #include "oa/present/rle.hpp"
 #include "oa/present/surface.hpp"
+#include "oa/present/game_text.hpp"
 
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
+#include <memory>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -185,6 +190,153 @@ void test_gadget_text() {
     oa::present::free_light_table(display);
 }
 
+// What the game-text hooks answer: the settings, and whether a line is drawn.
+struct GameTextAnswers {
+    oa::present::TextSettings settings{};
+    bool draws{true};
+    std::vector<uint8_t> palette{};
+    int32_t size{}; ///< the size the last line was drawn at, in percent
+};
+
+/// A line of solid characters, 3 pixels wide and 2 rows above the baseline.
+std::shared_ptr<const oa::present::TextMask> solid_line(std::string_view text) {
+    auto mask = std::make_shared<oa::present::TextMask>();
+    int32_t pen = 0;
+    for (std::size_t at = 0; at < text.size();) {
+        const auto sequence = oa::present::utf8_sequence(text.substr(at));
+        at += sequence.bytes != 0 ? sequence.bytes : 1;
+        pen += 3;
+        mask->character_ends.push_back(pen);
+    }
+    mask->width = pen;
+    mask->height = 2;
+    mask->baseline = 2;
+    mask->advance = pen;
+    mask->alpha.assign(static_cast<std::size_t>(pen) * 2U, 255);
+    return mask;
+}
+
+void test_gadget_text_game_runs() {
+    namespace draw = oa::ui::frontend_renderer;
+    TestFont font;
+    build_font(font);
+    GameTextAnswers answers;
+    answers.settings.style = {false, false, false, false, oa::present::default_text_size};
+    answers.settings.utf8 = true;
+    // Entry 4 is hattfont12's colour, which the modern runs are drawn in.
+    answers.palette.assign(8 * 4, 0);
+    answers.palette[4 * 4] = 195;
+    answers.palette[4 * 4 + 1] = 195;
+    answers.palette[4 * 4 + 2] = 155;
+    oa::present::GameTextHooks hooks{};
+    hooks.context = &answers;
+    hooks.settings = [](void* context) { return static_cast<GameTextAnswers*>(context)->settings; };
+    hooks.draw = [](void* context,
+                    std::string_view text,
+                    oa::present::TextFace,
+                    int32_t,
+                    int32_t size) -> std::shared_ptr<const oa::present::TextMask> {
+        auto& answers = *static_cast<GameTextAnswers*>(context);
+        answers.size = size;
+        return answers.draws ? solid_line(text) : nullptr;
+    };
+    hooks.palette = [](void* context) -> std::span<const uint8_t> {
+        return static_cast<GameTextAnswers*>(context)->palette;
+    };
+    oa::present::set_game_text_hooks(hooks);
+    const std::string sun = "\xE6\x97\xA5";
+    const std::string text = "A" + sun + "B";
+    auto buffer = oa::present::create_surface(12, 4);
+    std::fill(buffer.pixels.begin(), buffer.pixels.end(), uint8_t{9});
+    draw::draw_gadget_text(
+        &buffer.surface, &font.gaf, text.c_str(), 1, 2, draw::gadget_text_unbounded, 0
+    );
+    // The font has no 'I': the baseline is the pen row, and the run stands
+    // on it after 'A'.
+    require(
+        at(buffer, 3, 0) == 4 && at(buffer, 5, 1) == 4 && at(buffer, 3, 2) == 9,
+        "gadget text: the font's missing character is drawn in the modern fonts after 'A'"
+    );
+    require(at(buffer, 6, 2) == 7, "gadget text: 'B' follows the run's width");
+    require(
+        draw::measure_gadget_text(&font.gaf, text.c_str()) == 2 + 3 + 1,
+        "gadget text: the run measures as drawn"
+    );
+    // A width budget stops before a run wider than what is left.
+    std::fill(buffer.pixels.begin(), buffer.pixels.end(), uint8_t{9});
+    draw::draw_gadget_text(&buffer.surface, &font.gaf, text.c_str(), 1, 2, 4, 0);
+    require(
+        at(buffer, 3, 0) == 9 && at(buffer, 6, 2) == 9, "gadget text: the budget stops at the run"
+    );
+    // A run the modern fonts cannot draw is the code page's '?', which the
+    // font has no glyph for.
+    answers.draws = false;
+    std::fill(buffer.pixels.begin(), buffer.pixels.end(), uint8_t{9});
+    draw::draw_gadget_text(
+        &buffer.surface, &font.gaf, text.c_str(), 1, 2, draw::gadget_text_unbounded, 0
+    );
+    require(
+        at(buffer, 3, 0) == 9 && at(buffer, 3, 2) == 7,
+        "gadget text: a run the modern fonts cannot draw takes no room"
+    );
+    // Game text is drawn whole in the modern fonts while the settings choose
+    // them; interface text keeps the font.
+    answers.draws = true;
+    answers.settings.style.modern_fonts = true;
+    std::fill(buffer.pixels.begin(), buffer.pixels.end(), uint8_t{9});
+    draw::draw_gadget_text(
+        &buffer.surface, &font.gaf, "AB", 1, 2, draw::gadget_text_unbounded, 0, true
+    );
+    require(
+        at(buffer, 1, 0) == 4 && at(buffer, 6, 1) == 4 && at(buffer, 1, 2) == 9,
+        "gadget text: game text is drawn in the modern fonts"
+    );
+    require(
+        answers.size == oa::present::default_text_size,
+        "gadget text: game text is drawn at the text size"
+    );
+    // Gadgets are laid out for the game's fonts: game text larger than them
+    // is drawn at their size, on the same baseline; smaller is drawn smaller.
+    answers.settings.style.size = oa::present::highest_text_size;
+    std::fill(buffer.pixels.begin(), buffer.pixels.end(), uint8_t{9});
+    draw::draw_gadget_text(
+        &buffer.surface, &font.gaf, "AB", 1, 2, draw::gadget_text_unbounded, 0, true
+    );
+    require(
+        answers.size == oa::present::game_font_text_size && at(buffer, 1, 0) == 4 &&
+            at(buffer, 1, 2) == 9,
+        "gadget text: game text keeps to the game fonts' size"
+    );
+    answers.settings.style.size = oa::present::lowest_text_size;
+    draw::draw_gadget_text(
+        &buffer.surface, &font.gaf, "AB", 1, 2, draw::gadget_text_unbounded, 0, true
+    );
+    require(
+        answers.size == oa::present::lowest_text_size, "gadget text: smaller text is drawn smaller"
+    );
+    require(
+        draw::screen_text_size({true, "AB", oa::present::highest_text_size}) ==
+                oa::present::game_font_text_size &&
+            draw::screen_text_size({true, "AB", oa::present::lowest_text_size}) ==
+                oa::present::lowest_text_size,
+        "gadget text: the screens hold text to the game fonts' size"
+    );
+    // A label's missing character is drawn at the font's own size, whatever
+    // the setting.
+    draw::draw_gadget_text(
+        &buffer.surface, &font.gaf, text.c_str(), 1, 2, draw::gadget_text_unbounded, 0
+    );
+    require(
+        answers.size == oa::present::game_font_text_size,
+        "gadget text: a missing character keeps the font's size"
+    );
+    answers.settings.style.size = oa::present::default_text_size;
+    std::fill(buffer.pixels.begin(), buffer.pixels.end(), uint8_t{9});
+    draw::draw_gadget_text(&buffer.surface, &font.gaf, "AB", 1, 2, draw::gadget_text_unbounded, 0);
+    require(at(buffer, 1, 2) == 5 && at(buffer, 3, 2) == 7, "gadget text: a label keeps the font");
+    oa::present::set_game_text_hooks({});
+}
+
 } // namespace
 
 int main() {
@@ -236,6 +388,7 @@ int main() {
         require(at(buffer, 2, 2) == 6, "attribute 4 draws the diagonal");
     }
     test_gadget_text();
+    test_gadget_text_game_runs();
     test_gui_font();
     return failures == 0 ? 0 : 1;
 }

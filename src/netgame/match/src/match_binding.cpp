@@ -63,8 +63,11 @@ MovementRecord* movement(void* context, World* world, Unit* unit) {
 ///
 /// A unit still in the slot dies first as the kill handler kills it (death
 /// kind 0, by its own health: its Killed percentage, explosion and wreck), and
-/// the slot's movement record is reset. Refused and failed creates are
-/// counted, those with a def index past the unit table separately.
+/// the slot's movement record is reset; under the recorder's rules a create
+/// that repeats the unit in its slot is dropped instead. A building whose type
+/// may turn (units.build-rotation) faces as the record's heading turns it.
+/// Refused and failed creates are counted, those with a def index past the
+/// unit table separately.
 ///
 /// @param context The MatchBinding.
 /// @param world Match world.
@@ -85,6 +88,16 @@ void create_unit(
         return;
     }
     const bool past_table = record.unit_def_index >= world->unit_def_count;
+    // A recorder peer may send the records of its first game frame twice
+    // in that frame: under the recorder's rules a create that repeats the
+    // unit already in its slot (same owner, type and ground position) is
+    // dropped, so the owner keeps its unit and no departure is announced.
+    const auto& present = existing->unit->record;
+    if (b.net != nullptr && b.net->rules.recorder_protocol != recorder_protocol_plain &&
+        present.type_index != 0 && present.type_index == record.unit_def_index &&
+        present.owner_index == owner_index && present.position.x == record.position[0] &&
+        present.position.z == record.position[2])
+        return;
     try {
         if (existing->unit->record.type_index != 0)
             b.match->kill_unit(record.unit_index, replaced_unit_death_kind);
@@ -98,6 +111,10 @@ void create_unit(
             static_cast<uint32_t>(record.position[2])
         };
         request.requested_slot = record.unit_index;
+        // A building faces as the heading the owner sent turns it (units.build-rotation).
+        request.facing = b.match->build_facing_of_heading(
+            request.type, static_cast<uint16_t>(record.bank_heading >> 16)
+        );
         if (b.match->create(request) != nullptr)
             ++b.created_remote;
         else
@@ -255,6 +272,27 @@ void place_unit(void* context, World* world, Unit* unit, const FixedVec3& to, ui
     }
     if (b.full_record_probe.placed != nullptr)
         b.full_record_probe.placed(b.full_record_probe.context, *unit, before, to);
+}
+
+/// Hands a full unit record to the recorder's view of the units (net_match_note_full_record).
+///
+/// @param context The MatchBinding.
+/// @param world Match world.
+/// @param unit The unit the record is for.
+/// @param record The record.
+void full_record_read(void* context, World* world, Unit* unit, const FullUnitRecord& record) {
+    auto& b = self(context);
+    if (b.net != nullptr && unit != nullptr)
+        net_match_note_full_record(b.net, world_unit_slot(world, unit), record);
+}
+
+/// Tells every recorder that the local player's commander is placed (net_match_warp_done).
+///
+/// @param context The MatchBinding.
+void commander_placed(void* context) {
+    auto& b = self(context);
+    if (b.net != nullptr)
+        net_match_warp_done(b.net);
 }
 
 /// Steps a sender's unit once per 0x2c record received from it.
@@ -1045,6 +1083,7 @@ ReplicationSim match_binding_sim(MatchBinding* b) noexcept {
     sim.detonate_projectile = detonate_projectile;
     sim.link_builder = link_builder;
     sim.transfer_unit = transfer_unit;
+    sim.full_record_read = full_record_read;
     sim.movement_tick = movement_tick;
     sim.sight_update = sight_update;
     return sim;
@@ -1081,6 +1120,7 @@ void match_binding_install(MatchBinding* b) noexcept {
     hooks.carry_link_changed = carry_link_changed;
     hooks.unit_finished = unit_finished;
     hooks.unit_transferred = unit_transferred;
+    hooks.commander_placed = commander_placed;
     b->features = FeatureRecordLink{};
     b->features.world = &b->match->state();
     b->features.context = b;

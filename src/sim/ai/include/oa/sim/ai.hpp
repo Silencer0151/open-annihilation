@@ -8,6 +8,8 @@
 #pragma once
 
 #include "oa/core/world.h"
+#include "oa/data/limits.hpp"
+#include "oa/data/match_rules.hpp"
 #include "oa/sim/detection.hpp"
 
 #include <cstdint>
@@ -17,7 +19,6 @@
 namespace oa::sim::ai {
 
 inline constexpr uint32_t squad_count = 10;
-inline constexpr uint32_t build_list_capacity = 30; // types one builder's list holds
 inline constexpr uint32_t type_categories_bytes = 256;
 inline constexpr uint32_t sort_interval_ticks = 30;
 inline constexpr int32_t unlimited = -1;
@@ -25,11 +26,12 @@ inline constexpr int32_t unlimited = -1;
 /// Unit.squad values the computer player sorts its units into.
 enum class Squad : uint32_t {
     none = 0,
-    structures = 1,       // unarmed buildings: factories, economy
-    land_strike = 2,      // gathered land attack group
-    land_army = 3,        // armed land units waiting to join the strike
-    builders = 4,         // mobile builders
-    armed_structures = 5, // defences; no task
+    structures = 1,  // unarmed buildings: factories, economy
+    land_strike = 2, // gathered land attack group
+    land_army = 3,   // armed land units waiting to join the strike
+    builders = 4,    // mobile builders
+    armed_structures =
+        5, // defences; no task unless ai.squad5-factory-tick gives them the structures task
     naval_strike = 6,
     navy = 7,
     aircraft = 8,
@@ -59,12 +61,15 @@ struct ComputerType {
     int8_t bm_code{};
     int8_t makes_metal{};
     int16_t min_water_depth{};
+    int16_t max_water_depth{};
+    float energy_use{}; // FBI EnergyUse; negative for a producer
     int16_t footprint_x{};
     int16_t footprint_z{};
     float extracts_metal{};
     uint8_t has_build_list{}; // builders always own a (possibly empty) list
-    uint8_t build_count{};
-    uint16_t build_ids[build_list_capacity]{};
+    uint16_t build_count{};
+    // build_count type ids in ComputerPlayers::build_id_block; null without a list
+    uint16_t* build_ids{};
 };
 
 /// One squad task of a controller; ComputerPlayer.tasks holds one per squad.
@@ -134,6 +139,16 @@ struct ComputerPlayer {
 struct ComputerPlayers {
     ComputerType* types{}; // type_count entries; index 0 reserved
     uint32_t type_count{};
+    // How many CANBUILD entries a builder's list keeps (30 in 3.1c); set
+    // before computer_players_initialize.
+    data::limits::BuildLists build_lists{};
+    // type_count lists of data::limits::build_list_kept(build_lists) type ids,
+    // one for each type, which ComputerType::build_ids point into.
+    uint16_t* build_id_block{};
+    // The rules the match plays by (Match::rules_view), the ai.* hacks among
+    // them; set before computer_players_initialize and at every pass. Unset,
+    // 3.1c's.
+    data::match_rules::MatchRulesView rules{};
     ComputerPlayer players[OA_PLAYER_COUNT]{};
     uint8_t initialized{};
     uint8_t downloadables_restricted{}; // options state 1 skips downloadable types
@@ -161,6 +176,9 @@ struct ComputerHost {
     bool (*primary_order)(
         void* context, uint16_t unit, uint8_t* preserve_flags, uint8_t* queue_flags
     ){};
+    /// Whether the unit's secondary order queue, where a silo's stockpile builds run, holds an
+    /// order; null holds none.
+    bool (*secondary_order)(void* context, uint16_t unit){};
     bool (*unit_visible)(void* context, uint8_t player, uint16_t unit){};
     /// Strength triple (strengths[type][0..2]) from the strategic refresh, or
     /// null when the player has none yet.
@@ -408,11 +426,28 @@ void computer_write_report(
 
 /// Returns the squad a freshly sorted unit joins.
 ///
+/// By 3.1c's rules a building joins the armed structures when armed and the structures
+/// otherwise; a mobile unit joins the builders when it builds, the aircraft when it flies,
+/// the navy when it needs water (MinWaterDepth above 0), and the land army when armed,
+/// leaving any other unit unsorted. By the role-squad rules (ai.squad-assignment) a building
+/// joins the structures when it builds or its EnergyUse is 58.5 or more, and the armed
+/// structures otherwise; a mobile unit joins the builders, the aircraft, the navy when it
+/// needs water, can go 128 deep (MaxWaterDepth) or is amphibious, and otherwise the land
+/// army, armed or not.
+///
 /// @param unit unit being sorted
 /// @param type its computer-player fields
-/// @return armed structures or structures for buildings, then builders, aircraft, navy,
-///         or the land army for an armed unit; none otherwise
-[[nodiscard]] Squad computer_sort_squad(const oa::Unit& unit, const ComputerType& type) noexcept;
+/// @param rules which rules sort it; 3.1c's when left out
+/// @return the squad, or none
+/// @quirk The role-squad EnergyUse test compares the high 16 bits of the float as a signed
+///        number above 0x4269, so 58.25 up to just under 58.5 counts as below, and any
+///        negative EnergyUse too.
+[[nodiscard]] Squad computer_sort_squad(
+    const oa::Unit& unit,
+    const ComputerType& type,
+    data::match_rules::AiSquadAssignmentRules rules =
+        data::match_rules::AiSquadAssignmentRules::base
+) noexcept;
 
 } // namespace oa::sim::ai
 

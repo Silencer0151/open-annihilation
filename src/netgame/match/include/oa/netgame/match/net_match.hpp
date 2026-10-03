@@ -13,10 +13,18 @@
 // through ReplicationSim; everything else acts on the canonical World.
 
 #include "oa/base/game_loop.hpp"
+#include "oa/netgame/match/integrity_check.hpp"
 #include "oa/netgame/match/launch.hpp"
 #include "oa/netgame/match/session_lobby.hpp"
+#include "oa/netgame/match/vote_reject.hpp"
+#include "oa/netgame/recorder_session.hpp"
 #include "oa/netgame/replication.hpp"
+#include "oa/netgame/wire_rules.hpp"
 #include "oa/ui/frontend_multiplayer/lobby.hpp"
+
+#include <array>
+#include <cstddef>
+#include <vector>
 
 namespace oa::netgame::match {
 
@@ -137,6 +145,68 @@ struct NetMatchHooks {
     /// @param world Match world.
     /// @param slot Player slot whose row changed, 0..9.
     void (*alliance_changed)(void* context, World* world, uint8_t slot){};
+
+    /// Shows the vote on a player as it opens or changes (network.vote-reject). Null shows it as a
+    /// notice line only.
+    ///
+    /// @param context NetMatchHooks.context.
+    /// @param vote The vote.
+    /// @param target_slot The slot the vote would reject.
+    /// @param needed Yes votes it needs.
+    /// @param electorate Players taking part.
+    void (*vote_shown)(
+        void* context, const Vote& vote, uint8_t target_slot, uint8_t needed, uint8_t electorate
+    ){};
+
+    /// Sees every record a remote player's machine sent that the pump admits, the recorder's
+    /// included, and every record a local player sends, once per send, as a recording keeps
+    /// them. Null sees nothing.
+    ///
+    /// @param context NetMatchHooks.context.
+    /// @param sender_id Transport id of the player the record is from.
+    /// @param record The record, type byte first.
+    /// @param size Its length.
+    void (*record_seen)(
+        void* context, uint32_t sender_id, const uint8_t* record, std::size_t size
+    ){};
+
+    /// Hears that the host locked or unlocked the game speed (.syncon,
+    /// .syncoff) under WireRules::speed_lock, after the match applied it.
+    /// Null hears nothing.
+    ///
+    /// @param context NetMatchHooks.context.
+    /// @param locked The lock is on.
+    /// @param slowest The lowest speed now allowed (net_match_speed_range).
+    /// @param fastest The highest speed now allowed.
+    void (*speed_lock_changed)(void* context, bool locked, uint8_t slowest, uint8_t fastest){};
+
+    /// Shows a batch of whiteboard marks another player's recorder sent
+    /// (recorder message kind 0), once the match has admitted it: the sender
+    /// allies this machine's player. Null drops every batch.
+    ///
+    /// @param context NetMatchHooks.context.
+    /// @param sender_slot Slot of the player whose marks they are.
+    /// @param batch The batch, its record count first.
+    /// @param size Its length, at most recorder_whiteboard_max_payload.
+    void (*whiteboard_marks)(
+        void* context, uint8_t sender_slot, const uint8_t* batch, std::size_t size
+    ){};
+};
+
+/// The health a unit has in the recorder's eyes before any full record of it was seen.
+inline constexpr int16_t recorder_unit_unseen_health = 42;
+/// RecorderUnitView::state of a slot the recorder knows no unit in.
+inline constexpr uint16_t recorder_unit_state_empty = 1000;
+/// RecorderUnitView::state of a unit the recorder saw created and no full record of since.
+inline constexpr uint16_t recorder_unit_state_created = 0xff;
+
+/// A unit as the recorder last saw it (sharing.recorder-take-give).
+struct RecorderUnitView {
+    int16_t health{recorder_unit_unseen_health}; ///< as the unit's last full record gave it
+    /// The build byte of the unit's last full record, 0 for a finished unit;
+    /// recorder_unit_state_created after its creation record and
+    /// recorder_unit_state_empty while the slot holds none.
+    uint16_t state{recorder_unit_state_empty};
 };
 
 struct NetMatch {
@@ -153,6 +223,34 @@ struct NetMatch {
     uint32_t records_applied{};
     uint32_t records_refused{}; // gated, unknown sender or not handled
     uint32_t record_errors{};   // malformed or rejected by the replication layer
+    /// The mod profile's rules the match keeps (net_match_bind_rules); null keeps 3.1c's.
+    const data::match_rules::MatchRules* match_rules{};
+    /// Whether the map places units for the neutral player, which the
+    /// team start positions read.
+    bool map_neutral_units{};
+    /// The host worked out the team start positions (team_positions).
+    bool team_positions_assigned{};
+    /// The start position the team start positions gave each slot, -1 for none.
+    std::array<int32_t, OA_PLAYER_COUNT> team_positions{};
+    /// The game's network rules, copied from the connection by net_match_begin.
+    WireRules rules{};
+    /// The recorder's session (rules.recorder_protocol), from the battle room.
+    RecorderSession recorder{};
+    VoteBoard votes{};                  ///< votes to reject (rules.vote_reject)
+    IntegrityCheckState integrity{};    ///< the integrity check (rules.integrity_check)
+    uint32_t private_records{};         ///< private chat records read
+    uint32_t recorder_records{};        ///< recorder records read
+    uint32_t whiteboard_batches{};      ///< whiteboard batches shown (hooks.whiteboard_marks)
+    uint32_t commander_syncs_applied{}; ///< commander positions taken from a start sync
+    uint32_t commander_syncs_sent{};    ///< start sync records sent
+    bool sending_copies{};              ///< a broadcast goes out as one copy per machine
+    /// The recorder's claim on a silent player's units (sharing.recorder-take-give).
+    RecorderTake take{};
+    /// By unit slot, while sharing.recorder-take-give is on: each unit as the
+    /// recorder last saw it.
+    std::vector<RecorderUnitView> recorder_units;
+    uint32_t taken_units{};    ///< units a take handed over to this machine's player
+    uint32_t base_buildings{}; ///< buildings of prebuilt bases this machine handed over
 };
 
 /// Takes over the lobby's connection for the match.
@@ -173,6 +271,37 @@ void net_match_begin(
     World* world,
     const ReplicationSim& sim,
     const NetMatchHooks& hooks
+) noexcept;
+
+/// Binds a mod profile's setup and team rules to a begun match.
+///
+/// With setup.team-start-positions at team-adjacent the host's start
+/// positions keep team-mates together (team_rules::team_start_positions);
+/// with teams.team-number-alliances a team record moves this machine's
+/// players' alliances with its sender and an alliance request for one of
+/// them is carried out and announced.
+///
+/// @param[in,out] match Match begun with net_match_begin.
+/// @param rules The rules, or null for 3.1c's.
+/// @param map_neutral_units Whether the map places units for the neutral player.
+void net_match_bind_rules(
+    NetMatch* match, const data::match_rules::MatchRules* rules, bool map_neutral_units
+) noexcept;
+
+/// Deals teams by start position in the game (the console's "autoteam" under
+/// teams.team-number-alliances).
+///
+/// Only the host that worked out team start positions deals; it needs two
+/// players with a start position and no player on a team. Each such player
+/// allies the players whose position equals its own modulo `teams` and
+/// unallies the rest, announcing each alliance as the team rules do.
+///
+/// @param[in,out] match Running match.
+/// @param teams the number of teams, 2..5
+/// @param[out] notice the line that reports the outcome
+/// @param capacity bytes at notice
+void net_match_deal_teams(
+    NetMatch* match, int32_t teams, char* notice, std::size_t capacity
 ) noexcept;
 
 /// Queues the 0x08 start record from the local player as the battle room closes; only the host sends it.
@@ -364,7 +493,10 @@ void net_match_enter_game(NetMatch* match) noexcept;
 ///
 /// Records are admitted by phase and sender; a record from a slot that is
 /// neither local nor a seated remote player rejects that sender. A 0x08
-/// start record ends the drain.
+/// start record ends the drain. In the game, while this machine's player
+/// takes a silent player's units (sharing.recorder-take-give), a step of the
+/// take goes before each packet read, and the drain goes on while steps
+/// hand units over.
 ///
 /// @param[in,out] match Running match.
 /// @return How many packets were read; 0 outside a live game.
@@ -527,15 +659,32 @@ void net_match_sync_timing(const World* world, base::game_loop::Timing* timing) 
 ///
 /// Only the Pause key pauses a network game; the in-game menus never do. The
 /// engine flips the bit as the key is pressed, so this writes the same value.
+/// While the recorder's autopause holds the game, an unpause on any machine
+/// but the host's sets the bit again, sends nothing and says why.
 ///
 /// @param[in,out] match Running match.
 /// @param paused New pause state.
 void net_match_set_pause(NetMatch* match, bool paused) noexcept;
 
+/// Returns the speeds the match may be set to: the rules' range
+/// (WireRules::speed_min to speed_max), narrowed by the host's speed lock
+/// while WireRules::speed_lock is on, the recorder protocol is presented
+/// and the host has locked the speed (recorder_speed_range).
+///
+/// @param match Running match.
+/// @param[out] slowest The lowest speed; may be null.
+/// @param[out] fastest The highest speed; may be null.
+/// @return True while the host's lock narrows the range.
+bool net_match_speed_range(const NetMatch* match, uint8_t* slowest, uint8_t* fastest) noexcept;
+
 /// Changes the game speed, shows a notice when it changed and optionally broadcasts it as 0x19.
 ///
+/// The speed is clamped to the rules' range (1..20 in 3.1c). A local change
+/// outside the host's speed lock (net_match_speed_range) is not made.
+///
 /// @param[in,out] match Running match.
-/// @param speed Requested speed, clamped to 1..20; 10 is normal.
+/// @param speed Requested speed, clamped first to WireRules::speed_max and then to
+///        WireRules::speed_min (1..20 in 3.1c); 10 is normal.
 /// @param broadcast True for a local change, false when applying a received one.
 void net_match_set_speed(NetMatch* match, int32_t speed, bool broadcast) noexcept;
 
@@ -546,7 +695,8 @@ void net_match_set_speed(NetMatch* match, int32_t speed, bool broadcast) noexcep
 /// Game.chat_targets entry is set. Modes 1 (allies) and 2 (enemies) send one
 /// copy to each player simulated elsewhere whose entry in the local player's
 /// alliance row is set (1) or clear (2). Mode 4 (this machine only) sends
-/// nothing.
+/// nothing. The recorder then reads the line for its commands, so an answer
+/// follows the line that asked for it.
 ///
 /// @param[in,out] match Running match.
 /// @param text Line to send, truncated to 64 bytes; null sends an empty line.
@@ -601,6 +751,97 @@ void net_match_share_sight(NetMatch* match, uint8_t from, uint8_t to) noexcept;
 ///
 /// @param[in,out] match Running match.
 void net_match_economy_period(NetMatch* match) noexcept;
+
+/// Runs the network rules' work at the end of a simulation tick.
+///
+/// With the rules on: the integrity check's challenges at their ticks and its
+/// report at tick 600, the tally of every open vote (a vote that passes
+/// rejects its player on this machine, as every machine does), and the
+/// recorder's release of a commander warp once every player's warp is done.
+/// Does nothing with 3.1c's rules.
+///
+/// @param[in,out] match Running match.
+void net_match_rules_tick(NetMatch* match) noexcept;
+
+/// Votes on a player (network.vote-reject): the local human's yes or no to an open vote.
+///
+/// The vote goes to every player and counts here at once.
+///
+/// @param[in,out] match Running match.
+/// @param target_id Transport id of the player the vote would reject.
+/// @param yes true for yes
+/// @return false when no vote on that player is open or the rule is off
+bool net_match_cast_vote(NetMatch* match, uint32_t target_id, bool yes) noexcept;
+
+/// Asks every machine to vote on rejecting a player (network.vote-reject).
+///
+/// The local human proposes, which counts as its yes.
+///
+/// @param[in,out] match Running match.
+/// @param slot Player slot, 0..9.
+/// @return false when the rule is off, the slot is no remote player, or a vote on it is open or
+///         cooling down
+bool net_match_propose_reject(NetMatch* match, uint8_t slot) noexcept;
+
+/// Notes a full unit record a remote player's machine sent, as the recorder keeps it (sharing.recorder-take-give).
+///
+/// The record's health and build byte become the unit's in RecorderUnitView;
+/// a record of an empty slot empties it. Does nothing while the rule is off.
+///
+/// @param[in,out] match Running match.
+/// @param unit_slot The unit's slot.
+/// @param record The record.
+void net_match_note_full_record(
+    NetMatch* match, uint32_t unit_slot, const FullUnitRecord& record
+) noexcept;
+
+/// Tells every recorder that the local player's commander warp is done (recorder message kind 1).
+///
+/// Sent alone, once, to each player whose machine runs the recorder. The
+/// local players count as done here.
+///
+/// @param[in,out] match Running match.
+void net_match_warp_done(NetMatch* match) noexcept;
+
+/// Starts the game paused when the host's recorder options ask for it.
+///
+/// With autopause or commander warp set, every recorder sends a pause of its
+/// own as the game starts; this machine does too and pauses.
+///
+/// @param[in,out] match Running match.
+void net_match_recorder_start(NetMatch* match) noexcept;
+
+/// Sends a batch of whiteboard marks to every other recorder (recorder message kind 0).
+///
+/// The batch goes as the whole payload, alone in its own frame, once to
+/// each player still in the game whose machine runs recorder protocol 2 or
+/// later. A machine that presents no recorder sends nothing.
+///
+/// @param[in,out] match Running match.
+/// @param batch The batch, its record count first.
+/// @param size Its length, 1 to recorder_whiteboard_max_payload.
+/// @return The number of players it went to; 0 when nothing was sent.
+uint32_t
+net_match_send_whiteboard(NetMatch* match, const uint8_t* batch, std::size_t size) noexcept;
+
+/// Sends the camera position to every recorder (record 0xfc), appended to the next frame.
+///
+/// @param[in,out] match Running match.
+/// @param x Camera x, or recorder_camera_off.
+/// @param y Camera y, or recorder_camera_off.
+void net_match_send_camera(NetMatch* match, uint16_t x, uint16_t y) noexcept;
+
+/// Notes where this machine's camera is, for the recorder to share.
+///
+/// While the recorder is on and the local player has not turned sharing off
+/// (.sharemappos), the camera goes to every player with the frames this
+/// machine sends: when it has moved since it last went out, at most once
+/// each send interval.
+///
+/// @param[in,out] match Running match.
+/// @param x The camera's centre in map pixels, clamped to 0..0xfffe.
+/// @param y The camera's centre in map pixels, clamped to 0..0xfffe.
+void net_match_note_camera(NetMatch* match, int32_t x, int32_t y) noexcept;
 
 /// Settles the economy exchange of a finished game.
 ///

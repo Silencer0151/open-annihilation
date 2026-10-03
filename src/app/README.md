@@ -189,7 +189,15 @@ logs it.
   images and silhouettes and those of the units they carry
   (`plan_unit_supersampled`), the texture animations, the projectiles'
   models, the GAF frames decoded for the particles (each once a frame), the
-  selection boxes' lines and the frame's statistics. The model bridge is
+  selection boxes' lines and the frame's statistics. Before them the frame's
+  shadows are set from the zoom (`set_frame_shadows`, `shadow_fade.hpp` of
+  the model module): at zoom 1 and closer the game's own; zoomed out
+  lighter, easing down to none at a quarter, the models' silhouettes and
+  the projectiles' shadow sprite blended through a faded alpha table
+  (`ShadowTable`) and a feature's shadow frame mixed from the frame toward
+  the game's shadow by the level (`fade_shadow_channel`); from a quarter
+  out none at all, the renderer's shadow option cleared for the frame and
+  no shadow listed, so none is drawn or built. The model bridge is
   then split into one band of whole tile rows for each drawing thread
   (`bridge_split`), and each band draws the whole list with its own rows
   alone (`draw_world_band`): its own tiles of the bridge are captured, drawn
@@ -493,29 +501,42 @@ logs it.
   rows as a per-vertex multiplier with a bright page of doubled texels for
   the rows above unlit, the alpha table as alpha 0.5 for cloaked units and
   shadows, the blue table as a halved colour with an additive lift, the
-  nanoframe's bands per polygon and its outline as line quads, diggers'
-  and other players' underwater polygons left out; texture frames go on
+  nanoframe's bands per polygon and its outline as the processor finds
+  it, the first and the last pixel of each row a primitive spans where
+  nothing nearer of the image lies, found on a depth plane of the model's
+  own and drawn as quads of those pixels, each at least a screen pixel
+  across and down in a view zoomed out, diggers' and other players'
+  underwater polygons left out; texture frames go on
   sprite pages on first sight in two variants, the image key transparent
   as in a cached image or a colour as in a flat draw; shadows go into a
   transparent shadow target the battlefield's size, every silhouette
-  replacing what is there so overlaps darken once, composed over the
-  terrain at half darkness by one resolve before the list's draws, or
+  replacing what is there so overlaps darken once, an unfinished
+  building's first and cut by its image's place as the processor cuts it,
+  so that the ground shows unshaded through the image the bands clear,
+  composed over the terrain at half darkness by one resolve before the
+  list's draws, or
   straight into the battlefield where the target cannot be made
   (`emit_shadows`, the extension point a later better-shadows option
-  replaces). The fog's dither over everything under the dithered option
+  replaces). Zoomed out, the shadows' alpha, and a feature's shadow frame's
+  colour and alpha on the sprite stage, take the list's shadow level's
+  share; at level 0 the stage emits no shadow and neither clears nor
+  composes the target. The fog's dither over everything under the dithered option
   (`append_unseen_dither`), palette index 0 at alpha one half, the even
   tone the processor's every-other pixel averages to, over the objects as
   the processor dithers them, since the pages hold no dithered sprite; and
   its black pass over everything (`append_unmapped`), UI colour 0 at the
   corner alphas of the cells never mapped, which blacks out the units as
   the processor does. Last the painters' quads (`paint_world_level`,
-  `paint_world_blend`): the kill board's shade of the world under it and
-  the light of the local player's row, and the +stats panel's fills, which
+  `paint_world_blend`, `paint_world_minimum`): the kill board's shade of
+  the world under it and the light of the local player's row, the +stats
+  panel's fills, and the shadow, outline and letter edges of game text in
+  the modern fonts, which
   in Full ask the card for a quad in place of reading and shading the
   canvas, which holds no world: a shade row as black by alpha over the
   world, leaving row x 0.06875 of it, a light row as white added by
   1 - 1 / (1 + row / 30) (`full_fog::level_quad`), a blend as its colour
-  at its opacity; their foregrounds go on the canvas as in every tier. The
+  at its opacity, a minimum as each channel the lesser of the world's and
+  its colour's; their foregrounds go on the canvas as in every tier. The
   executor runs the frame within the battlefield's scissor; the canvas
   goes up as the overlay by its key (`convert_rgb24_keyed_overlay_argb`),
   in the bands that hold paint, laid over the card's picture 1:1, so
@@ -558,7 +579,13 @@ logs it.
   setting's Full or `--hardware-acceleration=full` gives (design D76).
   While Full draws, the view zooms out to `kMinFullBattlefieldZoom`, one
   sixth, three times as far as the processor's floor, and the terrain's
-  level rule reaches the atlas's third level (design D79).
+  level rule reaches the atlas's third level (design D79). Below the
+  processor's floor a tile spans a fraction of a pixel or a few, so the
+  terrain's tiles and the fog's quads there have their edges on whole
+  pixels (`TerrainView::whole_pixels`, `FogPlacement::whole_pixels`), each
+  where its map pixel lands rounded to the nearest, and meet with no row
+  or column between them on a renderer that rounds each quad by itself, as
+  SDL's software renderer does.
   Anti-aliasing in Full is the graphics card's (`full_supersampling.hpp`,
   `ensure_full_world_target`): the Enhanced anti-aliasing row's level is
   the supersample factor, its samples across, off 1, 2x 2, 4x 4, 8x 8 and
@@ -737,7 +764,15 @@ logs it.
   the side column too (`match_dialog_side_`); while
   the in-game menu or the tab menu is open the panels show their keyboard
   focus. The load and save dialogs darken the panel below with the frontend
-  renderer's `shade_panel_below`, as the frontend dialogs do.
+  renderer's `shade_panel_below`, as the frontend dialogs do. Over a match
+  both open centred on the screen, at every window size and interface
+  scale (the save dialog's centring is in [VARIANCES.md](../../VARIANCES.md));
+  at the end of a mission the save dialog keeps its place from the GUI
+  file, as in 3.1c (`enter_load_game`, `runtime_load_game.cpp`). The save
+  dialog saves only through OK and Return at the end of the name; a click
+  on the name field gives it the keys (`savegame_on_save_press`). In the
+  load dialog Return is OK and Escape is CANCEL, as in the save dialog:
+  Escape leaves either dialog as its CANCEL does (`leave_load_dialog`).
 - `runtime_scroll_bars.cpp`: the scroll bars of the frontend screen's panel
   and of the match HUD's panel (`renderer::LayoutScrolls`), bound as each
   panel's first draw binds them, drawn over it, driven by the pointer and
@@ -902,7 +937,46 @@ logs it.
   trucks to both armies, and for the local player a kbot lab building
   peewees and an air transport loading one, and selects the local army
   with selection boxes shown, so that the frames reach every kind of
-  battlefield draw.
+  battlefield draw. `--stage FILE` sets up a headless skirmish of
+  `--match-ticks` ticks from a file of actions, one a line, after any
+  `--combat` armies: `unit PLAYER TYPE DX DZ [FROM]` places a finished unit
+  of a player DX, DZ map pixels from where the first unit of player FROM
+  (the owner by default) stood, `build TYPE DX DZ` queues the last unit
+  placed to build a type DX, DZ map pixels from it, `stockpile ROUNDS` has
+  the last unit placed build rounds for its first weapon, `console LINE` enters a chat line as
+  the local player, `type LINE` opens the chat line and types a line into
+  it, leaving it open, `pointer X Y` moves the pointer to a point of
+  the window, `click X Y` presses and releases the pointer's left button
+  there, `key NAME` presses and releases a key SDL names so (`Space`,
+  `Down`), both reaching an open dialog or menu first, as the player's do,
+  and `settings SECTION` opens the settings dialog beside the
+  in-game menu at the section its list names so, such as
+  `settings Language & Text`;
+  `native-stage` checks it. A save/load run ends by
+  reporting the live units by type, the veterans by veterancy level, the
+  stockpiled rounds, the buildings by facing and each player's health.
+- `runtime_stage.cpp` and `stage_state.hpp`: the parts of a stage that play
+  out over its match. `place PLAYER TYPE X Z [FACING]` places a finished
+  unit at map pixel X, Z, turned a quarter (`east`), half (`north`) or
+  three quarters (`west`) from the way its type is built facing (`south`,
+  the default); `group NAME` gathers the units the stage places after it,
+  by `unit` or `place`, into a group, and `group` alone stops gathering;
+  `move GROUP X Z` and `patrol GROUP X Z` give a group's live units that
+  order to map pixel X, Z, `attack GROUP TARGETS` sets each of them on
+  the nearest live unit of another group, and `activate GROUP` and
+  `deactivate GROUP` switch them on and off with the order panel's ON/OFF
+  button's orders (`give_state_order`, which the button gives each
+  selected unit), as a player's orders do; a type that cannot be switched
+  on and off stays as it is. `at
+  TICK` before any action keeps its line for that match tick, and the line
+  runs before the tick does (`run_due_stage_lines`, from every step of the
+  match), the lines of a tick in the order the file gives them; each tick
+  that runs lines prints `stage: tick TICK` before their own lines. A
+  director script that names a stage in place of a recording renders the
+  headless skirmish the stage sets up and plays out
+  ([docs/director.md](../../docs/director.md)). `native-stage-render` checks
+  the timed lines, the orders, the lines a stage refuses and two renders of
+  a stage.
 - `xrgb_conversion.hpp`, `xrgb_conversion.cpp`: each frame's RGB layers
   converted into the window's 32-bit pixels (0xffRRGGBB) as they are
   uploaded, through the display gamma's table when the gamma is not 1, in
@@ -998,6 +1072,29 @@ logs it.
 - `runtime_console.cpp`, `runtime_console_debug.cpp`: the in-game console's
   host hooks, the debug grid, "Profile" bars and DebugBreak, and the console
   part of `--check-navigation`.
+- `runtime_console_cheats.cpp`, `runtime_console_sound.cpp`: the cheat flag
+  each mission start sets, from `sim::scenario::session_cheats_allowed`: a
+  campaign and a skirmish run cheats, a multiplayer game while its host's
+  CHEATING option is on (3.1c refuses them in a campaign;
+  [VARIANCES.md](../../VARIANCES.md)). "+Sing" flips the novelty voice,
+  which lasts from match to match until the program ends and no save
+  holds; its two sounds are the mod profile's `strings.cheat.sing-sounds`,
+  else 3.1c's honk and sing, bound to the announcement gates as each match
+  starts. `check_console_cheat_effects` types every cheat 3.1c registers
+  through the chat line and checks what it does to the match, in the
+  skirmish of `--check-navigation` and in the campaign mission of
+  `native-campaign-restart`, which also checks "+Sing";
+  `native-campaign-sing-sounds` runs it under a profile that names its own
+  sing sounds. The match view (`match_view_player`) follows
+  `Game.viewpoint_player`, which "+View" moves: the fog, the units drawn,
+  the economy and the units that speak follow the viewed player.
+- `runtime_unit_speech_check.cpp`: `--check-unit-speech`
+  (`native-unit-speech`): the commander clicked says its select line, and
+  clicked onto open ground its order line, in a skirmish and in a second
+  one started after it. Each match starts the unit speech queue empty, with
+  no category cooling down (`NativeOfflineServices::bind_announcements`),
+  as each mission start does in 3.1c, so what one match said never
+  silences the next.
 - `runtime_match_menus.cpp` also registers the load-game overlay
   (`register_load_game_screens`).
 - The Open Annihilation settings ([oa/ui/engine_settings.hpp](../ui/engine-settings/README.md)):
@@ -1050,8 +1147,9 @@ logs it.
   for pixel with what they should draw;
   `runtime_engine_settings_dialog_check.cpp` the dialog driven by the
   pointer, the wheel and the keys (every section, scrolling, each setting in
-  effect at once, Vertical sync read back from the renderer, OK, Cancel,
-  Restore defaults and the keys they save) and the main menu with the
+  effect at once, Vertical sync read back from the renderer, Font shadow
+  read back from the text style, OK, Cancel, Restore defaults and the keys
+  they save) and the main menu with the
   button and the dialog as 640x480, 1280x720, 1920x1080 and 2560x1080
   windows show them, Graphics at its top and its end;
   `runtime_engine_settings_match_check.cpp` the in-game menu's button and
@@ -1258,7 +1356,9 @@ logs it.
   `runtime_director.cpp` runs `--generate-script` (the recording replayed
   undrawn through the extension that replays it, its timeline recorded and
   the shots planned) and `--render-script` (the recording replayed tick by
-  tick, the shots drawn, the sound mixed offline, the chunks written), and
+  tick, the shots drawn, the sound mixed offline, the chunks written, the
+  stills `--stills` asks for written), a script that names a stage played
+  out over the headless skirmish in place of a recording, and
   `--check-director-render`, which renders a small script over the headless
   skirmish. `runtime_director_view.cpp` and `director_state.hpp` are director
   mode (`director_presentation.hpp`): the frame drawn from the director's
@@ -1268,7 +1368,8 @@ logs it.
   `--check-director-view` checks that a drawn and an undrawn replay reach
   one world. `director_output.hpp` and
   `director_output.cpp` (`oa-app-director-output`) write a render's files
-  (each chunk's frame manifest and sound, the run manifest), run `ffmpeg` on
+  (each chunk's frame manifest and sound, the run manifest, the stills as
+  PNG pictures), run `ffmpeg` on
   the chunks and join them, and read and write the `.oamovie` bundle;
   `app-director-output` tests them without an encoder.
 - Frames between ticks: `presentation_interpolation.hpp` and `.cpp` keep
@@ -1344,6 +1445,377 @@ not the release the engine recognises, and a failed unpacking or a full disk
 is reported the same way.
 `DemoRelease` holds everything that identifies the release, in one place, so
 that the tests (`demo_installer_test.cpp`) substitute a synthetic one.
+
+## Mod profile and mod folders
+
+`mod_profile_loader.cpp` and `mod_folder.cpp` (`oa-app-mod-profile`) do the
+file work for mod profiles, which
+[src/data/mod-profile](../data/mod-profile/README.md) resolves:
+`find_mod_profile` finds a folder's `oamod.yaml`, its name matched without
+case, and refuses a folder holding two names that differ only in case;
+`load_mod_profile` reads a file and resolves it. `--print-profile` prints the
+resolved profile of `--mod FILE`, or of the `--mod-dir` or `--game-dir`
+folder, with its sim and full hashes, and exits; a folder without a profile
+prints that it plays base 3.1c, and a profile with errors prints each, one a
+line, and exits with status 1.
+
+A mod plays in one of two ways, which give the same game:
+
+- **Copied install:** the mod's files copied into the game folder, with its
+  `oamod.yaml` in the folder's root.
+- **Mod folder:** a folder holding the mod's own files and its `oamod.yaml`,
+  layered over a plain game folder: `--mod-dir PATH`, or the folder the
+  preferences remember (`open-annihilation.mod-directory`); `--base-game`
+  plays without the remembered one, and one that is gone is dropped with a
+  notice. `list_mod_folders` lists the folders of the game folder's `mods`
+  folder that hold a profile, which the Open Annihilation settings offer
+  (Gameplay, Mod); the choice applies from the next start, since one profile
+  plays per run. A game folder holding its own `oamod.yaml` cannot carry a
+  mod folder.
+
+`inspect_game_install` resolves the profile (`resolve_folder_profile`) before
+any archive is mounted: `--mod`'s file, else the mod folder's, else the game
+folder's. It resolves it twice, first to learn its settings file and
+registry root, then with the settings it binds: the INI of that name from
+the first folder that holds it, read only (`read_ini_settings`; a `;` ends a
+value, as the mod's own readers take only its leading number or word), and
+the preferences' registry section. A profile that cannot be used makes the
+folder unusable with every error, and the game never falls back to 3.1c.
+The profile's layout then names the archives discovery mounts
+(`discovery_plan_of`) and the directories of the resources the folder must
+provide; with a mod folder the asset store layers it over the game folder
+(`GameInstall::folders`, `Options::game_folders`), so that it reads exactly
+as a copied install of the same files.
+
+`main` puts the profile in `Options::mod_profile`, and `Runtime::mod_profile()`
+returns it (null for base 3.1c) to everything that reads it: the runtime
+copies its limits into `limits_` before anything sizes a table from it, and
+every match is built with its rules, so unit scripts read the extensions it
+mounts, the unit types' and weapons' own records (`unit_type_rules_`,
+`weapon_rules_`) and its sim hash. The unit and weapon files are read with
+the data keys the profile binds (`oa/data/defs/rule_keys.hpp`) into those
+records and, for the build-cursor preview, `unit_preview_keys_`; a bound key
+whose value cannot be used is reported and the profile's default applies to
+that type. `main` also puts its layout in the data layout every loader reads
+(`oa/data/defs/layout.hpp`, `data_layout_of`): the renamed directories, the
+unit file extension, the map units section, the build version unit files are
+checked against (the profile's network version) and the two side names. The
+runtime then:
+
+- shows the profile's display version on the main menu, when it names one,
+  even where its game data holds no `version.tdf` (without one the base
+  game's label is hidden);
+- keeps the game's settings under the profile's registry root, as
+  `registry:<root>\<section>|<name>` keys, unless the root is the base
+  game's; a first run seeds the profile's registry seeds where no value of
+  that name, matched without case, exists (`seed_registry`);
+- keeps saved games in `mods/<id>` below the preferences folder;
+- reads the movies, the music folder and the disc archives through the
+  folders, the mod folder first; a profile whose `cd-check` is false always
+  finds its disc.
+- hands its setup and team rules to the battle room
+  (`multiplayer_bind_rules`) and to each network match
+  (`net_match_bind_rules`), and with `setup.map-scripted-units` places a
+  skirmish or multiplayer map's schema units in place of the commanders and
+  as their countdowns come due (`runtime_map_units.cpp`).
+
+A save made under a profile holds a ModProfile account (its id, version,
+catalogue, hashes and the match's rule-state tables); such a save loads only
+under a profile of the same sim hash, which the status line otherwise names
+with the game's, and a save without one, written by 3.1c or by a mod's own
+client, loads under any.
+
+### Developer Mode
+
+Developer Mode, in the settings' Developer section
+(`EngineSettings::developer_mode`,
+[src/ui/engine-settings](../ui/engine-settings/README.md#developer-mode)),
+lays the player's overrides of the standard hacks
+(`EngineSettings::hack_overrides`) over the profile the game plays.
+`load_engine_settings` first sets up its layers (`load_profile_layers`):
+it reads again what the profile is resolved from, the mod's file and the
+settings it binds (`folder_profile_source`), or without a mod the plain
+3.1c baseline (`base_game_profile_text`); the id the overrides are kept
+under, the profile's or `ta-3.1c`; and the profile's hacks as the dialog
+shows them. Each time Developer Mode or the overrides change,
+`apply_hack_overrides` resolves the profile again with them as its last
+layer, reporting on standard error, once, each override the resolver left
+out, and keeps the result as the latest profile. Off, or with no override,
+the latest is the profile as it ships, and the game plays as without the
+setting.
+
+The display rules (`ui_rules`) read the latest profile at once, a running
+match's voices and explosions (`Match::set_display_rules`) and the
+player's view settings included. The rules (`mod_profile`) read the
+played profile: the latest one while no match runs, held from a match's
+start until `teardown_match` puts the latest in play, so that a running
+match and its saves keep the rules it started with; a saved game is checked
+against the profile the match it loads into will play
+(`next_match_profile`). A game without a mod plays by no profile while its
+overrides change none of 3.1c's rules (its sim hash is the baseline's), so
+its saves and network games are as without them; once an override changes
+a rule, it plays the baseline with the overrides, whose account its saves
+then hold.
+
+The run names the profile and its sim hash. `--print-profile` applies the
+INI settings of the folder it prints, as a game does (`mod_settings_of`).
+`--accept-unimplemented-hacks` accepts, with a warning each, hacks this build
+does not implement yet, for development. `--trace-lookups FILE` writes every
+game file and listing the run looks up, one a line, which shows that a
+renamed directory is never read by its base name. `app-mod-profile` and
+`game-directory` cover these; `native-mod-layout-data` checks a mod's real
+data (docs/development/testing.md).
+
+### Display rules
+
+A profile's display rules (`ModProfile::ui`, the `ui.*` hacks) change what
+the player sees and hears and how this machine's input works, never what
+another machine is told. `view_rules.hpp` (`oa-app-view-rules`) turns them
+into the records and decisions of the modules that carry them out, and
+`app-view-rules` checks each against 3.1c's:
+
+- **Voices and explosions** (ui.unit-voice-fixes, ui.effects-tweaks):
+  `match_display_rules` gives the match its `DisplayRules`
+  ([src/sim/match-runtime](../sim/match-runtime/README.md#rules)), and
+  gives a running match new ones as Developer Mode changes them.
+- **Music and the victory announcement** (ui.audio): `music_source` picks
+  the disc's layout, numbered MP3 files from `1.mp3` or every MP3 file of
+  the folder in name order ([src/audio](../audio/README.md)); the CD music
+  pauses as a finished match leaves for its end screen
+  (`music_end_game`); drawing the victory banner plays the "Victory
+  Condition" sound, at most once in 300 ticks by
+  `victory_announcement_due`, whose tick is kept across matches. Sound
+  keeps playing while the window is in the background, and sounds are
+  placed in 3D by the Sound Mode setting, which the profile's registry
+  seeds set.
+- **Display modes and screenshots** (ui.display-modes): with
+  `min-height-768` the options screen offers only modes of 768 rows or
+  more (`minimum_mode_height`), and the DisplaymodeWidth and
+  DisplaymodeHeight settings start at 1024 by 768 and raise a smaller
+  stored width or height to it as they are read (`display_mode_setting`).
+  Ctrl+F9 and Print Screen, on release and on every screen before the
+  screen sees them (`handle_view_rule_key`), save the frame as an 8-bit
+  PCX in the `screenshots` folder of the player's data folder, named by
+  the date, the map and the players, or SHOT outside a match, with the
+  first unused number from 0 (`screenshot_file_name`,
+  `capture_named_screenshot`). The graphics-driver warning `dx-warning`
+  keeps or drops is one the engine never shows, so both values play alike;
+  a forced resolution comes from the profile's registry seeds like any
+  other setting.
+- **Click snap** (ui.click-snap): while the snap override key (Alt) is up,
+  a build click with a metal extractor snaps, within the mex radius, to the
+  place whose footprint holds the most cells richer than the map's
+  SurfaceMetal, the nearest of the best to the cursor (`snap_cell`), and
+  keeps the snap only when snapping again from there, with the larger
+  footprint side as radius, agrees; a building whose yard map holds a
+  geothermal cell (read as text, so an open cell before it hides it) snaps
+  to the nearest place it may be built. A reclaim click on ground with no
+  feature snaps, within the wreck radius, to the nearest reclaimable
+  feature with metal or energy, and a queued order then cancels only
+  within -8 to 7 whole pixels (`Match::cancel_queued_order`). The ghost
+  shows a snapped site as one that may be built on. The radii start at the
+  profile's defaults and are held to its maxima (`click_snap_radius`).
+- **Line and ring build tools** (ui.build-tools): in build mode, with the
+  autoclick key (X) held, a click starts a line at the cursor (at a snapped
+  site's middle cell when the click snaps); the line follows the cursor
+  (`line_build_slots`: whole footprints plus the spacing along the axis
+  with more cells, a cell at a time along the other) and the next click
+  gives it, one queued build order a building, and starts the next line
+  there. Over a unit the tool lays a ring around its footprint widened by
+  the spacing (`ring_build_slots`, corners closed with full rings) and a
+  click gives it. The mouse wheel, Page Up and Page Down change the
+  spacing (0 to 10) while the key is held; letting the key go drops the
+  line unbuilt. A line of 2 by 2 buildings is given as a staggered double
+  row with Optimize DT rows (`optimize_dt_rows`). The ghost outlines every
+  building. A site the build cursor accepts over the local player's own
+  units (orders.build-site-kickout place-over-own-units) is outlined in
+  interface colour 14 in place of 10, as a building there has them moved
+  off. With the snap override key (Alt) held, a left press on one of the
+  local player's own units with a movement object picks it up and the
+  release sends it to the terrain under the pointer ahead of its orders
+  (`order_drag_pointer`, `Match::send_ahead_of_orders`): its first order
+  waits behind the move, or starts again from its beginning behind it, and
+  its later orders are kept, as the kickout sends a unit off a site.
+- **Build preview** (ui.build-preview): the building being placed is drawn
+  at its site through a stand-in unit record as a nanoframe
+  (`ready_build_preview`), its build sweeping again every second
+  (`build_preview_remaining`): with `fill` over the whole model, else over
+  its top fifth, which leaves its outline shimmering. A type's preview keys
+  pick the pieces drawn (`preview_lists_piece`, per facing first) or another
+  model (`objects3d/<name>.3DO`). The rotate key (/, without Ctrl) or the
+  snap override key with the wheel turns a type that may face more than
+  one way to its next facing (`next_build_facing`), playing MORE; the
+  footprint's sides swap for east and west, the facing's letter shows at
+  the site, and "Press /, or Alt+wheel, to rotate" until the player has
+  turned one (`rotate_key_discovered`). The site is tested turned to the
+  facing, and the build order carries it (`issue_mobile_build`), so the
+  building rotation rule places the building that way. A type whose preview
+  keys face its opponent is drawn, though not built, turned toward the
+  nearest enemy (`opponent_facing`) while the site lies within build
+  distance of one of the player's selected, finished units: the first unit
+  of each player who is in use, no watcher and not allied, the nearest
+  faced east or west when it lies farther off across than down, else
+  south or north.
+- **Share dialog and battle room buttons** (ui.share-dialog-and-lobby-buttons):
+  a share panel whose GUI has them gets EN_SHAREMETAL, EN_SHAREENERGY,
+  EN_SHOOTALL and EN_NOSHAKE switches set from the player's share switches
+  and the console's flags, each click flipping the switch and giving its
+  command (+sharemetal, +shareenergy, +shootall, +noshake) as a line shown
+  here and run on the console (`give_view_command`); EN_READY says
+  ".ready" to every player; SRL_SETSHRMETAL and SRL_SETSHAREGRY run over
+  the stores with their knobs at the share thresholds
+  (`share_threshold_knob`), SM# and SE# showing the threshold a moved knob
+  stands for (`share_threshold_value`) when it differs from the player's,
+  and OK gives +setsharemetal and +setshareenergy for each that differs;
+  SRL_GAMESPEED, when a GUI has it, asks for its speed as the speed keys
+  do. The battle room offers the host the AUTOTEAM, AUTOPAUSE, RANDOMTEAM
+  and CRCREPORT buttons the profile lists (`lobby_button_bits`,
+  `multiplayer_bind_lobby_buttons`) when its GUI has them, grayed for the
+  other players; a press says "+autoteam", ".autopause", "+randomteam" or
+  ".crcreport" as if typed.
+- **Text** (ui.text-rendering): with `unicode`, game text holds UTF-8: the
+  chat line and the whiteboard's text send what is typed as UTF-8, and
+  well-formed UTF-8 in game text is read as its characters
+  (`game_text_utf8`); without it, typed text goes out in the game's 8-bit
+  code page, a character it lacks as `?`, and game text is read in the code
+  page (`typed_game_text`, `oa::present::encode_game_text` and
+  `decode_game_text`). With the accessible chat on, each line of the
+  message log gets a black backdrop from 4 pixels left of the log to 4 past
+  its text, a logo counted a line height wide, from the row above to the
+  row below (`chat_backdrop_rect`), whatever the Game text background
+  setting says; the line is drawn as all game text is. The chat line shows
+  the input method's composition after its text until it is committed, and
+  Backspace in the chat line and on the whiteboard takes the whole last
+  character.
+- **Game text** (the Language & Text settings, `text_style`): the match's
+  text, what players type and send and their names are drawn as
+  `oa/present/game_text.hpp` lays them out (`runtime_game_text.cpp`): with
+  Use modern fonts for game text, in the bundled fonts through FreeType
+  ([text font](../platform/text-font/README.md)) at the Text size of the game
+  fonts' sizes, times the text's scale, in their colours, with the outline,
+  shadow and background the settings choose, reduced to the palette
+  (`install_game_text_hooks`, `paint_modern_text`), the shadow over the
+  Full tier's battlefield drawn by the card; without it, in the
+  game's fonts, with Latin-1 drawn with the glyphs the fonts hold and the
+  rest in the modern fonts at the fonts' own size. `paint_text` (the
+  labels, the clock, the frame statistics), `overlay_gui_text` (the message
+  log, the status readouts), `draw_board_text` (the kill board), the
+  end-of-game statistics and the battle room's chat and names draw this
+  way; menu and dialog labels, and the loading screen whatever the
+  settings say, keep the game's fonts for every character they hold.
+  Over the battlefield the text grows with the size: the message log steps
+  by its font's height at the size (`message_log_step`), breaks a line
+  wider than the battlefield into rows (`message_log_rows`) and lets the
+  oldest lines go while its rows do not fit above the clock or the
+  battlefield's bottom (`message_log_most_rows`); the clock rises with its
+  height (`console_clock_pen_row`); the chat line is drawn at the size in
+  the TALK field, showing its end as it grows wider, and rises over the
+  battlefield in a black box across it when it is taller than the field and
+  two rows above and below it (`chat_line_layers`, `draw_risen_chat_line`). The fixed panels paint
+  their text within a `PanelText`, which holds it to the game fonts' size
+  on their baseline (`painted_text_size`, `painted_baseline`): the top and
+  bottom bars, the build captions, the digits under and over a unit's bar,
+  the kill board, the resource panel and its clock line, the frame
+  statistics, the debug keys' line, the commander placement's prompt and
+  an extension's overlay.
+- **Language** (`runtime_language.cpp`, `language_state.hpp`): the
+  language the game shows its text in ([docs/languages.md](../../docs/languages.md)).
+  `start_language` asks the operating system for its preferred locales
+  (`oa::platform::locale::preferred_locales`), reads the interface
+  catalogue's files from the `languages` folder beside the game's other
+  files and the setting, and `apply_language` puts the language in effect:
+  3.1c's command-line word, else the setting, else the system's. It loads
+  `gamedata\translate.tdf` and the fonts for the game data's word
+  (`game_language`, "German"), and installs the lookups every interface
+  reads: the game's own texts through `game_translation`
+  (`translation_hook`, which the gadgets, dialogs, menus, the kill board,
+  the F1 panel, the message log's phrases and the loading screen take, and
+  `oa::data::languages::set_translation_hooks` for the GUI files and the
+  campaign's files), units' names and descriptions from the table the unit
+  loaders fill through `unit_text_sink`, and the engine's own words in the
+  catalogue. `set_language_choice` takes the setting as it changes; the
+  match's definitions, saves and what a shared game sends never see it.
+  `--check-unit-language TAG` (`runtime_language_check.cpp`) checks the
+  build menu's bottom bar and the unit panel in a language against the
+  unit files themselves, and English after it; the
+  `native-unit-language-*` checks run it in each language and in the
+  system's.
+- **Options dialog** (ui.options-dialog): Ctrl+F2 in a match opens the
+  settings dialog as its mod options kind beside the in-game menu
+  (`open_engine_settings_in_match`), over the player's view settings
+  (`dialog_options`), with the snap radii the profile gives no room locked
+  (`dialog_option_locks`). Changes take effect at once
+  (`apply_dialog_options`), OK keeps them in the preferences, Cancel puts
+  back what it opened with; the builders' options apply from the next
+  game. F11 in a match gives each line of the chat macro
+  (`chat_macro_lines`) as a line shown here only, a line starting with '+'
+  also run on the console. Not in the dialog: the whiteboard and full
+  screen map keys, the build menu's facing overlay, VSync and editing the
+  macro, which keep their stored values.
+- **External exports** (ui.external-exports): live unit state and lobby
+  state are not published for outside viewers and lobbies; publishing them
+  has no effect on the game, so the profile's parameters are accepted and
+  change nothing.
+- **Player settings** (`ViewSettings`, `read_view_settings`): the keys,
+  snap radii, builders' patrol and guard options, chat macro and display
+  switches the options dialog changes, kept under the preferences' Eye
+  section; the builders' options go into each match's rules while the
+  profile turns them on (`apply_builder_options`).
+
+The profile's visual rules (`ModProfile::ui`, read through
+`Runtime::ui_rules`, with the player's Developer Mode overrides as they are
+now; a default record without a profile) change only what this machine
+draws and how its pointer and keys select. Their logic lives in the
+HUD and selection modules (`oa/ui/hud/resource_panel.hpp`,
+`shared_views.hpp`, `whiteboard.hpp`, `megamap.hpp`, `unit_labels.hpp`,
+`oa/sim/selection/shortcuts.hpp`) and the runtime wires it in:
+`runtime_view_panels.cpp` draws the resource panel, the clock, wind and
+tidal line and the shared camera rectangles, and switches a watcher's view;
+`runtime_whiteboard.cpp` takes the whiteboard's pointer, keys and text and
+makes and applies its batches (`take_whiteboard_batch`,
+`receive_whiteboard_batch`); `runtime_megamap.cpp` opens, draws and clicks
+the megamap and redraws the enhanced minimap; `runtime_selection_shortcuts.cpp`
+takes the double-click, Ctrl+S/B/F and the drag filters. What other
+machines report about their players' views (`shared_views_`) is left to
+network play to carry; a game played alone reports and receives nothing.
+Network play carries the whiteboard's batches: each frame `net_frame` sends
+the batches drawn here (`net_match_send_whiteboard`), and the match hands a
+batch an allied player's recorder sent to `receive_whiteboard_batch`
+through its `whiteboard_marks` hook.
+
+The overlays are painted after the fog, on the world layer or the HUD's,
+so the accelerated tier presents them as it presents the game's own
+painters: 1:1 over the area pass's picture, or as the overlay laid over the
+magnified scene; in the Full tier they are painted on the overlay canvas
+and laid 1:1 over the battlefield the card draws, at every zoom down to its
+floor of a sixth. Those placed at map points take the frame's viewport for
+those painters, moved by the offset of a view drawn between map pixels:
+the build tools' sites, the build preview's facing letter and the
+whiteboard's marks (`draw_whiteboard`), whose pointer, like the commander
+placement's, finds the map pixel drawn under it (`battlefield_map_point`).
+The build preview's model is drawn into the scene at the draw scale, as
+every unit is, and in the Full tier by the card's model stage, which draws
+an unfinished mobile unit's nanoframe over every piece where the profile's
+interface fixes hold its moving pieces until it is built
+(`ModelFrameInputs::moving_pieces_once_built`). The canvas holds no
+battlefield, so game text in the modern fonts paints there only the
+pixels its letters cover whole and leaves the rest to the card
+(`paint_modern_text`, `paints_full_canvas`): its shadow as a darkening and
+its letters' partial coverage as their colour at that coverage
+(`paint_world_blend`), and its outline as a hold of each channel to the
+outline grey at the most (`paint_world_minimum`, `card::Blend::minimum`),
+which is black over black ground, as the processor's outline is, and the
+grey over ground lighter than it. A renderer without the minimum blend,
+SDL's software renderer among them, draws the outline in the grey itself.
+The megamap covers the
+battlefield it opens over, so a frame under it draws at the zoom in the
+accelerated tier too (`megamap_shown`, `world_scaling`) and the megamap is
+presented as the processor composes it, never through the card's
+magnification of the scene it hides; in the Full tier it covers the
+canvas. `native-render-tiers-visual-rules` runs the render tiers check
+under a profile that turns the visual rules on and checks these overlays
+in the standard and accelerated tiers, and in the Full tier after its own
+cases (`check_visual_rule_overlays`).
 
 ## Extensions
 
@@ -1538,5 +2010,17 @@ that notice instead.
 Extensions built on network play use its own table,
 `oa/app/netgame/extension_api.hpp`, numbered by
 `OA_NET_EXTENSION_API_VERSION`.
+Network play binds the profile's network, setup and team rules and the
+battle room buttons its display rules add to the multiplayer screens and
+the session (`bind_profile_rules`), and binds them again in the first frame
+they differ from those bound (`follow_profile_rules`), so that the overrides
+Developer Mode lays over the profile reach them; the profile the rules are
+played by is one object for the whole run, which each change is copied
+into, so that what is bound to it stays valid. It binds the engine's line
+to the battle room (`multiplayer_bind_engine_banner`): `[Engine: OpenAnnihilation v<version>]`,
+or with ` DEV MODE` before the bracket while `Runtime::developer_mode` says
+Developer Mode is on, which the battle room says as the local player's chat
+line as it is entered and again each time the line changes there
+(VARIANCES.md).
 [docs/development/testing.md](../../docs/development/testing.md#network-play)
 lists its tests.

@@ -5,6 +5,7 @@
 #include "oa/sim/weapon_execution/interceptor.hpp"
 #include "oa/sim/weapon_execution/projectile_contact.hpp"
 #include "oa/sim/weapon_execution/projectile_pool.hpp"
+#include "oa/sim/weapon_execution/weapon_keys.hpp"
 #include "oa/sim/unit_movement/terrain.hpp"
 
 #include <cstring>
@@ -83,6 +84,24 @@ bool plot_feature_height(
     return true;
 }
 
+/// Tells whether a ballistic shell explodes when its weapontimer runs out.
+///
+/// 3.1c explodes it only when the weapon has burnblow; under
+/// weapons.timed-shell-detonation's not-noautorange rule it explodes unless the
+/// weapon has noautorange. Otherwise it goes out in a light puff.
+///
+/// @param flags WeaponDef.flags
+/// @param timed the hack's rules
+/// @return true when the shell explodes
+bool timed_shell_explodes(
+    uint32_t flags, const data::match_rules::WeaponsTimedShellDetonation& timed
+) noexcept {
+    if (timed.enabled &&
+        timed.rule == data::match_rules::WeaponsTimedShellDetonationRule::not_noautorange)
+        return (flags & OA_WEAPON_FLAG_NO_AUTO_RANGE) == 0;
+    return (flags & OA_WEAPON_FLAG_BURN_BLOW) != 0;
+}
+
 } // namespace
 
 class ProjectileDamageHost final : public sim::unit_health::DamageHost {
@@ -94,7 +113,7 @@ class ProjectileDamageHost final : public sim::unit_health::DamageHost {
 
   public:
 
-    explicit ProjectileDamageHost(Match& world) : match(world) {}
+    explicit ProjectileDamageHost(Match& world) : match(world) { rules = world.rules_view(); }
 
     bool target_is_live(const sim::unit_health::Unit& u) override {
         return unit_is_live_target(slot(u).unit->flags);
@@ -180,7 +199,7 @@ Match::apply_projectile_damage(oa::Projectile& shot, sim::unit_spawn::Slot& targ
             : static_cast<int32_t>(definition->default_damage);
     auto* source = projectile_source(shot);
     const auto amount = sim::weapon_execution::projectile_damage(
-        base, scale, source ? &source->record : nullptr, state().game
+        base, scale, source ? &source->record : nullptr, state().game, rules_view()
     );
     const auto direction = sim::weapon_execution::impact_direction(
         {shot.position.x, 0, shot.position.z}, target.record
@@ -199,6 +218,7 @@ Match::apply_projectile_damage(oa::Projectile& shot, sim::unit_spawn::Slot& targ
         target.unit->health,
         &type
     };
+    projected.type_index = target.record.type_index;
     sim::unit_health::Unit source_projected{};
     const sim::unit_health::Unit* source_ptr = nullptr;
     if (source) {
@@ -270,7 +290,9 @@ void Match::detonate(oa::Projectile& shot, sim::unit_spawn::Slot* direct) {
         return;
     if (direct != nullptr && definition->areaofeffect < 0x11)
         strike_unit(shot, *direct);
-    else
+    else if (!sim::weapon_execution::silent_ownerless_shot(
+                 shot, *weapon, rules_view().weapon(weapon->weapon_id)
+             ))
         detonate_area(shot, *definition, *weapon);
 }
 
@@ -600,10 +622,10 @@ void Match::update_projectiles() {
                 fall_with_wind();
                 break;
             }
-            if ((flags & OA_WEAPON_FLAG_BURN_BLOW) != 0) {
+            if (timed_shell_explodes(flags, rules().weapons.timed_shell_detonation)) {
                 detonate(shot, nullptr);
             } else {
-                // A timed shell without burnblow goes out in a light puff.
+                // A timed shell that does not explode goes out in a light puff.
                 spawn_light_puff(shot.position);
                 sim::weapon_execution::retire_projectile(world, shot);
             }
@@ -617,7 +639,10 @@ void Match::update_projectiles() {
             break;
         case sim::weapon_execution::FlightMode::self_propelled:
             if (tick < shot.lifetime_tick) {
-                if ((flags & OA_WEAPON_FLAG_WATER_WEAPON) == 0 || previous_height < sea) {
+                // A water weapon's shot above sea level falls, unless it
+                // has the surface-fire key.
+                if ((flags & OA_WEAPON_FLAG_WATER_WEAPON) == 0 || previous_height < sea ||
+                    rules_view().weapon(weapon->weapon_id).surface_fire) {
                     shot.speed = sim::combat_state::accelerate_projectile(
                         shot.speed, weapon->weapon_velocity, weapon->weapon_acceleration
                     );

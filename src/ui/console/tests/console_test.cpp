@@ -4,6 +4,9 @@
 // Command console: per-command state changes, dispatch masks, the passphrase,
 // chat echo modes, the extension hook and the hotkey dispatcher.
 #include "oa/ui/console/console.hpp"
+#include "oa/core/player_setup.h"
+#include "oa/data/campaign/campaign_file.hpp"
+#include "oa/sim/scenario/commander_rules.hpp"
 #include "oa/ui/console/game_fields.hpp"
 #include "oa/ui/console/hotkeys.hpp"
 
@@ -450,6 +453,46 @@ void test_masks_and_chat() {
     CHECK(f.run("NoSuchCommand", 0x11) == 0);
 }
 
+// The chat line in each kind of game, with the cheat flag its mission start
+// sets (session_cheats_allowed): a campaign and a skirmish run "+atm" and
+// echo it to everyone, a multiplayer game only while its host's CHEATING
+// option is on, and refuses it otherwise, sending the line as plain chat.
+// "+sing" is an option command: it runs in every kind of game and its echo
+// stays on this machine.
+void test_cheats_by_game_type() {
+    using oa::data::campaign::SessionKind;
+
+    struct Case {
+        SessionKind kind;
+        uint16_t host_options;
+        bool runs;
+    };
+
+    for (const auto& c : {
+             Case{SessionKind::campaign, 0, true},
+             Case{SessionKind::skirmish, 0, true},
+             Case{SessionKind::multiplayer, 0, false},
+             Case{SessionKind::multiplayer, OA_SETUP_OPTION_CHEATS_ALLOWED, true},
+         }) {
+        Fixture f;
+        // Player 1 holds the host role.
+        f.world->player_info[1].role = 0x01;
+        f.world->player_info[1].options = c.host_options;
+        f.con.cheats_enabled = oa::sim::scenario::session_cheats_allowed(c.kind, *f.world, !c.runs);
+        CHECK(f.con.cheats_enabled == c.runs);
+        const char* echo = nullptr;
+        const auto mode = console::console_submit_chat_line(&f.con, "+atm", 3, &echo);
+        CHECK(mode == (c.runs ? console::kChatModeEveryone : 3));
+        CHECK(f.game().players[0].metal == (c.runs ? 1000.0f : 0.0f));
+        CHECK(f.game().players[0].energy == (c.runs ? 1000.0f : 0.0f));
+        CHECK(
+            console::console_submit_chat_line(&f.con, "+sing", 3, &echo) ==
+            console::kChatModeLocalOnly
+        );
+        CHECK(!g_rec.calls.empty() && g_rec.calls.back() == "novelty voice");
+    }
+}
+
 void test_share_commands() {
     Fixture f;
     f.run("ShareMetal");
@@ -704,6 +747,20 @@ void test_ai_profile() {
     CHECK(g_rec.calls.empty());
     f.run("plan easy hard", console::command_class::ai_profile);
     CHECK(!f.con.ai_plan_matches);
+    f.run("plan easy medium", console::command_class::ai_profile);
+    CHECK(f.con.ai_plan_matches);
+    // ai.difficulty-names: with Easy and Hard swapped, difficulty 0 answers to "hard".
+    using Names = oa::data::match_rules::AiDifficultyNamesNames;
+    f.host.difficulty_names.names = {Names::hard, Names::medium, Names::easy};
+    f.game().difficulty = OA_DIFFICULTY_EASY;
+    f.run("plan easy", console::command_class::ai_profile);
+    CHECK(!f.con.ai_plan_matches);
+    f.run("plan hard", console::command_class::ai_profile);
+    CHECK(f.con.ai_plan_matches);
+    f.host.difficulty_names = {};
+    f.run("plan hard", console::command_class::ai_profile);
+    CHECK(!f.con.ai_plan_matches);
+    f.game().difficulty = OA_DIFFICULTY_MEDIUM;
     f.run("plan easy medium", console::command_class::ai_profile);
     CHECK(f.con.ai_plan_matches);
     // "weight" applies to every player with a controller, which the local
@@ -980,6 +1037,162 @@ void test_indexed_names() {
     CHECK(std::strcmp(name, "A0001.pcx") == 0);
 }
 
+void key_team_menu(void*) {
+    g_keys.calls.push_back("team menu");
+}
+
+// A mod's console rules: the classes of AI, Control and LOSType, the ATM
+// amount, and each one back at 3.1c's when the rules are.
+void test_mod_console_rules() {
+    namespace rules = oa::data::match_rules;
+    const uint32_t cheat = console::command_class::cheat;
+    const uint32_t chat_options =
+        console::command_class::option | console::command_class::private_echo;
+    {
+        // 3.1c: AI and Control are developer commands, LOSType an option.
+        Fixture f;
+        console::console_apply_rules(&f.con, rules::MatchRules{});
+        CHECK(f.run("AI", cheat) == 0);
+        CHECK(f.run("Control 1", cheat) == 0);
+        CHECK(f.run("LOSType", cheat) == 0);
+        CHECK(f.run("LOSType", chat_options) == chat_options);
+        CHECK(f.run("AI", console::command_class::developer) == console::command_class::developer);
+        CHECK(f.con.atm_amount == 1000.0f && !f.con.key_remaps && !f.con.team_menu_every_game);
+    }
+    {
+        Fixture f;
+        rules::MatchRules mod{};
+        mod.console.ai_control_cheat_group.enabled = true;
+        console::console_apply_rules(&f.con, mod);
+        CHECK(f.run("AI", cheat) == cheat);
+        CHECK(f.run("Control 1", cheat) == cheat);
+        // LOSType keeps its class unless its own rule is on.
+        CHECK(f.run("LOSType", chat_options) == chat_options);
+        // With cheats allowed, the chat line runs +AI and echoes it to everyone.
+        f.con.cheats_enabled = true;
+        const char* echo = nullptr;
+        CHECK(
+            console::console_submit_chat_line(&f.con, "+ai", 3, &echo) == console::kChatModeEveryone
+        );
+        f.con.cheats_enabled = false;
+        CHECK(console::console_submit_chat_line(&f.con, "+ai", 3, &echo) == 3);
+        // The 3.1c rules put the classes back.
+        console::console_apply_rules(&f.con, rules::MatchRules{});
+        CHECK(f.run("AI", cheat) == 0);
+    }
+    {
+        Fixture f;
+        rules::MatchRules mod{};
+        mod.console.lostype_cheat_group.enabled = true;
+        console::console_apply_rules(&f.con, mod);
+        CHECK(f.run("LOSType", chat_options) == 0);
+        CHECK(f.game().visibility_flags == 0);
+        CHECK(f.run("LOSType", cheat) == cheat);
+        CHECK(f.game().visibility_flags == console::visibility_flag::los_type);
+        // Its chat echo goes to everyone, as a cheat's does.
+        f.con.cheats_enabled = true;
+        const char* echo = nullptr;
+        CHECK(
+            console::console_submit_chat_line(&f.con, "+LOSType", 3, &echo) ==
+            console::kChatModeEveryone
+        );
+        CHECK(f.run("AI", cheat) == 0);
+    }
+    {
+        // ATM: the amount is added in single precision.
+        Fixture f;
+        rules::MatchRules mod{};
+        mod.console.atm_amount.enabled = true;
+        mod.console.atm_amount.amount = 1000.0;
+        console::console_apply_rules(&f.con, mod);
+        f.game().players[0].energy = 5.0f;
+        f.run("ATM");
+        CHECK(f.game().players[0].energy == 1005.0f);
+        mod.console.atm_amount.amount = 4294967296000.0;
+        console::console_apply_rules(&f.con, mod);
+        f.run("ATM");
+        CHECK(f.game().players[0].energy == 1005.0f + 4294967296000.0f);
+        CHECK(f.game().players[0].metal == 1000.0f + 4294967296000.0f);
+        // The amount is held in single precision.
+        mod.console.atm_amount.amount = 1.0 + 0x1p-29;
+        console::console_apply_rules(&f.con, mod);
+        CHECK(f.con.atm_amount == 1.0f);
+        mod.console.atm_amount.amount = 2.5;
+        console::console_apply_rules(&f.con, mod);
+        f.game().players[0].metal = 0.0f;
+        f.run("ATM");
+        CHECK(f.game().players[0].metal == 2.5f);
+        // Off, the amount is 1000 whatever the parameter says.
+        mod.console.atm_amount.enabled = false;
+        console::console_apply_rules(&f.con, mod);
+        f.run("ATM");
+        CHECK(f.game().players[0].metal == 1002.5f);
+    }
+}
+
+// Console key remaps: Insert re-runs the last line and F10 toggles the
+// debug keys, '\' does nothing; without them Insert and F10 do nothing.
+void test_key_remaps() {
+    namespace rules = oa::data::match_rules;
+    const console::HotkeyHost keys = make_key_host();
+    g_keys = KeyRecorder{};
+    {
+        Fixture f;
+        f.run("Now Film Chris Include Reload Assert");
+        f.run("ATM");
+        const float metal = f.game().players[0].metal;
+        console::hotkey_dispatch(&f.con, &keys, console::hotkey::insert);
+        console::hotkey_dispatch(&f.con, &keys, console::hotkey::f10);
+        CHECK(f.game().players[0].metal == metal);
+        CHECK((f.game().outcome_flags & console::outcome_flag::debug_keys) == 0);
+    }
+    Fixture f;
+    rules::MatchRules mod{};
+    mod.console.key_remaps.enabled = true;
+    console::console_apply_rules(&f.con, mod);
+    f.run("ATM");
+    float metal = f.game().players[0].metal;
+    // Both still need the passphrase.
+    console::hotkey_dispatch(&f.con, &keys, console::hotkey::insert);
+    console::hotkey_dispatch(&f.con, &keys, console::hotkey::f10);
+    CHECK(f.game().players[0].metal == metal);
+    CHECK((f.game().outcome_flags & console::outcome_flag::debug_keys) == 0);
+    f.run("Now Film Chris Include Reload Assert");
+    f.run("ATM");
+    metal = f.game().players[0].metal;
+    console::hotkey_dispatch(&f.con, &keys, console::hotkey::repeat_command);
+    CHECK(f.game().players[0].metal == metal);
+    console::hotkey_dispatch(&f.con, &keys, console::hotkey::insert);
+    CHECK(f.game().players[0].metal == metal + 1000.0f);
+    console::hotkey_dispatch(&f.con, &keys, console::hotkey::f10);
+    CHECK((f.game().outcome_flags & console::outcome_flag::debug_keys) != 0);
+    console::hotkey_dispatch(&f.con, &keys, console::hotkey::f11);
+    CHECK((f.game().outcome_flags & console::outcome_flag::debug_keys) == 0);
+    // Ctrl+F10 keeps its own key.
+    console::hotkey_dispatch(&f.con, &keys, console::hotkey::control_f10);
+    CHECK(f.game().capture_enabled != 0);
+}
+
+// Tab opens the team menu outside multiplayer under the alliance-menu rule.
+void test_team_menu_every_game() {
+    namespace rules = oa::data::match_rules;
+    console::HotkeyHost keys = make_key_host();
+    keys.open_team_menu = key_team_menu;
+    g_keys = KeyRecorder{};
+    Fixture f;
+    console::console_apply_rules(&f.con, rules::MatchRules{});
+    console::hotkey_dispatch(&f.con, &keys, console::hotkey::tab);
+    CHECK((g_keys.calls == std::vector<std::string>{"options"}));
+    console::hotkey_dispatch(&f.con, &keys, console::hotkey::escape);
+    rules::MatchRules mod{};
+    mod.teams.alliance_menu_all_game_types.enabled = true;
+    console::console_apply_rules(&f.con, mod);
+    g_keys.calls.clear();
+    console::hotkey_dispatch(&f.con, &keys, console::hotkey::tab);
+    CHECK((g_keys.calls == std::vector<std::string>{"team menu"}));
+    CHECK((f.game().frame_flags & console::kFrameFlagOptionsOpen) == 0);
+}
+
 } // namespace
 
 int main() {
@@ -989,6 +1202,7 @@ int main() {
     test_resource_cheats();
     test_passphrase();
     test_masks_and_chat();
+    test_cheats_by_game_type();
     test_share_commands();
     test_extension_commands_absent();
     test_extension_hook();
@@ -1005,6 +1219,9 @@ int main() {
     test_hotkeys();
     test_option_saves();
     test_indexed_names();
+    test_mod_console_rules();
+    test_key_remaps();
+    test_team_menu_every_game();
     if (g_failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;

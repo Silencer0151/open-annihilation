@@ -2,12 +2,12 @@
 # SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Build the pinned zlib and SDL3 as universal static libraries for macOS.
+"""Build the pinned zlib, SDL3 and FreeType as universal static libraries for macOS.
 
 The macOS release (tools/release_macos.sh) links them into the application,
 which then needs no library beyond the system's. Each library runs on arm64
 and x86_64 Macs from the oldest macOS release --deployment-target names, and
-gets its own install prefix (zlib/, sdl/) under the prefix root,
+gets its own install prefix (zlib/, sdl/, freetype/) under the prefix root,
 <deps>/macos-<deployment target> unless --prefix-root names another. Each
 library is built for both architectures at once. Build trees live beside
 the root (<root>-build). Each
@@ -27,6 +27,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import bootstrap_sdl  # noqa: E402
+import bootstrap_text_fonts  # noqa: E402
 import bootstrap_windows_deps as pins  # noqa: E402
 
 ARCHITECTURES = ("arm64", "x86_64")
@@ -104,7 +105,17 @@ def main():
         build_universal(bootstrap_sdl.sdl_source(deps), builds / "sdl", sdl_install, args.deployment_target,
                         args.jobs, SDL_OPTIONS)
         record(sdl_install, sdl_settings)
-    for install, wanted in ((zlib_install, zlib_settings), (sdl_install, sdl_settings)):
+    # FreeType for the text fonts, with the options and modules
+    # tools/bootstrap_text_fonts.py builds it with.
+    freetype_install = prefixes / "freetype"
+    freetype_settings = settings(bootstrap_text_fonts.FREETYPE_VERSION, bootstrap_text_fonts.FREETYPE_SHA256,
+                                 args.deployment_target, bootstrap_text_fonts.FREETYPE_OPTIONS)
+    if not is_current(freetype_install, [bootstrap_text_fonts.FREETYPE_INSTALLED], freetype_settings):
+        build_universal(bootstrap_text_fonts.freetype_source(deps), builds / "freetype", freetype_install,
+                        args.deployment_target, args.jobs, bootstrap_text_fonts.FREETYPE_OPTIONS)
+        record(freetype_install, freetype_settings)
+    for install, wanted in ((zlib_install, zlib_settings), (sdl_install, sdl_settings),
+                            (freetype_install, freetype_settings)):
         print(f"{install.name} {wanted['version']} for macOS {args.deployment_target}, {' '.join(ARCHITECTURES)}")
     print(f"macOS dependencies ready under {prefixes}")
 

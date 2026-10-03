@@ -224,9 +224,9 @@ int main() {
     const auto& smoke_layer = world.layers[sim::effect_particles::layer_smoke];
     const auto smoke_before = smoke_layer.count;
     const auto smoke_at = [&](uint16_t age) -> const sim::effect_particles::Emitter& {
-        return smoke_layer.emitters
-            [(smoke_layer.head + smoke_layer.count - 1 - age) %
-             sim::effect_particles::layer_capacity];
+        return sim::effect_particles::layer_emitter(
+            world, sim::effect_particles::layer_smoke, smoke_layer.count - 1 - age
+        );
     };
     CHECK(world.explosion_count == 0 && match.particle_count() == 0);
     const auto* victim_model = &match.instance(victim->unit_index)->model().model();

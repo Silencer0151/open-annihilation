@@ -349,8 +349,11 @@ struct OptionsContext {
     OptionsHost host{};
     DisplayModeList display_modes{};
     bool display_modes_ready = false; // the display-mode list VIDSLDR steps through is allocated
-    bool in_game = false;             // Game.session_flags bit 2
-    bool realtime_panels = false;     // Game.frame_flags bit 0: in-game *RT.GUI variants
+    // The shortest display mode VIDSLDR offers, in rows: 480 in 3.1c; a
+    // mod's display rules may raise it.
+    int32_t minimum_mode_height = oa::present::world_renderer::minimum_mode_height;
+    bool in_game = false;         // Game.session_flags bit 2
+    bool realtime_panels = false; // Game.frame_flags bit 0: in-game *RT.GUI variants
     bool audio_device_missing = false;
     bool game_speed_locked = false;                 // current player may not change the game speed
     bool hold_game = false;                         // Game.sim_run_flags bit 0

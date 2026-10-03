@@ -75,6 +75,7 @@ void Runtime::update_pointer(float x, float y) {
             }
         }
         pick_cursor_unit();
+        build_tool_motion(x, y);
         if (options_.trace_input)
             std::cerr << "input match pointer x=" << x << " y=" << y
                       << " hud=" << (hovered_ ? std::to_string(*hovered_) : "none") << '\n';
@@ -422,7 +423,7 @@ void Runtime::pick_cursor_unit(bool refresh_view) {
 }
 
 oa::sim::gameplay_input::OrderCursorHooks Runtime::order_cursor_hooks() {
-    return {
+    oa::sim::gameplay_input::OrderCursorHooks hooks{
         this,
         [](void* context, const World&, const Player& player, const FixedVec3& position) {
             const auto* self = static_cast<Runtime*>(context);
@@ -445,10 +446,24 @@ oa::sim::gameplay_input::OrderCursorHooks Runtime::order_cursor_hooks() {
                 return false;
             }
         },
-        [](void*, const World& world, const Unit& actor, const FixedVec3& position) {
-            return oa::sim::weapon_execution::slot_reaches_point(world, actor, position, 0);
+        [](void* context, const World& world, const Unit& actor, const FixedVec3& position) {
+            const auto* self = static_cast<Runtime*>(context);
+            return oa::sim::weapon_execution::slot_reaches_point(
+                world,
+                actor,
+                position,
+                0,
+                self->match_ ? self->match_->rules_view() : oa::data::match_rules::MatchRulesView{}
+            );
         },
     };
+    if (match_)
+        hooks.rules = match_->rules_view();
+    const auto& fixes = ui_rules().interface_fixes;
+    hooks.pad_load_cursor =
+        fixes.enabled &&
+        fixes.fixes.contains(oa::data::mod_profile::UiInterfaceFixesFixes::pad_cursor);
+    return hooks;
 }
 
 std::string_view Runtime::match_hud_action(std::string_view name) const {

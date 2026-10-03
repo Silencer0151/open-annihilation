@@ -46,7 +46,12 @@ bool TickHost::ConstructionAdapter::site_clear() {
                                ? static_cast<uint8_t>(source.unit->flags & 3u)
                                : uint8_t{1};
     return host.match.site_clear_for(
-        static_cast<uint16_t>(record.construction.type_index), cell_x, cell_z, 0, occupancy
+        static_cast<uint16_t>(record.construction.type_index),
+        cell_x,
+        cell_z,
+        0,
+        occupancy,
+        facing()
     );
 }
 
@@ -67,7 +72,7 @@ void TickHost::ConstructionAdapter::snap_build_height() {
             std::bit_cast<uint32_t>(world) - static_cast<uint32_t>(footprint) * 0x80000u + 0x80000u
         ));
     };
-    const auto yard = host.match.input_.fields[index].yard_mask;
+    const auto yard = host.match.build_yard(index, facing());
     if (fx < 0 || fz < 0 ||
         yard.size() < static_cast<std::size_t>(fx) * static_cast<std::size_t>(fz)) {
         host.match.fault_.note("building yard map does not cover its footprint");
@@ -96,6 +101,7 @@ sim::simulation_state::Unit* TickHost::ConstructionAdapter::spawn_nanoframe() {
     };
     request.finished = false;
     request.state = sim::unit_spawn::ground_occupancy_state;
+    request.facing = facing();
     auto* created = host.match.create(request);
     if (!created)
         return nullptr;
@@ -149,6 +155,7 @@ bool TickHost::ConstructionAdapter::build_progress(
         nanoframe.events,
         nanoframe.flags
     };
+    target_proj.type_index = s.record.type_index;
     HealthHost health(host.match, source.unit_index);
     // The step's own changes reach the frame before the cancel damage or the
     // completion acts on it, and what those leave, such as a pending death,
@@ -193,6 +200,7 @@ void TickHost::ConstructionAdapter::link_built(sim::simulation_state::Unit& nano
         nanoframe.events,
         nanoframe.flags
     };
+    target_proj.type_index = s.record.type_index;
     HealthHost health(host.match, source.unit_index);
     health.complete_construction(builder_proj, target_proj);
 }
@@ -201,13 +209,20 @@ float TickHost::ConstructionAdapter::build_decay_rate(int32_t ticks) const {
     return sim::unit_health::build_decay_rate(health_type(source), ticks);
 }
 
+uint8_t TickHost::ConstructionAdapter::facing() const {
+    return host.match.build_facing(
+        static_cast<uint16_t>(record.construction.type_index), record.construction.facing
+    );
+}
+
 int16_t TickHost::ConstructionAdapter::footprint_x() const {
     const auto index = static_cast<uint16_t>(record.construction.type_index);
     if (index >= host.match.world_.types.size()) {
         host.match.fault_.note("construction type is not loaded");
         return 0;
     }
-    return host.match.world_.types[index].footprint_x;
+    const auto& type = host.match.world_.types[index];
+    return (facing() & 1U) != 0 ? type.footprint_z : type.footprint_x;
 }
 
 int16_t TickHost::ConstructionAdapter::footprint_z() const {
@@ -216,7 +231,8 @@ int16_t TickHost::ConstructionAdapter::footprint_z() const {
         host.match.fault_.note("construction type is not loaded");
         return 0;
     }
-    return host.match.world_.types[index].footprint_z;
+    const auto& type = host.match.world_.types[index];
+    return (facing() & 1U) != 0 ? type.footprint_x : type.footprint_z;
 }
 
 bool TickHost::ConstructionAdapter::query_build_pad(sim::ground_orders::Point& pad) {

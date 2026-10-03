@@ -116,6 +116,11 @@ uint8_t TickHost::AttackAdapter::morph_attack_command(sim::simulation_state::Uni
     projected.secondary_weapon_flags = weapon_flags(weapons.definitions[1]);
     projected.type_primary_weapon_flags = weapon_flags(weapons.definitions[0]);
     projected.secondary_slot_flags = source.record.weapons[1].flags;
+    if (const auto* primary = weapons.definitions[0])
+        projected.primary_surface_fire =
+            host.match.rules_view()
+                .weapon(host.match.state().game.weapon_defs[primary->registry_index].weapon_id)
+                .surface_fire;
     std::optional<CommandTarget> other;
     if (target) {
         auto& to = host.slot(*target);

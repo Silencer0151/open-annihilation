@@ -6,8 +6,12 @@
 // or campaign mission from a savegame, and the match's meteor-storm state
 // they carry.
 #include "engine_settings_state.hpp"
+#include "oa/data/defs/layout.hpp"
 #include "oa/core/map_plot.h"
 #include "oa/app/runtime.hpp"
+#include "oa/data/mod_profile.hpp"
+#include "oa/app/game_directory.hpp"
+#include "oa/app/mod_profile_loader.hpp"
 #include "oa/base/bytes.hpp"
 
 #include "oa/data/campaign/campaign_file.hpp"
@@ -18,11 +22,14 @@
 #include "oa/data/mission_types.hpp"
 #include "oa/sim/scenario/condition_persist.hpp"
 #include "oa/data/persist/hapibank.hpp"
+#include "oa/data/mod_profile/registry.hpp"
+#include "oa/data/persist/save_profile.hpp"
 #include "oa/data/persist/save_sections.hpp"
 #include "oa/sim/feature_runtime.hpp"
 #include "oa/sim/script_state.hpp"
 #include "oa/sim/session.hpp"
 #include "oa/sim/state_hash.hpp"
+#include "oa/sim/unit_health/veterancy.hpp"
 #include "oa/sim/unit_spawn/spawn.hpp"
 #include "oa/sim/trace.hpp"
 #include "oa/ui/hud/order_panel.hpp"
@@ -39,6 +46,7 @@
 #include <ctime>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <span>
@@ -78,7 +86,7 @@ constexpr int8_t kNoCarryPiece = -1;
 constexpr uint8_t kStartAboardLayer = 0;
 
 // gamedata\meteor.tdf [Default] and the map keys it stands in for.
-constexpr const char* kMeteorDefaults = "gamedata/meteor.tdf";
+constexpr const char* kMeteorDefaults = "meteor.tdf";
 constexpr const char* kMeteorDefaultSection = "Default";
 constexpr const char* kMeteorWeapon = "MeteorWeapon";
 constexpr const char* kMeteorRadius = "MeteorRadius";
@@ -513,6 +521,10 @@ Runtime::SaveLoadState& Runtime::saveload_state() {
 }
 
 fs::path Runtime::save_game_root() const {
+    // Each mod keeps its own saved games, in a folder named after its id.
+    if (options_.mod_profile)
+        return preference_path_.parent_path() / std::string(mods_folder_name) /
+               path_from_utf8(options_.mod_profile->id);
     return preference_path_.parent_path();
 }
 
@@ -561,19 +573,34 @@ void Runtime::reset_meteors() {
     auto& meteor = saveload_state().meteor;
     environment::MeteorSettings settings{};
     const auto load_defaults = [&] {
-        const auto bytes = assets_.load_file_contents(kMeteorDefaults);
+        const auto bytes = assets_.load_file_contents(
+            oa::data::defs::data_path(oa::data::defs::DataDirectory::gamedata, kMeteorDefaults)
+        );
         if (!bytes)
             return;
         const std::string_view text(reinterpret_cast<const char*>(bytes->data()), bytes->size());
         oa::formats::tdf::OwnedDocument document;
         if (!document.parse(text))
-            throw std::runtime_error("cannot parse " + std::string(kMeteorDefaults));
+            throw std::runtime_error(
+                "cannot parse " + std::string(
+                                      oa::data::defs::data_path(
+                                          oa::data::defs::DataDirectory::gamedata, kMeteorDefaults
+                                      )
+                                  )
+            );
         const auto* section = oa::formats::tdf::find_child(document.root(), kMeteorDefaultSection);
         if (section == nullptr)
             return;
         const auto tdf = meteor_tdf(section);
         if (persist::load_meteor_config(&tdf, &settings) == persist::MeteorConfigResult::bogus)
-            throw std::runtime_error("bogus meteor defaults in " + std::string(kMeteorDefaults));
+            throw std::runtime_error(
+                "bogus meteor defaults in " +
+                std::string(
+                    oa::data::defs::data_path(
+                        oa::data::defs::DataDirectory::gamedata, kMeteorDefaults
+                    )
+                )
+            );
     };
     const auto real = [&](const char* key) {
         return static_cast<float>(oa::formats::tdf::get_double(session_schema_section(), key, 0.0));
@@ -1010,6 +1037,9 @@ bool Runtime::write_saved_game(
     summary.write_stats_panel = [](void* context, persist::Bank* bank) {
         hud::save_players_section(*static_cast<SummaryBindings*>(context)->world, *bank);
     };
+    summary.save_profile = [](void* context, persist::Bank* bank) {
+        static_cast<SummaryBindings*>(context)->runtime->save_mod_profile(bank);
+    };
     summary.save_conditions = [](void* context, persist::Bank* bank) {
         auto* runtime = static_cast<SummaryBindings*>(context)->runtime;
         if (!sim::scenario::save_conditions(
@@ -1073,6 +1103,9 @@ oa::Unit* Runtime::restore_saved_unit(uint16_t id, persist::Bank* bank) {
         request.finished = true;
         request.state = creation_state;
         request.requested_slot = id;
+        // A building is placed facing as its saved heading turns it (units.build-rotation).
+        request.facing =
+            match_->build_facing_of_heading(request.type, load_le16(record + r::heading));
         oa::sim::unit_spawn::Slot* slot = nullptr;
         try {
             slot = match_->create(request);
@@ -1262,6 +1295,7 @@ bool Runtime::restore_saved_session(persist::Bank* bank) {
     persist::save_read_meteor(&state.meteor, bank);
     if (!sim::scenario::load_conditions(match_->scenario_controller(), bank, scenario_map_kind()))
         throw std::runtime_error("the campaign map's victory conditions cannot be restored");
+    restore_saved_rule_state(bank);
     match_->selection().frame_flags |= hud::kFrameRedrawBuildMenu;
     SaveLoadState::apply_plots(*this, state);
     rebuild_feature_draws();
@@ -1270,6 +1304,72 @@ bool Runtime::restore_saved_session(persist::Bank* bank) {
         skirmish_settings_.slots[i].color = world.player_info[i].color;
     }
     return players;
+}
+
+void Runtime::save_mod_profile(persist::Bank* bank) const {
+    namespace profiles = oa::data::mod_profile;
+    const auto* profile = mod_profile();
+    if (profile == nullptr)
+        return;
+    const persist::SavedProfile saved{
+        profile->id,
+        profile->version,
+        profiles::registry::table().catalogue,
+        profiles::digest_text(profile->sim_hash),
+        profiles::digest_text(profile->full_hash)
+    };
+    std::vector<persist::SavedRuleState> tables;
+    if (match_ && match_->state().game.mode == persist::game_mode_in_match) {
+        const auto& state = match_->rule_state();
+        for (uint8_t at = 0; at < state.count; ++at) {
+            const auto& table = state.tables[at];
+            tables.push_back(
+                {table.name,
+                 table.bytes != nullptr ? table.bytes(table.context) : std::span<const uint8_t>{}}
+            );
+        }
+    }
+    if (!persist::save_write_profile(bank, saved, tables))
+        throw std::runtime_error("the mod profile's account cannot be saved");
+}
+
+bool Runtime::check_saved_mod_profile(persist::Bank* bank) {
+    namespace profiles = oa::data::mod_profile;
+    const auto saved = persist::save_read_profile(bank);
+    if (!saved)
+        return true;
+    // The save is loaded into a new match, which plays the profile with the
+    // overrides in effect now.
+    const auto* profile = next_match_profile();
+    const std::string saved_name = saved->id + " " + saved->version;
+    if (profile == nullptr) {
+        status_ = "Savegame belongs to mod profile " + saved_name + "; this game plays base 3.1c";
+        return false;
+    }
+    if (saved->sim_hash != profiles::digest_text(profile->sim_hash)) {
+        status_ = "Savegame belongs to mod profile " + saved_name + " (sim hash " +
+                  saved->sim_hash + "); this game plays " + profile->id + " " + profile->version +
+                  " (sim hash " + profiles::digest_text(profile->sim_hash) + ")";
+        return false;
+    }
+    return true;
+}
+
+void Runtime::restore_saved_rule_state(persist::Bank* bank) {
+    const auto& state = match_->rule_state();
+    if (state.count == 0 || !persist::save_read_profile(bank))
+        return;
+    for (uint8_t at = 0; at < state.count; ++at) {
+        const auto& table = state.tables[at];
+        const auto bytes = persist::save_read_rule_state(bank, table.name);
+        if (!bytes || table.restore == nullptr)
+            continue;
+        if (!table.restore(table.context, *bytes))
+            throw std::runtime_error(
+                std::string("the saved state of the mod rule table ") + table.name +
+                " does not fit this game"
+            );
+    }
 }
 
 bool Runtime::resume_saved_mission() {
@@ -1301,6 +1401,8 @@ bool Runtime::load_saved_game(const fs::path& path) {
         status_ = std::string("Invalid savegame file: ") + error.message;
         return false;
     }
+    if (!check_saved_mod_profile(bank))
+        return false;
     persist::bank_open_account(bank, save_key::summary);
     ui::frontend::LoadSummary summary;
     if (!ui::frontend::savegame_read_load_summary(bank_summary_reader(), bank, summary)) {
@@ -1623,6 +1725,71 @@ void Runtime::print_saved_orders() const {
     std::printf("%s\n", line.c_str());
 }
 
+void Runtime::print_saved_units() const {
+    const oa::World& world = match_->state();
+    const auto rules = match_->rules_view();
+    std::map<std::string, uint32_t> types;
+    std::map<uint32_t, uint32_t> levels;
+    uint32_t veterans = 0;
+    uint32_t most_kills = 0;
+    uint32_t stockpile_weapons = 0;
+    uint32_t stocked_shots = 0;
+    std::array<uint32_t, 4> facings{};
+    uint32_t buildings = 0;
+    std::array<int64_t, OA_PLAYER_COUNT> health{};
+    for (const auto& slot : match_->world().slots) {
+        if (slot.unit == nullptr || slot.record.type_index == 0 ||
+            (slot.record.flags & OA_UNIT_FLAG_LIVE) == 0)
+            continue;
+        const oa::Unit& unit = world.units[slot.unit_index];
+        const auto type = slot.record.type_index;
+        ++types[type < spawn_type_names_.size() ? spawn_type_names_[type] : std::to_string(type)];
+        if (unit.veteran_level != 0) {
+            ++veterans;
+            ++levels[sim::unit_health::veterancy_level(rules, type, unit.veteran_level)];
+            most_kills = std::max<uint32_t>(most_kills, unit.veteran_level);
+        }
+        for (const auto& weapon : unit.weapons) {
+            const auto* definition = oa::world_weapon_def(&world, weapon.def);
+            if (definition == nullptr || (definition->flags & OA_WEAPON_FLAG_STOCKPILE) == 0)
+                continue;
+            ++stockpile_weapons;
+            stocked_shots += weapon.stockpile;
+        }
+        if (unit.movement == 0) {
+            ++buildings;
+            ++facings[match_->unit_build_facing(unit) & 3U];
+        }
+        if (unit.owner_index < health.size())
+            health[unit.owner_index] += unit.health;
+    }
+    std::string line = "saveload: unit types " + std::to_string(types.size());
+    for (const auto& [name, count] : types)
+        line += ' ' + name + '=' + std::to_string(count);
+    std::printf("%s\n", line.c_str());
+    line = "saveload: veterans " + std::to_string(veterans) + ", levels";
+    for (const auto& [level, count] : levels)
+        line += ' ' + std::to_string(level) + '=' + std::to_string(count);
+    line += ", most kills " + std::to_string(most_kills);
+    std::printf("%s\n", line.c_str());
+    std::printf(
+        "saveload: stockpile weapons %u, shots held %u\n", stockpile_weapons, stocked_shots
+    );
+    std::printf(
+        "saveload: buildings %u, facing south %u east %u north %u west %u\n",
+        buildings,
+        facings[0],
+        facings[1],
+        facings[2],
+        facings[3]
+    );
+    line = "saveload: health by player";
+    for (std::size_t player = 0; player < health.size(); ++player)
+        if (health[player] != 0)
+            line += ' ' + std::to_string(player) + '=' + std::to_string(health[player]);
+    std::printf("%s\n", line.c_str());
+}
+
 void Runtime::give_saveload_feature_events() {
     namespace features = oa::sim::feature_runtime;
     oa::World& world = match_->state();
@@ -1758,6 +1925,8 @@ void Runtime::run_headless_saveload() {
             spawn_combat_armies(options_.combat_units);
         if (options_.give_orders)
             give_saveload_orders();
+        if (!options_.stage_file.empty())
+            apply_stage();
     }
     match_layout_ =
         oa::ui::display_layout::make_match_layout(options_.match_width, options_.match_height);
@@ -1815,6 +1984,7 @@ void Runtime::run_headless_saveload() {
     for (const auto& slot : match_->world().slots)
         live += slot.unit != nullptr && slot.record.type_index != 0 ? 1 : 0;
     print_saved_orders();
+    print_saved_units();
     print_saved_features();
     // The limit the match plays at, its setting as a save writes it, and the
     // run-wide limit a new skirmish would take.

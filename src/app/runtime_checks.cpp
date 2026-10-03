@@ -3,6 +3,7 @@
 
 // Bounded headless navigation checks.
 #include "oa/app/runtime.hpp"
+#include "oa/data/defs/layout.hpp"
 #include "map_picture_state.hpp"
 #include "oa/app/asset_files.hpp"
 #include "oa/ui/hud/order_panel.hpp"
@@ -1395,6 +1396,27 @@ void Runtime::check_navigation() {
     draw_loading_screen();
     write_ppm(report_directory / "native-loading.ppm", surface_);
     write_display_pcx(report_directory / "native-loading.pcx");
+    // The loading screen keeps the game's own fonts whatever the Language &
+    // Text settings say: with the modern fonts on, at the largest text
+    // size, it draws as with them off.
+    if (modern_fonts_open()) {
+        const auto game_fonts = surface_;
+        const auto kept = engine_settings();
+        auto modern = kept;
+        modern.modern_fonts = true;
+        modern.text_size = oa::present::highest_text_size;
+        apply_engine_settings(modern);
+        draw_loading_screen();
+        const bool same = surface_.width == game_fonts.width &&
+                          surface_.height == game_fonts.height && surface_.rgb == game_fonts.rgb;
+        apply_engine_settings(kept);
+        if (!same)
+            throw std::runtime_error(
+                "navigation check: the loading screen changed with the modern fonts on"
+            );
+        std::cout << "navigation check: the loading screen keeps the game's fonts with the "
+                     "modern fonts on\n";
+    }
     exercise_click(menu::resource_name(menu::Button::single_player));
     if (screen_ != Screen::single_player || surface_.width != kCanvasWidth)
         throw std::runtime_error("navigation check did not reach SINGLE.GUI");
@@ -1865,7 +1887,8 @@ void Runtime::check_launch_services() {
         probe.close_answer = false;
         handle_sdl_event(close, running);
         require(
-            running && match_paused_ && match_hud_panel_ == "guis/YESORNO.GUI" &&
+            running && match_paused_ &&
+                match_hud_panel_ == oa::data::defs::gui_path("YESORNO.GUI") &&
                 probe.close_requests == 2,
             "a close request the extension declined did not ask to surrender"
         );
@@ -1888,7 +1911,7 @@ void Runtime::check_launch_services() {
         show_match_pause_menu();
         activate_pause_gadget("PREFS");
         require(
-            match_preferences_open() && match_hud_panel_ == "guis/PREFS.GUI",
+            match_preferences_open() && match_hud_panel_ == oa::data::defs::gui_path("PREFS.GUI"),
             "PREFS did not open the preferences over the match"
         );
         context.services->quit(context.host, nullptr, 7);

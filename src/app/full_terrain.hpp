@@ -77,6 +77,10 @@ struct TerrainView {
     float scale{1.0F};   ///< target pixels per map pixel, above 0
     uint32_t width{};    ///< target pixels the view spans across
     uint32_t height{};   ///< target pixels the view spans down
+    /// Every tile's edges on whole target pixels, each edge where its map
+    /// pixel lands rounded to the nearest, so that the tiles of a zoom
+    /// whose tiles span a fraction of a pixel meet on every renderer.
+    bool whole_pixels{};
 };
 
 /// The tiles of the grid a view shows: columns first_column to end_column

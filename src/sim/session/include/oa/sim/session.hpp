@@ -10,6 +10,7 @@
 #pragma once
 
 #include "oa/core/world.h"
+#include "oa/data/limits.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -138,17 +139,31 @@ struct SessionHost {
 inline constexpr std::size_t kSkirmishInfoBytes = 0x22c;
 inline constexpr std::size_t kSkirmishInfoFlagsOffset = 0x108;
 inline constexpr std::size_t kSkirmishInfoFixedStartsOffset = 0x118;
-// [UnitLimit]: its default and the range it is clamped to.
+// [UnitLimit]: its default and the range it is clamped to, as
+// data::limits::UnitsPerPlayer holds them for the base game.
 inline constexpr int32_t kDefaultUnitLimit = 250;
-inline constexpr int32_t kMinUnitLimit = 21;
+inline constexpr int32_t kMinUnitLimit = 20;
 inline constexpr int32_t kMaxUnitLimit = 500;
+static_assert(kDefaultUnitLimit == data::limits::UnitsPerPlayer{}.default_limit);
+static_assert(kMinUnitLimit == data::limits::UnitsPerPlayer{}.minimum);
+static_assert(kMaxUnitLimit == data::limits::UnitsPerPlayer{}.maximum);
+
+/// Returns a unit limit clamped into a game's range.
+///
+/// @param limit units per player, as read or chosen
+/// @param range the lowest and highest limit the game allows
+/// @return `limit` clamped to range.minimum..range.maximum
+[[nodiscard]] constexpr int32_t
+clamp_unit_limit(int32_t limit, const data::limits::UnitsPerPlayer& range) noexcept {
+    return limit > range.maximum ? range.maximum : limit < range.minimum ? range.minimum : limit;
+}
 
 /// Returns an installation's unit limit as a game plays it.
 ///
 /// @param limit the [UnitLimit] value as read, in units per player
 /// @return `limit` clamped to kMinUnitLimit..kMaxUnitLimit
 [[nodiscard]] constexpr int32_t clamp_installed_unit_limit(int32_t limit) noexcept {
-    return limit > kMaxUnitLimit ? kMaxUnitLimit : limit < kMinUnitLimit ? kMinUnitLimit : limit;
+    return clamp_unit_limit(limit, data::limits::UnitsPerPlayer{});
 }
 
 struct Session {

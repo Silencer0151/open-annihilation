@@ -115,7 +115,8 @@ bool toggle_tab_menu(
     bool control_offered,
     const PanelLoader& loader,
     const PanelControls& controls,
-    const HudEvents& events
+    const HudEvents& events,
+    bool allies_every_game
 ) {
     Game& game = world.game;
     play_sound(events, "SmallButton");
@@ -142,7 +143,7 @@ bool toggle_tab_menu(
         show_named(controls, "SHARE", others > 0);
         control = (game.setup_options & kSetupOptionLocked) == 0 && control_offered;
     } else {
-        show_named(controls, "ALLIES", false);
+        show_named(controls, "ALLIES", allies_every_game);
         show_named(controls, "SHARE", false);
     }
     show_named(controls, "CONTROL", control);

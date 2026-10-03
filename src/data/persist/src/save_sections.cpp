@@ -304,6 +304,8 @@ bool save_write_game(
         save_write_meteor(save->meteor, &bank);
         summary->save_conditions(context, &bank);
     }
+    if (summary->save_profile != nullptr)
+        summary->save_profile(context, &bank);
     const bool written = bank_write_file(&bank, path, savegame_description, true, false, files);
     bank_destroy(&bank);
     return written;

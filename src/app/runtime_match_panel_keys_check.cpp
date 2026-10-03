@@ -4,6 +4,7 @@
 // The headless check of the keys the in-game menu's and the tab menu's
 // panels take, over the navigation check's skirmish.
 #include "oa/app/runtime.hpp"
+#include "oa/data/defs/layout.hpp"
 #include <SDL3/SDL.h>
 #include <cstdint>
 #include <iostream>
@@ -37,8 +38,8 @@ void Runtime::check_match_panel_keys() {
         return screen_ == Screen::match && match_paused_ && match_hud_ &&
                match_hud_panel_ == layout;
     };
-    constexpr std::string_view menu = "guis/ARMOPT.GUI";
-    constexpr std::string_view exit_menu = "guis/EXITMENU.GUI";
+    const auto menu = oa::data::defs::gui_path("ARMOPT.GUI");
+    const auto exit_menu = oa::data::defs::gui_path("EXITMENU.GUI");
 
     // The in-game menu gives its panels the keyboard. A key with Ctrl down
     // types no character and presses nothing; a quick key presses its
@@ -56,7 +57,10 @@ void Runtime::check_match_panel_keys() {
     press(SDLK_E, SDL_SCANCODE_E, SDL_KMOD_LSHIFT);
     require(showing(exit_menu), "'E' did not press the in-game menu's Exit");
     press(SDLK_R, SDL_SCANCODE_R, SDL_KMOD_NONE);
-    require(showing("guis/RESTART.GUI"), "'r' did not press the exit menu's Restart");
+    require(
+        showing(oa::data::defs::gui_path("RESTART.GUI")),
+        "'r' did not press the exit menu's Restart"
+    );
     // RESTART.GUI's Enter default is CANCEL.
     press(SDLK_RETURN, SDL_SCANCODE_RETURN, SDL_KMOD_NONE);
     require(showing(menu), "Enter did not press the restart dialog's Cancel");
@@ -65,7 +69,7 @@ void Runtime::check_match_panel_keys() {
     // focused No.
     press(SDLK_E, SDL_SCANCODE_E, SDL_KMOD_NONE);
     activate_pause_gadget("EXITGAME");
-    require(showing("guis/YESORNO.GUI"), "EXITGAME did not ask to surrender");
+    require(showing(oa::data::defs::gui_path("YESORNO.GUI")), "EXITGAME did not ask to surrender");
     press(SDLK_N, SDL_SCANCODE_N, SDL_KMOD_NONE);
     require(showing(menu) && !exit_requested_, "'n' did not answer the confirmation as No");
     press(SDLK_E, SDL_SCANCODE_E, SDL_KMOD_NONE);
@@ -81,7 +85,10 @@ void Runtime::check_match_panel_keys() {
     require(!match_paused_, "Escape did not press the in-game menu's Resume");
     show_match_pause_menu();
     press(SDLK_O, SDL_SCANCODE_O, SDL_KMOD_NONE);
-    require(showing("guis/PREFS.GUI"), "'o' did not press the in-game menu's Options");
+    require(
+        showing(oa::data::defs::gui_path("PREFS.GUI")),
+        "'o' did not press the in-game menu's Options"
+    );
     press(SDLK_C, SDL_SCANCODE_C, SDL_KMOD_NONE);
     require(showing(menu), "'c' did not press the preferences' Cancel");
     press(SDLK_R, SDL_SCANCODE_R, SDL_KMOD_NONE);
@@ -95,17 +102,22 @@ void Runtime::check_match_panel_keys() {
         };
         toggle_team_menu();
         require(
-            showing("guis/TABMENU.GUI") && match_panels_keyboard_,
+            showing(oa::data::defs::gui_path("TABMENU.GUI")) && match_panels_keyboard_,
             "the tab menu did not take the keyboard"
         );
         press(SDLK_A, SDL_SCANCODE_A, SDL_KMOD_NONE);
-        require(showing("guis/ALLIES.GUI"), "'a' did not press the tab menu's Allies");
+        require(
+            showing(oa::data::defs::gui_path("ALLIES.GUI")),
+            "'a' did not press the tab menu's Allies"
+        );
         // ALLIES.GUI's Enter default is OK.
         press(SDLK_RETURN, SDL_SCANCODE_RETURN, SDL_KMOD_NONE);
         require(!team_panel_open() && !match_paused_, "Enter did not press ALLIES.GUI's OK");
         toggle_team_menu();
         press(SDLK_S, SDL_SCANCODE_S, SDL_KMOD_NONE);
-        require(showing("guis/SHARE.GUI"), "'s' did not press the tab menu's Share");
+        require(
+            showing(oa::data::defs::gui_path("SHARE.GUI")), "'s' did not press the tab menu's Share"
+        );
         // SHARE.GUI's Escape default is CANCEL.
         press(SDLK_ESCAPE, SDL_SCANCODE_ESCAPE, SDL_KMOD_NONE);
         require(!team_panel_open() && !match_paused_, "Escape did not press SHARE.GUI's Cancel");

@@ -6,20 +6,30 @@
 #include "oa/sim/session.hpp"
 
 #include <algorithm>
+#include <array>
 #include <string>
 
 namespace oa::ui::engine_settings {
+
+namespace mod_profile = oa::data::mod_profile;
 
 static_assert(default_unit_limit == oa::sim::session::kDefaultUnitLimit);
 static_assert(lowest_stored_unit_limit == oa::sim::session::kMinUnitLimit);
 static_assert(lowest_stored_unit_limit <= lowest_unit_limit);
 static_assert(oa::sim::session::kMaxUnitLimit <= highest_unit_limit);
+static_assert(highest_offered_unit_limit({}) == highest_unit_limit);
 static_assert(raspberry_pi_frame_rate >= lowest_frame_rate);
 static_assert(raspberry_pi_frame_rate <= highest_frame_rate);
 static_assert((raspberry_pi_frame_rate - lowest_frame_rate) % frame_rate_step == 0);
 static_assert(light_machine_frame_rate >= lowest_frame_rate);
 static_assert(light_machine_frame_rate <= highest_frame_rate);
 static_assert((light_machine_frame_rate - lowest_frame_rate) % frame_rate_step == 0);
+static_assert((highest_text_size - lowest_text_size) % text_size_step == 0);
+static_assert((default_text_size - lowest_text_size) % text_size_step == 0);
+static_assert(
+    lowest_text_size <= oa::present::game_font_text_size &&
+    oa::present::game_font_text_size <= highest_text_size
+);
 
 namespace {
 
@@ -177,6 +187,28 @@ std::optional<HardwareAcceleration> stored_acceleration(std::string_view text) {
     return number->value > 0 ? HardwareAcceleration::full : HardwareAcceleration::off;
 }
 
+/// A Language & Text switch: its key and the member of EngineSettings it is.
+struct TextSwitch {
+    std::string_view key;            ///< its preferences key
+    bool EngineSettings::* member{}; ///< its value
+};
+
+/// The Language & Text switches, read and written alike.
+constexpr std::array<TextSwitch, 4> text_switches{{
+    {key::modern_fonts, &EngineSettings::modern_fonts},
+    {key::text_outline, &EngineSettings::text_outline},
+    {key::text_shadow, &EngineSettings::text_shadow},
+    {key::text_background, &EngineSettings::text_background},
+}};
+
+/// Returns the key a profile's overrides are kept under.
+///
+/// @param profile_id the profile's id
+/// @return key::hack_overrides followed by the id
+std::string overrides_key(std::string_view profile_id) {
+    return std::string{key::hack_overrides} + std::string{profile_id};
+}
+
 } // namespace
 
 EngineSettings default_settings(const Inputs& inputs) {
@@ -186,9 +218,19 @@ EngineSettings default_settings(const Inputs& inputs) {
     // card is used is decided apart, so the default never moves with it.
     settings.hardware_acceleration =
         inputs.players_own_profile ? HardwareAcceleration::full : HardwareAcceleration::off;
+    // A named file draws game text in the game's own fonts.
+    settings.modern_fonts = inputs.players_own_profile;
+    // A named file plays in English, as the game does without a language on
+    // its command line; the player's own follows the operating system.
+    settings.language = inputs.players_own_profile
+                            ? std::string(oa::data::languages::system_choice)
+                            : std::string(oa::data::languages::english().tag);
     if (inputs.players_own_profile)
         settings.unit_limit =
-            installation_unit_limit(inputs.installation_ini).value_or(default_unit_limit);
+            installation_unit_limit(inputs.installation_ini, inputs.units_per_player)
+                .value_or(inputs.units_per_player.default_limit);
+    else
+        settings.unit_limit = inputs.units_per_player.default_limit;
     if (inputs.players_own_profile && inputs.raspberry_pi) {
         settings.max_frame_rate = raspberry_pi_frame_rate;
         settings.anti_aliasing = AntiAliasing::off;
@@ -251,7 +293,11 @@ EngineSettings read_settings(
     if (const auto number = stored_number(values, key::escape_opens_menu))
         settings.escape_opens_menu = *number > 0;
     if (const auto number = stored_number(values, key::unit_limit))
-        settings.unit_limit = clamped(*number, lowest_stored_unit_limit, highest_unit_limit);
+        settings.unit_limit = clamped(
+            *number,
+            inputs.units_per_player.minimum,
+            highest_offered_unit_limit(inputs.units_per_player)
+        );
     if (const auto number = stored_number(values, key::max_frame_rate))
         settings.max_frame_rate = clamped(*number, lowest_frame_rate, highest_frame_rate);
     if (const auto number = stored_number(values, key::anti_aliasing))
@@ -266,6 +312,23 @@ EngineSettings read_settings(
             stored_acceleration(found->second).value_or(settings.hardware_acceleration);
     if (const auto number = stored_number(values, key::vertical_sync))
         settings.vertical_sync = *number > 0;
+    for (const TextSwitch& entry : text_switches)
+        if (const auto number = stored_number(values, entry.key))
+            settings.*entry.member = *number > 0;
+    if (const auto number = stored_number(values, key::text_size))
+        settings.text_size = clamped(*number, lowest_text_size, highest_text_size);
+    settings.language = stored_language(values, inputs.players_own_profile);
+    if (const auto found = values.find(std::string{key::mod_directory}); found != values.end()) {
+        const auto offered =
+            std::find(inputs.mod_folders.begin(), inputs.mod_folders.end(), found->second);
+        if (offered != inputs.mod_folders.end())
+            settings.mod = static_cast<uint16_t>(offered - inputs.mod_folders.begin() + 1);
+    }
+    if (const auto number = stored_number(values, key::developer_mode))
+        settings.developer_mode = *number > 0;
+    if (!inputs.profile_id.empty())
+        if (const auto found = values.find(overrides_key(inputs.profile_id)); found != values.end())
+            settings.hack_overrides = mod_profile::read_overrides(found->second);
     return settings;
 }
 
@@ -274,8 +337,15 @@ void write_settings(
     const EngineSettings& opened,
     const EngineSettings& chosen,
     const EngineSettings& defaults,
-    bool restored
+    bool restored,
+    std::span<const std::string> mod_folders,
+    std::string_view profile_id
 ) {
+    // No mod is stored as no key, never as an empty path.
+    if ((restored && chosen.mod == defaults.mod) || (chosen.mod != opened.mod && chosen.mod == 0))
+        values.erase(std::string{key::mod_directory});
+    else if (chosen.mod != opened.mod && chosen.mod <= mod_folders.size())
+        values[std::string{key::mod_directory}] = mod_folders[chosen.mod - 1U];
     store(
         values,
         key::path_search_nodes,
@@ -356,9 +426,65 @@ void write_settings(
         chosen.vertical_sync == defaults.vertical_sync,
         restored
     );
+    for (const TextSwitch& entry : text_switches)
+        store(
+            values,
+            entry.key,
+            switch_text(chosen.*entry.member),
+            chosen.*entry.member != opened.*entry.member,
+            chosen.*entry.member == defaults.*entry.member,
+            restored
+        );
+    store(
+        values,
+        key::text_size,
+        std::to_string(chosen.text_size),
+        chosen.text_size != opened.text_size,
+        chosen.text_size == defaults.text_size,
+        restored
+    );
+    store(
+        values,
+        key::language,
+        chosen.language,
+        chosen.language != opened.language,
+        chosen.language == defaults.language,
+        restored
+    );
+    store(
+        values,
+        key::developer_mode,
+        switch_text(chosen.developer_mode),
+        chosen.developer_mode != opened.developer_mode,
+        chosen.developer_mode == defaults.developer_mode,
+        restored
+    );
+    // Restore defaults keeps the overrides: Restore profile values clears them.
+    if (!profile_id.empty() && chosen.hack_overrides != opened.hack_overrides) {
+        if (chosen.hack_overrides.empty())
+            values.erase(overrides_key(profile_id));
+        else
+            values[overrides_key(profile_id)] = mod_profile::overrides_text(chosen.hack_overrides);
+    }
 }
 
-std::optional<uint16_t> installation_unit_limit(std::string_view ini_text) {
+std::string
+stored_language(const oa::platform::preferences::Values& values, bool players_own_profile) {
+    namespace languages = oa::data::languages;
+    if (const auto found = values.find(std::string{key::language}); found != values.end()) {
+        const std::string_view stored = trimmed(found->second);
+        if (same_name(stored, languages::system_choice))
+            return std::string(languages::system_choice);
+        if (const auto* language = languages::find_by_tag(stored);
+            language != nullptr && languages::drawable(*language))
+            return std::string(language->tag);
+    }
+    return players_own_profile ? std::string(languages::system_choice)
+                               : std::string(languages::english().tag);
+}
+
+std::optional<uint16_t>
+installation_unit_limit(std::string_view ini_text, const oa::data::limits::UnitsPerPlayer& units) {
     std::string_view rest = ini_text.substr(0, std::min(ini_text.size(), installation_ini_limit));
     bool in_section = false;
     bool section_seen = false;
@@ -388,7 +514,7 @@ std::optional<uint16_t> installation_unit_limit(std::string_view ini_text) {
         const auto number = leading_number(trimmed(line.substr(equals + 1)));
         const int64_t limit = number ? std::max(number->value, int64_t{0}) : 0;
         return static_cast<uint16_t>(
-            oa::sim::session::clamp_installed_unit_limit(static_cast<int32_t>(limit))
+            oa::sim::session::clamp_unit_limit(static_cast<int32_t>(limit), units)
         );
     }
     return std::nullopt;
@@ -399,8 +525,16 @@ int32_t path_search_multiplier(int32_t nodes) noexcept {
     return clamped(nearest, int32_t{1}, highest_path_search_multiplier);
 }
 
-int32_t match_path_search_nodes(const EngineSettings& settings, bool shared_or_replay) noexcept {
-    return shared_or_replay ? base_path_search_nodes : settings.path_search_nodes;
+int32_t match_path_search_nodes(
+    const EngineSettings& settings, bool shared_or_replay, int32_t game_nodes
+) noexcept {
+    if (shared_or_replay)
+        return game_nodes;
+    const int64_t scaled =
+        int64_t{settings.path_search_nodes} * game_nodes / base_path_search_nodes;
+    return static_cast<int32_t>(
+        std::clamp<int64_t>(scaled, 1, oa::data::limits::highest_path_search_nodes)
+    );
 }
 
 Locks settings_locks(const GameState& state) noexcept {
@@ -420,6 +554,8 @@ Locks settings_locks(const GameState& state) noexcept {
     locks.vertical_sync = state.vertical_sync_unavailable                        ? Lock::unavailable
                           : state.in_game && (state.shared_game || state.replay) ? Lock::in_game
                                                                                  : Lock::none;
+    // The language changes only what players read, so no game locks it.
+    locks.language = state.language_from_command_line ? Lock::command_line : Lock::none;
     return locks;
 }
 

@@ -4,12 +4,62 @@
 #include "tick_internal.hpp"
 
 #include <cstdint>
+#include <cstring>
+#include <memory>
+#include <span>
+#include <type_traits>
 
 namespace oa::sim::match_runtime {
 namespace {
 // The wreck level is the low four bits of the Killed script's second result.
 constexpr int32_t killed_wreck_level_mask = 0xf;
+
+// The heal remainders are digested and saved as their bytes: two 32-bit
+// words per entry, with no padding.
+static_assert(
+    sizeof(sim::unit_health::RepairRemainders) ==
+    sim::unit_health::repair_remainder_targets * 2 * sizeof(uint32_t)
+);
+static_assert(std::has_unique_object_representations_v<sim::unit_health::RepairRemainders>);
+
+/// Returns the bytes of a match's heal remainders.
+///
+/// @param context the match
+/// @return the table's bytes
+std::span<const uint8_t> repair_remainder_bytes(void* context) {
+    const auto table = static_cast<Match*>(context)->repair_remainders();
+    return {reinterpret_cast<const uint8_t*>(table.data()), table.size_bytes()};
+}
+
+/// Replaces a match's heal remainders with saved bytes.
+///
+/// @param context the match
+/// @param bytes the saved table
+/// @return false when they are not a table of the match's size
+bool restore_repair_remainders(void* context, std::span<const uint8_t> bytes) {
+    const auto table = static_cast<Match*>(context)->repair_remainders();
+    if (bytes.size() != table.size_bytes())
+        return false;
+    if (!bytes.empty())
+        std::memcpy(table.data(), bytes.data(), bytes.size());
+    return true;
+}
 } // namespace
+
+void Match::keep_repair_remainders() {
+    if (input_.rules.repair.rate.mode != data::match_rules::RepairRateMode::exact_remainder)
+        return;
+    repair_remainder_count_ = slots_.size();
+    repair_remainders_ =
+        std::make_unique<sim::unit_health::RepairRemainders[]>(repair_remainder_count_);
+    RuleStateTable table{};
+    table.name = "repair-remainders";
+    table.context = this;
+    table.bytes = repair_remainder_bytes;
+    table.restore = restore_repair_remainders;
+    if (!add_rule_state(rule_state_, table))
+        fault_.note("repair remainders do not fit the rule state");
+}
 
 sim::unit_spawn::Slot& TickHost::HealthHost::slot(const sim::unit_health::Unit& u) {
     return match_.world().slots[u.identity];
@@ -188,6 +238,7 @@ bool TickHost::nano_repair(
         patient.health,
         &patient_type
     };
+    projected.type_index = patient_slot.record.type_index;
     HealthHost health(match, patient_slot.unit_index);
     // Every repair order passes the repairer's worker time per tick.
     const auto rate = static_cast<float>(
@@ -216,6 +267,7 @@ void TickHost::scaled_damage(
     sim::unit_health::Unit projected{
         target.unit_index, target.record.state_flags, target.record.veteran_level, u.health, &type
     };
+    projected.type_index = target.record.type_index;
     sim::unit_health::Unit attacker{};
     if (source)
         attacker = {
@@ -250,11 +302,10 @@ void TickHost::regenerate_health(oa::Unit& record) {
     sim::unit_health::Unit projected{
         s.unit_index, s.record.state_flags, s.record.veteran_level, u.health, &type
     };
+    projected.type_index = s.record.type_index;
     HealthHost host(match, s.unit_index);
-    const auto rate = static_cast<float>(
-        (static_cast<uint32_t>(static_cast<uint16_t>(match_unit_def(match, s.record).heal_time)) *
-         8u) /
-        30u
+    const auto rate = sim::simulation_state::self_heal_rate(
+        match.rules().repair.healtime_self_heal, match_unit_def(match, s.record).heal_time
     );
     (void)sim::unit_health::recover_health(projected, projected, rate, host);
     host.store();

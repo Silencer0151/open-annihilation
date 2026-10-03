@@ -7,12 +7,14 @@ add_library(oa-netgame-match
   src/packet_layer.cpp
   src/session_lobby.cpp
   src/launch.cpp
-  src/net_match.cpp)
+  src/net_match.cpp
+  src/vote_reject.cpp
+  src/integrity_check.cpp)
 add_library(oa::netgame::match ALIAS oa-netgame-match)
 target_include_directories(oa-netgame-match PUBLIC include)
 target_link_libraries(oa-netgame-match
   PUBLIC oa-netgame oa-netgame-replication oa-ui-frontend-multiplayer oa-base-game-loop
-  PRIVATE oa-sim-visibility-state)
+  PRIVATE oa-sim-visibility-state oa-base-sha256 oa-base-text)
 
 # Records built from the simulation's shared events, and ground route deltas.
 add_library(oa-netgame-match-sim-records src/sim_records.cpp src/route_delta.cpp)
@@ -29,6 +31,9 @@ if(BUILD_TESTING)
   target_link_libraries(oa-netgame-match-test PRIVATE oa-base-text oa-netgame-match)
   add_test(NAME net-match COMMAND oa-netgame-match-test)
   set_tests_properties(net-match PROPERTIES TIMEOUT 120)
+  add_executable(oa-netgame-match-rules-test tests/net_match_rules_test.cpp)
+  target_link_libraries(oa-netgame-match-rules-test PRIVATE oa-netgame-match)
+  add_test(NAME net-match-rules COMMAND oa-netgame-match-rules-test)
 
   # The battle room over the session binding, machines on 127.0.0.1.
   add_executable(oa-netgame-session-lobby-test tests/session_lobby_test.cpp)

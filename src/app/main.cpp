@@ -8,9 +8,12 @@
 #include "oa/app/extension_list.hpp"
 #include "oa/app/full_screen.hpp"
 #include "oa/app/game_directory.hpp"
+#include "oa/app/mod_profile_loader.hpp"
 #include "oa/app/video_capture.hpp"
 #include "oa/app/window_icon.hpp"
 #include "oa/base/float_precision.hpp"
+#include "oa/base/threads.hpp"
+#include "oa/data/defs/layout.hpp"
 #include "oa/media/intro_player.hpp"
 #include "oa/platform/log_files.hpp"
 #include "oa/platform/preferences.hpp"
@@ -20,6 +23,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <new>
@@ -320,10 +324,46 @@ void play_intro(const Options& options, HostDisplay* host) {
     if (options.skip_intro || options.launch.skip_intro != 0)
         return;
     // Frontend state 0 plays Data/1.zrb (the publisher's logo), then state 1
-    // plays Data/2.zrb (game intro), then state 2 loads MAINMENU.GUI.
-    play_intro_file(options, options.game_dir / "Data" / "1.zrb", false, host);
-    play_intro_file(options, options.game_dir / "Data" / "2.zrb", true, host);
+    // plays Data/2.zrb (game intro), then state 2 loads MAINMENU.GUI. A mod
+    // folder's movie replaces the game folder's.
+    const oa::AssetStore folders(options.game_folders);
+    const auto movie = [&](std::string_view name) {
+        const auto found = folders.loose_file(std::string("Data/") + std::string(name));
+        return found ? *found : options.game_dir / "Data" / std::string(name);
+    };
+    play_intro_file(options, movie("1.zrb"), false, host);
+    play_intro_file(options, movie("2.zrb"), true, host);
 }
+
+/// Writes each game file and listing a run looks up to a file, one a line,
+/// from whichever thread looks it up (--trace-lookups).
+class LookupLog {
+  public:
+
+    /// Opens the log.
+    ///
+    /// @param file the log file, replaced
+    explicit LookupLog(const fs::path& file) : out_(file, std::ios::binary | std::ios::trunc) {
+        if (!out_)
+            throw std::runtime_error("cannot write the lookup log " + path_to_utf8(file));
+    }
+
+    /// The observer that writes to this log.
+    ///
+    /// @return the observer
+    oa::LookupObserver observer() {
+        return {this, [](void* context, std::string_view name) {
+                    auto& self = *static_cast<LookupLog*>(context);
+                    const oa::base::threads::LockGuard guard(self.lock_);
+                    self.out_ << name << '\n';
+                }};
+    }
+
+  private:
+
+    oa::base::threads::Mutex lock_;
+    std::ofstream out_;
+};
 
 // Sends the game's standard output and standard error to the logs folder in
 // the per-user folder. Without a per-user folder, or when the log cannot be
@@ -368,6 +408,15 @@ int main(int argc, char** argv) {
         const ExtensionList extensions(registered_extensions());
         const Extension& extension = extensions.combined();
         auto options = parse_options(argc, argv, extension);
+        // --print-profile prints the resolved mod profile and stops.
+        if (options.print_profile)
+            return print_mod_profile(
+                options.mod_file,
+                options.mod_dir.empty() ? options.game_dir : options.mod_dir,
+                options.accept_unimplemented_hacks,
+                std::cout,
+                std::cerr
+            );
         // A game started for play, from a terminal or the desktop, logs to the
         // logs folder. Checks, benchmarks and other scripted runs keep their
         // output where it goes, and so does a run whose output another
@@ -375,6 +424,10 @@ int main(int argc, char** argv) {
         if (!options.headless_check && !options.unattended &&
             !oa::platform::log_files::output_captured())
             start_log();
+        // The game folder's profile, --mod's or the mod folder's or its own,
+        // is resolved while the folder is inspected, before any archive is
+        // mounted, so that one the engine cannot use stops the run with its
+        // errors.
         auto game_directory = find_game_directory(options);
         if (!game_directory)
             return 1;
@@ -388,13 +441,45 @@ int main(int argc, char** argv) {
                 "game directory does not exist: " + path_to_utf8(options.game_dir) +
                 " (name it with --game-dir PATH)"
             );
+        options.game_folders = game_directory->folders;
+        if (options.game_folders.empty())
+            options.game_folders = {options.game_dir};
+        options.mod_profile = game_directory->profile;
+        // --archive names the archives and skips the inspection; a --mod
+        // profile still sets the layout the data is read by.
+        if (!options.archives.empty() && !options.mod_file.empty()) {
+            auto resolved = resolve_folder_profile(
+                options.game_folders,
+                {{}, options.mod_file, options.accept_unimplemented_hacks, nullptr}
+            );
+            if (!resolved.errors.empty()) {
+                std::string message = "the mod profile cannot be used:";
+                for (const auto& error : resolved.errors)
+                    message += "\n  " + error;
+                throw std::runtime_error(message);
+            }
+            options.mod_profile = std::move(resolved.profile);
+            game_directory->profile_warnings = std::move(resolved.warnings);
+        }
+        if (options.mod_profile) {
+            // Its limits size the game's tables from the start, and its
+            // rules reach every match.
+            report_mod_profile(*options.mod_profile, game_directory->profile_warnings, std::cout);
+        }
+        // Every later read of game data uses the profile's layout.
+        oa::data::defs::use_data_layout(data_layout_of(options.mod_profile.get()));
         HostDisplay display;
         if (!options.headless_check)
             display.initialize(options);
         play_intro(options, options.headless_check ? nullptr : &display);
         // The movies present on the game's renderer.
         oa::base::float_precision::restore_program_float_control();
-        oa::AssetStore assets(options.game_dir);
+        oa::AssetStore assets(options.game_folders);
+        std::unique_ptr<LookupLog> lookup_log;
+        if (!options.trace_lookups.empty()) {
+            lookup_log = std::make_unique<LookupLog>(options.trace_lookups);
+            assets.observe_lookups(lookup_log->observer());
+        }
         auto archives = options.archives;
         if (archives.empty())
             archives = std::move(game_directory->archives);

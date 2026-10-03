@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/ui/hud/player_records.hpp"
+#include "oa/data/defs/layout.hpp"
 
 #include "oa/ui/hud/chat_panel.hpp"
 #include "oa/ui/hud/game_fields.hpp"
@@ -17,11 +18,9 @@ namespace {
 
 constexpr int32_t kBytesPerMegabyte = 0x100000;
 constexpr uint8_t kArmSide = 0;
-// Names init_player_slot gives in a campaign or skirmish, as the English
-// game shows them.
+// The name init_player_slot gives a human in a campaign or skirmish, as the
+// English game shows it; a computer player is named after its side slot.
 constexpr const char* kHumanName = "Player";
-constexpr const char* kArmComputerName = "Arm";
-constexpr const char* kCoreComputerName = "Core";
 
 /// Game.last_frame_time through Game.sim_run_flags, saved as one blob.
 constexpr size_t kGameClockBytes =
@@ -134,7 +133,7 @@ void init_player_slot(
     if (status == OA_PLAYER_STATUS_LOCAL)
         name = kHumanName;
     else if (status == OA_PLAYER_STATUS_COMPUTER && info != nullptr)
-        name = info->side == kArmSide ? kArmComputerName : kCoreComputerName;
+        name = oa::data::defs::side_name(info->side == kArmSide ? 0 : 1);
     if (name != nullptr)
         std::snprintf(player.name, sizeof player.name, "%s", name);
     std::snprintf(

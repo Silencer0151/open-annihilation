@@ -54,6 +54,12 @@ struct NetOptions {
     // are no recording and a recording's truncated header, then the
     // --play-demo recording, which it replays through the replay hooks.
     bool check_recording_hook = false;
+    // Record the next network game to this file, whatever the rules; empty
+    // records only under the recorder's rules, to the demos folder.
+    fs::path net_record;
+    // Present the replay version bytes (identity.replay-network-version), as a
+    // game that joins a replayer's session to watch a recording does.
+    bool replay_viewer = false;
 };
 
 // A recording the engine handed network play to replay

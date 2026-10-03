@@ -16,6 +16,7 @@
 // screen origin (0x80, 0x20 on the game's 640x480 screen).
 
 #include "oa/core/world.h"
+#include "oa/data/limits.hpp"
 #include "oa/sim/effect_particles.hpp"
 #include "oa/sim/model_runtime/instance.hpp"
 #include "oa/present/model/model_library.hpp"
@@ -40,7 +41,8 @@ inline constexpr int32_t shadow_depth_base = 0x19;
 inline constexpr uint8_t digger_clip_depth = 0x7d;
 // Key and fill of every model image.
 inline constexpr uint8_t image_key = 1;
-// Side of the square composite buffer allocated at startup.
+// Side of the square composite buffer allocated at startup in 3.1c
+// (data::limits::ModelComposite).
 inline constexpr int32_t composite_side = 600;
 // A root rotation word must move this far before the transforms are redone.
 inline constexpr int32_t shift_threshold = 8;
@@ -153,8 +155,11 @@ struct ModelRenderer {
     World* world{};
     uint16_t graphics_flags{}; // Game.graphics_flags
     uint32_t tick{};           // Game.tick
-    int32_t camera_x{};        // Game.camera_x, map pixels
-    int32_t camera_y{};        // Game.camera_y
+    /// Ticks the build effect's pulse lags behind `tick`
+    /// (advance_build_pulse); 0, at zoom 1 and in, pulses as 3.1c does.
+    uint32_t build_pulse_lag{};
+    int32_t camera_x{}; // Game.camera_x, map pixels
+    int32_t camera_y{}; // Game.camera_y
     int32_t origin_x{screen_left};
     int32_t origin_y{screen_top};
     uint8_t team_colors[10]{}; // each player's PlayerSetupInfo.color, by player index
@@ -174,6 +179,19 @@ struct ModelRenderer {
     /// many times finer, origin_x and origin_y counted in samples too
     /// (enhanced anti-aliasing). Depths stay in game pixels.
     uint32_t samples{1};
+    /// The composite's start size, and whether a model larger than it is cut
+    /// to it rather than the composite growing: composite_side by
+    /// composite_side, growing, as in 3.1c. init_composite_buffer reads it.
+    data::limits::ModelComposite composite_limits{};
+    /// A mobile unit's moving pieces are drawn over its image only once it is
+    /// built, as a building's are (ui.interface-fixes nanoframe-raster);
+    /// false draws a mobile unit's every frame, built or not, as 3.1c does.
+    bool moving_pieces_once_built{};
+    /// The table shadows blend through, laid out as the display's alpha
+    /// table: null for the display's own, which draws them as the game
+    /// does; else a ShadowTable's (shadow_fade.hpp), which draws them
+    /// lighter as the view zooms out.
+    const uint8_t* shadow_table{};
 };
 
 /// What one draw of a unit and its carried units draws with (prepare_linked_draw).
@@ -182,9 +200,14 @@ struct LinkedDraw {
     bool unlit{}; ///< animated textures show their first frame
 };
 
-/// Allocates the context's 600x600 two-plane composite buffer.
+/// Allocates the context's two-plane composite buffer at its start size.
 ///
-/// The composite's key byte is image_key; every image copied in has key 1.
+/// The size is composite_limits' width by height, 600x600 in 3.1c. Without
+/// clamp_oversize the buffer later grows to fit a larger model; with it the
+/// buffer keeps its size, a model's per-frame copy is cut to the buffer's
+/// width and height from its top left, and a larger image or silhouette that
+/// would be built in the buffer is not drawn. The composite's key byte is
+/// image_key; every image copied in has key 1.
 ///
 /// @param[in,out] renderer drawing context
 /// @return false when the buffer cannot be allocated
@@ -397,12 +420,78 @@ void remap_depth_bands(
     Sprite& image, uint8_t threshold, int32_t above, int32_t below, int32_t band
 ) noexcept;
 
+/// The two colours the build effect pulses an unfinished unit with.
+struct BuildPulseColours {
+    uint8_t first{};  ///< the slower colour, which fills the bands early and late in the build
+    uint8_t second{}; ///< the faster colour: the outline, and the band through mid-build
+};
+
+/// Returns the build effect's colours for a unit at a tick of its pulse.
+///
+/// As in 3.1c, each colour walks palette 0xa0..0xaf, bright green to
+/// black, and back, one step for each step of its wave: the first wave
+/// takes 33 steps every 30 ticks and the second 57, so the first colour
+/// comes back to bright green 33 times every 960 ticks (about once a
+/// second at 30 ticks a second) and the second 57 times. Each unit starts
+/// its waves at its own place, by its id. The colours depend only on the
+/// tick and the id, so every frame drawn during a tick shows the same ones,
+/// however many frames a second are drawn.
+///
+/// @param pulse_tick the pulse's tick: Game.tick, less the build effect's lag
+///        (ModelRenderer::build_pulse_lag)
+/// @param unit_id the unit's id
+/// @return the two colours
+[[nodiscard]] BuildPulseColours build_pulse_colours(uint32_t pulse_tick, uint32_t unit_id) noexcept;
+
+/// The build effect's own clock: how far its pulse lags behind the game's
+/// tick in a view zoomed out (advance_build_pulse).
+struct BuildPulseClock {
+    bool seen{};             ///< a tick has been seen
+    uint32_t last_tick{};    ///< the game's tick last seen
+    uint32_t lag{};          ///< ticks the pulse lags behind the game's tick
+    uint32_t lag_fraction{}; ///< the part of a tick of lag gathered so far, in 1/65536
+};
+
+/// The zoom at and above which the build effect pulses at 3.1c's own rate.
+inline constexpr float build_pulse_full_rate_zoom = 1.0F;
+/// The slowest the build effect pulses, as a part of 3.1c's rate: the rate
+/// of a view zoomed out four times or more.
+inline constexpr float build_pulse_least_rate = 0.25F;
+
+/// Returns the share of 3.1c's pulse rate the build effect pulses at, at a zoom.
+///
+/// At zoom 1 and zoomed in, 1: the pulse is 3.1c's. Zoomed out, the pulse
+/// slows with the units' size on screen, at the zoom's own share of the
+/// rate (half at zoom 0.5), down to build_pulse_least_rate from zoom 0.25
+/// on, so that a view of many small nanoframes does not flicker.
+///
+/// @param zoom battlefield zoom, screen pixels per map pixel
+/// @return the share, from build_pulse_least_rate through 1
+[[nodiscard]] float build_pulse_rate(float zoom) noexcept;
+
+/// Moves the build effect's clock on to the game's tick and returns its lag.
+///
+/// The clock moves with the game's ticks, never with the frames drawn:
+/// a frame drawn during the tick last seen leaves it as it is, so the
+/// pulse is the same at every frame rate. Each tick since the tick last
+/// seen adds to the lag the part of a tick the pulse falls behind at the
+/// zoom (1 - build_pulse_rate). At zoom 1 and zoomed in the lag is 0, so
+/// the pulse is 3.1c's, tick for tick; coming back to zoom 1 from a
+/// zoomed-out view sets it back to 0 at once. A tick before the tick last
+/// seen (a game loaded or started again) starts the clock again at 0.
+///
+/// @param[in,out] clock the build effect's clock
+/// @param game_tick Game.tick
+/// @param zoom battlefield zoom, screen pixels per map pixel
+/// @return the lag, in ticks, for ModelRenderer::build_pulse_lag
+uint32_t advance_build_pulse(BuildPulseClock& clock, uint32_t game_tick, float zoom) noexcept;
+
 /// Applies the build (nanoframe) effect to an unfinished unit's depth image.
 ///
-/// A pulsing band of nano colours (palette 0xa0..0xaf) sweeps up the model
-/// with the build progress, then the model is outlined.
+/// A pulsing band of nano colours (palette 0xa0..0xaf, build_pulse_colours)
+/// sweeps up the model with the build progress, then the model is outlined.
 ///
-/// @param renderer drawing context; its tick drives the pulse
+/// @param renderer drawing context; its tick less its build_pulse_lag drives the pulse
 /// @param[in,out] image model image with a depth plane
 /// @param model model of the unit being built
 /// @return false when the image has no depth plane or the unit is finished

@@ -3,6 +3,7 @@
 
 // In-match HUD layout, pause, outcome and options menus.
 #include "oa/data/campaign/campaign_file.hpp"
+#include "oa/data/defs/layout.hpp"
 #include "oa/app/hook_call.hpp"
 #include "oa/ui/decoded.hpp"
 #include "oa/sim/scenario/commander_rules.hpp"
@@ -24,6 +25,8 @@
 #include "oa/ui/console/game_fields.hpp"
 #include "oa/present/world_renderer/world_camera.hpp"
 #include "oa/app/runtime.hpp"
+#include "oa/ui/hud/resource_bar.hpp"
+#include "oa/app/view_rules.hpp"
 #include "engine_settings_state.hpp"
 #include <algorithm>
 #include <cctype>
@@ -61,7 +64,7 @@ enum class IngamePanel : uint8_t {
 
 // The preferences a match opens: PREFS.GUI, and each tab's sub-panel merged
 // into it.
-constexpr const char* kPreferencesLayout = "guis/PREFS.GUI";
+constexpr const char* kPreferencesLayout = "PREFS.GUI";
 
 // Options/in-game menu state that outlives one click. The runtime
 // shows one frontend screen at a time, so a single session suffices.
@@ -112,10 +115,10 @@ ui::SessionKind ingame_session(bool campaign, bool multiplayer) {
     return campaign ? ui::SessionKind::campaign : ui::SessionKind::skirmish;
 }
 
-constexpr const char* kRestartLayout = "guis/RESTART.GUI";
+constexpr const char* kRestartLayout = "RESTART.GUI";
 // RESTART.GUI's art is the top-left of this 640x480 bitmap.
 constexpr const char* kRestartBackdrop = "bitmaps/drestart.pcx";
-constexpr const char* kGameSettingsLayout = "guis/GAMEOPTIONS.GUI";
+constexpr const char* kGameSettingsLayout = "GAMEOPTIONS.GUI";
 constexpr const char* kGameSettingsBackdrop = "bitmaps/gamesettings.pcx";
 // The Game Settings sheet centres every row it adds in its column (record attributes 2).
 constexpr int32_t kSettingsRowAttributes = 2;
@@ -467,7 +470,10 @@ LoadGameOverlay& load_overlay() {
 void load_overlay_bind(ScreenContext* ctx, LoadGameOverlay& overlay) {
     overlay.bound = true;
     try {
-        auto parsed = oa::ui::gui_layout::parse(ctx->assets->read("guis/loadgame.gui").bytes);
+        auto parsed = oa::ui::gui_layout::parse(
+            ctx->assets->read(oa::data::defs::gui_path("loadgame.gui")).bytes,
+            oa::ui::gui_layout::game_translation_lookup()
+        );
         if (!parsed.ok())
             return;
         overlay.layout = std::move(*parsed.layout);
@@ -489,6 +495,7 @@ void load_overlay_bind(ScreenContext* ctx, LoadGameOverlay& overlay) {
     overlay.side_names = runtime.saved_game_side_names();
     overlay.side_views.assign(overlay.side_names.begin(), overlay.side_names.end());
     saves.side_names = overlay.side_views;
+    saves.difficulty_names = runtime.difficulty_names();
     saves.files = ui::savegame_host_files(&overlay.root);
     saves.reader = ui::savegame_persist_reader(&overlay.root);
     saves.host = {};
@@ -558,14 +565,12 @@ int32_t load_overlay_row_height(const LoadGameOverlay& overlay) {
 // Rows start two pixels into the list.
 constexpr int32_t kListRowInset = 2;
 
-// The save dialog's click on a control: CANCEL leaves through the built-in
-// handler; a save writes the game and closes the dialog.
-int save_overlay_click(ScreenContext* ctx, LoadGameOverlay& overlay, int32_t hit) {
+// Acts on what the save dialog's handler decided: CANCEL leaves through the
+// built-in handler; a save writes the game and closes the dialog.
+int save_overlay_result(
+    ScreenContext* ctx, LoadGameOverlay& overlay, const ui::SaveDialogResult& result
+) {
     auto& panel = overlay.panel;
-    panel.selected = hit;
-    overlay.context = ctx;
-    const auto result = ui::savegame_on_save_click(panel, overlay.saves);
-    overlay.context = nullptr;
     auto& runtime = *static_cast<Runtime*>(ctx->host);
     switch (result.action) {
     case ui::SaveDialogAction::cancelled:
@@ -584,6 +589,24 @@ int save_overlay_click(ScreenContext* ctx, LoadGameOverlay& overlay, int32_t hit
     default:
         return 1;
     }
+}
+
+// The save dialog's press on a control: a button acts, and the name field
+// only keeps the keys, as savegame_on_save_press says.
+int save_overlay_press(ScreenContext* ctx, LoadGameOverlay& overlay, int32_t hit) {
+    overlay.context = ctx;
+    const auto result = ui::savegame_on_save_press(overlay.panel, overlay.saves, hit);
+    overlay.context = nullptr;
+    return save_overlay_result(ctx, overlay, result);
+}
+
+// Return at the end of the name activates GAMENAME, which saves under it.
+int save_overlay_enter(ScreenContext* ctx, LoadGameOverlay& overlay, int32_t name) {
+    overlay.panel.selected = name;
+    overlay.context = ctx;
+    const auto result = ui::savegame_on_save_click(overlay.panel, overlay.saves);
+    overlay.context = nullptr;
+    return save_overlay_result(ctx, overlay, result);
 }
 
 // Typing edits GAMENAME up to its length; Return saves under it and Escape
@@ -613,7 +636,7 @@ int save_overlay_key(ScreenContext* ctx, LoadGameOverlay& overlay, const ScreenI
         text.pop_back();
         ui::set_control_text(control, text);
     } else if (input.key == SDLK_RETURN || input.key == SDLK_KP_ENTER) {
-        return save_overlay_click(ctx, overlay, index);
+        return save_overlay_enter(ctx, overlay, index);
     } else if (input.key == SDLK_ESCAPE) {
         overlay.panel.selected = ui::panel_find(overlay.panel, "CANCEL");
         overlay.context = ctx;
@@ -626,12 +649,54 @@ int save_overlay_key(ScreenContext* ctx, LoadGameOverlay& overlay, const ScreenI
     return 1;
 }
 
+// Runs the load dialog's handler for the record `control`: CANCEL releases
+// the lists, and LOAD or the chosen GAMES row starts the selected save.
+ui::SaveDialogAction
+load_overlay_activate(ScreenContext* ctx, LoadGameOverlay& overlay, int32_t control) {
+    overlay.context = ctx;
+    overlay.panel.selected = control;
+    const auto result = ui::savegame_on_load_click(overlay.panel, overlay.saves);
+    overlay.context = nullptr;
+    if (result.action == ui::SaveDialogAction::cancelled)
+        overlay.bound = false;
+    if (result.action == ui::SaveDialogAction::load) {
+        // Starting the save replaces this screen with the match.
+        overlay.bound = false;
+        static_cast<Runtime*>(ctx->host)->start_saved_game(result.path.data());
+    }
+    return result.action;
+}
+
+// The load dialog's keys, as LOADGAME.GUI's defaults give them: Return is OK
+// (LOAD), which starts the selected save, and Escape is CANCEL, which leaves
+// the dialog as the button does. A message open over the dialog takes the
+// keys first.
+int load_overlay_key(ScreenContext* ctx, LoadGameOverlay& overlay, const ScreenInput& input) {
+    if (input.kind != ScreenInputKind::key_down || oa::ui::frontend_dialogs::dialog_count() != 0)
+        return 0;
+    if (input.key == SDLK_RETURN || input.key == SDLK_KP_ENTER) {
+        if (const auto load = ui::panel_find(overlay.panel, "LOAD"); load >= 0)
+            std::ignore = load_overlay_activate(ctx, overlay, load);
+        return 1;
+    }
+    if (input.key != SDLK_ESCAPE)
+        return 0;
+    if (const auto cancel = ui::panel_find(overlay.panel, "CANCEL");
+        cancel >= 0 &&
+        load_overlay_activate(ctx, overlay, cancel) == ui::SaveDialogAction::cancelled)
+        static_cast<Runtime*>(ctx->host)->leave_load_dialog();
+    return 1;
+}
+
 int load_overlay_event(ScreenContext* ctx, void*) {
     auto& overlay = load_overlay();
     const auto* input = ctx->input;
     if (overlay.bound && overlay.save_role && input != nullptr &&
         (input->kind == ScreenInputKind::text || input->kind == ScreenInputKind::key_down))
         return save_overlay_key(ctx, overlay, *input);
+    if (overlay.bound && !overlay.save_role && input != nullptr &&
+        input->kind == ScreenInputKind::key_down)
+        return load_overlay_key(ctx, overlay, *input);
     if (!overlay.bound || input == nullptr || input->kind != ScreenInputKind::pointer_down ||
         input->button != 1)
         return 0;
@@ -670,20 +735,11 @@ int load_overlay_event(ScreenContext* ctx, void*) {
     }
     overlay.context = nullptr;
     if (overlay.save_role)
-        return save_overlay_click(ctx, overlay, hit);
-    overlay.context = ctx;
-    panel.selected = hit;
-    const auto result = ui::savegame_on_load_click(panel, overlay.saves);
-    overlay.context = nullptr;
-    switch (result.action) {
+        return save_overlay_press(ctx, overlay, hit);
+    switch (load_overlay_activate(ctx, overlay, hit)) {
     case ui::SaveDialogAction::cancelled:
-        overlay.bound = false; // the built-in handler leaves the screen
-        return 0;
+        return 0; // the built-in handler leaves the screen
     case ui::SaveDialogAction::load:
-        // Starting the save replaces this screen with the match.
-        overlay.bound = false;
-        static_cast<Runtime*>(ctx->host)->start_saved_game(result.path.data());
-        return 1;
     case ui::SaveDialogAction::invalid:
     case ui::SaveDialogAction::refreshed:
         return 1;
@@ -1322,17 +1378,23 @@ bool Runtime::load_match_hud_layout(const std::string& layout) {
     overlay_gaf_sequence(
         match_hud_->background, match_hud_->shared_sprites, "PANELSIDE", 0, 0, icon_palette
     );
-    overlay_gaf_sequence(
-        match_hud_->background,
-        match_hud_->shared_sprites,
-        "PANELTOP",
-        kBattlefieldLeft,
-        0,
-        icon_palette
-    );
     if (const auto* top = gaf_sequence(match_hud_->shared_sprites, "PANELTOP");
-        top && !top->frames.empty())
+        top && !top->frames.empty()) {
         panel_top_width_ = static_cast<int>(top->frames.front().width);
+        // Under ui.interface-fixes bar-clamp art reaching the battlefield
+        // keeps one row less than its top edge.
+        const auto& fixes = ui_rules().interface_fixes;
+        const bool clamp =
+            fixes.enabled &&
+            fixes.fixes.contains(oa::data::mod_profile::UiInterfaceFixesFixes::bar_clamp);
+        if (auto rendered = oa::formats::gaf::render_normal(top->frames.front()); rendered.ok()) {
+            auto frame = *rendered.frame;
+            frame.height = static_cast<uint16_t>(std::max<int32_t>(
+                0, oa::ui::hud::top_panel_rows(frame.height, kBattlefieldTop, clamp)
+            ));
+            blit_gaf_frame(match_hud_->background, frame, kBattlefieldLeft, 0, icon_palette);
+        }
+    }
     const auto* bottom = gaf_sequence(match_hud_->shared_sprites, "PANELBOT");
     if (bottom != nullptr && !bottom->frames.empty()) {
         overlay_gaf_sequence(
@@ -1490,7 +1552,7 @@ void Runtime::show_match_pause_menu() {
     // The in-game menu gives the match's panels the keyboard until the match
     // resumes.
     match_panels_keyboard_ = true;
-    if (load_match_hud_layout("guis/ARMOPT.GUI")) {
+    if (load_match_hud_layout(oa::data::defs::gui_path("ARMOPT.GUI"))) {
         auto& session = match_menu_session();
         session.ingame_panel = IngamePanel::options;
         session.ingame.host = {};
@@ -1498,6 +1560,7 @@ void Runtime::show_match_pause_menu() {
             campaign_mission_, (current_extension_state() & extension_state::multiplayer) != 0
         );
         session.ingame.saved_games_offered = offers_saved_games();
+        session.ingame.difficulty_names = difficulty_names();
         // A match with a return label names it in the exit menus.
         session.ingame.return_label = return_label_;
         panel_from_widgets(session.panel, match_hud_->layout, widget_text_stages_);
@@ -1854,10 +1917,12 @@ void Runtime::draw_end_overlay() {
     match_dialog_side_.rgb.clear();
     if (match_finished_) {
         // No victory or defeat banner is drawn for a watcher.
-        if ((current_extension_state() & extension_state::local_watcher) == 0)
-            draw_igtitle(
-                match_outcome_ == sim::scenario::Outcome::victory ? "igvictory" : "igdefeat"
-            );
+        if ((current_extension_state() & extension_state::local_watcher) == 0) {
+            const bool won = match_outcome_ == sim::scenario::Outcome::victory;
+            draw_igtitle(won ? "igvictory" : "igdefeat");
+            if (won)
+                announce_victory();
+        }
         return;
     }
     // The pause bit holds any match; a menu holds only a match played on this
@@ -1991,7 +2056,7 @@ void Runtime::draw_battlefield_panel() {
     // scale down to its bottom, over the battlefield, as 3.1c's panel stays
     // where it is at a larger screen.
     if (match_menu_session().ingame_panel == IngamePanel::preferences &&
-        match_hud_panel_ == kPreferencesLayout) {
+        match_hud_panel_ == oa::data::defs::gui_path(kPreferencesLayout)) {
         const auto rows = preferences_panel_rows();
         if (!preferences_hud_.rgb.empty())
             show_hud_over_battlefield(
@@ -2306,10 +2371,12 @@ void Runtime::activate_pause_gadget(std::string_view name) {
         // Each tab loads PREFS.GUI afresh, widens it and merges the tab's
         // in-game sub-panel into it, beside the tabs over the battlefield.
         const auto open_sub_panel = [this, &session, &context](ui::OptionsPanel which) {
-            const auto file = "guis/" + std::string(ui::options_panel_file(which, true));
+            const auto file = oa::data::defs::gui_path(ui::options_panel_file(which, true));
             oa::ui::gui_layout::Layout sub;
             try {
-                auto parsed = oa::ui::gui_layout::parse(assets_.read(file).bytes);
+                auto parsed = oa::ui::gui_layout::parse(
+                    assets_.read(file).bytes, oa::ui::gui_layout::game_translation_lookup()
+                );
                 if (!parsed.ok() || parsed.layout->gadgets.empty())
                     throw std::runtime_error(
                         parsed.error ? parsed.error->message : file + " has no panel"
@@ -2319,7 +2386,7 @@ void Runtime::activate_pause_gadget(std::string_view name) {
                 status_ = "options panel unavailable: " + std::string(error.what());
                 return;
             }
-            if (!load_match_hud_layout(kPreferencesLayout))
+            if (!load_match_hud_layout(oa::data::defs::gui_path(kPreferencesLayout)))
                 return;
             widget_gaf_frames_.clear();
             widget_text_stages_.clear();
@@ -2366,7 +2433,9 @@ void Runtime::activate_pause_gadget(std::string_view name) {
             // PREFS.GAF (the merged panel's own) and then the shared GAF.
             oa::formats::gaf::Archive panel_art;
             append_gaf_file(
-                panel_art, "anims/" + fs::path(kPreferencesLayout).stem().string() + ".GAF"
+                panel_art,
+                "anims/" + fs::path(oa::data::defs::gui_path(kPreferencesLayout)).stem().string() +
+                    ".GAF"
             );
             draw_image_records(
                 match_hud_->background,
@@ -2485,7 +2554,7 @@ void Runtime::activate_pause_gadget(std::string_view name) {
     // picture of its own. The exit menu darkens the menu under it; the
     // confirmation darkens nothing, and as the exit menu closes before it
     // opens the menu shows as drawn again.
-    const auto show = [this, &session](const char* layout, IngamePanel which, bool shade) {
+    const auto show = [this, &session](const std::string& layout, IngamePanel which, bool shade) {
         auto under = panel_under_dialog();
         if (under)
             under->shaded = shade;
@@ -2559,7 +2628,7 @@ void Runtime::activate_pause_gadget(std::string_view name) {
         open_help();
         return;
     case ui::IngameAction::open_exit_menu:
-        if (show("guis/EXITMENU.GUI", IngamePanel::exit_menu, true)) {
+        if (show(oa::data::defs::gui_path("EXITMENU.GUI"), IngamePanel::exit_menu, true)) {
             ui::ingame_enter_exit_menu(session.panel, context);
             panel_to_widgets(
                 session.panel, match_hud_->layout, widget_gaf_frames_, widget_text_stages_
@@ -2568,7 +2637,7 @@ void Runtime::activate_pause_gadget(std::string_view name) {
         }
         return;
     case ui::IngameAction::open_exit_confirm:
-        if (show("guis/YESORNO.GUI", IngamePanel::exit_confirm, false)) {
+        if (show(oa::data::defs::gui_path("YESORNO.GUI"), IngamePanel::exit_confirm, false)) {
             ui::ingame_enter_exit_confirm(session.panel, context);
             panel_to_widgets(
                 session.panel, match_hud_->layout, widget_gaf_frames_, widget_text_stages_
@@ -2629,7 +2698,8 @@ void Runtime::escape_match_menu() {
     }
     // The preferences take Escape as their Escape default, PREV.
     if (session.ingame_panel == IngamePanel::preferences && match_hud_ &&
-        match_hud_panel_ == kPreferencesLayout && !match_hud_->layout.gadgets.empty()) {
+        match_hud_panel_ == oa::data::defs::gui_path(kPreferencesLayout) &&
+        !match_hud_->layout.gadgets.empty()) {
         const auto* root = std::get_if<oa::ui::gui_layout::PanelFields>(
             &match_hud_->layout.gadgets.front().fields
         );
@@ -2658,7 +2728,7 @@ bool Runtime::press_match_panel_key(const SDL_KeyboardEvent& key) {
     // The in-game menu and the tab menu give the panels the keyboard; the
     // surrender confirmation a close request opens over the running match
     // takes only its Enter and Escape.
-    if (!match_panels_keyboard_ && match_hud_panel_ != kPreferencesLayout)
+    if (!match_panels_keyboard_ && match_hud_panel_ != oa::data::defs::gui_path(kPreferencesLayout))
         return false;
     // Keys with Ctrl, Alt or the system key down type no character.
     if ((key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0)
@@ -2731,7 +2801,9 @@ void Runtime::request_match_close() {
     match_paused_ = true;
     match_command_ = MatchCommand::none;
     pending_build_type_ = 0;
-    if (!open_match_dialog("guis/YESORNO.GUI", panel_flag::beside_hud, true, std::move(under))) {
+    if (!open_match_dialog(
+            oa::data::defs::gui_path("YESORNO.GUI"), panel_flag::beside_hud, true, std::move(under)
+        )) {
         // Without the confirmation the request is answered as a plain quit.
         std::cerr << "YESORNO.GUI unavailable; closing without confirmation\n";
         leave_match();
@@ -2762,7 +2834,12 @@ void Runtime::open_restart_dialog() {
     auto under = panel_under_dialog();
     if (under)
         under->shaded = false;
-    if (!open_match_dialog(kRestartLayout, panel_flag::beside_hud, false, std::move(under)) ||
+    if (!open_match_dialog(
+            oa::data::defs::gui_path(kRestartLayout),
+            panel_flag::beside_hud,
+            false,
+            std::move(under)
+        ) ||
         match_hud_->layout.gadgets.empty())
         return;
     session.ingame_panel = IngamePanel::restart;
@@ -2779,7 +2856,7 @@ void Runtime::open_restart_dialog() {
     }
     panel_from_widgets(session.panel, match_hud_->layout, widget_text_stages_);
     const auto mission = session.ingame.session == ui::SessionKind::campaign
-                             ? bound_mission_name()
+                             ? bound_mission_title()
                              : skirmish_settings_.map_name;
     ui::ingame_enter_restart(session.panel, session.ingame, mission);
     panel_to_widgets(session.panel, match_hud_->layout, widget_gaf_frames_, widget_text_stages_);
@@ -2794,7 +2871,12 @@ void Runtime::open_game_settings_sheet() {
     auto under = panel_under_dialog();
     if (under)
         under->shaded = true;
-    if (!open_match_dialog(kGameSettingsLayout, panel_flag::beside_hud, false, std::move(under)) ||
+    if (!open_match_dialog(
+            oa::data::defs::gui_path(kGameSettingsLayout),
+            panel_flag::beside_hud,
+            false,
+            std::move(under)
+        ) ||
         match_hud_->layout.gadgets.empty())
         return;
     session.ingame_panel = IngamePanel::game_settings;
@@ -2810,8 +2892,10 @@ void Runtime::open_game_settings_sheet() {
     } catch (const std::exception& error) {
         std::cerr << "GAMEOPTIONS backdrop unavailable: " << error.what() << '\n';
     }
+    // Its labels and word values in the game's language, as
+    // gamedata\translate.tdf gives them.
     ui::GameSettingsSheet sheet;
-    ui::ingame_build_game_settings(game_settings_view(), sheet);
+    ui::ingame_build_game_settings(game_settings_view(), sheet, translation_hook, this);
     const auto& root = layout.gadgets.front().common;
     const auto root_x = root.x;
     const auto root_y = root.y;
@@ -2923,6 +3007,7 @@ ui::GameSettingsView Runtime::game_settings_view() {
     view.commander_rule = static_cast<uint32_t>(game.session_rules);
     view.mapping_flags = game.visibility_flags;
     view.difficulty = static_cast<uint32_t>(game.difficulty);
+    view.difficulty_names = difficulty_names();
     view.max_units = game.units_per_player;
     if (const auto* map = match_map_context())
         view.map_name = map->mission_name;
@@ -3024,7 +3109,8 @@ void Runtime::draw_options_lightbar() {
     // full-screen options of the frontend set the lightbar up and never draw it.
     auto& session = match_menu_session();
     if (session.ingame_panel != IngamePanel::preferences || options_parent_ != Screen::match ||
-        !match_ || !match_hud_ || match_hud_panel_ != kPreferencesLayout ||
+        !match_ || !match_hud_ ||
+        match_hud_panel_ != oa::data::defs::gui_path(kPreferencesLayout) ||
         session.options.lightbar.active == 0 || options_flip_.rgb.empty() ||
         match_hud_cpu_.rgb.empty() || match_world_cpu_.rgb.empty())
         return;
@@ -3108,7 +3194,7 @@ void Runtime::leave_options_screen() {
         screen_ = Screen::match;
         match_paused_ = true;
         apply_output_mode();
-        if (!load_match_hud_layout("guis/ARMOPT.GUI"))
+        if (!load_match_hud_layout(oa::data::defs::gui_path("ARMOPT.GUI")))
             resume_match_pause();
         else
             render_match_surface();
@@ -3121,7 +3207,8 @@ void Runtime::leave_options_screen() {
 
 oa::ui::display_layout::Rect Runtime::preferences_panel_rows() const {
     if (match_menu_session().ingame_panel != IngamePanel::preferences || !match_hud_ ||
-        match_hud_panel_ != kPreferencesLayout || match_hud_->layout.gadgets.empty())
+        match_hud_panel_ != oa::data::defs::gui_path(kPreferencesLayout) ||
+        match_hud_->layout.gadgets.empty())
         return {};
     const auto& root = match_hud_->layout.gadgets.front().common;
     if (root.x + root.width <= kBattlefieldLeft || root.height <= 0)
@@ -3218,9 +3305,9 @@ bool Runtime::pause_menu_shown() const {
 bool Runtime::ingame_menu_column_shown() const {
     const auto& session = match_menu_session();
     return screen_ == Screen::match && match_ && !match_finished_ && match_paused_ && match_hud_ &&
-           match_hud_panel_ == "guis/ARMOPT.GUI" && session.ingame_panel == IngamePanel::options &&
-           !session.close_confirm && !team_panel_open() &&
-           oa::ui::frontend_dialogs::dialog_count() == 0;
+           match_hud_panel_ == oa::data::defs::gui_path("ARMOPT.GUI") &&
+           session.ingame_panel == IngamePanel::options && !session.close_confirm &&
+           !team_panel_open() && oa::ui::frontend_dialogs::dialog_count() == 0;
 }
 
 void Runtime::sync_visual_option_widgets() {
@@ -3252,6 +3339,7 @@ void Runtime::bind_options_context() {
     // full-screen frontend panels.
     const bool in_match = options_parent_ == Screen::match && screen_ == Screen::match && match_;
     context.in_game = in_match;
+    context.minimum_mode_height = view_rules::minimum_mode_height(ui_rules());
     if (!in_match) {
         context.realtime_panels = false;
         context.hold_game = false;
@@ -3321,7 +3409,9 @@ void Runtime::bind_options_context() {
                 return;
             auto& world = runtime.match_->state();
             // The speed set is read back from the Game block below.
-            std::ignore = oa::sim::speed::set_speed(world, speed, runtime.message_hooks());
+            std::ignore = oa::sim::speed::set_speed(
+                world, speed, runtime.message_hooks(), runtime.game_speed_range()
+            );
             runtime.match_timing_.requested_rate = world.game.requested_speed;
             runtime.match_timing_.actual_rate = world.game.current_speed;
             runtime.preferences_.current_game_speed = world.game.current_speed;
@@ -3378,7 +3468,7 @@ void Runtime::bind_options_context() {
         auto& session = match_menu_session();
         if (session.options.in_game) {
             // PREFS.GUI takes the in-game menu's place in the side column.
-            if (!runtime.load_match_hud_layout(kPreferencesLayout)) {
+            if (!runtime.load_match_hud_layout(oa::data::defs::gui_path(kPreferencesLayout))) {
                 panel = {};
                 return;
             }
@@ -3569,7 +3659,7 @@ void Runtime::activate_options_gadget() {
         try {
             resources_ = renderer::load_screen(
                 assets_,
-                {"guis/startopt.gui",
+                {oa::data::defs::gui_path("startopt.gui"),
                  "",
                  "palettes/guipal.pal",
                  "anims/commongui.gaf",
@@ -3578,7 +3668,10 @@ void Runtime::activate_options_gadget() {
             // A bitmap that cannot be read throws, as the screen's other
             // files do; whether the backdrop changed is not needed.
             std::ignore = load_named_background(background.c_str(), false, false, false);
-            auto parsed = oa::ui::gui_layout::parse(assets_.read("guis/" + sub).bytes);
+            auto parsed = oa::ui::gui_layout::parse(
+                assets_.read(oa::data::defs::gui_path(sub)).bytes,
+                oa::ui::gui_layout::game_translation_lookup()
+            );
             if (!parsed.ok())
                 throw std::runtime_error(
                     parsed.error ? parsed.error->message : sub + " parse failed"
@@ -3613,7 +3706,7 @@ void Runtime::activate_options_gadget() {
         // draw would; its buttons are fitted to their frames but keep the
         // authored foreground colour the renderer draws the frame through.
         // Only a loaded panel's first draw clears it.
-        bind_frontend_scrolls("guis/startopt.gui", "anims/commongui.gaf");
+        bind_frontend_scrolls(oa::data::defs::gui_path("startopt.gui"), "anims/commongui.gaf");
         widget_gaf_frames_.clear();
         widget_text_stages_.clear();
         session.kind = which;
@@ -3686,8 +3779,8 @@ void Runtime::activate_campaign_gadget() {
     }
     // The side buttons refill the Campaign list with the chosen side's
     // campaigns and, on Any Mission, the Missions list.
-    if (name == "Side0" || name == "Arm") {
-        set_button_status("Arm", 1);
+    if (name == "Side0" || name == oa::data::defs::side_name(0)) {
+        set_button_status(oa::data::defs::side_name(0), 1);
         set_button_status("Side0", 1);
         preferences_.side = 0;
         write_number(init::general_section, "side", 0);
@@ -3697,8 +3790,8 @@ void Runtime::activate_campaign_gadget() {
         rebuild_surface();
         return;
     }
-    if (name == "Side1" || name == "Core") {
-        set_button_status("Core", 1);
+    if (name == "Side1" || name == oa::data::defs::side_name(1)) {
+        set_button_status(oa::data::defs::side_name(1), 1);
         set_button_status("Side1", 1);
         preferences_.side = 1;
         write_number(init::general_section, "side", 1);

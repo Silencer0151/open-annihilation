@@ -201,6 +201,34 @@ constexpr uint64_t kLatestFrameClockMs = 1'000'000'000'000;
     return {first, last};
 }
 
+/// Returns the frames a --stills value names: frame numbers from 0, in
+/// increasing order, separated by commas.
+///
+/// Throws std::runtime_error for any other value.
+///
+/// @param text the option's value
+/// @return the frames
+[[nodiscard]] std::vector<uint64_t> parse_stills(std::string_view text) {
+    std::vector<uint64_t> frames;
+    std::size_t start = 0;
+    while (true) {
+        const auto comma = text.find(',', start);
+        const auto part =
+            text.substr(start, comma == std::string_view::npos ? comma : comma - start);
+        uint64_t frame = 0;
+        const auto result = std::from_chars(part.data(), part.data() + part.size(), frame);
+        if (part.empty() || result.ec != std::errc{} || result.ptr != part.data() + part.size() ||
+            (!frames.empty() && frame <= frames.back()))
+            throw std::runtime_error(
+                "--stills expects frame numbers from 0, in increasing order, separated by commas"
+            );
+        frames.push_back(frame);
+        if (comma == std::string_view::npos)
+            return frames;
+        start = comma + 1;
+    }
+}
+
 /// Checks the director's options against the others, and has a director
 /// run headless: --generate-script and --render-script run on their own,
 /// on the fixed clock and seed, so that a script's analysis and its render
@@ -219,12 +247,16 @@ void check_director_options(Options& options) {
             throw std::runtime_error("--output needs --generate-script or --render-script");
         if (options.director_chunks)
             throw std::runtime_error("--chunks needs --render-script");
+        if (!options.director_stills.empty())
+            throw std::runtime_error("--stills needs --render-script");
         return;
     }
     if (generate && render)
         throw std::runtime_error("--generate-script and --render-script cannot be used together");
     if (generate && options.director_chunks)
         throw std::runtime_error("--chunks needs --render-script");
+    if (generate && !options.director_stills.empty())
+        throw std::runtime_error("--stills needs --render-script");
     if (render && options.window_resolution)
         throw std::runtime_error(
             "--render-script takes the frame size from the script, not from --resolution"
@@ -249,6 +281,7 @@ void check_director_options(Options& options) {
         {options.match_zoom != kDefaultBattlefieldZoom, "--zoom"},
         {options.combat_units != 0, "--combat"},
         {options.busy_combat, "--busy-combat"},
+        {!options.stage_file.empty(), "--stage"},
         {options.reclaim_check, "--reclaim-check"},
         {options.give_orders, "--give-orders"},
         {options.check_navigation, "--check-navigation"},
@@ -261,9 +294,11 @@ void check_director_options(Options& options) {
         {options.check_render_tiers, "--check-render-tiers"},
         {options.check_match_orders, "--check-match-orders"},
         {options.check_factory_orders, "--check-factory-orders"},
+        {options.check_unit_speech, "--check-unit-speech"},
         {options.check_download_builds, "--check-download-builds"},
         {options.check_side_column, "--check-side-column"},
         {options.check_kill_board, "--check-kill-board"},
+        {!options.check_unit_language.empty(), "--check-unit-language"},
         {options.check_patrol_reclaim, "--check-patrol-reclaim"},
         {options.check_reclaim_cursor, "--check-reclaim-cursor"},
         {options.check_pointer_interfaces, "--check-pointer-interfaces"},
@@ -386,6 +421,16 @@ namespace {
             result.choose_game_dir = true;
         else if (argument == "--archive")
             result.archives.emplace_back(value(argument));
+        else if (argument == "--mod")
+            result.mod_file = path_from_utf8(value(argument));
+        else if (argument == "--mod-dir")
+            result.mod_dir = path_from_utf8(value(argument));
+        else if (argument == "--base-game")
+            result.base_game = true;
+        else if (argument == "--print-profile")
+            result.print_profile = true;
+        else if (argument == "--accept-unimplemented-hacks")
+            result.accept_unimplemented_hacks = true;
         else if (argument == "--snapshot")
             result.snapshot = value(argument);
         else if (argument == "--preferences-file")
@@ -450,6 +495,8 @@ namespace {
             result.combat_units = parse_count(value(argument));
         else if (argument == "--busy-combat")
             result.busy_combat = true;
+        else if (argument == "--stage")
+            result.stage_file = value(argument);
         else if (argument == "--save-after")
             result.save_after = parse_count(value(argument));
         else if (argument == "--save-file")
@@ -517,12 +564,16 @@ namespace {
             result.check_match_orders = true;
         else if (argument == "--check-factory-orders")
             result.check_factory_orders = true;
+        else if (argument == "--check-unit-speech")
+            result.check_unit_speech = true;
         else if (argument == "--check-download-builds")
             result.check_download_builds = true;
         else if (argument == "--check-side-column")
             result.check_side_column = true;
         else if (argument == "--check-kill-board")
             result.check_kill_board = true;
+        else if (argument == "--check-unit-language")
+            result.check_unit_language = value(argument);
         else if (argument == "--check-patrol-reclaim")
             result.check_patrol_reclaim = true;
         else if (argument == "--check-reclaim-cursor")
@@ -547,8 +598,12 @@ namespace {
             result.director_output = path_from_utf8(value(argument));
         else if (argument == "--chunks")
             result.director_chunks = parse_chunks(value(argument));
+        else if (argument == "--stills")
+            result.director_stills = parse_stills(value(argument));
         else if (argument == "--trace-input")
             result.trace_input = true;
+        else if (argument == "--trace-lookups")
+            result.trace_lookups = path_from_utf8(value(argument));
         else if (argument == "--debug-order-lines")
             result.debug_order_lines = true;
         else if (argument == "--trace-digest")
@@ -569,13 +624,16 @@ namespace {
             std::cout
                 << "usage: open-annihilation [--game-dir PATH | --choose-game-dir] "
                    "[--archive PATH]... "
+                   "[--mod FILE] [--mod-dir PATH | --base-game] [--print-profile] "
+                   "[--accept-unimplemented-hacks] "
                    "[--skip-intro] [--frames N] [--headless-check] "
                    "[--snapshot PATH.ppm] [--preferences-file PATH] [--data-dir PATH] "
                    "[--mute] "
                    "[--check-navigation] [--check-match-dialogs] [--check-match-layers] "
                    "[--check-render-tiers [--force-capable] [--native-density]] "
-                   "[--check-match-orders] [--check-factory-orders] "
+                   "[--check-match-orders] [--check-factory-orders] [--check-unit-speech] "
                    "[--check-download-builds] [--check-side-column] [--check-kill-board] "
+                   "[--check-unit-language TAG] "
                    "[--check-patrol-reclaim] [--check-reclaim-cursor] "
                    "[--check-pointer-interfaces] "
                    "[--check-multiplayer-menu] "
@@ -595,17 +653,19 @@ namespace {
                    "[--follow] [--frame-clock MS]]] "
                    "[--campaign NAME --mission N [--past-outcome] [--restart-at TICK]] "
                    "[--resolution WxH] "
-                   "[--zoom FACTOR] [--combat UNITS [--busy-combat]] [--reclaim-check] "
+                   "[--zoom FACTOR] [--combat UNITS [--busy-combat]] [--stage FILE] "
+                   "[--reclaim-check] "
                    "[--camera X,Z] "
                 << extension_text(extension, ExtensionText::usage_runs, "")
                 << "[--save-after TICK] "
                    "[--save-file PATH.sav] [--load PATH.sav] [--give-orders] [--seed N] "
-                   "[--trace-digest FILE] [--trace-units FILE] [--draw-threads N] "
+                   "[--trace-digest FILE] [--trace-units FILE] [--trace-lookups FILE] "
+                   "[--draw-threads N] "
                    "[--capture-video PATH.mp4] [--showcase arm-first-mission|skirmish-battle] "
                    "[--generate-script RECORDING [--output PATH.oascript|PATH.oamovie] "
                    "[--resolution WxH]] "
                    "[--render-script PATH.oascript|PATH.oamovie [--output DIR] "
-                   "[--chunks A-B]] "
+                   "[--chunks A-B] [--stills F,F...]] "
                    "[game switches such as "
                 << extension_text(extension, ExtensionText::usage_switches, "")
                 << "-d -s] "
@@ -701,6 +761,9 @@ namespace {
     check_director_options(result);
     if (result.busy_combat && result.combat_units == 0)
         throw std::runtime_error("--busy-combat needs --combat");
+    if (!result.stage_file.empty() &&
+        (!result.match_ticks || !result.load_file.empty() || !result.campaign.empty()))
+        throw std::runtime_error("--stage stages a headless skirmish of --match-ticks ticks");
     if (result.check_render_tiers && result.headless_check)
         throw std::runtime_error(
             "--check-render-tiers draws in a window and cannot be used with --headless-check"
@@ -719,8 +782,9 @@ namespace {
         result.headless_check || result.check_match_layers || result.check_render_tiers ||
         result.check_match_dialogs || result.check_load_save || result.check_frontend_controls ||
         result.check_scroll_bars || result.check_engine_settings || result.check_renderer_ladder ||
-        result.check_match_orders || result.check_factory_orders || result.check_download_builds ||
-        result.check_side_column || result.check_kill_board || result.check_patrol_reclaim ||
+        result.check_match_orders || result.check_factory_orders || result.check_unit_speech ||
+        result.check_download_builds || result.check_side_column || result.check_kill_board ||
+        !result.check_unit_language.empty() || result.check_patrol_reclaim ||
         result.check_reclaim_cursor || result.check_pointer_interfaces ||
         result.check_director_view || result.check_director_render || result.check_interpolation ||
         result.check_unit_playout;
@@ -750,6 +814,19 @@ namespace {
     result.start_full_screen =
         result.launch.display_option == 0 && !result.unattended && result.capture_video.empty();
 #endif
+    if (result.print_profile && result.mod_file.empty() && result.mod_dir.empty() &&
+        result.game_dir.empty())
+        throw std::runtime_error(
+            "--print-profile needs --mod FILE, --mod-dir PATH or --game-dir PATH"
+        );
+    if (result.accept_unimplemented_hacks && result.mod_file.empty() && result.mod_dir.empty() &&
+        result.game_dir.empty() && !result.print_profile)
+        throw std::runtime_error(
+            "--accept-unimplemented-hacks needs a mod: --mod, --mod-dir, --game-dir or "
+            "--print-profile"
+        );
+    if (result.base_game && !result.mod_dir.empty())
+        throw std::runtime_error("--base-game and --mod-dir cannot be used together");
     if (result.choose_game_dir && !result.game_dir.empty())
         throw std::runtime_error("--choose-game-dir and --game-dir cannot be used together");
     if (result.choose_game_dir && result.unattended)

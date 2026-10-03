@@ -8,6 +8,7 @@
 // card that could not be used, and one that could not draw the battlefield.
 #include "oa/app/game_directory.hpp"
 #include "oa/app/runtime.hpp"
+#include "oa/data/languages/interface_text.hpp"
 #include "render_host.hpp"
 #include "render_run.hpp"
 #include "web_link_state.hpp"
@@ -97,6 +98,9 @@ void Runtime::show_missing_content(MissingContent missing) {
         text = "Campaign complete. This game includes no further missions.";
         break;
     }
+    // The engine's own words, in the player's language when the interface
+    // catalogue has them.
+    text = oa::data::languages::interface_text(text);
     auto context = screen_context();
     const auto closed = [](void* runtime, dialogs::NoticeChoice choice) {
         auto& owner = *static_cast<Runtime*>(runtime);
@@ -110,7 +114,7 @@ void Runtime::show_missing_content(MissingContent missing) {
         ))
         return;
     show_frontend_message(
-        translate_ui(text), kMessageWidth, entry::message_show_ok, entry::message_fit_width
+        std::string(text), kMessageWidth, entry::message_show_ok, entry::message_fit_width
     );
 }
 
@@ -164,7 +168,7 @@ void Runtime::tell_renderer_records() {
     if (action != renderer_state::NoticeAction::show)
         return;
     ++run.notices_shown;
-    const std::string_view text = notice_text(notice->kind);
+    const std::string_view text = oa::data::languages::interface_text(notice_text(notice->kind));
     auto context = screen_context();
     const auto closed = [](void* runtime, dialogs::NoticeChoice choice) {
         if (choice == dialogs::NoticeChoice::website)
@@ -175,7 +179,7 @@ void Runtime::tell_renderer_records() {
         ))
         return;
     show_frontend_message(
-        translate_ui(text), kMessageWidth, entry::message_show_ok, entry::message_fit_width
+        std::string(text), kMessageWidth, entry::message_show_ok, entry::message_fit_width
     );
 }
 

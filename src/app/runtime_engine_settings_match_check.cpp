@@ -152,28 +152,17 @@ void Runtime::check_engine_settings_in_match() {
             }
         require(differing == 0, what + ": " + std::to_string(differing) + " pixels differ");
     };
-    const auto button_face = [](settings::ButtonLook look, bool darkened, const auto& fonts) {
-        renderer::Surface face;
-        face.width = static_cast<uint32_t>(settings::ingame_button_side);
-        face.height = face.width;
-        face.rgb.assign(static_cast<std::size_t>(face.width) * face.height * 3U, 0);
-        settings::draw_oa_button(face, {0, 0, 1}, settings::ingame_button_side, look, fonts);
-        if (darkened)
-            renderer::blend_source_rect(
-                face,
-                {0, 0, 1},
-                {0, 0, settings::ingame_button_side, settings::ingame_button_side},
-                settings::backdrop_color,
-                settings::ingame_backdrop_opacity
-            );
-        return face;
+    const auto icon = engine_settings_icon();
+    require(renderer::picture_drawable(icon), "the in-game OA button has no icon to show");
+    const auto button_face = [&](settings::ButtonLook look, bool darkened, const auto& fonts) {
+        return MatchHost::button_face(match_layout_, look, darkened, fonts, icon);
     };
-    const auto dialog_face = [](const settings::Dialog& dialog, const auto& fonts) {
+    const auto dialog_face = [&icon](const settings::Dialog& dialog, const auto& fonts) {
         renderer::Surface face;
         face.width = static_cast<uint32_t>(settings::dialog_width);
         face.height = static_cast<uint32_t>(settings::dialog_height);
         face.rgb.assign(static_cast<std::size_t>(face.width) * face.height * 3U, 0);
-        settings::draw_dialog(face, {0, 0, 1}, dialog, fonts);
+        settings::draw_dialog(face, {0, 0, 1}, dialog, fonts, icon);
         return face;
     };
     const auto centre = [](const layout::Rect& rect) {

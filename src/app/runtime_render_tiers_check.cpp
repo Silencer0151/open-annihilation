@@ -35,6 +35,7 @@
 #include "oa/formats/png.hpp"
 #include "oa/platform/machine.hpp"
 #include "oa/platform/render_probe.hpp"
+#include "oa/present/game_text.hpp"
 #include "oa/present/model/rgb_bridge.hpp"
 #include "oa/sim/feature_runtime.hpp"
 #include "oa/sim/unit_spawn/spawn_runtime.hpp"
@@ -593,12 +594,16 @@ std::string zoom_text(float zoom) {
 /// their shadows; and the fog tiles that are not wholly in sight or wholly
 /// out of it, whose edges ramp where the processor's masks cut, with
 /// every tile a corner out of sight at a zoom below 1, where the greyed
-/// level is the box of the grey where the processor grays the box.
+/// level is the box of the grey where the processor grays the box; and the
+/// quads the painters after the fog asked the card for over the world, such
+/// as the shadow of text in the modern fonts, which the card blends where
+/// the processor reduces its blend to the palette.
 /// Everything beside the mark is the processor's picture exactly at a
 /// whole-number zoom.
 ///
 /// @param list the frame's draws
 /// @param grid the fog grid the frame drew its fog from
+/// @param quads the painters' quads, in pixels of the battlefield layer
 /// @param field the battlefield on the frame
 /// @param zoom the frame's zoom
 /// @param width the frame's columns
@@ -607,12 +612,17 @@ std::string zoom_text(float zoom) {
 std::vector<uint8_t> card_draw_mask(
     const WorldDrawList& list,
     const wr::FogGrid& grid,
+    std::span<const FullWorldQuad> quads,
     const Area& field,
     float zoom,
     uint32_t width,
     uint32_t height
 ) {
     std::vector<uint8_t> mask(std::size_t{width} * height, 0);
+    for (const FullWorldQuad& quad : quads)
+        mark_rect(
+            mask, width, height, field.x + quad.x, field.y + quad.y, quad.width, quad.height, 0
+        );
     const bool whole = std::floor(zoom) == zoom;
     const int reach = static_cast<int>(std::ceil(std::max(1.0F, zoom)));
     const auto scaled = [&](int32_t pixels) {
@@ -1243,6 +1253,7 @@ int Runtime::check_render_tiers() {
                 card_draw_mask(
                     match_models().draws,
                     full_->fog.grid,
+                    full_->world_quads,
                     battlefield(),
                     1.0F,
                     points_wide,
@@ -1643,6 +1654,16 @@ int Runtime::check_render_tiers() {
     // drops the prescale targets the frames before made, and the ease
     // counts on finding them made.
     check_smooth_panning(switch_tier, at_zoom, anchor);
+    // The overlays a profile's visual rules paint, where it turns them on,
+    // in the standard and accelerated tiers; the Full tier's after its own
+    // cases.
+    {
+        constexpr std::array<HardwareAcceleration, 2> standard_and_basic{
+            HardwareAcceleration::off, HardwareAcceleration::basic
+        };
+        check_visual_rule_overlays(set_level, standard_and_basic, at_zoom, anchor);
+        switch_tier(true);
+    }
     // At a chrome scale of 1.6 the HUD strips are the chrome's filter from
     // the HUD's prescale target, which is drawn into once on each frame
     // that paints the layer, which every frame the loop presents does, and
@@ -1767,7 +1788,7 @@ int Runtime::check_render_tiers() {
     }
     // The Full tier: the terrain drawn by the card from the atlas pages, the
     // rest by the processor over it.
-    if (asked_level == HardwareAcceleration::full)
+    if (asked_level == HardwareAcceleration::full) {
         check_full_render_tier(
             set_level,
             at_zoom,
@@ -1778,7 +1799,10 @@ int Runtime::check_render_tiers() {
             report_directory,
             software
         );
-    else
+        // The overlays a profile's visual rules paint, in the Full tier.
+        constexpr std::array<HardwareAcceleration, 1> full_only{HardwareAcceleration::full};
+        check_visual_rule_overlays(set_level, full_only, at_zoom, anchor);
+    } else
         std::cout << "render tiers check: the Full cases need --hardware-acceleration=full; "
                      "skipped\n";
     // Switched off, every frame is the standard tier's again.
@@ -1877,7 +1901,13 @@ void Runtime::check_full_render_tier(
     // Where the card's own draws lie on a frame (card_draw_mask).
     const auto card_mask = [&](float zoom, const renderer::Surface& read) {
         return card_draw_mask(
-            match_models().draws, full_->fog.grid, battlefield(), zoom, read.width, read.height
+            match_models().draws,
+            full_->fog.grid,
+            full_->world_quads,
+            battlefield(),
+            zoom,
+            read.width,
+            read.height
         );
     };
     // The picture of where two frames differ beside a mask: the first
@@ -2094,6 +2124,57 @@ void Runtime::check_full_render_tier(
         std::cout << "render tiers check: full tier: the zoom floor of "
                   << zoom_text(kMinFullBattlefieldZoom) << " is drawn from level 2 LINEAR, "
                   << full_->drawn_quads << " quads\n";
+    }
+
+    // Shadows lighten as the view zooms out and are not drawn from a
+    // quarter out. The standard tier draws the game's own at zoom 1 and, at
+    // its floor of 0.5, shadows at half the game's darkness through the
+    // faded table; on the card, zoom 1 casts the game's own, 0.5 and a
+    // third lighter ones, and a quarter and the zoom floor none, the list
+    // holding no shadow either. Pictures of each go to the report.
+    {
+        set_level(HardwareAcceleration::off);
+        for (const float zoom : {1.0F, kMinBattlefieldZoom}) {
+            at_zoom(zoom);
+            const auto read = presented();
+            const bool whole = zoom == 1.0F;
+            const auto& models = match_models();
+            if (models.draws.shadow_level != oa::present::model::shadow_level(zoom) ||
+                (models.renderer.shadow_table == nullptr) != whole)
+                fail(
+                    "the standard tier at zoom " + zoom_text(zoom) +
+                    " did not draw shadows at its level"
+                );
+            write_png(
+                report_directory / ("native-render-tiers-off-shadows-" + zoom_text(zoom) + ".png"),
+                read
+            );
+        }
+        set_level(HardwareAcceleration::full);
+        for (const float zoom : {1.0F, 0.5F, 1.0F / 3.0F, 0.25F, kMinFullBattlefieldZoom}) {
+            at_zoom(zoom);
+            const uint64_t before = full_->models.counts().shadows;
+            const auto read = full_frame();
+            const uint64_t cast = full_->models.counts().shadows - before;
+            const WorldDrawList& list = match_models().draws;
+            const uint32_t level = oa::present::model::shadow_level(zoom);
+            if (list.shadow_level != level)
+                fail("the frame at zoom " + zoom_text(zoom) + " drew shadows at another level");
+            std::size_t listed = 0;
+            for (const SpriteDraw& sprite : list.sprites)
+                listed += sprite.shadow ? 1U : 0U;
+            for (const ProjectileDraw& shot : list.projectiles)
+                listed += shot.shadow ? 1U : 0U;
+            if (level == 0 && (cast != 0 || listed != 0))
+                fail("the frame at zoom " + zoom_text(zoom) + " drew shadows");
+            if (zoom == 1.0F && cast == 0)
+                fail("the frame at zoom 1 cast no shadow");
+            write_png(picture("shadows-" + zoom_text(zoom)), read);
+            std::cout << "render tiers check: full tier: at zoom " << zoom_text(zoom)
+                      << " shadows at level " << level << " of "
+                      << oa::present::model::shadow_full_level << ", " << cast
+                      << " cast on the card, " << listed << " shadow sprites listed\n";
+        }
     }
 
     // Zoomed out: the card's levels, never the box filter. The terrain
@@ -2575,7 +2656,8 @@ void Runtime::check_full_render_tier(
     // Anti-aliasing: the Enhanced anti-aliasing row's level chooses the
     // world target's factor, 2x giving 2 and 4x 4, within the budget S and
     // the texture limit at this battlefield; the processor draws no unit
-    // finer in Full; and the battlefield under a transparent overlay equals
+    // finer in Full; and the battlefield under a transparent overlay and
+    // beside the painters' quads equals
     // the target read back and reduced on the processor as the card reduces
     // it: by the factor's halvings from zoom 1 up, and by the two-level
     // blend of the part drawn at zoom 1 below, with the terrain, the fog
@@ -2657,13 +2739,17 @@ void Runtime::check_full_render_tier(
                 );
             SDL_DestroySurface(texels);
             // Reduced on the processor as the card reduces it, and held to
-            // the battlefield under transparent overlays, the cursor and the
-            // last column and row left out.
+            // the battlefield under transparent overlays, the cursor, the
+            // painters' quads, which the card draws over the reduced picture,
+            // and the last column and row left out.
             const auto reduced = reduce_world_target_reference(
                 texture_rgb, texture_width, texture_height, plan, software
             );
             const auto reduced_width = static_cast<uint32_t>(plan.destination.width);
             const auto overlay = full.overlay;
+            std::vector<uint8_t> under_quads(std::size_t{bf_w} * bf_h, 0);
+            for (const FullWorldQuad& quad : full.world_quads)
+                mark_rect(under_quads, bf_w, bf_h, quad.x, quad.y, quad.width, quad.height, 0);
             Difference difference;
             double sum = 0.0;
             std::size_t channels = 0;
@@ -2675,7 +2761,7 @@ void Runtime::check_full_render_tier(
                         sy < pointer.y + pointer.h)
                         continue;
                     const auto cell = static_cast<std::size_t>(y) * bf_w + static_cast<uint32_t>(x);
-                    if (overlay[cell * 4U + 3U] != 0)
+                    if (overlay[cell * 4U + 3U] != 0 || under_quads[cell] != 0)
                         continue;
                     const auto at = (static_cast<std::size_t>(sy) * read.width + sx) * 3U;
                     const auto expected_at =
@@ -2859,7 +2945,7 @@ void Runtime::check_full_models(const fs::path& report_directory) {
     inputs.library = &models.library;
     inputs.display = &models.display;
     inputs.graphics_flags = models.renderer.graphics_flags;
-    inputs.tick = models.renderer.tick;
+    inputs.build_pulse_tick = models.renderer.tick - models.renderer.build_pulse_lag;
     std::copy_n(models.renderer.team_colors, full::team_colour_players, inputs.team_colors.begin());
     inputs.light = {models.renderer.light[0], models.renderer.light[1], models.renderer.light[2]};
     inputs.light_scale = models.renderer.light_scale;
@@ -3189,8 +3275,14 @@ void Runtime::check_full_overlays(
     // projectile, debris piece, fragment, line and square, which the card
     // draws in colour where the processor greys them, and which the frames
     // between two cases may move. Each is grown by a pixel for the edges of
-    // its raster.
+    // its raster. Also passed over: what the painters after the fog lay
+    // over everything, the same over every fog in both tiers, which are the
+    // overlay canvas's painted pixels, such as the clock line and the
+    // resource panel of a profile's visual rules, and the quads they ask the
+    // card for.
     enum class TileState : uint8_t { clear, unseen, unmapped, edge };
+    // A pixel of the mask under the painters' quads and nothing else of it.
+    constexpr uint8_t quads_alone = 2;
     const auto object_mask = [&](float zoom, const renderer::Surface& frame) {
         const auto& list = match_models().draws;
         const Area field = battlefield();
@@ -3344,6 +3436,38 @@ void Runtime::check_full_overlays(
                 break;
             }
         }
+        if (full_frame_drawn()) {
+            const auto key = full_overlay_key();
+            const auto& canvas = match_world_cpu_;
+            for (uint32_t y = 0; y < canvas.height; ++y)
+                for (uint32_t x = 0; x < canvas.width; ++x) {
+                    const uint8_t* painted =
+                        canvas.rgb.data() + (std::size_t{y} * canvas.width + x) * 3U;
+                    const int fx = field.x + static_cast<int>(x);
+                    const int fy = field.y + static_cast<int>(y);
+                    if (std::equal(key.begin(), key.end(), painted) || fx < 0 || fy < 0 ||
+                        fx >= static_cast<int>(frame.width) || fy >= static_cast<int>(frame.height))
+                        continue;
+                    mask
+                        [static_cast<std::size_t>(fy) * frame.width +
+                         static_cast<std::size_t>(fx)] = 1;
+                }
+            // The quads alone, apart from the rest, for the case of the
+            // black fog to hold them to what they ask over its black.
+            for (const FullWorldQuad& quad : full_->world_quads)
+                for (int y = std::max(field.y + quad.y, 0);
+                     y < std::min(field.y + quad.y + quad.height, static_cast<int>(frame.height));
+                     ++y)
+                    for (int x = std::max(field.x + quad.x, 0);
+                         x < std::min(field.x + quad.x + quad.width, static_cast<int>(frame.width));
+                         ++x) {
+                        auto& marked = mask
+                            [static_cast<std::size_t>(y) * frame.width +
+                             static_cast<std::size_t>(x)];
+                        if (marked == 0)
+                            marked = quads_alone;
+                    }
+        }
         return mask;
     };
 
@@ -3455,9 +3579,29 @@ void Runtime::check_full_overlays(
         set_fog(true, true, false);
         const auto full_mapped = full_frame();
         objects = object_mask(zoom, full_mapped);
+        const auto black = fog_shading_.unmapped_rgb;
+        // The painters' quads over never-mapped ground draw over its black:
+        // the shadow, outline and letter edges of game text in the modern
+        // fonts there, over the black the processor's text lies on. The
+        // outline holds the black where the renderer takes the minimum blend.
+        std::vector<uint8_t> over_black(full_mapped.rgb.size());
+        for (std::size_t at = 0; at + 3U <= over_black.size(); at += 3U)
+            std::copy(
+                black.begin(), black.end(), over_black.begin() + static_cast<std::ptrdiff_t>(at)
+            );
+        const auto quads_over_black = replay_world_quads(
+            full_->world_quads,
+            full_->executor.capabilities().minimum_composed,
+            over_black,
+            full_mapped.width,
+            full_mapped.height,
+            field.x,
+            field.y
+        );
         const auto processor_mapped = standard();
         write_png(picture("fog-unmapped-zoom-" + zoom_text(zoom)), full_mapped);
-        const auto black = fog_shading_.unmapped_rgb;
+        std::size_t quads_unmapped = 0;
+        std::size_t quads_unmapped_differing = 0;
         std::size_t unmapped = 0;
         std::size_t unmapped_differing = 0;
         std::size_t unmapped_edge = 0;
@@ -3478,6 +3622,20 @@ void Runtime::check_full_overlays(
                         continue;
                     under(x, y) = 1;
                     whole_in_view = whole_in_view || whole;
+                    const auto cell = static_cast<std::size_t>(y) * full_mapped.width +
+                                      static_cast<std::size_t>(x);
+                    if (whole && !inside(pointer, x, y) && objects[cell] == quads_alone) {
+                        ++quads_unmapped;
+                        const uint8_t* drawn = pixel(full_mapped, x, y);
+                        for (std::size_t channel = 0; channel < 3; ++channel)
+                            if (std::abs(
+                                    int{drawn[channel]} - int{over_black[cell * 3U + channel]}
+                                ) > most_blend_rounding * int{quads_over_black[cell]}) {
+                                ++quads_unmapped_differing;
+                                break;
+                            }
+                        continue;
+                    }
                     if (passed_over(x, y))
                         continue;
                     const uint8_t* fogged = pixel(full_mapped, x, y);
@@ -3513,9 +3671,12 @@ void Runtime::check_full_overlays(
                   << unmapped << " pixels under tiles never mapped, " << unmapped_differing
                   << " not the processor's black; " << unmapped_edge << " under edge tiles, "
                   << unmapped_edge_outside << " outside the range to black; " << untouched
-                  << " under no such tile, " << untouched_changed << " changed\n";
+                  << " under no such tile, " << untouched_changed << " changed; " << quads_unmapped
+                  << " under the painters' quads over never-mapped ground, "
+                  << quads_unmapped_differing << " not drawn over its black as asked\n";
         if ((whole_in_view && unmapped < least_fog_pixels) || unmapped_differing != 0 ||
-            unmapped_edge == 0 || unmapped_edge_outside != 0 || untouched_changed != 0) {
+            unmapped_edge == 0 || unmapped_edge_outside != 0 || untouched_changed != 0 ||
+            quads_unmapped_differing != 0) {
             write_png(
                 picture("fog-unmapped-zoom-" + zoom_text(zoom) + "-standard"), processor_mapped
             );
@@ -3560,6 +3721,65 @@ void Runtime::check_full_overlays(
         if ((whole_in_view && dithered < least_fog_pixels) || dithered_differing != 0)
             fail("the dithered fog at zoom " + zoom_text(zoom) + " is not the even tone");
     }
+    // At the zoom floor, a sixth, where the processor draws no picture to
+    // hold the card's to and a fog tile spans a fraction of a pixel or a
+    // few: the black pass leaves no pixel of never-mapped ground
+    // unblackened between its quads, the ground's edge pixels left out.
+    {
+        const float zoom = kMinFullBattlefieldZoom;
+        at_zoom(zoom);
+        set_fog(true, true, false);
+        const auto floor_mapped = full_frame();
+        const auto objects = object_mask(zoom, floor_mapped);
+        const auto black = fog_shading_.unmapped_rgb;
+        const Area field = battlefield();
+        const Area pointer = cursor();
+        const auto width = static_cast<int>(floor_mapped.width);
+        const auto height = static_cast<int>(floor_mapped.height);
+        std::vector<uint8_t> unmapped_ground(floor_mapped.rgb.size() / 3U, 0);
+        for (const auto& tile : fog_tiles(zoom)) {
+            if (tile.tile.unmapped != wr::fog_mask_full)
+                continue;
+            for (int y = std::max(tile.area.y, 0); y < std::min(tile.area.y + tile.area.h, height);
+                 ++y)
+                for (int x = std::max(tile.area.x, 0);
+                     x < std::min(tile.area.x + tile.area.w, width);
+                     ++x)
+                    unmapped_ground
+                        [static_cast<std::size_t>(y) * floor_mapped.width +
+                         static_cast<std::size_t>(x)] = 1;
+        }
+        const auto ground_at = [&](int x, int y) {
+            return x >= 0 && y >= 0 && x < width && y < height &&
+                   unmapped_ground
+                           [static_cast<std::size_t>(y) * floor_mapped.width +
+                            static_cast<std::size_t>(x)] != 0;
+        };
+        std::size_t inside_unmapped = 0;
+        std::size_t not_black = 0;
+        for (int y = field.y + 1; y + 1 < field.y + field.h; ++y)
+            for (int x = field.x + 1; x + 1 < field.x + field.w; ++x) {
+                bool within = true;
+                for (int dy = -1; within && dy <= 1; ++dy)
+                    for (int dx = -1; within && dx <= 1; ++dx)
+                        within = ground_at(x + dx, y + dy);
+                if (!within || inside(pointer, x, y) ||
+                    objects
+                            [static_cast<std::size_t>(y) * floor_mapped.width +
+                             static_cast<std::size_t>(x)] != 0)
+                    continue;
+                ++inside_unmapped;
+                if (!same(pixel(floor_mapped, x, y), black.data()))
+                    ++not_black;
+            }
+        std::cout << "render tiers check: full tier fog at zoom " << zoom_text(zoom) << ": "
+                  << inside_unmapped << " pixels within the ground never mapped, " << not_black
+                  << " not black\n";
+        if (not_black != 0) {
+            write_png(picture("fog-unmapped-zoom-" + zoom_text(zoom)), floor_mapped);
+            fail("the black fog at zoom " + zoom_text(zoom) + " leaves pixels between its quads");
+        }
+    }
     restore_fog();
     at_zoom(1.0F);
 
@@ -3593,7 +3813,8 @@ void Runtime::check_full_overlays(
 
     // The kill board: its foreground painted on the overlay as in every tier,
     // its shading of the world under it a black quad on the card at the
-    // shade level's alpha, and nothing changed outside it.
+    // shade level's alpha, what its text in the modern fonts leaves to the
+    // card drawn as asked, and nothing changed outside it.
     {
         const auto hidden = full_frame();
         canvas_matches_overlay("with the board hidden", false);
@@ -3642,7 +3863,12 @@ void Runtime::check_full_overlays(
             // What the shade level darkens a channel to, as the card blends black
             // over it at the level's alpha.
             const double kept = 1.0 - full_fog::level_quad(hud::kBoardShadeLevel).colour.alpha;
+            // What the shadow of its text in the modern fonts darkens a
+            // shaded channel to, as the card blends it over the shade.
+            const double shadow_kept = kept * (1.0 - oa::present::text_shadow_alpha / 255.0);
             std::size_t shaded = 0;
+            std::size_t shadowed = 0;
+            std::size_t text_quads = 0;
             std::size_t foreground = 0;
             std::size_t neither = 0;
             std::size_t outside_changed = 0;
@@ -3655,6 +3881,31 @@ void Runtime::check_full_overlays(
             const auto darkened = [&](const uint8_t* before, const uint8_t* after, double share) {
                 for (std::size_t channel = 0; channel < 3; ++channel)
                     if (std::abs(after[channel] - before[channel] * share) > most_blend_rounding)
+                        return false;
+                return true;
+            };
+            // The frame without the board with the shown frame's quads drawn
+            // over it on the processor: the shade, the light and what the
+            // board's text in the modern fonts leaves to the card.
+            auto replayed = hidden.rgb;
+            const auto over = replay_world_quads(
+                full_->world_quads,
+                full_->executor.capabilities().minimum_composed,
+                replayed,
+                hidden.width,
+                hidden.height,
+                field.x,
+                field.y
+            );
+            const auto as_quads_ask = [&](int x, int y, const uint8_t* after) {
+                const auto at =
+                    static_cast<std::size_t>(y) * hidden.width + static_cast<std::size_t>(x);
+                const int quads = over[at];
+                if (quads == 0)
+                    return false;
+                for (std::size_t channel = 0; channel < 3; ++channel)
+                    if (std::abs(int{after[channel]} - int{replayed[at * 3U + channel]}) >
+                        most_blend_rounding * quads)
                         return false;
                 return true;
             };
@@ -3675,6 +3926,12 @@ void Runtime::check_full_overlays(
                         ++shaded;
                         continue;
                     }
+                    // The shadow its text in the modern fonts casts beside the
+                    // letters, a darkening the card blends over the shade.
+                    if (darkened(before, after, shadow_kept)) {
+                        ++shadowed;
+                        continue;
+                    }
                     // The foreground: a pixel the processor painted, the same in
                     // both tiers.
                     const auto cell =
@@ -3682,6 +3939,12 @@ void Runtime::check_full_overlays(
                         static_cast<std::size_t>(x - field.x);
                     if (full_->overlay[cell * 4U + 3U] != 0) {
                         ++foreground;
+                        continue;
+                    }
+                    // The outline and letter edges of its text in the modern
+                    // fonts, which the card draws over the shade.
+                    if (as_quads_ask(x, y, after)) {
+                        ++text_quads;
                         continue;
                     }
                     ++neither;
@@ -3711,10 +3974,11 @@ void Runtime::check_full_overlays(
                         ++margin_unshaded;
                 }
             std::cout << "render tiers check: full tier kill board " << board.w << 'x' << board.h
-                      << ": " << shaded << " pixels shaded by the card, " << foreground
-                      << " painted, " << neither << " neither; margin " << margin << " with "
-                      << margin_unshaded << " unshaded; " << outside_changed
-                      << " changed outside\n";
+                      << ": " << shaded << " pixels shaded by the card, " << shadowed
+                      << " shadowed by its text, " << text_quads
+                      << " drawn as its text's other quads ask, " << foreground << " painted, "
+                      << neither << " neither; margin " << margin << " with " << margin_unshaded
+                      << " unshaded; " << outside_changed << " changed outside\n";
             if (shaded == 0 || foreground == 0 || neither != 0 || margin == 0 ||
                 margin_unshaded != 0 || outside_changed != 0) {
                 write_png(picture("kill-board-hidden"), hidden);

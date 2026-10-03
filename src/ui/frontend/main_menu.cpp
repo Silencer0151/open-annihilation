@@ -23,7 +23,7 @@ void place_version_label(Panel& panel, const MainMenuHost& host) {
     auto* label = panel_control(panel, kMainMenuVersionControl);
     if (label == nullptr)
         return;
-    set_control_text(*label, kMainMenuVersion);
+    set_control_text(*label, host.version_text != nullptr ? host.version_text : kMainMenuVersion);
     panel.dirty = true;
     const int32_t width =
         host.measure_text != nullptr ? host.measure_text(host.context, label->text.data()) : 0;

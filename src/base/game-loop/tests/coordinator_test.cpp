@@ -177,6 +177,17 @@ void test_timing() {
     );
     ran(update_timing(t, 0));
     require(t.adaptation == 0 && t.actual_rate == 10, "spare-101 restores rate");
+    // Speed 0, which a mod's speed range allows: the clock runs no tick, keeps
+    // its fraction and does not count as paused.
+    t = timing();
+    t.actual_rate = 0;
+    t.requested_rate = 0;
+    t.remainder = 0.5f;
+    ran(update_timing(t, 300));
+    require(
+        t.pending_steps == 0 && t.remainder == 0.5f && t.actual_rate == 0 && (t.flags & 4) == 0,
+        "speed 0 runs no tick"
+    );
     t = timing();
     t.adaptation = 32767;
     ran(update_timing(t, 20));
@@ -501,8 +512,28 @@ void test_mode_timing_reset() {
     );
 }
 
+// The lag guard lets steps run while a remote player was heard within the
+// period; once all have been silent for it, one step runs per period, and a
+// player heard again opens it at once.
+void test_lag_guard() {
+    using namespace oa::base::game_loop;
+    LagGuard guard{};
+    require(lag_guard_step(guard, 0, 0, 100000) == LagGuardStep::run, "a period of 0 is off");
+    require(lag_guard_step(guard, 500, 1000, 499) == LagGuardStep::run, "heard within the period");
+    require(lag_guard_step(guard, 500, 1000, 500) == LagGuardStep::closing, "silent: it closes");
+    require(guard.closed && guard.closed_at_ms == 1000, "closed at 1000");
+    require(lag_guard_step(guard, 500, 1016, 516) == LagGuardStep::held, "held within the period");
+    require(lag_guard_step(guard, 500, 1499, 999) == LagGuardStep::held, "still held");
+    require(lag_guard_step(guard, 500, 1500, 1000) == LagGuardStep::run, "one step per period");
+    require(lag_guard_step(guard, 500, 1516, 1016) == LagGuardStep::held, "then held again");
+    require(lag_guard_step(guard, 500, 1600, 20) == LagGuardStep::opening, "heard: it opens");
+    require(!guard.closed, "open");
+    require(lag_guard_step(guard, 500, 1616, 36) == LagGuardStep::run, "and runs freely");
+}
+
 int main() {
     try {
+        test_lag_guard();
         test_mode_timing_reset();
         test_timing();
         test_clock_turn();

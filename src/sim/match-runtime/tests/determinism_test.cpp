@@ -8,15 +8,22 @@
 // platform, and two runs must agree tick for tick.
 // A change that moves a pinned value changes what the simulation computes;
 // update the constant only with the reason in the commit message.
+//
+// The same skirmish played under a mod profile that turns every limit and
+// hack on at its baseline preset (baseline_profile_text) must give the same
+// pinned values: a rule at its 3.1c baseline plays exactly as 3.1c.
 #include "combat_fixture.hpp"
 
 #include "oa/base/game_loop.hpp"
+#include "oa/data/mod_profile.hpp"
 #include "oa/sim/match_runtime/match_trace.hpp"
 #include "oa/sim/state_hash.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <span>
+#include <string>
 #include <vector>
 
 namespace {
@@ -60,17 +67,15 @@ bool live(const World& world, uint32_t slot) {
     return world.units[slot].type_index != 0 && (world.units[slot].flags & OA_UNIT_FLAG_LIVE) != 0;
 }
 
-/// Returns the total section digest of the match's current state.
+/// Returns the total section digest of the match's current state, its rule
+/// state included.
 ///
 /// @param match match to sample
 /// @param[in,out] sides scratch table of one entry per unit slot
 /// @return the total section's 64-bit digest
 uint64_t total_digest(const sim::match_runtime::Match& match, std::vector<trace::UnitSide>& sides) {
-    const auto& world = match.state();
-    sides.assign(world.unit_slot_count, {});
-    sim::match_runtime::fill_trace_sides(match, sides);
-    const trace::RandomState random{match.random_state(), match.lcg_state()};
-    const auto digest = trace::tick_digest(world, sides.data(), random);
+    sides.assign(match.state().unit_slot_count, {});
+    const auto digest = sim::match_runtime::match_tick_digest(match, sides);
     return digest.sections[static_cast<size_t>(trace::Section::total)].value;
 }
 
@@ -88,9 +93,10 @@ uint64_t state_digest(sim::match_runtime::Match& match) {
 /// which attacks player 0's first back; player 1's second unit marches on
 /// player 0's side; each player's third unit patrols across the map.
 ///
+/// @param options the rules the match plays by; 3.1c's by default
 /// @return each tick's total digest and the values pinned above
-Run play() {
-    Fixture f;
+Run play(const Options& options = {}) {
+    Fixture f(options);
     auto& gunner = f.spawn(0, 48, 48);
     auto& second = f.spawn(0, 48, 112);
     auto& scout = f.spawn(0, 64, 208);
@@ -148,9 +154,11 @@ bool matches_pinned(const char* what, uint64_t found, uint64_t expected) {
 }
 
 /// Plays the skirmish twice; the runs must agree with each other and with the pinned values.
-void runs_repeat_and_match_pins() {
-    const Run first = play();
-    const Run second = play();
+///
+/// @param options the rules the match plays by
+void runs_repeat_and_match_pins(const Options& options = {}) {
+    const Run first = play(options);
+    const Run second = play(options);
     CHECK(first.totals.size() == match_ticks);
     CHECK(first.duellists_destroyed);
     CHECK(first.totals == second.totals);
@@ -166,7 +174,44 @@ void runs_repeat_and_match_pins() {
            held;
     held = matches_pinned("live units", first.live_units, pinned.live_units) && held;
     CHECK(held);
-    std::cout << "match determinism passed\n";
+}
+
+/// Resolves the profile that turns every limit and hack on at its baseline
+/// preset, accepting hacks not implemented yet.
+///
+/// @return the match options its rules, limits and sim hash give
+Options baseline_profile_options() {
+    const std::string text = oa::data::mod_profile::baseline_profile_text();
+    oa::data::mod_profile::ResolveOptions resolve{};
+    resolve.accept_unimplemented_hacks = true;
+    const auto result = oa::data::mod_profile::resolve_profile(
+        std::span<const uint8_t>{reinterpret_cast<const uint8_t*>(text.data()), text.size()},
+        "baseline-rules",
+        resolve
+    );
+    for (const auto& error : result.errors)
+        std::cerr << oa::data::mod_profile::format_diagnostic(error) << '\n';
+    CHECK(result.resolution.has_value());
+    const auto& profile = result.resolution->profile;
+    Options options{};
+    options.rules = profile.rules;
+    options.limits = profile.limits;
+    options.profile_sim_hash = profile.sim_hash;
+    return options;
+}
+
+/// Plays the skirmish under the profile of every rule at its baseline; it
+/// must keep no rule state and match the pins.
+void baseline_profile_matches_pins() {
+    const Options options = baseline_profile_options();
+    CHECK(!(options.rules == oa::data::match_rules::MatchRules{}));
+    {
+        const Fixture f(options);
+        CHECK(f.match->profile_active());
+        CHECK(f.match->rules() == options.rules);
+        CHECK(f.match->rule_state().count == 0);
+    }
+    runs_repeat_and_match_pins(options);
 }
 
 } // namespace
@@ -174,6 +219,8 @@ void runs_repeat_and_match_pins() {
 int main() {
     try {
         runs_repeat_and_match_pins();
+        baseline_profile_matches_pins();
+        std::cout << "match determinism passed\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

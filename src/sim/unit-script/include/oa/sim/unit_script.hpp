@@ -7,6 +7,8 @@
 #include <cstdint>
 
 #include "oa/core/world.h"
+#include "oa/data/limits.hpp"
+#include "oa/data/match_rules.hpp"
 #include "oa/sim/script_vm.hpp"
 
 namespace oa::formats::cob {
@@ -342,22 +344,63 @@ struct UnitValueServices {
     void (*set_state_flag)(void* context, World* world, Unit* unit, uint8_t mask, bool enabled){};
     /// Opens or closes a factory yard.
     void (*set_yard_open)(void* context, World* world, Unit* unit, int32_t open){};
+    /// The rules the match plays by: the unit-script extensions a profile
+    /// mounts (MatchRules::script_get, script_set, script_fidelity). Unset,
+    /// nothing is mounted, as in 3.1c.
+    data::match_rules::MatchRulesView rules{};
+    /// The capacities the match was built with, such as the most units a
+    /// player may have; null for 3.1c's.
+    const data::limits::Limits* limits{};
 };
 
 /// Reads a GET unit value.
 ///
 /// Positions packed by COB hold x in the high word and z in the low word.
+/// Selectors 1..20 read the base values; any other selector reads the
+/// extension mounted there (MatchRules::script_get, through
+/// UnitValueServices::rules), or 0 when none is. The extensions read:
+///
+/// - unit.kills-x100: the caller's kills (Unit.veteran_level) times 100;
+/// - unit.min-id: 1, the lowest unit id;
+/// - unit.max-id: the configured unit limit (Game.max_units_setting) times
+///   10, the highest id a full table holds, however many units this game's
+///   limit allows; a world that records no setting reads its active limit
+///   (Game.units_per_player) instead;
+/// - unit.my-id: the caller's own id (Unit.id);
+/// - unit.owner-of(id): the owner player index (Unit.owner_index) of slot
+///   id & 0xffff;
+/// - unit.build-percent-left-of(id): the BUILD_PERCENT_LEFT value of the unit
+///   in slot id, the whole 32-bit argument;
+/// - unit.allied-with(id): 1 when the caller's owner has allied the owner of
+///   slot id & 0xffff (Player.alliance, one-way; every player allies itself),
+///   0 for an owner index of 10 or more;
+/// - unit.is-local(id): 1 when the owner of slot id & 0xffff is played on
+///   this machine (Player.status local or computer), else 0; this differs
+///   between machines by design.
+///
+/// Under exact fidelity owner-of, build-percent-left-of and allied-with read a
+/// slot whether or not a unit lives there, so a free slot gives what its
+/// record still holds. A slot past the unit table, or past the highest id
+/// unit.max-id reports, reads 0 (is-local too). build-percent-left-of reads
+/// the slot the argument times the record size (0x118 bytes), wrapped to 32
+/// bits, lands on, and 0 when that is not a whole record before the table's
+/// last slot. Under safe fidelity those three read 0 for any slot without a
+/// live unit, and build-percent-left-of takes the argument as the slot.
 ///
 /// @param world World the unit belongs to
 /// @param unit unit whose script asks
-/// @param selector UnitValue selector
+/// @param selector UnitValue selector, or an index an extension is mounted at
 /// @param first selector argument: piece index, unit id, packed x/z or dx
 /// @param second second argument; dz for atan and hypot, otherwise unused
-/// @param services engine services for pieces, trigonometry and terrain
+/// @param services engine services for pieces, trigonometry and terrain, and
+///        the mounted extensions
 /// @return the value, or 0 for an unknown selector or a dead or missing unit;
 ///         health is 0 for a type whose UnitDef.max_damage is zero
 /// @quirk Health is Unit.health * 100 divided by UnitDef.max_damage as unsigned
-///        32-bit values, as 3.1c computes it.
+///        32-bit values, as 3.1c computes it, and ignores any unit-id argument.
+/// @quirk unit.max-id follows the configured limit, not the limit of the game
+///        being played, so a game whose host chose a lower limit reads ids past
+///        its table, which read 0.
 [[nodiscard]] int32_t unit_script_get_value(
     World* world,
     Unit* unit,

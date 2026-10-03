@@ -4,6 +4,7 @@
 // Campaign/mission-info object: campaign TDF loading, mission selection and
 // the per-mission OTA header, briefing and placement tables.
 #include "oa/data/campaign/campaign_file.hpp"
+#include "oa/data/defs/layout.hpp"
 
 #include "oa/core/game_state.h"
 #include "oa/base/text.hpp"
@@ -23,7 +24,6 @@ constexpr const char* kMapsDirectory = "Maps";
 constexpr const char* kBriefsDirectory = "camps/briefs";
 constexpr const char* kHintsDirectory = "camps/hints";
 constexpr const char* kUseOnlyDirectory = "camps/useonly";
-constexpr const char* kAiDirectory = "ai";
 constexpr const char* kGlobalHeader = "GlobalHeader";
 constexpr const char* kStartPos = "StartPos";
 constexpr const char* kUnnamedMission = "Error -- Unnamed Mission";
@@ -223,10 +223,18 @@ bool find_matching_schema(
     int32_t difficulty,
     int32_t players,
     char* schema_name,
-    std::size_t capacity
+    std::size_t capacity,
+    const match_rules::AiDifficultyNames& names
 ) {
-    static constexpr const char* kTypes[] = {
-        "Easy", "Medium", "Hard", "Network 1", "Network 2", "Network 3", "Network 4"
+    static constexpr const char* kDifficultyTypes[] = {"Easy", "Medium", "Hard"};
+    const char* const kTypes[] = {
+        kDifficultyTypes[static_cast<std::size_t>(names.names[0])],
+        kDifficultyTypes[static_cast<std::size_t>(names.names[1])],
+        kDifficultyTypes[static_cast<std::size_t>(names.names[2])],
+        "Network 1",
+        "Network 2",
+        "Network 3",
+        "Network 4"
     };
     int32_t order[4] = {-1, -1, -1, -1};
     if (kind == SessionKind::campaign) {
@@ -309,6 +317,50 @@ void cursor_string(
     );
 }
 
+/// Reads a key in the game's language first, as 3.1c does for a mission's
+/// name, briefing, narration and hint: "<language><key>", which wins when
+/// present, even empty, then the key itself.
+///
+/// @param block the block read
+/// @param language the language's word; null or empty reads the key alone
+/// @param key key to read
+/// @param[out] out the value, cut to `capacity - 1` characters
+/// @param capacity size of `out` in bytes
+/// @param fallback text taken when neither key is there, or null
+/// @return true when either key was there
+bool language_string(
+    const oa::formats::tdf::Block* block,
+    const char* language,
+    const char* key,
+    char* out,
+    std::size_t capacity,
+    const char* fallback
+) {
+    if (capacity == 0)
+        return false;
+    out[0] = '\0';
+    if (language != nullptr && language[0] != '\0') {
+        char prefixed[0x100];
+        if (std::snprintf(prefixed, sizeof prefixed, "%s%s", language, key) <
+                static_cast<int>(sizeof prefixed) &&
+            oa::formats::tdf::get_string(block, prefixed, out, capacity, nullptr))
+            return true;
+    }
+    return oa::formats::tdf::get_string(block, key, out, capacity, fallback);
+}
+
+/// Returns file services that read the game's rules from their own
+/// folders: the language's folders hold only what players read and hear,
+/// so that the language never changes a mission.
+///
+/// @param files the file services
+/// @return a copy without the language's folders
+CampaignFiles rule_files(const CampaignFiles* files) noexcept {
+    CampaignFiles plain = files != nullptr ? *files : CampaignFiles{};
+    plain.language = nullptr;
+    return plain;
+}
+
 } // namespace
 
 void campaign_file_init(CampaignFile* file) noexcept {
@@ -345,7 +397,8 @@ bool campaign_load_file(CampaignFile* file, const CampaignEnv* env, const char* 
         set_path(file, files, static_cast<CampaignPath>(slot), "");
     if (file->campaign_name[0] == '\0')
         return true;
-    resolve_path(file, files, CampaignPath::campaign, kCampsDirectory, file->campaign_name, "TDF");
+    const CampaignFiles rules = rule_files(files);
+    resolve_path(file, &rules, CampaignPath::campaign, kCampsDirectory, file->campaign_name, "TDF");
     const char* path = campaign_path(file, CampaignPath::campaign);
     if (!load_tdf(files, &file->campaign, path)) {
         char text[kCampaignPathBytes + 64];
@@ -434,6 +487,35 @@ int32_t campaign_load_mission_list(
     return count;
 }
 
+bool campaign_mission_title(
+    CampaignFile* file, int32_t index, const char* language, char* out, std::size_t capacity
+) noexcept {
+    if (capacity != 0)
+        out[0] = '\0';
+    if (capacity == 0 || file->campaign_name[0] == '\0' ||
+        !select_mission_section(&file->campaign, index))
+        return false;
+    (void)language_string(
+        oa::formats::tdf::cursor(&file->campaign),
+        language,
+        "missionname",
+        out,
+        capacity,
+        kUnnamedMission
+    );
+    return true;
+}
+
+int32_t campaign_load_mission_titles(
+    CampaignFile* file, const char* language, char (*names)[kCampaignNameBytes], int32_t capacity
+) noexcept {
+    const int32_t count = campaign_load_mission_list(file, nullptr, 0);
+    for (int32_t index = 0; index < count && index < capacity && names != nullptr; ++index)
+        if (!campaign_mission_title(file, index, language, names[index], kCampaignNameBytes))
+            return 0;
+    return count;
+}
+
 bool campaign_mission_file(
     CampaignFile* file, int32_t index, char* out, std::size_t capacity
 ) noexcept {
@@ -507,6 +589,7 @@ bool campaign_select_mission(CampaignFile* file, const CampaignEnv* env, const c
 
 bool campaign_load_mission_info(CampaignFile* file, const CampaignEnv* env, const char* map_name) {
     const CampaignFiles* files = env->files;
+    const CampaignFiles rules = rule_files(files);
     file->planet[0] = '\0';
     file->description[0] = '\0';
     file->surface_metal = -1;
@@ -547,7 +630,7 @@ bool campaign_load_mission_info(CampaignFile* file, const CampaignEnv* env, cons
         }
         // The two messages below name the mission as the campaign file
         // writes it, not the path searched.
-        build_variant_path(files, path, sizeof(path), kMapsDirectory, name, "OTA");
+        build_variant_path(&rules, path, sizeof(path), kMapsDirectory, name, "OTA");
         if (!load_tdf(files, &ota, path)) {
             std::snprintf(
                 text,
@@ -581,7 +664,7 @@ bool campaign_load_mission_info(CampaignFile* file, const CampaignEnv* env, cons
         file->mission_file_size = 0;
         copy_bounded(file->mission_name, kCampaignNameBytes, map_name);
         copy_bounded(name, sizeof(name), map_name);
-        build_variant_path(files, path, sizeof(path), kMapsDirectory, name, "OTA");
+        build_variant_path(&rules, path, sizeof(path), kMapsDirectory, name, "OTA");
         if (!load_tdf(files, &ota, path)) {
             oa::formats::tdf::document_free(&ota);
             return false;
@@ -591,7 +674,7 @@ bool campaign_load_mission_info(CampaignFile* file, const CampaignEnv* env, cons
         return false;
     }
 
-    resolve_path(file, files, CampaignPath::mission, kMapsDirectory, name, "TNT");
+    resolve_path(file, &rules, CampaignPath::mission, kMapsDirectory, name, "TNT");
     if (!oa::formats::tdf::select_section(&ota, kGlobalHeader)) {
         message(files, "No GlobalHeader block in mission file!");
         oa::formats::tdf::document_free(&ota);
@@ -599,20 +682,23 @@ bool campaign_load_mission_info(CampaignFile* file, const CampaignEnv* env, cons
     }
     const oa::formats::tdf::Block* header = oa::formats::tdf::cursor(&ota);
     file->header_hash = header->body_hash;
+    // What players read and hear comes from the language's folders and keys
+    // first, as 3.1c reads it.
+    const char* language = files != nullptr ? files->language : nullptr;
     char value[kCampaignPathBytes];
-    cursor_string(&ota, "brief", value, sizeof(value), "");
+    language_string(header, language, "brief", value, sizeof(value), "");
     resolve_path(file, files, CampaignPath::briefing, kBriefsDirectory, value, "TXT");
     load_briefing_text(file, files);
-    cursor_string(&ota, "narration", value, sizeof(value), "");
+    language_string(header, language, "narration", value, sizeof(value), "");
     resolve_path(file, files, CampaignPath::narration, kBriefsDirectory, value, "WAV");
-    cursor_string(&ota, "missionhint", value, sizeof(value), "");
+    language_string(header, language, "missionhint", value, sizeof(value), "");
     resolve_path(file, files, CampaignPath::hint, kHintsDirectory, value, "TXT");
     cursor_string(&ota, "glamour", value, sizeof(value), "");
     resolve_path(file, files, CampaignPath::glamour, "", value, "PCX");
     cursor_string(&ota, "glamoursound", value, sizeof(value), "");
     resolve_path(file, files, CampaignPath::glamour_sound, kBriefsDirectory, value, "WAV");
     cursor_string(&ota, "UseOnlyUnits", value, sizeof(value), "");
-    resolve_path(file, files, CampaignPath::use_only, kUseOnlyDirectory, value, "TDF");
+    resolve_path(file, &rules, CampaignPath::use_only, kUseOnlyDirectory, value, "TDF");
 
     file->mapping = oa::formats::tdf::get_int(header, "mapping", 0);
     file->line_of_sight = oa::formats::tdf::get_int(header, "lineofsight", 0);
@@ -656,7 +742,13 @@ bool campaign_load_mission_info(CampaignFile* file, const CampaignEnv* env, cons
 
     const int32_t players = env->player_count;
     if (!find_matching_schema(
-            file->kind, &ota, env->difficulty, players, file->schema, sizeof(file->schema)
+            file->kind,
+            &ota,
+            env->difficulty,
+            players,
+            file->schema,
+            sizeof(file->schema),
+            env->difficulty_names
         )) {
         message(files, "No suitable schema type in mission file!");
         oa::formats::tdf::document_free(&ota);
@@ -669,9 +761,10 @@ bool campaign_load_mission_info(CampaignFile* file, const CampaignEnv* env, cons
     file->energy[1] = static_cast<float>(oa::formats::tdf::get_int(schema, "ComputerEnergy", 0));
     file->surface_metal = oa::formats::tdf::get_int(schema, "SurfaceMetal", 0);
     cursor_string(&ota, "aiprofile", value, sizeof(value), "");
-    resolve_path(file, files, CampaignPath::ai_profile, kAiDirectory, value, "txt");
+    const char* ai_directory = oa::data::defs::directory_name(oa::data::defs::DataDirectory::ai);
+    resolve_path(file, &rules, CampaignPath::ai_profile, ai_directory, value, "txt");
     if (campaign_path(file, CampaignPath::ai_profile) == nullptr)
-        resolve_path(file, files, CampaignPath::ai_profile, kAiDirectory, "Default", "txt");
+        resolve_path(file, &rules, CampaignPath::ai_profile, ai_directory, "Default", "txt");
     ok = campaign_parse_mission_data(file, file->schema, &ota);
     oa::formats::tdf::document_free(&ota);
     return ok;
@@ -687,7 +780,8 @@ bool campaign_parse_mission_data(
     const oa::formats::tdf::Block* schema = oa::formats::tdf::cursor(ota);
     static constexpr const char* kUnitStrings[] = {"Unitname", "Ident", "InitialMission"};
 
-    const oa::formats::tdf::Block* units = oa::formats::tdf::find_child(schema, "units");
+    const oa::formats::tdf::Block* units =
+        oa::formats::tdf::find_child(schema, oa::data::defs::map_units_section());
     const uint32_t unit_count = oa::formats::tdf::child_count(units);
     uint32_t pool = 0;
     char scratch[kUnitStringLimit];
@@ -859,7 +953,8 @@ campaign_load_names(const CampaignFiles* files, const char* side, char* out, std
     oa::formats::tdf::document_init(&document);
     for (int32_t left = count; left > 0; --left) {
         char path[kCampaignPathBytes];
-        build_variant_path(files, path, sizeof(path), kCampsDirectory, name, "tdf");
+        const CampaignFiles rules = rule_files(files);
+        build_variant_path(&rules, path, sizeof(path), kCampsDirectory, name, "tdf");
         if (!load_tdf(files, &document, path))
             continue;
         oa::formats::tdf::reset_cursor(&document);

@@ -8,10 +8,13 @@
 
 #include "oa/ui/console/unit_tags.hpp"
 
+#include "oa/data/languages/unit_texts.hpp"
+
 #include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <string_view>
 
 namespace oa::ui::hud {
 namespace {
@@ -44,6 +47,15 @@ bool same_name(const char* a, const char* b) noexcept {
 template <size_t N>
 void copy_field(char* out, size_t size, const char (&field)[N]) {
     std::snprintf(out, size, "%.*s", static_cast<int>(N), field);
+}
+
+/// Copies a text, cut to the room an output has.
+///
+/// @param[out] out the output
+/// @param size bytes of `out`
+/// @param text the text
+void copy_text(char* out, size_t size, std::string_view text) {
+    std::snprintf(out, size, "%.*s", static_cast<int>(text.size()), text.data());
 }
 
 /// Converts a cost to the whole number the panel prints: truncated toward
@@ -79,6 +91,20 @@ bool shows_owner_name(const UnitDef& def, oa::data::campaign::SessionKind sessio
         OA_UNIT_DEF_ABILITY_SHOW_PLAYER_NAME | OA_UNIT_DEF_ABILITY_COMMANDER;
     return session_kind == oa::data::campaign::SessionKind::multiplayer &&
            (def.abilities & owner_named) != 0;
+}
+
+/// Tells whether the panel shows a unit as the viewer's own: its owner is the
+/// viewer or, with UnitPanelHooks::allied_units_shown, allies the viewer
+/// (Player.alliance of the owner, which holds the owner itself, or
+/// UnitPanelHooks::viewer_allies_every_player).
+bool shown_as_own(const World& world, const Unit& unit, const UnitPanelHooks& hooks) noexcept {
+    const auto viewer = world.game.viewpoint_player;
+    if (!hooks.allied_units_shown)
+        return unit.owner_index == viewer;
+    const Player* owner = world_unit_owner(&world, &unit);
+    if (hooks.viewer_allies_every_player)
+        return owner != nullptr;
+    return owner != nullptr && viewer < sizeof owner->alliance && owner->alliance[viewer] != 0;
 }
 
 } // namespace
@@ -135,18 +161,28 @@ UnitPanelSnapshot unit_panel_snapshot(
     if (owner != nullptr && shows_owner_name(*def, session_kind))
         copy_field(panel.name, sizeof panel.name, owner->name);
     else
-        copy_field(panel.name, sizeof panel.name, def->name);
-    panel.show_damage = panel_shows_damage(world, *unit, *def);
+        copy_text(panel.name, sizeof panel.name, oa::data::languages::unit_display_name(*def));
+    const bool own = shown_as_own(world, *unit, hooks);
+    panel.show_damage = (hooks.allied_units_shown && own) || panel_shows_damage(world, *unit, *def);
     panel.logo_player = unit->owner_index;
-    const bool own = unit->owner_index == game.viewpoint_player;
     if (!own && !debug_keys)
         return panel;
     panel.show_rates = true;
     if ((unit->flags & OA_UNIT_FLAG_HAS_WEAPONS) != 0 && unit->veteran_level != 0) {
         panel.show_kills = true;
-        format_kill_count(
-            panel.kills, sizeof panel.kills, unit->veteran_level, hooks.localize, hooks.context
-        );
+        if (hooks.veterancy_level != nullptr)
+            format_kill_count_at_level(
+                panel.kills,
+                sizeof panel.kills,
+                unit->veteran_level,
+                hooks.veterancy_level(hooks.context, *unit),
+                hooks.localize,
+                hooks.context
+            );
+        else
+            format_kill_count(
+                panel.kills, sizeof panel.kills, unit->veteran_level, hooks.localize, hooks.context
+            );
     }
     std::snprintf(
         panel.mission_text,
@@ -155,7 +191,7 @@ UnitPanelSnapshot unit_panel_snapshot(
         localized(hooks.localize, hooks.context, head_order_status_text(overlay, unit))
     );
     // The stockpile build and the head order's target are shown for the
-    // viewer's own units only.
+    // viewer's own units only (and its allies' under allied_units_shown).
     if (!own)
         return panel;
     if (const int32_t percent = stockpile_percent(overlay, *unit); percent != 0) {
@@ -185,10 +221,10 @@ bool build_button_readout(
     const char* button_name,
     char* name_line,
     size_t name_size,
-    const char** description
+    std::string_view* description
 ) {
     if (description != nullptr)
-        *description = nullptr;
+        *description = {};
     if (button_name == nullptr || name_line == nullptr || name_size == 0)
         return false;
     char name[kButtonUnitNameBytes + 1]{};
@@ -203,18 +239,18 @@ bool build_button_readout(
     if (type == 0 || same_name(name, kBuildMenuButton))
         return false;
     const UnitDef& def = world.unit_defs[type];
-    char display[sizeof def.name + 1]{};
-    copy_field(display, sizeof display, def.name);
+    const std::string_view display = oa::data::languages::unit_display_name(def);
     std::snprintf(
         name_line,
         name_size,
-        "%s  M:%d E:%d",
-        display,
+        "%.*s  M:%d E:%d",
+        static_cast<int>(display.size()),
+        display.data(),
         static_cast<int>(whole_cost(def.build_cost_metal)),
         static_cast<int>(whole_cost(def.build_cost_energy))
     );
     if (description != nullptr)
-        *description = def.description;
+        *description = oa::data::languages::unit_display_description(def);
     return true;
 }
 

@@ -56,11 +56,6 @@ class NativeOfflineServices final : public oa::sim::match_runtime::OfflineServic
     /// Forgets the bound match; announcements need bind_announcements() again.
     void clear_match() noexcept { match_ = nullptr; }
 
-    /// Sets the player whose units' announcements count as the viewer's own.
-    ///
-    /// @param viewpoint player index compared with the speaking slot's player byte
-    void set_viewpoint(uint8_t viewpoint) noexcept { viewpoint_ = viewpoint; }
-
     /// Tests whether a unit is on screen: listed by the last frame drawn.
     using OnScreenTest = bool (*)(const void* context, uint16_t unit);
 
@@ -102,7 +97,10 @@ class NativeOfflineServices final : public oa::sim::match_runtime::OfflineServic
     /// Binds the unit sound catalog and the match for unit announcements.
     ///
     /// Maps each type's simulation record to its definition's sound category,
-    /// and starts the announcements' random stream again.
+    /// and starts the announcements' random stream again. As each mission
+    /// start does in 3.1c, the match starts with an empty queue, no category
+    /// cooling down and no sound heard yet: what the last match said, and
+    /// when, silences nothing in this one.
     /// Throws std::runtime_error unless there is exactly one more type than
     /// definitions (type 0 has none).
     ///
@@ -124,6 +122,8 @@ class NativeOfflineServices final : public oa::sim::match_runtime::OfflineServic
         match_ = &match;
         announcement_gates_ = gates;
         announcement_random_ = {};
+        announcement_queue_.reset_cooldowns();
+        presented_announcements_.clear();
         sound_categories_.clear();
         for (std::size_t index = 1; index < types.size(); ++index)
             sound_categories_.emplace(
@@ -307,7 +307,9 @@ class NativeOfflineServices final : public oa::sim::match_runtime::OfflineServic
 
     /// Queues a unit announcement for a game sound category.
     ///
-    /// A category with no announcement is dropped. The announcement listener,
+    /// A category with no announcement is dropped. Only the units of the
+    /// player the match views (Game.viewpoint_player, which "+View" changes)
+    /// speak, as in 3.1c. The announcement listener,
     /// when one is set, hears the request first, whoever owns the unit. When
     /// the queue was full and the record is queued, the record it evicted is
     /// presented at once, with a draw from the announcements' own stream
@@ -339,7 +341,7 @@ class NativeOfflineServices final : public oa::sim::match_runtime::OfflineServic
             found->second,
             *category,
             match_->simulation().tick,
-            slot.owner_index == viewpoint_,
+            slot.owner_index == match_->state().game.viewpoint_player,
             unit_is_live_target(slot.unit->flags),
             // Chatter captions a unit only while it is live (OA_UNIT_FLAG_LIVE).
             (slot.unit->flags & OA_UNIT_FLAG_LIVE) != 0,
@@ -369,7 +371,6 @@ class NativeOfflineServices final : public oa::sim::match_runtime::OfflineServic
     PresentationRandom announcement_random_{};
     std::unordered_map<const oa::sim::simulation_state::UnitType*, std::string> sound_categories_;
     std::vector<oa::audio::game_audio::UnitAnnouncement> presented_announcements_;
-    uint8_t viewpoint_{};
     OnScreenTest on_screen_test_{};
     const void* on_screen_context_{};
     AnnouncementHooks announcement_hooks_{};

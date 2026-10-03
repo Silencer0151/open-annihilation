@@ -92,7 +92,12 @@ inline constexpr std::size_t code_words = 1U << 20;
 inline constexpr std::size_t scripts = 1U << 16;
 inline constexpr std::size_t statics = 1U << 16;
 inline constexpr std::size_t pieces = 4096;
-inline constexpr std::size_t instructions_per_tick = 100'000;
+// Instructions one unit's contexts may run in one tick before the tick stops
+// with instruction_limit. 3.1c has no such bound: a script may walk every unit
+// slot without sleeping, and one that loops forever never returns. The bound
+// lets a script visit all 65536 slots with a few hundred instructions each
+// and still stops one that never sleeps.
+inline constexpr std::size_t instructions_per_tick = std::size_t{1} << 24;
 } // namespace limit
 
 namespace unit {

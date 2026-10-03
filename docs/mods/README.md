@@ -1,0 +1,441 @@
+# Mod support
+
+Open Annihilation plays mods of Total Annihilation as well as 3.1c itself.
+A mod describes how it differs from 3.1c in one file, `oamod.yaml`: its
+archives and directories, its engine limits, the extra values its unit
+scripts read, the extra keys in its data files, and the **standard hacks**
+it turns on. The engine reads that profile and plays the mod by those
+rules. It holds no code for any particular mod, and it never guesses which
+mod is installed: a folder without a profile plays exactly as 3.1c.
+
+- [The OAMOD standard](oamod-standard.md) is the full description of the
+  profile format and its rules.
+- [The standard hacks](#the-standard-hacks) below explains what a hack is,
+  and [every standard hack](#every-standard-hack) lists each behaviour a
+  profile can turn on, with a page of its own.
+- [Developer Mode](#developer-mode) changes a profile's hacks from the
+  settings' Developer section, without editing the profile.
+
+## Installing a mod
+
+A mod plays in one of two ways, which give the same game.
+
+**Mod folder.** Put the mod's files, `oamod.yaml` among them, in a folder of
+their own inside the game folder's `mods` folder:
+
+```text
+<game folder>/
+  totala1.hpi  ...          the plain 3.1c installation
+  mods/
+    <mod name>/
+      oamod.yaml
+      ...                   the mod's own archives and files
+```
+
+The mod folder is layered over the game folder: a file in the mod folder
+takes the place of the game folder's file of the same path, as copying it
+over would. One plain 3.1c installation then serves every mod. A game
+folder that holds its own `oamod.yaml` cannot carry a mod folder.
+
+**Copied install.** Copy the mod's files into a copy of the game folder, so
+that `oamod.yaml` sits in that folder's root. The game folder then plays
+that mod and nothing else.
+
+### Choosing a mod
+
+Open Annihilation's settings (the **OA** button on the main menu) list
+under **Gameplay**, **Mod**, every folder in the game folder's `mods` folder
+that holds a profile, and **None** for 3.1c. One profile plays per run, so
+the choice applies from the next start. A remembered mod folder that has
+gone is dropped with a notice.
+
+The command line chooses a mod for one run:
+
+| Option | What it does |
+| --- | --- |
+| `--mod-dir PATH` | Plays the mod folder at `PATH`, layered over the game folder. |
+| `--base-game` | Plays 3.1c without the remembered mod folder. It cannot be combined with `--mod-dir`. |
+| `--mod FILE` | Reads the profile from `FILE` instead of the folder's own. This is for developing a profile, or for trying one with a mod that does not ship it. |
+| `--print-profile` | Prints the resolved profile of `--mod FILE`, or of the `--mod-dir` or `--game-dir` folder, with its two hashes, and exits. A profile with errors prints each error and exits with status 1. |
+| `--accept-unimplemented-hacks` | Accepts, with a warning each, the hacks this build does not implement yet. For development only. |
+
+The profile comes from `--mod`'s file, else the mod folder's `oamod.yaml`,
+else the game folder's own. A profile that fails validation stops the game
+from starting and names every error; the game never falls back to 3.1c
+with a broken profile. Each run that plays a profile names it and its sim
+hash. [Section 4](oamod-standard.md#4-where-the-file-lives) of the
+standard has the details.
+
+## What a profile holds
+
+A profile is a strict subset of YAML, written for people to read and edit.
+Its blocks are:
+
+- `oamod`, `id`, `name` and `version`: the format version and the mod's
+  id, name and version;
+- `identity`: the display version, the network version its games
+  announce, its settings file, its registry root and its side names;
+- `layout`: the archives the engine mounts, and the directories and file
+  names it reads;
+- `limits`: engine limits such as the number of units per player;
+- `script-extensions`: extra values the mod's unit scripts read and set;
+- `data-keys`: extra keys in the mod's unit and weapon files;
+- `hacks`: the standard hacks, each with its parameters;
+- `settings`: the parameters a player adjusts through the mod's INI file
+  or registry settings, and the registry values a first run starts with;
+- `strings` and `media`: texts and movies the interface uses.
+
+Anything a profile leaves out plays as 3.1c. The
+[OAMOD standard](oamod-standard.md) describes each block, with a minimal
+profile and a fuller example.
+
+## The standard hacks
+
+A standard hack is one behaviour the engine implements once, in the module
+that owns it, and any mod can turn on. Its id is `area.name`, such as
+`repair.rate`, and names the behaviour, never a mod. A profile turns a hack
+on under `hacks`, by writing `true` for its defaults, a bare value for its
+shorthand parameter, or a mapping of an optional preset and parameters. A hack that is
+absent, or written `false`, plays as 3.1c.
+
+Each hack has a **scope**:
+
+- **sim** hacks change the game itself. Every machine in a network game
+  must play the same sim hacks with the same values, and they are part of
+  the profile's sim hash.
+- **view** hacks change only what one player sees, hears or types. Each
+  player may set them differently, and they stay out of the sim hash.
+
+Each hack also runs in a set place, which its page names under "Runs on":
+on the machine that owns the unit or computer player, on every machine
+alike, on the host only, or for this machine's own view. A few hacks have
+parts in more than one place.
+
+Every hack page has the same five parts:
+
+1. **Facts:** the hack's area, scope, where it runs, its number of
+   parameters and whether this engine implements it.
+2. **Description:** what the hack does for a player, and what 3.1c does
+   without it. A hack that changes what the player sees shows it in
+   screenshots, often with the hack on and off, kept in
+   [standard-hacks/images](standard-hacks/images/).
+3. **Configuration example:** one or more `hacks` entries to copy.
+4. **Details:** the exact behaviour, the edge cases it keeps, how it
+   affects network play and saves, the tests that check it, and any known
+   limit of this engine.
+5. **Full configuration schema:** every way to write the hack, each
+   parameter with its type, bounds, 3.1c baseline, default, who may adjust
+   it and its scope, the presets, the constraints, and a YAML block with
+   every parameter at its default.
+
+The facts and the schema are generated from the engine's registry, so they
+always match what the engine accepts. A hack whose status is "not
+implemented" is refused by this build unless `--accept-unimplemented-hacks`
+is given; its page says what works so far.
+
+## Validation and hashing
+
+The engine checks a profile completely before it plays: every key, hack,
+parameter, preset, script extension and data key must be known, and every
+value must have the right type and lie within its bounds. Each refusal names
+the file, the line and column, the offending path and what is wrong.
+A setting a player has saved that does not read as its type is ignored with
+a warning, and one out of bounds is clamped with a warning. A valid profile
+resolves to an **effective profile** with every value filled in, and two
+hashes of its canonical form: the **full hash** of everything, and the
+**sim hash** of only the parts that decide the game. Two profiles with the
+same sim hash play the same game, whatever their names, comments or display
+choices. `--print-profile` prints the effective profile and both hashes.
+[Section 11](oamod-standard.md#11-the-resolved-profile-and-its-hashes) of
+the standard defines them.
+
+## Network play
+
+Network play reads its rules from the profile. Every machine in a game must
+play the same sim hash, the same game data and the same unit set; view
+hacks may differ from player to player. A profile's network version is the
+version a machine announces, and with any version other than 3.1 a machine
+joins only a game of the same major version.
+
+The `network.*` and `recorder.*` hacks select the wire behaviour a mod's
+games use: the private chat channel, the integrity check, votes to drop a
+player, the lag guard, the commander start sync, recording and replays.
+They make the engine speak a mod's protocol, so that its games follow the
+same exchanges as the mod's own game client. Where this engine's behaviour
+still differs from such a client, the hack's page says so as a known limit;
+the integrity check, for one, compares digests of the engine's own rules,
+so a machine running another client reports a mismatch
+([`network.vercheck`](standard-hacks/network.vercheck.md)).
+[Section 12](oamod-standard.md#12-network-compatibility) of the standard
+covers network compatibility.
+
+## Saves and settings
+
+Game folders are never written to. With a profile, saved games go to
+`mods/<id>` in the player's own data folder, so each mod keeps its own list
+of saved games. A save made under a profile records the profile's id,
+version and hashes, and loads only under a profile with the same sim hash.
+A save without a profile record loads under any profile.
+
+A mod's INI file is read, never written. Settings the mod keeps in the
+registry are kept in the engine's own preferences, under the profile's
+registry root, and a mod's first run fills in the values its profile seeds.
+
+## Developer Mode
+
+Developer Mode, in the **Developer** section of Open Annihilation's
+settings (the **OA** button), changes the standard hacks of the profile the
+game plays without editing its `oamod.yaml`, which is never written. It is
+for trying a hack, or a hack's values, before writing them into a profile.
+With no mod it changes the plain 3.1c baseline, so it can turn hacks on
+over 3.1c itself.
+
+**Enable Developer Mode** heads the Developer section, Off by default, over
+the section's **Show performance statistics**, which Developer Mode leaves
+alone. Under them the section lists every standard hack, grouped by area,
+in a list that scrolls on its own, in two levels that open and close, every
+one closed at first: an area with how many of its hacks are on, and under
+it each hack with its title and an Off/On switch, areas and hacks
+alphabetically by title. Opened, a hack shows its id, its summary, "Applies
+at next match" for a sim hack, and a control for each parameter that fits
+its type, bounds and unit: a switch, a slider of numbers, of values or of a
+list's items, or a switch for each value of a set. **Show Active Only
+(X/Y)**, under the list, shows only the hacks that are on: X is how many
+are on as the section shows them, Y every standard hack. **Restore profile
+values** clears every change.
+
+- **Off**, the list only shows the profile's own values, and the game
+  plays the profile as it ships. Changes made while it was on are kept
+  for when it is turned on again.
+- **On**, the list's controls take changes, and the changes apply: a view
+  hack's at once, even in a running match; a sim hack's from the start of
+  the next match, so that a running game and its saves keep the rules they
+  started with. They apply alike in a game played alone and in a network
+  game.
+
+The changes are kept with the other Open Annihilation settings, in the
+player's preferences, under the id of the profile the game plays (with no
+mod, under `ta-3.1c`), so each mod keeps its own. Each is checked as the
+same value written in a profile would be; one that no longer fits, such as
+one kept from an earlier version, is left out with a warning on standard
+error. They become part of the effective profile, so a sim hack changed
+in Developer Mode changes the profile's sim hash, as writing the same value
+into `oamod.yaml` would: a save made with such a change loads only under
+the same effective profile, and every machine of a network game must play
+the same one. With no mod, while only view hacks are changed, the game
+still plays 3.1c's rules and its saves load anywhere.
+
+In a network game's battle room the engine says, as the player's own chat
+line, which engine the machine runs: `[Engine: OpenAnnihilation v<version>]`,
+or `[Engine: OpenAnnihilation v<version> DEV MODE]` while Developer Mode is
+on. It is said once as the battle room is entered, and again whenever
+Developer Mode is turned on or off there, so every player sees whether
+Open Annihilation and its Developer Mode are in use
+([VARIANCES.md](../../VARIANCES.md#engine-line-in-the-battle-room)).
+
+## For contributors
+
+The registry,
+[src/data/mod-profile/registry/hack-registry.yaml](../../src/data/mod-profile/registry/hack-registry.yaml),
+is the single source of truth for every limit, script extension, data key
+and hack a profile can name, with each parameter's type, bounds, 3.1c
+baseline, default, adjustment, scope and presets. The engine implements
+each hack in the module that owns its behaviour; the
+[mod-profile module](../../src/data/mod-profile/README.md) describes the
+registry and the resolver.
+
+- [tools/gen_mod_registry.py](../../tools/gen_mod_registry.py) checks the
+  registry and writes the tables and rule records the engine compiles from
+  it. The `mod-registry-sync` test fails while a generated file differs
+  from what the registry gives.
+- [tools/gen_mod_docs.py](../../tools/gen_mod_docs.py) writes the table
+  below, and the heading (the hack's title) and the facts and schema
+  blocks of every hack page, and creates a skeleton page for a new hack.
+  Besides the heading, it writes only between a block's `BEGIN GENERATED`
+  and `END GENERATED` comment lines; the prose outside them is kept. The
+  `mod-docs-sync` test fails while a heading or a block differs from what
+  the registry gives, or while a page names no hack.
+
+To add or change a hack, change the registry, run both tools, then write or
+update the page's Description, Configuration example and Details.
+A screenshot goes in `standard-hacks/images/`, named after the hack, as a
+small PNG cropped to the feature, with alt text and a one-line caption on
+the page.
+
+## Every standard hack
+
+The table is generated from the registry. Each hack is named by its
+title, as Developer Mode lists it, beside the id a profile writes; areas
+and the hacks within each follow their titles alphabetically. Scope is
+`sim` or `view`, as [above](#the-standard-hacks).
+
+<!-- BEGIN GENERATED: hacks table -->
+### AI
+
+| Hack | Id | What it does | Scope | Status |
+| --- | --- | --- | --- | --- |
+| [Attack Wave Size](standard-hacks/ai.attack-wave-size.md) | `ai.attack-wave-size` | Sets how many units the AI's land and naval attack groups gather before they attack. | sim | implemented |
+| [Commander Builder Limit](standard-hacks/ai.builder-withhold-threshold.md) | `ai.builder-withhold-threshold` | An AI commander stops taking builder jobs once the computer player owns a set number of builders. | sim | implemented |
+| [Commander Keeps Orders When Hit](standard-hacks/ai.commander-keeps-orders-when-damaged.md) | `ai.commander-keeps-orders-when-damaged` | A damaged AI commander keeps its orders instead of clearing its queue. | sim | implemented |
+| [Commander Runs Factories](standard-hacks/ai.squad5-factory-tick.md) | `ai.squad5-factory-tick` | The AI commander's third task runs the factory and economy tick, so computer players build and fire stockpile weapons. | sim | implemented |
+| [Difficulty Names](standard-hacks/ai.difficulty-names.md) | `ai.difficulty-names` | Reorders the difficulty names, so each difficulty selects a different AI profile. | sim | implemented |
+| [Factory Tick Filter](standard-hacks/ai.factory-tick-filter.md) | `ai.factory-tick-filter` | The AI factory tick skips buildings with queued background orders and switches power on any building that uses enough energy. | sim | implemented |
+| [Ignore Submerged Targets](standard-hacks/ai.nearest-enemy-filter.md) | `ai.nearest-enemy-filter` | AI land attack groups ignore fully submerged enemies when they choose the nearest target. | sim | implemented |
+| [Income Multipliers](standard-hacks/ai.income-multipliers.md) | `ai.income-multipliers` | Sets the computer player's production and reclaim income multipliers for each difficulty. | sim | implemented |
+| [Patrol Edge Fallback](standard-hacks/ai.patrol-null-enemy-skip.md) | `ai.patrol-null-enemy-skip` | When the AI's forces have no position, its patrol goes to a random map edge instead of attacking a missing enemy. | sim | implemented |
+| [Patrol Group Size](standard-hacks/ai.patrol-group-size.md) | `ai.patrol-group-size` | Sets how many units the AI's patrol group gathers before it scouts a map edge. | sim | implemented |
+| [Squad Assignment](standard-hacks/ai.squad-assignment.md) | `ai.squad-assignment` | Idle AI units are grouped into squads and given standing orders by role. | sim | implemented |
+
+### Aircraft
+
+| Hack | Id | What it does | Scope | Status |
+| --- | --- | --- | --- | --- |
+| [Guard Respects Hold Position](standard-hacks/air.guard-respects-hold-position.md) | `air.guard-respects-hold-position` | Guarding aircraft engage an attacker only when their move order is not Hold Position. | sim | implemented |
+| [No Repair Retreat](standard-hacks/air.no-repair-retreat-flag.md) | `air.no-repair-retreat-flag` | Aircraft with a chosen unit flag never break off to find a repair pad when damaged. | sim | implemented |
+
+### Console
+
+| Hack | Id | What it does | Scope | Status |
+| --- | --- | --- | --- | --- |
+| [AI and Control Cheats](standard-hacks/console.ai-control-cheat-group.md) | `console.ai-control-cheat-group` | The +AI and +Control commands join the cheat commands, so they work in multiplayer games with cheats on. | sim | implemented |
+| [ATM Amount](standard-hacks/console.atm-amount.md) | `console.atm-amount` | Sets how much metal and energy +ATM adds. | sim | implemented |
+| [Game Speed Range](standard-hacks/console.game-speed-range.md) | `console.game-speed-range` | Keeps the game speed within a set range, which recorder commands can lock for everyone. | sim | implemented |
+| [Key Remaps](standard-hacks/console.key-remaps.md) | `console.key-remaps` | Moves the repeat-last-command key and adds a second key for the watch toggle. | sim | implemented |
+| [LOS Type Cheat](standard-hacks/console.lostype-cheat-group.md) | `console.lostype-cheat-group` | The +LOSType command needs cheats on. | sim | implemented |
+
+### Economy
+
+| Hack | Id | What it does | Scope | Status |
+| --- | --- | --- | --- | --- |
+| [Deterministic Wind](standard-hacks/economy.deterministic-wind.md) | `economy.deterministic-wind` | Wind changes come from one generator seeded the same on every machine. | sim | implemented |
+| [Statistics Exclude Shared Income](standard-hacks/economy.stats-exclude-shared-income.md) | `economy.stats-exclude-shared-income` | Resources received from allies no longer count as produced in the statistics. | sim | implemented |
+
+### Game Setup
+
+| Hack | Id | What it does | Scope | Status |
+| --- | --- | --- | --- | --- |
+| [AI Player Names](standard-hacks/setup.ai-player-name-format.md) | `setup.ai-player-name-format` | Computer player names include the hosting player's name and slot. | sim | implemented |
+| [Commander Warp](standard-hacks/setup.commander-warp.md) | `setup.commander-warp` | Adds an opt-in start in which the game waits while each player places their commander. | sim | implemented |
+| [Map Scripted Units](standard-hacks/setup.map-scripted-units.md) | `setup.map-scripted-units` | Maps may place units for each player at the start and at set times, with a neutral computer player for unowned ones. | sim | implemented |
+| [Prebuilt Base](standard-hacks/setup.recorder-prebuilt-base.md) | `setup.recorder-prebuilt-base` | Adds opt-in chat commands that build a prebuilt base for each player at the start. | sim | implemented |
+| [Several Local AI Players](standard-hacks/setup.multiple-local-ai.md) | `setup.multiple-local-ai` | One machine may add several computer players to a multiplayer game. | sim | implemented |
+| [Start with One Human](standard-hacks/setup.allow-start-with-ai.md) | `setup.allow-start-with-ai` | A multiplayer game may start with one human and computer players. | sim | implemented |
+| [Team Start Positions](standard-hacks/setup.team-start-positions.md) | `setup.team-start-positions` | Start positions are given out by team, with team-mates next to each other. | sim | implemented |
+
+### Interface
+
+| Hack | Id | What it does | Scope | Status |
+| --- | --- | --- | --- | --- |
+| [Allied Unit Display](standard-hacks/ui.allied-unit-display.md) | `ui.allied-unit-display` | The minimap and info panel show allied units and their details. | view | implemented |
+| [Audio](standard-hacks/ui.audio.md) | `ui.audio` | Audio changes: 3D sound, music from numbered or found files, and limits on announcements. | view | implemented |
+| [Build Preview](standard-hacks/ui.build-preview.md) | `ui.build-preview` | Shows the building under the build cursor before it is placed. | view | implemented |
+| [Build Tools](standard-hacks/ui.build-tools.md) | `ui.build-tools` | Adds line and ring building, dragging of queued orders, and a warning colour when units must clear a site. | view | implemented |
+| [Camera Sharing](standard-hacks/ui.camera-sharing.md) | `ui.camera-sharing` | Allies' camera positions show on the minimap, and watchers can follow a player's camera. | view | implemented |
+| [Click Snap](standard-hacks/ui.click-snap.md) | `ui.click-snap` | Build and reclaim cursors snap to the nearest metal spot or feature. | view | implemented |
+| [Display Modes](standard-hacks/ui.display-modes.md) | `ui.display-modes` | Display changes: a 1024x768 minimum, the menu resolution and screenshots. | view | implemented |
+| [Effects Tweaks](standard-hacks/ui.effects-tweaks.md) | `ui.effects-tweaks` | Changes explosion effects: end-smoke weapons add the explosion, and the extra smoke puff can go. | view | implemented |
+| [End-of-Game Statistics](standard-hacks/ui.endgame-stats.md) | `ui.endgame-stats` | End-of-game statistics list players who dropped or were removed. | view | implemented |
+| [External Exports](standard-hacks/ui.external-exports.md) | `ui.external-exports` | Exports live unit state and the battle room's state for other programs. | view | implemented |
+| [Interface Fixes](standard-hacks/ui.interface-fixes.md) | `ui.interface-fixes` | A set of small display fixes, each chosen by name. | view | implemented |
+| [Map Features Always Drawn](standard-hacks/ui.map-features-ignore-los.md) | `ui.map-features-ignore-los` | Features the map places are drawn whether or not they are in line of sight. | view | implemented |
+| [Megamap](standard-hacks/ui.megamap.md) | `ui.megamap` | Adds a full-screen strategic map with category icons and sensor rings. | view | implemented |
+| [Options Dialog](standard-hacks/ui.options-dialog.md) | `ui.options-dialog` | Adds a settings dialog and options page for the added settings, and a chat macro key. | view | implemented |
+| [Resource Panel](standard-hacks/ui.resource-panel.md) | `ui.resource-panel` | Watchers see every player's resources and can switch their view to a player and follow it. | view | implemented |
+| [Selection Shortcuts](standard-hacks/ui.selection-shortcuts.md) | `ui.selection-shortcuts` | Adds selection shortcuts: same type, filters while dragging and larger queue steps. | view | implemented |
+| [Share Dialog and Lobby Buttons](standard-hacks/ui.share-dialog-and-lobby-buttons.md) | `ui.share-dialog-and-lobby-buttons` | Expands the share dialog and adds buttons to the battle room. | view | implemented |
+| [Text Rendering](standard-hacks/ui.text-rendering.md) | `ui.text-rendering` | Sends and reads chat as UTF-8, for every language, and can force the message log's backdrop on. | view | implemented |
+| [Unit Voice Fixes](standard-hacks/ui.unit-voice-fixes.md) | `ui.unit-voice-fixes` | Changes when the reclaim and landing voices play. | view | implemented |
+| [Veterancy Label](standard-hacks/ui.veterancy-label.md) | `ui.veterancy-label` | The info panel shows a unit's veterancy level as a number. | view | implemented |
+| [Whiteboard](standard-hacks/ui.whiteboard.md) | `ui.whiteboard` | Allies draw lines, dots and text markers on the map for each other. | view | implemented |
+
+### Network
+
+| Hack | Id | What it does | Scope | Status |
+| --- | --- | --- | --- | --- |
+| [Chat Extension Channel](standard-hacks/network.chat-extension-channel.md) | `network.chat-extension-channel` | Chat packets carry private add-on messages to the handlers that take them. | sim | implemented |
+| [Clear Session Description](standard-hacks/network.session-desc-clear.md) | `network.session-desc-clear` | The host clears one field of the session description before publishing it. | sim | implemented |
+| [Commander Start Sync](standard-hacks/network.commander-start-sync.md) | `network.commander-start-sync` | At a set tick each machine sends where its commanders stand, and the others place them there. | sim | implemented |
+| [Host Stays as Watcher](standard-hacks/network.host-stays-as-watcher.md) | `network.host-stays-as-watcher` | A defeated host stays in the game as a watcher, so the session goes on. | sim | implemented |
+| [Keep Remote Player Colours](standard-hacks/network.preserve-remote-player-colour.md) | `network.preserve-remote-player-colour` | A remote player's colour and position slot survive player updates during a game. | sim | implemented |
+| [Lag Guard](standard-hacks/network.lag-guard.md) | `network.lag-guard` | While no remote player is heard from, the simulation slows to one step an interval and pausing is blocked. | sim | implemented |
+| [Recorder Session Commands](standard-hacks/network.recorder-session-commands.md) | `network.recorder-session-commands` | Adds opt-in recorder chat commands for pausing, starting, watching and choosing random maps. | sim | implemented |
+| [Version Check](standard-hacks/network.vercheck.md) | `network.vercheck` | Clients challenge each other to compare their game data and report any mismatch. | sim | implemented |
+| [Vote to Remove Players](standard-hacks/network.vote-reject.md) | `network.vote-reject` | Removing a timed-out or unwanted player becomes a vote of the players. | sim | implemented |
+
+### Orders
+
+| Hack | Id | What it does | Scope | Status |
+| --- | --- | --- | --- | --- |
+| [Build Site Kickout](standard-hacks/orders.build-site-kickout.md) | `orders.build-site-kickout` | Players may place buildings over their own units, which then clear the site, and blocked builders retry longer. | sim | implemented |
+| [Builder Patrol and Guard Options](standard-hacks/orders.con-patrol-guard-options.md) | `orders.con-patrol-guard-options` | Each player chooses what patrolling and guarding builders do, for each standing move order. | sim | implemented |
+| [Fire While Building](standard-hacks/orders.weapons-free-while-busy.md) | `orders.weapons-free-while-busy` | A builder's weapons stay free to fire while it builds, repairs, reclaims or captures. | sim | implemented |
+| [Reclaim Cursor on Any Unit](standard-hacks/orders.reclaim-command-any-unit.md) | `orders.reclaim-command-any-unit` | In Reclaim mode the cursor offers reclaim over any unit; the reclaim still refuses what it cannot take. | sim | implemented |
+| [Repair Finish Check](standard-hacks/orders.repairing-state-target-activity.md) | `orders.repairing-state-target-activity` | The repair order's finishing check looks at the target's activity, not the repairing unit's. | sim | implemented |
+| [Resurrectors Reclaim Wrecks](standard-hacks/orders.resurrector-reclaims-features.md) | `orders.resurrector-reclaims-features` | The Reclaim command reclaims a wreck even when the builder can resurrect it; right-click still resurrects. | sim | implemented |
+| [Selective Weapon Use](standard-hacks/orders.selective-weapon-occupy.md) | `orders.selective-weapon-occupy` | An attack order occupies only the ordered weapon, leaving the others free to choose their own targets. | sim | implemented |
+
+### Recorder
+
+| Hack | Id | What it does | Scope | Status |
+| --- | --- | --- | --- | --- |
+| [Game Recorder](standard-hacks/recorder.ta-demo-recorder.md) | `recorder.ta-demo-recorder` | The game recorder is present: it records games and carries recorder messages between players. | sim | implemented |
+| [Ten-Player Replay](standard-hacks/recorder.ten-player-replay.md) | `recorder.ten-player-replay` | A recording of a full ten-player game can be replayed and watched. | sim | implemented |
+
+### Repair
+
+| Hack | Id | What it does | Scope | Status |
+| --- | --- | --- | --- | --- |
+| [Repair Rate](standard-hacks/repair.rate.md) | `repair.rate` | Repair heals in proportion to the builder's work time and the unit's build time instead of one hit point a step. | sim | implemented |
+| [Self-Repair by Heal Time](standard-hacks/repair.healtime-self-heal.md) | `repair.healtime-self-heal` | Self-repair skips unfinished units and takes its pace and amount from the unit's heal time. | sim | implemented |
+
+### Sharing
+
+| Hack | Id | What it does | Scope | Status |
+| --- | --- | --- | --- | --- |
+| [Structure Gift Rate Limit](standard-hacks/sharing.structure-gift-rate-limit.md) | `sharing.structure-gift-rate-limit` | Structure gifts are sent in batches, and a batch over the limit waits. | sim | implemented |
+| [Take and Give Commands](standard-hacks/sharing.recorder-take-give.md) | `sharing.recorder-take-give` | Adds opt-in chat commands with which a player lets named players take their units when they go silent. | sim | implemented |
+| [Take Waits for Commander Deaths](standard-hacks/sharing.take-requires-live-commander.md) | `sharing.take-requires-live-commander` | Taking over another player's units is refused while a destroyed commander is still in the world. | sim | implemented |
+
+### Teams
+
+| Hack | Id | What it does | Scope | Status |
+| --- | --- | --- | --- | --- |
+| [Alliance Menu Everywhere](standard-hacks/teams.alliance-menu-all-game-types.md) | `teams.alliance-menu-all-game-types` | The alliance menu opens in every game type, so players can ally computer players outside multiplayer. | sim | implemented |
+| [Keep Allied Victory](standard-hacks/teams.allied-victory-kept.md) | `teams.allied-victory-kept` | The battle room keeps a player's Allied Victory choice whatever their team. | sim | implemented |
+| [Team Number Alliances](standard-hacks/teams.team-number-alliances.md) | `teams.team-number-alliances` | Team numbers set alliances: team-mates ally, other teams do not, and the host can assign teams. | sim | implemented |
+
+### Units
+
+| Hack | Id | What it does | Scope | Status |
+| --- | --- | --- | --- | --- |
+| [Build Rotation](standard-hacks/units.build-rotation.md) | `units.build-rotation` | Buildings may be placed facing any of four directions when their definition allows it. | sim | implemented |
+| [Cloak After Build](standard-hacks/units.init-cloaked-after-build.md) | `units.init-cloaked-after-build` | An unfinished unit neither cloaks nor pays for its cloak. | sim | implemented |
+| [Ignore Unit 0 Deaths](standard-hacks/units.ignore-null-death-record.md) | `units.ignore-null-death-record` | A unit death record for unit 0 is ignored. | sim | implemented |
+| [Mobile Unit Yard Maps](standard-hacks/units.mobile-unit-yardmap.md) | `units.mobile-unit-yardmap` | Mobile units read their yard map too, not only buildings. | sim | implemented |
+| [Placement by Builder](standard-hacks/units.placement-by-builder.md) | `units.placement-by-builder` | The selected builder decides whether a build-menu click places on the map or queues in a factory. | sim | implemented |
+| [Skip Empty Yard Maps](standard-hacks/units.skip-empty-yardmap.md) | `units.skip-empty-yardmap` | A unit with an empty yard map or no footprint builds no yard map. | sim | implemented |
+| [Unit Slot Reuse Delay](standard-hacks/units.id-reuse-delay.md) | `units.id-reuse-delay` | A dead unit's slot is not reused until a delay has passed since its death. | sim | implemented |
+| [Water State Rules](standard-hacks/units.water-state-rules.md) | `units.water-state-rules` | A unit's water state is worked out in a new order, and units created under water start submerged. | sim | implemented |
+
+### Veterancy
+
+| Hack | Id | What it does | Scope | Status |
+| --- | --- | --- | --- | --- |
+| [Veterancy Model](standard-hacks/veterancy.model.md) | `veterancy.model` | Veterancy levels come from per-type kill thresholds, with adjustable bonuses, caps and accuracy. | sim | implemented |
+
+### Vision and Radar
+
+| Hack | Id | What it does | Scope | Status |
+| --- | --- | --- | --- | --- |
+| [Allied Line of Sight](standard-hacks/intel.allied-los-sharing.md) | `intel.allied-los-sharing` | Allies share line of sight, radar and sonar coverage and unit visibility. | sim | implemented |
+| [Ignore Allied Jammers](standard-hacks/intel.allied-jammers-ignored.md) | `intel.allied-jammers-ignored` | Jammers of the viewer and the viewer's allies no longer jam the viewer's radar. | sim | implemented |
+
+### Weapons
+
+| Hack | Id | What it does | Scope | Status |
+| --- | --- | --- | --- | --- |
+| [High-Arc Ballistics](standard-hacks/weapons.high-arc-ballistic.md) | `weapons.high-arc-ballistic` | Ballistic weapons fire on the high arc when the flat arc is below the barrel's minimum angle. | sim | implemented |
+| [Retarget Out of Range](standard-hacks/weapons.retarget-out-of-range.md) | `weapons.retarget-out-of-range` | A weapon drops a target that leaves its range and acquires a new one. | sim | implemented |
+| [Timed Shell Detonation](standard-hacks/weapons.timed-shell-detonation.md) | `weapons.timed-shell-detonation` | A ballistic shell whose timer runs out explodes, unless its weapon opts out, instead of fizzling. | sim | implemented |
+| [Vertical Launch Before Turret](standard-hacks/weapons.vlaunch-before-turret.md) | `weapons.vlaunch-before-turret` | A weapon that is both vertical-launch and turreted fires as a vertical-launch weapon. | sim | implemented |
+<!-- END GENERATED: hacks table -->

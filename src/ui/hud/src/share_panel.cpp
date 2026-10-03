@@ -4,10 +4,12 @@
 #include "oa/ui/hud/share_panel.hpp"
 #include "oa/ui/hud/order_panel.hpp"
 
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 
 namespace oa::ui::hud {
 namespace {
@@ -226,6 +228,68 @@ void give_selected_units(
         transfer.transfer(transfer.user, unit, *to);
     }
     std::free(selected);
+}
+
+bool is_take_command(const char* text) noexcept {
+    if (text == nullptr)
+        return false;
+    while (*text == ' ' || *text == '\t')
+        ++text;
+    if (*text != '.')
+        return false;
+    ++text;
+    // The longer word first: ".takecmd" also starts with "take".
+    for (const char* word : {"takecmd", "take"}) {
+        const size_t length = std::strlen(word);
+        bool same = true;
+        for (size_t at = 0; at < length && same; ++at)
+            same = std::tolower(static_cast<unsigned char>(text[at])) == word[at];
+        if (!same)
+            continue;
+        const char* rest = text + length;
+        while (*rest == ' ' || *rest == '\t' || *rest == '\r' || *rest == '\n')
+            ++rest;
+        if (*rest == '\0')
+            return true;
+    }
+    return false;
+}
+
+uint8_t commander_destroyed_elsewhere(
+    const World& world, uint8_t player, const uint32_t* commander_types
+) noexcept {
+    if (world.game.session_rules == 0 || commander_types == nullptr)
+        return kNoPlayer;
+    for (uint8_t slot = 0; slot < OA_PLAYER_COUNT; ++slot) {
+        if (slot == player)
+            continue;
+        const Player& owner = world.game.players[slot];
+        if (owner.in_use == 0)
+            continue;
+        uint32_t count = 0;
+        const Unit* units = world_player_units(const_cast<World*>(&world), &owner, &count);
+        for (uint32_t index = 0; index < count; ++index) {
+            const Unit& unit = units[index];
+            const uint32_t type = unit.type_index;
+            if (type == 0 || (unit.flags & OA_UNIT_FLAG_LIVE) == 0)
+                continue;
+            if ((commander_types[type >> 5] & (1u << (type & 31u))) == 0)
+                continue;
+            if (unit.health <= 0)
+                return slot;
+        }
+    }
+    return kNoPlayer;
+}
+
+void format_take_refusal(char* out, size_t size, const Player& owner) noexcept {
+    std::snprintf(
+        out,
+        size,
+        "Cannot take %.*s: their commander has been destroyed.",
+        static_cast<int>(sizeof owner.name),
+        owner.name[0] != '\0' ? owner.name : "that player"
+    );
 }
 
 } // namespace oa::ui::hud

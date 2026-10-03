@@ -3,12 +3,17 @@
 
 // Match chrome, side HUD, resource readout, fog and minimap.
 #include "oa/app/runtime.hpp"
+#include "oa/data/languages/unit_texts.hpp"
+#include "oa/app/view_rules.hpp"
+#include "oa/data/defs/layout.hpp"
 #include "oa/app/hook_call.hpp"
 #include "oa/ui/decoded.hpp"
 #include "oa/ui/hud/status_panel.hpp"
 #include "oa/present/world_renderer/world_fog.hpp"
 #include "oa/present/world_renderer/world_camera.hpp"
 #include "oa/present/surface.hpp"
+#include "oa/present/game_text.hpp"
+#include "oa/ui/frontend_renderer/game_text.hpp"
 #include "oa/ui/hud/build_page_fit.hpp"
 #include "oa/ui/hud/health_bar.hpp"
 #include "oa/ui/hud/order_panel.hpp"
@@ -295,6 +300,69 @@ void Runtime::paint_text(
     int y,
     std::string_view text,
     std::array<uint8_t, 3> color,
+    int scale,
+    bool allow_background
+) {
+    if (text.empty() || scale < 1)
+        return;
+    if (!renderer::needs_text_runs(text, true)) {
+        paint_font_text(font, x, y, text, color, scale);
+        return;
+    }
+    // The modern fonts sit on the font's baseline, drawn at the scale's size
+    // and the size the text takes here.
+    const int32_t font_baseline = renderer::fnt_font_baseline(font);
+    const auto face = renderer::fnt_font_face(font);
+    int pen = x;
+    for (const auto& run :
+         renderer::split_game_text(text, renderer::fnt_font_characters(font), true)) {
+        if (run.modern) {
+            const int32_t size = painted_text_size(run);
+            if (const auto layers =
+                    oa::present::modern_text(run.text, face, scale, size, allow_background)) {
+                const int baseline = y + painted_baseline(font_baseline, size) * scale;
+                pen += paint_modern_text(*layers, pen, baseline, color);
+                continue;
+            }
+        }
+        // A run the modern fonts cannot draw shows in the font, as the code
+        // page holds it.
+        const std::string bytes =
+            run.modern ? oa::present::encode_game_text(run.text, false) : run.text;
+        paint_font_text(font, pen, y, bytes, color, scale);
+        pen += static_cast<int>(oa::formats::fnt::measure_text(font, bytes)) * scale;
+    }
+}
+
+int Runtime::match_text_width(
+    const oa::formats::fnt::Font& font, std::string_view text, int scale
+) const {
+    scale = std::max(scale, 1);
+    if (!renderer::needs_text_runs(text, true))
+        return static_cast<int>(oa::formats::fnt::measure_text(font, text)) * scale;
+    int width = 0;
+    for (const auto& run :
+         renderer::split_game_text(text, renderer::fnt_font_characters(font), true)) {
+        if (run.modern)
+            if (const auto layers = oa::present::modern_text(
+                    run.text, renderer::fnt_font_face(font), scale, painted_text_size(run)
+                )) {
+                width += layers->advance;
+                continue;
+            }
+        const std::string bytes =
+            run.modern ? oa::present::encode_game_text(run.text, false) : run.text;
+        width += static_cast<int>(oa::formats::fnt::measure_text(font, bytes)) * scale;
+    }
+    return width;
+}
+
+void Runtime::paint_font_text(
+    const oa::formats::fnt::Font& font,
+    int x,
+    int y,
+    std::string_view text,
+    std::array<uint8_t, 3> color,
     int scale
 ) {
     if (text.empty() || scale < 1)
@@ -346,7 +414,13 @@ void Runtime::paint_text(
 void Runtime::load_side_hud() {
     side_hud_ = {};
     try {
-        const auto data = assets_.read("gamedata/sidedata.tdf").bytes;
+        const auto data = assets_
+                              .read(
+                                  oa::data::defs::data_path(
+                                      oa::data::defs::DataDirectory::gamedata, "sidedata.tdf"
+                                  )
+                              )
+                              .bytes;
         const std::string_view text(reinterpret_cast<const char*>(data.data()), data.size());
         oa::ui::hud::SideLayout layout;
         if (!oa::ui::hud::parse_side_layout(text, match_side_prefix() == "cor" ? 1 : 0, layout))
@@ -452,6 +526,8 @@ const oa::formats::fnt::Font* Runtime::overlay_font(OverlayFont font) {
 void Runtime::draw_extension_overlay() {
     if (extension_.draw_match_overlay == nullptr || !match_)
         return;
+    // Its lines step by the game fonts' heights.
+    const PanelText panel(*this);
     MatchOverlay overlay{};
     overlay.painter = this;
     overlay.game = &match_->state().game;
@@ -503,7 +579,7 @@ void Runtime::draw_match_label_right(int x, int y, std::string_view text, uint8_
     const oa::formats::fnt::Font* font = match_label_font();
     if (font == nullptr)
         return;
-    const auto width = static_cast<int>(oa::formats::fnt::measure_text(*font, text));
+    const auto width = match_text_width(*font, text, 1);
     const auto point = hud_canvas(x, y);
     draw_match_label(point.x - width, point.y, text, palette_index);
 }
@@ -512,7 +588,7 @@ void Runtime::draw_hud_label_centered(int x, int y, std::string_view text, uint8
     const oa::formats::fnt::Font* font = match_label_font();
     if (font == nullptr)
         return;
-    const auto width = static_cast<int>(oa::formats::fnt::measure_text(*font, text));
+    const auto width = match_text_width(*font, text, 1);
     draw_hud_label(x - width / 2, y, text, palette_index);
 }
 
@@ -737,16 +813,11 @@ void Runtime::draw_unit_panel() {
     // and description, any other gadget nothing.
     if (const char* button = hovered_gadget_name()) {
         char line[hud::kPanelLineBytes];
-        const char* description = nullptr;
+        std::string_view description;
         if (hud::build_button_readout(world, button, line, sizeof line, &description)) {
             text_at(side_hud_.name, line);
-            if (description != nullptr)
-                text_at(
-                    side_hud_.description,
-                    std::string_view(
-                        description, strnlen(description, sizeof(UnitDef::description))
-                    )
-                );
+            if (!description.empty())
+                text_at(side_hud_.description, description);
         }
         return;
     }
@@ -781,6 +852,27 @@ void Runtime::draw_unit_panel() {
         }
     };
     hooks.localize = localize;
+    const auto& ui = ui_rules();
+    hooks.allied_units_shown = ui.allied_unit_display.enabled;
+    hooks.viewer_allies_every_player =
+        match_->slotless_viewer() == oa::sim::match_runtime::SlotlessViewer::ally_of_every_player;
+    if (ui.veterancy_label.enabled)
+        hooks.veterancy_level = [](void* context, const oa::Unit& unit) -> uint32_t {
+            const auto& self = *static_cast<Runtime*>(context);
+            const auto& own =
+                self.match_->rules_view().unit_type(unit.type_index).veterancy_thresholds;
+            if (own.has_value())
+                return hud::veterancy_label_level(
+                    {own->items.data(), own->count}, unit.veteran_level
+                );
+            // A type without its own thresholds takes the profile's default list.
+            const auto& defaults = self.match_->rules().veterancy.model.default_thresholds;
+            std::array<uint16_t, 32> thresholds{};
+            const auto count = std::min<std::size_t>(defaults.count, thresholds.size());
+            for (std::size_t index = 0; index < count; ++index)
+                thresholds[index] = static_cast<uint16_t>(defaults.items[index]);
+            return hud::veterancy_label_level({thresholds.data(), count}, unit.veteran_level);
+        };
     const auto panel =
         hud::unit_panel_snapshot(world, cursor, debug_keys, match_session_kind(), overlay, hooks);
     if (panel.unit == 0)
@@ -841,9 +933,7 @@ void Runtime::draw_unit_panel() {
             draw_hud_label_centered(
                 side_hud_.unit_name2.x,
                 side_hud_.unit_name2.y,
-                std::string_view(
-                    target_def->name, strnlen(target_def->name, sizeof target_def->name)
-                ),
+                oa::data::languages::unit_display_name(*target_def),
                 text_color
             );
             if (panel.second_damage)

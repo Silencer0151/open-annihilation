@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Cross-build the pinned zlib and SDL3 for Windows into local/deps/windows.
+"""Cross-build the pinned zlib, SDL3 and FreeType for Windows into local/deps/windows.
 
 The toolchain file names the target: cmake/toolchains/x86_64-w64-mingw32.cmake
 (the default) or another toolchain file there. --xp builds them for
@@ -19,6 +19,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import bootstrap_sdl  # noqa: E402
+import bootstrap_text_fonts  # noqa: E402
 
 ROOT = bootstrap_sdl.ROOT
 ZLIB_VERSION = "1.3.1"
@@ -72,6 +73,10 @@ def main():
         cross_build(bootstrap_sdl.sdl_source(deps), builds / "sdl", sdl_install, toolchain, args.jobs,
                     [*target_options, "-DSDL_SHARED=OFF", "-DSDL_STATIC=ON", "-DSDL_TEST_LIBRARY=OFF",
                      "-DSDL_TESTS=OFF", "-DSDL_EXAMPLES=OFF"])
+    freetype_install = prefixes / "freetype"
+    if not (freetype_install / bootstrap_text_fonts.FREETYPE_INSTALLED).exists():
+        cross_build(bootstrap_text_fonts.freetype_source(deps), builds / "freetype", freetype_install, toolchain,
+                    args.jobs, [*target_options, *bootstrap_text_fonts.FREETYPE_OPTIONS])
     print(f"Windows dependencies ready under {prefixes}")
 
 

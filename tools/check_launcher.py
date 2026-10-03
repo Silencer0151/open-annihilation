@@ -57,8 +57,16 @@ def check(root, source):
     repo = root / "repo"
     repo.mkdir()
     shutil.copy2(source / "run.sh", repo / "run.sh")
+    # The files run.sh looks for before it bootstraps the pinned SDL, and
+    # FreeType with the text fonts, so that it bootstraps neither. It takes
+    # FreeType of any release, freetype-install-*.
     (repo / "local/deps/sdl-install/lib/cmake/SDL3").mkdir(parents=True)
     (repo / "local/deps/sdl-install/lib/cmake/SDL3/SDL3Config.cmake").touch()
+    (repo / "local/deps/text-fonts").mkdir(parents=True)
+    (repo / "local/deps/text-fonts/build-settings.json").touch()
+    freetype_config = repo / "local/deps/freetype-install-any/lib/cmake/freetype"
+    freetype_config.mkdir(parents=True)
+    (freetype_config / "freetype-config.cmake").touch()
     (root / "bin").mkdir()
     (root / "build").mkdir()
     # The installation lies beside the checkout, where a workspace might keep

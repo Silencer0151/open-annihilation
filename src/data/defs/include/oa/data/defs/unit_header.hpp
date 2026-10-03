@@ -8,6 +8,7 @@
 #include "oa/core/game_state.h"
 #include "oa/core/unit_def.h"
 #include "oa/data/defs/files.hpp"
+#include "oa/data/defs/unit_texts.hpp"
 #include "oa/formats/tdf.hpp"
 
 #include <cstdint>
@@ -63,6 +64,9 @@ struct UnitHeaderSources {
     int8_t build_minor{}; // its minor version, 1 in 3.1c
     bool archive_only{};  // loose unit files are refused
     bool disc_mismatch{}; // the game disc failed its check
+    // Receives the unit's names and descriptions in other languages, for
+    // what players see; null reads none (oa/data/defs/unit_texts.hpp).
+    const UnitTextSink* texts{};
 };
 
 // The Copyright value a unit needs, any year: the 60-character notice the

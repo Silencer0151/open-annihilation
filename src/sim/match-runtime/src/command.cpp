@@ -115,7 +115,8 @@ std::string_view resolve_combat_command(
             (source.secondary_slot_flags & 2) && (source.secondary_weapon_flags & water_weapon);
         if (top < sea_level && !primary_water && !secondary_water)
             return {};
-        if (top >= sea_level && (source.type_flags & hover) && (primary_water || secondary_water))
+        if (top >= sea_level && (source.type_flags & hover) && !source.primary_surface_fire &&
+            (primary_water || secondary_water))
             return {};
         if (!(source.type_flags & aircraft)) {
             if (source.object_present)

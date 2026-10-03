@@ -14,10 +14,13 @@
 #include "oa/netgame/match/packet_layer.hpp"
 #include "oa/netgame/match/session_lobby.hpp"
 #include "oa/netgame/network.hpp"
+#include "oa/netgame/private_channel.hpp"
+#include "oa/netgame/unit_state.hpp"
 #include "oa/ui/frontend_multiplayer/connect.hpp"
 #include "oa/base/text.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -549,9 +552,9 @@ struct Seat {
     uint32_t machine_group{};
 };
 
-World* seated_world(const Seat (&seats)[4]) {
+World* seated_world(const Seat (&seats)[4], uint32_t unit_slots = 4 * OA_PLAYER_COUNT + 1) {
     World* world = world_create();
-    const WorldCapacity capacity{4 * OA_PLAYER_COUNT + 1, 2, 0};
+    const WorldCapacity capacity{unit_slots, 2, 0};
     CHECK(world != nullptr && world_alloc_tables(world, &capacity) != 0);
     for (uint8_t i = 0; i < OA_PLAYER_COUNT; ++i) {
         auto& p = world->game.players[i];
@@ -888,16 +891,50 @@ struct SeatedMachine {
     std::vector<std::pair<uint8_t, float>> credits;
     std::vector<std::pair<uint8_t, float>> debits;
 
-    SeatedMachine(const Seat (&seats)[4], uint8_t local_slot) {
-        world = seated_world(seats);
+    std::vector<std::string> chats;   // chat lines the chat hook showed
+    std::vector<std::string> notices; // lines the notice hook showed
+    // What the record_seen hook saw, sender id and type byte.
+    std::vector<std::pair<uint32_t, uint8_t>> seen;
+    // What the speed_lock_changed hook heard: locked, slowest, fastest.
+    std::vector<std::array<int32_t, 3>> speed_locks;
+    // Whiteboard batches the whiteboard_marks hook showed, by sender slot.
+    std::vector<std::pair<uint8_t, std::vector<uint8_t>>> marks;
+
+    SeatedMachine(
+        const Seat (&seats)[4],
+        uint8_t local_slot,
+        const WireRules& rules = {},
+        uint32_t unit_slots = 4 * OA_PLAYER_COUNT + 1
+    ) {
+        world = seated_world(seats, unit_slots);
         world->game.local_player_index = local_slot;
         connection.packets = new PacketLayer();
         packet_layer_create(connection.packets);
         packet_layer_start(connection.packets, NetTransport{&link, link_send, link_receive});
+        net_connection_set_rules(&connection, rules);
         NetMatchHooks hooks{};
         hooks.context = this;
+        hooks.chat = [](void* c, uint8_t, const char* text) {
+            static_cast<SeatedMachine*>(c)->chats.emplace_back(text);
+        };
+        hooks.notice = [](void* c, const char* text) {
+            static_cast<SeatedMachine*>(c)->notices.emplace_back(text);
+        };
+        hooks.record_seen = [](void* c, uint32_t sender, const uint8_t* record, std::size_t) {
+            static_cast<SeatedMachine*>(c)->seen.emplace_back(sender, record[0]);
+        };
         hooks.destroy_player_units = [](void* c, World*, uint8_t slot) {
             static_cast<SeatedMachine*>(c)->destroyed.push_back(slot);
+        };
+        hooks.speed_lock_changed = [](void* c, bool locked, uint8_t slowest, uint8_t fastest) {
+            static_cast<SeatedMachine*>(c)->speed_locks.push_back(
+                {locked ? 1 : 0, slowest, fastest}
+            );
+        };
+        hooks.whiteboard_marks = [](void* c, uint8_t slot, const uint8_t* batch, std::size_t size) {
+            static_cast<SeatedMachine*>(c)->marks.emplace_back(
+                slot, std::vector<uint8_t>(batch, batch + size)
+            );
         };
         hooks.end_local_game = [](void* c) { ++static_cast<SeatedMachine*>(c)->ended; };
         hooks.local_player_won = [](void* c) { return static_cast<SeatedMachine*>(c)->won; };
@@ -2385,6 +2422,33 @@ void two_machines_lobby_to_match() {
     }));
     net_match_set_pause(host->match.get(), false);
 
+    // Each machine clamps a received speed to its own range: a sender whose
+    // range reaches 0 sends 0, which 3.1c's range takes as 1, and a narrower
+    // range takes as its slowest.
+    client->match->rules.speed_min = 0;
+    net_match_set_speed(client->match.get(), 0, true);
+    CHECK(client->world->game.requested_speed == 0);
+    packet_layer_flush(client->connection.packets, net_connection_time(&client->connection), true);
+    CHECK(wait_until([&] {
+        (void)net_match_pump(host->match.get());
+        (void)net_match_pump(client->match.get());
+        return host->world->game.requested_speed == 1;
+    }));
+    host->match->rules.speed_min = 12;
+    host->match->rules.speed_max = 14;
+    net_match_set_speed(client->match.get(), 5, true);
+    packet_layer_flush(client->connection.packets, net_connection_time(&client->connection), true);
+    CHECK(wait_until([&] {
+        (void)net_match_pump(host->match.get());
+        (void)net_match_pump(client->match.get());
+        return host->world->game.requested_speed == 12 && host->world->game.current_speed == 12;
+    }));
+    host->match->rules.speed_min = min_game_speed;
+    host->match->rules.speed_max = max_game_speed;
+    client->match->rules.speed_min = min_game_speed;
+    net_match_set_speed(host->match.get(), 10, true);
+    net_match_set_speed(client->match.get(), 10, false);
+
     // The timing coordinator sees the peer's tick for the lag throttle.
     base::game_loop::Timing timing{};
     net_match_sync_timing(host->world, &timing);
@@ -2862,6 +2926,1236 @@ void address_picks_the_enumeration_target() {
     g_machines[0] = g_machines[1] = nullptr;
 }
 
+namespace {
+
+using Bytes = std::vector<uint8_t>;
+
+// ---- a mod profile's network rules ----
+
+// Rules with the private channel and everything that rides on it.
+WireRules channel_rules() {
+    WireRules rules{};
+    rules.private_channel = PrivateChannel::sub_id_dispatch;
+    rules.integrity_check = IntegrityCheck::single_challenge;
+    rules.vote_reject = true;
+    return rules;
+}
+
+// Rules with the recorder presented.
+WireRules recorder_rules() {
+    WireRules rules{};
+    rules.recorder_protocol = recorder_protocol_current;
+    rules.recorder_session_commands = true;
+    rules.speed_min = 0;
+    rules.speed_lock = true;
+    return rules;
+}
+
+// Sends raw record bytes from one machine and pumps them on the other.
+void deliver_bytes(SeatedMachine& from, SeatedMachine& to, uint32_t from_id, const Bytes& bytes) {
+    CHECK(net_match_send(
+        from.match.get(), from_id, broadcast_destination_id, bytes.data(), bytes.size()
+    ));
+    packet_layer_flush(from.connection.packets, 0, true);
+    (void)net_match_pump(to.match.get());
+}
+
+// A private chat line reaches its handler and is never shown under the
+// rule; without it, 3.1c's chat shows it as it is.
+void private_lines_stay_hidden() {
+    start_case("private_lines_stay_hidden");
+    constexpr uint32_t kA = 7, kB = 9;
+    const Seat a_view[4] = {{kA, OA_PLAYER_STATUS_LOCAL, 1}, {kB, OA_PLAYER_STATUS_MIRRORED, 2}};
+    const Seat b_view[4] = {{kA, OA_PLAYER_STATUS_MIRRORED, 1}, {kB, OA_PLAYER_STATUS_LOCAL, 2}};
+    Bytes line(private_record_bytes, 0);
+    line[0] = 0x05;
+    line[2] = private_sub_vote;
+    line[3] = 0x41;
+    line[5] = vote_op_yes;
+    {
+        SeatedMachine a(a_view, 0, channel_rules());
+        SeatedMachine b(b_view, 1, channel_rules());
+        join(a, b);
+        deliver_bytes(a, b, kA, line);
+        CHECK(b.chats.empty());
+        CHECK(b.match->private_records == 1);
+    }
+    {
+        SeatedMachine a(a_view, 0);
+        SeatedMachine b(b_view, 1);
+        join(a, b);
+        deliver_bytes(a, b, kA, line);
+        CHECK(b.chats.size() == 1 && b.chats[0].empty());
+        CHECK(b.match->private_records == 0);
+    }
+}
+
+// Two machines on the same program and data challenge each other at tick
+// 180, answer with two records back to back and agree, so the tick-600
+// report names nobody; a machine whose data differs is reported, and its
+// report line goes to everyone.
+void integrity_check_answers_and_reports() {
+    start_case("integrity_check_answers_and_reports");
+    constexpr uint32_t kA = 7, kB = 9;
+    const Seat a_view[4] = {{kA, OA_PLAYER_STATUS_LOCAL, 1}, {kB, OA_PLAYER_STATUS_MIRRORED, 2}};
+    const Seat b_view[4] = {{kA, OA_PLAYER_STATUS_MIRRORED, 1}, {kB, OA_PLAYER_STATUS_LOCAL, 2}};
+    for (const bool same : {true, false}) {
+        SeatedMachine a(a_view, 0, channel_rules());
+        SeatedMachine b(b_view, 1, channel_rules());
+        join(a, b);
+        oa::base::text::copy_padded(a.player(0).name, "Alpha", sizeof a.player(0).name);
+        // Remote humans still playing are challenged.
+        a.info(1).state = 1;
+        b.info(0).state = 1;
+        a.match->integrity.identity.program[0] = 0x11;
+        b.match->integrity.identity.program[0] = 0x11;
+        b.match->integrity.identity.game_data[0] = same ? 0 : 0x22;
+        a.world->game.tick = integrity_challenge_tick;
+        net_match_rules_tick(a.match.get());
+        const auto challenges = a.sent(RecordType::chat);
+        CHECK(challenges.size() == 1);
+        if (challenges.size() == 1) {
+            CHECK(challenges[0].to == kB && challenges[0].bytes.size() == private_record_bytes);
+            CHECK(challenges[0].bytes[2] == private_sub_integrity);
+            CHECK(challenges[0].bytes[5] == integrity_op_challenge);
+        }
+        (void)net_match_pump(b.match.get());
+        const auto replies = b.sent(RecordType::chat);
+        CHECK(replies.size() == 2);
+        if (replies.size() == 2) {
+            CHECK(replies[0].to == kA && replies[1].to == kA);
+            CHECK(replies[0].bytes[5] == integrity_op_module_reply);
+            CHECK(replies[1].bytes[5] == integrity_op_data_reply);
+        }
+        // The two records of a frame are spread over two ticks.
+        (void)net_match_pump(a.match.get());
+        ++a.world->game.tick;
+        (void)net_match_pump(a.match.get());
+        CHECK(a.match->private_records == 2);
+        const auto* peer = integrity_peer(a.match->integrity, kB);
+        CHECK(peer != nullptr && peer->program_answered && peer->data_answered);
+        CHECK(peer != nullptr && peer->program_matches && peer->data_matches == same);
+        CHECK(integrity_issue_count(a.match->integrity) == (same ? 0 : 1));
+        a.forget_sent();
+        a.world->game.tick = integrity_report_tick;
+        net_match_rules_tick(a.match.get());
+        const auto reports = a.sent(RecordType::chat);
+        CHECK(reports.size() == (same ? 0u : 1u));
+        if (!same && reports.size() == 1)
+            CHECK(
+                std::string(reinterpret_cast<const char*>(reports[0].bytes.data()) + 1) ==
+                "Alpha reports VerCheck issues with 1 other players"
+            );
+        CHECK(a.match->integrity.reported);
+    }
+}
+
+// A report request makes every machine say what it runs.
+void integrity_report_request_is_answered() {
+    start_case("integrity_report_request_is_answered");
+    constexpr uint32_t kA = 7, kB = 9;
+    const Seat a_view[4] = {{kA, OA_PLAYER_STATUS_LOCAL, 1}, {kB, OA_PLAYER_STATUS_MIRRORED, 2}};
+    const Seat b_view[4] = {{kA, OA_PLAYER_STATUS_MIRRORED, 1}, {kB, OA_PLAYER_STATUS_LOCAL, 2}};
+    SeatedMachine a(a_view, 0, channel_rules());
+    SeatedMachine b(b_view, 1, channel_rules());
+    join(a, b);
+    oa::base::text::copy_padded(b.player(1).name, "Bravo", sizeof b.player(1).name);
+    std::snprintf(b.match->recorder.program, sizeof b.match->recorder.program, "Program 1.0");
+    Bytes request(private_record_bytes, 0);
+    request[0] = 0x05;
+    request[2] = private_sub_integrity;
+    request[3] = 0x41;
+    request[5] = 7;
+    deliver_bytes(a, b, kA, request);
+    const auto lines = b.sent(RecordType::chat);
+    CHECK(lines.size() == 1);
+    if (lines.size() == 1)
+        CHECK(
+            std::string(reinterpret_cast<const char*>(lines[0].bytes.data()) + 1) ==
+            "*** Bravo uses Program 1.0"
+        );
+}
+
+// The vote tally: a manual vote needs two thirds of the players, a timeout
+// vote two; an ally of the target must agree; too many noes fail it; an
+// undecided timeout vote rejects and an undecided manual one fails and
+// keeps its target from a new vote for a while.
+void vote_tally_rules() {
+    start_case("vote_tally_rules");
+    VoteBoard board{};
+    auto* vote = vote_open(board, 50, vote_flag_manual, 100, 60 * 30);
+    CHECK(vote != nullptr);
+    CHECK(vote_open(board, 50, vote_flag_manual, 100, 60 * 30) == nullptr);
+    VoteElectorate four{4, 0};
+    CHECK(vote_needed(*vote, 4) == 3);
+    vote_cast(*vote, 0, true);
+    vote_cast(*vote, 1, true);
+    CHECK(vote_tally(*vote, four, 100) == VoteResult::open);
+    vote_cast(*vote, 2, true);
+    CHECK(vote_tally(*vote, four, 100) == VoteResult::passed);
+    four.target_allies = 1u << 3;
+    CHECK(vote_tally(*vote, four, 100) == VoteResult::open);
+    vote_cast(*vote, 3, true);
+    CHECK(vote_tally(*vote, four, 100) == VoteResult::passed);
+    vote_cast(*vote, 3, false);
+    vote_cast(*vote, 2, false);
+    CHECK(vote_tally(*vote, {4, 0}, 100) == VoteResult::failed);
+    vote_close(board, *vote, VoteResult::failed, 100);
+    CHECK(vote_find(board, 50) == nullptr);
+    CHECK(vote_open(board, 50, vote_flag_manual, 200, 60 * 30) == nullptr);
+    CHECK(vote_open(board, 50, vote_flag_manual, 100 + 90 * 30, 60 * 30) != nullptr);
+
+    VoteBoard timeouts{};
+    auto* timeout = vote_open(timeouts, 60, vote_flag_timeout, 0, 90 * 30);
+    CHECK(timeout != nullptr && vote_needed(*timeout, 5) == 2 && vote_needed(*timeout, 1) == 1);
+    CHECK(vote_seconds_left(*timeout, 30 * 46) == 44);
+    CHECK(vote_tally(*timeout, {5, 0}, 10) == VoteResult::open);
+    CHECK(vote_tally(*timeout, {5, 0}, 90 * 30) == VoteResult::passed);
+    vote_close(timeouts, *timeout, VoteResult::passed, 90 * 30);
+    // A passed timeout vote leaves no cooldown.
+    CHECK(vote_open(timeouts, 60, vote_flag_manual, 90 * 30 + 1, 60 * 30) != nullptr);
+    auto* manual = vote_find(timeouts, 60);
+    CHECK(
+        manual != nullptr &&
+        vote_tally(*manual, {5, 0}, 90 * 30 + 1 + 60 * 30) == VoteResult::failed
+    );
+}
+
+// A proposal from one machine opens the vote on the other with the
+// proposer's yes; the other's yes passes it, and each machine rejects the
+// player itself.
+void votes_reject_on_every_machine() {
+    start_case("votes_reject_on_every_machine");
+    constexpr uint32_t kA = 7, kB = 9, kC = 11;
+    const Seat a_view[4] = {
+        {kA, OA_PLAYER_STATUS_LOCAL, 1},
+        {kB, OA_PLAYER_STATUS_MIRRORED, 2},
+        {kC, OA_PLAYER_STATUS_MIRRORED, 3}
+    };
+    const Seat b_view[4] = {
+        {kA, OA_PLAYER_STATUS_MIRRORED, 1},
+        {kB, OA_PLAYER_STATUS_LOCAL, 2},
+        {kC, OA_PLAYER_STATUS_MIRRORED, 3}
+    };
+    SeatedMachine a(a_view, 0, channel_rules());
+    SeatedMachine b(b_view, 1, channel_rules());
+    join(a, b);
+    // A removal under the rule asks for a vote instead.
+    net_match_remove_player(a.match.get(), 2, 1);
+    CHECK(a.sent(RecordType::reject).empty());
+    const auto* opened = vote_find(a.match->votes, kC);
+    CHECK(opened != nullptr && opened->flag == vote_flag_manual && opened->yes == 1u);
+    CHECK(!net_match_propose_reject(a.match.get(), 2));
+    (void)net_match_pump(b.match.get());
+    const auto* heard = vote_find(b.match->votes, kC);
+    CHECK(heard != nullptr && heard->yes == 1u);
+    CHECK(net_match_cast_vote(b.match.get(), kC, true));
+    // Two of three: passed on the voter's machine at once.
+    CHECK(vote_find(b.match->votes, kC) == nullptr);
+    const auto b_rejects = b.sent(RecordType::reject);
+    CHECK(b_rejects.size() == 1 && b_rejects[0].bytes[1] == kC);
+    (void)net_match_pump(a.match.get());
+    CHECK(vote_find(a.match->votes, kC) == nullptr);
+    CHECK(a.player(2).reject_reason == vote_flag_manual);
+    CHECK(!net_match_cast_vote(a.match.get(), kC, true));
+    // Without the rule, removal rejects at once.
+    SeatedMachine plain(a_view, 0);
+    net_match_remove_player(plain.match.get(), 2, 1);
+    CHECK(plain.sent(RecordType::reject).size() == 1);
+}
+
+// A silent player gets a timeout vote from every machine instead of the
+// host's drop, and hearing from it again cancels the vote.
+void silence_opens_a_timeout_vote() {
+    start_case("silence_opens_a_timeout_vote");
+    constexpr uint32_t kA = 7, kB = 9;
+    const Seat a_view[4] = {{kA, OA_PLAYER_STATUS_LOCAL, 1}, {kB, OA_PLAYER_STATUS_MIRRORED, 2}};
+    const Seat b_view[4] = {{kA, OA_PLAYER_STATUS_MIRRORED, 1}, {kB, OA_PLAYER_STATUS_LOCAL, 2}};
+    SeatedMachine a(a_view, 0, channel_rules());
+    SeatedMachine b(b_view, 1, channel_rules());
+    join(a, b);
+    // The connection clock stays at 0 without a socket host: a player last
+    // heard far in the past counts as silent.
+    a.world->game.player_timeout_seconds = 1;
+    a.player(1).last_update_time = 0u - 1000u;
+    a.match->timeout_baseline = 0u - 1000u;
+    (void)net_match_pump(a.match.get());
+    CHECK(a.match->timeout_player == kB);
+    const auto* vote = vote_find(a.match->votes, kB);
+    CHECK(vote != nullptr && vote->flag == vote_flag_timeout && vote->yes == 0);
+    CHECK(!net_match_timeout_expired(a.match.get(), kB));
+    const auto proposals = a.sent(RecordType::chat);
+    CHECK(proposals.size() == 1 && proposals[0].bytes[2] == private_sub_vote);
+    CHECK(proposals.size() == 1 && proposals[0].bytes[10] == vote_flag_timeout);
+    // The silent machine ignores a timeout vote on its own player.
+    (void)net_match_pump(b.match.get());
+    CHECK(vote_find(b.match->votes, kB) == nullptr);
+    // Heard from again, the vote is dropped.
+    const uint8_t probe = static_cast<uint8_t>(RecordType::probe);
+    CHECK(net_match_send(b.match.get(), kB, broadcast_destination_id, &probe, 1));
+    packet_layer_flush(b.connection.packets, 0, true);
+    (void)net_match_pump(a.match.get());
+    CHECK(vote_find(a.match->votes, kB) == nullptr);
+}
+
+// The silent player does not count among the voters of its timeout vote:
+// between two machines the one still answering rejects it with its own yes.
+void timeout_vote_leaves_out_its_target() {
+    start_case("timeout_vote_leaves_out_its_target");
+    constexpr uint32_t kA = 7, kB = 9;
+    const Seat a_view[4] = {{kA, OA_PLAYER_STATUS_LOCAL, 1}, {kB, OA_PLAYER_STATUS_MIRRORED, 2}};
+    const Seat b_view[4] = {{kA, OA_PLAYER_STATUS_MIRRORED, 1}, {kB, OA_PLAYER_STATUS_LOCAL, 2}};
+    SeatedMachine a(a_view, 0, channel_rules());
+    SeatedMachine b(b_view, 1, channel_rules());
+    join(a, b);
+    a.world->game.player_timeout_seconds = 1;
+    a.player(1).last_update_time = 0u - 1000u;
+    a.match->timeout_baseline = 0u - 1000u;
+    (void)net_match_pump(a.match.get());
+    CHECK(vote_find(a.match->votes, kB) != nullptr);
+    CHECK(net_match_cast_vote(a.match.get(), kB, true));
+    CHECK(vote_find(a.match->votes, kB) == nullptr);
+    const auto rejects = a.sent(RecordType::reject);
+    CHECK(rejects.size() == 1 && rejects[0].bytes[1] == kB);
+}
+
+// An in-game setup block keeps a remote player's colour under the rule.
+void remote_colour_survives_in_game_blocks() {
+    start_case("remote_colour_survives_in_game_blocks");
+    constexpr uint32_t kA = 7, kB = 9;
+    const Seat a_view[4] = {{kA, OA_PLAYER_STATUS_LOCAL, 1}, {kB, OA_PLAYER_STATUS_MIRRORED, 2}};
+    const Seat b_view[4] = {{kA, OA_PLAYER_STATUS_MIRRORED, 1}, {kB, OA_PLAYER_STATUS_LOCAL, 2}};
+    for (const bool keep : {true, false}) {
+        WireRules rules{};
+        rules.keep_remote_colour = keep;
+        SeatedMachine a(a_view, 0, rules);
+        SeatedMachine b(b_view, 1, rules);
+        join(a, b);
+        b.info(0).color = 2;
+        a.info(0).color = 5;
+        a.info(0).side = 1;
+        net_match_send_player_status(a.match.get(), false);
+        (void)net_match_pump(b.match.get());
+        CHECK(b.info(0).color == (keep ? 2 : 5));
+        CHECK(b.info(0).side == 1);
+    }
+}
+
+// Under the recorder's rules its records reach the match: cameras are kept
+// and warp-done counted. A game held for its warps starts once every
+// player's warp is done; the in-game setup blocks say no recorder, as a
+// recorder's do, and the protocol learnt in the battle room stays.
+void recorder_records_reach_the_match() {
+    start_case("recorder_records_reach_the_match");
+    constexpr uint32_t kA = 7, kB = 9;
+    const Seat a_view[4] = {{kA, OA_PLAYER_STATUS_LOCAL, 1}, {kB, OA_PLAYER_STATUS_MIRRORED, 2}};
+    const Seat b_view[4] = {{kA, OA_PLAYER_STATUS_MIRRORED, 1}, {kB, OA_PLAYER_STATUS_LOCAL, 2}};
+    SeatedMachine a(a_view, 0, recorder_rules());
+    SeatedMachine b(b_view, 1, recorder_rules());
+    join(a, b);
+    a.match->recorder.peer_protocol[1] = recorder_protocol_current;
+    b.match->recorder.peer_protocol[0] = recorder_protocol_current;
+    b.match->recorder.options.commander_warp = 1;
+    net_match_recorder_start(b.match.get());
+    CHECK((b.world->game.sim_run_flags & run_flag_paused) != 0);
+    CHECK(b.match->recorder.start_paused && !b.match->recorder.autopause_holding);
+    net_match_warp_done(b.match.get());
+    CHECK(b.match->recorder.warp_done[1]);
+    net_match_paused_frame(b.match.get());
+    CHECK(!b.match->recorder.warp_released);
+    net_match_warp_done(a.match.get());
+    const auto warps = a.sent(static_cast<RecordType>(0xfb));
+    (void)warps;
+    net_match_paused_frame(b.match.get());
+    CHECK(b.match->recorder.warp_done[0]);
+    CHECK(b.match->recorder.warp_released);
+    CHECK((b.world->game.sim_run_flags & run_flag_paused) == 0);
+    CHECK(b.match->records_refused == 0);
+
+    net_match_send_camera(a.match.get(), 0x0100, 0x00d0);
+    packet_layer_flush(a.connection.packets, 0, true);
+    (void)net_match_pump(b.match.get());
+    CHECK(b.match->recorder.camera_x[0] == 0x0100 && b.match->recorder.camera_y[0] == 0x00d0);
+    CHECK(b.match->recorder_records == 2);
+    bool camera_seen = false;
+    for (const auto& [sender, type] : b.seen)
+        camera_seen = camera_seen || (sender == kA && type == 0xfc);
+    CHECK(camera_seen);
+
+    a.info(0).reserved_after_map_hash
+        [netgame::player_info_recorder_protocol_offset - netgame::player_info_map_hash_offset - 4] =
+        recorder_protocol_current;
+    b.info(0).reserved_after_map_hash
+        [netgame::player_info_recorder_protocol_offset - netgame::player_info_map_hash_offset - 4] =
+        recorder_protocol_current;
+    a.forget_sent();
+    net_match_send_player_status(a.match.get(), false);
+    const auto blocks = a.sent(RecordType::player_info);
+    CHECK(blocks.size() == 1 && blocks[0].bytes[1 + player_info_recorder_protocol_offset] == 0);
+    (void)net_match_pump(b.match.get());
+    CHECK(
+        reinterpret_cast<const uint8_t*>(&b.info(0))[player_info_recorder_protocol_offset] ==
+        recorder_protocol_current
+    );
+
+    // Under 3.1c's rules a frame stops at a recorder record, as 3.1c's does.
+    SeatedMachine c(a_view, 0);
+    SeatedMachine d(b_view, 1);
+    join(c, d);
+    const Bytes camera{0xfc, 0x00, 0x01, 0xd0, 0x00};
+    CHECK(
+        net_match_send(c.match.get(), kA, broadcast_destination_id, camera.data(), camera.size())
+    );
+    packet_layer_flush(c.connection.packets, 0, true);
+    (void)net_match_pump(d.match.get());
+    CHECK(d.match->recorder_records == 0 && d.match->recorder.camera_x[0] == 0);
+}
+
+// Under the recorder's rules this machine's camera goes out with its frames
+// when it moves, at most once each send interval, and the receiver keeps
+// who shares. .sharemappos turns sharing off with a camera record whose
+// halves are both off, in a frame of its own, and back on; only the local
+// player's command counts. Under 3.1c's rules no camera goes out.
+// The camera records a machine sent, read past the recorder's records as a
+// recorder reads its frames.
+std::vector<SentRecord> cameras_sent(SeatedMachine& m) {
+    packet_layer_flush(m.connection.packets, 0, true);
+    std::vector<SentRecord> out;
+    for (const auto& datagram : m.link.sent) {
+        const auto frame = oa::netgame::network::decode_frame(datagram.bytes);
+        for (std::size_t at = frame_header_bytes; at < frame.size();) {
+            uint16_t length = 0;
+            if (recorder_record_length(frame.data() + at, frame.size() - at, &length) !=
+                    WireError::ok &&
+                record_wire_length(frame.data() + at, frame.size() - at, &length) != WireError::ok)
+                break;
+            if (length == 0 || at + length > frame.size())
+                break;
+            if (frame[at] == 0xfc)
+                out.push_back(
+                    {datagram.from,
+                     datagram.to,
+                     std::vector<uint8_t>(frame.begin() + at, frame.begin() + at + length)}
+                );
+            at += length;
+        }
+    }
+    return out;
+}
+
+void recorder_cameras_are_shared() {
+    start_case("recorder_cameras_are_shared");
+    constexpr uint32_t kA = 7, kB = 9;
+    const Seat a_view[4] = {{kA, OA_PLAYER_STATUS_LOCAL, 1}, {kB, OA_PLAYER_STATUS_MIRRORED, 2}};
+    const Seat b_view[4] = {{kA, OA_PLAYER_STATUS_MIRRORED, 1}, {kB, OA_PLAYER_STATUS_LOCAL, 2}};
+    SeatedMachine a(a_view, 0, recorder_rules());
+    SeatedMachine b(b_view, 1, recorder_rules());
+    join(a, b);
+    // No camera noted yet: none goes out.
+    a.forget_sent();
+    net_match_after_tick(a.match.get());
+    CHECK(cameras_sent(a).empty());
+    net_match_note_camera(a.match.get(), 0x0100, 0x00d0);
+    net_match_after_tick(a.match.get());
+    auto cameras = cameras_sent(a);
+    CHECK(cameras.size() == 1 && (cameras[0].bytes == Bytes{0xfc, 0x00, 0x01, 0xd0, 0x00}));
+    CHECK(cameras.size() == 1 && cameras[0].to == broadcast_destination_id);
+    (void)net_match_pump(b.match.get());
+    CHECK(b.match->recorder.camera_shared[0]);
+    CHECK(b.match->recorder.camera_x[0] == 0x0100 && b.match->recorder.camera_y[0] == 0x00d0);
+    // The same place again, or a move within the send interval: nothing more.
+    net_match_after_tick(a.match.get());
+    CHECK(cameras_sent(a).size() == 1);
+    net_match_note_camera(a.match.get(), 0x0200, 0x0300);
+    net_match_after_tick(a.match.get());
+    CHECK(cameras_sent(a).size() == 1);
+    // Once the interval has passed the move goes out; places off the range
+    // are clamped, short of the off value.
+    a.connection.packets->ticks_between_sends = 0;
+    net_match_note_camera(a.match.get(), -5, 0x12345);
+    net_match_after_tick(a.match.get());
+    cameras = cameras_sent(a);
+    CHECK(cameras.size() == 2 && (cameras[1].bytes == Bytes{0xfc, 0x00, 0x00, 0xfe, 0xff}));
+
+    // .sharemappos turns sharing off: the off record goes in a frame alone.
+    a.forget_sent();
+    net_match_say(a.match.get(), "<Alpha> .sharemappos");
+    CHECK(a.match->recorder.local_camera_hidden);
+    cameras = cameras_sent(a);
+    CHECK(cameras.size() == 1 && (cameras[0].bytes == Bytes{0xfc, 0xff, 0xff, 0xff, 0xff}));
+    bool alone = false;
+    for (const auto& datagram : a.link.sent) {
+        const auto frame = oa::netgame::network::decode_frame(datagram.bytes);
+        if (frame.size() > frame_header_bytes && frame[frame_header_bytes] == 0xfc)
+            alone = frame.size() == frame_header_bytes + recorder_camera_bytes;
+    }
+    CHECK(alone);
+    (void)net_match_pump(b.match.get());
+    CHECK(!b.match->recorder.camera_shared[0]);
+    // While it is off the camera stays here.
+    net_match_note_camera(a.match.get(), 0x0400, 0x0400);
+    net_match_after_tick(a.match.get());
+    CHECK(cameras_sent(a).size() == 1);
+    // Typed again, the camera goes out with the next frame.
+    net_match_say(a.match.get(), "<Alpha> .sharemappos");
+    CHECK(!a.match->recorder.local_camera_hidden);
+    net_match_after_tick(a.match.get());
+    cameras = cameras_sent(a);
+    CHECK(cameras.size() == 2 && (cameras[1].bytes == Bytes{0xfc, 0x00, 0x04, 0x00, 0x04}));
+    (void)net_match_pump(b.match.get());
+    CHECK(b.match->recorder.camera_shared[0] && b.match->recorder.camera_x[0] == 0x0400);
+    // Another player's .sharemappos leaves this machine's sharing as it was.
+    ChatRecord line{};
+    std::snprintf(line.text, sizeof line.text, "%s", "<Bravo> .sharemappos");
+    deliver(b, a, kB, broadcast_destination_id, line);
+    CHECK(!a.match->recorder.local_camera_hidden);
+
+    SeatedMachine c(a_view, 0);
+    c.forget_sent();
+    net_match_note_camera(c.match.get(), 1, 1);
+    net_match_after_tick(c.match.get());
+    CHECK(cameras_sent(c).empty());
+}
+
+// ui.whiteboard over the recorder: a batch of marks goes as message kind 0,
+// `fb n 00` and the batch, alone in a frame of its own (sequence -1) to
+// each recorder of protocol 2 or later, never to a plain peer or one of
+// protocol 1. The other machine shows it only while the sender allies its
+// player; a payload above 100 bytes is shown nowhere.
+void whiteboard_marks_reach_allies() {
+    start_case("whiteboard_marks_reach_allies");
+    constexpr uint32_t kA = 7, kB = 9;
+    const Seat a_view[4] = {{kA, OA_PLAYER_STATUS_LOCAL, 1}, {kB, OA_PLAYER_STATUS_MIRRORED, 2}};
+    const Seat b_view[4] = {{kA, OA_PLAYER_STATUS_MIRRORED, 1}, {kB, OA_PLAYER_STATUS_LOCAL, 2}};
+    SeatedMachine a(a_view, 0, recorder_rules());
+    SeatedMachine b(b_view, 1, recorder_rules());
+    join(a, b);
+    a.match->recorder.peer_protocol[1] = recorder_protocol_current;
+    b.match->recorder.peer_protocol[0] = recorder_protocol_current;
+    // One dot marker: count 1, then type 3, pad, x 0x0140, y 0x0280, colour 0xe3, empty text.
+    const Bytes dot{0x01, 0x03, 0x00, 0x40, 0x01, 0x80, 0x02, 0xe3, 0x00};
+    Bytes record{0xfb, static_cast<uint8_t>(dot.size()), 0x00};
+    record.insert(record.end(), dot.begin(), dot.end());
+
+    a.forget_sent();
+    CHECK(net_match_send_whiteboard(a.match.get(), dot.data(), dot.size()) == 1);
+    Bytes alone{0xff, 0xff, 0xff, 0xff};
+    alone.insert(alone.end(), record.begin(), record.end());
+    // The 0xfb frames Alpha sent, as the other machine would read them.
+    const auto whiteboard_frames = [](const Link& link) {
+        std::vector<Datagram> out;
+        for (const auto& datagram : link.sent) {
+            const auto frame = oa::netgame::network::decode_frame(datagram.bytes);
+            if (frame.size() > frame_header_bytes && frame[frame_header_bytes] == 0xfb)
+                out.push_back({datagram.from, datagram.to, frame});
+        }
+        return out;
+    };
+    packet_layer_flush(a.connection.packets, 0, true);
+    const auto sent = whiteboard_frames(a.link);
+    CHECK(sent.size() == 1);
+    CHECK(sent[0].from == kA && sent[0].to == kB && sent[0].bytes == alone);
+    // Bravo's player is not allied by Alpha's: nothing is shown.
+    (void)net_match_pump(b.match.get());
+    CHECK(b.marks.empty() && b.match->whiteboard_batches == 0);
+    CHECK(b.match->records_refused == 0);
+
+    // Once Alpha's player allies Bravo's, the batch is shown as sent.
+    b.player(1).allied_by[0] = 1;
+    CHECK(net_match_send_whiteboard(a.match.get(), dot.data(), dot.size()) == 1);
+    packet_layer_flush(a.connection.packets, 0, true);
+    (void)net_match_pump(b.match.get());
+    CHECK(b.marks.size() == 1);
+    CHECK(b.marks[0].first == 0 && b.marks[0].second == dot);
+    CHECK(b.match->whiteboard_batches == 1);
+
+    // A payload past 100 bytes is not shown.
+    Bytes oversized{0xfb, 101, 0x00};
+    oversized.resize(oversized.size() + 101, 0x00);
+    oversized[3] = 0x01;
+    const auto read_before = b.match->recorder_records;
+    deliver_bytes(a, b, kA, oversized);
+    CHECK(b.match->recorder_records == read_before + 1);
+    CHECK(b.marks.size() == 1);
+
+    // Nothing goes to a recorder of protocol 1, nor a batch past 100 bytes,
+    // nor from a machine that presents no recorder.
+    a.match->recorder.peer_protocol[1] = 1;
+    CHECK(net_match_send_whiteboard(a.match.get(), dot.data(), dot.size()) == 0);
+    a.match->recorder.peer_protocol[1] = recorder_protocol_current;
+    const Bytes long_batch(101, 0x00);
+    CHECK(net_match_send_whiteboard(a.match.get(), long_batch.data(), long_batch.size()) == 0);
+    CHECK(net_match_send_whiteboard(a.match.get(), nullptr, 0) == 0);
+    SeatedMachine plain(a_view, 0);
+    plain.match->recorder.peer_protocol[1] = recorder_protocol_current;
+    CHECK(net_match_send_whiteboard(plain.match.get(), dot.data(), dot.size()) == 0);
+    packet_layer_flush(plain.connection.packets, 0, true);
+    CHECK(whiteboard_frames(plain.link).empty());
+}
+
+// Under autopause only the host's unpause starts the game: another's is
+// undone with a notice, here and from another machine.
+void autopause_holds_for_the_host() {
+    start_case("autopause_holds_for_the_host");
+    constexpr uint32_t kHost = 7, kB = 9, kC = 11;
+    const Seat b_view[4] = {
+        {kHost, OA_PLAYER_STATUS_MIRRORED, 1},
+        {kB, OA_PLAYER_STATUS_LOCAL, 2},
+        {kC, OA_PLAYER_STATUS_MIRRORED, 3}
+    };
+    const Seat c_view[4] = {
+        {kHost, OA_PLAYER_STATUS_MIRRORED, 1},
+        {kB, OA_PLAYER_STATUS_MIRRORED, 2},
+        {kC, OA_PLAYER_STATUS_LOCAL, 3}
+    };
+    const Seat host_view[4] = {
+        {kHost, OA_PLAYER_STATUS_LOCAL, 1},
+        {kB, OA_PLAYER_STATUS_MIRRORED, 2},
+        {kC, OA_PLAYER_STATUS_MIRRORED, 3}
+    };
+    SeatedMachine b(b_view, 1, recorder_rules());
+    SeatedMachine c(c_view, 2, recorder_rules());
+    SeatedMachine host(host_view, 0, recorder_rules());
+    for (auto* m : {&b, &c, &host})
+        m->info(0).role = 1;
+    b.match->recorder.options.autopause = 1;
+    c.match->recorder.options.autopause = 1;
+    net_match_recorder_start(b.match.get());
+    CHECK(b.match->recorder.autopause_holding);
+    // The local unpause of a machine that does not host.
+    b.world->game.sim_run_flags =
+        static_cast<uint16_t>(b.world->game.sim_run_flags & ~run_flag_paused);
+    b.forget_sent();
+    net_match_set_pause(b.match.get(), false);
+    CHECK((b.world->game.sim_run_flags & run_flag_paused) != 0);
+    CHECK(b.sent(RecordType::pause_speed).empty());
+    // Another player's unpause arrives and is undone.
+    join(c, b);
+    PauseSpeedRecord unpause{};
+    deliver(c, b, kC, broadcast_destination_id, unpause);
+    CHECK((b.world->game.sim_run_flags & run_flag_paused) != 0);
+    CHECK(!b.notices.empty() && b.notices.back().find("tried to unpause") != std::string::npos);
+    // The host's unpause starts it, and pauses after it are free.
+    join(host, b);
+    deliver(host, b, kHost, broadcast_destination_id, unpause);
+    CHECK((b.world->game.sim_run_flags & run_flag_paused) == 0);
+    CHECK(!b.match->recorder.autopause_holding);
+}
+
+// The recorder's speed lock removes received speeds outside it; speed 0 is
+// a speed when the rules allow it.
+void speed_lock_and_speed_zero() {
+    start_case("speed_lock_and_speed_zero");
+    constexpr uint32_t kA = 7, kB = 9;
+    const Seat a_view[4] = {{kA, OA_PLAYER_STATUS_LOCAL, 1}, {kB, OA_PLAYER_STATUS_MIRRORED, 2}};
+    const Seat b_view[4] = {{kA, OA_PLAYER_STATUS_MIRRORED, 1}, {kB, OA_PLAYER_STATUS_LOCAL, 2}};
+    SeatedMachine a(a_view, 0, recorder_rules());
+    SeatedMachine b(b_view, 1, recorder_rules());
+    join(a, b);
+    PauseSpeedRecord speed{};
+    speed.kind = 1;
+    speed.value = 0;
+    deliver(a, b, kA, broadcast_destination_id, speed);
+    CHECK(b.world->game.requested_speed == 0);
+    b.match->recorder.options.speed_lock = 1;
+    b.match->recorder.options.speed_low = 0;
+    b.match->recorder.options.speed_high = 5;
+    speed.value = 9;
+    deliver(a, b, kA, broadcast_destination_id, speed);
+    CHECK(b.world->game.requested_speed == 0);
+    speed.value = 12;
+    deliver(a, b, kA, broadcast_destination_id, speed);
+    CHECK(b.world->game.requested_speed == 12);
+    // A local change outside the lock is not made nor sent.
+    b.forget_sent();
+    net_match_set_speed(b.match.get(), 16, true);
+    CHECK(b.world->game.requested_speed == 12 && b.sent(RecordType::pause_speed).empty());
+    // 3.1c's range is 1..20.
+    SeatedMachine c(a_view, 0);
+    SeatedMachine d(b_view, 1);
+    join(c, d);
+    speed.value = 0;
+    deliver(c, d, kA, broadcast_destination_id, speed);
+    CHECK(d.world->game.requested_speed == 1);
+}
+
+// The host's .syncon narrows every machine's speeds and a speed outside the
+// lock is set to its nearest end and sent; .syncoff lifts it. Without the
+// rules' speed lock both lines are only chat.
+void hosts_speed_lock_narrows_the_range() {
+    start_case("hosts_speed_lock_narrows_the_range");
+    constexpr uint32_t kHost = 7, kB = 9;
+    const Seat host_view[4] = {
+        {kHost, OA_PLAYER_STATUS_LOCAL, 1}, {kB, OA_PLAYER_STATUS_MIRRORED, 2}
+    };
+    const Seat b_view[4] = {{kHost, OA_PLAYER_STATUS_MIRRORED, 1}, {kB, OA_PLAYER_STATUS_LOCAL, 2}};
+    for (const bool rule : {false, true}) {
+        auto rules = recorder_rules();
+        rules.speed_lock = rule;
+        SeatedMachine host(host_view, 0, rules);
+        SeatedMachine b(b_view, 1, rules);
+        for (auto* m : {&host, &b})
+            m->info(0).role = 1;
+        join(host, b);
+        host.world->game.requested_speed = 10;
+        b.world->game.requested_speed = 18;
+        b.forget_sent();
+        net_match_say(host.match.get(), "<Host> .syncon 0 5");
+        packet_layer_flush(host.connection.packets, 0, true);
+        (void)net_match_pump(b.match.get());
+        PauseSpeedRecord speed{};
+        speed.kind = 1;
+        if (!rule) {
+            CHECK(b.match->recorder.options.speed_lock == 0 && b.speed_locks.empty());
+            CHECK(b.world->game.requested_speed == 18 && b.sent(RecordType::pause_speed).empty());
+            uint8_t slowest = 0;
+            uint8_t fastest = 0;
+            CHECK(!net_match_speed_range(b.match.get(), &slowest, &fastest));
+            CHECK(slowest == 0 && fastest == 20);
+            speed.value = 3;
+            deliver(host, b, kHost, broadcast_destination_id, speed);
+            CHECK(b.world->game.requested_speed == 3);
+            continue;
+        }
+        CHECK(b.match->recorder.options.speed_lock == 1);
+        CHECK((b.speed_locks == std::vector<std::array<int32_t, 3>>{{1, 10, 15}}));
+        CHECK((host.speed_locks == std::vector<std::array<int32_t, 3>>{{1, 10, 15}}));
+        // The host's speed lay within it: the host sends none.
+        CHECK(host.world->game.requested_speed == 10);
+        // b's speed lay above the lock: it is set to 15 and sent.
+        CHECK(b.world->game.requested_speed == 15);
+        const auto sent = b.sent(RecordType::pause_speed);
+        CHECK(sent.size() == 1);
+        if (sent.size() == 1)
+            CHECK(sent[0].from == kB && (sent[0].bytes == std::vector<uint8_t>{0x19, 1, 15}));
+        // Speeds outside the lock are neither taken nor made.
+        speed.value = 9;
+        deliver(host, b, kHost, broadcast_destination_id, speed);
+        CHECK(b.world->game.requested_speed == 15);
+        b.forget_sent();
+        net_match_set_speed(b.match.get(), 16, true);
+        CHECK(b.world->game.requested_speed == 15 && b.sent(RecordType::pause_speed).empty());
+        speed.value = 12;
+        deliver(host, b, kHost, broadcast_destination_id, speed);
+        CHECK(b.world->game.requested_speed == 12);
+        // Another player's .syncoff is only chat; the host's lifts the lock.
+        b.forget_sent();
+        net_match_say(b.match.get(), "<B> .syncoff");
+        CHECK(b.match->recorder.options.speed_lock == 1 && b.speed_locks.size() == 1);
+        net_match_say(host.match.get(), "<Host> .syncoff");
+        packet_layer_flush(host.connection.packets, 0, true);
+        (void)net_match_pump(b.match.get());
+        CHECK(b.match->recorder.options.speed_lock == 0);
+        CHECK(
+            b.speed_locks.size() == 2 && (b.speed_locks.back() == std::array<int32_t, 3>{0, 0, 20})
+        );
+        speed.value = 19;
+        deliver(host, b, kHost, broadcast_destination_id, speed);
+        CHECK(b.world->game.requested_speed == 19);
+    }
+}
+
+// A remote player's start sync puts its commander where the record says
+// while the game is younger than the unit limit, whatever unit the record
+// names; the fractions stay.
+void commander_start_sync_places_the_commander() {
+    start_case("commander_start_sync_places_the_commander");
+    constexpr uint32_t kA = 7, kB = 9;
+    const Seat a_view[4] = {{kA, OA_PLAYER_STATUS_LOCAL, 1}, {kB, OA_PLAYER_STATUS_MIRRORED, 2}};
+    const Seat b_view[4] = {{kA, OA_PLAYER_STATUS_MIRRORED, 1}, {kB, OA_PLAYER_STATUS_LOCAL, 2}};
+    for (const bool rule : {true, false}) {
+        WireRules rules{};
+        rules.commander_sync_tick = rule ? 90 : 0;
+        SeatedMachine a(a_view, 0, rules);
+        SeatedMachine b(b_view, 1, rules);
+        join(a, b);
+        b.world->game.units_per_player = 10;
+        b.world->game.unit_def_id_bits = 10;
+        b.world->game.tick = 5;
+        b.player(0).first_unit = oa_unit_ref_from_slot(1);
+        b.player(0).last_unit = oa_unit_ref_from_slot(10);
+        auto& commander = b.world->units[1];
+        commander.position.x = (100 << 16) | 0x8000;
+        commander.position.z = (200 << 16) | 0x4000;
+        uint8_t storage[unit_state_writer_words * bit_stream_word_bytes];
+        BitWriter writer;
+        bit_writer_init(&writer, storage, unit_state_writer_words);
+        uint16_t length = 0;
+        CHECK(
+            unit_state_write_start_position(&writer, 90, {54, 9072, 992, 9072, 992}, 10, &length) ==
+            WireError::ok
+        );
+        deliver_bytes(a, b, kA, Bytes(storage, storage + length));
+        if (rule) {
+            CHECK(commander.position.x == ((9072 << 16) | 0x8000));
+            CHECK(commander.position.z == ((992 << 16) | 0x4000));
+            CHECK(b.match->commander_syncs_applied == 1);
+        } else {
+            CHECK(commander.position.x == ((100 << 16) | 0x8000));
+            CHECK(b.match->commander_syncs_applied == 0);
+        }
+    }
+}
+
+// A unit state record of one entry, as a start sync writes it.
+Bytes moving_record() {
+    uint8_t storage[unit_state_writer_words * bit_stream_word_bytes];
+    BitWriter writer;
+    bit_writer_init(&writer, storage, unit_state_writer_words);
+    uint16_t length = 0;
+    CHECK(
+        unit_state_write_start_position(&writer, 3, {5, 1, 2, 1, 2}, 10, &length) == WireError::ok
+    );
+    return Bytes(storage, storage + length);
+}
+
+// The recorder's session commands in the match: .ready from every player
+// still playing unpauses, .fakewatch makes the typer's records load reports
+// and empty unit states five seconds on, and a cheat mask is announced.
+void recorder_session_commands_in_the_match() {
+    start_case("recorder_session_commands_in_the_match");
+    constexpr uint32_t kA = 7, kB = 9;
+    const Seat a_view[4] = {{kA, OA_PLAYER_STATUS_LOCAL, 1}, {kB, OA_PLAYER_STATUS_MIRRORED, 2}};
+    const Seat b_view[4] = {{kA, OA_PLAYER_STATUS_MIRRORED, 1}, {kB, OA_PLAYER_STATUS_LOCAL, 2}};
+    SeatedMachine a(a_view, 0, recorder_rules());
+    SeatedMachine b(b_view, 1, recorder_rules());
+    join(a, b);
+    for (auto* m : {&a, &b})
+        for (uint8_t slot = 0; slot < 2; ++slot)
+            m->player(slot).unit_count = 1;
+    b.world->game.sim_run_flags =
+        static_cast<uint16_t>(b.world->game.sim_run_flags | run_flag_paused);
+    net_match_say(b.match.get(), "<Bravo> .ready");
+    CHECK(b.match->recorder.ready[1]);
+    CHECK((b.world->game.sim_run_flags & run_flag_paused) != 0);
+    ChatRecord ready{};
+    std::snprintf(ready.text, sizeof ready.text, "%s", "<Alpha> .ready");
+    deliver(a, b, kA, broadcast_destination_id, ready);
+    CHECK(b.match->recorder.ready[0]);
+    CHECK((b.world->game.sim_run_flags & run_flag_paused) == 0);
+
+    net_match_say(a.match.get(), "<Alpha> .fakewatch");
+    CHECK(a.match->recorder.fake_watch);
+    a.forget_sent();
+    const uint8_t probe = static_cast<uint8_t>(RecordType::probe);
+    CHECK(net_match_send(a.match.get(), kA, broadcast_destination_id, &probe, 1));
+    CHECK(a.sent(RecordType::probe).size() == 1);
+    a.world->game.tick = a.match->recorder.fake_watch_tick;
+    a.world->game.unit_def_id_bits = 10;
+    a.forget_sent();
+    CHECK(net_match_send(a.match.get(), kA, broadcast_destination_id, &probe, 1));
+    CHECK(a.sent(RecordType::probe).empty());
+    const auto reports = a.sent(RecordType::load_progress);
+    CHECK(reports.size() == 1 && (reports[0].bytes == std::vector<uint8_t>{0x2a, 100}));
+    const auto state = moving_record();
+    CHECK(net_match_send(a.match.get(), kA, broadcast_destination_id, state.data(), state.size()));
+    const auto states = a.sent(RecordType::unit_state);
+    CHECK(states.size() == 1 && states[0].bytes.size() == 11);
+    net_match_say(a.match.get(), "still talking");
+    CHECK(!a.sent(RecordType::chat).empty());
+
+    a.match->recorder.fake_watch = false;
+    const Bytes cheats{0xfb, 0x04, 0x02, 0x01, 0x00, 0x00, 0x00};
+    oa::base::text::copy_padded(b.player(0).name, "Alpha", sizeof b.player(0).name);
+    deliver_bytes(a, b, kA, cheats);
+    CHECK(b.match->recorder.cheat_mask[0] == 1);
+    CHECK(!b.notices.empty() && b.notices.back() == "Alpha has cheats enabled");
+}
+
+// What the replication hooks of a seated machine were asked to do.
+struct ReplicationLog {
+    std::vector<UnitCreatedRecord> creates;
+    std::vector<uint8_t> create_owners;
+    std::vector<std::pair<uint16_t, uint8_t>> flags; // unit, mask switched on
+    std::vector<UnitTransferRecord> transfers;
+    std::vector<UnitDamageRecord> damage;
+};
+
+// Points a seated machine's replication hooks at a log; a created unit is
+// live from then on, so a hand-over of it reaches transfer_unit.
+void log_replication(SeatedMachine& m, ReplicationLog& log) {
+    auto& sim = m.match->sim;
+    sim.context = &log;
+    sim.create_unit = [](void* c, World* world, uint8_t owner, const UnitCreatedRecord& r) {
+        auto& log = *static_cast<ReplicationLog*>(c);
+        log.creates.push_back(r);
+        log.create_owners.push_back(owner);
+        if (auto* unit = world_unit_at(world, r.unit_index)) {
+            unit->flags |= OA_UNIT_FLAG_LIVE;
+            unit->type_index = r.unit_def_index;
+        }
+    };
+    sim.toggle_state_flags = [](void* c, World*, Unit* unit, uint8_t mask, bool on) {
+        if (on && mask != 0)
+            static_cast<ReplicationLog*>(c)->flags.emplace_back(unit->id, mask);
+    };
+    sim.transfer_unit = [](void* c, World*, Unit*, Player*, const UnitTransferRecord& r) {
+        static_cast<ReplicationLog*>(c)->transfers.push_back(r);
+    };
+    sim.apply_damage = [](void* c, World*, const UnitDamageRecord& r) {
+        static_cast<ReplicationLog*>(c)->damage.push_back(r);
+    };
+}
+
+// Gives a seated machine's first two players blocks of ten units each, slots
+// 1..10 and 11..20, with every unit's id its slot.
+void give_unit_blocks(SeatedMachine& m) {
+    auto* world = m.world;
+    world->game.units_per_player = 10;
+    world->game.unit_def_id_bits = 10;
+    for (uint32_t slot = 0; slot < world->unit_slot_count; ++slot)
+        world->units[slot].id = static_cast<uint16_t>(slot);
+    for (uint8_t player = 0; player < 2; ++player) {
+        m.player(player).first_unit = oa_unit_ref_from_slot(1u + 10u * player);
+        m.player(player).last_unit = oa_unit_ref_from_slot(10u + 10u * player);
+    }
+}
+
+bool chat_shown(const SeatedMachine& m, const std::string& line) {
+    return std::find(m.chats.begin(), m.chats.end(), line) != m.chats.end();
+}
+
+// sharing.recorder-take-give: .give lets a named player take the giver's
+// units and .stopgive takes it back; allying grants it too. A .take of a
+// player silent for over 30 seconds hands its units that the last full
+// records showed finished over, one place of its block each step the pump
+// takes, with the health those records gave, and ends with a reject of it
+// sent to every player. Another player's .take is a claim this machine
+// notes in place of any other and releases at the next reject; one with no
+// recorder has the empty slots of its block killed then, and any other has
+// nothing killed.
+void recorder_take_hands_a_silent_players_units_over() {
+    start_case("recorder_take_hands_a_silent_players_units_over");
+    constexpr uint32_t kA = 7, kB = 9;
+    constexpr uint32_t kSlots = 10 * OA_PLAYER_COUNT + 1;
+    const Seat a_view[4] = {{kA, OA_PLAYER_STATUS_LOCAL, 1}, {kB, OA_PLAYER_STATUS_MIRRORED, 2}};
+    const Seat b_view[4] = {{kA, OA_PLAYER_STATUS_MIRRORED, 1}, {kB, OA_PLAYER_STATUS_LOCAL, 2}};
+    SeatedMachine a(a_view, 0, recorder_rules(), kSlots);
+    SeatedMachine b(b_view, 1, recorder_rules(), kSlots);
+    join(a, b);
+    oa::data::match_rules::MatchRules rules{};
+    rules.sharing.recorder_take_give.enabled = true;
+    rules.sharing.recorder_take_give.available = true;
+    for (auto* m : {&a, &b}) {
+        give_unit_blocks(*m);
+        oa::base::text::copy_padded(m->player(0).name, "Alpha", sizeof m->player(0).name);
+        oa::base::text::copy_padded(m->player(1).name, "Bravo", sizeof m->player(1).name);
+        m->match->recorder.peer_protocol[0] = recorder_protocol_current;
+        m->match->recorder.peer_protocol[1] = recorder_protocol_current;
+        net_match_bind_rules(m->match.get(), &rules, false);
+    }
+    CHECK(a.match->recorder_units.size() == kSlots);
+    ReplicationLog log;
+    log_replication(a, log);
+    ChatRecord line{};
+
+    // Bravo lets Alpha take its units; Alpha's recorder says so.
+    std::snprintf(line.text, sizeof line.text, "%s", "<Bravo> .give alpha");
+    deliver(b, a, kB, broadcast_destination_id, line);
+    CHECK(a.match->take.granted[1]);
+    CHECK(chat_shown(a, "Alpha ready to take units from Bravo"));
+    std::snprintf(line.text, sizeof line.text, "%s", "<Bravo> .stopgive Alpha");
+    deliver(b, a, kB, broadcast_destination_id, line);
+    CHECK(!a.match->take.granted[1]);
+    CHECK(chat_shown(a, "Alpha barred from taking units from Bravo"));
+    // An alliance with Alpha grants it as well, and .give then says so.
+    AllianceRecord alliance{};
+    alliance.player_id_a = kB;
+    alliance.player_id_b = kA;
+    alliance.value = 1;
+    deliver(b, a, kB, broadcast_destination_id, alliance);
+    CHECK(a.match->take.granted[1] && a.match->take.allied[1]);
+    std::snprintf(line.text, sizeof line.text, "%s", "<Bravo> .give Alpha");
+    deliver(b, a, kB, broadcast_destination_id, line);
+    CHECK(chat_shown(a, "You don't really need to type .give. Allying is enough."));
+
+    // Bravo's units as Bravo's full records last showed them.
+    FullUnitRecord finished{};
+    finished.unit_def_index = 3;
+    finished.health = 900;
+    net_match_note_full_record(a.match.get(), 11, finished); // the commander
+    net_match_note_full_record(a.match.get(), 12, finished);
+    FullUnitRecord building = finished;
+    building.health = 300;
+    building.build_byte = 0x40;
+    net_match_note_full_record(a.match.get(), 13, building);
+    finished.health = 650;
+    net_match_note_full_record(a.match.get(), 15, finished);
+    for (const uint32_t unit : {11u, 12u, 13u, 15u}) {
+        a.world->units[unit].flags |= OA_UNIT_FLAG_LIVE;
+        a.world->units[unit].type_index = 3;
+    }
+
+    // Bravo was heard from just now: nothing is taken.
+    a.player(0).unit_count = 4;
+    net_match_say(a.match.get(), "<Alpha> .take");
+    CHECK(a.match->take.state == RecorderTakeState::idle);
+    // Silent for over 30 seconds, it is.
+    a.player(1).last_update_time = oa::base::game_loop::scaled_clock_turn - 1000;
+    a.forget_sent();
+    net_match_say(a.match.get(), "<Alpha> .take");
+    CHECK(a.match->take.state == RecorderTakeState::taking);
+    CHECK(!a.match->take.granted[1] && a.match->take.cursor[1] == 2);
+    CHECK(chat_shown(a, "Alpha taking Bravos units"));
+    const auto said = a.sent(RecordType::chat);
+    CHECK(
+        said.size() == 2 &&
+        std::strcmp(reinterpret_cast<const char*>(said[0].bytes.data()) + 1, "<Alpha> .take") == 0
+    );
+    // One place a step: the finished unit 12 at once, then the unfinished
+    // 13 and the empty 14 hand nothing over and end each pump.
+    (void)net_match_pump(a.match.get());
+    CHECK(log.transfers.size() == 1);
+    CHECK(log.transfers[0].unit_index == 12 && log.transfers[0].new_owner_id == kA);
+    CHECK(log.transfers[0].health == 900 && log.transfers[0].build_remaining == 0);
+    CHECK(log.transfers[0].bank_heading == 0x7f640000u && log.transfers[0].pitch == 0);
+    CHECK(a.match->take.cursor[1] == 4);
+    for (int pump = 0; pump < 8 && a.match->take.state == RecorderTakeState::taking; ++pump)
+        (void)net_match_pump(a.match.get());
+    CHECK(log.transfers.size() == 2 && log.transfers[1].unit_index == 15);
+    CHECK(log.transfers[1].health == 650);
+    CHECK(a.match->taken_units == 2);
+    // Past the block's end less two places, Bravo is rejected everywhere.
+    CHECK(a.match->take.state == RecorderTakeState::idle && a.match->take.cursor[1] == 0);
+    const auto rejects = a.sent(RecordType::reject);
+    CHECK(rejects.size() == 1 && rejects[0].from == kA);
+    RejectRecord sent_reject{};
+    CHECK(
+        decode_record(rejects[0].bytes.data(), rejects[0].bytes.size(), &sent_reject) ==
+        WireError::ok
+    );
+    CHECK(sent_reject.player_id == kB && sent_reject.reason == 6);
+
+    // .takecmd starts at the commander.
+    a.match->take.granted[1] = true;
+    net_match_say(a.match.get(), "<Alpha> .takecmd");
+    CHECK(a.match->take.cursor[1] == 1);
+    (void)net_match_pump(a.match.get());
+    CHECK(log.transfers.size() == 4 && log.transfers[2].unit_index == 11);
+    a.match->take = RecorderTake{};
+
+    // Another player's .take is a claim: this machine's own take stops and
+    // keeps no place in the taken block, so a later take of another player
+    // hands over that player's units alone, and the next reject releases
+    // the claim.
+    a.match->take.state = RecorderTakeState::taking;
+    a.match->take.takes = 1;
+    a.match->take.cursor[1] = 6;
+    std::snprintf(line.text, sizeof line.text, "%s", "<Bravo> .take");
+    deliver(b, a, kB, broadcast_destination_id, line);
+    CHECK(chat_shown(a, "Alpha aborting take claim"));
+    CHECK(a.match->take.state == RecorderTakeState::claimed);
+    CHECK(std::string(a.match->take.claimant) == "Bravo");
+    CHECK(a.match->take.cursor[1] == 0);
+    RejectRecord reject{};
+    reject.player_id = 0x55;
+    reject.reason = 6;
+    deliver(b, a, kB, broadcast_destination_id, reject);
+    CHECK(chat_shown(a, "Bravo take claim released"));
+    CHECK(a.match->take.state == RecorderTakeState::idle);
+
+    // A claimant with no recorder has its empty slots, and the slot after
+    // its block, killed with the next reject.
+    a.match->recorder.peer_protocol[1] = recorder_protocol_plain;
+    deliver(b, a, kB, broadcast_destination_id, line);
+    CHECK(a.match->take.state == RecorderTakeState::claimed_plain);
+    // Units 11, 12, 13 and 15 were seen; 14 and 16..21 were not.
+    CHECK(a.match->take.kill_records.size() == 7 * 9);
+    a.forget_sent();
+    deliver(b, a, kB, broadcast_destination_id, reject);
+    const auto kills = a.sent(RecordType::unit_damage);
+    CHECK(kills.size() == 7);
+    UnitDamageRecord kill{};
+    CHECK(decode_record(kills[0].bytes.data(), kills[0].bytes.size(), &kill) == WireError::ok);
+    CHECK(kill.target_unit_index == 14 && kill.amount == 30999 && kill.kind == 1);
+    CHECK(kill.direction == 0x92 && kill.source_unit_index == 0);
+    CHECK(log.damage.size() == 7);
+    CHECK(chat_shown(a, "Sending killing packets"));
+
+    // A claim over one not yet released starts afresh: a claimant whose
+    // recorder is protocol 1 or 2 has nothing killed at the next reject,
+    // even when an earlier claimant with no recorder had slots to kill.
+    deliver(b, a, kB, broadcast_destination_id, line);
+    CHECK(!a.match->take.kill_records.empty());
+    a.match->recorder.peer_protocol[1] = 2;
+    deliver(b, a, kB, broadcast_destination_id, line);
+    CHECK(a.match->take.state == RecorderTakeState::claimed_plain);
+    CHECK(a.match->take.kill_records.empty());
+    a.forget_sent();
+    deliver(b, a, kB, broadcast_destination_id, reject);
+    CHECK(a.sent(RecordType::unit_damage).empty() && log.damage.size() == 7);
+    CHECK(a.match->take.state == RecorderTakeState::idle);
+
+    // Without the rule nothing of it runs.
+    SeatedMachine c(a_view, 0, recorder_rules(), kSlots);
+    join(b, c);
+    std::snprintf(line.text, sizeof line.text, "%s", "<Bravo> .give alpha");
+    oa::base::text::copy_padded(c.player(0).name, "Alpha", sizeof c.player(0).name);
+    deliver(b, c, kB, broadcast_destination_id, line);
+    CHECK(!c.match->take.granted[1] && c.chats.size() == 1);
+}
+
+// setup.recorder-prebuilt-base: the second unit a player creates marks its
+// base's centre; the player's .dobase has the host's machine send it the
+// side's buildings around that centre, each created in a spare slot, switched
+// on and handed over with the table's health. The host's own base is built
+// here from the next player's spare slot.
+void recorder_dobase_builds_the_offered_base() {
+    start_case("recorder_dobase_builds_the_offered_base");
+    constexpr uint32_t kH = 7, kC = 9;
+    constexpr uint32_t kSlots = 10 * OA_PLAYER_COUNT + 1;
+    const Seat h_view[4] = {{kH, OA_PLAYER_STATUS_LOCAL, 1}, {kC, OA_PLAYER_STATUS_MIRRORED, 2}};
+    const Seat c_view[4] = {{kH, OA_PLAYER_STATUS_MIRRORED, 1}, {kC, OA_PLAYER_STATUS_LOCAL, 2}};
+    SeatedMachine h(h_view, 0, recorder_rules(), kSlots);
+    SeatedMachine c(c_view, 1, recorder_rules(), kSlots);
+    join(h, c);
+    oa::data::match_rules::MatchRules rules{};
+    rules.setup.recorder_prebuilt_base.enabled = true;
+    rules.setup.recorder_prebuilt_base.available = true;
+    for (auto* m : {&h, &c}) {
+        give_unit_blocks(*m);
+        m->info(0).role = 1; // the host
+        m->info(1).side = 0; // ARM
+        m->info(0).side = 1; // CORE
+        oa::base::text::copy_padded(m->player(0).name, "Host", sizeof m->player(0).name);
+        oa::base::text::copy_padded(m->player(1).name, "Charlie", sizeof m->player(1).name);
+        net_match_bind_rules(m->match.get(), &rules, false);
+    }
+    auto& base = h.match->recorder.base;
+    recorder_standard_base(base);
+    base.available[0] = base.available[1] = true;
+    ReplicationLog c_log;
+    log_replication(c, c_log);
+    ReplicationLog h_log;
+    log_replication(h, h_log);
+    ChatRecord line{};
+    std::snprintf(line.text, sizeof line.text, "%s", "<Charlie> .dobase");
+
+    // Before Charlie created a second unit there is no centre.
+    deliver(c, h, kC, broadcast_destination_id, line);
+    CHECK(chat_shown(h, "Please build a building to mark the centre of your base"));
+    CHECK(base.available[1]);
+    UnitCreatedRecord first{};
+    first.unit_def_index = 40;
+    first.unit_index = 11; // the commander: not the centre
+    first.position[0] = 500 << 16;
+    first.position[2] = 600 << 16;
+    deliver(c, h, kC, broadcast_destination_id, first);
+    CHECK(base.centre[1][0] == 0);
+    UnitCreatedRecord centre{};
+    centre.unit_def_index = 41;
+    centre.unit_index = 12;
+    centre.position[0] = (1000 << 16) | 0x8000;
+    centre.position[1] = 50 << 16;
+    centre.position[2] = (2000 << 16) | 0x4000;
+    deliver(c, h, kC, broadcast_destination_id, centre);
+    CHECK(base.centre[1][0] == 1000 && base.centre[1][1] == 50 && base.centre[1][2] == 2000);
+
+    h.forget_sent();
+    deliver(c, h, kC, broadcast_destination_id, line);
+    CHECK(chat_shown(h, "Charlie just built a base"));
+    CHECK(!base.available[1] && h.match->base_buildings == 15);
+    const auto creates = h.sent(RecordType::unit_created);
+    const auto switches = h.sent(RecordType::unit_state_flags);
+    const auto gives = h.sent(RecordType::unit_transfer);
+    CHECK(creates.size() == 15 && switches.size() == 15 && gives.size() == 15);
+    UnitCreatedRecord create{};
+    CHECK(
+        decode_record(creates[0].bytes.data(), creates[0].bytes.size(), &create) == WireError::ok
+    );
+    CHECK(creates[0].from == kH && creates[0].to == kC);
+    CHECK(create.unit_def_index == 132 && create.unit_index == 9);
+    CHECK(create.position[0] == (900 << 16) && create.position[1] == (50 << 16));
+    CHECK(create.position[2] == (2140 << 16) && create.bank_heading == 0x74e90000u);
+    UnitStateFlagsRecord on{};
+    CHECK(decode_record(switches[0].bytes.data(), switches[0].bytes.size(), &on) == WireError::ok);
+    CHECK(on.unit_index == 9 && on.state_mask == 1 && switches[0].to == kC);
+    UnitTransferRecord give{};
+    CHECK(decode_record(gives[0].bytes.data(), gives[0].bytes.size(), &give) == WireError::ok);
+    CHECK(give.unit_index == 9 && give.new_owner_id == kC && give.health == 2500);
+    CHECK(give.bank_heading == 0x7e640000u && gives[0].to == kC);
+    // Charlie's machine takes them as the host's records.
+    (void)net_match_pump(c.match.get());
+    CHECK(c_log.creates.size() == 15 && c_log.create_owners[0] == 0);
+    CHECK(c_log.transfers.size() == 15 && c_log.transfers[14].health == 1700);
+    CHECK(c_log.flags.size() == 15);
+    // The base is built once.
+    h.forget_sent();
+    deliver(c, h, kC, broadcast_destination_id, line);
+    CHECK(h.sent(RecordType::unit_created).empty());
+
+    // The host's own base: CORE's, from the next player's spare slot, here.
+    UnitCreatedRecord own{};
+    own.unit_def_index = 41;
+    own.unit_index = 2;
+    own.position[0] = 300 << 16;
+    own.position[2] = 100 << 16;
+    uint8_t bytes[32];
+    std::size_t written = 0;
+    CHECK(encode_record(own, bytes, sizeof bytes, &written) == WireError::ok);
+    CHECK(net_match_send(h.match.get(), kH, broadcast_destination_id, bytes, written));
+    CHECK(base.centre[0][0] == 300 && base.centre[0][2] == 100);
+    h.forget_sent();
+    h_log = ReplicationLog{};
+    net_match_say(h.match.get(), "<Host> .dobase");
+    CHECK(h.sent(RecordType::unit_created).empty());
+    // Buildings whose x or z would not be past 0 are left out: of CORE's
+    // fifteen, the seven 120 or more north of z 100.
+    CHECK(h_log.creates.size() == 8 && h_log.create_owners[0] == 1);
+    CHECK(h_log.creates[0].unit_def_index == 274 && h_log.creates[0].unit_index == 19);
+    CHECK(h_log.transfers.size() == 8 && h_log.transfers[0].new_owner_id == kH);
+
+    // .baseoff from the host ends every offer.
+    base.available[1] = true;
+    net_match_say(h.match.get(), "<Host> .baseoff");
+    CHECK(!base.enabled && !base.available[1]);
+    CHECK(chat_shown(h, "Quick base disabled"));
+}
+
+// setup.commander-warp: only under the rule does .cmdwarp turn the warp on,
+// and each one turns it on or off; the computer players hold no warp, and an
+// unpause ends the warp for everyone.
+void commander_warp_follows_its_rule() {
+    start_case("commander_warp_follows_its_rule");
+    constexpr uint32_t kA = 7, kB = 9, kComputer = 10;
+    const Seat a_view[4] = {
+        {kA, OA_PLAYER_STATUS_LOCAL, 1},
+        {kB, OA_PLAYER_STATUS_MIRRORED, 2},
+        {kComputer, OA_PLAYER_STATUS_MIRRORED, 2}
+    };
+    SeatedMachine a(a_view, 0, recorder_rules());
+    a.info(0).role = 1; // the host
+    a.info(2).state = OA_PLAYER_STATUS_COMPUTER;
+    net_match_say(a.match.get(), "<Alpha> .cmdwarp");
+    CHECK(a.match->recorder.options.commander_warp == 0);
+    oa::data::match_rules::MatchRules rules{};
+    rules.setup.commander_warp.enabled = true;
+    rules.setup.commander_warp.available = true;
+    net_match_bind_rules(a.match.get(), &rules, false);
+    net_match_say(a.match.get(), "<Alpha> .cmdwarp");
+    CHECK(a.match->recorder.options.commander_warp == 1);
+    net_match_recorder_start(a.match.get());
+    CHECK((a.world->game.sim_run_flags & run_flag_paused) != 0);
+    net_match_warp_done(a.match.get());
+    a.match->recorder.warp_done[1] = true; // Bravo's machine said so
+    net_match_paused_frame(a.match.get());
+    CHECK(a.match->recorder.warp_released);
+    CHECK((a.world->game.sim_run_flags & run_flag_paused) == 0);
+
+    // An unpause before every warp is done ends the warp too.
+    SeatedMachine b(a_view, 0, recorder_rules());
+    b.info(0).role = 1;
+    net_match_bind_rules(b.match.get(), &rules, false);
+    b.match->recorder.options.commander_warp = 1;
+    net_match_recorder_start(b.match.get());
+    net_match_set_pause(b.match.get(), false);
+    CHECK(b.match->recorder.warp_released);
+    net_match_say(b.match.get(), "<Alpha> .cmdwarp");
+    CHECK(b.match->recorder.options.commander_warp == 0);
+}
+
+} // namespace
+
 int main() {
     packet_layer_over_memory();
     packet_layer_reads_game_send_options();
@@ -2893,6 +4187,25 @@ int main() {
     password_game_keeps_the_session_open();
     client_computer_is_a_session_player();
     address_picks_the_enumeration_target();
+    private_lines_stay_hidden();
+    integrity_check_answers_and_reports();
+    integrity_report_request_is_answered();
+    vote_tally_rules();
+    votes_reject_on_every_machine();
+    silence_opens_a_timeout_vote();
+    timeout_vote_leaves_out_its_target();
+    remote_colour_survives_in_game_blocks();
+    recorder_records_reach_the_match();
+    whiteboard_marks_reach_allies();
+    recorder_cameras_are_shared();
+    autopause_holds_for_the_host();
+    speed_lock_and_speed_zero();
+    hosts_speed_lock_narrows_the_range();
+    commander_start_sync_places_the_commander();
+    recorder_session_commands_in_the_match();
+    recorder_take_hands_a_silent_players_units_over();
+    recorder_dobase_builds_the_offered_base();
+    commander_warp_follows_its_rule();
     if (failures != 0) {
         std::fprintf(stderr, "%d failure(s)\n", failures);
         return 1;

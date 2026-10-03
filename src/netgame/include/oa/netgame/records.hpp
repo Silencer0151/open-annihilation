@@ -55,7 +55,8 @@ struct UnitCreatedRecord {
     uint16_t unit_def_index{}; // Unit.type_index
     uint16_t unit_index{};     // Unit.id
     int32_t position[3]{};     // 16.16 x, y, z
-    uint32_t bank_heading{};   // Unit.bank and Unit.heading, not read by the receiver
+    uint32_t bank_heading{};   // Unit.bank and Unit.heading; the receiver reads only a
+                               // building's facing from the heading (units.build-rotation)
     uint16_t pitch{};          // Unit.pitch, not read by the receiver
 };
 
@@ -299,6 +300,11 @@ inline constexpr std::size_t player_info_tail_offset = 0x94;
 inline constexpr std::size_t player_info_map_hash_offset = 0xa9; // block offset, u32
 inline constexpr std::size_t player_info_version_major_offset = 0xa7;
 inline constexpr std::size_t player_info_version_minor_offset = 0xa8;
+inline constexpr std::size_t player_info_color_offset = 0x96; // block offset, the colour slot
+/// Block offset of the recorder's protocol byte: the version of the recorder
+/// the sender runs (recorder_protocol_current), 0 for none. 3.1c carries the
+/// byte unchanged and never reads it.
+inline constexpr std::size_t player_info_recorder_protocol_offset = 0xb4;
 
 /// Returns the map hash stored at player_info_map_hash_offset of a player info record.
 [[nodiscard]] inline uint32_t player_info_map_hash(const PlayerInfoRecord& r) noexcept {

@@ -44,10 +44,13 @@ enum class SearchAdvance : uint8_t { in_progress, succeeded, failed };
 struct SearchMapCell {
     uint8_t flags{};
     uint8_t predecessor{};
-    uint16_t handle{};
+    // The cell's open-set node. As wide as the heap's handles, so that an open
+    // set of any size, whatever the node budget, keeps every handle.
+    SearchHeap::Handle handle{};
 };
 
-static_assert(sizeof(SearchMapCell) == 4);
+static_assert(sizeof(SearchMapCell) == 8);
+static_assert(sizeof(SearchMapCell::handle) == sizeof(SearchHeap::Handle));
 
 // The path search's cell grid. count is (width * height + 7) & ~7, the
 // rounded cell count, not the raw product.

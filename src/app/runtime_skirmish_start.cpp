@@ -3,12 +3,16 @@
 
 // Skirmish match bootstrap from the selected map and players.
 #include "oa/app/runtime.hpp"
+#include "oa/ui/hud/unit_labels.hpp"
 #include "engine_settings_state.hpp"
 #include "oa/app/asset_files.hpp"
 #include "oa/app/hook_call.hpp"
 #include "oa/app/match_console.hpp"
+#include "oa/app/view_rules.hpp"
 #include "oa/data/campaign/campaign_file.hpp"
 #include "oa/data/defs/gamedata_tables.hpp"
+#include "oa/data/defs/layout.hpp"
+#include "oa/data/defs/rule_keys.hpp"
 #include "oa/data/defs/unit_def_loader.hpp"
 #include "oa/data/defs/unit_header.hpp"
 #include "oa/data/defs/unit_records.hpp"
@@ -93,11 +97,6 @@ constexpr uint16_t match_cleared_console_flags = oa::ui::console::console_flag::
                                                  oa::ui::console::console_flag::double_shot |
                                                  oa::ui::console::console_flag::half_shot;
 
-// The build version, 3.1, that unit files are checked against; the engine
-// keeps it here rather than in Game.version_block.
-constexpr int8_t kBuildVersionMajor = 3;
-constexpr int8_t kBuildVersionMinor = 1;
-
 // The unit loader loads a corpse= feature the table lacks; the first failure is kept.
 struct CorpseFeatures {
     oa::sim::map_runtime::FeatureDefTable& table;
@@ -176,6 +175,86 @@ std::string lowered_name(std::string_view name) {
         if (character >= 'A' && character <= 'Z')
             character = static_cast<char>(character - 'A' + 'a');
     return lowered;
+}
+
+/// Returns a bound key's name for the loaders: null when nothing is bound.
+///
+/// @param name the key's name in the files, empty when unbound
+/// @return the name, or null
+const char* bound_key(const std::string& name) {
+    return name.empty() ? nullptr : name.c_str();
+}
+
+/// Returns the weapon-file keys a mod profile binds.
+///
+/// @param keys the profile's bindings; must outlive the result
+/// @return the names, null where nothing is bound
+oa::data::defs::WeaponDataKeys
+bound_weapon_keys(const oa::data::mod_profile::DataKeyBindings& keys) {
+    return {
+        bound_key(keys.weapons_not_to_air),
+        bound_key(keys.weapons_surface_fire),
+        bound_key(keys.weapons_not_to_underwater),
+        bound_key(keys.weapons_no_map_alert)
+    };
+}
+
+/// Returns the data keys a mod profile binds.
+///
+/// @param profile the profile; null for base 3.1c
+/// @return its bindings, or bindings of nothing without a profile
+const oa::data::mod_profile::DataKeyBindings&
+data_key_bindings(const oa::data::mod_profile::ModProfile* profile) {
+    static const oa::data::mod_profile::DataKeyBindings none{};
+    return profile != nullptr ? profile->data_keys : none;
+}
+
+/// Returns the unit-file rule keys a mod profile binds.
+///
+/// @param keys the profile's bindings; must outlive the result
+/// @return the names, null where nothing is bound
+oa::data::defs::UnitDataKeys bound_unit_keys(const oa::data::mod_profile::DataKeyBindings& keys) {
+    return {
+        bound_key(keys.veterancy_thresholds),
+        bound_key(keys.veterancy_accuracy_rate),
+        bound_key(keys.units_build_facings)
+    };
+}
+
+/// Returns the unit-file preview keys a mod profile binds.
+///
+/// @param keys the profile's bindings; must outlive the result
+/// @return the names, null where nothing is bound
+oa::data::defs::UnitPreviewDataKeys
+bound_unit_preview_keys(const oa::data::mod_profile::DataKeyBindings& keys) {
+    return {
+        bound_key(keys.ui_preview_pieces),
+        bound_key(keys.ui_preview_pieces_by_facing),
+        bound_key(keys.ui_preview_object),
+        bound_key(keys.ui_preview_face_opponent)
+    };
+}
+
+/// Reports the bound unit keys of one file whose values could not be used;
+/// the type then takes the profile's defaults for them.
+///
+/// @param path the FBI file's path
+/// @param keys the names the profile binds
+/// @param issues what was wrong with each
+void report_rule_key_issues(
+    const char* path,
+    const oa::data::defs::UnitDataKeys& keys,
+    const oa::data::defs::RuleKeyIssues& issues
+) {
+    const auto report = [path](const char* key, oa::data::defs::RuleKeyProblem problem) {
+        if (problem != oa::data::defs::RuleKeyProblem::none)
+            std::cerr << path << ": " << key << ": "
+                      << oa::data::defs::rule_key_problem_text(problem)
+                      << "; the mod profile's default applies\n";
+    };
+    report(keys.veterancy_thresholds, issues.veterancy_thresholds);
+    report(keys.veterancy_accuracy_rate, issues.veterancy_accuracy_rate);
+    report(keys.build_facings, issues.build_facings);
 }
 
 } // namespace
@@ -368,15 +447,24 @@ void Runtime::seat_campaign_players(oa::World& world) {
 }
 
 void Runtime::bind_match_speech() {
-    // Captions come in the game's English wording and are shown in the
-    // player's language; the queue keeps its own copy.
+    // Captions come in the game's English wording and keep it in the queue,
+    // which keeps its own copy; the message log shows them in the player's
+    // language (post_unit_report).
     oa::sim::match_runtime::SpeechHooks hooks;
     hooks.context = this;
     hooks.speak =
         [](void* context, oa::sim::unit_spawn::Slot& slot, uint32_t category, const char* caption) {
             auto& self = *static_cast<Runtime*>(context);
+            const auto& fixes = self.ui_rules().interface_fixes;
+            caption = oa::ui::hud::shown_unit_caption(
+                caption,
+                fixes.enabled &&
+                    fixes.fixes.contains(
+                        oa::data::mod_profile::UiInterfaceFixesFixes::resurrect_spelling
+                    )
+            );
             self.offline_services_.command_speech(
-                slot, category, self.translate_ui(caption != nullptr ? caption : "")
+                slot, category, caption != nullptr ? std::string_view(caption) : std::string_view{}
             );
         };
     match_->set_speech_hooks(hooks);
@@ -416,12 +504,21 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
     std::size_t installed_weapons = 0;
     {
         const auto weapon_table = std::make_unique<oa::data::defs::WeaponTable>();
+        const oa::data::defs::WeaponDataKeys weapon_keys =
+            bound_weapon_keys(data_key_bindings(mod_profile()));
         const oa::data::defs::WeaponLoadOptions weapon_options{
-            nullptr, nullptr, integer("lavaworld", 0) != 0, false
+            nullptr, nullptr, integer("lavaworld", 0) != 0, false, &weapon_keys
         };
         oa::data::defs::load_weapon_defs(&files, weapon_table.get(), &weapon_options);
         installed_weapons =
             oa::sim::combat_state::install_weapon_table(weapon_registry_, *weapon_table);
+        // Each weapon's own rules, by weapon ID, when the profile binds a weapon key.
+        weapon_rules_.assign(weapon_keys.any() ? OA_WEAPON_DEF_COUNT : 0U, {});
+        for (std::size_t slot = 0; slot < weapon_rules_.size(); ++slot) {
+            const WeaponDef& weapon = weapon_table->defs[slot];
+            if (weapon.key[0] != '\0')
+                weapon_rules_[weapon.weapon_id] = weapon_table->rule_data[slot];
+        }
         for (std::size_t slot = 0; slot < OA_WEAPON_DEF_COUNT; ++slot) {
             const char* model = weapon_table->assets[slot].model;
             if (weapon_table->defs[slot].key[0] != '\0' && model[0] != '\0')
@@ -501,13 +598,24 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         unique_ptr<oa::data::defs::WeaponTdfSet, void (*)(oa::data::defs::WeaponTdfSet*) noexcept>
             weapon_files_owner(&weapon_files, oa::data::defs::weapon_tdf_set_free);
     const oa::data::defs::UnitHeaderSources header_sources{
-        "", &weapon_files, kBuildVersionMajor, kBuildVersionMinor, false, false
+        // The build version unit files are checked against: the game's
+        // network version, kept in the data layout rather than in
+        // Game.version_block.
+        "",
+        &weapon_files,
+        oa::data::defs::data_layout().build_version[0],
+        oa::data::defs::data_layout().build_version[1],
+        false,
+        false,
+        // Each unit's name and description in other languages, for what
+        // players see; the records keep Name and Description.
+        unit_text_sink()
     };
     std::vector<std::string> unit_files;
     files.list(
         files.context,
-        "units",
-        "FBI",
+        oa::data::defs::directory_name(oa::data::defs::DataDirectory::units),
+        oa::data::defs::unit_extension(),
         [](void* user, const char* name) {
             static_cast<std::vector<std::string>*>(user)->emplace_back(name);
         },
@@ -518,10 +626,21 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
             &unit_table, static_cast<uint32_t>(unit_files.size() + 1U)
         ))
         throw std::runtime_error("unit catalog exceeds the unit table");
+    // The category masks hold as many type ids as the game's limits say.
+    if (!oa::data::defs::category_registry_set_mask_types(
+            &unit_table.categories, limits_.category_masks.types
+        ))
+        throw std::runtime_error("the category masks cannot hold the game's unit types");
     for (std::size_t index = 0; index < unit_files.size(); ++index) {
         char fbi_path[oa::data::defs::path_capacity];
         oa::data::defs::build_variant_path(
-            &files, fbi_path, sizeof fbi_path, "units", unit_files[index].c_str(), "FBI", nullptr
+            &files,
+            fbi_path,
+            sizeof fbi_path,
+            oa::data::defs::directory_name(oa::data::defs::DataDirectory::units),
+            unit_files[index].c_str(),
+            oa::data::defs::unit_extension(),
+            nullptr
         );
         bool refused = false;
         if (!oa::data::defs::load_unit_header(
@@ -542,6 +661,10 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
     // movement classes and the sound categories.
     CorpseFeatures corpses{feature_table_, feature_documents.value, &feature_host, {}};
     const oa::data::defs::UnitDefLoadHost corpse_host{&corpses, CorpseFeatures::load};
+    // Which units get a yard map follows the mod profile's unit rules.
+    const auto yard_maps = mod_profile() != nullptr
+                               ? oa::data::defs::yard_map_rules(mod_profile()->rules.units)
+                               : oa::data::defs::YardMapRules{};
     const oa::data::defs::UnitDefSources unit_sources{
         "",
         &unit_table_.move_classes,
@@ -549,7 +672,9 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         &unit_table_.sound_categories,
         &unit_table.categories,
         &unit_table.blocks,
-        &corpse_host
+        &corpse_host,
+        yard_maps,
+        unit_text_sink()
     };
     const oa::data::unit_definitions::UnitDefinitionSources definition_sources{
         &unit_table_.move_classes,
@@ -557,6 +682,13 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         &unit_table_.sound_categories,
         &unit_table.categories
     };
+    // The rule and preview keys the mod profile binds, read from each kept
+    // unit's FBI; nothing is read when it binds none.
+    const auto& data_keys = data_key_bindings(mod_profile());
+    const oa::data::defs::UnitDataKeys unit_keys = bound_unit_keys(data_keys);
+    const oa::data::defs::UnitPreviewDataKeys preview_keys = bound_unit_preview_keys(data_keys);
+    unit_type_rules_.assign(unit_keys.any() ? unit_count + 1U : 0U, {});
+    unit_preview_keys_.assign(preview_keys.any() ? unit_count + 1U : 0U, {});
     loaded_commander_types_.reserve(unit_count + 1U);
     unit_definitions_.reserve(unit_count);
     runtime_definition_metadata_.reserve(unit_count);
@@ -567,16 +699,36 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         oa::UnitDef& record = unit_table.records[type_id];
         char fbi_path[oa::data::defs::path_capacity];
         oa::data::defs::build_variant_path(
-            &files, fbi_path, sizeof fbi_path, "units", record.unit_name, "FBI", nullptr
+            &files,
+            fbi_path,
+            sizeof fbi_path,
+            oa::data::defs::directory_name(oa::data::defs::DataDirectory::units),
+            record.unit_name,
+            oa::data::defs::unit_extension(),
+            nullptr
         );
         if (!oa::data::defs::load_unit_def(&files, fbi_path, record, unit_sources))
             throw std::runtime_error("cannot load unit definition " + std::string(fbi_path));
         if (!corpses.error.empty())
             throw std::runtime_error(corpses.error);
+        if (!unit_type_rules_.empty() || !unit_preview_keys_.empty()) {
+            oa::data::match_rules::UnitTypeRules rule_data{};
+            oa::data::defs::UnitPreviewKeys preview{};
+            oa::data::defs::RuleKeyIssues issues{};
+            if (!oa::data::defs::load_unit_rule_keys(
+                    &files, fbi_path, unit_keys, preview_keys, rule_data, &preview, &issues
+                ))
+                throw std::runtime_error("cannot load unit definition " + std::string(fbi_path));
+            report_rule_key_issues(fbi_path, unit_keys, issues);
+            if (!unit_type_rules_.empty())
+                unit_type_rules_[type_id] = rule_data;
+            if (!unit_preview_keys_.empty())
+                unit_preview_keys_[type_id] = preview;
+        }
         auto definition =
             oa::data::unit_definitions::unit_definition_from(record, definition_sources);
         auto metadata = oa::data::unit_definitions::resolve_runtime_metadata(
-            record, unit_table_.move_classes, unit_table.blocks
+            record, unit_table_.move_classes, unit_table.blocks, yard_maps
         );
         if (!metadata)
             throw std::runtime_error(
@@ -621,9 +773,9 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
             bootstrap.unit_filter.context, unit_table.records, unit_table.count
         );
     // The CANBUILD pass, then the download menus.
-    if (!oa::data::defs::load_build_lists(&files, nullptr, &unit_table))
+    if (!oa::data::defs::load_build_lists(&files, nullptr, &unit_table, limits_.build_lists))
         throw std::runtime_error("Can't load GAMEDATA.TDF");
-    if (!oa::data::defs::load_download_menu(&files, nullptr, &unit_table))
+    if (!oa::data::defs::load_download_menu(&files, nullptr, &unit_table, limits_.build_lists))
         throw std::runtime_error("cannot load the download menus");
     // The header table is marked stale once the full load is done; the
     // frontend reads its unit headers again when it next runs.
@@ -832,7 +984,6 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         if (skirmish_settings_.slots[index].controller == entry::controller::human)
             local_player = static_cast<uint8_t>(index);
     match_local_player_ = local_player;
-    offline_services_.set_viewpoint(local_player);
     oa::sim::match_runtime::OfflineInputs inputs{
         *selected_tnt_,
         loaded_commander_types_,
@@ -863,10 +1014,26 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         feature_table_.defs
     };
     inputs.unit_defs = {unit_table.records, unit_table.count};
+    inputs.limits = limits_;
+    // The display rules as they are now; Developer Mode may change them
+    // while the match runs.
+    inputs.display = view_rules::match_display_rules(ui_rules());
+    if (const auto* profile = mod_profile()) {
+        inputs.rules = profile->rules;
+        // The player's own options for patrolling and guarding builders.
+        view_rules::apply_builder_options(
+            view_settings_, inputs.rules.orders.con_patrol_guard_options
+        );
+        inputs.profile_sim_hash = profile->sim_hash;
+    }
+    // Records for another type table than this one are not this match's.
+    if (unit_type_rules_.size() == spawn_types_.size())
+        inputs.unit_type_rules = unit_type_rules_;
+    inputs.weapon_rules = weapon_rules_;
     inputs.mission_features = mission_features_;
     inputs.resuming_saved_game = resuming_saved_game();
     inputs.effect_sequence = [this](std::string_view archive, std::string_view entry) {
-        return gaf_sequence(explosion_gaf_archive(archive), entry);
+        return explosion_sequence(archive, entry);
     };
     inputs.feature_sequence_frame =
         [this](
@@ -881,20 +1048,21 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
     // the map's features, so a geothermal vent smokes from the first tick.
     if (match_fx_.sequences.empty())
         append_gaf_file(match_fx_, "anims/FX.GAF");
-    // The explosion archives the weapons name are read before the match
-    // starts, so that the first of each explosion does not wait for its file.
-    // Each is kept in the cache, which reports a damaged one; the archive
-    // itself is not needed here.
+    // The explosion files the weapons name are read and checked before the
+    // match starts, so that the first of each explosion does not wait for
+    // its file and a damaged one is reported now; their sequences are
+    // decoded as explosions first ask for them.
     for (std::size_t index = 0; index < oa::sim::combat_state::weapon_registry_capacity; ++index) {
         const auto& weapon = weapon_registry_.definition(static_cast<uint8_t>(index));
         for (const auto* name : {&weapon.explosion_gaf, &weapon.water_explosion_gaf})
             if (!name->empty())
-                std::ignore = explosion_gaf_archive(*name);
+                load_explosion_gaf(*name);
     }
     try {
         if (const char* refused = oa::sim::match_runtime::Match::input_error(inputs))
             throw std::runtime_error(std::string("cannot start the match: ") + refused);
         match_ = std::make_unique<oa::sim::match_runtime::Match>(inputs, offline_services_);
+        game_speed_lock_.reset();
         raise_match_fault(*match_);
         std::vector<oa::sim::spatial_state::Plot>().swap(collision_plots);
         bind_match_speech();
@@ -1027,6 +1195,11 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
     set_load_progress(4, 70);
     offline_effects_.bind(*match_);
     offline_services_.bind_effects(offline_effects_);
+    // The novelty voice plays the mod profile's two sounds
+    // (strings.cheat.sing-sounds), or 3.1c's.
+    const auto* profile = mod_profile();
+    novelty_sounds_ = profile != nullptr ? profile->strings.cheat.sing_sounds
+                                         : oa::data::mod_profile::StringsCheat{}.sing_sounds;
     offline_services_.bind_announcements(
         unit_sound_catalog_,
         *match_,
@@ -1037,7 +1210,8 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
          !options_.mute,
          (preferences_.sound_flags & init::preference_flags::speech_fx) != 0,
          true,
-         novelty_voice_ != 0}
+         novelty_voice_ != 0,
+         {novelty_sounds_[0], novelty_sounds_[1]}}
     );
     for (std::size_t player = 0; player < skirmish_settings_.slots.size(); ++player) {
         const auto controller = skirmish_settings_.slots[player].controller;
@@ -1099,6 +1273,7 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         oa::base::game_loop::scaled_clock(clock_milliseconds(), match_clock_scale());
     match_tick_blocked_ = false;
     configure_computer_players();
+    begin_map_units(resuming_saved_game());
     std::size_t started_players = 0;
     if (campaign_mission_) {
         // Mission start rebuilds the sight grids before the mission's units stand.
@@ -1111,10 +1286,35 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
             if (slot.unit != nullptr && slot.unit->type_index)
                 ++started_players;
     } else if (bootstrap.place_commanders) {
+        // The start position of each player, as the commanders are placed.
+        std::array<int32_t, 10> start_positions{};
+        start_positions.fill(-1);
+        for (std::size_t player = 0;
+             player < skirmish_settings_.slots.size() && player < start_positions.size();
+             ++player)
+            if (skirmish_settings_.slots[player].controller != 0)
+                start_positions[player] = static_cast<int32_t>(player);
         for (std::size_t player = 0; player < skirmish_settings_.slots.size(); ++player) {
             const auto& slot = skirmish_settings_.slots[player];
             if (slot.controller == 0)
                 continue;
+            // A position an earlier move swapped is read from the table.
+            int32_t start_index = player < start_positions.size() ? start_positions[player]
+                                                                  : static_cast<int32_t>(player);
+            // setup.map-scripted-units: the map's units for this start
+            // position take the commander's place; before the commander is
+            // placed the computer player moves last on a neutral map.
+            if (place_map_units(static_cast<uint8_t>(player), start_index)) {
+                ++started_players;
+                continue;
+            }
+            if (player < start_positions.size()) {
+                move_map_unit_computer_last(start_positions, start_index);
+                if (place_map_units(static_cast<uint8_t>(player), start_index)) {
+                    ++started_players;
+                    continue;
+                }
+            }
             oa::sim::unit_spawn::PlayerSetup setup{
                 static_cast<uint8_t>(slot.side),
                 static_cast<uint8_t>(slot.color),
@@ -1127,7 +1327,7 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
                     static_cast<uint8_t>(player),
                     setup,
                     selected_start_markers_,
-                    static_cast<int32_t>(player),
+                    start_index,
                     kBattlefieldWidth,
                     kBattlefieldHeight,
                     *this

@@ -4,6 +4,8 @@
 // Runtime glue for the campaign package: binds the campaign object, the
 // NEWGAME lists and the MSNBRIEF panel to the frontend runtime.
 #include "oa/app/runtime.hpp"
+#include "oa/data/defs/layout.hpp"
+#include "oa/data/languages/translation.hpp"
 #include "oa/ui/decoded.hpp"
 #include "oa/app/asset_files.hpp"
 
@@ -76,8 +78,8 @@ constexpr int32_t kFirstSideFontRecord = 1;
 // BRIEFING.GUI opens at its authored position, over the panel below without
 // darkening it.
 constexpr uint32_t kInGameBriefingFlags = 0;
-constexpr const char* kDefaultAiProfile = "ai/default.txt";
-constexpr const char* kSideBuildLists = "gamedata/sidedata.tdf";
+constexpr const char* kDefaultAiProfile = "default.txt";
+constexpr const char* kSideBuildLists = "sidedata.tdf";
 // Width of the message box the mission loader's messages open in.
 constexpr int32_t kMissionMessageWidth = 480;
 
@@ -240,6 +242,12 @@ int32_t lcg_random(void*) {
 
 campaign::FrontendHost event_host() {
     campaign::FrontendHost host{};
+    // The briefing's words in the game's language, as gamedata\translate.tdf
+    // gives them.
+    host.translate = [](void*, const char* text) -> const char* {
+        const auto& hooks = oa::data::languages::translation_hooks();
+        return hooks.translate != nullptr ? hooks.translate(hooks.context, text) : nullptr;
+    };
     host.play_sound = [](void*, const char* name) {
         campaign_runtime().events.sounds.emplace_back(name);
     };
@@ -279,7 +287,15 @@ bool load_skirmish_session(
         if (settings.slots[slot].controller != entry::controller::disabled)
             roster = static_cast<int32_t>(slot) + 1;
     const missions::CampaignFiles files{
-        &assets, asset_size, asset_read, asset_list, nullptr, nullptr, nullptr, nullptr, nullptr
+        &assets,
+        asset_size,
+        asset_read,
+        asset_list,
+        oa::data::languages::installed_translation,
+        nullptr,
+        oa::data::languages::installed_word(),
+        nullptr,
+        nullptr
     };
     const missions::CampaignEnv env{&files, nullptr, static_cast<int32_t>(difficulty), roster};
     session->kind = missions::SessionKind::skirmish;
@@ -293,20 +309,25 @@ bool Runtime::tdf_names_equal(std::string_view left, std::string_view right) {
 }
 
 // Binds the package's file services to this runtime's asset store.
-static missions::CampaignEnv campaign_env(oa::AssetStore& assets, uint32_t difficulty) {
+static missions::CampaignEnv campaign_env(
+    oa::AssetStore& assets,
+    uint32_t difficulty,
+    const oa::data::match_rules::AiDifficultyNames& names
+) {
     auto& state = campaign_runtime();
+    // The campaign's texts in the game's language, and its language folders.
     state.files = {
         &assets,
         asset_size,
         asset_read,
         asset_list,
-        nullptr,
+        oa::data::languages::installed_translation,
         package_message,
-        nullptr,
+        oa::data::languages::installed_word(),
         asset_count,
         asset_find
     };
-    return {&state.files, nullptr, static_cast<int32_t>(difficulty), 0};
+    return {&state.files, nullptr, static_cast<int32_t>(difficulty), 0, names};
 }
 
 namespace {
@@ -336,6 +357,14 @@ campaign::CampaignSetup& new_game_setup() {
 campaign::FrontendHost Runtime::single_player_host() {
     campaign::FrontendHost host{};
     host.context = this;
+    host.translate = translation_hook;
+    // A button's keyboard shortcut, which Spanish moves to the letter its
+    // caption has (single_player_enter).
+    host.set_quick_key = [](void* context, const char* name, char key) {
+        if (auto* gadget = static_cast<Runtime*>(context)->widget(name))
+            if (auto* button = std::get_if<oa::ui::gui_layout::ButtonFields>(&gadget->fields))
+                button->quick_key = static_cast<int8_t>(key);
+    };
     host.set_control_value = [](void* context, const char* name, int32_t value) {
         if (auto* gadget = static_cast<Runtime*>(context)->widget(name))
             gadget->common.active = static_cast<int8_t>(value != 0 ? 1 : 0);
@@ -369,7 +398,7 @@ void Runtime::enter_single_player_panel() {
     setup.side = static_cast<int32_t>(preferences_.side);
     setup.unlock_flags = preferences_.campaign_unlock_flags;
     const auto host = single_player_host();
-    campaign::single_player_enter(&setup, &host, nullptr);
+    campaign::single_player_enter(&setup, &host, game_language());
     typed_key_hook_ = TypedKeyHook::single_player_code;
     if (!offers_saved_games())
         if (auto* gadget = widget("LoadGame"))
@@ -381,16 +410,16 @@ void Runtime::enter_single_player_panel() {
 }
 
 bool Runtime::offers_saved_games() const {
-    return assets_.file_size("guis/loadgame.gui") != 0;
+    return assets_.file_size(oa::data::defs::gui_path("loadgame.gui")) != 0;
 }
 
 bool Runtime::offers_any_mission() const {
-    return assets_.file_size("guis/newgame.gui") != 0 &&
+    return assets_.file_size(oa::data::defs::gui_path("newgame.gui")) != 0 &&
            assets_.file_size("bitmaps/playanygame4.pcx") != 0;
 }
 
 bool Runtime::side_has_campaign(uint32_t side) {
-    const auto env = campaign_env(assets_, preferences_.difficulty);
+    const auto env = campaign_env(assets_, preferences_.difficulty, difficulty_names());
     std::vector<char> names(64 * 1024);
     return missions::campaign_load_names(
                env.files, side == 0 ? "ARM" : "CORE", names.data(), names.size()
@@ -412,7 +441,7 @@ void Runtime::enter_new_game_panel(bool any_mission) {
     std::snprintf(setup.side_names[0], sizeof setup.side_names[0], "%s", "ARM");
     std::snprintf(setup.side_names[1], sizeof setup.side_names[1], "%s", "CORE");
     setup.side_count = 2;
-    setup.env = campaign_env(assets_, preferences_.difficulty);
+    setup.env = campaign_env(assets_, preferences_.difficulty, difficulty_names());
     setup.campaign = &campaign_runtime().file;
     setup.campaign_selected = 0;
     setup.mission_selected = 0;
@@ -477,7 +506,9 @@ void Runtime::enter_new_game_panel(bool any_mission) {
         discover_campaigns();
     else if (campaign_mission_files_.empty())
         load_campaign_missions(selected_campaign_index_);
-    constexpr const char* side_buttons[2][2]{{"Side0", "Arm"}, {"Side1", "Core"}};
+    const char* const side_buttons[2][2]{
+        {"Side0", oa::data::defs::side_name(0)}, {"Side1", oa::data::defs::side_name(1)}
+    };
     for (std::size_t side = 0; side < 2; ++side)
         if (!side_campaigns[side])
             for (const char* name : side_buttons[side])
@@ -504,11 +535,11 @@ missions::CampaignFile& Runtime::campaign_object() {
 }
 
 missions::CampaignEnv Runtime::campaign_object_env() {
-    return campaign_env(assets_, preferences_.difficulty);
+    return campaign_env(assets_, preferences_.difficulty, difficulty_names());
 }
 
 missions::CampaignEnv Runtime::campaign_dialog_env() {
-    missions::CampaignEnv env = campaign_env(assets_, preferences_.difficulty);
+    missions::CampaignEnv env = campaign_env(assets_, preferences_.difficulty, difficulty_names());
     auto& state = campaign_runtime();
     state.dialog_files = state.files;
     state.dialog_owner = this;
@@ -800,14 +831,17 @@ std::string Runtime::read_computer_profile() {
     if (const auto path = session_ai_profile_path(); !path.empty())
         bytes = assets_.load_file_contents(path);
     if (!bytes)
-        bytes = assets_.load_file_contents(kDefaultAiProfile);
+        bytes = assets_.load_file_contents(
+            oa::data::defs::data_path(oa::data::defs::DataDirectory::ai, kDefaultAiProfile)
+        );
     return bytes ? std::string(bytes->begin(), bytes->end()) : std::string();
 }
 
 void Runtime::configure_computer_players() {
     if (!match_)
         return;
-    const auto lists = read(kSideBuildLists);
+    const auto lists =
+        read(oa::data::defs::data_path(oa::data::defs::DataDirectory::gamedata, kSideBuildLists));
     if (!lists)
         throw std::runtime_error("cannot load gamedata/sidedata.tdf");
     const auto profile = read_computer_profile();
@@ -860,17 +894,18 @@ void Runtime::load_campaign_missions(std::size_t campaign_index) {
     if (campaign_index >= campaign_labels_.size())
         return;
     auto& state = campaign_runtime();
-    const auto env = campaign_env(assets_, preferences_.difficulty);
+    const auto env = campaign_env(assets_, preferences_.difficulty, difficulty_names());
     if (!missions::campaign_load_file(
             &state.file, &env, campaign_labels_[campaign_index].c_str()
         )) {
         std::cerr << "campaign file unavailable: " << state.events.message << '\n';
         return;
     }
+    // The missions as players see them in the game's language.
     auto names =
         std::make_unique<char[][missions::kCampaignNameBytes]>(missions::kMaxCampaignMissions);
-    const auto count = missions::campaign_load_mission_list(
-        &state.file, names.get(), missions::kMaxCampaignMissions
+    const auto count = missions::campaign_load_mission_titles(
+        &state.file, game_language(), names.get(), missions::kMaxCampaignMissions
     );
     for (int32_t index = 0; index < count && index < missions::kMaxCampaignMissions; ++index) {
         char file[missions::kCampaignNameBytes];
@@ -888,7 +923,7 @@ void Runtime::discover_campaigns() {
     campaign_labels_.clear();
     selected_campaign_index_ = 0;
     campaign_first_visible_ = 0;
-    const auto env = campaign_env(assets_, preferences_.difficulty);
+    const auto env = campaign_env(assets_, preferences_.difficulty, difficulty_names());
     const char* side = preferences_.side == 0 ? "ARM" : "CORE";
     std::vector<char> names(64 * 1024);
     const auto count = missions::campaign_load_names(env.files, side, names.data(), names.size());
@@ -1011,7 +1046,7 @@ void Runtime::show_mission_briefing() {
     if (campaign_mission_files_.empty())
         discover_campaigns();
     auto& state = campaign_runtime();
-    const auto env = campaign_env(assets_, preferences_.difficulty);
+    const auto env = campaign_env(assets_, preferences_.difficulty, difficulty_names());
     if (state.file.campaign_name[0] == '\0' ||
         !missions::campaign_bind_mission(
             &state.file, &env, static_cast<int32_t>(selected_mission_index_)
@@ -1022,7 +1057,11 @@ void Runtime::show_mission_briefing() {
     }
     const auto bg = preferences_.side == 0 ? "bitmaps/mbriefarm.pcx" : "bitmaps/mbriefcor.pcx";
     renderer::ScreenAssetNames names{
-        "guis/msnbrief.gui", bg, "palettes/guipal.pal", "anims/commongui.gaf", "anims/commongui.gaf"
+        oa::data::defs::gui_path("msnbrief.gui"),
+        bg,
+        "palettes/guipal.pal",
+        "anims/commongui.gaf",
+        "anims/commongui.gaf"
     };
     resources_ = renderer::load_screen(assets_, names);
     const auto& art = campaign::planet_art(
@@ -1104,7 +1143,7 @@ void Runtime::show_mission_briefing() {
 
 void Runtime::show_in_game_briefing() {
     renderer::ScreenAssetNames names{
-        "guis/briefing.gui",
+        oa::data::defs::gui_path("briefing.gui"),
         "bitmaps/igmbrief.pcx",
         "palettes/guipal.pal",
         "anims/brief.gaf",
@@ -1395,7 +1434,7 @@ void Runtime::draw_briefing_overlays() {
 }
 
 void Runtime::load_briefing_fonts() {
-    const char* language = oa::app::command_line::launch_language(options_.launch);
+    const char* language = game_language();
     briefing_text_font_ = load_panel_font(
         resources_.layout,
         kFirstSideFontRecord + static_cast<int32_t>(preferences_.side),
@@ -1432,7 +1471,7 @@ void Runtime::start_campaign_mission() {
         return;
     }
     auto& state = campaign_runtime();
-    const auto env = campaign_env(assets_, preferences_.difficulty);
+    const auto env = campaign_env(assets_, preferences_.difficulty, difficulty_names());
     if (!missions::campaign_bind_mission(
             &state.file, &env, static_cast<int32_t>(selected_mission_index_)
         )) {
@@ -1462,17 +1501,21 @@ void Runtime::start_campaign_mission() {
     }
 }
 
+void Runtime::leave_load_dialog() {
+    if (save_dialog_open())
+        close_save_dialog();
+    else if (options_parent_ == Screen::match && match_)
+        leave_options_screen();
+    else
+        load(Screen::single_player);
+}
+
 void Runtime::activate_load_game_gadget() {
     if (!hovered_ || *hovered_ >= resources_.layout.gadgets.size())
         return;
     const auto name = resources_.layout.gadgets[*hovered_].common.name;
     if (name == "CANCEL" || name == "PREV" || name == "PREVMENU") {
-        if (save_dialog_open())
-            close_save_dialog();
-        else if (options_parent_ == Screen::match && match_)
-            leave_options_screen();
-        else
-            load(Screen::single_player);
+        leave_load_dialog();
         return;
     }
     if (name == "LOAD" || name == "LOADGAME") {
@@ -1490,6 +1533,16 @@ std::string Runtime::bound_mission_name() {
     return {file.mission_name, ::strnlen(file.mission_name, sizeof file.mission_name)};
 }
 
+std::string Runtime::bound_mission_title() {
+    auto& file = campaign_runtime().file;
+    char title[missions::kCampaignNameBytes];
+    if (!missions::campaign_mission_title(
+            &file, file.mission_index, game_language(), title, sizeof title
+        ))
+        return bound_mission_name();
+    return title;
+}
+
 int32_t Runtime::bound_mission_index() {
     return missions::campaign_mission_index(&campaign_runtime().file);
 }
@@ -1499,14 +1552,14 @@ void Runtime::reload_campaign_file() {
     char name[missions::kCampaignNameBytes]{};
     if (const char* loaded = missions::campaign_name_if_loaded(&state.file))
         std::snprintf(name, sizeof name, "%s", loaded);
-    const auto env = campaign_env(assets_, preferences_.difficulty);
+    const auto env = campaign_env(assets_, preferences_.difficulty, difficulty_names());
     if (!missions::campaign_load_file(&state.file, &env, name))
         status_ = "campaign restart: " + state.events.message;
 }
 
 bool Runtime::bind_campaign_mission(int32_t index) {
     auto& state = campaign_runtime();
-    const auto env = campaign_env(assets_, preferences_.difficulty);
+    const auto env = campaign_env(assets_, preferences_.difficulty, difficulty_names());
     if (!missions::campaign_bind_mission(&state.file, &env, index)) {
         status_ = "campaign restart: " + state.events.message;
         return false;

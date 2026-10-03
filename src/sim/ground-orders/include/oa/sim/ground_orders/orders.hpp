@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "oa/data/match_rules.hpp"
 #include "oa/sim/ground_orders/goals.hpp"
 #include "oa/sim/unit_spawn/legacy_views.hpp"
 #include "oa/sim/unit_movement/movement.hpp"
@@ -88,6 +89,8 @@ struct UnitView {
 
 struct Host {
     virtual ~Host() = default;
+    /// The rules the match plays by (Match::rules_view); unset, 3.1c's.
+    data::match_rules::MatchRulesView rules{};
     /// Cancels the world search job a navigator owns; routing decisions stay in this component.
     ///
     /// @param navigation navigator whose job is cancelled

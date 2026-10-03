@@ -5,6 +5,7 @@
 #include "oa/ui/frontend/savegame_dialogs.hpp"
 
 #include "oa/ui/frontend_state/dispatcher.hpp"
+#include "oa/data/match_rules/difficulty_names.hpp"
 #include "oa/data/persist/hapibank.hpp"
 #include "oa/data/persist/save_sections.hpp"
 #include "oa/present/pcx.hpp"
@@ -340,7 +341,13 @@ void savegame_fill_preview(Panel& panel, SaveDialogContext& context) {
     }
     static constexpr const char* difficulty[] = {"Easy", "Medium", "Hard"};
     const auto level = get_int(save_key::difficulty, 0);
-    panel_set_text(panel, "DIFF", level >= 0 && level < 3 ? difficulty[level] : "");
+    panel_set_text(
+        panel,
+        "DIFF",
+        level >= 0 && level < 3
+            ? difficulty[data::match_rules::difficulty_name_index(context.difficulty_names, level)]
+            : ""
+    );
     if (reader.close != nullptr)
         reader.close(reader.context, bank);
     panel.dirty = true;
@@ -494,6 +501,14 @@ SaveDialogResult savegame_on_save_click(Panel& panel, SaveDialogContext& context
     result.action = SaveDialogAction::save;
     copy(result.path, path);
     return result;
+}
+
+SaveDialogResult savegame_on_save_press(Panel& panel, SaveDialogContext& context, int32_t control) {
+    if (control < 1 || control > panel.count ||
+        panel.controls[static_cast<std::size_t>(control)].type != ControlType::button)
+        return {};
+    panel.selected = control;
+    return savegame_on_save_click(panel, context);
 }
 
 bool savegame_read_load_summary(const SaveSummaryReader& reader, void* bank, LoadSummary& summary) {

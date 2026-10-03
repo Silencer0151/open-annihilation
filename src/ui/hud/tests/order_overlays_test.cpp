@@ -228,6 +228,47 @@ void test_ranges_and_ring() {
     CHECK(scene.recorder.lines[0].x0 == 128 + 20);
 }
 
+// ui.interface-fixes range-ring-3 and radius-0.
+void test_interface_fix_circles() {
+    Scene scene;
+    auto& unit = scene.match.spawn(1, 1);
+    unit.weapons[2].def = oa_ref_from_index(3);
+    scene.match.game().weapon_defs[3].range = 300;
+    OrderOverlay order{};
+    order.unit = &unit;
+    auto context = scene.context();
+    context.show_ranges = true;
+    // 3.1c: the third weapon's circle follows the first weapon's enable bit.
+    unit.weapons[2].flags = OA_UNIT_WEAPON_ENABLED;
+    draw_unit_ranges(context, order);
+    CHECK(scene.recorder.labels.empty());
+    unit.weapons[0].flags = OA_UNIT_WEAPON_ENABLED;
+    draw_unit_ranges(context, order);
+    CHECK(scene.recorder.labels.size() == 1 && scene.recorder.labels[0] == "weapon3 range");
+    // The fix: its own bit.
+    context.third_ring_own_weapon = true;
+    unit.weapons[2].flags = 0;
+    scene.recorder.clear();
+    draw_unit_ranges(context, order);
+    CHECK(scene.recorder.labels.empty());
+    unit.weapons[0].flags = 0;
+    unit.weapons[2].flags = OA_UNIT_WEAPON_ENABLED;
+    draw_unit_ranges(context, order);
+    CHECK(scene.recorder.labels.size() == 1 && scene.recorder.labels[0] == "weapon3 range");
+
+    // A one-pixel circle has no segments: 3.1c draws nothing, the fix its label.
+    scene.recorder.clear();
+    draw_range_circle(context, {0, 0, 0}, 1, 5, "tiny", 0);
+    CHECK(scene.recorder.lines.empty() && scene.recorder.labels.empty());
+    context.segmentless_circle_label = true;
+    draw_range_circle(context, {0, 0, 0}, 1, 5, "tiny", 0);
+    CHECK(scene.recorder.lines.empty() && scene.recorder.labels.size() == 1);
+    // Radius 0 stays empty either way.
+    scene.recorder.clear();
+    draw_range_circle(context, {0, 0, 0}, 0, 5, "none", 0);
+    CHECK(scene.recorder.lines.empty() && scene.recorder.labels.empty());
+}
+
 void test_selection_and_stockpile() {
     Scene scene;
     scene.missions[1] = {kOverlayBuildSite | kOverlayRanges, 0};
@@ -306,6 +347,7 @@ int main() {
     test_range_circle();
     test_path_and_target();
     test_ranges_and_ring();
+    test_interface_fix_circles();
     test_selection_and_stockpile();
     return 0;
 }

@@ -4,7 +4,10 @@
 #include "oa/sim/effect_particles.hpp"
 #include "oa/base/game_math.hpp"
 
+#include <algorithm>
 #include <bit>
+#include <new>
+#include <utility>
 
 namespace oa::sim::effect_particles {
 namespace {
@@ -196,7 +199,7 @@ void each_particle(
 /// @return false while the SFX toggle refuses emitters or once every slot is out; the
 ///         caller then creates nothing and draws no random numbers
 bool take_emitter_slot(EffectWorld& world) noexcept {
-    if (world.emitters_refused || world.pooled_emitters >= emitter_pool_capacity)
+    if (world.emitters_refused || world.pooled_emitters >= world.pool_capacity)
         return false;
     ++world.pooled_emitters;
     return true;
@@ -261,12 +264,16 @@ void release_emitter(EffectWorld& world, Emitter& emitter) noexcept {
     give_back_emitter_slot(world);
 }
 
-Emitter& emitter_at(Layer& layer, uint16_t index) noexcept {
-    return layer.emitters[(layer.head + index) % layer_capacity];
-}
-
-const Emitter& emitter_at(const Layer& layer, uint16_t index) noexcept {
-    return layer.emitters[(layer.head + index) % layer_capacity];
+/// Returns the ring slot of a layer's emitter.
+///
+/// @param world layers and their emitter block
+/// @param layer_index layer index 0..9
+/// @param index position in the layer, oldest first
+/// @return index into the world's emitter block
+std::size_t ring_slot(const EffectWorld& world, uint16_t layer_index, uint32_t index) noexcept {
+    const Layer& layer = world.layers[layer_index];
+    const uint32_t slot = static_cast<uint32_t>((uint64_t{layer.head} + index) % world.layer_slots);
+    return std::size_t{layer_index} * world.layer_slots + slot;
 }
 
 /// Sets an emitter's deadline a number of ticks from now.
@@ -1219,18 +1226,57 @@ int32_t step_wake_particle(WakeParticle& p) noexcept {
     return p.high;
 }
 
+EmitterBlock::EmitterBlock(std::size_t slot_count) noexcept
+    : slots(slot_count != 0 ? new (std::nothrow) Emitter[slot_count] : nullptr),
+      count(slots != nullptr ? slot_count : 0) {
+}
+
+EmitterBlock::EmitterBlock(const EmitterBlock& other) noexcept : EmitterBlock(other.count) {
+    if (count != 0)
+        std::copy(other.slots.get(), other.slots.get() + count, slots.get());
+}
+
+EmitterBlock& EmitterBlock::operator=(const EmitterBlock& other) noexcept {
+    if (this != &other) {
+        EmitterBlock copy(other);
+        *this = std::move(copy);
+    }
+    return *this;
+}
+
+bool size_effect_world(EffectWorld& world, const data::limits::Effects& limits) noexcept {
+    const uint32_t ring = layer_ring_slots(limits);
+    for (auto& layer : world.layers)
+        layer = {};
+    world.evict_above = limits.queue;
+    world.pool_capacity = limits.reserve;
+    if (ring != world.layer_slots || world.emitter_block.count != std::size_t{layer_count} * ring)
+        world.emitter_block = EmitterBlock(std::size_t{layer_count} * ring);
+    world.layer_slots = world.emitter_block.count != 0 ? ring : 0;
+    return world.layer_slots != 0;
+}
+
+const Emitter& layer_emitter(const EffectWorld& world, uint16_t layer, uint32_t index) noexcept {
+    return world.emitter_block.slots[ring_slot(world, layer, index)];
+}
+
+Emitter& layer_emitter(EffectWorld& world, uint16_t layer, uint32_t index) noexcept {
+    return world.emitter_block.slots[ring_slot(world, layer, index)];
+}
+
 void tick_particles(EffectWorld& world, const oa::Game& game, const EffectHost& host) {
-    for (auto& layer : world.layers) {
-        uint16_t kept = 0;
-        for (uint16_t index = 0; index < layer.count; ++index) {
-            auto& emitter = emitter_at(layer, index);
+    for (uint16_t layer_index = 0; layer_index < layer_count; ++layer_index) {
+        auto& layer = world.layers[layer_index];
+        uint32_t kept = 0;
+        for (uint32_t index = 0; index < layer.count; ++index) {
+            auto& emitter = layer_emitter(world, layer_index, index);
             if (finished(emitter, game)) {
                 release_emitter(world, emitter);
                 continue;
             }
             tick_emitter(world, emitter, game, host);
             if (kept != index)
-                emitter_at(layer, kept) = emitter;
+                layer_emitter(world, layer_index, kept) = emitter;
             ++kept;
         }
         layer.count = kept;
@@ -1238,18 +1284,18 @@ void tick_particles(EffectWorld& world, const oa::Game& game, const EffectHost& 
 }
 
 void queue_emitter(EffectWorld& world, uint16_t layer_index, const Emitter& emitter) {
-    if (layer_index >= layer_count) {
+    if (layer_index >= layer_count || world.layer_slots == 0) {
         auto dropped = emitter;
         release_emitter(world, dropped);
         return;
     }
     auto& layer = world.layers[layer_index];
-    if (layer.count > layer_evict_above) {
-        release_emitter(world, emitter_at(layer, 0));
-        layer.head = static_cast<uint16_t>((layer.head + 1) % layer_capacity);
+    if (layer.count > world.evict_above || layer.count == world.layer_slots) {
+        release_emitter(world, layer_emitter(world, layer_index, 0));
+        layer.head = static_cast<uint32_t>((uint64_t{layer.head} + 1) % world.layer_slots);
         --layer.count;
     }
-    emitter_at(layer, layer.count) = emitter;
+    layer_emitter(world, layer_index, layer.count) = emitter;
     ++layer.count;
 }
 
@@ -1401,7 +1447,7 @@ void draw_layer(
     if (layer_index >= layer_count || visit == nullptr)
         return;
     const auto& layer = world.layers[layer_index];
-    for (uint16_t index = 0; index < layer.count; ++index)
-        draw_emitter(world, emitter_at(layer, index), context, visit);
+    for (uint32_t index = 0; index < layer.count; ++index)
+        draw_emitter(world, layer_emitter(world, layer_index, index), context, visit);
 }
 } // namespace oa::sim::effect_particles

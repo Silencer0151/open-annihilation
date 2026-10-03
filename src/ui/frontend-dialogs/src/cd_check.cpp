@@ -4,6 +4,7 @@
 // CDCHECK.GUI: the "insert the Play CD" prompt shown before a campaign
 // outcome screen when the disc is missing.
 #include "dialog_internal.hpp"
+#include "oa/data/defs/layout.hpp"
 
 #include <string>
 
@@ -11,13 +12,17 @@ namespace oa::ui::frontend_dialogs {
 
 namespace {
 
-constexpr const char* kLayout = "guis/cdcheck.gui";
+constexpr const char* kLayout = "cdcheck.gui";
 
 } // namespace
 
 bool open_cd_check(app::ScreenContext* ctx) {
     auto* dialog = dialog_push(
-        ctx, DialogKind::cd_check, kLayout, nullptr, panel_flag::centre | panel_flag::first_draw
+        ctx,
+        DialogKind::cd_check,
+        oa::data::defs::gui_path(kLayout).c_str(),
+        nullptr,
+        panel_flag::centre | panel_flag::first_draw
     );
     if (dialog == nullptr)
         return false;

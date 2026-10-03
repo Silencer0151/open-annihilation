@@ -188,6 +188,52 @@ void unit_state_write_entry_header(
 /// @return True once the record has reached 0x200 bytes.
 [[nodiscard]] bool unit_state_full(const BitWriter* writer) noexcept;
 
+/// A unit's start position as a commander start sync carries it.
+struct StartPosition {
+    uint16_t def_index{};
+    int16_t x{};        ///< whole part of the position's x
+    int16_t z{};        ///< whole part of the position's z
+    int16_t target_x{}; ///< where the unit moves to, or x again
+    int16_t target_z{}; ///< where the unit moves to, or z again
+};
+
+/// Writes a commander start sync record (network.commander-start-sync).
+///
+/// A 0x2c whose list holds one entry, always for unit index 0 whatever
+/// unit it describes: the def index, a ground delta (flag 0) with two
+/// points (the position, then the move target), the list terminator and no
+/// full record.
+///
+/// @param[in,out] writer Freshly initialised writer that receives the record.
+/// @param sender_tick The sender's game tick.
+/// @param position The unit and its position.
+/// @param def_index_bits Width of the def index field, 1..16.
+/// @param[out] length Record length in bytes, when not null.
+/// @return ok, or the writer's error.
+[[nodiscard]] WireError unit_state_write_start_position(
+    BitWriter* writer,
+    uint32_t sender_tick,
+    const StartPosition& position,
+    unsigned def_index_bits,
+    uint16_t* length
+) noexcept;
+
+/// Reads the position a commander start sync gives the sender's first unit out of any 0x2c.
+///
+/// The record's first entry must be for unit index 0, and its delta's
+/// count must have its high bit set (two points or more); the first point
+/// is the position. The record's tick is not read.
+///
+/// @param bytes Record start, type byte first.
+/// @param size Bytes readable from bytes.
+/// @param def_index_bits Width of the def index field, 1..16.
+/// @param[out] x Whole part of the position's x.
+/// @param[out] z Whole part of the position's z.
+/// @return true when the record gives a position
+[[nodiscard]] bool unit_state_start_position(
+    const uint8_t* bytes, std::size_t size, unsigned def_index_bits, int16_t* x, int16_t* z
+) noexcept;
+
 /// Ends a 0x2c record: list terminator, flag bit 1, the full unit record, then the length patch.
 ///
 /// @param[in,out] writer Writer building the record.

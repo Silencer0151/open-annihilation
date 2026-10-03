@@ -149,7 +149,14 @@ struct Sight {
     /// @return the grid
     [[nodiscard]] wr::FogGrid fog(int32_t camera_x, int32_t camera_z) const {
         return wr::build_fog_grid(
-            grid, coverage, {true, true}, camera_x, camera_z, view_width, view_height
+            grid,
+            grid.viewpoint_player,
+            coverage,
+            {true, true},
+            camera_x,
+            camera_z,
+            view_width,
+            view_height
         );
     }
 };
@@ -694,6 +701,48 @@ void placement_moves_and_scales_the_quads() {
     }
 }
 
+/// With whole pixels at a sixth, where a fog tile spans 2 2/3 pixels, every
+/// corner of the black and the greyed passes lies on a whole pixel, and
+/// each row of tiles begins where the row above it ends, so that no row of
+/// pixels lies between them.
+void whole_pixels_meet_at_a_sixth() {
+    const Atlas built = build_atlas();
+    const Sight sight = mixed_sight();
+    fog::FogPlacement placement;
+    placement.camera_x = 150;
+    placement.camera_z = 100;
+    placement.origin_x = 10.25F;
+    placement.origin_y = 20.5F;
+    placement.scale = 1.0F / 6.0F;
+    placement.whole_pixels = true;
+    const auto grid = sight.fog(150, 100);
+    card::CardFrame black;
+    fog::append_unmapped(black, grid, {0.0F, 0.0F, 0.0F, 1.0F}, placement, {}, nullptr);
+    card::CardFrame greyed;
+    const fog::GreyedLevel single[] = {{0, card::Sampling::linear, 1.0F}};
+    fog::append_unseen_terrain(
+        greyed, grid, built.atlas, built.pages, single, placement, {}, nullptr
+    );
+    OA_CHECK(!black.vertices.empty() && !greyed.vertices.empty());
+    for (const card::CardFrame* frame : {&black, &greyed}) {
+        std::vector<float> tops;
+        std::vector<float> bottoms;
+        for (const auto& vertex : frame->vertices)
+            OA_CHECK(vertex.x == std::round(vertex.x) && vertex.y == std::round(vertex.y));
+        // Each quad's four corners, its top-left first and its bottom-left
+        // last.
+        for (std::size_t first = 0; first + 3 < frame->vertices.size(); first += 4) {
+            tops.push_back(frame->vertices[first].y);
+            bottoms.push_back(frame->vertices[first + 3].y);
+        }
+        const float highest = *std::min_element(tops.begin(), tops.end());
+        for (const float top : tops)
+            OA_CHECK(
+                top == highest || std::find(bottoms.begin(), bottoms.end(), top) != bottoms.end()
+            );
+    }
+}
+
 /// Checks a solid pass over a layer of the grid: a quad for each tile with
 /// a corner marked, tiles wholly marked that follow one another merged,
 /// the colour kept, the alphas the corners' times the factor.
@@ -908,6 +957,7 @@ int main() {
     greyed_pass_covers_what_is_out_of_sight();
     two_levels_draw_the_quads_twice();
     placement_moves_and_scales_the_quads();
+    whole_pixels_meet_at_a_sixth();
     solid_passes_merge_their_runs();
     level_quads_follow_the_tables();
     refusals_add_nothing();

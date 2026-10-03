@@ -1,0 +1,322 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+#include "oa/ui/hud/resource_panel.hpp"
+
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+
+namespace oa::ui::hud {
+namespace {
+
+/// Below this a stored amount is shown whole.
+constexpr float kAmountThousandsFrom = 10000.0F;
+/// From this on a stored amount is shown in whole thousands.
+constexpr float kAmountWholeThousandsFrom = 100000.0F;
+constexpr float kThousand = 1000.0F;
+constexpr float kBarScale = 100.0F;
+constexpr int32_t kBarFullest = kResourcePanelBarWidth - 1;
+/// Rows of a storage bar, below its row's text line.
+constexpr int32_t kBarRows = 3;
+constexpr int32_t kMetalLineY = 10;
+constexpr int32_t kEnergyLineY = 20;
+constexpr int32_t kSquareSide = 8;
+constexpr uint32_t kTicksPerSecond = 30;
+constexpr uint32_t kSecondsPerMinute = 60;
+constexpr uint32_t kSecondsPerHour = 3600;
+/// Setup option of a watcher (PlayerSetupInfo.options).
+constexpr uint32_t kWatcherOption = OA_SETUP_OPTION_WATCHER;
+
+bool slot_in_use(const Player& player) noexcept {
+    return player.in_use != 0;
+}
+
+/// Copies a player's name, which need not end in a NUL.
+void copy_name(char* out, std::size_t size, const Player& player) {
+    std::snprintf(out, size, "%.*s", static_cast<int>(sizeof player.name), player.name);
+}
+
+/// Draws a storage bar: its trough, the black edges a background-less panel
+/// gives it, and its fill.
+void draw_bar(
+    const ResourcePanel& panel,
+    const ResourcePanelSink& sink,
+    int32_t x,
+    int32_t y,
+    int32_t pixels,
+    uint8_t color
+) {
+    if (sink.fill == nullptr)
+        return;
+    if (panel.background == ResourcePanelBackground::none) {
+        sink.fill(sink.user, x, y - 1, kResourcePanelBarWidth, 1, kResourcePanelTroughColor);
+        sink.fill(sink.user, x, y + kBarRows, kResourcePanelBarWidth, 1, kResourcePanelTroughColor);
+    }
+    sink.fill(sink.user, x, y, kResourcePanelBarWidth, kBarRows, kResourcePanelTroughColor);
+    if (pixels > 0)
+        sink.fill(sink.user, x, y, pixels, kBarRows, color);
+}
+
+/// Draws a stored amount right-aligned in kResourcePanelAmountChars characters.
+void draw_amount(const ResourcePanelSink& sink, int32_t x, int32_t y, float amount) {
+    char text[32];
+    format_panel_amount(text, sizeof text, amount);
+    const auto length = static_cast<int32_t>(std::strlen(text));
+    if (sink.text != nullptr)
+        sink.text(
+            sink.user,
+            x + kResourcePanelCharWidth * (kResourcePanelAmountChars - length),
+            y,
+            text,
+            kResourcePanelTextColor
+        );
+}
+
+/// The energy of one wind speed: rounded to nearest over the divisor, at most the output.
+int32_t wind_energy(int32_t speed, int32_t generator, int32_t divisor) noexcept {
+    const int32_t half = divisor / 2;
+    const int32_t energy = (speed * generator + half) / divisor;
+    return energy < generator ? energy : generator;
+}
+
+} // namespace
+
+bool local_player_watches(const World& world) noexcept {
+    const Player* local = world_player(const_cast<World*>(&world), world.game.local_player_index);
+    if (local == nullptr)
+        return false;
+    const PlayerSetupInfo* info = world_player_info(&world, local);
+    return info != nullptr && (info->options & kWatcherOption) != 0;
+}
+
+ResourcePanelRows
+resource_panel_rows(const World& world, bool watching, const SharedPlayerViews& shared) noexcept {
+    ResourcePanelRows rows{};
+    for (uint8_t slot = kResourcePanelFirstSlot; slot < kResourcePanelSlotEnd; ++slot) {
+        const Player& player = world.game.players[slot];
+        const bool listed =
+            watching ? slot_in_use(player) && player.name[0] != '\0' : shared.shares_position[slot];
+        if (listed)
+            rows.slots[rows.count++] = slot;
+    }
+    rows.own_view_row = watching;
+    return rows;
+}
+
+void format_panel_amount(char* out, std::size_t size, float amount) {
+    if (kAmountThousandsFrom > amount)
+        std::snprintf(out, size, "%.0f", static_cast<double>(amount));
+    else if (kAmountWholeThousandsFrom > amount)
+        std::snprintf(out, size, "%.1fK", static_cast<double>(amount / kThousand));
+    else
+        std::snprintf(out, size, "%.0fK", static_cast<double>(amount / kThousand));
+}
+
+int32_t panel_bar_pixels(float stored, float capacity) noexcept {
+    if (capacity == 0.0F || std::isnan(capacity))
+        return 0;
+    const float share = stored / capacity * kBarScale;
+    if (!(share >= 0.0F))
+        return 0;
+    if (share >= static_cast<float>(kBarFullest))
+        return kBarFullest;
+    return static_cast<int32_t>(share);
+}
+
+void format_panel_income(char* out, std::size_t size, float income, bool metal) {
+    std::snprintf(out, size, metal ? "+%.1f" : "+%.0f", static_cast<double>(income));
+}
+
+int32_t resource_panel_height(const ResourcePanelRows& rows) noexcept {
+    return kResourcePanelRowHeight * (rows.count + (rows.own_view_row ? 1 : 0));
+}
+
+void draw_resource_panel(
+    const World& world,
+    ResourcePanel& panel,
+    const ResourcePanelRows& rows,
+    const ResourcePanelSink& sink
+) {
+    panel.flash = static_cast<uint8_t>(panel.flash ^ kResourcePanelLockFlash);
+    const int32_t height = resource_panel_height(rows);
+    if (height == 0)
+        return;
+    if (panel.background == ResourcePanelBackground::solid && sink.fill != nullptr)
+        sink.fill(
+            sink.user, panel.x, panel.y, kResourcePanelWidth, height, kResourcePanelTroughColor
+        );
+    for (uint8_t row = 0; row < rows.count; ++row) {
+        const uint8_t slot = rows.slots[row];
+        const Player& player = world.game.players[slot];
+        const int32_t x = panel.x;
+        const int32_t y = panel.y + row * kResourcePanelRowHeight;
+        if (sink.fill != nullptr) {
+            if (panel.locked_slot != 0 && slot == panel.locked_slot)
+                sink.fill(
+                    sink.user, x, y, kResourcePanelWidth, kResourcePanelRowHeight, panel.flash
+                );
+            else if (panel.viewed_slot != 0 && slot == panel.viewed_slot)
+                sink.fill(
+                    sink.user,
+                    x,
+                    y,
+                    kResourcePanelWidth,
+                    kResourcePanelRowHeight,
+                    kResourcePanelViewRowColor
+                );
+            const PlayerSetupInfo* info = world_player_info(&world, &player);
+            sink.fill(
+                sink.user,
+                x + kResourcePanelSquareX,
+                y + 1,
+                kSquareSide,
+                kSquareSide,
+                info != nullptr ? info->color : uint8_t{0}
+            );
+        }
+        char text[64];
+        copy_name(text, sizeof text, player);
+        if (sink.text != nullptr)
+            sink.text(sink.user, x + kResourcePanelBarX, y, text, kResourcePanelNameColor);
+        draw_amount(sink, x, y + kMetalLineY, player.metal);
+        draw_bar(
+            panel,
+            sink,
+            x + kResourcePanelBarX,
+            y + kMetalLineY,
+            panel_bar_pixels(player.metal, player.metal_storage),
+            kResourcePanelMetalBarColor
+        );
+        format_panel_income(text, sizeof text, player.metal_produced, true);
+        if (sink.text != nullptr)
+            sink.text(
+                sink.user, x + kResourcePanelIncomeX, y + kMetalLineY, text, kResourcePanelTextColor
+            );
+        draw_amount(sink, x, y + kEnergyLineY, player.energy);
+        draw_bar(
+            panel,
+            sink,
+            x + kResourcePanelBarX,
+            y + kEnergyLineY,
+            panel_bar_pixels(player.energy, player.energy_storage),
+            kResourcePanelEnergyBarColor
+        );
+        format_panel_income(text, sizeof text, player.energy_produced, false);
+        if (sink.text != nullptr)
+            sink.text(
+                sink.user,
+                x + kResourcePanelIncomeX,
+                y + kEnergyLineY,
+                text,
+                kResourcePanelTextColor
+            );
+    }
+    if (rows.own_view_row && sink.text != nullptr)
+        sink.text(
+            sink.user,
+            panel.x + kResourcePanelBarX,
+            panel.y + rows.count * kResourcePanelRowHeight + kMetalLineY,
+            kResourcePanelOwnViewRow,
+            kResourcePanelNameColor
+        );
+}
+
+ResourcePanelHit resource_panel_hit(
+    const ResourcePanel& panel, const ResourcePanelRows& rows, int32_t x, int32_t y
+) noexcept {
+    ResourcePanelHit hit{};
+    const int32_t height = resource_panel_height(rows);
+    if (x <= panel.x || x >= panel.x + kResourcePanelWidth || y <= panel.y || y >= panel.y + height)
+        return hit;
+    hit.inside = true;
+    // The panel's last row's height belongs to the own-view row while a
+    // watcher has it.
+    if (rows.own_view_row && y > panel.y + height - kResourcePanelRowHeight) {
+        hit.own_view = true;
+        return hit;
+    }
+    hit.row = static_cast<int8_t>((y - panel.y) / kResourcePanelRowHeight);
+    return hit;
+}
+
+bool resource_panel_f4(ResourcePanel& panel, bool board_out, bool has_rows) noexcept {
+    if (!has_rows)
+        return false;
+    if (panel.hidden && board_out) {
+        panel.hidden = false;
+        return true;
+    }
+    if (!panel.hidden && !board_out) {
+        panel.hidden = true;
+        return true;
+    }
+    return false;
+}
+
+ViewSwitch resource_panel_view_switch(
+    ResourcePanel& panel, const ResourcePanelRows& rows, const ResourcePanelHit& hit, bool watching
+) noexcept {
+    if (!watching || !hit.inside)
+        return ViewSwitch::none;
+    if (hit.own_view) {
+        panel.locked_slot = 0;
+        panel.viewed_slot = 0;
+        return ViewSwitch::own_view;
+    }
+    if (hit.row < 0)
+        return ViewSwitch::none;
+    (void)rows;
+    // The row's number from 1 stands for a player slot, whatever slot the
+    // row shows.
+    const auto slot = static_cast<uint8_t>(hit.row + 1);
+    if (slot == panel.locked_slot) {
+        panel.locked_slot = 0;
+        return ViewSwitch::unlock_camera;
+    }
+    if (slot == panel.viewed_slot) {
+        panel.locked_slot = slot;
+        return ViewSwitch::lock_camera;
+    }
+    panel.viewed_slot = slot;
+    if (panel.locked_slot != 0)
+        panel.locked_slot = slot;
+    return ViewSwitch::view_player;
+}
+
+WindReadout wind_readout(
+    int32_t strength, int32_t minimum, int32_t maximum, int32_t divisor, int32_t generator
+) noexcept {
+    WindReadout wind{};
+    if (divisor <= 0)
+        return wind;
+    wind.current = wind_energy(strength, generator, divisor);
+    wind.minimum = wind_energy(minimum, generator, divisor);
+    wind.maximum = wind_energy(maximum, generator, divisor);
+    return wind;
+}
+
+void format_game_time(char* out, std::size_t size, uint32_t tick) {
+    const uint32_t seconds = tick / kTicksPerSecond;
+    std::snprintf(
+        out,
+        size,
+        "Game Time : %02u:%02u:%02u",
+        seconds / kSecondsPerHour,
+        seconds / kSecondsPerMinute % kSecondsPerMinute,
+        seconds % kSecondsPerMinute
+    );
+}
+
+void format_wind(char* out, std::size_t size, const WindReadout& wind, bool watching) {
+    if (watching)
+        std::snprintf(out, size, "Wind : (%d-%d)", wind.minimum, wind.maximum);
+    else
+        std::snprintf(out, size, "Wind : +%d (%d-%d)", wind.current, wind.minimum, wind.maximum);
+}
+
+void format_tidal(char* out, std::size_t size, float tidal_strength) {
+    std::snprintf(out, size, "Tidal : +%d", static_cast<int>(tidal_strength));
+}
+
+} // namespace oa::ui::hud

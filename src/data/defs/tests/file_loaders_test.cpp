@@ -274,6 +274,76 @@ void test_category_registry_mask() {
     CHECK(category_registry_mask(&registry, 1) == nullptr);
 }
 
+/// Registers one unit type id in a category and in "ALL".
+///
+/// @param[in,out] registry registry to register in
+/// @param type_id the unit's type id
+/// @return what register_unit_categories returns
+bool register_type(CategoryRegistry& registry, uint16_t type_id) {
+    oa::UnitDef unit{};
+    unit.type_id = type_id;
+    return register_unit_categories(&registry, &unit, "WIDE");
+}
+
+/// Checks the category mask width: 512 type ids as in 3.1c, ids past it left out of
+/// every category, and the widest registry holding every 16-bit type id.
+void test_category_mask_width() {
+    CategoryRegistry base;
+    category_registry_init(&base);
+    CHECK(base.words_per_mask == category_mask_words);
+    CHECK(register_type(base, 511) && register_type(base, 512) && register_type(base, 600));
+    const CategoryMask* wide = category_registry_find(&base, "WIDE");
+    const CategoryMask* all = category_registry_find(&base, "ALL");
+    CHECK(wide != nullptr && wide->word_count == category_mask_words);
+    CHECK(category_mask_contains(wide, 511) && category_mask_contains(all, 511));
+    CHECK(!category_mask_contains(wide, 512) && !category_mask_contains(wide, 600));
+    CHECK(!category_mask_contains(all, 600));
+    // A registry that holds a category keeps its width.
+    CHECK(!category_registry_set_mask_types(&base, oa::data::limits::highest_type_bits));
+    category_registry_clear(&base);
+    CHECK(base.words_per_mask == category_mask_words);
+
+    CategoryRegistry widest;
+    category_registry_init(&widest);
+    CHECK(!category_registry_set_mask_types(&widest, oa::data::limits::highest_type_bits + 1));
+    CHECK(category_registry_set_mask_types(&widest, oa::data::limits::highest_type_bits));
+    CHECK(widest.words_per_mask == max_category_mask_words);
+    CHECK(register_type(widest, 600) && register_type(widest, 65535));
+    // Enough further categories to grow the registry past its first 64, which
+    // moves the words every mask points into.
+    char name[16];
+    for (uint32_t index = 0; index < 100; ++index) {
+        std::snprintf(name, sizeof name, "C%u", index);
+        CategoryMask* mask = category_registry_find_or_add(&widest, name);
+        CHECK(mask != nullptr && mask->word_count == max_category_mask_words);
+        if (mask != nullptr)
+            category_mask_set(mask, static_cast<uint16_t>(60000 + index));
+    }
+    wide = category_registry_find(&widest, "WIDE");
+    all = category_registry_find(&widest, "ALL");
+    CHECK(
+        wide != nullptr && category_mask_contains(wide, 600) && category_mask_contains(wide, 65535)
+    );
+    CHECK(
+        all != nullptr && category_mask_contains(all, 65535) && !category_mask_contains(all, 601)
+    );
+    const CategoryMask* last = category_registry_find(&widest, "C99");
+    CHECK(
+        last != nullptr && category_mask_contains(last, 60099) &&
+        !category_mask_contains(last, 60098)
+    );
+    // Words outside a registry hold as many type ids as asked, up to the widest.
+    CategoryMaskStorage storage;
+    CategoryMask target = category_mask_over(storage, oa::data::limits::highest_type_bits);
+    category_mask_or(&target, wide);
+    CHECK(target.word_count == max_category_mask_words && category_mask_contains(&target, 65535));
+    CategoryMask narrow = category_mask_over(storage, oa::data::limits::base_type_bits);
+    category_mask_or(&narrow, wide);
+    CHECK(narrow.word_count == category_mask_words && !category_mask_contains(&narrow, 600));
+    category_registry_clear(&widest);
+    CHECK(widest.words_per_mask == max_category_mask_words);
+}
+
 } // namespace
 
 int main() {
@@ -282,6 +352,7 @@ int main() {
     test_load_side_data();
     test_load_locale_table();
     test_category_registry_mask();
+    test_category_mask_width();
     if (failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;

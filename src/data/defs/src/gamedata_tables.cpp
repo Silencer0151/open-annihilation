@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/data/defs/gamedata_tables.hpp"
+#include "oa/data/defs/layout.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -25,7 +26,9 @@ bool load_gamedata_tables(
     const Files* files, const char* variant, const GamedataTableSink& sink
 ) noexcept {
     char path[path_capacity];
-    build_variant_path(files, path, sizeof path, "gamedata", "los", "TDF", variant);
+    build_variant_path(
+        files, path, sizeof path, directory_name(DataDirectory::gamedata), "los", "TDF", variant
+    );
     formats::tdf::Document document;
     formats::tdf::document_init(&document);
     if (!load_tdf_file(files, path, &document, nullptr)) {

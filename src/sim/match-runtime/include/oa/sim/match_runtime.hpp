@@ -29,6 +29,11 @@
 #include "oa/sim/ground_orders/search_worker.hpp"
 #include "oa/sim/detection.hpp"
 #include "oa/sim/world_environment/wind.hpp"
+#include "oa/base/sha256.hpp"
+#include "oa/data/limits.hpp"
+#include "oa/data/match_rules.hpp"
+#include "oa/sim/match_runtime/rule_state.hpp"
+#include "oa/sim/match_runtime/structure_gifts.hpp"
 #include "oa/sim/effect_particles.hpp"
 #include "oa/sim/feature_runtime.hpp"
 #include "oa/data/persist/save_orders.hpp"
@@ -134,6 +139,33 @@ struct RuntimeTypeFields {
     int16_t corpse_feature = -1; // UnitDef.corpse: FeatureDef index of corpse=, -1 none
 };
 
+/// How a match's units speak and its explosions show, as a mod's profile's
+/// display rules set them (ModProfile::ui); the defaults are 3.1c's.
+///
+/// They change what the player hears and sees, with the order stages and the
+/// effect emitters that go with it, and never what another machine is told.
+struct DisplayRules {
+    /// Feature reclaim says "working" once as it starts and then reclaims in
+    /// its next stage; 3.1c says it at every reclaim step and takes one step
+    /// more before the feature is collected.
+    bool reclaim_voice_once{};
+    /// An aircraft reclaiming a unit says "working" when it arrives to
+    /// reclaim, in a stage of its own; 3.1c says it as it sets off.
+    bool vtol_reclaim_voice_at_start{};
+    /// The speech category of a landing that finds no free pad ("Landing
+    /// failed", "all pads are occupied", "no pads available"); 3.1c's is
+    /// cannot comply (7).
+    uint8_t landing_fail_voice{7};
+    /// An endsmoke weapon's burst shows the weapon's explosion as well as its
+    /// smoke puff; 3.1c shows only the puff.
+    bool end_smoke_explosion{};
+    /// Every explosion above sea level raises a short smoke column, as in
+    /// 3.1c; off, it raises none.
+    bool explosion_smoke_column{true};
+    /// Compares every field.
+    bool operator==(const DisplayRules&) const = default;
+};
+
 struct OfflineInputs {
     const formats::tnt::Map& map;
     std::span<const sim::unit_spawn::LoadedType> loaded; // includes reserved index0
@@ -195,6 +227,26 @@ struct OfflineInputs {
         std::vector<sim::effect_particles::PiecePrimitive>& out
     )>
         loaded_primitives{};
+    // The capacities a mod may raise: the effect layers and pool, the path
+    // search's node budget and the computer players' build lists. The
+    // defaults are 3.1c's.
+    data::limits::Limits limits{};
+    // The rules a mod's profile sets for the match (ModProfile::rules), which
+    // the match copies; the defaults are 3.1c's. Match::rules_view hands them
+    // to the code that applies them.
+    data::match_rules::MatchRules rules{};
+    // Each unit type's own rules from its data keys, indexed like types
+    // (index 0 reserved); empty when no type has any. The match copies them.
+    std::span<const data::match_rules::UnitTypeRules> unit_type_rules{};
+    // Each weapon's own rules from its data keys, indexed by weapon ID; empty
+    // when no weapon has any. The match copies them.
+    std::span<const data::match_rules::WeaponTypeRules> weapon_rules{};
+    // How the match's units speak and its explosions show; the defaults are
+    // 3.1c's.
+    DisplayRules display{};
+    // The sim hash of the profile the match plays (ModProfile::sim_hash),
+    // with which its rule-state digest starts; none without a profile.
+    std::optional<base::sha256::Digest> profile_sim_hash{};
 };
 
 /// Returns a canonical 16.16 point as the raw words the legacy views use.
@@ -381,6 +433,20 @@ struct MultiplayerHooks {
     /// @param unit Unit slot, still live and still owned by its old owner.
     /// @param new_owner Player index 0..9 of the receiving player.
     void (*unit_transferred)(void* context, uint16_t unit, uint8_t new_owner){};
+    /// Reports that the local player finished placing its commander
+    /// (finish_commander_placement). Null reports nothing.
+    ///
+    /// @param context The hooks' context.
+    void (*commander_placed)(void* context){};
+};
+
+/// Where the local player's placing of its commander stands
+/// (setup.commander-warp): while the game is held at its start, the player
+/// moves its commander to any point of the map and then says it is done.
+enum class CommanderPlacement : uint8_t {
+    none,    ///< nothing to place
+    placing, ///< each click on the map moves the commander there
+    waiting, ///< placed; the game waits for the other players
 };
 
 /// The state a unit takes when another player's machine hands it to a
@@ -395,6 +461,42 @@ struct TransferredUnit {
     /// UnitWeapon.stockpile per weapon slot; a slot whose weapon is not
     /// enabled on the copy keeps its own.
     std::array<uint8_t, OA_UNIT_WEAPON_COUNT> stockpiles{};
+};
+
+/// No player's units are let through a site test (BuildSiteOptions::own_units_player).
+inline constexpr uint8_t no_site_units_player = 0xff;
+
+/// How a building-site test treats the building's facing and units on the site.
+struct BuildSiteOptions {
+    /// Quarter turns from south the building is placed facing
+    /// (sim::unit_spawn::facing_*; units.build-rotation). A facing the match
+    /// does not let the type take (Match::build_facing) tests it facing south.
+    uint8_t facing{};
+    /// The player whose own units with a movement object do not refuse the
+    /// site, as the build cursor lets the local player place a building over
+    /// them (orders.build-site-kickout place-over-own-units);
+    /// no_site_units_player for none, as in 3.1c. Buildings and claimed plots
+    /// still refuse it.
+    uint8_t own_units_player{no_site_units_player};
+    /// Set to true, when not null, as the placing player's own units let the
+    /// build cursor's site through (orders.build-site-kickout
+    /// place-over-own-units), so a building placed there needs them moved
+    /// off; left as it is otherwise.
+    bool* over_own_units{};
+};
+
+/// How the local view sees a replay that leaves the viewer no slot of its own
+/// (recorder.ten-player-replay). The viewer then looks through a recorded
+/// player's slot, which stays that player's.
+enum class SlotlessViewer : uint8_t {
+    /// The viewer has a slot of its own: a player's, or a seated watcher's.
+    none,
+    /// The viewer watches: every unit is a radar contact in its own view, and
+    /// a recorded player's view shows that player's radar.
+    watcher,
+    /// The viewer is every recorded player's ally: every unit is a radar
+    /// contact in every view.
+    ally_of_every_player,
 };
 
 // Owns the real unit pool, model/VM objects, weapon slots, spatial plots/buckets
@@ -556,6 +658,43 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// @param difficulty OA_DIFFICULTY_* value.
     void set_difficulty(int32_t difficulty) noexcept { state().game.difficulty = difficulty; }
 
+    /// Keeps a defeated host of a network game watching (network.host-stays-as-watcher).
+    ///
+    /// With it set, the local player's defeat while it holds the host role
+    /// makes it a watcher with WatchNotice::host_watching, whatever the
+    /// game's watching option, so the session goes on without it.
+    ///
+    /// @param stays true to keep the host watching
+    void set_host_stays_watching(bool stays) noexcept { host_stays_watching_ = stays; }
+
+    /// Opens the local player's placing of its commander (setup.commander-warp).
+    ///
+    /// Nothing opens without a live first unit of the local player's block,
+    /// the commander. The next tick the game runs closes the placing.
+    void begin_commander_placement() noexcept;
+
+    /// Returns where the local player's placing of its commander stands.
+    [[nodiscard]] CommanderPlacement commander_placement() const noexcept {
+        return commander_placement_;
+    }
+
+    /// Moves the local player's commander to a point of the map while its placing is open.
+    ///
+    /// The whole part of the commander's x and z becomes the point's and the
+    /// fractions stay; its height and occupancy layer stay, and its footprint
+    /// and sight move with it. Nothing moves once the player said it is done
+    /// or when the point is off the map.
+    ///
+    /// @param x map pixels from the left edge
+    /// @param z map pixels from the top edge
+    /// @return true when the commander moved
+    bool place_commander(int32_t x, int32_t z) noexcept;
+
+    /// Ends the local player's placing: the commander stays where it is and
+    /// MultiplayerHooks::commander_placed reports it. Nothing happens unless
+    /// the placing is open.
+    void finish_commander_placement() noexcept;
+
     /// Returns the computer players' difficulty (OA_DIFFICULTY_*).
     [[nodiscard]] int32_t difficulty() const noexcept { return state().game.difficulty; }
 
@@ -643,9 +782,16 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// @param target Target unit slot to match, 0 for any.
     /// @param point Signed 16.16 point the order's must lie within 16 pixels
     ///     of on x and on z, or null for any.
+    /// @param snapped_point The point is a click a mod's click snap moved
+    ///     onto a feature: the order's whole pixels must then lie from 8
+    ///     before the point's to 7 after them, on x and on z.
     /// @return True when an order was removed.
     bool cancel_queued_order(
-        uint16_t unit, uint8_t kind, uint16_t target, const sim::ground_orders::Point* point
+        uint16_t unit,
+        uint8_t kind,
+        uint16_t target,
+        const sim::ground_orders::Point* point,
+        bool snapped_point = false
     );
 
     /// Issues an order, except that a queued order removes its match
@@ -814,6 +960,34 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
         bool multiplayer = false
     );
 
+    /// Sets how the local view sees a replay that leaves the viewer no slot
+    /// of its own (recorder.ten-player-replay); SlotlessViewer::none, the
+    /// default, is a viewer with a slot. It changes only what the local view
+    /// shows: the contact scan and jamming as a watcher sees them.
+    ///
+    /// @param viewer how the slotless viewer sees
+    void set_slotless_viewer(SlotlessViewer viewer) noexcept { slotless_viewer_ = viewer; }
+
+    /// Returns how the local view sees a replay that leaves the viewer no slot.
+    [[nodiscard]] SlotlessViewer slotless_viewer() const noexcept { return slotless_viewer_; }
+
+    /// Notes whether a slotless viewer has switched its view to a recorded
+    /// player's (ui.resource-panel), which a watching viewer sees with that
+    /// player's radar.
+    ///
+    /// @param switched true for a recorded player's view, false for the viewer's own
+    void set_slotless_view_switched(bool switched) noexcept { slotless_view_switched_ = switched; }
+
+    /// Tells whether the contact scan makes every unit a radar contact for a
+    /// slotless viewer: in every view for an ally of every player, in its own
+    /// view for a watcher.
+    ///
+    /// @return true when the viewer's radar shows every unit
+    [[nodiscard]] bool slotless_full_radar() const noexcept {
+        return slotless_viewer_ == SlotlessViewer::ally_of_every_player ||
+               (slotless_viewer_ == SlotlessViewer::watcher && !slotless_view_switched_);
+    }
+
     /// Returns the local player's final outcome, or ongoing.
     sim::scenario::Outcome outcome() const noexcept { return outcome_result_; }
 
@@ -938,7 +1112,8 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
         void* context
     );
     /// Runs the viewpoint player's contact scan: its own and radar-sharing
-    /// units are seen, its active radar and sonar units stamp contacts, other
+    /// units are seen (every unit for a watcher, and for a slotless viewer
+    /// while slotless_full_radar holds), its active radar and sonar units stamp contacts, other
     /// players' active jammers clear them, cloakers near an enemy their owner
     /// sees lose the cloak, and units in its line of sight are radar
     /// contacts. Nothing happens with a single participant.
@@ -1010,10 +1185,31 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// @param type Type index to build (the order's first parameter).
     /// @param destination Signed 16.16 site.
     /// @param queue Whether the command was queued (shift held).
+    /// @param facing Quarter turns from south the building is placed facing
+    ///     (units.build-rotation; set_build_facing); one the type may not
+    ///     take builds it facing south.
     /// @return The new order.
     sim::simulation_state::Order& issue_mobile_build(
-        uint16_t unit, uint16_t type, const sim::ground_orders::Point& destination, bool queue
+        uint16_t unit,
+        uint16_t type,
+        const sim::ground_orders::Point& destination,
+        bool queue,
+        uint8_t facing = 0
     );
+    /// Sends one of the local player's own units with a movement object to a
+    /// point ahead of its orders, as orders.build-site-kickout sends a unit
+    /// off a site (ui.build-tools' drag with the snap override key): a
+    /// builder whose frame is not started walks to its site again after the
+    /// move; an order without a point gives way to it; a unit already on the
+    /// kickout's move is sent on; any other order stops and is given again
+    /// from its start behind the move. The unit's later orders are kept, and
+    /// the kickout's table (build_site_kickout_spots) keeps the point.
+    ///
+    /// @param unit Unit slot.
+    /// @param point Signed 16.16 point; its whole x, y and z are the move's.
+    /// @return False, and nothing done, for a unit that is not the local
+    ///     player's or has no movement object.
+    bool send_ahead_of_orders(uint16_t unit, const sim::ground_orders::Point& point);
     /// Issues the patrol command (9): RepairPatrol or VTOL_RepairPatrol for a
     /// type with the repair ability, else Patrol or VTOL_Patrol; QPatrol for a
     /// unit without a movement object.
@@ -1152,6 +1348,36 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// @param carried The state another player's machine handed over with
     ///     the unit, or null to take the unit's own.
     void transfer_unit(uint16_t unit, uint8_t new_owner, const TransferredUnit* carried = nullptr);
+
+    /// Starts a share panel's gift of units (share_gift_unit, end_share_gift).
+    void begin_share_gift() noexcept;
+
+    /// Gives one unit through the share panel.
+    ///
+    /// Under sharing.structure-gift-rate-limit a structure (UnitDef.bm_code 0)
+    /// joins the gift being collected, which end_share_gift hands over;
+    /// every other unit, and every unit without the rule, goes across at once
+    /// (transfer_unit).
+    ///
+    /// @param unit Unit slot.
+    /// @param recipient Player index 0..9.
+    void share_gift_unit(uint16_t unit, uint8_t recipient);
+
+    /// Ends a share panel's gift: its structures go across at once while the
+    /// structures given within the rule's window, with these, number no more
+    /// than its immediate-max; otherwise they all wait the rule's defer-ticks.
+    ///
+    /// Each structure goes only while it is still the same live, not dying
+    /// unit of the player that gave it and the recipient's slot is in use;
+    /// those given count towards the window.
+    ///
+    /// @return what became of the structures; nothing without the rule or
+    ///     without a structure in the gift
+    ShareGiftOutcome end_share_gift();
+
+    /// Gives the waiting structure gifts that are due (sharing.structure-gift-rate-limit),
+    /// each structure checked as end_share_gift checks it. The match's tick runs it last.
+    void give_due_structure_gifts();
     /// Issues Ground_Pickup (VTOL_Pickup for an aircraft).
     ///
     /// @param transport Transport slot.
@@ -1290,7 +1516,9 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// centre, at the corner cell's terrain height, mapped, and units and
     /// claimed plots only refuse the site where that player has line of
     /// sight. Metal under the yard plays no part: a metal extractor is
-    /// accepted on bare ground as on a deposit.
+    /// accepted on bare ground as on a deposit. Under the rule
+    /// orders.build-site-kickout place-over-own-units, the placing player's
+    /// own units that have a movement object do not refuse it either.
     ///
     /// @param type Type index; 0 or one past the table is refused.
     /// @param cell_x Site's top-left cell x.
@@ -1299,6 +1527,9 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     ///     site, 0 for none.
     /// @param placing_player Player placing the building, or
     ///     no_placing_player for the simulation's own checks.
+    /// @param options The building's facing, whose yard and footprint
+    ///     (width and depth swapped facing east or west) are tested, and the
+    ///     player whose own mobile units do not refuse the site.
     /// @return The height the building would stand at, or nothing when the
     ///     site is refused.
     std::optional<uint8_t> building_site(
@@ -1306,7 +1537,8 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
         int32_t cell_x,
         int32_t cell_z,
         uint16_t skip_unit,
-        uint8_t placing_player = no_placing_player
+        uint8_t placing_player = no_placing_player,
+        const BuildSiteOptions& options = BuildSiteOptions{}
     ) const;
 
     /// Tests a building site (building_site) without the placing player.
@@ -1316,10 +1548,18 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// @param cell_z Site's top-left cell z.
     /// @param skip_unit Unit slot whose own occupancy does not refuse the
     ///     site, 0 for none.
+    /// @param options The building's facing and the player whose own mobile
+    ///     units do not refuse the site.
     /// @return True when the site is accepted.
-    bool
-    building_site_clear(uint16_t type, int32_t cell_x, int32_t cell_z, uint16_t skip_unit) const {
-        return building_site(type, cell_x, cell_z, skip_unit).has_value();
+    bool building_site_clear(
+        uint16_t type,
+        int32_t cell_x,
+        int32_t cell_z,
+        uint16_t skip_unit,
+        const BuildSiteOptions& options = BuildSiteOptions{}
+    ) const {
+        return building_site(type, cell_x, cell_z, skip_unit, no_placing_player, options)
+            .has_value();
     }
 
     /// Returns the height a building's yard would stand at on a site, tested
@@ -1328,8 +1568,68 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// @param type Type index; 0 or one past the table gives 0.
     /// @param cell_x Site's top-left cell x.
     /// @param cell_z Site's top-left cell z.
+    /// @param facing Quarter turns from south the building faces; one the
+    ///     type may not take is south.
     /// @return Height in whole units.
-    uint8_t footprint_height(uint16_t type, int32_t cell_x, int32_t cell_z) const;
+    uint8_t
+    footprint_height(uint16_t type, int32_t cell_x, int32_t cell_z, uint8_t facing = 0) const;
+
+    /// Returns the facing a building of a type may be placed in
+    /// (units.build-rotation).
+    ///
+    /// A type may face a direction its build facings (UnitTypeRules
+    /// build_facings) list when the rule is on and it is a building
+    /// (bmcode 0) with a yard as large as its footprint, at most 32 cells
+    /// wide and deep.
+    ///
+    /// @param type Type index.
+    /// @param facing Quarter turns from south asked for; only its low two
+    ///     bits count.
+    /// @return The facing, or south (0) for one the type may not take.
+    [[nodiscard]] uint8_t build_facing(uint16_t type, uint8_t facing) const noexcept;
+
+    /// Returns every facing a building of a type may be placed in
+    /// (build_facing), as the build cursor offers them.
+    ///
+    /// @param type Type index.
+    /// @return data::match_rules::build_facing bits; south always, and
+    ///     south alone without units.build-rotation.
+    [[nodiscard]] uint8_t build_facings(uint16_t type) const noexcept;
+
+    /// Returns the facing a building's heading gives it: the quarter of a
+    /// turn holding the heading plus 0xA000, which the type may take
+    /// (build_facing).
+    ///
+    /// @param type Type index.
+    /// @param heading Heading in 65536ths of a turn (Unit.heading, or a
+    ///     wreck's or a saved unit's).
+    /// @return The facing, or south (0).
+    [[nodiscard]] uint8_t build_facing_of_heading(uint16_t type, uint16_t heading) const noexcept;
+
+    /// Returns the facing a unit stands in: the one its heading gives it
+    /// (build_facing_of_heading), when its own footprint is the facing's;
+    /// otherwise south.
+    ///
+    /// @param unit The unit.
+    /// @return The facing, 0 to 3.
+    [[nodiscard]] uint8_t unit_build_facing(const oa::Unit& unit) const noexcept;
+
+    /// Returns the yard of a type turned to a facing.
+    ///
+    /// @param type Type index.
+    /// @param facing Quarter turns from south; one the type may not take is
+    ///     south.
+    /// @return The yard cells, row by row, the rows as long as the turned
+    ///     footprint is wide; empty for a type without a yard.
+    [[nodiscard]] std::span<const uint8_t> build_yard(uint16_t type, uint8_t facing) const noexcept;
+
+    /// Sets the facing the building a construction order builds is placed in
+    /// (units.build-rotation); the order's site test, height and the new
+    /// frame use it. A facing the type may not take builds it facing south.
+    ///
+    /// @param order An order the match owns; another is noted and ignored.
+    /// @param facing Quarter turns from south.
+    void set_build_facing(sim::simulation_state::Order& order, uint8_t facing);
     /// Tests whether a type fits a site: a building goes through
     /// building_site; a mobile unit on occupancy layer 1 walks its footprint
     /// for blocking features, ground units, water depths and slopes.
@@ -1341,10 +1641,16 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     ///     none.
     /// @param occupancy_kind Occupancy layer of a mobile unit: 1 walks the
     ///     footprint, any other passes.
+    /// @param facing Quarter turns from south a building faces (building_site).
     /// @return True when the site is clear; for type 0, a type past the table
     ///     or a footprint past the map edge, true only for occupancy kind 2.
     bool site_clear_for(
-        uint16_t type, int32_t cell_x, int32_t cell_z, uint16_t skip_unit, uint8_t occupancy_kind
+        uint16_t type,
+        int32_t cell_x,
+        int32_t cell_z,
+        uint16_t skip_unit,
+        uint8_t occupancy_kind,
+        uint8_t facing = 0
     ) const;
     /// Tells whether a unit's weapon slot can reach another unit: sea and
     /// air gates, ballistic feasibility, then the squared horizontal range.
@@ -1517,7 +1823,9 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     // asks whether to go on watching, or, while computer players this
     // machine hosts still play and a human is left, tells it why it must
     // watch.
-    enum class WatchNotice : uint8_t { continue_prompt, hosting_computers, none };
+    // host_watching: the host's defeat keeps it watching so the game goes on
+    // (network.host-stays-as-watcher).
+    enum class WatchNotice : uint8_t { continue_prompt, hosting_computers, none, host_watching };
 
     struct WatchHook {
         void* context{};
@@ -1850,6 +2158,12 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// Returns the current wind as wind generators read it.
     WindState& wind() noexcept { return wind_; }
 
+    /// Returns the wind's whole state: its strength now and the map's least
+    /// and most strengths, which the game record does not keep.
+    [[nodiscard]] const sim::world_environment::WindState& environment_wind() const noexcept {
+        return environment_wind_;
+    }
+
     /// Returns the spatial state: plots, buckets and unit projections.
     sim::spatial_state::World& spatial() noexcept { return spatial_; }
 
@@ -1935,7 +2249,8 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// Reschedules the wind and stores it in the game record and wind().
     ///
     /// tick() runs it after the players' tick, so the economy reads the
-    /// Game.wind_factor of the tick before.
+    /// Game.wind_factor of the tick before. Under a mod's deterministic-wind
+    /// rule every change draws from the shared generator instead.
     void refresh_wind();
     /// Runs one player's economy tick: collects every live unit's production
     /// and requests, settles the stores against storage and the waste
@@ -2113,6 +2428,69 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
 
     /// Returns the effect world for mutation.
     [[nodiscard]] sim::effect_particles::EffectWorld& effects() noexcept { return *effects_; }
+
+    /// Returns how the match's units speak and its explosions show
+    /// (OfflineInputs::display).
+    [[nodiscard]] const DisplayRules& display_rules() const noexcept { return input_.display; }
+
+    /// Replaces how the match's units speak and its explosions show, as the
+    /// player's display rules change while it runs (Developer Mode); the
+    /// next tick reads them.
+    ///
+    /// @param display the rules
+    void set_display_rules(const DisplayRules& display) noexcept { input_.display = display; }
+
+    /// Returns the capacities the match was built with (OfflineInputs::limits).
+    [[nodiscard]] const data::limits::Limits& limits() const noexcept { return input_.limits; }
+
+    /// Returns the match-wide rules the match plays by (OfflineInputs::rules).
+    [[nodiscard]] const data::match_rules::MatchRules& rules() const noexcept {
+        return input_.rules;
+    }
+
+    /// Returns the rules the match plays by as simulation code reads them:
+    /// the match-wide rules and the unit types' and weapons' own, which the
+    /// match keeps for as long as it lives.
+    ///
+    /// @return the view
+    [[nodiscard]] data::match_rules::MatchRulesView rules_view() const noexcept;
+
+    /// Tells whether the match plays a mod's profile (OfflineInputs::profile_sim_hash).
+    ///
+    /// @return true with a profile, even one whose rules are all 3.1c's
+    [[nodiscard]] bool profile_active() const noexcept {
+        return input_.profile_sim_hash.has_value();
+    }
+
+    /// Returns the rule-state tables, to which a rule adds its own while
+    /// the match is built (rule_state.hpp).
+    [[nodiscard]] RuleState& rule_state() noexcept { return rule_state_; }
+
+    /// Returns the rule-state tables.
+    [[nodiscard]] const RuleState& rule_state() const noexcept { return rule_state_; }
+
+    /// Returns each unit slot's heal remainders, indexed by unit index, which
+    /// the match keeps under repair.rate exact-remainder.
+    ///
+    /// @return the table; empty under any other repair rate
+    [[nodiscard]] std::span<sim::unit_health::RepairRemainders> repair_remainders() noexcept {
+        return {repair_remainders_.get(), repair_remainder_count_};
+    }
+
+    /// Returns what orders.build-site-kickout keeps per unit slot: whether it
+    /// sent the unit off a build site, then the whole x, z and y of the spot;
+    /// empty unless the rule moves units.
+    [[nodiscard]] std::span<std::array<uint16_t, 4>> build_site_kickout_spots() noexcept {
+        return {build_site_kickout_spots_.get(), build_site_kickout_spot_count_};
+    }
+
+    /// Folds the rule state into a 64-bit FNV-1a digest: nothing without a
+    /// table, otherwise the profile's sim hash and every table
+    /// (digest_rule_state).
+    ///
+    /// @param digest the digest so far
+    /// @return the new digest; `digest` itself when no table was added
+    [[nodiscard]] uint64_t fold_rule_state(uint64_t digest) const noexcept;
 
     /// Returns the effect host: the LCG and synced streams and the grid and
     /// ground height samplers.
@@ -2363,6 +2741,52 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
 
   private:
 
+    /// Bytes of allied vision's rule state: whether it has followed the
+    /// players yet, the viewpoint player it followed, and the alliance rows
+    /// of players 0..9 it followed, one byte per pair.
+    static constexpr size_t allied_sight_state_bytes = 2 + OA_PLAYER_COUNT * OA_PLAYER_COUNT;
+
+    /// Adds allied vision's rule state (intel.allied-los-sharing) to the
+    /// match's tables; nothing without the hack.
+    void add_allied_sight_state();
+    /// Rebuilds every sight stamp, keeping the mapped cells, once allied
+    /// vision (intel.allied-los-sharing) finds an alliance row or the
+    /// viewpoint player changed since it last looked; it first notes them
+    /// without a rebuild.
+    void follow_alliances_in_sight();
+    /// Tells whether a unit's owner allies a player (the owner's alliance row).
+    ///
+    /// @param unit the unit
+    /// @param player Player index 0..9
+    /// @return true when the owner's row names the player
+    [[nodiscard]] bool owner_allies(const oa::Unit& unit, uint8_t player) const noexcept;
+    /// Tells whether a player sees a point as the contact scan's line-of-sight
+    /// pass reads it for that player: its coverage under the line-of-sight
+    /// rule, else its own mapped bit.
+    ///
+    /// @param player Player index 0..9
+    /// @param position Signed 16.16 point as bit patterns.
+    /// @return True when seen.
+    [[nodiscard]] bool point_seen_by(uint8_t player, const std::array<uint32_t, 3>& position) const;
+    /// Runs the contact scan's passes after the per-unit one for one
+    /// viewing player: its radar and sonar units stamp contacts unless it has
+    /// no unit range, other players' jammers clear them, cloakers near an
+    /// enemy lose the cloak, and units in its line of sight become radar
+    /// contacts.
+    ///
+    /// @param viewer the viewing player
+    /// @param scan_own_units whether its own radar and sonar units stamp
+    void scan_contacts_for(const oa::Player& viewer, bool scan_own_units);
+    /// Tells whether the contact scan lets a jammer jam the viewing player's
+    /// radar picture: always in 3.1c; under intel.allied-jammers-ignored not
+    /// when the viewer allies the jammer's owner, nor for a local watcher or
+    /// a slotless viewer unless the view-switch branch applies.
+    ///
+    /// @param viewer the viewing player
+    /// @param jammer the jamming unit, of another player
+    /// @return true when it jams
+    [[nodiscard]] bool jammer_jams(const oa::Player& viewer, const oa::Unit& jammer) noexcept;
+
     /// Fills a projectile record a constructor allocated: it starts at
     /// `start`, aimed at `target` when given, fired by the slot's unit (query
     /// piece and owner), with the launch the constructor worked out and the
@@ -2510,17 +2934,30 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
 
     /// Credits metal into a unit's metal accumulator
     /// (Unit.economy.metal.produced), scaled for easy and medium computer
-    /// owners; the economy tick moves it into the player store.
+    /// owners, or by a mod's income multipliers; the economy tick moves it into
+    /// the player store.
     ///
     /// @param target Unit credited.
     /// @param amount Metal before scaling.
-    void credit_metal(oa::Unit& target, float amount);
+    /// @param scales A mod's multipliers for a computer owner by difficulty;
+    ///        null scales as 3.1c does.
+    void credit_metal(
+        oa::Unit& target,
+        float amount,
+        const sim::unit_health::ComputerIncomeScales* scales = nullptr
+    );
     /// Credits energy into a unit's energy accumulator
     /// (Unit.economy.energy.produced), scaled like credit_metal.
     ///
     /// @param target Unit credited.
     /// @param amount Energy before scaling.
-    void credit_energy(oa::Unit& target, float amount);
+    /// @param scales A mod's multipliers for a computer owner by difficulty;
+    ///        null scales as 3.1c does.
+    void credit_energy(
+        oa::Unit& target,
+        float amount,
+        const sim::unit_health::ComputerIncomeScales* scales = nullptr
+    );
 
     struct RuntimeOrder {
         sim::simulation_state::Order order;
@@ -2727,8 +3164,93 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
         const sim::combat_state::AttackSource& source,
         std::span<const sim::combat_state::AttackOrderRequest> requests
     );
+    /// Copies the unit types' and weapons' own rules from the inputs, points
+    /// the kept inputs at the copies and hands the rules to the unit-value
+    /// handlers.
+    ///
+    /// @param input the match's inputs
+    void keep_rules(const OfflineInputs& input);
+    /// Allocates the heal remainders under repair.rate exact-remainder, one
+    /// entry per unit slot, and adds them to the rule state as
+    /// "repair-remainders"; under any other rate it allocates and adds nothing.
+    void keep_repair_remainders();
+    /// Sizes and adds orders.build-site-kickout's table when the rule moves
+    /// units (tick_missions_kickout.cpp).
+    void keep_build_site_kickout();
+    /// Sets up the state the unit rules keep (units.id-reuse-delay,
+    /// units.water-state-rules, units.build-rotation) once the pool and its
+    /// tables exist, adding a rule-state table only for a delay above 0.
+    void keep_unit_rules();
+    /// Returns the yard a unit stands on: its type's, turned to its facing
+    /// (unit_build_facing).
+    ///
+    /// @param slot The unit.
+    /// @return The yard cells.
+    [[nodiscard]] std::span<const uint8_t> unit_yard(sim::unit_spawn::Slot& slot) const;
+    /// Returns a type's yard turned to a facing it may take.
+    ///
+    /// @param type Type index whose facing build_facing allowed.
+    /// @param facing 1 to 3.
+    /// @return The turned cells.
+    [[nodiscard]] std::span<const uint8_t>
+    turned_yard(uint16_t type, uint8_t facing) const noexcept;
+    /// Tells whether a unit has a movement object and belongs to a player
+    /// (BuildSiteOptions::own_units_player).
+    ///
+    /// @param unit Unit slot.
+    /// @param player Player index, or no_site_units_player for none.
+    /// @return True for such a unit of that player.
+    [[nodiscard]] bool own_mobile_unit(uint16_t unit, uint8_t player) const noexcept;
+    /// Keeps the structure gift state, and adds it to the rule-state tables,
+    /// while sharing.structure-gift-rate-limit is on.
+    void keep_structure_gifts();
+    /// Hands over a batch of structures, each checked as end_share_gift says,
+    /// and remembers how many went across this tick.
+    ///
+    /// @param batch the structures
+    /// @return the structures handed over
+    uint16_t give_structure_batch(std::span<const StructureGift> batch);
+
     OfflineInputs input_;
     OfflineServices& services_;
+    // The unit types' and weapons' own rules (OfflineInputs::unit_type_rules,
+    // weapon_rules), copied so the match keeps them.
+    std::unique_ptr<data::match_rules::UnitTypeRules[]> unit_type_rules_;
+    size_t unit_type_rule_count_{};
+    std::unique_ptr<data::match_rules::WeaponTypeRules[]> weapon_rules_;
+    size_t weapon_rule_count_{};
+    // The heal remainders of repair.rate exact-remainder (repair_remainders).
+    std::unique_ptr<sim::unit_health::RepairRemainders[]> repair_remainders_;
+    size_t repair_remainder_count_{};
+    RuleState rule_state_{};
+    // orders.build-site-kickout's table (build_site_kickout_spots).
+    std::unique_ptr<std::array<uint16_t, 4>[]> build_site_kickout_spots_;
+    size_t build_site_kickout_spot_count_{};
+    // The shared wind generator of a mod's deterministic-wind rule, which
+    // its rule-state table "wind-generator" keeps; null under 3.1c's wind.
+    std::unique_ptr<sim::world_environment::WindGenerator> wind_generator_;
+    // The tick from which each place of each player's unit range may be
+    // taken again (units.id-reuse-delay; sim::unit_spawn::SpawnRules
+    // reuse_ticks); none without a delay.
+    std::unique_ptr<int32_t[]> slot_reuse_ticks_;
+    size_t slot_reuse_tick_count_{};
+    // Where each unit type's yards turned to east, north and west start in
+    // turned_yard_cells_, plus one, by type index; 0 for a type that faces
+    // only south. None without units.build-rotation.
+    std::unique_ptr<uint32_t[]> turned_yard_starts_;
+    size_t turned_yard_type_count_{};
+    // The turned yards, each type's three one after another, each as long as
+    // the type's own yard.
+    std::unique_ptr<uint8_t[]> turned_yard_cells_;
+    // Allied vision's rule state (add_allied_sight_state).
+    std::array<uint8_t, allied_sight_state_bytes> allied_sight_state_{};
+    // How the local view sees a replay that leaves the viewer no slot
+    // (set_slotless_viewer), and whether it shows a recorded player's view.
+    SlotlessViewer slotless_viewer_{SlotlessViewer::none};
+    bool slotless_view_switched_{};
+    // The structure gift state (sharing.structure-gift-rate-limit); null
+    // while the rule is off.
+    std::unique_ptr<StructureGiftState> structure_gifts_;
     SpeechHooks speech_hooks_{};
     // The shot apply_shot is placing, whose aim and target unit place_shot
     // reports to event_hooks.shot_placed in place of its own; place_shot
@@ -2794,6 +3316,8 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     sim::scenario::Outcome outcome_result_{sim::scenario::Outcome::ongoing};
     std::optional<sim::scenario::OutcomeView> outcome_view_;
     bool defeat_allowed_{};
+    bool host_stays_watching_{}; ///< set_host_stays_watching
+    CommanderPlacement commander_placement_{CommanderPlacement::none};
     bool campaign_outcomes_{};
     bool multiplayer_outcomes_{};
     // Set once end_local_game ended the local player's game: its outcome
@@ -2974,6 +3498,16 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// Returns the fields a unit whose type has none reads: a default FBI
     /// definition, runtime metadata and target masks, no movement class.
     static const RuntimeTypeFields& unresolved_fields() noexcept;
+    /// Keeps the shared wind generator of a mod's deterministic-wind rule and
+    /// its rule-state table; under 3.1c's wind it keeps neither.
+    ///
+    /// @param rule The rule.
+    void keep_wind_generator(const data::match_rules::EconomyDeterministicWind& rule);
+    /// Returns the shared wind generator's seed: the host's network id, or
+    /// the match's random seed without a host record; 0 once it is seeded.
+    ///
+    /// @return The seed.
+    [[nodiscard]] uint32_t shared_wind_seed() const;
     /// Notes a wind refresh that stopped on an error.
     ///
     /// @param result How the wind scheduler's run ended.

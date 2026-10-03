@@ -111,7 +111,9 @@ they are open; a multiplayer game keeps running.
   without Alt: a number key selects its group on its own.
 - **Gameplay:** Unit limit, 50 to 1500 units per player, from the next game.
   It starts at the unit limit your Total Annihilation installation sets, or
-  250. A saved game keeps the limit it was saved with.
+  250. A saved game keeps the limit it was saved with. Mod, from the next
+  start: None, the default, or one of the mod folders in the game folder's
+  mods folder.
 - **Graphics:** Maximum frame rate, 30 to 120 frames a second. Enhanced
   anti-aliasing, off or 2× to 16×: units are drawn at a higher resolution
   and scaled down for smoother edges; 8× and 16× need a fast CPU. Screen
@@ -120,9 +122,12 @@ they are open; a multiplayer game keeps running.
   screen to that size in full screen, and opens the window at that size.
   Hardware acceleration, Off, Basic or Full (Full by default): at Basic the
   graphics card scales the picture, only where it is able to and the
-  computer has at least 2 GB of memory; Full, where the card also draws the
-  battlefield, is not in this build yet, so choosing it draws Basic and the
-  status says so. A short test first draws known patterns on the card and
+  computer has at least 2 GB of memory; at Full the card also draws the
+  battlefield, and the view zooms out to a sixth. Where Full cannot run,
+  because the game cannot save its files, there is too little memory, the
+  card lacks a feature Full needs, or Full stopped in this run or failed
+  before on that driver, Basic draws instead, and a shared game or a replay
+  takes Full from the next game; the status says which. A short test first draws known patterns on the card and
   reads them back, and a card that draws them wrongly is not used. The game runs
   that test at start, and keeps beside its preferences file what it saw of
   each graphics driver: a driver that stopped the game, or failed, at two
@@ -141,9 +146,27 @@ they are open; a multiplayer game keeps running.
   whose graphics device each change would reset. The Graphics
   section is taller than the dialog and scrolls, with the mouse wheel, its
   scroll bar, Page Up, Page Down, Home and End.
-- **Developer:** Show performance statistics: frame and tick times over the
-  battlefield, and the renderer in use, as the `+stats` console command
-  shows them.
+- **Language & Text:** Language, a drop-down of System default, English,
+  Deutsch, Español, Français and Italiano: the game's own text and unit
+  names in that language, where its data has them; System default by
+  default, English with `--preferences-file`. Use modern fonts for game
+  text (on by default): modern fonts for in-game text, including
+  internationalization; off, game text keeps the game's own fonts. Text
+  size, 50% to 300% of the game fonts' sizes in steps of 10% (80% by
+  default), sizes the modern fonts and is locked while they are off. Font
+  outline (on by default), Font shadow (on by default) and Game text
+  background, a shaded box behind each line (off by default), shape the
+  modern text.
+- **Developer:** Enable Developer Mode (off by default) changes the
+  standard hacks of the mod being played, or of 3.1c without one, without
+  editing its profile ([docs/mods](docs/mods/README.md#developer-mode)). A
+  view hack changes at once; a sim hack from the next match. While it is
+  on, a network game's battle room is told so. Show performance
+  statistics: frame and tick times over the battlefield, and the renderer
+  in use, as the `+stats` console command shows them. Under both, the
+  section lists every hack, grouped by area, with its switch and a control
+  for each parameter, and Show Active Only and Restore profile values at
+  its foot.
 
 Pathfinding cycles and Unit limit cannot change during a game; in a
 multiplayer game the host's settings apply. Vertical sync keeps its value
@@ -167,6 +190,14 @@ starts at a screen size of 800×600 (640×480 when the desktop is smaller),
 with the maximum frame rate at 60 frames a second and Enhanced
 anti-aliasing off. Each can be changed in the settings, and **Restore
 defaults** puts these back.
+
+## Mods
+
+Open Annihilation plays mods as well as 3.1c: a mod describes how it differs
+from 3.1c in one `oamod.yaml` file, and the engine applies the standard
+hacks it names, with no code for any particular mod. See
+[Mod support](docs/mods/README.md) for installing and choosing a mod, the
+profile format and every standard hack.
 
 ## Playing the demo
 

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "oa/data/match_rules.hpp"
 #include "oa/sim/unit_spawn/legacy_views.hpp"
 #include <array>
 #include <cstdint>
@@ -32,9 +33,10 @@ struct AttackOrderHost {
     /// @return The first enabled slot, 0 or 1; otherwise the third slot's
     ///     enabled bit itself, 2 when set and 0 when no slot is enabled.
     virtual uint8_t selected_weapon() = 0;
-    /// Releases the target an order gave a weapon slot: an enabled slot
-    /// carrying the stand-down bit loses it and its target, and the slot is
-    /// free for the automatic target scan again.
+    /// Occupies a weapon slot for an order: an enabled slot that may pick
+    /// its own targets (OA_UNIT_WEAPON_RETALIATE) loses that bit and its
+    /// target, so it fires only at what an order gives it. reset_weapons
+    /// frees the slots again.
     ///
     /// @param slot Weapon slot 0..2, or 3 for all three.
     virtual void release_weapon_targets(uint32_t slot) = 0;
@@ -133,5 +135,20 @@ inline constexpr uint8_t wait_kind = 66;                // Wait
 }
 
 inline constexpr uint8_t vtol_seek_attack_kind = 62; // VTOL_SeekAttack
+
+/// Tells whether an aircraft type never breaks off to a repair pad, by
+/// air.no-repair-retreat-flag: with the flag cantbetransported, a type that
+/// sets it keeps attacking, patrolling or guarding below three quarters of its
+/// health; in 3.1c every aircraft breaks off.
+///
+/// @param rules the match's rules
+/// @param abilities the type's UnitDef.abilities
+/// @return true when the type never breaks off
+[[nodiscard]] inline bool
+never_retreats_to_repair(const data::match_rules::MatchRules& rules, uint32_t abilities) noexcept {
+    return rules.air.no_repair_retreat_flag.flag ==
+               data::match_rules::AirNoRepairRetreatFlagFlag::cantbetransported &&
+           (abilities & OA_UNIT_DEF_ABILITY_CANT_BE_TRANSPORTED) != 0;
+}
 
 } // namespace oa::sim::match_runtime

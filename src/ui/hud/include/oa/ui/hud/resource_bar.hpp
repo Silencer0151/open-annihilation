@@ -159,6 +159,21 @@ inline constexpr int32_t kReadoutConsumedColor = 12; // use and the share level 
 [[nodiscard]] RateText
 format_unit_rate(const Game& game, float amount, bool metal, bool produced) noexcept;
 
+/// Returns how many rows of the top panel's art are drawn above the battlefield.
+///
+/// Under ui.interface-fixes bar-clamp, art as tall as the battlefield's top
+/// edge or taller is cut to one row less than it, so that a frame of exactly
+/// that height loses its last row; otherwise the art is drawn whole.
+///
+/// @param frame_height the art's height in pixels
+/// @param battlefield_top the battlefield's top row
+/// @param clamp the bar-clamp fix is in force
+/// @return the rows drawn
+[[nodiscard]] constexpr int32_t
+top_panel_rows(int32_t frame_height, int32_t battlefield_top, bool clamp) noexcept {
+    return clamp && frame_height >= battlefield_top ? battlefield_top - 1 : frame_height;
+}
+
 /// Places the aspect-fitted minimap picture inside the square radar.
 ///
 /// @param map_width Map width (any unit, compared with the height).

@@ -7,6 +7,8 @@
 
 #include "oa/ui/hud/boundary.hpp"
 
+#include "oa/core/world.h"
+
 #include <cstddef>
 #include <cstdint>
 
@@ -38,6 +40,14 @@ inline constexpr const char* kSpecialOrdersSound = "specialorders";
 
 // Group order the STOP button gives at once.
 inline constexpr const char* kStopOrderTag = "STOP";
+
+/// Tells whether the unit the order panel shows is gone: Game.panel_unit_id
+/// names a slot that holds no unit type. While it is, an armed order is
+/// disarmed each frame (ui.interface-fixes cursor-reset).
+///
+/// @param world World holding the panel's unit
+/// @return true when the panel shows a unit whose slot is now empty
+[[nodiscard]] bool panel_unit_vanished(const World& world) noexcept;
 
 /// Reads the order the pointer gives.
 ///

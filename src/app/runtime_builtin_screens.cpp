@@ -4,6 +4,9 @@
 // Built-in frontend screens, dispatcher steps and the services table handed to
 // registered screen packages.
 #include "oa/app/runtime.hpp"
+#include "oa/app/view_rules.hpp"
+#include "oa/data/defs/layout.hpp"
+#include "oa/data/mod_profile.hpp"
 #include "engine_settings_state.hpp"
 #include "oa/app/hook_call.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
@@ -180,6 +183,7 @@ struct BuiltinScreens {
         auto& runtime = *static_cast<Runtime*>(host);
         oa::ui::campaign::FrontendHost campaign_host{};
         campaign_host.context = &runtime;
+        campaign_host.translate = Runtime::translation_hook;
         campaign_host.play_sound = dialog_sound;
         campaign_host.disc_present = [](void* context) {
             return static_cast<Runtime*>(context)->find_disc(menu::Disc::campaign) != 0;
@@ -276,6 +280,7 @@ struct BuiltinScreens {
         static ui::frontend::MainMenuChecks checks;
         ui::frontend::MainMenuHost menu{};
         menu.context = &runtime;
+        menu.translate = Runtime::translation_hook;
         menu.play_music = [](void* context, const char* sound) {
             static_cast<Runtime*>(context)->play_menu_voice(sound);
         };
@@ -308,9 +313,20 @@ struct BuiltinScreens {
         menu.movies_present = [](void* context) {
             return static_cast<Runtime*>(context)->offers_movies();
         };
-        menu.revision_named = [](void* context) {
-            return static_cast<Runtime*>(context)->assets_.file_size("gamedata/version.tdf") != 0;
-        };
+        // A mod shows its own version where the profile names one, whether
+        // or not its game data names a revision.
+        if (const auto* profile = runtime.options_.mod_profile.get();
+            profile != nullptr &&
+            profile->identity.display_version != oa::data::mod_profile::Identity{}.display_version)
+            menu.version_text = profile->identity.display_version.c_str();
+        else
+            menu.revision_named = [](void* context) {
+                return static_cast<Runtime*>(context)->assets_.file_size(
+                           oa::data::defs::data_path(
+                               oa::data::defs::DataDirectory::gamedata, "version.tdf"
+                           )
+                       ) != 0;
+            };
         static ui::frontend::Panel panel;
         ui::frontend::panel_load_layout(panel, runtime.resources_.layout);
         ui::frontend::main_menu_setup(panel, checks, menu);
@@ -400,7 +416,11 @@ struct BuiltinScreens {
     static void step_load_preferences(ScreenContext* ctx, void*) {
         auto& runtime = host(ctx);
         init::load_preferences(
-            runtime.state_, runtime.skirmish_settings_, runtime.preferences_, runtime
+            runtime.state_,
+            runtime.skirmish_settings_,
+            runtime.preferences_,
+            runtime,
+            view_rules::display_mode_setting(runtime.ui_rules())
         );
     }
 
@@ -436,6 +456,14 @@ void add_screen(ScreenRegistry* registry, const ScreenDesc& desc) {
     screen_register(registry, &desc);
 }
 
+/// A screen drawn from a GUI layout.
+///
+/// @param screen the screen
+/// @param name its name
+/// @param layout its layout's file name in the GUI directory, such as "single.gui"
+/// @param background its named background, or null
+/// @param sprites its own sprites
+/// @return the screen's description
 ScreenDesc gui_screen(
     Screen screen, const char* name, const char* layout, const char* background, const char* sprites
 ) {
@@ -456,15 +484,13 @@ void BuiltinScreens::register_all(ScreenRegistry* registry) {
     add_screen(registry, desc);
 
     desc = gui_screen(
-        Screen::single_player, "single_player", "guis/single.gui", "singlebg", "anims/single.gaf"
+        Screen::single_player, "single_player", "single.gui", "singlebg", "anims/single.gaf"
     );
     desc.enter = enter_single_player;
     add_screen(registry, desc);
 
     // SKIRMISH.GUI's setup asks for Skirmsetup4x itself.
-    desc = gui_screen(
-        Screen::skirmish, "skirmish", "guis/skirmish.gui", nullptr, "anims/skirmish.gaf"
-    );
+    desc = gui_screen(Screen::skirmish, "skirmish", "skirmish.gui", nullptr, "anims/skirmish.gaf");
     desc.enter = enter_skirmish;
     add_screen(registry, desc);
 
@@ -475,26 +501,20 @@ void BuiltinScreens::register_all(ScreenRegistry* registry) {
     add_screen(registry, desc);
 
     add_screen(
-        registry,
-        gui_screen(Screen::options, "options", "guis/startopt.gui", "options4x", kCommonGaf)
+        registry, gui_screen(Screen::options, "options", "startopt.gui", "options4x", kCommonGaf)
     );
-    add_screen(
-        registry, gui_screen(Screen::sound, "sound", "guis/sound.gui", "optsound4x", kCommonGaf)
-    );
-    desc = gui_screen(Screen::visuals, "visuals", "guis/visuals.gui", "optvisual4x", kCommonGaf);
+    add_screen(registry, gui_screen(Screen::sound, "sound", "sound.gui", "optsound4x", kCommonGaf));
+    desc = gui_screen(Screen::visuals, "visuals", "visuals.gui", "optvisual4x", kCommonGaf);
     desc.enter = enter_visuals;
     add_screen(registry, desc);
     add_screen(
-        registry,
-        gui_screen(Screen::speeds, "speeds", "guis/speeds.gui", "optinterface4x", kCommonGaf)
+        registry, gui_screen(Screen::speeds, "speeds", "speeds.gui", "optinterface4x", kCommonGaf)
     );
-    add_screen(
-        registry, gui_screen(Screen::music, "music", "guis/sound.gui", "optmusic4x", kCommonGaf)
-    );
+    add_screen(registry, gui_screen(Screen::music, "music", "sound.gui", "optmusic4x", kCommonGaf));
 
     // NEWGAME.GUI's setup asks for its background by mode and campaign count.
     desc = gui_screen(
-        Screen::new_campaign, "new_campaign", "guis/newgame.gui", nullptr, "anims/newgame.gaf"
+        Screen::new_campaign, "new_campaign", "newgame.gui", nullptr, "anims/newgame.gaf"
     );
     desc.enter = enter_new_game;
     add_screen(registry, desc);
@@ -502,16 +522,14 @@ void BuiltinScreens::register_all(ScreenRegistry* registry) {
     desc.name = "any_mission";
     add_screen(registry, desc);
 
-    desc =
-        gui_screen(Screen::load_game, "load_game", "guis/loadgame.gui", "dloadgame2", kCommonGaf);
+    desc = gui_screen(Screen::load_game, "load_game", "loadgame.gui", "dloadgame2", kCommonGaf);
     desc.background = load_game_background;
     desc.enter = enter_load_game;
     desc.leave = leave_load_game;
     add_screen(registry, desc);
 
-    desc = gui_screen(
-        Screen::campaign_end, "campaign_end", "guis/endmsn.gui", nullptr, "anims/endmsn.gaf"
-    );
+    desc =
+        gui_screen(Screen::campaign_end, "campaign_end", "endmsn.gui", nullptr, "anims/endmsn.gaf");
     desc.background = campaign_end_background;
     desc.enter = enter_campaign_end;
     desc.leave = leave_campaign_end;
@@ -522,7 +540,7 @@ void BuiltinScreens::register_all(ScreenRegistry* registry) {
     add_screen(
         registry,
         gui_screen(
-            Screen::map_selection, "map_selection", "guis/selmap.gui", nullptr, "anims/skirmish.gaf"
+            Screen::map_selection, "map_selection", "selmap.gui", nullptr, "anims/skirmish.gaf"
         )
     );
 
@@ -665,7 +683,7 @@ void Runtime::register_screens() {
     oa::ui::frontend_dialogs::dialogs_bind_host(
         {this,
          BuiltinScreens::dialog_sound,
-         nullptr,
+         translation_hook,
          BuiltinScreens::dialog_cd_check_click,
          BuiltinScreens::dialog_active_palette,
          BuiltinScreens::dialog_panel_below,

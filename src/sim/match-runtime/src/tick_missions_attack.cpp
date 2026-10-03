@@ -108,9 +108,20 @@ uint32_t TickHost::GroundMissions::attack_chase() {
             return ground::mission_done;
     }
     AttackAdapter weapons(host, s, record);
-    const auto engage = [&] {
-        weapons.release_weapon_targets(0);
-        weapons.release_weapon_targets(2);
+    // Before aiming the ordered slot, 3.1c occupies slots 0 and 2. Under
+    // orders.selective-weapon-occupy the stage it names occupies only the
+    // ordered slot, read as 2 for a slot past 1 and 0 otherwise, so slot 1
+    // is never occupied and an order for it occupies slot 0.
+    const auto engage = [&](bool first_stage) {
+        using Attack = data::match_rules::OrdersSelectiveWeaponOccupyAttack;
+        const auto occupy = rules().orders.selective_weapon_occupy.attack;
+        if (occupy == Attack::ordered_slot_both_stages ||
+            (first_stage && occupy == Attack::ordered_slot_first_stage)) {
+            weapons.release_weapon_targets(slot > 1 ? attack::special_weapon_slot : 0);
+        } else {
+            weapons.release_weapon_targets(0);
+            weapons.release_weapon_targets(2);
+        }
         weapons.assign_target(*aimed, slot);
     };
     const auto at_target = ground::position_of(aimed->record);
@@ -131,7 +142,7 @@ uint32_t TickHost::GroundMissions::attack_chase() {
             return ground::next_phase;
         if (!weapons.can_reach(*aimed, weapon))
             return ground::next_phase;
-        engage();
+        engage(true);
         order.wait_events = ground::attack_wait;
         return ground::keep_waiting;
     case 2: {
@@ -184,7 +195,7 @@ uint32_t TickHost::GroundMissions::attack_chase() {
             return ground::phase_chosen;
         }
         if (weapons.can_reach(*aimed, weapon)) {
-            engage();
+            engage(false);
             order.wait_events = ground::attack_in_range_wait;
         } else {
             weapons.reset_weapons();
@@ -214,7 +225,14 @@ uint32_t TickHost::GroundMissions::suppress() {
     case 1: {
         int32_t fired = 1;
         if (record.attack.weapon_slot == attack::special_weapon_slot) {
-            weapons.release_weapon_targets(attack::all_weapons);
+            // orders.selective-weapon-occupy suppress: slot-2 occupies the
+            // third slot alone, leaving the others to pick their own targets.
+            using Suppress = data::match_rules::OrdersSelectiveWeaponOccupySuppress;
+            weapons.release_weapon_targets(
+                rules().orders.selective_weapon_occupy.suppress == Suppress::slot_2
+                    ? attack::special_weapon_slot
+                    : attack::all_weapons
+            );
             fired = attack::special_weapon_slot;
         } else {
             weapons.release_weapon_targets(0);
@@ -334,6 +352,37 @@ uint32_t TickHost::GroundMissions::follow() {
                 return ground::retry_later;
             }
         }
+    }
+    // orders.con-patrol-guard-options: a stay or scatter choice rewrites the
+    // whole parts of the offset's x and z (their fractions stay) to 7/20 of
+    // the spacing or the whole spacing, each signed toward the side of the
+    // guarded unit the guard stands on. Every guarding ground unit takes it,
+    // builder or not, and the order keeps the rewritten offset.
+    if (const auto choice = guard_choice(); choice != ground::guard_base) {
+        const auto whole = static_cast<uint32_t>(spacing);
+        const auto distance =
+            static_cast<uint16_t>(choice == ground::guard_stay ? whole * 7u / 20u : whole);
+        const auto side = [](int32_t guard, int32_t guarded) {
+            return static_cast<int32_t>(static_cast<uint16_t>(static_cast<uint32_t>(guard) >> 16)) -
+                   static_cast<int32_t>(
+                       static_cast<uint16_t>(static_cast<uint32_t>(guarded) >> 16)
+                   );
+        };
+        const auto signed_distance = [&](int32_t toward) {
+            return toward < 0 ? static_cast<uint16_t>(0u - distance) : distance;
+        };
+        auto& rewritten = record.extra.destination;
+        const auto with_whole = [](int32_t value, uint16_t whole_part) {
+            return static_cast<int32_t>(
+                (static_cast<uint32_t>(value) & 0xffffu) | (static_cast<uint32_t>(whole_part) << 16)
+            );
+        };
+        rewritten[0] = with_whole(
+            rewritten[0], signed_distance(side(s.record.position.x, guarded->record.position.x))
+        );
+        rewritten[2] = with_whole(
+            rewritten[2], signed_distance(side(s.record.position.z, guarded->record.position.z))
+        );
     }
     const auto& offset = record.extra.destination;
     const sim::ground_orders::Point beside{

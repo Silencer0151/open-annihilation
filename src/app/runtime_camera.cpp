@@ -47,8 +47,15 @@ std::optional<oa::sim::ground_orders::Point> Runtime::radar_world_point(float x,
         return std::nullopt;
     const auto rx = static_cast<int>(x) - radar_picture_.x;
     const auto ry = static_cast<int>(y) - radar_picture_.y;
-    const auto map_x = rx * radar_map_w_ / radar_picture_.width;
-    const auto map_z = ry * radar_map_h_ / radar_picture_.height;
+    return map_world_point(
+        rx * radar_map_w_ / radar_picture_.width, ry * radar_map_h_ / radar_picture_.height
+    );
+}
+
+std::optional<oa::sim::ground_orders::Point>
+Runtime::map_world_point(int32_t map_x, int32_t map_z) {
+    if (!selected_tnt_)
+        return std::nullopt;
     const oa::sim::unit_movement::Terrain terrain(*selected_tnt_);
     const auto target = oa::sim::gameplay_input::terrain_intersection(
         terrain,
@@ -101,11 +108,18 @@ void Runtime::bind_match_view() {
 }
 
 bool Runtime::issue_radar_orders(float x, float y) {
-    namespace input = oa::sim::gameplay_input;
     if (!match_ || selected_match_unit_ == 0)
         return false;
     const auto world = radar_world_point(x, y);
-    const auto target = pick_radar_unit(x, y);
+    return issue_map_orders(world, pick_radar_unit(x, y));
+}
+
+bool Runtime::issue_map_orders(
+    const std::optional<oa::sim::ground_orders::Point>& world, uint16_t target
+) {
+    namespace input = oa::sim::gameplay_input;
+    if (!match_ || selected_match_unit_ == 0)
+        return false;
     auto& slots = match_->world().slots;
     const auto enemy = target != 0 && slots[target].unit != nullptr &&
                                slots[target].owner_index != match_local_player_

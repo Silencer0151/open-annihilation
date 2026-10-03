@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // The console's network and service commands: the options NetStats, Drop,
-// Compression, BPS, Page and P, and the developer command Senderror.
+// Compression, BPS, Page, P and Vote, the developer command Senderror and,
+// while a mod profile deals teams, autoteam.
 // register_console_commands is a ConsoleHost::extend; the host's
 // extension_context must be the CommandHost, which the handlers find again
 // through the dispatching console's ConsoleHost.
@@ -10,6 +11,7 @@
 
 #include "oa/ui/console/console.hpp"
 
+#include <cstddef>
 #include <cstdint>
 
 namespace oa::netgame::console {
@@ -22,6 +24,14 @@ struct CommandHost {
     // Whether a launch is active; Page sends only then. Null answers false.
     bool (*launch_active)(void* context){};
     void (*send_page)(void* context, const char* user, const char* text){};
+    /// Deals teams by start position ("autoteam [N]", while a mod profile
+    /// turns teams.team-number-alliances on): `argument` is the command's
+    /// first argument, empty for none, and the outcome's line is written to
+    /// `notice`. Null leaves "autoteam" unregistered.
+    void (*deal_teams)(void* context, const char* argument, char* notice, std::size_t capacity){};
+    /// Answers the open vote to reject a player (network.vote-reject): yes or no.
+    /// Null, or false back, says no vote is open.
+    bool (*cast_vote)(void* context, bool yes){};
 };
 
 /// Resets the traffic statistics, as every console setup does, and registers the commands in console->commands.
@@ -29,7 +39,8 @@ struct CommandHost {
 /// @param extension_context The CommandHost (ConsoleHost::extension_context); null
 ///                          skips the reset.
 /// @param[in,out] console Console whose command table gains NetStats, Drop,
-///                        Compression, BPS, Page, P and Senderror.
+///                        Compression, BPS, Page, P, Vote and Senderror, and
+///                        autoteam when the host deals teams.
 void register_console_commands(void* extension_context, oa::ui::console::Console* console) noexcept;
 
 /// Validates and sends a page from a whole "page <user> <text>" line.

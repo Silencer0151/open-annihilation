@@ -8,7 +8,7 @@ add_library(oa::ui::frontend ALIAS oa-ui-frontend)
 target_link_libraries(oa-ui-frontend PRIVATE oa-base-text oa-base-game-math)
 target_include_directories(oa-ui-frontend PUBLIC include)
 target_link_libraries(oa-ui-frontend PUBLIC oa-ui-frontend-state oa-ui-gui-layout oa-present
-  oa-present-world-renderer oa-ui-campaign oa-data-campaign PRIVATE oa-data-persist oa-options
+  oa-present-world-renderer oa-ui-campaign oa-data-campaign oa-data-match-rules PRIVATE oa-data-persist oa-options
   oa-ui-gui-input)
 target_compile_features(oa-ui-frontend PUBLIC cxx_std_20)
 

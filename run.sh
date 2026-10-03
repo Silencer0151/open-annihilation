@@ -149,6 +149,12 @@ if [[ ! -f "$sdl_prefix/lib/cmake/SDL3/SDL3Config.cmake" ]]; then
     printf 'Building the pinned SDL dependency under local/deps...\n'
     python3 "$repo_dir/tools/bootstrap_sdl.py"
 fi
+# FreeType and the fonts text outside the game's own fonts is drawn with.
+freetype_prefixes=("$repo_dir"/local/deps/freetype-install-*/lib/cmake/freetype/freetype-config.cmake)
+if [[ ! -f "$repo_dir/local/deps/text-fonts/build-settings.json" || ! -f "${freetype_prefixes[0]}" ]]; then
+    printf 'Building the pinned FreeType and text fonts under local/deps...\n'
+    python3 "$repo_dir/tools/bootstrap_text_fonts.py"
+fi
 prefix_path="$sdl_prefix"
 if [[ -n "${CMAKE_PREFIX_PATH:-}" ]]; then prefix_path="$prefix_path;$CMAKE_PREFIX_PATH"; fi
 printf 'Building current native code in %s...\n' "$build_dir"

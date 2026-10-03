@@ -632,7 +632,8 @@ struct RuntimeExtension {
         // last frame is due, by an amount only the replay tells.
         info.expected_end_tick = 0;
         info.duration_ms = demo::demo_duration_ms(session.playback);
-        info.viewer_player = session.watcher_slot;
+        // A viewer with no slot of its own looks through the first recorded player's.
+        info.viewer_player = session.watcher_slot < OA_PLAYER_COUNT ? session.watcher_slot : 0;
         info.player_count = static_cast<uint8_t>(session.playback.demo.players.size());
         info.content_differs = play.demo_unit_table_differs_;
         // Filled by position: ReplayHooks::step shares its name with a
@@ -868,14 +869,18 @@ struct RuntimeExtension {
     /// @param context Extension context (unused).
     /// @param runtime The running app.
     /// @param stage pump follows the game into its close handler (and runs
-    ///              --check-host-not-found's part of the frame), then runs
-    ///              the network match's frame; after_pump applies the demo's
-    ///              recorded speed.
+    ///              --check-host-not-found's part of the frame), binds the
+    ///              profile's rules again once Developer Mode changes them,
+    ///              then runs the network match's frame; after_pump applies
+    ///              the demo's recorded speed.
     static void frame(void* /*context*/, Runtime& runtime, FrameStage stage) {
         if (stage == FrameStage::pump) {
             observe_close_handlers(runtime);
             if (net_options().check_host_not_found)
                 host_not_found_frame();
+            // The rules Developer Mode lays over the profile reach the
+            // multiplayer screens and the session.
+            NetworkPlay::of(runtime).follow_profile_rules();
             NetworkPlay::of(runtime).net_frame();
         } else {
             NetworkPlay::of(runtime).demo_frame();
@@ -1070,8 +1075,7 @@ struct RuntimeExtension {
         auto* state = net_of(runtime);
         if (state == nullptr || !state->active || state->loading)
             return;
-        oa::netgame::match::net_match_set_pause(state->net.get(), paused);
-        state->pause_seen = paused;
+        NetworkPlay::of(runtime).net_pause_key(paused);
     }
 
     /// Shares a speed the local player set with the other players (Extension::speed_changed).

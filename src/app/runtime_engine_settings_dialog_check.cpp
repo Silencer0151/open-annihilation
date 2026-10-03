@@ -5,8 +5,10 @@
 // driven through the SDL presenter's pointer and keys (every section, each
 // setting changed and in effect at once, Vertical sync read back from the
 // renderer, OK, Cancel and Restore defaults and the preferences they
-// leave), and the main menu with its OA button and the dialog as the window
-// shows them at several sizes, the Graphics section at its top and its end.
+// leave, Developer Mode's overrides in effect and kept), and the main menu
+// with its OA button and the dialog as the window shows them at several
+// sizes, the Graphics section at its top and its end, and the Developer
+// section with an area of Developer Mode's list open, off and on.
 
 #include "check_host_input.hpp"
 #include "engine_settings_menu_host.hpp"
@@ -15,6 +17,7 @@
 
 #include "oa/app/acceleration_status.hpp"
 #include "oa/app/runtime.hpp"
+#include "oa/data/mod_profile/overrides.hpp"
 #include "oa/platform/preferences.hpp"
 #include "oa/ui/engine_settings/dialog.hpp"
 #include "oa/ui/frontend_renderer/artless.hpp"
@@ -107,20 +110,74 @@ std::string_view page_slug(settings::Page page) {
         return "gameplay";
     case settings::Page::graphics:
         return "graphics";
+    case settings::Page::language_text:
+        return "text";
     case settings::Page::developer:
         return "developer";
+    case settings::Page::mod_keys:
+    case settings::Page::mod_patrol:
+    case settings::Page::mod_guard:
+    case settings::Page::mod_tools:
+    case settings::Page::mod_chat:
+        return "mod";
     }
     return "page";
 }
 
 /// The dialog's sections, in the order its list shows them.
-constexpr std::array<settings::Page, 5> kPages{
+constexpr std::array<settings::Page, 6> kPages{
     settings::Page::path_search,
     settings::Page::controls,
     settings::Page::gameplay,
     settings::Page::graphics,
+    settings::Page::language_text,
     settings::Page::developer,
 };
+
+/// The first area of Developer Mode's list, which the check opens.
+constexpr std::string_view kFirstArea = "AI";
+/// The area of the display (view-scope) hacks, as the list names it.
+constexpr std::string_view kDisplayArea = "Interface";
+/// A rule (sim-scope) hack of the first area, ai.attack-wave-size, as the
+/// list names it; the check turns it on.
+constexpr std::string_view kRuleHack = "Attack Wave Size";
+/// The first area's first hack, which the snapshots show open and on.
+constexpr std::string_view kShownHack = kRuleHack;
+/// A display (view-scope) hack, ui.whiteboard, as the list names it; the
+/// check turns it on.
+constexpr std::string_view kDisplayHack = "Whiteboard";
+
+/// Returns Show Active Only's label for a count of hacks that are on.
+///
+/// @param active the hacks that are on
+/// @return "Show Active Only (X/Y)" with every standard hack as Y
+std::string active_only_label(std::size_t active) {
+    return "Show Active Only (" + std::to_string(active) + "/" +
+           std::to_string(oa::data::mod_profile::standard_hacks().size()) + ")";
+}
+
+/// Finds the part of a hack's switch, Off or On, on the hack's own line.
+///
+/// @param parts the dialog's layout
+/// @param hack the hack's title, as its header shows it
+/// @param caption "OFF" or "ON"
+/// @return the switch's half; nullptr when the hack does not show
+const settings::LayoutPart* hack_switch(
+    const std::vector<settings::LayoutPart>& parts, std::string_view hack, std::string_view caption
+) {
+    const settings::LayoutPart* header = nullptr;
+    for (const auto& part : parts)
+        if (part.text == hack)
+            header = &part;
+    if (header == nullptr)
+        return nullptr;
+    // The switch's halves lie one row under the header's label line's top.
+    for (const auto& part : parts)
+        if (part.text == caption && part.rect.y == header->rect.y + 1 &&
+            part.rect.x > header->rect.x + header->rect.width)
+            return &part;
+    return nullptr;
+}
 
 /// Returns the label a setting's row shows.
 ///
@@ -144,14 +201,31 @@ std::string_view label_of(settings::Setting setting) {
         return "Enhanced anti-aliasing";
     case settings::Setting::screen_size:
         return "Screen size";
+    case settings::Setting::developer_mode:
+        return "Enable Developer Mode";
     case settings::Setting::frame_stats:
         return "Show performance statistics";
     case settings::Setting::hardware_acceleration:
         return "Hardware acceleration";
     case settings::Setting::vertical_sync:
         return "Vertical sync";
+    case settings::Setting::modern_fonts:
+        return "Use modern fonts for game text";
+    case settings::Setting::text_outline:
+        return "Font outline";
+    case settings::Setting::text_shadow:
+        return "Font shadow";
+    case settings::Setting::text_background:
+        return "Game text background";
+    case settings::Setting::text_size:
+        return "Text size";
+    case settings::Setting::language:
+        return "Language";
+    case settings::Setting::mod:
+        return "Mod";
+    default:
+        return {};
     }
-    return {};
 }
 
 /// Tells whether the renderer waits for the display, as SDL reports it.
@@ -607,8 +681,70 @@ void Runtime::check_engine_settings_dialog() {
         );
     }
 
+    // The text drawing reads the Language & Text section at once. Text size
+    // waits for the modern fonts, Off with a named preferences file: locked,
+    // it says so; with them On, Right raises it a stop.
+    click(settings::page_control(settings::Page::language_text), {}, "Language & Text's entry");
+    require(
+        !chosen.modern_fonts &&
+            shows_text(settings::dialog_layout(*engine_settings_dialog()), "Needs modern fonts"),
+        "Text size is not locked while the modern fonts are Off"
+    );
+    // The Language drop-down: a click on its field opens its list, a click
+    // on an item chooses the language at once, and Left steps it back.
+    require(
+        chosen.language == "en" && game_language() != nullptr &&
+            std::string_view(game_language()) == "English",
+        "a named preferences file does not play in English"
+    );
+    click(settings::first_row_control, "English", "Language's field");
+    require(
+        engine_settings_dialog()->open_list == settings::first_row_control,
+        "a click on Language's field did not open its list"
+    );
+    click(settings::no_control, "Deutsch", "Language's Deutsch");
+    chosen.language = "de";
+    expect("Language Deutsch");
+    require(
+        shown_language().tag == "de" && game_language() != nullptr &&
+            std::string_view(game_language()) == "German" &&
+            engine_settings_dialog()->open_list == settings::no_control,
+        "Language Deutsch did not put German in effect at once"
+    );
+    focus(settings::first_row_control, "Language");
+    tap(SDLK_LEFT);
+    chosen.language = "en";
+    expect("Language English");
+    require(shown_language().tag == "en", "Language English did not put English back");
+    click(settings::first_row_control + 1, "ON", "Use modern fonts for game text's On");
+    chosen.modern_fonts = true;
+    expect("Use modern fonts for game text On");
+    require(
+        !shows_text(settings::dialog_layout(*engine_settings_dialog()), "Needs modern fonts"),
+        "Text size stayed locked with the modern fonts On"
+    );
+    focus(settings::first_row_control + 2, "Text size");
+    tap(SDLK_RIGHT);
+    chosen.text_size = settings::default_text_size + settings::text_size_step;
+    expect("Text size a stop up");
+    require(
+        text_style().size == chosen.text_size &&
+            shows_text(settings::dialog_layout(*engine_settings_dialog()), "90%"),
+        "Text size a stop up did not reach the text style"
+    );
+    // Font shadow lies under the view's edge: the focus brings it in.
+    focus(settings::first_row_control + 4, "Font shadow");
+    tap(SDLK_LEFT);
+    chosen.text_shadow = false;
+    expect("Font shadow Off");
+    require(
+        text_style() == settings::text_style(chosen) && !text_style().shadow &&
+            text_style().outline,
+        "Font shadow Off did not reach the text style"
+    );
+
     click(settings::page_control(settings::Page::developer), {}, "Developer's entry");
-    click(settings::first_row_control, "ON", "Show performance statistics' On");
+    click(settings::first_row_control + 1, "ON", "Show performance statistics' On");
     chosen.frame_stats = true;
     expect("Show performance statistics On");
     require(frame_stats_shown_, "Show performance statistics did not show the statistics");
@@ -629,6 +765,9 @@ void Runtime::check_engine_settings_dialog() {
         {std::string(settings::key::anti_aliasing),
          std::to_string(static_cast<int>(kChosenAntiAliasing))},
         {std::string(settings::key::frame_stats), "1"},
+        {std::string(settings::key::modern_fonts), "1"},
+        {std::string(settings::key::text_shadow), "0"},
+        {std::string(settings::key::text_size), std::to_string(chosen.text_size)},
     };
     if (vertical_sync)
         expected_keys.emplace(std::string(settings::key::vertical_sync), "1");
@@ -642,7 +781,7 @@ void Runtime::check_engine_settings_dialog() {
     );
 
     // Cancel (its button) puts back what the dialog opened with and saves nothing.
-    click(settings::first_row_control, "OFF", "Show performance statistics' Off");
+    click(settings::first_row_control + 1, "OFF", "Show performance statistics' Off");
     click(settings::page_control(settings::Page::controls), {}, "Controls & Input's entry");
     click(settings::first_row_control, "ON", "Mouse wheel zoom's On");
     require(
@@ -691,11 +830,126 @@ void Runtime::check_engine_settings_dialog() {
     require(engine_keys(restored).empty(), "Restore defaults and OK left settings in the file");
     require(!renderer_waits(sdl_.renderer), "Restore defaults and OK left the renderer waiting");
     require(saved_general_number("SwitchAlt") == 0, "Restore defaults did not save SwitchAlt off");
+
+    // Developer Mode: off, its list shows the profile and takes no change;
+    // on, an override of a rule (sim-scope) hack plays at once with no
+    // match running and one of a display (view-scope) hack shows at once;
+    // OK keeps them under the base game's id, Restore profile values clears
+    // them, and Off plays the profile as it ships.
+    {
+        namespace profiles = oa::data::mod_profile;
+        const std::string overrides_key =
+            std::string(settings::key::hack_overrides) + std::string(profiles::base_game_id);
+        const std::string mode_key{settings::key::developer_mode};
+        const auto parts_now = [&] { return settings::dialog_layout(*engine_settings_dialog()); };
+        // Clicks the middle of a part with a text, whatever its control.
+        const auto click_text = [&](std::string_view text, std::string_view what) {
+            const auto parts = parts_now();
+            const settings::LayoutPart* found = nullptr;
+            for (const auto& part : parts)
+                if (part.text == text)
+                    found = &part;
+            require(found != nullptr, "Developer Mode shows no " + std::string(what));
+            click_at(found->rect.x + found->rect.width / 2, found->rect.y + found->rect.height / 2);
+        };
+        const auto click_hack = [&](std::string_view hack, std::string_view caption) {
+            const auto parts = parts_now();
+            const auto* half = hack_switch(parts, hack, caption);
+            require(half != nullptr, "Developer Mode shows no switch of " + std::string(hack));
+            click_at(half->rect.x + half->rect.width / 2, half->rect.y + half->rect.height / 2);
+        };
+        // Scrolls the list a page at a time until it shows a text.
+        const auto reveal = [&](std::string_view text) {
+            tap(SDLK_HOME);
+            for (int32_t pages = 0; pages < 32; ++pages) {
+                if (shows_text(parts_now(), text))
+                    return true;
+                tap(SDLK_PAGEDOWN);
+            }
+            return shows_text(parts_now(), text);
+        };
+        dialog = open("for Developer Mode");
+        click(settings::page_control(settings::Page::developer), {}, "Developer's entry");
+        dialog = engine_settings_dialog();
+        require(dialog->page == settings::Page::developer, "Developer did not show");
+        auto parts = parts_now();
+        require(
+            shows_text(parts, "Enable Developer Mode") &&
+                shows_text(parts, "Show performance statistics") &&
+                shows_text(parts, active_only_label(0)),
+            "Developer does not show its switches with no hack on"
+        );
+        require(!shows_text(parts, kRuleHack), "an area of Developer Mode starts open");
+        click_text(kFirstArea, "first area");
+        require(reveal(kRuleHack), "a click on an area did not open it");
+        click_hack(kRuleHack, "ON");
+        require(
+            engine_settings_dialog()->chosen.hack_overrides.empty() && mod_profile() == nullptr,
+            "a hack's switch took a change while Developer Mode was off"
+        );
+        click(settings::developer_mode_control, "ON", "Enable Developer Mode's On");
+        require(developer_mode(), "Enable Developer Mode did not turn it on at once");
+        click_hack(kRuleHack, "ON");
+        const auto* rules = mod_profile();
+        require(
+            rules != nullptr && rules->rules.ai.attack_wave_size.enabled &&
+                shows_text(parts_now(), active_only_label(1)),
+            "a rule hack turned on did not play at once with no match running"
+        );
+        require(reveal(kDisplayArea), "Developer Mode does not list the display area");
+        click_text(kDisplayArea, "display area");
+        require(reveal(kDisplayHack), "the display area did not open");
+        click_hack(kDisplayHack, "ON");
+        require(
+            ui_rules().whiteboard.enabled &&
+                engine_settings_dialog()->chosen.hack_overrides.size() == 2,
+            "a display hack turned on did not show at once"
+        );
+        click(settings::ok_control, "OK", "OK");
+        const auto kept = oa::platform::preferences::load(preference_path_);
+        require(
+            kept.contains(mode_key) && kept.at(mode_key) == "1" && kept.contains(overrides_key) &&
+                profiles::read_overrides(kept.at(overrides_key)).size() == 2,
+            "OK did not keep Developer Mode and its overrides under the base game's id"
+        );
+        dialog = open("for Restore profile values");
+        require(dialog->page == settings::Page::developer, "the dialog did not open on Developer");
+        click(
+            settings::restore_profile_control, "RESTORE PROFILE VALUES", "Restore profile values"
+        );
+        require(
+            engine_settings_dialog()->chosen.hack_overrides.empty() && mod_profile() == nullptr &&
+                !ui_rules().whiteboard.enabled,
+            "Restore profile values did not put the profile's values back at once"
+        );
+        click(settings::developer_mode_control, "OFF", "Enable Developer Mode's Off");
+        require(!developer_mode(), "Enable Developer Mode did not turn it off at once");
+        click(settings::ok_control, "OK", "OK");
+        const auto cleared = oa::platform::preferences::load(preference_path_);
+        require(
+            !cleared.contains(overrides_key) && cleared.contains(mode_key) &&
+                cleared.at(mode_key) == "0",
+            "Restore profile values and Off did not leave the overrides out of the file"
+        );
+        // Restore defaults and OK leave no key of the settings behind, and the
+        // list opens closed again.
+        dialog = open("after Developer Mode");
+        click(settings::restore_control, "RESTORE DEFAULTS", "Restore defaults");
+        tap(SDLK_RETURN);
+        require(
+            engine_keys(oa::platform::preferences::load(preference_path_)).empty() &&
+                engine_settings() == defaults,
+            "Restore defaults and OK after Developer Mode left settings in the file"
+        );
+        engine_settings_state().last_developer_list.reset();
+        engine_settings_state().last_page = settings::Page::path_search;
+    }
     rest();
     host.latched_key = 0;
     fake_frontend_tick_ = previous_tick;
     std::cout << "engine settings check: every section, each setting through the dialog's "
-                 "pointer and keys, OK, Cancel and Restore defaults, and the keys they save\n";
+                 "pointer and keys, OK, Cancel and Restore defaults, the keys they save, and "
+                 "Developer Mode's overrides in effect and kept\n";
 }
 
 void Runtime::check_engine_settings_window_sizes() {
@@ -818,6 +1072,63 @@ void Runtime::check_engine_settings_window_sizes() {
                     ": " + std::to_string(shown) + " pixels differ"
             );
             snapshot("menu-dialog-" + std::string(page_slug(page)) + '-' + size);
+            if (page == settings::Page::developer && width == kWindowSizes.front().first) {
+                // Developer with the first area of Developer Mode's list
+                // open, off and then on, and with a rule hack of it open and
+                // on, as the window shows them; then closed and off again as
+                // it was.
+                // Clicks the middle of a part, in the picture's pixels.
+                const auto click_part = [&](const settings::LayoutPart* part,
+                                            std::string_view what) {
+                    require(part != nullptr, "Developer Mode shows no " + std::string(what) + on);
+                    click(
+                        {placement.x + part->rect.x + part->rect.width / 2,
+                         placement.y + part->rect.y + part->rect.height / 2}
+                    );
+                };
+                // Clicks the part that shows a text.
+                const auto click_text = [&](std::string_view text) {
+                    const auto parts = settings::dialog_layout(*engine_settings_dialog());
+                    const settings::LayoutPart* found = nullptr;
+                    for (const auto& part : parts)
+                        if (part.text == text)
+                            found = &part;
+                    click_part(found, text);
+                };
+                const auto shows_as_picture = [&](std::string_view what) {
+                    point(SDL_EVENT_MOUSE_MOTION, kRestingPointer);
+                    present(presented, picture);
+                    const auto differing = letterbox_differences(
+                        presented, picture, area, window_width, kRestingPointer
+                    );
+                    require(
+                        differing == 0,
+                        "the window does not show Developer Mode " + std::string(what) + on + ": " +
+                            std::to_string(differing) + " pixels differ"
+                    );
+                };
+                click_text(kFirstArea);
+                shows_as_picture("with an area open");
+                snapshot("menu-dialog-developer-area-" + size);
+                {
+                    const auto parts = settings::dialog_layout(*engine_settings_dialog());
+                    click_part(
+                        find_part(parts, settings::developer_mode_control, "ON"),
+                        "Enable Developer Mode's On"
+                    );
+                }
+                shows_as_picture("on");
+                snapshot("menu-dialog-developer-on-" + size);
+                click_text(kShownHack);
+                {
+                    const auto parts = settings::dialog_layout(*engine_settings_dialog());
+                    click_part(hack_switch(parts, kShownHack, "ON"), "rule hack's switch");
+                }
+                shows_as_picture("with a rule hack open and on");
+                snapshot("menu-dialog-developer-hack-" + size);
+                click_text(kShownHack);
+                click_text(kFirstArea);
+            }
             if (page != settings::Page::graphics)
                 continue;
             // Graphics scrolls: at its end too, as the window shows the picture.

@@ -10,7 +10,10 @@
 // lines and selection lines from the sprite pages, and the model stage
 // (runtime_full_models.cpp), the list's units, 3D features, projectiles,
 // debris and shatter fragments as meshes, with their shadows drawn into a
-// transparent shadow target and composed once at half darkness. The
+// transparent shadow target and composed once at half darkness, lighter as
+// the view zooms out and not at all from a quarter out (the list's
+// shadow_level, shadow_fade.hpp); a feature's shadow frame on the sprite
+// stage fades the same way. The
 // terrain stage is full_terrain.hpp and the fog passes are full_fog.hpp,
 // both pure. The branch walks the list once and hands each draw to the
 // stage of its kind, so that sprites and models keep the painter's order
@@ -326,7 +329,13 @@ struct ModelFrameInputs {
     /// of a lit building their colours. Null draws them unlit.
     const oa::present::model::ModelDisplay* display{};
     uint16_t graphics_flags{}; ///< Game.graphics_flags: shadows, vehicle shadows and shading
-    uint32_t tick{};           ///< the match's tick, which the nanoframe's colours cycle by
+    /// The tick of the build effect's pulse, which the nanoframe's colours
+    /// cycle by: the match's tick less ModelRenderer::build_pulse_lag.
+    uint32_t build_pulse_tick{};
+    /// An unfinished mobile unit is drawn as an unfinished building is,
+    /// its nanoframe over every piece (ModelRenderer::moving_pieces_once_built);
+    /// false draws its pieces whole with the running frames, as 3.1c does.
+    bool moving_pieces_once_built{};
     /// Each player's colour, by player index (ModelRenderer::team_colors).
     std::array<uint8_t, team_colour_players> team_colors{};
     /// The shaded builder's light direction and the scale of its dot product.
@@ -399,8 +408,10 @@ class ModelStage {
     /// target, cleared first, then one resolve that composes the target over
     /// the battlefield at half darkness. Where the target cannot be made,
     /// each shadow is drawn straight into the battlefield at half darkness
-    /// in list order. This function is the extension point a later
-    /// "better shadows" option replaces.
+    /// in list order. Below the list's full shadow level the darkness is
+    /// that much of a half; at level 0 nothing is emitted, the target
+    /// neither cleared nor composed. This function is the extension point a
+    /// later "better shadows" option replaces.
     ///
     /// @param inputs the frame's list and state
     /// @param view the frame's view

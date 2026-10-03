@@ -290,6 +290,31 @@ void preferences() {
             std::find(custom.calls.begin(), custom.calls.end(), "cd:88") != custom.calls.end(),
         "volume restore"
     );
+    // A mod's display rules that keep only tall modes: 1024 by 768 when not
+    // stored, and a smaller stored width or height raised, each on its own.
+    {
+        SettingsHost fresh;
+        init::load_preferences(state, settings, p, fresh, init::tall_display_mode_setting);
+        require(p.display_width == 1024 && p.display_height == 768, "tall display default");
+        require(
+            fresh.written.at(SettingsHost::key(init::general_section, "DisplaymodeWidth")) == 1024,
+            "the tall default is written back"
+        );
+        SettingsHost small;
+        small.number("DisplaymodeWidth", 800);
+        small.number("DisplaymodeHeight", 1024);
+        init::load_preferences(state, settings, p, small, init::tall_display_mode_setting);
+        require(p.display_width == 1024 && p.display_height == 1024, "a narrow width is raised");
+        require(
+            !small.written.contains(SettingsHost::key(init::general_section, "DisplaymodeWidth")),
+            "the raised width is not written back"
+        );
+        SettingsHost kept;
+        kept.number("DisplaymodeWidth", 320);
+        kept.number("DisplaymodeHeight", 200);
+        init::load_preferences(state, settings, p, kept);
+        require(p.display_width == 320 && p.display_height == 200, "3.1c keeps a small mode");
+    }
     for (auto count : {12U, 0xffffffffU}) {
         SettingsHost bad;
         bad.number("NumSkirmishPlayers", count);

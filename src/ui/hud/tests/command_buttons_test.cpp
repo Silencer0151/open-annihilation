@@ -96,9 +96,28 @@ void other_names() {
     CHECK(armed_order_of(*game) == armed_order::patrol && heard.sounds.empty());
 }
 
+// ui.interface-fixes cursor-reset: the panel's unit counts as gone once its
+// slot holds no type.
+void vanished_panel_unit() {
+    auto* world = world_create();
+    const WorldCapacity capacity{8, 2, 0};
+    CHECK(world != nullptr && world_alloc_tables(world, &capacity) != 0);
+    Game& game = world->game;
+    CHECK(!panel_unit_vanished(*world)); // no panel unit
+    game.panel_unit_id = 3;
+    world->units[3].type_index = 2;
+    CHECK(!panel_unit_vanished(*world));
+    world->units[3].type_index = 0;
+    CHECK(panel_unit_vanished(*world));
+    game.panel_unit_id = 200; // past the table
+    CHECK(!panel_unit_vanished(*world));
+    world_destroy(world);
+}
+
 } // namespace
 
 int main() {
+    vanished_panel_unit();
     lit_and_unlit();
     stop_gives_stop();
     other_names();

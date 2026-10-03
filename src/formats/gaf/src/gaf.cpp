@@ -303,14 +303,18 @@ class Parser {
             return true;
         }
 
+        // Only kept pixels count towards the decoded total: a checked frame
+        // reuses the parser's own buffers.
         constexpr std::size_t decoded_bytes_per_pixel = 2;
-        if (pixel_count >
-            (limit::total_decoded_bytes - total_decoded_bytes_) / decoded_bytes_per_pixel) {
-            return set_error(
-                ErrorCode::pixel_limit, at, "GAF decoded buffers exceed portable limit"
-            );
+        if (pixels_ == PixelData::decoded) {
+            if (pixel_count >
+                (limit::total_decoded_bytes - total_decoded_bytes_) / decoded_bytes_per_pixel) {
+                return set_error(
+                    ErrorCode::pixel_limit, at, "GAF decoded buffers exceed portable limit"
+                );
+            }
+            total_decoded_bytes_ += pixel_count * decoded_bytes_per_pixel;
         }
-        total_decoded_bytes_ += pixel_count * decoded_bytes_per_pixel;
         // A checked frame decodes into the parser's own buffers and keeps nothing.
         auto& kept_pixels = pixels_ == PixelData::decoded ? output.pixels : checked_pixels_;
         auto& kept_coverage = pixels_ == PixelData::decoded ? output.coverage : checked_coverage_;

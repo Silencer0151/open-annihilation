@@ -85,7 +85,7 @@ uint8_t nearest_index(const oa::PaletteBytes& palette, uint8_t r, uint8_t g, uin
 
 } // namespace
 
-bool Runtime::save_numbered_frame(const char* directory, const char* prefix) {
+bool Runtime::indexed_frame(present::DisplayContext& capture, present::SurfaceBuffer& frame) {
     if (screen_ == Screen::match && match_use_layers_) {
         // A world the accelerated presentation scaled is drawn again as the
         // standard tier draws it, so the picture saved is the game's own.
@@ -95,7 +95,6 @@ bool Runtime::save_numbered_frame(const char* directory, const char* prefix) {
     if (surface_.width == 0 || surface_.height == 0 ||
         surface_.rgb.size() != static_cast<std::size_t>(surface_.width) * surface_.height * 3U)
         return false;
-    present::DisplayContext capture{};
     std::unordered_map<uint32_t, uint8_t> indices;
     const bool match = screen_ == Screen::match && match_;
     const oa::PaletteBytes& palette =
@@ -104,7 +103,7 @@ bool Runtime::save_numbered_frame(const char* directory, const char* prefix) {
         capture.palette = match_display_context().palette;
     else
         capture.palette = present::palette_from_bytes(palette);
-    present::SurfaceBuffer frame = present::create_surface(
+    frame = present::create_surface(
         static_cast<int32_t>(surface_.width), static_cast<int32_t>(surface_.height)
     );
     for (std::size_t pixel = 0; pixel < frame.pixels.size(); ++pixel) {
@@ -123,6 +122,14 @@ bool Runtime::save_numbered_frame(const char* directory, const char* prefix) {
     }
     capture.active_surface = &frame.surface;
     capture.use_active_surface = 1;
+    return true;
+}
+
+bool Runtime::save_numbered_frame(const char* directory, const char* prefix) {
+    present::DisplayContext capture{};
+    present::SurfaceBuffer frame{};
+    if (!indexed_frame(capture, frame))
+        return false;
     present::NumberedFileHost files{};
     files.context = this;
     files.list =

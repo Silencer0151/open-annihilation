@@ -190,8 +190,12 @@ WorldScaling Runtime::world_scaling() const {
             std::nullopt
         );
     // The accelerated presentation draws at its own draw scale, within its
-    // budget; a check's draw scale, and every other frame, as before.
-    if (!scene_draw_scale_ && accelerated_presentation() && screen_ == Screen::match)
+    // budget; a check's draw scale, and every other frame, as before. The
+    // megamap covers the battlefield it opens over, so a frame under it
+    // draws at the zoom and the megamap is presented 1:1, never through the
+    // card's magnification of a scene it hides.
+    if (!scene_draw_scale_ && accelerated_presentation() && screen_ == Screen::match &&
+        !megamap_shown())
         return accelerated_world_scaling(
             match_zoom(),
             match_layout_.battlefield_width(),

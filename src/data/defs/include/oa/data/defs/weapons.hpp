@@ -6,6 +6,7 @@
 
 #include "oa/core/weapon_def.h"
 #include "oa/data/defs/files.hpp"
+#include "oa/data/defs/rule_keys.hpp"
 #include "oa/formats/tdf.hpp"
 
 #include <cstdint>
@@ -102,7 +103,10 @@ struct WeaponTable {
     // DAMAGE overrides per slot; WeaponDef.damage_overrides holds index + 1 when set.
     WeaponDamageTable damage[OA_WEAPON_DEF_COUNT];
     WeaponAssetNames assets[OA_WEAPON_DEF_COUNT]; // the names each slot's section gave
-    uint32_t rejected_ids{};                      // sections whose ID is outside 0..255
+    // What each slot's section gave for the rule keys a profile binds
+    // (WeaponLoadOptions::data_keys); all false without a binding.
+    match_rules::WeaponTypeRules rule_data[OA_WEAPON_DEF_COUNT];
+    uint32_t rejected_ids{}; // sections whose ID is outside 0..255
 };
 
 struct WeaponLoadOptions {
@@ -110,6 +114,9 @@ struct WeaponLoadOptions {
     const char* variant{};
     bool lava_world{};   // use lavaexplosion* instead of waterexplosion* keys
     bool archive_only{}; // ignore loose weapon files, as when archive scanning is on
+    // The rule keys a mod profile binds, read into WeaponTable::rule_data;
+    // null reads none, as 3.1c does.
+    const WeaponDataKeys* data_keys{};
 };
 
 /// Returns the slot index a weapon record carries in WeaponDef.weapon_id.
@@ -163,7 +170,9 @@ void weapon_table_free(WeaponTable* table) noexcept;
 /// on a lava world. The asset names are also kept in the slot's
 /// WeaponTable.assets entry. A DAMAGE block sets damage_default and adds each
 /// other key to the slot's override map, which a later section with the same
-/// ID extends. A section whose ID is outside the table is rejected.
+/// ID extends. A section whose ID is outside the table is rejected. With
+/// bound rule keys (WeaponLoadOptions::data_keys), the section also replaces
+/// the slot's WeaponTable.rule_data record.
 ///
 /// Numbers are read as the game reads them: a key that is present takes its
 /// text's value even when the text is empty or not a number (0), and only a

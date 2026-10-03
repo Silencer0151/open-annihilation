@@ -132,9 +132,12 @@ bool match_slot_watcher(const World* world, uint8_t slot) noexcept {
 }
 
 void match_apply_watcher_view(World* world) noexcept {
+    if (match_slot_watcher(world, world->game.local_player_index))
+        match_show_whole_map(world);
+}
+
+void match_show_whole_map(World* world) noexcept {
     auto& game = world->game;
-    if (!match_slot_watcher(world, game.local_player_index))
-        return;
     constexpr auto shown_everywhere =
         sim::visibility_state::terrain_mapping | sim::visibility_state::update_sight_grid;
     game.visibility_flags = static_cast<uint8_t>(game.visibility_flags & ~shown_everywhere);

@@ -491,6 +491,7 @@ struct Scene {
     oa::formats::gaf::RenderedFrame shadow_frame;
     std::array<uint8_t, full::team_colour_players> team_colors{};
     uint32_t tick{};
+    uint32_t build_pulse_lag{};
 
     explicit Scene(
         oa::Palette scene_palette = gray_palette(),
@@ -591,6 +592,7 @@ struct Scene {
         world->game.graphics_flags = graphics_flags;
         renderer.graphics_flags = graphics_flags;
         renderer.tick = tick;
+        renderer.build_pulse_lag = build_pulse_lag;
         renderer.camera_x = 0;
         renderer.camera_y = 0;
         draw::bridge_begin(
@@ -722,7 +724,8 @@ struct Scene {
         in.library = &library;
         in.display = &display;
         in.graphics_flags = world->game.graphics_flags;
-        in.tick = tick;
+        in.build_pulse_tick = tick - build_pulse_lag;
+        in.moving_pieces_once_built = renderer.moving_pieces_once_built;
         in.team_colors = team_colors;
         in.projectile_shadow = with_shadow_sprite ? &shadow_frame : nullptr;
         return in;
@@ -1124,33 +1127,127 @@ void test_cloaked() {
 }
 
 // A building under construction: the bands colour its polygons by their
-// depth and the outline runs along every edge; both pictures take the
-// band's colour inside.
+// depth, and the outline is the processor's, the first and the last pixel
+// of each row a primitive spans. Half built, both pictures take the band's
+// colour inside; near the start of building the bands clear the square and
+// leave its outline's two sides alone.
 void test_nanoframe() {
+    for (const float remaining : {0.5F, 0.9F, 0.99F}) {
+        Scene scene;
+        SceneUnit& site = scene.add_unit(square_model(), 1, unit_x, unit_z);
+        site.unit->flags |= OA_UNIT_FLAG_BUILDING;
+        site.unit->build_remaining = remaining;
+        scene.tick = 7;
+        Card card(scene);
+        ProcessorPicture processor;
+        scene.begin_frame(processor, 0);
+        scene.plan_unit(site);
+        scene.raster_processor(processor);
+        const CardPicture drawn = card.raster(scene);
+        const auto c = compare(drawn, processor, scene);
+        std::array<char, 48> name{};
+        std::snprintf(name.data(), name.size(), "nanoframe, %.2f left to build", remaining);
+        check_exact(name.data(), c);
+        OA_CHECK(c.same == c.drawn);
+        const uint8_t* inside = drawn.at(unit_x, unit_z);
+        if (remaining == 0.5F) {
+            // Inside, the band's colour, from the nano ramp; the processor's too.
+            OA_CHECK(inside[3] == 255 && inside[0] >= 0xa0 && inside[0] <= 0xaf);
+            OA_CHECK(processor.at(unit_x, unit_z)[0] == inside[0]);
+        } else {
+            // The square cleared, and the outline down its two sides alone,
+            // one pixel a row: no row across its top or bottom.
+            OA_CHECK(inside[3] == 0);
+            OA_CHECK(c.drawn == 2 * 2 * half_side);
+            OA_CHECK(drawn.at(unit_x, unit_z - half_side)[3] == 0);
+        }
+        // The outline is drawn as quads of its own, past the square's one
+        // polygon where the bands leave it.
+        OA_CHECK(card.stage.counts().polygons == (remaining == 0.5F ? 1U : 0U));
+        OA_CHECK(card.frame.indices.size() > 6);
+    }
+}
+
+// A nanoframe barely begun in a view zoomed out to a sixth: its outline's
+// runs span a sixth of a screen pixel, and are drawn a screen pixel across
+// and down, so that both of its sides still show on screen, with the
+// square cleared between them.
+void test_nanoframe_zoomed_out() {
+    constexpr float zoom = 1.0F / 6.0F;
     Scene scene;
     SceneUnit& site = scene.add_unit(square_model(), 1, unit_x, unit_z);
     site.unit->flags |= OA_UNIT_FLAG_BUILDING;
-    site.unit->build_remaining = 0.5F;
+    site.unit->build_remaining = 0.99F;
     scene.tick = 7;
-    Card card(scene);
     ProcessorPicture processor;
     scene.begin_frame(processor, 0);
     scene.plan_unit(site);
-    scene.raster_processor(processor);
-    const CardPicture drawn = card.raster(scene);
-    const auto c = compare(drawn, processor, scene);
-    print("nanoframe", c);
-    OA_CHECK(c.drawn > 0);
-    OA_CHECK(c.far_coverage == 0);
-    OA_CHECK(c.far == 0);
-    // Inside, the band's colour, from the nano ramp; the processor's too.
-    const uint8_t* inside = drawn.at(unit_x, unit_z);
-    OA_CHECK(inside[3] == 255 && inside[0] >= 0xa0 && inside[0] <= 0xaf);
-    OA_CHECK(processor.at(unit_x, unit_z)[0] == inside[0]);
-    // The outline is drawn as line quads, so the frame holds more than the
-    // square's one polygon.
-    OA_CHECK(card.stage.counts().polygons == 1);
-    OA_CHECK(card.frame.indices.size() > 6);
+    Card card(scene, zoom);
+    const CardPicture drawn = card.raster(scene, zoom);
+    const auto middle_x = static_cast<uint32_t>(static_cast<float>(unit_x) * zoom);
+    const auto middle_y = static_cast<uint32_t>(static_cast<float>(unit_z) * zoom);
+    uint32_t left = 0;
+    uint32_t right = 0;
+    for (uint32_t y = 0; y < drawn.height; ++y)
+        for (uint32_t x = 0; x < drawn.width; ++x)
+            if (drawn.at(x, y)[3] != 0)
+                ++(x < middle_x ? left : right);
+    std::printf(
+        "nanoframe barely begun at zoom 1/6: %u pixels left of its middle, %u right\n", left, right
+    );
+    OA_CHECK(left > 0 && right > 0);
+    OA_CHECK(drawn.at(middle_x, middle_y)[3] == 0);
+}
+
+// The nanoframe's pulse in a view zoomed out, its clock lagging behind the
+// match's tick: both pictures take the colours of the pulse's tick, the
+// tick less the lag, the same as a frame at that tick with no lag.
+void test_nanoframe_pulse_lag() {
+    const auto inside_colour = [](uint32_t tick, uint32_t lag) {
+        Scene scene;
+        SceneUnit& site = scene.add_unit(square_model(), 1, unit_x, unit_z);
+        site.unit->flags |= OA_UNIT_FLAG_BUILDING;
+        site.unit->build_remaining = 0.5F;
+        scene.tick = tick;
+        scene.build_pulse_lag = lag;
+        Card card(scene);
+        ProcessorPicture processor;
+        scene.begin_frame(processor, 0);
+        scene.plan_unit(site);
+        scene.raster_processor(processor);
+        const CardPicture drawn = card.raster(scene);
+        const uint8_t* inside = drawn.at(unit_x, unit_z);
+        OA_CHECK(inside[3] == 255 && processor.at(unit_x, unit_z)[0] == inside[0]);
+        return inside[0];
+    };
+    OA_CHECK(inside_colour(907, 900) == inside_colour(7, 0));
+    OA_CHECK(inside_colour(7, 0) != inside_colour(13, 0));
+}
+
+// A mobile unit under construction whose moving pieces wait for it to be
+// built, as a building's do: the bands colour it as they colour a
+// building, in both pictures; without the rule it is drawn whole.
+void test_mobile_nanoframe_once_built() {
+    for (const bool once_built : {false, true}) {
+        Scene scene;
+        SceneUnit& unit = scene.add_unit(square_model(), 1, unit_x, unit_z);
+        unit.unit->build_remaining = 0.5F;
+        scene.tick = 7;
+        scene.renderer.moving_pieces_once_built = once_built;
+        Card card(scene);
+        ProcessorPicture processor;
+        scene.begin_frame(processor, 0);
+        scene.plan_unit(unit);
+        scene.raster_processor(processor);
+        const CardPicture drawn = card.raster(scene);
+        const auto c = compare(drawn, processor, scene);
+        print(once_built ? "mobile nanoframe once built" : "mobile unit unfinished", c);
+        OA_CHECK(c.drawn > 0 && c.far_coverage == 0 && c.far == 0);
+        const uint8_t* inside = drawn.at(unit_x, unit_z);
+        OA_CHECK(inside[3] == 255 && processor.at(unit_x, unit_z)[0] == inside[0]);
+        const bool banded = inside[0] >= 0xa0 && inside[0] <= 0xaf;
+        OA_CHECK(banded == once_built);
+    }
 }
 
 // Units under the water line: the viewpoint's own tinted, halved with the
@@ -1328,6 +1425,125 @@ void test_shadows() {
     const auto d = compare(direct, wide_processor, wide);
     print("shadow without a target", d);
     OA_CHECK(d.far == 0 && d.far_coverage == 0 && d.shadowed > 0);
+}
+
+// An unfinished building near the start of building: the bands clear its
+// image, and its shadow, cut by the image's place as the processor cuts it,
+// lies only past the building, so that the ground shows unshaded through
+// the image, in the card's picture as in the processor's.
+void test_unfinished_building_shadow() {
+    Scene scene;
+    SceneUnit& tower = scene.add_unit(turret_model(), 2, unit_x, unit_z);
+    tower.unit->flags |= OA_UNIT_FLAG_BUILDING;
+    tower.unit->build_remaining = 0.9F;
+    scene.tick = 7;
+    constexpr uint16_t flags = draw::graphics_shadows | draw::graphics_vehicle_shadows;
+    Card card(scene);
+    ProcessorPicture processor;
+    scene.begin_frame(processor, flags);
+    scene.plan_unit(tower);
+    scene.raster_processor(processor);
+    const CardPicture drawn = card.raster(scene);
+    const auto c = compare(drawn, processor, scene);
+    print("unfinished building shadow", c);
+    OA_CHECK(card.stage.shadows_through_target());
+    OA_CHECK(c.drawn > 0 && c.far == 0 && c.far_coverage == 0 && c.shadowed > 0);
+    OA_CHECK(drawn.at(unit_x, unit_z)[3] == 0);
+    OA_CHECK(!drawn_by_processor(processor.at(unit_x, unit_z), scene.key));
+}
+
+// Shadows fading as the view zooms out (set_frame_shadows): a vehicle's
+// silhouette and a projectile's shadow sprite, on the card and on the
+// processor, at the game's darkness at zoom 1, at a quarter of the frame's
+// darkness (half the game's) at zoom 0.5, and not drawn at all at zoom
+// 0.25, where the card neither clears nor composes the shadow target.
+void test_faded_shadows() {
+    Scene scene;
+    SceneUnit& vehicle = scene.add_unit(square_model(), 1, unit_x, unit_z);
+    vehicle.unit->position.y = 4 * unit;
+    const auto model = square_model(third_ink);
+    const draw::PreparedModel& prepared = draw::prepare_model(scene.library, model);
+    constexpr uint16_t flags = draw::graphics_shadows | draw::graphics_vehicle_shadows;
+    draw::ShadowTable table;
+    Card card(scene);
+    ProcessorPicture processor;
+    // The vehicle's silhouette's last row, at its right edge; the
+    // projectile's shadow, under a shot lifted well clear of it.
+    const uint32_t shade_x = unit_x + half_side + 4;
+    const uint32_t shade_y = unit_z + half_side - 2;
+    constexpr uint32_t shot_x = 30;
+    constexpr uint32_t shot_z = 130;
+    const auto frame_at = [&](float zoom) {
+        scene.begin_frame(processor, flags);
+        oa::app::set_frame_shadows(
+            scene.list, scene.renderer, table, scene.display, &scene.shadow_sprite, zoom
+        );
+        scene.plan_unit(vehicle);
+        ProjectileDraw shot;
+        shot.position = {
+            static_cast<int32_t>(shot_x) * unit, 40 * unit, static_cast<int32_t>(shot_z) * unit
+        };
+        shot.shadow = true;
+        shot.x = shot_x;
+        shot.shadow_y = shot_z;
+        shot.object = &model->objects[0];
+        shot.prepared = &prepared.objects[0];
+        shot.region = {0, 0, scene.width - 1, scene.height - 1};
+        scene.list.projectiles.push_back(shot);
+        oa::app::add_world_draw(scene.list, WorldDrawKind::projectile, 0);
+        scene.raster_processor(processor);
+        return card.raster(scene);
+    };
+    const auto brightness = [](const uint8_t* pixel) { return pixel[0] + pixel[1] + pixel[2]; };
+    const auto resolves = [&]() {
+        std::size_t count = 0;
+        for (const card::Batch& batch : card.frame.batches)
+            count += batch.operation == card::Operation::resolve ? 1U : 0U;
+        return count;
+    };
+    // Zoom 1: the game's own shadows.
+    const CardPicture full = frame_at(1.0F);
+    OA_CHECK(scene.list.shadow_level == draw::shadow_full_level);
+    OA_CHECK(full.at(shade_x, shade_y)[3] >= 126 && full.at(shade_x, shade_y)[3] <= 129);
+    OA_CHECK(full.at(shot_x, shot_z)[3] >= 126 && full.at(shot_x, shot_z)[3] <= 129);
+    OA_CHECK(card.stage.counts().shadows == 2);
+    OA_CHECK(resolves() == 1);
+    const ProcessorPicture full_processor = processor;
+    const uint8_t* dark = full_processor.at(shade_x, shade_y);
+    const uint8_t* dark_shot = full_processor.at(shot_x, shot_z);
+    OA_CHECK(drawn_by_processor(dark, scene.key));
+    OA_CHECK(drawn_by_processor(dark_shot, scene.key));
+    // Zoom 0.5: half the game's darkness, a quarter alpha on the card, and
+    // between the ground and the game's shadow on the processor.
+    const CardPicture half = frame_at(0.5F);
+    OA_CHECK(scene.list.shadow_level == draw::shadow_full_level / 2);
+    OA_CHECK(half.at(shade_x, shade_y)[3] >= 62 && half.at(shade_x, shade_y)[3] <= 66);
+    OA_CHECK(half.at(shot_x, shot_z)[3] >= 62 && half.at(shot_x, shot_z)[3] <= 66);
+    OA_CHECK(card.stage.counts().shadows == 4);
+    const uint8_t* light = processor.at(shade_x, shade_y);
+    const uint8_t* light_shot = processor.at(shot_x, shot_z);
+    OA_CHECK(drawn_by_processor(light, scene.key));
+    OA_CHECK(brightness(light) > brightness(dark));
+    OA_CHECK(brightness(light) < brightness(scene.key.data()));
+    OA_CHECK(brightness(light_shot) > brightness(dark_shot));
+    OA_CHECK(brightness(light_shot) < brightness(scene.key.data()));
+    // The bodies are as at zoom 1.
+    OA_CHECK(std::memcmp(processor.at(unit_x, unit_z), full_processor.at(unit_x, unit_z), 3) == 0);
+    // Zoom 0.25: no shadow at all, and no work for one.
+    const CardPicture none = frame_at(0.25F);
+    OA_CHECK(scene.list.shadow_level == 0);
+    OA_CHECK(none.at(shade_x, shade_y)[3] == 0);
+    OA_CHECK(none.at(shot_x, shot_z)[3] == 0);
+    OA_CHECK(card.stage.counts().shadows == 4);
+    OA_CHECK(resolves() == 0);
+    OA_CHECK(!card.stage.shadows_through_target());
+    OA_CHECK(!drawn_by_processor(processor.at(shade_x, shade_y), scene.key));
+    OA_CHECK(!drawn_by_processor(processor.at(shot_x, shot_z), scene.key));
+    OA_CHECK(std::memcmp(processor.at(unit_x, unit_z), full_processor.at(unit_x, unit_z), 3) == 0);
+    // Zooming back in brings them back as they were.
+    const CardPicture again = frame_at(1.0F);
+    OA_CHECK(again.rgba == full.rgba);
+    OA_CHECK(processor.rgb == full_processor.rgb);
 }
 
 // A projectile and its shadow sprite, a debris piece and a shatter
@@ -1812,10 +2028,15 @@ int main(int argc, char** argv) {
         test_lit_building();
         test_cloaked();
         test_nanoframe();
+        test_nanoframe_zoomed_out();
+        test_nanoframe_pulse_lag();
+        test_mobile_nanoframe_once_built();
         test_underwater();
         test_digger();
         test_carried();
         test_shadows();
+        test_unfinished_building_shadow();
+        test_faded_shadows();
         test_flat_objects();
         test_pages_and_gamma();
         test_zoom();

@@ -7,6 +7,7 @@
 #include "oa/app/runtime.hpp"
 #include "director_state.hpp"
 
+#include "oa/data/mod_profile.hpp"
 #include "oa/sim/match_runtime.hpp"
 #include "oa/platform/preferences.hpp"
 #include "match_fault.hpp"
@@ -25,7 +26,8 @@ namespace {
 using PointSound = oa::sim::match_runtime::Match::PointSound;
 
 constexpr uint32_t announcement_window_ticks = 30;
-constexpr uint32_t novelty_honk_windows = 8; // honk on one window in eight
+// The novelty voice's first sound plays on one window in eight.
+constexpr uint32_t novelty_first_sound_windows = 8;
 
 } // namespace
 
@@ -174,20 +176,63 @@ void Runtime::check_console_sound_commands(const std::function<void(const char*)
     );
     match_->point_sound = kept_hook;
     bind_match_view();
+    const auto sung = check_console_sing_command(enter_line);
+    std::cout << "console sound check: +sound3d placed a clip from the view centre and saved, "
+                 "+sing "
+              << sung << '\n';
+}
 
+std::string
+Runtime::check_console_sing_command(const std::function<void(const char*)>& enter_line) {
+    const auto require = [](bool ok, const char* what) {
+        if (!ok)
+            throw std::runtime_error(std::string("console sing check: ") + what);
+    };
+    namespace game_audio = oa::audio::game_audio;
+    const oa::World& world = match_->state();
+    // A live unit of the viewed player whose sound category offers a sound
+    // for being selected: only the viewed player's units speak.
+    const auto speaks_when_selected = [&](const oa::sim::unit_spawn::Slot& slot) {
+        const auto type = slot.record.type_index;
+        if (slot.unit == nullptr || type == 0 || type > unit_definitions_.size() ||
+            slot.record.owner_index != world.game.viewpoint_player ||
+            (slot.record.flags & OA_UNIT_FLAG_LIVE) == 0)
+            return false;
+        const auto* sounds = unit_sound_catalog_.choices(
+            unit_definitions_[type - 1U].sound_category,
+            game_audio::UnitAnnouncementCategory::select
+        );
+        return sounds != nullptr && !sounds->empty();
+    };
+    const oa::sim::unit_spawn::Slot* speaker = nullptr;
+    for (const auto& slot : match_->world().slots)
+        if (speaker == nullptr && speaks_when_selected(slot))
+            speaker = &slot;
+    require(speaker != nullptr, "the viewed player has no unit with a sound for being selected");
+    // The two sounds the match plays: the mod profile's, or 3.1c's honk and
+    // sing.
+    const auto* profile = mod_profile();
+    const auto& names = profile != nullptr ? profile->strings.cheat.sing_sounds
+                                           : oa::data::mod_profile::StringsCheat{}.sing_sounds;
+    const auto first = game_audio::sound_resource(names[0]);
+    const auto second = game_audio::sound_resource(names[1]);
     auto& gates = offline_services_.announcement_gates();
     require(novelty_voice_ == 0 && !gates.novelty_voice, "the novelty voice started on");
+    require(
+        gates.novelty_sounds[0] == names[0] && gates.novelty_sounds[1] == names[1],
+        "the novelty voice does not hold the profile's sing sounds"
+    );
     const auto kept_gates = gates;
     gates.play_audio = true;
     gates.unit_speech_mode = true;
     gates.unit_sound_volume = 10;
-    auto& slot = match_->world().slots[commander->unit_index];
-    // Selects the commander each tick until speech plays: a record presented
+    auto& slot = match_->world().slots[speaker->unit_index];
+    // Selects the unit each tick until speech plays: a record presented
     // within 30 ticks of the last speech is shown without audio.
     const auto spoken = [&]() -> std::string {
         for (uint32_t step = 0; step <= 2 * announcement_window_ticks; ++step) {
             offline_services_.command_sound(
-                slot, static_cast<uint32_t>(oa::audio::game_audio::UnitAnnouncementCategory::select)
+                slot, static_cast<uint32_t>(game_audio::UnitAnnouncementCategory::select)
             );
             for (auto& event : offline_services_.pump_announcements())
                 if (event.sound_resource)
@@ -198,28 +243,33 @@ void Runtime::check_console_sound_commands(const std::function<void(const char*)
         }
         return {};
     };
+    // "+Sing" says nothing of its own: the log's last line is its echo.
+    const auto echoed = [this] {
+        const auto lines = match_message_lines();
+        return !lines.empty() && lines.back().ends_with("> +sing");
+    };
     enter_line("+sing");
     require(novelty_voice_ == 1 && gates.novelty_voice, "+sing did not turn the novelty voice on");
+    require(echoed(), "+sing was not echoed, or posted a line of its own");
     const auto novelty = spoken();
     const uint32_t tick = match_->simulation().tick;
-    const bool honk_window = tick / announcement_window_ticks % novelty_honk_windows == 0;
+    const bool first_window = tick / announcement_window_ticks % novelty_first_sound_windows == 0;
     require(
-        novelty == (honk_window ? "sounds/honk.wav" : "sounds/sing.wav"),
-        "unit speech did not play honk or sing with the novelty voice on"
+        novelty == (first_window ? first : second),
+        "unit speech did not play the novelty voice's sound for its window"
     );
     enter_line("+sing");
     require(
         novelty_voice_ == 0 && !gates.novelty_voice, "+sing did not turn the novelty voice off"
     );
+    require(echoed(), "the second +sing was not echoed, or posted a line of its own");
     const auto own = spoken();
     require(
-        !own.empty() && own != "sounds/honk.wav" && own != "sounds/sing.wav",
+        !own.empty() && own != first && own != second,
         "unit speech did not play the unit's own sound with the novelty voice off"
     );
     gates = kept_gates;
-    std::cout << "console sound check: +sound3d placed a clip from the view centre and saved, "
-                 "+sing played "
-              << novelty << " at tick " << tick << " and then " << own << '\n';
+    return "played " + novelty + " at tick " + std::to_string(tick) + " and then " + own;
 }
 
 } // namespace oa::app

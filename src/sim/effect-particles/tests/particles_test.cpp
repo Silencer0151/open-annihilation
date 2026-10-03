@@ -80,9 +80,8 @@ struct Fixture {
 
     const Layer& layer(uint16_t index) const { return world->layers[index]; }
 
-    const Emitter& emitter(uint16_t layer_index, uint16_t index = 0) const {
-        const auto& l = world->layers[layer_index];
-        return l.emitters[(l.head + index) % layer_capacity];
+    const Emitter& emitter(uint16_t layer_index, uint32_t index = 0) const {
+        return layer_emitter(*world, layer_index, index);
     }
 
     void advance() {
@@ -210,6 +209,63 @@ void layer_evicts_oldest_past_400() {
     check(
         f.world->pooled_emitters == 401, "the dropped emitter's slot went back to the emitter pool"
     );
+}
+
+void layer_and_pool_follow_raised_limits() {
+    // A mod's limits of 20,480 emitters a layer and 204,800 in the pool: a
+    // layer grows to 20,481 before evicting, and the pool runs out across the
+    // ten layers before they fill.
+    Fixture f;
+    const oa::data::limits::Effects raised{20480, 204800};
+    check(size_effect_world(*f.world, raised), "the raised rings are allocated");
+    check(f.world->layer_slots == 20481, "each ring holds the queue plus one");
+    for (int32_t i = 0; i < 20482; ++i)
+        spawn_white_smoke(*f.world, f.game, host_for(f.script), units(i, 0, 0), layer_smoke);
+    check(f.layer(layer_smoke).count == 20481, "a layer grows to 20,481 before evicting");
+    check(f.emitter(layer_smoke).origin.x == (1 << 16), "the oldest emitter was dropped");
+    check(f.world->pooled_emitters == 20481, "the evicted emitter's slot went back");
+    for (uint16_t layer = 0; layer < layer_count; ++layer)
+        for (int32_t i = 0; i < 20481 && layer != layer_smoke; ++i)
+            spawn_white_smoke(*f.world, f.game, host_for(f.script), units(i, 0, 0), layer);
+    check(f.world->pooled_emitters == 204800, "every pool slot is out");
+    check(f.layer(layer_smoke - 1).count == 20481 - 10, "the last layer filled stops short by ten");
+    // Back to 3.1c's sizes: an empty world with 401-slot rings and 1000 in the pool.
+    check(size_effect_world(*f.world, {}), "the base rings are allocated");
+    f.world->pooled_emitters = 0;
+    check(f.world->layer_slots == 401 && f.layer(layer_smoke).count == 0, "base rings");
+    check(f.world->evict_above == 400 && f.world->pool_capacity == 1000, "base limits");
+}
+
+void layer_counts_pass_sixteen_bits_at_the_largest_queue() {
+    // The largest queue a profile may name, a million emitters a layer: the ring
+    // takes the pool's size instead, and a layer and the pool count past 65,535.
+    using oa::data::limits::highest_effect_queue;
+    using oa::data::limits::highest_effect_reserve;
+    check(
+        layer_ring_slots({highest_effect_queue, highest_effect_reserve}) ==
+            highest_effect_queue + 1,
+        "the largest ring holds a million and one emitters"
+    );
+    check(
+        uint64_t{layer_count} * layer_ring_slots({highest_effect_queue, highest_effect_reserve}) <
+            uint64_t{1} << 32,
+        "the largest rings' slot count fits 32 bits"
+    );
+    Fixture f;
+    const oa::data::limits::Effects largest{highest_effect_queue, 65600};
+    check(size_effect_world(*f.world, largest), "the rings are allocated");
+    check(f.world->layer_slots == 65601, "a ring never holds more than the pool");
+    for (int32_t i = 0; i < 65601; ++i)
+        spawn_white_smoke(*f.world, f.game, host_for(f.script), units(i, 0, 0), layer_smoke);
+    check(f.layer(layer_smoke).count == 65600, "the layer holds the whole pool");
+    check(f.world->pooled_emitters == 65600, "the pool count passes 16 bits");
+    check(
+        f.emitter(layer_smoke, 65599).origin.x == units(65599, 0, 0).x,
+        "the newest emitter keeps its place"
+    );
+    for (int32_t i = 0; i < 300; ++i)
+        f.advance();
+    check(f.layer(layer_smoke).count == 0 && f.world->pooled_emitters == 0, "every emitter ends");
 }
 
 void nano_stream_from_nozzle_to_box() {
@@ -669,6 +725,8 @@ int main() {
     dark_and_start_smoke();
     smoke_column_spawns_on_interval();
     layer_evicts_oldest_past_400();
+    layer_and_pool_follow_raised_limits();
+    layer_counts_pass_sixteen_bits_at_the_largest_queue();
     nano_stream_from_nozzle_to_box();
     nano_colour_wraps_after_seven();
     flame_travels_over_its_ticks();

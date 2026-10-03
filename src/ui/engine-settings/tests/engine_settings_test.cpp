@@ -4,13 +4,25 @@
 // The settings' defaults on each platform and preferences file, what they
 // read from the preferences and an installation's totala.ini, what they
 // write back, and the locks a game, the command line and the renderer put
-// on them.
+// on them. The Language & Text switches and text size: their defaults, a
+// file without them, a file with CR LF line ends, the round trip, the text
+// size's range and the text style the drawing reads. Developer Mode's
+// switch and the overrides kept under each profile's id.
 
 #include "oa/ui/engine_settings.hpp"
 
 #include <array>
+#include <chrono>
+#include <cstdint>
+#include <exception>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
+#include <string_view>
+#include <system_error>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -340,10 +352,10 @@ void totala_ini_gives_its_unit_limit_as_the_game_reads_it() {
     CHECK(installation_unit_limit("[ PREFERENCES ]\r\n  UNITLIMIT\t=\t333 \r\n") == 333);
     CHECK(installation_unit_limit("[Other]\nUnitLimit=99\n[Preferences]\nUnitLimit=400\n") == 400);
     // Values: the leading whole number, then 3.1c's own clamp.
-    CHECK(installation_unit_limit("[Preferences]\nUnitLimit=abc\n") == 21);
-    CHECK(installation_unit_limit("[Preferences]\nUnitLimit=\n") == 21);
-    CHECK(installation_unit_limit("[Preferences]\nUnitLimit=3\n") == 21);
-    CHECK(installation_unit_limit("[Preferences]\nUnitLimit=-40\n") == 21);
+    CHECK(installation_unit_limit("[Preferences]\nUnitLimit=abc\n") == 20);
+    CHECK(installation_unit_limit("[Preferences]\nUnitLimit=\n") == 20);
+    CHECK(installation_unit_limit("[Preferences]\nUnitLimit=3\n") == 20);
+    CHECK(installation_unit_limit("[Preferences]\nUnitLimit=-40\n") == 20);
     CHECK(installation_unit_limit("[Preferences]\nUnitLimit=9999\n") == 500);
     CHECK(installation_unit_limit("[Preferences]\nUnitLimit=99999999999999999999\n") == 500);
     CHECK(installation_unit_limit("[Preferences]\nUnitLimit=300 ; more\n") == 300);
@@ -412,7 +424,7 @@ void stored_values_are_read_and_clamped_into_their_ranges() {
     CHECK(read_one(settings::key::unit_limit, "1500").unit_limit == 1500);
     CHECK(read_one(settings::key::unit_limit, "477").unit_limit == 477);
     CHECK(read_one(settings::key::unit_limit, "30").unit_limit == 30);
-    CHECK(read_one(settings::key::unit_limit, "5").unit_limit == 21);
+    CHECK(read_one(settings::key::unit_limit, "5").unit_limit == 20);
     CHECK(read_one(settings::key::unit_limit, "4000").unit_limit == 1500);
 
     CHECK(read_one(settings::key::max_frame_rate, "60").max_frame_rate == 60);
@@ -465,6 +477,12 @@ settings::EngineSettings changed_settings() {
     chosen.screen_size = {1024, 768};
     chosen.hardware_acceleration = HardwareAcceleration::basic;
     chosen.vertical_sync = true;
+    chosen.modern_fonts = true;
+    chosen.text_outline = false;
+    chosen.text_shadow = false;
+    chosen.text_background = true;
+    chosen.text_size = 150;
+    chosen.language = "de";
     return chosen;
 }
 
@@ -477,7 +495,7 @@ void only_changed_settings_are_written() {
 
     const auto chosen = changed_settings();
     settings::write_settings(values, defaults, chosen, defaults, false);
-    CHECK(values.size() == 11);
+    CHECK(values.size() == 17);
     CHECK(values.at(std::string{settings::key::path_search_nodes}) == "5332");
     CHECK(values.at(std::string{settings::key::wheel_zoom}) == "0");
     CHECK(values.at(std::string{settings::key::escape_opens_menu}) == "1");
@@ -488,6 +506,12 @@ void only_changed_settings_are_written() {
     CHECK(values.at(std::string{settings::key::screen_size}) == "1024x768");
     CHECK(values.at(std::string{settings::key::hardware_acceleration}) == "basic");
     CHECK(values.at(std::string{settings::key::vertical_sync}) == "1");
+    CHECK(values.at(std::string{settings::key::modern_fonts}) == "1");
+    CHECK(values.at(std::string{settings::key::text_outline}) == "0");
+    CHECK(values.at(std::string{settings::key::text_shadow}) == "0");
+    CHECK(values.at(std::string{settings::key::text_background}) == "1");
+    CHECK(values.at(std::string{settings::key::text_size}) == "150");
+    CHECK(values.at(std::string{settings::key::language}) == "de");
     CHECK(values.at("Total Annihilation|SwitchAlt") == "1");
     CHECK(settings::read_settings(values, {}, false) == chosen);
 
@@ -604,6 +628,56 @@ void shared_games_and_replays_search_at_one_cycle() {
     CHECK(settings::match_path_search_nodes(chosen, true) == settings::base_path_search_nodes);
 }
 
+void a_mods_unit_limits_set_the_range_and_the_default() {
+    // A mod's limits of 1,500 in 20 to 1,500, and the largest a profile may name.
+    settings::Inputs raised{};
+    raised.units_per_player = {1500, 20, 1500, 1500};
+    CHECK(settings::default_settings(raised).unit_limit == 1500);
+    CHECK(settings::highest_offered_unit_limit(raised.units_per_player) == 1500);
+    raised.players_own_profile = true;
+    raised.installation_ini = "[Preferences]\nUnitLimit=1200\n";
+    CHECK(settings::default_settings(raised).unit_limit == 1200);
+    settings::Inputs largest{};
+    largest.units_per_player = {
+        oa::data::limits::highest_units_per_player,
+        20,
+        oa::data::limits::highest_units_per_player,
+        1500
+    };
+    CHECK(
+        settings::highest_offered_unit_limit(largest.units_per_player) ==
+        oa::data::limits::highest_units_per_player
+    );
+    const auto stored = [&](const char* text) {
+        return settings::read_settings(one_key(settings::key::unit_limit, text), largest, false)
+            .unit_limit;
+    };
+    CHECK(stored("6000") == 6000);
+    CHECK(stored("99999") == oa::data::limits::highest_units_per_player);
+    CHECK(stored("5") == 20);
+    // 3.1c's limits keep the setting's own highest stop.
+    CHECK(settings::highest_offered_unit_limit({}) == settings::highest_unit_limit);
+}
+
+void a_mods_path_budget_scales_the_credit() {
+    settings::EngineSettings chosen{};
+    chosen.path_search_nodes = 3 * settings::base_path_search_nodes;
+    CHECK(settings::match_path_search_nodes(chosen, false, 66650) == 3 * 66650);
+    CHECK(settings::match_path_search_nodes(chosen, true, 66650) == 66650);
+    // The largest budget a profile may name, times eight, holds to that budget.
+    chosen.path_search_nodes = settings::highest_path_search_nodes;
+    CHECK(
+        settings::match_path_search_nodes(
+            chosen, false, oa::data::limits::highest_path_search_nodes
+        ) == oa::data::limits::highest_path_search_nodes
+    );
+    CHECK(
+        settings::match_path_search_nodes(
+            chosen, true, oa::data::limits::highest_path_search_nodes
+        ) == oa::data::limits::highest_path_search_nodes
+    );
+}
+
 void a_game_locks_the_next_game_settings() {
     const auto alone = settings::settings_locks({true, false, false, false});
     CHECK(alone.path_search == settings::Lock::in_game);
@@ -670,7 +744,366 @@ void the_renderer_settings_lock_by_the_flags_and_the_renderer() {
         }
 }
 
+/// The Language & Text switches' keys, and the text size's.
+constexpr std::array<std::string_view, 5> text_keys{
+    settings::key::modern_fonts,
+    settings::key::text_outline,
+    settings::key::text_shadow,
+    settings::key::text_background,
+    settings::key::text_size,
+};
+
+void language_and_text_defaults_to_modern_fonts_with_outline_and_shadow() {
+    // The player's own file, on every platform and machine: modern fonts,
+    // their outline and shadow On, the background Off; the text style the
+    // drawing reads is TextStyle's own default.
+    const std::array<settings::Inputs, 4> own{{
+        players_own_on_linux,
+        {true, true, {}},
+        {true, false, {}, true},
+        {true, false, {}, false, true, {1024, 768}},
+    }};
+    for (const auto& inputs : own) {
+        const auto defaults = settings::default_settings(inputs);
+        CHECK(defaults.modern_fonts);
+        CHECK(defaults.text_outline);
+        CHECK(defaults.text_shadow);
+        CHECK(!defaults.text_background);
+        CHECK(defaults.text_size == 80);
+        CHECK(settings::text_style(defaults) == oa::present::TextStyle{});
+        CHECK(settings::text_style(defaults).size == 80);
+    }
+    // A named file draws game text in the game's own fonts; the outline,
+    // shadow and background keep their defaults.
+    for (auto inputs : own) {
+        inputs.players_own_profile = false;
+        const auto defaults = settings::default_settings(inputs);
+        CHECK(!defaults.modern_fonts);
+        CHECK(defaults.text_outline && defaults.text_shadow && !defaults.text_background);
+        CHECK(defaults.text_size == 80);
+        const auto style = settings::text_style(defaults);
+        CHECK(!style.modern_fonts && style.outline && style.shadow && !style.background);
+        CHECK(style.size == 80);
+    }
+}
+
+void a_file_without_the_text_switches_reads_their_defaults() {
+    // A file an earlier version wrote: other settings and the game's own
+    // keys, and none of Language & Text's.
+    Values earlier;
+    earlier[std::string{settings::key::wheel_zoom}] = "0";
+    earlier[std::string{settings::key::max_frame_rate}] = "60";
+    earlier[std::string{settings::key::hardware_acceleration}] = "basic";
+    earlier["Total Annihilation|UnitLimit"] = "1000";
+    for (const auto& inputs : {settings::Inputs{}, players_own_on_linux}) {
+        const auto defaults = settings::default_settings(inputs);
+        const auto read = settings::read_settings(earlier, inputs, false);
+        CHECK(!read.wheel_zoom && read.max_frame_rate == 60);
+        CHECK(read.modern_fonts == defaults.modern_fonts);
+        CHECK(read.text_outline == defaults.text_outline);
+        CHECK(read.text_shadow == defaults.text_shadow);
+        CHECK(read.text_background == defaults.text_background);
+        // Without its key the text size is the default, 80%.
+        CHECK(read.text_size == 80);
+        CHECK(settings::text_style(read) == settings::text_style(defaults));
+        // A value that is no whole number gives the default too.
+        for (const auto key : text_keys)
+            for (const char* text : {"", "on", "true", " 1", "1.0"})
+                CHECK(
+                    settings::text_style(
+                        settings::read_settings(one_key(key, text), inputs, false)
+                    ) == settings::text_style(defaults)
+                );
+    }
+    // Each reads as a switch: on above 0.
+    const auto own = [](std::string_view key, const char* text) {
+        return settings::read_settings(one_key(key, text), players_own_on_linux, false);
+    };
+    CHECK(!own(settings::key::modern_fonts, "0").modern_fonts);
+    CHECK(read_one(settings::key::modern_fonts, "1").modern_fonts);
+    CHECK(!own(settings::key::text_outline, "0").text_outline);
+    CHECK(!own(settings::key::text_shadow, "-1").text_shadow);
+    CHECK(own(settings::key::text_background, "1").text_background);
+    CHECK(own(settings::key::text_background, "3").text_background);
+}
+
+void the_text_switches_round_trip_and_restore() {
+    const auto defaults = settings::default_settings(players_own_on_linux);
+    // Every combination of the four, chosen in a dialog opened on the
+    // defaults: only those away from it are written, and they read back.
+    for (uint32_t bits = 0; bits < 16; ++bits) {
+        auto chosen = defaults;
+        chosen.modern_fonts = (bits & 1U) != 0;
+        chosen.text_outline = (bits & 2U) != 0;
+        chosen.text_shadow = (bits & 4U) != 0;
+        chosen.text_background = (bits & 8U) != 0;
+        Values values;
+        settings::write_settings(values, defaults, chosen, defaults, false);
+        std::size_t changed = 0;
+        for (const auto& [key, member] :
+             std::array<std::pair<std::string_view, bool settings::EngineSettings::*>, 4>{{
+                 {settings::key::modern_fonts, &settings::EngineSettings::modern_fonts},
+                 {settings::key::text_outline, &settings::EngineSettings::text_outline},
+                 {settings::key::text_shadow, &settings::EngineSettings::text_shadow},
+                 {settings::key::text_background, &settings::EngineSettings::text_background},
+             }}) {
+            if (chosen.*member == defaults.*member)
+                continue;
+            ++changed;
+            CHECK(values.at(std::string{key}) == (chosen.*member ? "1" : "0"));
+        }
+        CHECK(values.size() == changed);
+        const auto read = settings::read_settings(values, players_own_on_linux, false);
+        CHECK(read == chosen);
+        CHECK(settings::text_style(read) == settings::text_style(chosen));
+        // Restore defaults, then OK: their keys go.
+        Values restored = values;
+        settings::write_settings(restored, chosen, defaults, defaults, true);
+        CHECK(restored.empty());
+    }
+}
+
+void the_text_size_reads_writes_and_restores_in_its_range() {
+    CHECK(settings::key::text_size == "open-annihilation.text-size");
+    CHECK(settings::lowest_text_size == 50 && settings::highest_text_size == 300);
+    CHECK(settings::text_size_step == 10 && settings::default_text_size == 80);
+    // Stored sizes are clamped into 50 to 300, and one between the steps
+    // is kept as stored; what is no whole number gives the default.
+    const auto size = [](const char* text) {
+        return settings::read_settings(
+                   one_key(settings::key::text_size, text), players_own_on_linux, false
+        )
+            .text_size;
+    };
+    CHECK(size("50") == 50 && size("80") == 80 && size("150") == 150 && size("300") == 300);
+    CHECK(size("85") == 85 && size("+120") == 120);
+    CHECK(size("10") == 50 && size("0") == 50 && size("-20") == 50);
+    CHECK(size("301") == 300 && size("99999999999999") == 300);
+    for (const char* text : {"", "big", "80%", " 80", "80 ", "1.5", "0x50"})
+        CHECK(size(text) == 80);
+    // It reads the same with a named file, where modern fonts start Off.
+    CHECK(read_one(settings::key::text_size, "200").text_size == 200);
+    CHECK(read_one(settings::key::text_size, "200").modern_fonts == false);
+
+    // Written as its percent only when it changed, and read back; Restore
+    // defaults, then OK, erases it.
+    const auto defaults = settings::default_settings(players_own_on_linux);
+    for (int32_t percent = settings::lowest_text_size; percent <= settings::highest_text_size;
+         percent += settings::text_size_step) {
+        auto chosen = defaults;
+        chosen.text_size = percent;
+        Values values;
+        settings::write_settings(values, defaults, chosen, defaults, false);
+        if (percent == settings::default_text_size) {
+            CHECK(values.empty());
+            continue;
+        }
+        CHECK(values.size() == 1);
+        CHECK(values.at(std::string{settings::key::text_size}) == std::to_string(percent));
+        const auto read = settings::read_settings(values, players_own_on_linux, false);
+        CHECK(read == chosen);
+        CHECK(settings::text_style(read).size == percent);
+        settings::write_settings(values, chosen, defaults, defaults, true);
+        CHECK(values.empty());
+    }
+    // Back to the default by hand keeps a key, written as 80.
+    Values values = one_key(settings::key::text_size, "150");
+    auto larger = defaults;
+    larger.text_size = 150;
+    settings::write_settings(values, larger, defaults, defaults, false);
+    CHECK(values.at(std::string{settings::key::text_size}) == "80");
+}
+
+void the_language_reads_writes_and_restores() {
+    namespace languages = oa::data::languages;
+    // The player's own file follows the operating system; a named file plays
+    // in English, as the game does without a language on its command line.
+    CHECK(settings::default_settings(players_own_on_linux).language == "system");
+    CHECK(settings::default_settings(settings::Inputs{}).language == "en");
+    // A file without the key, as an older version wrote, reads as the
+    // default: the system's language with the player's own file.
+    Values earlier;
+    earlier[std::string{settings::key::wheel_zoom}] = "0";
+    CHECK(settings::read_settings(earlier, players_own_on_linux, false).language == "system");
+    CHECK(settings::read_settings(earlier, settings::Inputs{}, false).language == "en");
+    CHECK(settings::stored_language(earlier, true) == "system");
+    // "system" or a known tag, in any case and with spaces around it; any
+    // other value, a tag this build does not know included, the default.
+    const auto read = [](const char* text, bool own) {
+        return settings::stored_language(one_key(settings::key::language, text), own);
+    };
+    CHECK(read("system", false) == "system");
+    CHECK(read("System", false) == "system");
+    CHECK(read("de", true) == "de");
+    CHECK(read("DE", true) == "de");
+    CHECK(read(" fr ", true) == "fr");
+    CHECK(read("es", true) == "es" && read("it", true) == "it" && read("en", true) == "en");
+    for (const char* other : {"", "pt", "de-AT", "german", "1", "xx_YY"}) {
+        CHECK(read(other, true) == "system");
+        CHECK(read(other, false) == "en");
+    }
+    for (const auto& language : languages::known_languages())
+        CHECK(read(std::string(language.tag).c_str(), true) == language.tag);
+    // A changed language is written as its tag; one left alone is not
+    // written, so a tag a later version wrote stays in the file.
+    const auto defaults = settings::default_settings(players_own_on_linux);
+    auto chosen = defaults;
+    chosen.language = "it";
+    Values written;
+    settings::write_settings(written, defaults, chosen, defaults, false);
+    CHECK(written.at(std::string{settings::key::language}) == "it");
+    CHECK(settings::read_settings(written, players_own_on_linux, false).language == "it");
+    Values kept = one_key(settings::key::language, "pt");
+    const auto opened = settings::read_settings(kept, players_own_on_linux, false);
+    CHECK(opened.language == "system");
+    settings::write_settings(kept, opened, opened, defaults, false);
+    CHECK(kept.at(std::string{settings::key::language}) == "pt");
+    // Back to System default is written too, and Restore defaults erases it.
+    settings::write_settings(written, chosen, defaults, defaults, false);
+    CHECK(written.at(std::string{settings::key::language}) == "system");
+    settings::write_settings(written, chosen, defaults, defaults, true);
+    CHECK(written.count(std::string{settings::key::language}) == 0);
+    // The command line's language locks the setting for the run; no game does.
+    settings::GameState state{};
+    CHECK(settings::settings_locks(state).language == settings::Lock::none);
+    state.in_game = true;
+    state.shared_game = true;
+    CHECK(settings::settings_locks(state).language == settings::Lock::none);
+    state.language_from_command_line = true;
+    CHECK(settings::settings_locks(state).language == settings::Lock::command_line);
+    // The language changes nothing the text style draws.
+    CHECK(settings::text_style(chosen) == settings::text_style(defaults));
+}
+
+void a_preferences_file_with_crlf_line_ends_reads_its_settings() {
+    const auto folder =
+        std::filesystem::temp_directory_path() /
+        ("oa-engine-settings-crlf-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(folder);
+    const auto file = folder / "preferences.conf";
+    std::ofstream(file, std::ios::binary) << "open-annihilation-preferences 1\r\n"
+                                             "\"open-annihilation.max-fps\" \"60\"\r\n"
+                                             "\"open-annihilation.modern-fonts\" \"0\"\r\n"
+                                             "\"open-annihilation.text-background\" \"1\"\r\n"
+                                             "\"open-annihilation.text-shadow\" \"0\"\r\n"
+                                             "\"open-annihilation.text-size\" \"120\"\r\n";
+    Values values;
+    bool loaded = true;
+    try {
+        values = oa::platform::preferences::load(file);
+    } catch (const std::exception& error) {
+        std::cerr << "CR LF preferences: " << error.what() << '\n';
+        loaded = false;
+    }
+    std::error_code ignored;
+    std::filesystem::remove_all(folder, ignored);
+    CHECK(loaded);
+    const auto read = settings::read_settings(values, players_own_on_linux, false);
+    CHECK(read.max_frame_rate == 60);
+    CHECK(!read.modern_fonts);
+    CHECK(read.text_outline);
+    CHECK(!read.text_shadow);
+    CHECK(read.text_background);
+    CHECK(read.text_size == 120);
+}
+
+void developer_mode_and_its_overrides_are_kept_under_the_profiles_id() {
+    namespace profiles = oa::data::mod_profile;
+    const settings::EngineSettings defaults{};
+    CHECK(!defaults.developer_mode && defaults.hack_overrides.empty());
+    CHECK(!settings::default_settings(players_own_on_linux).developer_mode);
+    // A file without them reads Off and no override.
+    settings::Inputs base{};
+    base.profile_id = profiles::base_game_id;
+    const auto none = settings::read_settings({}, base, false);
+    CHECK(!none.developer_mode && none.hack_overrides.empty());
+
+    auto chosen = defaults;
+    chosen.developer_mode = true;
+    chosen.hack_overrides = {
+        profiles::HackOverride{
+            "ai.attack-wave-size", true, {{"units", profiles::make_integer(40)}}
+        },
+        profiles::HackOverride{"repair.rate", false, {}},
+    };
+    Values values;
+    settings::write_settings(values, defaults, chosen, defaults, false, {}, profiles::base_game_id);
+    const std::string base_key = std::string{settings::key::hack_overrides} + "ta-3.1c";
+    CHECK(values.size() == 2);
+    CHECK(values.at(std::string{settings::key::developer_mode}) == "1");
+    CHECK(values.at(base_key) == "{\"ai.attack-wave-size\":{\"units\":40},\"repair.rate\":false}");
+    const auto read = settings::read_settings(values, base, false);
+    CHECK(read.developer_mode);
+    CHECK(read.hack_overrides.size() == chosen.hack_overrides.size());
+    for (const auto& override : chosen.hack_overrides) {
+        const auto* found = profiles::find_override(read.hack_overrides, override.hack);
+        CHECK(found != nullptr && *found == override);
+    }
+
+    // Each profile keeps its own; without an id none is read or written.
+    settings::Inputs mod{};
+    mod.profile_id = "some-mod";
+    CHECK(settings::read_settings(values, mod, false).hack_overrides.empty());
+    CHECK(settings::read_settings(values, {}, false).hack_overrides.empty());
+    Values without_id;
+    settings::write_settings(without_id, defaults, chosen, defaults, false);
+    CHECK(without_id.size() == 1 && !without_id.contains(base_key));
+
+    // Restore defaults turns Developer Mode off and keeps the overrides.
+    auto restored_choice = defaults;
+    restored_choice.hack_overrides = chosen.hack_overrides;
+    Values restored = values;
+    settings::write_settings(
+        restored, chosen, restored_choice, defaults, true, {}, profiles::base_game_id
+    );
+    CHECK(!restored.contains(std::string{settings::key::developer_mode}));
+    CHECK(restored.at(base_key) == values.at(base_key));
+
+    // With none left, the key goes; an unchanged list is not written.
+    auto cleared = chosen;
+    cleared.hack_overrides.clear();
+    Values emptied = values;
+    settings::write_settings(emptied, chosen, cleared, defaults, false, {}, profiles::base_game_id);
+    CHECK(!emptied.contains(base_key));
+    Values kept = one_key(base_key, "garbage");
+    settings::write_settings(kept, chosen, chosen, defaults, false, {}, profiles::base_game_id);
+    CHECK(kept.at(base_key) == "garbage");
+
+    // A text the profile grammar does not read as a mapping gives none.
+    CHECK(
+        settings::read_settings(one_key(base_key, "{not json"), base, false).hack_overrides.empty()
+    );
+}
+
 } // namespace
+
+void the_mod_is_stored_as_its_folder() {
+    const std::vector<std::string> folders{"/games/ta/mods/alpha", "/games/ta/mods/beta"};
+    settings::Inputs inputs{};
+    inputs.mod_folders = folders;
+    const settings::EngineSettings defaults{};
+    CHECK(defaults.mod == 0);
+
+    Values values;
+    auto chosen = defaults;
+    chosen.mod = 2;
+    settings::write_settings(values, defaults, chosen, defaults, false, folders);
+    CHECK(values.at(std::string{settings::key::mod_directory}) == "/games/ta/mods/beta");
+    CHECK(settings::read_settings(values, inputs, false).mod == 2);
+
+    // A folder no longer offered reads as none; no mod erases the key.
+    CHECK(settings::read_settings(values, {}, false).mod == 0);
+    settings::write_settings(values, chosen, defaults, defaults, false, folders);
+    CHECK(!values.contains(std::string{settings::key::mod_directory}));
+
+    // Restore defaults forgets the mod.
+    values[std::string{settings::key::mod_directory}] = folders[0];
+    auto first = defaults;
+    first.mod = 1;
+    settings::write_settings(values, first, defaults, defaults, true, folders);
+    CHECK(!values.contains(std::string{settings::key::mod_directory}));
+}
 
 int main() {
     defaults_play_as_without_the_settings();
@@ -689,10 +1122,20 @@ int main() {
     the_frame_rate_goes_down_to_a_frame_a_tick();
     the_path_credit_shows_as_whole_cycles();
     shared_games_and_replays_search_at_one_cycle();
+    a_mods_unit_limits_set_the_range_and_the_default();
+    a_mods_path_budget_scales_the_credit();
     a_game_locks_the_next_game_settings();
+    the_mod_is_stored_as_its_folder();
     hardware_acceleration_defaults_to_full_for_the_players_own_file_on_every_machine();
     hardware_acceleration_reads_its_words_and_the_switchs_numbers();
     the_renderer_settings_lock_by_the_flags_and_the_renderer();
+    language_and_text_defaults_to_modern_fonts_with_outline_and_shadow();
+    a_file_without_the_text_switches_reads_their_defaults();
+    the_text_switches_round_trip_and_restore();
+    the_text_size_reads_writes_and_restores_in_its_range();
+    the_language_reads_writes_and_restores();
+    a_preferences_file_with_crlf_line_ends_reads_its_settings();
+    developer_mode_and_its_overrides_are_kept_under_the_profiles_id();
     if (failures != 0)
         return 1;
     std::cout << "engine settings: ok\n";

@@ -67,6 +67,16 @@ void test_configure_and_reset() {
         "settings converted to ticks by truncation"
     );
 
+    // Settings left empty, as a game folder without meteor defaults leaves
+    // them: the infinite hit quotient truncates to 0 on every machine, so
+    // the strike is due from the first tick.
+    MeteorState empty{};
+    configure_meteors(empty, MeteorSettings{});
+    require(
+        empty.hit_interval == 0 && empty.duration == 0 && empty.strike_interval == 0,
+        "empty settings convert to 0 ticks"
+    );
+
     auto* world = world_create();
     Script script;
     const auto host = make_host(script);

@@ -71,6 +71,93 @@ builder's "Starting construction", reaches the application through
 `SpeechHooks` (`Match::set_speech_hooks`); without them the speech plays its
 category through `command_sound` and the category's own caption.
 
+## Rules
+
+A mod's profile reaches the match through `OfflineInputs`: `limits` (the
+capacities), `rules` (`MatchRules`, one record per hack), `unit_type_rules`
+and `weapon_rules` (what the data keys give single types and weapons) and
+`profile_sim_hash`. The defaults are 3.1c's and no profile. The match keeps
+copies of all of them; `Match::rules()` returns the match-wide rules and
+`Match::rules_view()` a `MatchRulesView` over its copies, which it hands to
+the systems that apply them: its tick host (as the simulation-state and
+ground-order host) and the adapters, which hold the match itself; the
+weapon, health and projectile damage hosts (`Host::rules`); the retaliation
+hooks; the unit-value handlers (`UnitValueHost::value_rules`,
+`value_limits`); and the computer players (`ComputerPlayers::rules`). Where
+each rule is read is listed in
+[src/data/match-rules](../../data/match-rules/README.md#where-each-rule-is-read).
+
+A profile's display rules reach the match as `OfflineInputs::display`
+(`DisplayRules`, `Match::display_rules()`), which `Match::set_display_rules`
+replaces while the match runs as the player's Developer Mode changes them,
+from the next tick: what a feature reclaim, an
+aircraft reclaiming a unit and a failed landing say, and whether an
+endsmoke weapon's burst also shows its explosion and an explosion raises a
+smoke column (`EffectWorld::explosion_smoke_column`). They change only what
+the player hears and sees, with the order stages and effect emitters that
+go with it: a feature reclaim that speaks once moves to its silent stage
+with the first step, and so reaches its end one step sooner; an aircraft
+that waits to speak until it arrives reclaims in a stage 3 of its own.
+`match-missions-ground`, `match-missions-vtol-build`, `match-missions-vtol`,
+`match-effect-hooks` and `effect-explosions` check each.
+
+State a rule keeps that 3.1c's records have no room for (the tick a slot
+may be reused at, a building's facing) lives in a table of the rule's own
+module, allocated while the match is built, never in `Unit`, `Game` or
+`Player`. The rule describes it as a `RuleStateTable`
+(`oa/sim/match_runtime/rule_state.hpp`): a name, its bytes (fixed-width
+integers, no padding) and how to restore them, and adds it with
+`add_rule_state(match.rule_state(), table)` while the match is built, and
+only when its parameters need the state: at its baseline a rule adds none.
+`Match::fold_rule_state` folds the profile's sim hash and every table into
+the match-state digest (`src/sim/state-hash`), and `match_tick_digest` and
+the trace recorder fold the same into the trace's total; a save keeps each
+table as a blob of its ModProfile account. With no table nothing more is
+digested or saved, so a match without a profile, or with every rule at its
+baseline, digests as before: `match-determinism` plays its skirmish under
+the profile that turns every limit and hack on at its baseline preset and
+holds it to the same pins. `match-rules` checks the copies, the view and the
+rule-state digests. Under `repair.rate: exact-remainder` the match keeps
+each unit slot's heal remainders (`Match::repair_remainders`) as the table
+`repair-remainders`; `match-veterancy-repair` plays the veterancy and repair
+rules in a match.
+
+The `orders.*` and `air.*` rules act in the mission handlers: which weapon
+slots Attack_Chase and Suppress occupy and which busy states free a
+builder's weapons (`GroundMissions::occupy_weapons_while_busy`), the repair
+pad's activity test in SelfRepair, the blocked-site retries of MobileBuild
+and VTOL_MobileBuild, the builder patrol and guard choices
+(`ground::patrol_choice`, `ground::guard_choice`), the aircraft that never
+break off for a repair pad (`never_retreats_to_repair`) and the air guard
+that keeps Hold Position. A blocked builder under orders.build-site-kickout
+sends the local player's own mobile units off its footprint
+(`GroundMissions::clear_build_site`, `tick_missions_kickout.cpp`); the spot
+it last sent each unit to is the rule's state table, `build-site-kickout`,
+eight bytes per unit slot, added only when the rule moves units.
+`Match::send_ahead_of_orders` sends one of the local player's units the
+same way to a point the player drags it to (ui.build-tools), and the build
+cursor's site test reports a site it lets through over the player's own
+units (`BuildSiteOptions::over_own_units`).
+`match-order-rules` checks each rule and parameter against 3.1c's behaviour.
+
+The unit rules (`unit_rules.cpp`) keep such a table for the slot reuse delay
+(units.id-reuse-delay), handing its ticks to unit creation. A building's
+facing (units.build-rotation) needs none: it lives in the unit's heading, as
+it does on the wire and in saves, and `Match::unit_build_facing` reads it
+back. The match turns each rotatable type's yard once, and its occupancy,
+building sites (`BuildSiteOptions`), construction orders
+(`Match::issue_mobile_build`, `Match::set_build_facing`), resurrection and transfers place the building
+facing that way. `match-unit-rules` plays each unit rule.
+
+The structure gift rate limit (`sharing.structure-gift-rate-limit`) is one
+such rule: the share panel's gifts go through `Match::begin_share_gift`,
+`share_gift_unit` and `end_share_gift`, which hold back a batch of structures
+when too many went across within the window, and the tick hands over the
+batches that are due last (`give_due_structure_gifts`). Its window and
+waiting batches are the table `structure-gifts`
+(`oa/sim/match_runtime/structure_gifts.hpp`); `match-structure-gifts` checks
+them.
+
 ## Event hooks
 
 `Match::event_hooks` (`EventHooks`, `event_hooks.hpp`) reports what happens
@@ -183,6 +270,39 @@ bounds, with the owner, cloak and submerged gates. `point_visible` uses the
 asking player's coverage under line of sight, and the viewpoint player's
 mapped bit under the mapping rule alone.
 
+`scan_contacts` builds the viewpoint player's radar picture every 30 ticks:
+it first marks its own and radar-sharing players' units as contacts, then
+runs the scan's passes (`scan_contacts_for`) for the viewer: its active
+radar and sonar units stamp contacts, other players' active jammers clear
+them, cloakers near a seen enemy lose the cloak, and units in its line of
+sight are radar contacts.
+
+Allied vision (`intel.allied-los-sharing`, `intel.cpp`) grants a player the
+view of every player whose alliance row names it, one way, with no
+shared-radar role needed:
+
+- the sight stamps count in the coverage of each player the owner allies
+  (`SightContext::allied_vision`, in `src/sim/visibility-state`), so the fog,
+  the line-of-sight contacts and `point_visible` see through the allies'
+  units;
+- `unit_visible` passes every unit whose owner allies the asking player
+  before the cloak and sight tests, which the computer players' sightings,
+  scripts' effects and the drawn units all go through;
+- the contact scan marks every unit of such an owner, then runs its passes
+  once for each player allying the viewer, in player order and each as the
+  viewing player, so jamming in a later ally's pass clears what an earlier
+  one found; a viewer without a unit range runs them once, for itself;
+- at each player's deadline, before the viewpoint's scan, a changed
+  alliance row or viewpoint player rebuilds every stamp, keeping the mapped
+  cells (`follow_alliances_in_sight`); the rows it followed are its rule
+  state.
+
+Allied jammers (`intel.allied-jammers-ignored`, `jammer_jams`) stop jamming
+the viewing player when it allies their owner; a watching local player
+sees no jamming at all, unless the view-switch branch applies: then, while
+the viewing player is not the local one in a game with mapping or line of
+sight, only the alliance counts.
+
 ## Economy and repair
 
 Natural repair runs on the eight-tick cadence of 3.1c. It uses the unit's
@@ -198,6 +318,21 @@ clamps with waste totals, and the scaling of every block for the next tick.
 `economy_test.cpp` asserts every player output field for human, easy, medium
 and hard computer players across inactive, storage-full, storage-free,
 negative-income, wind and tidal branches.
+
+A mod's rules change the tick in three places. Its income multipliers
+(`ai.income-multipliers`) scale a computer player's credit at every production
+site by its difficulty's entry, hard included, and what its units reclaim from
+features by the reclaim entries; refunds, unit deaths, shares and start
+resources keep 3.1c's scaling. Under `economy.stats-exclude-shared-income`
+what the player's staging block received from allies that tick leaves the
+produced totals, at double precision, just before the block settles; income
+and storage keep it. Under `units.init-cloaked-after-build` a unit whose build
+fraction left has any bit set neither cloaks nor pays upkeep. Under
+`economy.deterministic-wind` with the shared generator, the wind draws every
+change from an MT19937 generator (`src/sim/world-environment`) seeded at the
+first change with the host's network id, or the match's random seed without a
+host record; the generator is the rule-state table `wind-generator`.
+`economy_rules_test.cpp` covers each rule and its baseline.
 
 ## Orders
 
@@ -352,7 +487,8 @@ from the other players (`match-shared-deaths`), the interceptions, carry
 links, completions, StartBuilding starts, resurrections, unit transfers and
 game endings shared with and applied from them (`match-shared-events`),
 projectiles, economy, features, transports, outcomes, saved orders, saved
-features and the trace stream.
+features and the trace stream. `match-intel` plays the intel hacks against
+3.1c's rules.
 
 The tests reach the match through its public header alone. A test that
 runs one piece of a tick by itself (an order's mission step, a unit's

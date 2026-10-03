@@ -12,13 +12,19 @@
 namespace oa::app {
 namespace {
 
-// Substituted into the rev%s.GP3 discovery pattern.
-constexpr std::string_view kArchiveRevisionTag = "31";
-
 // Opened by the frontend before anything else draws; each 3.1 installation
-// carries them in totala1.hpi.
-constexpr std::string_view kRequiredResources[]{
-    "guis/mainmenu.gui", "palettes/palette.pal", "gamedata/sidedata.tdf", "gamedata/sound.tdf"
+// carries them in totala1.hpi. Each lies in a directory of the data layout,
+// or in palettes when none is named.
+struct RequiredResource {
+    std::optional<data::defs::DataDirectory> directory;
+    std::string_view name;
+};
+
+constexpr RequiredResource kRequiredResources[]{
+    {data::defs::DataDirectory::guis, "mainmenu.gui"},
+    {std::nullopt, "palettes/palette.pal"},
+    {data::defs::DataDirectory::gamedata, "sidedata.tdf"},
+    {data::defs::DataDirectory::gamedata, "sound.tdf"}
 };
 
 constexpr std::string_view kWhatToChoose =
@@ -67,6 +73,12 @@ constexpr std::string_view kNoArchives =
 [[nodiscard]] std::string install_problem(const GameInstall& install) {
     if (!install.problem.empty())
         return "It could not be read: " + install.problem;
+    if (!install.profile_errors.empty()) {
+        std::string text = "Its mod profile cannot be used:";
+        for (const auto& error : install.profile_errors)
+            text += "\n  " + error;
+        return text;
+    }
     if (!install.folder)
         return "The folder does not exist.";
     if (install.archives.empty())
@@ -108,28 +120,42 @@ constexpr std::string_view kNoArchives =
 [[nodiscard]] GameDirectory
 resolved(const fs::path& folder, GameInstall&& install, GameDirectorySource source) {
     auto installation = install.installation.empty() ? folder : std::move(install.installation);
+    auto folders = std::move(install.folders);
+    if (folders.empty())
+        folders.push_back(installation);
     return GameDirectory{
         folder,
         std::move(install.archives),
         source,
         std::move(installation),
-        std::move(install.demo)
+        std::move(install.demo),
+        std::move(folders),
+        std::move(install.profile),
+        std::move(install.profile_warnings)
     };
 }
 
 // Records a probe store's archives as the installation's, and the required
-// resources neither they nor the loose files in `root` hold.
+// resources neither they nor the loose files in its folders hold, named in
+// the layout of the installation's profile.
 void take_mounted(const fs::path& root, const oa::AssetStore& probe, GameInstall& install) {
     const auto mounted = probe.mount_paths();
     install.archives.assign(mounted.begin(), mounted.end());
     install.missing.clear();
-    for (const auto resource : kRequiredResources)
-        if (probe.file_size(resource) == 0)
-            install.missing.push_back(resource);
+    const auto layout = data_layout_of(install.profile.get());
+    for (const auto& resource : kRequiredResources) {
+        const auto path = resource.directory
+                              ? layout.directories[static_cast<std::size_t>(*resource.directory)] +
+                                    '/' + std::string(resource.name)
+                              : std::string(resource.name);
+        if (probe.file_size(path) == 0)
+            install.missing.push_back(path);
+    }
     install.installation = root;
 }
 
-// Runs the archive discovery on `root` into `install`.
+// Runs the archive discovery on the installation's folders into `install`,
+// as its profile's layout names the archives.
 void discover_archives(const fs::path& root, GameInstall& install) {
     // The game's discovery scan (AssetStore::discover) decides
     // both which archives are mounted and their lookup precedence: the
@@ -141,9 +167,10 @@ void discover_archives(const fs::path& root, GameInstall& install) {
     // the disc root: the archives past the *.HPI limit mount after everything
     // else, as the disc copies would. A scratch store runs the scan so main()
     // mounts the same archives in the same order. --archive bypasses this.
-    oa::AssetStore probe(root);
-    const fs::path disc_roots[]{root};
-    for (const auto& outcome : probe.discover(kArchiveRevisionTag, disc_roots))
+    // A mod folder layers over the folder: discovery runs over both, as
+    // over one folder holding the files of both.
+    oa::AssetStore probe(install.folders);
+    for (const auto& outcome : probe.discover(discovery_plan_of(install.profile.get())))
         if (!outcome.mounted && !outcome.already_mounted)
             std::cerr << "open-annihilation: skipping archive "
                       << path_to_utf8(outcome.path.filename()) << ": " << outcome.error << '\n';
@@ -153,6 +180,7 @@ void discover_archives(const fs::path& root, GameInstall& install) {
 // Takes `archive` as the only archive of the installation in `root`: the
 // demo's checked archive, whatever else its folder holds.
 void take_archive(const fs::path& root, const fs::path& archive, GameInstall& install) {
+    install.folders = {root};
     oa::AssetStore probe(root);
     std::string error;
     if (!probe.try_mount(archive, &error))
@@ -164,15 +192,36 @@ void take_archive(const fs::path& root, const fs::path& archive, GameInstall& in
 } // namespace
 
 GameInstall inspect_game_install(
-    const fs::path& root, const fs::path& data_folder, const DemoRelease& release
+    const fs::path& root,
+    const fs::path& data_folder,
+    const DemoRelease& release,
+    const ModChoice& mod
 ) {
     GameInstall install;
     std::error_code error;
     install.folder = fs::is_directory(root, error);
     if (!install.folder)
         return install;
+    if (!mod.folder.empty()) {
+        if (!fs::is_directory(mod.folder, error)) {
+            install.profile_errors.push_back(
+                path_to_utf8(mod.folder) + ": the mod folder does not exist"
+            );
+            return install;
+        }
+        install.folders.push_back(mod.folder);
+    }
+    install.folders.push_back(root);
+    // The profile is resolved before any archive is mounted; one that cannot
+    // be used stops here and never falls back to the base game.
+    auto profile = resolve_folder_profile(install.folders, mod);
+    install.profile = std::move(profile.profile);
+    install.profile_errors = std::move(profile.errors);
+    install.profile_warnings = std::move(profile.warnings);
+    if (!install.profile_errors.empty())
+        return install;
     discover_archives(root, install);
-    if (!install.archives.empty())
+    if (!install.archives.empty() || install.profile)
         return install;
     // A folder with no archives may hold the demo's installer; its unpacked
     // archive, checked, is the one archive mounted from the folder it was
@@ -184,8 +233,8 @@ GameInstall inspect_game_install(
 }
 
 bool usable(const GameInstall& install) {
-    return install.problem.empty() && install.folder && !install.archives.empty() &&
-           install.missing.empty();
+    return install.problem.empty() && install.profile_errors.empty() && install.folder &&
+           !install.archives.empty() && install.missing.empty();
 }
 
 std::optional<GameDirectory>
@@ -193,7 +242,14 @@ resolve_game_directory(const GameDirectoryRequest& request, const GameDirectoryH
     if (!request.argument.empty()) {
         if (request.archives_named)
             return GameDirectory{
-                request.argument, {}, GameDirectorySource::argument, request.argument, {}
+                request.argument,
+                {},
+                GameDirectorySource::argument,
+                request.argument,
+                {},
+                {},
+                {},
+                {}
             };
         auto install = inspect_folder(host, request.argument);
         if (install.problem.empty() && !install.folder)
@@ -201,7 +257,7 @@ resolve_game_directory(const GameDirectoryRequest& request, const GameDirectoryH
                 "game directory does not exist: " + path_to_utf8(request.argument) +
                 " (name it with --game-dir PATH)"
             );
-        if (!install.problem.empty() || install.archives.empty())
+        if (!install.problem.empty() || !install.profile_errors.empty() || install.archives.empty())
             throw std::runtime_error(
                 "the folder --game-dir names cannot be played: " + path_to_utf8(request.argument) +
                 " (" + install_problem(install) + ")"
@@ -343,6 +399,28 @@ std::optional<std::string> stored_game_directory(const oa::platform::preferences
 
 void remember_game_directory(oa::platform::preferences::Values& values, const fs::path& folder) {
     values[std::string(kGameDirectoryPreference)] =
+        path_to_utf8(fs::absolute(folder).lexically_normal());
+}
+
+fs::path chosen_mod_directory(
+    const fs::path& mod_dir, bool base_game, const oa::platform::preferences::Values& values
+) {
+    if (!mod_dir.empty())
+        return mod_dir;
+    if (base_game)
+        return {};
+    const auto found = values.find(std::string(mod_directory_preference));
+    if (found == values.end() || found->second.empty())
+        return {};
+    return path_from_utf8(found->second);
+}
+
+void remember_mod_directory(oa::platform::preferences::Values& values, const fs::path& folder) {
+    if (folder.empty()) {
+        values.erase(std::string(mod_directory_preference));
+        return;
+    }
+    values[std::string(mod_directory_preference)] =
         path_to_utf8(fs::absolute(folder).lexically_normal());
 }
 

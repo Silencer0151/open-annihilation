@@ -7,6 +7,7 @@
 #include <cctype>
 #include <string>
 #include <system_error>
+#include <vector>
 
 namespace oa::audio {
 namespace {
@@ -48,6 +49,39 @@ void hash_word(uint32_t& hash, uint64_t value) {
     }
 }
 
+// Names the disc by its track count and its audio tracks' sizes.
+void identify_disc(MusicDisc& disc) {
+    std::error_code error;
+    uint32_t hash = fnv_offset;
+    hash_word(hash, static_cast<uint64_t>(disc.track_count));
+    for (int32_t track = music_disc_first_audio_track; track <= disc.track_count; ++track) {
+        const auto size =
+            std::filesystem::file_size(disc.tracks[static_cast<std::size_t>(track)], error);
+        hash_word(hash, error ? 0 : static_cast<uint64_t>(size));
+    }
+    disc.disc_id = hash == 0 ? 1 : hash;
+}
+
+// The regular files of a directory whose extension is .mp3, matched
+// without case.
+std::vector<std::filesystem::path> mp3_files(const std::filesystem::path& directory) {
+    std::vector<std::filesystem::path> files;
+    std::error_code error;
+    for (std::filesystem::directory_iterator it(directory, error), end; !error && it != end;
+         it.increment(error))
+        if (it->is_regular_file(error) && lower(it->path().extension().string()) == ".mp3")
+            files.push_back(it->path());
+    return files;
+}
+
+// Upper-cases ASCII letters, the order names sort in without case.
+std::string upper(std::string text) {
+    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) {
+        return static_cast<char>(std::toupper(c));
+    });
+    return text;
+}
+
 } // namespace
 
 std::filesystem::path music_disc_directory(const std::filesystem::path& game_dir) {
@@ -85,14 +119,53 @@ MusicDisc music_disc_scan(const std::filesystem::path& directory) {
         return disc;
     disc.track_count = last;
     disc.tracks.assign(found.begin(), found.begin() + last + 1);
-    uint32_t hash = fnv_offset;
-    hash_word(hash, static_cast<uint64_t>(last));
-    for (int32_t track = music_disc_first_audio_track; track <= last; ++track) {
-        const auto size =
-            std::filesystem::file_size(disc.tracks[static_cast<std::size_t>(track)], error);
-        hash_word(hash, error ? 0 : static_cast<uint64_t>(size));
+    identify_disc(disc);
+    return disc;
+}
+
+MusicDisc music_disc_scan_numbered(const std::filesystem::path& directory) {
+    MusicDisc disc;
+    disc.directory = directory;
+    std::vector<std::filesystem::path> found(static_cast<std::size_t>(music_disc_max_tracks) + 1);
+    for (const auto& file : mp3_files(directory)) {
+        // Only the number's own spelling: 01.mp3 is not track 1.
+        const int32_t number = track_number(file.filename());
+        if (number >= 1 && number <= music_disc_max_tracks &&
+            file.stem().string() == std::to_string(number))
+            found[static_cast<std::size_t>(number)] = file;
     }
-    disc.disc_id = hash == 0 ? 1 : hash;
+    int32_t last = 0;
+    while (last < music_disc_max_tracks && !found[static_cast<std::size_t>(last) + 1].empty())
+        ++last;
+    if (last < music_disc_first_audio_track)
+        return disc;
+    disc.track_count = last;
+    disc.tracks.assign(found.begin(), found.begin() + last + 1);
+    // Track 1 is the data track whatever its file holds.
+    disc.tracks[1].clear();
+    identify_disc(disc);
+    return disc;
+}
+
+MusicDisc music_disc_scan_folder(const std::filesystem::path& directory) {
+    MusicDisc disc;
+    disc.directory = directory;
+    auto files = mp3_files(directory);
+    std::sort(files.begin(), files.end(), [](const auto& a, const auto& b) {
+        const auto left = upper(a.filename().string());
+        const auto right = upper(b.filename().string());
+        return left != right ? left < right : a.filename().string() < b.filename().string();
+    });
+    const auto playable =
+        static_cast<std::size_t>(music_disc_max_tracks - music_disc_first_audio_track + 1);
+    if (files.size() > playable)
+        files.resize(playable);
+    if (files.empty())
+        return disc;
+    disc.track_count = static_cast<int32_t>(files.size()) + music_disc_first_audio_track - 1;
+    disc.tracks.assign(static_cast<std::size_t>(music_disc_first_audio_track), {});
+    disc.tracks.insert(disc.tracks.end(), files.begin(), files.end());
+    identify_disc(disc);
     return disc;
 }
 

@@ -14,7 +14,7 @@
 // design says: the shade rows as a per-vertex multiplier with a bright page
 // for the rows above unlit, the alpha table as alpha 0.5, the blue table as
 // a halved colour and an additive lift, the nanoframe's bands per polygon
-// with its outline as line quads. The texture frames are placed on sprite
+// with its outline as the processor finds its pixels. The texture frames are placed on sprite
 // pages (sprite_pages.hpp) on first sight, in two variants: keyed, where the
 // image key is transparent as in a cached image, and flat, where it is a
 // colour as in a flat draw. Nothing here writes the match or the planner's
@@ -23,6 +23,7 @@
 
 #include "oa/base/game_math.hpp"
 #include "oa/present/palette_tables.hpp"
+#include "oa/present/polygon.hpp"
 #include "oa/sim/effect_particles.hpp"
 #include "oa/sim/model_runtime/instance.hpp"
 
@@ -70,16 +71,6 @@ constexpr float texel_edge = 1.0F / 64.0F;
 constexpr float texel_centre = 0.5F;
 /// The blue table halves a colour and lifts its blue channel by this much.
 constexpr uint8_t underwater_blue_lift = 0x32;
-/// The build effect's colour ramp, palette 0xa0 to 0xaf, up then down.
-constexpr uint8_t nano_ramp_low = 0xa0;
-constexpr uint8_t nano_ramp_high = 0xaf;
-constexpr uint32_t nano_ramp_turn = 0x10;
-constexpr uint32_t nano_ramp_mask = 0xf;
-constexpr uint32_t nano_wave_a_rate = 0x21;
-constexpr uint32_t nano_wave_b_rate = 0x39;
-constexpr uint32_t nano_wave_period = 0x1e;
-constexpr uint32_t nano_wave_a_salt = 5;
-constexpr uint32_t nano_wave_b_salt = 9;
 constexpr float progress_scale = 255.0F;
 /// The progress bands of the build effect and the span of each.
 constexpr int32_t nano_band_first = 0xeb;
@@ -92,8 +83,14 @@ constexpr int32_t nano_span_middle = 0x55;
 constexpr int32_t depth_byte_max = 0xff;
 /// The band below a threshold the effect colours.
 constexpr int32_t nano_band_depth = 4;
-/// The width of a nanoframe's outline, in map pixels.
-constexpr float outline_width = 1.0F;
+/// The corners of a textured primitive the image fills.
+constexpr size_t quad_corner_count = 4;
+/// The empty map pixels kept round the plane a nanoframe's outline is
+/// found on, past the rows' last pixels the outline reaches.
+constexpr int32_t outline_plane_margin = 2;
+/// The most map pixels a side of that plane takes; a model wider or
+/// taller than that draws no outline.
+constexpr int32_t most_outline_plane_side = 4096;
 /// The edge of the white page every solid fill draws from, so that each
 /// renderer draws the fill with the batch's own blend.
 constexpr uint32_t solid_page_edge = 2;
@@ -134,12 +131,11 @@ struct Polygon {
     int32_t depth{};         ///< the depth plane's value, for the sort
 };
 
-/// One edge of a nanoframe's outline, frame pixels at zoom 1.
-struct Edge {
-    int32_t x0{};
-    int32_t y0{};
-    int32_t x1{};
-    int32_t y1{};
+/// A run of one row's pixels of a nanoframe's outline, frame pixels at zoom 1.
+struct OutlineRun {
+    int32_t x{};
+    int32_t y{};
+    int32_t width{};
     card::Colour colour{};
 };
 
@@ -246,22 +242,15 @@ uint32_t first_primitive(const draw::PreparedObject& prepared) noexcept {
     return prepared.skips_first ? 1U : 0U;
 }
 
-/// The build effect's bands of a unit for a tick, as apply_build_effect
-/// sets them; inactive for a finished unit.
-NanoBands nano_bands(uint32_t tick, const Unit& unit) {
+/// The build effect's bands of a unit for a tick of its pulse, as
+/// apply_build_effect sets them; inactive for a finished unit.
+NanoBands nano_bands(uint32_t pulse_tick, const Unit& unit) {
     NanoBands bands;
     if (unit.build_remaining == 0.0F)
         return bands;
-    const uint32_t id = unit.id;
-    const uint32_t wave_a = (tick * nano_wave_a_rate) / nano_wave_period + (id ^ nano_wave_a_salt);
-    const uint32_t wave_b = (tick * nano_wave_b_rate) / nano_wave_period + (id ^ nano_wave_b_salt);
-    const auto ramp = [](uint32_t wave) -> int32_t {
-        return (wave & nano_ramp_turn) != 0
-                   ? nano_ramp_high - static_cast<int32_t>(wave & nano_ramp_mask)
-                   : static_cast<int32_t>(wave & nano_ramp_mask) + nano_ramp_low;
-    };
-    const int32_t color_a = ramp(wave_a);
-    const int32_t color_b = ramp(wave_b);
+    const draw::BuildPulseColours colours = draw::build_pulse_colours(pulse_tick, unit.id);
+    const int32_t color_a = colours.first;
+    const int32_t color_b = colours.second;
     const int32_t progress = oa::base::game_math::truncate_low32(
         static_cast<double>(unit.build_remaining) * progress_scale
     );
@@ -386,7 +375,14 @@ struct ModelStage::Impl {
     // Scratch of a frame's emission, kept from frame to frame.
     std::vector<Corner> corners;
     std::vector<Polygon> polygons;
-    std::vector<Edge> edges;
+    std::vector<OutlineRun> outline_runs;
+    /// The primitives a nanoframe's outline is found from: their corners,
+    /// and how many corners each takes and whether it fills the image.
+    std::vector<oa::present::DepthVertex> outline_corners;
+    std::vector<std::pair<uint32_t, bool>> outline_primitives;
+    std::vector<oa::present::DepthVertex> outline_scratch;
+    std::vector<uint8_t> outline_depth;
+    std::vector<uint8_t> outline_marks;
     std::vector<gw::VertexNormal> normals;
     std::vector<FixedVector3> points;
     std::vector<gw::PixelPoint> projected;
@@ -634,16 +630,28 @@ class Emitter {
     );
     void emit_polygons(const Canvas& surface);
     void emit_polygon(const Canvas& surface, const Polygon& polygon);
-    void emit_edges(const Canvas& surface);
-    void emit_silhouettes(const Canvas& surface, card::Blend blend);
+    void emit_outline(const Canvas& surface);
+    void emit_silhouettes(const Canvas& surface, card::Blend blend, const card::Colour& shade);
 
     // The kinds.
     void draw_model(const ModelDraw& drawn);
     void draw_projectile(const ProjectileDraw& shot);
     void draw_debris(const DebrisDraw& piece);
     void draw_fragment(const FragmentDraw& fragment);
-    void shadow_of_model(const ModelDraw& drawn, const Canvas& surface, card::Blend blend);
+    void shadow_of_model(
+        const ModelDraw& drawn, const Canvas& surface, card::Blend blend, bool unfinished_pass
+    );
     void shadow_of_projectile(const ProjectileDraw& shot, const Canvas& surface);
+
+    /// Returns the alpha the frame's shadows draw at: the alpha table's half
+    /// mix at the game's own darkness, less as the list's shadow level falls.
+    ///
+    /// @return half_alpha times the shadow level's strength
+    [[nodiscard]] float shadow_alpha() const noexcept {
+        const uint32_t level =
+            in_.draws != nullptr ? in_.draws->shadow_level : draw::shadow_full_level;
+        return half_alpha * draw::shadow_level_strength(level);
+    }
 
     ModelStage::Impl& impl_;
     gw::SpritePages& pages_;
@@ -973,9 +981,13 @@ void Emitter::apply_nanoframe(
             );
         }
     }
-    // The outline: every visible piece's primitives, cleared ones too, each
-    // edge a line a map pixel wide.
-    const card::Colour colour = palette_colour(impl_.palette, impl_.gamma, bands.outline, 1.0F);
+    // The outline, as the processor draws it over the image: each visible
+    // piece's primitives, cleared ones too, in the processor's order, the
+    // first and the last pixel of each row a primitive spans, where nothing
+    // nearer of the image lies. The image's depth plane is found from its
+    // primitives on a plane of the model's own.
+    impl_.outline_corners.clear();
+    impl_.outline_primitives.clear();
     const Model& source = model.instance->model();
     const auto pieces = model.instance->pieces();
     for (size_t n = pieces.size(); n != 0; --n) {
@@ -987,28 +999,93 @@ void Emitter::apply_nanoframe(
         const draw::PreparedObject& prepared = model.prepared->objects[state.object_index];
         const auto& points = state.transformed_vertices;
         for (uint32_t i = first_primitive(prepared); i < prepared.primitives.size(); ++i) {
-            const uint32_t index = prepared.primitives[i].source_index;
-            if (index >= object.primitives.size())
+            const draw::PreparedPrimitive& primitive = prepared.primitives[i];
+            if (primitive.source_index >= object.primitives.size())
                 continue;
-            const auto& corners = object.primitives[index].vertex_indices;
-            if (corners.empty())
+            const auto& corners = object.primitives[primitive.source_index].vertex_indices;
+            if (corners.empty() || std::any_of(corners.begin(), corners.end(), [&](uint16_t c) {
+                    return c >= points.size();
+                }))
                 continue;
-            impl_.projected.clear();
-            bool valid = true;
             for (const uint16_t corner : corners) {
-                if (corner >= points.size()) {
-                    valid = false;
-                    break;
-                }
-                impl_.projected.push_back(place_vertex(points[corner], placement));
+                const gw::PixelPoint placed = place_vertex(points[corner], placement);
+                impl_.outline_corners.push_back({placed.x, placed.y, placed.depth});
             }
-            if (!valid)
+            const bool fills = (primitive.flags & draw::primitive_colored) != 0 ||
+                               corners.size() == quad_corner_count;
+            impl_.outline_primitives.emplace_back(static_cast<uint32_t>(corners.size()), fills);
+        }
+    }
+    if (impl_.outline_corners.empty())
+        return;
+    int32_t left = impl_.outline_corners.front().x;
+    int32_t right = left;
+    int32_t top = impl_.outline_corners.front().y;
+    int32_t bottom = top;
+    for (const auto& corner : impl_.outline_corners) {
+        left = std::min(left, corner.x);
+        right = std::max(right, corner.x);
+        top = std::min(top, corner.y);
+        bottom = std::max(bottom, corner.y);
+    }
+    const int64_t wide = int64_t{right} - left + 1 + 2 * outline_plane_margin;
+    const int64_t high = int64_t{bottom} - top + 1 + 2 * outline_plane_margin;
+    if (wide > most_outline_plane_side || high > most_outline_plane_side)
+        return;
+    const int32_t shift_x = outline_plane_margin - left;
+    const int32_t shift_y = outline_plane_margin - top;
+    for (auto& corner : impl_.outline_corners) {
+        corner.x += shift_x;
+        corner.y += shift_y;
+    }
+    const auto size = static_cast<size_t>(wide * high);
+    impl_.outline_depth.assign(size, 0);
+    impl_.outline_marks.assign(size, 0);
+    Sprite plane{};
+    plane.width = static_cast<uint16_t>(wide);
+    plane.height = static_cast<uint16_t>(high);
+    plane.key = 0;
+    plane.data = impl_.outline_marks.data();
+    plane.aux = impl_.outline_depth.data();
+    // The depth plane: every primitive the image fills, its marks left
+    // unmarked.
+    size_t first = 0;
+    for (const auto& [count, fills] : impl_.outline_primitives) {
+        if (fills && count >= 3)
+            oa::present::fill_depth_polygon(
+                plane, impl_.outline_corners.data() + first, static_cast<int32_t>(count), 0
+            );
+        first += count;
+    }
+    // The outline over it, each primitive closed by its first corner again.
+    constexpr uint8_t marked = 1;
+    first = 0;
+    for (const auto& [count, fills] : impl_.outline_primitives) {
+        impl_.outline_scratch.assign(
+            impl_.outline_corners.begin() + static_cast<std::ptrdiff_t>(first),
+            impl_.outline_corners.begin() + static_cast<std::ptrdiff_t>(first + count)
+        );
+        impl_.outline_scratch.push_back(impl_.outline_scratch.front());
+        oa::present::outline_depth_polygon(
+            plane,
+            impl_.outline_scratch.data(),
+            static_cast<int32_t>(impl_.outline_scratch.size()),
+            marked
+        );
+        first += count;
+    }
+    const card::Colour colour = palette_colour(impl_.palette, impl_.gamma, bands.outline, 1.0F);
+    for (int32_t y = 0; y < plane.height; ++y) {
+        const uint8_t* row = impl_.outline_marks.data() + static_cast<size_t>(y) * plane.width;
+        for (int32_t x = 0; x < plane.width;) {
+            if (row[x] != marked) {
+                ++x;
                 continue;
-            for (size_t k = 0; k < impl_.projected.size(); ++k) {
-                const gw::PixelPoint& a = impl_.projected[k];
-                const gw::PixelPoint& b = impl_.projected[(k + 1) % impl_.projected.size()];
-                impl_.edges.push_back({a.x, a.y, b.x, b.y, colour});
             }
+            const int32_t start = x;
+            while (x < plane.width && row[x] == marked)
+                ++x;
+            impl_.outline_runs.push_back({start - shift_x, y - shift_y, x - start, colour});
         }
     }
 }
@@ -1212,44 +1289,41 @@ void Emitter::emit_polygons(const Canvas& surface) {
         emit_polygon(surface, polygon);
 }
 
-void Emitter::emit_edges(const Canvas& surface) {
-    if (impl_.edges.empty())
+void Emitter::emit_outline(const Canvas& surface) {
+    if (impl_.outline_runs.empty())
         return;
-    const float width = std::max(1.0F, outline_width * scale_);
-    for (const Edge& edge : impl_.edges) {
-        const float x0 = surface.origin_x + static_cast<float>(edge.x0) * scale_;
-        const float y0 = surface.origin_y + static_cast<float>(edge.y0) * scale_;
-        const float x1 = surface.origin_x + static_cast<float>(edge.x1) * scale_;
-        const float y1 = surface.origin_y + static_cast<float>(edge.y1) * scale_;
-        const float dx = x1 - x0;
-        const float dy = y1 - y0;
-        const float length = std::sqrt(dx * dx + dy * dy);
-        if (length <= 0.0F)
-            continue;
-        const float nx = -dy / length * width * half_colour;
-        const float ny = dx / length * width * half_colour;
+    // Zoomed out, a run of map pixels spans less than a screen pixel and
+    // could fall between pixel centres, leaving a nanoframe barely begun
+    // with nothing on screen: each run is then drawn at least a screen
+    // pixel across and down.
+    const float least = scale_ < 1.0F ? 1.0F : 0.0F;
+    for (const OutlineRun& run : impl_.outline_runs) {
+        const float x0 = surface.origin_x + static_cast<float>(run.x) * scale_;
+        const float y0 = surface.origin_y + static_cast<float>(run.y) * scale_;
+        const float x1 =
+            std::max(surface.origin_x + static_cast<float>(run.x + run.width) * scale_, x0 + least);
+        const float y1 =
+            std::max(surface.origin_y + static_cast<float>(run.y + 1) * scale_, y0 + least);
         vertices_.clear();
         for (const auto& [x, y] :
-             {std::pair{x0 + nx, y0 + ny},
-              std::pair{x1 + nx, y1 + ny},
-              std::pair{x1 - nx, y1 - ny},
-              std::pair{x0 - nx, y0 - ny}}) {
+             {std::pair{x0, y0}, std::pair{x1, y0}, std::pair{x1, y1}, std::pair{x0, y1}}) {
             card::Vertex vertex;
             vertex.x = x;
             vertex.y = y;
-            vertex.colour = edge.colour;
+            vertex.colour = run.colour;
             vertices_.push_back(vertex);
         }
         constexpr std::array<card::Index, 6> quad{0, 1, 2, 0, 2, 3};
         append(surface, {}, card::Blend::alpha, vertices_, quad);
     }
-    impl_.edges.clear();
+    impl_.outline_runs.clear();
 }
 
-void Emitter::emit_silhouettes(const Canvas& surface, card::Blend blend) {
+void Emitter::emit_silhouettes(
+    const Canvas& surface, card::Blend blend, const card::Colour& shade
+) {
     if (!ensure_solid_page())
         return;
-    const card::Colour shade{0.0F, 0.0F, 0.0F, half_alpha};
     for (const Polygon& polygon : impl_.polygons) {
         if (polygon.corner_count < 3)
             continue;
@@ -1299,7 +1373,7 @@ void Emitter::draw_model(const ModelDraw& drawn) {
     const Game& game = in_.world->game;
     impl_.corners.clear();
     impl_.polygons.clear();
-    impl_.edges.clear();
+    impl_.outline_runs.clear();
     const int32_t dx = wrap_sub(unit.position.x, camera_x_);
     const int32_t dz = wrap_sub(unit.position.z, camera_z_);
     const int32_t image_x = hi(dx);
@@ -1394,21 +1468,23 @@ void Emitter::draw_model(const ModelDraw& drawn) {
     // plane the sort stands in for.
     if (unfinished) {
         // An unfinished unit's image holds every piece; a mobile one draws
-        // them again with the running frames.
+        // them again with the running frames, unless its moving pieces wait
+        // for it to be built as a building's do.
+        const bool framed = building || in_.moving_pieces_once_built;
         add_unit_pieces(
             model,
             *mesh,
             image_placement,
             true,
             true,
-            building,
+            framed,
             team,
             image_shading,
             body_alpha,
             false
         );
-        if (building)
-            apply_nanoframe(nano_bands(in_.tick, unit), 0, model, image_placement);
+        if (framed)
+            apply_nanoframe(nano_bands(in_.build_pulse_tick, unit), 0, model, image_placement);
     } else {
         add_unit_pieces(
             model, *mesh, image_placement, true, false, true, team, image_shading, body_alpha, false
@@ -1465,7 +1541,9 @@ void Emitter::draw_model(const ModelDraw& drawn) {
             body_alpha,
             false
         );
-        apply_nanoframe(nano_bands(in_.tick, child), first_polygon, carried.model, composed);
+        apply_nanoframe(
+            nano_bands(in_.build_pulse_tick, child), first_polygon, carried.model, composed
+        );
     }
     const int32_t lift = static_cast<int32_t>(game.sea_level) - hi(unit.position.y);
     const bool own = (unit.flags & OA_UNIT_FLAG_VIEWPOINT_OWNED) != 0 ||
@@ -1479,7 +1557,7 @@ void Emitter::draw_model(const ModelDraw& drawn) {
         }
     );
     emit_polygons(battlefield());
-    emit_edges(battlefield());
+    emit_outline(battlefield());
 }
 
 namespace {
@@ -1627,7 +1705,9 @@ void Emitter::draw_fragment(const FragmentDraw& fragment) {
     emit_polygons(battlefield());
 }
 
-void Emitter::shadow_of_model(const ModelDraw& drawn, const Canvas& surface, card::Blend blend) {
+void Emitter::shadow_of_model(
+    const ModelDraw& drawn, const Canvas& surface, card::Blend blend, bool unfinished_pass
+) {
     draw::ModelRef model = drawn.model;
     if (drawn.stand_in >= 0 && static_cast<size_t>(drawn.stand_in) < in_.draws->stand_ins.size())
         model.unit = &in_.draws->stand_ins[static_cast<size_t>(drawn.stand_in)];
@@ -1656,6 +1736,13 @@ void Emitter::shadow_of_model(const ModelDraw& drawn, const Canvas& surface, car
         unit.type_index == 0 && static_cast<int16_t>(unit_height) < game.sea_level;
     const bool digger = (flags & OA_UNIT_DEF_FLAG_DIGGER) != 0;
     const bool building = is_building(unit);
+    // An unfinished building's shadow is taken out where its image lies,
+    // which the shadow target alone allows; those shadows are drawn in a
+    // pass before the others, so that taking one out leaves the others.
+    const bool cut = blend == card::Blend::none && building && !digger && !submerged_standin &&
+                     unit.build_remaining != 0.0F;
+    if (cut != unfinished_pass)
+        return;
     const int32_t dx = wrap_sub(unit.position.x, camera_x_);
     const int32_t dz = wrap_sub(unit.position.z, camera_z_);
     const int32_t shadow_x = hi(dx) + draw::shadow_offset_x;
@@ -1743,7 +1830,29 @@ void Emitter::shadow_of_model(const ModelDraw& drawn, const Canvas& surface, car
         const int32_t lift = static_cast<int32_t>(game.sea_level) - unit_height;
         image_silhouette(lift > 0 ? int32_t{static_cast<uint8_t>(base + lift)} : -1);
     }
-    emit_silhouettes(surface, blend);
+    emit_silhouettes(surface, blend, {0.0F, 0.0F, 0.0F, shadow_alpha()});
+    // The processor cuts a building's shadow by the mask of its whole
+    // image, so that the shadow lies only past the building; over an
+    // unfinished building, whose image the bands clear, the ground shows
+    // there unshaded. The image's polygons at the shadow's place, moved
+    // back by the shadow's offset, clear the target again.
+    if (cut) {
+        impl_.corners.clear();
+        impl_.polygons.clear();
+        add_unit_pieces(
+            model,
+            *mesh,
+            Placement{false, shadow_x - draw::shadow_offset_x, shadow_y, 0, 0, 0, 0, base},
+            true,
+            true,
+            true,
+            team,
+            Shading::none,
+            1.0F,
+            false
+        );
+        emit_silhouettes(surface, card::Blend::none, {0.0F, 0.0F, 0.0F, 0.0F});
+    }
 }
 
 void Emitter::shadow_of_projectile(const ProjectileDraw& shot, const Canvas& surface) {
@@ -1772,7 +1881,7 @@ void Emitter::shadow_of_projectile(const ProjectileDraw& shot, const Canvas& sur
     const float v0 = static_cast<float>(placed.rect.y) / page;
     const float u1 = static_cast<float>(placed.rect.x + placed.rect.width) / page;
     const float v1 = static_cast<float>(placed.rect.y + placed.rect.height) / page;
-    const card::Colour shade{0.0F, 0.0F, 0.0F, half_alpha};
+    const card::Colour shade{0.0F, 0.0F, 0.0F, shadow_alpha()};
     vertices_.clear();
     for (const auto& [x, y, u, v] :
          {std::tuple{left, top, u0, v0},
@@ -1794,7 +1903,9 @@ void Emitter::shadow_of_projectile(const ProjectileDraw& shot, const Canvas& sur
 
 void Emitter::shadows(bool& through_target) {
     through_target = false;
-    if (in_.draws == nullptr)
+    // A frame drawn too far out for shadows draws none, and neither clears
+    // nor composes the shadow target.
+    if (in_.draws == nullptr || !shadows_drawn(*in_.draws))
         return;
     const auto width = static_cast<uint32_t>(std::max(0, scissor_.width));
     const auto height = static_cast<uint32_t>(std::max(0, scissor_.height));
@@ -1832,9 +1943,10 @@ void Emitter::shadows(bool& through_target) {
     for (const WorldDraw& entry : in_.draws->draws)
         if (entry.kind == WorldDrawKind::projectile && entry.index < in_.draws->projectiles.size())
             shadow_of_projectile(in_.draws->projectiles[entry.index], surface);
-    for (const WorldDraw& entry : in_.draws->draws)
-        if (entry.kind == WorldDrawKind::model && entry.index < in_.draws->models.size())
-            shadow_of_model(in_.draws->models[entry.index], surface, blend);
+    for (const bool unfinished_pass : {true, false})
+        for (const WorldDraw& entry : in_.draws->draws)
+            if (entry.kind == WorldDrawKind::model && entry.index < in_.draws->models.size())
+                shadow_of_model(in_.draws->models[entry.index], surface, blend, unfinished_pass);
     if (!through_target)
         return;
     card::Batch compose;

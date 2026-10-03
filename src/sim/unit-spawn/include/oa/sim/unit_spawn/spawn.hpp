@@ -44,12 +44,32 @@ struct PlayerSetupState {
     uint8_t side{}, color{};
 };
 
+/// How unit creation follows a mod's unit rules; the defaults are 3.1c's.
+struct SpawnRules {
+    /// The tick from which each place of each player's unit range may be
+    /// taken again by a local creation (units.id-reuse-delay): OA_PLAYER_COUNT
+    /// rows of Game.units_per_player entries, row by player, entry by the
+    /// place's offset in the range. Empty when a free slot is taken at once,
+    /// as in 3.1c. The match owns the entries.
+    std::span<int32_t> reuse_ticks{};
+    /// Ticks after a death before its place is taken again; read only with
+    /// reuse_ticks.
+    int32_t reuse_delay_ticks{};
+    /// A unit created with its model top under the sea starts with sea
+    /// occupy code 3 (units.water-state-rules start-submerged).
+    bool start_submerged{};
+};
+
+/// Unit creation as 3.1c does it.
+inline constexpr SpawnRules baseline_spawn_rules{};
+
 // Native tables that accompany oa::World during unit creation. `types` is
 // indexed like World.unit_defs; `assets` by unit slot; `setups` by player.
 struct Tables {
     std::span<Type> types;
     std::span<SlotAssets> assets;
     std::span<PlayerSetupState> setups;
+    SpawnRules rules{}; // a mod's unit rules; 3.1c's by default
 };
 
 /// Debits a player's energy store when it covers an amount.
@@ -82,6 +102,12 @@ struct Tables {
 // Request.state of a unit placed on the ground: occupancy 1 in Unit.flags.
 inline constexpr uint32_t ground_occupancy_state = 1;
 
+// The quarter turns a building faces, from south (units.build-rotation).
+inline constexpr uint8_t facing_south = 0;
+inline constexpr uint8_t facing_east = 1;
+inline constexpr uint8_t facing_north = 2;
+inline constexpr uint8_t facing_west = 3;
+
 struct Request {
     uint8_t player{};
     uint16_t type{};
@@ -89,6 +115,11 @@ struct Request {
     bool finished{};
     uint32_t state{};          // Unit.flags occupancy bits, written after initialization
     uint16_t requested_slot{}; // zero chooses first free; nonzero is exact global index
+    // Quarter turns from south the unit is built facing (facing_*); 0 in
+    // 3.1c. An east or west facing swaps the footprint's width and depth,
+    // and the facing joins the heading (facing << 14) before the unit takes
+    // its place on the map. The caller decides whether the type may face it.
+    uint8_t facing{};
 };
 
 // Work unit creation hands to other systems, in the order create calls it.
@@ -259,6 +290,10 @@ bool init_unit_pool(oa::World& world, uint16_t per_player_limit) noexcept;
 /// @return the unit, or null for the game's ordinary failures: a disabled or zero type,
 ///         an exhausted limit, an occupied exact slot, or no free slot; null too for a
 ///         fault
+/// @quirk With SpawnRules::reuse_ticks, a creation without an exact slot takes
+///        the first free slot whose reuse tick the game tick has reached
+///        (signed), and fails when none has; a creation at game tick 0 first
+///        clears every reuse tick.
 oa::Unit* create(
     oa::World& world,
     Tables& tables,
@@ -279,9 +314,37 @@ oa::Unit* create(
 /// @return none; no_owner for a slot without an owner, type_outside_table for a type
 ///         out of range, type_removed for a callback that removes the type, each
 ///         stopping the initialization there
+/// @param rules a mod's unit rules: with SpawnRules::start_submerged the
+///        first byte of the sea occupy code (Unit.last_occupy_code) becomes 3
+///        when the model top (UnitDef.model_height) plus the unit's height is
+///        below the sea level, else 0
 /// @quirk The heading's half-angle is read from the type the unit holds after the
 ///        random draw, and the type is reloaded after the weapon callbacks.
-SpawnFault initialize_numeric(oa::World& world, oa::Unit& unit, const Request& request, Host& host);
+/// @quirk With start_submerged the sea level is read as a 16-bit word, so a debug
+///        overlay mode (Game.debug_overlay, the byte after it) raises it by 256
+///        per mode.
+SpawnFault initialize_numeric(
+    oa::World& world,
+    oa::Unit& unit,
+    const Request& request,
+    Host& host,
+    const SpawnRules& rules = baseline_spawn_rules
+);
+/// Records the tick from which a dead unit's place in its owner's range may
+/// be taken again (units.id-reuse-delay), once its record is torn down.
+///
+/// Nothing is recorded without SpawnRules::reuse_ticks. At game tick 0 every
+/// reuse tick is cleared first.
+///
+/// @param world world the unit died in
+/// @param[in,out] tables its rules' reuse ticks receive the entry
+/// @param unit the dead unit's record, its id, owner and capture cooldown kept
+/// @quirk The entry goes in the row of the player numbered by bits 8 to 23 of
+///        the unit's capture cooldown (Unit.capture_cooldown), which is
+///        player 0 for every unit not handed over 256 or more ticks ago, at
+///        the unit's place in its owner's range; a number past 9 records
+///        nothing. Only that row's own creations wait.
+void record_slot_death(oa::World& world, Tables& tables, const oa::Unit& unit) noexcept;
 /// Attaches the model and COB script of a freshly claimed unit.
 ///
 /// A scripted type allocates a VM, loads the COB, creates the scripted model instance,

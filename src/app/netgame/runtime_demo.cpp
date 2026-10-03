@@ -9,6 +9,7 @@
 #include "oa/app/check_host.hpp"
 #include "demo_state.hpp"
 #include "net_options.hpp"
+#include "wire_rules_binding.hpp"
 
 #include "oa/netgame/match/net_match.hpp"
 #include "oa/session/demo.hpp"
@@ -78,12 +79,15 @@ void NetworkPlay::start_demo_playback() {
     const bool ignore_unit_table = staged ? !staged->strict : net_options().demo_ignore_unit_table;
     const auto& recording = session->playback.demo;
     const auto& players = recording.players;
-    if (players.size() >= OA_PLAYER_COUNT)
+    session->playback.ten_player_replay =
+        oa::app::netgame::wire_rules_of(runtime_.mod_profile()).ten_player_replay;
+    const bool slotless = demo::demo_watches_without_slot(session->playback);
+    if (players.size() >= OA_PLAYER_COUNT && !slotless)
         throw std::runtime_error("demo has no free slot for the watcher");
     if (!select_map_named(recording.map_name))
         throw std::runtime_error("demo map '" + recording.map_name + "' is not installed");
     const auto watcher = players.size();
-    runtime_.state_.player_count = static_cast<uint16_t>(watcher + 1);
+    runtime_.state_.player_count = static_cast<uint16_t>(slotless ? watcher : watcher + 1);
     // The match is built for the view of the first recorded player, the
     // others as computer slots; demo_session_begin then makes every recorded
     // player remote and the watcher after them local.
@@ -137,8 +141,8 @@ void NetworkPlay::start_demo_playback() {
     // The view is the watcher's: it owns no units, so nothing can be
     // ordered and no unit is announced as its own, and with mapping and
     // line of sight off the whole map shows.
-    runtime_.match_local_player_ = session->watcher_slot;
-    runtime_.offline_services_.set_viewpoint(session->watcher_slot);
+    const uint8_t view = slotless ? 0 : session->watcher_slot;
+    runtime_.match_local_player_ = view;
     demo_speed_ = 0;
     demo_ = std::move(session);
     runtime_.enter_match_view();
@@ -167,8 +171,8 @@ void NetworkPlay::demo_frame() {
     if (!demo_ || !runtime_.match_)
         return;
     const auto speed = runtime_.match_->state().game.requested_speed;
-    if (speed == demo_speed_ || speed < oa::netgame::match::min_game_speed ||
-        speed > oa::netgame::match::max_game_speed)
+    const auto range = runtime_.game_speed_range();
+    if (speed == demo_speed_ || speed < range.slowest || speed > range.fastest)
         return;
     demo_speed_ = speed;
     runtime_.match_timing_.requested_rate = speed;

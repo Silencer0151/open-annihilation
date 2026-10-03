@@ -4,6 +4,7 @@
 // CD music: numbered music files play as the game disc; the CD player,
 // session and mood run on them from the menus through a match.
 #include "oa/app/runtime.hpp"
+#include "oa/app/view_rules.hpp"
 #include "oa/audio/music_session.hpp"
 #include "oa/audio/sdl_music.hpp"
 #include "oa/platform/app_loop.hpp"
@@ -26,6 +27,8 @@ namespace audio = oa::audio;
 constexpr uint32_t engine_clock_rate = 30; // engine ticks per second
 constexpr std::string_view track_types_key = "CDLISTS";
 constexpr std::string_view no_disc_text = "NO DISC";
+// The ALLSOUND section the victory announcement plays.
+constexpr std::string_view victory_announcement_sound = "Victory Condition";
 constexpr uint8_t cd_mode_by_kind = static_cast<uint8_t>(audio::CdPlayMode::by_kind);
 // The rand() generator: x = x * 214013 + 2531011, drawing bits 16..30.
 constexpr uint32_t lcg_multiplier = 214013U;
@@ -86,10 +89,31 @@ void Runtime::music_start() {
     host.random_state = static_cast<uint32_t>(SDL_GetTicks());
     oa::ui::services::timers_reset(&host.timers, &host.clock);
 
-    const auto disc = audio::music_disc_scan(audio::music_disc_directory(options_.game_dir));
+    // The profile's display rules may take the disc's tracks from numbered
+    // MP3 files from 1.mp3 or from every MP3 file of the folder instead.
+    const auto source = view_rules::music_source(ui_rules());
+    const auto scan = [source](const fs::path& directory) {
+        switch (source) {
+        case view_rules::MusicSource::numbered_mp3:
+            return audio::music_disc_scan_numbered(directory);
+        case view_rules::MusicSource::folder_scan:
+            return audio::music_disc_scan_folder(directory);
+        case view_rules::MusicSource::disc:
+            break;
+        }
+        return audio::music_disc_scan(directory);
+    };
+    // The first game folder with a music folder plays it, a mod folder's
+    // before the game folder's.
+    fs::path music_folder = options_.game_dir;
+    for (const auto& root : assets_.loose_roots())
+        if (audio::music_disc_present(scan(audio::music_disc_directory(root)))) {
+            music_folder = root;
+            break;
+        }
+    const auto disc = scan(audio::music_disc_directory(music_folder));
     if (!audio::music_disc_present(disc))
-        std::cerr << "music: no numbered tracks in " << disc.directory.string()
-                  << "; CD music is silent\n";
+        std::cerr << "music: no tracks in " << disc.directory.string() << "; CD music is silent\n";
     else if (!audio::sdl_music_decoder_available())
         std::cerr << "music: this build cannot decode music files\n";
     host.device = audio::sdl_music_device_create(disc);
@@ -196,6 +220,19 @@ void Runtime::music_begin_match() {
     audio::music_session_begin_match(host.session);
     host.in_match = true;
     host.menu_paused = false;
+}
+
+void Runtime::music_end_game() {
+    if (!music_ || !ui_rules().audio.enabled)
+        return;
+    std::ignore = audio::music_set_paused(music_->session, true);
+}
+
+void Runtime::announce_victory() {
+    if (!match_ || !ui_rules().audio.enabled)
+        return;
+    if (view_rules::victory_announcement_due(match_->state().game.tick, victory_banner_tick_))
+        play_match_interface_sound(victory_announcement_sound);
 }
 
 void Runtime::apply_saved_volumes() {

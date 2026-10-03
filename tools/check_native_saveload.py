@@ -47,8 +47,16 @@ world, and only the run-wide limit takes the save's. A skirmish started with
 the Unit limit setting at SETTING_UNIT_LIMIT plays at it, and its save loads
 at it into the same world in a run whose setting is the default, and keeps
 simulating at it.
+
+Run A is played again under a mod profile that turns every limit and hack on
+at its baseline preset (written from the engine's registry, as
+baseline_profile_text does): it must save the same world. Its save holds the
+profile's ModProfile account, so a run without the profile refuses it and a
+run under the profile loads it into the same world; run A's own save, which
+has no such account, loads under the profile too.
 """
 import argparse
+import importlib.util
 import os
 from pathlib import Path
 import re
@@ -293,6 +301,63 @@ def run(native, game_dir, profile, cwd, *extra):
             missions, features.groups(), tuple(int(limit) for limit in limits.groups()))
 
 
+# The engine's registry, from which the baseline profile is written.
+REGISTRY = Path(__file__).resolve().parent.parent / "src/data/mod-profile/registry/hack-registry.yaml"
+# What a run prints when it refuses a save of another profile.
+REFUSED_PROFILE = "Savegame belongs to mod profile baseline-rules"
+
+
+def baseline_profile(target):
+    """Writes the profile of every limit and hack with a baseline preset, at that preset."""
+    spec = importlib.util.spec_from_file_location(
+        "oamod_yaml", Path(__file__).resolve().parent / "oamod_yaml.py")
+    reader = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(reader)
+    registry = reader.load_file(str(REGISTRY))
+    limits, hacks = [], []
+    for name, entry in registry["entries"].items():
+        if "baseline" not in (entry.get("presets") or {}):
+            continue
+        if entry.get("kind") == "limit" and name.startswith("limits."):
+            limits.append(f"  {name[len('limits.'):]}: {{preset: baseline}}\n")
+        elif entry.get("kind") == "hack":
+            hacks.append(f"  {name}: {{preset: baseline}}\n")
+    text = ("oamod: 1\nid: baseline-rules\nname: \"Every rule at its baseline\"\nversion: \"1\"\n"
+            f"requires: {{base: ta-3.1c, catalogue: {registry['catalogue']}}}\n")
+    if limits:
+        text += "limits:\n" + "".join(limits)
+    if hacks:
+        text += "hacks:\n" + "".join(hacks)
+    target.write_text(text)
+
+
+def check_baseline_profile(native, game_dir, cwd, save, saved):
+    """Plays run A under the baseline profile and moves saves across it."""
+    mod = Path(cwd) / "baseline-rules.yaml"
+    baseline_profile(mod)
+    under = ("--mod", str(mod), "--accept-unimplemented-hacks")
+    profile = Path(cwd) / "baseline-preferences.conf"
+    mod_save = Path(cwd) / "savegame" / "baseline-rules.sav"
+    played = run(native, game_dir, profile, cwd, *under, "--combat", str(COMBAT_UNITS),
+                 "--give-orders", "--match-ticks", str(SAVE_TICK), "--save-after", str(SAVE_TICK),
+                 "--save-file", str(mod_save))
+    if played[:6] != saved[:6]:
+        raise SystemExit(f"run A under the baseline profile saved digest {played[2]} with "
+                         f"{played[1]} units, not {saved[2]} with {saved[1]}")
+    refused = launch(native, game_dir, profile, cwd, "--load", str(mod_save), "--match-ticks", "0")
+    if refused.returncode == 0 or REFUSED_PROFILE not in refused.stderr + refused.stdout:
+        print(refused.stdout + refused.stderr, end="")
+        raise SystemExit("a save of the baseline profile loaded without it")
+    loaded = run(native, game_dir, profile, cwd, *under, "--load", str(mod_save),
+                 "--match-ticks", "0")
+    plain = run(native, game_dir, profile, cwd, *under, "--load", str(save), "--match-ticks", "0")
+    if loaded[:6] != saved[:6] or plain[:6] != saved[:6]:
+        raise SystemExit(f"under the baseline profile its save loads to digest {loaded[2]} and "
+                         f"run A's to {plain[2]}, not {saved[2]}")
+    print(f"saveload check: the baseline profile plays and loads digest {saved[2]}; its save "
+          f"is refused without it")
+
+
 def check_unit_limits(native, game_dir, profile, cwd, save, saved):
     """Loads run A's save edited to no limit, another limit and one no pool holds."""
     if saved[6] != (DEFAULT_UNIT_LIMIT,) * 3 or saved_unit_limit(save) != DEFAULT_UNIT_LIMIT:
@@ -423,6 +488,7 @@ def main():
             raise SystemExit(f"resumed match carries {resumed[4]['BeCarried']} units, not the "
                              f"{TRANSPORTED} aboard the Atlas and the transport ship")
         check_unit_limits(native, game_dir, profile, temporary, save, saved)
+        check_baseline_profile(native, game_dir, temporary, save, saved)
         check_setting_unit_limit(native, game_dir, temporary)
         print(f"saveload check: tick {SAVE_TICK} digest {saved[2]} with {saved[1]} units "
               f"({saved[4]['BeCarried']} carried), {saved[3]} orders and features {saved[5][6]} "

@@ -9,6 +9,8 @@
 // demo that a second match then replays.
 
 #include "oa/session/demo.hpp"
+#include "oa/session/demo/recording.hpp"
+#include "oa/netgame/unit_state.hpp"
 
 #include "oa/data/defs/unit_records.hpp"
 #include "oa/netgame/match/launch.hpp"
@@ -120,9 +122,10 @@ std::vector<uint8_t> status_datagram(const PlayerSetupInfo& info) {
     return oa::netgame::network::encode_frame(frame, false);
 }
 
-// Recorded ids descend with the player number, so unit ranges follow ids.
+// Recorded ids descend with the player number, so unit ranges follow ids;
+// all ten players' ids are usable.
 constexpr uint32_t recorded_id(std::size_t player) {
-    return 0x5000u - static_cast<uint32_t>(player) * 0x1000u;
+    return 0xa000u - static_cast<uint32_t>(player) * 0x1000u;
 }
 
 constexpr uint8_t recorded_color(std::size_t player) {
@@ -1087,6 +1090,276 @@ void recorded_records_reach_the_binding() {
     CHECK(session->playback.stats.sends_dropped > 0);
 }
 
+// A live recording's setup: players with ids 0x100, 0x200, ... and a unit
+// check for each of three unit types.
+RecordingSetup live_setup(std::size_t players, bool compress) {
+    RecordingSetup setup{};
+    setup.max_units = kUnitsPerPlayer;
+    setup.map_name = "Test Map";
+    setup.recorder_text = "Program 1.0";
+    setup.date_text = "2026-10-03 08:00";
+    setup.compress = compress;
+    for (std::size_t i = 0; i < players; ++i) {
+        RecordingPlayer player{};
+        player.player_id = static_cast<uint32_t>(0x100 * (i + 1));
+        player.name = "player" + std::to_string(i + 1);
+        player.info.side = static_cast<uint8_t>(i & 1);
+        player.info.color = static_cast<uint8_t>(i);
+        player.info.max_units = kUnitsPerPlayer;
+        player.info.version_major = 3;
+        player.info.version_minor = 1;
+        if (i == 0)
+            player.info.role = 1;
+        player.team = 5;
+        player.address = "10.0.0." + std::to_string(i + 1);
+        setup.players.push_back(std::move(player));
+    }
+    for (uint32_t type = 1; type <= 3; ++type) {
+        UnitDefHandshakeRecord check{};
+        check.subtype = checksum;
+        check.key = 0x1000 + type;
+        check.value = 0x2000 + type;
+        std::array<uint8_t, formats::tad::layout::unit_check_record_bytes> bytes{};
+        CHECK(encode_record(check, bytes.data(), bytes.size(), nullptr) == WireError::ok);
+        setup.unit_checks.push_back(bytes);
+    }
+    return setup;
+}
+
+// A unit state with one waypoint delta for unit 0 of type 1, at a tick.
+std::vector<uint8_t> moving_state(uint32_t tick) {
+    uint8_t storage[unit_state_writer_words * bit_stream_word_bytes];
+    BitWriter writer;
+    bit_writer_init(&writer, storage, unit_state_writer_words);
+    uint16_t length = 0;
+    CHECK(
+        unit_state_write_start_position(&writer, tick, {1, 10, 20, 10, 20}, 2, &length) ==
+        WireError::ok
+    );
+    return {storage, storage + length};
+}
+
+// A live recording keeps every record it saw, stored as a recorder stores
+// them: unit states without their tick behind a tick base, empty ones as
+// the empty-tick marker, the rest as they are, each under its sender's
+// number; the statuses are the players' blocks as sent. Playback reads it.
+void live_recording_round_trips(bool compress) {
+    DemoRecording recording;
+    recording_begin(&recording, live_setup(2, compress));
+    ChatRecord chat{};
+    std::snprintf(chat.text, sizeof chat.text, "%s", "<player1> hello there, everyone in the game");
+    uint8_t chat_bytes[65];
+    CHECK(encode_record(chat, chat_bytes, sizeof chat_bytes, nullptr) == WireError::ok);
+    recording_add(&recording, 0x100, 1000, chat_bytes);
+    const auto state = moving_state(42);
+    recording_add(&recording, 0x200, 1033, state);
+    const uint8_t empty[] = {0x2c, 0x0b, 0x00, 43, 0, 0, 0, 0xff, 0xff, 0x01, 0x00};
+    recording_add(&recording, 0x200, 1066, empty);
+    const uint8_t camera[] = {0xfc, 0x00, 0x01, 0xd0, 0x00};
+    recording_add(&recording, 0x100, 1100, camera);
+    recording_add(&recording, 0x999, 1200, camera);
+    CHECK(recording.dropped_records == 1 && recording.packets.size() == 4);
+    const auto written = recording_write(recording);
+    CHECK(written.ok());
+    const auto parsed = formats::tad::parse(written.bytes);
+    CHECK(parsed.ok());
+    if (!parsed.ok())
+        return;
+    const auto& demo = *parsed.demo;
+    CHECK(demo.version == 5 && demo.max_units == kUnitsPerPlayer && demo.map_name == "Test Map");
+    CHECK(demo.players.size() == 2 && demo.statuses.size() == 2);
+    CHECK(demo.players[0].number == 1 && demo.players[0].name == "player1");
+    CHECK(demo.players[1].side == 1 && demo.players[1].color == 1);
+    const auto* version =
+        formats::tad::find_sector(demo, formats::tad::SectorType::recorder_version);
+    CHECK(version != nullptr && formats::tad::sector_text(*version) == "Program 1.0");
+    CHECK(formats::tad::unit_check_records(demo).size() == 3);
+    CHECK(demo.packets.size() == 4);
+    if (demo.packets.size() == 4) {
+        CHECK(demo.packets[0].sender == 1 && demo.packets[1].sender == 2);
+        CHECK(demo.packets[1].delay_ms == 33 && demo.packets[3].time_ms == 100);
+        const auto decoded = formats::tad::decode_payload(demo.packets[1].payload);
+        CHECK(decoded.ok());
+        const auto split = formats::tad::split_records(decoded.bytes);
+        CHECK(split.records.size() == 2);
+        if (split.records.size() == 2) {
+            CHECK(
+                split.records[0].type == static_cast<uint8_t>(formats::tad::RecordType::tick_base)
+            );
+            const auto expanded = formats::tad::expand_unit_state(split.records[1]);
+            CHECK(expanded == state);
+        }
+        const auto empty_split = formats::tad::split_records(
+            formats::tad::decode_payload(demo.packets[2].payload).bytes
+        );
+        CHECK(
+            empty_split.records.size() == 2 &&
+            empty_split.records[1].type ==
+                static_cast<uint8_t>(formats::tad::RecordType::empty_tick)
+        );
+        const auto chat_payload = formats::tad::decode_payload(demo.packets[0].payload);
+        CHECK(
+            chat_payload.ok() && chat_payload.bytes.size() == 66 && chat_payload.bytes[1] == 0x05
+        );
+        if (compress)
+            CHECK(demo.packets[0].payload[0] == formats::tad::compressed_payload_marker);
+        else
+            CHECK(demo.packets[0].payload[0] == formats::tad::payload_marker);
+    }
+    DemoPlayback playback;
+    std::string error;
+    CHECK(demo_load(&playback, written.bytes, &error));
+    CHECK(playback.players.size() == 2 && playback.players[0].from_status);
+    CHECK(playback.players[1].info.color == 1 && playback.players[0].info.role == 1);
+    CHECK(playback.recorded_definitions == 3);
+    CHECK(
+        recording_file_name("2026-10-03 0800", "Seven: Islands", ".ted") ==
+        "2026-10-03 0800 Seven_ Islands.ted"
+    );
+}
+
+// Ten recorded players leave no slot for the viewer: refused by 3.1c's
+// rules, watched through the first recorded player's slot under the
+// ten-player rule.
+void ten_players_watch_without_a_slot() {
+    DemoRecording recording;
+    recording_begin(&recording, live_setup(OA_PLAYER_COUNT, false));
+    recording_add(&recording, 0x100, 0, moving_state(1));
+    const auto written = recording_write(recording);
+    CHECK(written.ok());
+    DemoPlayback playback;
+    std::string error;
+    CHECK(demo_load(&playback, written.bytes, &error));
+    World* world = make_world();
+    uint8_t watcher = 0xff;
+    CHECK(!demo_watches_without_slot(playback));
+    CHECK(!demo_bind_players(playback, world, &watcher));
+    playback.ten_player_replay = TenPlayerReplay::watcher_view;
+    CHECK(demo_watches_without_slot(playback));
+    CHECK(demo_bind_players(playback, world, &watcher));
+    CHECK(watcher == OA_PLAYER_COUNT);
+    CHECK(world->game.local_player_index == 0 && world->game.viewpoint_player == 0);
+    CHECK(world->game.player_count == OA_PLAYER_COUNT);
+    bool all_remote = true;
+    for (const auto& player : world->game.players)
+        all_remote = all_remote && player.in_use == 1 && player.status == OA_PLAYER_STATUS_MIRRORED;
+    CHECK(all_remote);
+    CHECK(demo_slotless_viewer(playback) == sim::match_runtime::SlotlessViewer::watcher);
+    playback.ten_player_replay = TenPlayerReplay::allied_fake_player;
+    CHECK(
+        demo_slotless_viewer(playback) == sim::match_runtime::SlotlessViewer::ally_of_every_player
+    );
+    playback.ten_player_replay = TenPlayerReplay::off;
+    CHECK(demo_slotless_viewer(playback) == sim::match_runtime::SlotlessViewer::none);
+    world_destroy(world);
+}
+
+// A chat record from a recorded player.
+std::vector<uint8_t> chat_payload(const char* text) {
+    std::vector<uint8_t> payload{formats::tad::payload_marker};
+    ChatRecord chat{};
+    std::snprintf(chat.text, sizeof chat.text, "%s", text);
+    append_record(&payload, chat);
+    return payload;
+}
+
+// A slotless viewer of ten recorded players sees the whole map, the match
+// learns how it sees, and it is shown the recorded chat, which the pump shows
+// only to a local slot. A seated watcher is shown each line once.
+void slotless_viewer_watches_the_recording() {
+    for (const auto form : {TenPlayerReplay::watcher_view, TenPlayerReplay::allied_fake_player}) {
+        auto recording = make_recording(kUnitsPerPlayer, OA_PLAYER_COUNT);
+        recording.add(4, 33, chat_payload("player4: hello"));
+        EconomyRecord economy{};
+        economy.energy_produced_total = 50.0f;
+        std::vector<uint8_t> payload{formats::tad::payload_marker};
+        append_record(&payload, economy);
+        recording.add(3, 33, payload);
+        const auto release = [](DemoSession* session) {
+            demo_session_end(session);
+            delete session;
+        };
+        std::unique_ptr<DemoSession, decltype(release)> session(new DemoSession(), release);
+        std::string error;
+        CHECK(demo_load(&session->playback, recording.bytes(), &error));
+        session->playback.ten_player_replay = form;
+        Machine replay;
+        replay.build(0);
+        std::array<uint8_t, OA_PLAYER_COUNT> allies{};
+        allies[0] = 1;
+        replay.match->configure_outcomes(0, allies, false);
+        CHECK(demo_session_begin(session.get(), replay.match.get(), &error));
+        if (session->match == nullptr) {
+            std::fprintf(stderr, "slotless session: %s\n", error.c_str());
+            return;
+        }
+        CHECK(session->watcher_slot == OA_PLAYER_COUNT);
+        const auto& game = replay.match->state().game;
+        CHECK((game.visibility_flags & sim::visibility_state::update_sight_grid) == 0);
+        CHECK((game.visibility_flags & sim::visibility_state::altitude_sight_algorithm) != 0);
+        CHECK(replay.match->slotless_viewer() == demo_slotless_viewer(session->playback));
+        CHECK(replay.match->slotless_full_radar());
+        for (int t = 0; t < 10; ++t)
+            demo_session_frame(session.get());
+        CHECK(session->tick_errors == 0);
+        CHECK(std::count(session->lines.begin(), session->lines.end(), "player4: hello") == 1);
+        // Only watcher-view follows the recorded economy.
+        const bool followed = form == TenPlayerReplay::watcher_view;
+        CHECK(session->economy_samples[2].taken == followed);
+        CHECK(session->economy_samples[2].energy_produced_total == (followed ? 50.0f : 0.0f));
+    }
+    auto recording = make_recording(kUnitsPerPlayer, 1);
+    recording.add(1, 33, chat_payload("player1: hello"));
+    const auto release = [](DemoSession* session) {
+        demo_session_end(session);
+        delete session;
+    };
+    std::unique_ptr<DemoSession, decltype(release)> session(new DemoSession(), release);
+    std::string error;
+    CHECK(demo_load(&session->playback, recording.bytes(), &error));
+    session->playback.ten_player_replay = TenPlayerReplay::watcher_view;
+    Machine replay;
+    replay.build(1);
+    std::array<uint8_t, OA_PLAYER_COUNT> watcher_allies{};
+    watcher_allies[1] = 1;
+    replay.match->configure_outcomes(1, watcher_allies, false);
+    CHECK(demo_session_begin(session.get(), replay.match.get(), &error));
+    if (session->match == nullptr)
+        return;
+    CHECK(replay.match->slotless_viewer() == sim::match_runtime::SlotlessViewer::none);
+    for (int t = 0; t < 10; ++t)
+        demo_session_frame(session.get());
+    CHECK(std::count(session->lines.begin(), session->lines.end(), "player1: hello") == 1);
+}
+
+// Economy records give a player simulated elsewhere the production and use
+// per settlement its running totals imply, from the second record on.
+void economy_records_give_income_figures() {
+    Player player{};
+    player.energy_produced = 7.0f;
+    EconomySample sample{};
+    EconomyRecord record{};
+    record.energy_produced_total = 100.0f;
+    record.energy_requested_total = 40.0f;
+    record.metal_produced_total = 10.0f;
+    record.metal_requested_total = 4.0f;
+    demo_follow_economy(&sample, &player, record, 90);
+    CHECK(sample.taken && sample.tick == 90);
+    CHECK(player.energy_produced == 7.0f);
+    // 120 ticks later: four settlements.
+    record.energy_produced_total = 500.0f;
+    record.energy_requested_total = 240.0f;
+    record.metal_produced_total = 50.0f;
+    record.metal_requested_total = 24.0f;
+    demo_follow_economy(&sample, &player, record, 210);
+    CHECK(player.energy_produced == 100.0f && player.energy_requested == 50.0f);
+    CHECK(player.metal_produced == 10.0f && player.metal_requested == 5.0f);
+    // Another record at the same tick changes nothing.
+    record.energy_produced_total = 900.0f;
+    demo_follow_economy(&sample, &player, record, 210);
+    CHECK(player.energy_produced == 100.0f && sample.energy_produced_total == 500.0f);
+}
+
 } // namespace
 
 int main() {
@@ -1103,6 +1376,11 @@ int main() {
     replay_reproduces_a_recorded_unit(false);
     replay_reproduces_a_recorded_unit(true);
     recorded_records_reach_the_binding();
+    live_recording_round_trips(false);
+    live_recording_round_trips(true);
+    ten_players_watch_without_a_slot();
+    slotless_viewer_watches_the_recording();
+    economy_records_give_income_figures();
     if (failures != 0) {
         std::fprintf(stderr, "%d failure(s)\n", failures);
         return 1;

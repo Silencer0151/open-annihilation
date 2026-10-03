@@ -130,6 +130,8 @@ void Runtime::check_engine_settings_in_menu() {
     require(screen_ == Screen::main_menu, "the main menu did not open");
     const auto* fonts = engine_settings_fonts();
     require(fonts != nullptr, "the dialog's fonts did not load");
+    const auto icon = engine_settings_icon();
+    require(artless::picture_drawable(icon), "the OA button and the dialog have no icon to show");
     require(!main_menu_overlay_, "an extension's overlay stands over the main menu");
 
     const auto point = [this](SDL_EventType type, oa::ui::display_layout::Point at) {
@@ -202,7 +204,9 @@ void Runtime::check_engine_settings_in_menu() {
     main_menu_overlay_ = false;
     const auto expect_button = [&](settings::ButtonLook look, std::string_view what) {
         auto expected = button_at_top;
-        settings::draw_oa_button(expected, {bottom.x, bottom.y, 1}, bottom.width, look, *fonts);
+        settings::draw_oa_button(
+            expected, {bottom.x, bottom.y, 1}, bottom.width, look, *fonts, icon
+        );
         require(differing_pixels(frame(), expected, top) == 0, what);
     };
     expect_button(settings::ButtonLook::idle, "the OA button is not drawn at rest at 596,436");
@@ -211,7 +215,7 @@ void Runtime::check_engine_settings_in_menu() {
     {
         auto expected = idle;
         settings::draw_oa_button(
-            expected, {top.x, top.y, 1}, top.width, settings::ButtonLook::idle, *fonts
+            expected, {top.x, top.y, 1}, top.width, settings::ButtonLook::idle, *fonts, icon
         );
         require(
             differing_pixels(button_at_top, expected, bottom) == 0,
@@ -265,7 +269,7 @@ void Runtime::check_engine_settings_in_menu() {
             settings::backdrop_color,
             settings::menu_backdrop_opacity
         );
-        settings::draw_dialog(expected, placement, *dialog, *fonts);
+        settings::draw_dialog(expected, placement, *dialog, *fonts, icon);
         const auto shown = frame();
         snapshot("engine-settings-menu-dialog", shown);
         require(

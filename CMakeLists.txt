@@ -30,6 +30,9 @@ find_package(ZLIB REQUIRED)
 if(OA_BUILD_PLATFORM)
   find_package(SDL3 3.2 CONFIG REQUIRED)
 endif()
+# FreeType and the fonts text outside the game's own fonts is drawn with,
+# from tools/bootstrap_text_fonts.py (cmake/OaTextFonts.cmake).
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/OaTextFonts.cmake")
 
 # OA_GAME_DIR, the installed game the game-data tests and native checks read,
 # and the helpers that register those tests (cmake/OaGameData.cmake).
@@ -120,6 +123,9 @@ add_subdirectory(src/platform/preferences)
 add_subdirectory(src/app/command-line)
 add_subdirectory(src/app/card)
 add_subdirectory(src/data/mission-types)
+add_subdirectory(src/data/limits)
+add_subdirectory(src/data/languages)
+add_subdirectory(src/data/match-rules)
 add_subdirectory(src/sim/unit-activation)
 add_subdirectory(src/base/game-math)
 add_subdirectory(src/base/geometry)
@@ -132,9 +138,11 @@ add_subdirectory(src/platform)
 add_subdirectory(src/platform/xp-runtime)
 add_subdirectory(src/platform/steady-clock)
 add_subdirectory(src/platform/app-menu)
+add_subdirectory(src/platform/text-font)
 add_subdirectory(src/platform/job-pool)
 add_subdirectory(src/platform/render-probe)
 add_subdirectory(src/platform/sound-device)
+add_subdirectory(src/platform/locale)
 add_subdirectory(src/ui/decoded)
 add_subdirectory(src/ui/services)
 add_subdirectory(src/present)
@@ -152,6 +160,8 @@ add_subdirectory(src/formats/fnt)
 add_subdirectory(src/formats/png)
 add_subdirectory(src/formats/pe)
 add_subdirectory(src/formats/oascript)
+add_subdirectory(src/formats/oamod)
+add_subdirectory(src/data/mod-profile)
 add_subdirectory(src/formats/zip)
 add_subdirectory(src/sim/sprite-animation)
 add_subdirectory(src/formats/tnt)
@@ -214,20 +224,29 @@ add_library(oa-app-headers INTERFACE)
 add_library(oa::app::headers ALIAS oa-app-headers)
 target_include_directories(oa-app-headers INTERFACE src/app/include)
 # app.hpp and render_policy.hpp include the engine settings' header.
-target_link_libraries(oa-app-headers INTERFACE oa-base-sha256 oa-ui-engine-settings)
+target_link_libraries(oa-app-headers INTERFACE oa-base-sha256 oa-data-languages oa-data-limits
+  oa-data-mod-profile oa-ui-engine-settings)
 # oa-game's command line, which the option tests parse without a running app.
 add_library(oa-app-game-options src/app/startup.cpp)
 add_library(oa::app::game_options ALIAS oa-app-game-options)
 target_link_libraries(oa-app-game-options PUBLIC oa-app-headers)
 target_link_libraries(oa-app-game-options PUBLIC oa-ui-frontend-renderer oa-ui-frontend-state oa-sim-scenario
-  oa-ui-screen-registry oa-app-command-line oa-platform-preferences PRIVATE oa-platform-job-pool oa-options)
+  oa-ui-screen-registry oa-app-command-line oa-platform-preferences oa-app-mod-profile
+  PRIVATE oa-platform-job-pool oa-options)
 # oa-game's game folder: --game-dir, the remembered folder or the folder
 # dialog's choice, the installation checks, and the installer of the Total
 # Annihilation demo (1997) recognised and its archive unpacked.
 add_library(oa-app-game-directory src/app/game_directory.cpp src/app/demo_installer.cpp)
 add_library(oa::app::game_directory ALIAS oa-app-game-directory)
 target_link_libraries(oa-app-game-directory PUBLIC oa-app-headers oa-base-sha256 oa-platform-preferences
-  PRIVATE oa-formats-hpi oa-formats-pe oa-options)
+  oa-app-mod-profile PRIVATE oa-formats-hpi oa-formats-pe oa-options)
+# oa-game's mod profile: a folder's oamod.yaml found and resolved with the
+# settings it binds, the mod folders a game folder offers, the layout and
+# discovery a profile sets, and the --mod and --print-profile options.
+add_library(oa-app-mod-profile src/app/mod_profile_loader.cpp src/app/mod_folder.cpp)
+add_library(oa::app::mod_profile ALIAS oa-app-mod-profile)
+target_link_libraries(oa-app-mod-profile PUBLIC oa-app-headers oa-data-mod-profile oa-data-defs
+  oa-formats-hpi oa-platform-preferences PRIVATE oa-options)
 # The renderer records: what the engine has seen of each render driver on
 # this machine, and the sentinel of the stage a start has reached. Their text
 # and rules are pure (renderer_records.hpp); renderer_state.hpp keeps them in
@@ -242,7 +261,20 @@ target_link_libraries(oa-app-renderer-state PUBLIC oa-app-renderer-records
   PRIVATE oa-platform-preferences oa-options)
 # The game's window icon: the Open Annihilation icon at 256 by 256 pixels
 # (branding/, made by tools/make_icons.py), embedded as a PNG file and
-# decoded when the window opens.
+# decoded when the window opens; the settings dialog's header and the OA
+# buttons draw it too.
+# A mod profile's display rules as the records and decisions of the modules
+# that carry them out (view_rules.hpp).
+add_library(oa-app-view-rules src/app/view_rules.cpp)
+add_library(oa::app::view_rules ALIAS oa-app-view-rules)
+target_link_libraries(oa-app-view-rules PUBLIC oa-app-headers oa-data-mod-profile oa-sim-match-runtime
+  oa-ui-frontend-state oa-present-world-renderer oa-ui-engine-settings
+  PRIVATE oa-ui-frontend-multiplayer oa-options)
+if(BUILD_TESTING)
+  add_executable(oa-app-view-rules-test src/app/view_rules_test.cpp)
+  target_link_libraries(oa-app-view-rules-test PRIVATE oa-app-view-rules oa-test-support oa-options)
+  add_test(NAME app-view-rules COMMAND oa-app-view-rules-test)
+endif()
 set(oa_window_icon_png "${CMAKE_CURRENT_SOURCE_DIR}/branding/open-annihilation-256.png")
 set(oa_window_icon_source "${CMAKE_CURRENT_BINARY_DIR}/generated/window_icon_png.cpp")
 add_custom_command(OUTPUT "${oa_window_icon_source}"
@@ -382,7 +414,8 @@ if(OA_BUILD_PLATFORM)
     # rest and turned, a depth-sorted unit, a lit building and its bright
     # page, a cloaked unit, a unit under construction, units under water
     # of both sides, carried units, shadows into the target and straight
-    # into the frame, a projectile, a debris piece and a fragment, a
+    # into the frame, shadows lighter at zoom 0.5 and none at a quarter on
+    # both sides, a projectile, a debris piece and a fragment, a
     # back-facing polygon left out, the pages placed once and uploaded, and
     # a frame at zoom 2; with --data, every unit model of the installed
     # game at zoom 1, drawn from a cached image with and without a depth
@@ -462,8 +495,10 @@ if(OA_BUILD_PLATFORM)
     # alpha table blends them, with the lines held to the game's lines and
     # the squares exact; the stage's order, batches, fog states (a sprite
     # under a cell out of sight greyed, under a never-mapped cell left out),
-    # the refusals, the pages overflowing a frame, and a pinned digest of
-    # the frame. With --data, a scene of the installed game's GAF frames
+    # the refusals, the pages overflowing a frame, a pinned digest of the
+    # frame, and a feature's shadow frames, drawn and blended, as dark as
+    # the list's shadow level on both sides and left out at level 0. With
+    # --data, a scene of the installed game's GAF frames
     # through its palette and alpha table.
     add_executable(oa-app-full-sprites-test src/app/full_sprites_test.cpp
       src/app/runtime_full_sprites.cpp src/app/world_draws.cpp)
@@ -487,13 +522,15 @@ if(OA_BUILD_PLATFORM)
   add_library(oa-app-director-output src/app/director_output.cpp)
   add_library(oa::app::director_output ALIAS oa-app-director-output)
   target_link_libraries(oa-app-director-output PUBLIC oa-app-headers oa-formats-zip oa-formats-oascript
-    oa-base-sha256 SDL3::SDL3 PRIVATE oa-platform-shims oa-audio-offline-mix oa-base-threads oa-options)
+    oa-base-sha256 SDL3::SDL3 PRIVATE oa-platform-shims oa-audio-offline-mix oa-base-threads
+    oa-formats-png oa-options)
   if(BUILD_TESTING)
     # File names, encoder arguments, the files of a render with encoding
-    # off, the environment's settings and bundles, malformed ones included.
+    # off, stills, the environment's settings and bundles, malformed ones
+    # included.
     add_executable(oa-app-director-output-test src/app/director_output_test.cpp)
     target_link_libraries(oa-app-director-output-test PRIVATE oa-app-director-output
-      oa-audio-offline-mix oa-formats-zip oa-base-sha256 oa-options)
+      oa-audio-offline-mix oa-formats-png oa-formats-zip oa-base-sha256 oa-options)
     add_test(NAME app-director-output COMMAND oa-app-director-output-test)
   endif()
 endif()
@@ -504,6 +541,11 @@ if(BUILD_TESTING)
   add_executable(oa-game-options-test src/app/startup_test.cpp)
   target_link_libraries(oa-game-options-test PRIVATE oa-app-game-options oa-options)
   add_test(NAME game-options COMMAND oa-game-options-test)
+  # A folder's profile found without case, the profile printed with its
+  # hashes, and the errors of one the engine cannot use.
+  add_executable(oa-app-mod-profile-test src/app/mod_profile_loader_test.cpp)
+  target_link_libraries(oa-app-mod-profile-test PRIVATE oa-app-mod-profile oa-test-support oa-options)
+  add_test(NAME app-mod-profile COMMAND oa-app-mod-profile-test)
   add_executable(oa-game-directory-test src/app/game_directory_test.cpp)
   target_link_libraries(oa-game-directory-test PRIVATE oa-app-game-directory oa-app-headers oa-formats-hpi
     oa-platform-preferences oa-test-game-data oa-options)
@@ -582,7 +624,9 @@ if(BUILD_TESTING)
   # selection lines of the model bridge, 2 pixels thick as a reduced scene
   # draws them, cover the pixels a square pen gives across the bands' edges,
   # the same on 1 to 8 bands and drawing threads; 1 pixel thick, the line's
-  # own pixels.
+  # own pixels. A feature's shadow frame mixed toward the game's shadow by
+  # the frame's shadow level and left out at 0, and a frame's shadows set
+  # from its zoom.
   add_executable(oa-app-world-draws-test src/app/world_draws_test.cpp src/app/world_draws.cpp)
   target_link_libraries(oa-app-world-draws-test PRIVATE oa-present oa-present-model
     oa-present-world-renderer oa-formats-gaf oa-sim-effect-particles oa-sim-model-runtime
@@ -679,11 +723,15 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/runtime_dgun_check.cpp src/app/runtime_attack_command_check.cpp
   src/app/runtime_match_panel_keys_check.cpp
   src/app/runtime_turret_draw_check.cpp
-  src/app/runtime_selection.cpp src/app/runtime_skirmish_host.cpp
-  src/app/runtime_skirmish_start.cpp src/app/runtime_world_draw.cpp src/app/world_draws.cpp src/app/runtime_benchmark.cpp src/app/runtime_music.cpp
+  src/app/runtime_selection.cpp src/app/runtime_selection_shortcuts.cpp
+  src/app/runtime_view_panels.cpp src/app/runtime_whiteboard.cpp src/app/runtime_commander_placement.cpp
+  src/app/runtime_megamap.cpp src/app/runtime_skirmish_host.cpp
+  src/app/runtime_skirmish_start.cpp src/app/runtime_map_units.cpp src/app/runtime_world_draw.cpp src/app/world_draws.cpp src/app/runtime_benchmark.cpp src/app/runtime_music.cpp
   src/app/runtime_saveload.cpp src/app/runtime_sides.cpp src/app/asset_files.cpp
   src/app/runtime_platform.cpp src/app/runtime_endgame.cpp src/app/runtime_radar.cpp
-  src/app/runtime_factory_check.cpp src/app/runtime_build_page_check.cpp
+  src/app/runtime_factory_check.cpp src/app/runtime_unit_speech_check.cpp
+  src/app/runtime_build_page_check.cpp
+  src/app/runtime_language_check.cpp
   src/app/runtime_side_column_check.cpp
   src/app/runtime_kill_board.cpp src/app/runtime_frontend_controls_check.cpp
   src/app/runtime_briefing_narration_check.cpp
@@ -695,30 +743,35 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/frame_pacing.cpp src/app/frame_stats_panel.cpp src/app/runtime_frame_stats.cpp
   src/app/runtime_team_panels.cpp src/app/runtime_team_panel_check.cpp
   src/app/runtime_scroll_bars.cpp src/app/runtime_scroll_bar_check.cpp
-  src/app/runtime_director_view.cpp src/app/runtime_director.cpp
+  src/app/runtime_director_view.cpp src/app/runtime_director.cpp src/app/runtime_stage.cpp
   src/app/presentation_interpolation.cpp src/app/runtime_interpolation_check.cpp
   src/app/runtime_unit_playout_check.cpp
   src/app/runtime_engine_settings.cpp src/app/runtime_engine_settings_wiring_check.cpp
   src/app/runtime_engine_settings_menu.cpp src/app/runtime_engine_settings_check.cpp
   src/app/runtime_engine_settings_match.cpp src/app/runtime_engine_settings_match_check.cpp
   src/app/runtime_engine_settings_app_menu.cpp src/app/runtime_engine_settings_dialog_check.cpp
-  src/app/runtime_renderer.cpp src/app/runtime_renderer_ladder_check.cpp)
+  src/app/runtime_view_rules.cpp src/app/runtime_game_text.cpp src/app/runtime_language.cpp
+  src/app/runtime_renderer.cpp src/app/runtime_renderer_ladder_check.cpp
+  src/app/runtime_visual_rules_check.cpp)
 # The run manifest of a director render and the settings dialog's header
 # name the engine's version, and the renderer records are written under it.
 set_property(SOURCE src/app/runtime_director.cpp src/app/runtime_engine_settings.cpp
   src/app/main.cpp APPEND
   PROPERTY COMPILE_DEFINITIONS "OA_ENGINE_VERSION=\"${PROJECT_VERSION}\"")
-set(oa_game_libraries oa-formats-hpi oa-app-game-options oa-app-game-directory oa-app-window-icon
+set(oa_game_libraries oa-formats-hpi oa-app-game-options oa-app-game-directory oa-app-mod-profile
+  oa-app-view-rules
+  oa-app-window-icon
   oa-app-video-capture oa-app-render-host
   oa-ui-frontend-renderer oa-ui-gui-input oa-ui-frontend-state oa-audio-sdl
-  oa-platform-preferences oa-app-command-line oa-formats-tnt oa-sim-unit-spawn-runtime oa-data-mission-types oa-present-world-renderer oa-sim-combat-state oa-sim-match-runtime oa-sim-unit-effects oa-sim-map-runtime oa-base-game-loop oa-sim-gameplay-input oa-sim-sprite-animation oa-ui-screen-registry oa-options
+  oa-platform-preferences oa-app-command-line oa-formats-tnt oa-sim-unit-spawn-runtime oa-data-mission-types oa-data-limits oa-present-world-renderer oa-sim-combat-state oa-sim-match-runtime oa-sim-unit-effects oa-sim-map-runtime oa-base-game-loop oa-sim-gameplay-input oa-sim-sprite-animation oa-ui-screen-registry oa-options
   oa-ui-hud oa-present-model oa-present-unit-playout oa-ui-frontend oa-ui-campaign oa-sim-session oa-ui-console
   oa-ui-services oa-sim-mission-units oa-sim-match-runtime-mission-units oa-sim-selection oa-sim-messages oa-sim-speed
   oa-data-campaign-assets oa-sim-profile oa-sim-state-hash oa-app-extensions
-  oa-ui-engine-settings oa-platform-app-menu oa-platform-job-pool oa-platform-render-probe
-  oa-app-render-policy oa-ui-decoded oa-base-bytes oa-base-float-precision oa-app-acceleration-status
-  oa-formats-png oa-app-full-terrain oa-app-full-supersampling oa-app-full-fog
-  oa-app-card-executor oa-present-gpu-world oa-app-full-models)
+  oa-ui-engine-settings oa-platform-app-menu oa-platform-text-font oa-platform-job-pool
+  oa-platform-render-probe oa-app-render-policy oa-ui-decoded oa-base-bytes oa-base-float-precision oa-base-text
+  oa-app-acceleration-status oa-formats-png oa-data-languages oa-platform-locale
+  oa-app-full-terrain oa-app-full-supersampling oa-app-full-fog oa-app-card-executor
+  oa-present-gpu-world oa-app-full-models)
 # The table that combines the extensions' tables of oa-game
 # (extension_list.hpp); the extensions themselves are registered with
 # oa_add_extension (cmake/OaExtensions.cmake).
@@ -776,13 +829,35 @@ if(OA_BUILD_PLATFORM)
     # without one they are not added.
     if(IS_DIRECTORY "${OA_GAME_DIR}")
       file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
-      # Restart from the exit menu part way into the first Arm mission must
-      # start it over with the units its first start created.
+      # Part way into the first Arm mission every cheat typed through the
+      # chat line takes effect, as in a skirmish, and +sing sings with 3.1c's
+      # honk and sing; then restart from the exit menu must start the mission
+      # over with the units its first start created and cheats still allowed.
       add_test(NAME native-campaign-restart COMMAND oa-game --game-dir "${OA_GAME_DIR}"
         --skip-intro --mute --headless-check --campaign "Arm Campaign" --mission 0
         --match-ticks 60 --restart-at 30
         --preferences-file "${CMAKE_CURRENT_BINARY_DIR}/native-checks/campaign-restart.conf")
       set_tests_properties(native-campaign-restart PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
+      # The same under a mod profile that names its own two sing sounds
+      # (strings.cheat.sing-sounds): +sing sings with them, never with
+      # 3.1c's.
+      set(oa_sing_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/campaign-sing-sounds")
+      file(MAKE_DIRECTORY "${oa_sing_check_dir}")
+      file(WRITE "${oa_sing_check_dir}/sing-sounds.oamod.yaml"
+        "oamod: 1\n"
+        "id: sing-sounds\n"
+        "name: Sing sounds\n"
+        "version: \"1.0\"\n"
+        "requires: {base: ta-3.1c, catalogue: 1}\n"
+        "strings:\n"
+        "  cheat: {sing-sounds: [beep, boop]}\n")
+      add_test(NAME native-campaign-sing-sounds COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --headless-check --campaign "Arm Campaign" --mission 0
+        --match-ticks 60 --restart-at 30 --mod "${oa_sing_check_dir}/sing-sounds.oamod.yaml"
+        --preferences-file "${oa_sing_check_dir}/campaign-sing-sounds.conf")
+      set_tests_properties(native-campaign-sing-sounds PROPERTIES
+        TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT} WORKING_DIRECTORY "${oa_sing_check_dir}"
+        FAIL_REGULAR_EXPRESSION "sounds/(honk|sing)\\.wav")
       # The match frame presented through SDL on dummy devices must equal the
       # CPU composition headless runs use, with the overlays visible, and a
       # nano particle fills a square two pixels on a side at zoom 1 and four
@@ -818,8 +893,12 @@ if(OA_BUILD_PLATFORM)
       # pointer must pick the unit drawn under it with the view between map
       # pixels at zoom 4; a zoom ease must make no texture; prescale targets
       # are drawn once a painted frame; switched off, every frame is the
-      # standard tier's. Pictures of one moment at zoom 0.5, 1 and 2.5 in
-      # both tiers go to local/reports. Skips under 2 GiB of memory.
+      # standard tier's. Shadows are drawn at their zoom's level: the game's
+      # own at zoom 1, half as dark at 0.5 in the standard tier and on the
+      # card, lighter at a third and none at a quarter and the Full floor.
+      # Pictures of one moment at zoom 0.5, 1 and 2.5 in both tiers, and of
+      # the shadows at each of those zooms, go to local/reports. Skips under
+      # 2 GiB of memory.
       set(oa_render_tiers_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/render-tiers")
       file(MAKE_DIRECTORY "${oa_render_tiers_check_dir}")
       add_test(NAME native-render-tiers COMMAND oa-game --game-dir "${OA_GAME_DIR}"
@@ -827,6 +906,71 @@ if(OA_BUILD_PLATFORM)
         --preferences-file "${oa_render_tiers_check_dir}/render-tiers.conf")
       set_tests_properties(native-render-tiers PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_render_tiers_check_dir}" SKIP_RETURN_CODE 77
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # The same check under a mod profile that turns the visual rules on
+      # over the installed game: everything above, with the profile's
+      # overlays drawn, then the whiteboard's dot and the build tools' line
+      # of sites drawn where the frame draws their map points in the
+      # standard and Basic tiers, at zoom 0.5, 1 and 2.5 and with the view
+      # between map pixels, the pointer finding the map pixel drawn under
+      # it, the build preview drawn over its site at the scene's draw scale,
+      # the open megamap presented as the processor composes it, a chat line
+      # in the system's fonts presented as composed at each zoom, and a
+      # named screenshot keeping the standard tier's battlefield; then in
+      # the Full tier the dot and the line of sites down to its zoom floor of
+      # a sixth, a marker's label whose shadow, outline and letter edges the
+      # card draws as asked, the build preview drawn by the card, the
+      # megamap at the floor too, and the chat line with what of it lies
+      # beside its backdrop the card's (check_visual_rule_overlays).
+      set(oa_render_visual_check_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/native-checks/render-tiers-visual-rules")
+      file(MAKE_DIRECTORY "${oa_render_visual_check_dir}")
+      file(WRITE "${oa_render_visual_check_dir}/visual-rules.oamod.yaml"
+        "oamod: 1\n"
+        "id: visual-rules\n"
+        "name: Visual rules\n"
+        "version: \"1.0\"\n"
+        "requires: {base: ta-3.1c, catalogue: 1}\n"
+        "hacks:\n"
+        "  ui.megamap: true\n"
+        "  ui.whiteboard: true\n"
+        "  ui.resource-panel: true\n"
+        "  ui.camera-sharing: true\n"
+        "  ui.allied-unit-display: true\n"
+        "  ui.build-tools: true\n"
+        "  ui.click-snap: true\n"
+        "  ui.build-preview: true\n"
+        "  ui.text-rendering: {unicode: true, chat-backdrop: true}\n"
+        "  ui.veterancy-label: true\n"
+        "  ui.effects-tweaks: true\n"
+        "  ui.interface-fixes: true\n"
+        "  ui.display-modes: true\n")
+      add_test(NAME native-render-tiers-visual-rules COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-render-tiers --hardware-acceleration --force-capable
+        --mod "${oa_render_visual_check_dir}/visual-rules.oamod.yaml"
+        --preferences-file "${oa_render_visual_check_dir}/render-tiers.conf")
+      set_tests_properties(native-render-tiers-visual-rules PROPERTIES
+        TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_render_visual_check_dir}" SKIP_RETURN_CODE 77
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # The same again with the modern fonts on: every
+      # line of game text, the clock and the resource panel among them, in
+      # those fonts, so that in the Full tier what of it lies over the
+      # battlefield is left to the card, held to what its quads ask beside
+      # the processor's picture, under the fog and over the kill board.
+      set(oa_render_modern_check_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/native-checks/render-tiers-modern-fonts")
+      file(MAKE_DIRECTORY "${oa_render_modern_check_dir}")
+      file(WRITE "${oa_render_modern_check_dir}/render-tiers.conf"
+        "open-annihilation-preferences 1\n"
+        "\"open-annihilation.modern-fonts\" \"1\"\n")
+      add_test(NAME native-render-tiers-modern-fonts COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-render-tiers --hardware-acceleration --force-capable
+        --mod "${oa_render_visual_check_dir}/visual-rules.oamod.yaml"
+        --preferences-file "${oa_render_modern_check_dir}/render-tiers.conf")
+      set_tests_properties(native-render-tiers-modern-fonts PROPERTIES
+        TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_render_modern_check_dir}" SKIP_RETURN_CODE 77
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # The same check with --native-density: the window opens at the
       # display's own density, which on the dummy video driver is 1, and the
@@ -846,9 +990,11 @@ if(OA_BUILD_PLATFORM)
         WORKING_DIRECTORY "${oa_render_density_check_dir}" SKIP_RETURN_CODE 77
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # LOADGAME.GUI from Single Player and, through the SDL presenter, as the
-      # save and load dialogs over a paused skirmish: each placed as its loader
-      # places it over the darkened panel below, its bitmap in that palette,
-      # and each previewing the chosen save's radar image and side.
+      # save and load dialogs over a paused skirmish: each centred on the
+      # screen over the darkened panel below on 640x480, 1280x960 and
+      # 1920x1080 windows, its bitmap in that palette, and each previewing the
+      # chosen save's radar image and side. A click on the name field and
+      # CANCEL save nothing, OK and Return save, and Escape leaves the dialog.
       set(oa_loadsave_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/loadsave")
       file(MAKE_DIRECTORY "${oa_loadsave_check_dir}")
       add_test(NAME native-loadsave-screens COMMAND oa-game --game-dir "${OA_GAME_DIR}"
@@ -1008,10 +1154,11 @@ if(OA_BUILD_PLATFORM)
       # world depends on the chunks drawn before it, and the render reaches
       # the world the generator's undrawn replay reaches. The frames and the
       # sound are pinned; at 60 frames a second every other frame lies half
-      # way between two ticks, and is drawn so.
+      # way between two ticks, and is drawn so, and frames zoomed out draw
+      # their shadows lighter.
       set(oa_director_render_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/director-render")
       set(oa_director_render_hashes
-        "director render: frames a31c23b78459f727fba16dc60377daa4556d7bd539f94150941eaa2dc33304a2 sound 98718c0ce9d785c0a09f409493bd394e92371b25a8a79bd3d72b6d5bab2234f3")
+        "director render: frames d6b99763468b5caa0dffecb299e520b984592be1b9fda2993a1587d8e8ec349f sound 98718c0ce9d785c0a09f409493bd394e92371b25a8a79bd3d72b6d5bab2234f3")
       file(MAKE_DIRECTORY "${oa_director_render_dir}")
       add_test(NAME native-director-render COMMAND oa-game --game-dir "${OA_GAME_DIR}"
         --mute --check-director-render
@@ -1091,6 +1238,19 @@ if(OA_BUILD_PLATFORM)
       set_tests_properties(native-factory-orders PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_factory_check_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # Through SDL input on dummy devices the commander says its select line
+      # when clicked and its order line when then clicked onto open ground,
+      # each with a sound its SOUND.TDF section offers; and so in a second
+      # skirmish started after the first, which nothing the first one said
+      # may silence; with +Sing on, the select line sings.
+      set(oa_unit_speech_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/unit-speech")
+      file(MAKE_DIRECTORY "${oa_unit_speech_check_dir}")
+      add_test(NAME native-unit-speech COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-unit-speech
+        --preferences-file "${oa_unit_speech_check_dir}/unit-speech.conf")
+      set_tests_properties(native-unit-speech PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_unit_speech_check_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # ARMLAB's second page is the ARMDL.GUI download page with the Warrior
       # and Flea its download TDFs name; through SDL input on dummy devices
       # they queue, come off the middle and end of the queue and build, and a
@@ -1103,6 +1263,29 @@ if(OA_BUILD_PLATFORM)
       set_tests_properties(native-download-builds PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_download_check_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # Units' names and descriptions in each language the game data holds,
+      # and in the language the system's preferred locale chooses: through
+      # SDL input on dummy devices, the commander's build buttons show their
+      # unit files' names and descriptions in the language at the bottom
+      # bar's NAME and DESCRIPTION, and the commander its name at UNITNAME;
+      # put back to English, the same places show the files' own texts.
+      foreach(oa_language_case IN ITEMS "english;en;en" "german;de;de" "french;fr;fr" "italian;it;it"
+          "spanish;es;es" "system;system;fr")
+        list(GET oa_language_case 0 oa_language_name)
+        list(GET oa_language_case 1 oa_language_choice)
+        list(GET oa_language_case 2 oa_language_tag)
+        set(oa_language_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/unit-language-${oa_language_name}")
+        file(MAKE_DIRECTORY "${oa_language_check_dir}")
+        file(WRITE "${oa_language_check_dir}/unit-language.conf"
+          "open-annihilation-preferences 1\n\"open-annihilation.language\" \"${oa_language_choice}\"\n")
+        add_test(NAME native-unit-language-${oa_language_name} COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+          --skip-intro --mute --check-unit-language ${oa_language_tag}
+          --preferences-file "${oa_language_check_dir}/unit-language.conf")
+        set_tests_properties(native-unit-language-${oa_language_name} PROPERTIES
+          TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+          WORKING_DIRECTORY "${oa_language_check_dir}"
+          ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software;SDL_PREFERRED_LOCALES=fr_CA,de_DE")
+      endforeach()
       # The commander's build pages on windows from 640x480 to 5120x2880,
       # walked with NEXT through SDL input on dummy devices: each fits the
       # side column, the same build buttons are reachable on every window and
@@ -1204,6 +1387,23 @@ if(OA_BUILD_PLATFORM)
           --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
           --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
         set_tests_properties(native-trace PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
+        # --stage places units and asks for stockpiled rounds in a headless
+        # skirmish, which plays to the same digest each time, and stops at a
+        # line naming a type the game lacks.
+        add_test(NAME native-stage COMMAND ${Python3_EXECUTABLE}
+          "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_stage.py"
+          --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
+          --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
+        set_tests_properties(native-stage PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
+        # A stage's lines timed for later ticks place units, move a group,
+        # send one on patrol and set one on another's nearest units, and stop
+        # at a line that does not read; a director script that names the
+        # stage renders it with its stills, drawing the same frames twice.
+        add_test(NAME native-stage-render COMMAND ${Python3_EXECUTABLE}
+          "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_stage_render.py"
+          --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
+          --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
+        set_tests_properties(native-stage-render PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
         # The Open Annihilation settings leave the game as it plays without
         # them: the seeded skirmish, drawn, writes the same trace stream and
         # last frame with every key at its default as with no preferences;
@@ -1283,6 +1483,29 @@ if(OA_BUILD_PLATFORM)
           --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
         set_tests_properties(native-menu-without-movies PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
           SKIP_RETURN_CODE ${OA_GAME_DATA_SKIP_CODE})
+        # A mod's copied install (OA_MOD_GAME_DIR) and the same files as a
+        # mod folder over the game folder load the same unit types through
+        # the layout of its profile among OA_MOD_PROFILES_DIR's, and never
+        # look up a directory the profile renames by its base name.
+        if(DEFINED OA_MOD_GAME_DIR AND DEFINED OA_MOD_PROFILES_DIR)
+          add_test(NAME native-mod-layout-data COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_mod_layout.py"
+            --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
+            --mod-install "${OA_MOD_GAME_DIR}" --profiles "${OA_MOD_PROFILES_DIR}"
+            --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
+          set_tests_properties(native-mod-layout-data PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+            SKIP_RETURN_CODE ${OA_GAME_DATA_SKIP_CODE})
+          # Two machines in one process play a network game on that install
+          # by its profile's network and recorder rules, end with equal
+          # worlds, and every recording they made plays back.
+          add_test(NAME native-mod-net-loopback COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_mod_loopback.py"
+            --native $<TARGET_FILE:oa-game>
+            --mod-install "${OA_MOD_GAME_DIR}" --profiles "${OA_MOD_PROFILES_DIR}"
+            --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
+          set_tests_properties(native-mod-net-loopback PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+            SKIP_RETURN_CODE ${OA_GAME_DATA_SKIP_CODE})
+        endif()
         # Arm mission 1 (AC01) played with --give-orders is won at the
         # Galactic Gate and goes on through the end screen into AC02; both
         # briefings are drawn in their background's palette and ARM's colours.
@@ -1415,6 +1638,22 @@ if(BUILD_TESTING)
     add_test(NAME style-ratchet-selftest COMMAND ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_style_test.py)
     set_tests_properties(style-ratchet style-ratchet-selftest PROPERTIES TIMEOUT 300)
+    # The tables and records generated from the OAMOD registry
+    # (tools/gen_mod_registry.py) are what the registry gives, and the
+    # registry is consistent.
+    add_test(NAME mod-registry-sync COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_mod_registry.py --check)
+    add_test(NAME mod-registry-sync-selftest COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_mod_registry.py --self-test)
+    set_tests_properties(mod-registry-sync mod-registry-sync-selftest PROPERTIES TIMEOUT 60)
+    # The standard hack pages and table in docs/mods hold what the OAMOD
+    # registry gives (tools/gen_mod_docs.py), and the tool still keeps prose
+    # and finds changed blocks in a small built-in registry.
+    add_test(NAME mod-docs-sync COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_mod_docs.py --check)
+    add_test(NAME mod-docs-sync-selftest COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_mod_docs.py --self-test)
+    set_tests_properties(mod-docs-sync mod-docs-sync-selftest PROPERTIES TIMEOUT 60)
     # Relative links, anchors and repository paths in the engine's Markdown
     # files resolve (tools/check_links.py), and the check still finds what it
     # should in a small built-in tree.
@@ -1450,8 +1689,12 @@ if(BUILD_TESTING)
     # the folders each release builds in. It downloads nothing.
     add_test(NAME sdl-bootstrap-selftest COMMAND ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/tools/bootstrap_sdl.py --self-test)
+    # tools/bootstrap_text_fonts.py's pins, the licence texts they must
+    # match and the characters the cut CJK font keeps. It downloads nothing.
+    add_test(NAME text-fonts-bootstrap-selftest COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tools/bootstrap_text_fonts.py --self-test)
     set_tests_properties(fixed-width-rewrite-selftest format-check-selftest licensing-check-selftest
-      sdl-bootstrap-selftest PROPERTIES TIMEOUT 60)
+      sdl-bootstrap-selftest text-fonts-bootstrap-selftest PROPERTIES TIMEOUT 60)
   endif()
 endif()
 
@@ -1581,6 +1824,12 @@ endif()
 # whatever the extensions add there (their GAME_FILES, which the script
 # cmake/OaExtensions.cmake writes runs). The executables may share a
 # directory, so the copies take turns on one lock.
+# The fonts travel with the game in the fonts folder of its
+# OA_GAME_FILES_DIR, where oa::platform::text_font::bundled_font_directory()
+# finds them (cmake/OaTextFonts.cmake).
+if(TARGET oa-game)
+  oa_copy_text_fonts(oa-game "$<GENEX_EVAL:$<TARGET_PROPERTY:oa-game,OA_GAME_FILES_DIR>>")
+endif()
 foreach(target IN ITEMS oa-game oa-intro oa-tool)
   if(NOT TARGET ${target})
     continue()

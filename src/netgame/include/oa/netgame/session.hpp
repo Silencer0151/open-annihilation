@@ -59,6 +59,9 @@ struct Session {
     uint32_t session_count{};
     uint32_t last_join_result{};
     bool guaranteed{};
+    /// Every description the host publishes again carries an empty password
+    /// (network.session-desc-clear).
+    bool publish_without_password{};
 };
 
 /// Binds a session to its backend and records the application GUID, with guaranteed delivery off.
@@ -193,6 +196,9 @@ uint32_t session_enum_players(
 bool session_quit_game(Session* session) noexcept;
 
 /// Publishes the session description with a new name; only the name server does this.
+///
+/// The description keeps the engine's password unless
+/// Session::publish_without_password is set, which publishes an empty one.
 ///
 /// @param[in,out] session Connected hosting session; its name takes 16 characters of name.
 /// @param name New session name.

@@ -7,12 +7,15 @@
 #include "oa/formats/fnt.hpp"
 #include "oa/ui/frontend_renderer.hpp"
 #include "oa/ui/frontend_renderer/gadget_draw.hpp"
+#include "oa/ui/frontend_renderer/game_text.hpp"
 #include "oa/formats/gaf.hpp"
 #include "oa/present/model/mesh_raster.hpp"
 #include "oa/present/raster.hpp"
 #include "oa/ui/screen_registry.hpp"
 
+#include <array>
 #include <cstring>
+#include <tuple>
 #include <vector>
 
 namespace oa::ui::campaign {
@@ -150,6 +153,10 @@ void draw_name(
 ) {
     ScoreNameDraw name{};
     place_score_name(row, game.scores[row.player].name, label_font(overlay), &name);
+    // Game text the modern fonts draw goes on the screen's RGB pixels after
+    // the table (draw_score_game_text).
+    if (oa::ui::frontend_renderer::needs_text_runs(name.text, true))
+        return;
     draw_indexed_text(target, overlay.name_font, name.text, name.x, name.y);
 }
 
@@ -183,6 +190,8 @@ void draw_bar(
         oa::Rect32{draw.inner_left, draw.inner_top, draw.fill_right, draw.inner_bottom},
         game.ui_colors[kFillColor]
     );
+    if (oa::ui::frontend_renderer::needs_text_runs(draw.label, true))
+        return;
     draw_indexed_text(target, label_font(overlay), draw.label, draw.label_x, draw.label_y);
 }
 
@@ -197,6 +206,82 @@ void draw_score_table(oa::Surface& target, const EndgameOverlay& overlay, const 
         for (const ScoreBar& bar : row.bars)
             if (bar.active)
                 draw_bar(target, overlay, game, bar, row.y);
+    }
+}
+
+/// Gives the colour of a font's glyphs: the first drawn pixel of its 'H'
+/// through the palette.
+std::array<uint8_t, 3>
+font_color(const EndgameOverlay& overlay, const oa::formats::fnt::Font& font) {
+    std::array<uint8_t, 3> color{};
+    uint8_t index = oa::formats::fnt::foreground_index;
+    if (const auto& glyph = font.glyphs['H'])
+        for (std::size_t at = 0; at < glyph->coverage.size() && at < glyph->pixels.size(); ++at)
+            if (glyph->coverage[at] != 0) {
+                index = glyph->pixels[at];
+                break;
+            }
+    std::memcpy(color.data(), palette_rgb(overlay, index), color.size());
+    return color;
+}
+
+// The names and bar values the modern fonts draw, on the screen's RGB pixels:
+// a name centred on its label and cut at the label's right edge, a value
+// centred on its bar.
+void draw_score_game_text(
+    oa::ui::frontend_renderer::Surface& surface, const EndgameOverlay& overlay, const Game& game
+) {
+    namespace renderer = oa::ui::frontend_renderer;
+    oa::PaletteBytes palette{};
+    std::memcpy(palette.data(), overlay.view.palette, palette.size());
+    const auto& names = overlay.name_font;
+    const auto& values = label_font(overlay);
+    const ScoreLayout& layout = overlay.view.screen->layout;
+    const renderer::TextClip screen{
+        0, 0, static_cast<int32_t>(surface.width) - 1, static_cast<int32_t>(surface.height) - 1
+    };
+    for (uint32_t r = 0; r < layout.row_count; ++r) {
+        const ScoreRow& row = layout.rows[r];
+        const char* name = game.scores[row.player].name;
+        if (renderer::needs_text_runs(name, true)) {
+            const int32_t width = renderer::measure_fnt_game_text(names, name, true);
+            ScoreNameDraw placed{};
+            place_score_name(row, name, values, &placed);
+            renderer::TextClip label = screen;
+            label.left = row.name_x;
+            label.right = row.name_x + kScoreNameWidth - 1;
+            std::ignore = renderer::draw_fnt_game_text(
+                surface,
+                names,
+                name,
+                std::max(row.name_x, kScoreNameWidth / 2 + row.name_x - width / 2),
+                placed.y,
+                font_color(overlay, names),
+                palette,
+                label,
+                true
+            );
+        }
+        for (const ScoreBar& bar : row.bars) {
+            if (!bar.active)
+                continue;
+            ScoreBarDraw draw{};
+            draw_score_bar(bar, row.y, values, &draw);
+            if (!renderer::needs_text_runs(draw.label, true))
+                continue;
+            const int32_t width = renderer::measure_fnt_game_text(values, draw.label, true);
+            std::ignore = renderer::draw_fnt_game_text(
+                surface,
+                values,
+                draw.label,
+                kScoreBarWidth / 2 - width / 2 + bar.x,
+                draw.label_y,
+                font_color(overlay, values),
+                palette,
+                screen,
+                true
+            );
+        }
     }
 }
 
@@ -220,6 +305,7 @@ void draw_score_rows(
     for (std::size_t i = 0; i < count && i * 3U + 2 < surface.rgb.size(); ++i)
         if (overlay.passes[0][i] == overlay.passes[1][i])
             std::memcpy(surface.rgb.data() + i * 3U, palette_rgb(overlay, overlay.passes[0][i]), 3);
+    draw_score_game_text(surface, overlay, game);
 }
 
 // Glyphs of every label on the screen, composed onto the frame in one pass.

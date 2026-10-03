@@ -978,9 +978,26 @@ void overlay_tests() {
 
 } // namespace
 
+// ui.endgame-stats: a dropped player (non-zero reject reason) is listed like
+// any other, both while active and once it has left with units built.
+void dropped_player_tests() {
+    static oa::World world{};
+    build_players(world);
+    world.game.outcome_flags = 0x10;
+    world.game.players[0].reject_reason = 6;
+    world.game.players[2].reject_reason = 1;
+    build_score_summary(world, session_of(oa::data::campaign::SessionKind::multiplayer));
+    expect(
+        std::strcmp(world.game.scores[0].name, "Commander") == 0, "dropped active player listed"
+    );
+    expect(std::strcmp(world.game.scores[2].name, "Gone") == 0, "dropped departed builder listed");
+    expect(world.game.scores[1].name[0] == '\0', "watcher that never built still left out");
+}
+
 int main() {
     fade_tests();
     score_tests();
+    dropped_player_tests();
     name_tests();
     state_tests();
     skirmish_screen_tests();

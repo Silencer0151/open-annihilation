@@ -202,14 +202,20 @@ void Runtime::draw_loading_screen() {
         const auto chip_color =
             ui_colors_[percent >= 100 ? kLoadChipDoneColor : kLoadChipBusyColor];
         present::set_text_colors(chip_color, static_cast<int32_t>(present::text_transparent()));
+        // The loading screen keeps the game's own fonts whatever the
+        // Language & Text settings say: a character a font lacks is drawn
+        // in the modern fonts, as with them off. The label is in the game's
+        // language, as gamedata\translate.tdf gives it.
+        const char* translated = game_translation(labels[i]);
         renderer::draw_gadget_text(
             &target,
             font,
-            labels[i],
+            translated != nullptr ? translated : labels[i],
             kLoadLabelX,
             bar_y[i],
             renderer::gadget_text_unbounded,
-            loading_flash_[i]
+            loading_flash_[i],
+            false
         );
         const oa::Rect32 chip{
             kLoadChipLeft, bar_y[i], kLoadChipLeft + (percent * 7) / 2, bar_y[i] + kLoadChipHeight
@@ -241,11 +247,24 @@ void Runtime::teardown_match() {
     // preferences its in-game menu opened.
     forget_team_panel();
     forget_match_preferences();
+    // A watcher's switched view and what other machines reported go with
+    // the match; the resource panel keeps its place.
+    watched_player_ = OA_PLAYER_COUNT;
+    watched_sight_ = WatchedSight::game;
+    resource_panel_.viewed_slot = 0;
+    resource_panel_.locked_slot = 0;
+    resource_panel_.dragging = false;
+    shared_views_ = {};
+    whiteboard_ = {};
+    whiteboard_input_ = {};
+    megamap_open_ = false;
+    megamap_ = {};
     offline_effects_.unbind();
     offline_services_.clear_match();
     offline_services_.set_on_screen_test(nullptr, nullptr);
     effect_boundary_.clock = nullptr;
     match_.reset();
+    game_speed_lock_.reset();
     end_render_tier_match();
     unit_playout_.reset();
     // Its models and radar are keyed by address; a later match can reuse the
@@ -264,6 +283,9 @@ void Runtime::teardown_match() {
     stop_match_tracking();
     match_hud_.reset();
     match_tick_blocked_ = false;
+    // The rules the player's overrides changed while it ran apply from here,
+    // so that the next match is built with them.
+    play_latest_profile();
 }
 
 void Runtime::leave_match() {
@@ -274,6 +296,8 @@ void Runtime::leave_match() {
     match_paused_ = false;
     match_panels_keyboard_ = false;
     match_finished_ = false;
+    // A stage belongs to the match it set up.
+    stage_.reset();
     outcome_over_menu_ = false;
     match_outcome_ = sim::scenario::Outcome::ongoing;
     campaign_mission_ = false;
@@ -282,6 +306,7 @@ void Runtime::leave_match() {
     unit_info_panel_.reset();
     chat_composing_ = false;
     chat_buffer_.clear();
+    chat_composition_.clear();
     match_zoom_ = kDefaultBattlefieldZoom;
     match_zoom_target_ = kDefaultBattlefieldZoom;
     zoom_anchored_ = false;

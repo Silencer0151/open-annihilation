@@ -380,6 +380,17 @@ OA_TEST(game_settings_rows) {
     OA_CHECK(text(7) == "Permanent");
     OA_CHECK(text(8) == "Cheat Codes:" && text(9) == "Allowed");
     OA_CHECK(text(11) == "Disallowed");
+
+    // ai.difficulty-names: the row shows the name the difficulty carries.
+    using Names = data::match_rules::AiDifficultyNamesNames;
+    view.session = SessionKind::skirmish;
+    view.difficulty_names.names = {Names::hard, Names::medium, Names::easy};
+    view.difficulty = 0;
+    ingame_build_game_settings(view, sheet);
+    OA_CHECK(text(8) == "Difficulty:" && text(9) == "Hard");
+    view.difficulty = 2;
+    ingame_build_game_settings(view, sheet);
+    OA_CHECK(text(9) == "Easy");
 }
 
 } // namespace

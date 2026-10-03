@@ -3,6 +3,11 @@
 
 // Match hotkeys, selection commands and overlays.
 #include "oa/app/runtime.hpp"
+#include "oa/app/view_rules.hpp"
+#include "oa/data/languages/translation.hpp"
+#include "oa/present/game_text.hpp"
+#include "oa/ui/frontend_renderer/game_text.hpp"
+#include "oa/data/defs/layout.hpp"
 #include "oa/app/hook_call.hpp"
 #include "oa/ui/decoded.hpp"
 #include "engine_settings_state.hpp"
@@ -36,9 +41,11 @@ namespace oa::app {
 bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
     if (screen_ != Screen::match || !match_ || key.repeat)
         return false;
+    if (whiteboard_key(key) || megamap_key(key))
+        return true;
     // F4 pins the kills board out (Game.graphics_flags 0x80).
     if (key.key == SDLK_F4 || key.scancode == SDL_SCANCODE_F4)
-        return handle_console_hotkey(key);
+        return resource_panel_f4_key() || handle_console_hotkey(key);
     // F1 opens the unit info panel; Shift+F1 pins the unit under the cursor
     // instead (Game.pinned_unit_a), or unpins without one.
     if (key.key == SDLK_F1 || key.scancode == SDL_SCANCODE_F1) {
@@ -93,7 +100,8 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
             return true;
         }
         if (key.key == SDLK_BACKSPACE && !chat_buffer_.empty()) {
-            chat_buffer_.pop_back();
+            // The line is typed text: the key takes the whole last character.
+            chat_buffer_.erase(oa::present::last_character_start(chat_buffer_));
             return true;
         }
         return true;
@@ -171,6 +179,8 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
         return true;
     }
     if (ctrl) {
+        if (selection_shortcut_key(sym, shift))
+            return true;
         if (sym == SDLK_A) {
             select_units_matching([](const oa::sim::unit_spawn::Slot&) { return true; });
             return true;
@@ -388,6 +398,7 @@ void Runtime::box_select_units(int x0, int y0, int x1, int y1, bool add) {
         selected_match_unit_ = 0;
     const bool any =
         oa::sim::selection::select_units_in_box(world, on_screen_lists(), add, selection_hooks());
+    selection_shortcut_drag_filter();
     adopt_selected_units();
     int count = 0;
     for (const auto& slot : match_->world().slots)
@@ -464,18 +475,70 @@ void Runtime::area_order_units(int x0, int y0, int x1, int y1, std::string_view 
     status_ = std::string(kind) + " " + std::to_string(count);
 }
 
+oa::sim::speed::Range Runtime::game_speed_range() const {
+    if (!match_)
+        return {};
+    auto range = oa::sim::speed::range_of(match_->rules().console.game_speed_range);
+    if (game_speed_lock_)
+        range = oa::sim::speed::locked(
+            range,
+            game_speed_lock_->slowest - oa::sim::speed::lock_offset,
+            game_speed_lock_->fastest - oa::sim::speed::lock_offset
+        );
+    return range;
+}
+
+void Runtime::lock_game_speed(oa::sim::speed::Range lock) {
+    game_speed_lock_ = lock;
+}
+
+void Runtime::unlock_game_speed() {
+    game_speed_lock_.reset();
+}
+
+void Runtime::read_speed_lock_line(const char* text) {
+    if (!match_ || (current_extension_state() & extension_state::multiplayer) != 0)
+        return;
+    const auto& rule = match_->rules().console.game_speed_range;
+    if (!rule.enabled || !rule.syncon)
+        return;
+    const auto line = oa::sim::speed::read_lock_line(text);
+    switch (line.request) {
+    case oa::sim::speed::LockRequest::lock: {
+        game_speed_lock_ =
+            oa::sim::speed::locked(oa::sim::speed::range_of(rule), line.low, line.high);
+        auto& world = match_->state();
+        const auto range = game_speed_range();
+        const int32_t speed = world.game.requested_speed;
+        if (speed >= range.slowest && speed <= range.fastest)
+            break;
+        std::ignore = oa::sim::speed::set_speed(world, speed, message_hooks(), range);
+        match_timing_.requested_rate = world.game.requested_speed;
+        match_timing_.actual_rate = world.game.current_speed;
+        preferences_.current_game_speed = world.game.current_speed;
+        break;
+    }
+    case oa::sim::speed::LockRequest::unlock:
+        game_speed_lock_.reset();
+        break;
+    case oa::sim::speed::LockRequest::none:
+        break;
+    }
+}
+
 void Runtime::adjust_game_speed(int delta) {
     auto& world = match_->state();
     const auto hooks = message_hooks();
+    const auto range = game_speed_range();
     // '+' sets the speed only below the fastest, '-' only above the slowest.
     const int32_t before = world.game.requested_speed;
-    const bool sets = delta > 0   ? before < oa::sim::speed::fastest
-                      : delta < 0 ? before > oa::sim::speed::slowest
+    const bool sets = delta > 0   ? before < range.fastest
+                      : delta < 0 ? before > range.slowest
                                   : false;
     if (delta > 0)
-        oa::sim::speed::raise_speed(world, hooks);
+        oa::sim::speed::raise_speed(world, hooks, range);
     else if (delta < 0)
-        oa::sim::speed::lower_speed(world, hooks);
+        oa::sim::speed::lower_speed(world, hooks, range);
     match_timing_.requested_rate = world.game.requested_speed;
     match_timing_.actual_rate = world.game.current_speed;
     preferences_.current_game_speed = world.game.current_speed;
@@ -531,7 +594,7 @@ bool Runtime::open_unit_info() {
         try {
             panel.screen = renderer::load_screen(
                 self.assets_,
-                {std::string("guis/") + name,
+                {oa::data::defs::gui_path(name),
                  "",
                  "palettes/guipal.pal",
                  "anims/commongui.gaf",
@@ -589,6 +652,13 @@ bool Runtime::open_unit_info() {
     };
     hud::UnitInfoHost host{};
     host.user = this;
+    // The panel's headings, labels and units in the game's language, as
+    // gamedata\translate.tdf gives them.
+    host.localize = [](void* user, const char* text) -> const char* {
+        auto& self = *static_cast<Runtime*>(user);
+        self.unit_panel_word_ = self.translate_ui(text);
+        return self.unit_panel_word_.c_str();
+    };
     host.add_label = [](void* user, const char* text, int16_t x, int16_t y, uint32_t) {
         auto& self = *static_cast<Runtime*>(user);
         if (!self.unit_info_panel_ || !self.unit_info_panel_->screen)
@@ -608,8 +678,14 @@ bool Runtime::open_unit_info() {
     };
     host.set_picture = [](void* user, const char* path) {
         auto& self = *static_cast<Runtime*>(user);
-        if (self.unit_info_panel_)
-            self.unit_info_panel_->picture_path = path;
+        if (!self.unit_info_panel_)
+            return;
+        self.unit_info_panel_->picture_path = path;
+        // The picture in the language's folder when the game data has it
+        // there (unitpics-German), as 3.1c looks first.
+        if (const auto variant = oa::data::languages::language_folder_path(path);
+            variant && self.assets_.file_size(*variant) > 0)
+            self.unit_info_panel_->picture_path = *variant;
     };
     host.free_picture = [](void* user) {
         auto& self = *static_cast<Runtime*>(user);
@@ -759,8 +835,9 @@ void Runtime::ensure_talk_panel() {
     if (talk_layout_)
         return;
     try {
-        const auto bytes = assets_.read("guis/talk.gui").bytes;
-        auto parsed = oa::ui::gui_layout::parse(bytes);
+        const auto bytes = assets_.read(oa::data::defs::gui_path("talk.gui")).bytes;
+        auto parsed =
+            oa::ui::gui_layout::parse(bytes, oa::ui::gui_layout::game_translation_lookup());
         if (!parsed.ok())
             throw std::runtime_error(
                 parsed.error ? parsed.error->message : "TALK.GUI parse failed"
@@ -772,6 +849,51 @@ void Runtime::ensure_talk_panel() {
         return;
     }
     append_gaf_file(match_talk_, "anims/talk.gaf");
+}
+
+namespace {
+
+/// The columns between the chat line's box and its text, and the rows above
+/// and below the TALK field the line may take, or that a line risen over
+/// the battlefield keeps clear above and below it, in source pixels.
+constexpr int kChatTextInset = 2;
+/// The palette colour of the chat line's text.
+constexpr uint8_t kChatTextColor = 255;
+
+} // namespace
+
+std::optional<Runtime::HudRect> Runtime::chat_text_box() {
+    ensure_talk_panel();
+    if (!talk_layout_ || talk_layout_->gadgets.empty())
+        return std::nullopt;
+    const auto& root = talk_layout_->gadgets.front().common;
+    const int origin_x = root.x;
+    const int origin_y = root.y < 0 ? kCanvasHeight + root.y : root.y;
+    for (const auto& gadget : talk_layout_->gadgets) {
+        const auto& common = gadget.common;
+        if (&common != &root && common.type == oa::ui::gui_layout::GadgetType::text_box)
+            return HudRect{origin_x + common.x, origin_y + common.y, common.width, common.height};
+    }
+    return std::nullopt;
+}
+
+std::optional<oa::present::TextLayers> Runtime::chat_line_layers(int scale, int width) {
+    const oa::formats::fnt::Font* font = match_label_font();
+    if (font == nullptr)
+        return std::nullopt;
+    const std::string line = typed_game_text(chat_buffer_ + chat_composition_) + "_";
+    const auto runs = renderer::split_game_text(line, renderer::fnt_font_characters(*font), true);
+    if (runs.size() != 1 || !runs.front().modern)
+        return std::nullopt;
+    // The line being typed shows its end, the cursor with it, when it is
+    // wider than its box; its box is its background.
+    const auto& run = runs.front();
+    const auto face = renderer::fnt_font_face(*font);
+    const int32_t room = width - 2 * oa::present::text_border(scale, run.size);
+    const std::size_t from = oa::present::modern_text_tail(run.text, face, scale, run.size, room);
+    return oa::present::modern_text(
+        std::string_view(run.text).substr(from), face, scale, run.size, false
+    );
 }
 
 void Runtime::draw_chat_entry() {
@@ -790,10 +912,29 @@ void Runtime::draw_chat_entry() {
         const int x = origin_x + common.x;
         const int y = origin_y + common.y;
         if (common.type == oa::ui::gui_layout::GadgetType::text_box) {
+            // In the modern fonts the line is drawn at the text size,
+            // centred on the box while the box and the rows above and
+            // below it hold it; a taller line rises over the battlefield
+            // (draw_risen_chat_line).
+            if (const auto layers = chat_line_layers(1, common.width - 2 * kChatTextInset)) {
+                if (layers->height <= common.height + 2 * kChatTextInset)
+                    std::ignore = paint_modern_text(
+                        *layers,
+                        x + kChatTextInset,
+                        y + (common.height - layers->height) / 2 + layers->baseline,
+                        palette_rgb(kChatTextColor)
+                    );
+                continue;
+            }
             const oa::formats::fnt::Font* font = match_label_font();
             const int text_h =
                 font != nullptr ? static_cast<int>(oa::formats::fnt::line_height(*font)) : 0;
-            draw_hud_label(x + 2, y + (common.height - text_h) / 2, chat_buffer_ + "_", 255);
+            draw_hud_label(
+                x + kChatTextInset,
+                y + (common.height - text_h) / 2,
+                typed_game_text(chat_buffer_ + chat_composition_) + "_",
+                kChatTextColor
+            );
             continue;
         }
         // CONSOLE is the TALK.GAF picture of the same name.
@@ -804,6 +945,41 @@ void Runtime::draw_chat_entry() {
             rendered.ok())
             blit_gaf_source(*rendered.frame, x, y);
     }
+}
+
+void Runtime::draw_risen_chat_line() {
+    if (!chat_composing_)
+        return;
+    const auto box = chat_text_box();
+    if (!box)
+        return;
+    // Only a line taller than the TALK field and the rows round it rises.
+    const auto in_box = chat_line_layers(1, box->width - 2 * kChatTextInset);
+    if (!in_box || in_box->height <= box->height + 2 * kChatTextInset)
+        return;
+    // Across the battlefield, standing on its bottom edge, the text from
+    // the column the field's text starts at; in canvas pixels.
+    namespace layout = oa::ui::display_layout;
+    const int scale = hud_text_scale();
+    const int left = match_layout_.left;
+    const int right = match_layout_.left + match_layout_.battlefield_width();
+    const int inset = kChatTextInset * scale;
+    const int pen = std::clamp(
+        layout::source_to_canvas(match_layout_, box->x + kChatTextInset, layout::kSourceBottomBarY)
+            .x,
+        left + inset,
+        right
+    );
+    const auto layers = chat_line_layers(scale, right - pen - inset);
+    if (!layers || right <= left)
+        return;
+    const int bottom = match_layout_.top + match_layout_.battlefield_height();
+    const int top = std::max(bottom - layers->height - 2 * inset, match_layout_.top);
+    const auto at = canvas_paint(left, top);
+    fill_hud_rect(at.x, at.y, right - left, bottom - top, view_rules::chat_backdrop_color);
+    std::ignore = paint_modern_text(
+        *layers, at.x + pen - left, at.y + inset + layers->baseline, palette_rgb(kChatTextColor)
+    );
 }
 
 namespace {

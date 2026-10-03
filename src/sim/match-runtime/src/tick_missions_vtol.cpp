@@ -175,6 +175,12 @@ class TickHost::VtolMissions {
         host.play_sound(*s.unit, category, caption);
     }
 
+    /// Returns the speech category of a landing that finds no free pad,
+    /// as the match's display rules set it (cannot comply in 3.1c).
+    ///
+    /// @return the speech category
+    uint32_t landing_fail_voice() { return match().display_rules().landing_fail_voice; }
+
     /// Plays the order's acknowledgement once, clearing its announce bit.
     ///
     /// @param caption The order's caption, or null for none.
@@ -492,6 +498,11 @@ class TickHost::VtolMissions {
         const auto* masks = match().fields(s).target_masks;
         if (masks && masks->no_chase.contains(attacker->record.type_index))
             return false;
+        // air.guard-respects-hold-position: a guard holding position lets the
+        // attacker be.
+        if (match().rules().air.guard_respects_hold_position.enabled &&
+            (s.record.flags & OA_UNIT_FLAG_MOVE_ORDER_MASK) == 0)
+            return false;
         const auto attacker_slot = host.slot(*attacker).unit_index;
         if (match().issue_attack(s.unit_index, attacker_slot, true)) {
             order.wait_events = 0;
@@ -662,8 +673,9 @@ class TickHost::VtolMissions {
             const auto heading = vtol::bearing_between(vtol::position_of(s.record), waypoint);
             goal_at(vtol::behind(waypoint, heading, vtol::patrol_lead), vtol::patrol_arrival);
             order.wait_events |= vtol::goal_events;
-            const auto max_damage = def_of(s.record).max_damage;
-            if (vtol::below(s.record.health, (max_damage >> 2) * 3) && land_on_nearby_pad())
+            const auto& type = def_of(s.record);
+            if (vtol::below(s.record.health, (type.max_damage >> 2) * 3) &&
+                !never_retreats_to_repair(match().rules(), type.abilities) && land_on_nearby_pad())
                 return 0;
             if (auto* target = match().find_automatic_target(*s.unit);
                 target && match().issue_automatic_attack(*s.unit, *target)) {
@@ -1045,7 +1057,7 @@ class TickHost::VtolMissions {
         case 3:
             piece = free_pad_piece(*pad, vtol::no_piece);
             if (piece == vtol::no_piece) {
-                speak(vtol::speech_failed, "Landing failed");
+                speak(landing_fail_voice(), "Landing failed");
                 return 0;
             }
             approach_pad(*pad, piece, vtol::pad_arrival);
@@ -1058,7 +1070,7 @@ class TickHost::VtolMissions {
                 return 1;
             piece = free_pad_piece(*pad, piece);
             if (piece == vtol::no_piece) {
-                speak(vtol::speech_failed, "Landing aborted: all pads are occupied");
+                speak(landing_fail_voice(), "Landing aborted: all pads are occupied");
                 return 0;
             }
             // Settle on the piece with the pad's heading, a loaded transport
@@ -1081,7 +1093,7 @@ class TickHost::VtolMissions {
             if (events & vtol::path_failed_event)
                 return 8;
             if (!pad_piece_free(pad->record, piece)) {
-                speak(vtol::speech_failed, "Landing aborted: no pads available");
+                speak(landing_fail_voice(), "Landing aborted: no pads available");
                 return 0;
             }
             const auto pad_slot = host.slot(*pad).unit_index;

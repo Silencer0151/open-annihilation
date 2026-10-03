@@ -76,9 +76,16 @@ void apply_side_selection(CampaignSetup* setup, const FrontendHost* host);
 
 /// Shows a difficulty as the Difficulty button's stage and selects its Easy/Medium/Hard radio label.
 ///
+/// The label is the name the difficulty carries (ai.difficulty-names).
+///
 /// @param difficulty Difficulty 0..2; other values only redraw.
 /// @param host Frontend services.
-void show_difficulty(int32_t difficulty, const FrontendHost* host);
+/// @param names which of 3.1c's names each difficulty carries; 3.1c's when left out
+void show_difficulty(
+    int32_t difficulty,
+    const FrontendHost* host,
+    const data::match_rules::AiDifficultyNames& names = {}
+);
 
 /// Toggles the all-missions unlock when DRDEATH was just typed on SINGLE.GUI.
 ///

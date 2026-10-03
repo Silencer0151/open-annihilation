@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/netgame/frame.hpp"
+#include "oa/netgame/recorder_messages.hpp"
 #include "oa/base/game_loop.hpp"
 #include <cstdint>
 #include <cstring>
@@ -82,7 +83,22 @@ uint16_t copy_record_length(const PeerRecords* r, std::size_t at) noexcept {
     const auto type = r->copy[at];
     if (type == static_cast<uint8_t>(RecordType::unit_state))
         return load_u16(r->copy + at + 1);
+    if (r->recorder_records && is_recorder_record_type(type)) {
+        uint16_t length = 0;
+        const std::size_t available = sizeof r->copy - at;
+        return recorder_record_length(r->copy + at, available, &length) == WireError::ok ? length
+                                                                                         : 0;
+    }
     return record_length_table[type];
+}
+
+/// Tells whether a byte heads a record the ring's split takes.
+///
+/// @param r the peer's records
+/// @param type the byte
+/// @return true for 0x02..0x2c, and for a recorder record when the ring splits them
+bool splits_record(const PeerRecords* r, uint8_t type) noexcept {
+    return is_record_type(type) || (r->recorder_records && is_recorder_record_type(type));
 }
 
 /// Binds a peer slot to a sender with no sequence, nothing held and an empty ring.
@@ -272,11 +288,14 @@ WireError unpack_frame_records(
         return WireError::ok;
     for (;;) {
         const auto type = r->copy[at];
-        if (!is_record_type(type))
+        if (!splits_record(r, type))
             break;
         const auto length = copy_record_length(r, at);
-        if (length == 0)
-            return WireError::zero_length_record;
+        if (length == 0) {
+            if (is_record_type(type))
+                return WireError::zero_length_record;
+            break; // a recorder record whose length cannot be read
+        }
         remaining -= length;
         if (remaining < 0)
             break;

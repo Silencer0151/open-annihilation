@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/ui/frontend_renderer.hpp"
+#include "oa/data/defs/layout.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -39,7 +40,7 @@ int main(int argc, char** argv) {
         } else if (screen == "single") {
             resources = oa::ui::frontend_renderer::load_screen(
                 assets,
-                {"guis/single.gui",
+                {oa::data::defs::gui_path("single.gui"),
                  "bitmaps/singlebg.pcx",
                  "palettes/guipal.pal",
                  "anims/single.gaf",
@@ -48,7 +49,7 @@ int main(int argc, char** argv) {
         } else {
             resources = oa::ui::frontend_renderer::load_screen(
                 assets,
-                {"guis/skirmish.gui",
+                {oa::data::defs::gui_path("skirmish.gui"),
                  "bitmaps/skirmsetup4x.pcx",
                  "palettes/guipal.pal",
                  "anims/skirmish.gaf",

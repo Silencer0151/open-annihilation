@@ -291,11 +291,14 @@ void visit_altitude_stamp(
     }
 }
 
-// Adding and removing coverage differ only in the step added to each count.
-void adjust_area_coverage(const SightStamp& stamp, SightContext& context, uint8_t step) noexcept {
+// The steps adding and removing a stamp add to each count it covers; the
+// counts wrap.
+constexpr uint8_t coverage_added = 1;
+constexpr uint8_t coverage_removed = 0xff;
+
+// Counts the stamp in its owner's coverage.
+void count_area_coverage(const SightStamp& stamp, SightContext& context, uint8_t step) noexcept {
     auto& grid = *context.grid;
-    if (stamp.owner == grid.viewpoint_player)
-        mark_viewpoint_sight_changed(grid);
     if (stamp.owner >= OA_PLAYER_COUNT || context.coverage[stamp.owner].empty())
         return;
     const auto coverage = context.coverage[stamp.owner];
@@ -312,6 +315,41 @@ void adjust_area_coverage(const SightStamp& stamp, SightContext& context, uint8_
     if (stamp.band >= context.masks.size())
         return;
     visit_standard_stamp(stamp.center_x, stamp.center_z, context.masks[stamp.band], grid, count);
+}
+
+// Allied vision keeps a player's coverage on this machine only while the
+// player is simulated here or is the one viewed.
+bool keeps_allied_coverage(const oa::Game& game, const oa::Player& player) noexcept {
+    return player.status != OA_PLAYER_STATUS_MIRRORED || player.index == game.viewpoint_player;
+}
+
+// Counts the stamp once more or once less, for its owner alone or, under
+// allied vision, for each player its owner allies and then for the owner.
+// Allied vision leaves the stamp's owner at the last player counted.
+void adjust_area_coverage(SightStamp& stamp, SightContext& context, uint8_t step) noexcept {
+    auto& grid = *context.grid;
+    if (!context.allied_vision || grid.game == nullptr || stamp.owner >= OA_PLAYER_COUNT) {
+        if (stamp.owner == grid.viewpoint_player)
+            mark_viewpoint_sight_changed(grid);
+        count_area_coverage(stamp, context, step);
+        return;
+    }
+    const auto& game = *grid.game;
+    const auto owner = stamp.owner;
+    const auto& granter = game.players[owner];
+    const auto count_for = [&](uint8_t player) {
+        stamp.owner = player;
+        mark_viewpoint_sight_changed(grid);
+        count_area_coverage(stamp, context, step);
+    };
+    for (uint8_t player = 0; player < OA_PLAYER_COUNT; ++player) {
+        const auto& record = game.players[player];
+        if (granter.alliance[player] != 0 && granter.index != player && record.in_use != 0 &&
+            keeps_allied_coverage(game, record))
+            count_for(player);
+    }
+    if (keeps_allied_coverage(game, granter))
+        count_for(owner);
 }
 
 SightStamp unit_sight_stamp(
@@ -402,11 +440,13 @@ SightProjection project_sight_cell(const SightStamp& stamp, const SightContext& 
 }
 
 void add_area_coverage(const SightStamp& stamp, SightContext& context) noexcept {
-    adjust_area_coverage(stamp, context, 1);
+    auto counted = stamp;
+    adjust_area_coverage(counted, context, coverage_added);
 }
 
 void remove_area_coverage(const SightStamp& stamp, SightContext& context) noexcept {
-    adjust_area_coverage(stamp, context, 0xff);
+    auto counted = stamp;
+    adjust_area_coverage(counted, context, coverage_removed);
 }
 
 void map_area(const SightStamp& stamp, SightContext& context) noexcept {
@@ -465,7 +505,7 @@ void update_area_coverage(SightStamp& stamp, SightContext& context) noexcept {
             std::abs(static_cast<int32_t>(stamp.band) - altitude) < altitude_restamp_distance)
             return;
         if (stamp.band != 0 && (rules & update_sight_grid) != 0)
-            remove_area_coverage(stamp, context);
+            adjust_area_coverage(stamp, context, coverage_removed);
         stamp.center_x = static_cast<int16_t>(x);
         stamp.center_z = static_cast<int16_t>(z);
         if (!inside_altitude_grid(x, z, *context.altitude)) {
@@ -474,19 +514,19 @@ void update_area_coverage(SightStamp& stamp, SightContext& context) noexcept {
         }
         stamp.band = static_cast<uint8_t>(altitude);
         if ((rules & update_sight_grid) != 0)
-            add_area_coverage(stamp, context);
+            adjust_area_coverage(stamp, context, coverage_added);
     } else {
         const auto cell = project_sight_cell(stamp, context);
         if (stamp.center_x == cell.center_x && stamp.center_z == cell.center_z &&
             stamp.band == cell.band)
             return;
         if ((rules & update_sight_grid) != 0)
-            remove_area_coverage(stamp, context);
+            adjust_area_coverage(stamp, context, coverage_removed);
         stamp.center_x = static_cast<int16_t>(cell.center_x);
         stamp.center_z = static_cast<int16_t>(cell.center_z);
         stamp.band = static_cast<uint8_t>(cell.band);
         if ((rules & update_sight_grid) != 0)
-            add_area_coverage(stamp, context);
+            adjust_area_coverage(stamp, context, coverage_added);
     }
     if ((rules & terrain_mapping) != 0)
         map_area(stamp, context);
@@ -504,7 +544,7 @@ void refresh_area_coverage(SightStamp& stamp, SightContext& context) noexcept {
     stamp.center_x = static_cast<int16_t>(cell.center_x);
     stamp.center_z = static_cast<int16_t>(cell.center_z);
     stamp.band = static_cast<uint8_t>(cell.band);
-    add_area_coverage(stamp, context);
+    adjust_area_coverage(stamp, context, coverage_added);
     map_area(stamp, context);
 }
 
@@ -581,7 +621,7 @@ void expire_remembered_sight(
     const auto end = std::min(memory.count, eyeball_capacity);
     for (auto index = 0; index < end; ++index)
         if (remembered_sight_expired(memory.slots[index], tick)) {
-            remove_area_coverage(memory.slots[index].stamp, context);
+            adjust_area_coverage(memory.slots[index].stamp, context, coverage_removed);
             expired = true;
         }
     if (expired)

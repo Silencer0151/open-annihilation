@@ -3,7 +3,8 @@
 
 // The game's window icon: the Open Annihilation icon at 256 by 256 pixels,
 // made by tools/make_icons.py and embedded in the game as a PNG file, which
-// start-up decodes and gives the window.
+// start-up decodes and gives the window. The settings dialog's header and
+// the OA buttons draw the same icon, cut to its visible part.
 #pragma once
 
 #include <cstdint>
@@ -41,5 +42,14 @@ std::span<const uint8_t> window_icon_png();
 ///         by window_icon_size pixels
 [[nodiscard]] bool
 decode_window_icon(std::span<const uint8_t> png, WindowIcon& icon, std::string& error);
+
+/// Returns the smallest rectangle of an icon that holds every pixel that is
+/// not wholly transparent, so that a small copy of the icon fills its place
+/// without the clear margin round it.
+///
+/// @param icon the icon, its pixels filling its size
+/// @return that rectangle's pixels; empty when every pixel is transparent or
+///         the pixels do not fill the icon's size
+[[nodiscard]] WindowIcon visible_part(const WindowIcon& icon);
 
 } // namespace oa::app

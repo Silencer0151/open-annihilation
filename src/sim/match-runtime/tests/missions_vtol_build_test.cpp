@@ -387,6 +387,46 @@ int main() {
     CHECK(step(match, *builder, *queue.primary, queue.primary->raised_events) == 8);
     CHECK(services.caption == "Construction terminated by hostile action");
 
+    // Display rules that hold the reclaim voice back: setting off is silent,
+    // arriving says "working" once and moves to stage 3, where the aircraft
+    // reclaims without another word.
+    {
+        input.display.vtol_reclaim_voice_at_start = true;
+        Services held_services;
+        sim::match_runtime::Match held(input, held_services);
+        held.set_speech_hooks({&held_services, &Services::speak});
+        held.reload_unit_defs();
+        for (uint8_t player = 0; player < 2; ++player) {
+            held.simulation().players[player].present = true;
+            held.simulation().players[player].status = 1;
+        }
+        held.simulation().tick = 1;
+        auto* flier = held.create({0, aircraft_type, {64u << 16, 0, 64u << 16}, true, 1, 0});
+        auto* target = held.create({1, structure_type, {72u << 16, 0, 64u << 16}, true, 1, 0});
+        CHECK(flier && target);
+        auto& order = held.issue_reclaim(flier->unit_index, target->unit_index, false);
+        CHECK(step(held, *flier, order, 0) == 1);
+        held_services.speech.clear();
+        CHECK(step(held, *flier, order, 0) == 1 && held_services.speech.empty());
+        CHECK(step(held, *flier, order, 0x40) == 9 && held_services.speech.empty());
+        CHECK(order.phase == 2);
+        CHECK(step(held, *flier, order, 0) == 2 && order.phase == 3);
+        CHECK(held_services.speech == std::vector<uint32_t>{11});
+        CHECK((order.wait_events & 0x10009) == 0x10009);
+        CHECK(step(held, *flier, order, 0) == 2 && order.phase == 3);
+        CHECK(held_services.speech == std::vector<uint32_t>{11});
+        CHECK(step(held, *flier, order, 0x40) == 9);
+        target->record.position.x = 400 << 16;
+        CHECK(step(held, *flier, order, 0) == 0 && order.phase == 0);
+        // Without the rules a stage 3 is no stage of the order.
+        auto* other = match.create({1, structure_type, {72u << 16, 0, 64u << 16}, true, 1, 0});
+        CHECK(other != nullptr);
+        match.stop_orders(builder_id);
+        auto& plain = match.issue_reclaim(builder_id, other->unit_index, false);
+        plain.phase = 3;
+        CHECK(step(match, *builder, plain, 0) == 7);
+    }
+
     std::cout << "match-missions-vtol-build: ok\n";
     return 0;
 }

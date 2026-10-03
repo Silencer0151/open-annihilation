@@ -287,6 +287,32 @@ void test_transport() {
     check(!can_load_unit(*f.world, transport, cargo), "cargo refuses transport");
 }
 
+// ui.interface-fixes pad-cursor: a flyer moving over its own air base shows
+// the unload cursor, or the load cursor under the fix.
+void test_pad_cursor() {
+    Fixture f;
+    Unit& flyer = f.unit(1, 0, 1);
+    Unit& pad = f.unit(2, 0, 2);
+    f.def(1).abilities = OA_UNIT_DEF_ABILITY_CAN_MOVE;
+    f.def(1).flags = OA_UNIT_DEF_FLAG_CAN_FLY;
+    f.def(2).flags = OA_UNIT_DEF_FLAG_IS_AIRBASE;
+    auto hooks = f.hooks();
+    check(
+        order_cursor(*f.world, OrderCommand::move, flyer, &pad, {}, hooks) == OrderCursor::unload,
+        "3.1c pad cursor unloads"
+    );
+    hooks.pad_load_cursor = true;
+    check(
+        order_cursor(*f.world, OrderCommand::move, flyer, &pad, {}, hooks) == OrderCursor::load,
+        "fixed pad cursor loads"
+    );
+    f.def(2).flags = 0;
+    check(
+        order_cursor(*f.world, OrderCommand::move, flyer, &pad, {}, hooks) == OrderCursor::move,
+        "no pad, no load cursor"
+    );
+}
+
 // The air layer (occupancy 2) is a flying unit's; a carried unit is in
 // layer 0. Water weapons decide targets under the sea.
 void test_airborne_and_water_targets() {
@@ -1106,6 +1132,175 @@ void test_radar_scroll() {
         end_radar_scroll(game, true) && pointer_flags(game) == radar, "the right release ends it"
     );
 }
+
+// orders.reclaim-command-any-unit: the Reclaim command's cursor over a unit is
+// reclaim whatever the unit; the order it issues is the one 3.1c issues.
+void test_reclaim_command_any_unit() {
+    Fixture f;
+    auto hooks = f.hooks();
+    data::match_rules::MatchRules rules{};
+    hooks.rules.match = &rules;
+    Unit& builder = f.unit(1, 0, 1);
+    Unit& tank = f.unit(2, 0, 2);
+    Unit& commander = f.unit(5, 1, 3);
+    Unit& fighter = f.unit(6, 1, 4);
+    Unit& wreck_tank = f.unit(7, 1, 2);
+    for (Unit* unit : {&builder, &tank, &commander, &fighter, &wreck_tank})
+        unit->flags |= OA_UNIT_FLAG_LIVE;
+    f.def(1).abilities = OA_UNIT_DEF_ABILITY_CAN_RECLAMATE | OA_UNIT_DEF_ABILITY_CAN_MOVE;
+    f.def(2).abilities = OA_UNIT_DEF_ABILITY_CAN_MOVE;
+    f.def(3).abilities = OA_UNIT_DEF_ABILITY_CAN_CAPTURE;
+    fighter.flags |= 2U; // airborne
+    const FixedVec3 at{};
+    const auto cursor = [&](const Unit& actor, const Unit* target) {
+        return order_cursor(*f.world, OrderCommand::reclaim, actor, target, at, hooks);
+    };
+    const auto order = [&](const Unit& actor, const Unit* target) {
+        return unit_order(*f.world, OrderCommand::reclaim, actor, target, &at, hooks);
+    };
+
+    check(cursor(builder, &wreck_tank) == OrderCursor::reclaim, "3.1c: a plain unit reclaims");
+    check(cursor(builder, &commander) == OrderCursor::normal, "3.1c: a commander refuses");
+    check(cursor(builder, &fighter) == OrderCursor::normal, "3.1c: an airborne unit refuses");
+    check(cursor(tank, &wreck_tank) == OrderCursor::normal, "3.1c: a non-reclaimer refuses");
+
+    rules.orders.reclaim_command_any_unit.enabled = true;
+    check(cursor(builder, &commander) == OrderCursor::reclaim, "any unit: over a commander");
+    check(cursor(builder, &fighter) == OrderCursor::reclaim, "any unit: over an airborne unit");
+    check(cursor(builder, &wreck_tank) == OrderCursor::reclaim, "any unit: over a plain unit");
+    check(cursor(tank, &commander) == OrderCursor::reclaim, "any unit: even for a non-reclaimer");
+    check(cursor(builder, nullptr) == OrderCursor::normal, "any unit: bare ground stays normal");
+    check(
+        click_action(*f.world, OrderCommand::reclaim, cursor(builder, &commander)) ==
+            ClickAction::issue_command,
+        "any unit: the click over a commander issues the command"
+    );
+    check(order(builder, &commander) == UnitOrder::reclaim_unit, "the reclaimer is ordered");
+    check(order(tank, &commander) == UnitOrder::none, "a non-reclaimer gets no order");
+    check(
+        order_cursor(*f.world, OrderCommand::move, builder, &commander, at, hooks) ==
+            OrderCursor::move,
+        "any unit: the Move command keeps its own test"
+    );
+}
+
+// orders.resurrector-reclaims-features: the Reclaim command makes a resurrector
+// reclaim a feature; the default order still resurrects it.
+void test_resurrector_reclaims_features() {
+    Fixture f;
+    auto hooks = f.hooks();
+    data::match_rules::MatchRules rules{};
+    hooks.rules.match = &rules;
+    f.feature_here = true;
+    Unit& necro = f.unit(1, 0, 1);
+    Unit& plane = f.unit(2, 0, 2);
+    f.def(1).abilities = OA_UNIT_DEF_ABILITY_CAN_RECLAMATE | OA_UNIT_DEF_ABILITY_CAN_RESURRECT |
+                         OA_UNIT_DEF_ABILITY_CAN_MOVE;
+    f.def(2).abilities = f.def(1).abilities;
+    f.def(2).flags = OA_UNIT_DEF_FLAG_CAN_FLY;
+    const FixedVec3 at{};
+    const auto order = [&](OrderCommand command, const Unit& actor) {
+        return unit_order(*f.world, command, actor, nullptr, &at, hooks);
+    };
+    check(order(OrderCommand::reclaim, necro) == UnitOrder::resurrect, "3.1c: Reclaim resurrects");
+    rules.orders.resurrector_reclaims_features.enabled = true;
+    check(order(OrderCommand::reclaim, necro) == UnitOrder::reclaim, "Reclaim now reclaims");
+    check(
+        order(OrderCommand::reclaim, plane) == UnitOrder::vtol_reclaim,
+        "an aircraft reclaims through its VTOL order"
+    );
+    check(
+        order(OrderCommand::default_order, necro) == UnitOrder::resurrect,
+        "the default order still resurrects"
+    );
+    f.world->game.interface_type = interface_right_click;
+    check(
+        order(OrderCommand::default_order, necro) == UnitOrder::resurrect,
+        "the right-click default order still resurrects"
+    );
+    f.world->game.interface_type = interface_left_click;
+    check(
+        order_cursor(*f.world, OrderCommand::reclaim, necro, nullptr, at, hooks) ==
+            OrderCursor::reclaim,
+        "the Reclaim cursor is unchanged"
+    );
+    f.feature_here = false;
+    check(order(OrderCommand::reclaim, necro) == UnitOrder::none, "nothing to reclaim");
+}
+
+// air.no-repair-retreat-flag: the Move command keeps aircraft marked
+// cantbetransported off repair pads, cursor and order alike.
+void test_no_repair_retreat_flag() {
+    Fixture f;
+    auto hooks = f.hooks();
+    data::match_rules::MatchRules rules{};
+    hooks.rules.match = &rules;
+    using Flag = data::match_rules::AirNoRepairRetreatFlagFlag;
+    Unit& bomber = f.unit(1, 0, 1);
+    Unit& lifter = f.unit(2, 0, 2);
+    Unit& pad = f.unit(3, 0, 3);
+    Unit& cargo = f.unit(4, 0, 4);
+    for (Unit* unit : {&bomber, &lifter, &pad, &cargo})
+        unit->flags |= OA_UNIT_FLAG_LIVE;
+    f.def(1).abilities = OA_UNIT_DEF_ABILITY_CAN_MOVE | OA_UNIT_DEF_ABILITY_CANT_BE_TRANSPORTED;
+    f.def(1).flags = OA_UNIT_DEF_FLAG_CAN_FLY;
+    f.def(2).abilities = OA_UNIT_DEF_ABILITY_CAN_MOVE | OA_UNIT_DEF_ABILITY_CAN_LOAD |
+                         OA_UNIT_DEF_ABILITY_CANT_BE_TRANSPORTED | OA_UNIT_DEF_ABILITY_CAN_GUARD;
+    f.def(2).flags = OA_UNIT_DEF_FLAG_CAN_FLY;
+    f.def(2).transport_capacity = 1;
+    f.def(2).transport_size = 3;
+    f.def(3).flags = OA_UNIT_DEF_FLAG_IS_AIRBASE;
+    f.def(3).model_height = 4 << 16;
+    f.def(3).footprint_x = 2;
+    f.def(4).abilities = OA_UNIT_DEF_ABILITY_CAN_MOVE;
+    const FixedVec3 at{};
+    const auto cursor = [&](OrderCommand command, const Unit& actor) {
+        return order_cursor(*f.world, command, actor, &pad, at, hooks);
+    };
+    const auto order = [&](OrderCommand command, const Unit& actor) {
+        return unit_order(*f.world, command, actor, &pad, &at, hooks);
+    };
+
+    check(cursor(OrderCommand::move, bomber) == OrderCursor::unload, "3.1c: the pad cursor");
+    check(order(OrderCommand::move, bomber) == UnitOrder::vtol_landing, "3.1c: Move lands");
+
+    rules.air.no_repair_retreat_flag.enabled = true;
+    rules.air.no_repair_retreat_flag.flag = Flag::none;
+    check(cursor(OrderCommand::move, bomber) == OrderCursor::unload, "flag none: the pad cursor");
+    check(order(OrderCommand::move, bomber) == UnitOrder::vtol_landing, "flag none: Move lands");
+
+    rules.air.no_repair_retreat_flag.flag = Flag::cantbetransported;
+    check(cursor(OrderCommand::move, bomber) == OrderCursor::move, "marked: the move cursor");
+    check(order(OrderCommand::move, bomber) == UnitOrder::vtol_move, "marked: Move just moves");
+    // A marked transport falls through to the load test, then to guard.
+    pad.movement = 1;
+    check(
+        cursor(OrderCommand::move, lifter) == OrderCursor::load_by_air,
+        "marked transport: the load cursor"
+    );
+    check(
+        order(OrderCommand::move, lifter) == UnitOrder::vtol_pickup,
+        "marked transport: Move picks the pad up"
+    );
+    pad.movement = 0;
+    check(
+        cursor(OrderCommand::move, lifter) == OrderCursor::guard, "marked: then the guard cursor"
+    );
+    check(order(OrderCommand::move, lifter) == UnitOrder::vtol_follow, "marked: then Move guards");
+    check(
+        order(OrderCommand::unload, lifter) == UnitOrder::vtol_landing,
+        "marked: Unload over a pad still lands"
+    );
+    f.world->game.interface_type = interface_right_click;
+    check(
+        order(OrderCommand::default_order, bomber) == UnitOrder::vtol_landing,
+        "marked: the right-click default order still lands"
+    );
+    f.world->game.interface_type = interface_left_click;
+    f.def(1).abilities &= ~OA_UNIT_DEF_ABILITY_CANT_BE_TRANSPORTED;
+    check(cursor(OrderCommand::move, bomber) == OrderCursor::unload, "unmarked: the pad cursor");
+    check(order(OrderCommand::move, bomber) == UnitOrder::vtol_landing, "unmarked: Move lands");
+}
 } // namespace
 
 int main() {
@@ -1113,6 +1308,7 @@ int main() {
     test_default_order();
     test_armed_orders();
     test_transport();
+    test_pad_cursor();
     test_airborne_and_water_targets();
     test_transport_orders();
     test_repair_and_reclaim();
@@ -1124,6 +1320,9 @@ int main() {
     test_pointer_area();
     test_right_press();
     test_radar_scroll();
+    test_reclaim_command_any_unit();
+    test_resurrector_reclaims_features();
+    test_no_repair_retreat_flag();
     if (failures != 0)
         return 1;
     std::puts("order cursor tests passed");

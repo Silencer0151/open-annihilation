@@ -156,8 +156,9 @@ void select_all(World& world, const Hooks& hooks) {
     mark_selection_changed(world);
 }
 
-void select_matching_types(World& world, const Hooks& hooks) {
-    TypeMask mask{};
+void select_matching_types(World& world, const Hooks& hooks, uint32_t type_bits) {
+    data::defs::CategoryMaskStorage storage;
+    TypeMask mask = data::defs::category_mask_over(storage, type_bits);
     if (const Player* player = local_player(world)) {
         for_player_units(world, *player, [&](Unit& unit) {
             if ((unit.flags & OA_UNIT_FLAG_SELECTED) != 0)

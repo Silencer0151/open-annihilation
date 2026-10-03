@@ -72,6 +72,16 @@ bool reclaimable_feature_visible(
     return feature != nullptr && (feature->flags & OA_FEATURE_FLAG_RECLAIMABLE) != 0;
 }
 
+// Whether the rules keep an aircraft of this type off repair pads
+// (air.no-repair-retreat-flag): the Move command over a pad then neither
+// shows the pad cursor nor lands on it, and the pointer falls through to the
+// load and guard tests.
+bool kept_off_pads(const UnitDef& actor_def, const OrderCursorHooks& hooks) noexcept {
+    using Flag = data::match_rules::AirNoRepairRetreatFlagFlag;
+    return hooks.rules.rules().air.no_repair_retreat_flag.flag == Flag::cantbetransported &&
+           (actor_def.abilities & OA_UNIT_DEF_ABILITY_CANT_BE_TRANSPORTED) != 0;
+}
+
 OrderCursor load_cursor(const UnitDef& actor_def) noexcept {
     return (actor_def.flags & OA_UNIT_DEF_FLAG_CAN_FLY) != 0 ? OrderCursor::load_by_air
                                                              : OrderCursor::load;
@@ -302,8 +312,9 @@ OrderCursor order_cursor(
                     return OrderCursor::repair;
                 const UnitDef* target_def = world_unit_def_of(&world, target);
                 if ((def->flags & OA_UNIT_DEF_FLAG_CAN_FLY) != 0 && target_def != nullptr &&
-                    (target_def->flags & OA_UNIT_DEF_FLAG_IS_AIRBASE) != 0)
-                    return OrderCursor::unload;
+                    (target_def->flags & OA_UNIT_DEF_FLAG_IS_AIRBASE) != 0 &&
+                    !kept_off_pads(*def, hooks))
+                    return hooks.pad_load_cursor ? OrderCursor::load : OrderCursor::unload;
                 if (can_load_unit(world, actor, *target))
                     return load_cursor(*def);
                 if ((abilities & OA_UNIT_DEF_ABILITY_CAN_GUARD) != 0 && allied)
@@ -370,7 +381,10 @@ OrderCursor order_cursor(
             if ((abilities & OA_UNIT_DEF_ABILITY_CAN_RECLAMATE) != 0 &&
                 reclaimable_feature_visible(world, actor, position, hooks))
                 return OrderCursor::reclaim;
-            if (target != nullptr && can_reclaim_unit(world, actor, *target))
+            // With reclaim-command-any-unit the cursor over a unit is always
+            // reclaim, so hovering it no longer tells which units refuse.
+            if (target != nullptr && (hooks.rules.rules().orders.reclaim_command_any_unit.enabled ||
+                                      can_reclaim_unit(world, actor, *target)))
                 return OrderCursor::reclaim;
             return OrderCursor::normal;
         case OrderCommand::capture:
@@ -556,7 +570,7 @@ UnitOrder unit_order(
                         static_cast<uint32_t>(target_def->max_damage))
                         return by_air(UnitOrder::repair_unit, UnitOrder::vtol_repair_unit);
                 }
-                if (flies && allied && target_airbase)
+                if (flies && allied && target_airbase && !kept_off_pads(*def, hooks))
                     return UnitOrder::vtol_landing;
                 if (can_load_unit(world, actor, *target))
                     return by_air(UnitOrder::ground_pickup, UnitOrder::vtol_pickup);
@@ -595,8 +609,12 @@ UnitOrder unit_order(
                                          (secondary->flags & OA_WEAPON_FLAG_WATER_WEAPON) != 0;
             if (top < sea_level && !primary_water && !secondary_water)
                 return UnitOrder::none;
+            // A primary weapon with the surface-fire key lets a hovering
+            // unit's water weapons attack above sea level.
+            const bool primary_surface_fire =
+                primary != nullptr && hooks.rules.weapon(primary->weapon_id).surface_fire;
             if (sea_level <= top && (def->flags & OA_UNIT_DEF_FLAG_CAN_HOVER) != 0 &&
-                (primary_water || secondary_water))
+                !primary_surface_fire && (primary_water || secondary_water))
                 return UnitOrder::none;
             if (!flies) {
                 if (has_movement_object(world, actor, hooks))
@@ -652,7 +670,9 @@ UnitOrder unit_order(
             if ((abilities & OA_UNIT_DEF_ABILITY_CAN_RECLAMATE) == 0)
                 return UnitOrder::none;
             if (position != nullptr) {
-                if ((abilities & OA_UNIT_DEF_ABILITY_CAN_RESURRECT) != 0 && feature_here())
+                if ((abilities & OA_UNIT_DEF_ABILITY_CAN_RESURRECT) != 0 &&
+                    !hooks.rules.rules().orders.resurrector_reclaims_features.enabled &&
+                    feature_here())
                     return UnitOrder::resurrect;
                 if (feature_here())
                     return by_air(UnitOrder::reclaim, UnitOrder::vtol_reclaim);

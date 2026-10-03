@@ -201,6 +201,18 @@ struct ReplicationSim {
         void* context, World* world, Unit* unit, Player* new_owner, const UnitTransferRecord& record
     ){};
 
+    /// Sees a full unit record as it is read, before it changes the unit.
+    ///
+    /// Null sees nothing.
+    ///
+    /// @param context ReplicationSim.context.
+    /// @param world Receiving world.
+    /// @param unit The unit the record is for.
+    /// @param record The record; a unit_def_index of 0 says the slot is empty.
+    void (*full_record_read)(
+        void* context, World* world, Unit* unit, const FullUnitRecord& record
+    ){};
+
     /// Moves a unit to the position a detached full unit record carries.
     ///
     /// Fallback when null: position = to.

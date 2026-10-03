@@ -672,6 +672,103 @@ bool host_battleroom(Driver& d, const char* game, const char* nickname) {
     return d.click("OK") && d.follow(mp::kScreenBattleroom, "hosting opens the battle room again");
 }
 
+/// Whether Developer Mode is on, as the engine's line the test binds says.
+bool banner_developer_mode = false;
+
+/// Returns the engine's line the test binds.
+///
+/// @return the line, at version v9.8.7
+std::string banner_line(void*) {
+    return mp::engine_banner_line("v9.8.7", banner_developer_mode);
+}
+
+/// Counts the battle room's chat lines that read as a text.
+///
+/// @param lobby the lobby
+/// @param text the line
+/// @return how many lines of the chat ring read so
+int32_t chat_lines(mp::Lobby& lobby, std::string_view text) {
+    int32_t count = 0;
+    for (std::size_t index = 0; index < mp::kChatLines; ++index)
+        if (std::string_view{mp::lobby_chat_line(*lobby.game, index)} == text)
+            ++count;
+    return count;
+}
+
+/// Counts the chat records the loopback keeps that read as a text.
+///
+/// @param text the record's text
+/// @return how many kept records do
+int32_t chat_records(std::string_view text) {
+    const auto& loopback = mp::multiplayer_loopback();
+    int32_t count = 0;
+    for (int32_t index = 0; index < loopback.sent_count; ++index) {
+        oa::netgame::ChatRecord record{};
+        if (oa::netgame::decode_record(loopback.sent[index], loopback.sent_size[index], &record) !=
+            oa::netgame::WireError::ok)
+            continue;
+        if (std::string_view{record.text, ::strnlen(record.text, sizeof record.text)} == text)
+            ++count;
+    }
+    return count;
+}
+
+/// The battle room says the engine's line, as the local player's chat line,
+/// once as it is entered and again whenever the line changes there.
+void check_engine_banner(Driver& d) {
+    expect(
+        mp::engine_banner_line("v9.8.7", false) == "[Engine: OpenAnnihilation v9.8.7]",
+        "the engine's line names the engine and its version"
+    );
+    expect(
+        mp::engine_banner_line("v9.8.7", true) == "[Engine: OpenAnnihilation v9.8.7 DEV MODE]",
+        "the engine's line says when Developer Mode is on"
+    );
+    banner_developer_mode = false;
+    mp::multiplayer_bind_engine_banner({nullptr, banner_line});
+    if (!host_battleroom(d, "Banner", "Host")) {
+        mp::multiplayer_bind_engine_banner({});
+        return;
+    }
+    auto& lobby = mp::multiplayer_lobby();
+    const std::string plain = "<Host> [Engine: OpenAnnihilation v9.8.7]";
+    const std::string developer = "<Host> [Engine: OpenAnnihilation v9.8.7 DEV MODE]";
+    d.frame();
+    expect(chat_lines(lobby, plain) == 1, "the battle room says the engine's line as it opens");
+    expect(chat_records(plain) == 1, "the engine's line goes out as a chat record");
+    d.frame();
+    d.frame();
+    expect(
+        chat_lines(lobby, plain) == 1 && chat_records(plain) == 1,
+        "the engine's line is said once while it stays the same"
+    );
+    banner_developer_mode = true;
+    d.frame();
+    expect(
+        chat_lines(lobby, developer) == 1 && chat_records(developer) == 1,
+        "the engine's line is said again as Developer Mode turns on"
+    );
+    banner_developer_mode = false;
+    d.frame();
+    expect(
+        chat_lines(lobby, plain) == 2 && chat_records(plain) == 2,
+        "the engine's line is said again as Developer Mode turns off"
+    );
+    // A battle room entered again says it again, at the chat ring's head.
+    if (host_battleroom(d, "Banner again", "Host")) {
+        auto& again = mp::multiplayer_lobby();
+        const uint16_t head = mp::lobby_chat_head(*again.game);
+        d.frame();
+        expect(
+            static_cast<uint16_t>(mp::lobby_chat_head(*again.game)) ==
+                    (head + 1U) % mp::kChatLines &&
+                std::string_view{mp::lobby_chat_line(*again.game, head)} == plain,
+            "a battle room entered again says the engine's line"
+        );
+    }
+    mp::multiplayer_bind_engine_banner({});
+}
+
 int starts = 0;
 
 /// Counts the games the battle room starts.
@@ -1158,6 +1255,16 @@ bool check_player_timeout(Driver& d) {
         return slot >= 0 && mp::slot_player(lobby, slot).status == mp::kSlotComputer;
     };
     expect(computer_seated(), "a computer player is seated");
+    // Its setup block reports the machine's memory, as the local player's
+    // does, so other machines do not mark it short of the map's memory.
+    {
+        const auto* computer_info = mp::player_info(lobby, mp::slot_player(lobby, 1));
+        expect(
+            computer_info != nullptr && mp::local_info(lobby).memory_mb != 0 &&
+                computer_info->memory_mb == mp::local_info(lobby).memory_mb,
+            "a computer player's block reports the local player's memory"
+        );
+    }
 
     expect(mp::lobby_add_player(lobby, kSilent, "Silent"), "a remote player joins");
     auto heard = stepped_tick;
@@ -2614,6 +2721,7 @@ int main() {
         expect(d.click("OK"), "the message box is dismissed");
     }
     check_launch_exit(d);
+    check_engine_banner(d);
 
     if (failures != 0) {
         std::fprintf(stderr, "%d failure(s)\n", failures);

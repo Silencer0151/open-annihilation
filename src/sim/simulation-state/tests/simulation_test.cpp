@@ -3,6 +3,7 @@
 
 #include "fixture.hpp"
 #include <array>
+#include <cstring>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
@@ -172,6 +173,39 @@ int main() {
     one.units[2].position = {1 << 16, 0, 0};
     const auto edge = static_cast<int32_t>(0x80000000u);
     CHECK(nearest_candidate_unit(*one, open, edge, edge) == &one.units[1]);
+    {
+        // The candidate filter: widened flags pass over occupancy states 2 and 3 and
+        // move-rate tiers 2 and 3; skip_submerged passes over water state 3.
+        TestWorld filtered(4, 1);
+        filtered.player(0).in_use = 1;
+        filtered.player(0).status = 1;
+        filtered.range(0, 1, 3);
+        for (uint32_t i = 1; i <= 3; ++i) {
+            filtered.units[i].flags = OA_UNIT_FLAG_LIVE;
+            filtered.units[i].position = {static_cast<int32_t>(i) << 16, 0, 0};
+        }
+        filtered.units[1].flags |= OA_UNIT_FLAG_OCCUPANCY_MASK; // occupancy state 3
+        const uint32_t submerged = 3;
+        std::memcpy(filtered.units[2].last_occupy_code, &submerged, sizeof submerged);
+        const auto nearest = [&](bool widened, bool skip_submerged) {
+            CandidateFilter filter{};
+            filter.widened_flags = widened;
+            filter.skip_submerged = skip_submerged;
+            return nearest_candidate_unit(*filtered, open, 0, 0, filter);
+        };
+        CHECK(nearest(false, false) == &filtered.units[1]);
+        CHECK(nearest(false, true) == &filtered.units[1]);
+        CHECK(nearest(true, false) == &filtered.units[2]);
+        CHECK(nearest(true, true) == &filtered.units[3]);
+        constexpr uint32_t move_rate_tier_1 = 0x4u, move_rate_tier_2 = 0x8u;
+        filtered.units[3].flags |= move_rate_tier_2;
+        CHECK(nearest(true, true) == nullptr);
+        CHECK(nearest(false, true) == &filtered.units[1]);
+        filtered.units[1].flags = OA_UNIT_FLAG_LIVE | move_rate_tier_1;
+        CHECK(nearest(true, true) == &filtered.units[1]);
+        filtered.units[1].flags = OA_UNIT_FLAG_LIVE | OA_UNIT_FLAG_NOT_SELECTABLE;
+        CHECK(nearest(true, false) == &filtered.units[2]);
+    }
     TestWorld tw(2, 2);
     auto& w = *tw;
     Fixture h;

@@ -881,6 +881,85 @@ void test_synthetic_scene(float zoom) {
     }
 }
 
+/// A feature's shadow frames, drawn and blended, on the card as dark as the
+/// list's shadow level: the game's own at the full level, that strength of
+/// it below, within the blend tolerance of the processor's, and not drawn
+/// at 0. A frame that is not a shadow is drawn whole at every level.
+void test_shadow_sprites() {
+    const auto palette = test_palette();
+    const Frames frames;
+    model_render::ModelDisplay display;
+    model_render::build_model_display(display, oa::present::palette_from_bytes(palette));
+    const Picture background = grey_background(
+        palette, static_cast<uint32_t>(field_width), static_cast<uint32_t>(field_height)
+    );
+    for (const uint32_t level : {model_render::shadow_full_level, 32U, 16U, 0U}) {
+        WorldDrawList list;
+        list.shadow_level = level;
+        add_sprite(list, frames.colour_block, 30, 20, 1.0F, false);
+        list.sprites.back().shadow = true;
+        add_sprite(list, frames.grey_block, 24, 60, 1.0F, true);
+        list.sprites.back().shadow = true;
+        add_sprite(list, frames.ring, 100, 30, 1.0F, false);
+        const Picture processor = draw_processor(list, palette, display, background, 1.0F);
+        CardSide side(
+            static_cast<uint32_t>(field_left + field_width + border),
+            static_cast<uint32_t>(field_top + field_height + border),
+            gpu::Limits{}
+        );
+        side.pages.set_palette(oa::present::palette_from_bytes(palette), plain_gamma);
+        const CardDraw card = draw_card(side, list, palette, background, 1.0F);
+        // The shadows' pixels are compared within the blend tolerance,
+        // every other pixel exactly.
+        std::vector<uint8_t> shadows(std::size_t{field_width} * field_height, 0);
+        for (std::size_t index = 0; index < 2; ++index) {
+            const auto rect = sprite_rect(list.sprites[index], 1.0F);
+            mark(shadows, field_width, field_height, rect[0], rect[1], rect[2], rect[3]);
+        }
+        const Comparison comparison = compare(card.field, processor, shadows);
+        std::printf(
+            "shadow sprites at level %u: %u sprites; beside them most %d, under them most %d\n",
+            level,
+            card.result.sprites,
+            comparison.most_beside,
+            comparison.most_under
+        );
+        OA_CHECK(comparison.most_beside == 0);
+        OA_CHECK(comparison.most_under <= most_blend_difference);
+        OA_CHECK(card.result.sprites == (level == 0 ? 1U : 3U));
+        if (level == 0) {
+            // Nothing of the drawn shadow on either side.
+            const auto rect = sprite_rect(list.sprites[0], 1.0F);
+            const std::size_t at = (static_cast<std::size_t>(rect[1]) * field_width +
+                                    static_cast<std::size_t>(rect[0])) *
+                                   3U;
+            OA_CHECK(
+                std::equal(
+                    processor.rgb.begin() + static_cast<std::ptrdiff_t>(at),
+                    processor.rgb.begin() + static_cast<std::ptrdiff_t>(at + 3),
+                    background.rgb.begin() + static_cast<std::ptrdiff_t>(at)
+                )
+            );
+            OA_CHECK(
+                std::equal(
+                    card.field.rgb.begin() + static_cast<std::ptrdiff_t>(at),
+                    card.field.rgb.begin() + static_cast<std::ptrdiff_t>(at + 3),
+                    background.rgb.begin() + static_cast<std::ptrdiff_t>(at)
+                )
+            );
+            continue;
+        }
+        // The shadows' vertex colours: the level's strength, halved for the
+        // blended one; the ring's whole.
+        const float strength = model_render::shadow_level_strength(level);
+        OA_CHECK(card.frame.vertices.size() == 12);
+        OA_CHECK(card.frame.vertices[0].colour.alpha == strength);
+        OA_CHECK(card.frame.vertices[0].colour.red == strength);
+        OA_CHECK(card.frame.vertices[4].colour.alpha == 0.5F * strength);
+        OA_CHECK(card.frame.vertices[8].colour.alpha == 1.0F);
+    }
+}
+
 /// Returns a line's pixels as the game steps them.
 ///
 /// @param x0 the first pixel's column
@@ -1477,6 +1556,7 @@ int main(int argc, char** argv) {
         test_helpers();
         test_synthetic_scene(1.0F);
         test_synthetic_scene(2.0F);
+        test_shadow_sprites();
         test_lines(1.0F);
         test_lines(2.0F);
         test_fog_states();

@@ -1,0 +1,235 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// Finding, reading and resolving a mod profile (oamod.yaml) for oa-game:
+// the file a folder holds, matched without case; a mod folder layered over
+// the game folder; the settings the profile binds, read from the mod's INI
+// and from the preferences that stand in for its registry; the --mod and
+// --print-profile options.
+#pragma once
+
+#include "oa/data/defs/layout.hpp"
+#include "oa/data/mod_profile.hpp"
+#include "oa/formats/hpi.hpp"
+#include "oa/platform/preferences.hpp"
+
+#include <cstdint>
+#include <filesystem>
+#include <iosfwd>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace oa::app {
+
+/// The name of a mod profile in the root of a mod's folder, matched without case.
+inline constexpr std::string_view mod_profile_name = "oamod.yaml";
+
+/// The folder of a game folder that holds mod folders, matched without case.
+inline constexpr std::string_view mods_folder_name = "mods";
+
+/// The preference that remembers the chosen mod folder, as UTF-8; absent or
+/// empty for the base game. Without '|' or a backslash it cannot equal a
+/// game key.
+inline constexpr std::string_view mod_directory_preference = "open-annihilation.mod-directory";
+
+/// The registry section, below a registry root, that holds the game's own
+/// settings.
+inline constexpr std::string_view registry_game_section = "Total Annihilation";
+
+/// What a game folder is played with besides its own files.
+struct ModChoice {
+    /// A mod folder layered over the game folder; empty for none.
+    std::filesystem::path folder{};
+    /// A profile read instead of the folder's own (--mod); empty for none.
+    std::filesystem::path profile_file{};
+    /// Accept hacks this build does not implement yet, with a warning each.
+    bool accept_unimplemented_hacks{};
+    /// The player's preferences, whose registry section the profile's
+    /// registry bindings read; null for none.
+    const platform::preferences::Values* preferences{};
+};
+
+/// A game folder's profile, read with the settings it binds and resolved.
+struct FolderProfile {
+    /// The resolved profile; null for a folder that plays base 3.1c.
+    std::shared_ptr<const data::mod_profile::ModProfile> profile{};
+    /// Each error, one a line; any error makes the folder unusable.
+    std::vector<std::string> errors{};
+    /// Each warning, one a line.
+    std::vector<std::string> warnings{};
+};
+
+/// What a game folder's profile is resolved from, so that it can be resolved
+/// again with a player's overrides of its standard hacks (Developer Mode).
+struct ProfileSource {
+    std::vector<uint8_t> text{}; ///< the profile's bytes
+    std::string name{};          ///< its file as UTF-8, which its diagnostics name
+    /// The settings it binds and whether hacks this build does not
+    /// implement yet are accepted, as the folder's profile was resolved
+    /// with them; no overrides.
+    data::mod_profile::ResolveOptions options{};
+};
+
+/// Reads what the profile a game folder plays with is resolved from, as
+/// resolve_folder_profile reads it: the --mod file or the first folder's
+/// oamod.yaml, and the settings it binds.
+///
+/// @param folders the folders loose files come from, the mod folder first
+/// @param choice the --mod file, the unimplemented-hack choice and the
+///        player's preferences; its mod folder is not looked at
+/// @return the source; nothing when the folders hold no profile, or it
+///         cannot be read or resolved
+[[nodiscard]] std::optional<ProfileSource>
+folder_profile_source(const std::vector<std::filesystem::path>& folders, const ModChoice& choice);
+
+/// Finds, reads and resolves the profile a game folder plays with.
+///
+/// The profile is the --mod file when one is chosen, else the mod folder's
+/// own oamod.yaml, else the game folder's (a copied install). A game folder
+/// that holds its own oamod.yaml cannot carry a mod folder. The profile is
+/// resolved once to learn its settings file and registry root, then again
+/// with the settings it binds: the INI of that name from the first folder
+/// that holds it, read only, and the preferences' registry section, which
+/// the profile's registry seeds fill.
+///
+/// @param folders the folders loose files come from, the mod folder first
+/// @param choice the mod folder, the --mod file and the player's preferences
+/// @return the profile, or the errors that make the folders unusable
+[[nodiscard]] FolderProfile
+resolve_folder_profile(const std::vector<std::filesystem::path>& folders, const ModChoice& choice);
+
+/// Reads the settings a profile binds: the INI file it names
+/// (identity.settings-file) from the first folder that holds one, its name
+/// matched without case, read only, and the preferences' registry section,
+/// which stands in for the mod's registry.
+///
+/// @param profile the profile, resolved without settings
+/// @param folders the folders, highest precedence first
+/// @param preferences the player's preferences; null for none
+/// @return the settings
+[[nodiscard]] data::mod_profile::Settings mod_settings_of(
+    const data::mod_profile::ModProfile& profile,
+    const std::vector<std::filesystem::path>& folders,
+    const platform::preferences::Values* preferences
+);
+
+/// Lists the mod folders a game folder offers: the folders below its mods
+/// folder that hold an oamod.yaml, in name order.
+///
+/// @param game_folder the game folder
+/// @return each mod folder's path
+[[nodiscard]] std::vector<std::filesystem::path>
+list_mod_folders(const std::filesystem::path& game_folder);
+
+/// Reads the values of an INI file as Section/Key settings.
+///
+/// Lines are "[Section]" or "Key = Value"; a ';' starts a comment, on a line
+/// of its own or after a value, which ends there as the mod's own readers
+/// take only its leading number or word; a line before any section is left
+/// out; names keep their case and are matched without it later.
+///
+/// @param text the file's bytes
+/// @return each value, named "Section/Key", in file order
+[[nodiscard]] std::vector<data::mod_profile::SettingValue> read_ini_settings(std::string_view text);
+
+/// Returns the prefix of the preference keys that stand in for a profile's
+/// registry root: empty for the base game's root, whose keys are the base
+/// game's own, else "registry:<root>\\".
+///
+/// @param profile the profile
+/// @return the prefix
+[[nodiscard]] std::string registry_key_prefix(const data::mod_profile::ModProfile& profile);
+
+/// Writes the profile's registry seeds into the preferences that stand in
+/// for its registry, each only where the value is absent, as a first run of
+/// the mod would find them.
+///
+/// @param profile the profile
+/// @param[in,out] values the preferences
+/// @return whether a value was written
+bool seed_registry(
+    const data::mod_profile::ModProfile& profile, platform::preferences::Values& values
+);
+
+/// Returns the data layout a profile sets: its directory names, unit file
+/// extension, map units section and build version.
+///
+/// @param profile the profile; null for the base game's layout
+/// @return the layout
+[[nodiscard]] data::defs::DataLayout data_layout_of(const data::mod_profile::ModProfile* profile);
+
+/// Returns the archive discovery a profile sets: its revision archive and
+/// group patterns, the folders serving as the disc.
+///
+/// @param profile the profile; null for the base game's
+/// @return the plan
+[[nodiscard]] DiscoveryPlan discovery_plan_of(const data::mod_profile::ModProfile* profile);
+
+/// Finds the profile in the root of a folder.
+///
+/// @param folder the folder
+/// @param[out] error why the folder cannot be used: two names that differ
+///        only in case, or a folder that cannot be listed; empty otherwise
+/// @return the profile's path; nullopt when the folder holds none, or on error
+[[nodiscard]] std::optional<std::filesystem::path>
+find_mod_profile(const std::filesystem::path& folder, std::string& error);
+
+/// Reads and resolves a profile file. A file that cannot be read gives one
+/// error naming it.
+///
+/// @param file the profile
+/// @param accept_unimplemented_hacks whether hacks this build does not
+///        implement yet are accepted with a warning
+/// @param settings the player's settings the profile's bindings read
+/// @return the resolution, or the errors; warnings either way
+[[nodiscard]] data::mod_profile::ResolveResult load_mod_profile(
+    const std::filesystem::path& file,
+    bool accept_unimplemented_hacks,
+    const data::mod_profile::Settings& settings = {}
+);
+
+/// Runs --print-profile: resolves the --mod file, or the profile of the
+/// game folder, and prints it with its hashes.
+///
+/// @param mod_file the --mod file; empty to use the game folder's profile
+/// @param game_dir the game folder, used when `mod_file` is empty
+/// @param accept_unimplemented_hacks whether hacks not implemented yet are accepted
+/// @param[out] out receives the profile, or the note that the folder plays 3.1c
+/// @param[out] err receives warnings and errors, one a line
+/// @return the process's exit status: 0 when printed, 1 when the profile is refused
+[[nodiscard]] int print_mod_profile(
+    const std::filesystem::path& mod_file,
+    const std::filesystem::path& game_dir,
+    bool accept_unimplemented_hacks,
+    std::ostream& out,
+    std::ostream& err
+);
+
+/// Resolves the --mod file for a run of the game, so that a profile it
+/// cannot use stops the run.
+///
+/// @param mod_file the --mod file
+/// @param accept_unimplemented_hacks whether hacks not implemented yet are accepted
+/// @param[out] out receives the line naming the profile and its sim hash, and the warnings
+/// @return the resolved profile
+/// @throws std::runtime_error naming every error when the profile is refused
+data::mod_profile::ModProfile check_mod_profile(
+    const std::filesystem::path& mod_file, bool accept_unimplemented_hacks, std::ostream& out
+);
+
+/// Tells a run which mod profile it plays: each warning, then a line naming
+/// the profile and its sim hash.
+///
+/// @param profile the profile
+/// @param warnings its warnings, one line each
+/// @param[out] out receives the lines
+void report_mod_profile(
+    const data::mod_profile::ModProfile& profile,
+    const std::vector<std::string>& warnings,
+    std::ostream& out
+);
+
+} // namespace oa::app

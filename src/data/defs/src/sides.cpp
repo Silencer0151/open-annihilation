@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/data/defs/sides.hpp"
+#include "oa/data/defs/layout.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -150,7 +151,15 @@ bool load_side_data(
     const Files* files, SideTable* table, const char* variant, const SideFontResolver* fonts
 ) noexcept {
     char path[path_capacity];
-    build_variant_path(files, path, sizeof path, "gamedata", "sidedata", "tdf", variant);
+    build_variant_path(
+        files,
+        path,
+        sizeof path,
+        directory_name(DataDirectory::gamedata),
+        "sidedata",
+        "tdf",
+        variant
+    );
     formats::tdf::Document document;
     formats::tdf::document_init(&document);
     // 3.1c ignores a failed load here and ends up with zero sides.

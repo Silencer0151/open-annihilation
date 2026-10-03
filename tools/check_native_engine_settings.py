@@ -64,6 +64,11 @@ DEFAULTS = {
     "open-annihilation.screen-size": "desktop",
     "open-annihilation.hardware-acceleration": "off",
     "open-annihilation.vertical-sync": "0",
+    "open-annihilation.modern-fonts": "0",
+    "open-annihilation.text-outline": "1",
+    "open-annihilation.text-shadow": "1",
+    "open-annihilation.text-background": "0",
+    "open-annihilation.developer-mode": "0",
 }
 # The settings that change only the look or the input, away from their defaults.
 PRESENTATION = {
@@ -73,6 +78,10 @@ PRESENTATION = {
     "open-annihilation.frame-stats": "1",
     "open-annihilation.hardware-acceleration": "full",
     "open-annihilation.vertical-sync": "1",
+    "open-annihilation.modern-fonts": "1",
+    "open-annihilation.text-outline": "0",
+    "open-annihilation.text-shadow": "0",
+    "open-annihilation.text-background": "1",
     SWITCH_ALT_KEY: "1",
 }
 ANTI_ALIASING_KEY = "open-annihilation.anti-aliasing"

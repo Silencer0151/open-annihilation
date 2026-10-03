@@ -55,6 +55,10 @@ jobs:
         run: vcpkg install zlib:x64-windows
       - name: Build pinned SDL
         run: python tools/bootstrap_sdl.py
+      # FreeType and the fonts text outside the game's fonts is drawn
+      # with, pinned (tools/bootstrap_text_fonts.py).
+      - name: Build pinned FreeType and text fonts
+        run: python tools/bootstrap_text_fonts.py
       - name: Configure Unix
         if: runner.os != 'Windows'
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DOA_REQUIRE_GAME=ON -DOA_WARNINGS_AS_ERRORS=ON -DCMAKE_PREFIX_PATH="$PWD/local/deps/sdl-install"
@@ -122,6 +126,10 @@ jobs:
         run: vcpkg install zlib:x64-windows
       - name: Build SDL 3.2.0
         run: python tools/bootstrap_sdl.py --version 3.2.0
+      # FreeType and the fonts text outside the game's fonts is drawn
+      # with, pinned (tools/bootstrap_text_fonts.py).
+      - name: Build pinned FreeType and text fonts
+        run: python tools/bootstrap_text_fonts.py
       - name: Configure Unix
         if: runner.os != 'Windows'
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DOA_REQUIRE_GAME=ON -DOA_WARNINGS_AS_ERRORS=ON -DCMAKE_PREFIX_PATH="$PWD/local/deps/sdl-install-3.2.0"
@@ -189,6 +197,10 @@ jobs:
           PY
       - name: Build pinned SDL
         run: python tools/bootstrap_sdl.py
+      # FreeType and the fonts text outside the game's fonts is drawn
+      # with, pinned (tools/bootstrap_text_fonts.py).
+      - name: Build pinned FreeType and text fonts
+        run: python tools/bootstrap_text_fonts.py
       - name: Configure
         run: >-
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Check -DOA_REQUIRE_GAME=ON -DOA_WARNINGS_AS_ERRORS=ON
@@ -222,6 +234,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y $LINUX_PACKAGES
       - name: Build pinned SDL
         run: python tools/bootstrap_sdl.py
+      # FreeType and the fonts text outside the game's fonts is drawn
+      # with, pinned (tools/bootstrap_text_fonts.py).
+      - name: Build pinned FreeType and text fonts
+        run: python tools/bootstrap_text_fonts.py
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DOA_REQUIRE_GAME=ON -DOA_WARNINGS_AS_ERRORS=ON -DOA_RECORD_EXTENSION_HOOKS=ON -DCMAKE_PREFIX_PATH="$PWD/local/deps/sdl-install"
       - name: Build
@@ -249,6 +265,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y $LINUX_PACKAGES
       - name: Build pinned SDL
         run: python tools/bootstrap_sdl.py
+      # FreeType and the fonts text outside the game's fonts is drawn
+      # with, pinned (tools/bootstrap_text_fonts.py).
+      - name: Build pinned FreeType and text fonts
+        run: python tools/bootstrap_text_fonts.py
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DOA_SANITIZERS=ON -DOA_REQUIRE_GAME=ON -DOA_WARNINGS_AS_ERRORS=ON -DCMAKE_PREFIX_PATH="$PWD/local/deps/sdl-install"
       - name: Build

@@ -4,6 +4,7 @@
 // DEMOMSG.GUI: a notice filling the screen over its own bitmap, with OK and a
 // website button.
 #include "dialog_internal.hpp"
+#include "oa/data/defs/layout.hpp"
 
 #include <string>
 #include <variant>
@@ -12,7 +13,7 @@ namespace oa::ui::frontend_dialogs {
 
 namespace {
 
-constexpr const char* kLayout = "guis/demomsg.gui";
+constexpr const char* kLayout = "demomsg.gui";
 constexpr const char* kBackdrop = "bitmaps/demotextbg.pcx";
 constexpr const char* kWebsiteButton = "GotoWebsite";
 constexpr const char* kButtonSound = "BigButton";
@@ -36,7 +37,7 @@ bool open_notice(
     auto* dialog = dialog_push(
         ctx,
         DialogKind::notice,
-        kLayout,
+        oa::data::defs::gui_path(kLayout).c_str(),
         kBackdrop,
         panel_flag::centre | panel_flag::modal_backdrop | panel_flag::first_draw
     );

@@ -618,6 +618,15 @@ void test_pcx_indexed_and_malformed() {
         );
     }
 
+    // Bytes after the last row, before the palette, are ignored.
+    auto padded = pcx;
+    padded.insert(padded.end() - 769, {0xAA, 0xBB, 0xCC});
+    const auto with_padding = oa::decode_pcx(padded);
+    require(
+        with_padding.ok() && with_padding.value->rgb == image.rgb,
+        "bytes before the PCX palette were not ignored"
+    );
+
     auto underflow = pcx;
     put16(underflow, 4, 5);
     put16(underflow, 8, 2);

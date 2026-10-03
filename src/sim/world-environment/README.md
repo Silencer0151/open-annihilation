@@ -17,7 +17,20 @@ scheduler over the canonical `Game` wind fields. Each run says how it ended
 a zero strength divisor, which leave the `Game` fields as they were. `update_sea_occupy` reads the
 canonical `Unit`/`UnitDef` and keeps the occupy code in
 `Unit.last_occupy_code`; the match's movement tick runs it for every unit it
-moves, and its hook runs the unit script's `setSFXoccupy`.
+moves, and its hook runs the unit script's `setSFXoccupy`. The hook also says
+whether a mod's water state rules reorder the checks (units.water-state-rules).
+
+A mod's deterministic-wind rule replaces the draws with one shared generator,
+so that every machine plays the same wind: `refresh_shared_wind` keeps the
+deadline test, vector and normalized strength, but draws the interval
+(150 + 30 * (draw mod 10) ticks), the strength (the minimum plus a draw modulo
+the range, or the minimum when the maximum is not above it) and, for a nonzero
+strength, the direction (a draw's low 16 bits) from a `WindGenerator`, the
+32-bit MT19937 generator. It is seeded at its first change with
+`shared_wind_seed`: the network id of the first slot in use on the host's
+machine with a host setup state, or the caller's fallback. The generator's
+words have no padding, so the match keeps it as rule state as it is.
+`shared_wind_test.cpp` checks it against the standard library's MT19937.
 
 `meteor.hpp` runs mission meteor showers. The strike schedule, target and
 origin draws use the `rand()` stream as the game does; projectiles are

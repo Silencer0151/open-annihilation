@@ -5,6 +5,7 @@
 // the Total Annihilation demo (1997): the notices, the entries the data cannot
 // open, and the campaign's way in and out.
 #include "oa/app/runtime.hpp"
+#include "oa/data/defs/layout.hpp"
 #include "web_link_state.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
 
@@ -81,7 +82,10 @@ void Runtime::check_navigation_without_maps(const fs::path& report_directory) {
     );
     expect(shown("Credits") == movies, "Credits shows exactly when the game offers movies");
     expect(
-        shown("DebugString") == (assets_.file_size("gamedata/version.tdf") != 0),
+        shown("DebugString") ==
+            (assets_.file_size(
+                 oa::data::defs::data_path(oa::data::defs::DataDirectory::gamedata, "version.tdf")
+             ) != 0),
         "the version label shows exactly when the data names its revision"
     );
     press("INTRO");

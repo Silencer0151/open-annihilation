@@ -2,12 +2,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/ui/hud/unit_info.hpp"
+#include "oa/data/defs/layout.hpp"
 
 #include "oa/ui/hud/chat_panel.hpp"
 
+#include "oa/data/languages/unit_texts.hpp"
+
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <string_view>
 
 namespace oa::ui::hud {
 namespace {
@@ -146,7 +151,13 @@ bool open_unit_info_panel(
         !loader.load(loader.user, "UNITINFOx.GUI", nullptr, kUnitInfoPanelFlags))
         return false;
     char path[256];
-    std::snprintf(path, sizeof path, "unitpics\\%.32s.PCX", def.unit_name);
+    std::snprintf(
+        path,
+        sizeof path,
+        "%s\\%.32s.PCX",
+        oa::data::defs::directory_name(oa::data::defs::DataDirectory::unitpics),
+        def.unit_name
+    );
     if (host.set_picture != nullptr)
         host.set_picture(host.user, path);
     char properties[kPropertyListBytes];
@@ -184,8 +195,10 @@ bool open_unit_info_panel(
     }
     const auto name = find_control(controls, "NAME");
     if (name != -1 && controls.set_text != nullptr) {
+        // The type's name in the player's language.
+        const std::string_view shown = oa::data::languages::unit_display_name(def);
         char text[kNameBytes + 1]{};
-        std::memcpy(text, def.name, sizeof def.name);
+        std::memcpy(text, shown.data(), std::min(shown.size(), kNameBytes));
         controls.set_text(controls.user, name, text);
     }
     return true;

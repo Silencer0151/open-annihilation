@@ -154,6 +154,10 @@ Values load(const std::filesystem::path& file) {
     std::istringstream stream(data);
     std::string header;
     std::getline(stream, header);
+    // Lines may end in CR LF, as a file edited on Windows keeps them; the
+    // entries' line ends are blanks between them.
+    if (!header.empty() && header.back() == '\r')
+        header.pop_back();
     if (header != format_header)
         throw std::runtime_error("unrecognized game preferences format");
     Values result;

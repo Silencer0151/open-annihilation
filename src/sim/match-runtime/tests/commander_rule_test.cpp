@@ -342,6 +342,43 @@ void defeated_player_watches() {
     std::cout << "defeated player watches passed\n";
 }
 
+// Under network.host-stays-as-watcher a defeated host watches on whatever
+// the watching option, so the game goes on for the others; a defeated
+// player that does not host loses as before, and so does the host without
+// the rule.
+void defeated_host_stays_watching() {
+    enum class Case { host_kept, host_without_rule, guest_with_rule };
+    for (const auto which : {Case::host_kept, Case::host_without_rule, Case::guest_with_rule}) {
+        Fixture f({.defeat_allowed = true, .multiplayer = true});
+        auto& world = f.match->state();
+        bind_setup(f);
+        if (which != Case::guest_with_rule) {
+            world.player_info[1].role = 0;
+            world.player_info[0].role = setup_role_host;
+        }
+        f.match->set_host_stays_watching(which != Case::host_without_rule);
+        WatchNotices notices;
+        observe_watching(f, notices);
+        auto& enemy = f.spawn(1, 200, 200);
+        auto& own = f.spawn(0, 64, 64);
+        f.run(1);
+        kill(f, own, enemy);
+        f.run(outcome_ticks);
+        const bool watches = which == Case::host_kept;
+        CHECK(((world.player_info[0].options & OA_SETUP_OPTION_WATCHER) != 0) == watches);
+        CHECK(
+            f.match->outcome() ==
+            (watches ? sim::scenario::Outcome::ongoing : sim::scenario::Outcome::defeat)
+        );
+        if (watches)
+            CHECK(
+                notices.notices == 1 &&
+                notices.last == sim::match_runtime::Match::WatchNotice::host_watching
+            );
+    }
+    std::cout << "defeated host stays watching passed\n";
+}
+
 // An allied victory is counted (finished, won and the victory transition),
 // then the winner loses every unit. Its machine still hosts a computer
 // player and a human is left, so it watches and the win is dropped: only
@@ -436,6 +473,7 @@ int main() {
         multiplayer_victory();
         abandoned_game_ends();
         defeated_player_watches();
+        defeated_host_stays_watching();
         defeated_winner_drops_the_win();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

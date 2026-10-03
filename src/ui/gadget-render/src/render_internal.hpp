@@ -30,6 +30,9 @@ inline constexpr int32_t kRowCodeBytes = 2;
 // Glyph whose height sets a GAF font's line height.
 inline constexpr int32_t kReferenceGlyph = 'I';
 inline constexpr int32_t kLineGap = 2;
+// The smallest 'I' of a GAF font whose missing characters are drawn in the
+// modern message face: hattfont12's; smaller fonts take the status face.
+inline constexpr int32_t kMessageFaceHeight = 12;
 inline constexpr int32_t kFirstPrintable = 0x20;
 inline constexpr int32_t kNoLimit = -1;
 inline constexpr const char* kGafExtension = "GAF";
@@ -110,10 +113,19 @@ inline constexpr const char* kGafExtension = "GAF";
     return slot < panel.colors.size() ? panel.colors[slot] : 0;
 }
 
+/// Returns the rows from a GAF font's pen down to its baseline.
+///
+/// @param renderer the renderer whose art table reads the font
+/// @param glyphs the font's glyph sequence, or null
+/// @return the height of its 'I' glyph, zero without one
+[[nodiscard]] int32_t font_baseline(const GadgetRenderer& renderer, const void* glyphs);
+
 /// Measures a text in an explicit GAF font, or in the display's FNT font.
 ///
 /// A GAF text is as wide as the frames of its characters' glyphs; a character
-/// without a glyph adds nothing.
+/// without a glyph adds nothing. With game-text hooks installed, text with a
+/// byte from 0x80 up is measured as draw_text draws it: a run of characters
+/// the font lacks is as wide as the modern fonts draw it.
 ///
 /// @param renderer the renderer whose art table reads the font
 /// @param gaf_font the GAF font, or null for the display's active FNT font

@@ -27,6 +27,13 @@ target_link_libraries(oa-app-netgame-options PUBLIC oa::app::headers oa-app-netg
   oa-core-types
   PRIVATE oa-options)
 
+# The network rules a mod profile gives network play, which their test
+# reads without a running app.
+add_library(oa-app-netgame-wire-rules STATIC wire_rules_binding.cpp)
+add_library(oa::app::netgame_wire_rules ALIAS oa-app-netgame-wire-rules)
+target_include_directories(oa-app-netgame-wire-rules PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(oa-app-netgame-wire-rules PUBLIC oa-data-mod-profile oa-netgame)
+
 # The traffic readouts drawn over the battlefield through the engine's match
 # overlay, which their test draws without a running app.
 add_library(oa-app-netgame-traffic-overlay STATIC traffic_overlay.cpp)
@@ -65,6 +72,10 @@ set(oa_app_netgame_sources
   runtime_report.cpp
   runtime_session_cheats.cpp)
 
+# The recorder's report line names the engine's version.
+set_property(SOURCE runtime_net.cpp APPEND
+  PROPERTY COMPILE_DEFINITIONS "OA_ENGINE_VERSION=\"${PROJECT_VERSION}\"")
+
 if(TARGET oa-game)
   # multiplayer_menu_check.cpp drives the game through the engine's check
   # host and reaches no Runtime member.
@@ -76,9 +87,10 @@ if(TARGET oa-game)
   # extension's OA_RUNTIME_EXTENSION_MEMBERS to both).
   target_link_libraries(oa-app-netgame
     PUBLIC oa-app-netgame-options oa-app-netgame-traffic-overlay oa-app-netgame-close-handlers
+      oa-app-netgame-wire-rules
       oa-app-netgame-launch-binding oa-ui-frontend-multiplayer oa-netgame-match-runtime oa-session-demo
       oa-netgame-console oa-netgame-messages
-    PRIVATE oa::extension-sdk)
+    PRIVATE oa::extension-sdk oa-app-view-rules)
   # Network play's API for the extensions built on it: an extension library
   # that links it links network play's extension too, so the engine lists
   # that extension after network play's.
@@ -102,6 +114,15 @@ if(BUILD_TESTING)
     oa-netgame-test-launch)
   add_test(NAME netgame-launch-binding COMMAND oa-netgame-launch-binding-test)
   set_tests_properties(netgame-close-handlers netgame-launch-binding PROPERTIES TIMEOUT 60)
+  # The network rules a profile gives; the reference profiles in the folder
+  # OA_MOD_PROFILES_DIR names are read when it is set.
+  add_executable(oa-netgame-wire-rules-binding-test tests/wire_rules_test.cpp)
+  target_link_libraries(oa-netgame-wire-rules-binding-test PRIVATE oa-app-netgame-wire-rules)
+  add_test(NAME netgame-wire-rules COMMAND oa-netgame-wire-rules-binding-test)
+  if(DEFINED OA_MOD_PROFILES_DIR)
+    set_tests_properties(netgame-wire-rules PROPERTIES
+      ENVIRONMENT "OA_MOD_PROFILES_DIR=${OA_MOD_PROFILES_DIR}")
+  endif()
   add_executable(oa-netgame-traffic-overlay-test tests/traffic_overlay_test.cpp)
   target_link_libraries(oa-netgame-traffic-overlay-test PRIVATE oa-app-netgame-traffic-overlay oa-netgame-match
     oa-ui-console)
@@ -132,6 +153,24 @@ if(BUILD_TESTING AND TARGET oa-game AND IS_DIRECTORY "${OA_GAME_DIR}")
     --skip-intro --mute --headless-check --net-loopback-check 300 --net-loopback-watcher
     --preferences-file "${oa_netgame_checks}/net-loopback-watcher.conf")
   set_tests_properties(native-net-loopback-watcher PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
+  # Under a profile that presents the recorder and turns ui.whiteboard on
+  # over the installed game, the host's whiteboard marks reach the joiner
+  # while the host allies it, with the marker echoed to its log, and not
+  # once the alliance is broken.
+  file(WRITE "${oa_netgame_checks}/whiteboard.oamod.yaml"
+    "oamod: 1\n"
+    "id: loopback-whiteboard\n"
+    "name: Loopback whiteboard\n"
+    "version: \"1.0\"\n"
+    "requires: {base: ta-3.1c, catalogue: 1}\n"
+    "hacks:\n"
+    "  recorder.ta-demo-recorder: true\n"
+    "  ui.whiteboard: true\n")
+  add_test(NAME native-net-loopback-whiteboard COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+    --skip-intro --mute --headless-check --net-loopback-check 300
+    --mod "${oa_netgame_checks}/whiteboard.oamod.yaml"
+    --preferences-file "${oa_netgame_checks}/net-loopback-whiteboard.conf")
+  set_tests_properties(native-net-loopback-whiteboard PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
   # The host seats a computer player, which builds for 6000 ticks, is given
   # a squad and strikes the joiner's commander; with the watcher, the
   # joiner watches it strike the host's.

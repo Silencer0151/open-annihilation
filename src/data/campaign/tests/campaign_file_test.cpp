@@ -379,6 +379,22 @@ void synthetic_tests() {
     env.difficulty = 1;
     expect(campaign_bind_mission(file, &env, 0), "medium falls back to easy");
     expect(std::strcmp(file->schema, "Schema 1") == 0, "medium order picks easy first");
+    // ai.difficulty-names: the order stays by difficulty and the names it tries follow the
+    // rule. With Easy and Hard swapped, difficulty 0 tries Hard first and difficulty 1
+    // tries Medium, Hard, Easy.
+    using Names = oa::data::match_rules::AiDifficultyNamesNames;
+    env.difficulty_names.names = {Names::hard, Names::medium, Names::easy};
+    env.difficulty = 0;
+    expect(campaign_bind_mission(file, &env, 0), "swapped names: difficulty 0");
+    expect(std::strcmp(file->schema, "Schema 0") == 0, "swapped names: 0 takes Hard");
+    env.difficulty = 1;
+    expect(campaign_bind_mission(file, &env, 0), "swapped names: difficulty 1");
+    expect(std::strcmp(file->schema, "Schema 0") == 0, "swapped names: 1 falls back to Hard");
+    env.difficulty = 2;
+    expect(campaign_bind_mission(file, &env, 0), "swapped names: difficulty 2");
+    expect(std::strcmp(file->schema, "Schema 1") == 0, "swapped names: 2 takes Easy");
+    env.difficulty_names = {};
+    env.difficulty = 1;
 
     expect(campaign_has_next_mission(file, 1) && !campaign_has_next_mission(file, 2), "has next");
     memory.messages.clear();

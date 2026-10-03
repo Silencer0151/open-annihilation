@@ -3,7 +3,9 @@
 
 // Battleroom rules and map previews with the loopback net, and (with --data)
 // against the installed game's LOUNGE2.GUI and SELGAME.GUI layouts.
+#include "oa/data/languages/unit_texts.hpp"
 #include "oa/formats/gaf.hpp"
+#include "oa/netgame/private_channel.hpp"
 #include "oa/netgame/records.hpp"
 #include "oa/ui/frontend_multiplayer/connect.hpp"
 #include "oa/ui/frontend_multiplayer/dialogs.hpp"
@@ -175,7 +177,8 @@ struct Fixture {
     explicit Fixture(
         const oa::ui::gui_layout::Layout& lounge,
         const mp::LaunchLink* online = nullptr,
-        bool host = true
+        bool host = true,
+        uint8_t lobby_buttons = 0
     )
         : layout(lounge) {
         mp::loopback_reset(loopback);
@@ -197,6 +200,7 @@ struct Fixture {
         mp::lobby_seat_local(lobby, 0, host, "Host");
         mp::panel_load(panel, "guis/lounge2.gui", layout);
         mp::panel_bind_sliders(panel, slider_art);
+        lobby.lobby_buttons = lobby_buttons;
         mp::lobby_enter_battleroom(lobby, panel);
     }
 
@@ -1350,6 +1354,56 @@ void test_slot_cycle(const oa::ui::gui_layout::Layout& lounge) {
     );
 }
 
+// The battle room buttons a mod's display rules add: the host's AUTOPAUSE
+// and AUTOTEAM say their commands as typed lines; a client's are grayed;
+// without the rules the gadgets do nothing.
+void test_mod_lobby_buttons(const oa::ui::gui_layout::Layout& lounge) {
+    auto layout = lounge;
+    const auto base = std::find_if(layout.gadgets.begin(), layout.gadgets.end(), [](const auto& g) {
+        return g.common.name == "PREVMENU";
+    });
+    expect(base != layout.gadgets.end(), "LOUNGE2.GUI has PREVMENU");
+    if (base == layout.gadgets.end())
+        return;
+    const auto prototype = *base;
+    int16_t x = 325;
+    for (const char* name : {"AUTOTEAM", "AUTOPAUSE"}) {
+        auto button = prototype;
+        button.common.name = name;
+        button.common.x = x;
+        button.common.y = 450;
+        layout.gadgets.push_back(button);
+        x = static_cast<int16_t>(x + 81);
+    }
+    const uint8_t buttons = mp::lobby_button::autoteam | mp::lobby_button::autopause;
+    {
+        Fixture f(layout, nullptr, true, buttons);
+        expect(f.press("AUTOPAUSE"), "the host's AUTOPAUSE takes a press");
+        expect(
+            std::strcmp(mp::lobby_chat_line(*f.game, 0), "<Host> .autopause") == 0,
+            "AUTOPAUSE says .autopause"
+        );
+        expect(f.press("AUTOTEAM"), "the host's AUTOTEAM takes a press");
+        expect(
+            std::strcmp(mp::lobby_chat_line(*f.game, 1), "<Host> +autoteam") == 0,
+            "AUTOTEAM says +autoteam"
+        );
+        expect(f.sent_of(oa::netgame::RecordType::chat) == 2, "both lines go to the others");
+    }
+    {
+        Fixture f(layout, nullptr, false, buttons);
+        const auto* pause = mp::panel_control(f.panel, "AUTOPAUSE");
+        expect(pause != nullptr && pause->grayed, "a client's AUTOPAUSE is grayed");
+        (void)f.press("AUTOPAUSE");
+        expect(f.sent_of(oa::netgame::RecordType::chat) == 0, "a client's press says nothing");
+    }
+    {
+        Fixture f(layout, nullptr, true, 0);
+        (void)f.press("AUTOPAUSE");
+        expect(f.sent_of(oa::netgame::RecordType::chat) == 0, "without the rules nothing is said");
+    }
+}
+
 void test_chat_and_leave(const oa::ui::gui_layout::Layout& lounge) {
     Fixture f(lounge);
     f.panel.focus = mp::panel_find(f.panel, "MESSAGE");
@@ -2098,6 +2152,24 @@ void test_unit_sync_and_restrictions() {
     );
     expect(mp::unit_sync_set_enabled(lobby, 44, true), "re-enabled unit both sides have");
     expect(!mp::unit_sync_set_enabled(lobby, 99, true), "an unknown unit is not enabled");
+    // In a language whose unit files name a unit, its row shows that name and
+    // sorts by it; a unit without one keeps its own.
+    oa::data::languages::UnitTexts texts;
+    texts.add("CORAK", "Italian", "Kbot AK", nullptr);
+    const std::vector<std::string> italian{"Italian"};
+    oa::data::languages::set_unit_texts(&texts, italian);
+    mp::RestrictPanel localized{};
+    mp::restrict_open(lobby, localized, panel);
+    expect(
+        localized.count == 3 && std::strncmp(localized.entries[0].text, "Kbot AK\rCORE", 12) == 0,
+        "a row shows its unit's name in the language and sorts by it"
+    );
+    expect(
+        std::strncmp(localized.entries[1].text, "Nuke\r", 5) == 0,
+        "a row without a name in the language keeps its own"
+    );
+    mp::restrict_close(lobby, localized);
+    oa::data::languages::set_unit_texts(nullptr, {});
 }
 
 // A client's table seeds its own types with the remote side clear and takes
@@ -3616,6 +3688,347 @@ void test_session_description() {
     expect(session.flags == 0x24, "0x20 stays once published");
 }
 
+/// Returns network rules of a game versioned 10.2 with the recorder presented.
+oa::netgame::WireRules versioned_recorder_rules() {
+    oa::netgame::WireRules rules{};
+    rules.version_major = 10;
+    rules.version_minor = 2;
+    rules.version_rule = oa::netgame::VersionRule::equal;
+    rules.launch_version_bias = false;
+    rules.private_channel = oa::netgame::PrivateChannel::sub_id_dispatch;
+    rules.recorder_protocol = oa::netgame::recorder_protocol_current;
+    rules.recorder_session_commands = true;
+    rules.speed_lock = true;
+    return rules;
+}
+
+/// Returns a raw record event from a player.
+mp::LobbyEvent raw_event(uint32_t from, std::initializer_list<uint8_t> bytes) {
+    mp::LobbyEvent event{};
+    event.kind = mp::LobbyEventKind::record;
+    event.player_id = from;
+    std::size_t at = 0;
+    for (const auto byte : bytes)
+        event.data[at++] = byte;
+    event.size = static_cast<uint16_t>(at);
+    return event;
+}
+
+// A game versioned 10.2 compares majors for equality and has no launch
+// bias: its session and blocks carry 10 and 2 as they are, and a 3.1 game
+// is not joinable from it, nor it from a 3.1 game's rule of "at least".
+void test_versioned_rules() {
+    auto rules = versioned_recorder_rules();
+    mp::PlayerSetupInfo host{};
+    host.version_major = 10;
+    expect(mp::info_version_compatible(host, 10, rules), "an equal major joins");
+    host.version_major = 3;
+    expect(
+        !mp::info_version_compatible(host, 10, rules), "a 3.1 game does not join under equality"
+    );
+    host.version_major = 11;
+    expect(!mp::info_version_compatible(host, 10, rules), "a newer major does not either");
+    host.version_major = 110;
+    host.status = mp::status::launch_only;
+    expect(
+        !mp::info_version_compatible(host, 10, rules),
+        "without the launch bias a launch-only game's byte is read as it is"
+    );
+    host.version_major = 10;
+    host.status = 0;
+    expect(mp::info_version_compatible(host, 3), "3.1's rule still joins a newer major");
+
+    reset_launch();
+    auto game = std::make_unique<oa::Game>();
+    mp::Lobby lobby{};
+    mp::LoopbackNet loopback{};
+    mp::ConnectState connect{};
+    mp::loopback_reset(loopback);
+    mp::lobby_reset(lobby, *game);
+    lobby.net = mp::loopback_lobby_net(loopback);
+    bind_services(lobby);
+    bind_maps(lobby);
+    lobby.wire_rules = rules;
+    lobby.local_version_major = 10;
+    lobby.local_version_minor = 2;
+    lobby.launch_link = launch_link();
+    active_launch = true;
+    loopback.opened = true;
+    std::snprintf(mp::lobby_game_name(*game), 17, "%s", "XGame");
+    std::snprintf(mp::lobby_nickname(*game), 17, "%s", "Alpha");
+    expect(mp::connect_host(lobby, connect), "the host creates the session");
+    const auto& session = loopback.sessions[0];
+    expect(
+        session.user[14] == 10 && session.user[15] == 2,
+        "the session's last user bytes are 10 and 2: no bias under an active launch"
+    );
+    expect(
+        (mp::local_info(lobby).status & mp::status::launch_only) == 0,
+        "nor is it marked launch-only"
+    );
+    active_launch = false;
+    reset_launch();
+}
+
+// A recorder stamps its protocol on every battle-room block; the host sends
+// its recorder options once to a joiner whose block says it runs one, and
+// takes a joiner's recorder protocol from its block.
+void test_recorder_in_the_battle_room() {
+    using oa::netgame::RecordType;
+    Room host(true);
+    host.lobby.wire_rules = versioned_recorder_rules();
+    mp::lobby_send_player_info(host.lobby);
+    const auto infos = host.sent(RecordType::player_info);
+    expect(infos.size() == 2, "a block for each player here");
+    bool stamped = !infos.empty();
+    for (const auto index : infos)
+        stamped =
+            stamped &&
+            host.loopback.sent[index][1 + oa::netgame::player_info_recorder_protocol_offset] ==
+                oa::netgame::recorder_protocol_current;
+    expect(stamped, "every block carries the recorder's protocol");
+
+    // The joiner's first block from a recorder: the options go to it once.
+    oa::netgame::PlayerInfoRecord block{};
+    block.player_id = kRoomGuest;
+    block.info_tail
+        [oa::netgame::player_info_recorder_protocol_offset - oa::netgame::player_info_tail_offset] =
+        oa::netgame::recorder_protocol_current;
+    host.loopback.sent_count = 0;
+    expect(mp::lobby_apply_event(host.lobby, record_event(kRoomGuest, block)), "the block applies");
+    expect(
+        host.lobby.recorder.peer_protocol[1] == oa::netgame::recorder_protocol_current,
+        "the joiner's recorder protocol is noted"
+    );
+    auto options = host.sent(static_cast<RecordType>(0xfb));
+    expect(options.size() == 1, "the host's options go out once");
+    if (options.size() == 1) {
+        const uint8_t expected[] = {0xfb, 0x06, 0x04, 0x00, 0x00, 0x00, 0x00, 0x01, 0x14};
+        expect(
+            host.loopback.sent_size[options[0]] == sizeof expected &&
+                std::memcmp(host.loopback.sent[options[0]], expected, sizeof expected) == 0 &&
+                host.loopback.sent_to[options[0]] == kRoomGuest,
+            "as a recorder sends them before any lock, to the joiner alone"
+        );
+    }
+    host.loopback.sent_count = 0;
+    (void)mp::lobby_apply_event(host.lobby, record_event(kRoomGuest, block));
+    expect(host.sent(static_cast<RecordType>(0xfb)).empty(), "and only once");
+
+    // The joiner takes the host's options.
+    Room guest(false);
+    guest.lobby.wire_rules = versioned_recorder_rules();
+    expect(
+        mp::lobby_apply_event(
+            guest.lobby,
+            raw_event(kRoomHost, {0xfb, 0x06, 0x04, 0x01, 0x00, 0x01, 0x01, 0x05, 0x00})
+        ),
+        "the host's options apply"
+    );
+    expect(
+        guest.lobby.recorder.options.autopause == 1 &&
+            guest.lobby.recorder.options.commander_warp == 1 &&
+            guest.lobby.recorder.options.speed_lock == 1,
+        "autopause, commander warp and the lock are the host's"
+    );
+    // Under 3.1c's rules the record is not read.
+    Room plain(false);
+    expect(
+        !mp::lobby_apply_event(plain.lobby, raw_event(kRoomHost, {0xfb, 0x00, 0x01})),
+        "3.1c reads no recorder record"
+    );
+}
+
+// The host's recorder commands typed as chat change the options on every
+// recorder; a guest's do not, and private lines are never shown.
+void test_recorder_commands_in_the_battle_room() {
+    Room guest(false);
+    guest.lobby.wire_rules = versioned_recorder_rules();
+    oa::netgame::ChatRecord line{};
+    std::snprintf(line.text, sizeof(line.text), "%s", "<Host> .syncon 0 5");
+    expect(mp::lobby_apply_event(guest.lobby, record_event(kRoomHost, line)), "the line shows");
+    expect(
+        guest.lobby.recorder.options.speed_lock == 1 &&
+            guest.lobby.recorder.options.speed_high == 5,
+        "the host's .syncon locks the speed"
+    );
+    std::snprintf(line.text, sizeof(line.text), "%s", "<Host> .autopause");
+    (void)mp::lobby_apply_event(guest.lobby, record_event(kRoomHost, line));
+    expect(guest.lobby.recorder.options.autopause == 1, "the host's .autopause applies");
+
+    // Without the rules' speed lock .syncon is only chat, and the host's
+    // options bring no lock.
+    Room unlocked(false);
+    unlocked.lobby.wire_rules = versioned_recorder_rules();
+    unlocked.lobby.wire_rules.speed_lock = false;
+    std::snprintf(line.text, sizeof(line.text), "%s", "<Host> .syncon 0 5");
+    expect(mp::lobby_apply_event(unlocked.lobby, record_event(kRoomHost, line)), "the line shows");
+    expect(
+        unlocked.lobby.recorder.options.speed_lock == 0,
+        "no speed lock without the rules' speed lock"
+    );
+    (void)mp::lobby_apply_event(
+        unlocked.lobby, raw_event(kRoomHost, {0xfb, 0x06, 0x04, 0x01, 0x00, 0x01, 0x01, 0x05, 0x00})
+    );
+    expect(
+        unlocked.lobby.recorder.options.autopause == 1 &&
+            unlocked.lobby.recorder.options.speed_lock == 0,
+        "the host's other options apply, its lock does not"
+    );
+
+    Room host(true);
+    host.lobby.wire_rules = versioned_recorder_rules();
+    // Without setup.commander-warp the recorder offers no .cmdwarp: the line
+    // is only chat.
+    mp::lobby_say(host.lobby, mp::local_player(host.lobby), ".cmdwarp");
+    expect(
+        host.lobby.recorder.options.commander_warp == 0 &&
+            host.sent(oa::netgame::RecordType::chat).size() == 1,
+        "without the rule .cmdwarp is only chat"
+    );
+    oa::data::match_rules::MatchRules rules{};
+    rules.setup.commander_warp.enabled = true;
+    rules.setup.commander_warp.available = true;
+    host.lobby.rules = &rules;
+    std::snprintf(line.text, sizeof(line.text), "%s", "<Guest> .cmdwarp");
+    (void)mp::lobby_apply_event(host.lobby, record_event(kRoomGuest, line));
+    expect(host.lobby.recorder.options.commander_warp == 0, "a guest's .cmdwarp does nothing");
+    // The host's own command is applied and announced; the next one turns
+    // the warp off again.
+    host.loopback.sent_count = 0;
+    mp::lobby_say(host.lobby, mp::local_player(host.lobby), ".cmdwarp");
+    expect(host.lobby.recorder.options.commander_warp == 1, "the host's own .cmdwarp applies");
+    const auto lines = host.sent(oa::netgame::RecordType::chat);
+    expect(
+        lines.size() == 2 && std::strcmp(
+                                 reinterpret_cast<const char*>(host.loopback.sent[lines[1]]) + 1,
+                                 "Cmd warping enabled"
+                             ) == 0,
+        "the host's recorder says so"
+    );
+    host.loopback.sent_count = 0;
+    mp::lobby_say(host.lobby, mp::local_player(host.lobby), ".cmdwarp");
+    const auto off = host.sent(oa::netgame::RecordType::chat);
+    expect(
+        host.lobby.recorder.options.commander_warp == 0 && off.size() == 2 &&
+            std::strcmp(
+                reinterpret_cast<const char*>(host.loopback.sent[off[1]]) + 1,
+                "Cmd warping disabled"
+            ) == 0,
+        "a second .cmdwarp turns the warp off"
+    );
+    host.lobby.rules = nullptr;
+    // .report answers with the program line.
+    std::snprintf(
+        host.lobby.recorder.program, sizeof host.lobby.recorder.program, "%s", "Program 1"
+    );
+    host.loopback.sent_count = 0;
+    std::snprintf(line.text, sizeof(line.text), "%s", "<Guest> .report");
+    (void)mp::lobby_apply_event(host.lobby, record_event(kRoomGuest, line));
+    const auto answers = host.sent(oa::netgame::RecordType::chat);
+    expect(
+        answers.size() == 1 &&
+            std::strcmp(
+                reinterpret_cast<const char*>(host.loopback.sent[answers[0]]) + 1,
+                "*** Host uses Program 1"
+            ) == 0,
+        ".report is answered"
+    );
+
+    const auto head = mp::lobby_chat_head(*guest.game);
+    const auto hidden = raw_event(kRoomHost, {0x05, 0x00, 0x2b, 0x41, 0x00, 0x01});
+    auto event = hidden;
+    event.size = static_cast<uint16_t>(oa::netgame::private_record_bytes);
+    expect(
+        !mp::lobby_apply_event(guest.lobby, event) && mp::lobby_chat_head(*guest.game) == head,
+        "a private line is not shown"
+    );
+}
+
+/// Returns the text of the last chat line a room sent.
+///
+/// @param room The room.
+/// @return The text; empty when it sent none.
+std::string last_chat_line(const Room& room) {
+    const auto lines = room.sent(oa::netgame::RecordType::chat);
+    if (lines.empty())
+        return {};
+    return reinterpret_cast<const char*>(room.loopback.sent[lines.back()]) + 1;
+}
+
+// The host's .base offers every seated player a prebuilt base, the standard
+// one or one read from a file; a file in error, a missing file, .baseoff and
+// a player joining each say so. Without setup.recorder-prebuilt-base the
+// line is only chat.
+void test_recorder_prebuilt_base_in_the_battle_room() {
+    Room host(true);
+    host.lobby.wire_rules = versioned_recorder_rules();
+    auto& base = host.lobby.recorder.base;
+    const auto say = [&](const char* text) {
+        host.loopback.sent_count = 0;
+        mp::lobby_say(host.lobby, mp::local_player(host.lobby), text);
+        return last_chat_line(host);
+    };
+    expect(
+        say(".base") == "<Host> .base" && base.per_side == 0, "without the rule .base is only chat"
+    );
+    oa::data::match_rules::MatchRules rules{};
+    rules.setup.recorder_prebuilt_base.enabled = true;
+    rules.setup.recorder_prebuilt_base.available = true;
+    host.lobby.rules = &rules;
+    expect(
+        say(".base") == "Standard base initiated .baseoff to disable",
+        "the standard base is announced"
+    );
+    expect(
+        base.per_side == 15 && base.entries[1].unit_type == 132 &&
+            base.entries[1].offset_x == -100 && base.entries[1].offset_z == 140 &&
+            base.entries[1].health == 2500 && base.entries[16].unit_type == 274 &&
+            base.entries[3].offset_z == 40 && base.entries[18].offset_z == 60,
+        "the standard base holds both sides' buildings"
+    );
+    expect(
+        base.available[0] && base.available[1] && base.available[2] && !base.available[3],
+        "every seated player is offered a base"
+    );
+    host.lobby.services.read_file =
+        [](void*, const char* name, std::size_t, std::string* contents) {
+            if (std::strcmp(name, "base.txt") == 0)
+                *contents = "; a base\r\n2\r\n1 99 10 -20 300;\r\n4 $10 0 0 5;\n";
+            else if (std::strcmp(name, "bad.txt") == 0)
+                *contents = "2\n1 99 10 -20 300\n";
+            else
+                return false;
+            return true;
+        };
+    expect(
+        say(".base base.txt") == "Fast base initiated from base.txt .baseoff to disable",
+        "a base file is announced"
+    );
+    expect(
+        base.per_side == 2 && base.entries[1].unit_type == 99 && base.entries[1].offset_x == 10 &&
+            base.entries[1].offset_z == -20 && base.entries[1].health == 300 &&
+            base.entries[4].unit_type == 16,
+        "the file's buildings replace their entries"
+    );
+    expect(say(".base bad.txt") == "Erroneous base file5", "a line without its ';' is in error");
+    expect(say(".base nothing.txt") == "Unable to open file nothing.txt", "a missing file is told");
+    // A player joining takes the offer back.
+    (void)say(".base");
+    host.loopback.sent_count = 0;
+    join_remote(host.lobby, kRoomThird);
+    expect(
+        last_chat_line(host) == "New player. Quick base toggled off" && !base.available[0] &&
+            !base.available[1],
+        "a joining player takes the offer back"
+    );
+    (void)say(".base");
+    expect(
+        say(".baseoff") == "Quick base disabled" && !base.enabled && !base.available[0],
+        ".baseoff takes every base back for the session"
+    );
+}
+
 /// Checks the battle room's commands, matched without case: they send no chat.
 void test_chat_commands(const oa::ui::gui_layout::Layout& lounge) {
     Fixture f(lounge);
@@ -4743,6 +5156,10 @@ int main(int argc, char** argv) {
         test_timeout_dialog_across_the_clock_turn();
         test_restrict_pictures_across_the_clock_turn();
         test_session_description();
+        test_versioned_rules();
+        test_recorder_in_the_battle_room();
+        test_recorder_commands_in_the_battle_room();
+        test_recorder_prebuilt_base_in_the_battle_room();
         test_hot_surfaces();
         test_slider_binding();
         test_slider_input();
@@ -4774,6 +5191,7 @@ int main(int argc, char** argv) {
             test_row_indicators(*lounge.layout);
             test_slot_cycle(*lounge.layout);
             test_chat_and_leave(*lounge.layout);
+            test_mod_lobby_buttons(*lounge.layout);
             test_client_rules(*lounge.layout);
             test_browsing_behind_a_dialog(*lounge.layout);
             test_chat_commands(*lounge.layout);

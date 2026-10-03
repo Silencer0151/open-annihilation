@@ -63,16 +63,35 @@ struct Fixture final : Host {
 };
 
 int main() {
-    // Projectile-constructor selection from the weapon flags.
-    OA_CHECK(select_fire_mode(flags::weapon_turret_flag) == FireMode::turret);
-    OA_CHECK(select_fire_mode(flags::weapon_vlaunch_flag) == FireMode::vertical_launch);
-    OA_CHECK(select_fire_mode(flags::weapon_line_of_sight_flag) == FireMode::line);
-    OA_CHECK(select_fire_mode(flags::weapon_selfprop_flag) == FireMode::line);
-    OA_CHECK(select_fire_mode(0x100) == FireMode::dropped);
-    OA_CHECK(select_fire_mode(0) == FireMode::none);
-    OA_CHECK(select_fire_mode(flags::weapon_ballistic_flag) == FireMode::none);
+    // Projectile-constructor selection from the weapon flags, as 3.1c and
+    // with weapons.vlaunch-before-turret.
+    for (const bool vlaunch_first : {false, true}) {
+        OA_CHECK(select_fire_mode(flags::weapon_turret_flag, vlaunch_first) == FireMode::turret);
+        OA_CHECK(
+            select_fire_mode(flags::weapon_vlaunch_flag, vlaunch_first) == FireMode::vertical_launch
+        );
+        OA_CHECK(
+            select_fire_mode(flags::weapon_line_of_sight_flag, vlaunch_first) == FireMode::line
+        );
+        OA_CHECK(select_fire_mode(flags::weapon_selfprop_flag, vlaunch_first) == FireMode::line);
+        OA_CHECK(select_fire_mode(0x100, vlaunch_first) == FireMode::dropped);
+        OA_CHECK(select_fire_mode(0, vlaunch_first) == FireMode::none);
+        OA_CHECK(select_fire_mode(flags::weapon_ballistic_flag, vlaunch_first) == FireMode::none);
+        OA_CHECK(
+            select_fire_mode(
+                flags::weapon_turret_flag | flags::weapon_line_of_sight_flag, vlaunch_first
+            ) == FireMode::turret
+        );
+    }
+    // A weapon with both bits: the turret constructor in 3.1c, the vertical
+    // launch one with the hack.
     OA_CHECK(
-        select_fire_mode(flags::weapon_turret_flag | flags::weapon_vlaunch_flag) == FireMode::turret
+        select_fire_mode(flags::weapon_turret_flag | flags::weapon_vlaunch_flag, false) ==
+        FireMode::turret
+    );
+    OA_CHECK(
+        select_fire_mode(flags::weapon_turret_flag | flags::weapon_vlaunch_flag, true) ==
+        FireMode::vertical_launch
     );
     // Line-of-sight or selfprop before ballistic.
     OA_CHECK(projectile_route(0) == ProjectileRoute::none);
@@ -119,6 +138,23 @@ int main() {
     OA_CHECK(!turret_within_tolerance(TurretSlewInput{500, 0, 0, 0, 0, 600, false}));
     OA_CHECK(reload_ticks_after_shot(100, 25, 10, 100) == 82); // 100*.70*.? 120-2 = 82
     OA_CHECK(reload_ticks_after_shot(100, 25, 10, 0) == 0);
+    {
+        // Under veterancy.model a type's own thresholds set the reload: 25
+        // kills over 10, 20, ... is level 2, 88% (then 118% for the health).
+        namespace match_rules = oa::data::match_rules;
+        match_rules::MatchRules rules{};
+        rules.veterancy.model.level_source = match_rules::VeterancyModelLevelSource::thresholds;
+        rules.veterancy.model.reload_cap = 16;
+        std::vector<match_rules::UnitTypeRules> types(3);
+        types[2].veterancy_thresholds =
+            match_rules::FixedList<uint16_t, match_rules::max_veterancy_thresholds>{
+                10, 20, 30, 40, 50
+        };
+        const match_rules::MatchRulesView view{&rules, types};
+        OA_CHECK(reload_ticks_after_shot(100, 25, 10, 100, view, 2) == 103);
+        OA_CHECK(reload_ticks_after_shot(100, 25, 10, 100, view, 1) == 82);
+        OA_CHECK(reload_ticks_after_shot(100, 25, 10, 100, {}, 2) == 82);
+    }
     {
         // A unit with no maximum health fires, then its first unstockpiled
         // slot ends the tick: the slots after it are not ticked.
@@ -221,6 +257,36 @@ int main() {
         refused.slots[0] == SlotResult::projectile_rejected && h.shots == std::vector<int>({0})
     );
     OA_CHECK(h.payments == payments && records[0].reload == 0);
+    {
+        // A weapon with both turret and vlaunch starts its turret Aim script
+        // either way. As 3.1c it then fires only once the turret's angles are
+        // on target; with weapons.vlaunch-before-turret it fires with the
+        // vertical-launch constructor, which reads no turret angles.
+        WeaponDefinition both{true, turret_flag | vlaunch_flag, 30, 0, 0, 0};
+        for (const bool vlaunch_first : {false, true}) {
+            std::array<oa::UnitWeapon, weapon_slot_count> both_records{};
+            UnitState launcher;
+            launcher.maximum_health = 100;
+            launcher.health = 100;
+            launcher.slots[0] = {&both, &both_records[0], 0, enabled_flag};
+            Fixture rack;
+            rack.aim_now = TurretAim::off_target;
+            oa::data::match_rules::MatchRules rules{};
+            rules.weapons.vlaunch_before_turret.enabled = vlaunch_first;
+            rack.rules.match = &rules;
+            const auto shot = tick_weapons(launcher, rack);
+            OA_CHECK(rack.aim == std::vector<int>({10}));
+            if (vlaunch_first) {
+                OA_CHECK(shot.slots[0] == SlotResult::fired);
+                OA_CHECK(rack.shots == std::vector<int>({0}));
+                // The shot spends the aim: the next tick aims again.
+                OA_CHECK(!(launcher.slots[0].flags & aimed_flag));
+            } else {
+                OA_CHECK(shot.slots[0] == SlotResult::waiting && rack.shots.empty());
+                OA_CHECK(!(launcher.slots[0].flags & aimed_flag));
+            }
+        }
+    }
     // One child once current >= anchor + burstrate. A skipped span
     // still emits one; the next due tick stays one interval ahead.
     const auto waiting = burst_fire_step(3, 10, 0, 0);

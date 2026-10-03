@@ -4,6 +4,7 @@
 #pragma once
 
 #include "oa/core/unit.h"
+#include "oa/data/match_rules.hpp"
 
 #include <array>
 #include <cstddef>
@@ -59,6 +60,7 @@ struct UnitState {
     std::array<WeaponSlot, weapon_slot_count> slots{};
     Point position;
     uint16_t veteran_level{};   // Unit.veteran_level
+    uint16_t type_index{};      // Unit.type_index; selects the type's veterancy thresholds
     int16_t health{};           // Unit.health
     uint32_t maximum_health{};  // UnitDef.max_damage; zero leaves a shot's reload undefined
     uint16_t shot_event_bits{}; // Unit.events
@@ -92,6 +94,8 @@ enum class TurretAim : uint8_t {
 // success, dispatch FirePrimary/Secondary/Tertiary.
 struct Host {
     virtual ~Host() = default;
+    /// The rules the match plays by (Match::rules_view); unset, 3.1c's.
+    data::match_rules::MatchRulesView rules{};
     /// Resolves a slot's current target.
     ///
     /// @param slot weapon slot 0..2
@@ -171,14 +175,17 @@ enum class FireMode : uint8_t {
 
 /// Chooses the projectile constructor a weapon's flags select.
 ///
-/// The order is turret, then vlaunch, then line-of-sight or selfprop, then dropped.
-/// The game makes this choice once, as the weapon loads, and a weapon whose flags
-/// match none of the four keeps the constructor it already had; here the choice is
-/// made for each shot, and such a weapon has none.
+/// The order is turret, then vlaunch, then line-of-sight or selfprop, then dropped;
+/// weapons.vlaunch-before-turret tests vlaunch before turret. The game makes this
+/// choice once, as the weapon loads, and a weapon whose flags match none of the
+/// four keeps the constructor it already had; here the choice is made for each
+/// shot, and such a weapon has none. Which Aim script a slot starts is not this
+/// choice: tick_weapons aims a weapon with both bits as a turret either way.
 ///
 /// @param weapon_flags WeaponDef.flags
+/// @param vlaunch_before_turret weapons.vlaunch-before-turret is on
 /// @return the constructor, or none when no bit matches
-[[nodiscard]] FireMode select_fire_mode(uint32_t weapon_flags) noexcept;
+[[nodiscard]] FireMode select_fire_mode(uint32_t weapon_flags, bool vlaunch_before_turret) noexcept;
 
 // Command-fire spawn route from WeaponDef.flags.
 enum class ProjectileRoute : uint8_t {
@@ -219,19 +226,27 @@ struct TurretSlewInput {
 
 /// Returns a slot's reload after a shot, shortened by experience and health.
 ///
-/// The base is scaled by 100 - 6 * min(veteran / 5, 5) percent, then by
-/// 120 - health * 20 / maximum_health percent.
+/// The base is scaled by the veteran's reload percentage
+/// (sim::unit_health::veteran_reload_percent; 100 - 6 * min(kills / 5, 5) in
+/// 3.1c), then by 120 - health * 20 / maximum_health percent.
 ///
 /// A zero maximum health gives no reload: the result is 0.
 ///
 /// @param base WeaponDef reload, ticks
-/// @param veteran_level unit's veteran level (Unit.veteran_level)
+/// @param veteran_level unit's kills (Unit.veteran_level)
 /// @param health unit's health
 /// @param maximum_health the type's maximum health
+/// @param rules the match's rules; unset, 3.1c's
+/// @param type_index the unit's type index (Unit.type_index), for its own thresholds
 /// @return the reload, ticks, narrowed to 16 bits
 /// @quirk The products wrap at 32 bits.
 [[nodiscard]] uint16_t reload_ticks_after_shot(
-    uint16_t base, uint16_t veteran_level, int16_t health, uint32_t maximum_health
+    uint16_t base,
+    uint16_t veteran_level,
+    int16_t health,
+    uint32_t maximum_health,
+    const data::match_rules::MatchRulesView& rules = {},
+    uint16_t type_index = 0
 ) noexcept;
 
 /// Runs one tick of a unit's three weapon slots.

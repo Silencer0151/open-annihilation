@@ -3,8 +3,9 @@
 
 // A section of the settings dialog taller than the view its rows scroll
 // in, which --check-engine-settings shows in place of the open section's
-// rows, on the main menu and in a match, so that the wheel and the scroll
-// keys have rows to scroll while every section of the dialog fits its view.
+// rows (on Developer, of its list and the list's footer too), on the main
+// menu and in a match, so that the wheel and the scroll keys have rows to
+// scroll while every section of the dialog fits its view.
 #pragma once
 
 #include "oa/ui/engine_settings/dialog.hpp"

@@ -9,11 +9,14 @@
 // process over 127.0.0.1, runs the in-game team panels over the session
 // and compares both worlds after a settled run.
 #include "oa/app/runtime.hpp"
+#include "oa/app/view_rules.hpp"
 #include "network_play.hpp"
 #include "oa/app/check_host.hpp"
+#include "oa/app/game_directory.hpp"
 #include "net_options.hpp"
 #include "net_state.hpp"
 #include "traffic_overlay.hpp"
+#include "wire_rules_binding.hpp"
 
 #include "oa/netgame/match/launch.hpp"
 #include "oa/netgame/match/match_binding.hpp"
@@ -21,6 +24,7 @@
 #include "oa/netgame/match/session_lobby.hpp"
 #include "oa/netgame/records.hpp"
 #include "oa/app/netgame/extension_api.hpp"
+#include "oa/base/sha256.hpp"
 #include "oa/sim/ai.hpp"
 #include "oa/sim/messages.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
@@ -29,7 +33,9 @@
 #include "oa/ui/hud/chat_panel.hpp"
 #include "oa/ui/hud/player_records.hpp"
 #include "oa/ui/hud/share_panel.hpp"
+#include "oa/ui/hud/shared_views.hpp"
 #include "oa/ui/hud/team_panels.hpp"
+#include "oa/ui/hud/whiteboard.hpp"
 #include "oa/ui/frontend_multiplayer/connect.hpp"
 #include "oa/ui/frontend_multiplayer/screens.hpp"
 
@@ -40,7 +46,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <exception>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -332,6 +340,82 @@ void mark_agreed_units(void* context, UnitDef* headers, uint32_t count) {
     mp::unit_sync_mark_units(*static_cast<const mp::UnitSync*>(context), headers, count);
 }
 
+#ifndef OA_ENGINE_VERSION
+#error "OA_ENGINE_VERSION names the engine's version for the recorder's report line"
+#endif
+
+/// The line this machine's recorder answers .report with: the program and its version.
+constexpr const char* kProgramLine = "Open Annihilation " OA_ENGINE_VERSION;
+/// The engine's version as the engine shows it, which the battle room's
+/// line names.
+constexpr const char* kEngineVersionText = "v" OA_ENGINE_VERSION;
+
+/// The network rules of a runtime's profile.
+///
+/// @param runtime the runtime
+/// @return its rules; 3.1c's without a profile
+oa::netgame::WireRules runtime_wire_rules(const Runtime& runtime) {
+    auto rules = oa::app::netgame::wire_rules_of(runtime.mod_profile());
+    // A game that joins a replayer to watch a recording presents the
+    // replay version.
+    if (net_options().replay_viewer) {
+        rules.version_major = rules.replay_version_major;
+        rules.version_minor = rules.replay_version_minor;
+    }
+    return rules;
+}
+
+/// The wall clock a recording counts its delays on.
+///
+/// @return milliseconds on the steady clock
+uint64_t recording_clock_ms() {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::steady_clock::now().time_since_epoch()
+    )
+                                     .count());
+}
+
+/// Formats the local date and time for a recording.
+///
+/// @param pattern strftime pattern
+/// @return the text
+std::string local_time_text(const char* pattern) {
+    const std::time_t now = std::time(nullptr);
+    std::tm parts{};
+#if defined(_WIN32)
+    localtime_s(&parts, &now);
+#else
+    localtime_r(&now, &parts);
+#endif
+    char formatted[64];
+    const auto length = std::strftime(formatted, sizeof formatted, pattern, &parts);
+    return std::string(formatted, length);
+}
+
+/// Fills the integrity check's answers about this machine: a digest of the
+/// program line, and one of the profile's sim hash with the map, so two
+/// machines agree exactly when they run the same program on the same rules and
+/// map.
+///
+/// @param[out] identity the identity
+/// @param runtime the runtime whose profile is read
+/// @param map the match's map name
+void fill_integrity_identity(
+    oa::netgame::match::IntegrityIdentity& identity, const Runtime& runtime, const std::string& map
+) {
+    const std::string_view program{kProgramLine};
+    const auto program_digest = oa::base::sha256::digest_of(
+        {reinterpret_cast<const uint8_t*>(program.data()), program.size()}
+    );
+    std::memcpy(identity.program, program_digest.data(), sizeof identity.program);
+    oa::base::sha256::Hasher data{};
+    if (const auto* profile = runtime.mod_profile())
+        oa::base::sha256::update(data, profile->sim_hash);
+    oa::base::sha256::update(data, {reinterpret_cast<const uint8_t*>(map.data()), map.size()});
+    const auto data_digest = oa::base::sha256::finish(data);
+    std::memcpy(identity.game_data, data_digest.data(), sizeof identity.game_data);
+}
+
 struct LoopbackSide {
     NetworkPlay* play{};
     const char* nickname{};
@@ -401,7 +485,40 @@ struct NetworkPlay::NetHost {
         hooks.share_sight = [](void* context, World*, uint8_t from, uint8_t to) {
             nm::match_binding_share_sight(&self(context).net_->binding, from, to);
         };
+        hooks.record_seen =
+            [](void* context, uint32_t sender, const uint8_t* record, std::size_t size) {
+                auto& recording = self(context).net_->recording;
+                if (recording.started)
+                    oa::session::demo::recording_add(
+                        &recording, sender, recording_clock_ms(), {record, size}
+                    );
+            };
+        // ui.whiteboard: marks an ally's recorder sent join this machine's whiteboard.
+        hooks.whiteboard_marks =
+            [](void* context, uint8_t, const uint8_t* batch, std::size_t size) {
+                self(context).runtime_.receive_whiteboard_batch({batch, size});
+            };
+        hooks.vote_shown =
+            [](void* context, const nm::Vote& vote, uint8_t target, uint8_t, uint8_t) {
+                auto& play = self(context);
+                play.net_->vote_target = vote.target_id;
+                if (target < OA_PLAYER_COUNT)
+                    notice(context, "Vote Yes or Vote No in the console answers the vote");
+            };
+        hooks.speed_lock_changed =
+            [](void* context, bool locked, uint8_t slowest, uint8_t fastest) {
+                share_speed_lock(self(context).runtime_, locked, slowest, fastest);
+            };
         return hooks;
+    }
+
+    // The host's speed lock reaches the runtime, whose speed keys and GAME
+    // slider then keep to it as the match does.
+    static void share_speed_lock(Runtime& runtime, bool locked, uint8_t slowest, uint8_t fastest) {
+        if (locked)
+            runtime.lock_game_speed({slowest, fastest});
+        else
+            runtime.unlock_game_speed();
     }
 
     // The battle room hands over its lobby on the host's START or on the
@@ -509,6 +626,22 @@ struct NetworkPlay::NetHost {
         // never built its table keeps every type. The player slot tick never
         // tests a watcher for defeat.
         const bool verdicts = lobby.sync.record_count > 0;
+        // A recording of the game keeps the verdicts the launch applies.
+        state.unit_verdicts.clear();
+        for (int32_t index = 0; index < lobby.sync.record_count; ++index) {
+            const auto& record = lobby.sync.records[index];
+            oa::netgame::UnitDefHandshakeRecord verdict{};
+            verdict.subtype = static_cast<uint8_t>(oa::netgame::HandshakeSubtype::verdict);
+            verdict.key = record.key;
+            verdict.value = static_cast<uint32_t>(record.local) |
+                            static_cast<uint32_t>(record.remote) << 8U |
+                            static_cast<uint32_t>(static_cast<uint16_t>(record.limit)) << 16U;
+            std::array<uint8_t, oa::formats::tad::layout::unit_check_record_bytes> bytes{};
+            std::size_t written = 0;
+            if (oa::netgame::encode_record(verdict, bytes.data(), bytes.size(), &written) ==
+                oa::netgame::WireError::ok)
+                state.unit_verdicts.push_back(bytes);
+        }
         runtime.bootstrap_match(
             {.units_per_player = limit,
              .place_commanders = false,
@@ -541,6 +674,21 @@ struct NetworkPlay::NetHost {
             nm::match_binding_sim(&state.binding),
             hooks(play)
         );
+        if (const auto* profile = runtime.mod_profile())
+            nm::net_match_bind_rules(
+                state.net.get(), &profile->rules, runtime.map_places_neutral_units()
+            );
+        // The battle room's recorder session goes on in the match, its speed
+        // lock with it.
+        state.net->recorder = lobby.recorder;
+        uint8_t slowest = 0;
+        uint8_t fastest = 0;
+        const bool locked = nm::net_match_speed_range(state.net.get(), &slowest, &fastest);
+        share_speed_lock(runtime, locked, slowest, fastest);
+        fill_integrity_identity(state.net->integrity.identity, runtime, map);
+        state.binding.match->set_host_stays_watching(state.net->rules.host_stays_watching);
+        state.lag_guard = {};
+        state.vote_target = nm::no_player_id;
         nm::match_binding_install(&state.binding);
         for (uint8_t slot = 0; slot < OA_PLAYER_COUNT; ++slot) {
             const auto& player = world.game.players[slot];
@@ -552,7 +700,6 @@ struct NetworkPlay::NetHost {
             runtime.match_->configure_player_alliances(slot, allies);
         }
         runtime.match_local_player_ = local_slot;
-        runtime.offline_services_.set_viewpoint(local_slot);
         nm::net_match_loader_waiting(state.net.get());
         state.local_slot = local_slot;
         state.loading = true;
@@ -617,7 +764,20 @@ struct NetworkPlay::NetHost {
             starts.emplace_back(slot, start);
         }
         nm::net_match_enter_game(state.net.get());
-        for (const auto& [slot, start] : starts) {
+        // setup.map-scripted-units: each start position this machine places
+        // is noted, the computer player moves last on a neutral map, and a
+        // player the map lists units for takes them in place of its commander.
+        std::array<int32_t, 10> start_positions{};
+        start_positions.fill(-1);
+        for (const auto& [slot, start] : starts)
+            start_positions[slot] = start;
+        for (const auto& placed : starts) {
+            const uint8_t slot = placed.first;
+            // A position an earlier move swapped is read from the table.
+            int32_t start = start_positions[slot];
+            runtime.move_map_unit_computer_last(start_positions, start);
+            if (runtime.place_map_units(slot, start))
+                continue;
             const auto& info = world.player_info[slot];
             const oa::sim::unit_spawn::PlayerSetup setup{
                 info.side, info.color, host->metal_hundreds * 100, host->energy_hundreds * 100
@@ -645,12 +805,159 @@ struct NetworkPlay::NetHost {
             runtime.match_camera_flags_ = 0;
         }
         runtime.reset_match_sight(true);
+        start_recording(play);
         nm::net_match_end_loading(state.net.get());
+        // The recorder's start: a pause under autopause or commander warp.
+        // Under the warp the local player places its commander and says it
+        // is done (setup.commander-warp); a watcher, or a profile without
+        // the rule, keeps its start position and is done at once.
+        nm::net_match_recorder_start(state.net.get());
+        if (state.net->recorder.options.commander_warp != 0) {
+            const auto* profile = runtime.mod_profile();
+            const bool placing = profile != nullptr &&
+                                 profile->rules.setup.commander_warp.enabled &&
+                                 profile->rules.setup.commander_warp.available &&
+                                 !nm::match_slot_watcher(&world, state.local_slot);
+            if (placing)
+                state.binding.match->begin_commander_placement();
+            if (state.binding.match->commander_placement() ==
+                oa::sim::match_runtime::CommanderPlacement::none)
+                nm::net_match_warp_done(state.net.get());
+        }
         nm::net_match_set_speed(state.net.get(), runtime.preferences_.current_game_speed, false);
         state.speed_seen = runtime.preferences_.current_game_speed;
         state.loading = false;
         play.report_game_event(oa::app::netgame::extension_api::report_event::game_started);
         runtime.enter_match_view();
+    }
+
+    /// Starts the game's recording under the recorder's rules, or when --net-record names a file.
+    ///
+    /// The recording machine's players come first, then the others in slot
+    /// order; the unit checks are this machine's unit checksums and the
+    /// battle room's verdicts.
+    ///
+    /// @param play network play's state for the runtime whose match starts
+    static void start_recording(NetworkPlay& play) {
+        Runtime& runtime = play.runtime_;
+        auto& state = *play.net_;
+        state.recording = {};
+        const bool recorder =
+            state.net->rules.recorder_protocol != oa::netgame::recorder_protocol_plain;
+        const auto& forced = net_options().net_record;
+        const std::string asked = state.net->recorder.record_name;
+        if (!recorder && forced.empty())
+            return;
+        auto& world = *state.net->world;
+        const auto* profile = runtime.mod_profile();
+        const auto* host = nm::launch_host_info(&world);
+        const auto map = host != nullptr
+                             ? std::string(field_text(host->map_name, sizeof host->map_name))
+                             : std::string();
+        oa::session::demo::RecordingSetup setup{};
+        setup.max_units = static_cast<uint16_t>(world.game.units_per_player);
+        setup.map_name = map;
+        setup.recorder_text = kProgramLine;
+        setup.date_text = local_time_text("%Y-%m-%d %H:%M");
+        setup.compress = profile != nullptr && profile->recorder.ta_demo_recorder.compress_files;
+        const auto add_player = [&](uint8_t slot) {
+            const auto& player = world.game.players[slot];
+            oa::session::demo::RecordingPlayer entry{};
+            entry.player_id = player.player_id;
+            entry.name = std::string(field_text(player.name, sizeof player.name));
+            entry.info = world.player_info[slot];
+            entry.team = player.team;
+            setup.players.push_back(std::move(entry));
+        };
+        for (uint8_t slot = 0; slot < OA_PLAYER_COUNT; ++slot) {
+            const auto& player = world.game.players[slot];
+            if (player.in_use != 0 && (player.status == OA_PLAYER_STATUS_LOCAL ||
+                                       player.status == OA_PLAYER_STATUS_COMPUTER))
+                add_player(slot);
+        }
+        for (uint8_t slot = 0; slot < OA_PLAYER_COUNT; ++slot)
+            if (world.game.players[slot].in_use != 0 &&
+                world.game.players[slot].status == OA_PLAYER_STATUS_MIRRORED)
+                add_player(slot);
+        // This machine's unit checksums as its battle room sent them, then
+        // the verdicts its launch applied.
+        int32_t unit_count = 0;
+        const CheckHost host_check = check_host(runtime);
+        const mp::LobbyUnit* units =
+            mp::multiplayer_units(*host_check.assets(host_check.context), &unit_count);
+        for (int32_t index = 1; units != nullptr && index < unit_count; ++index) {
+            oa::netgame::UnitDefHandshakeRecord check{};
+            check.subtype = static_cast<uint8_t>(oa::netgame::HandshakeSubtype::def_checksum);
+            check.key = units[index].fbi_hash;
+            check.value = mp::multiplayer_unit_checksum(nullptr, units[index]);
+            std::array<uint8_t, oa::formats::tad::layout::unit_check_record_bytes> bytes{};
+            std::size_t written = 0;
+            if (oa::netgame::encode_record(check, bytes.data(), bytes.size(), &written) ==
+                oa::netgame::WireError::ok)
+                setup.unit_checks.push_back(bytes);
+        }
+        setup.unit_checks.insert(
+            setup.unit_checks.end(), state.unit_verdicts.begin(), state.unit_verdicts.end()
+        );
+        if (!forced.empty()) {
+            state.recording_path = forced;
+        } else if (!asked.empty()) {
+            // .record names the file; it takes the recorder's manual extension.
+            const std::string extension =
+                profile != nullptr ? profile->recorder.ta_demo_recorder.manual_extension : ".tad";
+            state.recording_path =
+                runtime.save_game_root() / "demos" /
+                path_from_utf8(oa::session::demo::recording_file_name("", asked, extension));
+        } else {
+            const std::string extension =
+                profile != nullptr ? profile->recorder.ta_demo_recorder.auto_extension : ".tad";
+            state.recording_path = runtime.save_game_root() / "demos" /
+                                   path_from_utf8(
+                                       oa::session::demo::recording_file_name(
+                                           local_time_text("%Y-%m-%d %H%M"), map, extension
+                                       )
+                                   );
+        }
+        oa::session::demo::recording_begin(&state.recording, std::move(setup));
+    }
+
+    /// Writes the running game's recording, if one is being made, and stops it.
+    ///
+    /// @param play network play's state
+    static void finish_recording(NetworkPlay& play) {
+        auto& state = *play.net_;
+        if (!state.recording.started)
+            return;
+        const auto written = oa::session::demo::recording_write(state.recording);
+        state.recording = {};
+        if (!written.ok()) {
+            std::cerr << "multiplayer: the recording was not written: " << written.error->message
+                      << '\n';
+            return;
+        }
+        std::error_code error;
+        std::filesystem::create_directories(state.recording_path.parent_path(), error);
+        // An automatic recording never replaces another: the second of one
+        // minute takes " (2)", and so on.
+        if (net_options().net_record.empty()) {
+            const auto stem = state.recording_path.stem().string();
+            const auto extension = state.recording_path.extension().string();
+            for (int copy = 2; std::filesystem::exists(state.recording_path, error); ++copy)
+                state.recording_path.replace_filename(
+                    path_from_utf8(stem + " (" + std::to_string(copy) + ")" + extension)
+                );
+        }
+        std::ofstream out(state.recording_path, std::ios::binary);
+        out.write(
+            reinterpret_cast<const char*>(written.bytes.data()),
+            static_cast<std::streamsize>(written.bytes.size())
+        );
+        if (!out)
+            std::cerr << "multiplayer: the recording could not be saved to "
+                      << path_to_utf8(state.recording_path) << '\n';
+        else
+            std::cout << "multiplayer: recorded the game to " << path_to_utf8(state.recording_path)
+                      << '\n';
     }
 
     static void abort(NetworkPlay& play, std::string_view reason) {
@@ -1211,6 +1518,12 @@ void NetworkPlay::net_bind_multiplayer() {
         if (!net_->connected)
             std::cerr << "multiplayer: session storage is unavailable\n";
     }
+    if (const auto* profile = runtime_.mod_profile();
+        profile != nullptr && profile->recorder.ta_demo_recorder.weapon_id_patch)
+        std::cerr << "multiplayer: the recorder's wider weapon ids are not supported; it keeps "
+                     "protocol "
+                  << static_cast<int>(oa::netgame::recorder_protocol_current) << '\n';
+    bind_profile_rules();
     if (net_->connected)
         mp::multiplayer_bind_net(nm::session_lobby_net(&net_->connection));
     if (net_options().check_host_not_found)
@@ -1222,6 +1535,38 @@ void NetworkPlay::net_bind_multiplayer() {
              return static_cast<Runtime*>(context)->translate_ui(interface_text);
          }}
     );
+    // Every battle room is told which engine this machine runs, and whether
+    // Developer Mode is on.
+    mp::multiplayer_bind_engine_banner(
+        {&runtime_, [](void* context) {
+             return mp::engine_banner_line(
+                 kEngineVersionText, static_cast<const Runtime*>(context)->developer_mode()
+             );
+         }}
+    );
+}
+
+void NetworkPlay::bind_profile_rules() {
+    const auto rules = runtime_wire_rules(runtime_);
+    if (net_ && net_->connected)
+        nm::net_connection_set_rules(&net_->connection, rules);
+    mp::multiplayer_bind_wire_rules(rules, kProgramLine);
+    const uint8_t buttons = view_rules::lobby_button_bits(runtime_.ui_rules());
+    mp::multiplayer_bind_lobby_buttons(buttons);
+    const auto* profile = runtime_.mod_profile();
+    mp::multiplayer_bind_rules(profile != nullptr ? &profile->rules : nullptr);
+    bound_profile_ = profile;
+    bound_sim_hash_ = profile != nullptr ? profile->sim_hash : oa::base::sha256::Digest{};
+    bound_lobby_buttons_ = buttons;
+}
+
+void NetworkPlay::follow_profile_rules() {
+    const auto* profile = runtime_.mod_profile();
+    const auto sim_hash = profile != nullptr ? profile->sim_hash : oa::base::sha256::Digest{};
+    if (profile == bound_profile_ && sim_hash == bound_sim_hash_ &&
+        view_rules::lobby_button_bits(runtime_.ui_rules()) == bound_lobby_buttons_)
+        return;
+    bind_profile_rules();
 }
 
 // Per frame: the load barrier while loading; in the match a pause set
@@ -1261,18 +1606,44 @@ void NetworkPlay::net_frame() {
     }
     // A speed set elsewhere: one another machine sent, or one this machine's
     // preferences put back (Cancel, UNDO, RESTORE), which stays here.
-    if (game.requested_speed != state.speed_seen && game.requested_speed >= nm::min_game_speed &&
-        game.requested_speed <= nm::max_game_speed) {
+    if (game.requested_speed != state.speed_seen &&
+        game.requested_speed >= state.net->rules.speed_min &&
+        game.requested_speed <= state.net->rules.speed_max) {
         runtime_.preferences_.current_game_speed = game.requested_speed;
         runtime_.match_timing_.actual_rate = game.requested_speed;
         runtime_.match_timing_.requested_rate = game.requested_speed;
         state.speed_seen = game.requested_speed;
     }
+    share_cameras();
     if (sim_paused)
         nm::net_match_paused_frame(state.net.get());
+    // ui.whiteboard: the marks drawn here since the last frame go to the
+    // other players' recorders, batch by batch.
+    for (auto batch = runtime_.take_whiteboard_batch(); !batch.empty();
+         batch = runtime_.take_whiteboard_batch())
+        (void)nm::net_match_send_whiteboard(state.net.get(), batch.data(), batch.size());
+    // A .record typed during the game starts its recording now.
+    if (state.net->recorder.record_name[0] != '\0' && !state.recording.started)
+        NetHost::start_recording(*this);
     nm::net_match_sync_timing(&runtime_.match_->state(), &runtime_.match_timing_);
     NetHost::watch_timeouts(*this);
     step_reporter_frame();
+}
+
+// This machine's camera goes to the match, which sends it with the
+// recorder's traffic; the cameras the other machines sent go to the view.
+void NetworkPlay::share_cameras() {
+    auto& match = *net_->net;
+    if (const auto centre = runtime_.camera_centre())
+        nm::net_match_note_camera(&match, (*centre)[0], (*centre)[1]);
+    std::array<oa::ui::hud::ReportedCamera, OA_PLAYER_COUNT> reported{};
+    for (uint8_t slot = 0; slot < OA_PLAYER_COUNT; ++slot)
+        reported[slot] = {
+            match.recorder.camera_shared[slot],
+            match.recorder.camera_x[slot],
+            match.recorder.camera_y[slot],
+        };
+    runtime_.take_reported_cameras(reported);
 }
 
 bool NetworkPlay::net_match_active() const {
@@ -1301,9 +1672,71 @@ bool NetworkPlay::net_session_open() const {
 bool NetworkPlay::net_simulation_step() {
     if (!net_ || !net_->active || net_->loading || !runtime_.match_)
         return false;
+    if (const auto gap = net_->net->rules.lag_guard_ms; gap != 0) {
+        const auto verdict = oa::base::game_loop::lag_guard_step(
+            net_->lag_guard, gap, lag_guard_clock_ms(), net_remote_silence_ms()
+        );
+        if (verdict == oa::base::game_loop::LagGuardStep::held)
+            return true;
+        if (verdict == oa::base::game_loop::LagGuardStep::closing)
+            NetHost::notice(this, "Network gap detected - simulation paused");
+        if (verdict == oa::base::game_loop::LagGuardStep::opening)
+            NetHost::notice(
+                this,
+                ("Network resumed after " +
+                 std::to_string(lag_guard_clock_ms() - net_->lag_guard.closed_at_ms) + " ms freeze")
+                    .c_str()
+            );
+    }
     nm::match_binding_tick(&net_->binding);
     runtime_.match_timing_.tick = runtime_.match_->state().game.tick;
     return true;
+}
+
+uint32_t NetworkPlay::lag_guard_clock_ms() {
+    return static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::steady_clock::now().time_since_epoch()
+    )
+                                     .count());
+}
+
+uint32_t NetworkPlay::net_remote_silence_ms() const {
+    if (!net_ || !net_->active || net_->net->world == nullptr)
+        return 0;
+    const auto& world = *net_->net->world;
+    const auto now = nm::net_connection_time(&net_->connection);
+    bool heard = false;
+    uint32_t newest = 0;
+    for (const auto& player : world.game.players) {
+        if (player.in_use == 0 || player.status != OA_PLAYER_STATUS_MIRRORED ||
+            player.reject_reason != 0)
+            continue;
+        const auto silent = now - player.last_update_time;
+        if (!heard || silent < newest)
+            newest = silent;
+        heard = true;
+    }
+    // Connection time counts 1/30 s.
+    constexpr uint32_t ms_per_second = 1000;
+    constexpr uint32_t ticks_per_second = 30;
+    return heard ? newest * ms_per_second / ticks_per_second : 0;
+}
+
+void NetworkPlay::net_pause_key(bool paused) {
+    auto& game = net_->net->world->game;
+    if (net_lag_guard_closed()) {
+        game.sim_run_flags = static_cast<uint16_t>(
+            paused ? game.sim_run_flags & ~nm::run_flag_paused
+                   : game.sim_run_flags | nm::run_flag_paused
+        );
+        return;
+    }
+    nm::net_match_set_pause(net_->net.get(), paused);
+    net_->pause_seen = (game.sim_run_flags & nm::run_flag_paused) != 0;
+}
+
+bool NetworkPlay::net_lag_guard_closed() const {
+    return net_ && net_->active && net_->net->rules.lag_guard_ms != 0 && net_->lag_guard.closed;
 }
 
 // A finished network game holds on its frame until the final
@@ -1337,6 +1770,7 @@ void NetworkPlay::net_send_player_status() {
 void NetworkPlay::net_leave() {
     if (!net_ || !net_->active)
         return;
+    NetHost::finish_recording(*this);
     auto& state = *net_;
     if (runtime_.match_)
         nm::net_connection_finish(&state.connection, &runtime_.match_->state().game);
@@ -1444,7 +1878,10 @@ int NetworkPlay::run_net_loopback_check(std::size_t ticks) {
         side->net = nm::session_lobby_net(&side->play->net_->connection);
         mp::lobby_reset(*side->lobby, *side->game);
         side->lobby->net = side->net;
-        side->lobby->local_version_major = 3;
+        side->lobby->wire_rules = runtime_wire_rules(side->play->runtime_);
+        side->lobby->local_version_major = side->lobby->wire_rules.version_major;
+        side->lobby->local_version_minor = side->lobby->wire_rules.version_minor;
+        nm::net_connection_set_rules(&side->play->net_->connection, side->lobby->wire_rules);
         std::snprintf(mp::lobby_nickname(*side->game), 17, "%s", side->nickname);
         std::snprintf(mp::lobby_game_name(*side->game), 17, "%s", "Loopback Game");
     }
@@ -2157,10 +2594,21 @@ int NetworkPlay::run_net_loopback_check(std::size_t ticks) {
         copy_placed_tick != 0 && copy_placed_tick == first_applied_tick,
         "the client's copy of the host commander did not stand on its start position from its 0x09"
     );
-    require(
-        copy_compared > ticks / 2 && copy_divergence == 0,
-        "the client's copy left the host commander's path"
-    );
+    // Under the commander start sync the record each machine sends for its
+    // commander is decoded as an ordinary one too: the copy heads straight
+    // for the commander's goal from it and leaves the owner's path until the
+    // owner's next records, so only the sync and the settled worlds are held.
+    if (host_net.rules.commander_sync_tick != 0) {
+        require(host_net.commander_syncs_sent > 0, "the host sent no commander start sync");
+        std::cout << "net loopback check: the host sent " << host_net.commander_syncs_sent
+                  << " commander start sync records; the client placed the commander from "
+                  << client_net.commander_syncs_applied << "\n";
+    } else {
+        require(
+            copy_compared > ticks / 2 && copy_divergence == 0,
+            "the client's copy left the host commander's path"
+        );
+    }
     if (watching) {
         require(
             live == 1 && NetHost::local_commander(joiner_play) == 0,
@@ -2202,6 +2650,7 @@ int NetworkPlay::run_net_loopback_check(std::size_t ticks) {
     // owns the unit, the host's is gone on both machines. CONTROL.GUI turns
     // watching off, which the joiner's copy of the host's block shows, and
     // on again, and closes, removing nobody.
+    bool whiteboard_drawn = false; // the host's whiteboard marks reached the joiner
     if (!watching) {
         auto& panel_world = *net_->net->world;
         const auto panel_host_slot = panel_world.game.local_player_index;
@@ -2259,6 +2708,53 @@ int NetworkPlay::run_net_loopback_check(std::size_t ticks) {
             "LIVEALLY%u",
             static_cast<unsigned>(panel_client_slot)
         );
+        // ui.whiteboard under the recorder: while the host's player allies
+        // the joiner's, a line and a marker the host draws reach the joiner's
+        // whiteboard (recorder message kind 0), and the marker is echoed to
+        // its log with its label (checked with the other lines below); once
+        // the alliance is broken, the next ones do not.
+        const auto draws = [](const Runtime& side) { return side.ui_rules().whiteboard.enabled; };
+        const bool whiteboard =
+            draws(runtime_) && draws(joiner) &&
+            net_->net->rules.recorder_protocol != oa::netgame::recorder_protocol_plain;
+        uint32_t whiteboard_batches = 0;
+        const auto draw_on_whiteboard = [&](uint8_t allied) {
+            const auto& board = joiner.match_whiteboard();
+            const auto lines_before = board.lines.size();
+            const auto markers_before = board.markers.size();
+            const int32_t x = allied != 0 ? 320 : 640;
+            const int32_t y = 288;
+            const auto color = oa::ui::hud::player_dot_color(panel_world, panel_host_slot);
+            const std::string label = allied != 0 ? "allied mark" : "unallied mark";
+            auto& drawn = runtime_.match_whiteboard();
+            oa::ui::hud::whiteboard_draw_line(drawn, x, y, x + 64, y + 32, color);
+            oa::ui::hud::whiteboard_place_marker(drawn, x, y, color, label);
+            net_frame();
+            run_both(4);
+            if (allied == 0) {
+                require(
+                    board.lines.size() == lines_before && board.markers.size() == markers_before,
+                    "the joiner showed whiteboard marks from a player not allied with it"
+                );
+                return;
+            }
+            require(
+                board.lines.size() == lines_before + 1 &&
+                    board.markers.size() == markers_before + 1,
+                "the host's whiteboard marks did not reach the joiner"
+            );
+            const auto& line = board.lines.back();
+            const auto& marker = board.markers.back();
+            require(
+                line.x1 == x && line.y1 == y && line.x2 == x + 64 && line.y2 == y + 32 &&
+                    line.color == color && marker.x == x && marker.y == y &&
+                    marker.color == color && board.received_marker && board.received_x == x &&
+                    board.received_y == y,
+                "the joiner's whiteboard holds other marks than the host drew"
+            );
+            whiteboard_batches = joiner_play.net_->net->whiteboard_batches;
+            whiteboard_drawn = true;
+        };
         for (const uint8_t allied : {uint8_t{1}, uint8_t{0}}) {
             const auto result = oa::ui::hud::allies_panel_click(
                 panel_world, ally_control, no_controls, events, panels, nullptr, nullptr
@@ -2284,7 +2780,13 @@ int NetworkPlay::run_net_loopback_check(std::size_t ticks) {
                 ) == (allied != 0),
                 "the joiner's simulation did not follow the host's alliance"
             );
+            if (whiteboard)
+                draw_on_whiteboard(allied);
         }
+        if (whiteboard)
+            std::cout << "net loopback check: the host's whiteboard marks reached the allied "
+                         "joiner in "
+                      << whiteboard_batches << " batches and stayed away once unallied\n";
 
         // SHARE.GUI's view of the host's players.
         std::array<oa::UnitEconomy*, OA_PLAYER_COUNT> economies{};
@@ -2544,6 +3046,11 @@ int NetworkPlay::run_net_loopback_check(std::size_t ticks) {
         watching || (shown(client_lines, "<hoster>  allied with joiner") &&
                      shown(client_lines, "<hoster>  broke alliance with joiner")),
         "the lines ALLIES.GUI said did not reach the client"
+    );
+    require(
+        !whiteboard_drawn || (shown(client_lines, "*hoster: allied mark") &&
+                              !shown(client_lines, "*hoster: unallied mark")),
+        "the joiner's log did not echo only the allied whiteboard marker"
     );
     require(
         shown(client_lines, "<hoster> glhf") && shown(host_chat, "<hoster> glhf"),

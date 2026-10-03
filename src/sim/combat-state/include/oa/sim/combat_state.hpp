@@ -186,15 +186,16 @@ turn_toward_angle(uint16_t current, uint16_t desired, uint16_t rate) noexcept {
 /// Computes the random aim spread of a shot from a unit's health and experience.
 ///
 /// The width is `accuracy + 0x800 - health * 0x800 / maximum_health`, divided by
-/// `veteran / 12` when that quotient exceeds 1.
+/// the veteran divisor when it exceeds 1.
 ///
 /// @param accuracy TDF accuracy of the weapon, angle units
 /// @param health unit's current health
 /// @param maximum_health unit type's maximum health; zero gives no spread
-/// @param veteran unit's veteran level (Unit.veteran_level)
+/// @param veteran_divisor what the unit's experience divides the width by: its kills
+///        / 12 in 3.1c (sim::unit_health::veteran_accuracy_divisor)
 /// @return spread width in angle units (65536 per turn), wrapped to 16 bits
 [[nodiscard]] inline uint16_t accuracy_spread(
-    int16_t accuracy, int16_t health, uint32_t maximum_health, uint16_t veteran
+    int16_t accuracy, int16_t health, uint32_t maximum_health, int32_t veteran_divisor
 ) noexcept {
     if (maximum_health == 0)
         return 0;
@@ -202,9 +203,8 @@ turn_toward_angle(uint16_t current, uint16_t desired, uint16_t rate) noexcept {
     auto spread = static_cast<uint16_t>(
         static_cast<int32_t>(accuracy) - static_cast<int16_t>(scaled) + 0x800
     );
-    const auto group = static_cast<uint32_t>(veteran) / 0xcu;
-    if (group > 1)
-        spread = static_cast<uint16_t>(spread / group);
+    if (veteran_divisor > 1)
+        spread = static_cast<uint16_t>(static_cast<int32_t>(spread) / veteran_divisor);
     return spread;
 }
 

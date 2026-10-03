@@ -263,8 +263,11 @@ uint32_t session_update_game_info(Session* s, const char* name) noexcept {
     if (!connected(s))
         return result::no_connection;
     copy_bounded(s->session_name, name, session_name_bytes - 1);
-    const Engine* e = s->backend.engine;
-    return engine_set_session_desc(s->backend.engine, s->desc, name, e->password);
+    Engine* e = s->backend.engine;
+    e->publish_without_password = s->publish_without_password;
+    return engine_set_session_desc(
+        e, s->desc, name, s->publish_without_password ? "" : e->password
+    );
 }
 
 bool session_password_required(const Session* s) noexcept {

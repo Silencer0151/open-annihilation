@@ -7,6 +7,7 @@
 // so a control is pressed where it is drawn.
 #pragma once
 
+#include "oa/data/mod_profile/value.hpp"
 #include "oa/ui/engine_settings/dialog.hpp"
 
 #include <array>
@@ -19,6 +20,7 @@
 
 namespace oa::ui::engine_settings::geometry {
 
+using oa::data::mod_profile::Value;
 using oa::ui::frontend_renderer::SourceRect;
 
 /// The width of the dialog's raised edge.
@@ -50,8 +52,11 @@ inline constexpr int32_t content_right = dialog_width - edge - padding;
 /// The open section's width.
 inline constexpr int32_t content_width = content_right - content_left;
 
-/// The header's OA mark: an outlined square with the letters inside.
-inline constexpr SourceRect header_mark{padding, 7, 13, 13};
+/// The header's Open Annihilation icon, in the header's middle rows; or,
+/// without the icon, the OA mark's outlined square in its middle.
+inline constexpr SourceRect header_mark{padding, 4, 20, 20};
+/// The side of the OA mark's outlined square, which stands in for the icon.
+inline constexpr int32_t header_mark_square = 13;
 /// The space between the header's mark and the title, and between the
 /// title's two words.
 inline constexpr int32_t header_gap = 6;
@@ -187,6 +192,134 @@ inline constexpr int32_t wheel_step = 2 * hint_line_height;
 /// so that what showed at one edge still shows at the other.
 inline constexpr int32_t page_step = view.height - 3 * hint_line_height;
 
+/// Where a section's rows scroll: the view, the scroll bar's well, the
+/// margin a press holds the bar in, and the rows Page Up and Page Down move.
+struct ScrollArea {
+    SourceRect view{};   ///< what the rows are seen through
+    SourceRect well{};   ///< the scroll bar's well, as high as the view
+    SourceRect hit{};    ///< where a press holds the scroll bar
+    int32_t page_step{}; ///< the rows Page Up and Page Down scroll
+};
+
+/// Where a section's rows scroll; Developer's list scrolls in
+/// developer_scroll.
+inline constexpr ScrollArea section_scroll{view, scroll_well, scroll_hit, page_step};
+
+// Developer: its rows under the heading, Enable Developer Mode and Show
+// performance statistics, placed closer than a section's so that the list
+// under them has room; Developer Mode's list of the standard hacks in a view
+// of its own; and a footer of its own with Show Active Only and Restore
+// profile values. Only the list scrolls.
+
+/// The rows between the line of each of Developer's rows and its label, and
+/// under its last part: half a section's.
+inline constexpr int32_t developer_row_padding = row_padding / 2;
+/// The height of each of Developer's rows, from its line to the next row's:
+/// its label line and one hint line.
+inline constexpr int32_t developer_row_height = 1 + developer_row_padding + label_line_height +
+                                                hint_gap + hint_line_height + developer_row_padding;
+/// The row of the line over the list, under Developer's rows.
+inline constexpr int32_t developer_list_rule =
+    first_row_top + developer_row_count * developer_row_height;
+/// The rows between the footer's line, its two rows and the dialog's footer.
+inline constexpr int32_t developer_footer_gap = 4;
+/// The row of the line over the footer under Developer's list.
+inline constexpr int32_t developer_footer_rule = footer_rule_row - 2 - button_height -
+                                                 developer_footer_gap - label_line_height -
+                                                 developer_footer_gap;
+/// The view the list scrolls in, between the two lines.
+inline constexpr SourceRect developer_view{
+    content_left,
+    developer_list_rule + 1,
+    content_width,
+    developer_footer_rule - developer_list_rule - 1
+};
+/// What the list is drawn clipped to: the view, wider on each side by a
+/// focus outline.
+inline constexpr SourceRect developer_view_clip{
+    developer_view.x - focus_inset,
+    developer_view.y,
+    developer_view.width + 2 * focus_inset,
+    developer_view.height
+};
+/// Show Active Only's label, in the footer.
+inline constexpr SourceRect active_only_label{
+    content_left,
+    developer_footer_rule + developer_footer_gap,
+    content_width - switch_width - label_gap,
+    label_line_height
+};
+/// Show Active Only's switch, at the footer's right.
+inline constexpr SourceRect active_only_switch{
+    content_right - switch_width,
+    developer_footer_rule + developer_footer_gap,
+    switch_width,
+    label_line_height
+};
+/// Restore profile values, under Show Active Only.
+inline constexpr SourceRect restore_profile_button{
+    content_left, active_only_label.y + label_line_height + developer_footer_gap, 142, button_height
+};
+/// Where Developer's list scrolls.
+inline constexpr ScrollArea developer_scroll{
+    developer_view,
+    {scroll_well.x, developer_view.y, scroll_well.width, developer_view.height},
+    {scroll_hit.x, developer_view.y, scroll_hit.width, developer_view.height},
+    developer_view.height - 3 * hint_line_height,
+};
+
+/// An area's or a hack's header in the list: its height.
+inline constexpr int32_t list_header_height = 20;
+/// A line of text under a hack (its summary, its scope, a note): its height.
+inline constexpr int32_t list_text_height = hint_line_height;
+/// A parameter's switch row: its height.
+inline constexpr int32_t list_toggle_height = 20;
+/// A parameter's slider row, its name and value over the slider: its height.
+inline constexpr int32_t list_slider_height = 2 + hint_line_height + 2 + slider_line_height + 2;
+/// The line naming a set or a list over its items: its height.
+inline constexpr int32_t list_heading_height = hint_line_height + 2;
+/// The rows over a hack's first line of text, and under its last row.
+inline constexpr int32_t list_body_gap = 2;
+/// The column of an area's arrow, from content_left.
+inline constexpr int32_t area_arrow_offset = 1;
+/// The column of an area's name, from content_left.
+inline constexpr int32_t area_text_offset = 10;
+/// The column of a hack's arrow, from content_left.
+inline constexpr int32_t hack_arrow_offset = 9;
+/// The column of a hack's id and of what is under it, from content_left.
+inline constexpr int32_t hack_text_offset = 18;
+/// The column of a set's values and a list's items, from content_left.
+inline constexpr int32_t item_text_offset = 28;
+/// An arrow's side: closed it points right, open it points down.
+inline constexpr int32_t arrow_side = 5;
+/// The columns an area's count of hacks that are on keeps, at the row's right.
+inline constexpr int32_t area_count_width = 80;
+/// The most characters a line of a hack's summary holds, broken between
+/// words: what fits the columns under a hack in the small font.
+inline constexpr std::size_t summary_line_characters = 45;
+
+/// A drop-down's field: its width. It stands on its own line under the
+/// hint, as a slider's track does.
+inline constexpr int32_t choice_width = 200;
+/// A drop-down field's height.
+inline constexpr int32_t choice_line_height = label_line_height;
+/// The columns between a drop-down field's left edge and its text.
+inline constexpr int32_t choice_text_inset = 6;
+/// The columns a drop-down field keeps at its right for its arrow.
+inline constexpr int32_t choice_arrow_room = 16;
+/// The drop-down's arrow's width.
+inline constexpr int32_t choice_arrow_width = 7;
+/// The drop-down's arrow's height.
+inline constexpr int32_t choice_arrow_height = 4;
+/// An open drop-down list's item's height.
+inline constexpr int32_t choice_item_height = 16;
+/// The most items an open drop-down list shows at once; a longer list
+/// scrolls.
+inline constexpr int32_t most_shown_choices = 8;
+/// The columns between an open list item's left edge and its text, right of
+/// the marker the chosen item shows.
+inline constexpr int32_t choice_item_text_inset = 12;
+
 /// What a slider offers: its stops' count.
 struct Slider {
     int32_t stops{}; ///< 2 or more
@@ -216,45 +349,147 @@ struct Row {
     SourceRect value{}; ///< a slider's value; empty for the others
 };
 
+/// The text the dialog shows for one of its own words: the interface
+/// catalogue's translation into the language shown
+/// (oa/data/languages/interface_text.hpp), or the word itself.
+///
+/// @param english the word, in English as the source writes it
+/// @return the text to show
+[[nodiscard]] std::string_view shown_text(std::string_view english);
+
 /// The open section's rows, placed.
 struct Rows {
     std::vector<Row> rows; ///< one for each setting the section shows
     int32_t bottom{};      ///< the row of the line under the last row
 };
 
+/// What a row of Developer's list is.
+enum class ListRowKind : uint8_t {
+    area,    ///< an area's header: its title and how many of its hacks are on
+    hack,    ///< a hack's header: its title and its switch
+    id,      ///< the first line under an open hack: its id, for reference
+    text,    ///< a line under a hack: its summary or a note
+    scope,   ///< "Applies at next match", under a rule (sim-scope) hack
+    toggle,  ///< a parameter's switch, or one value of a set's
+    slider,  ///< a parameter's slider: a number, a choice, a list's length or one of its items
+    heading, ///< the name of a set or a list, over its items
+};
+
+/// ListRow::item for a row that changes its whole parameter.
+inline constexpr int32_t whole_parameter = -1;
+/// ListRow::item for a list's length.
+inline constexpr int32_t list_length = -2;
+
+/// One row of Developer's list, placed.
+struct ListRow {
+    ListRowKind kind{};
+    int32_t control{no_control};   ///< its control; no_control for a line or a heading
+    std::size_t area{};            ///< its area's place among developer_areas
+    std::size_t hack{};            ///< its hack's place among the standard hacks; an area's first
+    int32_t parameter{-1};         ///< its parameter's index within its hack; -1 for none
+    int32_t item{whole_parameter}; ///< a list's item or a set's value, or list_length
+    int32_t top{};                 ///< its first row
+    int32_t height{};              ///< its rows
+    std::string text;              ///< its title, id, name or line
+    SourceRect label{};            ///< where its text is drawn
+    /// Its switch or slider track; a header's whole row, which a press opens
+    /// or closes, its switch apart.
+    SourceRect control_area{};
+    SourceRect toggle{}; ///< a hack's switch, inside its header
+    SourceRect value{};  ///< a slider's value, or an area's count of hacks that are on
+    SourceRect arrow{};  ///< a header's open or closed mark
+    std::string shown;   ///< a slider's value, or an area's count, as the row shows it
+    bool open{};         ///< a header's part is open
+    bool on{};           ///< a hack's or a switch's state
+    int32_t stops{};     ///< a slider's stops, 1 or more
+    int32_t stop{};      ///< the stop a slider's knob is on
+    /// It shows but takes no change: Developer Mode is off, or the row's hack
+    /// is off or not implemented. A header still opens and closes.
+    bool locked{};
+};
+
+/// Developer's list, placed.
+struct List {
+    std::vector<ListRow> rows; ///< the rows the open areas and hacks show, top to bottom
+    int32_t bottom{};          ///< the row under the last row
+};
+
 /// The open section's rows placed at its scroll offset, and the offset's range.
 struct ScrolledRows {
-    Rows rows;                ///< placed `scroll` rows higher than at the section's top
-    int32_t scroll{};         ///< the offset, 0 to `limit`
-    int32_t limit{};          ///< the most the section scrolls; 0 when its rows fit the view
+    /// Placed `scroll` rows higher than at the section's top; Developer's
+    /// stay at its top, over its list.
+    Rows rows;
+    List list;                       ///< Developer's list, placed `scroll` rows higher
+    ScrollArea area{section_scroll}; ///< where they scroll
+    int32_t scroll{};                ///< the offset, 0 to `limit`
+    int32_t limit{};                 ///< the most the section scrolls; 0 when its rows fit the view
     int32_t content_height{}; ///< rows from the first row's line to the end gap under the last
 };
 
 /// Returns how a setting is changed.
 ///
 /// @param setting the setting
-/// @return true for a slider, false for a switch or the level strip
+/// @return true for a slider, false for a switch, a level strip or a drop-down
 [[nodiscard]] bool is_slider(Setting setting) noexcept;
 
 /// Returns what a slider setting offers.
 ///
 /// @param setting a slider setting
+/// @param highest_offered_unit the unit limit slider's highest value, in
+///     units per player
+/// @param offered_mods the mod folders the mod slider offers besides none
 /// @return its stops
-[[nodiscard]] Slider slider_of(Setting setting) noexcept;
+[[nodiscard]] Slider slider_of(
+    Setting setting, uint16_t highest_offered_unit = highest_unit_limit, size_t offered_mods = 0
+) noexcept;
+
+/// Returns the stops a slider setting offers for the settings shown: a
+/// snap radius runs from 0 to the mod's most (at least two stops), the
+/// others as slider_of gives them.
+///
+/// @param settings the settings shown
+/// @param setting a slider setting
+/// @param highest_offered_unit the unit limit slider's highest value, in
+///     units per player
+/// @param offered_mods the mod folders the mod slider offers besides none
+/// @return the stops, 2 or more
+[[nodiscard]] int32_t stops_of(
+    const EngineSettings& settings,
+    Setting setting,
+    uint16_t highest_offered_unit = highest_unit_limit,
+    size_t offered_mods = 0
+) noexcept;
 
 /// Returns the stop nearest a setting's value.
 ///
 /// @param settings the settings
 /// @param setting a slider setting
+/// @param highest_offered_unit the unit limit slider's highest value, in
+///     units per player
+/// @param offered_mods the mod folders the mod slider offers besides none
 /// @return 0 for the lowest value to stops - 1 for the highest
-[[nodiscard]] int32_t stop_of(const EngineSettings& settings, Setting setting) noexcept;
+[[nodiscard]] int32_t stop_of(
+    const EngineSettings& settings,
+    Setting setting,
+    uint16_t highest_offered_unit = highest_unit_limit,
+    size_t offered_mods = 0
+) noexcept;
 
 /// Sets a slider setting to a stop's value.
 ///
 /// @param[in,out] settings the settings
 /// @param setting a slider setting
 /// @param stop the stop, clamped to the slider's
-void set_stop(EngineSettings& settings, Setting setting, int32_t stop) noexcept;
+/// @param highest_offered_unit the unit limit slider's highest value, in
+///     units per player
+/// @param offered_mods the mod folders the mod slider offers besides none
+void set_stop(
+    EngineSettings& settings,
+    Setting setting,
+    int32_t stop,
+    uint16_t highest_offered_unit = highest_unit_limit,
+    size_t offered_mods = 0
+) noexcept;
 
 /// Tells whether a setting is a strip of levels: Enhanced anti-aliasing and
 /// Hardware acceleration.
@@ -290,10 +525,77 @@ void set_strip_level(EngineSettings& settings, Setting setting, std::size_t leve
 /// @return "Off", "2x", "Basic" and so on; empty past the strip's last
 [[nodiscard]] std::string_view strip_caption(Setting setting, std::size_t level) noexcept;
 
+/// Tells whether a setting is a drop-down: a field that shows the choice
+/// and opens a list of the choices.
+///
+/// @param setting the setting
+/// @return true for Language
+[[nodiscard]] bool is_choice(Setting setting) noexcept;
+
+/// Returns the languages the Language drop-down offers after System
+/// default: the known languages this build draws, in the registry's order.
+///
+/// @return the languages
+[[nodiscard]] std::span<const oa::data::languages::Language* const> offered_languages();
+
+/// Returns how many choices a drop-down offers.
+///
+/// @param setting a drop-down setting
+/// @return 1 and the offered languages for Language; 0 for any other setting
+[[nodiscard]] std::size_t choice_count(Setting setting);
+
+/// Returns a drop-down's choice as the drop-down names it: Language's first
+/// is System default with the operating system's language named in itself,
+/// "System default (Deutsch)", and the others each language named in itself.
+///
+/// @param setting a drop-down setting
+/// @param index the choice, from 0
+/// @param system the language the operating system chooses; null for English
+/// @return the text, in UTF-8; empty past the last choice
+[[nodiscard]] std::string
+choice_text(Setting setting, std::size_t index, const oa::data::languages::Language* system);
+
+/// Returns the choice a drop-down shows.
+///
+/// @param settings the settings
+/// @param setting a drop-down setting
+/// @return the choice, from 0; 0, System default, for a language not offered
+[[nodiscard]] std::size_t choice_index(const EngineSettings& settings, Setting setting);
+
+/// Sets a drop-down setting to a choice.
+///
+/// @param[in,out] settings the settings
+/// @param setting a drop-down setting; any other is left alone
+/// @param index the choice, clamped to the drop-down's
+void set_choice(EngineSettings& settings, Setting setting, std::size_t index);
+
+/// Returns where a drop-down's open list lies: under its field, its left
+/// edge with the field's, as wide as the field and as tall as the items it
+/// shows, at most most_shown_choices, with a one-pixel border; over the
+/// field when it would reach below the footer's line.
+///
+/// @param field the drop-down's field
+/// @param choices the choices it offers
+/// @return the list's rectangle
+[[nodiscard]] SourceRect choice_list(const SourceRect& field, std::size_t choices) noexcept;
+
+/// Returns how many items an open list shows at once.
+///
+/// @param choices the choices it offers
+/// @return at most most_shown_choices
+[[nodiscard]] int32_t shown_choices(std::size_t choices) noexcept;
+
+/// Returns one shown item's rectangle in an open list.
+///
+/// @param list the list (choice_list)
+/// @param shown the item's place among those shown, from 0
+/// @return the item's rectangle, inside the list's border
+[[nodiscard]] SourceRect choice_item(const SourceRect& list, int32_t shown) noexcept;
+
 /// Tells whether a setting is an Off/On switch.
 ///
 /// @param setting the setting
-/// @return true for a switch, false for a slider or a level strip
+/// @return true for a switch, false for a slider, a level strip or a drop-down
 [[nodiscard]] bool is_switch(Setting setting) noexcept;
 
 /// Tells whether a switch setting is On. Every switch is read and set
@@ -333,7 +635,8 @@ void set_switch(EngineSettings& settings, Setting setting, bool on) noexcept;
 /// @return its settings, top to bottom
 [[nodiscard]] std::span<const Setting> section_settings(Page page, const SectionHooks* section);
 
-/// Places the rows of a section.
+/// Places the rows of a section; Developer's own, over its list, with
+/// developer_row_padding.
 ///
 /// A locked switch keeps its switch, faded, with its lock left of it, so
 /// that its value shows; a locked switch or strip whose hint lines are its
@@ -369,7 +672,16 @@ void scroll_rows(Rows& rows, int32_t by) noexcept;
 /// @return the rows its content is taller than the view; 0 when it fits
 [[nodiscard]] int32_t scroll_limit(int32_t content_height) noexcept;
 
-/// Places the open section's rows once, at its offset clamped to its limit.
+/// Returns the locks the open section's rows show: the dialog's, and Text
+/// size locked Lock::needs_modern_fonts while the dialog shows Use modern
+/// fonts for game text Off.
+///
+/// @param dialog the dialog
+/// @return the locks
+[[nodiscard]] Locks shown_locks(const Dialog& dialog) noexcept;
+
+/// Places the open section's rows once, at its offset clamped to its limit,
+/// with the locks shown_locks gives.
 ///
 /// @param dialog the dialog
 /// @return its rows, offset, limit and content height
@@ -383,6 +695,69 @@ void scroll_rows(Rows& rows, int32_t by) noexcept;
 /// @return the offset, 0 to the section's limit; the open one for no such row
 [[nodiscard]] int32_t scroll_showing(const ScrolledRows& open, std::size_t index) noexcept;
 
+/// Tells whether a dialog of the engine's settings shows Developer's list
+/// and its footer under Developer's rows: Developer is open, and no check's
+/// own section takes its place (SectionHooks::settings).
+///
+/// @param dialog the dialog
+/// @return true while it shows the list
+[[nodiscard]] bool developer_page(const Dialog& dialog) noexcept;
+
+/// Places Developer's list: the areas, and under each open one its
+/// hacks, and under each open hack its summary, its scope, its notes and its
+/// parameters, as Show Active Only filters them.
+///
+/// @param dialog the dialog
+/// @param scroll the rows the list is scrolled by from its top; not clamped
+/// @return the list
+[[nodiscard]] List place_list(const Dialog& dialog, int32_t scroll = 0);
+
+/// Moves a placed list up, every part of every row with it.
+///
+/// @param[in,out] list the list
+/// @param by the rows it moves up; negative moves it down
+void scroll_list(List& list, int32_t by) noexcept;
+
+/// Returns the offset nearest the open one that shows one of the list's
+/// rows whole.
+///
+/// @param open Developer's list (open_rows)
+/// @param control the row's control
+/// @return the offset, 0 to the list's limit; the open one for no such row
+[[nodiscard]] int32_t list_scroll_showing(const ScrolledRows& open, int32_t control) noexcept;
+
+/// Returns the row of a list's control.
+///
+/// @param list the list
+/// @param control the control
+/// @return the row; null when no row of the list is the control
+[[nodiscard]] const ListRow* list_row(const List& list, int32_t control) noexcept;
+
+/// Returns the lines a summary is broken into: at most
+/// summary_line_characters each, broken between words, a word longer than
+/// a line after one of its slashes or else at the line's end, with each
+/// character the game's fonts lack written as ASCII.
+///
+/// @param summary the summary, UTF-8
+/// @return the lines, in order
+[[nodiscard]] std::vector<std::string> summary_lines(std::string_view summary);
+
+/// Returns a text in the characters the game's fonts hold: a degree sign,
+/// a middle dot, a multiplication sign and a plus-minus sign as " degrees",
+/// "*", "x" and "+/-", any other character outside printable ASCII as "?".
+///
+/// @param text the text, UTF-8
+/// @return the text in printable ASCII
+[[nodiscard]] std::string ascii_text(std::string_view text);
+
+/// Returns a value as a list's slider shows it: a number with its unit,
+/// "none", a word of an enumeration or a string.
+///
+/// @param value the value
+/// @param unit what a number counts, such as "ticks"; empty for none
+/// @return the text
+[[nodiscard]] std::string list_value_text(const Value& value, std::string_view unit);
+
 /// Returns the scroll bar's thumb: inside the well's border, as tall as the
 /// view's share of the content and never under least_thumb_height, and as
 /// far down its travel as the offset is down the limit, to the nearest row.
@@ -394,6 +769,18 @@ void scroll_rows(Rows& rows, int32_t by) noexcept;
 [[nodiscard]] SourceRect
 scroll_thumb(int32_t scroll, int32_t limit, int32_t content_height) noexcept;
 
+/// Returns the scroll bar's thumb in a scroll area, as scroll_thumb places
+/// it in a section's.
+///
+/// @param area where the section scrolls
+/// @param scroll the offset, 0 to `limit`
+/// @param limit the section's limit, above 0
+/// @param content_height the section's content height
+/// @return the thumb
+[[nodiscard]] SourceRect scroll_thumb(
+    const ScrollArea& area, int32_t scroll, int32_t limit, int32_t content_height
+) noexcept;
+
 /// Returns the offset that puts the scroll bar's thumb's top at a row, to
 /// the nearest row.
 ///
@@ -402,6 +789,18 @@ scroll_thumb(int32_t scroll, int32_t limit, int32_t content_height) noexcept;
 /// @param content_height the section's content height
 /// @return the offset, 0 to `limit`
 [[nodiscard]] int32_t scroll_at(int32_t thumb_top, int32_t limit, int32_t content_height) noexcept;
+
+/// Returns the offset that puts the scroll bar's thumb's top at a row in a
+/// scroll area, as scroll_at does in a section's.
+///
+/// @param area where the section scrolls
+/// @param thumb_top the thumb's top row, clamped to its travel
+/// @param limit the section's limit, above 0
+/// @param content_height the section's content height
+/// @return the offset, 0 to `limit`
+[[nodiscard]] int32_t scroll_at(
+    const ScrollArea& area, int32_t thumb_top, int32_t limit, int32_t content_height
+) noexcept;
 
 /// Returns a section's entry in the list.
 ///
@@ -413,6 +812,24 @@ scroll_thumb(int32_t scroll, int32_t limit, int32_t content_height) noexcept;
 ///
 /// @return its rectangle, one row high
 [[nodiscard]] SourceRect list_divider() noexcept;
+
+/// The caption of Restore profile values.
+inline constexpr std::string_view restore_profile_text = "RESTORE PROFILE VALUES";
+/// What a rule (sim-scope) hack says under its summary.
+inline constexpr std::string_view next_match_text = "Applies at next match";
+/// What a hack that is off says under its summary.
+inline constexpr std::string_view hack_off_text = "Off: it plays as 3.1c.";
+/// What a hack this engine does not implement says under its summary.
+inline constexpr std::string_view not_implemented_text = "Not implemented by this engine.";
+/// The name of a list's length.
+inline constexpr std::string_view items_text = "Items";
+
+/// Returns Show Active Only's label.
+///
+/// @param active the hacks that are on (active_hack_count)
+/// @param total every standard hack
+/// @return "Show Active Only (X/Y)"
+[[nodiscard]] std::string active_only_text(std::size_t active, std::size_t total);
 
 /// Returns a footer button's rectangle.
 ///
@@ -504,8 +921,12 @@ status_line(const AccelerationStatus& acceleration, std::size_t line) noexcept;
 ///
 /// @param setting a slider setting
 /// @param settings the settings shown
+/// @param mod_names the names of the offered mod folders, which the Mod
+///     setting shows
 /// @return the text
-[[nodiscard]] std::string value_text(Setting setting, const EngineSettings& settings);
+[[nodiscard]] std::string value_text(
+    Setting setting, const EngineSettings& settings, std::span<const std::string> mod_names = {}
+);
 
 /// Returns a lock's text.
 ///

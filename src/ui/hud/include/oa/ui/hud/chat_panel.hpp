@@ -78,6 +78,10 @@ enum class ChatClick : uint8_t {
     focus_text,      // focus TALK
 };
 
+/// The bytes of typed text send_chat_line reads, its terminating zero among
+/// them.
+inline constexpr std::size_t typed_text_bytes = 0x100;
+
 /// Sends typed text as TALK's Enter does.
 ///
 /// After leading spaces a '+' line first runs as a command, whose returned
@@ -127,7 +131,8 @@ ChatClick chat_panel_click(
 /// Drawing services for the message log.
 struct MessageLogSink {
     void* user{};
-    /// The step between lines: COMIX's header height (14).
+    /// The step between lines: COMIX's header height (14), or that height
+    /// at the size the log's text is drawn at.
     int32_t (*font_height)(void* user){};
     /// The label colour of the next line's text. It shows only when no GUI
     /// font is loaded: the GUI font's glyphs carry their own colours.
@@ -138,8 +143,16 @@ struct MessageLogSink {
     ){};
     /// A line's text with its pen at (x, y), written as the GUI writes gadget
     /// text: in the GUI's font (hattfont12.gaf), or as a COMIX label in the
-    /// set colour when the GUI has no font.
+    /// set colour when the GUI has no font; a line of several rows writes
+    /// them a font height apart.
     void (*text)(void* user, const char* text, int32_t x, int32_t y){};
+    /// The rows a line's text takes when it is written with its pen at
+    /// column x, 1 or more; null writes every line in one row.
+    int32_t (*rows)(void* user, const char* text, int32_t x){};
+    /// The most rows the lines shown may take: while they take more, the
+    /// oldest of them is left out, though the newest always shows. 0 for no
+    /// limit.
+    int32_t most_rows{};
 };
 
 /// Left edge of the message log.
@@ -150,7 +163,10 @@ inline constexpr uint8_t kMessageHighlight = 0x20;
 
 /// Draws the newest message lines that fit the configured line count and pass the display filter.
 ///
-/// Lines run down from kMessageLogTop, one font height apart, oldest first.
+/// Lines run down from kMessageLogTop, one font height apart, oldest first;
+/// a line the sink writes in several rows (MessageLogSink::rows) takes a
+/// font height for each, and while the lines take more rows than
+/// MessageLogSink::most_rows the oldest are left out.
 /// Filter 2 hides kind 8; filter 3 shows kinds 1, 4 and 8, or every kind when
 /// the show-all option is on. Highlighted lines set UI colour 10, the rest
 /// UI colour 15, which the text shows only without a GUI font. A line with a sender starts with that player's logo, 0.8 of a

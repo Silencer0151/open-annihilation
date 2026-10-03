@@ -7,6 +7,7 @@
 // running game; what they tell the other players' machines goes through the
 // extension's TeamPanelHost.
 #include "oa/app/runtime.hpp"
+#include "oa/data/defs/layout.hpp"
 #include "oa/data/defs/categories.hpp"
 #include "oa/sim/match_runtime.hpp"
 #include "oa/sim/messages.hpp"
@@ -18,6 +19,9 @@
 #include "oa/ui/hud/ingame_menu.hpp"
 #include "oa/ui/hud/order_panel.hpp"
 #include "oa/ui/hud/share_panel.hpp"
+#include "oa/app/view_rules.hpp"
+#include "oa/app/hook_call.hpp"
+#include "oa/sim/speed.hpp"
 #include "oa/ui/hud/team_panels.hpp"
 
 #include <algorithm>
@@ -25,6 +29,7 @@
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <optional>
 #include <string>
@@ -113,6 +118,35 @@ void place_from_edges(oa::ui::gui_layout::Layout& layout) {
         gadget.common.y = static_cast<int16_t>(gadget.common.y + dy);
     }
 }
+
+/// The share panel's added switches and the command each gives.
+struct ShareSwitch {
+    const char* gadget{};
+    const char* command{};
+};
+
+constexpr ShareSwitch kShareSwitches[] = {
+    {"EN_SHAREMETAL", "+sharemetal"},
+    {"EN_SHAREENERGY", "+shareenergy"},
+    {"EN_SHOOTALL", "+shootall"},
+    {"EN_NOSHAKE", "+noshake"},
+};
+
+/// The share panel's added threshold sliders, their readouts and commands.
+struct ShareThreshold {
+    const char* slider{};
+    const char* readout{};
+    const char* command{};
+    bool metal{};
+};
+
+/// The share panel's added game speed slider, and its stops past 0.
+constexpr std::string_view kShareSpeedSlider = "SRL_GAMESPEED";
+constexpr int16_t kShareSpeedStops = 20;
+constexpr ShareThreshold kShareThresholds[] = {
+    {"SRL_SETSHRMETAL", "SM#", "+setsharemetal %d", true},
+    {"SRL_SETSHAREGRY", "SE#", "+setshareenergy %d", false},
+};
 
 /// The per-player state SHARE.GUI works over, gathered from a World.
 struct ShareView {
@@ -205,7 +239,7 @@ void Runtime::forget_team_panel() {
 }
 
 bool Runtime::load_team_panel(const char* file) {
-    if (!match_ || !load_match_hud_layout(std::string("guis/") + file))
+    if (!match_ || !load_match_hud_layout(oa::data::defs::gui_path(file)))
         return false;
     place_from_edges(match_hud_->layout);
     // The loader gives the focus from where the panel is placed.
@@ -357,6 +391,40 @@ void Runtime::share_bar_moved(std::size_t gadget) {
         return;
     const auto* entry = renderer::find_layout_bar(*scrolls, gadget);
     const auto& name = match_hud_->layout.gadgets[gadget].common.name;
+    // The profile's game speed slider asks for its speed, as the speed keys
+    // do, when it moved off the speed asked for.
+    if (entry != nullptr && name == kShareSpeedSlider && match_) {
+        auto& world = match_->state();
+        const auto speed = static_cast<uint16_t>(entry->bar.knob);
+        if (speed == world.game.requested_speed)
+            return;
+        std::ignore = oa::sim::speed::set_speed(world, speed, message_hooks());
+        match_timing_.requested_rate = world.game.requested_speed;
+        match_timing_.actual_rate = world.game.current_speed;
+        preferences_.current_game_speed = world.game.current_speed;
+        call_hook_or_report<&Extension::speed_changed>(
+            extension_, hook_error_report(), *this, world.game.requested_speed
+        );
+        return;
+    }
+    // The profile's threshold sliders show the threshold they stand for,
+    // when it differs from the player's.
+    for (const auto& threshold : kShareThresholds) {
+        if (entry == nullptr || name != threshold.slider || !match_)
+            continue;
+        const auto& world = match_->state();
+        const auto& me = world.game.players[world.game.local_player_index % OA_PLAYER_COUNT];
+        const float storage = threshold.metal ? me.metal_storage : me.energy_storage;
+        const float current =
+            threshold.metal ? me.metal_share_threshold : me.energy_share_threshold;
+        const auto value =
+            view_rules::share_threshold_value(entry->bar.knob, entry->bar.range, storage);
+        const auto controls = team_panel_controls();
+        if (const auto label = hud::find_control(controls, threshold.readout);
+            label != -1 && value != static_cast<int32_t>(current))
+            controls.set_text(controls.user, label, std::to_string(value).c_str());
+        return;
+    }
     // PLYRLIST's bar has scrolled the list itself.
     if (entry == nullptr || (name != "METAL" && name != "ENERGY"))
         return;
@@ -375,8 +443,12 @@ void Runtime::share_bar_moved(std::size_t gadget) {
         controls.set_text(controls.user, label, text);
 }
 
+bool Runtime::team_menu_every_game() const {
+    return match_ && match_->rules().teams.alliance_menu_all_game_types.enabled;
+}
+
 void Runtime::toggle_team_menu() {
-    if (!match_ || match_finished_ || !multiplayer_session())
+    if (!match_ || match_finished_ || (!multiplayer_session() && !team_menu_every_game()))
         return;
     const hud::HudEvents events{
         this,
@@ -411,11 +483,12 @@ void Runtime::toggle_team_menu() {
     // CONTROL is the host's, and withheld in a tournament game.
     const bool opened = hud::toggle_tab_menu(
         world,
-        oa::data::campaign::SessionKind::multiplayer,
+        multiplayer_session() ? oa::data::campaign::SessionKind::multiplayer : match_session_kind(),
         hud::control_offered(world, team_panel_host_),
         loader,
         team_panel_controls(),
-        events
+        events,
+        team_menu_every_game()
     );
     if (opened) {
         // The tab menu gives the match's panels the keyboard until the match
@@ -499,12 +572,127 @@ void Runtime::open_team_share_panel() {
         widget_text_stages_.erase(box);
         widget_gaf_frames_.erase(box);
     }
+    if (ui_rules().share_dialog_and_lobby_buttons.enabled)
+        prepare_share_dialog_extras();
     status_ = "Share";
     render_match_surface();
 }
 
+void Runtime::prepare_share_dialog_extras() {
+    if (!match_ || !match_hud_)
+        return;
+    auto& world = match_->state();
+    const auto& me = world.game.players[world.game.local_player_index % OA_PLAYER_COUNT];
+    const auto* info = oa::world_player_info(&world, &me);
+    const auto share_bits =
+        info != nullptr
+            ? static_cast<uint16_t>(info->role | (uint16_t{info->reserved_after_role} << 8))
+            : uint16_t{0};
+    const auto flags = oa::ui::console::console_flags(world.game);
+    const auto controls = team_panel_controls();
+    const auto set_stage = [&](const char* gadget, bool on) {
+        if (const auto index = hud::find_control(controls, gadget); index != -1)
+            controls.set_value(controls.user, index, on ? 1 : 0);
+    };
+    namespace console = oa::ui::console;
+    set_stage("EN_SHAREMETAL", (share_bits & console::share_flag::metal) != 0);
+    set_stage("EN_SHAREENERGY", (share_bits & console::share_flag::energy) != 0);
+    set_stage("EN_SHOOTALL", (flags & console::console_flag::shoot_all) != 0);
+    set_stage("EN_NOSHAKE", (flags & console::console_flag::no_shake) != 0);
+    auto* scrolls = hud_scrolls();
+    for (const auto& threshold : kShareThresholds) {
+        const float storage = threshold.metal ? me.metal_storage : me.energy_storage;
+        const float current =
+            threshold.metal ? me.metal_share_threshold : me.energy_share_threshold;
+        if (scrolls != nullptr)
+            for (auto& entry : scrolls->bars) {
+                if (match_hud_->layout.gadgets[entry.gadget].common.name != threshold.slider)
+                    continue;
+                auto& bar = entry.bar;
+                bar.knob_size = bar.rect.height;
+                bar.range = static_cast<int16_t>(bar.rect.width - bar.rect.height);
+                bar.maximum = static_cast<int32_t>(storage);
+                bar.knob = view_rules::share_threshold_knob(current, storage, bar.range);
+                auto& fields = std::get<oa::ui::gui_layout::ScrollBarFields>(
+                    match_hud_->layout.gadgets[entry.gadget].fields
+                );
+                fields.knob_position = bar.knob;
+                fields.knob_size = bar.knob_size;
+                fields.range = bar.range;
+            }
+        if (const auto label = hud::find_control(controls, threshold.readout); label != -1)
+            controls.set_text(
+                controls.user, label, std::to_string(static_cast<int32_t>(current)).c_str()
+            );
+    }
+    // A game speed slider, when the dialog's GUI has one, runs over the
+    // speeds with its knob at the speed asked for.
+    if (scrolls != nullptr)
+        for (auto& entry : scrolls->bars) {
+            if (match_hud_->layout.gadgets[entry.gadget].common.name != kShareSpeedSlider)
+                continue;
+            auto& bar = entry.bar;
+            bar.knob_size = 1;
+            bar.range = kShareSpeedStops;
+            bar.maximum = kShareSpeedStops;
+            bar.knob = static_cast<int16_t>(
+                std::clamp<int32_t>(world.game.requested_speed, 0, kShareSpeedStops)
+            );
+            auto& fields = std::get<oa::ui::gui_layout::ScrollBarFields>(
+                match_hud_->layout.gadgets[entry.gadget].fields
+            );
+            fields.knob_position = bar.knob;
+            fields.knob_size = bar.knob_size;
+            fields.range = bar.range;
+        }
+}
+
+bool Runtime::share_dialog_extras_click(const std::string& name) {
+    if (!match_ || !ui_rules().share_dialog_and_lobby_buttons.enabled)
+        return false;
+    const auto controls = team_panel_controls();
+    for (const auto& toggle : kShareSwitches) {
+        if (name != toggle.gadget)
+            continue;
+        if (const auto index = hud::find_control(controls, toggle.gadget); index != -1)
+            controls.set_value(
+                controls.user, index, controls.value(controls.user, index) == 0 ? 1 : 0
+            );
+        give_view_command(toggle.command, false);
+        render_match_surface();
+        return true;
+    }
+    if (name == "EN_READY") {
+        give_view_command(".ready", true);
+        render_match_surface();
+        return true;
+    }
+    if (name != "OK")
+        return false;
+    // OK gives the thresholds moved off the player's, then closes as before.
+    const auto& world = match_->state();
+    const auto& me = world.game.players[world.game.local_player_index % OA_PLAYER_COUNT];
+    if (auto* scrolls = hud_scrolls())
+        for (const auto& threshold : kShareThresholds)
+            for (const auto& entry : scrolls->bars) {
+                if (match_hud_->layout.gadgets[entry.gadget].common.name != threshold.slider)
+                    continue;
+                const float storage = threshold.metal ? me.metal_storage : me.energy_storage;
+                const float current =
+                    threshold.metal ? me.metal_share_threshold : me.energy_share_threshold;
+                const auto value =
+                    view_rules::share_threshold_value(entry.bar.knob, entry.bar.range, storage);
+                if (value == static_cast<int32_t>(current))
+                    continue;
+                char line[64];
+                std::snprintf(line, sizeof line, threshold.command, static_cast<int>(value));
+                give_view_command(line, false);
+            }
+    return false;
+}
+
 void Runtime::open_allies_team_panel() {
-    if (!match_ || match_finished_ || !multiplayer_session())
+    if (!match_ || match_finished_ || (!multiplayer_session() && !team_menu_every_game()))
         return;
     keep_panel_below_darkened();
     forget_team_panel();
@@ -571,14 +759,35 @@ void Runtime::give_selected_units_to(uint8_t recipient) {
         this, [](void* user, oa::Unit& unit, oa::Player& to) {
             auto& self = *static_cast<Runtime*>(user);
             auto& match_world = self.match_->state();
-            self.match_->transfer_unit(
+            self.match_->share_gift_unit(
                 static_cast<uint16_t>(oa::world_unit_slot(&match_world, &unit)), to.index
             );
         }
     };
+    // A mod's rules may hold structures back when many went across lately.
+    match_->begin_share_gift();
     hud::give_selected_units(
         world, recipient, commanders != nullptr ? commanders->words : nullptr, transfer
     );
+    const auto outcome = match_->end_share_gift();
+    if (outcome.waiting != 0) {
+        char line[96];
+        std::snprintf(
+            line,
+            sizeof line,
+            "Sharing %d structures - transfer will complete in %d seconds.",
+            static_cast<int>(outcome.waiting),
+            static_cast<int>(outcome.wait_seconds)
+        );
+        oa::sim::messages::post_message(
+            world,
+            line,
+            oa::sim::messages::kind_unit_report,
+            0,
+            oa::sim::messages::sender_none,
+            message_hooks()
+        );
+    }
 }
 
 void Runtime::click_team_panel(std::string_view clicked) {
@@ -639,6 +848,9 @@ void Runtime::click_team_panel(std::string_view clicked) {
         return;
     }
     case TeamPanel::share: {
+        // The profile's share dialog takes its own gadgets first.
+        if (share_dialog_extras_click(name))
+            return;
         const auto source = oa::ui::display_layout::canvas_to_source(
             match_layout_, static_cast<int>(match_pointer_x_), static_cast<int>(match_pointer_y_)
         );

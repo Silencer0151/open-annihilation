@@ -382,6 +382,23 @@ int main() {
         "--busy-combat needs --combat"
     );
     expect(
+        parse({"--headless-check", "--match-ticks", "60", "--stage", "s.stage"}).stage_file ==
+                oa::app::fs::path("s.stage") &&
+            plain.stage_file.empty(),
+        "--stage names the file a headless skirmish stages"
+    );
+    expect(
+        rejection({"--headless-check", "--stage", "s.stage"}) ==
+            "--stage stages a headless skirmish of --match-ticks ticks",
+        "--stage needs --match-ticks"
+    );
+    expect(
+        rejection(
+            {"--headless-check", "--match-ticks", "60", "--load", "a.sav", "--stage", "s.stage"}
+        ) == "--stage stages a headless skirmish of --match-ticks ticks",
+        "--stage does not stage a loaded game"
+    );
+    expect(
         rejection({"--headless-check", "--match-ticks", "60", "--march"}) ==
             "--frame-log, --scroll-camera, --march, --follow and --frame-clock need --frame-rate",
         "--march needs --frame-rate"
@@ -518,6 +535,47 @@ int main() {
         "--game-dir takes a UTF-8 path"
     );
     expect(parse({"--choose-game-dir"}).choose_game_dir, "--choose-game-dir asks for the folder");
+    expect(
+        parse({}).mod_file.empty() && !parse({}).print_profile &&
+            !parse({}).accept_unimplemented_hacks,
+        "no mod profile until one is passed"
+    );
+    expect(
+        parse({"--mod", "mods/x/oamod.yaml"}).mod_file ==
+            oa::app::path_from_utf8("mods/x/oamod.yaml"),
+        "--mod takes a profile file"
+    );
+    expect(
+        parse({"--mod", "a.oamod", "--print-profile", "--accept-unimplemented-hacks"})
+            .print_profile,
+        "--print-profile prints the --mod profile"
+    );
+    expect(
+        parse({"--game-dir", "ta", "--print-profile"}).print_profile,
+        "--print-profile prints the game folder's profile"
+    );
+    expect(
+        rejection({"--print-profile"}) ==
+            "--print-profile needs --mod FILE, --mod-dir PATH or --game-dir PATH",
+        "--print-profile needs a profile to print"
+    );
+    expect(
+        rejection({"--accept-unimplemented-hacks"}) ==
+            "--accept-unimplemented-hacks needs a mod: --mod, --mod-dir, --game-dir or "
+            "--print-profile",
+        "--accept-unimplemented-hacks needs a profile"
+    );
+    expect(rejection({"--mod"}) == "--mod requires a value", "--mod needs a file");
+    expect(
+        parse({"--mod-dir", "mods/x"}).mod_dir == oa::app::path_from_utf8("mods/x"),
+        "--mod-dir takes a mod folder"
+    );
+    expect(parse({"--base-game"}).base_game, "--base-game plays without the remembered mod");
+    expect(
+        rejection({"--base-game", "--mod-dir", "mods/x"}) ==
+            "--base-game and --mod-dir cannot be used together",
+        "--base-game and --mod-dir exclude each other"
+    );
     const char* data_folder = "Donn\xc3\xa9"
                               "es";
     expect(
@@ -715,6 +773,24 @@ int main() {
         "--chunks takes one chunk"
     );
     expect(!parse({}).director_chunks, "every chunk unless --chunks says otherwise");
+    expect(
+        parse({"--render-script", "game.oascript", "--stills", "0,120,7199"}).director_stills ==
+            std::vector<uint64_t>{0, 120, 7199},
+        "--stills takes the frames to write as pictures"
+    );
+    expect(parse({}).director_stills.empty(), "no stills unless --stills asks");
+    for (const auto* stills : {"5,5", "9,3", "1,,2", "a", "-1", "1,", ",1", "18446744073709551616"})
+        expect(
+            rejection({"--render-script", "game.oascript", "--stills", stills}) ==
+                "--stills expects frame numbers from 0, in increasing order, separated by commas",
+            stills
+        );
+    expect(
+        rejection({"--stills", "1"}) == "--stills needs --render-script" &&
+            rejection({"--generate-script", "game.rec", "--stills", "1"}) ==
+                "--stills needs --render-script",
+        "--stills belongs to a render"
+    );
     expect(
         parse({"--render-script", "game.oascript", "--mute", "--preferences-file", "p.conf"}).mute,
         "a render can be silent"

@@ -59,6 +59,7 @@ void Match::react_to_damage(sim::unit_spawn::Slot& target, sim::unit_spawn::Slot
     wake_target_observers(*target.unit, unit_damaged_event);
     sim::weapon_execution::RetaliationHooks hooks;
     hooks.context = this;
+    hooks.rules = rules_view();
     hooks.category_contains = [](void* context, oa::oa_ref32 mask, uint16_t type_index) {
         const auto& masks = static_cast<Match*>(context)->state_.category_masks;
         return mask != 0 && mask <= masks.size() && masks[mask - 1]->contains(type_index);
@@ -225,6 +226,8 @@ void Match::transfer_unit(uint16_t unit, uint8_t new_owner, const TransferredUni
     request.position = original.unit->position;
     request.finished = true;
     request.state = original.unit->flags & OA_UNIT_FLAG_OCCUPANCY_MASK;
+    // A building handed over keeps its facing (units.build-rotation).
+    request.facing = unit_build_facing(original.record);
     auto* copy = create(request);
     if (!copy || !copy->unit)
         return;
@@ -536,6 +539,8 @@ void Match::teardown_dead_unit(
     unit.flags = (unit.flags & ~live_unit_flag & ~death_pending_flag) & ~death_clear_mask;
     unit.record.type_index = 0;
     unit.health = 0;
+    // The slot waits before a local creation takes it again (units.id-reuse-delay).
+    sim::unit_spawn::record_slot_death(state(), state_.tables, slot.record);
     if (dummy_type_index < world_.types.size())
         unit.type = &world_.types[dummy_type_index].simulation;
     slot.movement_object = 0;

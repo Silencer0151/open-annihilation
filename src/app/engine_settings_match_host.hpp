@@ -107,6 +107,25 @@ struct Runtime::EngineSettingsMatchHost {
     [[nodiscard]] static oa::ui::display_layout::Rect
     button_rect(const oa::ui::display_layout::MatchLayout& layout) noexcept;
 
+    /// Draws the OA button's face as the match's layer shows it: at the
+    /// whole-number scale at or above the side column's, so that its icon
+    /// keeps its detail when the face is fitted to button_rect, and darkened
+    /// as the screen is while the dialog shows.
+    ///
+    /// @param layout the match's layout
+    /// @param look how the button looks
+    /// @param darkened the dialog shows over the screen
+    /// @param fonts the dialog's fonts
+    /// @param icon the Open Annihilation icon; empty draws the OA mark
+    /// @return the face, ingame_button_side source pixels a side at that scale
+    [[nodiscard]] static oa::ui::frontend_renderer::Surface button_face(
+        const oa::ui::display_layout::MatchLayout& layout,
+        oa::ui::engine_settings::ButtonLook look,
+        bool darkened,
+        const oa::ui::engine_settings::DialogFonts& fonts,
+        const oa::ui::frontend_renderer::RgbaPicture& icon
+    );
+
     /// Returns where the dialog shows on the match's canvas: at the side
     /// column's scale, centred in the area right of the column.
     ///

@@ -166,6 +166,19 @@ struct Options {
     // 3 above. It explodes the root piece once, with the corpsetype as the
     // flags, and the services record each EXPLODE.
     bool killed_script{};
+    // The rules and capacities the match plays by (OfflineInputs::rules,
+    // limits, unit_type_rules, weapon_rules, profile_sim_hash); 3.1c's and no
+    // profile by default.
+    data::match_rules::MatchRules rules{};
+    data::limits::Limits limits{};
+    std::vector<data::match_rules::UnitTypeRules> unit_type_rules{};
+    std::vector<data::match_rules::WeaponTypeRules> weapon_rules{};
+    std::optional<base::sha256::Digest> profile_sim_hash{};
+    // The map's wind limits (OfflineInputs::minimum_wind, maximum_wind).
+    int32_t minimum_wind{};
+    int32_t maximum_wind{};
+    // Unit slots of each player (OfflineInputs::per_player_limit).
+    uint16_t per_player_limit = 4;
 };
 
 /// Returns the fixture's TESTGUN section (slot 1): a 400-range turret gun
@@ -389,7 +402,7 @@ struct Fixture {
             masks,
             8,
             8,
-            4,
+            options.per_player_limit,
             2,
             0,
             30,
@@ -408,6 +421,13 @@ struct Fixture {
         mission_features = options.mission_features;
         input.mission_features = mission_features;
         input.resuming_saved_game = options.resuming_saved_game;
+        input.limits = options.limits;
+        input.rules = options.rules;
+        input.unit_type_rules = options.unit_type_rules;
+        input.weapon_rules = options.weapon_rules;
+        input.profile_sim_hash = options.profile_sim_hash;
+        input.minimum_wind = options.minimum_wind;
+        input.maximum_wind = options.maximum_wind;
         match = std::make_unique<sim::match_runtime::Match>(input, services);
         match->configure_strategic_environment({0, 0.5F, 0});
         for (uint8_t player = 0; player < 2; ++player) {

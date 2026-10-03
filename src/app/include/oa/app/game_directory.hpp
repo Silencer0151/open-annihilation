@@ -4,13 +4,19 @@
 // Where oa-game finds the Total Annihilation installation: --game-dir, the
 // folder remembered in the user preferences, or a native folder dialog. A
 // folder that holds the installer of the Total Annihilation demo (1997)
-// instead of game archives is played from the archive unpacked from it.
+// instead of game archives is played from the archive unpacked from it. A
+// mod plays from a mod folder layered over the game folder (--mod-dir, or
+// the one remembered), or from a copied install whose folder holds the
+// mod's oamod.yaml; the profile is resolved before any archive is mounted,
+// and one the engine cannot use makes the folder unusable.
 #pragma once
 
 #include "oa/app/demo_installer.hpp"
+#include "oa/app/mod_profile_loader.hpp"
 #include "oa/platform/preferences.hpp"
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -56,7 +62,17 @@ struct GameInstall {
     std::vector<fs::path> archives;
     // Resources every installation provides that neither the archives nor
     // loose files hold.
-    std::vector<std::string_view> missing;
+    std::vector<std::string> missing;
+    /// The folders loose files come from, highest precedence first: the mod
+    /// folder, then the inspected folder; empty when the folder does not exist.
+    std::vector<fs::path> folders;
+    /// The mod profile the folders play with; null for base 3.1c.
+    std::shared_ptr<const data::mod_profile::ModProfile> profile;
+    /// Why the mod profile cannot be used, one line each; any makes the
+    /// folder unusable.
+    std::vector<std::string> profile_errors;
+    /// The mod profile's warnings, one line each.
+    std::vector<std::string> profile_warnings;
     // Why reading the folder failed; a folder that could not be read is unusable.
     std::string problem;
     /// The folder the archives lie in: the inspected folder, or the folder the
@@ -70,7 +86,12 @@ struct GameInstall {
 
 /// Runs the archive discovery on a folder and checks the resources the frontend opens first.
 ///
-/// A folder that holds no archives is searched for the installer of the
+/// The folder's mod profile is resolved first (resolve_folder_profile()):
+/// with a mod folder the two are layered, the mod folder first, and the
+/// profile's layout names the archives discovered and the directories of
+/// the required resources. A profile that cannot be used stops the
+/// inspection with its errors. A folder that holds no archives and plays
+/// no mod is searched for the installer of the
 /// Total Annihilation demo (1997), whose archive is unpacked to `data_folder`
 /// or reused from there (set_up_demo()); that checked archive is then the
 /// only one taken, from the folder it lies in, whatever other archives the
@@ -80,17 +101,22 @@ struct GameInstall {
 /// @param root candidate game folder
 /// @param data_folder the per-user data folder; empty when none is known
 /// @param release the release of the demo to recognise
+/// @param mod the mod folder, the --mod file and the player's preferences
 /// @return whether it is a folder, its archives in mount order, the
-///     required resources none of them holds and where they lie
+///     required resources none of them holds, where they lie and the
+///     profile they play with
 [[nodiscard]] GameInstall inspect_game_install(
-    const fs::path& root, const fs::path& data_folder = {}, const DemoRelease& release = demo_1997
+    const fs::path& root,
+    const fs::path& data_folder = {},
+    const DemoRelease& release = demo_1997,
+    const ModChoice& mod = {}
 );
 
 /// Tests whether an inspected folder can run the game.
 ///
 /// @param install inspect_game_install() result
-/// @return true when the folder was read, exists, has archives and lacks no
-///     required resource
+/// @return true when the folder was read, exists, has archives, lacks no
+///     required resource and its mod profile can be used
 [[nodiscard]] bool usable(const GameInstall& install);
 
 enum class FolderPick : uint8_t { chosen, cancelled, unavailable };
@@ -132,6 +158,13 @@ struct GameDirectory {
     fs::path installation;
     /// The demo's installer and archive, when `path` held the installer.
     DemoSetup demo;
+    /// The folders loose files come from, highest precedence first; empty
+    /// when --archive names the archives, which then come from `installation`.
+    std::vector<fs::path> folders;
+    /// The mod profile the folders play with; null for base 3.1c.
+    std::shared_ptr<const data::mod_profile::ModProfile> profile;
+    /// The mod profile's warnings, one line each.
+    std::vector<std::string> profile_warnings;
 };
 
 /// Resolves the game folder.
@@ -191,14 +224,34 @@ stored_game_directory(const oa::platform::preferences::Values& values);
 /// @param folder chosen folder; stored absolute and normalised, as UTF-8
 void remember_game_directory(oa::platform::preferences::Values& values, const fs::path& folder);
 
+/// Picks the mod folder a run plays: --mod-dir, else none with --base-game,
+/// else the one the preferences remember.
+///
+/// @param mod_dir the --mod-dir folder; empty when not given
+/// @param base_game whether --base-game was given
+/// @param values loaded preferences
+/// @return the mod folder; empty for the base game
+[[nodiscard]] fs::path chosen_mod_directory(
+    const fs::path& mod_dir, bool base_game, const oa::platform::preferences::Values& values
+);
+
+/// Stores the chosen mod folder in the preferences.
+///
+/// @param[in,out] values preferences to update
+/// @param folder the mod folder, stored absolute and normalised as UTF-8;
+///        empty forgets the choice, for the base game
+void remember_mod_directory(oa::platform::preferences::Values& values, const fs::path& folder);
+
 /// Resolves the game folder with the native dialogs (game_directory_dialog.cpp).
 ///
 /// The request takes --game-dir and --choose-game-dir, and is unattended for
 /// unattended runs, CI and a dummy or offscreen video driver. Without
 /// --game-dir it carries the folder stored in the preferences file, which an
 /// unattended run reads only when --preferences-file names it, so a scripted
-/// run never depends on the player's own settings. The demo's archive is
-/// unpacked to --data-dir, or else to the platform's per-user data folder.
+/// run never depends on the player's own settings. The mod folder is
+/// chosen_mod_directory()'s, and the profile is --mod's or the folders' own.
+/// The demo's archive is unpacked to --data-dir, or else to the platform's
+/// per-user data folder.
 ///
 /// @param options parsed command line
 /// @return as resolve_game_directory()

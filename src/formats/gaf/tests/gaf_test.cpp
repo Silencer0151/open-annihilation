@@ -320,6 +320,30 @@ void malformed_and_bounded_inputs() {
     );
 }
 
+// Nine 4096 x 4096 frames decode to 288 MiB of pixels and coverage, past
+// what a parse may keep; a checked parse keeps none of them and loads the file.
+void checked_parse_keeps_no_decoded_total() {
+    constexpr std::size_t frames = 9;
+    constexpr uint16_t side = 4096;
+    constexpr std::size_t frame_at = 56 + frames * 8;
+    constexpr std::size_t rows_at = frame_at + 24;
+    auto bytes = one_frame_file();
+    bytes.resize(rows_at + std::size_t{side} * 2);
+    put16(bytes, 16, frames);
+    for (std::size_t index = 0; index < frames; ++index) {
+        put32(bytes, 56 + index * 8, static_cast<uint32_t>(frame_at));
+        put32(bytes, 60 + index * 8, 1);
+    }
+    // Every row is empty, which leaves it transparent.
+    frame_header(bytes, frame_at, side, side, 0, 0, 0, true, 0, 0, rows_at);
+    const auto checked = gaf::parse(bytes, gaf::PixelData::checked);
+    require(
+        checked.ok() && checked.archive->sequences[0].frames.size() == frames &&
+            checked.archive->sequences[0].frames[0].pixels.empty(),
+        checked.error ? checked.error->message : "a checked parse kept pixels"
+    );
+}
+
 } // namespace
 
 int main() {
@@ -330,6 +354,7 @@ int main() {
         compressed_literal_transparency_index_is_still_written();
         frame_at_rejects_out_of_range_indices();
         malformed_and_bounded_inputs();
+        checked_parse_keeps_no_decoded_total();
     } catch (const std::exception& error) {
         std::cerr << "sprite-format test failure: " << error.what() << '\n';
         return 1;

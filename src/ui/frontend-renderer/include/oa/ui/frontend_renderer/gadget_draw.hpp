@@ -180,6 +180,12 @@ inline constexpr int32_t gadget_text_unbounded = -1;
 ///
 /// Frame c of the font's first sequence is the glyph of byte c. Bytes below
 /// 0x20 and missing glyphs are skipped and a space advances without drawing.
+/// With game-text hooks installed (oa/present/game_text.hpp), text with a
+/// byte from 0x80 up is read as the settings say: each character the font
+/// has a glyph for is drawn with it, and the rest in the modern fonts, on
+/// the font's baseline in hattfont12's colour. Game text the settings draw
+/// in the modern fonts is drawn in them whole, at the Text size held to the
+/// game fonts' size (screen_text_size).
 ///
 /// @param[in,out] target Surface to draw on; null draws on the locked display.
 /// @param font The GUI context's active GAF font (GadgetPanel::active_gaf_font);
@@ -188,8 +194,12 @@ inline constexpr int32_t gadget_text_unbounded = -1;
 /// @param x Pen x in target pixels.
 /// @param y Pen y in target pixels.
 /// @param max_width Width limit in pixels; other than gadget_text_unbounded,
-///        drawing stops before a glyph wider than what is left.
+///        drawing stops before a glyph, or a modern character, wider than what
+///        is left.
 /// @param light_level Nonzero draws glyphs through that light-table row.
+/// @param game_text The text is game text: what players type and send, their
+///        names and the match's own readouts, which the settings may draw in
+///        the modern fonts. False for the labels of menus and dialogs.
 void draw_gadget_text(
     oa::Surface* target,
     const oa::present::GafSprites* font,
@@ -197,7 +207,46 @@ void draw_gadget_text(
     int32_t x,
     int32_t y,
     int32_t max_width,
+    int32_t light_level,
+    bool game_text = false
+);
+
+/// Draws bytes glyph by glyph in a GAF font, each byte the glyph of its own
+/// frame, as draw_gadget_text draws text with no byte from 0x80 up.
+///
+/// @param[in,out] target Surface to draw on; null draws on the locked display.
+/// @param font The GAF font.
+/// @param bytes The font's bytes.
+/// @param x Pen x in target pixels.
+/// @param y Pen y in target pixels.
+/// @param max_width Width limit in pixels, or gadget_text_unbounded.
+/// @param light_level Nonzero draws glyphs through that light-table row.
+/// @return The pen x after the glyphs drawn.
+int32_t draw_gadget_glyphs(
+    oa::Surface* target,
+    const oa::present::GafSprites& font,
+    std::string_view bytes,
+    int32_t x,
+    int32_t y,
+    int32_t max_width,
     int32_t light_level
 );
+
+/// Measures bytes as draw_gadget_glyphs draws them.
+///
+/// @param font The GAF font.
+/// @param bytes The font's bytes.
+/// @return The width in pixels.
+[[nodiscard]] int32_t
+measure_gadget_glyphs(const oa::present::GafSprites& font, std::string_view bytes);
+
+/// Measures text as draw_gadget_text draws it in a GAF font.
+///
+/// @param font The GAF font; null measures nothing.
+/// @param text Text to measure.
+/// @param game_text The text is game text.
+/// @return The width in pixels.
+[[nodiscard]] int32_t
+measure_gadget_text(const oa::present::GafSprites* font, const char* text, bool game_text = false);
 
 } // namespace oa::ui::frontend_renderer

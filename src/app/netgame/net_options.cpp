@@ -42,9 +42,10 @@ NetgameContext& context_of(void* context) {
 
 /// Takes one of network play's long options (Extension::take_option).
 ///
-/// --net-loopback-check makes the run unattended, --check-host-not-found an
-/// unattended run that skips the intro, --check-recording-hook an unattended
-/// headless run that skips the intro. A missing or malformed value throws
+/// --net-loopback-check makes the run an unattended headless one (the check
+/// runs only in a headless run; without it the run would sit in the menus),
+/// --check-host-not-found an unattended run that skips the intro,
+/// --check-recording-hook an unattended headless run that skips the intro. A missing or malformed value throws
 /// std::runtime_error.
 ///
 /// @param context The NetgameContext whose options receive the value.
@@ -58,7 +59,7 @@ bool take_option(void* context, const char* name, const OptionValues& values, ui
     auto value = [&values]() -> std::string_view { return values.next(values.arguments); };
     if (argument == "--net-loopback-check") {
         result.net_loopback_ticks = parse_count(value());
-        effects |= option_effect::unattended;
+        effects |= option_effect::headless_check | option_effect::unattended;
     } else if (argument == "--net-loopback-watcher")
         result.net_loopback_watcher = true;
     else if (argument == "--net-loopback-computer")
@@ -74,7 +75,11 @@ bool take_option(void* context, const char* name, const OptionValues& values, ui
         result.check_recording_hook = true;
         effects |=
             option_effect::headless_check | option_effect::unattended | option_effect::skip_intro;
-    } else if (argument == "--demo-unit-table") {
+    } else if (argument == "--net-record")
+        result.net_record = fs::path(value());
+    else if (argument == "--replay-viewer")
+        result.replay_viewer = true;
+    else if (argument == "--demo-unit-table") {
         const auto mode = std::string(value());
         if (mode != "strict" && mode != "ignore")
             throw std::runtime_error("--demo-unit-table expects strict or ignore");
@@ -104,7 +109,7 @@ const char* text(void* /*context*/, ExtensionText which) {
     case ExtensionText::usage_runs:
         return "[--net-loopback-check TICKS] [--net-loopback-watcher] [--net-loopback-computer] "
                "[--check-host-not-found] [--dplay-port PORT] [--play-demo FILE.tad] "
-               "[--demo-unit-table strict|ignore] ";
+               "[--demo-unit-table strict|ignore] [--net-record FILE] [--replay-viewer] ";
     case ExtensionText::usage_switches:
         return "-t SECONDS -n TYPE[:ADDRESS] -hNAME ";
     case ExtensionText::usage_note:

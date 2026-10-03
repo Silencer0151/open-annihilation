@@ -37,6 +37,19 @@ constexpr int32_t bounds_margin = 2;
 // Build-effect colour ramp: palette 0xa0..0xaf, up then down.
 constexpr uint8_t nano_ramp_low = 0xa0;
 constexpr uint8_t nano_ramp_high = 0xaf;
+// A wave's step that turns its colour back up the ramp, and its place on it.
+constexpr uint32_t nano_ramp_turn = 0x10;
+constexpr uint32_t nano_ramp_mask = 0xf;
+// The build effect's waves: steps every nano_wave_period ticks, and the
+// value each unit's id is mixed with to start them.
+constexpr uint32_t nano_wave_first_steps = 0x21;
+constexpr uint32_t nano_wave_second_steps = 0x39;
+constexpr uint32_t nano_wave_period = 0x1e;
+constexpr uint32_t nano_wave_first_salt = 5;
+constexpr uint32_t nano_wave_second_salt = 9;
+// The build effect's clock counts parts of a tick in 1/65536.
+constexpr uint32_t pulse_fraction_bits = 16;
+constexpr uint32_t pulse_fraction_one = 1U << pulse_fraction_bits;
 constexpr float progress_scale = 255.0F;
 constexpr int64_t composite_max_pixels = 16 * 1024 * 1024;
 constexpr double light_input_scale = 0.01;
@@ -131,9 +144,11 @@ bool piece_passes(const PieceState& piece, int32_t pass, const Unit& unit) noexc
            unit.build_remaining != 0.0F;
 }
 
-// The composite grows to fit a model larger than its 600x600
-// start size.
+// The composite grows to fit a model larger than its start size, unless the
+// limits cut such a model to it.
 void ensure_composite(ModelRenderer& renderer, int64_t pixels) {
+    if (renderer.composite_limits.clamp_oversize)
+        return;
     auto& composite = renderer.composite;
     const auto plane = static_cast<int64_t>(composite.pixels.size() / 2);
     if (pixels <= plane || pixels > composite_max_pixels)
@@ -473,6 +488,15 @@ void set_composite_frame(ModelRenderer& renderer, const SpriteFrame& frame, uint
     Sprite& composite = renderer.composite.sprite;
     composite.width = frame.width;
     composite.height = frame.height;
+    if (renderer.composite_limits.clamp_oversize) {
+        // A model larger than the buffer keeps its top left part.
+        composite.width = static_cast<uint16_t>(
+            std::min<int32_t>(composite.width, renderer.composite_limits.width)
+        );
+        composite.height = static_cast<uint16_t>(
+            std::min<int32_t>(composite.height, renderer.composite_limits.height)
+        );
+    }
     composite.origin_x = frame.origin_x;
     composite.origin_y = frame.origin_y;
     composite.key = key;
@@ -483,6 +507,25 @@ void compose_copy(void* user, const SpriteFrame& frame) {
     const Sprite& source = *context->source;
     set_composite_frame(*context->renderer, frame, source.key);
     Sprite& composite = context->renderer->composite.sprite;
+    if (composite.width != source.width || composite.height != source.height) {
+        // Cut to the buffer: the top left rows and columns of the image.
+        if (composite.width > source.width || composite.height > source.height)
+            return;
+        auto* data = static_cast<uint8_t*>(composite.data);
+        auto* aux = static_cast<uint8_t*>(composite.aux);
+        for (uint32_t row = 0; row < composite.height; ++row) {
+            const std::size_t from = std::size_t{row} * source.width;
+            const std::size_t to = std::size_t{row} * composite.width;
+            std::memmove(
+                data + to, static_cast<const uint8_t*>(source.data) + from, composite.width
+            );
+            if (source.aux != nullptr)
+                std::memmove(
+                    aux + to, static_cast<const uint8_t*>(source.aux) + from, composite.width
+                );
+        }
+        return;
+    }
     const auto size = plane_size(source);
     if (static_cast<int64_t>(size) > composite_plane(*context->renderer))
         return;
@@ -520,13 +563,37 @@ void compose_finish(void* user, const SpriteFrame&) {
     apply_build_effect(*context->renderer, context->renderer->composite.sprite, *context->model);
 }
 
-// Blends colour 0 through the display alpha table into the target pixels
-// under a raw image's opaque pixels, in one pass: what draw_sprite_blended
-// draws of the image's colour-0 silhouette (copy_silhouette).
-void draw_silhouette_blended(Surface& target, const Sprite& image, int32_t x, int32_t y) {
+// Returns the table a renderer's shadows blend through: its faded table,
+// else the display's alpha table; null when there is neither.
+const uint8_t* shadow_blend_table(const ModelRenderer& renderer) {
+    if (renderer.shadow_table != nullptr)
+        return renderer.shadow_table;
     const present::DisplayContext* display = present::display_context();
-    if (display == nullptr || (display->flags & present::display_flag_alpha_table) == 0 ||
-        display->alpha_table == nullptr || image.data == nullptr)
+    if (display == nullptr || (display->flags & present::display_flag_alpha_table) == 0)
+        return nullptr;
+    return display->alpha_table;
+}
+
+// Draws a shadow sprite (a silhouette or a building's shadow image) blended
+// through the renderer's shadow table: what draw_sprite_blended draws with
+// the display's own.
+void draw_shadow_sprite(
+    const ModelRenderer& renderer, Surface* target, const Sprite* sprite, int32_t x, int32_t y
+) {
+    if (renderer.shadow_table == nullptr)
+        present::draw_sprite_blended(target, sprite, x, y);
+    else
+        present::draw_sprite_blended_through(target, sprite, x, y, renderer.shadow_table);
+}
+
+// Blends colour 0 through the renderer's shadow table into the target pixels
+// under a raw image's opaque pixels, in one pass: what draw_shadow_sprite
+// draws of the image's colour-0 silhouette (copy_silhouette).
+void draw_silhouette_blended(
+    const ModelRenderer& renderer, Surface& target, const Sprite& image, int32_t x, int32_t y
+) {
+    const uint8_t* table = shadow_blend_table(renderer);
+    if (table == nullptr || image.data == nullptr)
         return;
     Rect32 source{0, 0, image.width - 1, image.height - 1};
     Rect32 placed{
@@ -544,8 +611,8 @@ void draw_silhouette_blended(Surface& target, const Sprite& image, int32_t x, in
     mask.height = image.height;
     mask.pitch = image.width;
     mask.pixels = static_cast<uint8_t*>(image.data);
-    // Row 0 of the alpha table: colour 0 over each target colour.
-    present::remap_under_mask(target, mask, source, placed, image.key, display->alpha_table);
+    // Row 0 of the table: colour 0 over each target colour.
+    present::remap_under_mask(target, mask, source, placed, image.key, table);
 }
 
 // Grows sprite bounds to hold a part.
@@ -620,7 +687,17 @@ void draw_flat_primitives(
 } // namespace
 
 bool init_composite_buffer(ModelRenderer& renderer) {
-    renderer.composite = present::create_two_plane_sprite(composite_side, composite_side);
+    // Allocated here rather than by create_two_plane_sprite, whose bound of
+    // 16 Mi pixels a profile's largest composite passes.
+    const int32_t width = std::max(renderer.composite_limits.width, int32_t{0});
+    const int32_t height = std::max(renderer.composite_limits.height, int32_t{0});
+    const auto plane = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+    renderer.composite = {};
+    renderer.composite.pixels.assign(plane * 2, 0);
+    renderer.composite.sprite.width = static_cast<uint16_t>(width);
+    renderer.composite.sprite.height = static_cast<uint16_t>(height);
+    renderer.composite.sprite.data = plane != 0 ? renderer.composite.pixels.data() : nullptr;
+    renderer.composite.sprite.aux = plane != 0 ? renderer.composite.pixels.data() + plane : nullptr;
     // Every image copied into the composite uses key 1.
     renderer.composite.sprite.key = image_key;
     return renderer.composite.sprite.data != nullptr;
@@ -830,20 +907,55 @@ void remap_depth_bands(
     }
 }
 
+BuildPulseColours build_pulse_colours(uint32_t pulse_tick, uint32_t unit_id) noexcept {
+    // The products wrap at 32 bits, as the game's do.
+    const uint32_t first =
+        (pulse_tick * nano_wave_first_steps) / nano_wave_period + (unit_id ^ nano_wave_first_salt);
+    const uint32_t second = (pulse_tick * nano_wave_second_steps) / nano_wave_period +
+                            (unit_id ^ nano_wave_second_salt);
+    const auto ramp = [](uint32_t wave) -> uint8_t {
+        return static_cast<uint8_t>(
+            (wave & nano_ramp_turn) != 0 ? nano_ramp_high - (wave & nano_ramp_mask)
+                                         : nano_ramp_low + (wave & nano_ramp_mask)
+        );
+    };
+    return {ramp(first), ramp(second)};
+}
+
+float build_pulse_rate(float zoom) noexcept {
+    if (!(zoom < build_pulse_full_rate_zoom))
+        return 1.0F;
+    return std::max(zoom, build_pulse_least_rate);
+}
+
+uint32_t advance_build_pulse(BuildPulseClock& clock, uint32_t game_tick, float zoom) noexcept {
+    const float rate = build_pulse_rate(zoom);
+    if (!clock.seen || game_tick < clock.last_tick || rate >= 1.0F) {
+        clock.seen = true;
+        clock.last_tick = game_tick;
+        clock.lag = 0;
+        clock.lag_fraction = 0;
+        return 0;
+    }
+    const uint64_t ticks = game_tick - clock.last_tick;
+    clock.last_tick = game_tick;
+    const auto rate_fraction =
+        static_cast<uint32_t>(std::lround(rate * static_cast<float>(pulse_fraction_one)));
+    const uint64_t gathered =
+        uint64_t{clock.lag_fraction} + ticks * (pulse_fraction_one - rate_fraction);
+    clock.lag += static_cast<uint32_t>(gathered >> pulse_fraction_bits);
+    clock.lag_fraction = static_cast<uint32_t>(gathered & (pulse_fraction_one - 1));
+    return clock.lag;
+}
+
 bool apply_build_effect(const ModelRenderer& renderer, Sprite& image, const ModelRef& model) {
     const Unit& unit = *model.unit;
     if (image.aux == nullptr || unit.build_remaining == 0.0F)
         return false;
-    const uint32_t tick = renderer.tick;
-    const uint32_t id = unit.id;
-    const uint32_t wave_a = (tick * 0x21U) / 0x1eU + (id ^ 5U);
-    const uint32_t wave_b = (tick * 0x39U) / 0x1eU + (id ^ 9U);
-    const auto ramp = [](uint32_t wave) -> int32_t {
-        return (wave & 0x10U) != 0 ? nano_ramp_high - static_cast<int32_t>(wave & 0xfU)
-                                   : static_cast<int32_t>(wave & 0xfU) + nano_ramp_low;
-    };
-    const int32_t color_a = ramp(wave_a);
-    const int32_t color_b = ramp(wave_b);
+    const BuildPulseColours colours =
+        build_pulse_colours(renderer.tick - renderer.build_pulse_lag, unit.id);
+    const int32_t color_a = colours.first;
+    const int32_t color_b = colours.second;
     const int32_t progress =
         truncate_low32(static_cast<double>(unit.build_remaining) * progress_scale);
     if (progress > 0xeb) {
@@ -951,7 +1063,7 @@ void unit_model_pass(
         if (builds && state.shadow.sprite.data == nullptr)
             build_shadow_image(renderer, model, state.image.sprite);
         if (draws && state.shadow.sprite.data != nullptr)
-            present::draw_sprite_blended(target, &state.shadow.sprite, shadow_x, shadow_y);
+            draw_shadow_sprite(renderer, target, &state.shadow.sprite, shadow_x, shadow_y);
     };
     // The units it carries, in the order the draw walks them; a plan notes
     // each with the model the renderer hands back.
@@ -978,10 +1090,14 @@ void unit_model_pass(
             if (is_building(unit) && (flags & OA_UNIT_DEF_FLAG_DIGGER) == 0)
                 draw_building_shadow();
             else if (draws && vehicle_shadow && samples != 1 && target != nullptr)
-                draw_silhouette_blended(*target, state.image.sprite, shadow_x, shadow_y);
+                draw_silhouette_blended(renderer, *target, state.image.sprite, shadow_x, shadow_y);
             else if (draws && vehicle_shadow)
-                present::draw_sprite_blended(
-                    target, &copy_silhouette(renderer, state.image.sprite), shadow_x, shadow_y
+                draw_shadow_sprite(
+                    renderer,
+                    target,
+                    &copy_silhouette(renderer, state.image.sprite),
+                    shadow_x,
+                    shadow_y
                 );
         }
         if (!has_image(state) &&
@@ -1042,7 +1158,7 @@ void unit_model_pass(
                 present::clear_sprite_below_depth(
                     silhouette, static_cast<uint8_t>(vertex_depth_base(model))
                 );
-                present::draw_sprite_blended(target, &silhouette, shadow_x, shadow_y);
+                draw_shadow_sprite(renderer, target, &silhouette, shadow_x, shadow_y);
             }
         } else if (is_building(unit)) {
             draw_building_shadow();
@@ -1051,7 +1167,7 @@ void unit_model_pass(
             samples != 1 && target != nullptr
         ) {
             if (draws)
-                draw_silhouette_blended(*target, state.image.sprite, shadow_x, shadow_y);
+                draw_silhouette_blended(renderer, *target, state.image.sprite, shadow_x, shadow_y);
         } else if (vehicle_shadow) {
             if (draws) {
                 Sprite& silhouette = copy_silhouette(renderer, state.image.sprite);
@@ -1060,7 +1176,7 @@ void unit_model_pass(
                     present::clear_sprite_below_depth(
                         silhouette, static_cast<uint8_t>(vertex_depth_base(model) + lift)
                     );
-                present::draw_sprite_blended(target, &silhouette, shadow_x, shadow_y);
+                draw_shadow_sprite(renderer, target, &silhouette, shadow_x, shadow_y);
             }
         }
     }
@@ -1082,7 +1198,8 @@ void unit_model_pass(
             compose_unit_sprite(*renderer.world, unit, source_frame, composer);
         else
             compose_finer_sprite(context, unit, source_frame);
-        if (!is_building(unit) || unit.build_remaining == 0.0F)
+        if ((!is_building(unit) && !renderer.moving_pieces_once_built) ||
+            unit.build_remaining == 0.0F)
             build_model_image(renderer, composite, model, unit.owner_index, pass_moving_pieces);
     }
     // Each carried unit's image, built as carried with every piece and the

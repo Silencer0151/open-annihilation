@@ -6,6 +6,7 @@
 
 #include "oa/formats/png.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <string>
 #include <utility>
@@ -16,6 +17,9 @@ namespace {
 
 // Bits per sample of the icon's pixels.
 constexpr uint8_t icon_bit_depth = 8;
+
+// Offset of a pixel's alpha byte.
+constexpr std::size_t alpha_byte = 3;
 
 /// Keeps the first error the PNG reader reports; warnings are left out.
 ///
@@ -68,6 +72,42 @@ bool decode_window_icon(std::span<const uint8_t> png, WindowIcon& icon, std::str
     icon.height = header.height;
     icon.pixels = std::move(pixels);
     return true;
+}
+
+WindowIcon visible_part(const WindowIcon& icon) {
+    const std::size_t row_bytes = std::size_t{icon.width} * window_icon_pixel_bytes;
+    if (icon.width == 0 || icon.height == 0 || icon.pixels.size() / row_bytes < icon.height)
+        return {};
+    uint32_t left = icon.width;
+    uint32_t top = icon.height;
+    uint32_t right = 0;
+    uint32_t bottom = 0;
+    for (uint32_t y = 0; y < icon.height; ++y)
+        for (uint32_t x = 0; x < icon.width; ++x)
+            if (icon.pixels
+                    [y * row_bytes + std::size_t{x} * window_icon_pixel_bytes + alpha_byte] != 0) {
+                left = std::min(left, x);
+                top = std::min(top, y);
+                right = std::max(right, x + 1);
+                bottom = std::max(bottom, y + 1);
+            }
+    if (left >= right || top >= bottom)
+        return {};
+    WindowIcon part;
+    part.width = right - left;
+    part.height = bottom - top;
+    const std::size_t part_row_bytes = std::size_t{part.width} * window_icon_pixel_bytes;
+    part.pixels.reserve(part_row_bytes * part.height);
+    for (uint32_t y = top; y < bottom; ++y) {
+        const auto first =
+            icon.pixels.begin() + static_cast<std::ptrdiff_t>(
+                                      y * row_bytes + std::size_t{left} * window_icon_pixel_bytes
+                                  );
+        part.pixels.insert(
+            part.pixels.end(), first, first + static_cast<std::ptrdiff_t>(part_row_bytes)
+        );
+    }
+    return part;
 }
 
 } // namespace oa::app

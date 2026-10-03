@@ -171,6 +171,26 @@ LoopError update_timing(Timing& s, uint32_t now) noexcept {
     return LoopError::none;
 }
 
+LagGuardStep
+lag_guard_step(LagGuard& guard, uint32_t gap_ms, uint32_t now_ms, uint32_t silent_ms) noexcept {
+    if (gap_ms == 0 || silent_ms < gap_ms) {
+        if (!guard.closed)
+            return LagGuardStep::run;
+        guard.closed = false;
+        return LagGuardStep::opening;
+    }
+    if (!guard.closed) {
+        guard.closed = true;
+        guard.closed_at_ms = now_ms;
+        guard.last_step_ms = now_ms;
+        return LagGuardStep::closing;
+    }
+    if (now_ms - guard.last_step_ms < gap_ms)
+        return LagGuardStep::held;
+    guard.last_step_ms = now_ms;
+    return LagGuardStep::run;
+}
+
 LoopError run_ticks(State& s, Host& h, bool live) {
     const auto count = s.timing.pending_steps;
     if (count < 0)

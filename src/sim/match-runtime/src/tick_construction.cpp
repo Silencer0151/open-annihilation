@@ -22,18 +22,39 @@ constexpr uint8_t yard_default_cell = 0x2f;
 } // namespace
 
 std::optional<uint8_t> Match::building_site(
-    uint16_t type, int32_t cell_x, int32_t cell_z, uint16_t skip_unit, uint8_t placing_player
+    uint16_t type,
+    int32_t cell_x,
+    int32_t cell_z,
+    uint16_t skip_unit,
+    uint8_t placing_player,
+    const BuildSiteOptions& options
 ) const {
     if (type == 0 || type >= world_.types.size())
         return std::nullopt;
-    const auto fx = static_cast<int32_t>(world_.types[type].footprint_x);
-    const auto fz = static_cast<int32_t>(world_.types[type].footprint_z);
+    // Facing east or west swaps the footprint's width and depth.
+    const auto facing = build_facing(type, options.facing);
+    const bool turned = (facing & 1U) != 0;
+    const auto fx = static_cast<int32_t>(
+        turned ? world_.types[type].footprint_z : world_.types[type].footprint_x
+    );
+    const auto fz = static_cast<int32_t>(
+        turned ? world_.types[type].footprint_x : world_.types[type].footprint_z
+    );
     const auto width = static_cast<int32_t>(spatial_.terrain_width);
     const auto height = static_cast<int32_t>(spatial_.terrain_height);
     // Packed cell_x < 1, cell_z < 1, and a one-cell far border.
     if (cell_x < 1 || cell_z < 1 || width <= cell_x + fx || height <= cell_z + fz)
         return std::nullopt;
     bool in_sight = true;
+    // orders.build-site-kickout place-over-own-units: the placing player's
+    // own units with a movement object leave the build cursor's site open.
+    const bool own_units_pass = placing_player != no_placing_player &&
+                                rules().orders.build_site_kickout.place_over_own_units;
+    const auto placer_moves_off = [&](uint16_t slot) {
+        const Unit* unit = world_unit_at(&state(), slot);
+        return unit != nullptr && unit->owner_index == placing_player &&
+               ground_runtime(slot) != nullptr;
+    };
     if (placing_player != no_placing_player) {
         const auto corner = static_cast<std::size_t>(cell_z) * input_.map.attribute_width +
                             static_cast<std::size_t>(cell_x);
@@ -53,7 +74,7 @@ std::optional<uint8_t> Match::building_site(
     int16_t max_water_depth = 10000, min_water_depth = -10000;
     int8_t waterline = 0;
     if (type < input_.fields.size()) {
-        yard = input_.fields[type].yard_mask;
+        yard = build_yard(type, facing);
         if (const auto* meta = input_.fields[type].runtime_metadata) {
             max_slope = meta->max_slope;
             max_water_depth = meta->max_water_depth;
@@ -83,8 +104,13 @@ std::optional<uint8_t> Match::building_site(
                 (plot.flags & sim::spatial_state::plot_claimed) != 0 && in_sight)
                 return std::nullopt;
             if ((mask & yard_refuses_units) != 0 && plot.ground != sim::spatial_state::no_unit &&
-                plot.ground != skip_unit && in_sight)
-                return std::nullopt;
+                !own_mobile_unit(plot.ground, options.own_units_player) &&
+                plot.ground != skip_unit && in_sight) {
+                if (!(own_units_pass && placer_moves_off(plot.ground)))
+                    return std::nullopt;
+                if (options.over_own_units != nullptr)
+                    *options.over_own_units = true;
+            }
             if ((mask & yard_refuses_features) != 0 && plot.blocking_feature)
                 return std::nullopt;
             if ((mask & yard_refuses_indestructible) != 0 && plot.indestructible_feature)
@@ -117,19 +143,22 @@ std::optional<uint8_t> Match::building_site(
     return base;
 }
 
-uint8_t Match::footprint_height(uint16_t type, int32_t cell_x, int32_t cell_z) const {
+uint8_t
+Match::footprint_height(uint16_t type, int32_t cell_x, int32_t cell_z, uint8_t facing) const {
     if (type == 0 || type >= world_.types.size())
         return 0;
     std::span<const uint8_t> yard;
     int8_t waterline = 0;
+    const auto turn = build_facing(type, facing);
     if (type < input_.fields.size()) {
-        yard = input_.fields[type].yard_mask;
+        yard = build_yard(type, turn);
         if (const auto* definition = input_.fields[type].definition)
             waterline = definition->waterline;
     }
+    const bool turned = (turn & 1U) != 0;
     return sim::spatial_state::footprint_build_height(
-        world_.types[type].footprint_x,
-        world_.types[type].footprint_z,
+        turned ? world_.types[type].footprint_z : world_.types[type].footprint_x,
+        turned ? world_.types[type].footprint_x : world_.types[type].footprint_z,
         yard,
         waterline,
         cell_x,
@@ -175,20 +204,31 @@ uint16_t Match::feature_word_under(
 }
 
 bool Match::site_clear_for(
-    uint16_t type, int32_t cell_x, int32_t cell_z, uint16_t skip_unit, uint8_t occupancy_kind
+    uint16_t type,
+    int32_t cell_x,
+    int32_t cell_z,
+    uint16_t skip_unit,
+    uint8_t occupancy_kind,
+    uint8_t facing
 ) const {
     const auto oob = occupancy_kind == 2;
     if (type == 0 || type >= world_.types.size())
         return oob;
-    const auto fx = static_cast<int32_t>(world_.types[type].footprint_x);
-    const auto fz = static_cast<int32_t>(world_.types[type].footprint_z);
+    // A building facing east or west has its footprint's width and depth swapped.
+    const bool turned = (build_facing(type, facing) & 1U) != 0;
+    const auto fx = static_cast<int32_t>(
+        turned ? world_.types[type].footprint_z : world_.types[type].footprint_x
+    );
+    const auto fz = static_cast<int32_t>(
+        turned ? world_.types[type].footprint_x : world_.types[type].footprint_z
+    );
     const auto width = static_cast<int32_t>(spatial_.terrain_width);
     const auto height = static_cast<int32_t>(spatial_.terrain_height);
     // Packed cell_x/cell_z >= 0 and footprint inside the far border.
     if (cell_x < 0 || cell_z < 0 || width <= cell_x + fx || height <= cell_z + fz)
         return oob;
     if (world_.types[type].bm_code == 0)
-        return building_site_clear(type, cell_x, cell_z, 0);
+        return building_site_clear(type, cell_x, cell_z, 0, {facing});
     if (occupancy_kind != 1)
         return true;
     uint8_t max_slope = 255, max_water_slope = 255;

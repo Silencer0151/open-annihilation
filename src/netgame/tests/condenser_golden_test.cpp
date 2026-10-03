@@ -6,7 +6,9 @@
 // that compression cannot shrink and a compressible payload sent with
 // compression off, the datagram put on the wire must match the size and
 // 64-bit FNV-1a below on every platform (the short one byte for byte), and
-// a receiving condenser must unwrap each back to its payload.
+// a receiving condenser must unwrap each back to its payload. Datagrams a
+// 3.1c machine sent in a network game unwrap, and the condenser compresses
+// their payloads back into the same bytes.
 #include "oa/netgame/condenser.hpp"
 
 #include <algorithm>
@@ -283,10 +285,72 @@ void datagrams_match_pins() {
     check(same, "short text datagram is {" + listing + "}");
 }
 
+// Compressed datagrams a 3.1c machine sent to this engine, as captured on the
+// network (the payloads of its DirectPlay messages after the two player ids).
+struct CapturedDatagram {
+    const char* name{};
+    const char* hex{};
+};
+
+constexpr std::array<CapturedDatagram, 4> captured{{
+    {"a player setup block and its team, from a battle room",
+     "045a1b07d6fa2607284a6b656d0f625f10637d60677c78eb7f19551a431f711c5f25ad26bb2325882f9a22ab"
+     "2ecd2f2f1719dec72f753f379930323a36723c374a2048b944464717614cf42546456a2d595453000005"},
+    {"a probe and the slot table",
+     "04c40701fb1406012e2ee6ff17a72b8e1032d313361417176718199f1e000023"},
+    {"six unit-state records of one tick each",
+     "041f3b01fb14062b0309cd030c5f0e3f1010124214dd8e17d1085c1a391dd4ec2164c20d242522637a126b28"
+     "2c2dee25102e0726d4d9b024883b7e3f10103ef4e14343d34067dee7d9434ad24c4c6cbfaf8edb7954f11617"
+     "f8598a6f0c5bf2de64513262c8788667ea6d5b6b4ea19a6b7cd0731374ea77fd75187262ac7861f1d1a28407"
+     "d4b6128158880671bf898f000033"},
+    {"unit-state records that compression shortens by one byte",
+     "047f8e01fb14062b2909b96c0c0f0e1f10f00a1614111256b81983191cdd14bf2021320684cf29962929061a"
+     "282d9abe301d32b53a4d763623394a3a1f7c3d1540b1bd5cca14460708607a495c770e4efc705043580dc450"
+     "597a583b5ce8cd5f6ff18b6258645766e06aee6a7ccfee586052700d74c377c67d717a667ebebb7aa8e58733"
+     "048166b789fb4f8b8b5d8f2fd3f1fc0bc415c9768209922d8c999a9f57a5f0a3d0ad6acab8b00a99e83da80f"
+     "a6b1b223d03e76ba38b73bfb050abe1e50b0a2c4b4c4b6c6a34dde03cdfdee4fe0e6d9a36806dfc7d49989db"
+     "fc57e3dc20e121736dedbee618eeea45bceb2a6fe540f6e5b5a476f2aafeefcbf84a3ff828e1000f6e0447b7"
+     "017e0b2c0c716e1fd0511073fc9501a7381c0d792c5d12088023e323a42d52ad2b182b74b92b8d6f0805353b"
+     "26358e843d06d63a70253d0b6251510000ec"},
+}};
+
+/// Returns the bytes a string of hexadecimal digit pairs spells.
+///
+/// @param hex digits, two to a byte
+/// @return the bytes
+Bytes from_hex(std::string_view hex) {
+    Bytes bytes;
+    const auto digit = [](char c) {
+        return static_cast<uint8_t>(c <= '9' ? c - '0' : c - 'a' + 10);
+    };
+    for (size_t i = 0; i + 1 < hex.size(); i += 2)
+        bytes.push_back(static_cast<uint8_t>(digit(hex[i]) << 4 | digit(hex[i + 1])));
+    return bytes;
+}
+
+/// Unwraps each captured datagram and condenses its payload again: the
+/// engine's compression is 3.1c's, byte for byte.
+void captured_datagrams_compress_alike() {
+    for (const auto& sample : captured) {
+        const Bytes datagram = from_hex(sample.hex);
+        check(
+            !datagram.empty() && datagram[0] == condenser_type_compressed,
+            std::string(sample.name) + " was sent compressed"
+        );
+        const Bytes payload = unwrap(datagram);
+        check(!payload.empty(), std::string(sample.name) + " unwraps");
+        check(
+            condense(payload, true) == datagram,
+            std::string(sample.name) + " compresses back into the bytes 3.1c sent"
+        );
+    }
+}
+
 } // namespace
 
 int main() {
     datagrams_match_pins();
+    captured_datagrams_compress_alike();
     if (failures != 0)
         return 1;
     std::cout << "condenser golden datagrams passed\n";

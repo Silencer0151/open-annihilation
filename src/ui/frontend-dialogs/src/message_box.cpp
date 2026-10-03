@@ -3,6 +3,7 @@
 
 // MSGBOX.GUI: a wrapped message with an optional OK button.
 #include "dialog_internal.hpp"
+#include "oa/data/defs/layout.hpp"
 
 #include "oa/formats/fnt.hpp"
 #include "oa/ui/decoded.hpp"
@@ -15,7 +16,7 @@ namespace oa::ui::frontend_dialogs {
 
 namespace {
 
-constexpr const char* kLayout = "guis/msgbox.gui";
+constexpr const char* kLayout = "msgbox.gui";
 constexpr const char* kLineFont = "COMIX";  // the active FNT font while the frontend runs
 constexpr std::size_t kMessageBytes = 0xfe; // bounded copy before the line split
 constexpr int16_t kFirstLineY = 0x14;
@@ -36,8 +37,13 @@ bool open_message_box(
     int32_t show_ok,
     int32_t fit_width
 ) {
-    auto* dialog =
-        dialog_push(ctx, DialogKind::message_box, kLayout, nullptr, panel_flag::shade_below);
+    auto* dialog = dialog_push(
+        ctx,
+        DialogKind::message_box,
+        oa::data::defs::gui_path(kLayout).c_str(),
+        nullptr,
+        panel_flag::shade_below
+    );
     if (dialog == nullptr)
         return false;
     auto& gadgets = dialog->resources.layout.gadgets;
@@ -119,7 +125,7 @@ bool open_continue_watching(app::ScreenContext* ctx, void* context, void (*chose
     auto* dialog = dialog_push(
         ctx,
         DialogKind::continue_watching,
-        "guis/yesorno.gui",
+        oa::data::defs::gui_path("yesorno.gui").c_str(),
         nullptr,
         panel_flag::centre | panel_flag::shade_below
     );

@@ -16,6 +16,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 
 namespace oa::ui::hud {
 
@@ -33,6 +34,17 @@ struct UnitPanelHooks {
     bool (*can_see)(void* context, const Player& viewer, const Unit& unit){};
     /// Language lookup of the panel's words, given `context`; null keeps them as they are.
     Localize localize{};
+    /// Veterancy level a unit's kill line is labelled with (ui.veterancy-label,
+    /// veterancy_label_level); null labels it "Veteran" from kVeteranKills on.
+    uint32_t (*veterancy_level)(void* context, const Unit& unit){};
+    /// Units whose owner allies the viewer show what the viewer's own units do
+    /// (ui.allied-unit-display): rates, kills, mission, head-order target and
+    /// stockpile, and the damage bar of a type that hides it. False: own units only.
+    bool allied_units_shown{};
+    /// The viewer is every player's ally: a replay viewer without a slot of
+    /// its own under recorder.ten-player-replay allied-fake-player. With
+    /// allied_units_shown every player's units then show what own units do.
+    bool viewer_allies_every_player{};
 };
 
 /// What the unit panel shows at UNITNAME2 and DAMAGEBAR2.
@@ -114,21 +126,23 @@ struct UnitPanelSnapshot {
 ///
 /// The button names a unit type by its unit name, of which the first
 /// kButtonUnitNameBytes characters count; kBuildMenuButton shows nothing.
-/// The line is the type's name, then "  M:" and "E:" with its whole metal and
-/// energy costs.
+/// The line is the type's name in the player's language
+/// (oa::data::languages::unit_display_name), then "  M:" and "E:" with its
+/// whole metal and energy costs.
 ///
 /// @param world unit types
 /// @param button_name the hovered button's name
 /// @param[out] name_line receives the cost line
 /// @param name_size bytes of `name_line`
-/// @param[out] description receives the type's description; null when nothing is shown
+/// @param[out] description receives the type's description in the player's
+///     language; empty when nothing is shown
 /// @return false when the button names no unit type or is kBuildMenuButton
 bool build_button_readout(
     const World& world,
     const char* button_name,
     char* name_line,
     size_t name_size,
-    const char** description
+    std::string_view* description
 );
 
 /// Formats the line the feature under the cursor (Game.cursor_feature) shows at NAME.

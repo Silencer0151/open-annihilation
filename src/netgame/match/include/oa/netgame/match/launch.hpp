@@ -72,6 +72,14 @@ void match_apply_host_options(World* world, const PlayerSetupInfo& host) noexcep
 /// @param[in,out] world Match world whose Game.visibility_flags may change.
 void match_apply_watcher_view(World* world) noexcept;
 
+/// Shows the local view the whole map, as a watcher sees it: turns the
+/// host's mapping and line-of-sight rules off and keeps the line-of-sight
+/// type. match_apply_watcher_view does this for a watching local slot; a
+/// replay that leaves the viewer no slot of its own does it for the viewer.
+///
+/// @param[in,out] world Match world whose Game.visibility_flags change.
+void match_show_whole_map(World* world) noexcept;
+
 /// Returns the player count the multiplayer map schema is chosen for.
 ///
 /// @param game Game holding the host's slot table (Game.slot_table, record 0x26).

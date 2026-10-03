@@ -25,6 +25,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -66,8 +67,10 @@ struct FullCardPage {
 
 /// A quad a painter after the fog asked the card to draw over the world
 /// under it, in place of reading and shading the world itself: the kill
-/// board's shade and light levels and the +stats panel's fills
-/// (Runtime::paint_world_level, Runtime::paint_world_blend).
+/// board's shade and light levels, the +stats panel's fills and the
+/// shadow, outline and partly covered letters of game text in the modern
+/// fonts (Runtime::paint_world_level, Runtime::paint_world_blend,
+/// Runtime::paint_world_minimum).
 struct FullWorldQuad {
     int32_t x{}; ///< battlefield pixels, from the battlefield's top-left corner
     int32_t y{};
@@ -76,6 +79,30 @@ struct FullWorldQuad {
     card::Colour colour{}; ///< through the display gamma, at the quad's alpha
     card::Blend blend{card::Blend::alpha};
 };
+
+/// Draws the quads a Full frame's painters asked the card for over a
+/// picture of the frame on the processor, in paint order, each by its
+/// blend computed exactly, as the checks hold the card's picture to it.
+///
+/// @param quads the quads, in pixels of the battlefield
+/// @param minimum_composed the renderer takes the minimum blend; where it
+///     does not, a minimum quad blends as alpha (card::Capabilities)
+/// @param[in,out] picture the picture's pixels, red, green and blue, top row first
+/// @param width the picture's columns
+/// @param height its rows
+/// @param origin_x the column of the battlefield's left edge in the picture
+/// @param origin_y the row of its top edge
+/// @return for each pixel of the picture, how many quads lie over it, at
+///         most 255
+[[nodiscard]] std::vector<uint8_t> replay_world_quads(
+    std::span<const FullWorldQuad> quads,
+    bool minimum_composed,
+    std::vector<uint8_t>& picture,
+    uint32_t width,
+    uint32_t height,
+    int32_t origin_x,
+    int32_t origin_y
+);
 
 struct Runtime::FullPresentation {
     /// What a terrain atlas was built from: the map by the storage and size
@@ -250,6 +277,10 @@ struct Runtime::FullPresentation {
     uint32_t frame_camera_x{};
     uint32_t frame_camera_y{};
     float frame_zoom{};
+    /// The canvas frame's pixels, which the painters after the fog reach
+    /// through whichever surface holds them while they paint
+    /// (paints_full_canvas); null before the canvas is cleared.
+    const uint8_t* canvas_pixels{};
     TiledTexture overlay_texture;
     std::vector<uint8_t> overlay; ///< ARGB8888 words, the battlefield's size
     std::vector<uint8_t> opaque_bands;
@@ -257,7 +288,7 @@ struct Runtime::FullPresentation {
     bool overlay_uploaded{};
     ScaledWorldCounts counts; ///< what the overlay's texture was made of
     /// The quads the painters after the fog asked for this frame, in paint
-    /// order (paint_world_level, paint_world_blend).
+    /// order (paint_world_level, paint_world_blend, paint_world_minimum).
     std::vector<FullWorldQuad> world_quads;
 
     // What the last Full match frame drew, for the checks and the statistics.

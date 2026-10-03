@@ -19,11 +19,17 @@ in this repository or in the release packages.
 |---|---|---|---|---|---|
 | [SDL](#sdl) | 3.4.16 | zlib | static | static | static |
 | [zlib](#zlib) | 1.3.1 | zlib | static | static | static |
+| [FreeType](#freetype) | 2.14.3 | FreeType License | static | static | static |
+| [DejaVu fonts](#dejavu-fonts) | 2.37, DejaVu Sans and DejaVu Sans Bold | Bitstream Vera and Arev licences; DejaVu changes public domain | font files | font files | font files |
+| [Noto Sans CJK](#noto-sans-cjk) | 2.004, SC Bold, cut to the common characters | SIL Open Font License 1.1 | font file | font file | font file |
+| [Noto Emoji](#noto-emoji) | 3.002, monochrome | SIL Open Font License 1.1 | font file | font file | font file |
 | [stb_vorbis](#stb_vorbis) | 1.22, changed | public domain or MIT | static | static | static |
 | [dr_mp3 and dr_flac](#dr_mp3-and-dr_flac) | 0.7.3 and 0.13.3, with later fixes | public domain or MIT No Attribution | static | static | static |
 | [mingw-w64 runtime and winpthreads](#mingw-w64-runtime-and-winpthreads) | 15.0.0 | ZPL 2.1, MIT, BSD | | static | |
 | [LLVM runtime libraries](#llvm-runtime-libraries) (libc++, libc++abi, libunwind, compiler-rt) | 23.1.2 | Apache 2.0 with LLVM Exceptions | | static | |
 
+The font files are in the `fonts` folder beside `open-annihilation`, and on
+macOS in the game's bundle, `open-annihilation.app/Contents/Resources/fonts`.
 The operating system's own libraries, such as the C and C++ runtimes and
 the graphics, audio and windowing libraries, are not included.
 
@@ -51,6 +57,12 @@ repository with CMake links these components as follows:
   SDL 3.4.16 for arm64 and x86_64 as static libraries with
   `tools/bootstrap_macos_deps.py` and links them into the application, as
   the macOS package in the table above has them.
+- FreeType and the fonts come from `tools/bootstrap_text_fonts.py`, which
+  builds FreeType 2.14.3 as a static library into `local/deps` and puts the
+  fonts in `local/deps/text-fonts`; the build links that FreeType and copies
+  the fonts beside the game. A build CMake points at another FreeType 2.10
+  or later links that one instead. The macOS release build and the Windows
+  cross-build build the same FreeType for their targets.
 - The movies and music need no other library; the `ffmpeg` program that
   video capture and the director's renders start (docs/capture.md) is a
   separate program that no package contains.
@@ -157,6 +169,56 @@ All packages link zlib 1.3.1 statically, from
 > 2. Altered source versions must be plainly marked as such, and must not be
 >    misrepresented as being the original software.
 > 3. This notice may not be removed or altered from any source distribution.
+
+## FreeType
+
+FreeType 2.14.3, from <https://download.savannah.gnu.org/releases/freetype/>
+(SHA-256 `e61b31ab26358b946e767ed7eb7f4bb2e507da1cfefeb7a8861ace7fd5c899a1`),
+draws the fonts. It is linked statically, unmodified, built without zlib,
+bzip2, PNG, HarfBuzz or Brotli and with only its TrueType and CFF drivers,
+their helpers, the auto-hinter and the two rasterizers. It is used under the
+FreeType License; the full text is in
+[`licenses/FreeType-FTL.txt`](licenses/FreeType-FTL.txt).
+
+> Portions of this software are copyright © 2026 The FreeType
+> Project (https://freetype.org).  All rights reserved.
+
+## DejaVu fonts
+
+DejaVu Sans and DejaVu Sans Bold 2.37, unmodified, from
+<https://github.com/dejavu-fonts/dejavu-fonts/releases/tag/version_2_37>
+(`dejavu-fonts-ttf-2.37.zip`, SHA-256
+`7576310b219e04159d35ff61dd4a4ec4cdba4f35c00e002a136f00e96a908b0a`), draw
+Latin, Greek, Cyrillic and symbols. Fonts are (c) Bitstream; DejaVu changes
+are in the public domain; glyphs imported from the Arev fonts are (c)
+Tavmjong Bah. Copyright (c) 2003 by Bitstream, Inc. All Rights Reserved.
+Bitstream Vera is a trademark of Bitstream, Inc. The licence, with its
+conditions and disclaimer, is in
+[`licenses/DejaVu-LICENSE.txt`](licenses/DejaVu-LICENSE.txt).
+
+## Noto Sans CJK
+
+Noto Sans CJK SC Bold 2.004, from the `NotoSansCJK-Bold.ttc` collection of
+<https://github.com/notofonts/noto-cjk> at the release tag `Sans2.004`
+(SHA-256 `faa5f3656a78b2e2d450d27fe8382c778bc2b6bb5ea29c986664a6a435056ceb`),
+draws Chinese, Japanese and Korean. The packages hold the Simplified Chinese
+face of the collection, cut down by `tools/bootstrap_text_fonts.py` to the
+characters of GB 2312, of Big5's symbols and common hanzi, of JIS X 0208 and
+of KS X 1001 without its hanja, with the CJK punctuation, kana, bopomofo,
+Hangul jamo and full-width forms, and without its layout tables; nothing
+else in it is changed. © 2014-2021 Adobe (http://www.adobe.com/). It is
+licensed under the SIL Open Font License, Version 1.1; the text is in
+[`licenses/NotoSansCJK-OFL.txt`](licenses/NotoSansCJK-OFL.txt).
+
+## Noto Emoji
+
+Noto Emoji 3.002, the monochrome emoji font, unmodified, from
+<https://github.com/google/fonts/tree/main/ofl/notoemoji> at commit
+`b979dba422e445492b0eb9951ac52ee0b4d648c3` (`NotoEmoji[wght].ttf`, SHA-256
+`de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551`), shipped
+as `NotoEmoji.ttf`, draws emoji in the colour of the text. Copyright 2013
+Google LLC. It is licensed under the SIL Open Font License, Version 1.1; the
+text is in [`licenses/NotoEmoji-OFL.txt`](licenses/NotoEmoji-OFL.txt).
 
 ## mingw-w64 runtime and winpthreads
 

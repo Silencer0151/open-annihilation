@@ -89,7 +89,11 @@ struct Fixture {
     Scenario scenario;
     std::unique_ptr<sim::match_runtime::Match> match;
 
-    explicit Fixture(uint32_t downloadable_type = 0, bool builder_income = true) {
+    explicit Fixture(
+        uint32_t downloadable_type = 0,
+        bool builder_income = true,
+        const data::match_rules::MatchRules& rules = {}
+    ) {
         map.attribute_width = map.attribute_height = map_cells;
         map.attributes.resize(map_cells * map_cells);
         plots.resize(map_cells * map_cells);
@@ -165,6 +169,7 @@ struct Fixture {
             2,    0,      30,    1,      &scenario, [] { return 1000u; }, plots, {}, 0,  0,
             0.0F, {}
         };
+        input.rules = rules;
         match = std::make_unique<sim::match_runtime::Match>(input, services);
         match->set_difficulty(OA_DIFFICULTY_MEDIUM);
         for (uint8_t p = 0; p < 2; ++p) {
@@ -280,6 +285,63 @@ void campaign_computer_skips_downloadable_types() {
         CHECK(built == !campaign);
     }
 }
+
+// The ai.* rules at their 3.1c values (every parameter's baseline, the hacks turned on)
+// play the same game as no rules; at the values a mod sets they still build, through the
+// match's own host (its secondary order queues among the factory tick's queries).
+void computer_rules_through_the_match() {
+    namespace rules = data::match_rules;
+    const auto play = [](const rules::MatchRules& given) {
+        Fixture f(0, true, given);
+        f.spawn(0, vehicle, 8, 8);
+        f.spawn(computer, vehicle, 40, 40);
+        CHECK(sim::ai::configure_match_computer_players(*f.match, profile, build_lists, false));
+        f.run(run_ticks, [] { return false; });
+        std::vector<int64_t> state;
+        for (const auto& slot : f.match->world().slots) {
+            if (!slot.unit)
+                continue;
+            state.push_back(slot.record.type_index);
+            state.push_back(slot.record.position.x);
+            state.push_back(slot.record.position.z);
+            state.push_back(slot.record.squad);
+        }
+        state.push_back(static_cast<int64_t>(f.count(computer, collector)));
+        return state;
+    };
+    rules::MatchRules baseline_on{};
+    baseline_on.ai.difficulty_names.enabled = true;
+    baseline_on.ai.factory_tick_filter.enabled = true;
+    baseline_on.ai.builder_withhold_threshold.enabled = true;
+    baseline_on.ai.attack_wave_size.enabled = true;
+    baseline_on.ai.patrol_group_size.enabled = true;
+    baseline_on.ai.squad_assignment.enabled = true;
+    baseline_on.ai.nearest_enemy_filter.enabled = true;
+    const auto base = play({});
+    CHECK(base.back() != 0);
+    CHECK(play(baseline_on) == base);
+
+    rules::MatchRules modded{};
+    auto& ai = modded.ai;
+    ai.difficulty_names.enabled = true;
+    ai.difficulty_names.names = {
+        rules::AiDifficultyNamesNames::hard,
+        rules::AiDifficultyNamesNames::medium,
+        rules::AiDifficultyNamesNames::easy
+    };
+    ai.squad5_factory_tick.enabled = true;
+    ai.factory_tick_filter = {true, true, rules::AiFactoryTickFilterPowerToggle::energy_use_32};
+    ai.builder_withhold_threshold = {true, 10};
+    ai.commander_keeps_orders_when_damaged.enabled = true;
+    ai.attack_wave_size = {true, 10};
+    ai.patrol_group_size = {true, 15};
+    ai.patrol_null_enemy_skip.enabled = true;
+    ai.squad_assignment = {true, rules::AiSquadAssignmentRules::role_squads};
+    ai.nearest_enemy_filter = {true, rules::AiNearestEnemyFilterRules::skip_submerged};
+    const auto modded_game = play(modded);
+    CHECK(modded_game.back() != 0);
+    CHECK(play(modded) == modded_game);
+}
 } // namespace
 
 int main() {
@@ -287,6 +349,7 @@ int main() {
         computer_builds_from_its_profile_and_lists();
         computer_without_income_skips_the_collector();
         campaign_computer_skips_downloadable_types();
+        computer_rules_through_the_match();
     } catch (const std::exception& error) {
         std::cerr << "computer build test failed: " << error.what() << '\n';
         return 1;

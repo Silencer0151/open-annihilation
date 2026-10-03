@@ -20,18 +20,45 @@ constexpr uint32_t construction_interval_ticks = 90;
 constexpr uint32_t structures_interval_ticks = 30;
 constexpr uint32_t air_raid_base_ticks = 30;
 constexpr uint32_t air_raid_jitter_ticks = 900;
-constexpr int32_t air_raid_group_size = 5;
 constexpr uint32_t siege_base_ticks = 30;
 constexpr uint32_t siege_jitter_ticks = 150;
 constexpr uint32_t siege_turn_odds = 10;         // one run in this many turns the search
 constexpr int32_t siege_step_length = 0x1400000; // 320 world units
 constexpr int32_t siege_search_radius = 160;     // world units around the searched point
-constexpr int32_t commander_factory_quota = 5;
+// Builder-capable units from which a capturing builder that is idle circles the base
+// instead of waiting near it; ai.builder-withhold-threshold leaves it at 5.
+constexpr int32_t commander_patrol_quota = 5;
 constexpr int32_t builder_patrol_radius = 0x1400000;   // 320 world units
 constexpr int32_t builder_nudge_radius = 0x100000;     // 16 world units
 constexpr int32_t commander_patrol_radius = 0x2800000; // 640 world units
 constexpr uint8_t order_preserve_busy = 0x08;          // bit of Order::preserve_flags
 constexpr uint8_t order_queue_idle = 0x40;             // bit of OrderState::command_flags
+// EnergyUse from which the factory tick's power toggle runs under ai.factory-tick-filter's
+// energy-use-32: the float's top byte, read as a signed number, at least this (32.0 and up).
+constexpr int32_t power_toggle_energy_use_top_byte = 0x42;
+// EnergyUse above which a building joins the structures squad under the role-squad rules:
+// the float's high 16 bits, read as a signed number, above this (58.5 and up).
+constexpr int32_t role_squads_energy_use_high_word = 0x4269;
+// MaxWaterDepth from which a mobile unit joins the navy under the role-squad rules.
+constexpr int16_t role_squads_navy_max_water_depth = 128;
+
+/// Returns the bits of a float.
+///
+/// @param value the float
+/// @return its IEEE 754 single-precision bits
+uint32_t float_bits(float value) noexcept {
+    uint32_t bits = 0;
+    std::memcpy(&bits, &value, sizeof bits);
+    return bits;
+}
+
+/// Returns the AI rules the computer players play by.
+///
+/// @param state computer players
+/// @return the match's ai.* rules; 3.1c's for a null state
+const data::match_rules::AiRules& ai_rules(const ComputerPlayers* state) noexcept {
+    return state != nullptr ? state->rules.rules().ai : data::match_rules::baseline_match_rules.ai;
+}
 
 int32_t word(oa_fixed value) noexcept {
     return static_cast<int16_t>(static_cast<uint32_t>(value) >> 16);
@@ -143,18 +170,36 @@ bool home_centroid(
 
 /// Finds the nearest live unit of any player the controller is not allied with.
 ///
+/// Under ai.nearest-enemy-filter's skip-submerged rules the search also passes over units
+/// whose occupancy or move-rate bits hold state 2 or 3, and a task that does not recruit
+/// from the navy passes over fully submerged units; the naval strike still finds them.
+///
+/// @param state computer players, for the rules
 /// @param host alliances and world
 /// @param ai the player's controller
+/// @param task the task searching: its source squad says whether it recruits from the navy
 /// @param at reference point, 16.16 world coordinates
 /// @return the unit, or null
+/// @quirk Under skip-submerged only the naval strike finds fully submerged units: every
+///        other task that searches, the aircraft task among them, passes over them.
 oa::Unit* nearest_enemy(
-    const ComputerHost& host, const ComputerPlayer& ai, const oa::FixedVec3& at
+    const ComputerPlayers* state,
+    const ComputerHost& host,
+    const ComputerPlayer& ai,
+    const ComputerTask& task,
+    const oa::FixedVec3& at
 ) noexcept {
     uint8_t relation[OA_PLAYER_COUNT + 1]{};
     for (uint8_t i = 0; i < OA_PLAYER_COUNT; ++i)
         relation[i] = host.allied(host.context, ai.player, i) ? 1 : 0;
     relation[OA_PLAYER_COUNT] = 1;
-    return sim::simulation_state::nearest_candidate_unit(*host.world, relation, at.x, at.z);
+    sim::simulation_state::CandidateFilter filter{};
+    if (ai_rules(state).nearest_enemy_filter.rules ==
+        data::match_rules::AiNearestEnemyFilterRules::skip_submerged) {
+        filter.widened_flags = true;
+        filter.skip_submerged = task.source_squad != Squad::navy;
+    }
+    return sim::simulation_state::nearest_candidate_unit(*host.world, relation, at.x, at.z, filter);
 }
 
 enum class Command : uint8_t { move, patrol, attack };
@@ -280,10 +325,13 @@ void recruit_squad(
 /// Recruits, then rallies at home until big enough, then attacks the nearest enemy
 /// unit. Runs again in 300 ticks.
 ///
+/// @param state computer players, for the rules
 /// @param host squads, orders and world
 /// @param ai the player's controller
 /// @param[in,out] task strike task; its attacking flag and next tick are updated
-void run_strike(const ComputerHost& host, ComputerPlayer& ai, ComputerTask& task) noexcept {
+void run_strike(
+    const ComputerPlayers* state, const ComputerHost& host, ComputerPlayer& ai, ComputerTask& task
+) noexcept {
     task.next_tick = tick_of(host) + strike_interval_ticks;
     recruit_squad(host, ai, task, task.source_squad, task.merge_radius);
     if (squad_empty(host, ai, task.squad))
@@ -303,7 +351,7 @@ void run_strike(const ComputerHost& host, ComputerPlayer& ai, ComputerTask& task
     task.attacking = 1;
     oa::FixedVec3 center{};
     (void)squad_centroid(host, ai, task.squad, &center);
-    const auto* target = nearest_enemy(host, ai, center);
+    const auto* target = nearest_enemy(state, host, ai, task, center);
     if (target == nullptr)
         return;
     const auto target_slot = static_cast<uint16_t>(oa::world_unit_slot(host.world, target));
@@ -329,23 +377,32 @@ void run_rally(const ComputerHost& host, ComputerPlayer& ai, ComputerTask& task)
 /// Runs the aircraft task.
 ///
 /// Small wings scout around the base (or patrol to the nearest enemy before a base
-/// exists); wings of five or more patrol to a random map edge. Runs again in 30 plus a
-/// random 0..899 ticks.
+/// exists); wings of five or more (ai.patrol-group-size) patrol to a random map edge.
+/// Under ai.patrol-null-enemy-skip a small wing without a base patrols to a random map
+/// edge too, drawing as a large wing does. Runs again in 30 plus a random 0..899 ticks.
 ///
+/// @param state computer players, for the rules
 /// @param host squads, orders, random stream and world
 /// @param ai the player's controller
 /// @param[in,out] task air raid task
-void run_air_raid(const ComputerHost& host, ComputerPlayer& ai, ComputerTask& task) noexcept {
+void run_air_raid(
+    const ComputerPlayers* state, const ComputerHost& host, ComputerPlayer& ai, ComputerTask& task
+) noexcept {
     task.next_tick =
         tick_of(host) + host.random(host.context, air_raid_jitter_ticks) + air_raid_base_ticks;
+    const auto& rules = ai_rules(state);
     const auto world_x = host.map_cells_x << 4;
     const auto world_z = host.map_cells_z << 4;
-    if (static_cast<int32_t>(squad_size(host, ai, task.squad)) < air_raid_group_size) {
-        const auto base = base_position(ai);
-        if ((static_cast<uint32_t>(base.x) >> 16 | static_cast<uint32_t>(base.z) >> 16) == 0) {
+    const auto base = base_position(ai);
+    const bool no_base =
+        (static_cast<uint32_t>(base.x) >> 16 | static_cast<uint32_t>(base.z) >> 16) == 0;
+    const bool small_wing =
+        static_cast<int32_t>(squad_size(host, ai, task.squad)) < rules.patrol_group_size.units;
+    if (small_wing && !(no_base && rules.patrol_null_enemy_skip.enabled)) {
+        if (no_base) {
             oa::FixedVec3 center{};
             (void)squad_centroid(host, ai, task.squad, &center);
-            const auto* target = nearest_enemy(host, ai, center);
+            const auto* target = nearest_enemy(state, host, ai, task, center);
             if (target != nullptr)
                 order_squad(host, ai, task.squad, Command::patrol, true, 0, &target->position);
             return;
@@ -458,9 +515,28 @@ void run_siege(
     }
 }
 
-/// Runs the structures task: metal makers follow the energy surplus; idle factories queue one pick.
+/// Tells whether the structures task's power toggle runs for a building type.
 ///
-/// Runs again in 30 ticks.
+/// @param filter the match's ai.factory-tick-filter rule
+/// @param type the building's type
+/// @return true for a metal maker (MakesMetal), or under energy-use-32 for a type whose
+///         EnergyUse is 32 or more
+/// @quirk energy-use-32 reads the float's top byte as a signed number, at least 0x42: any
+///        negative EnergyUse fails it.
+bool runs_power_toggle(
+    const data::match_rules::AiFactoryTickFilter& filter, const ComputerType& type
+) noexcept {
+    if (filter.power_toggle == data::match_rules::AiFactoryTickFilterPowerToggle::energy_use_32)
+        return static_cast<int8_t>(float_bits(type.energy_use) >> 24) >=
+               power_toggle_energy_use_top_byte;
+    return type.makes_metal != 0;
+}
+
+/// Runs the structures task: power users follow the energy surplus; idle factories queue one pick.
+///
+/// The power toggle runs for metal makers, or under ai.factory-tick-filter's energy-use-32
+/// for buildings using 32 energy or more; under its skip-busy-background-queue a building
+/// whose secondary order queue holds an order is left alone. Runs again in 30 ticks.
 ///
 /// @param state computer players and their type table
 /// @param host squads, orders, random stream and world
@@ -470,6 +546,7 @@ void run_structures(
     ComputerPlayers* state, const ComputerHost& host, ComputerPlayer& ai, ComputerTask& task
 ) noexcept {
     task.next_tick = tick_of(host) + structures_interval_ticks;
+    const auto& filter = ai_rules(state).factory_tick_filter;
     const auto& player = host.world->game.players[ai.player];
     for (uint32_t i = 0; i < squad_size(host, ai, task.squad); ++i) {
         const auto slot = squad_member(host, ai, task.squad, i);
@@ -477,10 +554,13 @@ void run_structures(
         if (unit == nullptr || (unit->flags & OA_UNIT_FLAG_BUILDING) == 0 ||
             !oa::unit_is_live_target(unit->flags))
             continue;
+        if (filter.skip_busy_background_queue && host.secondary_order != nullptr &&
+            host.secondary_order(host.context, slot))
+            continue;
         const auto* type = computer_type(state, unit->type_index);
         if (type == nullptr)
             continue;
-        if (type->makes_metal != 0) {
+        if (runs_power_toggle(filter, *type)) {
             bool on = false;
             if (player.energy > player.metal + player.metal) {
                 if (!(player.energy_produced - player.energy_requested > 0.0F))
@@ -507,16 +587,20 @@ void run_structures(
 ///
 /// Each builder places a weighted pick near the base; idle ones patrol home.
 /// Capturing builders (commanders) build only while the player has fewer than five
-/// build-capable units and otherwise circle the base. Runs again in 90 ticks.
+/// build-capable units (ai.builder-withhold-threshold), and once idle circle the base
+/// from five. Runs again in 90 ticks.
 ///
 /// @param state computer players and their type table
 /// @param host squads, orders, placement queries, random stream and world
 /// @param ai the player's controller
 /// @param[in,out] task construction task
+/// @quirk ai.builder-withhold-threshold moves only the build limit: an idle capturing builder
+///        still circles the base from five build-capable units.
 void run_construction(
     ComputerPlayers* state, const ComputerHost& host, ComputerPlayer& ai, ComputerTask& task
 ) noexcept {
     task.next_tick = tick_of(host) + construction_interval_ticks;
+    const auto withhold_from = ai_rules(state).builder_withhold_threshold.builders;
     const auto base = base_position(ai);
     for (uint32_t i = 0; i < squad_size(host, ai, task.squad); ++i) {
         const auto slot = squad_member(host, ai, task.squad, i);
@@ -525,8 +609,8 @@ void run_construction(
         if (type == nullptr || type->build_count == 0)
             continue;
         const bool captures = (type->abilities & OA_UNIT_DEF_ABILITY_CAN_CAPTURE) != 0;
-        if (captures && (builder_count(ai) >= commander_factory_quota ||
-                         tick_of(host) < ai.commander_build_tick))
+        if (captures &&
+            (builder_count(ai) >= withhold_from || tick_of(host) < ai.commander_build_tick))
             continue;
         uint8_t preserve = 0, queue = 0;
         if (host.primary_order(host.context, slot, &preserve, &queue) &&
@@ -560,7 +644,7 @@ void run_construction(
             (queue & order_queue_idle) == 0)
             continue;
         const bool captures = (type->abilities & OA_UNIT_DEF_ABILITY_CAN_CAPTURE) != 0;
-        if (captures && builder_count(ai) < commander_factory_quota)
+        if (captures && builder_count(ai) < commander_patrol_quota)
             continue;
         oa::FixedVec3 destination = base;
         if (captures) {
@@ -614,7 +698,8 @@ void run_construction(
 
 /// Sorts the player's unsorted units into squads and sets their standing orders.
 ///
-/// Fire at will, and roam, or manoeuvre for capturing units.
+/// Fire at will, and roam, or manoeuvre for capturing units; under the role-squad rules
+/// (ai.squad-assignment), manoeuvre for commanders (OA_UNIT_DEF_ABILITY_COMMANDER).
 ///
 /// @param state computer players and their type table
 /// @param host squad assignment and world
@@ -625,6 +710,10 @@ void sort_squads(ComputerPlayers* state, const ComputerHost& host, ComputerPlaye
     auto* units = oa::world_player_units(host.world, &player, &count);
     if (units == nullptr)
         return;
+    const auto rules = ai_rules(state).squad_assignment.rules;
+    const uint32_t manoeuvre_ability = rules == data::match_rules::AiSquadAssignmentRules::base
+                                           ? OA_UNIT_DEF_ABILITY_CAN_CAPTURE
+                                           : OA_UNIT_DEF_ABILITY_COMMANDER;
     for (uint32_t i = 0; i < count; ++i) {
         auto& unit = units[i];
         if ((unit.flags & OA_UNIT_FLAG_SELECTABLE) == 0)
@@ -632,16 +721,15 @@ void sort_squads(ComputerPlayers* state, const ComputerHost& host, ComputerPlaye
         const auto* type = computer_type(state, unit.type_index);
         if (type == nullptr)
             continue;
-        const auto move_order = (type->abilities & OA_UNIT_DEF_ABILITY_CAN_CAPTURE) != 0
-                                    ? standing_move_manoeuvre
-                                    : standing_move_roam;
+        const auto move_order = (type->abilities & manoeuvre_ability) != 0 ? standing_move_manoeuvre
+                                                                           : standing_move_roam;
         unit.flags = (unit.flags & ~OA_UNIT_FLAG_MOVE_ORDER_MASK) |
                      (move_order << OA_UNIT_FLAG_MOVE_ORDER_SHIFT);
         unit.flags = (unit.flags & ~OA_UNIT_FLAG_FIRE_ORDER_MASK) |
                      (standing_fire_at_will << OA_UNIT_FLAG_FIRE_ORDER_SHIFT);
         if (unit.squad != 0)
             continue;
-        const auto squad = computer_sort_squad(unit, *type);
+        const auto squad = computer_sort_squad(unit, *type, rules);
         if (squad != Squad::none)
             host.set_squad(
                 host.context, static_cast<uint16_t>(oa::world_unit_slot(host.world, &unit)), squad
@@ -657,7 +745,7 @@ void run_task(
         run_structures(state, host, ai, task);
         break;
     case TaskKind::strike:
-        run_strike(host, ai, task);
+        run_strike(state, host, ai, task);
         break;
     case TaskKind::rally:
         run_rally(host, ai, task);
@@ -666,7 +754,7 @@ void run_task(
         run_construction(state, host, ai, task);
         break;
     case TaskKind::air_raid:
-        run_air_raid(host, ai, task);
+        run_air_raid(state, host, ai, task);
         break;
     case TaskKind::siege:
         run_siege(state, host, ai, task);
@@ -679,7 +767,26 @@ void run_task(
 
 } // namespace
 
-Squad computer_sort_squad(const oa::Unit& unit, const ComputerType& type) noexcept {
+Squad computer_sort_squad(
+    const oa::Unit& unit, const ComputerType& type, data::match_rules::AiSquadAssignmentRules rules
+) noexcept {
+    if (rules == data::match_rules::AiSquadAssignmentRules::role_squads) {
+        if ((unit.flags & OA_UNIT_FLAG_BUILDING) != 0) {
+            const auto high_word = static_cast<int16_t>(float_bits(type.energy_use) >> 16);
+            return (type.flags & OA_UNIT_DEF_FLAG_BUILDER) != 0 ||
+                           high_word > role_squads_energy_use_high_word
+                       ? Squad::structures
+                       : Squad::armed_structures;
+        }
+        if ((type.flags & OA_UNIT_DEF_FLAG_BUILDER) != 0)
+            return Squad::builders;
+        if ((type.flags & OA_UNIT_DEF_FLAG_CAN_FLY) != 0)
+            return Squad::aircraft;
+        if (type.min_water_depth > 0 || type.max_water_depth >= role_squads_navy_max_water_depth ||
+            (type.flags & OA_UNIT_DEF_FLAG_AMPHIBIOUS) != 0)
+            return Squad::navy;
+        return Squad::land_army;
+    }
     const bool armed = (unit.flags & OA_UNIT_FLAG_HAS_WEAPONS) != 0;
     if ((unit.flags & OA_UNIT_FLAG_BUILDING) != 0)
         return armed ? Squad::armed_structures : Squad::structures;
@@ -692,7 +799,12 @@ Squad computer_sort_squad(const oa::Unit& unit, const ComputerType& type) noexce
     return armed ? Squad::land_army : Squad::none;
 }
 
-void computer_player_create(ComputerPlayer& ai, uint8_t player, const oa::Game& game) noexcept {
+void computer_player_create(
+    ComputerPlayer& ai,
+    uint8_t player,
+    const oa::Game& game,
+    const data::match_rules::AiRules& rules
+) noexcept {
     ai.present = 1;
     ai.player = player;
     ai.sort_countdown = static_cast<int32_t>(sort_interval_ticks);
@@ -702,12 +814,13 @@ void computer_player_create(ComputerPlayer& ai, uint8_t player, const oa::Game& 
         task = {};
         task.squad = static_cast<Squad>(i);
     }
+    const auto wave = rules.attack_wave_size.units;
     ai.tasks[1].kind = TaskKind::structures;
-    ai.tasks[2] = {TaskKind::strike, Squad::land_strike, 0, 3, 6, 20000, Squad::land_army, 0};
+    ai.tasks[2] = {TaskKind::strike, Squad::land_strike, 0, 3, wave, 20000, Squad::land_army, 0};
     ai.tasks[3] = {TaskKind::rally, Squad::land_army, 0, 0, 0, 0, Squad::land_strike, 0};
     ai.tasks[4].kind = TaskKind::construction;
-    ai.tasks[5].kind = TaskKind::idle;
-    ai.tasks[6] = {TaskKind::strike, Squad::naval_strike, 0, 3, 6, 50000, Squad::navy, 0};
+    ai.tasks[5].kind = rules.squad5_factory_tick.enabled ? TaskKind::structures : TaskKind::idle;
+    ai.tasks[6] = {TaskKind::strike, Squad::naval_strike, 0, 3, wave, 50000, Squad::navy, 0};
     ai.tasks[7] = {TaskKind::rally, Squad::navy, 0, 0, 0, 0, Squad::naval_strike, 0};
     ai.tasks[8].kind = TaskKind::air_raid;
     // The siege search starts at the map's centre, and its first step is the

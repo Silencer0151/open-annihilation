@@ -284,6 +284,7 @@ void Runtime::keep_finished_match() {
     );
     campaign::set_endgame_state(world.game, OA_ENDGAME_CAPTURE);
     world.game.mode = frontend::mode_id::end_game;
+    music_end_game();
     state.screen = {};
     state.reopen = false;
     state.glamour = {};
@@ -301,6 +302,7 @@ void Runtime::start_endgame() {
     auto& state = *endgame_;
     state.frontend = {};
     state.frontend.context = this;
+    state.frontend.translate = translation_hook;
     state.frontend.disc_present = [](void* context) {
         return runtime_of(context).find_disc(menu::Disc::campaign) != 0;
     };
@@ -474,24 +476,25 @@ void Runtime::run_pending_ending() {
 
 bool Runtime::holds_movies() const {
     std::error_code error;
-    for (const auto& folder : fs::directory_iterator(options_.game_dir, error)) {
-        std::string name = folder.path().filename().string();
-        std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {
-            return static_cast<char>(std::tolower(c));
-        });
-        if (name != "data" || !folder.is_directory(error))
-            continue;
-        for (const auto& file : fs::directory_iterator(folder.path(), error)) {
-            std::string extension = file.path().extension().string();
-            std::transform(
-                extension.begin(), extension.end(), extension.begin(), [](unsigned char c) {
-                    return static_cast<char>(std::tolower(c));
-                }
-            );
-            if (extension == ".zrb")
-                return true;
+    for (const auto& root : assets_.loose_roots())
+        for (const auto& folder : fs::directory_iterator(root, error)) {
+            std::string name = folder.path().filename().string();
+            std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            });
+            if (name != "data" || !folder.is_directory(error))
+                continue;
+            for (const auto& file : fs::directory_iterator(folder.path(), error)) {
+                std::string extension = file.path().extension().string();
+                std::transform(
+                    extension.begin(), extension.end(), extension.begin(), [](unsigned char c) {
+                        return static_cast<char>(std::tolower(c));
+                    }
+                );
+                if (extension == ".zrb")
+                    return true;
+            }
         }
-    }
     return false;
 }
 

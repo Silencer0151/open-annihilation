@@ -39,6 +39,10 @@ Runtime::pending_build_site(oa::sim::ground_orders::Point world) const {
         fx = 2;
     if (fz <= 0)
         fz = 2;
+    // A building turned east or west lies across: its footprint's sides swap.
+    const auto facing = static_cast<uint8_t>(pending_build_facing());
+    if ((facing & 1U) != 0)
+        std::swap(fx, fz);
     oa::sim::match_runtime::snap_build_position(world, fx, fz);
     const auto fx_u = static_cast<uint32_t>(fx);
     const auto fz_u = static_cast<uint32_t>(fz);
@@ -48,15 +52,33 @@ Runtime::pending_build_site(oa::sim::ground_orders::Point world) const {
         std::bit_cast<int32_t>(static_cast<uint32_t>(world[0]) - fx_u * 0x80000u + 0x80000u) >> 20;
     const auto cell_z =
         std::bit_cast<int32_t>(static_cast<uint32_t>(world[2]) - fz_u * 0x80000u + 0x80000u) >> 20;
-    const auto site =
-        match_->building_site(pending_build_type_, cell_x, cell_z, 0, match_local_player_);
+    // Where the rules let the build cursor place over the player's own units,
+    // the cursor names unit slot 1 as the unit to skip, as the game does, so
+    // that slot never refuses the site, whoever owns it.
+    const uint16_t skip_unit =
+        match_->rules().orders.build_site_kickout.place_over_own_units ? 1 : 0;
+    // The site is tested, and stands, turned to the building's facing.
+    bool over_own_units = false;
+    oa::sim::match_runtime::BuildSiteOptions options{};
+    options.facing = facing;
+    options.over_own_units = &over_own_units;
+    const auto site = match_->building_site(
+        pending_build_type_, cell_x, cell_z, skip_unit, match_local_player_, options
+    );
     const auto height =
-        site ? *site : match_->footprint_height(pending_build_type_, cell_x, cell_z);
+        site ? *site : match_->footprint_height(pending_build_type_, cell_x, cell_z, facing);
     world[1] = static_cast<int32_t>(static_cast<uint32_t>(height) << 16);
-    return PendingBuildSite{world, cell_x, cell_z, fx, fz, site.has_value()};
+    return PendingBuildSite{world, cell_x, cell_z, fx, fz, site.has_value(), over_own_units};
 }
 
 std::optional<Runtime::PendingBuildSite> Runtime::build_site_under(float x, float y) const {
+    const auto target = build_cursor_point(x, y);
+    if (!target)
+        return std::nullopt;
+    return pending_build_site(*target);
+}
+
+std::optional<oa::sim::ground_orders::Point> Runtime::build_cursor_point(float x, float y) const {
     if (!selected_tnt_)
         return std::nullopt;
     const auto viewport = live_viewport(
@@ -76,7 +98,7 @@ std::optional<Runtime::PendingBuildSite> Runtime::build_site_under(float x, floa
         static_cast<int32_t>(selected_tnt_->attribute_width * 16U),
         static_cast<int32_t>(selected_tnt_->attribute_height * 16U)
     );
-    return pending_build_site({target.x, target.y, target.z});
+    return oa::sim::ground_orders::Point{target.x, target.y, target.z};
 }
 
 void Runtime::draw_build_ghost(
@@ -86,9 +108,69 @@ void Runtime::draw_build_ghost(
     if (match_command_ != MatchCommand::build || pending_build_type_ == 0 || !selected_tnt_ ||
         pending_build_type_ >= spawn_types_.size())
         return;
-    const auto site = build_site_under(match_pointer_x_, match_pointer_y_);
+    // The profile's line or ring build tool shows every building it lays.
+    if ((build_tool_.drawing_line || build_tool_.ring) && !build_tool_.layout.slots.empty()) {
+        for (const auto& slot : build_tool_.layout.slots)
+            if (const auto placed =
+                    pending_build_site({int32_t{slot.x} << 16, 0, int32_t{slot.z} << 16}))
+                draw_build_site(destination, viewport, *placed);
+        return;
+    }
+    auto site = build_site_under(match_pointer_x_, match_pointer_y_);
+    // A click the profile's click snap would move shows where it goes, as
+    // a site that may be built on.
+    if (auto snapped = snapped_build_site(match_pointer_x_, match_pointer_y_)) {
+        site = snapped;
+        site->legal = true;
+    }
     if (!site)
         return;
+    draw_build_site(destination, viewport, *site);
+    draw_build_facing(destination, viewport, *site);
+}
+
+void Runtime::draw_build_facing(
+    oa::present::world_renderer::Surface& destination,
+    const oa::present::world_renderer::BattlefieldViewport& viewport,
+    const PendingBuildSite& site
+) {
+    // A building that may face more than one way shows its facing's letter
+    // at its middle, and, until the player has turned one, how to turn it.
+    if (!ui_rules().build_preview.enabled)
+        return;
+    const auto facings = pending_build_facings();
+    if (view_rules::next_build_facing(facings, view_rules::BuildFacing::south, 1) ==
+        view_rules::BuildFacing::south)
+        return;
+    const auto middle = project_match_point(
+        viewport,
+        {static_cast<uint32_t>(site.world[0]),
+         static_cast<uint32_t>(site.world[1]),
+         static_cast<uint32_t>(site.world[2])}
+    );
+    ensure_ui_colors();
+    renderer::Surface text{destination.width, destination.height, std::move(destination.rgb)};
+    auto* const kept_target = overlay_target_;
+    overlay_target_ = &text;
+    const char letter[2] = {view_rules::facing_letter(pending_build_facing()), '\0'};
+    draw_match_label(middle.x, middle.y, letter, ui_colors_[kUiColorText]);
+    if (!view_settings_.rotate_key_discovered) {
+        const auto hint = view_rules::rotate_hint(
+            SDL_GetKeyName(static_cast<SDL_Keycode>(view_settings_.rotate_build_key)),
+            SDL_GetKeyName(static_cast<SDL_Keycode>(view_settings_.snap_override_key))
+        );
+        draw_match_label(middle.x, middle.y + kRotateHintRise, hint, ui_colors_[kUiColorText]);
+    }
+    overlay_target_ = kept_target;
+    destination.rgb = std::move(text.rgb);
+}
+
+void Runtime::draw_build_site(
+    oa::present::world_renderer::Surface& destination,
+    const oa::present::world_renderer::BattlefieldViewport& viewport,
+    const PendingBuildSite& site_record
+) {
+    const auto* site = &site_record;
     const auto height = static_cast<uint32_t>(site->world[1]);
     // Cells to 16.16 map positions; a negative cell stays left of or above the map.
     const auto cell_position = [](int32_t cell) {
@@ -104,7 +186,12 @@ void Runtime::draw_build_ghost(
          cell_position(site->cell_z + site->footprint_z)}
     );
     ensure_ui_colors();
-    const auto color = ui_color_rgb(site->legal ? kBuildSiteClearColor : kBuildSiteRefusedColor);
+    // The profile's build tools show a site the local player's own units
+    // must leave in a colour of its own.
+    auto slot = site->legal ? kBuildSiteClearColor : kBuildSiteRefusedColor;
+    if (site->legal && site->over_own_units && ui_rules().build_tools.enabled)
+        slot = kBuildSiteOverOwnUnitsColor;
+    const auto color = ui_color_rgb(slot);
     // The outlines lie side by side, each inset one pixel inside the last, so
     // together they are one band; the lines clip to the battlefield.
     const auto band = kBuildSiteOutlineCount * build_site_outline_width(viewport.scale);

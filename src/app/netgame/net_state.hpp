@@ -8,16 +8,20 @@
 #pragma once
 
 #include "oa/app/runtime.hpp"
+#include "oa/base/game_loop.hpp"
 
 #include "oa/netgame/console/console_commands.hpp"
 #include "oa/netgame/match/match_binding.hpp"
 #include "oa/netgame/match/net_match.hpp"
 #include "oa/netgame/match/session_lobby.hpp"
+#include "oa/session/demo/recording.hpp"
 #include "oa/ui/console/console.hpp"
 
 #include <array>
+#include <filesystem>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace oa::app {
 
@@ -63,6 +67,18 @@ struct NetState {
     // the engine fills it as each match starts and keeps it at this address
     // while the runtime lives. Chat another player sent is posted through it.
     const oa::ui::console::ConsoleHost* console_host{};
+    /// The lag guard (network.lag-guard): steps held while the other players are silent.
+    oa::base::game_loop::LagGuard lag_guard{};
+    /// The player the last vote shown would reject; Vote Yes and Vote No answer it.
+    uint32_t vote_target{oa::netgame::match::no_player_id};
+    /// The recording of the running game (recorder.ta-demo-recorder, or --net-record), written
+    /// to recording_path as the game is left.
+    oa::session::demo::DemoRecording recording{};
+    std::filesystem::path recording_path{};
+    /// The battle room's unit verdicts as the launch applied them, one 0x1a verdict record each;
+    /// a recording of the game stores them beside this machine's unit checksums.
+    std::vector<std::array<uint8_t, oa::formats::tad::layout::unit_check_record_bytes>>
+        unit_verdicts{};
 };
 
 /// Returns the clock --check-host-not-found runs DirectPlay's timers on.

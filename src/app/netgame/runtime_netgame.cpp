@@ -69,8 +69,17 @@ void NetworkPlay::draw_loading_players(oa::Surface& target, const oa::present::G
         oa::present::fill_clipped_rect(&target, area, runtime_.ui_colors_[kLoadPlayerBarColor]);
         area.x2 = bar.filled;
         oa::present::fill_clipped_rect(&target, area, runtime_.ui_colors_[kLoadChipDoneColor]);
+        // The loading screen keeps the game's own fonts, the players' names
+        // included: a character the font lacks is drawn in the modern fonts.
         renderer::draw_gadget_text(
-            &target, font, bar.player->name, bar.left, nm::loading_bar_top, bar.right - bar.left, 0
+            &target,
+            font,
+            bar.player->name,
+            bar.left,
+            nm::loading_bar_top,
+            bar.right - bar.left,
+            0,
+            false
         );
     }
     renderer::draw_gadget_text(
@@ -80,7 +89,8 @@ void NetworkPlay::draw_loading_players(oa::Surface& target, const oa::present::G
         nm::loading_status_x,
         nm::loading_status_y,
         renderer::gadget_text_unbounded,
-        0
+        0,
+        false
     );
 }
 

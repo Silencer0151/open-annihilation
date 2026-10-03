@@ -45,6 +45,11 @@ struct Capabilities {
     /// renderer's multiply mode with the vertex colours taken as black,
     /// which gives the same pixels from a copy of the batch's vertices.
     bool darken_composed{};
+    /// Minimum runs as a blend mode composed for the renderer, each channel
+    /// the lesser of the source's and the destination's; where the renderer
+    /// refuses it, as SDL's software renderer does, a minimum draw blends
+    /// as alpha, its colour over what is under it at its alpha.
+    bool minimum_composed{};
     /// The renderer was told to clamp texture coordinates at the page's
     /// edge, which keeps it from reading every vertex of a draw to decide.
     bool clamped_addressing{};
@@ -472,7 +477,8 @@ class Executor {
     Capabilities capabilities_{};
     Counts counts_{};
     std::string error_{};
-    SDL_BlendMode darken_mode_{SDL_BLENDMODE_NONE}; ///< the composed darken mode
+    SDL_BlendMode darken_mode_{SDL_BLENDMODE_NONE};  ///< the composed darken mode
+    SDL_BlendMode minimum_mode_{SDL_BLENDMODE_NONE}; ///< the composed minimum mode
     /// How pages are made: static, or streaming on SDL's software renderer,
     /// which run-length encodes a static texture, so that each copy of a
     /// part of it would scan the whole.

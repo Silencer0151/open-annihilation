@@ -10,13 +10,16 @@
 #include "oa/present/display.hpp"
 #include "oa/present/raster.hpp"
 #include "oa/present/surface.hpp"
+#include "oa/present/game_text.hpp"
 
 #include <cctype>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -286,6 +289,80 @@ void test_text(render::GadgetRenderer& renderer, TestFile& font) {
     require(
         panel.host.line_height(panel.host.context, &font) == 6,
         "host line height uses the given font"
+    );
+}
+
+// Each run the system-text hook drew, and the width it answers.
+// What the game-text hooks answer: the settings and the palette.
+struct GameTextAnswers {
+    present::TextSettings settings{};
+    std::vector<uint8_t> palette{};
+};
+
+void test_text_game_runs(render::GadgetRenderer& renderer, TestFile& font) {
+    TestPanel test;
+    make_panel(test, renderer, 12, 24);
+    GadgetPanel& panel = *test.panel;
+    panel.active_gaf_font = &font;
+    GameTextAnswers answers;
+    answers.settings.style = {false, false, false, false, present::default_text_size};
+    answers.settings.utf8 = true;
+    // Entry 4 is hattfont12's colour, which the modern runs are drawn in.
+    answers.palette.assign(8 * 4, 0);
+    answers.palette[4 * 4] = 195;
+    answers.palette[4 * 4 + 1] = 195;
+    answers.palette[4 * 4 + 2] = 155;
+    present::GameTextHooks hooks{};
+    hooks.context = &answers;
+    hooks.settings = [](void* context) { return static_cast<GameTextAnswers*>(context)->settings; };
+    // Each character a solid block 3 pixels wide, 2 rows above the baseline.
+    hooks.draw = [](
+                     void*, std::string_view text, present::TextFace, int32_t, int32_t
+                 ) -> std::shared_ptr<const present::TextMask> {
+        auto mask = std::make_shared<present::TextMask>();
+        int32_t pen = 0;
+        for (std::size_t at = 0; at < text.size();) {
+            const auto sequence = present::utf8_sequence(text.substr(at));
+            at += sequence.bytes != 0 ? sequence.bytes : 1;
+            pen += 3;
+            mask->character_ends.push_back(pen);
+        }
+        mask->width = mask->advance = pen;
+        mask->height = mask->baseline = 2;
+        mask->alpha.assign(static_cast<std::size_t>(pen) * 2U, 255);
+        return mask;
+    };
+    hooks.palette = [](void* context) -> std::span<const uint8_t> {
+        return static_cast<GameTextAnswers*>(context)->palette;
+    };
+    present::set_game_text_hooks(hooks);
+    const std::string sun = "\xE6\x97\xA5";
+    const std::string text = "A" + sun + "B";
+    require(
+        render::text_width(renderer, panel, text.c_str()) == 8,
+        "a modern run is as wide as the modern fonts draw it"
+    );
+    render::draw_text(renderer, panel, &test.face.surface, text.c_str(), 1, 1, -1, 0);
+    // The baseline is the 'I' glyph's height below the pen.
+    require(
+        at(test.face, 3, 3) == 4 && at(test.face, 5, 4) == 4 && at(test.face, 3, 2) == 0,
+        "the run stands on the font's baseline after A"
+    );
+    require(at(test.face, 7, 2) == 6, "B follows the run");
+    // A width budget stops before a run wider than what is left.
+    TestPanel bounded;
+    make_panel(bounded, renderer, 12, 6);
+    bounded.panel->active_gaf_font = &font;
+    render::draw_text(renderer, *bounded.panel, &bounded.face.surface, text.c_str(), 0, 0, 4, 0);
+    require(at(bounded.face, 2, 2) == 0, "the budget stops at the run");
+    // Interface text keeps the game's font even while the settings draw
+    // game text in the modern fonts.
+    answers.settings.style.modern_fonts = true;
+    require(render::text_width(renderer, panel, "AB") == 5, "a label keeps the font");
+    // Without hooks the bytes are the font's, which has no glyphs for them.
+    present::set_game_text_hooks({});
+    require(
+        render::text_width(renderer, panel, text.c_str()) == 5, "without hooks the run is glyphless"
     );
 }
 
@@ -836,6 +913,7 @@ int main() {
     TestFile small = make_font(0x21, 0x22);
 
     test_text(renderer, font);
+    test_text_game_runs(renderer, font);
     test_shade_level(display);
     test_button(renderer, font);
     test_button_art(renderer, font);

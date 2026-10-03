@@ -719,7 +719,8 @@ void options_enter_visuals(Panel& panel, OptionsContext& context, bool select_mo
             auto& list = context.display_modes;
             list.count = oa::present::world_renderer::sort_display_modes(
                 list.modes.data(),
-                std::clamp(list.count, 0, static_cast<int32_t>(kDisplayModeCapacity))
+                std::clamp(list.count, 0, static_cast<int32_t>(kDisplayModeCapacity)),
+                context.minimum_mode_height
             );
             if (auto* slider = panel_control(panel, "VIDSLDR")) {
                 slider->on_change = options_on_video_mode_slider;

@@ -49,6 +49,9 @@ struct MainMenuHost {
     // Whether the game data names the 3.1 revision it is (gamedata/version.tdf);
     // null counts it named.
     bool (*revision_named)(void* context) = nullptr;
+    // The version label's text, such as a mod's own version; null shows
+    // kMainMenuVersion.
+    const char* version_text = nullptr;
 };
 
 /// Sets up MAINMENU.GUI after the panel loads.

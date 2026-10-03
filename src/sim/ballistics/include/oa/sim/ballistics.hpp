@@ -25,12 +25,24 @@ struct BallisticParameters {
     int32_t projectile_velocity{};        // WeaponDef.weapon_velocity
     float minimum_barrel_angle_radians{}; // WeaponDef.min_barrel_angle
     int32_t simulation_gravity{};         // Game.gravity
+    // weapons.high-arc-ballistic: the second root is taken above a quarter of
+    // pi instead of at most a quarter of pi; false plays as 3.1c.
+    bool accept_high_arc{};
+};
+
+// What a weapon's own data keys change in the reach tests; all false plays as
+// 3.1c.
+struct ReachKeys {
+    bool not_to_air{};        // weapons.not-to-air: an airborne target is out of reach
+    bool surface_fire{};      // weapons.surface-fire: fires above sea level and at points
+    bool not_to_underwater{}; // weapons.not-to-underwater: a water weapon's target must top sea
 };
 
 struct WeaponReachParameters {
     uint32_t weapon_flags{};     // WeaponDef.flags
     int32_t range_world_units{}; // WeaponDef.range
     BallisticParameters ballistic{};
+    ReachKeys keys{};
 };
 
 struct ReachUnitGeometry {
@@ -62,10 +74,14 @@ inline constexpr int16_t invalid_launch_pitch = static_cast<int16_t>(0x8000);
 ///
 /// The first root of the trajectory equation is taken when its angle lies
 /// above the minimum barrel angle and at most a quarter of pi, else the second
-/// root under the same bounds. Each intermediate is rounded to binary64 as in
-/// 3.1c; sqrt, hypot and acos come from the host library.
+/// root under the same bounds. With accept_high_arc the second root's upper
+/// bound becomes a lower one: it is taken when its angle lies above both the
+/// minimum barrel angle and a quarter of pi, so the weapon lobs. Each
+/// intermediate is rounded to binary64 as in 3.1c; sqrt, hypot and acos come
+/// from the host library.
 ///
-/// @param parameters projectile velocity, minimum barrel angle and gravity
+/// @param parameters projectile velocity, minimum barrel angle, gravity and the
+///        high-arc switch
 /// @param dx wrapped AimFrom-minus-target x delta, 16.16 world units
 /// @param dy wrapped AimFrom-minus-target y delta, 16.16 world units
 /// @param dz wrapped AimFrom-minus-target z delta, 16.16 world units
@@ -95,7 +111,13 @@ launch_pitch(const BallisticParameters& parameters, int32_t dx, int32_t dy, int3
 /// hovering-type target whose half-height point is above sea level. The
 /// horizontal range is tested last.
 ///
-/// @param weapon weapon flags, range and ballistic parameters
+/// The weapon's data keys add to this. not_to_air rejects an airborne target
+/// on the non-water path. surface_fire lets a water weapon skip both of its
+/// above-sea tests, unless it is also not_to_air and the target is airborne.
+/// not_to_underwater then rejects, on the water path, a target whose model top
+/// is at or below sea level.
+///
+/// @param weapon weapon flags, range, ballistic parameters and data keys
 /// @param source firing unit
 /// @param target target unit
 /// @param sea_level sea level in integral world units
@@ -110,10 +132,11 @@ launch_pitch(const BallisticParameters& parameters, int32_t dx, int32_t dy, int3
 /// Tests whether a weapon on a unit can fire at a point.
 ///
 /// Horizontal range is tested first. A non-water weapon also needs the source
-/// model top above sea level, and a ballistic weapon a launch pitch. Target
-/// height, air state and water-target type flags are not read.
+/// model top above sea level, and a ballistic weapon a launch pitch, unless its
+/// surface_fire key is set. Target height, air state and water-target type
+/// flags are not read.
 ///
-/// @param weapon weapon flags, range and ballistic parameters
+/// @param weapon weapon flags, range, ballistic parameters and data keys
 /// @param source firing unit
 /// @param target target position, signed 16.16 bit patterns
 /// @param sea_level sea level in integral world units

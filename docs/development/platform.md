@@ -43,3 +43,13 @@ The code uses SDL3 APIs available since SDL 3.2.0: `SDL_LoadWAV`,
 the project's CMake asks for SDL 3.2 or newer. The `oa-platform` target links
 `SDL3::SDL3`, which `tools/bootstrap_sdl.py` builds at the pinned version
 into `local/deps`; SDL3 is not vendored in the tree.
+
+Text outside the game's own fonts is drawn through FreeType from fonts that
+travel with the game, the same on every platform
+([text font](../../src/platform/text-font/README.md)).
+`tools/bootstrap_text_fonts.py` fetches FreeType and the fonts, pinned by
+SHA-256, builds FreeType as a static library into
+`local/deps/freetype-install-<release>` and puts the fonts in
+`local/deps/text-fonts`; a configuration without them stops and says so
+(`cmake/OaTextFonts.cmake`). Neither is vendored in the tree. The macOS and
+Windows dependency bootstraps build the same FreeType for their targets.

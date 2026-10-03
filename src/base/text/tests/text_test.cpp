@@ -18,6 +18,7 @@ namespace {
 using oa::base::text::append_terminated;
 using oa::base::text::copy_padded;
 using oa::base::text::copy_terminated;
+using oa::base::text::whole_characters;
 
 /// Returns whether a field holds exactly the given bytes.
 ///
@@ -99,7 +100,29 @@ void appends() {
 
 } // namespace
 
+void cuts_between_characters() {
+    // U+65E5 is three bytes and U+1F600 four.
+    const std::string_view sun = "ab\xE6\x97\xA5";
+    OA_CHECK(whole_characters(sun, 5) == 5);
+    OA_CHECK(whole_characters(sun, 9) == 5);
+    OA_CHECK(whole_characters(sun, 4) == 2);
+    OA_CHECK(whole_characters(sun, 3) == 2);
+    OA_CHECK(whole_characters(sun, 2) == 2);
+    const std::string_view grin = "a\xF0\x9F\x98\x80"
+                                  "b";
+    OA_CHECK(whole_characters(grin, 4) == 1);
+    OA_CHECK(whole_characters(grin, 5) == 5);
+    OA_CHECK(whole_characters("abc", 2) == 2);
+    OA_CHECK(whole_characters("", 0) == 0);
+    // Bytes of an 8-bit code page are cut at the limit.
+    OA_CHECK(whole_characters("caf\xE9\xE9", 4) == 4);
+    OA_CHECK(whole_characters("\xE6\x97x", 1) == 1);
+    // An overlong form is no character.
+    OA_CHECK(whole_characters("a\xC1\x81", 2) == 2);
+}
+
 int main() {
+    cuts_between_characters();
     padded_copies();
     terminated_copies();
     appends();

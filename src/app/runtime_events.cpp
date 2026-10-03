@@ -57,8 +57,17 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
     // comes back.
     if (event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE)
         match_pointer_known_ = false;
+    if (whiteboard_text(event))
+        return;
     if (event.type == SDL_EVENT_TEXT_INPUT && chat_composing_) {
         chat_buffer_ += event.text.text;
+        chat_composition_.clear();
+        return;
+    }
+    // The input method's composition shows after the chat line until it is
+    // committed, as the line will be sent.
+    if (event.type == SDL_EVENT_TEXT_EDITING && chat_composing_) {
+        chat_composition_ = event.edit.text != nullptr ? event.edit.text : "";
         return;
     }
     if (event.type == SDL_EVENT_KEY_DOWN && handle_match_hotkey(event.key))
@@ -133,10 +142,10 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
             screen_ == Screen::speeds || screen_ == Screen::music
         ) {
             leave_options_screen();
-        } else if (
-            screen_ == Screen::new_campaign || screen_ == Screen::any_mission ||
-            screen_ == Screen::load_game
-        )
+        } else if (screen_ == Screen::load_game)
+            // As CANCEL does: a dialog opened over a paused match returns to it.
+            leave_load_dialog();
+        else if (screen_ == Screen::new_campaign || screen_ == Screen::any_mission)
             load(Screen::single_player);
         else if (screen_ == Screen::campaign_end)
             load(Screen::main_menu);
@@ -145,6 +154,18 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
         return;
     }
     if (event.type == SDL_EVENT_MOUSE_WHEEL && screen_ == Screen::match) {
+        // ui.megamap takes the wheel first.
+        if (megamap_on()) {
+            if (sdl_.renderer != nullptr &&
+                !SDL_ConvertEventToRenderCoordinates(sdl_.renderer, &event))
+                return;
+            if (megamap_wheel(event.wheel.y, event.wheel.mouse_x, event.wheel.mouse_y))
+                return;
+            if (!engine_settings().wheel_zoom)
+                return;
+            handle_match_zoom(event.wheel.y, event.wheel.mouse_x, event.wheel.mouse_y);
+            return;
+        }
         // With the Mouse wheel zoom setting off the wheel does nothing here.
         if (!engine_settings().wheel_zoom ||
             !SDL_ConvertEventToRenderCoordinates(sdl_.renderer, &event))
@@ -193,6 +214,14 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
         // reports it there (the screen's edges scroll the camera only then).
         match_pointer_known_ = screen_ == Screen::match;
         update_pointer(x, y);
+        // The commander placement (setup.commander-warp) takes the pointer
+        // first; ui.resource-panel's panel floats over the battlefield and
+        // takes it next; ui.build-tools' drag with the snap override key
+        // takes a press on an own unit before the battlefield does.
+        if (commander_placement_pointer(event, x, y) || resource_panel_pointer(event, x, y) ||
+            megamap_pointer(event, x, y) || whiteboard_pointer(event, x, y) ||
+            order_drag_pointer(event, x, y))
+            return;
         // A press on a HUD button holds it until either button comes up, on
         // whatever screen; the release acts on a HUD button only when the
         // press was on it.
@@ -216,7 +245,9 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
         if (screen_ == Screen::match && event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
             !match_paused_ && !match_finished_ && !hovered_ && match_) {
             if (event.button.button == SDL_BUTTON_RIGHT) {
-                handle_match_right_press(x, y);
+                // ui.selection-shortcuts takes a right double-click too.
+                if (!selection_shortcut_double_click(x, y, event.button.clicks))
+                    handle_match_right_press(x, y);
                 return;
             }
             // In the right-click interface a left press over the
@@ -466,7 +497,9 @@ void Runtime::take_movie_event(void* context, const SDL_Event& event) {
 }
 
 void Runtime::play_movie_resource(std::string_view filename) {
-    const auto path = options_.game_dir / "Data" / filename;
+    // A mod folder's movie replaces the game folder's.
+    const auto found = game_path("Data/" + std::string(filename));
+    const auto path = found ? *found : options_.game_dir / "Data" / filename;
     auto opened = oa::media::IntroPlayer::open(path);
     if (!opened) {
         status_ = "movie unavailable: " + opened.error;

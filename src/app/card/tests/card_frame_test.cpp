@@ -440,6 +440,10 @@ void blend_pixel(card::Blend blend, std::array<int64_t, 4> source, Pixel& destin
         for (std::size_t channel = 0; channel < 3; ++channel)
             under[channel] = under[channel] * (255 - alpha) / 255;
         break;
+    case card::Blend::minimum:
+        for (std::size_t channel = 0; channel < 3; ++channel)
+            under[channel] = std::min(under[channel], source[channel]);
+        break;
     }
     for (std::size_t channel = 0; channel < 4; ++channel)
         destination[channel] = static_cast<uint8_t>(under[channel]);
@@ -617,6 +621,9 @@ struct Reference {
     std::map<uint32_t, ReferencePage> pages;
     std::map<uint32_t, ReferenceTarget> targets;
     Image final_image = cleared_canvas();
+    /// The renderer takes the minimum blend; where it does not, a minimum
+    /// draw blends as alpha.
+    bool minimum_composed{};
 
     /// Returns the image a batch draws into and the factor its pixels are scaled by.
     ///
@@ -759,7 +766,11 @@ struct Reference {
                             );
                         }
                     }
-                    triangle(image, corners, texture, batch.blend, batch.scissored, scissor);
+                    const card::Blend blend =
+                        batch.blend == card::Blend::minimum && !minimum_composed
+                            ? card::Blend::alpha
+                            : batch.blend;
+                    triangle(image, corners, texture, blend, batch.scissored, scissor);
                 }
                 break;
             }
@@ -849,6 +860,7 @@ struct Fixture {
     /// @param texture_limit the limit given to the executor; 0 for none
     explicit Fixture(uint32_t texture_limit = 0) {
         OA_CHECK(executor.open(canvas.renderer, texture_limit));
+        reference.minimum_composed = executor.capabilities().minimum_composed;
         canvas.clear();
     }
 
@@ -1082,6 +1094,21 @@ void test_blended_draws_match_the_reference() {
         frame, 40.0F, 40.0F, 30.0F, 30.0F, 0.0F, 0.0F, 0.0F, 0.0F, {0.0F, 0.0F, 0.0F, level(128)}
     );
     draw_since(frame, first, {}, card::Blend::darken);
+    // An untextured quad that holds what is under it to a dark grey.
+    first = next_index(frame);
+    card::append_quad(
+        frame,
+        128.0F,
+        0.0F,
+        24.0F,
+        6.0F,
+        0.0F,
+        0.0F,
+        0.0F,
+        0.0F,
+        {level(43), level(43), level(43), 1.0F}
+    );
+    draw_since(frame, first, {}, card::Blend::minimum);
     // An untextured additive triangle with a gradient, and a textured
     // alpha triangle with a gradient and an alpha gradient.
     first = next_index(frame);
@@ -1130,9 +1157,10 @@ void test_blended_draws_match_the_reference() {
     draw_since(frame, first, {}, card::Blend::alpha_premultiplied);
     OA_CHECK(card::check_frame(frame).empty());
     fixture.run("blended draws", frame, false);
-    // The software renderer takes no composed blend mode, so darken ran as
-    // the fallback.
+    // The software renderer takes no composed blend mode, so darken and
+    // minimum ran as their fallbacks.
     OA_CHECK(!fixture.executor.capabilities().darken_composed);
+    OA_CHECK(!fixture.executor.capabilities().minimum_composed);
 }
 
 /// A scissor limits a draw to its rectangle; the pixels outside are untouched.

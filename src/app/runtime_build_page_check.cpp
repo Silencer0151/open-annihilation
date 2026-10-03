@@ -4,6 +4,7 @@
 // Build pages driven through synthetic SDL input: a download page with its
 // linked buttons and a missile silo's stockpile button.
 #include "oa/app/runtime.hpp"
+#include "oa/data/defs/layout.hpp"
 #include "oa/data/mission_types.hpp"
 #include "oa/ui/hud/order_panel.hpp"
 #include <SDL3/SDL.h>
@@ -149,10 +150,10 @@ void Runtime::check_download_builds() {
     using Queue = std::vector<std::pair<int32_t, int32_t>>;
 
     select(factory);
-    if (match_hud_panel_ != "guis/ARMLAB1.GUI" || match_build_page_ != 1)
+    if (match_hud_panel_ != oa::data::defs::gui_path("ARMLAB1.GUI") || match_build_page_ != 1)
         fail("did not open ARMLAB1.GUI for the lab");
     click_gadget("ARMNEXT", SDL_BUTTON_LEFT);
-    if (match_hud_panel_ != "guis/ARMDL.GUI" || match_build_page_ != 2)
+    if (match_hud_panel_ != oa::data::defs::gui_path("ARMDL.GUI") || match_build_page_ != 2)
         fail("did not open the download page ARMDL.GUI on NEXT");
     for (const auto& [slot, name] : {std::pair{4U, "ARMWAR"}, std::pair{5U, "ARMFLEA"}}) {
         const auto& gadget = match_hud_->layout.gadgets.at(slot);
@@ -202,10 +203,10 @@ void Runtime::check_download_builds() {
         fail("saw no Flea come out of the lab");
 
     select(missile_silo);
-    if (match_hud_panel_ != "guis/ARMGEN.GUI")
+    if (match_hud_panel_ != oa::data::defs::gui_path("ARMGEN.GUI"))
         fail("did not open the order page for the silo");
     click_gadget("ARMBUILD", SDL_BUTTON_LEFT);
-    if (match_hud_panel_ != "guis/ARMSILO1.GUI")
+    if (match_hud_panel_ != oa::data::defs::gui_path("ARMSILO1.GUI"))
         fail("did not open ARMSILO1.GUI on BUILD");
     const auto build_weapon = oa::data::mission_types::index_for_name("BUILDWEAPON");
     click_gadget("ARMMAKENUKE", SDL_BUTTON_LEFT);

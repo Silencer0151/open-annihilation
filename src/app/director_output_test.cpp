@@ -4,13 +4,14 @@
 // The director render's files: their names, the ffmpeg arguments that
 // encode, join and stitch the chunks, the frame manifests, the chunks' sound
 // and the run manifest written with encoding off, into a directory named
-// relative to the working directory too, the encoder settings the
-// environment gives, and the bundle's reader and writer, malformed bundles
-// included.
+// relative to the working directory too, the stills of frames, the encoder
+// settings the environment gives, and the bundle's reader and writer,
+// malformed bundles included.
 #include "oa/app/director_output.hpp"
 
 #include "oa/audio/offline_mix.hpp"
 #include "oa/base/sha256.hpp"
+#include "oa/formats/png.hpp"
 #include "oa/formats/zip.hpp"
 
 #include <algorithm>
@@ -21,6 +22,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -152,6 +154,43 @@ void test_paths() {
     CHECK(joined_video_path(paths) == fs::path("out") / "game.mp4");
     CHECK(run_manifest_path(paths) == fs::path("out") / "game.manifest");
     CHECK(concat_list_path(paths) == fs::path("out") / "game.concat.txt");
+    CHECK(still_path(paths, 0) == fs::path("out") / "game-still-000000.png");
+    CHECK(still_path(paths, 120) == fs::path("out") / "game-still-000120.png");
+    CHECK(still_path(paths, 1234567) == fs::path("out") / "game-still-1234567.png");
+}
+
+/// Ignores a warning or an error of the PNG reader; the test reads the
+/// result instead.
+void ignore_png_message(void*, const char*) {
+}
+
+// A still is the frame as drawn, an 8-bit RGB PNG that reads back to the
+// same bytes, in a directory made for it; a frame of the wrong size is
+// refused.
+void test_stills() {
+    const fs::path root{fresh_temporary("oa-director-stills")};
+    const DirectorPaths paths{root / "out", "game"};
+    std::vector<uint8_t> frame(kFrameBytes);
+    for (size_t index = 0; index < frame.size(); ++index)
+        frame[index] = static_cast<uint8_t>(index * 37 + 11);
+    const fs::path written = write_still(paths, 42, frame, kWidth, kHeight);
+    CHECK(written == still_path(paths, 42));
+    const auto file = read_file(written);
+    namespace png = oa::formats::png;
+    const png::Messages messages{nullptr, ignore_png_message, ignore_png_message};
+    png::Info info{};
+    CHECK(png::has_signature(file) && png::read_info(file, messages, &info));
+    CHECK(info.header.width == kWidth && info.header.height == kHeight);
+    CHECK(info.header.bit_depth == 8 && info.header.color_type == png::ColorType::rgb);
+    std::vector<uint8_t> rows(png::row_bytes(info.header, {}) * kHeight);
+    CHECK(png::read_image(file, info, {}, messages, rows) == png::Progress::end);
+    CHECK(rows == frame);
+    CHECK(logic_error_of([&] {
+        (void)write_still(paths, 43, std::span<const uint8_t>(frame).first(3), kWidth, kHeight);
+    }));
+    CHECK(!fs::exists(still_path(paths, 43)));
+    std::error_code removed;
+    fs::remove_all(root, removed);
 }
 
 // A script names a recording in its folder or below it by its path from
@@ -535,6 +574,7 @@ void test_bundles() {
 
 int main() {
     test_paths();
+    test_stills();
     test_recording_key();
     test_encoder_arguments();
     test_manifest_lines();

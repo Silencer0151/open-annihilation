@@ -205,8 +205,10 @@ void Match::advance_local_outcome() {
     // watching and loses instead.
     auto* local_info =
         oa::world_player_info(&world, &world.game.players[world.game.local_player_index]);
+    const bool host_stays = host_stays_watching_ && sim::scenario::host_player_index(world) ==
+                                                        world.game.local_player_index;
     const bool watches = multiplayer_outcomes_ && local_info != nullptr &&
-                         sim::scenario::defeated_player_watches(world);
+                         (sim::scenario::defeated_player_watches(world) || host_stays);
     const bool watching =
         local_info != nullptr && (local_info->options & OA_SETUP_OPTION_WATCHER) != 0;
     const auto next = sim::scenario::advance_outcome(
@@ -237,7 +239,12 @@ void Match::become_watcher(PlayerSetupInfo& local_info) {
     if (multiplayer.player_status_changed != nullptr)
         multiplayer.player_status_changed(multiplayer.context);
     auto notice = WatchNotice::none;
-    if (sim::scenario::computer_participants(world) == 0) {
+    if (host_stays_watching_ &&
+        sim::scenario::host_player_index(world) == world.game.local_player_index) {
+        outcome_state_.flags =
+            static_cast<uint16_t>(outcome_state_.flags & ~sim::scenario::outcome_flag::won);
+        notice = WatchNotice::host_watching;
+    } else if (sim::scenario::computer_participants(world) == 0) {
         notice = WatchNotice::continue_prompt;
     } else if (sim::scenario::connected_participants(world) > 0) {
         outcome_state_.flags =

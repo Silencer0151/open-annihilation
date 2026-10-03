@@ -4,6 +4,7 @@
 // Bounded checks of the stacked frontend dialogs: headless over a frontend
 // screen, and over a live match through the SDL presenter.
 #include "oa/app/runtime.hpp"
+#include "oa/data/defs/layout.hpp"
 #include "oa/ui/decoded.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
 #include "oa/ui/gui_input.hpp"
@@ -55,9 +56,9 @@ constexpr std::size_t kBackTileFrames = 9;
 constexpr std::size_t kBackTileRowFrames = 3;
 constexpr std::size_t kBackTileMiddle = 1;
 constexpr std::size_t kBackTileLast = 2;
-constexpr std::string_view kExitMenuLayout = "guis/EXITMENU.GUI";
-constexpr std::string_view kConfirmLayout = "guis/YESORNO.GUI";
-constexpr std::string_view kRestartLayout = "guis/RESTART.GUI";
+constexpr std::string_view kExitMenuLayout = "EXITMENU.GUI";
+constexpr std::string_view kConfirmLayout = "YESORNO.GUI";
+constexpr std::string_view kRestartLayout = "RESTART.GUI";
 // PlayerSetupInfo.role bit of the player hosting the game.
 constexpr uint8_t kHostRole = 0x01;
 
@@ -319,6 +320,12 @@ constexpr int kSmallWindowWidth = 800;
 constexpr int kSmallWindowHeight = 600;
 constexpr int kMediumWindowWidth = 1024;
 constexpr int kMediumWindowHeight = 768;
+// A 4:3 window at twice 640x480, where the side column is drawn at twice its
+// size.
+constexpr int kLargeWindowWidth = 1280;
+constexpr int kLargeWindowHeight = 960;
+// The name the save dialog's name field holds while the check presses it.
+constexpr const char* kCheckPressedName = "LSPRESS";
 constexpr const char* kLoadBitmap = "bitmaps/dloadgame2.pcx";
 constexpr const char* kSaveBitmap = "bitmaps/dsavegame2.pcx";
 constexpr const char* kCheckSaveName = "LSCHECK1";
@@ -330,13 +337,13 @@ constexpr const char* kCheckRadarSaveDescription = "Radar picture check";
 constexpr int32_t kCheckRadarWidth = 94;
 constexpr int32_t kCheckRadarHeight = 70;
 constexpr int32_t kCheckRadarSide = 1;
-constexpr const char* kBriefingGui = "guis/briefing.gui";
+constexpr const char* kBriefingGui = "briefing.gui";
 constexpr const char* kBriefingBitmap = "bitmaps/igmbrief.pcx";
 // The ARM campaign's third mission, whose briefing runs to a second page.
 constexpr std::size_t kBriefingCheckMission = 2;
 // The preferences a match opens, in the in-game menu's place.
-constexpr std::string_view kPreferencesLayout = "guis/PREFS.GUI";
-constexpr std::string_view kInGameMenuLayout = "guis/ARMOPT.GUI";
+constexpr std::string_view kPreferencesLayout = "PREFS.GUI";
+constexpr std::string_view kInGameMenuLayout = "ARMOPT.GUI";
 // Frames the OPTIONS lightbar check draws: the sweep's thirteen steps and
 // three held frames.
 constexpr int kSweepFrames = 16;
@@ -851,7 +858,7 @@ void Runtime::check_match_dialogs() {
             }
         return std::string();
     };
-    constexpr std::string_view confirm = "guis/YESORNO.GUI";
+    const auto confirm = oa::data::defs::gui_path("YESORNO.GUI");
     const auto confirming = [&] {
         return match_paused_ && match_hud_ && match_hud_panel_ == confirm &&
                hud_label("TITLE") == "Surrender this battle and exit to the system?";
@@ -880,13 +887,14 @@ void Runtime::check_match_dialogs() {
     require(send(close_request(SDL_EVENT_WINDOW_CLOSE_REQUESTED)) && confirming(), "no menu ask");
     activate_pause_gadget("CHOICE2");
     require(
-        match_paused_ && match_hud_panel_ == "guis/ARMOPT.GUI",
+        match_paused_ && match_hud_panel_ == oa::data::defs::gui_path("ARMOPT.GUI"),
         "CHOICE2 did not return to the in-game menu it was asked over"
     );
     // Escape answers as CHOICE2 does over the menu too.
     require(send(close_request(SDL_EVENT_WINDOW_CLOSE_REQUESTED)) && confirming(), "no menu ask");
     require(
-        send(escape(false)) && match_paused_ && match_hud_panel_ == "guis/ARMOPT.GUI",
+        send(escape(false)) && match_paused_ &&
+            match_hud_panel_ == oa::data::defs::gui_path("ARMOPT.GUI"),
         "Escape did not return to the in-game menu the confirmation was asked over"
     );
     // Enter answers No as well: CHOICE2 is the confirmation's Enter default.
@@ -900,7 +908,8 @@ void Runtime::check_match_dialogs() {
     };
     require(send(close_request(SDL_EVENT_WINDOW_CLOSE_REQUESTED)) && confirming(), "no menu ask");
     require(
-        send(enter()) && !exit_requested_ && match_paused_ && match_hud_panel_ == "guis/ARMOPT.GUI",
+        send(enter()) && !exit_requested_ && match_paused_ &&
+            match_hud_panel_ == oa::data::defs::gui_path("ARMOPT.GUI"),
         "Enter did not return to the in-game menu the confirmation was asked over"
     );
     // The confirmation EXITGAME asks answers Enter and Escape as No too,
@@ -912,13 +921,14 @@ void Runtime::check_match_dialogs() {
     };
     require(ask_from_menu(), "EXITGAME did not ask to surrender");
     require(
-        send(enter()) && !exit_requested_ && match_paused_ && match_hud_panel_ == "guis/ARMOPT.GUI",
+        send(enter()) && !exit_requested_ && match_paused_ &&
+            match_hud_panel_ == oa::data::defs::gui_path("ARMOPT.GUI"),
         "Enter did not answer EXITGAME's confirmation as No"
     );
     require(ask_from_menu(), "EXITGAME did not ask to surrender again");
     require(
         send(escape(false)) && !exit_requested_ && match_paused_ &&
-            match_hud_panel_ == "guis/ARMOPT.GUI",
+            match_hud_panel_ == oa::data::defs::gui_path("ARMOPT.GUI"),
         "Escape did not answer EXITGAME's confirmation as No"
     );
     // A panel that pauses the match after an answered confirmation, as the
@@ -943,7 +953,7 @@ void Runtime::check_match_dialogs() {
     );
     activate_pause_gadget("CHOICE2");
     require(
-        match_paused_ && match_hud_panel_ == "guis/ARMOPT.GUI",
+        match_paused_ && match_hud_panel_ == oa::data::defs::gui_path("ARMOPT.GUI"),
         "CHOICE2 after the save page did not return to the in-game menu"
     );
 
@@ -1005,7 +1015,10 @@ void Runtime::check_match_dialogs() {
         event.key.down = true;
         return event;
     };
-    require(showing(kInGameMenuLayout), "the in-game menu is not open for PREFS");
+    require(
+        showing(oa::data::defs::gui_path(kInGameMenuLayout)),
+        "the in-game menu is not open for PREFS"
+    );
     if (const auto viewer = match_view_player(); viewer < OA_PLAYER_COUNT) {
         auto& game = match_->state().game;
         for (int step = 0; step < kReadoutSettleSteps; ++step)
@@ -1022,7 +1035,10 @@ void Runtime::check_match_dialogs() {
     // Each frame of the lightbar marks it drawn in the game.
     match_->state().game.options_lightbar_drawn = 0;
     activate_pause_gadget("PREFS");
-    require(showing(kPreferencesLayout), "PREFS did not open PREFS.GUI over the match");
+    require(
+        showing(oa::data::defs::gui_path(kPreferencesLayout)),
+        "PREFS did not open PREFS.GUI over the match"
+    );
     const auto prefs = match_hud_->layout.gadgets.front().common;
     require(
         prefs.x == 0 && prefs.y == 126 && prefs.width == 128 && prefs.height == 354,
@@ -1094,7 +1110,8 @@ void Runtime::check_match_dialogs() {
     // the battlefield; right of it the match shows as before.
     click_control("SOUND", 50);
     require(
-        showing(kPreferencesLayout) && options_flip_.rgb.empty(), "SOUND did not free the lightbar"
+        showing(oa::data::defs::gui_path(kPreferencesLayout)) && options_flip_.rgb.empty(),
+        "SOUND did not free the lightbar"
     );
     require(
         match_hud_->layout.gadgets.front().common.width == 278,
@@ -1147,7 +1164,10 @@ void Runtime::check_match_dialogs() {
             std::to_string(loud) + ")"
     );
     click_control("CANCEL", 50);
-    require(showing(kInGameMenuLayout), "Cancel did not return to the in-game menu");
+    require(
+        showing(oa::data::defs::gui_path(kInGameMenuLayout)),
+        "Cancel did not return to the in-game menu"
+    );
     require(
         preferences_.fx_volume == entry_volume,
         "Cancel did not put the effects volume back to " + std::to_string(entry_volume)
@@ -1169,7 +1189,8 @@ void Runtime::check_match_dialogs() {
     );
     require(send(key(SDLK_RETURN, SDL_SCANCODE_RETURN)), "Enter ended the run");
     require(
-        showing(kInGameMenuLayout) && game.requested_speed == oa::sim::speed::fastest &&
+        showing(oa::data::defs::gui_path(kInGameMenuLayout)) &&
+            game.requested_speed == oa::sim::speed::fastest &&
             preferences_.game_speed == oa::sim::speed::fastest,
         "Enter did not leave the preferences as OK does"
     );
@@ -1227,19 +1248,22 @@ void Runtime::check_match_dialogs() {
     require(hud_gadget("FXVOL") != nullptr, "'s' did not open SOUND");
     require(!match_music_panel_open(), "SOUND left the MUSIC tab counted as the music's panel");
     require(send(key(SDLK_C, SDL_SCANCODE_C)), "'c' ended the run");
-    require(showing(kInGameMenuLayout), "'c' did not cancel the preferences");
+    require(
+        showing(oa::data::defs::gui_path(kInGameMenuLayout)), "'c' did not cancel the preferences"
+    );
     // Escape answers as OK.
     activate_pause_gadget("PREFS");
     require(send(escape(false)), "Escape ended the run");
     require(
-        showing(kInGameMenuLayout) && options_flip_.rgb.empty(),
+        showing(oa::data::defs::gui_path(kInGameMenuLayout)) && options_flip_.rgb.empty(),
         "Escape did not leave the preferences for the in-game menu"
     );
     // F2 closes the menus over the match, the preferences among them.
     activate_pause_gadget("PREFS");
     require(send(key(SDLK_F2, SDL_SCANCODE_F2)), "F2 ended the run");
     require(
-        screen_ == Screen::match && !match_paused_ && match_hud_panel_ != kPreferencesLayout,
+        screen_ == Screen::match && !match_paused_ &&
+            match_hud_panel_ != oa::data::defs::gui_path(kPreferencesLayout),
         "F2 did not close the preferences with the in-game menu"
     );
     show_match_pause_menu();
@@ -1252,7 +1276,7 @@ void Runtime::check_match_dialogs() {
     );
     activate_pause_gadget("CHOICE2");
     require(
-        showing(kInGameMenuLayout),
+        showing(oa::data::defs::gui_path(kInGameMenuLayout)),
         "CHOICE2 over the preferences did not return to the in-game menu"
     );
     resume_match_pause();
@@ -1323,7 +1347,9 @@ void Runtime::check_match_dialogs() {
         const auto ask_main_menu = [&] {
             show_match_pause_menu();
             activate_pause_gadget("EXIT");
-            require(showing("guis/EXITMENU.GUI"), "EXIT did not open EXITMENU.GUI");
+            require(
+                showing(oa::data::defs::gui_path("EXITMENU.GUI")), "EXIT did not open EXITMENU.GUI"
+            );
             activate_pause_gadget("MAINMENU");
             require(showing(confirm), "MAINMENU did not ask to surrender");
             const auto title = hud_label("TITLE");
@@ -1411,7 +1437,8 @@ void Runtime::check_in_game_briefing(const fs::path& report_directory) {
         if (!ok)
             throw std::runtime_error(what + ' ' + failure);
     };
-    const auto authored_layout = oa::ui::gui_layout::parse(assets_.read(kBriefingGui).bytes);
+    const auto authored_layout =
+        oa::ui::gui_layout::parse(assets_.read(oa::data::defs::gui_path(kBriefingGui)).bytes);
     require(authored_layout.ok() && !authored_layout.layout->gadgets.empty(), "does not parse");
     const auto authored = authored_layout.layout->gadgets.front().common;
     // The authored position centres the panel on a 640x480 screen.
@@ -1890,24 +1917,40 @@ void Runtime::check_placed_dialogs(const fs::path& report_directory) {
         activate_pause_gadget("EXIT");
         auto exit_menu = composed();
         write_ppm(report_directory / ("native-match-exit-menu-" + size + ".ppm"), exit_menu);
-        placed(paused, exit_menu, kExitMenuLayout, panel_flag::beside_hud, true);
-        menu_under(exit_menu, kExitMenuLayout, true);
+        placed(
+            paused,
+            exit_menu,
+            oa::data::defs::gui_path(kExitMenuLayout),
+            panel_flag::beside_hud,
+            true
+        );
+        menu_under(exit_menu, oa::data::defs::gui_path(kExitMenuLayout), true);
         // Restart takes its first letter as its caption is set; the focus
         // goes to the first control, Exit to Menu.
-        check_quick_keys(std::string(kExitMenuLayout) + on, {{"RESTART", 'R'}});
-        check_focus(std::string(kExitMenuLayout) + on, "MAINMENU");
+        check_quick_keys(
+            std::string(oa::data::defs::gui_path(kExitMenuLayout)) + on, {{"RESTART", 'R'}}
+        );
+        check_focus(std::string(oa::data::defs::gui_path(kExitMenuLayout)) + on, "MAINMENU");
 
         activate_pause_gadget("EXITGAME");
         auto confirm = composed();
         write_ppm(report_directory / ("native-match-surrender-" + size + ".ppm"), confirm);
-        const auto panel = placed(paused, confirm, kConfirmLayout, panel_flag::beside_hud, true);
-        menu_under(confirm, kConfirmLayout, false);
+        const auto panel = placed(
+            paused, confirm, oa::data::defs::gui_path(kConfirmLayout), panel_flag::beside_hud, true
+        );
+        menu_under(confirm, oa::data::defs::gui_path(kConfirmLayout), false);
         require(
             hud_label("TITLE") == "Surrender this battle and exit to the system?",
             "EXITGAME's confirmation reads \"" + hud_label("TITLE") + '"'
         );
-        check_quick_keys(std::string(kConfirmLayout) + on, {{"CHOICE1", 'Y'}, {"CHOICE2", 'N'}});
-        check_focus(std::string(kConfirmLayout) + on, oa::ui::frontend::kExitConfirmDefault);
+        check_quick_keys(
+            std::string(oa::data::defs::gui_path(kConfirmLayout)) + on,
+            {{"CHOICE1", 'Y'}, {"CHOICE2", 'N'}}
+        );
+        check_focus(
+            std::string(oa::data::defs::gui_path(kConfirmLayout)) + on,
+            oa::ui::frontend::kExitConfirmDefault
+        );
         // The pointer finds the choices where they show, and nothing beside them.
         const auto root = match_hud_->layout.gadgets.front().common;
         const auto shown_at = [&](const Rect& shown,
@@ -1933,7 +1976,8 @@ void Runtime::check_placed_dialogs(const fs::path& report_directory) {
         require(point_at(no_x, no_y) == "CHOICE2", "the pointer over No is not over it");
         click_at(no_x, no_y);
         require(
-            !exit_requested_ && match_paused_ && match_hud_panel_ == kInGameMenuLayout,
+            !exit_requested_ && match_paused_ &&
+                match_hud_panel_ == oa::data::defs::gui_path(kInGameMenuLayout),
             "a click on No where it shows did not return to the in-game menu"
         );
         update_pointer(static_cast<float>(width - 1), static_cast<float>(height - 1));
@@ -1941,7 +1985,13 @@ void Runtime::check_placed_dialogs(const fs::path& report_directory) {
         activate_pause_gadget("EXIT");
         activate_pause_gadget("MAINMENU");
         auto main_menu = composed();
-        placed(paused, main_menu, kConfirmLayout, panel_flag::beside_hud, true);
+        placed(
+            paused,
+            main_menu,
+            oa::data::defs::gui_path(kConfirmLayout),
+            panel_flag::beside_hud,
+            true
+        );
         menu_under(main_menu, "MAINMENU's confirmation", false);
         require(
             hud_label("TITLE") == "Surrender this battle and return to main menu?",
@@ -1952,9 +2002,11 @@ void Runtime::check_placed_dialogs(const fs::path& report_directory) {
         activate_pause_gadget("EXIT");
         activate_pause_gadget("RESTART");
         auto restart = composed();
-        placed(paused, restart, kRestartLayout, panel_flag::beside_hud, false);
-        menu_under(restart, kRestartLayout, false);
-        check_focus(std::string(kRestartLayout) + on, "Difficulty");
+        placed(
+            paused, restart, oa::data::defs::gui_path(kRestartLayout), panel_flag::beside_hud, false
+        );
+        menu_under(restart, oa::data::defs::gui_path(kRestartLayout), false);
+        check_focus(std::string(oa::data::defs::gui_path(kRestartLayout)) + on, "Difficulty");
         activate_pause_gadget("CANCEL");
 
         // Asked by closing the window over the running match, the
@@ -1965,7 +2017,9 @@ void Runtime::check_placed_dialogs(const fs::path& report_directory) {
         request_match_close();
         require(!match_panels_keyboard_, "the close request gave the panels the keyboard");
         auto closing = composed();
-        placed(running, closing, kConfirmLayout, panel_flag::beside_hud, true);
+        placed(
+            running, closing, oa::data::defs::gui_path(kConfirmLayout), panel_flag::beside_hud, true
+        );
         const auto side = oa::ui::display_layout::source_rect_to_canvas(
             match_layout_, 0, menu_root.y, kBattlefieldLeft, kCanvasHeight - menu_root.y
         );
@@ -2009,7 +2063,7 @@ void Runtime::check_placed_dialogs(const fs::path& report_directory) {
             toggle_team_menu();
             click_team_panel("CONTROL");
             require(
-                team_panel_open() && match_hud_panel_ == "guis/CONTROL.GUI",
+                team_panel_open() && match_hud_panel_ == oa::data::defs::gui_path("CONTROL.GUI"),
                 "the tab menu's CONTROL did not open CONTROL.GUI" + on
             );
             check_focus("CONTROL.GUI" + on, "OK");
@@ -2017,8 +2071,13 @@ void Runtime::check_placed_dialogs(const fs::path& report_directory) {
             open_removal_question(other);
             auto question = composed();
             write_ppm(report_directory / ("native-match-removal-" + size + ".ppm"), question);
-            const auto asked =
-                placed(control_frame, question, kConfirmLayout, panel_flag::centre, true);
+            const auto asked = placed(
+                control_frame,
+                question,
+                oa::data::defs::gui_path(kConfirmLayout),
+                panel_flag::centre,
+                true
+            );
             check_quick_keys("the removal question" + on, {{"CHOICE1", 'Y'}, {"CHOICE2", 'N'}});
             check_focus("the removal question" + on, "CHOICE1");
             // Off the question, the side column is as CONTROL.GUI left it:
@@ -2050,7 +2109,7 @@ void Runtime::check_placed_dialogs(const fs::path& report_directory) {
             );
             click_at(asked_no_x, asked_no_y);
             require(
-                team_panel_open() && match_hud_panel_ == "guis/CONTROL.GUI" &&
+                team_panel_open() && match_hud_panel_ == oa::data::defs::gui_path("CONTROL.GUI") &&
                     match_panels_keyboard_,
                 "No did not return to CONTROL.GUI" + on
             );
@@ -2085,7 +2144,8 @@ void Runtime::check_load_save() {
         oa::ui::decoded::require(oa::decode_pcx(assets_.read(kLoadBitmap).bytes), kLoadBitmap);
     const auto save_bitmap =
         oa::ui::decoded::require(oa::decode_pcx(assets_.read(kSaveBitmap).bytes), kSaveBitmap);
-    const auto authored_layout = oa::ui::gui_layout::parse(assets_.read("guis/loadgame.gui").bytes);
+    const auto authored_layout =
+        oa::ui::gui_layout::parse(assets_.read(oa::data::defs::gui_path("loadgame.gui")).bytes);
     if (!authored_layout.ok() || authored_layout.layout->gadgets.empty())
         throw std::runtime_error("load/save check: LOADGAME.GUI does not parse");
     const auto header = authored_layout.layout->gadgets.front().common;
@@ -2297,7 +2357,7 @@ void Runtime::check_load_save() {
     if (screen_ != Screen::single_player)
         throw std::runtime_error("load/save check: CANCEL did not leave the second load dialog");
 
-    // A paused skirmish: the save dialog at the authored root over the match.
+    // A paused skirmish: the save and load dialogs centred on the match frame.
     exercise_click(entry::resource_name(entry::Button::skirmish));
     state_.player_count = 2;
     if (map_player_capacity() < 2)
@@ -2377,14 +2437,56 @@ void Runtime::check_load_save() {
             );
         return shown;
     };
-    const oa::ui::display_layout::Point authored{header.x, header.y};
-    // What the dialog shows is checked by clicking it.
-    std::ignore = open_over_match("SAVEGAME", true);
-    click_record("CANCEL");
-    if (screen_ != Screen::match || save_dialog_open())
-        throw std::runtime_error(
-            "load/save check: CANCEL at its drawn position did not close the save dialog"
-        );
+    // Where LOADGAME.GUI's root is centred on a frame of the window's size.
+    const auto centred_on = [&](const Paused& paused) {
+        return oa::ui::display_layout::Point{
+            (static_cast<int32_t>(paused.frame.width) - header.width) / 2,
+            (static_cast<int32_t>(paused.frame.height) - header.height) / 2
+        };
+    };
+    const auto count_save_files = [&] {
+        std::size_t count = 0;
+        std::error_code error;
+        for (const auto& entry :
+             fs::directory_iterator(save_root / oa::ui::frontend::kSaveDirectory, error))
+            if (entry.is_regular_file())
+                ++count;
+        return count;
+    };
+    const auto press_key = [&](SDL_Keycode code) {
+        SDL_Event key{};
+        key.type = SDL_EVENT_KEY_DOWN;
+        key.key.key = code;
+        dispatch_event(key, running);
+    };
+    const auto type_name = [&](const char* name) {
+        for (int erase = 0; erase < 32; ++erase)
+            press_key(SDLK_BACKSPACE);
+        SDL_Event text{};
+        text.type = SDL_EVENT_TEXT_INPUT;
+        text.text.text = name;
+        dispatch_event(text, running);
+    };
+    // A click on the name field only gives it the keys: it neither saves
+    // under the name it holds nor closes the dialog. CANCEL then leaves
+    // without a save.
+    {
+        const auto files = count_save_files();
+        std::ignore = open_over_match("SAVEGAME", true);
+        type_name(kCheckPressedName);
+        click_record("GAMENAME");
+        if (screen_ != Screen::load_game || !save_dialog_open() || count_save_files() != files)
+            throw std::runtime_error(
+                "load/save check: a click on the save dialog's name field saved or closed it"
+            );
+        click_record("CANCEL");
+        if (screen_ != Screen::match || save_dialog_open())
+            throw std::runtime_error(
+                "load/save check: CANCEL at its drawn position did not close the save dialog"
+            );
+        if (count_save_files() != files)
+            throw std::runtime_error("load/save check: CANCEL wrote a save");
+    }
     Rect save_panel{};
     // Each save holds the radar image the match shows as it is saved, and
     // the local player's side.
@@ -2414,21 +2516,15 @@ void Runtime::check_load_save() {
                 "load/save check: " + path + " does not hold the local player's side"
             );
     };
+    // The first save is written by Return at the end of its name, the second
+    // by OK at its drawn position.
     for (const auto* name : {kCheckSaveName, kCheckSecondSaveName}) {
         auto paused = open_over_match("SAVEGAME", true);
-        SDL_Event key{};
-        key.type = SDL_EVENT_KEY_DOWN;
-        key.key.key = SDLK_BACKSPACE;
-        for (int erase = 0; erase < 32; ++erase)
-            dispatch_event(key, running);
-        SDL_Event text{};
-        text.type = SDL_EVENT_TEXT_INPUT;
-        text.text.text = name;
-        dispatch_event(text, running);
+        type_name(name);
         present(paused, "save");
         if (name == kCheckSaveName) {
             write_ppm(report_directory / "native-loadsave-save-match.ppm", surface_);
-            save_panel = check_over_match(paused, save_bitmap, authored, "save");
+            save_panel = check_over_match(paused, save_bitmap, centred_on(paused), "save");
         }
         const auto* final_image = radar_state_.surfaces.final_image;
         if (radar_state_.built_for != &match_->state() || final_image == nullptr)
@@ -2439,11 +2535,15 @@ void Runtime::check_load_save() {
                 final_image->pixels + static_cast<std::ptrdiff_t>(y) * final_image->pitch;
             shown.insert(shown.end(), line, line + final_image->width);
         }
-        key.key.key = SDLK_RETURN;
-        dispatch_event(key, running);
+        const bool by_return = name == kCheckSaveName;
+        if (by_return)
+            press_key(SDLK_RETURN);
+        else
+            click_record("LOAD");
         if (screen_ != Screen::match || save_dialog_open())
             throw std::runtime_error(
-                "load/save check: Return did not save and close the save dialog"
+                std::string("load/save check: ") + (by_return ? "Return" : "OK") +
+                " did not save and close the save dialog"
             );
         check_saved_radar(name, shown);
     }
@@ -2463,10 +2563,7 @@ void Runtime::check_load_save() {
     // The load dialog centred on the match frame; a click on the second
     // GAMES row moves the lit row there.
     auto paused = open_over_match("LOADGAME", false);
-    const oa::ui::display_layout::Point match_centred{
-        (static_cast<int32_t>(paused.frame.width) - header.width) / 2,
-        (static_cast<int32_t>(paused.frame.height) - header.height) / 2
-    };
+    const auto match_centred = centred_on(paused);
     present(paused, "match load");
     auto listed = surface_;
     const auto row = games_row;
@@ -2487,6 +2584,81 @@ void Runtime::check_load_save() {
     std::cout << "load/save check: save dialog at " << save_panel.x << ',' << save_panel.y
               << ", load dialog at " << load_panel.x << ',' << load_panel.y << " on the "
               << paused.frame.width << 'x' << paused.frame.height << " match frame\n";
+
+    // Escape leaves the load dialog as CANCEL does, for the paused match.
+    std::ignore = open_over_match("LOADGAME", false);
+    press_key(SDLK_ESCAPE);
+    if (screen_ != Screen::match || !match_paused_ || !match_hud_ ||
+        match_hud_panel_ != oa::data::defs::gui_path(kInGameMenuLayout))
+        throw std::runtime_error(
+            "load/save check: Escape did not return the load dialog to the in-game menu"
+        );
+    // Return starts the selected save, as OK does.
+    {
+        std::optional<std::size_t> second_row;
+        const auto saves = listed_saves();
+        for (std::size_t index = 0; index < saves.list.entries.size(); ++index)
+            if (std::string_view(saves.list.entries[index].file.data()) ==
+                std::string(kCheckSecondSaveName) + '.' +
+                    std::string(oa::ui::frontend::kSaveExtension))
+                second_row = index;
+        if (!second_row)
+            throw std::runtime_error("load/save check: the save written by OK is not listed");
+        std::ignore = open_over_match("LOADGAME", false);
+        const auto row = games_row(static_cast<int32_t>(*second_row));
+        click(row.x + 8, row.y + row.height / 2);
+        press_key(SDLK_RETURN);
+        const auto loaded = std::string("Loaded ") + kCheckSecondSaveName + '.';
+        if (screen_ != Screen::match || status_.rfind(loaded, 0) != 0)
+            throw std::runtime_error(
+                "load/save check: Return did not start the selected save (" + status_ + ")"
+            );
+    }
+
+    // At every window size, from 640x480 to 1920x1080, the side column drawn
+    // once or twice its size, both dialogs open centred on the screen over the
+    // paused match.
+    for (const auto& [width, height] :
+         {std::pair{kCanvasWidth, kCanvasHeight},
+          std::pair{kLargeWindowWidth, kLargeWindowHeight},
+          std::pair{kDefaultWindowWidth, kDefaultWindowHeight}}) {
+        const auto size = std::to_string(width) + 'x' + std::to_string(height);
+        if (match_)
+            leave_match();
+        if (!SDL_SetWindowSize(sdl_.window, width, height) || !SDL_SyncWindow(sdl_.window))
+            throw std::runtime_error(std::string("SDL_SetWindowSize: ") + SDL_GetError());
+        load(Screen::main_menu);
+        start_benchmark_skirmish();
+        if (match_layout_.width != width || match_layout_.height != height)
+            throw std::runtime_error("load/save check: could not size the match to " + size);
+        show_match_pause_menu();
+        // The pointer rests in the window's corner, clear of the panels.
+        update_pointer(static_cast<float>(width - 1), static_cast<float>(height - 1));
+        for (const auto& [gadget, save] :
+             {std::pair{"SAVEGAME", true}, std::pair{"LOADGAME", false}}) {
+            const auto role = std::string(save ? "save" : "load") + " dialog on " + size;
+            auto at_size = open_over_match(gadget, save);
+            present(at_size, role.c_str());
+            // Centred on the window itself, whatever the side column's scale.
+            const oa::ui::display_layout::Point expected{
+                (width - header.width) / 2, (height - header.height) / 2
+            };
+            const auto origin = panel_origin();
+            if (origin.x != expected.x || origin.y != expected.y)
+                throw std::runtime_error(
+                    "load/save check: the " + role + " is at " + std::to_string(origin.x) + ',' +
+                    std::to_string(origin.y) + ", not centred at " + std::to_string(expected.x) +
+                    ',' + std::to_string(expected.y)
+                );
+            std::ignore =
+                check_over_match(at_size, save ? save_bitmap : load_bitmap, expected, role.c_str());
+            press_key(SDLK_ESCAPE);
+            if (screen_ != Screen::match || !match_paused_ || save_dialog_open())
+                throw std::runtime_error("load/save check: Escape did not close the " + role);
+        }
+        std::cout << "load/save check: both dialogs centred at " << (width - header.width) / 2
+                  << ',' << (height - header.height) / 2 << " on the " << size << " window\n";
+    }
 }
 
 } // namespace oa::app

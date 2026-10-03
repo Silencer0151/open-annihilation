@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // Drawing without the game's art (artless.hpp): fills and blends, bevels,
-// outlines, one-colour text and one-bit marks, placed and scaled from source
-// pixels and clipped to the surface and to a placement's clip, pixel by
-// pixel.
+// outlines, one-colour text, one-bit marks and scaled RGBA pictures, placed
+// and scaled from source pixels and clipped to the surface and to a
+// placement's clip, pixel by pixel.
 
 #include "oa/ui/frontend_renderer/artless.hpp"
 
@@ -251,8 +251,35 @@ void text_is_placed_scaled_and_clipped() {
 }
 
 // Draws a fill, a blend, an outline, a bevel, a mark and text through a placement.
+/// A picture's pixels, four bytes a pixel; the picture refers to them.
+using PicturePixels = std::vector<uint8_t>;
+
+/// Returns a picture over pixels kept by the caller.
+renderer::RgbaPicture picture_of(uint32_t width, uint32_t height, const PicturePixels& pixels) {
+    return {width, height, pixels};
+}
+
+/// A 4 by 4 picture of four opaque colours in quarters, its corner clear.
+const PicturePixels& quartered_pixels() {
+    static const PicturePixels pixels = [] {
+        PicturePixels quarters;
+        for (uint32_t y = 0; y < 4; ++y)
+            for (uint32_t x = 0; x < 4; ++x) {
+                const bool right = x >= 2;
+                const bool lower = y >= 2;
+                quarters.push_back(right ? 0x20 : 0xe0);
+                quarters.push_back(lower ? 0xd0 : 0x30);
+                quarters.push_back(right != lower ? 0xc0 : 0x40);
+                quarters.push_back(x == 0 && y == 0 ? 0 : 0xff);
+            }
+        return quarters;
+    }();
+    return pixels;
+}
+
 void draw_every_primitive(renderer::Surface& surface, const renderer::Placement& placement) {
     const auto font = test_font();
+    renderer::draw_picture(surface, placement, {5, 4, 6, 5}, picture_of(4, 4, quartered_pixels()));
     renderer::fill_source_rect(surface, placement, {0, 0, 3, 9}, green);
     renderer::blend_source_rect(surface, placement, {3, 0, 4, 9}, green, 128);
     renderer::draw_outline(surface, placement, {1, 1, 9, 7}, light);
@@ -554,6 +581,111 @@ void installed_fonts_draw_as_the_game_draws_them(oa::AssetStore& assets) {
 
 } // namespace
 
+/// Returns an opaque pixel's four bytes.
+std::array<uint8_t, 4> opaque(renderer::Rgb color) {
+    return {color[0], color[1], color[2], 0xff};
+}
+
+void pictures_shrink_to_the_mean_of_their_pixels() {
+    constexpr renderer::Rgb red{0xff, 0, 0};
+    constexpr renderer::Rgb blue{0, 0, 0xff};
+    // Two red columns, then blue over clear: each half shrinks to one pixel.
+    PicturePixels pixels;
+    for (const auto& pixel :
+         {opaque(red),
+          opaque(red),
+          opaque(blue),
+          opaque(blue),
+          opaque(red),
+          opaque(red),
+          std::array<uint8_t, 4>{},
+          std::array<uint8_t, 4>{}})
+        pixels.insert(pixels.end(), pixel.begin(), pixel.end());
+    const auto picture = picture_of(4, 2, pixels);
+    CHECK(renderer::picture_drawable(picture));
+
+    auto surface = blank(4, 3);
+    renderer::draw_picture(surface, {}, {1, 1, 2, 1}, picture);
+    // The red half is opaque; the blue half is half covered: alpha 128 of
+    // 255, laid over black.
+    CHECK(pixel(surface, 1, 1) == red);
+    CHECK((pixel(surface, 2, 1) == renderer::Rgb{0, 0, 128}));
+    std::size_t lit = 0;
+    for (uint32_t y = 0; y < 3; ++y)
+        for (uint32_t x = 0; x < 4; ++x)
+            lit += pixel(surface, x, y) != black ? 1U : 0U;
+    CHECK(lit == 2);
+
+    // Over grey 100 each channel is (colour x 128 + 100 x 127 + 127) / 255.
+    auto grey = blank(4, 3);
+    std::fill(grey.rgb.begin(), grey.rgb.end(), uint8_t{100});
+    renderer::draw_picture(grey, {}, {1, 1, 2, 1}, picture);
+    CHECK((pixel(grey, 2, 1) == renderer::Rgb{50, 50, 178}));
+    CHECK((pixel(grey, 0, 0) == renderer::Rgb{100, 100, 100}));
+}
+
+void pictures_are_drawn_at_the_surface_resolution() {
+    // Four colours across, drawn two source pixels wide at scale 3: six
+    // surface columns share the picture's four, so source pixels split.
+    const std::array<renderer::Rgb, 4> colors{
+        renderer::Rgb{10, 0, 0},
+        renderer::Rgb{20, 0, 0},
+        renderer::Rgb{30, 0, 0},
+        renderer::Rgb{40, 0, 0}
+    };
+    PicturePixels pixels;
+    for (const auto& color : colors) {
+        const auto bytes = opaque(color);
+        pixels.insert(pixels.end(), bytes.begin(), bytes.end());
+    }
+    auto surface = blank(10, 4);
+    renderer::draw_picture(surface, {1, 0, 3}, {0, 0, 2, 1}, picture_of(4, 1, pixels));
+    const std::array<renderer::Rgb, 6> shown{
+        colors[0], colors[0], colors[1], colors[2], colors[2], colors[3]
+    };
+    for (uint32_t y = 0; y < 3; ++y)
+        for (uint32_t x = 0; x < 6; ++x)
+            CHECK(pixel(surface, 1 + x, y) == shown[x]);
+    CHECK(pixel(surface, 0, 0) == black);
+    CHECK(pixel(surface, 7, 0) == black);
+    CHECK(pixel(surface, 1, 3) == black);
+
+    // A placement off the surface's top left draws the part that shows.
+    auto shifted = blank(3, 2);
+    renderer::draw_picture(shifted, {-3, -1, 3}, {0, 0, 2, 1}, picture_of(4, 1, pixels));
+    CHECK(pixel(shifted, 0, 0) == colors[2]);
+    CHECK(pixel(shifted, 2, 1) == colors[3]);
+}
+
+void pictures_that_cannot_draw_draw_nothing() {
+    const PicturePixels pixels(4U * 4U * renderer::picture_pixel_bytes, 0xff);
+    const auto untouched = blank(8, 8);
+    const auto drawn = [&](const renderer::RgbaPicture& picture,
+                           const renderer::Placement& placement,
+                           const renderer::SourceRect& rect) {
+        auto surface = blank(8, 8);
+        renderer::draw_picture(surface, placement, rect, picture);
+        return surface.rgb == untouched.rgb;
+    };
+    CHECK(!drawn(picture_of(4, 4, pixels), {}, {0, 0, 4, 4}));
+    CHECK(drawn(renderer::RgbaPicture{}, {}, {0, 0, 4, 4}));
+    CHECK(!renderer::picture_drawable(renderer::RgbaPicture{}));
+    const PicturePixels short_of_one(pixels.begin(), pixels.end() - 1);
+    CHECK(!renderer::picture_drawable(picture_of(4, 4, short_of_one)));
+    CHECK(drawn(picture_of(4, 4, short_of_one), {}, {0, 0, 4, 4}));
+    CHECK(drawn(picture_of(4, 4, pixels), {0, 0, 0}, {0, 0, 4, 4}));
+    CHECK(drawn(picture_of(4, 4, pixels), {}, {0, 0, 0, 4}));
+    CHECK(drawn(picture_of(4, 4, pixels), {}, {8, 0, 4, 4}));
+    const PicturePixels clear(4U * 4U * renderer::picture_pixel_bytes, 0);
+    CHECK(drawn(picture_of(4, 4, clear), {}, {0, 0, 4, 4}));
+    // A surface whose pixels do not fill its size is left alone.
+    renderer::Surface cut = blank(4, 4);
+    cut.rgb.pop_back();
+    const auto before = cut.rgb;
+    renderer::draw_picture(cut, {}, {0, 0, 4, 4}, picture_of(4, 4, pixels));
+    CHECK(cut.rgb == before);
+}
+
 int main(int argc, char** argv) {
     if (oa::test::game_data_requested(argc, argv)) {
         auto assets = oa::test::require_game_assets("the installed fonts' artless text");
@@ -575,6 +707,9 @@ int main(int argc, char** argv) {
     a_clip_keeps_every_primitive_inside_it();
     text_fonts_keep_the_shading_and_drop_the_ring();
     marks_draw_their_set_pixels();
+    pictures_shrink_to_the_mean_of_their_pixels();
+    pictures_are_drawn_at_the_surface_resolution();
+    pictures_that_cannot_draw_draw_nothing();
     if (failures != 0)
         return 1;
     std::cout << "artless drawing: ok\n";

@@ -197,6 +197,18 @@ OA_GAME_DATA_TEST(load_dialog_preview_and_load) {
     OA_CHECK(text_of(panel, "TIME") == "01:02:05");
     OA_CHECK(text_of(panel, "SIDE") == "CORE");
     OA_CHECK(text_of(panel, "DIFF") == "Hard");
+    {
+        // ai.difficulty-names: the saved difficulty shows the name it carries.
+        using Names = data::match_rules::AiDifficultyNamesNames;
+        Panel named_panel;
+        if (loadgame_panel(named_panel)) {
+            auto named = make_context(fixture);
+            named.side_names = sides;
+            named.difficulty_names.names = {Names::hard, Names::medium, Names::easy};
+            OA_CHECK(savegame_enter_load(named_panel, named));
+            OA_CHECK(text_of(named_panel, "DIFF") == "Easy");
+        }
+    }
 
     panel_control(panel, "GAMES")->list_selection = 1;
     savegame_on_games_selected(panel, context);
@@ -288,6 +300,44 @@ OA_GAME_DATA_TEST(save_dialog_delete_and_write) {
     const auto result = savegame_on_save_click(panel, context);
     OA_CHECK(result.action == SaveDialogAction::save);
     OA_CHECK(std::string(result.path.data()) == "SAVEGAME\\My Battle.SAV");
+}
+
+// The save dialog saves only through OK and Return. It opens with the first
+// listed save's name; a press on the name field only gives it the keys, and
+// a press on the list, a label or the radar picture does nothing. OK saves
+// under the name, CANCEL leaves without a save, and Return at the end of the
+// name saves as OK does.
+OA_GAME_DATA_TEST(save_dialog_saves_only_through_its_buttons) {
+    Panel panel;
+    if (!loadgame_panel(panel))
+        return;
+    auto fixture = saves_fixture();
+    auto context = make_context(fixture);
+    savegame_enter_save(panel, context);
+    OA_CHECK(text_of(panel, "GAMENAME") == context.list.entries[0].description.data());
+    const auto press = [&](const char* name) {
+        return savegame_on_save_press(panel, context, panel_find(panel, name)).action;
+    };
+    for (const auto* name : {"GAMENAME", "GAMES", "GAMETYPE", "RADAR"})
+        OA_CHECK(press(name) == SaveDialogAction::none);
+    OA_CHECK(savegame_on_save_press(panel, context, 0).action == SaveDialogAction::none);
+    OA_CHECK(
+        savegame_on_save_press(panel, context, panel.count + 1).action == SaveDialogAction::none
+    );
+    OA_CHECK(fixture.sounds.empty() && fixture.removed.empty());
+    OA_CHECK(context.list.entries.size() == 2);
+
+    panel_set_text(panel, "GAMENAME", "Pressed Save");
+    const auto saved = savegame_on_save_press(panel, context, panel_find(panel, "LOAD"));
+    OA_CHECK(saved.action == SaveDialogAction::save);
+    OA_CHECK(std::string(saved.path.data()) == "SAVEGAME\\Pressed Save.SAV");
+    OA_CHECK(press("CANCEL") == SaveDialogAction::cancelled);
+    OA_CHECK(fixture.sounds.back() == "Previous");
+    select(panel, "GAMENAME");
+    OA_CHECK(savegame_on_save_click(panel, context).action == SaveDialogAction::save);
+    // An empty name saves nothing, whichever way.
+    panel_set_text(panel, "GAMENAME", "");
+    OA_CHECK(press("LOAD") == SaveDialogAction::none);
 }
 
 OA_TEST(load_summary_fields) {

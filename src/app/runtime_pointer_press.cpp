@@ -402,7 +402,9 @@ bool Runtime::cancels_queued_order(
     const auto kind = oa::data::mission_types::index_for_name(input::unit_order_name(order));
     if (kind == oa::data::mission_types::unknown_mission)
         return false;
-    return match_->cancel_queued_order(source, kind, target, ground ? &*ground : nullptr);
+    return match_->cancel_queued_order(
+        source, kind, target, ground ? &*ground : nullptr, reclaim_click_snapped_
+    );
 }
 
 bool Runtime::cancels_queued_command(

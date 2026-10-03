@@ -4,6 +4,7 @@
 #include "computer_internal.hpp"
 
 #include "oa/base/game_math.hpp"
+#include "oa/data/match_rules/difficulty_names.hpp"
 #include "oa/sim/unit_movement/movement.hpp"
 #include "oa/sim/simulation_state.hpp"
 #include "oa/formats/tdf.hpp"
@@ -283,7 +284,7 @@ void scan_metal_spots(const ComputerHost& host, ComputerKnowledge& k) noexcept {
 /// Applies every "plan", "weight" and "limit" line of an AI script.
 ///
 /// A plan line enables the following weight and limit lines when it names the game's
-/// difficulty or "any"; weight lines apply to every controller, limit lines to every
+/// difficulty (by the keyword ai.difficulty-names gives it) or "any"; weight lines apply to every controller, limit lines to every
 /// computer player.
 ///
 /// @param state computer players
@@ -299,6 +300,10 @@ void apply_script(
     std::size_t length,
     bool& plan_matches
 ) noexcept {
+    // The keyword the difficulty carries (ai.difficulty-names).
+    const auto named = data::match_rules::difficulty_name_index(
+        state->rules.rules().ai.difficulty_names, host.difficulty
+    );
     const char* cursor = text;
     const char* const end = text + length;
     while (cursor < end) {
@@ -317,12 +322,11 @@ void apply_script(
             for (uint32_t i = 1; i < line.count; ++i) {
                 if (equal_nocase(token(line, 1), "any"))
                     plan_matches = true;
-                if (host.difficulty == OA_DIFFICULTY_EASY && equal_nocase(token(line, i), "easy"))
+                if (named == OA_DIFFICULTY_EASY && equal_nocase(token(line, i), "easy"))
                     plan_matches = true;
-                if (host.difficulty == OA_DIFFICULTY_MEDIUM &&
-                    equal_nocase(token(line, i), "medium"))
+                if (named == OA_DIFFICULTY_MEDIUM && equal_nocase(token(line, i), "medium"))
                     plan_matches = true;
-                if (host.difficulty == OA_DIFFICULTY_HARD && equal_nocase(token(line, i), "hard"))
+                if (named == OA_DIFFICULTY_HARD && equal_nocase(token(line, i), "hard"))
                     plan_matches = true;
             }
         } else if (equal_nocase(command, "weight")) {
@@ -349,16 +353,27 @@ void apply_script(
 /// Loads the side build lists from gamedata/sidedata.tdf [CANBUILD] [<unit>] canbuildN.
 ///
 /// Every builder type gets a list, possibly empty; unknown names are skipped and a list
-/// holds at most 30 entries.
+/// holds at most data::limits::build_list_kept(state->build_lists) entries, 30 in 3.1c.
 ///
-/// @param[in,out] state type table
-/// @param text sidedata.tdf text; empty or unparsable leaves every list empty
+/// @param[in,out] state type table and build-list limits; its list block is allocated anew
+/// @param text sidedata.tdf text; empty or unparsable leaves every list empty, as does a
+///     block that cannot be allocated
 void load_build_lists(ComputerPlayers* state, std::string_view text) noexcept {
+    const uint32_t kept = data::limits::build_list_kept(state->build_lists);
+    std::free(state->build_id_block);
+    state->build_id_block = static_cast<uint16_t*>(
+        std::calloc(std::size_t{state->type_count} * kept, sizeof(uint16_t))
+    );
     for (uint32_t t = 1; t < state->type_count; ++t) {
         auto& type = state->types[t];
         type.build_count = 0;
+        type.build_ids = state->build_id_block != nullptr
+                             ? state->build_id_block + std::size_t{t} * kept
+                             : nullptr;
         type.has_build_list = (type.flags & OA_UNIT_DEF_FLAG_BUILDER) != 0 ? 1 : 0;
     }
+    if (state->build_id_block == nullptr)
+        return;
     if (text.empty())
         return;
     formats::tdf::OwnedDocument document;
@@ -394,7 +409,7 @@ void load_build_lists(ComputerPlayers* state, std::string_view text) noexcept {
             char name[32];
             copy_bounded(name, sizeof name, value);
             const auto id = type_by_name(state, name);
-            if (id != 0 && type.build_count < build_list_capacity)
+            if (id != 0 && type.build_count < kept)
                 type.build_ids[type.build_count++] = id;
         }
     }
@@ -703,6 +718,7 @@ void computer_players_release(ComputerPlayers* state) noexcept {
     for (auto& ai : state->players)
         release_knowledge(ai.knowledge);
     std::free(state->types);
+    std::free(state->build_id_block);
     std::free(state->profile_text);
     std::free(state->build_list_text);
     *state = {};
@@ -722,7 +738,7 @@ bool computer_players_initialize(ComputerPlayers* state, const ComputerHost& hos
         const auto& player = host.world->game.players[index];
         if (player.in_use == 0 || player.status != OA_PLAYER_STATUS_COMPUTER)
             continue;
-        computer_player_create(ai, index, host.world->game);
+        computer_player_create(ai, index, host.world->game, state->rules.rules().ai);
         if (!create_knowledge(state, host, ai.knowledge))
             ai.present = 0;
     }

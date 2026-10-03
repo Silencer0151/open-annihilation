@@ -240,7 +240,10 @@ int main() {
     CHECK(accuracy_spread(0, 100, 100, 0) == 0);
     CHECK(accuracy_spread(80, 100, 100, 0) == 80);
     CHECK(accuracy_spread(0, 50, 100, 0) == 1024);
-    CHECK(accuracy_spread(0, 50, 100, 24) == 512);
+    CHECK(accuracy_spread(0, 50, 100, 2) == 512);
+    CHECK(accuracy_spread(0, 50, 100, 1) == 1024);
+    CHECK(accuracy_spread(0, 50, 100, -3) == 1024);
+    CHECK(accuracy_spread(0, 50, 100, 3) == 341);
     CHECK(accelerate_projectile(0, 100, 30) == 30);
     CHECK(accelerate_projectile(90, 100, 30) == 100);
     CHECK(accelerate_projectile(100, 100, 30) == 100);

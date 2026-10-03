@@ -34,6 +34,23 @@ int main() {
     source.type_flags = 0x1000;
     source.secondary_slot_flags = 2;
     OA_CHECK(resolve_combat_command(3, source, target, 10).empty());
+    // A primary weapon with the surface-fire key lets a hovering unit with a
+    // water weapon attack at or above sea level (weapons.surface-fire).
+    source.primary_surface_fire = true;
+    OA_CHECK(resolve_combat_command(3, source, target, 10) == "Attack_NoMove");
+    source.primary_weapon_flags = 0x10000;
+    OA_CHECK(resolve_combat_command(3, source, target, 10) == "Attack_NoMove");
+    source.primary_surface_fire = false;
+    OA_CHECK(resolve_combat_command(3, source, target, 10).empty());
+    source.primary_weapon_flags = 0;
+    // Below sea level the key changes nothing: a weapon must still be a water weapon.
+    target.height = -20;
+    source.secondary_weapon_flags = 0;
+    source.primary_surface_fire = true;
+    OA_CHECK(resolve_combat_command(3, source, target, 10).empty());
+    source.primary_surface_fire = false;
+    source.secondary_weapon_flags = 0x10000;
+    target.height = 20;
     source.type_flags = 0x800;
     source.secondary_weapon_flags = 0;
     OA_CHECK(resolve_combat_command(3, source, target, 10) == "AirToGround");

@@ -24,6 +24,23 @@ class Match;
 /// @param[out] sides One entry per unit slot.
 void fill_trace_sides(const Match& match, std::span<sim::trace::UnitSide> sides);
 
+/// Digests the state the match's rules keep outside the canonical records,
+/// for the trace's total (sim::trace::tick_digest).
+///
+/// @param match the match
+/// @param[out] digest receives Match::fold_rule_state from digest_basis and
+///        the number of tables
+/// @return false, leaving `digest` as it is, when the match keeps no rule state
+bool rule_state_digest(const Match& match, sim::trace::SectionDigest& digest) noexcept;
+
+/// Computes the section digests of the match's current tick
+/// (sim::trace::tick_digest), its rule state included.
+///
+/// @param match the match
+/// @param[out] sides scratch table of one entry per unit slot
+/// @return the digests
+sim::trace::TickDigest match_tick_digest(const Match& match, std::span<sim::trace::UnitSide> sides);
+
 class TraceRecorder {
   public:
 

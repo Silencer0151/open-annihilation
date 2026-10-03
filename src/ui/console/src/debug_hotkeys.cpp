@@ -239,15 +239,37 @@ void control_letter_key(const HotkeyHost& host, uint32_t code, bool add) noexcep
         host.select_by_category(host.context, category, add);
 }
 
+/// Returns the key a pressed key acts as under the console's key remaps.
+///
+/// @param console Console whose Console::key_remaps decides
+/// @param pressed Engine key code
+/// @return Insert as '\', F10 as F11 and '\' as no key under the remaps;
+///         otherwise the pressed key
+uint32_t key_acted_on(const Console& console, uint32_t pressed) noexcept {
+    if (!console.key_remaps)
+        return pressed;
+    switch (pressed) {
+    case hotkey::repeat_command:
+        return 0;
+    case hotkey::insert:
+        return hotkey::repeat_command;
+    case hotkey::f10:
+        return hotkey::f11;
+    default:
+        return pressed;
+    }
+}
+
 } // namespace
 
-void hotkey_dispatch(Console* console, const HotkeyHost* host_in, uint32_t code) noexcept {
-    if (code == 0)
+void hotkey_dispatch(Console* console, const HotkeyHost* host_in, uint32_t pressed) noexcept {
+    if (pressed == 0)
         return;
     const HotkeyHost& host = host_in != nullptr ? *host_in : kNoHost;
     World* world = console->world;
     Game& game = world->game;
     const bool add = shift_down(host);
+    const uint32_t code = key_acted_on(*console, pressed);
     switch (code) {
     case '!':
     case '#':
@@ -257,7 +279,7 @@ void hotkey_dispatch(Console* console, const HotkeyHost* host_in, uint32_t code)
         toggle_damage_bars(console);
         break;
     case hotkey::tab:
-        if (host.session_kind != nullptr &&
+        if (!console->team_menu_every_game && host.session_kind != nullptr &&
             host.session_kind(host.context) != oa::data::campaign::SessionKind::multiplayer) {
             options_key(console, host);
             break;
@@ -382,7 +404,7 @@ void hotkey_dispatch(Console* console, const HotkeyHost* host_in, uint32_t code)
         break;
     }
     if ((game.outcome_flags & outcome_flag::debug_keys) != 0)
-        hotkey_debug(console, &host, code);
+        hotkey_debug(console, &host, pressed);
 }
 
 void hotkey_debug(Console* console, const HotkeyHost* host_in, uint32_t code) noexcept {

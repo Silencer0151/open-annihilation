@@ -126,7 +126,12 @@ uint32_t TickHost::GroundMissions::self_repair() {
     case 0:
         if (!(def_of(pad->record).flags & OA_UNIT_DEF_FLAG_BUILDER))
             return ground::mission_invalid;
-        if (pad->record.build_remaining != 0.0F || !(s.record.state_flags & OA_UNIT_STATE_ACTIVE))
+        // 3.1c tests the repaired unit's own active bit here;
+        // orders.repairing-state-target-activity tests the pad's.
+        if (pad->record.build_remaining != 0.0F ||
+            !((rules().orders.repairing_state_target_activity.enabled ? pad->record : s.record)
+                  .state_flags &
+              OA_UNIT_STATE_ACTIVE))
             return ground::mission_failed;
         AttackAdapter(host, s, record).release_weapon_targets(3);
         return ground::next_phase;

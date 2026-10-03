@@ -9,7 +9,7 @@ FROM --platform=linux/amd64 debian:trixie-slim
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        ca-certificates cmake curl gcc git libc6-dev make pkg-config python3 xz-utils \
+        ca-certificates cmake curl gcc git libc6-dev make pkg-config python3 python3-venv xz-utils \
         g++-mingw-w64-x86-64-posix gcc-mingw-w64-x86-64-posix binutils-mingw-w64-x86-64 \
         mingw-w64-tools wine wine64 \
     && rm -rf /var/lib/apt/lists/*

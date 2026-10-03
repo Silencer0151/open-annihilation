@@ -97,6 +97,9 @@ inline constexpr uint8_t kGuiFlagsTabMenu = 0x20u;
 /// @param controls Named controls of the loaded menu; set_active shows and
 ///        hides ALLIES, SHARE and CONTROL.
 /// @param events Receives the sound.
+/// @param allies_every_game teams.alliance-menu-all-game-types: ALLIES shows
+///        outside a multiplayer game and for a watcher too, where SHARE and
+///        CONTROL stay hidden
 /// @return Whether the menu opened.
 bool toggle_tab_menu(
     World& world,
@@ -104,7 +107,8 @@ bool toggle_tab_menu(
     bool control_offered,
     const PanelLoader& loader,
     const PanelControls& controls,
-    const HudEvents& events
+    const HudEvents& events,
+    bool allies_every_game = false
 );
 
 /// Loads the mission start panel named by the game state.

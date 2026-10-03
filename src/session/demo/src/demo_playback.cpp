@@ -4,6 +4,7 @@
 #include "oa/session/demo.hpp"
 
 #include "oa/netgame/match/launch.hpp"
+#include "oa/netgame/private_channel.hpp"
 #include "oa/netgame/records.hpp"
 #include "oa/netgame/unit_state.hpp"
 #include "oa/netgame/network.hpp"
@@ -259,6 +260,47 @@ void note_notice(void* context, const char* text) {
     static_cast<DemoSession*>(context)->lines.emplace_back(text != nullptr ? text : "");
 }
 
+// The recorded player a record came from: a remote slot under its recorded id.
+Player* recorded_sender(World& world, uint32_t sender_id) {
+    for (auto& player : world.game.players)
+        if (player.in_use != 0 && player.status == OA_PLAYER_STATUS_MIRRORED &&
+            player.player_id == sender_id)
+            return &player;
+    return nullptr;
+}
+
+// Records the match pump admitted, before they are dispatched. A viewer
+// without a slot of its own is shown each recorded chat line, which the
+// pump shows only to a local slot; under watcher-view each recorded player's
+// economy records give it income figures.
+void note_record(void* context, uint32_t sender_id, const uint8_t* record, std::size_t size) {
+    auto& session = *static_cast<DemoSession*>(context);
+    if (session.match == nullptr || record == nullptr || size == 0)
+        return;
+    auto& world = session.match->state();
+    auto* sender = recorded_sender(world, sender_id);
+    if (sender == nullptr || sender->index >= OA_PLAYER_COUNT)
+        return;
+    const auto type = static_cast<netgame::RecordType>(record[0]);
+    if (type == netgame::RecordType::chat && demo_watches_without_slot(session.playback)) {
+        if (session.net.rules.private_channel != netgame::PrivateChannel::none &&
+            netgame::is_private_chat(record, size))
+            return;
+        char text[sizeof(netgame::ChatRecord::text) + 1]{};
+        std::memcpy(text, record + 1, std::min(size - 1, sizeof(netgame::ChatRecord::text)));
+        session.lines.emplace_back(text);
+        return;
+    }
+    if (type == netgame::RecordType::economy &&
+        session.playback.ten_player_replay == netgame::TenPlayerReplay::watcher_view) {
+        netgame::EconomyRecord economy{};
+        if (netgame::decode_record(record, size, &economy) == netgame::WireError::ok)
+            demo_follow_economy(
+                &session.economy_samples[sender->index], sender, economy, session.playback.tick
+            );
+    }
+}
+
 uint32_t horizontal_distance(const FixedVec3& a, const FixedVec3& b) {
     const double dx = (static_cast<double>(a.x) - b.x) / fixed_one;
     const double dz = (static_cast<double>(a.z) - b.z) / fixed_one;
@@ -447,9 +489,51 @@ UnitTableCheck demo_check_unit_table(
     return check;
 }
 
+bool demo_watches_without_slot(const DemoPlayback& playback) noexcept {
+    return playback.demo.players.size() == OA_PLAYER_COUNT &&
+           playback.ten_player_replay != netgame::TenPlayerReplay::off;
+}
+
+sim::match_runtime::SlotlessViewer demo_slotless_viewer(const DemoPlayback& playback) noexcept {
+    using sim::match_runtime::SlotlessViewer;
+    if (!demo_watches_without_slot(playback))
+        return SlotlessViewer::none;
+    return playback.ten_player_replay == netgame::TenPlayerReplay::allied_fake_player
+               ? SlotlessViewer::ally_of_every_player
+               : SlotlessViewer::watcher;
+}
+
+void demo_follow_economy(
+    EconomySample* sample, Player* player, const netgame::EconomyRecord& record, uint32_t tick
+) noexcept {
+    if (sample == nullptr || player == nullptr)
+        return;
+    if (sample->taken) {
+        if (tick <= sample->tick)
+            return;
+        const auto per_settlement =
+            static_cast<float>(economy_settlement_ticks) / static_cast<float>(tick - sample->tick);
+        player->energy_produced =
+            (record.energy_produced_total - sample->energy_produced_total) * per_settlement;
+        player->energy_requested =
+            (record.energy_requested_total - sample->energy_requested_total) * per_settlement;
+        player->metal_produced =
+            (record.metal_produced_total - sample->metal_produced_total) * per_settlement;
+        player->metal_requested =
+            (record.metal_requested_total - sample->metal_requested_total) * per_settlement;
+    }
+    sample->taken = true;
+    sample->tick = tick;
+    sample->energy_produced_total = record.energy_produced_total;
+    sample->energy_requested_total = record.energy_requested_total;
+    sample->metal_produced_total = record.metal_produced_total;
+    sample->metal_requested_total = record.metal_requested_total;
+}
+
 bool demo_bind_players(const DemoPlayback& playback, World* world, uint8_t* watcher_slot) noexcept {
     const auto count = playback.demo.players.size();
-    if (world == nullptr || count == 0 || count >= OA_PLAYER_COUNT ||
+    const bool slotless = demo_watches_without_slot(playback);
+    if (world == nullptr || count == 0 || (count >= OA_PLAYER_COUNT && !slotless) ||
         playback.players.size() != count)
         return false;
     auto& game = world->game;
@@ -487,12 +571,19 @@ bool demo_bind_players(const DemoPlayback& playback, World* world, uint8_t* watc
         player.allied_by[slot] = 1;
     }
     *watcher_slot = static_cast<uint8_t>(count);
-    game.local_player_index = *watcher_slot;
-    game.viewpoint_player = *watcher_slot;
-    game.player_count = static_cast<uint16_t>(count + 1);
+    // Without a slot of its own the viewer looks through the first recorded
+    // player's, which stays remote: nothing is simulated or sent for it here.
+    const uint8_t view = slotless ? 0 : *watcher_slot;
+    game.local_player_index = view;
+    game.viewpoint_player = view;
+    game.player_count = static_cast<uint16_t>(slotless ? count : count + 1);
     if (const auto* host = netgame::match::launch_host_info(world))
         netgame::match::match_apply_host_options(world, *host);
-    netgame::match::match_apply_watcher_view(world);
+    // The viewer watches, seated or not, and sees the whole map.
+    if (slotless)
+        netgame::match::match_show_whole_map(world);
+    else
+        netgame::match::match_apply_watcher_view(world);
     game.unit_def_id_bits = netgame::match::unit_def_id_bits_for_count(world->unit_def_count);
     game.session_flags = static_cast<uint8_t>(
         game.session_flags | netgame::match::kNetFlagLive | netgame::match::kNetFlagGameStarted
@@ -528,11 +619,14 @@ bool demo_session_begin(
             "recording has " + std::to_string(session->playback.demo.players.size()) +
                 " players; playback needs a free watcher slot"
         );
-    for (uint8_t slot = 0; slot <= session->watcher_slot; ++slot) {
+    for (uint8_t slot = 0; slot <= session->watcher_slot && slot < OA_PLAYER_COUNT; ++slot) {
         std::array<uint8_t, OA_PLAYER_COUNT> own{};
         own[slot] = 1;
         match->configure_player_alliances(slot, own);
     }
+    match->set_slotless_viewer(demo_slotless_viewer(session->playback));
+    match->set_slotless_view_switched(false);
+    session->economy_samples = {};
     session->match = match;
     session->connection = netgame::match::NetConnection{};
     session->connection.packets = new netgame::match::PacketLayer();
@@ -554,6 +648,7 @@ bool demo_session_begin(
     hooks.context = session;
     hooks.chat = note_chat;
     hooks.notice = note_notice;
+    hooks.record_seen = note_record;
     hooks.destroy_player_units = [](void* context, World*, uint8_t slot) {
         netgame::match::match_binding_destroy_player_units(&session_of(context).binding, slot);
     };

@@ -90,6 +90,18 @@ standing in for the disc root, which is where a GOG-style install keeps the
 disc archives. Do not silently substitute alphabetical order and call it the
 game's precedence.
 
+A `DiscoveryPlan` names the revision archive, the pattern of each group and
+the hpi limit; the default plan is the base game's (`rev31.GP3`, `*.CCX`,
+`*.UFO`, ten `*.HPI`). A mod profile's layout replaces them. The store may
+also be built over several folders layered in order, a mod folder over a base
+folder: a path resolves from the first folder that holds it, listings and
+each discovery group merge the folders by name (the earlier folder's file,
+the later folder's spelling, as copying one over the other leaves it), and
+the hpi limit counts the merged group, so the layered folders read exactly as
+a copied install of the same files (`hpi-layering`). An empty file wins its
+path like any other: the TDF loader refuses a zero-length file, as 3.1c's
+does, so it hides the copy beneath it and contributes nothing.
+
 The portable store resolves each loose path component without ASCII case,
 accepts either slash, and reports the winning source. Case collisions and
 relative traversal are rejected as explicit portable policies. A corrupt

@@ -103,6 +103,10 @@ Runtime::OrderOverlayPass Runtime::draw_order_overlays(
     context.path_pips = frame.sequences[kPathIconCursor];
     context.indicators = frame.sequences.data();
     context.show_ranges = hud::show_ranges(world.game);
+    const auto& fixes = ui_rules().interface_fixes;
+    using Fix = oa::data::mod_profile::UiInterfaceFixesFixes;
+    context.third_ring_own_weapon = fixes.enabled && fixes.fixes.contains(Fix::range_ring_3);
+    context.segmentless_circle_label = fixes.enabled && fixes.fixes.contains(Fix::radius_0);
     context.sink.user = &frame;
     context.sink.line =
         [](void* user, int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_t color) {

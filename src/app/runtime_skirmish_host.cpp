@@ -121,7 +121,8 @@ void Runtime::create_slot_widget(const skirmish::SlotWidget& source) {
 
 std::string Runtime::translate_ui(std::string_view text) {
     const std::string source(text);
-    return oa::data::defs::locale_translate(&translations_.table, source.c_str());
+    const char* translated = game_translation(source.c_str());
+    return translated != nullptr ? std::string(translated) : source;
 }
 
 void Runtime::set_text(
@@ -148,6 +149,12 @@ void Runtime::set_button_stage(std::string_view name, uint8_t stage) {
 
 void Runtime::select_difficulty_label(std::string_view label, int32_t value) {
     set_button_status(label, static_cast<int16_t>(value));
+}
+
+oa::data::match_rules::AiDifficultyNames Runtime::difficulty_names() const {
+    const auto* profile = mod_profile();
+    return profile != nullptr ? profile->rules.ai.difficulty_names
+                              : oa::data::match_rules::AiDifficultyNames{};
 }
 
 void Runtime::set_button_status(std::string_view name, int16_t value) {

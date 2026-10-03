@@ -20,15 +20,22 @@ static_assert(sizeof(DisplayMode) == 12);
 
 inline constexpr int32_t minimum_mode_width = 640;
 inline constexpr int32_t minimum_mode_height = 480;
+/// The shortest mode listed when a mod's display rules keep only modes of
+/// 768 rows or more (ui.display-modes min-height-768).
+inline constexpr int32_t tall_minimum_mode_height = 768;
 
-/// Orders modes by width then height and removes modes smaller than 640x480.
+/// Orders modes by width then height and removes modes narrower than 640
+/// or shorter than a minimum height.
 ///
 /// Uses an exchange sort in place.
 ///
 /// @param[in,out] modes mode list
 /// @param count number of modes
+/// @param minimum_height the shortest mode kept, in rows: 480 in 3.1c
 /// @return the new count
-int32_t sort_display_modes(DisplayMode* modes, int32_t count) noexcept;
+int32_t sort_display_modes(
+    DisplayMode* modes, int32_t count, int32_t minimum_height = minimum_mode_height
+) noexcept;
 
 /// Steps from the current resolution to the next (or previous) sorted mode, wrapping.
 ///

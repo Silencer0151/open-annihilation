@@ -45,7 +45,8 @@ absolute. Missing or invalid user-directory resolution produces an error, never
 a fallback into game assets or the working directory.
 
 The versioned UTF-8-compatible text representation quotes and escapes keys and
-values. Reads are bounded and reject corrupt files and duplicate keys. Saves
+values. Its lines may end in LF or CR LF, so a file edited on Windows reads
+as the game wrote it; the game writes LF. Reads are bounded and reject corrupt files and duplicate keys. Saves
 write a complete temporary file beside the destination, flush it, and replace
 the destination. A failed write preserves the last complete settings file;
 concurrent game instances use last-writer-wins replacement, not merging.
@@ -65,6 +66,12 @@ and no `|`, so they never collide with the game's `<section>|<name>` keys.
 `open-annihilation.game-directory` holds the Total Annihilation folder chosen
 in the first-start dialog as a UTF-8 path. It is written after that migration,
 once the game starts from the folder.
+`open-annihilation.mod-directory` holds the mod folder the player chose in
+the Open Annihilation settings (Gameplay, Mod) to layer over that folder, as
+an absolute UTF-8 path; absent, the game folder plays as it is. A mod whose profile names a registry root of its own keeps the game's
+`<section>|<name>` settings under `registry:<root>\<section>|<name>` keys
+instead, as the mod keeps them under its own registry key, and its first run
+seeds the values its profile names there.
 
 The Open Annihilation settings (`oa/ui/engine_settings.hpp`) keep these keys,
 written when the player changes a setting and erased again by the settings
@@ -78,13 +85,19 @@ of range is clamped. A switch is On for any number above 0: a word such as
 | `open-annihilation.path-search-nodes` | path nodes a game tick, 1333 to 10664 | 1333 |
 | `open-annihilation.wheel-zoom` | 0 or 1 | 1 |
 | `open-annihilation.escape-opens-menu` | 0 or 1 | 1 on macOS with the player's own file, else 0 |
-| `open-annihilation.unit-limit` | units per player, 21 to 1500 | the game folder's `totala.ini` `[Preferences] UnitLimit`, clamped to 21 to 500, with the player's own file; else 250 |
+| `open-annihilation.unit-limit` | units per player, 20 to 1500, or to a mod's higher maximum (`oa::data::limits::UnitsPerPlayer`) | the game folder's `totala.ini` `[Preferences] UnitLimit`, clamped to 20 to 500, with the player's own file; else 250 |
 | `open-annihilation.max-fps` | frames a second, 30 to 120 | 120 |
 | `open-annihilation.anti-aliasing` | 1 (off), 2, 3, 4, 8 or 16 | 1 |
 | `open-annihilation.frame-stats` | 0 or 1 | 0 |
 | `open-annihilation.screen-size` | `desktop`, or `640x480`, `800x600`, `1024x768` or `1280x1024` | `desktop`; with the player's own file on a light machine, `800x600`, or `640x480` on a smaller desktop |
 | `open-annihilation.hardware-acceleration` | `off`, `basic` or `full`; a whole number from an earlier version reads as `off` at 0 or below, else `full` | `full` with the player's own file, else `off` |
 | `open-annihilation.vertical-sync` | 0 or 1 | 0 |
+| `open-annihilation.modern-fonts` | 0 or 1 | 1 with the player's own file, else 0 |
+| `open-annihilation.text-outline` | 0 or 1 | 1 |
+| `open-annihilation.text-shadow` | 0 or 1 | 1 |
+| `open-annihilation.text-background` | 0 or 1 | 0 |
+| `open-annihilation.text-size` | percent of the game fonts' sizes, 50 to 300 | 80 |
+| `open-annihilation.language` | `system`, or a language's BCP-47 tag (`en`, `de`, `es`, `fr`, `it`) | `system` with the player's own file, else `en` |
 
 The settings dialog's Select groups without Alt is the game's own
 `Total Annihilation|SwitchAlt`, which `+switchalt` also sets. `+stats`

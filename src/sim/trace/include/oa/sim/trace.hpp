@@ -155,14 +155,21 @@ sample_tick_record(const World& world, const UnitSide* sides, uint32_t core_rand
 ///
 /// Folds the occupied unit slots (type_index != 0) in slot order, the live projectile
 /// records in pool order and all ten player slots, each section seeded with
-/// digest_basis; the total folds the tick and every section's value and count.
+/// digest_basis; the total folds the tick and every section's value and count, then,
+/// when the match keeps rule state, its digest and table count the same way.
 ///
 /// @param world units, projectiles, players and Game.tick
 /// @param sides one entry per unit slot, or null
 /// @param random generator states
+/// @param rule_state the digest of the state a mod's rules keep outside the
+///        canonical records and its number of tables; null when there is none
 /// @return the digests
-TickDigest
-tick_digest(const World& world, const UnitSide* sides, const RandomState& random) noexcept;
+TickDigest tick_digest(
+    const World& world,
+    const UnitSide* sides,
+    const RandomState& random,
+    const SectionDigest* rule_state = nullptr
+) noexcept;
 
 /// Returns the name of a digest section.
 ///

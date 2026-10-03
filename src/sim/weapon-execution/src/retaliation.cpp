@@ -4,6 +4,7 @@
 #include "oa/sim/weapon_execution/retaliation.hpp"
 
 #include "oa/sim/ballistics.hpp"
+#include "oa/sim/weapon_execution/weapon_keys.hpp"
 #include "oa/core/player.h"
 #include "oa/core/unit_def.h"
 #include "oa/core/weapon_def.h"
@@ -80,7 +81,11 @@ void aim_slot_at_point(Unit& shooter, const FixedVec3& point, uint8_t slot) noex
 }
 
 bool slot_reaches_unit(
-    const World& world, const Unit& shooter, const Unit& target, uint8_t slot
+    const World& world,
+    const Unit& shooter,
+    const Unit& target,
+    uint8_t slot,
+    const data::match_rules::MatchRulesView& rules
 ) noexcept {
     if (slot >= OA_UNIT_WEAPON_COUNT)
         return false;
@@ -89,11 +94,7 @@ bool slot_reaches_unit(
     const UnitDef* target_def = world_unit_def_of(&world, &target);
     if (weapon == nullptr || shooter_def == nullptr || target_def == nullptr)
         return false;
-    const sim::ballistics::WeaponReachParameters reach{
-        weapon->flags,
-        weapon->range,
-        {weapon->weapon_velocity, weapon->min_barrel_angle, world.game.gravity}
-    };
+    const auto reach = reach_parameters(*weapon, world.game.gravity, rules);
     return sim::ballistics::weapon_can_reach(
         reach,
         reach_geometry(shooter, *shooter_def),
@@ -103,7 +104,11 @@ bool slot_reaches_unit(
 }
 
 bool slot_reaches_point(
-    const World& world, const Unit& shooter, const FixedVec3& target, uint8_t slot
+    const World& world,
+    const Unit& shooter,
+    const FixedVec3& target,
+    uint8_t slot,
+    const data::match_rules::MatchRulesView& rules
 ) noexcept {
     if (slot >= OA_UNIT_WEAPON_COUNT)
         return false;
@@ -111,11 +116,7 @@ bool slot_reaches_point(
     const UnitDef* shooter_def = world_unit_def_of(&world, &shooter);
     if (weapon == nullptr || shooter_def == nullptr)
         return false;
-    const sim::ballistics::WeaponReachParameters reach{
-        weapon->flags,
-        weapon->range,
-        {weapon->weapon_velocity, weapon->min_barrel_angle, world.game.gravity}
-    };
+    const auto reach = reach_parameters(*weapon, world.game.gravity, rules);
     return sim::ballistics::fire_can_reach(
         reach,
         reach_geometry(shooter, *shooter_def),
@@ -134,8 +135,9 @@ retaliate(World& world, Unit& victim, Unit* attacker, const RetaliationHooks& ho
     const UnitDef* def = world_unit_def_of(&world, &victim);
     const Player* owner = world_unit_owner(&world, &victim);
     const bool owner_present = owner != nullptr && owner->in_use != 0;
-    if (def != nullptr && (def->abilities & OA_UNIT_DEF_ABILITY_CAN_CAPTURE) != 0 &&
-        owner_present && owner->status == OA_PLAYER_STATUS_COMPUTER && hooks.random != nullptr) {
+    if (!hooks.rules.rules().ai.commander_keeps_orders_when_damaged.enabled && def != nullptr &&
+        (def->abilities & OA_UNIT_DEF_ABILITY_CAN_CAPTURE) != 0 && owner_present &&
+        owner->status == OA_PLAYER_STATUS_COMPUTER && hooks.random != nullptr) {
         result.computer_alert = true;
         result.computer_alert_tick = hooks.random(hooks.context, computer_alert_random_ticks) +
                                      computer_alert_base_ticks + world.game.tick;
@@ -158,7 +160,8 @@ retaliate(World& world, Unit& victim, Unit* attacker, const RetaliationHooks& ho
             const bool head_yields = !has_head || (head & order_standby_flag) != 0;
             if (head_yields && !in_category(hooks, def->no_chase_category, attacker->type_index) &&
                 !in_category(hooks, def->primary_bad_target_category, attacker->type_index) &&
-                slot_reaches_unit(world, victim, *attacker, 0) && hooks.queue_attack != nullptr &&
+                slot_reaches_unit(world, victim, *attacker, 0, hooks.rules) &&
+                hooks.queue_attack != nullptr &&
                 hooks.queue_attack(hooks.context, victim, *attacker))
                 result.chased = true;
             if (!result.chased && (victim.flags & OA_UNIT_FLAG_FIRE_ORDER_MASK) != 0) {
@@ -172,7 +175,7 @@ retaliate(World& world, Unit& victim, Unit* attacker, const RetaliationHooks& ho
                     if ((weapon.flags & OA_UNIT_WEAPON_ENABLED) == 0 ||
                         (weapon.flags & OA_UNIT_WEAPON_RETALIATE) == 0)
                         continue;
-                    if (!slot_reaches_unit(world, victim, *attacker, slot))
+                    if (!slot_reaches_unit(world, victim, *attacker, slot, hooks.rules))
                         continue;
                     const WeaponDef* weapon_def = world_weapon_def(&world, weapon.def);
                     if (weapon_def != nullptr &&
@@ -180,7 +183,7 @@ retaliate(World& world, Unit& victim, Unit* attacker, const RetaliationHooks& ho
                         continue;
                     if (const Unit* current = slot_target_unit(world, victim, slot);
                         current != nullptr) {
-                        if (slot_reaches_unit(world, victim, *current, slot) &&
+                        if (slot_reaches_unit(world, victim, *current, slot, hooks.rules) &&
                             !in_category(hooks, bad_targets[slot], current->type_index))
                             continue;
                     }

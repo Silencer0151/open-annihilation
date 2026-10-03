@@ -243,6 +243,8 @@ void Runtime::draw_debug_status_line() {
     const oa::Game& game = match_->state().game;
     if ((game.outcome_flags & console::outcome_flag::debug_keys) == 0)
         return;
+    // Its parts stand at the game font's columns.
+    const PanelText panel(*this);
     const oa::formats::fnt::Font& font = message_font();
     ensure_ui_colors();
     // The counter counts the frames that draw the line, on the clock the

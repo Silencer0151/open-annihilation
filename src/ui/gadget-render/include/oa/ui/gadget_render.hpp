@@ -139,7 +139,11 @@ text_width(const GadgetRenderer& renderer, const GadgetPanel& panel, const char*
 
 /// Draws a string glyph by glyph in the active GAF font.
 ///
-/// Stops before a glyph wider than what is left of the width.
+/// Stops before a glyph wider than what is left of the width. With
+/// game-text hooks installed (oa/present/game_text.hpp), text with a byte
+/// from 0x80 up is read as the settings say: each character the font has a
+/// glyph for is drawn with it, and each run of the rest in the modern fonts
+/// on the font's baseline, stopping before a run wider than what is left.
 ///
 /// @param[in,out] renderer Renderer supplying the art and FNT hook.
 /// @param panel GUI context whose active GAF font is used.

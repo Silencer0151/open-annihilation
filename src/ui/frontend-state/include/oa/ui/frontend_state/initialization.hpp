@@ -290,6 +290,24 @@ void write_all_missions(const Preferences& p, PreferencesHost& h);
 /// @param[in,out] h Settings services.
 void write_skirmish_player_count(const game_entry::SkirmishSettings& s, PreferencesHost& h);
 
+/// The display mode the DisplaymodeWidth and DisplaymodeHeight settings
+/// start at when they are not stored, and whether a smaller stored one is
+/// raised to it.
+struct DisplayModeSetting {
+    uint32_t width{640};  ///< pixels across when not stored
+    uint32_t height{480}; ///< rows when not stored
+    /// A stored width or height below this mode's is raised to it, each on
+    /// its own; the raised value is not written back.
+    bool raise_smaller{};
+};
+
+/// 3.1c's display mode setting: 640 by 480, a smaller stored mode kept.
+inline constexpr DisplayModeSetting base_display_mode_setting{};
+/// The display mode setting of a mod whose display rules keep only modes of
+/// 768 rows or more (ui.display-modes min-height-768): 1024 by 768, a
+/// smaller stored width or height raised to it.
+inline constexpr DisplayModeSetting tall_display_mode_setting{1024, 768, true};
+
 /// Loads the persisted display, sound, rules and skirmish preferences.
 ///
 /// Keeps the game's defaults (writing many of them back when absent) and its
@@ -300,10 +318,15 @@ void write_skirmish_player_count(const game_entry::SkirmishSettings& s, Preferen
 /// @param[out] settings Skirmish slot count, map and slots.
 /// @param[in,out] p Preferences.
 /// @param[in,out] h Settings, device and naming services.
+/// @param display_mode The display mode setting's default and floor.
 /// @throws std::invalid_argument for a slot count outside 0..11 or an
 ///         oversized string, instead of overrunning fixed fields.
 void load_preferences(
-    State& state, game_entry::SkirmishSettings& settings, Preferences& p, PreferencesHost& h
+    State& state,
+    game_entry::SkirmishSettings& settings,
+    Preferences& p,
+    PreferencesHost& h,
+    const DisplayModeSetting& display_mode = base_display_mode_setting
 );
 
 /// Writes every persisted display, sound, rules and skirmish preference back.

@@ -72,8 +72,10 @@ struct Tables {
     ///
     /// @param type_id the record's slot
     /// @param text the FBI
+    /// @param yard_maps which units get a yard map
     /// @return the record
-    const oa::UnitDef& load(uint16_t type_id, const std::string& text) {
+    const oa::UnitDef&
+    load(uint16_t type_id, const std::string& text, defs::YardMapRules yard_maps = {}) {
         auto read = [](void* context, const char*, uint8_t** data, uint32_t* size, bool* archived) {
             const auto& fbi = *static_cast<const std::string*>(context);
             *data = static_cast<uint8_t*>(std::malloc(fbi.size() + 1));
@@ -90,7 +92,14 @@ struct Tables {
             [](void*, const char*, const char*, void (*)(void*, const char*), void*) {}
         };
         const defs::UnitDefSources sources{
-            "", &classes, weapons.data(), &sounds, &units.categories, &units.blocks, nullptr
+            "",
+            &classes,
+            weapons.data(),
+            &sounds,
+            &units.categories,
+            &units.blocks,
+            nullptr,
+            yard_maps
         };
         auto& record = units.records[type_id];
         record.type_id = type_id;
@@ -108,9 +117,108 @@ struct Tables {
     }
 };
 
+/// Checks the target-category masks of type ids past 3.1c's 512: left out of a
+/// 512-type registry's masks, held by the widest registry's.
+void target_masks_follow_the_category_width() {
+    for (const uint32_t types :
+         {oa::data::limits::base_type_bits, oa::data::limits::highest_type_bits}) {
+        defs::CategoryRegistry registry;
+        defs::category_registry_init(&registry);
+        OA_CHECK(defs::category_registry_set_mask_types(&registry, types));
+        oa::UnitDef unit{};
+        unit.primary_bad_target_category = defs::category_registry_ref(&registry, "VTOL");
+        for (const uint16_t type_id : {uint16_t{3}, uint16_t{600}, uint16_t{65535}}) {
+            oa::UnitDef target{};
+            target.type_id = type_id;
+            OA_CHECK(defs::register_unit_categories(&registry, &target, "VTOL"));
+        }
+        const UnitTargetCategoryMasks masks = target_category_masks(unit, registry);
+        OA_CHECK(masks.primary_bad.words.size() == oa::data::limits::type_words(types));
+        OA_CHECK(masks.primary_bad.contains(3));
+        const bool wide = types == oa::data::limits::highest_type_bits;
+        OA_CHECK(masks.primary_bad.contains(600) == wide);
+        OA_CHECK(masks.primary_bad.contains(65535) == wide);
+        // A category the type does not name holds nothing.
+        OA_CHECK(masks.no_chase.words.empty() && !masks.no_chase.contains(3));
+        defs::category_registry_clear(&registry);
+    }
+}
+
+/// Checks which units get a yard map under the unit rules: buildings only in
+/// 3.1c, mobile units too (units.mobile-unit-yardmap), and none for a file
+/// without a YardMap key or a footprint 0 cells wide or deep
+/// (units.skip-empty-yardmap).
+void yard_maps_follow_the_unit_rules() {
+    Tables tables;
+    const defs::YardMapRules base{};
+    const defs::YardMapRules mobile{true, false};
+    const defs::YardMapRules skip{false, true};
+    const defs::YardMapRules both{true, true};
+    const std::string walker =
+        "[UNITINFO]{UnitName=W;BMcode=1;FootprintX=2;FootprintZ=1;YardMap=oC;}";
+    const std::string bare_walker = "[UNITINFO]{UnitName=V;BMcode=1;FootprintX=2;FootprintZ=1;}";
+    const std::string bare_building = "[UNITINFO]{UnitName=B;BMcode=0;FootprintX=2;FootprintZ=2;}";
+    const std::string blank_building =
+        "[UNITINFO]{UnitName=K;BMcode=0;FootprintX=2;FootprintZ=2;YardMap=;}";
+    const std::string flat_building =
+        "[UNITINFO]{UnitName=F;BMcode=0;FootprintX=0;FootprintZ=3;YardMap=ooo;}";
+    const auto yard = [&](const oa::UnitDef& record, defs::YardMapRules rules) {
+        auto metadata =
+            resolve_runtime_metadata(record, tables.classes, tables.units.blocks, rules);
+        OA_CHECK(static_cast<bool>(metadata));
+        return metadata.value.yard_cells;
+    };
+
+    // A mobile unit's YardMap is read only with the mobile-unit rule.
+    OA_CHECK(tables.load(1, walker, base).yard_map == 0);
+    OA_CHECK(yard(tables.units.records[1], base).empty());
+    for (const auto rules : {mobile, both}) {
+        const auto& record = tables.load(1, walker, rules);
+        OA_CHECK(record.yard_map != 0);
+        OA_CHECK((yard(record, rules) == std::vector<uint8_t>{0x2f, 0x35}));
+    }
+    // Without its key a mobile unit gets an empty yard, or none when skipped.
+    OA_CHECK(tables.load(2, bare_walker, mobile).yard_map != 0);
+    OA_CHECK((yard(tables.units.records[2], mobile) == std::vector<uint8_t>{0, 0}));
+    OA_CHECK(tables.load(2, bare_walker, both).yard_map == 0);
+    OA_CHECK(yard(tables.units.records[2], both).empty());
+
+    // A building without the key gets an empty yard in 3.1c; skipped, it gets
+    // no yard map, and its runtime yard is the same empty cells.
+    for (const auto rules : {base, mobile}) {
+        const auto& record = tables.load(3, bare_building, rules);
+        OA_CHECK(record.yard_map != 0);
+        OA_CHECK((yard(record, rules) == std::vector<uint8_t>(4, 0)));
+    }
+    for (const auto rules : {skip, both}) {
+        const auto& record = tables.load(3, bare_building, rules);
+        OA_CHECK(record.yard_map == 0);
+        OA_CHECK((yard(record, rules) == std::vector<uint8_t>(4, 0)));
+    }
+    // A key with no text is a key: the yard is built either way.
+    for (const auto rules : {base, skip})
+        OA_CHECK(tables.load(3, blank_building, rules).yard_map != 0);
+    // A footprint 0 cells wide gets no yard map either way.
+    for (const auto rules : {base, skip}) {
+        const auto& record = tables.load(1, flat_building, rules);
+        OA_CHECK(record.yard_map == 0 && yard(record, rules).empty());
+    }
+    // Without the skip rule a building whose yard map is missing is refused.
+    oa::UnitDef broken = tables.units.records[3];
+    broken.yard_map = 0;
+    OA_CHECK(!resolve_runtime_metadata(broken, tables.classes, tables.units.blocks, base));
+    OA_CHECK(
+        static_cast<bool>(
+            resolve_runtime_metadata(broken, tables.classes, tables.units.blocks, skip)
+        )
+    );
+}
+
 } // namespace
 
 int main() {
+    target_masks_follow_the_category_width();
+    yard_maps_follow_the_unit_rules();
     Tables tables;
     const auto& specimen = tables.load(1, R"(
 // mixed case is intentional

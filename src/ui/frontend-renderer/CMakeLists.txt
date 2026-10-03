@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 add_library(oa-ui-frontend-renderer src/frontend_renderer.cpp src/gadget_draw.cpp src/scroll_bars.cpp
-  src/artless.cpp src/panel_shade.cpp)
+  src/artless.cpp src/panel_shade.cpp src/game_text.cpp)
 add_library(oa::ui::frontend_renderer ALIAS oa-ui-frontend-renderer)
 target_include_directories(oa-ui-frontend-renderer PUBLIC include)
 target_link_libraries(oa-ui-frontend-renderer PUBLIC
   oa-formats-hpi oa-formats-fnt oa-ui-gui-layout oa-ui-gui-input oa-formats-gaf oa-present
-  oa-ui-decoded oa-options)
+  oa-ui-decoded oa-data-defs oa-options PRIVATE oa-data-languages)
 
 add_executable(oa-render-main-menu EXCLUDE_FROM_ALL tools/render_main_menu.cpp)
 target_link_libraries(oa-render-main-menu PRIVATE oa-ui-frontend-renderer)

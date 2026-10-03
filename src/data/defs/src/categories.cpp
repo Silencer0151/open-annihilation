@@ -42,19 +42,30 @@ uint32_t lower_bound_name(const CategoryRegistry* registry, const char* name) no
 
 } // namespace
 
+CategoryMask category_mask_over(CategoryMaskStorage& storage, uint32_t type_bits) noexcept {
+    const uint32_t words = data::limits::type_words(type_bits);
+    CategoryMask mask{
+        storage.words, words < max_category_mask_words ? words : max_category_mask_words
+    };
+    std::memset(storage.words, 0, sizeof storage.words);
+    return mask;
+}
+
 void category_mask_set(CategoryMask* mask, uint16_t type_id) noexcept {
-    if ((type_id >> 5) >= category_mask_words)
-        return; // past the 64-byte mask
+    if ((static_cast<uint32_t>(type_id) >> 5) >= mask->word_count)
+        return; // past the mask's words
     mask->words[type_id >> 5] |= 1u << (type_id & 31u);
 }
 
 void category_mask_or(CategoryMask* mask, const CategoryMask* other) noexcept {
-    for (uint32_t word = 0; word < category_mask_words; ++word)
+    const uint32_t words =
+        mask->word_count < other->word_count ? mask->word_count : other->word_count;
+    for (uint32_t word = 0; word < words; ++word)
         mask->words[word] |= other->words[word];
 }
 
 bool category_mask_contains(const CategoryMask* mask, uint16_t type_id) noexcept {
-    if ((type_id >> 5) >= category_mask_words)
+    if ((static_cast<uint32_t>(type_id) >> 5) >= mask->word_count)
         return false;
     return (mask->words[type_id >> 5] >> (type_id & 31u) & 1u) != 0;
 }
@@ -62,8 +73,23 @@ bool category_mask_contains(const CategoryMask* mask, uint16_t type_id) noexcept
 void category_registry_init(CategoryRegistry* registry) noexcept {
     registry->entries = nullptr;
     registry->masks = nullptr;
+    registry->mask_words = nullptr;
     registry->count = 0;
     registry->capacity = 0;
+    if (registry->words_per_mask == 0 || registry->words_per_mask > max_category_mask_words)
+        registry->words_per_mask = category_mask_words;
+}
+
+bool category_registry_set_mask_types(CategoryRegistry* registry, uint32_t type_bits) noexcept {
+    if (registry->count != 0 || type_bits == 0 || type_bits > data::limits::highest_type_bits)
+        return false;
+    // Storage of the old width goes; the registry grows anew at the new one.
+    std::free(registry->entries);
+    std::free(registry->masks);
+    std::free(registry->mask_words);
+    registry->words_per_mask = data::limits::type_words(type_bits);
+    category_registry_init(registry);
+    return true;
 }
 
 void category_registry_clear(CategoryRegistry* registry) noexcept {
@@ -71,6 +97,7 @@ void category_registry_clear(CategoryRegistry* registry) noexcept {
         std::free(registry->entries[index].name);
     std::free(registry->entries);
     std::free(registry->masks);
+    std::free(registry->mask_words);
     category_registry_init(registry);
 }
 
@@ -79,6 +106,7 @@ oa_ref32 category_registry_ref(CategoryRegistry* registry, const char* name) noe
     if (position != registry->count &&
         formats::tdf::compare_nocase(registry->entries[position].name, name) == 0)
         return registry->entries[position].mask + 1u;
+    const std::size_t mask_bytes = sizeof(uint32_t) * registry->words_per_mask;
     if (registry->count == registry->capacity) {
         if (registry->capacity >= max_categories)
             return 0;
@@ -93,7 +121,15 @@ oa_ref32 category_registry_ref(CategoryRegistry* registry, const char* name) noe
         if (masks == nullptr)
             return 0;
         registry->masks = masks;
+        auto* words =
+            static_cast<uint32_t*>(std::realloc(registry->mask_words, mask_bytes * grown));
+        if (words == nullptr)
+            return 0;
+        registry->mask_words = words;
         registry->capacity = grown;
+        // The masks point into the words, which may have moved.
+        for (uint32_t index = 0; index < registry->count; ++index)
+            registry->masks[index].words = words + std::size_t{index} * registry->words_per_mask;
     }
     const std::size_t length = std::strlen(name);
     auto* copy = static_cast<char*>(std::malloc(length + 1));
@@ -104,7 +140,10 @@ oa_ref32 category_registry_ref(CategoryRegistry* registry, const char* name) noe
     std::memmove(slot + 1, slot, sizeof(Category) * (registry->count - position));
     slot->name = copy;
     slot->mask = registry->count;
-    std::memset(static_cast<void*>(&registry->masks[registry->count]), 0, sizeof(CategoryMask));
+    uint32_t* words =
+        registry->mask_words + std::size_t{registry->count} * registry->words_per_mask;
+    std::memset(words, 0, mask_bytes);
+    registry->masks[registry->count] = {words, registry->words_per_mask};
     ++registry->count;
     return slot->mask + 1u;
 }

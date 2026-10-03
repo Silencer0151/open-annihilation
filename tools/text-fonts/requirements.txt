@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The fontTools that cuts the CJK font down to the characters the game ships
+# (tools/bootstrap_text_fonts.py), pinned to one release, and to its
+# pure-Python wheel, so that every platform makes the same subset, byte for
+# byte. The bootstrap installs it into a virtual environment under
+# local/deps; nothing else needs it.
+--only-binary :all:
+fonttools==4.66.1 \
+    --hash=sha256:7234ae9e28db64273fbbfa72caebd0a97e3bdba6b05064114741b9539ef339d0

@@ -153,7 +153,19 @@ void loader_records_become_the_world_table() {
         {}
     };
     input.unit_defs = records;
+    // The profile's rules and each type's rule keys reach the match.
+    input.rules.script_get.mounts[input.rules.script_get.count++] = {
+        71, oa::data::match_rules::ScriptExtension::unit_my_id
+    };
+    input.rules.script_fidelity = oa::data::match_rules::ScriptFidelity::safe;
+    std::array<oa::data::match_rules::UnitTypeRules, 2> unit_type_rules{};
+    unit_type_rules[1].veterancy_thresholds = {7};
+    input.unit_type_rules = unit_type_rules;
     sim::match_runtime::Match match(input, services);
+    CHECK(match.rules() == input.rules);
+    CHECK(match.rules_view().unit_type(1) == unit_type_rules[1]);
+    CHECK(match.rules_view().unit_type(0) == oa::data::match_rules::UnitTypeRules{});
+    CHECK(match.rules_view().unit_type(5) == oa::data::match_rules::UnitTypeRules{});
     const UnitDef& def = match.state().unit_defs[1];
     CHECK(std::strcmp(match.state().unit_defs[0].unit_name, "None") == 0);
     CHECK(
@@ -175,8 +187,86 @@ void loader_records_become_the_world_table() {
     CHECK(mismatched.fault() != nullptr);
 }
 
+// The capacities the match sizes from OfflineInputs::limits: the effect layers
+// and pool, the path search's credit and, from the per-player limit, the unit
+// slots. 3.1c's by default; a mod's limits raise them, up to the largest a
+// profile may name.
+void limits_size_the_match() {
+    formats::tnt::Map map;
+    map.attribute_width = map.attribute_height = 16;
+    map.attributes.resize(256);
+    std::vector<sim::visibility_state::TerrainCell> terrain_values(256);
+    sim::visibility_state::SightMask mask;
+    mask.width = mask.height = 1;
+    mask.pixels = {1};
+    const std::array masks{mask};
+    std::array<sim::unit_spawn::LoadedType, 2> loaded;
+    std::array<sim::unit_spawn::Type, 2> types;
+    std::array<sim::match_runtime::RuntimeTypeFields, 2> fields{};
+    std::vector<sim::spatial_state::Plot> collision_plots(256);
+    sim::combat_state::WeaponRegistry weapons;
+    Services services;
+    Scenario scenario;
+    const auto built = [&](uint16_t per_player_limit, const data::limits::Limits& limits) {
+        sim::match_runtime::OfflineInputs input{
+            map,
+            loaded,
+            types,
+            fields,
+            weapons,
+            terrain_values,
+            masks,
+            8,
+            8,
+            per_player_limit,
+            2,
+            0,
+            30,
+            1,
+            &scenario,
+            {},
+            collision_plots,
+            {}
+        };
+        input.limits = limits;
+        return std::make_unique<sim::match_runtime::Match>(input, services);
+    };
+
+    const auto base = built(250, {});
+    CHECK(base->fault() == nullptr);
+    CHECK(base->effects().evict_above == 400 && base->effects().pool_capacity == 1000);
+    CHECK(base->effects().layer_slots == 401);
+    CHECK(base->path_search_jobs().tick_credit == 1333);
+    CHECK(base->state().game.units_per_player == 250);
+    CHECK(base->state().unit_slot_count == 2501);
+
+    data::limits::Limits raised;
+    raised.effects = {20480, 204800};
+    raised.path_search.nodes = 66650;
+    raised.units_per_player = {1500, 20, 1500, 1500};
+    const auto mod = built(1500, raised);
+    CHECK(mod->fault() == nullptr);
+    CHECK(mod->effects().evict_above == 20480 && mod->effects().pool_capacity == 204800);
+    CHECK(mod->effects().layer_slots == 20481);
+    CHECK(mod->path_search_jobs().tick_credit == 66650);
+    CHECK(mod->state().unit_slot_count == 15001);
+    CHECK(mod->limits().path_search.nodes == 66650);
+
+    // The largest values a profile may name; the pool is kept small here, so
+    // that the rings, which never hold more than it, stay small too.
+    data::limits::Limits largest;
+    largest.effects = {data::limits::highest_effect_queue, 4096};
+    largest.path_search.nodes = data::limits::highest_path_search_nodes;
+    const auto widest = built(data::limits::highest_units_per_player, largest);
+    CHECK(widest->fault() == nullptr);
+    CHECK(widest->effects().layer_slots == 4097);
+    CHECK(widest->path_search_jobs().tick_credit == data::limits::highest_path_search_nodes);
+    CHECK(widest->state().unit_slot_count == 65531);
+}
+
 int main() {
     loader_records_become_the_world_table();
+    limits_size_the_match();
     formats::tnt::Map map;
     map.attribute_width = map.attribute_height = 16;
     map.attributes.resize(256);

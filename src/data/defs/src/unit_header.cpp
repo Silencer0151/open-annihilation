@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/data/defs/unit_header.hpp"
+#include "oa/data/defs/layout.hpp"
 #include "oa/base/game_math.hpp"
 
 #include "oa/data/defs/locale.hpp"
@@ -77,7 +78,9 @@ bool load_weapon_tdf_set(
 ) noexcept {
     weapon_tdf_set_free(set);
     NameList names{nullptr, 0, 0, false};
-    files->list(files->context, "Weapons", "tdf", collect_name, &names);
+    files->list(
+        files->context, directory_name(DataDirectory::weapons), "tdf", collect_name, &names
+    );
     if (names.failed || names.count == 0) {
         std::free(names.names);
         return !names.failed;
@@ -95,7 +98,15 @@ bool load_weapon_tdf_set(
     for (uint32_t file = 0; file < names.count; ++file) {
         formats::tdf::Document* slot = &set->documents[set->count];
         char path[path_capacity];
-        build_variant_path(files, path, sizeof path, "Weapons", names.names[file], "TDF", variant);
+        build_variant_path(
+            files,
+            path,
+            sizeof path,
+            directory_name(DataDirectory::weapons),
+            names.names[file],
+            "TDF",
+            variant
+        );
         if (!load_tdf_file(files, path, slot, nullptr))
             continue;
         if (!slot->from_archive && archive_only)
@@ -153,6 +164,7 @@ bool load_unit_header(
     unit.fbi_hash = file_hash;
     get_localized_string(block, sources.language, "name", unit.name, sizeof unit.name, nullptr);
     formats::tdf::get_string(block, "unitname", unit.unit_name, sizeof unit.unit_name, "");
+    read_unit_texts(block, unit.unit_name, sources.texts);
     formats::tdf::get_string(block, "side", unit.side, sizeof unit.side, "");
     formats::tdf::get_string(block, "ai_weight", unit.ai_weight, sizeof unit.ai_weight, "");
     formats::tdf::get_string(block, "ai_limit", unit.ai_limit, sizeof unit.ai_limit, "");

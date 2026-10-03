@@ -35,6 +35,11 @@ inline constexpr std::size_t connection_rx_bytes = dplay::max_message_bytes;
 inline constexpr std::size_t connection_tx_bytes = 0x20000;
 inline constexpr intptr_t invalid_socket = -1;
 
+/// How long a closing host keeps its stream connections open after the last
+/// bytes it sent on one: a 3.1c machine takes a departure (DeletePlayer) only
+/// when it reads it before the connection ends, and it reads late.
+inline constexpr uint32_t close_linger_ms = 1000;
+
 /// The enumeration target that searches every local IPv4 network and this machine.
 inline constexpr uint8_t local_networks_ip[4] = {255, 255, 255, 255};
 
@@ -129,6 +134,10 @@ struct Host {
     int64_t clock_origin{};
     Connection connections[max_connections]{};
     uint32_t dropped_connections{};
+    /// Host clock when a stream connection last took bytes from this host;
+    /// valid while stream_sent is set.
+    uint32_t last_stream_send_ms{};
+    bool stream_sent{};
     /// Local addresses found for recent destinations, oldest replaced first.
     RouteEntry routes[max_route_entries]{};
     uint32_t route_count{};
@@ -168,7 +177,14 @@ void host_pump(Host* host, uint32_t wait_ms) noexcept;
 /// @return Milliseconds since host_open, or the HostClock's time when it has one.
 [[nodiscard]] uint32_t host_now_ms(const Host* host) noexcept;
 
-/// Closes the engine session and every socket, flushing connected streams first.
+/// Closes the engine session and every socket.
+///
+/// The listener and the datagram and enumeration ports close at once. The
+/// stream connections are flushed and stay open, read and discarded, until
+/// close_linger_ms after the last bytes this host sent on any of them (or
+/// until their peers close them), so the other machines read what was sent
+/// last, the departure among it, before the connection ends. Under a
+/// HostClock that advances, the wait is simulated.
 ///
 /// @param[in,out] host Host to close.
 void host_close(Host* host) noexcept;

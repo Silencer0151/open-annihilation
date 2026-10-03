@@ -1353,6 +1353,11 @@ bool Runtime::present_full_match_layers(bool dialogs) {
         view.scale = zoom;
         view.width = bf_w;
         view.height = bf_h;
+        // Below the zoom the other tiers reach, a tile spans a fraction of
+        // a pixel or a few: the tiles and the fog's quads meet on whole
+        // pixels, which leaves no row or column between them on a renderer
+        // that rounds each quad by itself.
+        view.whole_pixels = zoom < kMinBattlefieldZoom;
         uint32_t quads = 0;
         uint32_t fog_quads = 0;
         uint32_t world_quads = 0;
@@ -1375,6 +1380,7 @@ bool Runtime::present_full_match_layers(bool dialogs) {
             placement.origin_x = where.origin_x;
             placement.origin_y = where.origin_y;
             placement.scale = where.scale;
+            placement.whole_pixels = where.whole_pixels;
             fog_quads += full_fog::append_unseen_terrain(
                 frame, fog.grid, full.atlas, full.greyed_pages, levels, placement, target, scissor
             );
@@ -1390,7 +1396,8 @@ bool Runtime::present_full_match_layers(bool dialogs) {
         model_inputs.library = &models.library;
         model_inputs.display = &models.display;
         model_inputs.graphics_flags = models.renderer.graphics_flags;
-        model_inputs.tick = models.renderer.tick;
+        model_inputs.build_pulse_tick = models.renderer.tick - models.renderer.build_pulse_lag;
+        model_inputs.moving_pieces_once_built = models.renderer.moving_pieces_once_built;
         std::copy_n(
             models.renderer.team_colors, full::team_colour_players, model_inputs.team_colors.begin()
         );
@@ -1496,6 +1503,7 @@ bool Runtime::present_full_match_layers(bool dialogs) {
             placement.origin_x = where.origin_x;
             placement.origin_y = where.origin_y;
             placement.scale = where.scale;
+            placement.whole_pixels = where.whole_pixels;
             if (fog.dithered)
                 fog_quads += full_fog::append_unseen_dither(
                     frame, fog.grid, fog.dither, placement, target, scissor

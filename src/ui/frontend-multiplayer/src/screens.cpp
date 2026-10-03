@@ -7,8 +7,11 @@
 
 #include "oa/base/game_loop.hpp"
 #include "oa/data/campaign/campaign_assets.hpp"
+#include "oa/data/defs/layout.hpp"
 #include "oa/data/defs/unit_header.hpp"
+#include "oa/data/languages/unit_texts.hpp"
 #include "oa/ui/frontend_renderer.hpp"
+#include "oa/ui/frontend_renderer/game_text.hpp"
 #include "oa/ui/frontend_renderer/scroll_bars.hpp"
 #include "oa/ui/gui_input/scroll_bar.hpp"
 #include "oa/ui/gui_input.hpp"
@@ -34,12 +37,16 @@
 #include <cstring>
 #include <exception>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -58,8 +65,6 @@ constexpr int32_t kCanvasWidth = 640;
 constexpr int32_t kCanvasHeight = 480;
 constexpr uint32_t kTicksPerSecond = 30;
 constexpr uint32_t kDoubleClickMs = 400;
-constexpr uint32_t kLocalVersionMajor = 3; // TA 3.1
-constexpr uint32_t kLocalVersionMinor = 1;
 constexpr uint16_t kDefaultMaxUnits = 250;
 constexpr uint16_t kMachineMemoryMb = 256; // stand-in for the physical memory probe
 constexpr uint32_t kSdlKeyReturn = 0x0d;
@@ -109,8 +114,17 @@ struct Ui {
     void* start_context = nullptr;
     // The launch the lobby reads; it survives multiplayer_reset.
     LaunchLink launch_link{};
+    // The mod profile's rules the battle room keeps; null for 3.1c's. It
+    // survives multiplayer_reset.
+    const data::match_rules::MatchRules* rules{};
     // The game's translation of interface texts; it survives multiplayer_reset.
     TextTranslation translation{};
+    // The line this machine says of its engine in the battle room; it
+    // survives multiplayer_reset.
+    EngineBanner engine_banner{};
+    // The engine's line said last since the battle room was entered; empty
+    // until it is said.
+    std::string banner_said;
     // The last text LobbyServices::translate gave.
     std::string translated;
     ConnectState connect{};
@@ -125,6 +139,12 @@ struct Ui {
     ModalKind covered_kind = ModalKind::none;
     /// The player timeout the battle room's game takes, in seconds.
     int32_t player_timeout_seconds = kDefaultPlayerTimeoutSeconds;
+    /// The battle room buttons a mod's display rules add (lobby_button bits).
+    uint8_t lobby_buttons = 0;
+    /// The network rules the battle room plays by; 3.1c's until bound.
+    netgame::WireRules wire_rules{};
+    /// The line this machine's recorder answers .report with.
+    std::string program_line;
     std::string message;
     std::vector<MapInfo> maps;
     int32_t map = -1;
@@ -220,6 +240,16 @@ const char* service_translate(void*, const char* text) {
     return state.translated.c_str();
 }
 
+/// Draws a value below a bound for the team deal (LobbyServices::random_below).
+///
+/// @param bound exclusive upper limit
+/// @return a value from 0 to bound - 1; 0 for a bound below 2
+uint32_t service_random_below(void*, uint32_t bound) {
+    if (bound < 2)
+        return 0;
+    return static_cast<uint32_t>(std::rand()) % bound;
+}
+
 bool service_disc_present(void*) {
     return true; // the installed data stands in for the game disc
 }
@@ -277,9 +307,12 @@ void load_maps() {
     state.maps_loaded = true;
     auto& assets = *state.ctx->assets;
     char* names = nullptr;
-    const auto count = data::campaign::map_build_multiplayer_list(
-        state.map_list, map_files(), {}, &names, false, false
-    );
+    // The list keeps the maps' file names, which the screens find the maps
+    // by; a chosen map shows its translated name (campaign_localized_name).
+    auto files = map_files();
+    files.translate = nullptr;
+    const auto count =
+        data::campaign::map_build_multiplayer_list(state.map_list, files, {}, &names, false, false);
     const char* name = names;
     for (int32_t index = 0; name != nullptr && index < count;
          ++index, name += std::strlen(name) + 1) {
@@ -422,16 +455,22 @@ void load_units(const oa::AssetStore& assets) {
     oa::data::defs::WeaponTdfSet weapon_files{};
     oa::data::defs::weapon_tdf_set_init(&weapon_files);
     (void)oa::data::defs::load_weapon_tdf_set(&files, nullptr, false, &weapon_files);
+    // Each unit's name and description in other languages go to the
+    // language's table, for the names the restrictions list shows.
     const oa::data::defs::UnitHeaderSources header_sources{
         "",
         &weapon_files,
-        static_cast<int8_t>(kLocalVersionMajor),
-        static_cast<int8_t>(kLocalVersionMinor),
+        oa::data::defs::data_layout().build_version[0],
+        oa::data::defs::data_layout().build_version[1],
         false,
-        false
+        false,
+        oa::data::languages::unit_text_sink()
     };
     std::vector<Loaded> loaded;
-    for (const auto& path : assets.list_effective("units", ".fbi")) {
+    for (const auto& path : assets.list_effective(
+             oa::data::defs::directory_name(oa::data::defs::DataDirectory::units),
+             oa::data::defs::unit_file_suffix()
+         )) {
         try {
             auto header = std::make_unique<oa::UnitDef>();
             bool refused = false;
@@ -553,6 +592,39 @@ bool settings_user(void*, char* out, std::size_t capacity) {
     return true;
 }
 
+/// Reads the file the host's .base names (LobbyServices::read_file): an
+/// absolute host path when a file is there, or else a file of the game's
+/// folders.
+///
+/// @param name the name as typed
+/// @param limit the most bytes read
+/// @param[out] contents the file's bytes
+/// @return true when the file was read
+bool service_read_file(void*, const char* name, std::size_t limit, std::string* contents) {
+    if (name == nullptr || name[0] == '\0' || contents == nullptr)
+        return false;
+    std::error_code error;
+    const auto path = std::filesystem::path(
+        std::u8string(reinterpret_cast<const char8_t*>(name), std::strlen(name))
+    );
+    if (path.is_absolute() && std::filesystem::is_regular_file(path, error)) {
+        const auto size = std::filesystem::file_size(path, error);
+        if (error || size > limit)
+            return false;
+        std::ifstream file(path, std::ios::binary);
+        contents->assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+        return !file.bad();
+    }
+    const auto& state = ui();
+    if (state.ctx == nullptr || state.ctx->assets == nullptr)
+        return false;
+    const auto bytes = state.ctx->assets->load_file_contents(name);
+    if (!bytes || bytes->size() > limit)
+        return false;
+    contents->assign(bytes->begin(), bytes->end());
+    return true;
+}
+
 /// Binds the lobby to the screens' transport, services, map list and units.
 ///
 /// A lobby with no game is reset first. The unit limits, the canvas size and
@@ -580,7 +652,9 @@ void bind_boundaries() {
         service_free_picture,
         &state.picture_files,
         service_milliseconds,
-        service_translate
+        service_translate,
+        service_random_below,
+        service_read_file
     };
     lobby.maps = {
         nullptr,
@@ -596,9 +670,15 @@ void bind_boundaries() {
         [](void*) -> const data::campaign::CampaignFile* { return bound_map_context(); },
         maps_read
     };
-    lobby.local_version_major = kLocalVersionMajor;
-    lobby.local_version_minor = kLocalVersionMinor;
+    lobby.wire_rules = state.wire_rules;
+    lobby.local_version_major = state.wire_rules.version_major;
+    lobby.local_version_minor = state.wire_rules.version_minor;
+    std::snprintf(
+        lobby.recorder.program, sizeof lobby.recorder.program, "%s", state.program_line.c_str()
+    );
     lobby.launch_link = state.launch_link;
+    lobby.rules = state.rules;
+    lobby.lobby_buttons = state.lobby_buttons;
     lobby.option_4 = state.launch_link.block != nullptr && state.launch_link.block->tournament != 0;
     if (state.units.loaded) {
         lobby.units = state.units.units.data();
@@ -624,13 +704,15 @@ void bind_boundaries() {
 bool load(
     Resources& out,
     ScreenContext* ctx,
-    const char* layout,
+    const char* layout_file,
     const char* background,
     const char* sprites
 ) {
     out = Resources{};
     if (ctx == nullptr || ctx->assets == nullptr)
         return false;
+    const auto layout_path = oa::data::defs::gui_path(layout_file);
+    const char* layout = layout_path.c_str();
     try {
         out.screen = renderer::load_screen(
             *ctx->assets, {layout, background, kGuiPalette, sprites, kCommonGaf}
@@ -759,7 +841,7 @@ void open_timeout(ScreenContext* ctx, uint32_t player_id) {
     const auto covered_kind = state.modal_kind;
     state.modal = Resources{};
     state.modal_kind = ModalKind::none;
-    if (!load_modal(ctx, ModalKind::timeout, "guis/timeout.gui", nullptr, kCommonGaf) ||
+    if (!load_modal(ctx, ModalKind::timeout, "timeout.gui", nullptr, kCommonGaf) ||
         !timeout_open(state.lobby, state.modal.panel, player_id)) {
         state.modal = std::move(covered);
         state.modal_kind = covered_kind;
@@ -790,7 +872,7 @@ void open_exit_confirm(ScreenContext* ctx) {
     const auto covered_kind = state.modal_kind;
     state.modal = Resources{};
     state.modal_kind = ModalKind::none;
-    if (!load_modal(ctx, ModalKind::exit_confirm, "guis/yesorno.gui", nullptr, kCommonGaf)) {
+    if (!load_modal(ctx, ModalKind::exit_confirm, "yesorno.gui", nullptr, kCommonGaf)) {
         state.modal = std::move(covered);
         state.modal_kind = covered_kind;
         return;
@@ -1210,6 +1292,28 @@ void gray_buttons(
     }
 }
 
+/// Tells whether a control shows game text, which the Language & Text
+/// settings may draw in the modern fonts: the battle room's chat (OUTPUT)
+/// and the players' names (PLAYER0 to PLAYER9).
+///
+/// @param name the control's name
+/// @return true for those controls
+bool shows_game_text(std::string_view name) {
+    constexpr std::string_view chat = "OUTPUT";
+    constexpr std::string_view player = "PLAYER";
+    const auto same = [](std::string_view a, std::string_view b) {
+        return a.size() == b.size() &&
+               std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
+                   return std::toupper(static_cast<unsigned char>(x)) ==
+                          std::toupper(static_cast<unsigned char>(y));
+               });
+    };
+    if (same(name, chat))
+        return true;
+    return name.size() == player.size() + 1 && same(name.substr(0, player.size()), player) &&
+           std::isdigit(static_cast<unsigned char>(name.back())) != 0;
+}
+
 /// Builds a button's presentation: its condition, caption stage and frame.
 ///
 /// A grayed button with art that 3.1c grays and shades is presented as an
@@ -1234,6 +1338,7 @@ renderer::ButtonPresentation button_presentation(
     const auto& control = res.panel.controls[static_cast<std::size_t>(index)];
     renderer::ButtonPresentation presentation;
     presentation.name = gadget.common.name;
+    presentation.game_text = shows_game_text(gadget.common.name);
     // A button shows itself held only while the pointer that pressed it is over it.
     const bool held = index == res.pressed && res.pressed == res.hovered;
     if (control.grayed)
@@ -1397,7 +1502,8 @@ void compose_layout(
                 {gadget.common.name,
                  std::span<const std::string>(control.items),
                  static_cast<std::size_t>(std::max<int16_t>(0, control.list_first)),
-                 static_cast<std::size_t>(std::max<int16_t>(0, control.list_selection))}
+                 static_cast<std::size_t>(std::max<int16_t>(0, control.list_selection)),
+                 shows_game_text(gadget.common.name)}
             );
         layout.gadgets.push_back(std::move(gadget));
     }
@@ -1413,6 +1519,8 @@ void compose_layout(
 /// @param y top of the box in pixels
 /// @param width box width in pixels
 /// @param height box height in pixels
+/// @param game_text the text is game text, such as typed chat, which the
+///        Language & Text settings may draw in the modern fonts
 void draw_text_in(
     renderer::Surface& surface,
     const Resources& res,
@@ -1421,12 +1529,28 @@ void draw_text_in(
     int32_t x,
     int32_t y,
     int32_t width,
-    int32_t height
+    int32_t height,
+    bool game_text = false
 ) {
     if (surface.width == 0 || width <= 0 || height <= 0)
         return;
     const auto& palette = res.screen.background.palette.has_value() ? *res.screen.background.palette
                                                                     : res.screen.gui_palette;
+    if (renderer::needs_text_runs(text, game_text)) {
+        const std::size_t ink = static_cast<std::size_t>(formats::fnt::foreground_index) * 4U;
+        std::ignore = renderer::draw_fnt_game_text(
+            surface,
+            font,
+            text,
+            x,
+            y,
+            {palette[ink], palette[ink + 1], palette[ink + 2]},
+            palette,
+            {x, y, x + width - 1, y + height - 1},
+            game_text
+        );
+        return;
+    }
     std::vector<uint8_t> pixels(
         static_cast<std::size_t>(width) * static_cast<std::size_t>(height), 0
     );
@@ -1469,6 +1593,7 @@ void draw_text_in(
 /// @param y top of the box in pixels
 /// @param width box width in pixels
 /// @param height box height in pixels
+/// @param game_text the text is game text
 void draw_text(
     renderer::Surface& surface,
     const Resources& res,
@@ -1476,9 +1601,10 @@ void draw_text(
     int32_t x,
     int32_t y,
     int32_t width,
-    int32_t height
+    int32_t height,
+    bool game_text = false
 ) {
-    draw_text_in(surface, res, res.screen.font, text, x, y, width, height);
+    draw_text_in(surface, res, res.screen.font, text, x, y, width, height, game_text);
 }
 
 /// Draws each seated player's game version over the player's colour square, as 3.1c does.
@@ -1712,7 +1838,8 @@ void draw_text_boxes(renderer::Surface& surface, Resources& res) {
             control.x + res.offset_x + 3,
             control.y + res.offset_y + 3,
             control.width - 4,
-            control.height - 2
+            control.height - 2,
+            true
         );
     }
 }
@@ -1983,7 +2110,7 @@ void apply_lobby_action(ScreenContext* ctx, LobbyAction action) {
         if (load_modal(
                 ctx,
                 ModalKind::selmap,
-                "guis/selmap.gui",
+                "selmap.gui",
                 "bitmaps/dselectmap2.pcx",
                 "anims/skirmish.gaf"
             ) &&
@@ -1991,24 +2118,18 @@ void apply_lobby_action(ScreenContext* ctx, LobbyAction action) {
             close_modal();
         break;
     case LobbyAction::view_map:
-        if (load_modal(
-                ctx, ModalKind::viewmap, "guis/viewmap.gui", "bitmaps/dviewmap.pcx", kCommonGaf
-            ))
+        if (load_modal(ctx, ModalKind::viewmap, "viewmap.gui", "bitmaps/dviewmap.pcx", kCommonGaf))
             viewmap_open(lobby, state.modal.panel);
         break;
     case LobbyAction::restrictions:
         load_units();
         if (load_modal(
-                ctx,
-                ModalKind::restrict,
-                "guis/restrict2.gui",
-                "bitmaps/unitrestrict5x.pcx",
-                kCommonGaf
+                ctx, ModalKind::restrict, "restrict2.gui", "bitmaps/unitrestrict5x.pcx", kCommonGaf
             ))
             restrict_open(lobby, state.restrict, state.modal.panel);
         break;
     case LobbyAction::confirm_reject:
-        if (load_modal(ctx, ModalKind::confirm, "guis/yesorno.gui", nullptr, kCommonGaf))
+        if (load_modal(ctx, ModalKind::confirm, "yesorno.gui", nullptr, kCommonGaf))
             confirm_open(lobby, state.modal.panel, lobby.confirm_slot);
         break;
     case LobbyAction::none:
@@ -2165,6 +2286,24 @@ void dispatch(ScreenContext* ctx) {
 // ---------------------------------------------------------------------------
 // Screen hooks
 
+/// Says the engine's line in the battle room's chat, as the local player,
+/// when it differs from the line said last since the battle room was
+/// entered.
+///
+/// @param[in,out] state The screens' state, in the battle room.
+void say_engine_banner(Ui& state) {
+    if (state.engine_banner.line == nullptr || state.lobby.game == nullptr)
+        return;
+    std::string line = state.engine_banner.line(state.engine_banner.context);
+    if (line.empty() || line == state.banner_said)
+        return;
+    const Player& me = local_player(state.lobby);
+    if (me.player_id == 0)
+        return;
+    lobby_say(state.lobby, me, line.c_str());
+    state.banner_said = std::move(line);
+}
+
 /// Binds the frontend to a screen being entered and turns text input on for its text boxes.
 ///
 /// @param ctx Screen context of the running frontend.
@@ -2180,7 +2319,7 @@ void enter_providers(ScreenContext* ctx, void*) {
     auto& state = ui();
     state.screen = kScreenProviders;
     close_modal();
-    if (load(state.base, ctx, "guis/selprov.gui", "bitmaps/selconnect2.pcx", "anims/selprov.gaf")) {
+    if (load(state.base, ctx, "selprov.gui", "bitmaps/selconnect2.pcx", "anims/selprov.gaf")) {
         providers_open(state.lobby, state.connect, state.base.panel);
         oa::ui::gui_input::mark_label_shadows(state.base.source.gadgets);
         // A launch names its transport: the selection goes on with it.
@@ -2194,15 +2333,13 @@ void enter_tcp(ScreenContext* ctx, void*) {
     auto& state = ui();
     state.screen = kScreenTcp;
     if (!state.base.loaded || state.base.panel.name[0] == '\0' ||
-        std::string_view(state.base.panel.name.data()) != "guis/selprov.gui") {
-        if (load(
-                state.base, ctx, "guis/selprov.gui", "bitmaps/selconnect2.pcx", "anims/selprov.gaf"
-            )) {
+        std::string_view(state.base.panel.name.data()) != oa::data::defs::gui_path("selprov.gui")) {
+        if (load(state.base, ctx, "selprov.gui", "bitmaps/selconnect2.pcx", "anims/selprov.gaf")) {
             providers_open(state.lobby, state.connect, state.base.panel);
             oa::ui::gui_input::mark_label_shadows(state.base.source.gadgets);
         }
     }
-    if (!load_modal(ctx, ModalKind::tcp, "guis/tcp.gui", nullptr, "anims/selprov.gaf"))
+    if (!load_modal(ctx, ModalKind::tcp, "tcp.gui", nullptr, "anims/selprov.gaf"))
         return;
     tcp_open(state.lobby, state.connect, state.modal.panel);
     if (!state.connect.launch_address_used)
@@ -2212,7 +2349,7 @@ void enter_tcp(ScreenContext* ctx, void*) {
     const auto action = tcp_accept_launch_address(state.lobby, state.connect, state.modal.panel);
     if (lobby_launch_active(state.lobby)) {
         close_modal();
-        (void)load_modal(ctx, ModalKind::tcp, "guis/endmulti.gui", nullptr, "anims/selprov.gaf");
+        (void)load_modal(ctx, ModalKind::tcp, "endmulti.gui", nullptr, "anims/selprov.gaf");
     }
     app::screen_request(
         ctx, action == ConnectAction::game_list ? kScreenGameList : kScreenProviders
@@ -2224,7 +2361,7 @@ void enter_game_list(ScreenContext* ctx, void*) {
     auto& state = ui();
     state.screen = kScreenGameList;
     close_modal();
-    if (!load(state.base, ctx, "guis/selgame.gui", "bitmaps/selectgame2x.pcx", "anims/selgame.gaf"))
+    if (!load(state.base, ctx, "selgame.gui", "bitmaps/selectgame2x.pcx", "anims/selgame.gaf"))
         return;
     if (!game_list_open(state.lobby, state.connect, state.base.panel)) {
         app::screen_request(ctx, kScreenProviders);
@@ -2239,7 +2376,7 @@ void enter_new_game(ScreenContext* ctx, void*) {
     auto& state = ui();
     state.screen = kScreenNewGame;
     close_modal();
-    if (load(state.base, ctx, "guis/newmulti.gui", "bitmaps/createnew.pcx", "anims/selgame.gaf")) {
+    if (load(state.base, ctx, "newmulti.gui", "bitmaps/createnew.pcx", "anims/selgame.gaf")) {
         new_game_open(state.lobby, state.connect, state.base.panel);
         oa::ui::gui_input::mark_label_shadows(state.base.source.gadgets);
         if (state.connect.host_at_once)
@@ -2252,7 +2389,7 @@ void enter_battleroom(ScreenContext* ctx, void*) {
     auto& state = ui();
     state.screen = kScreenBattleroom;
     close_modal();
-    if (!load(state.base, ctx, "guis/lounge2.gui", "bitmaps/battleroom.pcx", "anims/lounge2.gaf"))
+    if (!load(state.base, ctx, "lounge2.gui", "bitmaps/battleroom.pcx", "anims/lounge2.gaf"))
         return;
     load_maps();
     load_units();
@@ -2260,6 +2397,8 @@ void enter_battleroom(ScreenContext* ctx, void*) {
     lobby_enter_battleroom(state.lobby, state.base.panel);
     oa::ui::gui_input::mark_label_shadows(state.base.source.gadgets);
     state.in_lobby = true;
+    // The engine's line is said again in each battle room entered.
+    state.banner_said.clear();
 }
 
 /// Closes any stacked dialog and turns text input off as a multiplayer screen is left.
@@ -2393,6 +2532,7 @@ void screen_tick(ScreenContext* ctx, void*) {
     if (state.screen != kScreenBattleroom || !state.in_lobby)
         return;
     auto& lobby = state.lobby;
+    say_engine_banner(state);
     if (state.modal_kind == ModalKind::restrict)
         restrict_tick(lobby, state.restrict, state.modal.panel);
     if (state.modal_kind == ModalKind::timeout && timeout_tick(lobby, state.modal.panel))
@@ -2464,6 +2604,24 @@ void multiplayer_bind_launch_link(const LaunchLink& link) noexcept {
     ui().lobby.launch_link = link;
 }
 
+void multiplayer_bind_rules(const data::match_rules::MatchRules* rules) noexcept {
+    ui().rules = rules;
+    ui().lobby.rules = rules;
+}
+
+void multiplayer_bind_engine_banner(const EngineBanner& banner) noexcept {
+    ui().engine_banner = banner;
+}
+
+std::string engine_banner_line(std::string_view version, bool developer_mode) {
+    std::string line = "[Engine: OpenAnnihilation ";
+    line += version;
+    if (developer_mode)
+        line += " DEV MODE";
+    line += ']';
+    return line;
+}
+
 void multiplayer_bind_translation(const TextTranslation& translation) noexcept {
     ui().translation = translation;
 }
@@ -2491,10 +2649,31 @@ void multiplayer_bind_net(const LobbyNet& net) noexcept {
     ui().lobby.net = net;
 }
 
+void multiplayer_bind_wire_rules(const netgame::WireRules& rules, const char* program) noexcept {
+    auto& state = ui();
+    state.wire_rules = rules;
+    state.program_line = program != nullptr ? program : "";
+    state.lobby.wire_rules = rules;
+    state.lobby.local_version_major = rules.version_major;
+    state.lobby.local_version_minor = rules.version_minor;
+    std::snprintf(
+        state.lobby.recorder.program,
+        sizeof state.lobby.recorder.program,
+        "%s",
+        state.program_line.c_str()
+    );
+}
+
 void multiplayer_bind_player_timeout(int32_t seconds) noexcept {
     auto& state = ui();
     state.player_timeout_seconds = seconds > 0 ? seconds : kDefaultPlayerTimeoutSeconds;
     state.game->player_timeout_seconds = state.player_timeout_seconds;
+}
+
+void multiplayer_bind_lobby_buttons(uint8_t buttons) noexcept {
+    auto& state = ui();
+    state.lobby_buttons = buttons;
+    state.lobby.lobby_buttons = buttons;
 }
 
 Lobby& multiplayer_lobby() noexcept {
@@ -2614,6 +2793,7 @@ void multiplayer_reset() noexcept {
     state.game = std::make_unique<Game>();
     state.lobby = Lobby{};
     state.lobby.launch_link = state.launch_link;
+    state.lobby.rules = state.rules;
     state.connect = ConnectState{};
     state.restrict = RestrictPanel{};
     state.mapselect = MapSelect{};
@@ -2621,6 +2801,7 @@ void multiplayer_reset() noexcept {
     close_modal();
     state.message.clear();
     state.in_lobby = false;
+    state.banner_said.clear();
     state.custom_net = custom;
     state.bound_net = net;
     loopback_reset(state.loopback);

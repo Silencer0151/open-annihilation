@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/data/campaign/campaign_assets.hpp"
+#include "oa/data/languages/translation.hpp"
 
 #include "oa/formats/hpi.hpp"
 
@@ -60,14 +61,16 @@ void asset_find(
 } // namespace
 
 CampaignFiles campaign_asset_files(const oa::AssetStore& assets) noexcept {
+    // The game's texts in the language shown, and its language folders, as
+    // the application installs them (oa/data/languages/translation.hpp).
     return {
         const_cast<oa::AssetStore*>(&assets),
         asset_size,
         asset_read,
         asset_list,
+        oa::data::languages::installed_translation,
         nullptr,
-        nullptr,
-        nullptr,
+        oa::data::languages::installed_word(),
         asset_count,
         asset_find
     };

@@ -43,8 +43,9 @@ Builds the macOS release of Open Annihilation and writes, in DIR:
       puts Open Annihilation.app in /Applications
 
 The game is a Release build for arm64 and x86_64 and macOS 11.0 or later,
-without tests, with zlib and SDL3 linked in from
-tools/bootstrap_macos_deps.py. The application is signed inside-out with the
+without tests, with zlib, SDL3 and FreeType linked in from
+tools/bootstrap_macos_deps.py, and the text fonts of
+tools/bootstrap_text_fonts.py in its Resources/fonts. The application is signed inside-out with the
 hardened runtime, notarized and stapled, and so is the installer package;
 then both are checked. Nothing is installed.
 
@@ -230,6 +231,10 @@ if [[ -z "$app" ]]; then
     python3 "$repo_dir/tools/bootstrap_macos_deps.py" --deps "$deps_dir" \
         --deployment-target "$macos_minimum" --jobs "$jobs"
     prefix="$deps_dir/macos-$macos_minimum"
+    # The text fonts, the same for every architecture; FreeType is the
+    # prefix's.
+    python3 "$repo_dir/tools/bootstrap_text_fonts.py" --deps "$deps_dir" --fonts-only
+    text_fonts="$deps_dir/text-fonts"
 
     # A Release build without tests, for both architectures and the oldest
     # macOS release, with the static libraries of the prefix only: never
@@ -259,6 +264,7 @@ if [[ -z "$app" ]]; then
         -DOA_BUILD_PLATFORM=ON -DOA_BUILD_INTRO_PLAYER=ON -DOA_REQUIRE_GAME=ON \
         -DOA_GAME_DIR= -DOA_DEMO_INSTALLER= \
         "-DSDL3_DIR=$prefix/sdl/lib/cmake/SDL3" \
+        "-Dfreetype_DIR=$prefix/freetype/lib/cmake/freetype" "-DOA_TEXT_FONTS_DIR=$text_fonts" \
         "-DZLIB_INCLUDE_DIR=$prefix/zlib/include" "-DZLIB_LIBRARY=$prefix/zlib/lib/libz.a"
 
     step "build"
@@ -284,9 +290,17 @@ if [[ "$release_build" == 1 ]]; then
     binary="$app/Contents/MacOS/$app_executable"
     [[ "$(ls -A "$app/Contents/MacOS")" == "$app_executable" ]] || fail "Contents/MacOS holds more than $app_executable"
     resources="$(ls -A "$app/Contents/Resources" | LC_ALL=C sort | tr '\n' ' ')"
-    expected="$(printf '%s\n' ATTRIBUTIONS.md LICENSE licenses "$(plist_value "$app" CFBundleIconFile)" \
+    expected="$(printf '%s\n' ATTRIBUTIONS.md LICENSE fonts licenses "$(plist_value "$app" CFBundleIconFile)" \
         | LC_ALL=C sort | tr '\n' ' ')"
     [[ "$resources" == "$expected" ]] || fail "unexpected files in Contents/Resources: $resources"
+    # The text fonts, and nothing else, as the bootstrap made them.
+    fonts="$(ls -A "$app/Contents/Resources/fonts" | LC_ALL=C sort | tr '\n' ' ')"
+    expected_fonts="$(ls -A "$text_fonts" | grep -Ev '^build-settings\.json$' | LC_ALL=C sort | tr '\n' ' ')"
+    [[ "$fonts" == "$expected_fonts" ]] || fail "Contents/Resources/fonts holds $fonts, not $expected_fonts"
+    for font in "$text_fonts"/*.ttf "$text_fonts"/*.otf; do
+        cmp -s "$font" "$app/Contents/Resources/fonts/$(basename "$font")" \
+            || fail "Contents/Resources/fonts/$(basename "$font") differs from $font"
+    done
     lipo -info "$binary"
     for arch in "${architectures[@]}"; do
         lipo "$binary" -verify_arch "$arch" || fail "the game has no $arch code"
@@ -300,7 +314,8 @@ if [[ "$release_build" == 1 ]]; then
     [[ "$(plist_value "$app" LSMinimumSystemVersion)" == "$macos_minimum" ]] \
         || fail "the Info.plist's LSMinimumSystemVersion is not $macos_minimum"
     check_notices "$app/Contents/Resources"
-    echo "${architectures[*]}, macOS $macos_minimum or later, system libraries only, the source's notices"
+    echo "${architectures[*]}, macOS $macos_minimum or later, system libraries only, the source's notices,"
+    echo "the text fonts: $fonts"
     echo "$bundle_id $app_version"
 fi
 
@@ -325,8 +340,8 @@ echo "$staged_app"
 
 # Code inside the bundle besides its executable is signed before what holds
 # it: every Mach-O file, then every nested bundle, each deepest first, then
-# the application. The game has none today, since SDL3 and zlib are
-# linked into its executable, but a library or helper added later is signed
+# the application. The game has none today, since SDL3, zlib and FreeType
+# are linked into its executable, but a library or helper added later is signed
 # where it lies. A Developer ID signature carries the hardened runtime and a
 # secure timestamp, and no entitlements (docs/development/releasing.md).
 step "sign"

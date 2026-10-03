@@ -87,16 +87,27 @@ void Match::scan_contacts() {
         return;
     auto& viewer = world.game.players[viewpoint];
     const auto* viewer_info = oa::world_player_info(&world, &viewer);
-    const bool watching = viewer.in_use != 0 && viewer_info != nullptr &&
-                          (viewer_info->options & OA_SETUP_OPTION_WATCHER) != 0;
+    // A slotless replay viewer looks through a recorded player's slot and
+    // sees every unit as a watcher does while its full radar holds.
+    const bool watching = (viewer.in_use != 0 && viewer_info != nullptr &&
+                           (viewer_info->options & OA_SETUP_OPTION_WATCHER) != 0) ||
+                          slotless_full_radar();
     const uint32_t count = world.unit_slot_count;
+    const bool allied_vision = rules().intel.allied_los_sharing.enabled;
 
     for (uint32_t slot = 1; slot < count; ++slot) {
         auto& unit = world.units[slot];
         if ((unit.flags & OA_UNIT_FLAG_LIVE) == 0)
             continue;
         unit.flags &= ~OA_UNIT_FLAG_CLOAK_LOCKED;
-        if (unit.owner_index != viewpoint) {
+        if (allied_vision) {
+            // Every unit whose owner allies the viewer, the viewer's own
+            // included, is a contact; no shared-radar role is needed.
+            if (!owner_allies(unit, viewpoint) && !watching) {
+                unit.flags &= ~detection::contact_bits;
+                continue;
+            }
+        } else if (unit.owner_index != viewpoint) {
             const auto* owner = oa::world_unit_owner(&world, &unit);
             if (!(owner != nullptr && detection::shares_radar(world, viewer, *owner)) &&
                 !watching) {
@@ -107,6 +118,32 @@ void Match::scan_contacts() {
         unit.flags |= detection::radar_contact | detection::sonar_contact;
     }
 
+    uint32_t owned = 0;
+    (void)oa::world_player_units(&world, &viewer, &owned);
+    if (!allied_vision || owned == 0) {
+        scan_contacts_for(viewer, owned != 0);
+        return;
+    }
+    // Allied vision runs the passes once for each player whose row allies
+    // the viewer, in player order, the viewer among them, each as the
+    // viewing player: their scanners, jamming as they see it and their line
+    // of sight all add to the one radar picture. Jamming in a later pass
+    // clears contacts an earlier one made.
+    for (uint8_t player = 0; player < OA_PLAYER_COUNT; ++player) {
+        const auto& ally = world.game.players[player];
+        if (ally.alliance[viewpoint] == 0)
+            continue;
+        uint32_t ally_owned = 0;
+        (void)oa::world_player_units(&world, &ally, &ally_owned);
+        scan_contacts_for(ally, ally_owned != 0);
+    }
+}
+
+void Match::scan_contacts_for(const oa::Player& viewer, bool scan_own_units) {
+    namespace detection = sim::detection;
+    auto& world = state();
+    const uint32_t count = world.unit_slot_count;
+
     // Radar reaches twice the scanner's integer altitude further; the walk
     // covers the larger of the plain radar and sonar ranges.
     struct Stamp {
@@ -115,7 +152,8 @@ void Match::scan_contacts() {
     };
 
     uint32_t owned = 0;
-    if (auto* units = oa::world_player_units(&world, &viewer, &owned))
+    auto* units = scan_own_units ? oa::world_player_units(&world, &viewer, &owned) : nullptr;
+    if (units != nullptr)
         for (uint32_t i = 0; i < owned; ++i) {
             const auto& scanner = units[i];
             if (!unit_is_live_target(scanner.flags) ||
@@ -149,7 +187,7 @@ void Match::scan_contacts() {
     for (uint32_t slot = 1; slot < count; ++slot) {
         const auto& jammer = world.units[slot];
         if ((jammer.flags & OA_UNIT_FLAG_LIVE) == 0 || jammer.owner_index == viewer.index ||
-            (jammer.state_flags & OA_UNIT_STATE_ACTIVE) == 0)
+            (jammer.state_flags & OA_UNIT_STATE_ACTIVE) == 0 || !jammer_jams(viewer, jammer))
             continue;
         const auto* def = oa::world_unit_def_of(&world, &jammer);
         if (def == nullptr)
@@ -194,7 +232,7 @@ void Match::scan_contacts() {
         auto& unit = world.units[slot];
         if ((unit.flags & OA_UNIT_FLAG_LIVE) != 0 && (unit.flags & detection::radar_contact) == 0 &&
             (unit.state_flags & OA_UNIT_STATE_CLOAKED) == 0 &&
-            point_visible(viewpoint, fixed_words(unit.position)))
+            point_seen_by(viewer.index, fixed_words(unit.position)))
             unit.flags |= detection::radar_contact;
     }
 }

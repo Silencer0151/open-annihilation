@@ -160,6 +160,7 @@ bool open(void* context, const mp::Provider* provider, const char* address) {
     std::memcpy(application.bytes, application_guid, 16);
     session::session_init_multiplay(&c.session, backend_of(&c), application);
     session::session_init_defaults(&c.session);
+    c.session.publish_without_password = c.rules.clear_session_password;
     c.opened = true;
     return true;
 }
@@ -545,6 +546,13 @@ ui::frontend_multiplayer::LobbyNet session_lobby_net(NetConnection* c) noexcept 
         send_from,
         flush
     };
+}
+
+void net_connection_set_rules(NetConnection* c, const WireRules& rules) noexcept {
+    c->rules = rules;
+    c->session.publish_without_password = rules.clear_session_password;
+    if (c->packets != nullptr)
+        c->packets->receiver.recorder_records = rules.recorder_protocol != recorder_protocol_plain;
 }
 
 bool net_connection_set_packet_rate(NetConnection* c, int32_t sends_per_second) noexcept {

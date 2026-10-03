@@ -3,6 +3,7 @@
 
 #include "oa/sim/world_environment/meteor.hpp"
 
+#include "oa/base/game_math.hpp"
 #include "oa/sim/unit_movement/movement.hpp"
 
 #include <cstring>
@@ -30,7 +31,7 @@ int32_t scaled_rand(const MeteorHost& host, int64_t range) noexcept {
 // toward zero as in 3.1c.
 int32_t ticks(float seconds) noexcept {
     const double product = static_cast<double>(seconds) * meteor_ticks_per_second;
-    return static_cast<int32_t>(static_cast<int64_t>(product));
+    return base::game_math::truncate_low32(product);
 }
 
 int32_t shifted_cell(int32_t cell) noexcept {
@@ -43,9 +44,11 @@ void configure_meteors(MeteorState& state, const MeteorSettings& settings) noexc
     std::memcpy(state.weapon_name, settings.weapon, sizeof(state.weapon_name));
     state.weapon_name[sizeof(state.weapon_name) - 1] = '\0';
     state.radius = settings.radius;
-    // The quotient is rounded to a double, then truncated toward zero.
+    // The quotient is rounded to a double, then truncated toward zero; a
+    // density of 0, as a game folder without meteor defaults leaves it,
+    // makes an infinite quotient, which truncates to 0 on every machine.
     const double hits_per_tick = static_cast<double>(meteor_ticks_per_second) / settings.density;
-    state.hit_interval = static_cast<int32_t>(static_cast<int64_t>(hits_per_tick));
+    state.hit_interval = base::game_math::truncate_low32(hits_per_tick);
     state.duration = ticks(settings.duration);
     state.strike_interval = ticks(settings.interval);
 }

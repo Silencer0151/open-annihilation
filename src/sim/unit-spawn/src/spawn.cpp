@@ -63,6 +63,36 @@ SlotAssets& assets(oa::World& w, Tables& tables, const oa::Unit& u) noexcept {
 oa::oa_fixed fixed_word(uint32_t word) noexcept {
     return static_cast<oa::oa_fixed>(word);
 }
+
+// Signed high word of a 16.16 value.
+int32_t high_word(oa::oa_fixed value) noexcept {
+    return static_cast<int16_t>(static_cast<uint32_t>(value) >> 16);
+}
+
+// Sea occupy code of a unit created wholly under the sea, and of any other.
+constexpr uint8_t created_submerged_code = 3;
+constexpr uint8_t created_code = 0;
+
+// Clears every reuse tick, as a creation or a death at game tick 0 does.
+void clear_reuse_ticks(const oa::World& w, SpawnRules& rules) noexcept {
+    if (w.game.tick == 0)
+        for (auto& tick : rules.reuse_ticks)
+            tick = 0;
+}
+
+// Whether the place at an offset of a player's range may be taken by a local
+// creation: always without reuse ticks, else once the game tick has reached
+// the place's reuse tick.
+bool place_reusable(
+    const oa::World& w, const SpawnRules& rules, uint8_t player, uint32_t offset
+) noexcept {
+    if (rules.reuse_ticks.empty())
+        return true;
+    const auto index = static_cast<std::size_t>(player) * w.game.units_per_player + offset;
+    if (offset >= w.game.units_per_player || index >= rules.reuse_ticks.size())
+        return true;
+    return static_cast<int32_t>(w.game.tick) >= rules.reuse_ticks[index];
+}
 } // namespace
 
 void load_unit_def(const Type& t, oa::UnitDef& d) noexcept {
@@ -80,7 +110,8 @@ void load_unit_def(const Type& t, oa::UnitDef& d) noexcept {
     d.bm_code = std::bit_cast<int8_t>(t.bm_code);
 }
 
-SpawnFault initialize_numeric(oa::World& w, oa::Unit& u, const Request& r, Host& h) {
+SpawnFault
+initialize_numeric(oa::World& w, oa::Unit& u, const Request& r, Host& h, const SpawnRules& rules) {
     const auto* owner = oa::world_unit_owner(&w, &u);
     if (!owner)
         return SpawnFault::no_owner;
@@ -91,8 +122,12 @@ SpawnFault initialize_numeric(oa::World& w, oa::Unit& u, const Request& r, Host&
     u.def = oa::oa_ref_from_index(r.type);
     u.flags =
         with_flag(u.flags & ~OA_UNIT_FLAG_DEATH_PENDING, OA_UNIT_FLAG_BUILDING, t.bm_code == 0);
-    u.footprint_x = t.footprint_x;
-    u.footprint_z = t.footprint_z;
+    // An east or west facing swaps the footprint's width and depth.
+    const bool turned = (r.facing & 1) != 0;
+    const auto footprint_x = turned ? t.footprint_z : t.footprint_x;
+    const auto footprint_z = turned ? t.footprint_x : t.footprint_z;
+    u.footprint_x = footprint_x;
+    u.footprint_z = footprint_z;
     u.flags =
         with_flag(u.flags, OA_UNIT_FLAG_HAS_WEAPONS, (t.flags & OA_UNIT_DEF_FLAG_HAS_WEAPONS) != 0);
     u.flags2 =
@@ -119,11 +154,11 @@ SpawnFault initialize_numeric(oa::World& w, oa::Unit& u, const Request& r, Host&
     u.pitch = 0;
     // Wrapping arithmetic, an arithmetic shift by 20, then each grid coordinate narrows.
     const auto grid_x = arithmetic_shift20(
-        r.position[0] - static_cast<uint32_t>(static_cast<int32_t>(t.footprint_x)) * 0x80000u +
+        r.position[0] - static_cast<uint32_t>(static_cast<int32_t>(footprint_x)) * 0x80000u +
         0x80000u
     );
     const auto grid_z = arithmetic_shift20(
-        r.position[2] - static_cast<uint32_t>(static_cast<int32_t>(t.footprint_z)) * 0x80000u +
+        r.position[2] - static_cast<uint32_t>(static_cast<int32_t>(footprint_z)) * 0x80000u +
         0x80000u
     );
     u.cell_x = std::bit_cast<int16_t>(static_cast<uint16_t>(grid_x));
@@ -155,6 +190,15 @@ SpawnFault initialize_numeric(oa::World& w, oa::Unit& u, const Request& r, Host&
     const auto* reset_def = u.def ? current_def(w, u) : nullptr;
     if (!reset_def)
         return SpawnFault::type_removed;
+    if (rules.start_submerged) {
+        const auto sea_word = static_cast<int16_t>(
+            static_cast<uint16_t>(w.game.sea_level | (w.game.debug_overlay << 8))
+        );
+        u.last_occupy_code[0] =
+            high_word(reset_def->model_height) + high_word(u.position.y) < sea_word
+                ? created_submerged_code
+                : created_code;
+    }
     const auto definition_flags = reset_def->flags;
     const auto flags_before_reset = u.flags;
     u.events = 0;
@@ -311,6 +355,7 @@ oa::Unit* create(oa::World& w, Tables& tables, const Request& r, Host& h, SpawnF
     }
     oa::Unit* chosen = nullptr;
     const auto first_slot = count ? oa::world_unit_slot(&w, first) : 0u;
+    clear_reuse_ticks(w, tables.rules);
     if (r.requested_slot) {
         const auto index = static_cast<uint32_t>(r.requested_slot);
         if (index < first_slot || index - first_slot >= count)
@@ -320,7 +365,7 @@ oa::Unit* create(oa::World& w, Tables& tables, const Request& r, Host& h, SpawnF
         chosen = &w.units[index];
     } else {
         for (uint32_t i = 0; i < count; ++i)
-            if (!first[i].type_index) {
+            if (!first[i].type_index && place_reusable(w, tables.rules, r.player, i)) {
                 chosen = &first[i];
                 break;
             }
@@ -331,7 +376,7 @@ oa::Unit* create(oa::World& w, Tables& tables, const Request& r, Host& h, SpawnF
     auto& a = assets(w, tables, u);
     a.weapon_slots_initialized.fill(true);
     u.type_index = r.type;
-    if (const auto why = initialize_numeric(w, u, r, h); why != SpawnFault::none)
+    if (const auto why = initialize_numeric(w, u, r, h, tables.rules); why != SpawnFault::none)
         return stop(why);
     if (const auto why = attach_model_script(w, tables, u, h); why != SpawnFault::none)
         return stop(why);
@@ -349,6 +394,9 @@ oa::Unit* create(oa::World& w, Tables& tables, const Request& r, Host& h, SpawnF
     }
     u.flags = ((u.flags ^ r.state) & OA_UNIT_FLAG_OCCUPANCY_MASK) ^ u.flags;
     h.fit_spawn_height(u);
+    // A facing joins the heading before the unit takes its place, which the
+    // occupancy and the other players read it from.
+    u.heading = static_cast<uint16_t>(u.heading + (static_cast<uint32_t>(r.facing & 3) << 14));
     h.register_occupancy(u);
     h.notify_created(u);
     if (r.finished) {
@@ -372,6 +420,31 @@ oa::Unit* create(oa::World& w, Tables& tables, const Request& r, Host& h, SpawnF
     ++p.units_created;
     h.notify_scenario_created(u);
     return chosen;
+}
+
+void record_slot_death(oa::World& w, Tables& tables, const oa::Unit& u) noexcept {
+    auto& rules = tables.rules;
+    if (rules.reuse_ticks.empty())
+        return;
+    clear_reuse_ticks(w, rules);
+    const auto* owner = oa::world_unit_owner(&w, &u);
+    if (owner == nullptr)
+        return;
+    const uint32_t row = (u.capture_cooldown >> 8) & 0xffffu;
+    if (row >= OA_PLAYER_COUNT)
+        return;
+    const auto place = static_cast<uint32_t>(
+        static_cast<int32_t>(static_cast<int16_t>(u.id)) -
+        static_cast<int32_t>(static_cast<int16_t>(owner->base_unit_id))
+    );
+    const auto per_player = static_cast<uint32_t>(w.game.units_per_player);
+    if (place >= per_player)
+        return;
+    const auto index = static_cast<std::size_t>(row) * per_player + place;
+    if (index >= rules.reuse_ticks.size())
+        return;
+    rules.reuse_ticks[index] =
+        static_cast<int32_t>(w.game.tick + static_cast<uint32_t>(rules.reuse_delay_ticks));
 }
 
 int32_t count_start_positions(std::span<const StartMarker> markers) noexcept {

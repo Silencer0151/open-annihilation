@@ -175,6 +175,8 @@ void TickHost::movement_tick(oa::Unit& record) {
     // setSFXoccupy runs only when it changes.
     sim::world_environment::SeaOccupyHost sea_host{};
     sea_host.context = &match;
+    sea_host.reordered = match.rules().units.water_state_rules.rules ==
+                         data::match_rules::UnitsWaterStateRulesRules::reordered;
     sea_host.set_sfx_occupy = [](void* context, oa::Unit& unit, int32_t occupy_code) {
         auto* object = static_cast<Match*>(context)->instance(unit.id);
         if (object && object->script())

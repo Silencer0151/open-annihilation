@@ -231,4 +231,64 @@ WireError unit_state_finish(
     return writer->error;
 }
 
+WireError unit_state_write_start_position(
+    BitWriter* writer,
+    uint32_t sender_tick,
+    const StartPosition& position,
+    unsigned def_index_bits,
+    uint16_t* length
+) noexcept {
+    if (writer == nullptr)
+        return WireError::bad_argument;
+    // Every entry names unit index 0, the slot of the sender's commander.
+    constexpr uint16_t commander_index = 0;
+    constexpr uint8_t position_and_target = 2;
+    unit_state_begin(writer, sender_tick);
+    unit_state_write_entry_header(writer, commander_index, position.def_index, def_index_bits);
+    WaypointDelta delta{};
+    delta.count = position_and_target;
+    delta.points[0][0] = position.x;
+    delta.points[0][1] = position.z;
+    delta.points[1][0] = position.target_x;
+    delta.points[1][1] = position.target_z;
+    write_waypoint_delta(writer, delta);
+    bit_writer_write(writer, unit_state_list_terminator, unit_state_unit_index_bits);
+    if (writer->error != WireError::ok)
+        return writer->error;
+    const auto bytes = bit_writer_byte_length(writer);
+    bit_writer_patch_byte(writer, 1, static_cast<uint8_t>(bytes));
+    bit_writer_patch_byte(writer, 2, static_cast<uint8_t>(bytes >> 8));
+    if (length != nullptr)
+        *length = static_cast<uint16_t>(bytes);
+    return writer->error;
+}
+
+bool unit_state_start_position(
+    const uint8_t* bytes, std::size_t size, unsigned def_index_bits, int16_t* x, int16_t* z
+) noexcept {
+    // The count's high bit: two points or more follow.
+    constexpr uint32_t two_points_bit = 0x4;
+    constexpr unsigned flag_and_count_bits = 3;
+    if (bytes == nullptr || x == nullptr || z == nullptr || !valid_def_bits(def_index_bits) ||
+        size <= unit_state_header_bytes || bytes[0] != static_cast<uint8_t>(RecordType::unit_state))
+        return false;
+    const auto length = load_u16(bytes + 1);
+    if (length > size || length <= unit_state_header_bytes)
+        return false;
+    BitReader reader{};
+    bit_reader_init(&reader, bytes + unit_state_header_bytes, length - unit_state_header_bytes);
+    if (bit_reader_read(&reader, unit_state_unit_index_bits) != 0)
+        return false;
+    (void)bit_reader_read(&reader, def_index_bits);
+    if ((bit_reader_read(&reader, flag_and_count_bits) & two_points_bit) == 0)
+        return false;
+    const auto read_x = static_cast<int16_t>(bit_reader_read(&reader, 16));
+    const auto read_z = static_cast<int16_t>(bit_reader_read(&reader, 16));
+    if (bit_reader_overrun(&reader))
+        return false;
+    *x = read_x;
+    *z = read_z;
+    return true;
+}
+
 } // namespace oa::netgame

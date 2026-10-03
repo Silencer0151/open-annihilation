@@ -7,6 +7,7 @@
 
 #include "oa/audio/offline_mix.hpp"
 #include "oa/base/threads.hpp"
+#include "oa/formats/png.hpp"
 #include "oa/platform/system.hpp"
 
 #include <SDL3/SDL.h>
@@ -55,6 +56,8 @@ constexpr const char* kAudioBitRate = "384k";
 constexpr const char* kFrameQueue = "32";
 /// Bytes of one pixel of a frame: red, green and blue.
 constexpr size_t kPixelBytes = 3;
+/// Bits of each of a still's samples: red, green and blue.
+constexpr uint8_t kStillBitDepth = 8;
 /// Bytes of one 16-bit sample.
 constexpr size_t kSampleBytes = 2;
 /// The extension of a director script.
@@ -316,6 +319,46 @@ fs::path run_manifest_path(const DirectorPaths& paths) {
 
 fs::path concat_list_path(const DirectorPaths& paths) {
     return paths.directory / utf8_path(paths.stem + ".concat.txt");
+}
+
+fs::path still_path(const DirectorPaths& paths, uint64_t frame) {
+    std::string number = std::to_string(frame);
+    if (number.size() < still_number_digits)
+        number.insert(0, still_number_digits - number.size(), '0');
+    return paths.directory / utf8_path(paths.stem + "-still-" + number + ".png");
+}
+
+fs::path write_still(
+    const DirectorPaths& paths,
+    uint64_t frame,
+    std::span<const uint8_t> rgb,
+    uint32_t width,
+    uint32_t height
+) {
+    namespace png = oa::formats::png;
+    if (rgb.size() != size_t{width} * height * kPixelBytes)
+        throw std::logic_error("a still is its frame's width * height * 3 bytes");
+    png::Header header{};
+    header.width = width;
+    header.height = height;
+    header.bit_depth = kStillBitDepth;
+    header.color_type = png::ColorType::rgb;
+    header.interlace = png::Interlace::none;
+    std::vector<uint8_t> file;
+    if (!png::write(png::Image{header, {}, rgb}, &file))
+        throw std::logic_error("a still's frame does not encode");
+    const fs::path path = still_path(paths, frame);
+    std::error_code made;
+    if (!paths.directory.empty())
+        fs::create_directories(paths.directory, made);
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out.write(
+        reinterpret_cast<const char*>(file.data()), static_cast<std::streamsize>(file.size())
+    );
+    out.close();
+    if (!out)
+        throw std::runtime_error("cannot write the still " + path_text(path));
+    return path;
 }
 
 uint64_t half_second_frames(oascript::Decimal framerate) noexcept {

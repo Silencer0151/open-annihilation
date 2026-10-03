@@ -7,7 +7,7 @@
 
 namespace oa::present::world_renderer {
 
-int32_t sort_display_modes(DisplayMode* modes, int32_t count) noexcept {
+int32_t sort_display_modes(DisplayMode* modes, int32_t count, int32_t minimum_height) noexcept {
     if (modes == nullptr)
         return 0;
     for (int32_t i = 0; i < count; ++i) {
@@ -22,7 +22,7 @@ int32_t sort_display_modes(DisplayMode* modes, int32_t count) noexcept {
         }
     }
     for (int32_t i = 0; i < count; ++i) {
-        if (modes[i].width < minimum_mode_width || modes[i].height < minimum_mode_height) {
+        if (modes[i].width < minimum_mode_width || modes[i].height < minimum_height) {
             for (int32_t k = i; k < count - 1; ++k)
                 modes[k] = modes[k + 1];
             --i;

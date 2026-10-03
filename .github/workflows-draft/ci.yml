@@ -25,6 +25,10 @@ jobs:
         run: vcpkg install zlib:x64-windows
       - name: Build pinned SDL
         run: python tools/bootstrap_sdl.py
+      # FreeType and the fonts text outside the game's fonts is drawn
+      # with, pinned (tools/bootstrap_text_fonts.py).
+      - name: Build pinned FreeType and text fonts
+        run: python tools/bootstrap_text_fonts.py
       - name: Configure Unix
         if: runner.os != 'Windows'
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_PREFIX_PATH="$PWD/local/deps/sdl-install"

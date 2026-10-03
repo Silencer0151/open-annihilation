@@ -66,4 +66,9 @@ bool order_panel_command(Game& game, const char* name, int16_t status, const Hud
     return true;
 }
 
+bool panel_unit_vanished(const World& world) noexcept {
+    const auto id = world.game.panel_unit_id;
+    return id != 0 && id < world.unit_slot_count && world.units[id].type_index == 0;
+}
+
 } // namespace oa::ui::hud

@@ -13,6 +13,10 @@ Every document in the repository, by what you want to do.
   - [Linux and Raspberry Pi](installation/linux.md)
 - [VARIANCES.md](../VARIANCES.md): where the engine always differs from
   3.1c, on purpose.
+- [languages.md](languages.md): the language the game shows its text in:
+  how it is chosen (3.1c's command line, the Language setting, the
+  operating system), what the game data translates in German, French,
+  Italian and Spanish, the engine's own words, and adding a language.
 - [capture.md](capture.md): capturing the game as an MP4 video with
   `--capture-video` (it needs the `ffmpeg` program), and the scripted run
   `--showcase` plays for showcase videos.
@@ -21,6 +25,15 @@ Every document in the repository, by what you want to do.
   `--generate-script`, rendering it to video with its sound with
   `--render-script`, the script format, the files a render writes, and what
   stays the same on every platform.
+- [mods/README.md](mods/README.md): mod support: installing a mod in a mod
+  folder or as a copied install, choosing it in the settings or with
+  `--mod-dir`, network play and saves under a mod, and the table of every
+  standard hack, each with its own page under
+  [mods/standard-hacks/](mods/standard-hacks).
+- [mods/oamod-standard.md](mods/oamod-standard.md): the OAMOD standard, the
+  format of a mod profile (`oamod.yaml`) and its rules: parameters,
+  presets, settings, limits, script extensions, data keys, hashes and
+  network compatibility.
 
 ## Developing
 
@@ -80,6 +93,7 @@ Game data formats:
   [COB unit scripts](../src/formats/cob/README.md),
   [fonts](../src/formats/fnt/README.md),
   [GAF sprites](../src/formats/gaf/README.md),
+  [languages and translations](../src/data/languages/README.md),
   [unit-order names](../src/data/mission-types/README.md),
   [Smacker intro movies](../src/formats/smacker/README.md),
   [TDF and unit definitions](../src/formats/tdf/README.md),
@@ -120,9 +134,11 @@ Presentation, interface and sound:
 
 Platform and application:
 
-- [user preferences](../src/platform/preferences/README.md),
+- [system locale](../src/platform/locale/README.md),
+  [user preferences](../src/platform/preferences/README.md),
   [job pool](../src/platform/job-pool/README.md),
-  [render probe](../src/platform/render-probe/README.md).
+  [render probe](../src/platform/render-probe/README.md),
+  [text font](../src/platform/text-font/README.md).
 - [src/app](../src/app/README.md): the game application, `open-annihilation`,
   adding a screen or overlay, the extension table, and network play's
   place in the game.

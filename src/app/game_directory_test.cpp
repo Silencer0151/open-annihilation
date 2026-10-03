@@ -430,6 +430,110 @@ void check_installs(const fs::path& temporary) {
     );
 }
 
+void write_text(const fs::path& path, std::string_view text) {
+    fs::create_directories(path.parent_path());
+    std::ofstream(path, std::ios::binary) << text;
+}
+
+// A mod whose profile renames the revision archive and the GUI and game-data
+// directories, played as a mod folder over a base folder and as a copied
+// install.
+void check_mod_folders(const fs::path& temporary) {
+    constexpr std::string_view profile = "oamod: 1\n"
+                                         "id: example\n"
+                                         "name: Example mod\n"
+                                         "version: \"1.0\"\n"
+                                         "requires: {base: ta-3.1c, catalogue: 1}\n"
+                                         "identity: {display-version: \"9.9\", "
+                                         "network-version: [9, 9], side-names: [Red, Blue]}\n"
+                                         "layout:\n"
+                                         "  revision-archive: modrev.gp3\n"
+                                         "  directories: {guis: guiM, gamedata: gamedatM}\n";
+    const auto base = temporary / "base";
+    const auto mod = base / "Mods" / "example";
+    const auto copied = temporary / "copied";
+    for (const auto& folder : {base, mod, copied})
+        fs::create_directories(folder);
+    write_file(
+        base / "totala1.hpi",
+        archive_of(
+            {"guis/mainmenu.gui",
+             "palettes/palette.pal",
+             "gamedata/sidedata.tdf",
+             "gamedata/sound.tdf"}
+        )
+    );
+    write_file(base / "rev31.gp3", archive_of({"anims/base.gaf"}));
+    write_file(
+        mod / "modrev.gp3",
+        archive_of({"guiM/mainmenu.gui", "gamedatM/sidedata.tdf", "gamedatM/sound.tdf"})
+    );
+    write_text(mod / "OAMod.yaml", profile);
+
+    const auto plain = inspect_game_install(base);
+    expect(usable(plain) && !plain.profile, "a base folder plays base 3.1c");
+    expect(plain.folders == std::vector<fs::path>{base}, "a base folder is its only folder");
+
+    const auto layered = inspect_game_install(base, {}, demo_1997, {mod, {}, false, nullptr});
+    expect(usable(layered), "a mod folder over a base folder is usable");
+    expect(
+        layered.profile && layered.profile->id == "example" &&
+            layered.profile->identity.display_version == "9.9",
+        "the mod folder's profile is resolved"
+    );
+    expect(layered.folders == std::vector<fs::path>{mod, base}, "the mod folder layers first");
+    std::vector<std::string> names;
+    for (const auto& archive : layered.archives)
+        names.push_back(archive.filename().string());
+    expect(
+        names == std::vector<std::string>{"modrev.gp3", "totala1.hpi"},
+        "the profile's revision archive replaces rev31.gp3"
+    );
+
+    const auto offered = list_mod_folders(base);
+    expect(
+        offered.size() == 1 && offered.front().filename() == "example",
+        "the base folder offers its mods folder's mod"
+    );
+
+    write_text(mod / "broken" / "oamod.yaml", "oamod: 1\nid: Broken\n");
+    const auto broken =
+        inspect_game_install(base, {}, demo_1997, {mod / "broken", {}, false, nullptr});
+    expect(
+        !usable(broken) && !broken.profile_errors.empty() && broken.archives.empty(),
+        "a profile that cannot be used stops the folder before any archive"
+    );
+
+    write_file(
+        copied / "modrev.gp3",
+        archive_of({"guiM/mainmenu.gui", "gamedatM/sidedata.tdf", "gamedatM/sound.tdf"})
+    );
+    write_file(copied / "totala1.hpi", archive_of({"palettes/palette.pal"}));
+    write_text(copied / "oamod.yaml", profile);
+    const auto installed = inspect_game_install(copied);
+    expect(
+        usable(installed) && installed.profile && installed.profile->id == "example",
+        "a copied install plays its own profile"
+    );
+    const auto over_copy = inspect_game_install(copied, {}, demo_1997, {mod, {}, false, nullptr});
+    expect(
+        !usable(over_copy) && !over_copy.profile_errors.empty(),
+        "a copied install cannot carry a mod folder"
+    );
+
+    oa::platform::preferences::Values values;
+    expect(chosen_mod_directory({}, false, values).empty(), "no mod folder before a choice");
+    remember_mod_directory(values, mod);
+    expect(
+        chosen_mod_directory({}, false, values) == fs::absolute(mod).lexically_normal(),
+        "the chosen mod folder is remembered"
+    );
+    expect(chosen_mod_directory({}, true, values).empty(), "--base-game ignores it");
+    expect(chosen_mod_directory(copied, false, values) == copied, "--mod-dir wins over the choice");
+    remember_mod_directory(values, {});
+    expect(values.empty(), "the base game forgets the choice");
+}
+
 void check_preferences(const fs::path& temporary) {
     std::vector<fs::path> folders{
         temporary / fs::path(u8"Jeux vid\u00e9o") /
@@ -487,6 +591,7 @@ int main(int argc, char** argv) {
     check_environment();
     try {
         check_installs(temporary);
+        check_mod_folders(temporary);
         check_preferences(temporary);
     } catch (const std::exception& error) {
         std::fprintf(stderr, "FAILED: %s\n", error.what());

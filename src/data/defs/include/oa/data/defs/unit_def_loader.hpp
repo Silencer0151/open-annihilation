@@ -10,6 +10,8 @@
 #include "oa/data/defs/files.hpp"
 #include "oa/data/defs/move_classes.hpp"
 #include "oa/data/defs/sound_categories.hpp"
+#include "oa/data/defs/unit_texts.hpp"
+#include "oa/data/match_rules.hpp"
 #include "oa/formats/tdf.hpp"
 
 #include <cstdint>
@@ -71,6 +73,25 @@ struct UnitDefLoadHost {
     int16_t (*corpse)(void* context, const char* feature_name) = nullptr;
 };
 
+// Which units get a yard map (UnitDef.yard_map) under a mod's unit rules;
+// the defaults are 3.1c's: every building, and nothing else.
+struct YardMapRules {
+    // Mobile units (bmcode not 0) get one too (units.mobile-unit-yardmap).
+    bool mobile_units{};
+    // A unit whose file has no YardMap key, or whose footprint is 0 cells
+    // wide or deep, gets none (units.skip-empty-yardmap).
+    bool skip_without_key{};
+};
+
+/// Returns which units get a yard map under a mod's unit rules.
+///
+/// @param units the rules' units area
+/// @return the yard map rules: units.mobile-unit-yardmap and
+///         units.skip-empty-yardmap as each is on or off
+[[nodiscard]] constexpr YardMapRules yard_map_rules(const match_rules::UnitsRules& units) noexcept {
+    return {units.mobile_unit_yardmap.enabled, units.skip_empty_yardmap.enabled};
+}
+
 // Tables a unit definition resolves names against. All are required except host.
 struct UnitDefSources {
     const char* language{}; // localized-key prefix ("" for none)
@@ -80,6 +101,10 @@ struct UnitDefSources {
     CategoryRegistry* categories{};
     UnitDefBlocks* blocks{};
     const UnitDefLoadHost* host{};
+    YardMapRules yard_maps{}; // which units get a yard map; 3.1c's by default
+    // Receives the unit's names and descriptions in other languages, for
+    // what players see; null reads none (oa/data/defs/unit_texts.hpp).
+    const UnitTextSink* texts{};
 };
 
 /// Finds a weapon by its TDF section name.
@@ -96,7 +121,8 @@ struct UnitDefSources {
 /// the packed flags and abilities words, category registration,
 /// sound category (by name, else the text as a number), corpse, movement
 /// class (or the file's own class keys when it names none), the five weapons
-/// (unknown names give weapon 0), the yard map of a building (bmcode 0) and
+/// (unknown names give weapon 0), the yard map of a building (bmcode 0), or of
+/// the units UnitDefSources::yard_maps names, and
 /// the footprint bounds and sizes in 16.16. A cloaker without
 /// mincloakdistance gets min_cloak_distance_default.
 ///

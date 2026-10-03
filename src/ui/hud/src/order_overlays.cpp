@@ -168,9 +168,9 @@ void draw_range_circle(
     int32_t label_y = 0;
     int32_t end_x = static_cast<int32_t>(radius);
     int32_t end_y = static_cast<int32_t>(radius);
-    if (segments >= 0) {
-        if (segments == 0)
-            return;
+    if (segments == 0 && !context.segmentless_circle_label)
+        return;
+    if (segments > 0) {
         const int32_t step = kOneUnit / segments;
         const auto magnitude = static_cast<int32_t>(radius << 16);
         const auto on_terrain = [&](int32_t angle) {
@@ -291,8 +291,9 @@ void draw_unit_ranges(const OverlayContext& context, const OrderOverlay& order) 
         ui_color(context, (game.tick & 1u) == 0 ? kUiColorRange : kUiColorRangeBlink);
     static const char* const weapon_labels[] = {"weapon1 range", "weapon2 range", "weapon3 range"};
     for (std::size_t index = 0; index < 3; ++index) {
-        // The third weapon's circle is gated on the first weapon's enable bit.
-        if (!weapon_enabled(*unit, index == 2 ? 0 : index))
+        // The third weapon's circle is gated on the first weapon's enable bit,
+        // or on its own under third_ring_own_weapon.
+        if (!weapon_enabled(*unit, index == 2 && !context.third_ring_own_weapon ? 0 : index))
             continue;
         const auto* weapon = weapon_of(context, *unit, index);
         if (weapon != nullptr && weapon->range != 0)

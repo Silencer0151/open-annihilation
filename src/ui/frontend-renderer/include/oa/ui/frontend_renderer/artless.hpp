@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // Drawing without the game's art, on an RGB surface: flat fills and blends,
-// one-pixel bevels, outlines and lines, one-colour text in a game font and
-// one-bit marks. The Open Annihilation settings dialog and its buttons are
-// drawn this way. Everything is given in source pixels (the game's 640x480
-// screen) and drawn through a Placement, which puts source pixel (0, 0) at
-// a surface pixel and draws each source pixel as a whole-number block, so
-// a caller draws at the size it shows. Every primitive clips to the surface,
+// one-pixel bevels, outlines and lines, one-colour text in a game font,
+// one-bit marks and scaled RGBA pictures. The Open Annihilation settings
+// dialog and its buttons are drawn this way. Everything is given in source
+// pixels (the game's 640x480 screen) and drawn through a Placement, which
+// puts source pixel (0, 0) at a surface pixel and draws each source pixel
+// as a whole-number block, so a caller draws at the size it shows; a
+// picture alone is scaled to its rectangle's surface pixels. Every primitive clips to the surface,
 // and to the placement's clip when it has one, and leaves a surface whose
 // pixels do not fill its size as it is.
 #pragma once
@@ -52,6 +53,46 @@ struct Mark {
     int32_t height{};                ///< rows
     std::span<const uint8_t> bits{}; ///< width x height bytes
 };
+
+/// Bytes of one RgbaPicture pixel: red, green, blue and alpha.
+inline constexpr uint32_t picture_pixel_bytes = 4;
+
+/// A picture in 8-bit RGBA pixels, its alpha not multiplied into its
+/// colours, such as the Open Annihilation icon. It refers to pixels kept
+/// elsewhere; an empty picture draws nothing.
+struct RgbaPicture {
+    uint32_t width{};                  ///< columns
+    uint32_t height{};                 ///< rows
+    std::span<const uint8_t> pixels{}; ///< width x height x picture_pixel_bytes, top row first
+};
+
+/// Tells whether a picture has pixels to draw.
+///
+/// @param picture the picture
+/// @return true when it is at least one pixel wide and high and its pixels fill its size
+[[nodiscard]] bool picture_drawable(const RgbaPicture& picture) noexcept;
+
+/// Draws a picture scaled to fill a rectangle, at the surface's own
+/// resolution: the rectangle covers width x scale by height x scale surface
+/// pixels, and each of them shows the mean of the picture's pixels its
+/// share of the picture covers, so a large picture shrinks smoothly.
+///
+/// The picture's columns are shared out among the surface columns in
+/// order, each taking the columns from (column x picture width / surface
+/// width) up to the next column's share, rounded down, and at least one;
+/// the rows the same. The colours are averaged weighted by their alpha, the
+/// alpha by itself, and the result is laid over the surface by its alpha:
+/// each channel becomes (colour x alpha + surface x (255 - alpha) + 127) /
+/// 255, rounded down. Transparent parts leave the surface as it is. Clipped
+/// as every primitive is.
+///
+/// @param[in,out] surface the surface
+/// @param placement where source pixels land, and their scale
+/// @param rect the rectangle the picture fills, in source pixels
+/// @param picture the picture; an empty one, or one whose pixels do not fill its size, draws nothing
+void draw_picture(
+    Surface& surface, const Placement& placement, const SourceRect& rect, const RgbaPicture& picture
+) noexcept;
 
 /// The OA mark in thin letters: "OA" five pixels high, its strokes one pixel
 /// wide, 9 by 5 pixels. It suits a box of about 13 to 24 source pixels.
