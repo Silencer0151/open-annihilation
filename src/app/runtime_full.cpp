@@ -14,8 +14,8 @@
 // asked for in place of shading the world themselves. With Enhanced
 // anti-aliasing on, the card draws the terrain, the fog's greyed pass and
 // the stages into a world target at the row's supersample factor
-// (full_supersampling.hpp), within the step-down's rung, the budget S and
-// the texture limit, and reduces it to the window: by exact halvings from
+// (full_supersampling.hpp), within the texture limit and the memory guard,
+// and reduces it to the window: by exact halvings from
 // zoom 1 up, by the two-level blend of the view drawn at zoom 1 below; the
 // processor's anti-aliasing never runs. The processor paints the interface
 // and, onto an overlay canvas cleared to a key colour outside the palette,
@@ -584,8 +584,6 @@ anti_aliasing_level_of(oa::present::model::UnitSupersampling level) noexcept {
         return AntiAliasing::off;
     case UnitSupersampling::x2:
         return AntiAliasing::x2;
-    case UnitSupersampling::x3:
-        return AntiAliasing::x3;
     case UnitSupersampling::x4:
         return AntiAliasing::x4;
     case UnitSupersampling::x8:
@@ -597,19 +595,12 @@ anti_aliasing_level_of(oa::present::model::UnitSupersampling level) noexcept {
 }
 
 /// Returns the supersample factor a Full frame asks of the world target:
-/// the Enhanced anti-aliasing row's, 1, 2 or 4, capped at the step-down's
-/// rung once it has lowered Full's anti-aliasing for slow frames
-/// (runtime_tier_watch.cpp), which never rises again within the run.
+/// the Enhanced anti-aliasing row's (render_policy::supersample_factor).
 ///
 /// @param level the row's level, as units draw at it outside Full
-/// @param rung the rung the accelerated presentation draws at
-/// @param rung_lowered the step-down has lowered Full's anti-aliasing
 /// @return the factor
-[[nodiscard]] uint32_t supersample_asked(
-    oa::present::model::UnitSupersampling level, const policy::LadderState& rung, bool rung_lowered
-) noexcept {
-    const uint32_t asked = policy::supersample_factor(anti_aliasing_level_of(level));
-    return rung.full && rung_lowered ? std::min<uint32_t>(asked, rung.supersample) : asked;
+[[nodiscard]] uint32_t supersample_asked(oa::present::model::UnitSupersampling level) noexcept {
+    return policy::supersample_factor(anti_aliasing_level_of(level));
 }
 
 /// Returns a count of bytes in whole mebibytes, for the log.
@@ -946,14 +937,7 @@ void Runtime::preallocate_full_match_textures() {
             ensure_full_target(bf_w, bf_h);
             if (bf_w != 0 && bf_h != 0)
                 ensure_full_world_target(
-                    supersample_asked(
-                        unit_supersampling_,
-                        accelerated_.rung,
-                        render_run_->watch && render_run_->watch->full_slowed
-                    ),
-                    bf_w,
-                    bf_h,
-                    render_texture_limit()
+                    supersample_asked(unit_supersampling_), bf_w, bf_h, render_texture_limit()
                 );
         }
     } catch (const FullCardError& error) {
@@ -1514,18 +1498,8 @@ bool Runtime::present_full_match_layers(bool dialogs) {
         bool fog_in_target = false;
 
         // Anti-aliasing: the factor the Enhanced anti-aliasing row asks for,
-        // within the step-down's rung, fitted to this battlefield, and the
-        // world target at it.
-        ensure_full_world_target(
-            supersample_asked(
-                unit_supersampling_,
-                accelerated_.rung,
-                render_run_ && render_run_->watch && render_run_->watch->full_slowed
-            ),
-            bf_w,
-            bf_h,
-            limit
-        );
+        // fitted to this battlefield, and the world target at it.
+        ensure_full_world_target(supersample_asked(unit_supersampling_), bf_w, bf_h, limit);
         const supersampling::WorldTargetPlan supersampled =
             supersampling::plan_world_target(zoom, full.supersample, bf_w, bf_h);
         full.drawn_plan = supersampled;
@@ -1708,8 +1682,6 @@ bool Runtime::present_full_match_layers(bool dialogs) {
         draw_one_to_one(
             sdl_.renderer, full.overlay_texture, nullptr, &world, one_to_one_scale_mode()
         );
-        // The tier's own passes, timed for the step-down as Basic's are.
-        accelerated_.passes_ns += full.overlay_ns + full.build_ns + full.execute_ns + full.stage_ns;
         finish_match_layers(frame_format, dialogs, upload_start, present_start);
         return true;
     } catch (const FullCardError& error) {

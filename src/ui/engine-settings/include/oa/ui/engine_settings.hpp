@@ -116,17 +116,15 @@ inline constexpr std::size_t installation_ini_limit = std::size_t{64} * 1024;
 enum class AntiAliasing : uint8_t {
     off = 1,
     x2 = 2,
-    x3 = 3,
     x4 = 4,
     x8 = 8,
     x16 = 16,
 };
 
 /// The levels of enhanced anti-aliasing, in the order the dialog offers them.
-inline constexpr std::array<AntiAliasing, 6> anti_aliasing_levels{
+inline constexpr std::array<AntiAliasing, 5> anti_aliasing_levels{
     AntiAliasing::off,
     AntiAliasing::x2,
-    AntiAliasing::x3,
     AntiAliasing::x4,
     AntiAliasing::x8,
     AntiAliasing::x16,

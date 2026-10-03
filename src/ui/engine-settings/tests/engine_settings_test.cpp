@@ -432,7 +432,7 @@ void stored_values_are_read_and_clamped_into_their_ranges() {
     CHECK(level("0") == AntiAliasing::off);
     CHECK(level("1") == AntiAliasing::off);
     CHECK(level("2") == AntiAliasing::x2);
-    CHECK(level("3") == AntiAliasing::x3);
+    CHECK(level("3") == AntiAliasing::x2);
     CHECK(level("4") == AntiAliasing::x4);
     CHECK(level("5") == AntiAliasing::x4);
     CHECK(level("8") == AntiAliasing::x8);

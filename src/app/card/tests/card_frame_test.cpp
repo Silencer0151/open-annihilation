@@ -806,7 +806,7 @@ struct Reference {
             }
             case card::Operation::blend_reduce: {
                 const ReferenceTarget& source = targets.at(batch.source.value);
-                OA_CHECK(source.keep_half || source.factor == card::largest_supersampling_factor);
+                OA_CHECK(source.keep_half || source.factor >= 4);
                 const Image reduced = blend_reduce_reference(
                     source.image,
                     batch.source_part,
@@ -1172,11 +1172,11 @@ void test_scissor_limits_the_pixels() {
     OA_CHECK(!SDL_RenderClipEnabled(fixture.canvas.renderer));
 }
 
-/// Render targets at factors 2 and 4: cleared, drawn into with vertices on
+/// Render targets at factors 2 to 16: cleared, drawn into with vertices on
 /// the texture's pixels, and resolved into the canvas by alpha and by
 /// none, the reference reduced by halving; a second frame draws the same.
 void test_render_targets_resolve_with_a_downscale() {
-    for (const uint32_t factor : {2U, 4U}) {
+    for (const uint32_t factor : {2U, 4U, 8U, 16U}) {
         Fixture fixture;
         const Image texels = seeded(seed_page, 64, 64);
         const card::PageHandle page = fixture.make_page({texels});
@@ -1408,12 +1408,15 @@ void test_a_target_written_again_resolves_again() {
 /// tolerance of the reference reduced by halving. The target's texture
 /// bytes are printed.
 void test_supersampled_edges_reduce_to_their_coverage() {
-    for (const uint32_t factor : {2U, 4U}) {
+    for (const uint32_t factor : {2U, 4U, 8U, 16U}) {
         Fixture fixture;
         const card::TargetHandle target = fixture.make_target(40, 30, factor);
         const uint64_t texture_bytes = uint64_t{40} * 30 * factor * factor * card::texel_bytes;
-        const uint64_t half_bytes =
-            factor == card::largest_supersampling_factor ? texture_bytes / 4 : 0;
+        // The halves the resolve reduces through: one fewer than the
+        // factor's doublings, each a quarter of the one before.
+        uint64_t half_bytes = 0;
+        for (uint32_t halving = 1, doubled = 4; doubled <= factor; ++halving, doubled *= 2)
+            half_bytes += texture_bytes >> (2 * halving);
         std::printf(
             "a 40x30 target at factor %u holds %llu bytes of textures\n",
             factor,
@@ -1457,24 +1460,26 @@ void test_supersampled_edges_reduce_to_their_coverage() {
         const Image read = fixture.canvas.read();
         const Pixel black{0, 0, 0, 255};
         const Pixel full{255, 255, 255, 255};
-        // The shares, as the halvings truncate them: (factor - 1) / factor
-        // and 1 / factor of white.
-        const uint8_t most_share = factor == 2 ? 127 : 191;
-        const uint8_t least_share = factor == 2 ? 127 : 63;
-        const auto grey = [](uint8_t level) { return Pixel{level, level, level, 255}; };
+        // The shares, (factor - 1) / factor and 1 / factor of white, within
+        // the rounding of each halving: 3 levels across four of them.
+        const auto near_grey = [](const Pixel& pixel, double share) {
+            const int level = pixel[0];
+            return pixel[1] == pixel[0] && pixel[2] == pixel[0] && pixel[3] == 255 &&
+                   std::abs(level - static_cast<int>(255.0 * share)) <= 3;
+        };
         OA_CHECK(read.at(11, 15) == black);
-        OA_CHECK(read.at(12, 15) == grey(most_share));
+        OA_CHECK(near_grey(read.at(12, 15), (factor - 1.0) / factor));
         OA_CHECK(read.at(13, 15) == full);
         OA_CHECK(read.at(21, 15) == full);
         OA_CHECK(read.at(22, 15) == black);
         OA_CHECK(read.at(39, 15) == full);
-        OA_CHECK(read.at(40, 15) == grey(least_share));
+        OA_CHECK(near_grey(read.at(40, 15), 1.0 / factor));
         OA_CHECK(read.at(41, 15) == black);
         // The triangle's row 19: column 5 inside, column 6 covered three
-        // quarters at either factor, column 7 one quarter, column 8 outside.
+        // quarters at every factor, column 7 one quarter, column 8 outside.
         OA_CHECK(read.at(15, 29) == full);
-        OA_CHECK(read.at(16, 29) == grey(191));
-        OA_CHECK(read.at(17, 29) == grey(63));
+        OA_CHECK(near_grey(read.at(16, 29), 0.75));
+        OA_CHECK(near_grey(read.at(17, 29), 0.25));
         OA_CHECK(read.at(18, 29) == black);
     }
 }
@@ -1928,7 +1933,7 @@ void test_pages_beyond_the_limit_are_refused() {
     refused(
         "a factor of 3",
         fixture.executor.create_target(10, 10, 3) != card::TargetHandle{},
-        "1, 2 or 4"
+        "a power of two from 1 to 16"
     );
     refused(
         "a target with no pixels",

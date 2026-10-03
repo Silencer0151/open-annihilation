@@ -25,7 +25,6 @@ namespace oa::present::model {
 enum class UnitSupersampling : uint8_t {
     off = 1,
     x2 = 2,
-    x3 = 3,
     x4 = 4,
     x8 = 8,
     x16 = 16,

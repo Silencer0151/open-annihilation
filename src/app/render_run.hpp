@@ -21,41 +21,22 @@
 
 namespace oa::app {
 
-/// What watches the accelerated tier while it runs: the memory guard and
-/// the step-down, with the measures of the frames that feed it. Made when
-/// the tier first switches on in a run, so that a run that stays on the
-/// standard tier holds none of it.
+/// What watches the accelerated tier while it runs: the memory guard, and
+/// the rung it leaves the tier at. Made when the tier first switches on in
+/// a run, so that a run that stays on the standard tier holds none of it.
 struct AcceleratedWatch {
-    render_policy::MemoryGuard memory{};      ///< sampled about once a second
-    render_policy::ScaleStepDown step_down{}; ///< fed the steady match frames
-    /// The ladder has moved in the run, by slow frames or by a buffer the
-    /// memory guard refused: each later switch-on draws at its rung, which
-    /// never rises again until Hardware acceleration is set to Off and back
-    /// or Restore defaults asks for a fresh try. The game reads and writes
-    /// the renderer records but not their scale-level key, which is
-    /// reserved for the rung reached, so the rung lasts for this run alone.
+    render_policy::MemoryGuard memory{}; ///< sampled about once a second
+    /// The rung the tier draws at in the run: the one it switched on at,
+    /// lowered by each buffer the memory guard refused (rung_without).
+    render_policy::LadderState rung{};
+    /// The ladder has moved in the run, by a buffer the memory guard
+    /// refused: each later switch-on draws at its rung, which never rises
+    /// again until Hardware acceleration is set to Off and back or Restore
+    /// defaults asks for a fresh try. The game reads and writes the renderer
+    /// records but not their scale-level key, which is reserved for the
+    /// rung reached, so the rung lasts for this run alone.
     bool moved{};
-    /// The step-down has lowered the rung for slow frames since the ladder
-    /// last started from the top, so the status says the tier smooths less;
-    /// a rung below a buffer the memory guard refused is about memory, and
-    /// does not count.
-    bool slowed{};
-    /// The step-down has lowered Full's anti-aliasing for slow frames since
-    /// the ladder last started from the top, so the status says Full draws
-    /// with less of it.
-    bool full_slowed{};
-    uint32_t steps{};             ///< steps down the ladder in the run, each logged once
-    uint64_t frame_interval_ns{}; ///< between the last two presents
-    /// Between the two presents before them: a long interval after another
-    /// as long is a crawl, not a wait.
-    uint64_t previous_interval_ns{};
-    uint64_t frame_ticks_ns{}; ///< what the ticks between them took
-    uint64_t frame_draw_ns{};  ///< the draw measure between them
-    int64_t ticks_seen_ns{};   ///< the run's ticks' time at the last present
-    int64_t draw_seen_ns{};    ///< the run's draw measures at the last present
-    /// The clock of the frames --check-renderer-ladder forces: the sum of
-    /// their forced intervals.
-    uint64_t forced_clock_ns{};
+    uint32_t steps{}; ///< steps down the ladder in the run, each logged once
 };
 
 /// The renderer a runtime borrows, with what made it, and how it has fared
@@ -115,10 +96,6 @@ struct Runtime::RenderRun {
     uint64_t fault_frame{};
     /// The accelerated tier's watch; null until the tier first switches on.
     std::unique_ptr<AcceleratedWatch> watch{};
-    /// The interval --check-renderer-ladder forces on each presented frame,
-    /// in nanoseconds, which the step-down then takes as a frame the loop
-    /// paced, on the forced frames' own clock; unset for the frames' own.
-    std::optional<uint64_t> forced_frame_ns{};
     /// The system's memory as --check-renderer-ladder forces the memory
     /// guard to see it, in place of the system's own sample; unset for the
     /// system's.

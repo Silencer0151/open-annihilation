@@ -11,11 +11,10 @@ namespace oa::present::model {
 namespace {
 
 // The levels from the finest down.
-constexpr std::array<UnitSupersampling, 6> levels_down{
+constexpr std::array<UnitSupersampling, 5> levels_down{
     UnitSupersampling::x16,
     UnitSupersampling::x8,
     UnitSupersampling::x4,
-    UnitSupersampling::x3,
     UnitSupersampling::x2,
     UnitSupersampling::off,
 };
@@ -254,8 +253,6 @@ std::optional<UnitSupersampling> unit_supersampling_from_factor(uint32_t factor)
         return UnitSupersampling::off;
     case 2:
         return UnitSupersampling::x2;
-    case 3:
-        return UnitSupersampling::x3;
     case 4:
         return UnitSupersampling::x4;
     case 8:

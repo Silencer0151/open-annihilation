@@ -80,14 +80,6 @@ constexpr int tiles_window_height = 1440;
 constexpr uint64_t match_begun_ns = 6'000'000'000;
 /// Exit code of a check that skipped, which ctest reports as skipped.
 constexpr int skipped_exit_code = 77;
-/// The interval the slow frames case forces on each frame, nanoseconds:
-/// over twice the period of 60 frames a second, so that a second of them
-/// steps the ladder at once.
-constexpr uint64_t slow_frame_ns = 100'000'000;
-/// Frames a step of the ladder may take before the slow frames case fails.
-constexpr uint32_t step_frames_allowed = 200;
-/// Frames the slow frames case presents where the ladder must not move.
-constexpr uint32_t unmoved_frames = 40;
 /// Frames the memory case presents for the tier to settle on the rungs
 /// below the buffers the memory guard refuses.
 constexpr uint32_t refused_buffer_frames = 4;
@@ -99,22 +91,12 @@ constexpr float zoomed_in_zoom = 2.0F;
 /// A zoom that is not whole, at which the card magnifies the scene by its
 /// own filter, not by NEAREST.
 constexpr float part_zoom = 1.5F;
-/// The rate the slow frames case has the loop pace at while it adds ticks
-/// between frames, frames a second: the loop's lowest, under the 60 the
-/// step-down holds a faster loop to.
-constexpr uint32_t ticked_frames_per_second = 30;
-/// How long the slow frames case presents frames whose ticks bring them on
-/// time, nanoseconds on the forced clock: past the slow rule's 3 s.
-constexpr uint64_t ticked_span_ns = 4'000'000'000;
 /// The window the memory case draws, pixels: its chrome scales by 1.6, so
 /// the HUD is drawn through a prescale target.
 constexpr int part_scale_width = 1024;
 constexpr int part_scale_height = 768;
 /// Frames the Full cases present for the card to draw a frame's terrain.
 constexpr uint32_t full_frames = 3;
-/// The anti-aliasing the Full rungs case starts Full at, so that every rung
-/// of Full's is there to take.
-constexpr uint8_t full_rungs_supersample = policy::full_supersample_most;
 
 /// Counts the reports of a changed floating-point setting.
 ///
@@ -816,49 +798,15 @@ struct Runtime::RendererLadder {
     /// @param zoom screen pixels per map pixel
     void at_zoom(float zoom) { runtime.match_zoom_ = runtime.match_zoom_target_ = zoom; }
 
-    /// Presents forced slow frames at a zoom until the ladder takes one step.
-    ///
-    /// @param where the case
-    /// @param zoom the zoom the frames show
-    /// @param expected the rung the step must reach
-    /// @param what the step, for a failure
-    void step_to(
-        std::string_view where,
-        float zoom,
-        const policy::LadderState& expected,
-        std::string_view what
-    ) {
-        at_zoom(zoom);
-        auto& watched = watch(where);
-        const uint32_t steps = watched.steps;
-        for (uint32_t frame = 0; frame < step_frames_allowed && watched.steps == steps; ++frame)
-            runtime.render();
-        expect(
-            watched.steps == steps + 1, where, "slow frames did not step to " + std::string(what)
-        );
-        expect(
-            watched.step_down.state == expected, where, "the step was not to " + std::string(what)
-        );
-        expect(
-            expected.standard || runtime.accelerated_.rung == expected,
-            where,
-            "the presentation does not draw at " + std::string(what)
-        );
-    }
-
-    /// Presents one frame at part_zoom that does not feed the step-down,
-    /// and tells whether the card drew the magnified scene through its
-    /// prescale target.
+    /// Presents one frame at part_zoom and tells whether the card drew the
+    /// magnified scene through its prescale target.
     ///
     /// @param where the case
     /// @return true when the scene went through the prescale target
     bool magnify_once(std::string_view where) {
-        const auto forced = run().forced_frame_ns;
-        run().forced_frame_ns.reset();
         at_zoom(part_zoom);
         const uint64_t draws = runtime.accelerated_.counts.prescale_draws;
         runtime.render();
-        run().forced_frame_ns = forced;
         expect(runtime.accelerated_.magnified, where, "zoom 1.5 was not magnified");
         return runtime.accelerated_.counts.prescale_draws != draws;
     }
@@ -870,221 +818,6 @@ struct Runtime::RendererLadder {
     bool scene_buffers_freed() const {
         return runtime.match_scene_cpu_.rgb.capacity() == 0 &&
                runtime.match_terrain_cache_.rgb.capacity() == 0;
-    }
-
-    /// Slow frames walk the step-down down its whole ladder, one rung a
-    /// step, each step logged once: the budget twice from zoomed-out
-    /// frames, NEAREST chrome and the card's two rungs at zoom 1, magnify
-    /// off from zoomed-in frames, then the standard tier for the rest of
-    /// the run. The standard tier and idle frames never feed it; a frame's
-    /// ticks, added between frames, are taken out against the rate the loop
-    /// paces at; each step frees what its rung no longer draws with, and
-    /// NEAREST chrome leaves the magnified scene's filter as it was; the
-    /// status says the tier smooths less. Off then On starts it again from
-    /// the top, and a match clock below its rate sheds the budget and
-    /// magnification at once.
-    ///
-    /// @param frame the presented frame of the match the case begins at
-    /// @return 0, or skipped_exit_code under 2 GiB of memory
-    int slow_frames(uint32_t frame) {
-        constexpr std::string_view where = "slow";
-        if (run().host->tier_inputs().memory < policy::smallest_accelerated_memory) {
-            std::cout << "renderer ladder check: slow: skipped: the machine reports less than the "
-                         "2 GiB threshold of memory\n";
-            return skipped_exit_code;
-        }
-        start_match();
-        for (uint32_t presented = 1; presented < frame; ++presented)
-            runtime.render();
-        steady_frames();
-        run().forced_frame_ns = slow_frame_ns;
-        // The standard tier, before the accelerated tier ever drew: no watch.
-        at_zoom(zoomed_out_zoom);
-        for (uint32_t presented = 0; presented < unmoved_frames; ++presented)
-            runtime.render();
-        expect(
-            run().watch == nullptr, where, "the standard tier made the accelerated tier's watch"
-        );
-        // The accelerated tier, then the standard tier between its frames.
-        accelerate(where, true);
-        accelerate(where, false);
-        expect(!runtime.accelerated_presentation(), where, "the tier did not go back to standard");
-        for (uint32_t presented = 0; presented < unmoved_frames; ++presented)
-            runtime.render();
-        expect(
-            watch(where).steps == 0 && watch(where).step_down.state == top_rung() &&
-                watch(where).step_down.zoomed_out.count == 0 &&
-                watch(where).step_down.other.count == 0,
-            where,
-            "frames of the standard tier fed the step-down"
-        );
-        accelerate(where, true);
-        // Idle frames never feed it, however slow.
-        at_zoom(zoomed_out_zoom);
-        runtime.frame_wait_ = frame_pacing::FrameWait::idle;
-        for (uint32_t presented = 0; presented < unmoved_frames; ++presented)
-            runtime.render();
-        runtime.frame_wait_ = frame_pacing::FrameWait::precise;
-        expect(
-            watch(where).steps == 0 && watch(where).step_down.zoomed_out.count == 0,
-            where,
-            "idle frames fed the step-down"
-        );
-        // A frame's ticks are taken out, against the rate the loop paces at:
-        // paced at 30, frames of one and a half periods whose ticks took half
-        // a period are on time, though at 60 they would be twice its period.
-        const uint32_t max_frames_per_second = runtime.options_.max_frames_per_second;
-        runtime.options_.max_frames_per_second = ticked_frames_per_second;
-        expect(
-            policy::step_target_rate(runtime.frame_stats_notes().paced_frames_per_second) ==
-                ticked_frames_per_second,
-            where,
-            "the step-down is not held to the rate the loop paces at"
-        );
-        const uint64_t period_ns = frame_pacing::kNanosecondsPerSecond / ticked_frames_per_second;
-        const uint64_t ticks_ns = period_ns / 2;
-        run().forced_frame_ns = period_ns + ticks_ns;
-        for (uint64_t forced = 0; forced < ticked_span_ns; forced += period_ns + ticks_ns) {
-            runtime.phase_times_.simulation += static_cast<int64_t>(ticks_ns);
-            runtime.render();
-            expect(
-                watch(where).frame_ticks_ns == ticks_ns,
-                where,
-                "the frame's ticks were not the time added between frames"
-            );
-        }
-        expect(
-            watch(where).steps == 0 && watch(where).step_down.zoomed_out.count != 0,
-            where,
-            "frames whose ticks bring them on time stepped, or fed nothing"
-        );
-        expect(
-            runtime.acceleration_report().status.state ==
-                oa::ui::engine_settings::AccelerationState::in_use,
-            where,
-            "the status does not say the tier is in use"
-        );
-        // Down the ladder: the same frames without their ticks are slow.
-        policy::LadderState expected = top_rung();
-        expected.budget = policy::SceneBudget::reduced;
-        step_to(where, zoomed_out_zoom, expected, "budget reduced");
-        expect(
-            runtime.acceleration_report().status.state ==
-                oa::ui::engine_settings::AccelerationState::in_use_less_smoothing,
-            where,
-            "the status does not say the tier smooths less"
-        );
-        runtime.options_.max_frames_per_second = max_frames_per_second;
-        run().forced_frame_ns = slow_frame_ns;
-        // The magnified scene's prescale target is made at the first frame
-        // drawn through it, and the budget's steps keep it.
-        expect(
-            magnify_once(where), where, "zoom 1.5 was not drawn through the scene's prescale target"
-        );
-        expected.budget = policy::SceneBudget::none;
-        step_to(where, zoomed_out_zoom, expected, "budget none");
-        expect(scene_buffers_freed(), where, "the scene's buffers outlived budget none");
-        expect(
-            runtime.accelerated_.world_prescale.made(),
-            where,
-            "the magnified scene has no prescale target"
-        );
-        expected.filtered_chrome = false;
-        step_to(where, zoom_one, expected, "NEAREST chrome");
-        expect(
-            !runtime.accelerated_.hud_prescale.made() && runtime.accelerated_.world_prescale.made(),
-            where,
-            "NEAREST chrome did not free the HUD's prescale target alone"
-        );
-        // The magnified scene keeps the card's magnification, through the
-        // target NEAREST chrome kept.
-        expect(
-            magnify_once(where) && runtime.accelerated_.world_prescale.made(),
-            where,
-            "NEAREST chrome changed the magnified scene's filter"
-        );
-        expected.card = policy::CardFilter::prescale_quarter;
-        step_to(where, zoom_one, expected, "a quarter of the prescale budget");
-        expect(
-            !runtime.accelerated_.world_prescale.made(),
-            where,
-            "the scene's prescale target outlived a smaller budget"
-        );
-        expected.card = policy::CardFilter::linear;
-        step_to(where, zoom_one, expected, "plain LINEAR");
-        expect(
-            !magnify_once(where) && !runtime.accelerated_.world_prescale.made(),
-            where,
-            "plain LINEAR drew the magnified scene through a prescale target"
-        );
-        // Zoomed in, the scene is magnified until magnify goes off.
-        at_zoom(zoomed_in_zoom);
-        runtime.render();
-        expect(runtime.accelerated_.magnified, where, "zoom 2 was not magnified");
-        expected.magnify = false;
-        step_to(where, zoomed_in_zoom, expected, "magnify off");
-        expect(
-            !runtime.accelerated_.scene.made() && !runtime.accelerated_.overlay_texture.made() &&
-                scene_buffers_freed(),
-            where,
-            "the scene outlived magnify off"
-        );
-        expected.standard = true;
-        step_to(where, zoom_one, expected, "the standard tier");
-        const auto& inputs = run().host->tier_inputs();
-        expect(
-            !runtime.accelerated_presentation() && inputs.drop == policy::Drop::slow_frames,
-            where,
-            "the last rung did not drop the accelerated tier for slow frames"
-        );
-        expect(
-            runtime.acceleration_report().status.state ==
-                oa::ui::engine_settings::AccelerationState::slow_frames,
-            where,
-            "the status does not say frames were slow"
-        );
-        // The standard tier after the drop feeds nothing, and presents the
-        // frame the processor composes.
-        const uint32_t steps = watch(where).steps;
-        for (uint32_t presented = 0; presented < unmoved_frames; ++presented)
-            runtime.render();
-        runtime.update_render_tier();
-        expect(
-            watch(where).steps == steps && !runtime.accelerated_presentation(),
-            where,
-            "the ladder moved, or the tier came back, after the drop"
-        );
-        expect_composed(where);
-        // Off then On tries again from the top.
-        runtime.forget_render_failures();
-        runtime.update_render_tier();
-        expect(
-            runtime.accelerated_presentation() && runtime.accelerated_.rung == top_rung() &&
-                watch(where).step_down.state == top_rung(),
-            where,
-            "Off then On did not start the step-down again from the top"
-        );
-        expect(
-            runtime.acceleration_report().status.state ==
-                oa::ui::engine_settings::AccelerationState::in_use,
-            where,
-            "after Off then On the status still says the tier smooths less"
-        );
-        // A match clock below its rate sheds the budget and magnification
-        // at the first frame whose own passes took any time.
-        expect(runtime.match_timing_.requested_rate > 1, where, "the match clock has no rate");
-        runtime.match_timing_.actual_rate = runtime.match_timing_.requested_rate - 1;
-        expected = top_rung();
-        expected.budget = policy::SceneBudget::none;
-        expected.magnify = false;
-        step_to(where, zoomed_in_zoom, expected, "budget none and magnify off at once");
-        runtime.match_timing_.actual_rate = runtime.match_timing_.requested_rate;
-        run().forced_frame_ns.reset();
-        accelerate(where, false);
-        std::cout << "renderer ladder check: slow: " << watch(where).steps
-                  << " steps down the ladder, each logged once\n";
-        passed.emplace_back(where);
-        return 0;
     }
 
     /// The memory guard, with the system's memory forced: free memory just
@@ -1130,7 +863,7 @@ struct Runtime::RendererLadder {
         );
         expect(
             !state.rung.magnify && state.rung.card == policy::CardFilter::linear && watched.moved &&
-                watched.step_down.state == state.rung,
+                watched.rung == state.rung,
             where,
             "the tier did not stay on the rungs below the buffers refused"
         );
@@ -2391,16 +2124,14 @@ struct Runtime::RendererLadder {
     }
 
     /// Switches the Full tier on, as --hardware-acceleration=full and
-    /// --force-capable would, at the top rung with an anti-aliasing of
-    /// Full's, or back to what the run's own options say.
+    /// --force-capable would, at the top rung, or back to what the run's
+    /// own options say.
     ///
     /// @param where the case
     /// @param on true to switch it on
-    /// @param supersample Full's anti-aliasing at the rung
-    void full_tier(std::string_view where, bool on, uint8_t supersample = 1) {
+    void full_tier(std::string_view where, bool on) {
         if (on) {
             run().rung = top_rung();
-            run().rung->supersample = supersample;
             runtime.options_.hardware_acceleration =
                 oa::ui::engine_settings::HardwareAcceleration::full;
             runtime.options_.force_capable = true;
@@ -2838,80 +2569,6 @@ struct Runtime::RendererLadder {
         passed.emplace_back(where);
     }
 
-    /// Slow frames take Full's rungs first: the anti-aliasing from 4 to 2
-    /// to 1, each step logged once and the status saying Full draws with
-    /// less of it, then Full to Basic for the run, which presents the frame
-    /// the processor composed, with the status saying Full's frames were
-    /// slow; Off then On starts Full again at the top.
-    ///
-    /// @param frame the presented frame of the match the case begins at
-    /// @return 0, or skipped_exit_code under 2 GiB of memory
-    int full_slow_frames(uint32_t frame) {
-        constexpr std::string_view where = "full-slow";
-        if (run().host->tier_inputs().memory < policy::smallest_accelerated_memory) {
-            std::cout << "renderer ladder check: full-slow: skipped: the machine reports less "
-                         "than the 2 GiB threshold of memory\n";
-            return skipped_exit_code;
-        }
-        start_match();
-        for (uint32_t presented = 1; presented < frame; ++presented)
-            runtime.render();
-        steady_frames();
-        full_tier(where, true, full_rungs_supersample);
-        full_frame(where);
-        expect(
-            runtime.accelerated_.rung.full &&
-                runtime.accelerated_.rung.supersample == full_rungs_supersample,
-            where,
-            "full did not draw at its top rung"
-        );
-        run().forced_frame_ns = slow_frame_ns;
-        policy::LadderState expected = top_rung();
-        expected.full = true;
-        expected.supersample = 2;
-        step_to(where, zoom_one, expected, "anti-aliasing 2x");
-        expect(
-            runtime.full_presentation() &&
-                runtime.acceleration_report().status.state ==
-                    oa::ui::engine_settings::AccelerationState::full_in_use_less_anti_aliasing &&
-                runtime.acceleration_report().status.supersample == 2,
-            where,
-            "the status does not say full draws with less anti-aliasing"
-        );
-        expected.supersample = 1;
-        step_to(where, zoom_one, expected, "no anti-aliasing");
-        expected.full = false;
-        step_to(where, zoom_one, expected, "basic");
-        expect(
-            !runtime.full_presentation() && runtime.accelerated_presentation() &&
-                full_drop() == render_policy::FullDrop::slow_frames,
-            where,
-            "full's last rung did not drop full to basic for slow frames"
-        );
-        expect(
-            status() == oa::ui::engine_settings::AccelerationState::full_slow_frames,
-            where,
-            "the status does not say full's frames were slow"
-        );
-        run().forced_frame_ns.reset();
-        expect_composed(where);
-        runtime.forget_render_failures();
-        runtime.update_render_tier();
-        expect(
-            runtime.full_presentation() &&
-                runtime.accelerated_.rung.supersample == full_rungs_supersample &&
-                watch(where).step_down.state == runtime.accelerated_.rung &&
-                status() == oa::ui::engine_settings::AccelerationState::full_in_use,
-            where,
-            "Off then On did not start full again at the top"
-        );
-        full_tier(where, false);
-        std::cout << "renderer ladder check: full-slow: " << watch(where).steps
-                  << " steps down the ladder, each logged once\n";
-        passed.emplace_back(where);
-        return 0;
-    }
-
     /// The memory guard with the system's memory forced: free memory just
     /// over its threshold refuses Full's pages, which drops Full to Basic,
     /// nothing struck and Off then On not lifting it; and committed memory
@@ -3087,17 +2744,12 @@ int Runtime::check_renderer_ladder() {
     const auto& fault = options_.render_fault;
     const auto runs = [&](RenderFaultPoint point) { return !fault || fault->point == point; };
     const uint32_t frame = fault && fault->frame ? *fault->frame : match_case_frame;
-    // The cases of the accelerated tier and of Full's rungs and guard run
-    // only when named.
-    if (fault &&
-        (fault->point == RenderFaultPoint::slow || fault->point == RenderFaultPoint::memory ||
-         fault->point == RenderFaultPoint::full_slow ||
-         fault->point == RenderFaultPoint::full_memory)) {
-        const int status = fault->point == RenderFaultPoint::slow     ? ladder.slow_frames(frame)
-                           : fault->point == RenderFaultPoint::memory ? ladder.memory(frame)
-                           : fault->point == RenderFaultPoint::full_slow
-                               ? ladder.full_slow_frames(frame)
-                               : ladder.full_memory(frame);
+    // The memory guard's cases of the accelerated tier and of Full run only
+    // when named.
+    if (fault && (fault->point == RenderFaultPoint::memory ||
+                  fault->point == RenderFaultPoint::full_memory)) {
+        const int status = fault->point == RenderFaultPoint::memory ? ladder.memory(frame)
+                                                                    : ladder.full_memory(frame);
         if (status == 0)
             std::cout << "renderer ladder check: " << ladder.passed.front() << " passed\n";
         return status;

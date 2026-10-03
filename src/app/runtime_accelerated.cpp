@@ -387,9 +387,7 @@ void Runtime::present_accelerated_match_layers(bool dialogs) {
     const auto upload_start = std::chrono::steady_clock::now();
     upload_rgb24_frame(match_hud_tex_, match_hud_cpu_);
     if (magnified) {
-        // The scene's upload and the overlay's conversion and upload are the
-        // tier's own passes, timed for the step-down.
-        const auto passes_start = std::chrono::steady_clock::now();
+        // The scene's upload and the overlay's conversion and upload.
         state.scene.upload_rgb24(
             match_scene_cpu_.rgb.data(),
             std::size_t{match_scene_cpu_.width} * 3U,
@@ -437,7 +435,6 @@ void Runtime::present_accelerated_match_layers(bool dialogs) {
         }
         state.uploaded_bands = state.opaque_bands;
         state.overlay_uploaded = true;
-        state.passes_ns += static_cast<uint64_t>(nanoseconds_since(passes_start));
     } else {
         upload_rgb24_tiles(match_world_tex_, match_world_cpu_, gamma);
     }

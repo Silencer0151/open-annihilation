@@ -47,8 +47,9 @@ but mean two things. Off and Basic draw units finer on the processor at
 the level's factor, and the row's hint says so, warning of the processor
 cost from 8x. While frames are drawn in Full the processor's anti-aliasing
 never runs: the graphics card draws the whole battlefield finer and scales
-it down, 2x and 3x at 2 and 4x, 8x and 16x at 4, within what the machine
-and its memory allow. The host tells the dialog the factor in use
+it down, at the level's samples across, 2, 4, 8 or 16, within what the
+renderer's texture limit and the memory allow at the window's size, and
+the hint says where they allow fewer. The host tells the dialog the factor in use
 (`AccelerationStatus::full_supersample`, 0 outside Full), and the hint
 then says what the level does in Full at that factor, 1:1 at Off.
 
@@ -74,11 +75,11 @@ record passed over one, or,
 on a renderer nothing has looked at yet, it takes effect from the next
 start. Where Full was asked for and Basic draws in its place, the first
 line says why: Full's trial could not be written, there is too little
-memory for Full, Full's frames were slow, Full stopped for this run, Full
+memory for Full, Full stopped for this run, Full
 failed before on this driver, the card lacks a feature Full needs, or a
 shared game or a replay waits for its end; and Full in use says the card
 draws the view, smoothed at every zoom, with its anti-aliasing where there
-is any, and with less of it once frames were slow. A driver a record
+is any. A driver a record
 passed over at this start shows whatever the setting. The key reads `off`, `basic` or `full`; a whole number, as the
 setting's earlier On and Off switch wrote it, reads as Full above 0 and Off
 otherwise, and any other text gives the default.

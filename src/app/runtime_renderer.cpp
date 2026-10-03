@@ -248,23 +248,6 @@ void Runtime::note_present_time(uint64_t present_ns) {
     const uint64_t now = frame_pacing::steady_now_ns();
     const uint64_t interval = run.last_present_ns != 0 ? now - run.last_present_ns : 0;
     run.last_present_ns = now;
-    // What the step-down measures between two presents, once the
-    // accelerated tier has run: the interval and the one before it, the
-    // ticks run between them and the draw measure.
-    if (run.watch) {
-        auto& watch = *run.watch;
-        watch.previous_interval_ns = watch.frame_interval_ns;
-        watch.frame_interval_ns = interval;
-        watch.frame_ticks_ns =
-            phase_times_.simulation > watch.ticks_seen_ns
-                ? static_cast<uint64_t>(phase_times_.simulation - watch.ticks_seen_ns)
-                : 0;
-        watch.frame_draw_ns = phase_times_.compose > watch.draw_seen_ns
-                                  ? static_cast<uint64_t>(phase_times_.compose - watch.draw_seen_ns)
-                                  : 0;
-        watch.ticks_seen_ns = phase_times_.simulation;
-        watch.draw_seen_ns = phase_times_.compose;
-    }
     const PathSet drawn = run.paths_drawn;
     run.paths_drawn = 0;
     // A lost device's presents show nothing and say nothing of the driver.

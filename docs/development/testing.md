@@ -329,23 +329,13 @@ walk runs:
   `--render-fault POINT[@FRAME]` forces one failure alone, at a presented
   frame of its case; `native-renderer-ladder-create` makes every driver but
   software refuse at start;
-- `native-renderer-ladder-slow` (`--render-fault slow`) and
-  `native-renderer-ladder-memory` (`--render-fault memory`) switch the
+- `native-renderer-ladder-memory` (`--render-fault memory`) switches the
   accelerated tier on, as `--hardware-acceleration` and `--force-capable`
-  would, and run only when named. The first forces the interval of each
-  frame, on a clock of its own, so that slow frames walk the step-down one
-  rung a step to the standard tier, each step logged once, and checks that
-  the standard tier and idle frames never feed it and that a frame's
-  ticks, added between frames, are taken out against the loop's paced
-  rate; the second forces the memory guard's sample of the system's
-  memory, so that the guard refuses the tier's buffers and then drops it
-  for the run. `native-renderer-ladder-full-slow` (`--render-fault
-  full-slow`) and `native-renderer-ladder-full-memory` (`--render-fault
-  full-memory`) do the same for the Full tier, switched on as
-  `--hardware-acceleration=full` would: slow frames take Full's rungs
-  first, its anti-aliasing from 4 to 2 to 1 and then Full itself, to
-  Basic for the run, each step logged once and the status saying so, Off
-  and back starting Full again at the top; and the guard refuses Full's
+  would, and runs only when named: it forces the memory guard's sample of
+  the system's memory, so that the guard refuses the tier's buffers and
+  then drops it for the run. `native-renderer-ladder-full-memory`
+  (`--render-fault full-memory`) does the same for the Full tier, switched
+  on as `--hardware-acceleration=full` would: the guard refuses Full's
   pages, which drops Full alone with nothing struck and nothing Off and
   back lifts, and, tripped while Full draws, drops Full first, freeing its
   pages, and Basic at the next sample while memory stays short. Each skips

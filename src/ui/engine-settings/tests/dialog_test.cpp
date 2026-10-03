@@ -491,7 +491,7 @@ void the_level_strip_picks_a_level() {
         return;
     CHECK(levels[0]->text == "Off");
     CHECK(levels[1]->text == "2x");
-    CHECK(levels[5]->text == "16x");
+    CHECK(levels[4]->text == "16x");
     for (std::size_t index = settings::anti_aliasing_levels.size(); index-- > 0;) {
         const auto expected = settings::anti_aliasing_levels[index];
         CHECK(click(dialog, centre(levels[index]->rect)) == DialogAction::changed);
@@ -524,23 +524,35 @@ void the_level_strip_picks_a_level() {
     full.full_supersample = 4;
     CHECK(settings::set_acceleration_status(dialog, full) == DialogAction::redraw);
     const auto in_full = settings::dialog_layout(dialog);
+    // The row asks for 16x: four across is fewer than asked, which the
+    // second line says.
     CHECK(
-        find_part(
-            in_full, "In Full the graphics card draws 4x4 samples a pixel,", settings::no_control
-        ) != nullptr
+        find_part(in_full, "In Full the card draws 4x4 samples a pixel", settings::no_control) !=
+        nullptr
     );
     CHECK(
-        find_part(
-            in_full, "its most, and scales them down for smoother edges.", settings::no_control
-        ) != nullptr
+        find_part(in_full, "the most this window allows, scaled down.", settings::no_control) !=
+        nullptr
     );
     CHECK(find_part(in_full, "Needs a fast CPU.", settings::no_control) == nullptr);
+    full.full_supersample = 16;
+    CHECK(settings::set_acceleration_status(dialog, full) == DialogAction::redraw);
+    const auto at_sixteen = settings::dialog_layout(dialog);
+    CHECK(
+        find_part(
+            at_sixteen, "In Full the card draws 16x16 samples a pixel", settings::no_control
+        ) != nullptr
+    );
+    CHECK(
+        find_part(at_sixteen, "and scales them down for smoother edges.", settings::no_control) !=
+        nullptr
+    );
     full.full_supersample = 2;
     CHECK(settings::set_acceleration_status(dialog, full) == DialogAction::redraw);
     CHECK(
         find_part(
             settings::dialog_layout(dialog),
-            "In Full the graphics card draws 2x2 samples a pixel",
+            "In Full the card draws 2x2 samples a pixel",
             settings::no_control
         ) != nullptr
     );
@@ -1905,7 +1917,7 @@ void hardware_acceleration_shows_its_status() {
     constexpr std::string_view retry = "Set it to Off and back, or restore defaults.";
     constexpr std::string_view needs_memory = "Not in use: it needs at least 2 GB of memory.";
     constexpr std::string_view takes_effect = "takes effect from the next game.";
-    const std::array<Expected, 19> fixed{{
+    const std::array<Expected, 18> fixed{{
         {AccelerationState::off_driver_skipped, off, "A failed graphics driver is skipped."},
         {AccelerationState::needs_memory_driver_skipped,
          needs_memory,
@@ -1932,7 +1944,6 @@ void hardware_acceleration_shows_its_status() {
          "Not in use: the graphics card lacks a feature.",
          processor},
         {AccelerationState::cannot_save, "Not in use: the game cannot save its files.", processor},
-        {AccelerationState::slow_frames, "Not in use for this run: frames were slow.", processor},
         {AccelerationState::next_start,
          "Takes effect from the next start.",
          "The processor draws and scales the view until then."},
@@ -1986,18 +1997,14 @@ void hardware_acceleration_shows_its_status() {
     // While it is in use the first line names Basic, the tier that runs, and
     // the second says what it does here; Full, which the game cannot draw
     // yet, or which stopped, says Basic is in use in its place.
-    const std::array<std::pair<AccelerationState, std::string_view>, 8> in_use{{
+    const std::array<std::pair<AccelerationState, std::string_view>, 6> in_use{{
         {AccelerationState::full_cannot_save, "Basic in use: the game cannot save its files."},
         {AccelerationState::full_too_little_memory,
          "Basic in use: there is too little memory for Full."},
-        {AccelerationState::full_slow_frames,
-         "Basic in use for this run: Full's frames were slow."},
         {AccelerationState::full_lacks_feature,
          "Basic in use: the card lacks a feature Full needs."},
         {AccelerationState::in_use_on_another_driver,
          "Basic in use, on another driver: one failed."},
-        {AccelerationState::in_use_less_smoothing,
-         "Basic in use, with less smoothing: frames were slow."},
         {AccelerationState::in_use_no_smoothing,
          "Basic in use; no smoothing when zoomed out here."},
         {AccelerationState::in_use, "Basic in use."},
@@ -2017,16 +2024,16 @@ void hardware_acceleration_shows_its_status() {
         }
     // Full in use names its anti-aliasing on the second line, whatever the
     // reach: none, 2x or 4x; a count between reads as the one below it.
-    const std::array<std::pair<AccelerationState, std::string_view>, 2> full_in_use{{
+    const std::array<std::pair<AccelerationState, std::string_view>, 1> full_in_use{{
         {AccelerationState::full_in_use, "Full in use: the graphics card draws the view."},
-        {AccelerationState::full_in_use_less_anti_aliasing,
-         "Full in use, less anti-aliasing: frames were slow."},
     }};
-    const std::array<std::pair<uint8_t, std::string_view>, 5> anti_aliasing{{
+    const std::array<std::pair<uint8_t, std::string_view>, 7> anti_aliasing{{
         {1, "Smoothed at every zoom."},
         {2, "Smoothed at every zoom; 2x2 samples a pixel."},
         {3, "Smoothed at every zoom; 2x2 samples a pixel."},
         {4, "Smoothed at every zoom; 4x4 samples a pixel."},
+        {8, "Smoothed at every zoom; 8x8 samples a pixel."},
+        {16, "Smoothed at every zoom; 16x16 samples a pixel."},
         {0, "Smoothed at every zoom."},
     }};
     for (const auto& [state, first] : full_in_use)
@@ -2537,7 +2544,7 @@ void fonts_load_and_every_text_fits_its_place() {
         }
     }
     // Enhanced anti-aliasing's hint in Full, at each factor and each level.
-    for (const uint8_t supersample : {uint8_t{1}, uint8_t{2}, uint8_t{4}})
+    for (const uint8_t supersample : {uint8_t{1}, uint8_t{2}, uint8_t{4}, uint8_t{8}, uint8_t{16}})
         for (const auto& state : level_states()) {
             settings::AccelerationStatus in_full{};
             in_full.state = settings::AccelerationState::in_use;

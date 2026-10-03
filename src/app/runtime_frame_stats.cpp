@@ -309,8 +309,14 @@ frame_pacing::FrameStatsRenderer Runtime::frame_stats_renderer() const {
     // samples a pixel, across by down.
     constexpr std::string_view twice = "2x2";
     constexpr std::string_view four_times = "4x4";
+    constexpr std::string_view eight_times = "8x8";
+    constexpr std::string_view sixteen_times = "16x16";
     const uint32_t supersample = full_supersample();
-    renderer.anti_aliasing = supersample == 2 ? twice : supersample == 4 ? four_times : "";
+    renderer.anti_aliasing = supersample == 2    ? twice
+                             : supersample == 4  ? four_times
+                             : supersample == 8  ? eight_times
+                             : supersample == 16 ? sixteen_times
+                                                 : "";
     renderer.driver = renderer_driver_;
     renderer.adapter = renderer_adapter_;
     return renderer;

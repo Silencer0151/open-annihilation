@@ -47,19 +47,25 @@ constexpr AntiAliasing kDemandingLevel = AntiAliasing::x8;
 
 /// Enhanced anti-aliasing's hint while frames are drawn in Full, by the
 /// samples a pixel the graphics card draws the battlefield with: there the
-/// processor's anti-aliasing never runs, and the row's levels choose the
-/// samples instead, 2x and 3x giving 2 by 2 and 4x and above 4 by 4, the
-/// most the card draws.
+/// processor's anti-aliasing never runs, and the row's level is the
+/// samples across, as the renderer's texture limit and the memory allow
+/// at the window's size; where they allow fewer, the second line says so.
 constexpr std::array<std::string_view, 2> kFullAntiAliasingOff{
     "In Full the graphics card draws the view 1:1;", "a level draws it finer for smoother edges."
 };
+constexpr std::string_view kFullAntiAliasingScaled = "and scales them down for smoother edges.";
+constexpr std::string_view kFullAntiAliasingCapped = "the most this window allows, scaled down.";
 constexpr std::array<std::string_view, 2> kFullAntiAliasingTwice{
-    "In Full the graphics card draws 2x2 samples a pixel",
-    "and scales them down for smoother edges."
+    "In Full the card draws 2x2 samples a pixel", kFullAntiAliasingScaled
 };
 constexpr std::array<std::string_view, 2> kFullAntiAliasingFourTimes{
-    "In Full the graphics card draws 4x4 samples a pixel,",
-    "its most, and scales them down for smoother edges."
+    "In Full the card draws 4x4 samples a pixel", kFullAntiAliasingScaled
+};
+constexpr std::array<std::string_view, 2> kFullAntiAliasingEightTimes{
+    "In Full the card draws 8x8 samples a pixel", kFullAntiAliasingScaled
+};
+constexpr std::array<std::string_view, 2> kFullAntiAliasingSixteenTimes{
+    "In Full the card draws 16x16 samples a pixel", kFullAntiAliasingScaled
 };
 
 /// A switch setting and the member of EngineSettings it is.
@@ -123,7 +129,7 @@ constexpr std::string_view kRetryFull = "Set it to Off and back, or restore defa
 constexpr std::string_view kFullInUse = "Full in use: the graphics card draws the view.";
 
 /// Every state's status, in AccelerationState's order.
-constexpr std::array<StatusText, 29> kStatusTexts{{
+constexpr std::array<StatusText, 25> kStatusTexts{{
     {AccelerationState::off_driver_skipped, kOff, kDriverSkipped},
     {AccelerationState::needs_memory_driver_skipped, kNeedsMemory, kDriverSkipped},
     {AccelerationState::needs_memory, kNeedsMemory, kProcessorDraws},
@@ -150,16 +156,12 @@ constexpr std::array<StatusText, 29> kStatusTexts{{
     {AccelerationState::cannot_save,
      "Not in use: the game cannot save its files.",
      kProcessorDraws},
-    {AccelerationState::slow_frames, "Not in use for this run: frames were slow.", kProcessorDraws},
     {AccelerationState::next_start,
      "Takes effect from the next start.",
      "The processor draws and scales the view until then."},
     {AccelerationState::full_cannot_save, "Basic in use: the game cannot save its files.", {}},
     {AccelerationState::full_too_little_memory,
      "Basic in use: there is too little memory for Full.",
-     {}},
-    {AccelerationState::full_slow_frames,
-     "Basic in use for this run: Full's frames were slow.",
      {}},
     {AccelerationState::full_stopped, "Basic in use: Full stopped for this run.", kRetryFull},
     {AccelerationState::full_failed_before,
@@ -174,14 +176,8 @@ constexpr std::array<StatusText, 29> kStatusTexts{{
     {AccelerationState::in_use_on_another_driver,
      "Basic in use, on another driver: one failed.",
      {}},
-    {AccelerationState::in_use_less_smoothing,
-     "Basic in use, with less smoothing: frames were slow.",
-     {}},
     {AccelerationState::in_use_no_smoothing,
      "Basic in use; no smoothing when zoomed out here.",
-     {}},
-    {AccelerationState::full_in_use_less_anti_aliasing,
-     "Full in use, less anti-aliasing: frames were slow.",
      {}},
     {AccelerationState::full_in_use, kFullInUse, {}},
     {AccelerationState::in_use, "Basic in use.", {}},
@@ -209,14 +205,18 @@ constexpr std::string_view kWaitingForFullInReplay = "Off for this game: in a re
 /// The first line of AccelerationState::full_waiting_for_game_end in a
 /// replay; kStatusTexts holds a shared game's.
 constexpr std::string_view kBasicWaitingForFullInReplay = "Basic for this game: in a replay, Full";
-/// The second line of Full in use, by its anti-aliasing: none, 2 samples
-/// across and 4.
+/// The second line of Full in use, by its anti-aliasing: none, and 2, 4, 8
+/// and 16 samples across.
 constexpr std::string_view kFullReach = "Smoothed at every zoom.";
 constexpr std::string_view kFullReachTwice = "Smoothed at every zoom; 2x2 samples a pixel.";
 constexpr std::string_view kFullReachFourfold = "Smoothed at every zoom; 4x4 samples a pixel.";
-/// The anti-aliasing kFullReachTwice and kFullReachFourfold name.
+constexpr std::string_view kFullReachEightfold = "Smoothed at every zoom; 8x8 samples a pixel.";
+constexpr std::string_view kFullReachSixteenfold = "Smoothed at every zoom; 16x16 samples a pixel.";
+/// The anti-aliasing the lines above name.
 constexpr uint8_t kSupersampleTwice = 2;
 constexpr uint8_t kSupersampleFourfold = 4;
+constexpr uint8_t kSupersampleEightfold = 8;
+constexpr uint8_t kSupersampleSixteenfold = 16;
 
 /// Returns the first line of AccelerationState::waiting_for_game_end: the
 /// match it waits for, and the level that takes effect after it.
@@ -242,10 +242,9 @@ std::string_view waiting_line(const AccelerationStatus& acceleration) noexcept {
 /// anti-aliasing rather than the reach.
 ///
 /// @param state the state
-/// @return true for the two Full in-use states
+/// @return true for Full in use
 bool full_in_use(AccelerationState state) noexcept {
-    return state == AccelerationState::full_in_use ||
-           state == AccelerationState::full_in_use_less_anti_aliasing;
+    return state == AccelerationState::full_in_use;
 }
 
 /// Returns the second line of Full in use: smoothed at every zoom, with its
@@ -254,6 +253,10 @@ bool full_in_use(AccelerationState state) noexcept {
 /// @param supersample the samples a pixel across; 1 for no anti-aliasing
 /// @return the line
 std::string_view full_line(uint8_t supersample) noexcept {
+    if (supersample >= kSupersampleSixteenfold)
+        return kFullReachSixteenfold;
+    if (supersample >= kSupersampleEightfold)
+        return kFullReachEightfold;
     if (supersample >= kSupersampleFourfold)
         return kFullReachFourfold;
     if (supersample >= kSupersampleTwice)
@@ -816,11 +819,18 @@ std::string_view hint_line(
         lines = {"Lower it to save power.", {}};
         break;
     case Setting::anti_aliasing:
-        if (acceleration.full_supersample != 0)
-            lines = acceleration.full_supersample >= 4   ? kFullAntiAliasingFourTimes
-                    : acceleration.full_supersample >= 2 ? kFullAntiAliasingTwice
-                                                         : kFullAntiAliasingOff;
-        else if (settings.anti_aliasing == AntiAliasing::x16)
+        if (acceleration.full_supersample != 0) {
+            const uint8_t drawn = acceleration.full_supersample;
+            lines = drawn >= 16  ? kFullAntiAliasingSixteenTimes
+                    : drawn >= 8 ? kFullAntiAliasingEightTimes
+                    : drawn >= 4 ? kFullAntiAliasingFourTimes
+                    : drawn >= 2 ? kFullAntiAliasingTwice
+                                 : kFullAntiAliasingOff;
+            // Fewer samples than the row asks: the texture limit or the
+            // memory allows no more at this window's size.
+            if (drawn >= 2 && drawn < static_cast<uint8_t>(settings.anti_aliasing))
+                lines[1] = kFullAntiAliasingCapped;
+        } else if (settings.anti_aliasing == AntiAliasing::x16)
             lines = {"Units drawn at 16x and scaled down.", "Needs a fast CPU."};
         else if (
             static_cast<uint8_t>(settings.anti_aliasing) >= static_cast<uint8_t>(kDemandingLevel)
@@ -898,8 +908,6 @@ std::string_view level_caption(AntiAliasing level) noexcept {
         return "Off";
     case AntiAliasing::x2:
         return "2x";
-    case AntiAliasing::x3:
-        return "3x";
     case AntiAliasing::x4:
         return "4x";
     case AntiAliasing::x8:

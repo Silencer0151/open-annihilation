@@ -162,20 +162,21 @@ class Executor {
     /// of the size times the factor, which a resolve reduces to the size by
     /// halving it once for each doubling, every sample averaged. Draws into
     /// it give their vertices in pixels of the size. The texture, and the
-    /// half a factor of 4 reduces through, is cleared to a check colour and
-    /// one pixel is read back, since a texture a driver failed to make
+    /// halves a factor above 2 reduces through, one fewer than its
+    /// doublings, each half the one before, are cleared to a check colour
+    /// and one pixel is read back, since a texture a driver failed to make
     /// draws black and reports no error; a pixel of another colour refuses
-    /// the target. It is then cleared transparent. With `keep_half` the
-    /// target keeps the half at any factor, for the two-level reduction
-    /// (Operation::blend_reduce), which is refused on a target without
-    /// one; the half's texture is half the texture's size, and its pixels
-    /// count with the target's. Refuses a factor other than 1, 2 or 4, and
-    /// a texture beyond the limits or the renderer's texture limit, with
-    /// an error naming both.
+    /// the target. They are then cleared transparent. With `keep_half` the
+    /// target keeps its first half at any factor, for the two-level
+    /// reduction (Operation::blend_reduce), which is refused on a target
+    /// without one; the halves' pixels count with the target's. Refuses a
+    /// factor that is not a power of two from 1 to
+    /// largest_supersampling_factor, and a texture beyond the limits or the
+    /// renderer's texture limit, with an error naming both.
     ///
     /// @param width pixels across, above 0
     /// @param height pixels down, above 0
-    /// @param factor the supersampling factor, 1, 2 or 4
+    /// @param factor the supersampling factor, a power of two from 1 to 16
     /// @param keep_half whether the target keeps a half for the two-level reduction
     /// @return the target's handle; none, with error() set, when it was not made
     [[nodiscard]] TargetHandle
@@ -238,23 +239,32 @@ class Executor {
         Rect clip{};    ///< the scissor set
     };
 
+    /// The most halvings a render target keeps: those a factor of
+    /// largest_supersampling_factor resolves through before the one LINEAR
+    /// draw that lands it.
+    static constexpr uint32_t most_halvings = 3;
+
     /// One render target slot.
     struct Target {
         bool alive{};
         uint32_t generation{};
         SDL_Texture* texture{}; ///< the size times the factor
-        /// The texture halved once: for a factor of 4, which resolves
-        /// through it, and for a target made with keep_half, which the
-        /// two-level reduction reads it from; else null.
-        SDL_Texture* half{};
+        /// The texture halved once, twice and three times, each half the
+        /// one before: the halvings a factor above 2 resolves through, one
+        /// fewer than the factor's doublings, and the first for a target
+        /// made with keep_half, which the two-level reduction reads it from;
+        /// null beyond those made.
+        std::array<SDL_Texture*, most_halvings> halves{};
         uint32_t width{};
         uint32_t height{};
         uint32_t factor{};
-        SDL_BlendMode blend{SDL_BLENDMODE_NONE};      ///< the mode `texture` is set to
-        SDL_BlendMode half_blend{SDL_BLENDMODE_NONE}; ///< the mode `half` is set to
-        /// The run `half` was last filled in, with `texture` not drawn into
-        /// or cleared since; 0 for never.
+        SDL_BlendMode blend{SDL_BLENDMODE_NONE}; ///< the mode `texture` is set to
+        /// The modes the halves are set to.
+        std::array<SDL_BlendMode, most_halvings> half_blends{};
+        /// The run the halves were last filled in, with `texture` not drawn
+        /// into or cleared since, and how many of them were; 0 for never.
         uint64_t halved_in{};
+        uint32_t halved_count{};
         ClipState clip{};
     };
 
@@ -410,17 +420,20 @@ class Executor {
     /// @return false when SDL refused
     bool run_clear(Run& run, const Batch& batch);
 
-    /// Halves a render target's texture into its half, unless done this
-    /// run with the texture not written since.
+    /// Halves a render target's texture into its halves, each from the one
+    /// before, up to a count, unless done this run with the texture not
+    /// written since.
     ///
     /// @param[in,out] run the run
-    /// @param[in,out] source the target, which has a half
+    /// @param[in,out] source the target, which has that many halves
+    /// @param count the halves to fill, 1 to most_halvings
     /// @return false when SDL refused
-    bool halve(Run& run, Target& source);
+    bool halve(Run& run, Target& source, uint32_t count);
 
-    /// Runs a resolve batch: halves a factor-4 source once into its half,
-    /// unless done this run with the source not written since, then draws
-    /// the source reduced into the destination.
+    /// Runs a resolve batch: halves a source above factor 2 through its
+    /// halves, one fewer than its doublings, unless done this run with the
+    /// source not written since, then draws the last reduced by one more
+    /// halving into the destination.
     ///
     /// @param[in,out] run the run
     /// @param batch the batch

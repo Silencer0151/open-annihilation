@@ -4,14 +4,13 @@
 // The accelerated tier's watch while it runs: the memory guard, which
 // samples the system's memory about once a second and drops the tier for
 // the rest of the run when memory runs short, and refuses a buffer of the
-// tier's own that would leave too little free; and the step-down, fed the
-// steady match frames the loop paces, which lowers the tier one rung at a
-// time when frames are slow and, at its last rung, drops it for the rest of
-// the run. Full's rungs come first: the memory guard drops Full before
-// Basic and judges Basic afresh, a refused page or target drops Full, and
-// slow frames take Full's anti-aliasing down and then Full itself before
-// Basic's ladder. Each step is logged once, and none ever rises again within
-// the run. Nothing of it exists until the tier first switches on.
+// tier's own that would leave too little free, which lowers the tier's rung
+// to one without that buffer. Full goes first: the memory guard drops Full
+// before Basic and judges Basic afresh, and a refused page or target drops
+// Full. Nothing lowers a rung for slow frames: the player's settings hold,
+// however slowly the machine draws them. Each step is logged once, and
+// none ever rises again within the run. Nothing of it exists until the tier
+// first switches on.
 #include "oa/app/runtime.hpp"
 
 #include "graphics_report.hpp"
@@ -34,8 +33,6 @@ namespace {
 
 namespace policy = render_policy;
 
-/// What the log says moved the rung when the step-down took a step.
-constexpr std::string_view slow_frames_cause = "frames were slow";
 /// What the log says moved the rung when the memory guard refused a buffer.
 constexpr std::string_view refused_buffer_cause = "too little memory for a new buffer";
 
@@ -83,14 +80,10 @@ void Runtime::begin_accelerated_watch() {
     if (!run.watch) {
         run.watch = std::make_unique<AcceleratedWatch>();
         run.watch->memory = policy::make_memory_guard(run.host->tier_inputs().memory);
-        run.watch->ticks_seen_ns = phase_times_.simulation;
-        run.watch->draw_seen_ns = phase_times_.compose;
     }
     auto& watch = *run.watch;
-    if (!watch.moved) {
-        watch.step_down = policy::start_step_down(render_tier_rung());
-        watch.slowed = false;
-    }
+    if (!watch.moved)
+        watch.rung = render_tier_rung();
     policy::resume_memory_guard(watch.memory);
 }
 
@@ -150,7 +143,7 @@ void Runtime::lower_accelerated_rung(const policy::LadderState& rung, std::strin
     auto& watch = *render_run_->watch;
     auto& state = accelerated_;
     const policy::LadderState before = state.rung;
-    watch.step_down.state = rung;
+    watch.rung = rung;
     watch.moved = true;
     ++watch.steps;
     state.rung = rung;
@@ -188,81 +181,6 @@ void Runtime::lower_accelerated_rung(const policy::LadderState& rung, std::strin
     line += ": ";
     line += policy::describe_step(before, rung);
     std::cout << line << '\n' << std::flush;
-}
-
-void Runtime::feed_render_step_down(uint64_t present_ns) {
-    // The tier's own passes are counted afresh for each match frame.
-    const uint64_t passes_ns = std::exchange(accelerated_.passes_ns, 0);
-    const uint64_t area_ns = std::exchange(accelerated_.area_ns, 0);
-    if (!render_run_ || !render_run_->watch)
-        return;
-    auto& run = *render_run_;
-    auto& watch = *run.watch;
-    policy::PresentedFrame frame;
-    frame.tier = full_presentation()          ? policy::RenderTier::full
-                 : accelerated_presentation() ? policy::RenderTier::accelerated
-                                              : policy::RenderTier::standard;
-    frame.match = screen_ == Screen::match && match_ != nullptr;
-    frame.paced = frame_pacer_.started || run.forced_frame_ns.has_value();
-    frame.previous_interval_ns = watch.previous_interval_ns;
-    if (!policy::card_tier(frame.tier) || run.device_lost)
-        return;
-    const uint64_t now = frame_pacing::steady_now_ns();
-    policy::FrameSample sample = present_frame_facts(now);
-    sample.now_ns = now;
-    sample.interval_ns = watch.frame_interval_ns;
-    // A forced frame stands in for the measured interval alone, on a clock
-    // of its own, after frames forced alike: whether it counts stays the
-    // steady frames' rule.
-    if (run.forced_frame_ns) {
-        watch.forced_clock_ns += *run.forced_frame_ns;
-        sample.now_ns = watch.forced_clock_ns;
-        sample.interval_ns = *run.forced_frame_ns;
-        frame.previous_interval_ns = *run.forced_frame_ns;
-    }
-    sample.tick_ns = watch.frame_ticks_ns;
-    sample.draw_ns = watch.frame_draw_ns;
-    sample.present_ns = present_ns;
-    sample.passes_ns = passes_ns;
-    sample.area_ns = area_ns;
-    sample.paced_frames_per_second = frame_stats_notes().paced_frames_per_second;
-    sample.allowance_ns = frame_pacing::frame_allowance_ns(
-        policy::step_target_rate(sample.paced_frames_per_second), frame_pacing::FrameWait::precise
-    );
-    sample.kind = policy::frame_kind(
-        match_zoom(), accelerated_.frame.method == SceneMethod::area, accelerated_.magnified
-    );
-    sample.clock_behind = match_timing_.actual_rate < match_timing_.requested_rate;
-    const policy::LadderState before = watch.step_down.state;
-    switch (policy::feed_presented_frame(watch.step_down, frame, sample)) {
-    case policy::StepResult::none:
-        break;
-    case policy::StepResult::stepped:
-    case policy::StepResult::shed: {
-        // Full's rungs lower its anti-aliasing; Basic's lower its smoothing.
-        const policy::LadderState& after = watch.step_down.state;
-        if (before.full && before.supersample != after.supersample)
-            watch.full_slowed = true;
-        if (!before.full || before.budget != after.budget || before.magnify != after.magnify ||
-            before.filtered_chrome != after.filtered_chrome || before.card != after.card ||
-            before.method != after.method)
-            watch.slowed = true;
-        lower_accelerated_rung(after, slow_frames_cause);
-        break;
-    }
-    case policy::StepResult::basic:
-        // Full's last rung: Basic draws from the next frame, at the top of
-        // its own ladder.
-        lower_accelerated_rung(watch.step_down.state, slow_frames_cause);
-        drop_full(std::string(slow_frames_cause), policy::FullDrop::slow_frames);
-        break;
-    case policy::StepResult::standard:
-        // The last rung: the drop's own line logs it.
-        watch.moved = true;
-        ++watch.steps;
-        drop_acceleration(std::string(slow_frames_cause), policy::Drop::slow_frames);
-        break;
-    }
 }
 
 } // namespace oa::app

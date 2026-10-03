@@ -72,9 +72,10 @@ inline constexpr uint8_t most_page_levels = 8;
 inline constexpr uint32_t largest_page_edge = 16384;
 /// The largest edge of a render target's texture, its factor applied.
 inline constexpr uint32_t largest_target_edge = 16384;
-/// The supersampling factors a render target takes: 1, 2 or 4, each halving
-/// of the reduction averaging every sample.
-inline constexpr uint32_t largest_supersampling_factor = 4;
+/// The largest supersampling factor a render target takes: the factors are
+/// the powers of two from 1 to this, each halving of the reduction
+/// averaging every sample.
+inline constexpr uint32_t largest_supersampling_factor = 16;
 /// The furthest a vertex may lie from the target's origin, in pixels.
 inline constexpr float largest_coordinate = 1048576.0F;
 

@@ -5,10 +5,9 @@
 // row's status, first rule first, for the machine's memory against the 2 GiB
 // threshold, the setting, either flag, the environment's driver, a shared
 // game or a replay, the renderer, looked at or not, lacking a feature or
-// failed in the run, a drop by the memory guard or for slow frames, an
-// error of the game's own, and --force-capable; in use, at the lowest budget
-// or above it, or after the step-down lowered its rung for slow frames;
-// Full in use, with its anti-aliasing and with less of it, and each reason
+// failed in the run, a drop by the memory guard, an error of the game's
+// own, and --force-capable; in use, at the lowest budget or above it;
+// Full in use, with its anti-aliasing, and each reason
 // Basic draws where Full was asked for; whether nothing could help the run;
 // what the graphics card
 // does at each rung; the status the facts the tier is decided from give;
@@ -297,7 +296,7 @@ void a_driver_that_failed_says_so_until_it_is_in_use_again() {
     OA_CHECK(report_acceleration(facts).status.state == State::in_use);
 }
 
-void a_drop_for_memory_or_slow_frames_says_so() {
+void a_drop_for_memory_says_so() {
     auto facts = able();
     facts.memory_dropped = true;
     auto report = report_acceleration(facts);
@@ -307,13 +306,8 @@ void a_drop_for_memory_or_slow_frames_says_so() {
     // end does not lift it.
     facts.shared_game = true;
     OA_CHECK(report_acceleration(facts).status.state == State::too_little_memory);
-    facts = able();
-    facts.slow_frames_dropped = true;
-    report = report_acceleration(facts);
-    OA_CHECK(report.status.state == State::slow_frames);
-    OA_CHECK(!report.acceleration_unavailable);
     facts.replay = true;
-    OA_CHECK(report_acceleration(facts).status.state == State::slow_frames);
+    OA_CHECK(report_acceleration(facts).status.state == State::too_little_memory);
     // Off says so first; in use again after Off then On, the drop no longer
     // shows.
     facts.replay = false;
@@ -337,15 +331,6 @@ void a_drop_for_memory_or_slow_frames_says_so() {
             )
         )
             .status.state == State::too_little_memory
-    );
-    inputs.drop = policy::Drop::slow_frames;
-    OA_CHECK(
-        report_acceleration(
-            oa::app::tier_acceleration_facts(
-                inputs, rung, oa::app::render_policy::RenderTier::standard
-            )
-        )
-            .status.state == State::slow_frames
     );
 }
 
@@ -388,33 +373,6 @@ void in_use_at_the_lowest_budget_says_nothing_smooths() {
     OA_CHECK(report_acceleration(facts).status.state == State::next_start);
 }
 
-void in_use_after_slow_frames_says_it_smooths_less() {
-    auto facts = able();
-    facts.tier_accelerated = true;
-    facts.slow_frames_stepped = true;
-    facts.reach = Reach::zoomed_in;
-    auto report = report_acceleration(facts);
-    OA_CHECK(report.status.state == State::in_use_less_smoothing);
-    OA_CHECK(report.status.reach == Reach::zoomed_in && !report.acceleration_unavailable);
-    // It comes before the lowest budget's line, which a step can reach.
-    facts.no_smoothing = true;
-    OA_CHECK(report_acceleration(facts).status.state == State::in_use_less_smoothing);
-    // A drop for slow frames, the last rung, says so instead.
-    facts.tier_accelerated = false;
-    facts.slow_frames_dropped = true;
-    OA_CHECK(report_acceleration(facts).status.state == State::slow_frames);
-    // Off then On starts the ladder again from the top: in use, plainly.
-    facts.slow_frames_dropped = false;
-    facts.slow_frames_stepped = false;
-    facts.no_smoothing = false;
-    facts.tier_accelerated = true;
-    OA_CHECK(report_acceleration(facts).status.state == State::in_use);
-    // Off still says so first.
-    facts.slow_frames_stepped = true;
-    facts.asked = Level::off;
-    OA_CHECK(report_acceleration(facts).status.state == State::off_by_setting);
-}
-
 void full_asked_while_basic_draws_says_what_the_card_does() {
     // Full asks for the graphics card as Basic does; while the card scales
     // the frames with nothing keeping Full to Basic, the status is Basic's
@@ -429,9 +387,6 @@ void full_asked_while_basic_draws_says_what_the_card_does() {
     facts.driver_skipped = true;
     OA_CHECK(report_acceleration(facts).status.state == State::in_use_on_another_driver);
     facts.driver_skipped = false;
-    facts.slow_frames_stepped = true;
-    OA_CHECK(report_acceleration(facts).status.state == State::in_use_less_smoothing);
-    facts.slow_frames_stepped = false;
     facts.no_smoothing = true;
     report = report_acceleration(facts);
     OA_CHECK(
@@ -509,11 +464,9 @@ void full_in_use_and_what_keeps_it_to_basic_say_so() {
     facts.driver_skipped = true;
     facts.no_smoothing = true;
     OA_CHECK(report_acceleration(facts).status.state == State::full_in_use);
-    facts.less_anti_aliasing = true;
     facts.full_supersample = 2;
     report = report_acceleration(facts);
-    OA_CHECK(report.status.state == State::full_in_use_less_anti_aliasing);
-    OA_CHECK(report.status.supersample == 2);
+    OA_CHECK(report.status.state == State::full_in_use && report.status.supersample == 2);
     // Where Basic draws with Full asked for, the first line says why, each
     // reason its own state, and nothing keeping Full to Basic is Basic's own.
     facts = able();
@@ -528,7 +481,6 @@ void full_in_use_and_what_keeps_it_to_basic_say_so() {
         {FullShortfall::lacks_feature, State::full_lacks_feature},
         {FullShortfall::failed_before, State::full_failed_before},
         {FullShortfall::stopped, State::full_stopped},
-        {FullShortfall::slow_frames, State::full_slow_frames},
         {FullShortfall::too_little_memory, State::full_too_little_memory},
         {FullShortfall::cannot_save, State::full_cannot_save},
         {FullShortfall::waiting_for_game_end, State::full_waiting_for_game_end},
@@ -576,14 +528,11 @@ void full_in_use_and_what_keeps_it_to_basic_say_so() {
     rung.filtered_chrome = true;
     rung.budget = policy::SceneBudget::reduced;
     rung.full = true;
-    rung.supersample = 2;
     auto from_tier = oa::app::tier_acceleration_facts(inputs, rung, policy::RenderTier::full);
     OA_CHECK(from_tier.tier_full && from_tier.tier_accelerated);
-    OA_CHECK(from_tier.full_shortfall == FullShortfall::none && from_tier.full_supersample == 2);
+    OA_CHECK(from_tier.full_shortfall == FullShortfall::none && from_tier.full_supersample == 1);
     report = report_acceleration(from_tier);
-    OA_CHECK(report.status.state == State::full_in_use && report.status.supersample == 2);
-    from_tier.less_anti_aliasing = true;
-    OA_CHECK(report_acceleration(from_tier).status.state == State::full_in_use_less_anti_aliasing);
+    OA_CHECK(report.status.state == State::full_in_use && report.status.supersample == 1);
     const auto shortfall = [&](const policy::TierInputs& facts_in) {
         return oa::app::tier_acceleration_facts(facts_in, rung, policy::RenderTier::accelerated)
             .full_shortfall;
@@ -603,8 +552,6 @@ void full_in_use_and_what_keeps_it_to_basic_say_so() {
     OA_CHECK(shortfall(inputs) == FullShortfall::stopped);
     inputs.full_drop = policy::FullDrop::memory;
     OA_CHECK(shortfall(inputs) == FullShortfall::too_little_memory);
-    inputs.full_drop = policy::FullDrop::slow_frames;
-    OA_CHECK(shortfall(inputs) == FullShortfall::slow_frames);
     inputs.full_drop = policy::FullDrop::trial_unwritten;
     OA_CHECK(shortfall(inputs) == FullShortfall::cannot_save);
     inputs.full_drop = policy::FullDrop::none;
@@ -924,10 +871,9 @@ int main() {
     in_use_says_what_it_does_here();
     a_renderer_that_lacks_a_feature_says_so();
     a_driver_that_failed_says_so_until_it_is_in_use_again();
-    a_drop_for_memory_or_slow_frames_says_so();
+    a_drop_for_memory_says_so();
     an_error_of_the_games_own_says_so();
     in_use_at_the_lowest_budget_says_nothing_smooths();
-    in_use_after_slow_frames_says_it_smooths_less();
     full_asked_while_basic_draws_says_what_the_card_does();
     full_in_use_and_what_keeps_it_to_basic_say_so();
     the_reach_follows_the_rung();

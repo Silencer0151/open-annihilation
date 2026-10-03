@@ -33,7 +33,6 @@ enum class FullShortfall : uint8_t {
     lacks_feature, ///< Full's function test failed or the card cannot make Full's pages
     failed_before, ///< a full-unusable record stands against the driver
     stopped,       ///< a call of the Full tier's own failed in this run
-    slow_frames,   ///< the step-down passed Full's last rung in this run
     /// The memory guard dropped Full in this run, which setting the setting
     /// to Off and back does not lift.
     too_little_memory,
@@ -83,13 +82,6 @@ struct AccelerationFacts {
     /// rest of the run, which setting the setting to Off and back does not
     /// lift.
     bool memory_dropped{};
-    /// The step-down stopped the graphics card scaling the frames for the
-    /// rest of the run: frames were slow with it at every rung.
-    bool slow_frames_dropped{};
-    /// The step-down lowered the graphics card's rung for slow frames in
-    /// this run, short of the last; a rung lowered because the memory guard
-    /// refused a buffer does not count.
-    bool slow_frames_stepped{};
     /// The graphics card stopped scaling the frames for the rest of the run
     /// after an error of the game's own, which says nothing of the driver.
     bool engine_error{};
@@ -107,13 +99,9 @@ struct AccelerationFacts {
     /// Why Basic draws where Full was asked for; none while Full draws or
     /// Basic was asked for.
     FullShortfall full_shortfall{FullShortfall::none};
-    /// Full's step-down lowered its anti-aliasing for slow frames in this
-    /// run, short of dropping it.
-    bool less_anti_aliasing{};
-    /// Full's anti-aliasing at the step-down's rung while it draws: the
-    /// samples a pixel across the rung allows, 1 for none
-    /// (render_policy::LadderState::supersample), which the status's second
-    /// line names (AccelerationStatus::supersample).
+    /// Full's anti-aliasing while it draws: the samples a pixel across the
+    /// world target draws with, 1 for none (Runtime::full_supersample),
+    /// which the status's second line names (AccelerationStatus::supersample).
     uint8_t full_supersample{1};
     /// The graphics card started at the lowest budget, where nothing smooths
     /// the zoomed-out view.
@@ -140,9 +128,9 @@ struct AccelerationFacts {
     bool trial_unwritten{};
     /// How many times finer than the window, along each axis, the graphics
     /// card drew the battlefield in the last Full frame: the world target's
-    /// factor in use, 1, 2 or 4, which the budget S and the texture limit
-    /// may hold under the rung's (Runtime::full_supersample); 0 while frames
-    /// are not drawn in Full (AccelerationStatus::full_supersample).
+    /// factor in use, which the texture limit and the memory guard may hold
+    /// under the row's (Runtime::full_supersample); 0 while frames are not
+    /// drawn in Full (AccelerationStatus::full_supersample).
     uint8_t full_supersample_drawn{};
 };
 
@@ -191,19 +179,18 @@ struct AccelerationReport {
 /// this run, as frames too slow; while the graphics card scales the
 /// frames, Full asked for, which the game cannot draw yet, so Basic is in
 /// use in its place; else in use, on another driver where a record skipped
-/// one, with less smoothing once the step-down has lowered its rung for
-/// slow frames, else with no smoothing where it started at the lowest
-/// budget; and otherwise from the next start, which a renderer not yet
-/// looked at shows. Acceleration is out of reach on the environment's
+/// one, else with no smoothing where it started at the lowest budget; and
+/// otherwise from the next start, which a renderer not yet looked at
+/// shows. Acceleration is out of reach on the environment's
 /// driver (unless a flag asks for the card or --force-capable), under
 /// 2 GiB, or on a renderer found unable (unless --force-capable, which
 /// never lifts a failed function test), unless a record skipped a driver
 /// at this start or, on an unable renderer, a driver failed in this run; a
 /// renderer not yet looked at, a record, and a trial that could not be
 /// written leave it within reach, so that the row can try again. While the
-/// graphics card draws the battlefield the status is Full in use, with
-/// less anti-aliasing once its step-down lowered it; while it scales the
-/// frames with Full asked for, the status says why Basic draws instead
+/// graphics card draws the battlefield the status is Full in use; while
+/// it scales the frames with Full asked for, the status says why Basic
+/// draws instead
 /// (FullShortfall), in a replay saying so for a shared game's wait, or,
 /// where nothing keeps Full to Basic, what the card does as for Basic.
 /// Vertical sync is out of reach on SDL's software renderer (unless
@@ -223,19 +210,18 @@ struct AccelerationReport {
 /// lacking a feature for a small texture limit or a failed function test;
 /// whether the function test failed;
 /// SDL's software renderer; a drop after a driver failure, the memory
-/// guard, the step-down's last rung or an error of the game's own; where
+/// guard or an error of the game's own; where
 /// the records live on disk, a trial that could not be written and records
 /// that could not be read after an unclean start; a shared game or a
 /// replay the tier waits for; whether the graphics card scales the frames
 /// now, and whether it draws the battlefield; where Full was asked for and
 /// Basic draws, why (FullShortfall), in the order the tier is decided:
 /// its function test failed, a full-unusable
-/// record, its drop by a card failure, the memory guard, slow frames or a
-/// trial that could not be written, or a shared game or a replay begun
-/// without it; Full's anti-aliasing at the rung; and what the card does
-/// at the rung. Vertical sync's facts, whether the step-down has lowered
-/// the rung for slow frames or Full's anti-aliasing, and what the records
-/// hold against drivers are left for the caller.
+/// record, its drop by a card failure, the memory guard or a trial that
+/// could not be written, or a shared game or a replay begun without it;
+/// and what the card does at the rung. Vertical sync's facts, Full's
+/// anti-aliasing in use and what the records hold against drivers are
+/// left for the caller.
 ///
 /// @param inputs the facts the tier is decided from
 /// @param rung the rung the accelerated tier draws at

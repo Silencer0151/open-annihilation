@@ -262,10 +262,6 @@ void test_tier_description() {
         "basic tier (Full stopped for this run): the graphics card scales the interface"
     );
     OA_CHECK(
-        described(AccelerationState::full_slow_frames, AccelerationReach::nearest_none) ==
-        "basic tier (Full's frames were slow): the view is drawn as in the standard tier"
-    );
-    OA_CHECK(
         described(AccelerationState::full_too_little_memory, AccelerationReach::menus) ==
         "basic tier (there is too little memory for Full): the graphics card scales the interface"
     );
@@ -288,10 +284,6 @@ void test_tier_description() {
     );
     OA_CHECK(
         described(AccelerationState::full_in_use, AccelerationReach::menus) ==
-        "full tier: the graphics card draws the battlefield and scales the interface"
-    );
-    OA_CHECK(
-        described(AccelerationState::full_in_use_less_anti_aliasing, AccelerationReach::menus) ==
         "full tier: the graphics card draws the battlefield and scales the interface"
     );
     OA_CHECK(oa::app::full_shortfall_note(AccelerationState::in_use).empty());

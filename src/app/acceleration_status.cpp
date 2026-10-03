@@ -30,8 +30,6 @@ std::optional<settings::AccelerationState> full_shortfall_state(FullShortfall sh
         return AccelerationState::full_failed_before;
     case FullShortfall::stopped:
         return AccelerationState::full_stopped;
-    case FullShortfall::slow_frames:
-        return AccelerationState::full_slow_frames;
     case FullShortfall::too_little_memory:
         return AccelerationState::full_too_little_memory;
     case FullShortfall::cannot_save:
@@ -101,7 +99,7 @@ AccelerationReport report_acceleration(const AccelerationFacts& facts) noexcept 
         report.status.state = AccelerationState::environment_driver;
     else if (
         capable && (facts.shared_game || facts.replay) && !facts.tier_accelerated &&
-        !facts.driver_failed && !facts.memory_dropped && !facts.slow_frames_dropped
+        !facts.driver_failed && !facts.memory_dropped
     )
         report.status.state = AccelerationState::waiting_for_game_end;
     else if (facts.driver_failed && !facts.tier_accelerated)
@@ -123,14 +121,9 @@ AccelerationReport report_acceleration(const AccelerationFacts& facts) noexcept 
             lacks_feature ? AccelerationState::lacks_feature : AccelerationState::no_usable_card;
     else if (facts.trial_unwritten && !facts.tier_accelerated)
         report.status.state = AccelerationState::cannot_save;
-    else if (facts.slow_frames_dropped && !facts.tier_accelerated)
-        report.status.state = AccelerationState::slow_frames;
     else if (facts.tier_full)
-        // The graphics card draws the battlefield, with the anti-aliasing
-        // asked for or less once frames were slow.
-        report.status.state = facts.less_anti_aliasing
-                                  ? AccelerationState::full_in_use_less_anti_aliasing
-                                  : AccelerationState::full_in_use;
+        // The graphics card draws the battlefield.
+        report.status.state = AccelerationState::full_in_use;
     else if (facts.tier_accelerated) {
         // Where Full was asked for and something keeps it to Basic, the
         // status says what before anything else; otherwise Basic's own
@@ -140,9 +133,8 @@ AccelerationReport report_acceleration(const AccelerationFacts& facts) noexcept 
                                                       : std::nullopt;
         report.status.state = shortfall              ? *shortfall
                               : facts.driver_skipped ? AccelerationState::in_use_on_another_driver
-                              : facts.slow_frames_stepped ? AccelerationState::in_use_less_smoothing
-                              : facts.no_smoothing        ? AccelerationState::in_use_no_smoothing
-                                                          : AccelerationState::in_use;
+                              : facts.no_smoothing   ? AccelerationState::in_use_no_smoothing
+                                                     : AccelerationState::in_use;
     } else
         report.status.state = AccelerationState::next_start;
     // The wait says whether it is for a replay, and which level then takes
@@ -178,8 +170,6 @@ FullShortfall full_shortfall_of(const render_policy::TierInputs& inputs) noexcep
         return FullShortfall::stopped;
     case FullDrop::memory:
         return FullShortfall::too_little_memory;
-    case FullDrop::slow_frames:
-        return FullShortfall::slow_frames;
     case FullDrop::trial_unwritten:
         return FullShortfall::cannot_save;
     case FullDrop::function_test:
@@ -216,7 +206,6 @@ AccelerationFacts tier_acceleration_facts(
     facts.lacks_feature = inputs.capability == Capability::small_texture_limit || test_failed;
     facts.driver_failed = inputs.drop == render_policy::Drop::driver_failure;
     facts.memory_dropped = inputs.drop == render_policy::Drop::memory;
-    facts.slow_frames_dropped = inputs.drop == render_policy::Drop::slow_frames;
     facts.engine_error = inputs.drop == render_policy::Drop::engine_fault;
     // Where the records live in memory a trial is always written, and a file
     // that could not be read keeps nothing standard.
@@ -232,7 +221,6 @@ AccelerationFacts tier_acceleration_facts(
     facts.tier_full = tier == render_policy::RenderTier::full;
     if (facts.asked == settings::HardwareAcceleration::full && !facts.tier_full)
         facts.full_shortfall = full_shortfall_of(inputs);
-    facts.full_supersample = rung.supersample;
     facts.no_smoothing = rung.budget == render_policy::SceneBudget::none;
     facts.reach = acceleration_reach(rung);
     return facts;

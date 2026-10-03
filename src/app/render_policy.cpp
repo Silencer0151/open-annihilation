@@ -9,30 +9,7 @@
 
 namespace oa::app::render_policy {
 
-namespace {
-
-/// Nanoseconds in a second.
-constexpr uint64_t nanoseconds_per_second = 1'000'000'000;
-/// Nanoseconds in a microsecond.
-constexpr uint64_t nanoseconds_per_microsecond = 1'000;
-/// The largest figure a pooled sample holds, in microseconds: a frame longer
-/// than about 71 minutes counts as that long.
-constexpr uint64_t largest_pooled_us = UINT32_MAX;
-
-/// The places of a pool's ring.
-constexpr uint32_t pool_slots = static_cast<uint32_t>(pool_capacity);
-
-/// Converts nanoseconds to whole microseconds for a pool, saturating.
-///
-/// @param ns a duration in nanoseconds
-/// @return the duration in microseconds, at most largest_pooled_us
-uint32_t pooled_us(uint64_t ns) noexcept {
-    return static_cast<uint32_t>(
-        std::min<uint64_t>(ns / nanoseconds_per_microsecond, largest_pooled_us)
-    );
-}
-
-} // namespace
+namespace {} // namespace
 
 // ---------------------------------------------------------------------------
 // The renderer's facts and its capability
@@ -603,24 +580,6 @@ CardFilter raise_card(CardFilter card, CardFilter ceiling) noexcept {
     return ceiling;
 }
 
-/// Steps the rungs that frames at any zoom move: NEAREST chrome, the card's
-/// magnification while anything uses it, then the standard tier.
-///
-/// @param state the rung
-/// @return the rung one step down
-LadderState step_general(LadderState state) noexcept {
-    if (state.filtered_chrome) {
-        state.filtered_chrome = false;
-        return state;
-    }
-    if (card_in_use(state) && state.card != CardFilter::linear) {
-        state.card = lower_card(state.card);
-        return state;
-    }
-    state.standard = true;
-    return state;
-}
-
 } // namespace
 
 SceneBudget start_budget(const StartInputs& machine) noexcept {
@@ -636,8 +595,6 @@ SceneBudget start_budget(const StartInputs& machine) noexcept {
 LadderState start_rung(const StartInputs& machine) noexcept {
     LadderState state;
     state.full = false;
-    state.supersample =
-        std::clamp(machine.full_supersample, full_supersample_least, full_supersample_most);
     state.budget = start_budget(machine);
     state.method = ZoomOutMethod::area;
     state.blend_allowed = machine.blend_available && !machine.driver.blend_excluded &&
@@ -667,18 +624,6 @@ LadderState start_ceiling(const StartInputs& machine) noexcept {
 LadderState step_up(const LadderState& state, const LadderState& ceiling) noexcept {
     LadderState raised = state;
     raised.standard = false;
-    // Full's rungs come first, so they are raised last: only once Basic's
-    // ladder stands at the ceiling does Full's anti-aliasing double.
-    const bool basic_at_ceiling = (!card_in_use(raised) || raised.card >= ceiling.card) &&
-                                  (raised.filtered_chrome || !ceiling.filtered_chrome) &&
-                                  (raised.magnify || !ceiling.magnify) &&
-                                  raised.budget >= ceiling.budget &&
-                                  raised.method != ZoomOutMethod::blend;
-    if (basic_at_ceiling && raised.full && raised.supersample < ceiling.supersample) {
-        raised.supersample =
-            static_cast<uint8_t>(std::min<unsigned>(raised.supersample * 2U, ceiling.supersample));
-        return raised;
-    }
     if (card_in_use(raised) && raised.card < ceiling.card) {
         raised.card = raise_card(raised.card, ceiling.card);
         return raised;
@@ -708,7 +653,6 @@ LadderState resume_rung(
     const LadderState ceiling = start_ceiling(machine);
     LadderState state = remembered;
     state.standard = false;
-    state.supersample = std::clamp(state.supersample, full_supersample_least, ceiling.supersample);
     state.blend_allowed = ceiling.blend_allowed;
     if (!state.blend_allowed)
         state.method = ZoomOutMethod::area;
@@ -724,296 +668,8 @@ LadderState resume_rung(
     return state;
 }
 
-LadderState step_down(const LadderState& state, FrameKind pool, bool blend_favoured) noexcept {
-    LadderState lowered = state;
-    if (lowered.standard)
-        return lowered;
-    // Full's rungs come first, from frames at any zoom: less anti-aliasing,
-    // then Basic.
-    if (lowered.full) {
-        if (lowered.supersample > full_supersample_least)
-            lowered.supersample = static_cast<uint8_t>(
-                std::max<unsigned>(lowered.supersample / 2U, full_supersample_least)
-            );
-        else
-            lowered.full = false;
-        return lowered;
-    }
-    switch (pool) {
-    case FrameKind::zoomed_out:
-        if (lowered.method == ZoomOutMethod::area && lowered.blend_allowed && blend_favoured &&
-            lowered.budget != SceneBudget::none) {
-            lowered.method = ZoomOutMethod::blend;
-            return lowered;
-        }
-        if (lowered.budget != SceneBudget::none) {
-            lowered.budget = static_cast<SceneBudget>(static_cast<uint8_t>(lowered.budget) - 1);
-            return lowered;
-        }
-        return step_general(lowered);
-    case FrameKind::zoomed_in:
-        if (lowered.magnify) {
-            lowered.magnify = false;
-            return lowered;
-        }
-        return step_general(lowered);
-    case FrameKind::other:
-        return step_general(lowered);
-    }
-    return lowered;
-}
-
 bool steady_frame(const FrameSample& sample) noexcept {
     return !sample.idle && sample.window_active && !sample.settling && !sample.match_warming;
-}
-
-namespace {
-
-/// Returns the pool a kind of frame joins.
-///
-/// @param ladder the step-down
-/// @param kind the frame's kind
-/// @return its pool
-SamplePool& pool_of(ScaleStepDown& ladder, FrameKind kind) noexcept {
-    switch (kind) {
-    case FrameKind::zoomed_out:
-        return ladder.zoomed_out;
-    case FrameKind::zoomed_in:
-        return ladder.zoomed_in;
-    case FrameKind::other:
-        return ladder.other;
-    }
-    return ladder.other;
-}
-
-/// Adds a sample to a pool, keeping its latest slow_window_ns and no more
-/// than pool_capacity samples.
-///
-/// @param[in,out] pool the pool
-/// @param sample the sample
-void add_sample(SamplePool& pool, const PooledSample& sample) noexcept {
-    if (pool.count == pool_slots) {
-        pool.held_us -= pool.samples[pool.first].interval_us;
-        pool.first = (pool.first + 1) % pool_slots;
-        --pool.count;
-    }
-    pool.samples[(pool.first + pool.count) % pool_slots] = sample;
-    ++pool.count;
-    pool.held_us += sample.interval_us;
-    const uint64_t window_us = slow_window_ns / nanoseconds_per_microsecond;
-    while (pool.count > 1 && pool.held_us - pool.samples[pool.first].interval_us >= window_us) {
-        pool.held_us -= pool.samples[pool.first].interval_us;
-        pool.first = (pool.first + 1) % pool_slots;
-        --pool.count;
-    }
-}
-
-/// The figure of a pooled sample a median is taken of.
-enum class Figure : uint8_t {
-    time,       ///< the frame's time, less its ticks'
-    own,        ///< the frame's own time: less the processor's drawing too, with the tier's passes
-    passes,     ///< the tier's own passes
-    area_third, ///< 1 when the area pass takes at least a third of the draw, else 0
-    present,    ///< the present measure
-};
-
-/// Returns the median of a figure over a pool's latest samples.
-///
-/// @param pool the pool
-/// @param span_us the span of the latest samples, by their intervals, in
-///     microseconds
-/// @param figure the figure
-/// @param[out] covered the samples taken span at least span_us
-/// @return the median, the upper of the two middle values for an even count;
-///     for Figure::area_third 1 when at least half the samples, counted
-///     from the upper middle, have the area pass at a third of the draw
-uint32_t
-pool_median(const SamplePool& pool, uint64_t span_us, Figure figure, bool& covered) noexcept {
-    std::array<uint32_t, pool_capacity> values{};
-    uint32_t taken = 0;
-    uint64_t spanned = 0;
-    covered = false;
-    for (uint32_t back = 0; back < pool.count; ++back) {
-        const PooledSample& sample =
-            pool.samples[(pool.first + pool.count - 1 - back) % pool_slots];
-        uint32_t value = 0;
-        switch (figure) {
-        case Figure::time:
-            value = sample.time_us;
-            break;
-        case Figure::own:
-            value = sample.own_us;
-            break;
-        case Figure::passes:
-            value = sample.passes_us;
-            break;
-        case Figure::area_third:
-            value = sample.draw_us != 0 &&
-                    uint64_t{sample.area_us} * blend_area_parts >= sample.draw_us;
-            break;
-        case Figure::present:
-            value = sample.present_us;
-            break;
-        }
-        values[taken++] = value;
-        spanned += sample.interval_us;
-        if (spanned >= span_us) {
-            covered = true;
-            break;
-        }
-    }
-    if (taken == 0)
-        return 0;
-    const auto middle = values.begin() + taken / 2;
-    std::nth_element(values.begin(), middle, values.begin() + taken);
-    return *middle;
-}
-
-/// Empties a pool.
-///
-/// @param[out] pool the pool
-void empty_pool(SamplePool& pool) noexcept {
-    pool.first = 0;
-    pool.count = 0;
-    pool.held_us = 0;
-}
-
-} // namespace
-
-ScaleStepDown start_step_down(const LadderState& state) noexcept {
-    ScaleStepDown ladder;
-    ladder.state = state;
-    return ladder;
-}
-
-uint32_t step_target_rate(uint32_t paced_frames_per_second) noexcept {
-    if (paced_frames_per_second == 0)
-        return step_target_frames_per_second;
-    return std::min(paced_frames_per_second, step_target_frames_per_second);
-}
-
-StepResult feed_step_down(ScaleStepDown& ladder, const FrameSample& sample) noexcept {
-    if (ladder.state.standard || !steady_frame(sample))
-        return StepResult::none;
-    // While the clock runs behind, any time the tier's own passes take is a
-    // loss: shed them at once, Full's anti-aliasing with them.
-    if (sample.clock_behind && sample.passes_ns > 0 &&
-        (ladder.state.budget != SceneBudget::none || ladder.state.magnify ||
-         (ladder.state.full && ladder.state.supersample > full_supersample_least))) {
-        ladder.state.budget = SceneBudget::none;
-        ladder.state.magnify = false;
-        ladder.state.supersample = full_supersample_least;
-        empty_pool(ladder.zoomed_out);
-        empty_pool(ladder.zoomed_in);
-        return StepResult::shed;
-    }
-    const uint32_t frames_per_second = step_target_rate(sample.paced_frames_per_second);
-    const uint64_t target_us =
-        nanoseconds_per_second / nanoseconds_per_microsecond / frames_per_second;
-    PooledSample pooled;
-    pooled.interval_us = pooled_us(sample.interval_ns);
-    const uint64_t time_ns =
-        sample.interval_ns > sample.tick_ns ? sample.interval_ns - sample.tick_ns : 0;
-    pooled.time_us = pooled_us(time_ns);
-    // The processor's drawing outside the tier's own passes is not the
-    // tier's doing: the processor would draw the frame as slowly without it.
-    const uint64_t drawing_ns =
-        sample.draw_ns > sample.passes_ns ? sample.draw_ns - sample.passes_ns : 0;
-    pooled.own_us = pooled_us(time_ns > drawing_ns ? time_ns - drawing_ns : 0);
-    pooled.passes_us = pooled_us(sample.passes_ns);
-    pooled.area_us = pooled_us(sample.area_ns);
-    pooled.draw_us = pooled_us(sample.draw_ns);
-    pooled.present_us = pooled_us(sample.present_ns);
-    SamplePool& pool = pool_of(ladder, sample.kind);
-    add_sample(pool, pooled);
-
-    bool step = false;
-    bool covered = false;
-    const uint32_t quick_median =
-        pool_median(pool, very_slow_window_ns / nanoseconds_per_microsecond, Figure::own, covered);
-    if (covered && uint64_t{quick_median} * 100 > target_us * very_slow_percent)
-        step = true;
-    const bool spaced = !ladder.stepped || sample.now_ns - ladder.last_step_ns >= step_spacing_ns;
-    if (!step && spaced) {
-        const uint32_t median =
-            pool_median(pool, slow_window_ns / nanoseconds_per_microsecond, Figure::own, covered);
-        if (covered) {
-            // A frame paced on time is presented on the period's grid, so the
-            // cost test counts a median as over the period only past the
-            // loop's allowance.
-            const uint64_t allowance_us = sample.allowance_ns != 0
-                                              ? sample.allowance_ns / nanoseconds_per_microsecond
-                                              : target_us;
-            if (uint64_t{median} * 100 > target_us * slow_percent) {
-                step = true;
-            } else if (sample.kind != FrameKind::other) {
-                // The cost test: a frame late by its whole time, whichever
-                // part makes it so, sheds a pass of the tier's own that
-                // costs a tenth of the period.
-                bool late_covered = false;
-                const uint32_t late = pool_median(
-                    pool, slow_window_ns / nanoseconds_per_microsecond, Figure::time, late_covered
-                );
-                if (late_covered && late > allowance_us) {
-                    bool passes_covered = false;
-                    const uint32_t passes = pool_median(
-                        pool,
-                        slow_window_ns / nanoseconds_per_microsecond,
-                        Figure::passes,
-                        passes_covered
-                    );
-                    if (uint64_t{passes} * 100 > target_us * passes_percent)
-                        step = true;
-                }
-            }
-        }
-    }
-    if (!step)
-        return StepResult::none;
-    bool blend_favoured = false;
-    if (sample.kind == FrameKind::zoomed_out) {
-        bool share_covered = false;
-        bool present_covered = false;
-        const uint32_t area_third = pool_median(
-            pool, slow_window_ns / nanoseconds_per_microsecond, Figure::area_third, share_covered
-        );
-        const uint32_t present = pool_median(
-            pool, slow_window_ns / nanoseconds_per_microsecond, Figure::present, present_covered
-        );
-        blend_favoured =
-            area_third != 0 && uint64_t{present} * 100 < target_us * blend_present_percent;
-    }
-    const bool was_full = ladder.state.full;
-    ladder.state = step_down(ladder.state, sample.kind, blend_favoured);
-    ladder.stepped = true;
-    ladder.last_step_ns = sample.now_ns;
-    empty_pool(pool);
-    if (was_full && !ladder.state.full)
-        return StepResult::basic;
-    return ladder.state.standard ? StepResult::standard : StepResult::stepped;
-}
-
-bool feeds_step_down(const PresentedFrame& frame, const FrameSample& sample) noexcept {
-    // A long frame alone is a wait; after another as long, a crawl.
-    const bool timed = sample.interval_ns < longest_fed_interval_ns ||
-                       frame.previous_interval_ns >= longest_fed_interval_ns;
-    return card_tier(frame.tier) && frame.match && frame.paced && timed;
-}
-
-FrameKind frame_kind(float zoom, bool reduced, bool magnified) noexcept {
-    if (zoom < 1.0F && (reduced || magnified))
-        return FrameKind::zoomed_out;
-    if (zoom > 1.0F && magnified)
-        return FrameKind::zoomed_in;
-    return FrameKind::other;
-}
-
-StepResult feed_presented_frame(
-    ScaleStepDown& ladder, const PresentedFrame& frame, const FrameSample& sample
-) noexcept {
-    if (!feeds_step_down(frame, sample))
-        return StepResult::none;
-    return feed_step_down(ladder, sample);
 }
 
 LadderState rung_without(const LadderState& state, AcceleratedBuffer buffer) noexcept {
@@ -1040,13 +696,6 @@ std::string_view describe_step(const LadderState& before, const LadderState& aft
         return "the processor draws everything for the rest of the run";
     if (before.full && !after.full)
         return "the graphics card no longer draws the battlefield";
-    if (before.full && before.supersample != after.supersample) {
-        if (after.budget == SceneBudget::none && before.budget != SceneBudget::none &&
-            before.magnify && !after.magnify)
-            return "the graphics card draws with less anti-aliasing, the zoomed-out view is no "
-                   "longer smoothed and the graphics card no longer magnifies the battlefield";
-        return "the graphics card draws with less anti-aliasing";
-    }
     if (before.budget != SceneBudget::none && after.budget == SceneBudget::none && before.magnify &&
         !after.magnify)
         return "the zoomed-out view is no longer smoothed and the graphics card no longer "
@@ -1171,10 +820,11 @@ uint32_t supersample_factor(oa::ui::engine_settings::AntiAliasing level) noexcep
     case AntiAliasing::off:
         return 1;
     case AntiAliasing::x2:
-    case AntiAliasing::x3:
         return 2;
     case AntiAliasing::x4:
+        return 4;
     case AntiAliasing::x8:
+        return 8;
     case AntiAliasing::x16:
         return largest_supersample_factor;
     }
@@ -1184,7 +834,16 @@ uint32_t supersample_factor(oa::ui::engine_settings::AntiAliasing level) noexcep
 uint64_t supersample_target_pixels(uint32_t width, uint32_t height, uint32_t factor) noexcept {
     const uint64_t texture_width = uint64_t{width} * factor;
     const uint64_t texture_height = uint64_t{height} * factor;
-    return texture_width * texture_height + (texture_width / 2) * (texture_height / 2);
+    uint64_t pixels = texture_width * texture_height;
+    // The halves: one for the two-level reduction at a factor up to 4, and
+    // one fewer than the doublings above it.
+    uint32_t doublings = 0;
+    while ((1U << doublings) < factor)
+        ++doublings;
+    const uint32_t halves = std::max<uint32_t>(1, doublings > 1 ? doublings - 1 : 0);
+    for (uint32_t level = 1; level <= halves; ++level)
+        pixels += (texture_width >> level) * (texture_height >> level);
+    return pixels;
 }
 
 uint32_t fit_supersample_factor(
@@ -1192,11 +851,11 @@ uint32_t fit_supersample_factor(
 ) noexcept {
     if (width == 0 || height == 0)
         return 1;
-    // A render target takes 1, 2 or 4: a factor between is read as the one
-    // below it.
-    uint32_t factor = asked >= largest_supersample_factor ? largest_supersample_factor
-                      : asked >= 2                        ? 2U
-                                                          : 1U;
+    // A render target takes a power of two: a factor between is read as the
+    // one below it.
+    uint32_t factor = 1;
+    while (factor * 2 <= std::min(asked, largest_supersample_factor))
+        factor *= 2;
     while (factor > 1) {
         const bool within_limit =
             texture_limit == unlimited_texture_size || (uint64_t{width} * factor <= texture_limit &&

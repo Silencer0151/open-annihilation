@@ -138,27 +138,26 @@ struct Scene {
 
 constexpr UnitSupersampling finer_levels[] = {
     UnitSupersampling::x2,
-    UnitSupersampling::x3,
     UnitSupersampling::x4,
     UnitSupersampling::x8,
     UnitSupersampling::x16,
 };
 
 void levels_and_factors_agree() {
-    for (const uint32_t factor : {1U, 2U, 3U, 4U, 8U, 16U}) {
+    for (const uint32_t factor : {1U, 2U, 4U, 8U, 16U}) {
         const auto level = unit_supersampling_from_factor(factor);
         CHECK(level.has_value());
         CHECK(level && supersampling_factor(*level) == factor);
     }
-    for (const uint32_t factor : {0U, 5U, 6U, 7U, 9U, 32U})
+    for (const uint32_t factor : {0U, 3U, 5U, 6U, 7U, 9U, 32U})
         CHECK(!unit_supersampling_from_factor(factor).has_value());
 }
 
 // A region too large for its level draws at the highest level that fits.
 void levels_fit_the_region() {
     CHECK(fitting_supersampling({0, 0, 99, 99}, UnitSupersampling::x16) == UnitSupersampling::x16);
-    CHECK(fitting_supersampling({0, 0, 99, 99}, UnitSupersampling::x3) == UnitSupersampling::x3);
-    // 2000 x 2000 pixels take 16M samples at x2 and more at x3.
+    CHECK(fitting_supersampling({0, 0, 99, 99}, UnitSupersampling::x4) == UnitSupersampling::x4);
+    // 2000 x 2000 pixels take 16M samples at x2 and more at x4.
     CHECK(
         fitting_supersampling({0, 0, 1999, 1999}, UnitSupersampling::x16) == UnitSupersampling::x2
     );

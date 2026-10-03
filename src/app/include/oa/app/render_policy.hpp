@@ -7,9 +7,8 @@
 // whether a renderer can be accelerated; whether a frame is drawn in the
 // standard tier (today's renderer), the accelerated one (Basic) or Full,
 // where the graphics card draws the battlefield, and why Full was not
-// given where it was asked for; where a machine
-// starts on the step-down ladder and when slow frames move it down, Full's
-// rungs before Basic's; whether
+// given where it was asked for; where a machine starts on the ladder of
+// rungs and the rung below a buffer the memory guard refuses; whether
 // the window opens at the display's own pixel density; how the chrome is
 // filtered; and how a texture larger than the renderer allows is split into
 // tiles. What a crash or a failure left behind counts for at the
@@ -179,7 +178,6 @@ enum class Drop : uint8_t {
     engine_fault, ///< presenting failed with a render target still set or an invalid renderer
     memory,       ///< the memory guard
     stall,        ///< the present stalled in the accelerated tier
-    slow_frames,  ///< the step-down reached its last rung
     path_trial_unwritten, ///< an accelerated path's trial record could not be written
 };
 
@@ -253,7 +251,6 @@ enum class FullDrop : uint8_t {
     card_failure,    ///< a call only the Full tier makes failed, which is struck against the driver
     function_test,   ///< the Full function test failed: the card lacks a feature Full needs
     memory,          ///< the memory guard, which setting the setting to Off and back does not lift
-    slow_frames,     ///< the step-down passed Full's last rung
     trial_unwritten, ///< Full's trial record could not be written, so Full was not tried
 };
 
@@ -714,12 +711,6 @@ enum class CardFilter : uint8_t {
     pixelart,         ///< the renderer's PIXELART scale mode, which needs no prescale target
 };
 
-/// The anti-aliasing Full draws with at the top of its rungs, and at its
-/// last: the samples a pixel across of the world target, 4, 2 and 1, the
-/// last drawn straight to the window.
-inline constexpr uint8_t full_supersample_most = 4;
-inline constexpr uint8_t full_supersample_least = 1;
-
 /// Where the accelerated tier stands on the step-down ladder. Each step
 /// lowers one member, from the top: Full's rungs while Full draws (its
 /// anti-aliasing from 4 to 2 to 1, then Full to Basic), the zoomed-out rungs
@@ -729,9 +720,6 @@ struct LadderState {
     /// The Full tier draws at the rung; false from the rung Full falls to
     /// Basic down, and on every rung of a run that draws Basic.
     bool full{};
-    /// Full's anti-aliasing at the rung: the samples a pixel across, from
-    /// full_supersample_most down to full_supersample_least.
-    uint8_t supersample{full_supersample_least};
     ZoomOutMethod method{ZoomOutMethod::area};
     SceneBudget budget{SceneBudget::none};
     bool blend_allowed{}; ///< blend is built and allowed on this machine and renderer
@@ -778,11 +766,6 @@ struct StartInputs {
     DriverTraits driver{};  ///< the renderer's driver
     bool pixelart{};        ///< probe (c) found the PIXELART scale mode
     bool blend_available{}; ///< blend is built and its half level fits this renderer
-    /// The anti-aliasing Full starts with: the samples a pixel across the
-    /// Enhanced anti-aliasing row asks of Full's world target, from
-    /// full_supersample_least to full_supersample_most; the least while Full
-    /// draws no such target.
-    uint8_t full_supersample{full_supersample_least};
 };
 
 /// The magnify path has been measured no slower than the standard tier on
@@ -813,9 +796,8 @@ inline constexpr bool magnify_measured_before_vista = false;
 /// its size. The card uses PIXELART where the probe found it, otherwise the
 /// prescale budget, a quarter of it on a light machine or a Pi. The blend
 /// is allowed where it is available, on a driver that does not exclude it,
-/// with more than most_memory_without_blend. Full's anti-aliasing is the
-/// machine's full_supersample, clamped to its range; the rung is Basic's
-/// until the host marks it Full's (LadderState::full).
+/// with more than most_memory_without_blend. The rung is Basic's until the
+/// host marks it Full's (LadderState::full).
 ///
 /// @param machine the machine's and the renderer's facts
 /// @return the starting rung
@@ -857,34 +839,8 @@ inline constexpr uint32_t headroom_percent = 60;
 /// @return the rung one step up, or state when none is left
 [[nodiscard]] LadderState step_up(const LadderState& state, const LadderState& ceiling) noexcept;
 
-/// What a frame showed, for the pool its sample joins.
-enum class FrameKind : uint8_t {
-    zoomed_out, ///< below zoom 1 with the area pass or the blend active
-    zoomed_in,  ///< above zoom 1 with the card magnifying the scene
-    other,      ///< every other frame
-};
-
-/// One presented frame, as the frame pacer and the frame measures saw it.
+/// What the host knows of a presented frame's steadiness (steady_frame).
 struct FrameSample {
-    uint64_t now_ns{};      ///< when the frame was presented, nanoseconds on a steady clock
-    uint64_t interval_ns{}; ///< since the frame before it
-    uint64_t tick_ns{};     ///< the time its ticks took, which is not the tier's doing
-    /// The draw measure: the processor's drawing, which is not the tier's
-    /// doing either, except the tier's own passes within it (passes_ns).
-    uint64_t draw_ns{};
-    uint64_t present_ns{};              ///< the present measure: uploading and presenting
-    uint64_t area_ns{};                 ///< the area pass's own time, part of passes_ns
-    uint64_t passes_ns{};               ///< the time of the tier's own added passes
-    uint32_t paced_frames_per_second{}; ///< the rate the loop paces at
-    /// The loop's allowance for a frame at the rate the step-down holds
-    /// frames to: its period and the slack the frame statistics allow, in
-    /// nanoseconds. A frame paced on time is presented on the period's grid,
-    /// so its time centres on the period with only jitter; the cost test
-    /// counts a median as over the period only past this. 0 judges against
-    /// the period alone.
-    uint64_t allowance_ns{};
-    FrameKind kind{FrameKind::other};
-    bool clock_behind{};  ///< the match clock runs below its requested rate
     bool idle{};          ///< paced at the idle rate
     bool window_active{}; ///< the window is shown and has the focus
     bool settling{};      ///< within 2 s of a resize, a mode change or a full-screen switch
@@ -897,187 +853,6 @@ struct FrameSample {
 /// @return true for a frame at the full rate in an active window, outside
 ///     the settle time and the match's first seconds
 [[nodiscard]] bool steady_frame(const FrameSample& sample) noexcept;
-
-/// The highest frame rate the step-down holds the frames to; a faster loop
-/// is judged against this rate's period.
-inline constexpr uint32_t step_target_frames_per_second = 60;
-/// The span of samples the slow rule takes its median over, in nanoseconds.
-inline constexpr uint64_t slow_window_ns = 3'000'000'000;
-/// The span of samples the very slow rule takes its median over, in nanoseconds.
-inline constexpr uint64_t very_slow_window_ns = 1'000'000'000;
-/// The shortest time between two steps of the slow rule, in nanoseconds.
-inline constexpr uint64_t step_spacing_ns = 10'000'000'000;
-/// The slow rule's limit, in percent of the target period. The slow and the
-/// very slow rules judge the frame's own time: its interval less its ticks
-/// and less the processor's drawing, plus the tier's own passes, so that a
-/// frame the processor's drawing makes slow, as its anti-aliasing of the
-/// units can, costs the tier nothing: the processor would draw that frame
-/// as slowly without the tier.
-inline constexpr uint32_t slow_percent = 125;
-/// The very slow rule's limit, in percent of the target period.
-inline constexpr uint32_t very_slow_percent = 200;
-/// The share of the target period, in percent, above which the tier's own
-/// passes cost a rung that owns them a step while frames are late. A
-/// provisional figure, chosen without measurement.
-inline constexpr uint32_t passes_percent = 10;
-/// The area pass favours a step to the blend when it takes at least one part
-/// in this many of the draw measure: a third.
-inline constexpr uint32_t blend_area_parts = 3;
-/// The present measure's share of the target period, in percent, under
-/// which uploads count as cheap enough for the blend. A provisional
-/// figure, chosen without measurement.
-inline constexpr uint32_t blend_present_percent = 25;
-/// The most samples a pool keeps: three seconds at the loop's highest
-/// paced rate of 120 frames a second, and some.
-inline constexpr size_t pool_capacity = 384;
-
-/// One steady frame's figures in a pool, in microseconds.
-struct PooledSample {
-    uint32_t interval_us{}; ///< the frame interval, which measures the pool's span
-    uint32_t time_us{};     ///< the frame interval less its ticks' time
-    /// The frame's own time: time_us less the processor's drawing outside
-    /// the tier's own passes (slow_percent).
-    uint32_t own_us{};
-    uint32_t passes_us{};  ///< the tier's own added passes
-    uint32_t area_us{};    ///< the area pass
-    uint32_t draw_us{};    ///< the draw measure
-    uint32_t present_us{}; ///< the present measure
-};
-
-/// The latest samples of one kind of frame, pooled across short spells.
-struct SamplePool {
-    std::array<PooledSample, pool_capacity> samples{}; ///< a ring, oldest at first
-    uint32_t first{};                                  ///< the oldest sample's place
-    uint32_t count{};                                  ///< the samples held
-    uint64_t held_us{};                                ///< the sum of the held samples' intervals
-};
-
-/// The step-down: the ladder's state and the pools of samples that move it.
-struct ScaleStepDown {
-    LadderState state{};
-    SamplePool zoomed_out{}; ///< moves the zoomed-out rungs
-    SamplePool zoomed_in{};  ///< moves magnify off
-    SamplePool other{}; ///< moves NEAREST chrome, the card's magnification and the standard tier
-    uint64_t last_step_ns{}; ///< when the slow rule last stepped
-    bool stepped{};          ///< it has stepped in this run
-};
-
-/// What a sample did to the ladder.
-enum class StepResult : uint8_t {
-    none,    ///< nothing changed
-    stepped, ///< one rung down
-    shed,    ///< the clock ran behind: straight to budget none and magnify off
-    /// Full's last rung: Full falls to Basic for the run, unrecorded, and
-    /// Basic's ladder stands at its top
-    basic,
-    standard, ///< the last rung: drop acceleration for the run, unrecorded
-};
-
-/// Starts a run's step-down at a rung.
-///
-/// @param state the starting rung (start_rung or resume_rung)
-/// @return the step-down with empty pools
-[[nodiscard]] ScaleStepDown start_step_down(const LadderState& state) noexcept;
-
-/// Returns the frame rate the step-down holds frames to: the lower of the
-/// rate the loop paces at and step_target_frames_per_second.
-///
-/// @param paced_frames_per_second the rate the loop paces at; 0 for no limit
-/// @return step_target_frames_per_second for no limit or a faster loop,
-///     otherwise the paced rate, 30 at the loop's lowest, where each frame
-///     is due at the middle of a clock unit
-[[nodiscard]] uint32_t step_target_rate(uint32_t paced_frames_per_second) noexcept;
-
-/// Feeds one presented match frame to the step-down.
-///
-/// Frames that are not steady are ignored. A sample's time is its interval
-/// less its ticks' time, judged against the period of step_target_rate's
-/// rate. In the frame's pool, the
-/// ladder steps one rung when the median over the last 3 s exceeds 1.25
-/// times the period, or exceeds the frame's allowance (its period where the
-/// sample gives none) while the tier's own passes take over a tenth of the
-/// period, at most once per 10 s; and at once when the median
-/// over the last 1 s exceeds twice the period. While Full draws
-/// (LadderState::full) a step from any pool takes Full's rungs first, and
-/// a clock running behind sheds Full's anti-aliasing with Basic's budget
-/// and magnification. Otherwise, while the match clock runs
-/// behind, any time the passes take sheds budget and magnification at
-/// once. A step empties the pool that caused it, and the ladder never steps
-/// back up within the run.
-///
-/// @param[in,out] ladder the run's step-down
-/// @param sample the frame
-/// @return what changed
-StepResult feed_step_down(ScaleStepDown& ladder, const FrameSample& sample) noexcept;
-
-/// Returns the rung one step down the ladder for a pool.
-///
-/// @param state the rung
-/// @param pool the pool that asks for the step: while Full draws, any pool
-///     halves Full's anti-aliasing, to full_supersample_least, and then
-///     drops Full to Basic; after that zoomed-out frames move the
-///     method and the budget, zoomed-in frames magnify, and other frames
-///     NEAREST chrome, the card's magnification and the standard tier,
-///     each passing rungs that would change nothing
-/// @param blend_favoured the area pass takes enough of the draw and uploads
-///     are cheap, so a step to the blend helps
-/// @return the rung one step down
-[[nodiscard]] LadderState
-step_down(const LadderState& state, FrameKind pool, bool blend_favoured) noexcept;
-
-/// The frame interval, in nanoseconds, from which a frame alone is taken as
-/// a wait rather than a frame's time: the loop waited for the window's
-/// focus, or a save held it. One such frame after shorter ones would fill
-/// the quick rule's second by itself; a run of them is a machine that
-/// really crawls, and feeds the step-down.
-inline constexpr uint64_t longest_fed_interval_ns = 1'000'000'000;
-
-/// What the host knows of a presented frame besides its measures.
-struct PresentedFrame {
-    RenderTier tier{RenderTier::standard}; ///< the tier that presented it
-    bool match{}; ///< a match frame, not a menu's, a loading frame or a movie's
-    /// The loop paced it, so its measures are the loop's; a check's frames,
-    /// drawn on the check's own clock, are not, unless the check forces the
-    /// measures the step-down sees.
-    bool paced{};
-    /// The interval of the frame presented before it, in nanoseconds; 0 for
-    /// none.
-    uint64_t previous_interval_ns{};
-};
-
-/// Tells whether a presented frame feeds the step-down: a match frame the
-/// accelerated tier presented and the loop paced, whose interval is under
-/// longest_fed_interval_ns, or as long as that with the frame before it as
-/// long too, so that a lone wait never counts and a sustained crawl does.
-/// Whether it is steady is feed_step_down's own test.
-///
-/// @param frame what the host knows of the frame
-/// @param sample its measures
-/// @return true when the frame's sample goes to feed_step_down; never for a
-///     frame of the standard tier
-[[nodiscard]] bool feeds_step_down(const PresentedFrame& frame, const FrameSample& sample) noexcept;
-
-/// Returns what a frame showed, for the pool its sample joins.
-///
-/// @param zoom the battlefield's zoom, screen pixels per map pixel
-/// @param reduced the area pass reduced the frame's scene
-/// @param magnified the graphics card magnified the frame's scene
-/// @return FrameKind::zoomed_out below zoom 1 with the scene reduced or
-///     magnified, FrameKind::zoomed_in above zoom 1 with it magnified,
-///     FrameKind::other otherwise
-[[nodiscard]] FrameKind frame_kind(float zoom, bool reduced, bool magnified) noexcept;
-
-/// Feeds a presented frame to the step-down (feed_step_down) when
-/// feeds_step_down says it feeds it; otherwise the ladder and its pools
-/// stay as they are.
-///
-/// @param[in,out] ladder the run's step-down
-/// @param frame what the host knows of the frame
-/// @param sample its measures
-/// @return what changed; StepResult::none for a frame that does not feed it
-StepResult feed_presented_frame(
-    ScaleStepDown& ladder, const PresentedFrame& frame, const FrameSample& sample
-) noexcept;
 
 /// A buffer of the accelerated tier's own that the memory guard may refuse
 /// before it is made (memory_guard_allows).
@@ -1287,26 +1062,27 @@ inline constexpr uint64_t supersample_budget_pixels =
     uint64_t{16384} * 16384 + uint64_t{8192} * 8192;
 /// The largest supersample factor: the world target's texture holds this
 /// many pixels a window pixel along each axis at most, and a render target
-/// takes 1, 2 or this.
-inline constexpr uint32_t largest_supersample_factor = 4;
+/// takes the powers of two up to this.
+inline constexpr uint32_t largest_supersample_factor = 16;
 
 /// Returns the supersample factor the Enhanced anti-aliasing row asks of
 /// the Full tier, in whose frames the processor's anti-aliasing never
-/// runs: 1 for off, 2 for 2x and 3x, and 4 for 4x, 8x and 16x, the factors
-/// a render target takes.
+/// runs: the row's own number of samples across, 1 for off, 2, 4, 8 or 16.
 ///
 /// @param level the row's level
-/// @return the factor, 1, 2 or 4
+/// @return the factor, a power of two from 1 to largest_supersample_factor
 [[nodiscard]] uint32_t supersample_factor(oa::ui::engine_settings::AntiAliasing level) noexcept;
 
 /// Returns the pixels the Full tier's world target holds at a size and a
 /// factor: its texture, the size times the factor along each axis, and
-/// its half, which the zoomed-out reduction reads.
+/// its halves, each half the one before: one, which the zoomed-out
+/// reduction reads, at a factor up to 4, and one fewer than the factor's
+/// doublings above, which the resolve reduces through.
 ///
 /// @param width window pixels across the battlefield
 /// @param height window pixels down it
-/// @param factor the supersample factor, 1, 2 or 4
-/// @return the pixels of both textures
+/// @param factor the supersample factor, a power of two up to largest_supersample_factor
+/// @return the pixels of every texture
 [[nodiscard]] uint64_t
 supersample_target_pixels(uint32_t width, uint32_t height, uint32_t factor) noexcept;
 
@@ -1320,9 +1096,10 @@ supersample_target_pixels(uint32_t width, uint32_t height, uint32_t factor) noex
 /// @param asked the factor the row asks for (supersample_factor)
 /// @param width window pixels across the battlefield
 /// @param height window pixels down it
-/// @param budget the machine's budget in pixels (supersample_budget)
+/// @param budget the budget in pixels (supersample_budget_pixels)
 /// @param texture_limit the largest texture edge the renderer makes; 0 for no limit
-/// @return the factor, 1, 2 or 4, never above `asked`
+/// @return the factor, a power of two up to largest_supersample_factor,
+///     never above `asked`
 [[nodiscard]] uint32_t fit_supersample_factor(
     uint32_t asked, uint32_t width, uint32_t height, uint64_t budget, uint32_t texture_limit
 ) noexcept;

@@ -129,20 +129,12 @@ enum class RenderFaultPoint : uint8_t {
     stall,
     /// the floating-point settings change before a present
     float_state,
-    /// frames are slow while the accelerated tier draws, so the step-down
-    /// walks its ladder to the standard tier; named alone, never part of
-    /// the run of every case
-    slow,
     /// the memory guard refuses the accelerated tier's buffers, then drops
     /// it; named alone, never part of the run of every case
     memory,
     /// a call only the Full tier makes fails on a Full match frame, which
     /// drops Full to Basic with a strike
     card,
-    /// frames are slow while the Full tier draws, so the step-down takes
-    /// Full's rungs down to Basic; named alone, never part of the run of
-    /// every case
-    full_slow,
     /// the memory guard refuses the Full tier's pages, then drops Full and
     /// then Basic; named alone, never part of the run of every case
     full_memory,

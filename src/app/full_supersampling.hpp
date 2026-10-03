@@ -82,7 +82,7 @@ inline constexpr float least_texel_scale = 0.25F;
 /// zoom.
 ///
 /// @param zoom window pixels per map pixel, above 0
-/// @param factor the supersample factor in use, 1, 2 or 4
+/// @param factor the supersample factor in use, a power of two up to 16
 /// @param battlefield_width window pixels across the battlefield, above 0
 /// @param battlefield_height window pixels down it, above 0
 /// @return the plan

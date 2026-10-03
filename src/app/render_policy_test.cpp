@@ -499,10 +499,6 @@ void test_decide_by_table() {
          [](TierInputs& i) { i.drop = Drop::stall; },
          RenderTier::standard,
          TierReason::dropped},
-        {"dropped: slow frames",
-         [](TierInputs& i) { i.drop = Drop::slow_frames; },
-         RenderTier::standard,
-         TierReason::dropped},
         {"dropped: path trial",
          [](TierInputs& i) { i.drop = Drop::path_trial_unwritten; },
          RenderTier::standard,
@@ -605,13 +601,6 @@ void test_decide_full() {
          },
          RenderTier::accelerated,
          FullReason::dropped},
-        {"full dropped for slow frames",
-         [](TierInputs& i) {
-             i.flag = AccelerationFlag::full;
-             i.full_drop = FullDrop::slow_frames;
-         },
-         RenderTier::accelerated,
-         FullReason::dropped},
         {"full's trial unwritten",
          [](TierInputs& i) {
              i.flag = AccelerationFlag::full;
@@ -665,7 +654,7 @@ void test_decide_full() {
         {"a record before a drop before the wait",
          [](TierInputs& i) {
              i.flag = AccelerationFlag::full;
-             i.full_drop = FullDrop::slow_frames;
+             i.full_drop = FullDrop::card_failure;
              i.match = SharedMatchGate{MatchKind::shared_game, true, false};
          },
          RenderTier::accelerated,
@@ -715,10 +704,7 @@ void test_decide_full() {
     // Off and back lifts Full's drop with the others, but not the memory
     // guard's.
     for (const FullDrop drop :
-         {FullDrop::card_failure,
-          FullDrop::function_test,
-          FullDrop::slow_frames,
-          FullDrop::trial_unwritten}) {
+         {FullDrop::card_failure, FullDrop::function_test, FullDrop::trial_unwritten}) {
         TierInputs dropped = accelerated_run();
         dropped.flag = AccelerationFlag::full;
         dropped.full_drop = drop;
@@ -1657,139 +1643,6 @@ StartInputs measured_desktop() {
     return machine;
 }
 
-void test_step_down_rungs() {
-    const LadderState top = start_rung(measured_desktop());
-    OA_CHECK(top.budget == SceneBudget::full && top.magnify && top.filtered_chrome);
-    OA_CHECK(top.card == CardFilter::prescale_full && top.blend_allowed);
-
-    // Zoomed-out frames: the blend first where it helps, then the budget.
-    LadderState state = step_down(top, FrameKind::zoomed_out, true);
-    OA_CHECK(state.method == ZoomOutMethod::blend && state.budget == SceneBudget::full);
-    state = step_down(state, FrameKind::zoomed_out, true);
-    OA_CHECK(state.budget == SceneBudget::reduced);
-    state = step_down(top, FrameKind::zoomed_out, false);
-    OA_CHECK(state.method == ZoomOutMethod::area && state.budget == SceneBudget::reduced);
-    LadderState no_blend = top;
-    no_blend.blend_allowed = false;
-    state = step_down(no_blend, FrameKind::zoomed_out, true);
-    OA_CHECK(state.method == ZoomOutMethod::area && state.budget == SceneBudget::reduced);
-    state = step_down(state, FrameKind::zoomed_out, false);
-    OA_CHECK(state.budget == SceneBudget::none && state.magnify && state.filtered_chrome);
-    // With no zoomed-out rung left, they move the others.
-    state = step_down(state, FrameKind::zoomed_out, false);
-    OA_CHECK(!state.filtered_chrome && state.magnify);
-
-    // Zoomed-in frames move magnify off, and nothing else first.
-    state = step_down(top, FrameKind::zoomed_in, false);
-    OA_CHECK(!state.magnify && state.budget == SceneBudget::full && state.filtered_chrome);
-    state = step_down(state, FrameKind::zoomed_in, false);
-    OA_CHECK(!state.filtered_chrome && state.budget == SceneBudget::full);
-
-    // Other frames: NEAREST chrome, then the card's magnification while the
-    // magnified world still uses it, then the standard tier.
-    state = step_down(top, FrameKind::other, false);
-    OA_CHECK(!state.filtered_chrome && state.budget == SceneBudget::full && state.magnify);
-    state = step_down(state, FrameKind::other, false);
-    OA_CHECK(state.card == CardFilter::prescale_quarter);
-    state = step_down(state, FrameKind::other, false);
-    OA_CHECK(state.card == CardFilter::linear);
-    state = step_down(state, FrameKind::other, false);
-    OA_CHECK(state.standard);
-    OA_CHECK(step_down(state, FrameKind::zoomed_out, true).standard);
-
-    // PIXELART is one rung, to plain LINEAR.
-    LadderState pixelart = top;
-    pixelart.card = CardFilter::pixelart;
-    pixelart.filtered_chrome = false;
-    OA_CHECK(step_down(pixelart, FrameKind::other, false).card == CardFilter::linear);
-
-    // Full's rungs come first, from frames of any pool: anti-aliasing 4 to
-    // 2 to 1, then Full to Basic, which leaves Basic's ladder at its top;
-    // a run without anti-aliasing has one Full rung.
-    OA_CHECK(!top.full && top.supersample == full_supersample_least);
-    LadderState full = top;
-    full.full = true;
-    full.supersample = full_supersample_most;
-    for (const FrameKind pool : {FrameKind::zoomed_out, FrameKind::zoomed_in, FrameKind::other}) {
-        LadderState rung = step_down(full, pool, true);
-        OA_CHECK(rung.full && rung.supersample == 2);
-        rung = step_down(rung, pool, true);
-        OA_CHECK(rung.full && rung.supersample == full_supersample_least);
-        rung = step_down(rung, pool, true);
-        OA_CHECK(!rung.full && rung.supersample == full_supersample_least);
-        LadderState basic = top;
-        basic.full = false;
-        OA_CHECK(rung == basic);
-    }
-    LadderState plain = top;
-    plain.full = true;
-    OA_CHECK(!step_down(plain, FrameKind::other, false).full);
-    OA_CHECK(step_down(plain, FrameKind::other, false) == top);
-    // An odd count halves down and never below the least.
-    LadderState odd = full;
-    odd.supersample = 3;
-    OA_CHECK(step_down(odd, FrameKind::other, false).supersample == full_supersample_least);
-    // The start clamps the anti-aliasing asked for to Full's range.
-    StartInputs anti_aliased = measured_desktop();
-    anti_aliased.full_supersample = 4;
-    OA_CHECK(start_rung(anti_aliased).supersample == 4);
-    anti_aliased.full_supersample = 16;
-    OA_CHECK(start_rung(anti_aliased).supersample == full_supersample_most);
-    anti_aliased.full_supersample = 0;
-    OA_CHECK(start_rung(anti_aliased).supersample == full_supersample_least);
-    // Stepping up: Basic's rungs first, Full's anti-aliasing last, within
-    // the ceiling; a remembered rung keeps the anti-aliasing it reached.
-    LadderState ceiling = start_ceiling(anti_aliased);
-    anti_aliased.full_supersample = 4;
-    ceiling = start_ceiling(anti_aliased);
-    OA_CHECK(ceiling.supersample == 4);
-    LadderState lowered = ceiling;
-    lowered.full = true;
-    lowered.supersample = 1;
-    lowered.budget = SceneBudget::reduced;
-    LadderState raised = step_up(lowered, ceiling);
-    OA_CHECK(raised.budget == SceneBudget::full && raised.supersample == 1);
-    raised = step_up(raised, ceiling);
-    OA_CHECK(raised.supersample == 2 && raised.full);
-    raised = step_up(raised, ceiling);
-    OA_CHECK(raised.supersample == 4);
-    OA_CHECK(step_up(raised, ceiling) == raised);
-    LadderState remembered = ceiling;
-    remembered.full = true;
-    remembered.supersample = 2;
-    OA_CHECK(resume_rung(anti_aliased, remembered, 90).supersample == 2);
-    OA_CHECK(resume_rung(anti_aliased, remembered, 10).supersample == 4);
-    remembered.supersample = 8;
-    OA_CHECK(resume_rung(anti_aliased, remembered, 90).supersample == 4);
-
-    // With magnify off and NEAREST chrome, the card's rungs change nothing
-    // and are passed: the next step is the standard tier.
-    LadderState bottom = top;
-    bottom.magnify = false;
-    bottom.filtered_chrome = false;
-    OA_CHECK(step_down(bottom, FrameKind::other, false).standard);
-
-    // The whole ladder in the maintainer's order takes 6 steps from the top,
-    // the card's rungs passed once magnify is off and the chrome NEAREST.
-    state = top;
-    int steps = 0;
-    const FrameKind order[] = {
-        FrameKind::zoomed_out,
-        FrameKind::zoomed_out,
-        FrameKind::zoomed_out,
-        FrameKind::zoomed_in,
-        FrameKind::other,
-        FrameKind::other
-    };
-    for (const FrameKind pool : order) {
-        state = step_down(state, pool, true);
-        ++steps;
-    }
-    OA_CHECK(state.method == ZoomOutMethod::blend && state.budget == SceneBudget::none);
-    OA_CHECK(!state.magnify && !state.filtered_chrome && state.standard);
-    OA_CHECK(steps == 6);
-}
-
 void test_resume_and_step_up() {
     const StartInputs desktop = measured_desktop();
     const LadderState ceiling = start_ceiling(desktop);
@@ -1875,680 +1728,6 @@ void test_resume_and_step_up() {
     OA_CHECK(resume_rung(before_vista, generous, 0).card == CardFilter::prescale_quarter);
 }
 
-/// Builds steady frames for the step-down.
-struct FrameClock {
-    uint64_t now_ns{};
-    uint32_t paced{60};
-
-    /// Returns the next frame, interval_ns after the last.
-    ///
-    /// @param interval_ns the frame interval
-    /// @param kind the frame's kind
-    /// @return the frame's sample
-    FrameSample frame(uint64_t interval_ns, FrameKind kind) {
-        now_ns += interval_ns;
-        FrameSample sample;
-        sample.now_ns = now_ns;
-        sample.interval_ns = interval_ns;
-        sample.paced_frames_per_second = paced;
-        sample.kind = kind;
-        sample.window_active = true;
-        return sample;
-    }
-};
-
-constexpr uint64_t millisecond = 1'000'000;
-
-/// Feeds frames until the step-down steps or a time runs out.
-///
-/// @param ladder the step-down
-/// @param clock the frames' clock
-/// @param interval_ns each frame's interval
-/// @param kind the frames' kind
-/// @param limit_ns how long to feed
-/// @return the time from the first frame to the step, or 0 when none came
-uint64_t time_to_step(
-    ScaleStepDown& ladder,
-    FrameClock& clock,
-    uint64_t interval_ns,
-    FrameKind kind,
-    uint64_t limit_ns
-) {
-    const uint64_t start = clock.now_ns;
-    while (clock.now_ns - start < limit_ns) {
-        if (feed_step_down(ladder, clock.frame(interval_ns, kind)) != StepResult::none)
-            return clock.now_ns - start;
-    }
-    return 0;
-}
-
-void test_step_down_rules() {
-    const LadderState top = start_rung(measured_desktop());
-    constexpr uint64_t seconds_20 = 20'000'000'000;
-
-    // On time at 60: never.
-    ScaleStepDown ladder = start_step_down(top);
-    FrameClock clock;
-    OA_CHECK(time_to_step(ladder, clock, 16'666'667, FrameKind::zoomed_out, seconds_20) == 0);
-
-    // Over 1.25 times the period for 3 s: one step after 3 s, the next not
-    // before 10 s later.
-    ladder = start_step_down(top);
-    clock = FrameClock{};
-    uint64_t elapsed =
-        time_to_step(ladder, clock, 22 * millisecond, FrameKind::zoomed_out, seconds_20);
-    OA_CHECK(elapsed >= slow_window_ns && elapsed < slow_window_ns + 30 * millisecond);
-    OA_CHECK(ladder.state.budget == SceneBudget::reduced);
-    elapsed = time_to_step(ladder, clock, 22 * millisecond, FrameKind::zoomed_out, seconds_20);
-    OA_CHECK(elapsed >= step_spacing_ns && elapsed < step_spacing_ns + 30 * millisecond);
-    OA_CHECK(ladder.state.budget == SceneBudget::none);
-
-    // The limits themselves: just under 1.25 times the 16.67 ms period
-    // never steps, just over steps after 3 s; just under twice it waits for
-    // 3 s, just over steps after 1 s.
-    ladder = start_step_down(top);
-    clock = FrameClock{};
-    OA_CHECK(time_to_step(ladder, clock, 20'700'000, FrameKind::zoomed_out, seconds_20) == 0);
-    ladder = start_step_down(top);
-    clock = FrameClock{};
-    elapsed = time_to_step(ladder, clock, 21'000'000, FrameKind::zoomed_out, seconds_20);
-    OA_CHECK(elapsed >= slow_window_ns && elapsed < slow_window_ns + 30 * millisecond);
-    ladder = start_step_down(top);
-    clock = FrameClock{};
-    elapsed = time_to_step(ladder, clock, 33'000'000, FrameKind::zoomed_out, seconds_20);
-    OA_CHECK(elapsed >= slow_window_ns && elapsed < slow_window_ns + 40 * millisecond);
-    ladder = start_step_down(top);
-    clock = FrameClock{};
-    elapsed = time_to_step(ladder, clock, 33'500'000, FrameKind::zoomed_out, seconds_20);
-    OA_CHECK(elapsed >= very_slow_window_ns && elapsed < very_slow_window_ns + 40 * millisecond);
-
-    // Over twice the period for 1 s: at once, whatever the spacing.
-    ladder = start_step_down(top);
-    clock = FrameClock{};
-    elapsed = time_to_step(ladder, clock, 40 * millisecond, FrameKind::zoomed_out, seconds_20);
-    OA_CHECK(elapsed >= very_slow_window_ns && elapsed < very_slow_window_ns + 50 * millisecond);
-    elapsed = time_to_step(ladder, clock, 40 * millisecond, FrameKind::zoomed_out, seconds_20);
-    OA_CHECK(elapsed >= very_slow_window_ns && elapsed < very_slow_window_ns + 50 * millisecond);
-    OA_CHECK(ladder.state.budget == SceneBudget::none);
-
-    // Frames that are not steady never count.
-    for (int variant = 0; variant < 4; ++variant) {
-        ladder = start_step_down(top);
-        clock = FrameClock{};
-        bool stepped = false;
-        while (clock.now_ns < seconds_20) {
-            FrameSample sample = clock.frame(50 * millisecond, FrameKind::zoomed_out);
-            sample.idle = variant == 0;
-            sample.window_active = variant != 1;
-            sample.settling = variant == 2;
-            sample.match_warming = variant == 3;
-            OA_CHECK(!steady_frame(sample));
-            if (feed_step_down(ladder, sample) != StepResult::none)
-                stepped = true;
-        }
-        OA_CHECK(!stepped);
-    }
-
-    // At 30 frames a second, frames due at each clock unit's middle: 33 or
-    // 34 ms apart, a short one after a late one, never slow.
-    ladder = start_step_down(top);
-    clock = FrameClock{};
-    clock.paced = 30;
-    bool stepped = false;
-    for (int frame = 0; frame < 900; ++frame) {
-        uint64_t interval = (frame % 3 == 0 ? 34 : 33) * millisecond;
-        if (frame % 50 == 10)
-            interval = 45 * millisecond;
-        if (frame % 50 == 11)
-            interval = 22 * millisecond;
-        if (feed_step_down(ladder, clock.frame(interval, FrameKind::zoomed_out)) !=
-            StepResult::none)
-            stepped = true;
-    }
-    OA_CHECK(!stepped);
-
-    // A frame slowed by its ticks never steps under the absolute rule.
-    ladder = start_step_down(top);
-    clock = FrameClock{};
-    stepped = false;
-    while (clock.now_ns < seconds_20) {
-        FrameSample sample = clock.frame(30 * millisecond, FrameKind::zoomed_out);
-        sample.tick_ns = 14 * millisecond;
-        if (feed_step_down(ladder, sample) != StepResult::none)
-            stepped = true;
-    }
-    OA_CHECK(!stepped);
-    ladder = start_step_down(top);
-    clock = FrameClock{};
-    OA_CHECK(time_to_step(ladder, clock, 30 * millisecond, FrameKind::zoomed_out, seconds_20) != 0);
-
-    // A loop paced at 120 that misses it but keeps 60 is never slow.
-    ladder = start_step_down(top);
-    clock = FrameClock{};
-    clock.paced = 120;
-    OA_CHECK(time_to_step(ladder, clock, 16 * millisecond, FrameKind::zoomed_in, seconds_20) == 0);
-}
-
-/// Full's rungs through the feeder: slow frames of any pool halve the
-/// anti-aliasing twice, then drop Full to Basic (StepResult::basic), after
-/// which Basic's ladder steps from its top; a clock running behind sheds
-/// the anti-aliasing with Basic's budget and magnification; and a run
-/// without anti-aliasing drops to Basic at its first step.
-void test_step_down_full_rungs() {
-    constexpr uint64_t seconds_20 = 20'000'000'000;
-    LadderState full = start_rung(measured_desktop());
-    full.full = true;
-    full.supersample = full_supersample_most;
-    for (const FrameKind kind : {FrameKind::zoomed_out, FrameKind::zoomed_in, FrameKind::other}) {
-        ScaleStepDown ladder = start_step_down(full);
-        FrameClock clock;
-        const auto step = [&]() {
-            StepResult result = StepResult::none;
-            const uint64_t start = clock.now_ns;
-            while (clock.now_ns - start < seconds_20 && result == StepResult::none)
-                result = feed_step_down(ladder, clock.frame(40 * millisecond, kind));
-            return result;
-        };
-        OA_CHECK(step() == StepResult::stepped);
-        OA_CHECK(ladder.state.full && ladder.state.supersample == 2);
-        OA_CHECK(step() == StepResult::stepped);
-        OA_CHECK(ladder.state.full && ladder.state.supersample == full_supersample_least);
-        OA_CHECK(step() == StepResult::basic);
-        LadderState basic = full;
-        basic.full = false;
-        basic.supersample = full_supersample_least;
-        OA_CHECK(ladder.state == basic);
-        // Basic's own rungs follow, from the top.
-        OA_CHECK(step() == StepResult::stepped);
-        OA_CHECK(!ladder.state.full && !ladder.state.standard);
-    }
-    ScaleStepDown plain = start_step_down(start_rung(measured_desktop()));
-    plain.state.full = true;
-    FrameClock clock;
-    StepResult result = StepResult::none;
-    while (clock.now_ns < seconds_20 && result == StepResult::none)
-        result = feed_step_down(plain, clock.frame(40 * millisecond, FrameKind::other));
-    OA_CHECK(result == StepResult::basic && !plain.state.full);
-    // The shed takes the anti-aliasing too, and only once there is
-    // something to shed.
-    ScaleStepDown behind = start_step_down(full);
-    FrameSample sample = clock.frame(16 * millisecond, FrameKind::other);
-    sample.clock_behind = true;
-    sample.passes_ns = millisecond;
-    OA_CHECK(feed_step_down(behind, sample) == StepResult::shed);
-    OA_CHECK(behind.state.full && behind.state.supersample == full_supersample_least);
-    OA_CHECK(behind.state.budget == SceneBudget::none && !behind.state.magnify);
-    OA_CHECK(feed_step_down(behind, sample) == StepResult::none);
-}
-
-void test_step_down_pools() {
-    const LadderState top = start_rung(measured_desktop());
-    constexpr uint64_t seconds_60 = 60'000'000'000;
-
-    // Short zoom-outs pool together: six slow half-second spells between
-    // fast frames at zoom 1 step the budget once the pool holds 3 s.
-    ScaleStepDown ladder = start_step_down(top);
-    FrameClock clock;
-    int spells = 0;
-    StepResult result = StepResult::none;
-    while (result == StepResult::none && spells < 20) {
-        for (int frame = 0; frame < 23 && result == StepResult::none; ++frame)
-            result = feed_step_down(ladder, clock.frame(22 * millisecond, FrameKind::zoomed_out));
-        ++spells;
-        for (int frame = 0; frame < 60; ++frame)
-            OA_CHECK(
-                feed_step_down(ladder, clock.frame(16 * millisecond, FrameKind::other)) ==
-                StepResult::none
-            );
-    }
-    OA_CHECK(result == StepResult::stepped);
-    OA_CHECK(spells == 6);
-    OA_CHECK(ladder.state.budget == SceneBudget::reduced && ladder.state.filtered_chrome);
-    OA_CHECK(ladder.zoomed_out.count == 0);
-
-    // Frames at zoom 1 and above never move the zoomed-out rungs.
-    ladder = start_step_down(top);
-    clock = FrameClock{};
-    OA_CHECK(time_to_step(ladder, clock, 22 * millisecond, FrameKind::other, seconds_60) != 0);
-    OA_CHECK(ladder.state.budget == SceneBudget::full && !ladder.state.filtered_chrome);
-    ladder = start_step_down(top);
-    clock = FrameClock{};
-    OA_CHECK(time_to_step(ladder, clock, 22 * millisecond, FrameKind::zoomed_in, seconds_60) != 0);
-    OA_CHECK(
-        ladder.state.budget == SceneBudget::full && !ladder.state.magnify &&
-        ladder.state.filtered_chrome
-    );
-
-    // Down to the standard tier, step by step, never back up.
-    ladder = start_step_down(top);
-    clock = FrameClock{};
-    LadderState before = ladder.state;
-    int steps = 0;
-    const FrameKind kinds[] = {FrameKind::zoomed_out, FrameKind::zoomed_in, FrameKind::other};
-    for (const FrameKind kind : kinds) {
-        for (int attempt = 0; attempt < 8 && !ladder.state.standard; ++attempt) {
-            const FrameKind fed =
-                kind == FrameKind::zoomed_out && ladder.state.budget == SceneBudget::none
-                    ? FrameKind::other
-                : kind == FrameKind::zoomed_in && !ladder.state.magnify ? FrameKind::other
-                                                                        : kind;
-            if (time_to_step(ladder, clock, 40 * millisecond, fed, seconds_60) == 0)
-                break;
-            ++steps;
-            OA_CHECK(ladder.state.budget <= before.budget);
-            OA_CHECK(ladder.state.card <= before.card);
-            OA_CHECK(!ladder.state.magnify || before.magnify);
-            OA_CHECK(!ladder.state.filtered_chrome || before.filtered_chrome);
-            before = ladder.state;
-        }
-    }
-    OA_CHECK(ladder.state.standard);
-    OA_CHECK(steps >= 4);
-    OA_CHECK(
-        feed_step_down(ladder, clock.frame(100 * millisecond, FrameKind::other)) == StepResult::none
-    );
-}
-
-void test_step_down_costs() {
-    const LadderState top = start_rung(measured_desktop());
-    constexpr uint64_t seconds_20 = 20'000'000'000;
-
-    // Late frames whose own passes take over a tenth of the period step the
-    // rung that owns them, within the 25% band.
-    for (const FrameKind kind : {FrameKind::zoomed_in, FrameKind::zoomed_out, FrameKind::other}) {
-        for (const uint64_t passes : {uint64_t{2} * millisecond, uint64_t{1} * millisecond}) {
-            ScaleStepDown ladder = start_step_down(top);
-            FrameClock clock;
-            uint64_t stepped_at = 0;
-            while (clock.now_ns < seconds_20 && stepped_at == 0) {
-                FrameSample sample = clock.frame(18 * millisecond, kind);
-                sample.passes_ns = passes;
-                sample.area_ns = kind == FrameKind::zoomed_out ? passes : 0;
-                if (feed_step_down(ladder, sample) != StepResult::none)
-                    stepped_at = clock.now_ns;
-            }
-            const bool expected = kind != FrameKind::other && passes == 2 * millisecond;
-            OA_CHECK((stepped_at != 0) == expected);
-        }
-    }
-
-    // While the clock runs behind, any time in the passes sheds the budget
-    // and magnification at once; with no passes nothing is shed.
-    ScaleStepDown ladder = start_step_down(top);
-    FrameClock clock;
-    FrameSample behind = clock.frame(16 * millisecond, FrameKind::other);
-    behind.clock_behind = true;
-    OA_CHECK(feed_step_down(ladder, behind) == StepResult::none);
-    behind = clock.frame(16 * millisecond, FrameKind::zoomed_in);
-    behind.clock_behind = true;
-    behind.passes_ns = 100'000;
-    OA_CHECK(feed_step_down(ladder, behind) == StepResult::shed);
-    OA_CHECK(ladder.state.budget == SceneBudget::none && !ladder.state.magnify);
-    OA_CHECK(ladder.state.filtered_chrome && !ladder.state.standard);
-    behind = clock.frame(16 * millisecond, FrameKind::other);
-    behind.clock_behind = true;
-    behind.passes_ns = 100'000;
-    OA_CHECK(feed_step_down(ladder, behind) == StepResult::none);
-
-    // The blend is chosen where the area pass takes at least a third of the
-    // draw, exactly a third included, and uploads are cheap.
-    for (const uint64_t area_ns : {uint64_t{4} * millisecond, uint64_t{3'999'000}}) {
-        ScaleStepDown third_ladder = start_step_down(top);
-        FrameClock third_clock;
-        StepResult result = StepResult::none;
-        while (result == StepResult::none && third_clock.now_ns < seconds_20) {
-            FrameSample sample = third_clock.frame(22 * millisecond, FrameKind::zoomed_out);
-            sample.draw_ns = 12 * millisecond;
-            sample.area_ns = area_ns;
-            sample.passes_ns = area_ns;
-            sample.present_ns = 1 * millisecond;
-            result = feed_step_down(third_ladder, sample);
-        }
-        OA_CHECK(result == StepResult::stepped);
-        const bool blend = area_ns == 4 * millisecond;
-        OA_CHECK((third_ladder.state.method == ZoomOutMethod::blend) == blend);
-        OA_CHECK(third_ladder.state.budget == (blend ? SceneBudget::full : SceneBudget::reduced));
-    }
-
-    // The blend is chosen first where it is allowed, the area pass takes a
-    // third of the draw and uploads are cheap; otherwise the budget steps.
-    for (const uint64_t present : {uint64_t{1} * millisecond, uint64_t{8} * millisecond}) {
-        ScaleStepDown blend_ladder = start_step_down(top);
-        FrameClock blend_clock;
-        StepResult result = StepResult::none;
-        while (result == StepResult::none && blend_clock.now_ns < seconds_20) {
-            FrameSample sample = blend_clock.frame(22 * millisecond, FrameKind::zoomed_out);
-            sample.draw_ns = 12 * millisecond;
-            sample.area_ns = 6 * millisecond;
-            sample.passes_ns = 6 * millisecond;
-            sample.present_ns = present;
-            result = feed_step_down(blend_ladder, sample);
-        }
-        OA_CHECK(result == StepResult::stepped);
-        if (present == 1 * millisecond)
-            OA_CHECK(
-                blend_ladder.state.method == ZoomOutMethod::blend &&
-                blend_ladder.state.budget == SceneBudget::full
-            );
-        else
-            OA_CHECK(
-                blend_ladder.state.method == ZoomOutMethod::area &&
-                blend_ladder.state.budget == SceneBudget::reduced
-            );
-    }
-
-    // A frame the processor's own drawing makes slow costs the tier nothing:
-    // 40 ms frames whose drawing takes 36 ms never step, at any zoom, while
-    // the same frames with 4 ms of drawing step at once.
-    for (const uint64_t drawing : {uint64_t{36} * millisecond, uint64_t{4} * millisecond})
-        for (const FrameKind kind :
-             {FrameKind::zoomed_in, FrameKind::zoomed_out, FrameKind::other}) {
-            ScaleStepDown slow_ladder = start_step_down(top);
-            FrameClock slow_clock;
-            bool stepped = false;
-            while (slow_clock.now_ns < seconds_20 && !stepped) {
-                FrameSample sample = slow_clock.frame(40 * millisecond, kind);
-                sample.draw_ns = drawing;
-                sample.passes_ns = 1 * millisecond;
-                stepped = feed_step_down(slow_ladder, sample) != StepResult::none;
-            }
-            OA_CHECK(stepped == (drawing == 4 * millisecond));
-        }
-}
-
-void test_step_target_rate() {
-    OA_CHECK(step_target_rate(0) == step_target_frames_per_second);
-    OA_CHECK(step_target_rate(120) == step_target_frames_per_second);
-    OA_CHECK(step_target_rate(61) == step_target_frames_per_second);
-    OA_CHECK(step_target_rate(60) == 60);
-    OA_CHECK(step_target_rate(59) == 59);
-    OA_CHECK(step_target_rate(30) == 30);
-    OA_CHECK(step_target_rate(1) == 1);
-
-    // A loop with no limit is held to 60 frames a second, as one at 120 is.
-    const LadderState top = start_rung(measured_desktop());
-    constexpr uint64_t seconds_20 = 20'000'000'000;
-    ScaleStepDown ladder = start_step_down(top);
-    FrameClock clock;
-    clock.paced = 0;
-    const uint64_t elapsed =
-        time_to_step(ladder, clock, 22 * millisecond, FrameKind::zoomed_out, seconds_20);
-    OA_CHECK(elapsed >= slow_window_ns && elapsed < slow_window_ns + 30 * millisecond);
-    ladder = start_step_down(top);
-    clock = FrameClock{};
-    clock.paced = 0;
-    OA_CHECK(time_to_step(ladder, clock, 16 * millisecond, FrameKind::other, seconds_20) == 0);
-}
-
-/// Tells whether a ladder's pools are empty.
-///
-/// @param ladder the step-down
-/// @return true when no pool holds a sample
-bool pools_empty(const ScaleStepDown& ladder) {
-    return ladder.zoomed_out.count == 0 && ladder.zoomed_in.count == 0 && ladder.other.count == 0;
-}
-
-void test_step_down_feeding() {
-    const LadderState top = start_rung(measured_desktop());
-    constexpr uint64_t seconds_20 = 20'000'000'000;
-    PresentedFrame accelerated;
-    accelerated.tier = RenderTier::accelerated;
-    accelerated.match = true;
-    accelerated.paced = true;
-
-    // Only a match frame the accelerated tier presented and the loop paced
-    // feeds it: never the standard tier's, a menu's or a check's own frame,
-    // however slow.
-    for (int variant = 0; variant < 3; ++variant) {
-        PresentedFrame frame = accelerated;
-        frame.tier = variant == 0 ? RenderTier::standard : RenderTier::accelerated;
-        frame.match = variant != 1;
-        frame.paced = variant != 2;
-        ScaleStepDown ladder = start_step_down(top);
-        FrameClock clock;
-        bool stepped = false;
-        while (clock.now_ns < seconds_20) {
-            for (const FrameKind kind :
-                 {FrameKind::zoomed_out, FrameKind::zoomed_in, FrameKind::other}) {
-                const FrameSample sample = clock.frame(100 * millisecond, kind);
-                OA_CHECK(steady_frame(sample) && !feeds_step_down(frame, sample));
-                if (feed_presented_frame(ladder, frame, sample) != StepResult::none)
-                    stepped = true;
-            }
-        }
-        OA_CHECK(!stepped && pools_empty(ladder) && ladder.state == top);
-    }
-
-    // An interval of a second or more after a shorter one is a wait, not a
-    // frame's time; after another as long, it is.
-    {
-        FrameClock clock;
-        OA_CHECK(
-            feeds_step_down(accelerated, clock.frame(longest_fed_interval_ns - 1, FrameKind::other))
-        );
-        OA_CHECK(
-            !feeds_step_down(accelerated, clock.frame(longest_fed_interval_ns, FrameKind::other))
-        );
-        PresentedFrame after_long = accelerated;
-        after_long.previous_interval_ns = longest_fed_interval_ns;
-        OA_CHECK(
-            feeds_step_down(after_long, clock.frame(longest_fed_interval_ns, FrameKind::other))
-        );
-        after_long.previous_interval_ns = longest_fed_interval_ns - 1;
-        OA_CHECK(
-            !feeds_step_down(after_long, clock.frame(longest_fed_interval_ns, FrameKind::other))
-        );
-    }
-
-    // A lone wait of 5 s among on-time frames, as the first frame after the
-    // window regains its focus or a save, never steps, nor joins a pool.
-    {
-        ScaleStepDown ladder = start_step_down(top);
-        FrameClock clock;
-        PresentedFrame frame = accelerated;
-        for (int index = 0; index < 1000; ++index) {
-            const uint64_t interval =
-                index % 200 == 100 ? 5 * longest_fed_interval_ns : 16 * millisecond;
-            const FrameSample sample = clock.frame(interval, FrameKind::other);
-            OA_CHECK(feeds_step_down(frame, sample) == (interval < longest_fed_interval_ns));
-            OA_CHECK(feed_presented_frame(ladder, frame, sample) == StepResult::none);
-            frame.previous_interval_ns = interval;
-        }
-        OA_CHECK(ladder.state == top);
-        const SamplePool& pool = ladder.other;
-        OA_CHECK(pool.count != 0);
-        for (uint32_t index = 0; index < pool.count; ++index)
-            OA_CHECK(pool.samples[(pool.first + index) % pool_capacity].interval_us == 16'000);
-    }
-
-    // Steady frames of 1.5 s, a machine that crawls, walk the ladder to the
-    // standard tier: the first is taken as a wait, and each after it steps.
-    {
-        ScaleStepDown ladder = start_step_down(top);
-        FrameClock clock;
-        PresentedFrame frame = accelerated;
-        constexpr uint64_t crawl_ns = 1'500'000'000;
-        StepResult result = StepResult::none;
-        uint32_t frames = 0;
-        uint32_t steps = 0;
-        for (; frames < 20 && result != StepResult::standard; ++frames) {
-            result = feed_presented_frame(ladder, frame, clock.frame(crawl_ns, FrameKind::other));
-            if (frames == 0)
-                OA_CHECK(result == StepResult::none);
-            else
-                OA_CHECK(result != StepResult::none);
-            if (result != StepResult::none)
-                ++steps;
-            frame.previous_interval_ns = crawl_ns;
-        }
-        OA_CHECK(result == StepResult::standard && ladder.state.standard);
-        OA_CHECK(frames == steps + 1);
-    }
-
-    // Idle frames at 30 a second never count; the same rate at full pace,
-    // a frame each clock unit, counts against its own 33.3 ms period: 33
-    // and 34 ms frames never step, 45 ms frames (over 1.25 times it) step
-    // after 3 s.
-    for (const bool idle : {true, false}) {
-        for (const uint64_t interval : {uint64_t{34} * millisecond, uint64_t{45} * millisecond}) {
-            ScaleStepDown ladder = start_step_down(top);
-            FrameClock clock;
-            clock.paced = 30;
-            uint64_t stepped_at = 0;
-            for (int frame = 0; frame < 600 && stepped_at == 0; ++frame) {
-                const bool unit_middle = interval == 34 * millisecond && frame % 3 != 0;
-                FrameSample sample =
-                    clock.frame(unit_middle ? 33 * millisecond : interval, FrameKind::zoomed_out);
-                sample.idle = idle;
-                if (feed_presented_frame(ladder, accelerated, sample) != StepResult::none)
-                    stepped_at = clock.now_ns;
-            }
-            const bool expected = !idle && interval == 45 * millisecond;
-            OA_CHECK((stepped_at != 0) == expected);
-            if (expected)
-                OA_CHECK(
-                    stepped_at >= slow_window_ns && stepped_at < slow_window_ns + 50 * millisecond
-                );
-            if (idle)
-                OA_CHECK(pools_empty(ladder));
-        }
-    }
-
-    // A frame's ticks are taken out: 30 ms frames whose ticks took 14 ms are
-    // on time at 60 a second, the same frames without ticks slow.
-    for (const uint64_t ticks : {uint64_t{14} * millisecond, uint64_t{0}}) {
-        ScaleStepDown ladder = start_step_down(top);
-        FrameClock clock;
-        bool stepped = false;
-        while (clock.now_ns < seconds_20 && !stepped) {
-            FrameSample sample = clock.frame(30 * millisecond, FrameKind::zoomed_in);
-            sample.tick_ns = ticks;
-            stepped = feed_presented_frame(ladder, accelerated, sample) != StepResult::none;
-        }
-        OA_CHECK(stepped == (ticks == 0));
-    }
-
-    // The whole ladder, as a run that zooms out, sits at zoom 1, zooms in
-    // and back walks it: the budget twice from zoomed-out frames, NEAREST
-    // chrome and the card's two rungs from frames at zoom 1, magnify off
-    // from zoomed-in frames, and the standard tier, each described; then
-    // nothing moves it.
-    {
-        ScaleStepDown ladder = start_step_down(top);
-        ladder.state.blend_allowed = false;
-        FrameClock clock;
-
-        struct Step {
-            FrameKind kind;
-            StepResult result;
-        };
-
-        const Step steps[] = {
-            {FrameKind::zoomed_out, StepResult::stepped},
-            {FrameKind::zoomed_out, StepResult::stepped},
-            {FrameKind::other, StepResult::stepped},
-            {FrameKind::other, StepResult::stepped},
-            {FrameKind::other, StepResult::stepped},
-            {FrameKind::zoomed_in, StepResult::stepped},
-            {FrameKind::other, StepResult::standard},
-        };
-        const std::string_view expected[] = {
-            "the zoomed-out view is smoothed less",
-            "the zoomed-out view is no longer smoothed",
-            "the interface is scaled without filtering",
-            "the graphics card magnifies within a quarter of its budget",
-            "the graphics card magnifies by plain linear filtering",
-            "the graphics card no longer magnifies the battlefield",
-            "the processor draws everything for the rest of the run",
-        };
-        static_assert(std::size(steps) == std::size(expected));
-        for (std::size_t index = 0; index < std::size(steps); ++index) {
-            const LadderState before = ladder.state;
-            StepResult result = StepResult::none;
-            for (int frame = 0; frame < 100 && result == StepResult::none; ++frame)
-                result = feed_presented_frame(
-                    ladder, accelerated, clock.frame(40 * millisecond, steps[index].kind)
-                );
-            OA_CHECK(result == steps[index].result);
-            OA_CHECK(describe_step(before, ladder.state) == expected[index]);
-        }
-        OA_CHECK(ladder.state.standard && ladder.state.budget == SceneBudget::none);
-        OA_CHECK(!ladder.state.magnify && !ladder.state.filtered_chrome);
-        OA_CHECK(ladder.state.card == CardFilter::linear);
-        for (int frame = 0; frame < 100; ++frame)
-            OA_CHECK(
-                feed_presented_frame(
-                    ladder, accelerated, clock.frame(100 * millisecond, FrameKind::other)
-                ) == StepResult::none
-            );
-    }
-}
-
-void test_step_down_allowance() {
-    const LadderState top = start_rung(measured_desktop());
-    constexpr uint64_t seconds_20 = 20'000'000'000;
-    // The loop paced at 60: its period, and its allowance after a precise
-    // wait, the period and the frame statistics' half a millisecond of slack.
-    constexpr uint64_t period_ns = 16'666'666;
-    constexpr uint64_t allowance_ns = period_ns + 500'000;
-    constexpr uint64_t jitter_ns = 50'000;
-
-    // On-time frames on the pacer's grid, with no ticks, as in a paused match
-    // the player scrolls, and passes of 3 ms, over a tenth of the period:
-    // judged against the allowance they never step; against the bare period,
-    // where three frames in five run 50 us over, they would.
-    for (const FrameKind kind : {FrameKind::zoomed_in, FrameKind::zoomed_out}) {
-        for (const uint64_t allowance : {allowance_ns, uint64_t{0}}) {
-            ScaleStepDown ladder = start_step_down(top);
-            FrameClock clock;
-            bool stepped = false;
-            for (int index = 0; clock.now_ns < seconds_20 && !stepped; ++index) {
-                const uint64_t interval =
-                    index % 5 < 3 ? period_ns + jitter_ns : period_ns - jitter_ns;
-                FrameSample sample = clock.frame(interval, kind);
-                sample.allowance_ns = allowance;
-                sample.passes_ns = 3 * millisecond;
-                sample.area_ns = kind == FrameKind::zoomed_out ? sample.passes_ns : 0;
-                stepped = feed_step_down(ladder, sample) != StepResult::none;
-            }
-            OA_CHECK(stepped == (allowance == 0));
-        }
-    }
-
-    // Frames late past the allowance still step by the cost test.
-    ScaleStepDown ladder = start_step_down(top);
-    FrameClock clock;
-    StepResult result = StepResult::none;
-    while (clock.now_ns < seconds_20 && result == StepResult::none) {
-        FrameSample sample = clock.frame(18 * millisecond, FrameKind::zoomed_in);
-        sample.allowance_ns = allowance_ns;
-        sample.passes_ns = 3 * millisecond;
-        result = feed_step_down(ladder, sample);
-    }
-    OA_CHECK(result == StepResult::stepped && !ladder.state.magnify);
-}
-
-void test_frame_kind() {
-    struct Case {
-        float zoom;
-        bool reduced;
-        bool magnified;
-        FrameKind expected;
-    };
-
-    const Case cases[] = {
-        {0.5F, true, false, FrameKind::zoomed_out},
-        {0.75F, false, true, FrameKind::zoomed_out},
-        {0.5F, false, false, FrameKind::other},
-        {1.0F, true, true, FrameKind::other},
-        {2.0F, false, true, FrameKind::zoomed_in},
-        {2.0F, true, false, FrameKind::other},
-        {1.37F, false, false, FrameKind::other},
-    };
-    for (const Case& test : cases)
-        OA_CHECK(frame_kind(test.zoom, test.reduced, test.magnified) == test.expected);
-}
-
 void test_rung_without() {
     const LadderState top = start_rung(measured_desktop());
     // The scene: magnify off, and nothing else.
@@ -2574,7 +1753,6 @@ void test_rung_without() {
     // neither.
     LadderState full = top;
     full.full = true;
-    full.supersample = 2;
     for (const AcceleratedBuffer buffer :
          {AcceleratedBuffer::card_pages, AcceleratedBuffer::card_targets}) {
         lowered = rung_without(full, buffer);
@@ -2584,24 +1762,12 @@ void test_rung_without() {
         OA_CHECK(rung_without(top, buffer) == top);
     }
 
-    // Each change is described; the shed of a clock running behind as one,
-    // and Full's rungs before Basic's.
+    // Each change is described, Full's before Basic's.
     OA_CHECK(describe_step(top, top) == "nothing changed");
-    LadderState less = full;
-    less.supersample = 1;
-    OA_CHECK(describe_step(full, less) == "the graphics card draws with less anti-aliasing");
     LadderState basic_again = full;
     basic_again.full = false;
     OA_CHECK(
         describe_step(full, basic_again) == "the graphics card no longer draws the battlefield"
-    );
-    LadderState shed_full = less;
-    shed_full.budget = SceneBudget::none;
-    shed_full.magnify = false;
-    OA_CHECK(
-        describe_step(full, shed_full) ==
-        "the graphics card draws with less anti-aliasing, the zoomed-out view is no longer "
-        "smoothed and the graphics card no longer magnifies the battlefield"
     );
     LadderState blend = top;
     blend.method = ZoomOutMethod::blend;
@@ -2672,10 +1838,9 @@ void test_supersampling() {
     using oa::ui::engine_settings::AntiAliasing;
     OA_CHECK(supersample_factor(AntiAliasing::off) == 1);
     OA_CHECK(supersample_factor(AntiAliasing::x2) == 2);
-    OA_CHECK(supersample_factor(AntiAliasing::x3) == 2);
     OA_CHECK(supersample_factor(AntiAliasing::x4) == 4);
-    OA_CHECK(supersample_factor(AntiAliasing::x8) == 4);
-    OA_CHECK(supersample_factor(AntiAliasing::x16) == 4);
+    OA_CHECK(supersample_factor(AntiAliasing::x8) == 8);
+    OA_CHECK(supersample_factor(AntiAliasing::x16) == 16);
 
     // The game's budget holds the largest target a renderer can, 16384 a
     // side (card::largest_target_edge): its square and the half.
@@ -2693,6 +1858,10 @@ void test_supersampling() {
     OA_CHECK(supersample_target_pixels(100, 50, 1) == 5000 + 1250);
     OA_CHECK(supersample_target_pixels(100, 50, 2) == 20000 + 5000);
     OA_CHECK(supersample_target_pixels(100, 50, 4) == 80000 + 20000);
+    // Above 4 the halves the resolve reduces through, each a quarter of the
+    // one before.
+    OA_CHECK(supersample_target_pixels(100, 50, 8) == 320000 + 80000 + 20000);
+    OA_CHECK(supersample_target_pixels(100, 50, 16) == 1280000 + 320000 + 80000 + 20000);
 
     // Battlefields about those of windows of 1920x1080, 2560x1440,
     // 3840x2160 and 5120x1440, the HUD strips taken out, with the factor
@@ -2758,7 +1927,18 @@ void test_supersampling() {
     OA_CHECK(fit_supersample_factor(4, 1792, 864, whole, 3584) == 2);
     // A factor between the ones a target takes is read as the one below.
     OA_CHECK(fit_supersample_factor(3, 640, 480, whole, unlimited_texture_size) == 2);
-    OA_CHECK(fit_supersample_factor(8, 640, 480, whole, unlimited_texture_size) == 4);
+    OA_CHECK(fit_supersample_factor(8, 640, 480, whole, unlimited_texture_size) == 8);
+    OA_CHECK(
+        fit_supersample_factor(16, 640, 480, supersample_budget_pixels, unlimited_texture_size) ==
+        16
+    );
+    OA_CHECK(
+        fit_supersample_factor(32, 640, 480, supersample_budget_pixels, unlimited_texture_size) ==
+        16
+    );
+    // The texture limit halves 16 to the largest that fits: 1792 by 16 is
+    // beyond 16384, by 8 within it.
+    OA_CHECK(fit_supersample_factor(16, 1792, 864, supersample_budget_pixels, 16384) == 8);
     // No budget, or no battlefield, is no target.
     OA_CHECK(fit_supersample_factor(4, 640, 480, 0, unlimited_texture_size) == 1);
     OA_CHECK(fit_supersample_factor(4, 0, 480, whole, unlimited_texture_size) == 1);
@@ -3336,8 +2516,7 @@ void test_forget_failures() {
     OA_CHECK(inputs.function_test == FunctionTest::not_run);
     OA_CHECK(inputs.drop == Drop::memory);
     inputs.function_test = FunctionTest::passed;
-    for (const Drop drop :
-         {Drop::engine_fault, Drop::stall, Drop::slow_frames, Drop::path_trial_unwritten}) {
+    for (const Drop drop : {Drop::engine_fault, Drop::stall, Drop::path_trial_unwritten}) {
         inputs.drop = drop;
         forget_failures(inputs);
         OA_CHECK(inputs.function_test == FunctionTest::passed);
@@ -3646,16 +2825,7 @@ int main() {
     test_layer_formats();
     test_start_budget();
     test_start_rung();
-    test_step_down_rungs();
     test_resume_and_step_up();
-    test_step_down_rules();
-    test_step_down_full_rungs();
-    test_step_down_pools();
-    test_step_down_costs();
-    test_step_target_rate();
-    test_step_down_feeding();
-    test_step_down_allowance();
-    test_frame_kind();
     test_rung_without();
     test_prescale();
     test_supersampling();

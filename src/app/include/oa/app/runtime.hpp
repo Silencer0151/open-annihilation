@@ -2356,7 +2356,7 @@ class Runtime final : public menu::Host,
     /// acceleration Off then On, raising it from Basic to Full or Restore
     /// defaults retries: a function test that failed and a drop of either
     /// tier other than the memory guard's (render_policy::forget_failures),
-    /// and the step-down, which starts again from the top, at the next
+    /// and the ladder, which starts again from the top, at the next
     /// switch-on or, where the tier stays on, at once.
     void forget_render_failures();
 
@@ -2395,9 +2395,9 @@ class Runtime final : public menu::Host,
     void tell_renderer_records();
 
     /// Returns the rung the accelerated presentation is switched on at: the
-    /// one the step-down reached, once it has moved in the run; else the one
-    /// a check set, else the one the machine starts at
-    /// (RendererHost::start_rung).
+    /// one the memory guard's refusals left, once the ladder has moved in
+    /// the run; else the one a check set, else the one the machine starts
+    /// at (RendererHost::start_rung).
     ///
     /// @return the rung; the default rung without the game's renderer
     [[nodiscard]] render_policy::LadderState render_tier_rung() const;
@@ -4391,8 +4391,8 @@ class Runtime final : public menu::Host,
     /// @return true for a steady frame
     [[nodiscard]] bool present_frame_steady(uint64_t now_ns) const;
 
-    /// Returns what decides whether a frame presented now is steady, as the
-    /// facts of a step-down sample (render_policy::steady_frame): whether
+    /// Returns what decides whether a frame presented now is steady
+    /// (render_policy::steady_frame): whether
     /// the window is shown and active, the frame was paced at the idle rate,
     /// it comes within 2 s of a resize, a mode change or a full-screen
     /// switch, or within a match's first 5 s.
@@ -4533,12 +4533,6 @@ class Runtime final : public menu::Host,
         /// the loop presents paints but one whose panel keeps the frame shown.
         uint64_t screen_revision{};
         ScaledWorldCounts counts; ///< what the card was asked to make and draw
-        /// The time the tier's own passes took since the last match frame
-        /// was presented, in nanoseconds: the area pass or the nearest
-        /// resample, the canvas copy, the overlay's conversion and the
-        /// uploads of the scene and the overlay.
-        uint64_t passes_ns{};
-        uint64_t area_ns{}; ///< the area pass's part of passes_ns
     };
 
     /// Switches the accelerated presentation on, at a rung of the step-down
@@ -4599,10 +4593,10 @@ class Runtime final : public menu::Host,
 
     /// Starts the accelerated tier's watch as the tier switches on: made on
     /// the first switch-on of the run, with the memory guard scaled to the
-    /// machine's physical memory; the step-down starts afresh at the rung
-    /// the tier switches on at (render_tier_rung) unless it has moved in the
-    /// run; and the memory guard's watch starts again, its first sample due
-    /// at once. Without the game's renderer it does nothing.
+    /// machine's physical memory; the ladder stands at the rung the tier
+    /// switches on at (render_tier_rung) unless it has moved in the run;
+    /// and the memory guard's watch starts again, its first sample due at
+    /// once. Without the game's renderer it does nothing.
     void begin_accelerated_watch();
 
     /// Samples the system's memory about once a second while the
@@ -4637,27 +4631,13 @@ class Runtime final : public menu::Host,
     [[nodiscard]] bool accelerated_buffer_fits(uint64_t bytes);
 
     /// Moves the accelerated presentation down to a lower rung for the rest
-    /// of the run, as the step-down or the memory guard asks: the step-down
-    /// takes the rung, the textures and targets the rung no longer draws
-    /// with are freed at once, and the step is logged once.
+    /// of the run, as the memory guard asks: the watch takes the rung, the
+    /// textures and targets the rung no longer draws with are freed at once,
+    /// and the step is logged once.
     ///
     /// @param rung the lower rung
     /// @param cause what moved it, which begins the log line
     void lower_accelerated_rung(const render_policy::LadderState& rung, std::string_view cause);
-
-    /// Feeds the match frame just presented to the step-down
-    /// (render_policy::feed_presented_frame): its interval, its ticks' time
-    /// taken out, its draw and present measures and the accelerated tier's
-    /// own passes, against the rate the loop paces at (frame_stats_notes),
-    /// with whether it is steady, what it showed and whether the match clock
-    /// runs below its requested rate. Only the accelerated tier's frames the
-    /// loop paces feed it, or a check's frames when it forces their interval
-    /// (RenderRun::forced_frame_ns). A step lowers the rung
-    /// (lower_accelerated_rung), and the last drops the tier for the rest of
-    /// the run (render_policy::Drop::slow_frames).
-    ///
-    /// @param present_ns the frame's present measure, nanoseconds
-    void feed_render_step_down(uint64_t present_ns);
 
     /// Drops the accelerated presentation after an AccelerationError: where
     /// it came from a path refused because its trial could not be written
@@ -4953,9 +4933,9 @@ class Runtime final : public menu::Host,
 
     /// Returns how many times finer than the window, along each axis, the
     /// graphics card draws the battlefield while frames are presented in
-    /// the Full tier: the world target's supersample factor, 1, 2 or 4,
-    /// which the Enhanced anti-aliasing row asks for within the step-down's
-    /// rung, the budget S and the texture limit (ensure_full_world_target).
+    /// the Full tier: the world target's supersample factor, which the
+    /// Enhanced anti-aliasing row asks for within the texture limit and the
+    /// memory guard (ensure_full_world_target).
     ///
     /// @return the factor; 0 while frames are not presented in Full
     [[nodiscard]] uint32_t full_supersample() const noexcept;
@@ -4983,25 +4963,6 @@ class Runtime final : public menu::Host,
         uint32_t battlefield_height,
         uint32_t texture_limit
     );
-
-    /// Returns the supersample factor the Enhanced anti-aliasing row's
-    /// level asks of Full's world target (render_policy::supersample_factor),
-    /// within Full's rungs.
-    ///
-    /// @return the factor, 1, 2 or 4
-    [[nodiscard]] uint8_t full_supersample_setting() const noexcept;
-
-    /// Tells the renderer host the factor the row asks for, which Full's
-    /// rungs start from and their ceiling takes
-    /// (RendererHost::set_full_supersample), before a rung is taken.
-    void note_full_supersample_setting();
-
-    /// Applies a change of the Enhanced anti-aliasing row to Full's rungs
-    /// (runtime_render_tier.cpp): the host's start input follows it, and
-    /// while Full draws so does the rung's anti-aliasing, unless the
-    /// step-down has lowered it already, which never rises within the run;
-    /// the rung then caps the factor the next Full frame draws at.
-    void apply_full_supersample_setting();
 
     /// Opens the card's executor on the renderer at its texture limit,
     /// unless it is open, and runs the Full function test on it once per

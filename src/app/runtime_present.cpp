@@ -659,7 +659,6 @@ void Runtime::finish_match_layers(
     const auto present_ns = static_cast<uint64_t>(elapsed_since(upload_start));
     frame_pacing::note_frame_measure(frame_stats_, frame_pacing::FrameMeasure::present, present_ns);
     note_present_time(present_ns);
-    feed_render_step_down(present_ns);
 }
 
 void Runtime::capture_render_target() {

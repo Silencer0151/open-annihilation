@@ -164,16 +164,13 @@ enum class AccelerationState : uint8_t {
     lacks_feature,  ///< Basic or Full, but the graphics card lacks something it needs
     /// Basic or Full, but the game cannot save the files that guard trying it.
     cannot_save,
-    slow_frames, ///< Basic or Full, but frames were too slow with it in this run
-    next_start,  ///< Basic or Full, from the next start
+    next_start, ///< Basic or Full, from the next start
     /// Full, but the game cannot save the files that guard trying it: Basic
     /// is in use in its place.
     full_cannot_save,
     /// Full, but dropped to Basic in this run when the machine ran short of
     /// memory.
     full_too_little_memory,
-    /// Full, but dropped to Basic in this run when its frames were too slow.
-    full_slow_frames,
     /// Full, but the graphics card failed while drawing the battlefield, so
     /// Basic is in use for the rest of the run.
     full_stopped,
@@ -188,13 +185,9 @@ enum class AccelerationState : uint8_t {
     /// (AccelerationStatus::replay says which match).
     full_waiting_for_game_end,
     in_use_on_another_driver, ///< In use, on another graphics driver: one failed
-    in_use_less_smoothing,    ///< In use, with less smoothing: frames were slow
     in_use_no_smoothing,      ///< In use, with no smoothing when zoomed out on this machine
-    /// Full in use, with less anti-aliasing than asked: frames were slow
-    /// (AccelerationStatus::supersample says how much is left).
-    full_in_use_less_anti_aliasing,
-    full_in_use, ///< Full in use: the graphics card draws the view
-    in_use,      ///< In use
+    full_in_use,              ///< Full in use: the graphics card draws the view
+    in_use,                   ///< In use
 };
 
 /// What the graphics card does on this machine while it is in use, which
@@ -220,14 +213,13 @@ struct AccelerationStatus {
     /// The level asked for, by the setting or a flag, which
     /// AccelerationState::waiting_for_game_end names.
     HardwareAcceleration asked{HardwareAcceleration::off};
-    /// Full's anti-aliasing at the step-down's rung while it is in use: the
-    /// samples a pixel across the graphics card may draw the view at, 1 for
-    /// none, which the second line of AccelerationState::full_in_use and
-    /// full_in_use_less_anti_aliasing names.
+    /// Full's anti-aliasing while it is in use: the samples a pixel across
+    /// the graphics card draws the view with, 1 for none, which the second
+    /// line of AccelerationState::full_in_use names.
     uint8_t supersample{1};
     /// How many times finer than the window, along each axis, the graphics
-    /// card drew the battlefield in the last Full frame: 1, 2 or 4, as the
-    /// Enhanced anti-aliasing row's level, the rung and the machine allow;
+    /// card drew the battlefield in the last Full frame: the Enhanced
+    /// anti-aliasing row's level, as the texture limit and the memory allow;
     /// 0 while frames are not drawn in Full. The row's hint says what its
     /// level does in Full from it.
     uint8_t full_supersample{};

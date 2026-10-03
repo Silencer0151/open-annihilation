@@ -323,7 +323,6 @@ void Runtime::check_engine_settings_wiring() {
         const auto in_use = [](settings::AccelerationState state) {
             return state == settings::AccelerationState::in_use ||
                    state == settings::AccelerationState::in_use_no_smoothing ||
-                   state == settings::AccelerationState::in_use_less_smoothing ||
                    state == settings::AccelerationState::in_use_on_another_driver;
         };
         require(

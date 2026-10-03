@@ -105,15 +105,12 @@ what each crash and failure counts for at the next start;
 `--render-fault POINT[@FRAME]` narrows it to one
 (`native-renderer-ladder-create` makes every driver but software refuse at
 start; `--render-fault card` fails a call of the Full tier's own on a
-Full match frame). Four cases switch the accelerated tier on and run
-only when named: `--render-fault slow` (`native-renderer-ladder-slow`),
-slow frames walking the step-down to the standard tier, `--render-fault
-memory` (`native-renderer-ladder-memory`), the memory guard refusing
-buffers and then dropping the tier, and `--render-fault full-slow` and
-`full-memory` (`native-renderer-ladder-full-slow`,
-`native-renderer-ladder-full-memory`), the same for the Full tier, whose
-rungs the step-down takes first and whose pages the guard drops first;
-each skips under 2 GiB.
+Full match frame). Two cases switch the accelerated tier on and run
+only when named: `--render-fault memory` (`native-renderer-ladder-memory`),
+the memory guard refusing buffers and then dropping the tier, and
+`--render-fault full-memory` (`native-renderer-ladder-full-memory`), the
+same for the Full tier, whose pages the guard drops first; each skips
+under 2 GiB.
 
 Once the renderer is made, start-up describes it with the
 [render probe](../platform/render-probe/README.md) and logs one line
@@ -537,11 +534,8 @@ logs it.
   the memory guard counts Full's pages and targets
   (`AcceleratedBuffer::card_pages`, `card_targets`) and refuses or drops
   Full before Basic, judging Basic afresh on the memory Full freed
-  (`retry_memory_guard`); slow frames take Full's rungs first, its
-  anti-aliasing from 4 to 2 to 1 (`LadderState::full`, `supersample`,
-  which Full's world target draws at) and then Full itself
-  (`StepResult::basic`), never back up within the run; and Full's first
-  card calls of a run, the pages made as the match loads
+  (`retry_memory_guard`); nothing drops Full for slow frames (design D83);
+  and Full's first card calls of a run, the pages made as the match loads
   (`make_full_match_pages`) and its first frame, stand under its own trial
   and sentinel, `path full` (`begin_full_path`), a trial that cannot be
   written keeping Full off with nothing struck. Basic presents the frame
@@ -554,27 +548,22 @@ logs it.
   are made as the loading screen begins (`preallocate_full_match_textures`),
   and a page a frame needs later, a sprite page among them, is made then,
   as at any time (design D80). The start-up line
-  and `+stats` name the full tier, and the step-down is fed the build, the
-  stages, the card's call and the overlay as Full's passes. Off and Basic
+  and `+stats` name the full tier. Off and Basic
   are untouched: nothing here runs unless the tier is Full, which the
   setting's Full or `--hardware-acceleration=full` gives (design D76).
   While Full draws, the view zooms out to `kMinFullBattlefieldZoom`, one
   sixth, three times as far as the processor's floor, and the terrain's
   level rule reaches the atlas's third level (design D79).
   Anti-aliasing in Full is the graphics card's (`full_supersampling.hpp`,
-  `ensure_full_world_target`): the Enhanced anti-aliasing row's level asks
-  for a supersample factor, off 1, 2x and 3x 2, 4x and above 4
-  (`render_policy::supersample_factor`), which Full's rungs start from
-  (`RendererHost::set_full_supersample`) and follow while the step-down
-  has not lowered them (`apply_full_supersample_setting`); the factor is
-  lowered to the rung's once frames were slow, and to what the budget S
-  of the machine, 2^25 pixels, a quarter of it at 4 GiB or less and on a
-  light machine or a Pi (`render_policy::supersample_budget`), the memory
-  guard and the renderer's texture limit allow at the battlefield's size
-  (`render_policy::fit_supersample_factor`); above 1 the card draws the
-  terrain, the fog's greyed pass and the stages into a world target at
-  that factor, made once with its half and remade when the factor or the
-  battlefield changes, by the plan of
+  `ensure_full_world_target`): the Enhanced anti-aliasing row's level is
+  the supersample factor, its samples across, off 1, 2x 2, 4x 4, 8x 8 and
+  16x 16 (`render_policy::supersample_factor`), halved to what the
+  renderer's texture limit allows at the battlefield's size
+  (`render_policy::fit_supersample_factor`) and then to what the memory
+  guard allows, each refusal costing a halving and never the tier (design
+  D81); above 1 the card draws the terrain, the fog's greyed pass and the
+  stages into a world target at that factor, made once with its halves
+  and remade when the factor or the battlefield changes, by the plan of
   `full_supersampling::plan_world_target`: from zoom 1 up at the zoom, the
   texture holding the factor's pixels a window pixel, reduced into the
   battlefield by exact halvings (`resolve`); below zoom 1 at one texel a
@@ -652,40 +641,24 @@ logs it.
   lifts; before the tier makes its scene and overlay or a prescale target
   it asks the guard with a fresh sample (`accelerated_buffer_allowed`), and
   where the guard refuses, the tier stays on the rung below, magnify off or
-  the card's magnification one rung lower (`rung_without`). Each match
-  frame the tier presents feeds the step-down (`feed_render_step_down`,
-  `feed_presented_frame`): its interval with its ticks' time taken out, its
-  draw and present measures and the tier's own passes (the area pass or
-  the nearest resample, the canvas copy, the overlay's conversion and the
-  uploads of the scene and the overlay, timed as they run), against the
-  lower of the rate the loop paces at, the lowest 30, and 60, and whether
-  it is steady, what it showed and whether the match clock runs below its
-  requested rate; the cost test takes a median as over the period only
-  past the loop's allowance, so on-time frames on the pacer's grid never
-  step. Frames of the standard tier, idle frames, a check's own frames and
-  a frame of a second or more after a shorter one, a wait for the window's
-  focus or a save, never feed it; a run of such frames, a machine that
-  really crawls, does. Each step lowers the rung for the rest of the run
+  the card's magnification one rung lower (`rung_without`). Nothing lowers
+  a rung for slow frames (design D83): the player's settings hold, however
+  slowly the machine draws them, and +stats shows the cost. Each step the
+  guard takes lowers the rung for the rest of the run
   (`lower_accelerated_rung`), freeing what the lower rung no longer draws
   with: the scene and its terrain buffer when magnify goes off or the
   budget falls, and the prescale targets the chrome or the card's
   magnification no longer use, the magnified scene's only when the card's
   magnification changes, since the NEAREST-chrome rung leaves the scene's
-  filter as it was (`world_filter`); each step is logged once. The status
-  then says the tier smooths less because frames were slow, and the last
-  step drops the tier, as the status then says, until Off and back or
-  Restore defaults starts the ladder again from the top. A later switch-on, after
-  a lost device or a shared game, keeps the rung reached. The rung is not
-  kept for the next start: the game reads and writes the renderer
-  records, but not their `scale-level` key, which is reserved for it.
-  `--check-renderer-ladder --render-fault slow`
-  (`native-renderer-ladder-slow`) forces slow frames and sees idle frames
-  and the standard tier never feeding it, a frame's ticks taken out
-  against the loop's paced rate, each rung with what it frees and keeps,
-  the status, the drop, Off and back and a clock below its rate;
-  `--render-fault memory` (`native-renderer-ladder-memory`) forces the
-  guard's sample, which refuses each buffer and then drops the tier,
-  freeing the scene's buffers.
+  filter as it was (`world_filter`); each step is logged once, until Off
+  and back or Restore defaults starts the ladder again from the top. A
+  later switch-on, after a lost device or a shared game, keeps the rung
+  reached. The rung is not kept for the next start: the game reads and
+  writes the renderer records, but not their `scale-level` key, which is
+  reserved for it. `--check-renderer-ladder --render-fault memory`
+  (`native-renderer-ladder-memory`) forces the guard's sample, which
+  refuses each buffer and then drops the tier, freeing the scene's
+  buffers.
 - The tier each frame is drawn in (`runtime_render_tier.cpp`): at start,
   once the renderer is made, `RendererHost::decide_start_tier` fills the
   render policy's facts (the flags, the Hardware acceleration setting read
@@ -734,7 +707,7 @@ logs it.
   Basic to Full, or Restore defaults,
   clears the renderer records' strikes and failure records in memory, lets
   a failed function test or an unwritten trial try again, lifts a drop of
-  either tier other than the memory guard's and starts the step-down again
+  either tier other than the memory guard's and starts the ladder again
   from the top, at once where the tier stays on (`take_renderer_retry`,
   `forget_render_failures`); OK writes the cleared records
   (`keep_renderer_records`) and Cancel puts them back
@@ -742,8 +715,8 @@ logs it.
   drops it for the run and is struck against the driver
   (`take_acceleration_error`), and so is a renderer made again after a
   present error, a lost device or three resets within a minute; the memory
-  guard and the step-down's last rung drop it for the run with nothing
-  struck. The dialog's status and locks follow these facts
+  guard drops it for the run with nothing struck. The dialog's status and
+  locks follow these facts
   (`tier_acceleration_facts`, with what the records hold,
   `RendererHost::fill_record_facts`); a driver that failed in the run, a
   record and a driver a record passed over lock nothing, so that the row
@@ -1219,8 +1192,8 @@ logs it.
   faults draw a reduction NEAREST (`FunctionTestFaults`).
   `runtime_renderer.cpp` holds the runtime's side: the render events,
   present errors and rebuilds, a lost device's wait and the stall rule;
-  `runtime_tier_watch.cpp` the accelerated tier's memory guard and
-  step-down; `runtime_renderer_ladder_check.cpp` the ladder check.
+  `runtime_tier_watch.cpp` the accelerated tier's memory guard;
+  `runtime_renderer_ladder_check.cpp` the ladder check.
 - `scaled_world.hpp`, `scaled_world.cpp`: `TiledTexture`, a streaming
   texture made as one texture within the renderer's limit and as tiles
   with one-texel gutters beyond it, for the standard tier's window-size
@@ -1239,8 +1212,8 @@ logs it.
   (`step_tier`, `tier_action`, `forget_failures`),
   the shared-game gate, the starting rung, the stall rule, the count of
   device resets (`note_device_reset`), the layers' texture formats
-  (`layer_formats`), the step-down and the rung below a buffer the memory
-  guard refuses, and the tiles of a texture beyond the renderer's
+  (`layer_formats`), the rung below a buffer the memory guard refuses, and
+  the tiles of a texture beyond the renderer's
   limit. The walk
   of SDL's render drivers in SDL's own order, skipping drivers recorded as
   failed (`failed_driver_list` of the renderer records) but never
@@ -1258,17 +1231,12 @@ logs it.
   start-up function test may run, never under 2 GiB; and the gate that
   keeps a shared game or a replay from starting anything until it ends;
   present stalls;
-  the rung a machine starts at on the step-down ladder from 2 GiB, its
-  budget sized from its processors and kind and never from its memory
-  (`start_budget`), magnify off before Vista and at budget none, and the
-  blend only above 4 GiB and never on a driver that excludes it
-  (`start_rung`); the remembered rung (`resume_rung`), and the step-down
-  itself, fed steady frames with their ticks' time taken out
-  (`feed_step_down`) against the lower of the loop's paced rate and 60
-  (`step_target_rate`), and only the match frames the accelerated tier
-  presented and the loop paced, never a lone wait of a second or more
-  (`feeds_step_down`, `feed_presented_frame`, `frame_kind`), each step
-  described for the log (`describe_step`); the rung the tier stays on
+  the rung a machine starts at on the ladder from 2 GiB, its budget sized
+  from its processors and kind and never from its memory (`start_budget`),
+  magnify off before Vista and at budget none, and the blend only above
+  4 GiB and never on a driver that excludes it (`start_rung`); the
+  remembered rung (`resume_rung`), each step described for the log
+  (`describe_step`); the rung the tier stays on
   where the memory guard refuses a buffer (`rung_without`); the chrome's
   filter (`chrome_filter`), the magnified scene's (`world_filter`) and the
   prescale budget; and the tiles of a texture beyond the renderer's limit

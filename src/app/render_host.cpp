@@ -1177,10 +1177,6 @@ render_policy::LadderState RendererHost::start_rung() const noexcept {
     return render_policy::start_rung(machine_);
 }
 
-void RendererHost::set_full_supersample(uint8_t factor) noexcept {
-    machine_.full_supersample = factor;
-}
-
 void RendererHost::open_records(const RecordsPlace& place) {
     place_ = place;
     records_log_.clear();
