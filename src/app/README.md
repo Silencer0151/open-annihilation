@@ -552,15 +552,15 @@ logs it.
   lower tier applies at once and Full waits for the match to end
   (`SharedMatchGate::full`); its terrain pages, overlay and zoom-in target
   are made as the loading screen begins (`preallocate_full_match_textures`),
-  and a page a frame would make later, a sprite page among them, waits for
-  the match to end instead (`full_creation_allowed`). The start-up line
+  and a page a frame needs later, a sprite page among them, is made then,
+  as at any time (design D80). The start-up line
   and `+stats` name the full tier, and the step-down is fed the build, the
   stages, the card's call and the overlay as Full's passes. Off and Basic
-  are untouched: nothing here runs unless the tier is Full, which only
-  `--hardware-acceleration=full` gives while `render_policy::full_ready`
-  is false; it stays false until the complete Full frame of
-  `native-render-tiers` is signed off against the standard tier's
-  (design D76), so a setting of Full resolves to Basic for players.
+  are untouched: nothing here runs unless the tier is Full, which the
+  setting's Full or `--hardware-acceleration=full` gives (design D76).
+  While Full draws, the view zooms out to `kMinFullBattlefieldZoom`, one
+  sixth, three times as far as the processor's floor, and the terrain's
+  level rule reaches the atlas's third level (design D79).
   Anti-aliasing in Full is the graphics card's (`full_supersampling.hpp`,
   `ensure_full_world_target`): the Enhanced anti-aliasing row's level asks
   for a supersample factor, off 1, 2x and 3x 2, 4x and above 4
@@ -715,11 +715,9 @@ logs it.
   graphics card (the Full tier, above): the render policy's request
   (`TierInputs::setting`, `AccelerationFlag`) carries Off, Basic or Full,
   and `decide_render_tier` gives `RenderTier::full` where Full was asked
-  for, Full is ready in this build (`render_policy::full_ready`, false
-  until the complete Full frame is signed off, design D76) or
-  `--hardware-acceleration=full` forced it, the driver has no
-  `full-unusable` record or that flag was given, Full was not dropped for
-  the run, and a shared game or a replay began in Full; otherwise Basic,
+  for, the driver has no `full-unusable` record or
+  `--hardware-acceleration=full` was given, Full was not dropped for the
+  run, and a shared game or a replay began in Full; otherwise Basic,
   with the Full reason (`FullReason`) in the decision, which the status
   and the start-up line's note say. Before each frame, `Runtime::update_render_tier`
   brings the facts up to date (the flags, the setting in effect, the

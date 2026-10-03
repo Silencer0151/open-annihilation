@@ -218,8 +218,8 @@ void test_report_software_renderer() {
 } // namespace
 
 /// The start-up line's tier: in use, what the graphics card does at each
-/// reach, Full noted as not in this build; otherwise the standard tier with
-/// the status's reason.
+/// reach, with why Basic draws where Full was asked for; otherwise the
+/// standard tier with the status's reason.
 void test_tier_description() {
     using oa::app::tier_description;
     using oa::ui::engine_settings::AccelerationReach;
@@ -254,16 +254,6 @@ void test_tier_description() {
     OA_CHECK(
         described(AccelerationState::in_use, AccelerationReach::nearest_none) ==
         "basic tier: the view is drawn as in the standard tier"
-    );
-    // Full, which the game draws as Basic, says so after the name.
-    OA_CHECK(
-        described(AccelerationState::full_not_built, AccelerationReach::menus) ==
-        "basic tier (Full is not in this build): the graphics card scales the interface"
-    );
-    OA_CHECK(
-        described(AccelerationState::full_not_built, AccelerationReach::zoomed_out) ==
-        "basic tier (Full is not in this build): the graphics card scales the interface and the "
-        "zoomed-in view, and the zoomed-out view is smoothed"
     );
     // Where Full stopped or waits, the note says why Basic draws; Full in
     // use is the full tier, as is the frame the flag forces.

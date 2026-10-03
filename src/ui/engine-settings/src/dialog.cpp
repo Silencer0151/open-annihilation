@@ -46,17 +46,20 @@ constexpr std::array<Setting, 1> kDeveloperRows{Setting::frame_stats};
 constexpr AntiAliasing kDemandingLevel = AntiAliasing::x8;
 
 /// Enhanced anti-aliasing's hint while frames are drawn in Full, by the
-/// factor the graphics card draws the battlefield finer at: there the
+/// samples a pixel the graphics card draws the battlefield with: there the
 /// processor's anti-aliasing never runs, and the row's levels choose the
-/// factor instead, 2x and 3x giving 2 and 4x and above 4.
+/// samples instead, 2x and 3x giving 2 by 2 and 4x and above 4 by 4, the
+/// most the card draws.
 constexpr std::array<std::string_view, 2> kFullAntiAliasingOff{
     "In Full the graphics card draws the view 1:1;", "a level draws it finer for smoother edges."
 };
 constexpr std::array<std::string_view, 2> kFullAntiAliasingTwice{
-    "In Full the graphics card draws the view 2x finer", "and scales it down for smoother edges."
+    "In Full the graphics card draws 2x2 samples a pixel",
+    "and scales them down for smoother edges."
 };
 constexpr std::array<std::string_view, 2> kFullAntiAliasingFourTimes{
-    "In Full the graphics card draws the view 4x finer", "and scales it down for smoother edges."
+    "In Full the graphics card draws 4x4 samples a pixel,",
+    "its most, and scales them down for smoother edges."
 };
 
 /// A switch setting and the member of EngineSettings it is.
@@ -120,7 +123,7 @@ constexpr std::string_view kRetryFull = "Set it to Off and back, or restore defa
 constexpr std::string_view kFullInUse = "Full in use: the graphics card draws the view.";
 
 /// Every state's status, in AccelerationState's order.
-constexpr std::array<StatusText, 30> kStatusTexts{{
+constexpr std::array<StatusText, 29> kStatusTexts{{
     {AccelerationState::off_driver_skipped, kOff, kDriverSkipped},
     {AccelerationState::needs_memory_driver_skipped, kNeedsMemory, kDriverSkipped},
     {AccelerationState::needs_memory, kNeedsMemory, kProcessorDraws},
@@ -168,7 +171,6 @@ constexpr std::array<StatusText, 30> kStatusTexts{{
     {AccelerationState::full_waiting_for_game_end,
      "Basic for this game: in a shared game, Full",
      "takes effect from the next game."},
-    {AccelerationState::full_not_built, "Full is not in this build: Basic is in use.", {}},
     {AccelerationState::in_use_on_another_driver,
      "Basic in use, on another driver: one failed.",
      {}},
@@ -210,8 +212,8 @@ constexpr std::string_view kBasicWaitingForFullInReplay = "Basic for this game: 
 /// The second line of Full in use, by its anti-aliasing: none, 2 samples
 /// across and 4.
 constexpr std::string_view kFullReach = "Smoothed at every zoom.";
-constexpr std::string_view kFullReachTwice = "Smoothed at every zoom; anti-aliasing 2x.";
-constexpr std::string_view kFullReachFourfold = "Smoothed at every zoom; anti-aliasing 4x.";
+constexpr std::string_view kFullReachTwice = "Smoothed at every zoom; 2x2 samples a pixel.";
+constexpr std::string_view kFullReachFourfold = "Smoothed at every zoom; 4x4 samples a pixel.";
 /// The anti-aliasing kFullReachTwice and kFullReachFourfold name.
 constexpr uint8_t kSupersampleTwice = 2;
 constexpr uint8_t kSupersampleFourfold = 4;

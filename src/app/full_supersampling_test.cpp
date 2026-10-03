@@ -34,8 +34,8 @@ constexpr std::array<std::array<uint32_t, 2>, 6> battlefields{{
 }};
 
 /// The zooms below 1 the plan is checked at, in thousandths.
-constexpr std::array<uint32_t, 9> zoomed_out_thousandths{
-    500, 501, 550, 600, 707, 750, 900, 990, 999
+constexpr std::array<uint32_t, 15> zoomed_out_thousandths{
+    167, 200, 249, 250, 300, 495, 500, 501, 550, 600, 707, 750, 900, 990, 999
 };
 
 /// Builds a frame with one reduction batch of a plan, for check_frame.
@@ -107,10 +107,21 @@ void test_zoomed_out_reduces_a_part_by_the_two_level_blend() {
     OA_CHECK(odd.destination.width == 1794 && odd.destination.height == 866);
     OA_CHECK(card::check_frame(frame_of(odd)).empty());
     const auto three_quarters = fs::plan_world_target(0.75F, 4, 1792, 864);
-    OA_CHECK(three_quarters.draw_scale == 0.25F);
+    OA_CHECK(three_quarters.draw_scale == 0.25F && three_quarters.texel_scale == 1.0F);
     OA_CHECK(three_quarters.source_part.width == 2392 && three_quarters.source_part.height == 1152);
     OA_CHECK(three_quarters.destination.width == 1794 && three_quarters.destination.height == 864);
     OA_CHECK(card::check_frame(frame_of(three_quarters)).empty());
+    // Just below one half the texture holds half a texel a map pixel, so
+    // the blend's scale is nearly 1 rather than just under one half, which
+    // the frame would refuse; at the Full tier's zoom floor a quarter.
+    const auto under_half = fs::plan_world_target(0.4947F, 4, 1668, 960);
+    OA_CHECK(under_half.texel_scale == 0.5F && under_half.draw_scale == 0.125F);
+    OA_CHECK(card::check_frame(frame_of(under_half)).empty());
+    const auto sixth = fs::plan_world_target(1.0F / 6.0F, 2, 1792, 864);
+    OA_CHECK(sixth.texel_scale == 0.25F && sixth.draw_scale == 0.125F);
+    OA_CHECK(card::check_frame(frame_of(sixth)).empty());
+    OA_CHECK(fs::texel_scale_of(0.5F) == 1.0F && fs::texel_scale_of(0.25F) == 0.5F);
+    OA_CHECK(fs::texel_scale_of(0.1F) == 0.25F);
 }
 
 /// Over battlefields of either parity, both factors and zooms across the
@@ -134,15 +145,24 @@ void test_every_zoom_keeps_the_invariants() {
                 const auto part_h = static_cast<uint32_t>(plan.source_part.height);
                 OA_CHECK(part_w % fs::part_grain == 0 && part_h % fs::part_grain == 0);
                 OA_CHECK(part_w <= plan.size_width * factor && part_h <= plan.size_height * factor);
-                OA_CHECK(static_cast<double>(part_w) * zoom >= battlefield[0] - 1.0e-3);
+                // The texel scale: 1 from one half up, one half from a
+                // quarter, one quarter below, so that the zoom over it
+                // lies within one half to 1.
+                const float texel_scale = zoom >= 0.5F ? 1.0F : zoom >= 0.25F ? 0.5F : 0.25F;
+                OA_CHECK(plan.texel_scale == texel_scale);
+                OA_CHECK(
+                    static_cast<double>(part_w) * zoom / texel_scale >= battlefield[0] - 1.0e-3
+                );
                 OA_CHECK(static_cast<uint32_t>(plan.destination.width) >= battlefield[0]);
                 OA_CHECK(static_cast<uint32_t>(plan.destination.height) >= battlefield[1]);
                 const double across = static_cast<double>(plan.destination.width) / part_w;
                 const double down = static_cast<double>(plan.destination.height) / part_h;
                 OA_CHECK(across >= 0.5 && across <= 1.0 && down >= 0.5 && down <= 1.0);
-                // The stages draw at one texel a map pixel: the part spans
+                // The stages draw at the texel scale: the part spans
                 // part_w / factor size pixels at the draw scale.
-                OA_CHECK(std::fabs(plan.draw_scale * static_cast<float>(factor) - 1.0F) < 1.0e-6F);
+                OA_CHECK(
+                    std::fabs(plan.draw_scale * static_cast<float>(factor) - texel_scale) < 1.0e-6F
+                );
                 const std::string fault = card::check_frame(frame_of(plan));
                 OA_CHECK(fault.empty());
                 if (!fault.empty())

@@ -32,12 +32,15 @@ inline constexpr uint32_t most_terrain_passes = 2;
 
 /// How the Full tier draws the terrain at a zoom, with no supersampling.
 ///
-/// Zoomed out, between zoom 0.5 and 1, the two levels that bracket the zoom
-/// are blended: level 1 LINEAR, then level 0 LINEAR over it at alpha
-/// 1 - t, t = log2(1 / zoom); at zoom 0.5, t is 1 and level 1 alone is
-/// drawn, each of its texels one window pixel, which is today's box filter
-/// where the camera lies on an even map pixel. Below 0.5, which the game's
-/// camera never reaches, level 1 is drawn alone, reduced. At zoom 1 and at
+/// Zoomed out, below zoom 1, the two atlas levels that bracket the zoom are
+/// blended: with t = log2(1 / zoom), level ceil(t) LINEAR, then the level
+/// above it LINEAR over it at alpha 1 - (t - (ceil(t) - 1)); at a whole t
+/// that level alone. So at zoom 0.5 level 1 alone is drawn, each of its
+/// texels one window pixel, which is today's box filter where the camera
+/// lies on an even map pixel; between 0.5 and 0.25 level 2 is blended under
+/// level 1; and at 0.25 and below, which only the Full tier's zoom floor
+/// (kMinFullBattlefieldZoom) reaches, level 2, the last tile level, is
+/// drawn alone, reduced. At zoom 1 and at
 /// every whole-number zoom above it level 0 is drawn NEAREST: 3.1c's pixels
 /// exactly. At another zoom above 1 level 0 is drawn by the pixel-art
 /// sampling mode where the renderer has it; elsewhere, SDL's software
@@ -53,9 +56,8 @@ struct TerrainDrawPlan {
     uint32_t target_zoom{1}; ///< window pixels per map pixel in the target; ceil(zoom)
 };
 
-/// The zoom at and below which level 1 is drawn alone.
-inline constexpr float level_1_alone_zoom = 0.5F;
-/// The level the zoomed-out blend draws first, under level 0.
+/// The level the zoomed-out blend draws first between zoom 0.5 and 1, under
+/// level 0, and alone at 0.5.
 inline constexpr uint8_t far_level = 1;
 
 /// Returns how the terrain is drawn at a zoom (TerrainDrawPlan).

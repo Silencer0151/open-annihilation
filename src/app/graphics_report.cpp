@@ -71,7 +71,6 @@ std::string_view standard_reason(settings::AccelerationState state) noexcept {
     case AccelerationState::full_failed_before:
     case AccelerationState::full_lacks_feature:
     case AccelerationState::full_waiting_for_game_end:
-    case AccelerationState::full_not_built:
     case AccelerationState::in_use_on_another_driver:
     case AccelerationState::in_use_less_smoothing:
     case AccelerationState::in_use_no_smoothing:
@@ -109,8 +108,6 @@ render_policy::RendererFacts renderer_facts(const render_probe::AdapterFacts& fa
 std::string_view full_shortfall_note(settings::AccelerationState state) noexcept {
     using settings::AccelerationState;
     switch (state) {
-    case AccelerationState::full_not_built:
-        return full_not_built_note;
     case AccelerationState::full_cannot_save:
         return " (Full's trial cannot be written)";
     case AccelerationState::full_too_little_memory:
@@ -137,8 +134,7 @@ std::string tier_description(const settings::AccelerationStatus& status, bool fu
         status.state == AccelerationState::full_in_use_less_anti_aliasing)
         return std::string(full_tier_description);
     // Where Full was asked for and Basic draws, the basic tier is in use.
-    const bool in_use = status.state == AccelerationState::full_not_built ||
-                        status.state == AccelerationState::full_cannot_save ||
+    const bool in_use = status.state == AccelerationState::full_cannot_save ||
                         status.state == AccelerationState::full_too_little_memory ||
                         status.state == AccelerationState::full_slow_frames ||
                         status.state == AccelerationState::full_stopped ||

@@ -526,12 +526,13 @@ void the_level_strip_picks_a_level() {
     const auto in_full = settings::dialog_layout(dialog);
     CHECK(
         find_part(
-            in_full, "In Full the graphics card draws the view 4x finer", settings::no_control
+            in_full, "In Full the graphics card draws 4x4 samples a pixel,", settings::no_control
         ) != nullptr
     );
     CHECK(
-        find_part(in_full, "and scales it down for smoother edges.", settings::no_control) !=
-        nullptr
+        find_part(
+            in_full, "its most, and scales them down for smoother edges.", settings::no_control
+        ) != nullptr
     );
     CHECK(find_part(in_full, "Needs a fast CPU.", settings::no_control) == nullptr);
     full.full_supersample = 2;
@@ -539,7 +540,7 @@ void the_level_strip_picks_a_level() {
     CHECK(
         find_part(
             settings::dialog_layout(dialog),
-            "In Full the graphics card draws the view 2x finer",
+            "In Full the graphics card draws 2x2 samples a pixel",
             settings::no_control
         ) != nullptr
     );
@@ -1985,7 +1986,7 @@ void hardware_acceleration_shows_its_status() {
     // While it is in use the first line names Basic, the tier that runs, and
     // the second says what it does here; Full, which the game cannot draw
     // yet, or which stopped, says Basic is in use in its place.
-    const std::array<std::pair<AccelerationState, std::string_view>, 9> in_use{{
+    const std::array<std::pair<AccelerationState, std::string_view>, 8> in_use{{
         {AccelerationState::full_cannot_save, "Basic in use: the game cannot save its files."},
         {AccelerationState::full_too_little_memory,
          "Basic in use: there is too little memory for Full."},
@@ -1993,7 +1994,6 @@ void hardware_acceleration_shows_its_status() {
          "Basic in use for this run: Full's frames were slow."},
         {AccelerationState::full_lacks_feature,
          "Basic in use: the card lacks a feature Full needs."},
-        {AccelerationState::full_not_built, "Full is not in this build: Basic is in use."},
         {AccelerationState::in_use_on_another_driver,
          "Basic in use, on another driver: one failed."},
         {AccelerationState::in_use_less_smoothing,
@@ -2024,9 +2024,9 @@ void hardware_acceleration_shows_its_status() {
     }};
     const std::array<std::pair<uint8_t, std::string_view>, 5> anti_aliasing{{
         {1, "Smoothed at every zoom."},
-        {2, "Smoothed at every zoom; anti-aliasing 2x."},
-        {3, "Smoothed at every zoom; anti-aliasing 2x."},
-        {4, "Smoothed at every zoom; anti-aliasing 4x."},
+        {2, "Smoothed at every zoom; 2x2 samples a pixel."},
+        {3, "Smoothed at every zoom; 2x2 samples a pixel."},
+        {4, "Smoothed at every zoom; 4x4 samples a pixel."},
         {0, "Smoothed at every zoom."},
     }};
     for (const auto& [state, first] : full_in_use)
@@ -2104,7 +2104,7 @@ void hardware_acceleration_shows_its_status() {
     CHECK(
         settings::set_acceleration_status(
             dialog,
-            {AccelerationState::full_not_built,
+            {AccelerationState::full_lacks_feature,
              AccelerationReach::menus,
              false,
              HardwareAcceleration::full}
@@ -2113,7 +2113,7 @@ void hardware_acceleration_shows_its_status() {
     const auto full_parts = settings::dialog_layout(dialog);
     CHECK(
         find_part(
-            full_parts, "Full is not in this build: Basic is in use.", settings::no_control
+            full_parts, "Basic in use: the card lacks a feature Full needs.", settings::no_control
         ) != nullptr
     );
     CHECK(
@@ -2488,7 +2488,6 @@ void fonts_load_and_every_text_fits_its_place() {
     for (const std::string_view text :
          {"Not in use: the game cannot save its files.",
           "Not in use: it needs at least 2 GB of memory.",
-          "Full is not in this build: Basic is in use.",
           "Basic in use, on another driver: one failed.",
           "Basic in use, with less smoothing: frames were slow.",
           "Basic in use; no smoothing when zoomed out here.",

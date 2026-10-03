@@ -105,10 +105,6 @@ void end_match(SharedMatchGate& gate) noexcept {
     gate = SharedMatchGate{};
 }
 
-bool first_use_allowed(const SharedMatchGate& gate, bool loading_screen_beginning) noexcept {
-    return gate.kind == MatchKind::none || loading_screen_beginning;
-}
-
 bool records_on_disk(bool players_own_profile, bool render_driver_named) noexcept {
     return players_own_profile && !render_driver_named;
 }
@@ -161,8 +157,6 @@ TierDecision decide_render_tier(const TierInputs& inputs) noexcept {
     const auto basic = [](FullReason reason) {
         return TierDecision{RenderTier::accelerated, TierReason::accelerated, reason};
     };
-    if (!full_ready && inputs.flag != AccelerationFlag::full)
-        return basic(FullReason::not_ready);
     if (inputs.full_unusable_record && inputs.flag != AccelerationFlag::full)
         return basic(FullReason::unusable_record);
     if (inputs.full_drop != FullDrop::none)
@@ -817,6 +811,7 @@ void add_sample(SamplePool& pool, const PooledSample& sample) noexcept {
 /// The figure of a pooled sample a median is taken of.
 enum class Figure : uint8_t {
     time,       ///< the frame's time, less its ticks'
+    own,        ///< the frame's own time: less the processor's drawing too, with the tier's passes
     passes,     ///< the tier's own passes
     area_third, ///< 1 when the area pass takes at least a third of the draw, else 0
     present,    ///< the present measure
@@ -845,6 +840,9 @@ pool_median(const SamplePool& pool, uint64_t span_us, Figure figure, bool& cover
         switch (figure) {
         case Figure::time:
             value = sample.time_us;
+            break;
+        case Figure::own:
+            value = sample.own_us;
             break;
         case Figure::passes:
             value = sample.passes_us;
@@ -914,8 +912,14 @@ StepResult feed_step_down(ScaleStepDown& ladder, const FrameSample& sample) noex
         nanoseconds_per_second / nanoseconds_per_microsecond / frames_per_second;
     PooledSample pooled;
     pooled.interval_us = pooled_us(sample.interval_ns);
-    pooled.time_us =
-        pooled_us(sample.interval_ns > sample.tick_ns ? sample.interval_ns - sample.tick_ns : 0);
+    const uint64_t time_ns =
+        sample.interval_ns > sample.tick_ns ? sample.interval_ns - sample.tick_ns : 0;
+    pooled.time_us = pooled_us(time_ns);
+    // The processor's drawing outside the tier's own passes is not the
+    // tier's doing: the processor would draw the frame as slowly without it.
+    const uint64_t drawing_ns =
+        sample.draw_ns > sample.passes_ns ? sample.draw_ns - sample.passes_ns : 0;
+    pooled.own_us = pooled_us(time_ns > drawing_ns ? time_ns - drawing_ns : 0);
     pooled.passes_us = pooled_us(sample.passes_ns);
     pooled.area_us = pooled_us(sample.area_ns);
     pooled.draw_us = pooled_us(sample.draw_ns);
@@ -926,13 +930,13 @@ StepResult feed_step_down(ScaleStepDown& ladder, const FrameSample& sample) noex
     bool step = false;
     bool covered = false;
     const uint32_t quick_median =
-        pool_median(pool, very_slow_window_ns / nanoseconds_per_microsecond, Figure::time, covered);
+        pool_median(pool, very_slow_window_ns / nanoseconds_per_microsecond, Figure::own, covered);
     if (covered && uint64_t{quick_median} * 100 > target_us * very_slow_percent)
         step = true;
     const bool spaced = !ladder.stepped || sample.now_ns - ladder.last_step_ns >= step_spacing_ns;
     if (!step && spaced) {
         const uint32_t median =
-            pool_median(pool, slow_window_ns / nanoseconds_per_microsecond, Figure::time, covered);
+            pool_median(pool, slow_window_ns / nanoseconds_per_microsecond, Figure::own, covered);
         if (covered) {
             // A frame paced on time is presented on the period's grid, so the
             // cost test counts a median as over the period only past the
@@ -942,16 +946,25 @@ StepResult feed_step_down(ScaleStepDown& ladder, const FrameSample& sample) noex
                                               : target_us;
             if (uint64_t{median} * 100 > target_us * slow_percent) {
                 step = true;
-            } else if (median > allowance_us && sample.kind != FrameKind::other) {
-                bool passes_covered = false;
-                const uint32_t passes = pool_median(
-                    pool,
-                    slow_window_ns / nanoseconds_per_microsecond,
-                    Figure::passes,
-                    passes_covered
+            } else if (sample.kind != FrameKind::other) {
+                // The cost test: a frame late by its whole time, whichever
+                // part makes it so, sheds a pass of the tier's own that
+                // costs a tenth of the period.
+                bool late_covered = false;
+                const uint32_t late = pool_median(
+                    pool, slow_window_ns / nanoseconds_per_microsecond, Figure::time, late_covered
                 );
-                if (uint64_t{passes} * 100 > target_us * passes_percent)
-                    step = true;
+                if (late_covered && late > allowance_us) {
+                    bool passes_covered = false;
+                    const uint32_t passes = pool_median(
+                        pool,
+                        slow_window_ns / nanoseconds_per_microsecond,
+                        Figure::passes,
+                        passes_covered
+                    );
+                    if (uint64_t{passes} * 100 > target_us * passes_percent)
+                        step = true;
+                }
             }
         }
     }
@@ -1166,12 +1179,6 @@ uint32_t supersample_factor(oa::ui::engine_settings::AntiAliasing level) noexcep
         return largest_supersample_factor;
     }
     return 1;
-}
-
-uint64_t supersample_budget(uint64_t memory, bool light_machine, bool raspberry_pi) noexcept {
-    if (memory <= most_memory_at_quarter_supersample_budget || light_machine || raspberry_pi)
-        return supersample_budget_pixels / 4;
-    return supersample_budget_pixels;
 }
 
 uint64_t supersample_target_pixels(uint32_t width, uint32_t height, uint32_t factor) noexcept {

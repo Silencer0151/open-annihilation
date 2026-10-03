@@ -57,11 +57,6 @@ enum class RenderTier : uint8_t {
     return tier != RenderTier::standard;
 }
 
-/// Whether Full is ready for players: while false, Full asked for by the
-/// setting resolves to Basic, and only --hardware-acceleration=full, which
-/// forces it for development and checks, takes the Full branch.
-inline constexpr bool full_ready = false;
-
 /// What the command line asks of hardware acceleration. A flag names a
 /// level of the setting and decides it for the run.
 enum class AccelerationFlag : uint8_t {
@@ -241,17 +236,6 @@ void stop_until_match_end(SharedMatchGate& gate) noexcept;
 /// @param[out] gate the run's gate
 void end_match(SharedMatchGate& gate) noexcept;
 
-/// Tells whether a texture or render target may be made for the first time
-/// in the run now.
-///
-/// @param gate the run's gate
-/// @param loading_screen_beginning the match's loading screen is beginning,
-///     before the world is built and before the machines wait for each other
-/// @return true outside a shared game or a replay, and in one only as its
-///     loading screen begins
-[[nodiscard]] bool
-first_use_allowed(const SharedMatchGate& gate, bool loading_screen_beginning) noexcept;
-
 /// One gibibyte, in bytes.
 inline constexpr uint64_t gibibyte = uint64_t{1} << 30;
 
@@ -337,7 +321,6 @@ enum class TierReason : uint8_t {
 enum class FullReason : uint8_t {
     not_asked, ///< Off or Basic was asked for, or the tier is standard
     full,      ///< Full was asked for and every condition holds
-    not_ready, ///< Full is not ready in this build (full_ready) and no flag forced it
     /// The driver has a full-unusable record and --hardware-acceleration=full
     /// was not given.
     unusable_record,
@@ -886,10 +869,12 @@ struct FrameSample {
     uint64_t now_ns{};      ///< when the frame was presented, nanoseconds on a steady clock
     uint64_t interval_ns{}; ///< since the frame before it
     uint64_t tick_ns{};     ///< the time its ticks took, which is not the tier's doing
-    uint64_t draw_ns{};     ///< the draw measure
-    uint64_t present_ns{};  ///< the present measure: uploading and presenting
-    uint64_t area_ns{};     ///< the area pass's own time, part of passes_ns
-    uint64_t passes_ns{};   ///< the time of the tier's own added passes
+    /// The draw measure: the processor's drawing, which is not the tier's
+    /// doing either, except the tier's own passes within it (passes_ns).
+    uint64_t draw_ns{};
+    uint64_t present_ns{};              ///< the present measure: uploading and presenting
+    uint64_t area_ns{};                 ///< the area pass's own time, part of passes_ns
+    uint64_t passes_ns{};               ///< the time of the tier's own added passes
     uint32_t paced_frames_per_second{}; ///< the rate the loop paces at
     /// The loop's allowance for a frame at the rate the step-down holds
     /// frames to: its period and the slack the frame statistics allow, in
@@ -922,7 +907,12 @@ inline constexpr uint64_t slow_window_ns = 3'000'000'000;
 inline constexpr uint64_t very_slow_window_ns = 1'000'000'000;
 /// The shortest time between two steps of the slow rule, in nanoseconds.
 inline constexpr uint64_t step_spacing_ns = 10'000'000'000;
-/// The slow rule's limit, in percent of the target period.
+/// The slow rule's limit, in percent of the target period. The slow and the
+/// very slow rules judge the frame's own time: its interval less its ticks
+/// and less the processor's drawing, plus the tier's own passes, so that a
+/// frame the processor's drawing makes slow, as its anti-aliasing of the
+/// units can, costs the tier nothing: the processor would draw that frame
+/// as slowly without the tier.
 inline constexpr uint32_t slow_percent = 125;
 /// The very slow rule's limit, in percent of the target period.
 inline constexpr uint32_t very_slow_percent = 200;
@@ -945,10 +935,13 @@ inline constexpr size_t pool_capacity = 384;
 struct PooledSample {
     uint32_t interval_us{}; ///< the frame interval, which measures the pool's span
     uint32_t time_us{};     ///< the frame interval less its ticks' time
-    uint32_t passes_us{};   ///< the tier's own added passes
-    uint32_t area_us{};     ///< the area pass
-    uint32_t draw_us{};     ///< the draw measure
-    uint32_t present_us{};  ///< the present measure
+    /// The frame's own time: time_us less the processor's drawing outside
+    /// the tier's own passes (slow_percent).
+    uint32_t own_us{};
+    uint32_t passes_us{};  ///< the tier's own added passes
+    uint32_t area_us{};    ///< the area pass
+    uint32_t draw_us{};    ///< the draw measure
+    uint32_t present_us{}; ///< the present measure
 };
 
 /// The latest samples of one kind of frame, pooled across short spells.
@@ -1287,12 +1280,11 @@ enum class ScaleFilter : uint8_t {
 
 /// The supersample budget S: the most pixels the Full tier's world target
 /// may hold, its texture and the half the zoomed-out reduction reads
-/// together. A provisional figure, chosen without measurement.
-inline constexpr uint64_t supersample_budget_pixels = uint64_t{1} << 25;
-/// The most physical memory, in bytes, with which the budget is a quarter
-/// of supersample_budget_pixels, as it also is on a light machine and a
-/// Raspberry Pi.
-inline constexpr uint64_t most_memory_at_quarter_supersample_budget = 4 * gibibyte;
+/// together: the largest target a renderer holds, 16384 a side
+/// (card::largest_target_edge), and its half. Below it the renderer's
+/// texture limit and the memory guard decide, factor by factor.
+inline constexpr uint64_t supersample_budget_pixels =
+    uint64_t{16384} * 16384 + uint64_t{8192} * 8192;
 /// The largest supersample factor: the world target's texture holds this
 /// many pixels a window pixel along each axis at most, and a render target
 /// takes 1, 2 or this.
@@ -1306,18 +1298,6 @@ inline constexpr uint32_t largest_supersample_factor = 4;
 /// @param level the row's level
 /// @return the factor, 1, 2 or 4
 [[nodiscard]] uint32_t supersample_factor(oa::ui::engine_settings::AntiAliasing level) noexcept;
-
-/// Returns the supersample budget of a machine: supersample_budget_pixels,
-/// or a quarter of it with most_memory_at_quarter_supersample_budget of
-/// physical memory or less, with memory the system does not report, on a
-/// light machine and on a Raspberry Pi.
-///
-/// @param memory physical memory in bytes, as the system reports it; 0 when it does not say
-/// @param light_machine oa::platform::light_machine
-/// @param raspberry_pi a Raspberry Pi
-/// @return the budget in pixels
-[[nodiscard]] uint64_t
-supersample_budget(uint64_t memory, bool light_machine, bool raspberry_pi) noexcept;
 
 /// Returns the pixels the Full tier's world target holds at a size and a
 /// factor: its texture, the size times the factor along each axis, and

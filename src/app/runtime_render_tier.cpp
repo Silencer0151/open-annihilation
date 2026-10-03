@@ -6,12 +6,10 @@
 // the start-up function test run where only it is missing and the
 // accelerated presentation switched on or off to match, its watch started
 // as it switches on (runtime_tier_watch.cpp). Off applies at once; Basic
-// and Full, which --hardware-acceleration=full forces while Full is not
-// ready for players and which the setting then draws as Basic, apply at once
-// too, except that a match played with
-// other machines or a replay, known from its loading screen, keeps the tier
-// it began with until it ends. Once the step-down has moved, the tier switches on at the rung
-// it reached. The renderer records follow the run: the first accelerated
+// and Full apply at once too, except that a match played with other
+// machines or a replay, known from its loading screen, keeps the tier it
+// began with until it ends. Once the step-down has moved, the tier switches
+// on at the rung it reached. The renderer records follow the run: the first accelerated
 // frame moves the sentinel, Full's first match frame stands under its own
 // trial (runtime_full.cpp), switching off closes the stage of a path's
 // first frames, and what a match strikes or records is written when it
@@ -121,7 +119,9 @@ uint8_t Runtime::full_supersample_setting() const noexcept {
     const auto level = engine_settings_ ? engine_settings_->current.anti_aliasing
                                         : oa::ui::engine_settings::AntiAliasing::off;
     return static_cast<uint8_t>(std::clamp<uint32_t>(
-        policy::supersample_factor(level), policy::full_supersample_least, policy::full_supersample_most
+        policy::supersample_factor(level),
+        policy::full_supersample_least,
+        policy::full_supersample_most
     ));
 }
 

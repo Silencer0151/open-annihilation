@@ -360,8 +360,13 @@ void Runtime::EngineSettingsState::ease_zoom_about_centre(Runtime& runtime, floa
     runtime.zoom_anchor_sx_ = centre_x;
     runtime.zoom_anchor_sy_ = centre_y;
     runtime.zoom_anchored_ = true;
-    runtime.match_zoom_target_ = std::clamp(target, kMinBattlefieldZoom, kMaxBattlefieldZoom);
+    runtime.match_zoom_target_ =
+        std::clamp(target, runtime.least_match_zoom(), kMaxBattlefieldZoom);
     runtime.stop_match_tracking();
+}
+
+float Runtime::least_match_zoom() const noexcept {
+    return full_presentation() ? kMinFullBattlefieldZoom : kMinBattlefieldZoom;
 }
 
 void Runtime::step_match_zoom() {
@@ -371,6 +376,16 @@ void Runtime::step_match_zoom() {
     // The director sets the zoom of every frame itself, off the wall clock.
     if (director_mode())
         return;
+    // The floor moves with the tier: a view zoomed out past the processor's
+    // floor when the card stops drawing the battlefield comes back to it at
+    // once.
+    const float least = least_match_zoom();
+    if (match_zoom_target_ < least)
+        match_zoom_target_ = least;
+    if (match_zoom_ < least) {
+        match_zoom_ = least;
+        camera_moved_ = true;
+    }
     // Seconds since the zoom last eased, from the frames' times; the first
     // frame takes a frame at the full rate, and a long gap counts as
     // kLongestZoomStep.
@@ -440,7 +455,7 @@ void Runtime::handle_match_zoom(float wheel_y, float pointer_x, float pointer_y)
     }
     match_zoom_target_ = std::clamp(
         match_zoom_target_ * std::pow(kZoomWheelFactor, wheel_y),
-        kMinBattlefieldZoom,
+        least_match_zoom(),
         kMaxBattlefieldZoom
     );
     stop_match_tracking();

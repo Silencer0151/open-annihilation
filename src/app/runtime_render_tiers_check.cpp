@@ -1942,6 +1942,27 @@ void Runtime::check_full_render_tier(
                      "the standard tier's frame does\n";
     }
 
+    // Zoomed out past the processor's floor, which only Full reaches: the
+    // zoom holds, and the card draws the terrain from level 2 alone,
+    // LINEAR, reduced.
+    {
+        set_level(HardwareAcceleration::full);
+        at_zoom(kMinFullBattlefieldZoom);
+        const auto read = full_frame();
+        const auto& plan = full_->plan;
+        if (std::abs(match_zoom() - kMinFullBattlefieldZoom) > 1.0e-6F)
+            fail("the full tier's zoom floor did not hold");
+        if (plan.pass_count != 1 || plan.passes[0].level != 2 ||
+            plan.passes[0].sampling != card::Sampling::linear || plan.through_target)
+            fail("the full tier's zoom floor was not drawn from level 2 LINEAR");
+        if (!full_->drawn || full_->drawn_quads == 0)
+            fail("the card drew no terrain at the full tier's zoom floor");
+        write_png(picture("zoom-" + zoom_text(kMinFullBattlefieldZoom)), read);
+        std::cout << "render tiers check: full tier: the zoom floor of "
+                  << zoom_text(kMinFullBattlefieldZoom) << " is drawn from level 2 LINEAR, "
+                  << full_->drawn_quads << " quads\n";
+    }
+
     // Zoomed out: the card's levels, never the box filter. The terrain
     // beside the card's own draws, where the standard tier shows its
     // terrain too, is held to the standard tier's box filter of the same
@@ -1953,8 +1974,14 @@ void Runtime::check_full_render_tier(
         const bool exact = zoom == kMinBattlefieldZoom;
         set_level(HardwareAcceleration::full);
         at_zoom(zoom);
-        match_camera_x_ &= ~1;
-        match_camera_z_ &= ~1;
+        // The camera the frame uses, within the map as the frame holds it
+        // (a small map holds it at an edge), on an even map pixel.
+        const auto map_width = static_cast<int32_t>(selected_tnt_->tile_width * 32U);
+        const auto map_height = static_cast<int32_t>(selected_tnt_->tile_height * 32U);
+        match_camera_x_ =
+            std::clamp(match_camera_x_, 0, std::max(0, map_width - visible_map_width())) & ~1;
+        match_camera_z_ =
+            std::clamp(match_camera_z_, 0, std::max(0, map_height - visible_map_height())) & ~1;
         const auto read = full_frame();
         const auto& plan = full_->plan;
         if (plan.passes[0].level != full_terrain::far_level ||
@@ -3223,6 +3250,9 @@ void Runtime::check_full_overlays(
         std::size_t edge_outside = 0;
         std::size_t clear = 0;
         std::size_t clear_differing = 0;
+        // A view without a tile wholly out of sight, as a small map's at a
+        // close zoom, holds the edge tiles to their range alone.
+        bool whole_in_view = false;
         std::vector<uint8_t> under_tile(
             static_cast<std::size_t>(field.w) * static_cast<std::size_t>(field.h), 0
         );
@@ -3240,6 +3270,7 @@ void Runtime::check_full_overlays(
                     if (!inside(field, x, y))
                         continue;
                     under(x, y) = 1;
+                    whole_in_view = whole_in_view || whole;
                     if (passed_over(x, y))
                         continue;
                     const uint8_t* clear_full = pixel(full_clear, x, y);
@@ -3279,8 +3310,8 @@ void Runtime::check_full_overlays(
                   << " differing from the processor's; " << edge << " under edge tiles, "
                   << edge_outside << " outside the colour-to-grey range; " << clear
                   << " under no tile, " << clear_differing << " changed\n";
-        if (interior < least_fog_pixels || interior_differing != 0 || edge == 0 ||
-            edge_outside != 0 || clear_differing != 0) {
+        if ((whole_in_view && interior < least_fog_pixels) || interior_differing != 0 ||
+            edge == 0 || edge_outside != 0 || clear_differing != 0) {
             write_png(
                 picture("fog-unseen-zoom-" + zoom_text(zoom) + "-standard"), processor_unseen
             );
@@ -3301,6 +3332,9 @@ void Runtime::check_full_overlays(
         std::size_t unmapped_edge_outside = 0;
         std::size_t untouched = 0;
         std::size_t untouched_changed = 0;
+        // A view without a tile wholly unmapped, as a small map's at a close
+        // zoom, holds the edge tiles to their range alone.
+        whole_in_view = false;
         std::fill(under_tile.begin(), under_tile.end(), 0);
         for (const auto& tile : fog_tiles(zoom)) {
             if (tile.tile.unmapped == 0)
@@ -3311,6 +3345,7 @@ void Runtime::check_full_overlays(
                     if (!inside(field, x, y))
                         continue;
                     under(x, y) = 1;
+                    whole_in_view = whole_in_view || whole;
                     if (passed_over(x, y))
                         continue;
                     const uint8_t* fogged = pixel(full_mapped, x, y);
@@ -3347,8 +3382,8 @@ void Runtime::check_full_overlays(
                   << " not the processor's black; " << unmapped_edge << " under edge tiles, "
                   << unmapped_edge_outside << " outside the range to black; " << untouched
                   << " under no such tile, " << untouched_changed << " changed\n";
-        if (unmapped < least_fog_pixels || unmapped_differing != 0 || unmapped_edge == 0 ||
-            unmapped_edge_outside != 0 || untouched_changed != 0) {
+        if ((whole_in_view && unmapped < least_fog_pixels) || unmapped_differing != 0 ||
+            unmapped_edge == 0 || unmapped_edge_outside != 0 || untouched_changed != 0) {
             write_png(
                 picture("fog-unmapped-zoom-" + zoom_text(zoom) + "-standard"), processor_mapped
             );
@@ -3364,12 +3399,16 @@ void Runtime::check_full_overlays(
         const auto dither = fog_shading_.dither_rgb;
         std::size_t dithered = 0;
         std::size_t dithered_differing = 0;
+        whole_in_view = false;
         for (const auto& tile : fog_tiles(zoom)) {
             if (tile.tile.unseen != wr::fog_mask_full || tile.tile.unmapped == wr::fog_mask_full)
                 continue;
             for (int y = tile.area.y; y < tile.area.y + tile.area.h; ++y)
                 for (int x = tile.area.x; x < tile.area.x + tile.area.w; ++x) {
-                    if (!inside(field, x, y) || passed_over(x, y))
+                    if (!inside(field, x, y))
+                        continue;
+                    whole_in_view = true;
+                    if (passed_over(x, y))
                         continue;
                     ++dithered;
                     const uint8_t* before = pixel(full_clear, x, y);
@@ -3386,7 +3425,7 @@ void Runtime::check_full_overlays(
         std::cout << "render tiers check: full tier dithered fog at zoom " << zoom_text(zoom)
                   << ": " << dithered << " pixels under tiles wholly out of sight, "
                   << dithered_differing << " not the even tone\n";
-        if (dithered < least_fog_pixels || dithered_differing != 0)
+        if ((whole_in_view && dithered < least_fog_pixels) || dithered_differing != 0)
             fail("the dithered fog at zoom " + zoom_text(zoom) + " is not the even tone");
     }
     restore_fog();

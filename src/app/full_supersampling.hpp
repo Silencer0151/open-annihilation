@@ -42,8 +42,14 @@ struct WorldTargetPlan {
     uint32_t size_height{};
     /// Size pixels per map pixel the stages draw at into the target: the
     /// zoom from zoom 1 up, so the texture holds factor times zoom texels a
-    /// map pixel; 1 over the factor below zoom 1, so it holds one.
+    /// map pixel; the texel scale over the factor below zoom 1, so it holds
+    /// texel_scale texels a map pixel.
     float draw_scale{1.0F};
+    /// Texels a map pixel the texture holds below zoom 1: 1 from zoom one
+    /// half up, one half from a quarter, one quarter below, the halving
+    /// that keeps the two-level blend's scale, the zoom over it, within one
+    /// half to 1 (texel_scale_of); 1 from zoom 1 up.
+    float texel_scale{1.0F};
     /// The part of the texture the frame fills, in texture pixels from its
     /// corner: the whole size from zoom 1 up; below it the battlefield over
     /// the zoom, rounded up to part_grain.
@@ -56,6 +62,19 @@ struct WorldTargetPlan {
     /// than by the factor's halvings (from zoom 1 up).
     bool two_level{};
 };
+
+/// The least texel scale a zoom below 1 draws at: one quarter, the atlas's
+/// last tile level, which holds the two-level blend's scale within one
+/// half to 1 down to zoom one eighth, below the Full tier's zoom floor of
+/// one sixth (kMinFullBattlefieldZoom).
+inline constexpr float least_texel_scale = 0.25F;
+
+/// Returns the texel scale a zoom below 1 draws at (WorldTargetPlan::texel_scale).
+///
+/// @param zoom window pixels per map pixel, above 0
+/// @return 1, one half or one quarter: the largest at which the zoom over
+///     it is at most 1 and, down to least_texel_scale, at least one half
+[[nodiscard]] float texel_scale_of(float zoom) noexcept;
 
 /// Returns how a frame at a zoom is drawn through the world target at a
 /// factor and reduced to a battlefield. At a factor of 1 the plan draws

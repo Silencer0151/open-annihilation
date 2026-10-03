@@ -30,7 +30,6 @@ enum class RecordedTrouble : uint8_t {
 /// first line says while the graphics card scales the frames.
 enum class FullShortfall : uint8_t {
     none,          ///< nothing keeps Full to Basic
-    not_built,     ///< this build cannot draw Full
     lacks_feature, ///< Full's function test failed or the card cannot make Full's pages
     failed_before, ///< a full-unusable record stands against the driver
     stopped,       ///< a call of the Full tier's own failed in this run
@@ -48,8 +47,7 @@ enum class FullShortfall : uint8_t {
 struct AccelerationFacts {
     /// The level asked for: a flag decides, else the Hardware acceleration
     /// setting in effect (hardware_acceleration_asked). Basic and Full ask
-    /// for the graphics card; Full is drawn as Basic until the game draws
-    /// the battlefield on the card.
+    /// for the graphics card.
     oa::ui::engine_settings::HardwareAcceleration asked{
         oa::ui::engine_settings::HardwareAcceleration::off
     };
@@ -206,8 +204,8 @@ struct AccelerationReport {
 /// graphics card draws the battlefield the status is Full in use, with
 /// less anti-aliasing once its step-down lowered it; while it scales the
 /// frames with Full asked for, the status says why Basic draws instead
-/// (FullShortfall), Full not in this build where nothing else does, in a
-/// replay saying so for a shared game's wait.
+/// (FullShortfall), in a replay saying so for a shared game's wait, or,
+/// where nothing keeps Full to Basic, what the card does as for Basic.
 /// Vertical sync is out of reach on SDL's software renderer (unless
 /// --force-capable), on a renderer whose device each change resets, and
 /// once the renderer refused it.
@@ -231,7 +229,7 @@ struct AccelerationReport {
 /// replay the tier waits for; whether the graphics card scales the frames
 /// now, and whether it draws the battlefield; where Full was asked for and
 /// Basic draws, why (FullShortfall), in the order the tier is decided:
-/// Full not in this build, its function test failed, a full-unusable
+/// its function test failed, a full-unusable
 /// record, its drop by a card failure, the memory guard, slow frames or a
 /// trial that could not be written, or a shared game or a replay begun
 /// without it; Full's anti-aliasing at the rung; and what the card does

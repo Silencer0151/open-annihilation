@@ -5,22 +5,25 @@
 
 #include "oa/app/render_policy.hpp"
 
+#include <optional>
+
 namespace oa::app {
 
 namespace settings = oa::ui::engine_settings;
 
 namespace {
 
-/// Returns the status of Basic drawing where Full was asked for.
+/// Returns the status of Basic drawing where Full was asked for and
+/// something keeps it to Basic.
 ///
 /// @param shortfall why Basic draws
-/// @return the state; Full not in this build where nothing keeps it to Basic
-settings::AccelerationState full_shortfall_state(FullShortfall shortfall) noexcept {
+/// @return the state; none where nothing keeps Full to Basic, which the
+///     states of Basic's own then describe
+std::optional<settings::AccelerationState> full_shortfall_state(FullShortfall shortfall) noexcept {
     using settings::AccelerationState;
     switch (shortfall) {
     case FullShortfall::none:
-    case FullShortfall::not_built:
-        return AccelerationState::full_not_built;
+        return std::nullopt;
     case FullShortfall::lacks_feature:
         return AccelerationState::full_lacks_feature;
     case FullShortfall::failed_before:
@@ -36,7 +39,7 @@ settings::AccelerationState full_shortfall_state(FullShortfall shortfall) noexce
     case FullShortfall::waiting_for_game_end:
         return AccelerationState::full_waiting_for_game_end;
     }
-    return AccelerationState::full_not_built;
+    return std::nullopt;
 }
 
 } // namespace
@@ -128,17 +131,19 @@ AccelerationReport report_acceleration(const AccelerationFacts& facts) noexcept 
         report.status.state = facts.less_anti_aliasing
                                   ? AccelerationState::full_in_use_less_anti_aliasing
                                   : AccelerationState::full_in_use;
-    else if (facts.tier_accelerated)
-        // Where Full was asked for and Basic draws, the status says why
-        // before anything else: this build cannot draw Full, or something
-        // kept it to Basic.
-        report.status.state = facts.asked == HardwareAcceleration::full
-                                  ? full_shortfall_state(facts.full_shortfall)
+    else if (facts.tier_accelerated) {
+        // Where Full was asked for and something keeps it to Basic, the
+        // status says what before anything else; otherwise Basic's own
+        // states say what the card does.
+        const std::optional<AccelerationState> shortfall =
+            facts.asked == HardwareAcceleration::full ? full_shortfall_state(facts.full_shortfall)
+                                                      : std::nullopt;
+        report.status.state = shortfall              ? *shortfall
                               : facts.driver_skipped ? AccelerationState::in_use_on_another_driver
                               : facts.slow_frames_stepped ? AccelerationState::in_use_less_smoothing
                               : facts.no_smoothing        ? AccelerationState::in_use_no_smoothing
                                                           : AccelerationState::in_use;
-    else
+    } else
         report.status.state = AccelerationState::next_start;
     // The wait says whether it is for a replay, and which level then takes
     // effect.
@@ -164,8 +169,6 @@ FullShortfall full_shortfall_of(const render_policy::TierInputs& inputs) noexcep
     using render_policy::FullDrop;
     using render_policy::MatchKind;
     const bool forced = inputs.flag == AccelerationFlag::full;
-    if (!render_policy::full_ready && !forced)
-        return FullShortfall::not_built;
     if (inputs.full_drop == FullDrop::function_test)
         return FullShortfall::lacks_feature;
     if (inputs.full_unusable_record && !forced)

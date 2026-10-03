@@ -95,8 +95,7 @@ processor's shade exactly; and `native-render-tiers`,
 `native-render-tiers-density` and `native-demo-render-tiers`, which with
 `--hardware-acceleration` run the start-up function test on SDL's software
 renderer and draw in the accelerated tier, switching it off and on as the
-flags would. That flag names Full, which forces the Full tier while it is
-not ready for players: the Basic cases run at `basic`, and the Full cases,
+flags would. That flag names Full: the Basic cases run at `basic`, and the Full cases,
 the whole battlefield drawn by the card (the terrain, the fog, the
 sprites, the models and the darkening under the kill board and the
 +stats panel) with the painters' overlay canvas laid over it, at `full`,

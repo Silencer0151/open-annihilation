@@ -415,27 +415,29 @@ void in_use_after_slow_frames_says_it_smooths_less() {
     OA_CHECK(report_acceleration(facts).status.state == State::off_by_setting);
 }
 
-void full_is_drawn_as_basic_and_says_so() {
+void full_asked_while_basic_draws_says_what_the_card_does() {
     // Full asks for the graphics card as Basic does; while the card scales
-    // the frames the status says Full is not in this build, whatever else
-    // in use would say, and until then the usual states apply.
+    // the frames with nothing keeping Full to Basic, the status is Basic's
+    // own, and until then the usual states apply.
     auto facts = able();
     facts.asked = Level::full;
     auto report = report_acceleration(facts);
     OA_CHECK(report.status.state == State::next_start && report.status.asked == Level::full);
     OA_CHECK(!report.acceleration_unavailable);
     facts.tier_accelerated = true;
-    OA_CHECK(report_acceleration(facts).status.state == State::full_not_built);
+    OA_CHECK(report_acceleration(facts).status.state == State::in_use);
     facts.driver_skipped = true;
-    OA_CHECK(report_acceleration(facts).status.state == State::full_not_built);
+    OA_CHECK(report_acceleration(facts).status.state == State::in_use_on_another_driver);
     facts.driver_skipped = false;
     facts.slow_frames_stepped = true;
-    OA_CHECK(report_acceleration(facts).status.state == State::full_not_built);
+    OA_CHECK(report_acceleration(facts).status.state == State::in_use_less_smoothing);
     facts.slow_frames_stepped = false;
     facts.no_smoothing = true;
     report = report_acceleration(facts);
-    OA_CHECK(report.status.state == State::full_not_built && report.status.asked == Level::full);
-    // Basic in use says so.
+    OA_CHECK(
+        report.status.state == State::in_use_no_smoothing && report.status.asked == Level::full
+    );
+    // Basic in use says the same.
     facts.asked = Level::basic;
     OA_CHECK(report_acceleration(facts).status.state == State::in_use_no_smoothing);
     // What stops the card stops it at Full too.
@@ -452,7 +454,7 @@ void full_is_drawn_as_basic_and_says_so() {
     facts.flag = Level::full;
     facts.asked = Level::full;
     facts.tier_accelerated = true;
-    OA_CHECK(report_acceleration(facts).status.state == State::full_not_built);
+    OA_CHECK(report_acceleration(facts).status.state == State::in_use);
     // From the facts the tier is decided from: the setting at Full, or a
     // flag over it.
     namespace policy = oa::app::render_policy;
@@ -468,7 +470,7 @@ void full_is_drawn_as_basic_and_says_so() {
         inputs, rung, oa::app::render_policy::RenderTier::accelerated
     );
     OA_CHECK(from_tier.asked == Level::full && !from_tier.flag);
-    OA_CHECK(report_acceleration(from_tier).status.state == State::full_not_built);
+    OA_CHECK(report_acceleration(from_tier).status.state == State::in_use);
     inputs.flag = policy::AccelerationFlag::basic;
     from_tier = oa::app::tier_acceleration_facts(
         inputs, rung, oa::app::render_policy::RenderTier::accelerated
@@ -487,7 +489,7 @@ void full_is_drawn_as_basic_and_says_so() {
         inputs, rung, oa::app::render_policy::RenderTier::accelerated
     );
     OA_CHECK(from_tier.asked == Level::full && from_tier.flag == Level::full);
-    OA_CHECK(report_acceleration(from_tier).status.state == State::full_not_built);
+    OA_CHECK(report_acceleration(from_tier).status.state == State::in_use);
 }
 
 void full_in_use_and_what_keeps_it_to_basic_say_so() {
@@ -513,7 +515,7 @@ void full_in_use_and_what_keeps_it_to_basic_say_so() {
     OA_CHECK(report.status.state == State::full_in_use_less_anti_aliasing);
     OA_CHECK(report.status.supersample == 2);
     // Where Basic draws with Full asked for, the first line says why, each
-    // reason its own state, and nothing known as Full not in this build.
+    // reason its own state, and nothing keeping Full to Basic is Basic's own.
     facts = able();
     facts.asked = Level::full;
     facts.tier_accelerated = true;
@@ -522,8 +524,7 @@ void full_in_use_and_what_keeps_it_to_basic_say_so() {
         FullShortfall shortfall;
         State state;
     } reasons[] = {
-        {FullShortfall::none, State::full_not_built},
-        {FullShortfall::not_built, State::full_not_built},
+        {FullShortfall::none, State::in_use},
         {FullShortfall::lacks_feature, State::full_lacks_feature},
         {FullShortfall::failed_before, State::full_failed_before},
         {FullShortfall::stopped, State::full_stopped},
@@ -587,17 +588,13 @@ void full_in_use_and_what_keeps_it_to_basic_say_so() {
         return oa::app::tier_acceleration_facts(facts_in, rung, policy::RenderTier::accelerated)
             .full_shortfall;
     };
-    // The flag forces Full over a build not ready and a record; the setting
-    // alone does neither.
+    // The flag forces Full over a record; the setting alone does not.
     OA_CHECK(shortfall(inputs) == FullShortfall::none);
     inputs.full_unusable_record = true;
     OA_CHECK(shortfall(inputs) == FullShortfall::none);
     inputs.flag = policy::AccelerationFlag::none;
     inputs.setting = Level::full;
-    OA_CHECK(
-        shortfall(inputs) ==
-        (policy::full_ready ? FullShortfall::failed_before : FullShortfall::not_built)
-    );
+    OA_CHECK(shortfall(inputs) == FullShortfall::failed_before);
     inputs.flag = policy::AccelerationFlag::full;
     inputs.full_drop = policy::FullDrop::function_test;
     OA_CHECK(shortfall(inputs) == FullShortfall::lacks_feature);
@@ -931,7 +928,7 @@ int main() {
     an_error_of_the_games_own_says_so();
     in_use_at_the_lowest_budget_says_nothing_smooths();
     in_use_after_slow_frames_says_it_smooths_less();
-    full_is_drawn_as_basic_and_says_so();
+    full_asked_while_basic_draws_says_what_the_card_does();
     full_in_use_and_what_keeps_it_to_basic_say_so();
     the_reach_follows_the_rung();
     the_tier_facts_give_the_status();

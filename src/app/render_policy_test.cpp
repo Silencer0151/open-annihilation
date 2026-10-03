@@ -363,9 +363,9 @@ void test_decide_by_table() {
          [](TierInputs& i) { i.setting = HardwareAcceleration::off; },
          RenderTier::standard,
          TierReason::setting_off},
-        {"setting full, drawn as basic",
+        {"setting full",
          [](TierInputs& i) { i.setting = HardwareAcceleration::full; },
-         RenderTier::accelerated,
+         RenderTier::full,
          TierReason::accelerated},
         {"setting off, flag on",
          [](TierInputs& i) {
@@ -549,10 +549,9 @@ void test_decide_by_table() {
     }
 }
 
-/// Full: asked for by the flag it is the Full tier; asked for by the
-/// setting alone it is Basic while Full is not ready in this build; dropped
-/// for the run it is Basic until Off and back lifts the drop; and every
-/// condition of the accelerated tier still applies to it.
+/// Full: asked for by the flag or by the setting it is the Full tier;
+/// dropped for the run it is Basic until Off and back lifts the drop; and
+/// every condition of the accelerated tier still applies to it.
 void test_decide_full() {
     struct Case {
         const char* name;
@@ -565,8 +564,8 @@ void test_decide_full() {
         {"basic asked", [](TierInputs&) {}, RenderTier::accelerated, FullReason::not_asked},
         {"full by the setting",
          [](TierInputs& i) { i.setting = HardwareAcceleration::full; },
-         full_ready ? RenderTier::full : RenderTier::accelerated,
-         full_ready ? FullReason::full : FullReason::not_ready},
+         RenderTier::full,
+         FullReason::full},
         {"full by the flag",
          [](TierInputs& i) { i.flag = AccelerationFlag::full; },
          RenderTier::full,
@@ -626,7 +625,7 @@ void test_decide_full() {
              i.full_unusable_record = true;
          },
          RenderTier::accelerated,
-         full_ready ? FullReason::unusable_record : FullReason::not_ready},
+         FullReason::unusable_record},
         {"full-unusable record, flag full",
          [](TierInputs& i) {
              i.flag = AccelerationFlag::full;
@@ -859,15 +858,14 @@ void test_decide_every_combination() {
                                 card_tier(decision.tier))
                                 ++mismatches;
                             // Of the frames the card presents, Full is exactly
-                            // those the flag forces while Full is not ready,
-                            // outside a shared game or a replay the tier did
-                            // not begin as Full.
-                            const bool full_expected =
-                                expected &&
-                                (flag == AccelerationFlag::full ||
-                                 (full_ready && flag == AccelerationFlag::none &&
-                                  setting == HardwareAcceleration::full)) &&
-                                (gate.kind == MatchKind::none || gate.full);
+                            // those Full was asked for, by the flag or by the
+                            // setting under no flag, outside a shared game or
+                            // a replay the tier did not begin as Full.
+                            const bool full_expected = expected &&
+                                                       (flag == AccelerationFlag::full ||
+                                                        (flag == AccelerationFlag::none &&
+                                                         setting == HardwareAcceleration::full)) &&
+                                                       (gate.kind == MatchKind::none || gate.full);
                             if ((decision.tier == RenderTier::full) != full_expected)
                                 ++mismatches;
                             // The function test may run exactly where the tier would
@@ -1097,19 +1095,6 @@ void test_shared_match_gate() {
     note_match_frame(inputs.match, RenderTier::standard, false);
     inputs.function_test = FunctionTest::passed;
     OA_CHECK(decide_render_tier(inputs).tier == RenderTier::accelerated);
-
-    // Resources are made for the first time only as the loading screen
-    // begins.
-    SharedMatchGate gate;
-    OA_CHECK(first_use_allowed(gate, false));
-    OA_CHECK(first_use_allowed(gate, true));
-    begin_match(gate, MatchKind::shared_game, true);
-    OA_CHECK(first_use_allowed(gate, true));
-    OA_CHECK(!first_use_allowed(gate, false));
-    begin_match(gate, MatchKind::replay, false);
-    OA_CHECK(!first_use_allowed(gate, false));
-    end_match(gate);
-    OA_CHECK(first_use_allowed(gate, false));
 }
 
 // ---------------------------------------------------------------------------
@@ -1905,7 +1890,6 @@ struct FrameClock {
         FrameSample sample;
         sample.now_ns = now_ns;
         sample.interval_ns = interval_ns;
-        sample.draw_ns = interval_ns / 2;
         sample.paced_frames_per_second = paced;
         sample.kind = kind;
         sample.window_active = true;
@@ -2216,6 +2200,7 @@ void test_step_down_costs() {
             FrameSample sample = third_clock.frame(22 * millisecond, FrameKind::zoomed_out);
             sample.draw_ns = 12 * millisecond;
             sample.area_ns = area_ns;
+            sample.passes_ns = area_ns;
             sample.present_ns = 1 * millisecond;
             result = feed_step_down(third_ladder, sample);
         }
@@ -2235,6 +2220,7 @@ void test_step_down_costs() {
             FrameSample sample = blend_clock.frame(22 * millisecond, FrameKind::zoomed_out);
             sample.draw_ns = 12 * millisecond;
             sample.area_ns = 6 * millisecond;
+            sample.passes_ns = 6 * millisecond;
             sample.present_ns = present;
             result = feed_step_down(blend_ladder, sample);
         }
@@ -2250,6 +2236,24 @@ void test_step_down_costs() {
                 blend_ladder.state.budget == SceneBudget::reduced
             );
     }
+
+    // A frame the processor's own drawing makes slow costs the tier nothing:
+    // 40 ms frames whose drawing takes 36 ms never step, at any zoom, while
+    // the same frames with 4 ms of drawing step at once.
+    for (const uint64_t drawing : {uint64_t{36} * millisecond, uint64_t{4} * millisecond})
+        for (const FrameKind kind :
+             {FrameKind::zoomed_in, FrameKind::zoomed_out, FrameKind::other}) {
+            ScaleStepDown slow_ladder = start_step_down(top);
+            FrameClock slow_clock;
+            bool stepped = false;
+            while (slow_clock.now_ns < seconds_20 && !stepped) {
+                FrameSample sample = slow_clock.frame(40 * millisecond, kind);
+                sample.draw_ns = drawing;
+                sample.passes_ns = 1 * millisecond;
+                stepped = feed_step_down(slow_ladder, sample) != StepResult::none;
+            }
+            OA_CHECK(stepped == (drawing == 4 * millisecond));
+        }
 }
 
 void test_step_target_rate() {
@@ -2673,18 +2677,17 @@ void test_supersampling() {
     OA_CHECK(supersample_factor(AntiAliasing::x8) == 4);
     OA_CHECK(supersample_factor(AntiAliasing::x16) == 4);
 
-    constexpr uint64_t whole = supersample_budget_pixels;
-    constexpr uint64_t quarter = supersample_budget_pixels / 4;
-    OA_CHECK(supersample_budget(8 * gibibyte, false, false) == whole);
+    // The game's budget holds the largest target a renderer can, 16384 a
+    // side (card::largest_target_edge): its square and the half.
+    constexpr uint32_t largest_target_edge = 16384;
     OA_CHECK(
-        supersample_budget(most_memory_at_quarter_supersample_budget + 1, false, false) == whole
+        supersample_budget_pixels >=
+        supersample_target_pixels(largest_target_edge, largest_target_edge, 1)
     );
-    OA_CHECK(
-        supersample_budget(most_memory_at_quarter_supersample_budget, false, false) == quarter
-    );
-    OA_CHECK(supersample_budget(0, false, false) == quarter);
-    OA_CHECK(supersample_budget(8 * gibibyte, true, false) == quarter);
-    OA_CHECK(supersample_budget(8 * gibibyte, false, true) == quarter);
+    // Budgets the fitting is tried within below: 2^25 pixels, which the
+    // first design set, and a quarter of it.
+    constexpr uint64_t whole = uint64_t{1} << 25;
+    constexpr uint64_t quarter = whole / 4;
 
     // The texture and its half.
     OA_CHECK(supersample_target_pixels(100, 50, 1) == 5000 + 1250);
@@ -3546,14 +3549,14 @@ void test_host_runs() {
         OA_CHECK(!on && test.runs == 1);
         forget_failures(inputs);
         test.passes = true;
-        OA_CHECK(drawn_frame(inputs, on, test).tier == RenderTier::accelerated);
+        OA_CHECK(card_tier(drawn_frame(inputs, on, test).tier));
         OA_CHECK(on && test.runs == 2);
         // A drop keeps it standard until forgotten.
         inputs.drop = Drop::driver_failure;
         OA_CHECK(drawn_frame(inputs, on, test).reason == TierReason::dropped);
         OA_CHECK(!on);
         forget_failures(inputs);
-        OA_CHECK(drawn_frame(inputs, on, test).tier == RenderTier::accelerated);
+        OA_CHECK(card_tier(drawn_frame(inputs, on, test).tier));
         OA_CHECK(test.runs == 2);
     }
 

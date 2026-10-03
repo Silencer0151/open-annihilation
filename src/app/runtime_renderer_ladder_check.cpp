@@ -2462,7 +2462,7 @@ struct Runtime::RendererLadder {
         const auto* struck = entry(render_probe::software_renderer);
         expect(
             struck != nullptr && struck->strike.stage == rs::StrikeStage::card &&
-                struck->strike.call == "the-card-refused-the-terrain-frame" &&
+                struck->strike.call == "the-card-refused-the-frame" &&
                 struck->full_unusable.failure == rs::RecordedFailure::none,
             where,
             "the failing call was not struck against the driver, or was recorded at once"
@@ -2506,9 +2506,10 @@ struct Runtime::RendererLadder {
     }
 
     /// In a shared game or a replay Full falls to Basic at once and rises
-    /// again only when the match ends; a page Full would make during the
-    /// match waits for its end instead, and the loading screen makes every
-    /// page and target before the world is built.
+    /// again only when the match ends; a page or a target Full needs during
+    /// the match is made then, as at any time, and a shared game's loading
+    /// screen makes the terrain pages and the targets before the world is
+    /// built.
     void shared_game() {
         constexpr std::string_view where = "full-shared";
         start_match();
@@ -2549,26 +2550,29 @@ struct Runtime::RendererLadder {
         runtime.end_render_tier_match();
         runtime.render();
         expect(runtime.full_presentation(), where, "full did not return after the match");
-        // Full's pages are made as the loading screen begins, and nothing
-        // afterwards: without them Full waits for the match to end.
+        // A page or a target Full needs during a replay or a shared game is
+        // made then, as at any time: pages freed during a replay are made
+        // again by the next Full frame, with nothing dropped or struck.
         runtime.begin_render_tier_match(render_policy::MatchKind::replay);
         runtime.free_full_presentation();
         expect(full(where).pages.empty(), where, "the pages were not freed");
-        runtime.render();
-        // The frame that found its pages missing was Basic's; the next is
-        // decided so.
-        runtime.update_render_tier();
+        full_frame(where);
         expect(
-            !runtime.full_presentation() && full(where).pages.empty() && !gate.full &&
+            !full(where).pages.empty() && gate.full &&
                 full_drop() == render_policy::FullDrop::none &&
                 host().records().records().drivers.size() == struck_before,
             where,
-            "a page was made during the replay, or the wait dropped or struck something"
+            "the pages were not made again during the replay, or making them dropped or "
+            "struck something"
         );
         runtime.end_render_tier_match();
         runtime.update_render_tier();
-        expect(runtime.full_presentation(), where, "full did not return after the replay");
+        expect(runtime.full_presentation(), where, "full did not draw on after the replay");
+        // A shared game's loading screen makes the terrain pages and the
+        // targets before the world is built, so that its first frames find
+        // them and make no terrain page.
         runtime.begin_render_tier_match(render_policy::MatchKind::shared_game);
+        runtime.free_full_presentation();
         runtime.preallocate_full_match_textures();
         auto& made = full(where);
         const std::size_t pages = made.pages.size();
@@ -2582,7 +2586,7 @@ struct Runtime::RendererLadder {
         expect(
             made.pages.size() == pages && gate.full && runtime.full_presentation(),
             where,
-            "a frame of the shared game made a page"
+            "a frame of the shared game made a terrain page"
         );
         runtime.end_render_tier_match();
         full_tier(where, false);

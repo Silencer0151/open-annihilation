@@ -43,6 +43,9 @@ constexpr int kBattlefieldHeight = kCanvasHeight - kBattlefieldTop - kBattlefiel
 constexpr std::size_t kDefaultCampaignTicks = 3000; // headless --mission without --match-ticks
 constexpr uint16_t kSkirmishUnitsPerPlayer = 250;
 constexpr float kMinBattlefieldZoom = 0.5F;
+/// The zoom floor while the graphics card draws the battlefield (the Full
+/// tier): three times as far out as the processor's floor.
+constexpr float kMinFullBattlefieldZoom = kMinBattlefieldZoom / 3.0F;
 constexpr float kMaxBattlefieldZoom = 4.0F;
 constexpr float kDefaultBattlefieldZoom = 1.0F;
 constexpr float kZoomWheelFactor = 1.15F;

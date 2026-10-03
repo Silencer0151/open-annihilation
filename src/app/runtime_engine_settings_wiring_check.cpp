@@ -330,17 +330,17 @@ void Runtime::check_engine_settings_wiring() {
             in_use(acceleration_report().status.state),
             "Hardware acceleration Basic does not say it is in use"
         );
-        // Full draws Basic, and the status says Full is not in this build.
+        // Full draws on the card at once, and the status says so.
         click(row_control, "Full");
         require(
             engine_settings().hardware_acceleration == settings::HardwareAcceleration::full &&
-                accelerated_presentation(),
-            "Hardware acceleration Full did not draw in the accelerated tier at once"
+                full_presentation(),
+            "Hardware acceleration Full did not draw in the full tier at once"
         );
         require(
-            acceleration_report().status.state == settings::AccelerationState::full_not_built &&
-                shows_dialog_text("Full is not in this build: Basic is in use."),
-            "Hardware acceleration Full does not say Basic is in use in its place"
+            acceleration_report().status.state == settings::AccelerationState::full_in_use &&
+                shows_dialog_text("Full in use: the graphics card draws the view."),
+            "Hardware acceleration Full does not say it is in use"
         );
         click(row_control, "Off");
         require(

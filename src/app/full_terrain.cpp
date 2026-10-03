@@ -19,14 +19,25 @@ namespace {
 /// Indices one tile's quad takes: two triangles.
 constexpr uint32_t quad_indices = 6;
 
-/// The alpha of the level-0 pass of the zoomed-out blend, 1 - log2(1 / zoom),
-/// held from 0 to 1; 0 at level_1_alone_zoom and below.
+/// The levels of the zoomed-out blend at a zoom below 1.
+struct ZoomedOutLevels {
+    uint8_t far{};      ///< the level drawn first, alone or under the nearer level
+    float near_alpha{}; ///< the alpha the level above it is blended over at; 0 for none
+};
+
+/// Returns the levels of the zoomed-out blend: with t = log2(1 / zoom), the
+/// two levels that bracket t, the nearer blended over the farther at alpha
+/// 1 - (t - near); at a whole t the far level alone; at and beyond the last
+/// tile level that level alone, reduced.
 ///
 /// @param zoom window pixels per map pixel, below 1
-/// @return the alpha
-float near_level_alpha(float zoom) noexcept {
+/// @return the levels
+ZoomedOutLevels zoomed_out_levels(float zoom) noexcept {
     const double t = std::log2(1.0 / static_cast<double>(zoom));
-    return static_cast<float>(std::clamp(1.0 - t, 0.0, 1.0));
+    constexpr double last_level = gw::tile_level_count - 1;
+    const double far = std::min(std::ceil(t), last_level);
+    const double near_alpha = t < far ? std::clamp(1.0 - (t - (far - 1.0)), 0.0, 1.0) : 0.0;
+    return {static_cast<uint8_t>(far), static_cast<float>(near_alpha)};
 }
 
 } // namespace
@@ -36,11 +47,16 @@ TerrainDrawPlan plan_terrain_draw(float zoom, bool pixel_art_sampling) noexcept 
     if (!(zoom > 0.0F))
         zoom = 1.0F;
     if (zoom < 1.0F) {
-        plan.passes[0] = {far_level, card::Sampling::linear, card::Blend::none, 1.0F};
+        const ZoomedOutLevels levels = zoomed_out_levels(zoom);
+        plan.passes[0] = {levels.far, card::Sampling::linear, card::Blend::none, 1.0F};
         plan.pass_count = 1;
-        const float alpha = zoom <= level_1_alone_zoom ? 0.0F : near_level_alpha(zoom);
-        if (alpha > 0.0F) {
-            plan.passes[1] = {0, card::Sampling::linear, card::Blend::alpha, alpha};
+        if (levels.near_alpha > 0.0F) {
+            plan.passes[1] = {
+                static_cast<uint8_t>(levels.far - 1U),
+                card::Sampling::linear,
+                card::Blend::alpha,
+                levels.near_alpha
+            };
             plan.pass_count = 2;
         }
         return plan;

@@ -55,9 +55,8 @@ then says what the level does in Full at that factor, 1:1 at Off.
 Hardware acceleration has three levels (`HardwareAcceleration`). Off is the
 game as it always drew: the processor draws and scales every frame. Basic
 lets the graphics card scale and compose the frames where it is able to;
-the processor still draws every pixel the game decides. Full, where the
-card also draws the battlefield, is not in this build: choosing it draws
-Basic, and the status says so. Its default depends only on the preferences
+the processor still draws every pixel the game decides. Full lets the
+card also draw the battlefield. Its default depends only on the preferences
 file, never on the machine: whether the card is used is decided apart, and
 the card is used only with a renderer able to and 2 GiB of memory, which a
 machine sold with 2 GB counts as having. Its two hint lines are its status
@@ -70,8 +69,8 @@ shared game or a replay waits for its end, naming the level that then
 takes effect, the graphics driver failed or the game stopped while using
 it, in this run or as the game's records of earlier ones say, no usable
 graphics card was found, the card lacks a feature, the game cannot save the
-files that guard trying it, Full is not in this build and Basic is in use,
-the card is in use, on another driver where a record passed over one, or,
+files that guard trying it, the card is in use, on another driver where a
+record passed over one, or,
 on a renderer nothing has looked at yet, it takes effect from the next
 start. Where Full was asked for and Basic draws in its place, the first
 line says why: Full's trial could not be written, there is too little

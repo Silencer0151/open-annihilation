@@ -53,8 +53,9 @@ bool near(float a, float b) {
     return std::fabs(a - b) < 1.0e-5F;
 }
 
-/// The level rule: level 1 alone at 0.5, the blend between, level 0 NEAREST
-/// at whole numbers, pixel-art or the target at other zooms above 1.
+/// The level rule: level 1 alone at 0.5, the blend between, level 2 under
+/// level 1 below 0.5 and alone at 0.25 and below, level 0 NEAREST at whole
+/// numbers, pixel-art or the target at other zooms above 1.
 void test_plan() {
     using card::Blend;
     using card::Sampling;
@@ -62,8 +63,22 @@ void test_plan() {
     OA_CHECK(half.pass_count == 1 && half.passes[0].level == 1);
     OA_CHECK(half.passes[0].sampling == Sampling::linear && half.passes[0].blend == Blend::none);
     OA_CHECK(!half.through_target);
+    // Between 0.5 and 0.25 level 2 is drawn first and level 1 blended over
+    // it, at the alpha of the same rule one level down.
     const auto below = ft::plan_terrain_draw(0.3F, false);
-    OA_CHECK(below.pass_count == 1 && below.passes[0].level == 1);
+    OA_CHECK(below.pass_count == 2 && below.passes[0].level == 2 && below.passes[1].level == 1);
+    OA_CHECK(below.passes[0].sampling == Sampling::linear && below.passes[1].blend == Blend::alpha);
+    OA_CHECK(near(
+        below.passes[1].alpha, static_cast<float>(2.0 - std::log2(1.0 / static_cast<double>(0.3F)))
+    ));
+    // At 0.25 and at the Full tier's floor of one sixth
+    // (kMinFullBattlefieldZoom) level 2 alone, reduced.
+    for (const float zoom : {0.25F, 1.0F / 6.0F, 0.1F}) {
+        const auto far = ft::plan_terrain_draw(zoom, false);
+        OA_CHECK(far.pass_count == 1 && far.passes[0].level == 2);
+        OA_CHECK(far.passes[0].sampling == Sampling::linear && far.passes[0].blend == Blend::none);
+        OA_CHECK(!far.through_target);
+    }
     for (const float zoom : {0.6F, 0.75F, 0.9F, 0.999F}) {
         const auto plan = ft::plan_terrain_draw(zoom, false);
         OA_CHECK(plan.pass_count == 2);

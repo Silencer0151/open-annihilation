@@ -4194,6 +4194,16 @@ class Runtime final : public menu::Host,
     /// @return canvas pixels per map pixel; 1 draws the map 1:1
     [[nodiscard]] float match_zoom() const;
 
+    /// Returns the zoom floor of the match's view: kMinFullBattlefieldZoom
+    /// while the graphics card draws the battlefield, which draws any view
+    /// at the window's cost, else kMinBattlefieldZoom, past which the
+    /// processor's drawing of the view would grow too slow. A view zoomed
+    /// out past the floor comes back to it as the floor moves
+    /// (step_match_zoom).
+    ///
+    /// @return the least zoom the view may take
+    [[nodiscard]] float least_match_zoom() const noexcept;
+
     /// Returns how many map pixels across the battlefield shows at the current zoom.
     ///
     /// @return the battlefield width over the zoom, at least 1
@@ -4924,8 +4934,8 @@ class Runtime final : public menu::Host,
     /// match's palette is read first, Full's trial written before the
     /// pages (begin_full_path), and the terrain atlas, the overlay and the
     /// zoom-in target made (ensure_full_match_textures, ensure_full_target)
-    /// at the battlefield's size of the match's layout. Nothing of Full is
-    /// made again until the match ends: a failure drops Full for the run
+    /// at the battlefield's size of the match's layout, so that the match's
+    /// first frames find them; a failure there drops Full for the run
     /// (take_full_failure). Does nothing for a match played alone, whose
     /// pages make_full_match_pages makes with the terrain step and whose
     /// first Full frame makes the rest.
@@ -4935,8 +4945,7 @@ class Runtime final : public menu::Host,
     /// zoom is above 1 and not whole and the renderer lacks the pixel-art
     /// sampling mode, once per match at the largest such a zoom needs;
     /// where the renderer cannot make it, logs so once and the terrain is
-    /// drawn LINEAR straight. In a shared game or a replay after the
-    /// loading screen it makes none (full_creation_allowed).
+    /// drawn LINEAR straight.
     ///
     /// @param bf_w the battlefield's width in pixels
     /// @param bf_h its height in pixels
@@ -4960,11 +4969,9 @@ class Runtime final : public menu::Host,
     /// target the renderer refuses, or one the memory guard refuses
     /// (accelerated_buffer_fits), is not asked for again at that size and
     /// factor: the tier draws straight, logged once. In a shared game or a
-    /// replay after the loading screen none is made
-    /// (render_policy::first_use_allowed): the tier draws straight until
-    /// the match ends, and preallocate_full_match_textures makes the target
-    /// as the loading screen begins. The factor in use and its target are
-    /// logged when they change.
+    /// replay preallocate_full_match_textures makes the target as the
+    /// loading screen begins. The factor in use and its target are logged
+    /// when they change.
     ///
     /// @param asked the factor asked, 1, 2 or 4 (render_policy::supersample_factor)
     /// @param battlefield_width window pixels across the battlefield
@@ -4996,19 +5003,6 @@ class Runtime final : public menu::Host,
     /// the rung then caps the factor the next Full frame draws at.
     void apply_full_supersample_setting();
 
-    /// Tells whether Full may make a page or a target now: outside a shared
-    /// game or a replay, or as one's loading screen begins
-    /// (render_policy::first_use_allowed). Where it may not, Full waits for
-    /// the match to end (wait_full_for_match_end) and the frame is Basic's.
-    ///
-    /// @return true when a page or target may be made
-    [[nodiscard]] bool full_creation_allowed();
-
-    /// Keeps Full away until the shared game or the replay ends
-    /// (render_policy::note_match_frame), logging once per match that its
-    /// pages cannot be made during it; the frame in hand is Basic's.
-    void wait_full_for_match_end();
-
     /// Opens the card's executor on the renderer at its texture limit,
     /// unless it is open, and runs the Full function test on it once per
     /// opening: a page of two levels drawn 1:1 NEAREST and its level 1
@@ -5016,29 +5010,24 @@ class Runtime final : public menu::Host,
     /// triangle of three vertex colours, read back and held to their
     /// references (runtime_full.cpp). The test's failure drops Full as the
     /// card lacking a feature it needs (render_policy::FullDrop::function_test)
-    /// before it is thrown. In a shared game or a replay after the loading
-    /// screen the executor is not opened for the first time
-    /// (full_creation_allowed).
+    /// before it is thrown.
     ///
-    /// Throws FullCardError when the card cannot be opened or must wait for
-    /// the match to end, or the test fails.
+    /// Throws FullCardError when the card cannot be opened or the test
+    /// fails.
     void ensure_full_executor();
 
     /// Builds the map's terrain atlas within fit_page_edge of the renderer's
-    /// texture limit, through the display gamma, and uploads its levels 0
-    /// and 1 as pages, which every zoom from one half draws from, unless
-    /// the pages already hold that atlas: it is built again when the map,
+    /// texture limit, through the display gamma, and uploads its tile
+    /// levels, 0 to 2, as pages, which every zoom from one sixth draws
+    /// from, unless the pages already hold that atlas: it is built again when the map,
     /// the palette, the gamma or the page edge changes, or the pages are
     /// gone. The pages are made once the memory guard allows their memory
-    /// (accelerated_buffer_allowed, which otherwise drops Full for the run),
-    /// and never for the first time in a shared game or a replay after the
-    /// loading screen (full_creation_allowed). Once a page is filled its
-    /// texels are let go; the atlas keeps its grid and its pages' sizes and
-    /// levels for the builder.
+    /// (accelerated_buffer_allowed, which otherwise drops Full for the run).
+    /// Once a page is filled its texels are let go; the atlas keeps its grid
+    /// and its pages' sizes and levels for the builder.
     ///
     /// Throws FullCardError when the match has no map, the atlas cannot be
-    /// built, the memory guard refuses the pages, the pages must wait for
-    /// the match to end or the card refuses a page.
+    /// built, the memory guard refuses the pages or the card refuses a page.
     ///
     /// @param palette the palette the tiles are shown in: the match's once
     ///     the match view is entered, and the game's active palette, which
@@ -5050,8 +5039,8 @@ class Runtime final : public menu::Host,
     /// (begin_full_path), then the executor and its function test
     /// (ensure_full_executor) and the terrain atlas and its pages
     /// (ensure_full_terrain_pages), so that the match's first frame finds
-    /// them and no page is made at a frame, which a shared game or a replay
-    /// never allows. The loading screen calls it with the terrain step,
+    /// them and no page is made at a frame. The loading screen calls it
+    /// with the terrain step,
     /// before the world is built and before a shared game's load barrier;
     /// in a shared game or a replay preallocate_full_match_textures made
     /// them already as the loading screen began. A card failure there drops
@@ -5066,12 +5055,10 @@ class Runtime final : public menu::Host,
     /// the palette, the gamma or the page edge changed since; and the
     /// overlay at the battlefield's size, the world layer's or, before the
     /// first frame, the match layout's, made again when that size changes.
-    /// In a shared game or a replay after the loading screen nothing is
-    /// made for the first time (full_creation_allowed).
     ///
     /// Throws FullCardError when the card refuses a call, the function
-    /// test fails, the memory guard refuses the pages or a first use must
-    /// wait for the match to end, and AccelerationError when the overlay
+    /// test fails or the memory guard refuses the pages, and
+    /// AccelerationError when the overlay
     /// cannot be made.
     void ensure_full_match_textures();
 

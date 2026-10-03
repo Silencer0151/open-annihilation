@@ -38,13 +38,9 @@ inline constexpr std::string_view standard_tier_text = "the processor draws ever
 /// reason, as for a renderer the runtime made itself.
 inline constexpr std::string_view standard_tier_description =
     "standard tier: the processor draws everything";
-/// What the start-up line puts after the basic tier's name where Full was
-/// asked for, while the game cannot draw Full.
-inline constexpr std::string_view full_not_built_note = " (Full is not in this build)";
-
 /// Returns what the start-up line puts after the basic tier's name where
-/// Full was asked for and Basic draws: full_not_built_note, or why Full
-/// stopped or waits, in brackets; empty where Basic was asked for.
+/// Full was asked for and Basic draws: why Full stopped or waits, in
+/// brackets; empty where Basic was asked for.
 ///
 /// @param state the Hardware acceleration row's status
 /// @return the note, with its leading space; empty for a state of Basic's

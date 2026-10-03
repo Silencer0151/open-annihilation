@@ -187,8 +187,6 @@ enum class AccelerationState : uint8_t {
     /// for this game, and Full takes effect from the next
     /// (AccelerationStatus::replay says which match).
     full_waiting_for_game_end,
-    /// Full, which the game cannot draw yet: Basic is in use in its place.
-    full_not_built,
     in_use_on_another_driver, ///< In use, on another graphics driver: one failed
     in_use_less_smoothing,    ///< In use, with less smoothing: frames were slow
     in_use_no_smoothing,      ///< In use, with no smoothing when zoomed out on this machine
