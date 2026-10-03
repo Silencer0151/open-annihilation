@@ -383,8 +383,7 @@ void Runtime::refresh_on_screen_view() {
         return;
     // The view a frame would show: the camera held on the map, bound to the
     // Game block, and the units on screen in it.
-    const auto map_width = static_cast<int32_t>(selected_tnt_->tile_width * 32U);
-    const auto map_height = static_cast<int32_t>(selected_tnt_->tile_height * 32U);
+    const auto [map_width, map_height] = shown_map_size();
     match_camera_x_ = std::clamp(match_camera_x_, 0, std::max(0, map_width - visible_map_width()));
     match_camera_z_ =
         std::clamp(match_camera_z_, 0, std::max(0, map_height - visible_map_height()));

@@ -36,6 +36,7 @@
 #include "oa/platform/machine.hpp"
 #include "oa/platform/render_probe.hpp"
 #include "oa/present/model/rgb_bridge.hpp"
+#include "oa/sim/feature_runtime.hpp"
 #include "oa/sim/unit_spawn/spawn_runtime.hpp"
 #include "oa/ui/console/game_fields.hpp"
 #include "oa/ui/gadget_render.hpp"
@@ -1679,6 +1680,91 @@ int Runtime::check_render_tiers() {
     update_pointer(
         static_cast<float>(match_layout_.width - 1), static_cast<float>(match_layout_.height - 1)
     );
+
+    // The map the view shows ends before the mosaic: the game never shows a
+    // map's last 32 columns and 128 rows of map pixels, where maps end in
+    // filler tiles. A camera asked past the map's end is held at the shown
+    // map's end less the view, and the terrain fill's last column and row
+    // are the shown map's last, never the filler's.
+    {
+        namespace features = oa::sim::feature_runtime;
+        at_zoom(1.0F);
+        const auto [shown_w, shown_h] = shown_map_size();
+        const auto mosaic_w = static_cast<int32_t>(selected_tnt_->tile_width * 32U);
+        const auto mosaic_h = static_cast<int32_t>(selected_tnt_->tile_height * 32U);
+        if (shown_w != mosaic_w - features::hidden_right_edge ||
+            shown_h != mosaic_h - features::hidden_bottom_edge)
+            fail("the shown map is not the mosaic less the edges the game never shows");
+        match_camera_x_ = mosaic_w * 2;
+        match_camera_z_ = mosaic_h * 2;
+        std::ignore = presented();
+        const auto camera = view_camera();
+        if (camera[0] != std::max(0, shown_w - visible_map_width()) ||
+            camera[1] != std::max(0, shown_h - visible_map_height()))
+            fail("the camera asked past the map's end was not held at the shown map's end");
+        const auto& cache = match_terrain_cache_;
+        if (cache.width == 0 || cache.height == 0 ||
+            cache.rgb.size() < static_cast<std::size_t>(cache.width) * cache.height * 3U)
+            fail("the standard tier's frame left no terrain fill");
+        // The fill's last shown column and row against the map, through
+        // the palette, and black past them where the fill reaches further.
+        const auto map_rgb = [&](int32_t map_x, int32_t map_y) {
+            const auto& map = *selected_tnt_;
+            const std::size_t tile = map.tile_indices
+                                         [static_cast<std::size_t>(map_y / 32) * map.tile_width +
+                                          static_cast<std::size_t>(map_x / 32)];
+            const uint8_t index = map.tile_palette_indices
+                                      [tile * 1024U + static_cast<std::size_t>(map_y % 32) * 32U +
+                                       static_cast<std::size_t>(map_x % 32)];
+            return std::array<uint8_t, 3>{
+                match_palette_[index * oa::palette_entry_bytes],
+                match_palette_[index * oa::palette_entry_bytes + 1],
+                match_palette_[index * oa::palette_entry_bytes + 2]
+            };
+        };
+        const auto cache_rgb = [&](uint32_t x, uint32_t y) {
+            const std::size_t at = (static_cast<std::size_t>(y) * cache.width + x) * 3U;
+            return std::array<uint8_t, 3>{cache.rgb[at], cache.rgb[at + 1], cache.rgb[at + 2]};
+        };
+        const auto last_column = shown_w - 1 - camera[0];
+        const auto last_row = shown_h - 1 - camera[1];
+        if (last_column < 0 || last_column >= static_cast<int32_t>(cache.width) || last_row < 0 ||
+            last_row >= static_cast<int32_t>(cache.height))
+            fail("the terrain fill does not reach the shown map's last column and row");
+        uint32_t wrong = 0;
+        uint32_t beyond = 0;
+        for (uint32_t y = 0; y < cache.height; ++y) {
+            const auto map_y = camera[1] + static_cast<int32_t>(y);
+            if (map_y < shown_h &&
+                cache_rgb(static_cast<uint32_t>(last_column), y) != map_rgb(shown_w - 1, map_y))
+                ++wrong;
+            for (auto x = static_cast<uint32_t>(last_column) + 1; x < cache.width; ++x) {
+                ++beyond;
+                if (cache_rgb(x, y) != std::array<uint8_t, 3>{0, 0, 0})
+                    ++wrong;
+            }
+        }
+        for (uint32_t x = 0; x < cache.width; ++x) {
+            const auto map_x = camera[0] + static_cast<int32_t>(x);
+            if (map_x < shown_w &&
+                cache_rgb(x, static_cast<uint32_t>(last_row)) != map_rgb(map_x, shown_h - 1))
+                ++wrong;
+            for (auto y = static_cast<uint32_t>(last_row) + 1; y < cache.height; ++y) {
+                ++beyond;
+                if (cache_rgb(x, y) != std::array<uint8_t, 3>{0, 0, 0})
+                    ++wrong;
+            }
+        }
+        if (wrong != 0)
+            fail(
+                "the terrain fill at the shown map's end differs from the map in " +
+                std::to_string(wrong) + " pixels"
+            );
+        std::cout << "render tiers check: the view ends at the shown map, " << shown_w << 'x'
+                  << shown_h << " of the " << mosaic_w << 'x' << mosaic_h
+                  << " mosaic, with the camera at " << camera[0] << ", " << camera[1] << " and "
+                  << beyond << " fill pixels black past it\n";
+    }
     // The Full tier: the terrain drawn by the card from the atlas pages, the
     // rest by the processor over it.
     if (asked_level == HardwareAcceleration::full)
@@ -1900,8 +1986,14 @@ void Runtime::check_full_render_tier(
             if (!selected_tnt_)
                 fail("the match has no map");
             const auto atlas_start = std::chrono::steady_clock::now();
+            const auto [atlas_columns, atlas_rows] = shown_tile_grid();
+            if (atlas_columns != selected_tnt_->tile_width - 1 ||
+                atlas_rows != selected_tnt_->tile_height - 4)
+                fail("the atlas grid is not the map less the edges the game never shows");
             if (gw::build_terrain_atlas(
                     *selected_tnt_,
+                    atlas_columns,
+                    atlas_rows,
                     match_palette_,
                     gamma_identity_ ? nullptr : &gamma_table_,
                     full.atlas_page_edge,
@@ -1958,6 +2050,47 @@ void Runtime::check_full_render_tier(
         if (!full_->drawn || full_->drawn_quads == 0)
             fail("the card drew no terrain at the full tier's zoom floor");
         write_png(picture("zoom-" + zoom_text(kMinFullBattlefieldZoom)), read);
+        // The atlas holds the shown map alone, so where the view reaches
+        // past the shown map's right edge the card draws nothing: black,
+        // the filler tiles of the edge the game never shows left undrawn.
+        {
+            const auto [columns, rows] = shown_tile_grid();
+            if (full_->atlas.grid_width != columns || full_->atlas.grid_height != rows)
+                fail("the atlas grid is not the shown map's tiles");
+            const auto shown_w = shown_map_size()[0];
+            const auto field = battlefield();
+            const auto pointer = cursor();
+            const auto edge =
+                field.x +
+                static_cast<int>(std::ceil(
+                    static_cast<double>(shown_w - static_cast<int32_t>(full_->frame_camera_x)) *
+                    static_cast<double>(kMinFullBattlefieldZoom)
+                ));
+            // Past the sprites that may overhang the edge from units beside it.
+            const int first = edge + 8;
+            uint32_t sampled = 0;
+            uint32_t lit = 0;
+            for (int y = field.y; y < field.y + field.h; y += 4)
+                for (int x = first; x < field.x + field.w; x += 4) {
+                    if (x >= pointer.x && x < pointer.x + pointer.w && y >= pointer.y &&
+                        y < pointer.y + pointer.h)
+                        continue;
+                    const std::size_t at =
+                        (static_cast<std::size_t>(y) * read.width + static_cast<std::size_t>(x)) *
+                        3U;
+                    ++sampled;
+                    if (read.rgb[at] != 0 || read.rgb[at + 1] != 0 || read.rgb[at + 2] != 0)
+                        ++lit;
+                }
+            if (lit != 0)
+                fail(
+                    "the frame at the zoom floor is lit in " + std::to_string(lit) + " of " +
+                    std::to_string(sampled) + " pixels past the shown map's right edge"
+                );
+            std::cout << "render tiers check: full tier: at the zoom floor the shown map ends at "
+                      << edge << " of the battlefield's " << field.x + field.w << ", with "
+                      << sampled << " pixels sampled black past it\n";
+        }
         std::cout << "render tiers check: full tier: the zoom floor of "
                   << zoom_text(kMinFullBattlefieldZoom) << " is drawn from level 2 LINEAR, "
                   << full_->drawn_quads << " quads\n";
@@ -1976,8 +2109,7 @@ void Runtime::check_full_render_tier(
         at_zoom(zoom);
         // The camera the frame uses, within the map as the frame holds it
         // (a small map holds it at an edge), on an even map pixel.
-        const auto map_width = static_cast<int32_t>(selected_tnt_->tile_width * 32U);
-        const auto map_height = static_cast<int32_t>(selected_tnt_->tile_height * 32U);
+        const auto [map_width, map_height] = shown_map_size();
         match_camera_x_ =
             std::clamp(match_camera_x_, 0, std::max(0, map_width - visible_map_width())) & ~1;
         match_camera_z_ =

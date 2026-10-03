@@ -145,7 +145,17 @@ std::vector<uint8_t> fill_view(
 ) {
     std::vector<uint8_t> rgb(static_cast<std::size_t>(width) * height * 3U);
     const auto error = wr::fill_scaled_viewport(
-        map, palette, source_x, source_y, width, height, 1.0F, rgb.data(), width
+        map,
+        palette,
+        source_x,
+        source_y,
+        map.tile_width * tile_edge,
+        map.tile_height * tile_edge,
+        width,
+        height,
+        1.0F,
+        rgb.data(),
+        width
     );
     OA_CHECK(!error.has_value());
     apply_gamma(rgb, gamma);
@@ -375,7 +385,9 @@ gw::TerrainAtlas build(
     const Map& map, const oa::PaletteBytes& palette, const GammaTable* gamma, uint32_t page_edge
 ) {
     gw::TerrainAtlas atlas;
-    const auto error = gw::build_terrain_atlas(map, palette, gamma, page_edge, atlas);
+    const auto error = gw::build_terrain_atlas(
+        map, map.tile_width, map.tile_height, palette, gamma, page_edge, atlas
+    );
     if (error != gw::TerrainAtlasError::none)
         std::fprintf(stderr, "build refused: %s\n", gw::terrain_atlas_error_text(error));
     OA_CHECK(error == gw::TerrainAtlasError::none);
@@ -955,6 +967,64 @@ void test_pinned_digests() {
     check("gamma 1.25 within 2048", digest_atlas(narrow), pinned_page_lit, pinned_grid);
 }
 
+/// An atlas of fewer cells than the map, the last tile column and the last
+/// four rows left out as the game leaves out the edges it never shows: the
+/// grid is those columns of those rows, each cell's slot holding the tile
+/// the map names there, pixel for pixel; no more slots than the whole
+/// map's; and a grid of no cells or of more than the map's is refused.
+void test_shown_grid() {
+    const oa::PaletteBytes palette = test_palette();
+    const Map map = shared_map();
+    constexpr uint32_t columns = map_tiles_wide - 1;
+    constexpr uint32_t rows = map_tiles_high - 4;
+    const gw::TerrainAtlas whole = build(map, palette, nullptr, gw::page_edge_limit);
+    gw::TerrainAtlas part;
+    OA_CHECK(
+        gw::build_terrain_atlas(map, columns, rows, palette, nullptr, gw::page_edge_limit, part) ==
+        gw::TerrainAtlasError::none
+    );
+    OA_CHECK(part.grid_width == columns && part.grid_height == rows);
+    OA_CHECK(part.grid.size() == static_cast<std::size_t>(columns) * rows);
+    OA_CHECK(!part.slot_tiles.empty() && part.slot_tiles.size() <= whole.slot_tiles.size());
+    std::size_t same = 0;
+    for (uint32_t row = 0; row < rows; ++row)
+        for (uint32_t column = 0; column < columns; ++column) {
+            const std::size_t cell = static_cast<std::size_t>(row) * columns + column;
+            const std::size_t map_cell = static_cast<std::size_t>(row) * map_tiles_wide + column;
+            if (part.grid[cell] >= part.slot_tiles.size())
+                continue;
+            const uint16_t named = map.tile_indices[map_cell];
+            const uint16_t held = part.slot_tiles[part.grid[cell]];
+            if (std::memcmp(
+                    &map.tile_palette_indices[static_cast<std::size_t>(named) * tile_bytes],
+                    &map.tile_palette_indices[static_cast<std::size_t>(held) * tile_bytes],
+                    tile_bytes
+                ) == 0)
+                ++same;
+        }
+    OA_CHECK(same == part.grid.size());
+    gw::TerrainAtlas refused;
+    OA_CHECK(
+        gw::build_terrain_atlas(map, 0, rows, palette, nullptr, gw::page_edge_limit, refused) ==
+        gw::TerrainAtlasError::empty_grid
+    );
+    OA_CHECK(
+        gw::build_terrain_atlas(map, columns, 0, palette, nullptr, gw::page_edge_limit, refused) ==
+        gw::TerrainAtlasError::empty_grid
+    );
+    OA_CHECK(
+        gw::build_terrain_atlas(
+            map, map_tiles_wide + 1, rows, palette, nullptr, gw::page_edge_limit, refused
+        ) == gw::TerrainAtlasError::grid_size
+    );
+    OA_CHECK(
+        gw::build_terrain_atlas(
+            map, columns, map_tiles_high + 1, palette, nullptr, gw::page_edge_limit, refused
+        ) == gw::TerrainAtlasError::grid_size
+    );
+    OA_CHECK(refused.pages.empty() && refused.grid.empty() && refused.slot_tiles.empty());
+}
+
 /// Each malformed map is refused and leaves the atlas empty, after a build
 /// that succeeded too.
 void test_malformed_maps() {
@@ -962,17 +1032,26 @@ void test_malformed_maps() {
     const Map good = shared_map();
     gw::TerrainAtlas atlas;
     OA_CHECK(
-        gw::build_terrain_atlas(good, palette, nullptr, gw::page_edge_limit, atlas) ==
-        gw::TerrainAtlasError::none
+        gw::build_terrain_atlas(
+            good, good.tile_width, good.tile_height, palette, nullptr, gw::page_edge_limit, atlas
+        ) == gw::TerrainAtlasError::none
     );
     OA_CHECK(!atlas.pages.empty());
     const auto refuses = [&](const Map& map, gw::TerrainAtlasError expected) {
         OA_CHECK(
-            gw::build_terrain_atlas(good, palette, nullptr, gw::page_edge_limit, atlas) ==
-            gw::TerrainAtlasError::none
+            gw::build_terrain_atlas(
+                good,
+                good.tile_width,
+                good.tile_height,
+                palette,
+                nullptr,
+                gw::page_edge_limit,
+                atlas
+            ) == gw::TerrainAtlasError::none
         );
-        const auto error =
-            gw::build_terrain_atlas(map, palette, nullptr, gw::page_edge_limit, atlas);
+        const auto error = gw::build_terrain_atlas(
+            map, map.tile_width, map.tile_height, palette, nullptr, gw::page_edge_limit, atlas
+        );
         if (error != expected)
             std::fprintf(
                 stderr,
@@ -1270,8 +1349,9 @@ void test_installed_maps(const oa::AssetStore& assets) {
         }
         const Map& map = *parsed.map;
         gw::TerrainAtlas atlas;
-        const auto error =
-            gw::build_terrain_atlas(map, palette, nullptr, gw::page_edge_limit, atlas);
+        const auto error = gw::build_terrain_atlas(
+            map, map.tile_width, map.tile_height, palette, nullptr, gw::page_edge_limit, atlas
+        );
         if (error != gw::TerrainAtlasError::none) {
             // A map the atlas refuses is one the fill refuses too.
             std::vector<uint8_t> rgb(static_cast<std::size_t>(map.tile_width) * tile_edge * 3U);
@@ -1280,6 +1360,8 @@ void test_installed_maps(const oa::AssetStore& assets) {
                 palette,
                 0,
                 0,
+                map.tile_width * tile_edge,
+                map.tile_height * tile_edge,
                 map.tile_width * tile_edge,
                 1,
                 1.0F,
@@ -1296,8 +1378,15 @@ void test_installed_maps(const oa::AssetStore& assets) {
         if (m % gamma_map_step == 0) {
             gw::TerrainAtlas lit;
             OA_CHECK(
-                gw::build_terrain_atlas(map, palette, &brighter, gw::page_edge_limit, lit) ==
-                gw::TerrainAtlasError::none
+                gw::build_terrain_atlas(
+                    map,
+                    map.tile_width,
+                    map.tile_height,
+                    palette,
+                    &brighter,
+                    gw::page_edge_limit,
+                    lit
+                ) == gw::TerrainAtlasError::none
             );
             wrong += compare_installed_map(map, lit, palette, &brighter);
             ++through_gamma;
@@ -1375,6 +1464,7 @@ int main(int argc, char** argv) {
         test_mips_match_box_filter();
         test_full_chain_exact();
         test_pinned_digests();
+        test_shown_grid();
         test_malformed_maps();
         test_read_refusals();
         test_footprint();

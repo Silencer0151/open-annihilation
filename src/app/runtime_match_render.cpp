@@ -679,8 +679,9 @@ void Runtime::render_match_surface() {
     // for it; its draws never start debris particles.
     const bool directed = director_ != nullptr;
     const bool bare = directed && !director_->presentation.show_interface;
-    const auto map_width = static_cast<int32_t>(selected_tnt_->tile_width * 32U);
-    const auto map_height = static_cast<int32_t>(selected_tnt_->tile_height * 32U);
+    // The map the view shows: the camera is held within it, and the fill
+    // below draws nothing beyond it.
+    const auto [map_width, map_height] = shown_map_size();
     const auto bf_w = match_layout_.battlefield_width();
     const auto bf_h = match_layout_.battlefield_height();
     const auto vis_w = visible_map_width();
@@ -912,6 +913,8 @@ void Runtime::render_match_surface() {
                 match_palette_,
                 camera_x,
                 camera_y,
+                static_cast<uint32_t>(map_width),
+                static_cast<uint32_t>(map_height),
                 static_cast<uint32_t>(scene_w),
                 static_cast<uint32_t>(scene_h),
                 draw_scale,

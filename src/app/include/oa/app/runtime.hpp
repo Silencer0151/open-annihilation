@@ -4214,6 +4214,25 @@ class Runtime final : public menu::Host,
     /// @return the battlefield height over the zoom, at least 1
     [[nodiscard]] int visible_map_height() const;
 
+    /// Returns the map a view may show, in map pixels: the tile mosaic less
+    /// the edges the game never shows, the last 32 across and the last 128
+    /// down (feature_runtime's hidden_right_edge and hidden_bottom_edge),
+    /// which the match's Game block holds as map_pixel_width and
+    /// map_pixel_height once its features are placed. Every camera clamp
+    /// holds the view within it, as the game's clamp does, and the terrain
+    /// beyond it is never drawn: maps end in filler tiles there.
+    ///
+    /// @return the width and height; the Game block's where a match holds
+    ///         them, else the map's less the hidden edges; zero without a map
+    [[nodiscard]] std::array<int32_t, 2> shown_map_size() const noexcept;
+
+    /// Returns the tiles the shown map covers (shown_map_size), across and
+    /// down: the cells the card's terrain atlas holds.
+    ///
+    /// @return the tile columns and rows, each at least 1 and at most the
+    ///         map's; zero without a map
+    [[nodiscard]] std::array<uint32_t, 2> shown_tile_grid() const noexcept;
+
     /// Returns the battlefield viewport for a camera position with the live layout and zoom.
     ///
     /// @param camera_x camera column in map pixels

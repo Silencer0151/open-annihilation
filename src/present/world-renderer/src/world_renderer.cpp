@@ -203,6 +203,8 @@ std::optional<Error> fill_scaled_viewport(
     const PaletteBytes& game_palette,
     uint32_t source_x,
     uint32_t source_y,
+    uint32_t shown_width,
+    uint32_t shown_height,
     uint32_t dest_width,
     uint32_t dest_height,
     float scale,
@@ -231,6 +233,8 @@ std::optional<Error> fill_scaled_viewport(
     std::array<uint8_t, 256U * 3U> lut{};
     for (std::size_t index = 0; index < 256U; ++index)
         std::memcpy(&lut[index * 3U], &game_palette[index * palette_entry_bytes], 3U);
+    // The terrain ends for the fill where the shown map does, within the
+    // mosaic.
     const ScaledFill fill{
         &map,
         lut.data(),
@@ -238,8 +242,14 @@ std::optional<Error> fill_scaled_viewport(
         source_y,
         dest_width,
         scale_fp,
-        static_cast<uint64_t>(map.tile_width) * formats::tnt::layout::tile_edge_pixels,
-        static_cast<uint64_t>(map.tile_height) * formats::tnt::layout::tile_edge_pixels,
+        std::min<uint64_t>(
+            static_cast<uint64_t>(map.tile_width) * formats::tnt::layout::tile_edge_pixels,
+            shown_width
+        ),
+        std::min<uint64_t>(
+            static_cast<uint64_t>(map.tile_height) * formats::tnt::layout::tile_edge_pixels,
+            shown_height
+        ),
         dest_rgb,
         dest_stride_pixels
     };
@@ -289,6 +299,8 @@ RenderResult render_scaled_viewport(
             game_palette,
             source_x,
             source_y,
+            map.tile_width * formats::tnt::layout::tile_edge_pixels,
+            map.tile_height * formats::tnt::layout::tile_edge_pixels,
             dest_width,
             dest_height,
             scale,

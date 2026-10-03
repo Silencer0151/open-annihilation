@@ -439,31 +439,37 @@ terrain_atlas_footprint(uint32_t slots, uint64_t grid_cells, uint32_t page_edge)
 
 TerrainAtlasError build_terrain_atlas(
     const formats::tnt::Map& map,
+    uint32_t columns,
+    uint32_t rows,
     const PaletteBytes& palette,
     const std::array<uint8_t, 256>* gamma,
     uint32_t page_edge,
     TerrainAtlas& atlas
 ) {
     atlas = TerrainAtlas{};
-    if (map.tile_width == 0 || map.tile_height == 0)
+    if (map.tile_width == 0 || map.tile_height == 0 || columns == 0 || rows == 0)
         return TerrainAtlasError::empty_grid;
-    const uint64_t cells = static_cast<uint64_t>(map.tile_width) * map.tile_height;
-    if (cells > grid_cell_limit || cells != map.tile_indices.size())
+    const uint64_t map_cells = static_cast<uint64_t>(map.tile_width) * map.tile_height;
+    if (map_cells > grid_cell_limit || map_cells != map.tile_indices.size() ||
+        columns > map.tile_width || rows > map.tile_height)
         return TerrainAtlasError::grid_size;
     if (static_cast<uint64_t>(map.tile_count) * formats::tnt::layout::tile_bytes !=
         map.tile_palette_indices.size())
         return TerrainAtlasError::tile_bytes;
 
     TerrainAtlas built;
-    built.grid_width = map.tile_width;
-    built.grid_height = map.tile_height;
+    built.grid_width = columns;
+    built.grid_height = rows;
     built.page_edge = fit_page_edge(page_edge);
     built.slots_per_page = full_page_slots(built.page_edge);
-    built.grid.resize(static_cast<std::size_t>(cells));
+    built.grid.resize(static_cast<std::size_t>(columns) * rows);
     std::vector<uint32_t> slot_of_tile(map.tile_count, no_slot);
     std::unordered_map<uint64_t, uint32_t> slot_of_hash;
     for (std::size_t cell = 0; cell < built.grid.size(); ++cell) {
-        const uint16_t tile = map.tile_indices[cell];
+        // The grid's cell in the map's own grid, whose rows are tile_width
+        // cells long.
+        const std::size_t map_cell = (cell / columns) * map.tile_width + cell % columns;
+        const uint16_t tile = map.tile_indices[map_cell];
         if (tile >= map.tile_count)
             return TerrainAtlasError::missing_tile;
         uint32_t& slot = slot_of_tile[tile];

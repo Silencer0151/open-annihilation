@@ -23,10 +23,13 @@ the map's cells show. The whole map is resident: every distinct tile the
 grid names has its slot before the first frame, so nothing is placed or
 evicted while a match runs.
 
-- **Slots.** `build_terrain_atlas` walks the grid row by row and gives each
-  distinct tile, compared by its pixels, the next slot in order of first
-  use, so cells that share a tile share a slot and tiles no cell names take
-  none. `TerrainAtlas::grid` holds the slot of every cell and
+- **Slots.** `build_terrain_atlas` walks the grid asked of it, the map's
+  first columns of its first rows (the whole mosaic, or the map the view
+  shows: the game never shows a map's last tile column and last four rows,
+  which maps fill with filler tiles), row by row and gives each distinct
+  tile, compared by its pixels, the next slot in order of first use, so
+  cells that share a tile share a slot and tiles no cell names take none.
+  `TerrainAtlas::grid` holds the slot of every cell and
   `slot_tiles` the map's tile each slot was filled from. A slot spans
   `slot_pitch` (40) texels a side at level 0: the tile and a gutter ring
   of `level_0_gutter` (4) texels copied from the tile's edge, so that
@@ -79,8 +82,9 @@ evicted while a match runs.
   deeper level and a camera between texels.
 - **Malformed maps** are refused with the atlas left empty: an empty grid,
   a grid that is not `tile_width` by `tile_height` cells or that exceeds
-  `grid_cell_limit`, a tile set that is not `tile_count` tiles, and a cell
-  naming a tile the set lacks.
+  `grid_cell_limit`, a grid asked for of no cells or of more columns or
+  rows than the map holds, a tile set that is not `tile_count` tiles, and a
+  cell naming a tile the set lacks.
 
 ### What the atlas holds exactly, and what the renderer decides
 

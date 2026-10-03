@@ -47,7 +47,10 @@ while terrain and hit testing keep the full inclusive extent.
 ## Drawing in bands
 
 The match's terrain fill (`fill_scaled_viewport`, the destination-sized
-sample of the mosaic at any zoom) and its fog (`draw_fog_grid`) take an
+sample of the mosaic at any zoom, within the map the view shows: the fill
+takes the shown width and height, the mosaic's or less where the game never
+shows a map's last columns and rows, and is black past them as past the
+mosaic) and its fog (`draw_fog_grid`) take an
 optional [job pool](../../platform/job-pool/README.md) and split their rows
 into bands by the data: the fill by `terrain_band_rows` (32) destination
 rows, each band finding its first map row and fraction from its first row's

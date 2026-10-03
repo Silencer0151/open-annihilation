@@ -1761,6 +1761,11 @@ void Runtime::run_headless_saveload() {
     }
     match_layout_ =
         oa::ui::display_layout::make_match_layout(options_.match_width, options_.match_height);
+    // The headless camera placement applies to a loaded game as to a start.
+    if (options_.camera) {
+        match_camera_x_ = options_.camera->first;
+        match_camera_z_ = options_.camera->second;
+    }
     bool saved = false;
     const auto save_if_due = [&] {
         if (saved || !options_.save_after || match_timing_.tick < *options_.save_after)

@@ -133,15 +133,20 @@ inline constexpr uint32_t terrain_band_rows = 32;
 
 /// Writes a scaled sample of the TNT mosaic into caller storage without allocating.
 ///
-/// Samples as render_scaled_viewport does. The rows are filled in bands of
-/// terrain_band_rows rows, on the pool's threads when one is given; every
-/// row is the same whichever thread fills it. After an error, which rows
-/// were written is not specified.
+/// Samples as render_scaled_viewport does, within the map the view shows:
+/// the mosaic ends for the fill at shown_width across and shown_height
+/// down, where the game never shows a map's last columns and rows, and the
+/// pixels past them are black as those past the mosaic are. The rows are
+/// filled in bands of terrain_band_rows rows, on the pool's threads when one
+/// is given; every row is the same whichever thread fills it. After an
+/// error, which rows were written is not specified.
 ///
 /// @param map parsed TNT
 /// @param game_palette the game palette
 /// @param source_x map-pixel X of the top-left sample
 /// @param source_y map-pixel Y of the top-left sample
+/// @param shown_width map pixels across the view may show; the mosaic's width or fewer
+/// @param shown_height map pixels down the view may show; the mosaic's height or fewer
 /// @param dest_width output width in pixels
 /// @param dest_height output height in pixels
 /// @param scale screen pixels per map pixel; non-positive means 1
@@ -154,6 +159,8 @@ inline constexpr uint32_t terrain_band_rows = 32;
     const PaletteBytes& game_palette,
     uint32_t source_x,
     uint32_t source_y,
+    uint32_t shown_width,
+    uint32_t shown_height,
     uint32_t dest_width,
     uint32_t dest_height,
     float scale,

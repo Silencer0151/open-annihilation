@@ -167,7 +167,12 @@ logs it.
   screen loading and the host of the frontend dispatcher. Lines are only
   ever added to `screens.inc`.
 - `runtime_world_draw.cpp`, `runtime_camera.cpp`: world rendering and the
-  camera.
+  camera, held within the map the game shows (`shown_map_size`: the tile
+  mosaic less its last 32 columns and 128 rows of map pixels, the hidden
+  edges the original never scrolls to and maps fill with filler tiles, as
+  `Game.map_pixel_width/height` hold it); the terrain fills, the box filter
+  and the Full tier's atlas (`shown_tile_grid`) end there too, so no tier
+  draws the filler at any zoom.
 - `runtime_skirmish_start.cpp` builds a match: the feature table's GAF files
   are kept as read and parsed without their pixels (`gaf::PixelData::checked`);
   a feature sequence's pixels are decoded from its file when a feature first

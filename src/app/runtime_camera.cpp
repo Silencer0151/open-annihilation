@@ -5,6 +5,7 @@
 #include "oa/app/runtime.hpp"
 #include "oa/core/map_plot.h"
 #include "engine_settings_state.hpp"
+#include "oa/sim/feature_runtime.hpp"
 #include "oa/sim/selection.hpp"
 #include "oa/present/world_renderer/world_camera.hpp"
 #include <SDL3/SDL.h>
@@ -265,11 +266,40 @@ void Runtime::apply_zoom_anchor() {
     );
 }
 
+std::array<int32_t, 2> Runtime::shown_map_size() const noexcept {
+    namespace features = oa::sim::feature_runtime;
+    if (match_) {
+        const auto& game = match_->state().game;
+        if (game.map_pixel_width > 0 && game.map_pixel_height > 0)
+            return {game.map_pixel_width, game.map_pixel_height};
+    }
+    if (!selected_tnt_)
+        return {0, 0};
+    const auto width = static_cast<int32_t>(selected_tnt_->tile_width * 32U);
+    const auto height = static_cast<int32_t>(selected_tnt_->tile_height * 32U);
+    return {
+        std::max(0, width - features::hidden_right_edge),
+        std::max(0, height - features::hidden_bottom_edge)
+    };
+}
+
+std::array<uint32_t, 2> Runtime::shown_tile_grid() const noexcept {
+    if (!selected_tnt_)
+        return {0, 0};
+    const auto shown = shown_map_size();
+    const auto tiles = [](int32_t pixels, uint32_t most) {
+        const auto whole = static_cast<uint32_t>((std::max(pixels, 0) + 31) / 32);
+        return std::clamp<uint32_t>(whole, std::min<uint32_t>(1, most), most);
+    };
+    return {
+        tiles(shown[0], selected_tnt_->tile_width), tiles(shown[1], selected_tnt_->tile_height)
+    };
+}
+
 std::array<int32_t, 2> Runtime::view_camera() const {
     if (!selected_tnt_)
         return {match_camera_x_, match_camera_z_};
-    const auto map_width = static_cast<int32_t>(selected_tnt_->tile_width * 32U);
-    const auto map_height = static_cast<int32_t>(selected_tnt_->tile_height * 32U);
+    const auto [map_width, map_height] = shown_map_size();
     return {
         std::clamp(match_camera_x_, 0, std::max(0, map_width - visible_map_width())),
         std::clamp(match_camera_z_, 0, std::max(0, map_height - visible_map_height()))
@@ -281,8 +311,7 @@ Runtime::most_view_offsets(int32_t camera_x, int32_t camera_z) const {
     if (!selected_tnt_)
         return {};
     // The camera's farthest places, as view_camera holds it.
-    const auto map_width = static_cast<int32_t>(selected_tnt_->tile_width * 32U);
-    const auto map_height = static_cast<int32_t>(selected_tnt_->tile_height * 32U);
+    const auto [map_width, map_height] = shown_map_size();
     return {
         most_view_offset(camera_x, std::max(0, map_width - visible_map_width())),
         most_view_offset(camera_z, std::max(0, map_height - visible_map_height()))

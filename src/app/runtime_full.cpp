@@ -1136,8 +1136,11 @@ void Runtime::ensure_full_terrain_pages(const oa::PaletteBytes& palette) {
     full.pages_from_load = false;
     full.atlas_source = {};
     const auto build_start = std::chrono::steady_clock::now();
+    // The atlas holds the map the view shows: the mosaic less the edges the
+    // game never shows, whose filler tiles the card then never draws.
+    const auto [columns, rows] = shown_tile_grid();
     const gw::TerrainAtlasError error = gw::build_terrain_atlas(
-        map, palette, gamma ? &gamma_table_ : nullptr, page_edge, full.atlas
+        map, columns, rows, palette, gamma ? &gamma_table_ : nullptr, page_edge, full.atlas
     );
     if (error != gw::TerrainAtlasError::none)
         throw FullCardError(
@@ -1149,7 +1152,13 @@ void Runtime::ensure_full_terrain_pages(const oa::PaletteBytes& palette) {
     // apart by their indices; its texels go once uploaded.
     gw::TerrainAtlas greyed;
     const gw::TerrainAtlasError greyed_error = gw::build_terrain_atlas(
-        map, greyed_palette(palette), gamma ? &gamma_table_ : nullptr, page_edge, greyed
+        map,
+        columns,
+        rows,
+        greyed_palette(palette),
+        gamma ? &gamma_table_ : nullptr,
+        page_edge,
+        greyed
     );
     full.atlas_build_ns = nanoseconds_since(build_start);
     if (greyed_error != gw::TerrainAtlasError::none)

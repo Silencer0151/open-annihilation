@@ -303,7 +303,7 @@ void Runtime::check_smooth_panning(
             match_layout_.battlefield_height() - 2 * margin
         };
     };
-    const auto map_width = static_cast<int32_t>(selected_tnt_->tile_width * 32U);
+    const auto map_width = shown_map_size()[0];
 
     // A scroll from the unit, toward whichever side of the map has room for
     // it, one frame's step after another, each frame read back.

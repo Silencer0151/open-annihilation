@@ -93,8 +93,9 @@ Atlas build_atlas() {
         palette[byte] = static_cast<uint8_t>(random());
     Atlas built;
     OA_CHECK(
-        gw::build_terrain_atlas(map, palette, nullptr, gw::page_edge_limit, built.atlas) ==
-        gw::TerrainAtlasError::none
+        gw::build_terrain_atlas(
+            map, map.tile_width, map.tile_height, palette, nullptr, gw::page_edge_limit, built.atlas
+        ) == gw::TerrainAtlasError::none
     );
     for (std::size_t page = 0; page < built.atlas.pages.size(); ++page)
         built.pages.push_back({static_cast<uint32_t>(page + 1)});

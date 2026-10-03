@@ -328,8 +328,7 @@ void Runtime::check_build_site_edges(uint16_t type) {
     constexpr uint32_t tile_pixels = 32;
     // Map pixels the pointer stands inside an edge of the battlefield.
     constexpr int pointer_inset = 2;
-    const auto map_width = static_cast<int32_t>(selected_tnt_->tile_width * tile_pixels);
-    const auto map_height = static_cast<int32_t>(selected_tnt_->tile_height * tile_pixels);
+    const auto [map_width, map_height] = shown_map_size();
     const auto saved_camera_x = match_camera_x_;
     const auto saved_camera_z = match_camera_z_;
     const auto saved_zoom = match_zoom_;

@@ -120,8 +120,9 @@ void test_tiles() {
     // Within the smallest page edge each page holds one slot, so three
     // distinct tiles take three pages.
     OA_CHECK(
-        gw::build_terrain_atlas(map, palette, nullptr, gw::page_edge_minimum, atlas) ==
-        gw::TerrainAtlasError::none
+        gw::build_terrain_atlas(
+            map, map.tile_width, map.tile_height, palette, nullptr, gw::page_edge_minimum, atlas
+        ) == gw::TerrainAtlasError::none
     );
     OA_CHECK(atlas.pages.size() == 3 && atlas.grid_width == 3 && atlas.grid_height == 2);
     const std::vector<card::PageHandle> pages{{1}, {2}, {3}};

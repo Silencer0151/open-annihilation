@@ -90,6 +90,8 @@ std::vector<uint8_t> fill(
                palette,
                source_x,
                source_y,
+               map_tiles_wide * 32U,
+               map_tiles_high * 32U,
                view_width,
                view_height,
                scale,
@@ -189,9 +191,95 @@ void terrain_fill_reports_a_missing_tile_on_a_pool() {
     job_pool::Pool pool(4);
     std::vector<uint8_t> rgb(static_cast<std::size_t>(view_width) * view_height * 3U);
     const auto error = wr::fill_scaled_viewport(
-        map, palette, 0, 0, view_width, view_height, 1.0F, rgb.data(), view_width, &pool
+        map,
+        palette,
+        0,
+        0,
+        map_tiles_wide * 32U,
+        map_tiles_high * 32U,
+        view_width,
+        view_height,
+        1.0F,
+        rgb.data(),
+        view_width,
+        &pool
     );
     CHECK(error.has_value() && error->code == wr::ErrorCode::invalid_map_model);
+}
+
+/// A fill whose shown map ends before the mosaic, the last tile column and
+/// the last four tile rows never shown: the pixels past the shown map are
+/// black, as past the mosaic, and the rest are the whole mosaic's fill, at
+/// zoom 1 and zoomed out, on the calling thread and on a pool.
+void terrain_fill_ends_at_the_shown_map() {
+    std::mt19937 random(test_seed);
+    const auto map = test_map(random);
+    const auto palette = test_palette();
+    constexpr uint32_t mosaic_width = map_tiles_wide * 32U;
+    constexpr uint32_t mosaic_height = map_tiles_high * 32U;
+    constexpr uint32_t shown_width = mosaic_width - 32U;
+    constexpr uint32_t shown_height = mosaic_height - 128U;
+    constexpr uint32_t source_x = 700;
+    constexpr uint32_t source_y = 500;
+    job_pool::Pool pool(3);
+    for (const float scale : {1.0F, 0.5F})
+        for (job_pool::Pool* threads : {static_cast<job_pool::Pool*>(nullptr), &pool}) {
+            const auto scale_fp = static_cast<uint64_t>(std::lround(scale * 65536.0));
+            std::vector<uint8_t> whole(static_cast<std::size_t>(view_width) * view_height * 3U);
+            std::vector<uint8_t> shown(whole.size());
+            CHECK(!wr::fill_scaled_viewport(
+                       map,
+                       palette,
+                       source_x,
+                       source_y,
+                       mosaic_width,
+                       mosaic_height,
+                       view_width,
+                       view_height,
+                       scale,
+                       whole.data(),
+                       view_width,
+                       threads
+            )
+                       .has_value());
+            CHECK(!wr::fill_scaled_viewport(
+                       map,
+                       palette,
+                       source_x,
+                       source_y,
+                       shown_width,
+                       shown_height,
+                       view_width,
+                       view_height,
+                       scale,
+                       shown.data(),
+                       view_width,
+                       threads
+            )
+                       .has_value());
+            bool all = true;
+            uint32_t beyond = 0;
+            uint32_t filler_lit = 0;
+            for (uint32_t y = 0; y < view_height; ++y) {
+                const uint64_t map_y = source_y + static_cast<uint64_t>(y) * 65536U / scale_fp;
+                for (uint32_t x = 0; x < view_width; ++x) {
+                    const uint64_t map_x = source_x + static_cast<uint64_t>(x) * 65536U / scale_fp;
+                    const std::size_t at = (static_cast<std::size_t>(y) * view_width + x) * 3U;
+                    const bool past = map_x >= shown_width || map_y >= shown_height;
+                    const bool filler = past && map_x < mosaic_width && map_y < mosaic_height;
+                    beyond += past ? 1U : 0U;
+                    for (std::size_t channel = 0; channel < 3U; ++channel) {
+                        all = all && shown[at + channel] == (past ? 0U : whole[at + channel]);
+                        filler_lit += filler && whole[at + channel] != 0 ? 1U : 0U;
+                    }
+                }
+            }
+            CHECK(all);
+            // The view reaches past the shown map, where the whole fill
+            // drew the mosaic's filler tiles that the shown fill left black.
+            CHECK(beyond != 0);
+            CHECK(filler_lit != 0);
+        }
 }
 
 /// The fog's colours, each entry distinct.
@@ -290,6 +378,7 @@ void fog_is_the_same_on_every_pool() {
 int main() {
     terrain_fill_is_the_same_on_every_pool();
     terrain_fill_reports_a_missing_tile_on_a_pool();
+    terrain_fill_ends_at_the_shown_map();
     fog_is_the_same_on_every_pool();
     if (failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);

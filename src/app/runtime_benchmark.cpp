@@ -117,7 +117,7 @@ void Runtime::benchmark_scene(std::string_view label, std::size_t frames, bool s
         throw std::runtime_error("benchmark scene requires an active match");
     phase_times_ = {};
     int32_t direction = kScrollStep;
-    const auto map_width = static_cast<int32_t>(selected_tnt_->tile_width * 32U);
+    const auto map_width = shown_map_size()[0];
     int64_t total = 0;
     for (std::size_t frame = 0; frame < frames; ++frame) {
         const auto frame_start = BenchClock::now();

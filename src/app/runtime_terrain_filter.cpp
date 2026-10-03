@@ -51,6 +51,8 @@ void footprint_bounds(std::vector<uint32_t>& bounds, uint32_t start, int count, 
 /// @param palette palette the tiles' indices are shown in
 /// @param source_x map column of the first destination pixel
 /// @param source_y map row of the first destination pixel
+/// @param shown_width map pixels across the view may show, the mosaic's or fewer
+/// @param shown_height map pixels down the view may show, the mosaic's or fewer
 /// @param dest_w destination width
 /// @param dest_h destination height
 /// @param zoom destination pixels per map pixel (the draw scale), below 1
@@ -61,6 +63,8 @@ bool box_filter_terrain(
     const oa::PaletteBytes& palette,
     uint32_t source_x,
     uint32_t source_y,
+    uint32_t shown_width,
+    uint32_t shown_height,
     int dest_w,
     int dest_h,
     float zoom,
@@ -72,8 +76,12 @@ bool box_filter_terrain(
     const auto tile_pixels = static_cast<uint64_t>(map.tile_count) * tile_bytes;
     if (grid_cells != map.tile_indices.size() || tile_pixels != map.tile_palette_indices.size())
         return false;
-    const auto terrain_w = static_cast<uint64_t>(map.tile_width) * tile_edge;
-    const auto terrain_h = static_cast<uint64_t>(map.tile_height) * tile_edge;
+    // The map the view shows ends at the shown size, within the mosaic;
+    // past it the filter sums nothing, as past the mosaic.
+    const auto terrain_w =
+        std::min<uint64_t>(static_cast<uint64_t>(map.tile_width) * tile_edge, shown_width);
+    const auto terrain_h =
+        std::min<uint64_t>(static_cast<uint64_t>(map.tile_height) * tile_edge, shown_height);
     auto scale_fp = static_cast<uint32_t>(std::lround(static_cast<double>(zoom) * kFixedOne));
     if (scale_fp == 0)
         scale_fp = 1;
@@ -153,8 +161,7 @@ void Runtime::refresh_filtered_terrain() {
     if (!(draw_scale > 0.0F) || draw_scale >= kFilteredZoomLimit)
         return;
     const auto& map = *selected_tnt_;
-    const auto map_width = static_cast<int32_t>(map.tile_width * 32U);
-    const auto map_height = static_cast<int32_t>(map.tile_height * 32U);
+    const auto [map_width, map_height] = shown_map_size();
     const int dest_w = scaling.scene_width;
     const int dest_h = scaling.scene_height;
     if (dest_w <= 0 || dest_h <= 0)
@@ -185,7 +192,16 @@ void Runtime::refresh_filtered_terrain() {
         return;
     const auto filter_start = std::chrono::steady_clock::now();
     const bool filtered = box_filter_terrain(
-        map, match_palette_, camera_x, camera_y, dest_w, dest_h, draw_scale, cache.rgb.data()
+        map,
+        match_palette_,
+        camera_x,
+        camera_y,
+        static_cast<uint32_t>(map_width),
+        static_cast<uint32_t>(map_height),
+        dest_w,
+        dest_h,
+        draw_scale,
+        cache.rgb.data()
     );
     terrain_box_filter_ns_ +=
         static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(

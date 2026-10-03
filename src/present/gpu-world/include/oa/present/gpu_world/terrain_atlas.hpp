@@ -91,8 +91,8 @@ static_assert(slot_pitch % (1U << (tile_level_count - 1U)) == 0);
 /// Why a build, a lookup or a read was refused; none when it was not.
 enum class TerrainAtlasError : uint8_t {
     none,
-    empty_grid, ///< the map has no tile columns or no tile rows
-    grid_size, ///< the tile grid holds other than tile_width * tile_height cells, or more than grid_cell_limit
+    empty_grid, ///< the map has no tile columns or no tile rows, or none were asked for
+    grid_size, ///< the tile grid holds other than tile_width * tile_height cells, or more than grid_cell_limit, or more columns or rows were asked for than it holds
     tile_bytes,         ///< the tile set holds other than tile_count tiles of pixels
     missing_tile,       ///< a cell names a tile the tile set lacks
     too_many_slots,     ///< more distinct tiles than slot_limit
@@ -224,9 +224,14 @@ terrain_atlas_footprint(uint32_t slots, uint64_t grid_cells, uint32_t page_edge)
 /// by plan_page for the slots it holds. A texel of a tile is the tile's
 /// pixel through the palette and then the gamma table, the bytes today's
 /// terrain fill and conversion give it at zoom 1; every other texel of a
-/// page is opaque black. Refuses a malformed map, leaving the atlas empty.
+/// page is opaque black. The grid is the map's first `columns` cells of its
+/// first `rows`: the whole mosaic, or less where the game never shows a
+/// map's last columns and rows, whose tiles then take no slot. Refuses a
+/// malformed map, or a grid asked beyond it, leaving the atlas empty.
 ///
 /// @param map the parsed map
+/// @param columns tile columns the grid holds, 1 to the map's tile_width
+/// @param rows tile rows the grid holds, 1 to the map's tile_height
 /// @param palette the palette the tiles' indices are shown in
 /// @param gamma display gamma per channel, applied after the palette; null for none
 /// @param page_edge the largest edge a page may have, fitted by fit_page_edge
@@ -234,6 +239,8 @@ terrain_atlas_footprint(uint32_t slots, uint64_t grid_cells, uint32_t page_edge)
 /// @return none on success
 [[nodiscard]] TerrainAtlasError build_terrain_atlas(
     const formats::tnt::Map& map,
+    uint32_t columns,
+    uint32_t rows,
     const PaletteBytes& palette,
     const std::array<uint8_t, 256>* gamma,
     uint32_t page_edge,
