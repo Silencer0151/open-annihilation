@@ -913,8 +913,8 @@ void test_start_tier_on_dummy() {
     own.players_own_profile = true;
     own.setting = HardwareAcceleration::full;
     oa::app::TierRequest named{};
-    // --hardware-acceleration names Full, which the game draws as Basic and
-    // says so.
+    // --hardware-acceleration names Full, which the flag forces while Full is
+    // not ready for players, and the line says so.
     oa::app::TierRequest flagged{};
     flagged.flag = HardwareAcceleration::full;
     flagged.force_capable = true;
@@ -936,7 +936,7 @@ void test_start_tier_on_dummy() {
          "standard tier: the processor draws everything (hardware acceleration is off)"},
         {flagged,
          true,
-         "basic tier (Full is not in this build): the graphics card scales the interface"},
+         "full tier: the graphics card draws the battlefield and scales the interface"},
         {basic, true, "basic tier: the graphics card scales the interface"},
         {flagged,
          true,
@@ -969,7 +969,7 @@ void test_start_tier_on_dummy() {
             run.draws_wrongly ? policy::FunctionTest::failed : policy::FunctionTest::passed;
         OA_CHECK(inputs.function_test == (run.tested && memory ? tested : run.untested));
         OA_CHECK(
-            (policy::decide_render_tier(inputs).tier == policy::RenderTier::accelerated) ==
+            policy::card_tier(policy::decide_render_tier(inputs).tier) ==
             (run.tested && memory && !run.draws_wrongly)
         );
         // A failed test logs what failed before the start-up line.

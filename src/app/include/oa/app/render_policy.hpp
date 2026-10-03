@@ -39,8 +39,25 @@ using oa::ui::engine_settings::HardwareAcceleration;
 /// How a frame is drawn and presented.
 enum class RenderTier : uint8_t {
     standard,    ///< today's renderer: the processor draws and scales everything
-    accelerated, ///< the processor draws; the graphics card scales and composes
+    accelerated, ///< Basic: the processor draws; the graphics card scales and composes
+    /// Full: the processor plans the frame and the graphics card draws the
+    /// battlefield from texture pages, the terrain first; what the card
+    /// does not draw yet, the processor still draws and the card composes.
+    full,
 };
+
+/// Tells whether a tier presents through the graphics card: Basic or Full.
+///
+/// @param tier the tier
+/// @return true for every tier but the standard one
+[[nodiscard]] constexpr bool card_tier(RenderTier tier) noexcept {
+    return tier != RenderTier::standard;
+}
+
+/// Whether Full is ready for players: while false, Full asked for by the
+/// setting resolves to Basic, and only --hardware-acceleration=full, which
+/// forces it for development and checks, takes the Full branch.
+inline constexpr bool full_ready = false;
 
 /// What the command line asks of hardware acceleration. A flag names a
 /// level of the setting and decides it for the run.
@@ -259,6 +276,10 @@ struct TierInputs {
     /// be read.
     bool records_unreadable_after_unclean_start{};
     Drop drop{Drop::none};
+    /// Full was dropped for the rest of the run, to Basic, by a failed call
+    /// of the card's own or a failed Full function test; setting the setting
+    /// to Off and back, or Restore defaults, lifts it (forget_failures).
+    bool full_drop{};
     bool device_lost{}; ///< the device is lost until it is reset
     SharedMatchGate match{};
 };
@@ -288,10 +309,23 @@ enum class TierReason : uint8_t {
     function_test_due, ///< every other condition holds: run the function test, then decide again
 };
 
+/// Why a frame whose tier is accelerated is Full, or is Basic although Full
+/// was asked for. The order of the enumerators is the order
+/// decide_render_tier tests the conditions in.
+enum class FullReason : uint8_t {
+    not_asked, ///< Off or Basic was asked for, or the tier is standard
+    full,      ///< Full was asked for and every condition holds
+    not_ready, ///< Full is not ready in this build (full_ready) and no flag forced it
+    dropped,   ///< Full was dropped for the run (TierInputs::full_drop)
+};
+
 /// The tier for a frame and the reason for it.
 struct TierDecision {
     RenderTier tier{RenderTier::standard};
     TierReason reason{TierReason::no_renderer};
+    /// Where the tier is accelerated or full, whether it is Full, and why
+    /// not where Full was asked for; FullReason::not_asked otherwise.
+    FullReason full{FullReason::not_asked};
 };
 
 /// Tells whether the records and the trial live on disk: only the player's
@@ -303,6 +337,13 @@ struct TierDecision {
 [[nodiscard]] bool records_on_disk(bool players_own_profile, bool render_driver_named) noexcept;
 
 /// Decides which tier draws a frame.
+///
+/// Basic and Full share every condition of the accelerated tier, and a
+/// frame the conditions allow is Full when Full was asked for
+/// (acceleration_asked), Full is ready in this build (full_ready) or
+/// --hardware-acceleration=full forced it, and Full was not dropped for the
+/// run (TierInputs::full_drop); otherwise it is Basic
+/// (RenderTier::accelerated), with the Full reason in the decision.
 ///
 /// The accelerated tier needs every condition: a renderer, a frame that is
 /// not a director render's, physical memory of at least
@@ -316,9 +357,7 @@ struct TierDecision {
 /// no lost device, and in a shared game or a replay a tier that was
 /// accelerated as its loading screen began. Where the records live in
 /// memory a trial cannot fail to be written, so FunctionTest::trial_unwritten
-/// counts as not run there. Full asks for the battlefield drawn on the
-/// graphics card, which the game does not do yet: it is drawn as Basic, in
-/// the accelerated tier, until that tier is built.
+/// counts as not run there.
 ///
 /// @param inputs the run's and the frame's facts
 /// @return the tier, and the first reason in TierReason's order that
@@ -386,13 +425,15 @@ enum class TierAction : uint8_t {
 /// @param presentation_on the accelerated presentation is on
 /// @return TierAction::run_function_test when only the function test is
 ///     missing, else switch_on or switch_off where the presentation differs
-///     from the tier, else TierAction::none
+///     from the tier (card_tier: Basic and Full both switch it on), else
+///     TierAction::none
 [[nodiscard]] TierAction tier_action(const TierDecision& decision, bool presentation_on) noexcept;
 
-/// Forgets what keeps the tier standard that setting Hardware
-/// acceleration to Off and back, or Restore defaults, lets the run try again: a
-/// function test that failed or whose trial could not be written, which
-/// then runs again, and a drop, except the memory guard's.
+/// Forgets what keeps the tier standard, or Basic in place of Full, that
+/// setting Hardware acceleration to Off and back, or Restore defaults, lets
+/// the run try again: a function test that failed or whose trial could not
+/// be written, which then runs again, a drop, except the memory guard's,
+/// and Full's drop.
 ///
 /// @param[in,out] inputs the run's facts
 void forget_failures(TierInputs& inputs) noexcept;

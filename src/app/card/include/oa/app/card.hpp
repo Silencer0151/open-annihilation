@@ -11,8 +11,8 @@
 // reduced from its supersampling factor to its own size, into a rectangle
 // of another target. The executor (card/executor.hpp) makes the pages and
 // targets and runs the list on SDL's renderer. Nothing here is reached by
-// the standard tier or the Basic tier: only the Full tier, which is not
-// wired into the match yet, builds and runs frames.
+// the standard tier or the Basic tier: only the Full tier builds and runs
+// frames, the terrain's first.
 #pragma once
 
 #include <cstddef>

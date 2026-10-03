@@ -175,12 +175,13 @@ void Runtime::feed_render_step_down(uint64_t present_ns) {
     auto& run = *render_run_;
     auto& watch = *run.watch;
     policy::PresentedFrame frame;
-    frame.tier =
-        accelerated_presentation() ? policy::RenderTier::accelerated : policy::RenderTier::standard;
+    frame.tier = full_presentation()          ? policy::RenderTier::full
+                 : accelerated_presentation() ? policy::RenderTier::accelerated
+                                              : policy::RenderTier::standard;
     frame.match = screen_ == Screen::match && match_ != nullptr;
     frame.paced = frame_pacer_.started || run.forced_frame_ns.has_value();
     frame.previous_interval_ns = watch.previous_interval_ns;
-    if (frame.tier != policy::RenderTier::accelerated || run.device_lost)
+    if (!policy::card_tier(frame.tier) || run.device_lost)
         return;
     const uint64_t now = frame_pacing::steady_now_ns();
     policy::FrameSample sample = present_frame_facts(now);

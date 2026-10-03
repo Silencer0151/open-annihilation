@@ -97,9 +97,11 @@ render_policy::RendererFacts renderer_facts(const render_probe::AdapterFacts& fa
     return renderer;
 }
 
-std::string tier_description(const settings::AccelerationStatus& status) {
+std::string tier_description(const settings::AccelerationStatus& status, bool full) {
     using settings::AccelerationReach;
     using settings::AccelerationState;
+    if (full)
+        return std::string(full_tier_description);
     const bool in_use = status.state == AccelerationState::full_not_built ||
                         status.state == AccelerationState::in_use_on_another_driver ||
                         status.state == AccelerationState::in_use_less_smoothing ||

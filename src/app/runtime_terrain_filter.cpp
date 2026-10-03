@@ -5,6 +5,7 @@
 #include "oa/app/runtime.hpp"
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -141,6 +142,10 @@ bool box_filter_terrain(
 void Runtime::refresh_filtered_terrain() {
     if (screen_ != Screen::match || !match_ || !selected_tnt_)
         return;
+    // The Full tier's zoomed-out terrain is the card's, from the atlas
+    // levels: its base stays the nearest fill, and the box filter never runs.
+    if (full_presentation())
+        return;
     // The scene's terrain, at the draw scale: below one pixel per map pixel
     // only, so a scene drawn 1:1 or magnified keeps the nearest fill.
     const auto scaling = world_scaling();
@@ -178,9 +183,17 @@ void Runtime::refresh_filtered_terrain() {
         current(terrain_filtered_cam_x_, terrain_filtered_cam_y_, terrain_filtered_zoom_) &&
         current(terrain_cache_cam_x_, terrain_cache_cam_y_, terrain_cache_zoom_))
         return;
-    if (!box_filter_terrain(
-            map, match_palette_, camera_x, camera_y, dest_w, dest_h, draw_scale, cache.rgb.data()
-        ))
+    const auto filter_start = std::chrono::steady_clock::now();
+    const bool filtered = box_filter_terrain(
+        map, match_palette_, camera_x, camera_y, dest_w, dest_h, draw_scale, cache.rgb.data()
+    );
+    terrain_box_filter_ns_ +=
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                  std::chrono::steady_clock::now() - filter_start
+        )
+                                  .count());
+    ++terrain_box_filter_runs_;
+    if (!filtered)
         return; // A malformed map is reported by the renderer's own fill.
     terrain_cache_cam_x_ = camera_x;
     terrain_cache_cam_y_ = camera_y;

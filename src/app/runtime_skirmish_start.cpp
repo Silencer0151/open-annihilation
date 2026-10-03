@@ -469,6 +469,10 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         throw std::runtime_error("cannot prepare map runtime: " + prepared.error->message);
     prepared_map_ = std::move(*prepared.value);
     set_load_progress(1, 100);
+    // The Full tier's terrain pages, with the terrain: made here, before the
+    // world is built and before a shared game's load barrier, so that the
+    // match's first frame finds them and no page is made at a frame.
+    make_full_match_pages();
 
     loaded_commander_types_.clear();
     unit_definitions_.clear();

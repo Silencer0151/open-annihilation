@@ -1118,12 +1118,17 @@ void RendererHost::decide_start_tier(const TierRequest& request) {
     sync_record_facts();
     const render_policy::TierDecision decision =
         render_policy::step_tier(tier_, false, function_test_hooks()).decision;
-    AccelerationFacts facts = tier_acceleration_facts(
-        tier_, start_rung(), decision.tier == render_policy::RenderTier::accelerated
-    );
+    AccelerationFacts facts =
+        tier_acceleration_facts(tier_, start_rung(), render_policy::card_tier(decision.tier));
     fill_record_facts(facts);
     const AccelerationReport report = report_acceleration(facts);
-    std::cout << graphics_log_line(facts_, tier_description(report.status)) << '\n' << std::flush;
+    std::cout
+        << graphics_log_line(
+               facts_,
+               tier_description(report.status, decision.tier == render_policy::RenderTier::full)
+           )
+        << '\n'
+        << std::flush;
 }
 
 void RendererHost::test_function() {

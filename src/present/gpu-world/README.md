@@ -108,8 +108,12 @@ applies, and those bytes are the card's, not today's.
   There is no smaller form: dropping the chain beyond the tile levels saves
   under two per cent, so a machine that cannot afford a map's atlas within
   the card's page edge is a tier choice, not this module's.
-- **Nothing is uploaded.** The pages are processor memory; the renderer
-  that uploads them and chooses the level per draw is a later change.
+- **Uploaded by the Full tier.** The pages are processor memory until the
+  Full tier (`src/app/runtime_full.cpp`) uploads levels 0 and 1 of each
+  page as the match loads; it then lets each page's texels go and keeps
+  the grid, the slots and the pages' sizes and levels, which its builder
+  reads through `tile_rect`, choosing the level per draw by its zoom. The
+  greyed variant follows.
 
 ### Tests
 

@@ -120,9 +120,10 @@ TierDecision decide_render_tier(const TierInputs& inputs) noexcept {
     if ((inputs.render_driver_named || inputs.virtual_video_driver) && !flag_on &&
         !inputs.force_capable)
         return standard(TierReason::environment);
-    // Basic and Full both ask for the accelerated tier: the game draws Full
-    // as Basic until the battlefield is drawn on the graphics card.
-    if (acceleration_asked(inputs.flag, inputs.setting) == HardwareAcceleration::off)
+    // Basic and Full both ask for the accelerated tier; which of the two
+    // runs is decided once every condition holds.
+    const HardwareAcceleration asked = acceleration_asked(inputs.flag, inputs.setting);
+    if (asked == HardwareAcceleration::off)
         return standard(TierReason::setting_off);
     if (inputs.capability != Capability::capable && !inputs.force_capable)
         return standard(TierReason::not_capable);
@@ -142,7 +143,17 @@ TierDecision decide_render_tier(const TierInputs& inputs) noexcept {
         return standard(TierReason::trial_unwritten);
     if (inputs.function_test != FunctionTest::passed)
         return standard(TierReason::function_test_due);
-    return TierDecision{RenderTier::accelerated, TierReason::accelerated};
+    if (asked != HardwareAcceleration::full)
+        return TierDecision{
+            RenderTier::accelerated, TierReason::accelerated, FullReason::not_asked
+        };
+    if (!full_ready && inputs.flag != AccelerationFlag::full)
+        return TierDecision{
+            RenderTier::accelerated, TierReason::accelerated, FullReason::not_ready
+        };
+    if (inputs.full_drop)
+        return TierDecision{RenderTier::accelerated, TierReason::accelerated, FullReason::dropped};
+    return TierDecision{RenderTier::full, TierReason::accelerated, FullReason::full};
 }
 
 bool function_test_may_run(const TierInputs& inputs) noexcept {
@@ -208,7 +219,7 @@ bool flag_asks_for_card(AccelerationFlag flag) noexcept {
 TierAction tier_action(const TierDecision& decision, bool presentation_on) noexcept {
     if (decision.reason == TierReason::function_test_due)
         return TierAction::run_function_test;
-    const bool accelerated = decision.tier == RenderTier::accelerated;
+    const bool accelerated = card_tier(decision.tier);
     if (accelerated && !presentation_on)
         return TierAction::switch_on;
     if (!accelerated && presentation_on)
@@ -222,6 +233,7 @@ void forget_failures(TierInputs& inputs) noexcept {
         inputs.function_test = FunctionTest::not_run;
     if (inputs.drop != Drop::memory)
         inputs.drop = Drop::none;
+    inputs.full_drop = false;
 }
 
 TierStep step_tier(TierInputs& inputs, bool presentation_on, const FunctionTestHooks& test) {
@@ -487,7 +499,7 @@ note_present(StallWatch& watch, uint64_t steady_ns, uint64_t present_ns, RenderT
     if (watch.stalls < stalls_that_act)
         return StallAction::none;
     watch.stalls = 0;
-    if (tier == RenderTier::accelerated)
+    if (card_tier(tier))
         return StallAction::drop;
     if (watch.logged)
         return StallAction::none;
@@ -923,7 +935,7 @@ bool feeds_step_down(const PresentedFrame& frame, const FrameSample& sample) noe
     // A long frame alone is a wait; after another as long, a crawl.
     const bool timed = sample.interval_ns < longest_fed_interval_ns ||
                        frame.previous_interval_ns >= longest_fed_interval_ns;
-    return frame.tier == RenderTier::accelerated && frame.match && frame.paced && timed;
+    return card_tier(frame.tier) && frame.match && frame.paced && timed;
 }
 
 FrameKind frame_kind(float zoom, bool reduced, bool magnified) noexcept {

@@ -26,6 +26,12 @@ inline constexpr std::string_view standard_tier_name = "standard";
 /// The name of the tier in which the graphics card scales and composes what
 /// the processor draws: Hardware acceleration Basic.
 inline constexpr std::string_view basic_tier_name = "basic";
+/// The name of the tier in which the graphics card draws the battlefield
+/// from texture pages: Hardware acceleration Full.
+inline constexpr std::string_view full_tier_name = "full";
+/// What the start-up line says the full tier does.
+inline constexpr std::string_view full_tier_description =
+    "full tier: the graphics card draws the battlefield and scales the interface";
 /// What the start-up line says the standard tier does.
 inline constexpr std::string_view standard_tier_text = "the processor draws everything";
 /// What the start-up line says of the standard tier where it gives no
@@ -67,7 +73,8 @@ inline constexpr std::string_view unknown_adapter_name = "unknown adapter";
 [[nodiscard]] render_policy::RendererFacts
 renderer_facts(const oa::platform::render_probe::AdapterFacts& facts) noexcept;
 
-/// Returns what the start-up line says of the status's tier: in use,
+/// Returns what the start-up line says of the status's tier: in the full
+/// tier, full_tier_description; otherwise in use,
 /// "basic tier: " and what the graphics card does at its reach, "the
 /// graphics card scales the interface", "... and the zoomed-in view", "...,
 /// and the zoomed-out view is smoothed", "the zoomed-out view is smoothed"
@@ -79,9 +86,10 @@ renderer_facts(const oa::platform::render_probe::AdapterFacts& facts) noexcept;
 /// names a driver)".
 ///
 /// @param status the Hardware acceleration row's status
+/// @param full the frame is drawn in the full tier
 /// @return the tier and what it does, without a full stop
 [[nodiscard]] std::string
-tier_description(const oa::ui::engine_settings::AccelerationStatus& status);
+tier_description(const oa::ui::engine_settings::AccelerationStatus& status, bool full = false);
 
 /// Returns the texture limit a renderer really has, as the render policy
 /// corrects it (render_policy::texture_limit) from what the probe found: a

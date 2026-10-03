@@ -302,7 +302,9 @@ void Runtime::show_frame_stats(bool shown) {
 
 frame_pacing::FrameStatsRenderer Runtime::frame_stats_renderer() const {
     frame_pacing::FrameStatsRenderer renderer{};
-    renderer.tier = accelerated_presentation() ? basic_tier_name : standard_tier_name;
+    renderer.tier = full_presentation()          ? full_tier_name
+                    : accelerated_presentation() ? basic_tier_name
+                                                 : standard_tier_name;
     renderer.driver = renderer_driver_;
     renderer.adapter = renderer_adapter_;
     return renderer;

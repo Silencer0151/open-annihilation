@@ -139,6 +139,7 @@ void Runtime::free_accelerated_layout_textures() noexcept {
 
 void Runtime::free_accelerated_match_textures() noexcept {
     auto& state = accelerated_;
+    free_full_match_textures();
     free_accelerated_layout_textures();
     state.base = {};
     state.area_plan = {};
@@ -147,6 +148,7 @@ void Runtime::free_accelerated_match_textures() noexcept {
 }
 
 void Runtime::free_accelerated_presentation() noexcept {
+    free_full_presentation();
     free_accelerated_match_textures();
     // Only the presentation holds the scene's buffers at a scene's size; the
     // standard tier's stay as they are.
@@ -446,40 +448,7 @@ void Runtime::present_accelerated_match_layers(bool dialogs) {
     // Every scale is the one at the display's pixels: on a window at native
     // density the layout's scale times the density.
     const double density = match_display_density();
-    // The HUD strips by the chrome's filter.
-    std::vector<SharpPart> strips;
-    for (const auto& strip : match_hud_strips())
-        strips.push_back(
-            {{static_cast<float>(strip.source_x),
-              static_cast<float>(strip.source_y),
-              static_cast<float>(strip.source_w),
-              static_cast<float>(strip.source_h)},
-             {static_cast<float>(strip.x),
-              static_cast<float>(strip.y),
-              static_cast<float>(strip.w),
-              static_cast<float>(strip.h)}}
-        );
-    const double chrome = match_layout_.scale * density;
-    const CardScale hud_scale = accelerated_card_scale(
-        policy::chrome_filter(state.rung, chrome),
-        chrome,
-        match_hud_cpu_.width,
-        match_hud_cpu_.height,
-        state.hud_prescale
-    );
-    note_card_scale_drawn(hud_scale);
-    sharp_draw(
-        sdl_.renderer,
-        nullptr,
-        match_hud_tex_,
-        match_hud_cpu_.width,
-        match_hud_cpu_.height,
-        strips,
-        hud_scale,
-        state.hud_revision,
-        state.hud_prescale,
-        state.counts
-    );
+    draw_accelerated_hud_strips();
     const SDL_Rect battlefield{
         match_layout_.left, match_layout_.top, static_cast<int>(bf_w), static_cast<int>(bf_h)
     };
@@ -548,6 +517,44 @@ void Runtime::present_accelerated_match_layers(bool dialogs) {
     finish_match_layers(frame_format, dialogs, upload_start, present_start);
 }
 
+void Runtime::draw_accelerated_hud_strips() {
+    auto& state = accelerated_;
+    // The HUD strips by the chrome's filter, at the display's scale.
+    std::vector<SharpPart> strips;
+    for (const auto& strip : match_hud_strips())
+        strips.push_back(
+            {{static_cast<float>(strip.source_x),
+              static_cast<float>(strip.source_y),
+              static_cast<float>(strip.source_w),
+              static_cast<float>(strip.source_h)},
+             {static_cast<float>(strip.x),
+              static_cast<float>(strip.y),
+              static_cast<float>(strip.w),
+              static_cast<float>(strip.h)}}
+        );
+    const double chrome = match_layout_.scale * match_display_density();
+    const CardScale hud_scale = accelerated_card_scale(
+        policy::chrome_filter(state.rung, chrome),
+        chrome,
+        match_hud_cpu_.width,
+        match_hud_cpu_.height,
+        state.hud_prescale
+    );
+    note_card_scale_drawn(hud_scale);
+    sharp_draw(
+        sdl_.renderer,
+        nullptr,
+        match_hud_tex_,
+        match_hud_cpu_.width,
+        match_hud_cpu_.height,
+        strips,
+        hud_scale,
+        state.hud_revision,
+        state.hud_prescale,
+        state.counts
+    );
+}
+
 void Runtime::draw_accelerated_screen(
     SDL_Texture* texture, int width, int height, uint64_t revision
 ) {
@@ -607,8 +614,10 @@ void Runtime::draw_accelerated_screen(
 void Runtime::ensure_screen_world() {
     if (!match_ || screen_ != Screen::match)
         return;
+    // A Full frame's world layer holds the processor's draws over a nearest
+    // terrain base, which below zoom 1 is not the standard tier's picture.
     const auto method = accelerated_.frame.method;
-    if (method != SceneMethod::area && method != SceneMethod::magnify)
+    if (method != SceneMethod::area && method != SceneMethod::magnify && !full_presentation())
         return;
 
     // The world drawn again as the standard tier draws it, at the moment

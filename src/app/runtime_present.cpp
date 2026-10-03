@@ -179,6 +179,16 @@ Runtime::live_viewport(uint32_t camera_x, uint32_t camera_y) const {
 }
 
 WorldScaling Runtime::world_scaling() const {
+    // The Full tier draws at the zoom with no split: the card draws the
+    // terrain, and the processor the rest over it, in screen pixels at the
+    // zoom, as the standard tier plans its frame.
+    if (!scene_draw_scale_ && full_presentation() && screen_ == Screen::match)
+        return oa::app::world_scaling(
+            match_zoom(),
+            match_layout_.battlefield_width(),
+            match_layout_.battlefield_height(),
+            std::nullopt
+        );
     // The accelerated presentation draws at its own draw scale, within its
     // budget; a check's draw scale, and every other frame, as before.
     if (!scene_draw_scale_ && accelerated_presentation() && screen_ == Screen::match)
@@ -536,6 +546,10 @@ void Runtime::present_match_layers() {
     const bool dialogs = compose_match_dialog_layer();
     if (accelerated_presentation()) {
         try {
+            // The Full tier draws the terrain on the card; a frame it drops,
+            // or cannot draw, Basic presents.
+            if (full_presentation() && present_full_match_layers(dialogs))
+                return;
             present_accelerated_match_layers(dialogs);
             return;
         } catch (const AccelerationError& error) {

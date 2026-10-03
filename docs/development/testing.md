@@ -91,7 +91,10 @@ step leaving it Off; and `native-render-tiers`,
 `native-render-tiers-density` and `native-demo-render-tiers`, which with
 `--hardware-acceleration` run the start-up function test on SDL's software
 renderer and draw in the accelerated tier, switching it off and on as the
-flags would.
+flags would. That flag names Full, which forces the Full tier while it is
+not ready for players: the Basic cases run at `basic`, and the Full cases,
+the terrain drawn by the card from the terrain atlas's pages with the rest
+drawn by the processor over it, at `full`.
 
 No window of a check opens at the display's own pixel density but
 `native-render-tiers-density`'s, which `--native-density` opens so: on the

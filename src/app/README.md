@@ -339,7 +339,96 @@ logs it.
   (`check_smooth_panning`, `runtime_smooth_pan_check.cpp`); that a zoom
   ease makes no texture; and that prescale targets are drawn once a
   painted frame; it writes pictures of one moment at zoom 0.5, 1 and 2.5
-  in both tiers.
+  in both tiers. Its flag names Full, so its Basic cases set the level to
+  `basic` and its Full cases (`check_full_render_tier`) run after them at
+  `full`: at zoom 1, 2 and 4 the frame equals `compose_match_frame`; a
+  Full frame leaves what the match reads back (`match_draw_read_back`) as
+  the standard tier's frame of the same moment does; at zoom 0.5 with the
+  camera on an even map pixel the terrain under a transparent overlay,
+  where the standard tier shows terrain too, equals that tier's box filter
+  exactly, and at 0.75 the blend of the two levels, the card's own filter,
+  is printed against it with its mean bounded and held within the
+  renderer's tolerance of that renderer's own LINEAR of each tile's quad,
+  pass over pass (2 and a mean of 1 on SDL's software renderer, 4 and a
+  mean of 0.5 on a card), the references built from the check's own atlas
+  of the map; at 1.37 the terrain through the target keeps within
+  the renderer's tolerance of the level-0 view enlarged twice and drawn
+  LINEAR, the sharp-bilinear reference; at the window whose chrome scales
+  by 1.6 the HUD strips keep within the chrome's filter, as the Basic case
+  there holds them; the box filter never runs for a Full frame; the match
+  loads in Full, its loading screen makes the terrain pages and lets the
+  atlas's texels go, the first match frame draws from them and makes none,
+  and no frame after the first of a spell of the tier makes a page; a pass
+  draws no more batches than the atlas has pages; and the terrain's
+  processor cost, the frame's build, the card's call and the overlay, is
+  printed for each zoom beside the box filter's, with pictures of each
+  zoom.
+- The Full tier (`runtime_full.cpp`, `full_presentation.hpp`,
+  `full_terrain.hpp`, `full_terrain.cpp`): a branch of the accelerated
+  presentation, taken when the tier decided for the frame is Full
+  (`set_full_presentation`), in which the graphics card draws the
+  battlefield's terrain and the processor the rest. The planner runs as in
+  Basic and writes what it writes there; `world_scaling` returns the zoom
+  with no split, so the frame draws in screen pixels at the zoom into the
+  world layer, over a terrain base the nearest fill paints at the zoom,
+  and the box filter never runs (`refresh_filtered_terrain`). As the match
+  loads, with the terrain step of its loading screen and before the world
+  is built or a shared game's load barrier runs (`make_full_match_pages`,
+  from `bootstrap_match`), the card's executor (`src/app/card`) is opened
+  on the renderer at its texture limit and the Full function test run on
+  it, four batches into one target read back once: an opaque page of two
+  levels drawn 1:1 NEAREST reads back as its texels, its level 1 drawn
+  twice its size LINEAR within 2 of the enlargement (or exactly NEAREST on
+  SDL's software renderer), a white quad at alpha one half over a known
+  colour as the blend within 2, and a triangle with red, green and blue
+  corners shows their mean at its centroid pixel within 4; the map's
+  terrain atlas (`src/present/gpu-world`) is built within `fit_page_edge`
+  of that limit, through the display gamma, its levels 0 and 1 uploaded
+  as pages and each page's texels let go once uploaded
+  (`ensure_full_terrain_pages`), so that the match's first frame finds the
+  pages and makes none. A frame builds them again only when the renderer
+  was made again, the pages were freed, or the palette, the gamma or the
+  page edge changed since (`ensure_full_match_textures`); the atlas is
+  keyed by the map's own storage, since one map record holds every map of
+  the run in turn. A card failure at the loading screen drops Full for the
+  run and the match plays in Basic. Each frame the builder appends one
+  quad per visible tile to a `CardFrame`, a batch for each page the tiles
+  read, so that a pass costs the card as many calls as the atlas has pages
+  however the grid alternates, by the level rule (`plan_terrain_draw`):
+  between zoom 0.5 and
+  1 level 1 LINEAR, then level 0 LINEAR over it at alpha 1 - log2(1/zoom),
+  which at 0.5 is level 1 alone, today's box filter where the camera lies
+  on an even map pixel; at 1 and every whole number above it level 0
+  NEAREST, 3.1c's pixels; at another zoom above 1 level 0 by the pixel-art
+  sampling mode where the start-up probe found it, which the rung's card
+  filter carries, else NEAREST into a target made
+  once at twice the battlefield, a whole number of map pixels at zoom 2, 3
+  and 4, and the target drawn LINEAR to the window by zoom over the next
+  whole number, the Basic tier's sharp-bilinear, or LINEAR straight where
+  the target cannot be made. The executor runs the frame within the
+  battlefield's scissor; what the processor drew over the terrain base
+  goes up as Basic's overlay does, by difference from the base
+  (`convert_rgb24_overlay_argb`) in the bands that hold it, laid over the
+  card's terrain 1:1; the HUD strips (`draw_accelerated_hud_strips`), from
+  the HUD layer's prescale target made as Basic makes it
+  (`ensure_accelerated_match_textures`), the dialogs, the cursor and the
+  present follow as in Basic, and the readers
+  that keep a picture get the standard tier's draw (`ensure_screen_world`).
+  A call of the card's own that fails, or a failed function test, drops
+  Full for the run (`drop_full`, `TierInputs::full_drop`): Basic presents
+  that frame and every frame after until Off and back, or Restore
+  defaults, lifts it; a frame whose terrain base is not the frame's is
+  Basic's too. The start-up line and `+stats` name the full tier, and the
+  step-down is fed the build, the card's call and the overlay as Full's
+  passes. Off and Basic are untouched: nothing here runs unless the tier is
+  Full, which only `--hardware-acceleration=full` gives while
+  `render_policy::full_ready` is false. Not yet: the memory guard's count
+  of the pages and the target, Full's records and statuses beyond the
+  drop, the zoom-in target and the overlay made at the loading screen
+  rather than at the first frame that needs them, smooth panning, and the
+  sprites, models, fog and overlays as card draws. `app-full-terrain`
+  checks the level rule and the quads over a small map on three pages, one
+  batch per page whatever the grid's order.
 - Native pixel density: a window's density is fixed when it opens.
   `decide_window_density` (`render_host.cpp`) decides it before the window
   opens by the render policy's rule (`decide_native_density`): from 2 GiB,
@@ -442,20 +531,25 @@ logs it.
   (`FunctionTest::trial_unwritten`) until the player tries again. With a
   named preferences file the records live in memory and it runs where the
   file sets the setting to Basic or Full. The start-up line names the
-  tier, standard or basic, with what it does, "(Full is not in this
-  build)" after the name where Full was asked for, or the reason the
+  tier, standard, basic or full, with what it does, "(Full is not in this
+  build)" after basic where Full was asked for, or the reason the
   processor draws everything (`tier_description`); the `+stats` renderer
-  row names the tier the same way. Full, the battlefield drawn
-  on the graphics card, is not built yet: the render policy's request
-  (`TierInputs::setting`, `AccelerationFlag`) carries Off, Basic or Full,
-  and `decide_render_tier` draws Full as Basic, so that a later change adds
-  the tier itself. Before each frame, `Runtime::update_render_tier`
+  row names the tier the same way. Full, the battlefield drawn on the
+  graphics card, is being built (the Full tier, above): the render
+  policy's request (`TierInputs::setting`, `AccelerationFlag`) carries
+  Off, Basic or Full, and `decide_render_tier` gives `RenderTier::full`
+  where Full was asked for, Full is ready in this build
+  (`render_policy::full_ready`, false until the card draws the whole
+  battlefield) or `--hardware-acceleration=full` forced it, and Full was
+  not dropped for the run; otherwise Basic, with the Full reason
+  (`FullReason`) in the decision. Before each frame, `Runtime::update_render_tier`
   brings the facts up to date (the flags, the setting in effect, the
   director, a lost device) and takes the frame's step from the render
   policy (`step_tier`): the tier, the function test run where only it is
   missing, the frame noted in a shared game or a replay, and the switch
   that makes the accelerated presentation match, on at the machine's
-  starting rung or off. Setting Hardware acceleration to Off applies at
+  starting rung or off, with the Full branch marked where the tier is Full
+  (`set_full_presentation`). Setting Hardware acceleration to Off applies at
   once; Basic and Full apply at once too, except in a shared game or a replay, known
   from its bootstrap (`MatchBootstrap::multiplayer`, `replay`), which keeps
   the tier it began with until it ends (`begin_render_tier_match`,

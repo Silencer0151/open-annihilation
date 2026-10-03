@@ -21,6 +21,7 @@
 // the unit under the pointer the one drawn there.
 #include "oa/app/runtime.hpp"
 
+#include "full_presentation.hpp"
 #include "render_host.hpp"
 #include "render_run.hpp"
 #include "xrgb_conversion.hpp"
@@ -34,6 +35,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -41,7 +43,9 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -53,6 +57,7 @@ namespace {
 
 namespace policy = render_policy;
 namespace wr = oa::present::world_renderer;
+namespace gw = oa::present::gpu_world;
 
 /// Exit code of a check that skipped, which ctest reports as skipped.
 constexpr int skipped_exit_code = 77;
@@ -112,6 +117,36 @@ constexpr int most_hud_difference = 1;
 /// density, in window points: the view maps one onto the other exactly but
 /// for the rounding of floats.
 constexpr float window_point_tolerance = 0.01F;
+/// The most the mean of a channel of the Full tier's two-level blend of the
+/// terrain, between zoom 0.5 and 1, may differ from the standard tier's
+/// box filter of the same view: the blend is the card's own filter, not
+/// today's bytes, so the bound is that of the terrain of the installed
+/// game's maps on SDL's software renderer, with room; a picture drawn from
+/// the wrong level, or a map pixel off, strays past it. The blend itself
+/// is held to the renderer's own LINEAR of each tile's quad, pass over
+/// pass, within the renderer's tolerance.
+constexpr double most_blend_mean_difference = 24.0;
+/// The levels SDL's software renderer's blend of a texture at an alpha
+/// gives: dst = ((src - dst) * alpha >> 8) + dst, within a level of the
+/// exact blend, so a blended pass of the reference computed exactly keeps
+/// within most_software_difference of the read-back.
+constexpr int blend_shift = 8;
+/// The most the mean difference of a channel may be against that model on
+/// SDL's software renderer: two passes, each rounded by the renderer, and
+/// the blend's own rounding, where one LINEAR draw is held to
+/// most_mean_scaled_difference; a card is held to that mean.
+constexpr double most_blended_mean_difference = 1.0;
+/// The clear and the resolve batches a frame drawn through the zoom-in
+/// target adds to its passes' batches.
+constexpr uint32_t target_frame_batches = 2;
+/// Pixels left out at each edge of a HUD strip when it is held to its
+/// reference: a card's LINEAR read may take the HUD layer beyond the
+/// strip's edge from the prescale target, where the reference clamps.
+constexpr int strip_edge_inset = 1;
+/// The fewest terrain pixels a zoomed-out Full frame must show under a
+/// transparent overlay for its comparison to count: the fog covers most
+/// of a zoomed-out view, and a unit the rest where one stands.
+constexpr std::size_t least_terrain_pixels = 4096;
 
 /// A rectangle of a frame.
 struct Area {
@@ -213,6 +248,19 @@ renderer::Surface enlarged(const renderer::Surface& frame, uint32_t factor) {
     return result;
 }
 
+/// Presents a frame and returns the frame as the processor composed it.
+///
+/// @param presented presents a frame
+/// @param composed composes the frame
+/// @return the composition
+renderer::Surface composed_after(
+    const std::function<renderer::Surface()>& presented,
+    const std::function<renderer::Surface()>& composed
+) {
+    std::ignore = presented();
+    return composed();
+}
+
 /// Returns a name's text for a zoom: "0.5", "1", "2.5".
 ///
 /// @param zoom the zoom
@@ -255,17 +303,24 @@ int Runtime::check_render_tiers() {
     if (!options_.hardware_acceleration ||
         *options_.hardware_acceleration == HardwareAcceleration::off)
         fail("needs --hardware-acceleration, which switches the accelerated tier on");
-    // The tier as the flags decide it, switched as --hardware-acceleration,
-    // at the level it was given, and --no-hardware-acceleration switch it.
+    // The tier as the flags decide it: the Basic cases switch it as
+    // --hardware-acceleration=basic and --no-hardware-acceleration would,
+    // and the Full cases, which need --hardware-acceleration=full, set the
+    // level themselves.
     const HardwareAcceleration asked_level = *options_.hardware_acceleration;
-    const auto switch_tier = [&](bool on) {
-        options_.hardware_acceleration = on ? asked_level : HardwareAcceleration::off;
+    const auto set_level = [&](HardwareAcceleration level) {
+        options_.hardware_acceleration = level;
         update_render_tier();
+    };
+    const auto switch_tier = [&](bool on) {
+        set_level(on ? HardwareAcceleration::basic : HardwareAcceleration::off);
         if (accelerated_presentation() != on)
             fail(
-                on ? "--hardware-acceleration did not switch the accelerated tier on"
+                on ? "--hardware-acceleration=basic did not switch the accelerated tier on"
                    : "--no-hardware-acceleration did not switch the accelerated tier off"
             );
+        if (on && full_presentation())
+            fail("--hardware-acceleration=basic drew in the full tier");
     };
     const fs::path report_directory = "local/reports";
     fs::create_directories(report_directory);
@@ -352,7 +407,7 @@ int Runtime::check_render_tiers() {
     switch_tier(false);
     switch_tier(true);
     if (render_run_->tier.tier != policy::RenderTier::accelerated)
-        fail("the tier decided for --hardware-acceleration is not the accelerated tier");
+        fail("the tier decided for --hardware-acceleration=basic is not the accelerated tier");
 
     // The main menu, letterboxed at 2.25 by the card's filter, and at 2 by
     // NEAREST with no prescale target.
@@ -413,8 +468,11 @@ int Runtime::check_render_tiers() {
     // A skirmish, or the campaign mission --campaign and --mission name, its
     // loading screen letterboxed by the card's filter, each of its frames
     // drawn into the prescale target, then drawn at a window whose chrome
-    // scales by 2.
+    // scales by 2. With Full asked, the match loads in Full, so that its
+    // loading screen makes the Full tier's pages.
     resize(kDefaultWindowWidth, kDefaultWindowHeight);
+    if (asked_level == HardwareAcceleration::full)
+        set_level(HardwareAcceleration::full);
     const uint64_t draws_before_loading = counts.prescale_draws;
     if (options_.campaign_mission)
         std::ignore = start_headless_campaign_mission();
@@ -426,6 +484,40 @@ int Runtime::check_render_tiers() {
         fail("the loading screen was not drawn by the card's filter");
     std::cout << "render tiers check: the loading screen drew "
               << counts.prescale_draws - draws_before_loading << " frames by the card's filter\n";
+    // The loading screen opened the executor, ran the Full function test
+    // and built and uploaded the terrain pages with the terrain, before the
+    // world was built, letting the atlas's texels go once uploaded; the
+    // first match frame draws from those pages and makes none.
+    if (asked_level == HardwareAcceleration::full) {
+        if (!full_presentation() || !full_ || render_run_->tier.tier != policy::RenderTier::full)
+            fail("the full tier was not on as the match loaded");
+        const auto& full = *full_;
+        if (!full.pages_from_load || full.pages.empty() ||
+            full.pages.size() != full.atlas.pages.size())
+            fail("the loading screen did not make the terrain pages");
+        const uint64_t pages_alive = full.executor.counts().pages_alive;
+        if (pages_alive != full.pages.size())
+            fail("the terrain pages alive are not the loading screen's");
+        for (const auto& page : full.atlas.pages)
+            if (!page.texels.empty())
+                fail("the atlas kept a page's texels after the page was filled");
+        std::cout << "render tiers check: the loading screen made the full tier's terrain pages: "
+                  << full.pages.size() << " pages of " << full.atlas.slot_tiles.size()
+                  << " slots within " << full.atlas_page_edge << ", "
+                  << full.page_bytes / 1024 / 1024 << " MiB, built in "
+                  << full.atlas_build_ns / 1000 << " us and filled in "
+                  << full.page_upload_ns / 1000 << " us\n";
+        const uint64_t frames_before = full.frames;
+        std::ignore = presented();
+        if (!full_->drawn || full_->frames != frames_before + 1)
+            fail("the first match frame was not drawn by the card");
+        if (!full_->pages_from_load || full_->executor.counts().pages_alive != pages_alive)
+            fail("the first match frame made a terrain page");
+        std::cout << "render tiers check: the first match frame drew from the loading screen's "
+                     "pages and made none\n";
+        // The Basic cases run at basic.
+        switch_tier(true);
+    }
     uint16_t anchor = 0;
     for (const auto& slot : match_->world().slots)
         if (slot.unit_index != 0 && slot.unit != nullptr && slot.record.type_index != 0 &&
@@ -460,6 +552,84 @@ int Runtime::check_render_tiers() {
         renderer::Surface frame;
         compose_match_frame(frame);
         return frame;
+    };
+    // The HUD strips of a presented frame, held to the chrome's filter at
+    // the display's scale as sharp_draw draws them from the HUD layer:
+    // each strip against its own source scaled by the card's filter, a
+    // pixel in from the strip's edges and the pointer's reach left out. At
+    // a whole-number scale the strips are NEAREST and equal; at another,
+    // where the rung filters the chrome through a prescale target, they
+    // are sharp-bilinear from it, within the renderer's tolerance.
+    const auto check_hud_strips = [&](const renderer::Surface& read, const std::string& which) {
+        const double chrome = match_layout_.scale * match_display_density();
+        const auto card = accelerated_card_scale(
+            policy::chrome_filter(accelerated_.rung, chrome),
+            chrome,
+            match_hud_cpu_.width,
+            match_hud_cpu_.height,
+            accelerated_.hud_prescale
+        );
+        const bool whole = std::floor(chrome) == chrome;
+        if (!whole && rung.filtered_chrome && rung.card != policy::CardFilter::pixelart &&
+            card.filter != policy::ScaleFilter::sharp_bilinear)
+            fail(which + ": the HUD strips are not drawn sharp-bilinear from the prescale target");
+        const auto hud_rgb = gamma_of(match_hud_cpu_.rgb);
+        const Area pointer = cursor();
+        Difference difference;
+        double sum = 0.0;
+        std::size_t channels = 0;
+        renderer::Surface reference = read;
+        for (const auto& strip : match_hud_strips()) {
+            if (strip.source_w <= 0 || strip.source_h <= 0 || strip.w <= 0 || strip.h <= 0)
+                continue;
+            const wr::RgbSource source{
+                hud_rgb.data() + (static_cast<std::size_t>(strip.source_y) * match_hud_cpu_.width +
+                                  static_cast<std::size_t>(strip.source_x)) *
+                                     3U,
+                static_cast<uint32_t>(strip.source_w),
+                static_cast<uint32_t>(strip.source_h),
+                match_hud_cpu_.width
+            };
+            // The card's references write every pixel of their target, so
+            // each strip is drawn and compared before the next.
+            scaled_reference(
+                source,
+                card,
+                {strip.x, strip.y, strip.w, strip.h},
+                {reference.rgb.data(), reference.width, reference.height, reference.width}
+            );
+            const int right =
+                std::min(strip.x + strip.w - strip_edge_inset, static_cast<int>(read.width));
+            const int bottom =
+                std::min(strip.y + strip.h - strip_edge_inset, static_cast<int>(read.height));
+            for (int y = strip.y + strip_edge_inset; y < bottom; ++y)
+                for (int x = strip.x + strip_edge_inset; x < right; ++x) {
+                    if (x >= pointer.x && x < pointer.x + pointer.w && y >= pointer.y &&
+                        y < pointer.y + pointer.h)
+                        continue;
+                    ++difference.pixels;
+                    const auto at = (static_cast<std::size_t>(y) * read.width + x) * 3U;
+                    for (std::size_t channel = 0; channel < 3; ++channel) {
+                        const int delta = std::abs(
+                            int{read.rgb[at + channel]} - int{reference.rgb[at + channel]}
+                        );
+                        difference.most = std::max(difference.most, delta);
+                        sum += delta;
+                        ++channels;
+                    }
+                }
+        }
+        difference.mean = channels != 0 ? sum / static_cast<double>(channels) : 0.0;
+        std::cout << "render tiers check: " << which << ": the HUD strips at chrome scale "
+                  << chrome << " by filter " << static_cast<int>(card.filter) << " x" << card.factor
+                  << " over " << difference.pixels << " pixels: most " << difference.most
+                  << ", mean " << difference.mean << '\n';
+        if (difference.pixels == 0 || difference.most > (whole ? 0 : most_scaled_difference) ||
+            difference.mean > most_mean_scaled_difference) {
+            write_png(report_directory / "native-render-tiers-hud-presented.png", read);
+            write_png(report_directory / "native-render-tiers-hud-reference.png", reference);
+            fail(which + ": the HUD strips stray from the chrome's filter");
+        }
     };
 
     // --native-density: the window opened at the display's own density, and
@@ -567,6 +737,44 @@ int Runtime::check_render_tiers() {
         std::cout << "render tiers check: at native density the match is laid out in window "
                      "points, read back at the display's size, and picks the unit drawn under "
                      "the pointer\n";
+        // The Full tier at zoom 1 and a whole-number density: the card's
+        // terrain and the overlay, stretched by logical presentation, equal
+        // the composition enlarged by nearest replication too.
+        if (asked_level == HardwareAcceleration::full && std::floor(density) == density &&
+            density >= 1.0) {
+            update_pointer(
+                static_cast<float>(match_layout_.width - 1),
+                static_cast<float>(match_layout_.height - 1)
+            );
+            set_level(HardwareAcceleration::full);
+            at_zoom(1.0F);
+            const auto full_read = presented();
+            if (!full_presentation() || !full_ || !full_->drawn)
+                fail("the full tier did not draw at native density");
+            const auto factor = static_cast<int>(density);
+            const auto expected = enlarged(composed(), static_cast<uint32_t>(factor));
+            const Area field{
+                battlefield().x * factor,
+                battlefield().y * factor,
+                battlefield().w * factor,
+                battlefield().h * factor
+            };
+            const Area pointer{
+                cursor().x * factor, cursor().y * factor, cursor().w * factor, cursor().h * factor
+            };
+            const auto world = compare(full_read, expected, field, pointer);
+            std::cout << "render tiers check: full tier at zoom 1 and native density: "
+                         "battlefield most "
+                      << world.most << '\n';
+            if (world.pixels == 0 || world.most != 0) {
+                write_png(report_directory / "native-render-tiers-density-full.png", full_read);
+                fail(
+                    "the full tier at zoom 1 and native density is not the composition "
+                    "enlarged by nearest replication"
+                );
+            }
+            set_level(HardwareAcceleration::off);
+        }
         return 0;
     }
 
@@ -928,9 +1136,10 @@ int Runtime::check_render_tiers() {
     // drops the prescale targets the frames before made, and the ease
     // counts on finding them made.
     check_smooth_panning(switch_tier, at_zoom, anchor);
-    // At a chrome scale of 1.6 the HUD is drawn into its prescale target
-    // once on each frame that paints the layer, which every frame the loop
-    // presents does, and on none presented again without a paint.
+    // At a chrome scale of 1.6 the HUD strips are the chrome's filter from
+    // the HUD's prescale target, which is drawn into once on each frame
+    // that paints the layer, which every frame the loop presents does, and
+    // on none presented again without a paint.
     {
         resize(part_scale_width, part_scale_height);
         update_pointer(
@@ -938,9 +1147,10 @@ int Runtime::check_render_tiers() {
             static_cast<float>(match_layout_.height - 1)
         );
         at_zoom(1.0F);
-        std::ignore = presented();
+        const auto hud_read = presented();
         if (!accelerated_.hud_prescale.made() && rung.card != policy::CardFilter::pixelart)
             fail("the HUD has no prescale target at a chrome scale of 1.6");
+        check_hud_strips(hud_read, "the basic tier at a chrome scale of 1.6");
         const uint64_t draws = counts.prescale_draws;
         for (int frame = 0; frame < counted_hud_frames; ++frame)
             std::ignore = presented();
@@ -957,9 +1167,29 @@ int Runtime::check_render_tiers() {
         if (counts.prescale_draws != painted)
             fail("the HUD was drawn into its prescale target with its layer unchanged");
     }
-    // Switched off, every frame is the standard tier's again.
     switch_tier(false);
     resize(whole_scale_width, whole_scale_height);
+    update_pointer(
+        static_cast<float>(match_layout_.width - 1), static_cast<float>(match_layout_.height - 1)
+    );
+    // The Full tier: the terrain drawn by the card from the atlas pages, the
+    // rest by the processor over it.
+    if (asked_level == HardwareAcceleration::full)
+        check_full_render_tier(
+            set_level,
+            at_zoom,
+            presented,
+            composed,
+            resize,
+            check_hud_strips,
+            report_directory,
+            software
+        );
+    else
+        std::cout << "render tiers check: the Full cases need --hardware-acceleration=full; "
+                     "skipped\n";
+    // Switched off, every frame is the standard tier's again.
+    switch_tier(false);
     for (const float zoom : {0.5F, 1.0F, 2.0F}) {
         at_zoom(zoom);
         const auto read = presented();
@@ -975,6 +1205,649 @@ int Runtime::check_render_tiers() {
               << counts.textures_created << " textures made and " << counts.prescale_draws
               << " prescale draws; pictures in " << report_directory.string() << '\n';
     return 0;
+}
+
+void Runtime::check_full_render_tier(
+    const std::function<void(oa::ui::engine_settings::HardwareAcceleration)>& set_level,
+    const std::function<void(float)>& at_zoom,
+    const std::function<renderer::Surface()>& presented,
+    const std::function<renderer::Surface()>& composed,
+    const std::function<void(int, int)>& resize,
+    const std::function<void(const renderer::Surface&, const std::string&)>& check_hud_strips,
+    const fs::path& report_directory,
+    bool software
+) {
+    using oa::ui::engine_settings::HardwareAcceleration;
+    const auto fail = [](const std::string& what) {
+        throw std::runtime_error("render tiers check: full tier: " + what);
+    };
+    // The pages alive at the first Full frame of a spell of the tier: no
+    // frame after it may make one. A spell ends when the level leaves Full,
+    // which frees the pages; the next spell's first frame makes them again.
+    std::optional<uint64_t> spell_pages;
+    const auto level = [&](HardwareAcceleration to) {
+        set_level(to);
+        if (to != HardwareAcceleration::full)
+            spell_pages.reset();
+    };
+    const auto battlefield = [&]() {
+        return Area{
+            match_layout_.left,
+            match_layout_.top,
+            match_layout_.battlefield_width(),
+            match_layout_.battlefield_height()
+        };
+    };
+    const auto cursor = [&]() {
+        return Area{
+            static_cast<int>(match_pointer_x_) - cursor_reach,
+            static_cast<int>(match_pointer_y_) - cursor_reach,
+            2 * cursor_reach,
+            2 * cursor_reach
+        };
+    };
+    const auto picture = [&](const std::string& name) {
+        return report_directory / ("native-render-tiers-full-" + name + ".png");
+    };
+    const auto gamma_of = [&](std::vector<uint8_t> bytes) {
+        if (!gamma_identity_)
+            for (auto& byte : bytes)
+                byte = gamma_table_[byte];
+        return bytes;
+    };
+    // A Full frame, which never runs the box filter, makes no page after
+    // the spell's first, and draws each pass in no more batches than the
+    // atlas has pages, the clear and the resolve of the zoom-in target
+    // beside them.
+    const auto full_frame = [&]() {
+        const uint64_t runs = terrain_box_filter_runs_;
+        auto frame = presented();
+        if (terrain_box_filter_runs_ != runs)
+            fail("the box filter ran for a full frame");
+        if (!full_presentation() || !full_ || !full_->drawn)
+            fail("the frame at zoom " + zoom_text(match_zoom()) + " was not drawn by the card");
+        const auto& full = *full_;
+        const uint64_t alive = full.executor.counts().pages_alive;
+        if (alive != full.atlas.pages.size() || full.pages.size() != alive)
+            fail("the terrain pages alive are not the atlas's pages");
+        if (spell_pages && *spell_pages != alive)
+            fail(
+                "a terrain page was made after the first full frame, at zoom " +
+                zoom_text(match_zoom())
+            );
+        spell_pages = alive;
+        const auto most_batches =
+            static_cast<uint32_t>(full.plan.pass_count * full.atlas.pages.size()) +
+            (full.drawn_through_target ? target_frame_batches : 0U);
+        if (full.drawn_batches > most_batches)
+            fail(
+                "zoom " + zoom_text(match_zoom()) + " drew " + std::to_string(full.drawn_batches) +
+                " batches from " + std::to_string(full.atlas.pages.size()) + " pages in " +
+                std::to_string(full.plan.pass_count) + " passes"
+            );
+        return frame;
+    };
+    // What the terrain cost the processor in the frame just presented.
+    const auto cost = [&]() {
+        const auto& full = *full_;
+        return "quads " + std::to_string(full.drawn_quads) + " in " +
+               std::to_string(full.drawn_batches) + " batches; processor cost: build " +
+               std::to_string(full.build_ns / 1000) + " us, card " +
+               std::to_string(full.execute_ns / 1000) + " us, overlay " +
+               std::to_string(full.overlay_ns / 1000) + " us";
+    };
+
+    level(HardwareAcceleration::full);
+    if (!render_run_ || render_run_->tier.tier != policy::RenderTier::full)
+        fail("the tier decided for --hardware-acceleration=full is not the full tier");
+    if (!full_presentation())
+        fail("--hardware-acceleration=full did not switch the full tier on");
+
+    // Whole-number zooms: level 0 NEAREST, the processor's picture exactly,
+    // the terrain the card's and the rest the overlay's. The check's own
+    // atlas of the map, built as the tier builds its own, holds the texels
+    // the references read: the tier lets its own go once uploaded.
+    gw::TerrainAtlas reference_atlas;
+    for (const float zoom : {1.0F, 2.0F, 4.0F}) {
+        at_zoom(zoom);
+        const auto read = full_frame();
+        const auto expected = composed();
+        if (full_->plan.pass_count != 1 || full_->plan.passes[0].level != 0 ||
+            full_->plan.passes[0].sampling != card::Sampling::nearest || full_->plan.through_target)
+            fail("zoom " + zoom_text(zoom) + " was not drawn from level 0 NEAREST");
+        const auto world = compare(read, expected, battlefield(), cursor());
+        const auto whole =
+            compare(read, expected, {0, 0, match_layout_.width, match_layout_.height}, cursor());
+        std::cout << "render tiers check: full tier zoom " << zoom_text(zoom)
+                  << ": battlefield most " << world.most << ", whole frame most " << whole.most
+                  << "; " << cost() << '\n';
+        write_png(picture("zoom-" + zoom_text(zoom)), read);
+        if (world.pixels == 0 || world.most != 0 || whole.most > most_hud_difference) {
+            write_png(picture("zoom-" + zoom_text(zoom) + "-composed"), expected);
+            fail("zoom " + zoom_text(zoom) + " differs from compose_match_frame");
+        }
+        if (zoom == 1.0F) {
+            const auto& full = *full_;
+            std::cout << "render tiers check: full tier terrain atlas: " << full.atlas.pages.size()
+                      << " pages of " << full.atlas.slot_tiles.size() << " slots within "
+                      << full.atlas_page_edge << ", " << full.page_bytes / 1024 / 1024
+                      << " MiB uploaded in " << full.page_upload_ns / 1000 << " us, built in "
+                      << full.atlas_build_ns / 1000 << " us"
+                      << (full.pages_from_load ? ", as the match loaded" : ", at a frame") << '\n';
+            for (const auto& page : full.atlas.pages)
+                if (!page.texels.empty())
+                    fail("the atlas kept a page's texels after the page was filled");
+            if (!selected_tnt_)
+                fail("the match has no map");
+            const auto atlas_start = std::chrono::steady_clock::now();
+            if (gw::build_terrain_atlas(
+                    *selected_tnt_,
+                    match_palette_,
+                    gamma_identity_ ? nullptr : &gamma_table_,
+                    full.atlas_page_edge,
+                    reference_atlas
+                ) != gw::TerrainAtlasError::none)
+                fail("the check could not build its own atlas of the map");
+            if (reference_atlas.grid != full.atlas.grid ||
+                reference_atlas.pages.size() != full.atlas.pages.size())
+                fail("the check's atlas of the map differs from the tier's");
+            std::cout << "render tiers check: the check's own atlas of the map built in "
+                      << std::chrono::duration_cast<std::chrono::microseconds>(
+                             std::chrono::steady_clock::now() - atlas_start
+                         )
+                             .count()
+                      << " us\n";
+        }
+    }
+
+    // The state case: what the match reads back from a Full frame equals
+    // the standard tier's at the same moment.
+    {
+        at_zoom(1.0F);
+        std::ignore = full_frame();
+        std::ignore = full_frame();
+        const auto full_read = match_draw_read_back();
+        level(HardwareAcceleration::off);
+        std::ignore = presented();
+        const auto standard_read = match_draw_read_back();
+        if (const char* differs = draw_read_back_difference(full_read, standard_read);
+            differs != nullptr)
+            fail(
+                std::string("a full frame left ") + differs +
+                " otherwise than the standard tier's frame of the same moment"
+            );
+        std::cout << "render tiers check: full tier: a full frame leaves what the match reads as "
+                     "the standard tier's frame does\n";
+    }
+
+    // Zoomed out: the card's levels, never the box filter. The terrain under
+    // a transparent overlay, where the standard tier shows its terrain too,
+    // is held to the standard tier's box filter of the same moment: exactly
+    // at zoom 0.5 with the camera on an even map pixel, where level 1 drawn
+    // 1:1 is that filter; at 0.75 the blend of the two levels is the card's
+    // own filter, held to a mean difference and printed.
+    for (const float zoom : {kMinBattlefieldZoom, 0.75F}) {
+        const bool exact = zoom == kMinBattlefieldZoom;
+        level(HardwareAcceleration::full);
+        at_zoom(zoom);
+        match_camera_x_ &= ~1;
+        match_camera_z_ &= ~1;
+        const auto read = full_frame();
+        const auto& plan = full_->plan;
+        if (plan.passes[0].level != full_terrain::far_level ||
+            plan.passes[0].sampling != card::Sampling::linear || plan.through_target)
+            fail("zoom " + zoom_text(zoom) + " was not drawn from level 1 LINEAR");
+        if (exact ? plan.pass_count != 1
+                  : (plan.pass_count != 2 || plan.passes[1].level != 0 ||
+                     plan.passes[1].blend != card::Blend::alpha ||
+                     std::abs(
+                         plan.passes[1].alpha -
+                         static_cast<float>(1.0 - std::log2(1.0 / static_cast<double>(zoom)))
+                     ) > 1.0e-5F))
+            fail("zoom " + zoom_text(zoom) + " did not take the level rule's passes");
+        const std::string full_cost = cost();
+        const auto overlay = full_->overlay;
+        const uint32_t cam_x = terrain_cache_cam_x_;
+        const uint32_t cam_y = terrain_cache_cam_y_;
+        if (cam_x % 2 != 0 || cam_y % 2 != 0)
+            fail("the camera is not on an even map pixel at zoom " + zoom_text(zoom));
+        write_png(picture("zoom-" + zoom_text(zoom)), read);
+        // The renderer's own picture of the passes, each tile's quad drawn
+        // LINEAR from the check's atlas and the level-0 pass blended over
+        // the level-1 pass at its alpha. On SDL's software renderer each
+        // quad is a texture copy: its rectangle truncated to whole pixels,
+        // the tile's texels at the level stretched into it as that renderer
+        // draws a texture LINEAR (software_linear_rgb24), and the blend in
+        // that renderer's 256ths. On a card each quad covers the pixels
+        // whose centres lie within it, each sampled LINEAR at its centre
+        // from the tile, clamped at the tile's edge as the gutter clamps it
+        // (bilinear_rgb24), and the blend is exact, rounded once.
+        renderer::Surface renderer_reference = read;
+        {
+            const auto& atlas = reference_atlas;
+            const Area field = battlefield();
+            const auto within_field = [&](int x, int y) {
+                return x >= field.x && x < field.x + field.w && y >= field.y &&
+                       y < field.y + field.h;
+            };
+            full_terrain::TerrainView view;
+            view.camera_x = cam_x;
+            view.camera_y = cam_y;
+            view.origin_x = static_cast<float>(field.x);
+            view.origin_y = static_cast<float>(field.y);
+            view.scale = zoom;
+            view.width = static_cast<uint32_t>(field.w);
+            view.height = static_cast<uint32_t>(field.h);
+            const auto range = full_terrain::visible_tiles(atlas, view);
+            const auto tile_pixels = static_cast<float>(gw::tile_edge) * zoom;
+            // Lays a drawn tile over the reference at a pixel, replacing or
+            // blending by the pass.
+            const auto lay = [&](int sx,
+                                 int sy,
+                                 const uint8_t* drawn,
+                                 card::Blend blend,
+                                 int alpha_256ths,
+                                 double alpha) {
+                if (!within_field(sx, sy))
+                    return;
+                const auto at = (static_cast<std::size_t>(sy) * renderer_reference.width + sx) * 3U;
+                for (std::size_t channel = 0; channel < 3; ++channel) {
+                    const int source_level = drawn[channel];
+                    uint8_t& destination = renderer_reference.rgb[at + channel];
+                    if (blend == card::Blend::none)
+                        destination = static_cast<uint8_t>(source_level);
+                    else if (software)
+                        destination = static_cast<uint8_t>(
+                            (((source_level - destination) * alpha_256ths) >> blend_shift) +
+                            destination
+                        );
+                    else
+                        destination = static_cast<uint8_t>(
+                            std::lround(destination + (source_level - destination) * alpha)
+                        );
+                }
+            };
+            for (uint32_t pass = 0; pass < plan.pass_count; ++pass) {
+                const auto& draw = plan.passes[pass];
+                const double alpha = std::clamp(static_cast<double>(draw.alpha), 0.0, 1.0);
+                const auto alpha_256ths = static_cast<int>(std::lround(alpha * 255.0));
+                for (uint32_t row = range.first_row; row < range.end_row; ++row)
+                    for (uint32_t column = range.first_column; column < range.end_column;
+                         ++column) {
+                        const auto rect = gw::tile_rect(
+                            atlas,
+                            atlas.grid[static_cast<std::size_t>(row) * atlas.grid_width + column],
+                            draw.level
+                        );
+                        if (!rect)
+                            fail("the atlas lacks a tile at zoom " + zoom_text(zoom));
+                        const auto& page = atlas.pages[rect->page];
+                        const auto& level = page.levels[draw.level];
+                        std::vector<uint8_t> tile(std::size_t{rect->edge} * rect->edge * 3U);
+                        for (uint32_t ty = 0; ty < rect->edge; ++ty)
+                            for (uint32_t tx = 0; tx < rect->edge; ++tx)
+                                std::memcpy(
+                                    &tile[(std::size_t{ty} * rect->edge + tx) * 3U],
+                                    &page.texels
+                                         [level.offset +
+                                          ((std::size_t{rect->y} + ty) * level.width + rect->x +
+                                           tx) *
+                                              4U],
+                                    3
+                                );
+                        const wr::RgbSource source{tile.data(), rect->edge, rect->edge, rect->edge};
+                        // The quad's corner and size as the builder gives them.
+                        const auto corner_x = static_cast<float>(
+                            static_cast<double>(view.origin_x) +
+                            (static_cast<double>(column) * gw::tile_edge -
+                             static_cast<double>(cam_x)) *
+                                zoom
+                        );
+                        const auto corner_y = static_cast<float>(
+                            static_cast<double>(view.origin_y) +
+                            (static_cast<double>(row) * gw::tile_edge -
+                             static_cast<double>(cam_y)) *
+                                zoom
+                        );
+                        if (software) {
+                            const SDL_Rect landed{
+                                static_cast<int>(corner_x),
+                                static_cast<int>(corner_y),
+                                static_cast<int>((corner_x + tile_pixels) - corner_x),
+                                static_cast<int>((corner_y + tile_pixels) - corner_y)
+                            };
+                            if (landed.w <= 0 || landed.h <= 0)
+                                continue;
+                            const auto landed_w = static_cast<uint32_t>(landed.w);
+                            const auto landed_h = static_cast<uint32_t>(landed.h);
+                            std::vector<uint8_t> stretched(std::size_t{landed_w} * landed_h * 3U);
+                            software_linear_rgb24(
+                                source,
+                                1,
+                                {0, 0, landed.w, landed.h},
+                                {stretched.data(), landed_w, landed_h, landed_w}
+                            );
+                            for (int y = 0; y < landed.h; ++y)
+                                for (int x = 0; x < landed.w; ++x)
+                                    lay(landed.x + x,
+                                        landed.y + y,
+                                        &stretched
+                                            [(static_cast<std::size_t>(y) * landed_w + x) * 3U],
+                                        draw.blend,
+                                        alpha_256ths,
+                                        alpha);
+                            continue;
+                        }
+                        // The pixels whose centres the quad covers, by the
+                        // top-left rule: from the first centre at or past the
+                        // quad's left and top edges to the last before its
+                        // right and bottom edges.
+                        const double left = corner_x;
+                        const double top = corner_y;
+                        const double size = tile_pixels;
+                        const auto first_x = static_cast<int>(std::ceil(left - 0.5));
+                        const auto first_y = static_cast<int>(std::ceil(top - 0.5));
+                        const auto end_x = static_cast<int>(std::ceil(left + size - 0.5));
+                        const auto end_y = static_cast<int>(std::ceil(top + size - 0.5));
+                        if (end_x <= first_x || end_y <= first_y)
+                            continue;
+                        const auto covered_w = static_cast<uint32_t>(end_x - first_x);
+                        const auto covered_h = static_cast<uint32_t>(end_y - first_y);
+                        std::vector<uint8_t> drawn(std::size_t{covered_w} * covered_h * 3U);
+                        wr::bilinear_rgb24(
+                            source,
+                            {size / rect->edge,
+                             size / rect->edge,
+                             left - static_cast<double>(first_x),
+                             top - static_cast<double>(first_y)},
+                            {drawn.data(), covered_w, covered_h, covered_w}
+                        );
+                        for (uint32_t y = 0; y < covered_h; ++y)
+                            for (uint32_t x = 0; x < covered_w; ++x)
+                                lay(first_x + static_cast<int>(x),
+                                    first_y + static_cast<int>(y),
+                                    &drawn[(std::size_t{y} * covered_w + x) * 3U],
+                                    draw.blend,
+                                    alpha_256ths,
+                                    alpha);
+                    }
+            }
+        }
+        // The standard tier's frame of the same moment, whose terrain base
+        // is the box filter's.
+        level(HardwareAcceleration::off);
+        const uint64_t filter_ns = terrain_box_filter_ns_;
+        const uint64_t filter_runs = terrain_box_filter_runs_;
+        const auto standard = composed_after(presented, composed);
+        if (terrain_cache_cam_x_ != cam_x || terrain_cache_cam_y_ != cam_y ||
+            terrain_box_filter_runs_ == filter_runs)
+            fail("the standard tier did not box-filter the same view at zoom " + zoom_text(zoom));
+        const auto boxed = gamma_of(match_terrain_cache_.rgb);
+        const Area field = battlefield();
+        const Area pointer = cursor();
+        const auto bf_w = static_cast<uint32_t>(field.w);
+        Difference difference;
+        double sum = 0.0;
+        std::size_t channels = 0;
+        std::size_t covered = 0;
+        for (int y = 0; y < field.h; ++y)
+            for (int x = 0; x < field.w; ++x) {
+                const int sx = field.x + x;
+                const int sy = field.y + y;
+                if (sx >= pointer.x && sx < pointer.x + pointer.w && sy >= pointer.y &&
+                    sy < pointer.y + pointer.h)
+                    continue;
+                const auto cell = static_cast<std::size_t>(y) * bf_w + static_cast<uint32_t>(x);
+                if (overlay[cell * 4U + 3U] != 0) {
+                    ++covered;
+                    continue;
+                }
+                const auto at = (static_cast<std::size_t>(sy) * read.width + sx) * 3U;
+                if (std::memcmp(&standard.rgb[at], &boxed[cell * 3U], 3) != 0) {
+                    ++covered;
+                    continue;
+                }
+                ++difference.pixels;
+                for (std::size_t channel = 0; channel < 3; ++channel) {
+                    const int delta =
+                        std::abs(int{read.rgb[at + channel]} - int{boxed[cell * 3U + channel]});
+                    difference.most = std::max(difference.most, delta);
+                    sum += delta;
+                    ++channels;
+                }
+            }
+        difference.mean = channels != 0 ? sum / static_cast<double>(channels) : 0.0;
+        std::cout << "render tiers check: full tier zoom " << zoom_text(zoom) << ": terrain of "
+                  << difference.pixels << " pixels against the box filter (" << covered
+                  << " under the overlay or a unit): most " << difference.most << ", mean "
+                  << difference.mean << "; " << full_cost
+                  << "; the standard tier's box filter took "
+                  << (terrain_box_filter_ns_ - filter_ns) / 1000 << " us\n";
+        const bool enough = difference.pixels >= least_terrain_pixels;
+        if (!enough ||
+            (exact ? difference.most != 0 : difference.mean > most_blend_mean_difference)) {
+            write_png(picture("zoom-" + zoom_text(zoom) + "-standard"), standard);
+            fail(
+                "the terrain at zoom " + zoom_text(zoom) +
+                (exact ? " differs from the box filter" : " strays from the box filter")
+            );
+        }
+        // The blend is held to the renderer's own LINEAR of each tile,
+        // pass over pass, within the renderer's tolerance: SDL's software
+        // renderer to its own, a card to the card's.
+        if (!exact) {
+            Difference modelled;
+            double model_sum = 0.0;
+            std::size_t model_channels = 0;
+            for (int y = 0; y < field.h; ++y)
+                for (int x = 0; x < field.w; ++x) {
+                    const int sx = field.x + x;
+                    const int sy = field.y + y;
+                    if (sx >= pointer.x && sx < pointer.x + pointer.w && sy >= pointer.y &&
+                        sy < pointer.y + pointer.h)
+                        continue;
+                    const auto cell = static_cast<std::size_t>(y) * bf_w + static_cast<uint32_t>(x);
+                    if (overlay[cell * 4U + 3U] != 0)
+                        continue;
+                    const auto at = (static_cast<std::size_t>(sy) * read.width + sx) * 3U;
+                    ++modelled.pixels;
+                    for (std::size_t channel = 0; channel < 3; ++channel) {
+                        const int delta = std::abs(
+                            int{read.rgb[at + channel]} - int{renderer_reference.rgb[at + channel]}
+                        );
+                        modelled.most = std::max(modelled.most, delta);
+                        model_sum += delta;
+                        ++model_channels;
+                    }
+                }
+            modelled.mean =
+                model_channels != 0 ? model_sum / static_cast<double>(model_channels) : 0.0;
+            const int most_allowed = software ? most_software_difference : most_card_difference;
+            const double mean_allowed =
+                software ? most_blended_mean_difference : most_mean_scaled_difference;
+            std::cout << "render tiers check: full tier zoom " << zoom_text(zoom) << ": terrain of "
+                      << modelled.pixels << " pixels against the "
+                      << (software ? "software renderer's" : "card's")
+                      << " LINEAR of each tile, blended: most " << modelled.most << ", mean "
+                      << modelled.mean << '\n';
+            if (modelled.pixels < least_terrain_pixels || modelled.most > most_allowed ||
+                modelled.mean > mean_allowed) {
+                write_png(picture("zoom-" + zoom_text(zoom) + "-reference"), renderer_reference);
+                fail(
+                    "the terrain at zoom " + zoom_text(zoom) +
+                    " strays from the renderer's own LINEAR of each tile"
+                );
+            }
+        }
+    }
+
+    // A zoom above 1 that is not whole: level 0 through the target at the
+    // next whole number, drawn LINEAR to the window, the Basic tier's
+    // sharp-bilinear; the terrain under a transparent overlay is held to
+    // the reference of the level-0 view enlarged that many times and drawn
+    // as the renderer draws a texture LINEAR, within the renderer's
+    // tolerance. A renderer with the pixel-art sampling mode draws straight,
+    // held to that filter's reference.
+    {
+        const float zoom = 1.37F;
+        level(HardwareAcceleration::full);
+        at_zoom(zoom);
+        const auto read = full_frame();
+        const auto& full = *full_;
+        const auto& plan = full.plan;
+        if (plan.pass_count != 1 || plan.passes[0].level != 0)
+            fail("zoom " + zoom_text(zoom) + " was not drawn from level 0");
+        write_png(picture("zoom-" + zoom_text(zoom)), read);
+        renderer::Surface reference = read;
+        const uint32_t cam_x = terrain_cache_cam_x_;
+        const uint32_t cam_y = terrain_cache_cam_y_;
+        const Area field = battlefield();
+        bool compared = true;
+        std::string how;
+        if (full.drawn_through_target) {
+            const uint32_t factor = plan.target_zoom;
+            const uint32_t view_w = full.target_width / factor;
+            const uint32_t view_h = full.target_height / factor;
+            std::vector<uint8_t> rgba(std::size_t{view_w} * view_h * 4U);
+            if (gw::read_terrain_view(
+                    reference_atlas,
+                    0,
+                    cam_x,
+                    cam_y,
+                    view_w,
+                    view_h,
+                    rgba.data(),
+                    std::size_t{view_w} * 4U
+                ) != gw::TerrainAtlasError::none)
+                fail("the atlas refused the level-0 view at zoom " + zoom_text(zoom));
+            std::vector<uint8_t> rgb(std::size_t{view_w} * view_h * 3U);
+            for (std::size_t i = 0; i < std::size_t{view_w} * view_h; ++i)
+                std::memcpy(&rgb[i * 3U], &rgba[i * 4U], 3);
+            const SDL_Rect landed{
+                field.x,
+                field.y,
+                static_cast<int>(std::lround(
+                    static_cast<double>(full.target_width) * zoom / static_cast<double>(factor)
+                )),
+                static_cast<int>(std::lround(
+                    static_cast<double>(full.target_height) * zoom / static_cast<double>(factor)
+                ))
+            };
+            const wr::RgbSource source{rgb.data(), view_w, view_h, view_w};
+            const wr::RgbTarget target{
+                reference.rgb.data(), reference.width, reference.height, reference.width
+            };
+            if (software)
+                software_linear_rgb24(source, factor, landed, target);
+            else
+                wr::sharp_bilinear_rgb24(
+                    source,
+                    {static_cast<double>(landed.w) / view_w,
+                     static_cast<double>(landed.h) / view_h,
+                     static_cast<double>(landed.x),
+                     static_cast<double>(landed.y)},
+                    factor,
+                    target
+                );
+            how = "through the target at " + std::to_string(factor);
+        } else if (plan.passes[0].sampling == card::Sampling::pixel_art) {
+            const auto view_w = static_cast<uint32_t>(std::ceil(field.w / zoom));
+            const auto view_h = static_cast<uint32_t>(std::ceil(field.h / zoom));
+            std::vector<uint8_t> rgba(std::size_t{view_w} * view_h * 4U);
+            if (gw::read_terrain_view(
+                    reference_atlas,
+                    0,
+                    cam_x,
+                    cam_y,
+                    view_w,
+                    view_h,
+                    rgba.data(),
+                    std::size_t{view_w} * 4U
+                ) != gw::TerrainAtlasError::none)
+                fail("the atlas refused the level-0 view at zoom " + zoom_text(zoom));
+            std::vector<uint8_t> rgb(std::size_t{view_w} * view_h * 3U);
+            for (std::size_t i = 0; i < std::size_t{view_w} * view_h; ++i)
+                std::memcpy(&rgb[i * 3U], &rgba[i * 4U], 3);
+            wr::pixelart_rgb24(
+                {rgb.data(), view_w, view_h, view_w},
+                {zoom, zoom, static_cast<double>(field.x), static_cast<double>(field.y)},
+                {reference.rgb.data(), reference.width, reference.height, reference.width}
+            );
+            how = "by the pixel-art sampling mode";
+        } else {
+            compared = false;
+            how = "LINEAR straight, with no target";
+        }
+        if (compared) {
+            const auto overlay = full.overlay;
+            const auto bf_w = static_cast<uint32_t>(field.w);
+            // The last column and row may read past the corner, which
+            // renderers clamp differently.
+            Difference difference;
+            double sum = 0.0;
+            std::size_t channels = 0;
+            const Area pointer = cursor();
+            for (int y = 0; y + 1 < field.h; ++y)
+                for (int x = 0; x + 1 < field.w; ++x) {
+                    const int sx = field.x + x;
+                    const int sy = field.y + y;
+                    if (sx >= pointer.x && sx < pointer.x + pointer.w && sy >= pointer.y &&
+                        sy < pointer.y + pointer.h)
+                        continue;
+                    const auto cell = static_cast<std::size_t>(y) * bf_w + static_cast<uint32_t>(x);
+                    if (overlay[cell * 4U + 3U] != 0)
+                        continue;
+                    const auto at = (static_cast<std::size_t>(sy) * read.width + sx) * 3U;
+                    ++difference.pixels;
+                    for (std::size_t channel = 0; channel < 3; ++channel) {
+                        const int delta = std::abs(
+                            int{read.rgb[at + channel]} - int{reference.rgb[at + channel]}
+                        );
+                        difference.most = std::max(difference.most, delta);
+                        sum += delta;
+                        ++channels;
+                    }
+                }
+            difference.mean = channels != 0 ? sum / static_cast<double>(channels) : 0.0;
+            const int most_allowed = software ? most_software_difference : most_card_difference;
+            std::cout << "render tiers check: full tier zoom " << zoom_text(zoom) << " " << how
+                      << ": terrain of " << difference.pixels << " pixels: most " << difference.most
+                      << ", mean " << difference.mean << "; " << cost() << '\n';
+            if (difference.pixels == 0 || difference.most > most_allowed ||
+                difference.mean > most_mean_scaled_difference) {
+                write_png(picture("zoom-" + zoom_text(zoom) + "-reference"), reference);
+                fail(
+                    "the terrain at zoom " + zoom_text(zoom) + " strays from the card's reference"
+                );
+            }
+        } else {
+            std::cout << "render tiers check: full tier zoom " << zoom_text(zoom) << " drawn "
+                      << how << ", which no reference holds; " << cost() << '\n';
+        }
+    }
+    // At a chrome scale of 1.6 the HUD strips are drawn by the chrome's
+    // filter from the HUD layer's prescale target, as Basic draws them.
+    {
+        level(HardwareAcceleration::full);
+        resize(part_scale_width, part_scale_height);
+        update_pointer(
+            static_cast<float>(match_layout_.width - 1),
+            static_cast<float>(match_layout_.height - 1)
+        );
+        at_zoom(1.0F);
+        const auto read = full_frame();
+        write_png(picture("hud-scale-1.6"), read);
+        check_hud_strips(read, "the full tier at a chrome scale of 1.6");
+        resize(whole_scale_width, whole_scale_height);
+        update_pointer(
+            static_cast<float>(match_layout_.width - 1),
+            static_cast<float>(match_layout_.height - 1)
+        );
+    }
+    std::cout << "render tiers check: the full tier drew its terrain on the card at every zoom, "
+              << full_->frames << " frames, with the box filter never run; pictures in "
+              << report_directory.string() << '\n';
+    level(HardwareAcceleration::off);
 }
 
 } // namespace oa::app

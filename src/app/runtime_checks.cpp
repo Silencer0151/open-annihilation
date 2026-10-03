@@ -973,6 +973,58 @@ void Runtime::render_match_surface_at(std::optional<float> draw_scale) {
     scene_draw_scale_.reset();
 }
 
+Runtime::DrawReadBack Runtime::match_draw_read_back() {
+    DrawReadBack read;
+    // The Game block but its resource readout, which eases toward the
+    // stores once a draw, whatever the draw.
+    read.game = std::make_unique<oa::Game>(match_->state().game);
+    read.game->resource_readout = {};
+    read.on_screen = on_screen_units_;
+    // Every unit's piece transforms, 64-bit FNV-1a over their words.
+    read.pieces = kFnvOffsetBasis;
+    const auto mix = [&read](int32_t word) {
+        const auto bits = std::bit_cast<uint32_t>(word);
+        for (int shift = 0; shift < 32; shift += 8) {
+            read.pieces ^= (bits >> shift) & 0xffU;
+            read.pieces *= kFnvPrime;
+        }
+    };
+    for (const auto& slot : match_->world().slots) {
+        if (slot.unit_index == 0)
+            continue;
+        auto* instance = match_->instance(slot.unit_index);
+        if (instance == nullptr)
+            continue;
+        for (const auto& piece : instance->model().pieces()) {
+            mix(piece.transformed_origin.x);
+            mix(piece.transformed_origin.y);
+            mix(piece.transformed_origin.z);
+            for (const auto& vertex : piece.transformed_vertices) {
+                mix(vertex.x);
+                mix(vertex.y);
+                mix(vertex.z);
+            }
+        }
+    }
+    read.world = oa::sim::trace::match_state_hash(
+        *match_, match_timing_, match_camera_x_, match_camera_z_, nullptr
+    );
+    return read;
+}
+
+const char*
+Runtime::draw_read_back_difference(const DrawReadBack& first, const DrawReadBack& second) {
+    if (std::memcmp(first.game.get(), second.game.get(), sizeof(oa::Game)) != 0)
+        return "the Game block";
+    if (first.on_screen != second.on_screen)
+        return "the on-screen list";
+    if (first.pieces != second.pieces)
+        return "the piece transforms";
+    if (first.world != second.world)
+        return "the world's digest";
+    return nullptr;
+}
+
 void Runtime::check_scene_draw_scale(const fs::path& report_directory) {
     uint16_t anchor = 0;
     for (const auto& slot : match_->world().slots)
@@ -985,55 +1037,7 @@ void Runtime::check_scene_draw_scale(const fs::path& report_directory) {
     if (anchor == 0)
         throw std::runtime_error("scene draw scale check found no local unit");
 
-    // What the match reads back from a draw.
-    struct ReadBack {
-        std::unique_ptr<oa::Game> game;
-        std::vector<uint16_t> on_screen;
-        uint64_t pieces{};
-        uint64_t world{};
-    };
-
-    const auto read_back = [this] {
-        ReadBack read;
-        // The Game block but its resource readout, which eases toward the
-        // stores once a draw, whatever the draw.
-        read.game = std::make_unique<oa::Game>(match_->state().game);
-        read.game->resource_readout = {};
-        read.on_screen = on_screen_units_;
-        // Every unit's piece transforms, 64-bit FNV-1a over their words.
-        read.pieces = kFnvOffsetBasis;
-        const auto mix = [&read](int32_t word) {
-            const auto bits = std::bit_cast<uint32_t>(word);
-            for (int shift = 0; shift < 32; shift += 8) {
-                read.pieces ^= (bits >> shift) & 0xffU;
-                read.pieces *= kFnvPrime;
-            }
-        };
-        for (const auto& slot : match_->world().slots) {
-            if (slot.unit_index == 0)
-                continue;
-            auto* instance = match_->instance(slot.unit_index);
-            if (instance == nullptr)
-                continue;
-            for (const auto& piece : instance->model().pieces()) {
-                mix(piece.transformed_origin.x);
-                mix(piece.transformed_origin.y);
-                mix(piece.transformed_origin.z);
-                for (const auto& vertex : piece.transformed_vertices) {
-                    mix(vertex.x);
-                    mix(vertex.y);
-                    mix(vertex.z);
-                }
-            }
-        }
-        read.world = oa::sim::trace::match_state_hash(
-            *match_, match_timing_, match_camera_x_, match_camera_z_, nullptr
-        );
-        return read;
-    };
-    const auto same_game = [](const ReadBack& first, const ReadBack& second) {
-        return std::memcmp(first.game.get(), second.game.get(), sizeof(oa::Game)) == 0;
-    };
+    const auto read_back = [this] { return match_draw_read_back(); };
     const auto saved_zoom = match_zoom_;
     const auto saved_zoom_target = match_zoom_target_;
     const auto saved_camera_x = match_camera_x_;
@@ -1068,14 +1072,10 @@ void Runtime::check_scene_draw_scale(const fs::path& report_directory) {
                 " into a " + std::to_string(drawn.width) + 'x' + std::to_string(drawn.height) +
                 " world layer " + name
             );
-        if (!same_game(apart_read, drawn_read) || apart_read.on_screen != drawn_read.on_screen ||
-            apart_read.pieces != drawn_read.pieces || apart_read.world != drawn_read.world)
+        if (const char* differs = draw_read_back_difference(apart_read, drawn_read);
+            differs != nullptr)
             throw std::runtime_error(
-                std::string("scene draw scale check: the draw left ") +
-                (!same_game(apart_read, drawn_read)             ? "the Game block"
-                 : apart_read.on_screen != drawn_read.on_screen ? "the on-screen list"
-                 : apart_read.pieces != drawn_read.pieces       ? "the piece transforms"
-                                                                : "the world's digest") +
+                std::string("scene draw scale check: the draw left ") + differs +
                 " otherwise than the frame drawn at the zoom " + name
             );
         if (zoom == 1.0F && apart.rgb != drawn.rgb) {

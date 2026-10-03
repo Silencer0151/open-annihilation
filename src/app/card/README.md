@@ -147,8 +147,11 @@ quads filled as triangles, which it never checks.
 
 ## Known limitations
 
-- Not wired into the match: no frame is built from the battlefield yet,
-  and the Full tier presents as the Basic tier does.
+- Wired into the match for the terrain alone: the Full tier
+  (`src/app/runtime_full.cpp`) draws the battlefield's terrain from the
+  terrain atlas's pages through the executor and the processor draws the
+  rest over it; the sprites, models, fog and overlays as card draws
+  follow.
 - The composed darken mode and the pixel-art sampling mode are exercised
   only on renderers that take them; the software renderer takes neither,
   so the fallbacks are what the test covers.

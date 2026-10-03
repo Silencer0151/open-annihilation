@@ -6,8 +6,9 @@
 // the start-up function test run where only it is missing and the
 // accelerated presentation switched on or off to match, its watch started
 // as it switches on (runtime_tier_watch.cpp). Off applies at once; Basic
-// and Full, which the game draws as Basic until the battlefield is drawn on
-// the graphics card, apply at once too, except that a match played with
+// and Full, which --hardware-acceleration=full forces while Full is not
+// ready for players and which the setting then draws as Basic, apply at once
+// too, except that a match played with
 // other machines or a replay, known from its loading screen, keeps the tier
 // it began with until it ends. Once the step-down has moved, the tier switches on at the rung
 // it reached. The renderer records follow the run: the first accelerated
@@ -55,6 +56,9 @@ void Runtime::update_render_tier() {
     case policy::TierAction::run_function_test:
         break;
     }
+    // Full is a branch of the accelerated presentation: the card draws the
+    // battlefield's terrain from the next frame, or stops.
+    set_full_presentation(step.decision.tier == policy::RenderTier::full);
     render_run_->tier = step.decision;
 }
 

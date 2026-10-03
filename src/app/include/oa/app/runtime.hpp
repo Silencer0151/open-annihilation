@@ -2222,6 +2222,19 @@ class Runtime final : public menu::Host,
     /// @param run state to free; null is allowed
     static void destroy_render_run(RenderRun* run) noexcept;
 
+    /// The Full tier's presentation (full_presentation.hpp,
+    /// runtime_full.cpp): the card's executor, the match's terrain atlas
+    /// and its pages, the target a zoom between whole numbers is drawn
+    /// through, the overlay of what the processor drew over the terrain,
+    /// and what the last Full frame drew. Made at the first switch-on of
+    /// the run.
+    struct FullPresentation;
+
+    /// Frees the Full tier's presentation.
+    ///
+    /// @param full the presentation to free; null is allowed
+    static void destroy_full_presentation(FullPresentation* full) noexcept;
+
     /// Runs --check-renderer-ladder (runtime_renderer_ladder_check.cpp):
     /// forces each renderer failure the game handles, or the one
     /// --render-fault names, and checks that the game goes on presenting.
@@ -4730,6 +4743,120 @@ class Runtime final : public menu::Host,
     /// @param dialogs the dialog layer holds a dialog (compose_match_dialog_layer)
     void present_accelerated_match_layers(bool dialogs);
 
+    /// Draws the HUD strips by the chrome's filter at the display's scale
+    /// (sharp_draw), from the HUD layer's prescale target where the filter
+    /// is sharp-bilinear, as the Basic and Full tiers both draw them.
+    ///
+    /// Throws AccelerationError when a call only the accelerated tier makes fails.
+    void draw_accelerated_hud_strips();
+
+    /// Says whether frames are presented in the Full tier: the accelerated
+    /// presentation is on (accelerated_presentation) and the tier decided
+    /// for the frame is Full (set_full_presentation).
+    ///
+    /// @return true when the Full branch presents the frame
+    [[nodiscard]] bool full_presentation() const noexcept;
+
+    /// Marks the frames from the next as the Full tier's, or not. On, the
+    /// first Full match frame makes the executor, the terrain pages and the
+    /// overlay (ensure_full_match_textures); off frees them
+    /// (free_full_presentation).
+    ///
+    /// @param on true when the tier decided for the frame is Full
+    void set_full_presentation(bool on);
+
+    /// Frees everything the Full tier made: the terrain pages, the target,
+    /// the overlay and the executor's hold on the renderer, as the
+    /// accelerated presentation is switched or dropped, the renderer is
+    /// made again or its textures are forgotten.
+    void free_full_presentation() noexcept;
+
+    /// Frees what the Full tier made for the match and its layout: the
+    /// terrain atlas and its pages, the target and the overlay; the
+    /// executor stays open for the next match.
+    void free_full_match_textures() noexcept;
+
+    /// Drops the Full tier for the rest of the run, to Basic: logs the
+    /// reason once, frees what Full made and keeps the tier Basic until
+    /// setting Hardware acceleration to Off and back, or Restore defaults,
+    /// lifts the drop (render_policy::TierInputs::full_drop).
+    ///
+    /// @param reason what failed
+    void drop_full(const std::string& reason);
+
+    /// Opens the card's executor on the renderer at its texture limit,
+    /// unless it is open, and runs the Full function test on it once per
+    /// opening: a page of two levels drawn 1:1 NEAREST and its level 1
+    /// drawn twice its size LINEAR, a quad blended at alpha one half and a
+    /// triangle of three vertex colours, read back and held to their
+    /// references (runtime_full.cpp).
+    ///
+    /// Throws FullCardError when the card cannot be opened or the test fails.
+    void ensure_full_executor();
+
+    /// Builds the map's terrain atlas within fit_page_edge of the renderer's
+    /// texture limit, through the display gamma, and uploads its levels 0
+    /// and 1 as pages, which every zoom from one half draws from, unless
+    /// the pages already hold that atlas: it is built again when the map,
+    /// the palette, the gamma or the page edge changes, or the pages are
+    /// gone. Once a page is filled its texels are let go; the atlas keeps
+    /// its grid and its pages' sizes and levels for the builder.
+    ///
+    /// Throws FullCardError when the match has no map, the atlas cannot be
+    /// built or the card refuses a page.
+    ///
+    /// @param palette the palette the tiles are shown in: the match's once
+    ///     the match view is entered, and the game's active palette, which
+    ///     is the same, while the match loads
+    void ensure_full_terrain_pages(const oa::PaletteBytes& palette);
+
+    /// Makes the Full tier's card resources for the match as it loads, when
+    /// the tier decided for its frames is Full: the executor and its
+    /// function test (ensure_full_executor) and the terrain atlas and its
+    /// pages (ensure_full_terrain_pages), so that the match's first frame
+    /// finds them and no page is made at a frame, which a shared game or a
+    /// replay never allows. The loading screen calls it with the terrain
+    /// step, before the world is built and before a shared game's load
+    /// barrier. A card failure there drops Full for the run (drop_full) and
+    /// the match plays in Basic. Nothing is made in any other tier.
+    void make_full_match_pages();
+
+    /// Makes what a Full match frame draws the terrain with: the executor
+    /// and its function test (ensure_full_executor), the terrain atlas and
+    /// its pages (ensure_full_terrain_pages), which the loading screen made
+    /// already unless the renderer was made again, the pages were freed or
+    /// the palette, the gamma or the page edge changed since; and the
+    /// overlay at the battlefield's size, made again when that size
+    /// changes.
+    ///
+    /// Throws FullCardError when the card refuses a call or the function
+    /// test fails, and AccelerationError when the overlay cannot be made.
+    void ensure_full_match_textures();
+
+    /// Presents the match layers in the Full tier: the HUD layer's prescale
+    /// target and the layout's bookkeeping made as Basic makes them
+    /// (ensure_accelerated_match_textures), and the HUD strips drawn as
+    /// Basic draws them (draw_accelerated_hud_strips); the terrain drawn by
+    /// the card from the atlas pages, by the level rule of
+    /// full_terrain::plan_terrain_draw at the frame's zoom and camera
+    /// within the battlefield, through the target at the next whole-number
+    /// zoom where a zoom above 1 is not whole and the renderer lacks the
+    /// pixel-art sampling mode; the overlay of what the processor drew over
+    /// its nearest-filled terrain base, found by difference from that base
+    /// (convert_rgb24_overlay_argb) and laid over the card's terrain 1:1;
+    /// then finish_match_layers. A card failure drops Full for the run
+    /// (drop_full) and the frame is left for Basic to present, as is a
+    /// frame whose terrain base is not the frame's.
+    ///
+    /// Throws PresentError when an SDL call outside the card's own fails,
+    /// and AccelerationError when the overlay or the HUD's prescale target
+    /// cannot be made or drawn.
+    ///
+    /// @param dialogs the dialog layer holds a dialog (compose_match_dialog_layer)
+    /// @return true when the frame was presented; false when the Basic
+    ///     tier is to present it
+    [[nodiscard]] bool present_full_match_layers(bool dialogs);
+
     /// Draws a letterboxed 640x480-style frame's texture by the chrome's
     /// filter at the letterbox's scale, from its prescale target where the
     /// filter is sharp-bilinear: the front end's and the loading screen's.
@@ -6084,6 +6211,52 @@ class Runtime final : public menu::Host,
     /// @return 0 when it passed; 77 when it skipped
     [[nodiscard]] int check_render_tiers();
 
+    /// Checks the Full tier's terrain for --check-render-tiers
+    /// (runtime_render_tiers_check.cpp), over its match, with the level set to Full
+    /// and the window's chrome at a whole-number scale: at zoom 1, 2 and 4
+    /// the presented frame equals compose_match_frame in the battlefield;
+    /// at zoom 0.5, with the camera on an even map pixel, the terrain
+    /// under a transparent overlay equals the standard tier's box filter
+    /// of the same moment exactly, and at 0.75, where the blend of the two
+    /// levels is the card's own filter, it keeps within the renderer's
+    /// tolerance of each tile's quad drawn LINEAR, pass over pass, as that
+    /// renderer draws it, its difference from the box filter printed and
+    /// its mean bounded; at zoom 1.37 the terrain keeps within the
+    /// tolerance of the sharp-bilinear reference of the level-0 view
+    /// through the target; at the window whose chrome scales by 1.6 the
+    /// HUD strips keep within the tolerance of the chrome's filter, as
+    /// Basic draws them; what the match reads back from a Full frame
+    /// equals the standard tier's at the same moment; the box filter never
+    /// runs in Full; no page is made after the first Full frame of each
+    /// spell of the tier, and a pass draws no more batches than the atlas
+    /// has pages; and the processor cost of the terrain, the frame's build,
+    /// the card's call and the overlay, is printed for each zoom beside the
+    /// box filter's. The references are built from the check's own atlas of
+    /// the map, built as the tier builds its own, since the tier lets its
+    /// texels go once uploaded. Pictures of each zoom go to the report
+    /// directory as native-render-tiers-full-zoom-*.png. Throws
+    /// std::runtime_error on a failure.
+    ///
+    /// @param set_level sets the flag's level and decides the tier again
+    /// @param at_zoom sets a zoom and centres the camera on the check's unit
+    /// @param presented presents a frame and returns it read back
+    /// @param composed returns the frame as the processor composes it
+    /// @param resize sets the window's size and lays the match out again
+    /// @param check_hud_strips holds a presented frame's HUD strips to the
+    ///     chrome's filter, naming the frame
+    /// @param report_directory where the pictures go
+    /// @param software the renderer is SDL's software renderer
+    void check_full_render_tier(
+        const std::function<void(oa::ui::engine_settings::HardwareAcceleration)>& set_level,
+        const std::function<void(float)>& at_zoom,
+        const std::function<renderer::Surface()>& presented,
+        const std::function<renderer::Surface()>& composed,
+        const std::function<void(int, int)>& resize,
+        const std::function<void(const renderer::Surface&, const std::string&)>& check_hud_strips,
+        const fs::path& report_directory,
+        bool software
+    );
+
     /// Checks the view the accelerated tier draws between map pixels, for
     /// --check-render-tiers, over its match and at its rung, with the tier
     /// switched on.
@@ -6153,6 +6326,32 @@ class Runtime final : public menu::Host,
     ///
     /// @param report_directory directory a differing frame is written to
     void check_scene_draw_scale(const fs::path& report_directory);
+
+    /// What the match reads back from a draw: the Game block but its
+    /// resource readout, which eases toward the stores once a draw whatever
+    /// the draw; the on-screen list; 64-bit FNV-1a over every unit's piece
+    /// transforms; and the world's digest.
+    struct DrawReadBack {
+        std::unique_ptr<oa::Game> game;
+        std::vector<uint16_t> on_screen;
+        uint64_t pieces{};
+        uint64_t world{};
+    };
+
+    /// Reads back what the match reads from a draw (DrawReadBack), for the
+    /// checks that hold two draws of one moment to the same reads.
+    ///
+    /// @return the reads
+    [[nodiscard]] DrawReadBack match_draw_read_back();
+
+    /// Names the first of the reads that differs between two draws.
+    ///
+    /// @param first one draw's reads
+    /// @param second another draw's reads
+    /// @return "the Game block", "the on-screen list", "the piece
+    ///     transforms" or "the world's digest"; null when none differs
+    [[nodiscard]] static const char*
+    draw_read_back_difference(const DrawReadBack& first, const DrawReadBack& second);
 
     /// Checks the standing order buttons against the selection and the units.
     ///
@@ -9149,6 +9348,11 @@ class Runtime final : public menu::Host,
     uint32_t terrain_filtered_cam_x_ = ~0u;
     uint32_t terrain_filtered_cam_y_ = ~0u;
     float terrain_filtered_zoom_ = -1.0F;
+    /// Runs of the box filter (refresh_filtered_terrain) and their time in
+    /// nanoseconds, which the render tiers check reads: a Full frame never
+    /// runs it.
+    uint64_t terrain_box_filter_runs_ = 0;
+    uint64_t terrain_box_filter_ns_ = 0;
     /// The scene a frame drawn apart from the world layer drew
     /// (WorldScaling::apart), kept for the next such frame; empty otherwise.
     renderer::Surface match_scene_cpu_{};
@@ -9159,6 +9363,12 @@ class Runtime final : public menu::Host,
     /// unless a check switches it on. Declared after sdl_, so its textures go
     /// before the renderer.
     AcceleratedPresentation accelerated_{};
+    /// The Full tier's presentation; null until the tier first switches on
+    /// in the run. Declared after sdl_, so its pages and targets go before
+    /// the renderer.
+    std::unique_ptr<FullPresentation, void (*)(FullPresentation*) noexcept> full_{
+        nullptr, &destroy_full_presentation
+    };
     std::vector<uint8_t> match_fog_grid_{};
     std::vector<int> scale_src_x_{};
     renderer::Surface* overlay_target_ = nullptr;

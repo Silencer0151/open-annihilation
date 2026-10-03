@@ -1371,7 +1371,7 @@ struct Runtime::RendererLadder {
         start_on(folder, true);
         menu_frames(1);
         expect(
-            tier().tier == render_policy::RenderTier::accelerated,
+            render_policy::card_tier(tier().tier),
             where,
             "the start did not run the function test and accelerate by itself"
         );
@@ -1412,7 +1412,7 @@ struct Runtime::RendererLadder {
         );
         menu_frames(1);
         expect(
-            tier().tier == render_policy::RenderTier::accelerated,
+            render_policy::card_tier(tier().tier),
             where,
             "the start after a strike did not run as if nothing were recorded"
         );
@@ -1847,8 +1847,7 @@ struct Runtime::RendererLadder {
         start_match();
         match_frames(1.0F, rs::path_stage_frames * 2);
         expect(
-            tier().tier == render_policy::RenderTier::accelerated &&
-                runtime.accelerated_.rung.magnify,
+            render_policy::card_tier(tier().tier) && runtime.accelerated_.rung.magnify,
             where,
             "the match was not drawn in the accelerated tier on a magnify rung"
         );
@@ -2260,7 +2259,7 @@ struct Runtime::RendererLadder {
                 start_on(folder, true);
             menu_frames(1);
             expect(
-                tier().tier == render_policy::RenderTier::accelerated,
+                render_policy::card_tier(tier().tier),
                 where,
                 "the tier was not accelerated before the failure"
             );
@@ -2305,7 +2304,7 @@ struct Runtime::RendererLadder {
         );
         menu_frames(1);
         expect(
-            tier().tier == render_policy::RenderTier::accelerated,
+            render_policy::card_tier(tier().tier),
             where,
             "the retry did not try the graphics card at once"
         );

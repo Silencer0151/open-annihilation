@@ -268,6 +268,25 @@ add_library(oa-app-render-policy src/app/render_policy.cpp src/app/memory_guard.
 add_library(oa::app::render_policy ALIAS oa-app-render-policy)
 target_link_libraries(oa-app-render-policy PUBLIC oa-app-headers oa-platform-shims
   PRIVATE oa-options)
+# The Full tier's terrain builder (full_terrain.hpp): the level rule for a
+# zoom and the terrain tiles' quads from a terrain atlas, appended to a card
+# command list; pure, so that runtime_full.cpp draws from it and a test
+# holds it without a renderer.
+add_library(oa-app-full-terrain src/app/full_terrain.cpp)
+add_library(oa::app::full_terrain ALIAS oa-app-full-terrain)
+target_include_directories(oa-app-full-terrain PUBLIC src/app)
+target_link_libraries(oa-app-full-terrain PUBLIC oa-app-card oa-present-gpu-world
+  PRIVATE oa-options)
+if(BUILD_TESTING)
+  # The level rule at every kind of zoom; the tiles' quads over a small map
+  # on three pages: places, texels, batches, the range within the map and
+  # the frame well formed.
+  add_executable(oa-app-full-terrain-test src/app/full_terrain_test.cpp)
+  target_link_libraries(oa-app-full-terrain-test PRIVATE oa-app-full-terrain oa-test-support
+    oa-options)
+  add_test(NAME app-full-terrain COMMAND oa-app-full-terrain-test)
+  set_tests_properties(app-full-terrain PROPERTIES TIMEOUT 60)
+endif()
 # What the settings dialog says of the renderer (acceleration_status.hpp):
 # Hardware acceleration's status and locks and Vertical sync's lock, from
 # what the run knows of its renderer, its machine and the match.
@@ -549,6 +568,7 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/runtime_match_render.cpp src/app/runtime_messages.cpp src/app/runtime_pointer.cpp
   src/app/runtime_present.cpp src/app/runtime_display.cpp
   src/app/runtime_accelerated.cpp src/app/runtime_render_tier.cpp src/app/runtime_tier_watch.cpp
+  src/app/runtime_full.cpp
   src/app/runtime_render_tiers_check.cpp src/app/runtime_smooth_pan_check.cpp
   src/app/runtime_terrain_filter.cpp src/app/runtime_reclaim_check.cpp src/app/runtime_patrol_check.cpp src/app/runtime_fog.cpp
   src/app/runtime_reclaim_cursor_check.cpp
@@ -594,7 +614,7 @@ set(oa_game_libraries oa-formats-hpi oa-app-game-options oa-app-game-directory o
   oa-data-campaign-assets oa-sim-profile oa-sim-state-hash oa-app-extensions
   oa-ui-engine-settings oa-platform-app-menu oa-platform-job-pool oa-platform-render-probe
   oa-app-render-policy oa-ui-decoded oa-base-bytes oa-base-float-precision oa-app-acceleration-status
-  oa-formats-png)
+  oa-formats-png oa-app-full-terrain oa-app-card-executor oa-present-gpu-world)
 # The table that combines the extensions' tables of oa-game
 # (extension_list.hpp); the extensions themselves are registered with
 # oa_add_extension (cmake/OaExtensions.cmake).

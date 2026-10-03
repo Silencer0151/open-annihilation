@@ -335,7 +335,7 @@ void test_decide_by_table() {
              i.render_driver_named = true;
              i.flag = AccelerationFlag::full;
          },
-         RenderTier::accelerated,
+         RenderTier::full,
          TierReason::accelerated},
         {"environment, forced",
          [](TierInputs& i) {
@@ -353,7 +353,7 @@ void test_decide_by_table() {
              i.virtual_video_driver = true;
              i.flag = AccelerationFlag::full;
          },
-         RenderTier::accelerated,
+         RenderTier::full,
          TierReason::accelerated},
         {"setting off",
          [](TierInputs& i) { i.setting = HardwareAcceleration::off; },
@@ -368,7 +368,7 @@ void test_decide_by_table() {
              i.setting = HardwareAcceleration::off;
              i.flag = AccelerationFlag::full;
          },
-         RenderTier::accelerated,
+         RenderTier::full,
          TierReason::accelerated},
         {"setting off, flag basic",
          [](TierInputs& i) {
@@ -470,7 +470,7 @@ void test_decide_by_table() {
              i.accelerated_unusable_record = true;
              i.flag = AccelerationFlag::full;
          },
-         RenderTier::accelerated,
+         RenderTier::full,
          TierReason::accelerated},
         {"accelerated-unusable, forced",
          [](TierInputs& i) {
@@ -543,6 +543,107 @@ void test_decide_by_table() {
         OA_CHECK(decision.tier == test.tier);
         OA_CHECK(decision.reason == test.reason);
     }
+}
+
+/// Full: asked for by the flag it is the Full tier; asked for by the
+/// setting alone it is Basic while Full is not ready in this build; dropped
+/// for the run it is Basic until Off and back lifts the drop; and every
+/// condition of the accelerated tier still applies to it.
+void test_decide_full() {
+    struct Case {
+        const char* name;
+        void (*change)(TierInputs&);
+        RenderTier tier;
+        FullReason full;
+    };
+
+    const Case cases[] = {
+        {"basic asked", [](TierInputs&) {}, RenderTier::accelerated, FullReason::not_asked},
+        {"full by the setting",
+         [](TierInputs& i) { i.setting = HardwareAcceleration::full; },
+         full_ready ? RenderTier::full : RenderTier::accelerated,
+         full_ready ? FullReason::full : FullReason::not_ready},
+        {"full by the flag",
+         [](TierInputs& i) { i.flag = AccelerationFlag::full; },
+         RenderTier::full,
+         FullReason::full},
+        {"full by the flag over a setting of basic",
+         [](TierInputs& i) {
+             i.flag = AccelerationFlag::full;
+             i.setting = HardwareAcceleration::basic;
+         },
+         RenderTier::full,
+         FullReason::full},
+        {"basic by the flag over a setting of full",
+         [](TierInputs& i) {
+             i.flag = AccelerationFlag::basic;
+             i.setting = HardwareAcceleration::full;
+         },
+         RenderTier::accelerated,
+         FullReason::not_asked},
+        {"full dropped for the run",
+         [](TierInputs& i) {
+             i.flag = AccelerationFlag::full;
+             i.full_drop = true;
+         },
+         RenderTier::accelerated,
+         FullReason::dropped},
+        {"full forced in a virtual video driver",
+         [](TierInputs& i) {
+             i.flag = AccelerationFlag::full;
+             i.virtual_video_driver = true;
+         },
+         RenderTier::full,
+         FullReason::full},
+        {"full forced over an accelerated-unusable record",
+         [](TierInputs& i) {
+             i.flag = AccelerationFlag::full;
+             i.accelerated_unusable_record = true;
+         },
+         RenderTier::full,
+         FullReason::full},
+    };
+    for (const Case& test : cases) {
+        TierInputs inputs = accelerated_run();
+        test.change(inputs);
+        const TierDecision decision = decide_render_tier(inputs);
+        if (decision.tier != test.tier || decision.full != test.full)
+            std::fprintf(stderr, "decide_render_tier full case: %s\n", test.name);
+        OA_CHECK(decision.tier == test.tier);
+        OA_CHECK(decision.full == test.full);
+        OA_CHECK(decision.reason == TierReason::accelerated);
+        OA_CHECK(card_tier(decision.tier));
+    }
+    // The standard tier's conditions stand before Full's: under 2 GiB, with
+    // a drop, with the device lost, the flag forces nothing.
+    for (void (*change)(TierInputs&) :
+         {+[](TierInputs& i) { i.memory = gibibyte; },
+          +[](TierInputs& i) { i.drop = Drop::memory; },
+          +[](TierInputs& i) { i.device_lost = true; },
+          +[](TierInputs& i) { i.function_test = FunctionTest::failed; },
+          +[](TierInputs& i) { i.renderer = false; }}) {
+        TierInputs inputs = accelerated_run();
+        inputs.flag = AccelerationFlag::full;
+        change(inputs);
+        const TierDecision decision = decide_render_tier(inputs);
+        OA_CHECK(decision.tier == RenderTier::standard);
+        OA_CHECK(decision.full == FullReason::not_asked);
+        OA_CHECK(!card_tier(decision.tier));
+    }
+    // Off and back lifts Full's drop with the others.
+    TierInputs dropped = accelerated_run();
+    dropped.flag = AccelerationFlag::full;
+    dropped.full_drop = true;
+    OA_CHECK(decide_render_tier(dropped).tier == RenderTier::accelerated);
+    forget_failures(dropped);
+    OA_CHECK(!dropped.full_drop);
+    OA_CHECK(decide_render_tier(dropped).tier == RenderTier::full);
+    // Full switches the presentation on as Basic does, and off again.
+    const TierDecision full{RenderTier::full, TierReason::accelerated, FullReason::full};
+    OA_CHECK(tier_action(full, false) == TierAction::switch_on);
+    OA_CHECK(tier_action(full, true) == TierAction::none);
+    OA_CHECK(card_tier(RenderTier::full) && card_tier(RenderTier::accelerated));
+    OA_CHECK(!card_tier(RenderTier::standard));
 }
 
 /// The conditions for the accelerated tier, written out again apart from
@@ -619,10 +720,18 @@ void test_decide_every_combination() {
                             ++combinations;
                             const TierDecision decision = decide_render_tier(in);
                             const bool expected = accelerated_by_the_rules(in, test);
-                            if ((decision.tier == RenderTier::accelerated) != expected)
+                            if (card_tier(decision.tier) != expected)
                                 ++mismatches;
                             if ((decision.reason == TierReason::accelerated) !=
-                                (decision.tier == RenderTier::accelerated))
+                                card_tier(decision.tier))
+                                ++mismatches;
+                            // Of the frames the card presents, Full is exactly
+                            // those the flag forces while Full is not ready.
+                            const bool full_expected =
+                                expected && (flag == AccelerationFlag::full ||
+                                             (full_ready && flag == AccelerationFlag::none &&
+                                              setting == HardwareAcceleration::full));
+                            if ((decision.tier == RenderTier::full) != full_expected)
                                 ++mismatches;
                             // The function test may run exactly where the tier would
                             // be accelerated once it passed, and only when it has not
@@ -3016,7 +3125,7 @@ void test_host_runs() {
     for (TierInputs inputs : {player, flagged, named_on}) {
         bool on = false;
         StandInTest test;
-        OA_CHECK(drawn_frame(inputs, on, test).tier == RenderTier::accelerated);
+        OA_CHECK(card_tier(drawn_frame(inputs, on, test).tier));
         OA_CHECK(on && test.runs == 1);
     }
     // The setting Off at start: no test until it is set to Basic, and none
@@ -3121,7 +3230,8 @@ void test_host_runs() {
         inputs.memory = smallest_accelerated_memory;
         bool on = false;
         StandInTest test;
-        OA_CHECK(drawn_frame(inputs, on, test).tier == RenderTier::accelerated);
+        // The flag forces the Full tier, which the check draws its Full cases in.
+        OA_CHECK(drawn_frame(inputs, on, test).tier == RenderTier::full);
         OA_CHECK(on && test.runs == 1);
     }
 }
@@ -3130,6 +3240,7 @@ int main() {
     test_texture_limit();
     test_assess_renderer();
     test_decide_by_table();
+    test_decide_full();
     test_decide_every_combination();
     test_function_test_gate();
     test_shared_match_gate();
