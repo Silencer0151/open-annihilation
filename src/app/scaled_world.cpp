@@ -31,7 +31,7 @@ SDL_ScaleMode direct_scale_mode(render_policy::ScaleFilter filter) noexcept {
 #if SDL_VERSION_ATLEAST(3, 4, 0)
         return SDL_SCALEMODE_PIXELART;
 #else
-        return SDL_SCALEMODE_LINEAR;
+        return SDL_SCALEMODE_NEAREST;
 #endif
     case render_policy::ScaleFilter::sharp_bilinear:
     case render_policy::ScaleFilter::linear:
@@ -40,6 +40,29 @@ SDL_ScaleMode direct_scale_mode(render_policy::ScaleFilter filter) noexcept {
     return SDL_SCALEMODE_NEAREST;
 }
 
+namespace {
+
+/// The first SDL release that draws a queued texture with the scale mode
+/// it had when the draw was queued. An older release draws it with the
+/// mode the texture has when the queued draws run, at the present or at a
+/// flush.
+constexpr int scale_mode_kept_per_draw_version = SDL_VERSIONNUM(3, 2, 10);
+
+/// Runs the queued draws before a texture's scale mode changes, on an SDL
+/// that would otherwise draw them with the changed mode; on a newer one the
+/// queue is left to run at the present. The SDL the game runs on decides,
+/// since a shared SDL library can be older than its headers.
+///
+/// @param renderer the renderer
+/// @return false when SDL refused to run the queue
+[[nodiscard]] bool run_draws_before_scale_mode_changes(SDL_Renderer* renderer) noexcept {
+    if (SDL_GetVersion() >= scale_mode_kept_per_draw_version)
+        return true;
+    return SDL_FlushRenderer(renderer);
+}
+
+} // namespace
+
 void draw_one_to_one(
     SDL_Renderer* renderer, SDL_Texture* texture, const SDL_FRect* destination, SDL_ScaleMode mode
 ) {
@@ -47,10 +70,13 @@ void draw_one_to_one(
     if (filtered && !SDL_SetTextureScaleMode(texture, mode))
         throw AccelerationError(std::string("SDL_SetTextureScaleMode: ") + SDL_GetError());
     const bool drawn = SDL_RenderTexture(renderer, texture, nullptr, destination);
+    const bool run = !filtered || !drawn || run_draws_before_scale_mode_changes(renderer);
     if (filtered)
         std::ignore = SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
     if (!drawn)
         throw_present_error("SDL_RenderTexture");
+    if (!run)
+        throw AccelerationError(std::string("SDL_FlushRenderer: ") + SDL_GetError());
 }
 
 void draw_one_to_one(
@@ -74,7 +100,10 @@ void draw_one_to_one(
         std::ignore = layer.set_scale_mode(SDL_SCALEMODE_NEAREST);
         throw;
     }
+    const bool run = run_draws_before_scale_mode_changes(renderer);
     std::ignore = layer.set_scale_mode(SDL_SCALEMODE_NEAREST);
+    if (!run)
+        throw AccelerationError(std::string("SDL_FlushRenderer: ") + SDL_GetError());
 }
 
 namespace {
@@ -96,12 +125,14 @@ bool same_grid(const policy::TileGrid& first, const policy::TileGrid& second) no
 /// picture is likely to leave in it.
 constexpr std::array<uint8_t, 3> target_check_colour{0x5A, 0xA5, 0x3C};
 
+#if SDL_VERSION_ATLEAST(3, 4, 0)
 /// The pixel-art probe's source, 2x1 texels, and its target, 5x1 pixels.
 constexpr int pixelart_probe_source_width = 2;
 constexpr int pixelart_probe_target_width = 5;
 /// The probe's black and white texels.
 constexpr uint32_t pixelart_probe_black = 0xFF000000U;
 constexpr uint32_t pixelart_probe_white = 0xFFFFFFFFU;
+#endif
 
 /// Throws an AccelerationError naming the call and SDL's error, after
 /// setting the render target back to the final one and clearing the clip.
@@ -858,11 +889,16 @@ void sharp_draw(
         bool drawn = true;
         for (const auto& part : parts)
             drawn = drawn && SDL_RenderTexture(renderer, source, &part.source, &part.destination);
-        // The source is left at NEAREST, as the standard tier draws it.
+        // The source is left at NEAREST, as the standard tier draws it, once
+        // the draws keep their mode.
+        const bool run = mode == SDL_SCALEMODE_NEAREST || !drawn ||
+                         run_draws_before_scale_mode_changes(renderer);
         if (mode != SDL_SCALEMODE_NEAREST)
             std::ignore = SDL_SetTextureScaleMode(source, SDL_SCALEMODE_NEAREST);
         if (!drawn)
             fail(renderer, final_target, "SDL_RenderTexture");
+        if (!run)
+            fail(renderer, final_target, "SDL_FlushRenderer");
         return;
     }
     const uint32_t factor = scale.factor;

@@ -657,7 +657,10 @@ void test_packing() {
         const TexelRect slot = slot_of(result.record);
         const Page& page = pages.pages()[result.record.page];
         OA_CHECK(page.size >= 256 && page.size <= 2048 && (page.size & (page.size - 1)) == 0);
-        OA_CHECK(slot.x + slot.width <= page.size && slot.y + slot.height <= page.size);
+        OA_CHECK(
+            uint32_t{slot.x} + uint32_t{slot.width} <= page.size &&
+            uint32_t{slot.y} + uint32_t{slot.height} <= page.size
+        );
         // The packing contract: every cell's corner and sides even, odd
         // frames included, so that a level 1 of the page is exact per cell.
         OA_CHECK(aligned(result.record));

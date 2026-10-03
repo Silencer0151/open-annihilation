@@ -451,9 +451,9 @@ struct CardScale {
 };
 
 /// Returns the scale mode the card draws a filter with straight from its
-/// source, with no prescale target: NEAREST; PIXELART, or plain LINEAR in a
-/// build of SDL older than 3.4, which lacks it; and plain LINEAR for
-/// sharp-bilinear and LINEAR.
+/// source, with no prescale target: NEAREST; PIXELART, or NEAREST in a
+/// build of SDL older than 3.4, which lacks it, as SDL's software renderer
+/// draws PIXELART; and plain LINEAR for sharp-bilinear and LINEAR.
 ///
 /// @param filter the filter
 /// @return the scale mode
@@ -463,10 +463,12 @@ struct CardScale {
 /// with a scale mode, and sets it back to NEAREST after, as the standard
 /// tier draws it; at NEAREST it is the one draw the standard tier makes.
 /// On a window at native density the renderer scales the layer by the
-/// density with that mode.
+/// density with that mode. An SDL older than 3.2.10 draws a queued texture
+/// with the scale mode it has when the queued draws run, so on it the queue
+/// is run before the mode goes back.
 ///
 /// Throws PresentError when SDL refuses the draw, and AccelerationError when
-/// it refuses a scale mode other than NEAREST.
+/// it refuses a scale mode other than NEAREST or running the queue.
 ///
 /// @param renderer the renderer
 /// @param texture the layer
@@ -478,10 +480,12 @@ void draw_one_to_one(
 
 /// Draws a layer of tiles laid out 1:1 in layout pixels (TiledTexture::draw)
 /// with a scale mode, and sets it back to NEAREST after, as the standard tier
-/// draws it; at NEAREST it is the one draw the standard tier makes.
+/// draws it; at NEAREST it is the one draw the standard tier makes. On an
+/// SDL older than 3.2.10 the queue is run before the mode goes back, as the
+/// other draw_one_to_one does.
 ///
 /// Throws as TiledTexture::draw throws, and AccelerationError when SDL
-/// refuses a scale mode other than NEAREST.
+/// refuses a scale mode other than NEAREST or running the queue.
 ///
 /// @param renderer the renderer the layer was made on
 /// @param layer the layer, whose scale mode is NEAREST
@@ -523,7 +527,8 @@ void draw_one_to_one(
 ///
 /// A destination that starts between pixels draws a view between map
 /// pixels: the card places the corner there, and SDL's software renderer
-/// at the whole pixel its own rounding gives.
+/// at the whole pixel its own rounding gives; before SDL 3.4 that renderer
+/// also moves a draw the clip cuts by up to a texel.
 ///
 /// Throws AccelerationError, after setting the render target back to
 /// `final_target`, when a call fails or the prescale target cannot hold the
@@ -564,10 +569,11 @@ struct SharpPart {
 
 /// Draws parts of a source texture into the final target scaled by the
 /// card: NEAREST, PIXELART or plain LINEAR straight from the source, which
-/// is left at NEAREST after; or sharp-bilinear, the whole source drawn
-/// NEAREST into the prescale target, into each of its tiles, only when its
-/// revision or the factor changed, then each part LINEAR from it, from each
-/// tile the part covers with the tile's gutters left out.
+/// is left at NEAREST after, the queue run first on an SDL older than
+/// 3.2.10 as draw_one_to_one runs it; or sharp-bilinear, the whole source
+/// drawn NEAREST into the prescale target, into each of its tiles, only
+/// when its revision or the factor changed, then each part LINEAR from it,
+/// from each tile the part covers with the tile's gutters left out.
 ///
 /// Throws AccelerationError, after setting the render target back to
 /// `final_target`, when a call fails.

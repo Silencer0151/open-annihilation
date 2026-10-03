@@ -202,14 +202,14 @@ void Runtime::check_engine_settings_wiring() {
         chosen.vertical_sync = true;
         apply_engine_settings(chosen);
         const bool waited = renderer_waits();
-        const auto locks = engine_settings_locks();
+        const auto software_locks = engine_settings_locks();
         chosen.vertical_sync = false;
         apply_engine_settings(chosen);
         options_.force_capable = kept_force;
         require(!waited, "Vertical sync reached SDL's software renderer");
         require(
-            locks.vertical_sync == settings::Lock::unavailable &&
-                locks.hardware_acceleration == settings::Lock::unavailable,
+            software_locks.vertical_sync == settings::Lock::unavailable &&
+                software_locks.hardware_acceleration == settings::Lock::unavailable,
             "SDL's software renderer under the dummy video driver does not lock both rows"
         );
     }

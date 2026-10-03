@@ -4,7 +4,9 @@
 // Window-size textures beyond the renderer's texture limit, on SDL's
 // software renderer over a surface larger than two 1024-texel tiles each
 // way: the same picture drawn as tiles under a limit of 1024 and as one
-// texture with no limit reads back pixel for pixel alike, for an XRGB8888
+// texture with no limit reads back pixel for pixel alike in its colour
+// channels (the unused byte of the target's pixels, which a blend may leave
+// as it likes, is not compared), for an XRGB8888
 // upload drawn 1:1 at an offset, ARGB8888 drawn with no blending, an RGBA32
 // layer blended over a background with no rectangles given, and part of the
 // picture drawn onto the same part of the target. Each tile is filled from the part of the picture
@@ -21,8 +23,12 @@
 // nearest replication. A view drawn between map pixels, one column and row
 // wider and landing before the battlefield's edge, through a prescale
 // target made for the view on its camera's map pixel, keeps within them
-// too, placed where that renderer places it. PIXELART is the renderer's NEAREST, as SDL's software
-// renderer gives it, and the probe finds it missing. A scene split into
+// too, placed where that renderer places it, from SDL 3.4; before it that
+// renderer moves a scaled draw the battlefield clips by up to a texel, and
+// such a view is held only to stay inside the battlefield. PIXELART is the
+// renderer's NEAREST, as SDL's software renderer gives it and as a build of
+// SDL older than 3.4, which lacks the mode, draws it, and the probe finds it
+// missing. A scene split into
 // tiles holds each neighbour's texels in its gutters and draws as the whole
 // texture does. A prescale target split into tiles holds the enlarged
 // picture, gutters included, from a scene of one tile or of several, and
@@ -108,19 +114,21 @@ struct SoftwareTarget {
         OA_CHECK(SDL_RenderClear(renderer));
     }
 
-    /// Reads the target back.
+    /// Reads the target's colour channels back, 3 bytes a pixel: the unused
+    /// byte of its XRGB8888 pixels is left out, since a blend may leave it
+    /// as it likes.
     std::vector<uint8_t> read_back() const {
         std::vector<uint8_t> pixels;
         SDL_Surface* read = SDL_RenderReadPixels(renderer, nullptr);
         OA_CHECK(read != nullptr);
         if (read == nullptr)
             return pixels;
-        SDL_Surface* rgb = SDL_ConvertSurface(read, SDL_PIXELFORMAT_XRGB8888);
+        SDL_Surface* rgb = SDL_ConvertSurface(read, SDL_PIXELFORMAT_RGB24);
         SDL_DestroySurface(read);
         OA_CHECK(rgb != nullptr);
         if (rgb == nullptr)
             return pixels;
-        const auto row_bytes = static_cast<std::size_t>(rgb->w) * 4U;
+        const auto row_bytes = static_cast<std::size_t>(rgb->w) * 3U;
         pixels.resize(row_bytes * static_cast<std::size_t>(rgb->h));
         for (int row = 0; row < rgb->h; ++row)
             std::memcpy(
@@ -361,6 +369,15 @@ constexpr uint32_t seed_overlay = 0x13198A2EU;
 constexpr int most_difference = 2;
 constexpr double most_mean_difference = 0.5;
 
+/// The first SDL release whose software renderer draws a scaled texture
+/// whose destination the clip rectangle cuts with the pixels the whole draw
+/// gives inside the clip. An older one scales the part of the source it
+/// works out for the clipped destination, rounded to whole texels, which
+/// moves the picture by up to a texel; on it a view drawn between map
+/// pixels, which starts before the battlefield, is held only to stay inside
+/// the battlefield.
+constexpr int clipped_draw_keeps_sampling_version = SDL_VERSIONNUM(3, 4, 0);
+
 /// The tile limit the tiled cases plan with: tiles of 64 texels, gutters included.
 constexpr uint32_t small_limit = 64;
 
@@ -513,6 +530,24 @@ Difference compare(const Picture& read, const Picture& reference, const SDL_Rect
             }
     difference.mean = count != 0 ? sum / static_cast<double>(count) : 0.0;
     return difference;
+}
+
+/// Says whether a read-back is black outside the battlefield, as the clip
+/// leaves it.
+///
+/// @param read the read-back of the whole surface
+/// @return true when every channel outside the battlefield is 0
+bool black_outside_battlefield(const Picture& read) {
+    for (int y = 0; y < surface_height; ++y)
+        for (int x = 0; x < surface_width; ++x) {
+            if (x >= battlefield.x && x < battlefield.x + battlefield.w && y >= battlefield.y &&
+                y < battlefield.y + battlefield.h)
+                continue;
+            const auto at = (static_cast<std::size_t>(y) * surface_width + x) * 3U;
+            if (read.rgb[at] != 0 || read.rgb[at + 1] != 0 || read.rgb[at + 2] != 0)
+                return false;
+        }
+    return true;
 }
 
 /// The corner of the scene a zoom shows on the battlefield, and where it lands.
@@ -698,7 +733,9 @@ void test_draw_scaled_world_matches_the_references() {
 /// offset times the zoom before the battlefield's edge, through a prescale
 /// target made only for that view's corner; and compares the read-back with
 /// the references placed where SDL's software renderer places the corner,
-/// at the whole pixel it truncates the destination to.
+/// at the whole pixel it truncates the destination to. Before SDL 3.4 that
+/// renderer moves the clipped draw (clipped_draw_keeps_sampling_version),
+/// and the read-back is held only to stay inside the battlefield.
 void test_view_between_map_pixels() {
     const Picture scene = seeded(seed_scene, 240, 160);
 
@@ -714,6 +751,7 @@ void test_view_between_map_pixels() {
         {2.0, 0.5, {ScaleFilter::nearest, 1}},
         {4.0, 0.75, {ScaleFilter::nearest, 1}},
     };
+    const bool held_to_reference = SDL_GetVersion() >= clipped_draw_keeps_sampling_version;
     for (const auto& item : cases) {
         Canvas canvas;
         oa::app::ScaledWorldCounts counts;
@@ -766,13 +804,17 @@ void test_view_between_map_pixels() {
         const SDL_Rect surface{0, 0, surface_width, surface_height};
         const auto difference = compare(read, reference, surface);
         std::printf(
-            "a view %.2f map pixels on at %.2f by filter %d: most %d, mean %.3f\n",
+            "a view %.2f map pixels on at %.2f by filter %d: most %d, mean %.3f%s\n",
             item.offset,
             item.zoom,
             static_cast<int>(item.scale.filter),
             difference.most,
-            difference.mean
+            difference.mean,
+            held_to_reference ? "" : " (not held to the reference before SDL 3.4)"
         );
+        OA_CHECK(black_outside_battlefield(read));
+        if (!held_to_reference)
+            continue;
         if (item.scale.filter == ScaleFilter::nearest)
             OA_CHECK(difference.most == 0);
         OA_CHECK(difference.most <= most_difference);
@@ -909,7 +951,8 @@ void test_sharp_draw_redraws_only_a_new_revision() {
 }
 
 /// Checks that PIXELART draws as NEAREST on SDL's software renderer, which
-/// lacks the filter, and that the probe finds it missing there.
+/// lacks the filter, as it does in a build of SDL older than 3.4, which
+/// lacks the mode, and that the probe finds it missing there.
 void test_pixelart_is_nearest_here() {
     Canvas canvas;
     OA_CHECK(!oa::app::probe_pixelart(canvas.renderer, nullptr));
