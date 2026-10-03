@@ -3479,122 +3479,133 @@ void Runtime::check_full_overlays(
             ++frames;
         }
         const auto shown = full_frame();
-        if (kill_board_.slide != hud::kBoardWidth)
+        // A game whose interface has no kills board, as the 1997 demo's,
+        // leaves the slide where it was: the board's cases are skipped.
+        const bool no_board = kill_board_.slide == 0;
+        if (no_board)
+            std::cout << "render tiers check: full tier: the game's interface has no kills "
+                         "board; the kill board cases are skipped\n";
+        else if (kill_board_.slide != hud::kBoardWidth)
             fail("the kill board did not slide out");
-        canvas_matches_overlay("with the board shown", true);
-        write_png(picture("kill-board"), shown);
-        const int scale = hud_text_scale();
-        const int left = oa::ui::display_layout::kSourceWidth - hud::kBoardWidth;
-        const int bottom = game.player_count * hud::kBoardRowHeight + 0x2e;
-        const auto corner = board_canvas(left, hud::kBoardTop);
-        const auto end = board_canvas(oa::ui::display_layout::kSourceWidth, bottom + 1);
-        const Area board{corner.x, corner.y, end.x - corner.x, end.y - corner.y};
-        // The local player's row is lit, not shaded: it is left out, to the
-        // last column and row the board lights.
-        const auto& local = game.players[game.local_player_index];
-        const int row_bottom = hud::kBoardTop + 0x34 + local.board_row * hud::kBoardRowHeight;
-        const auto lit_corner = board_canvas(left + 4, row_bottom - 0x26);
-        const auto lit_end = board_canvas(left + hud::kBoardWidth - 4 + 1, row_bottom + 2);
-        const Area lit{
-            lit_corner.x, lit_corner.y, lit_end.x - lit_corner.x, lit_end.y - lit_corner.y
-        };
-        const Area field = battlefield();
-        const Area pointer = cursor();
-        // What the shade level darkens a channel to, as the card blends black
-        // over it at the level's alpha.
-        const double kept = 1.0 - full_fog::level_quad(hud::kBoardShadeLevel).colour.alpha;
-        std::size_t shaded = 0;
-        std::size_t foreground = 0;
-        std::size_t neither = 0;
-        std::size_t outside_changed = 0;
-        // The pixels neither shaded nor painted, for the report of a failure.
-        renderer::Surface stray = shown;
-        for (auto& byte : stray.rgb)
-            byte = static_cast<uint8_t>(byte / 2U);
-        std::vector<std::tuple<int, int, std::array<uint8_t, 3>, std::array<uint8_t, 3>>> strays;
-        const auto darkened = [&](const uint8_t* before, const uint8_t* after, double share) {
-            for (std::size_t channel = 0; channel < 3; ++channel)
-                if (std::abs(after[channel] - before[channel] * share) > most_blend_rounding)
-                    return false;
-            return true;
-        };
-        for (int y = field.y; y < field.y + field.h; ++y)
-            for (int x = field.x; x < field.x + field.w; ++x) {
-                if (inside(pointer, x, y))
-                    continue;
-                const uint8_t* before = pixel(hidden, x, y);
-                const uint8_t* after = pixel(shown, x, y);
-                if (!inside(board, x, y)) {
-                    if (!same(before, after))
-                        ++outside_changed;
-                    continue;
-                }
-                if (inside(lit, x, y))
-                    continue;
-                if (darkened(before, after, kept)) {
-                    ++shaded;
-                    continue;
-                }
-                // The foreground: a pixel the processor painted, the same in
-                // both tiers.
-                const auto cell = static_cast<std::size_t>(y - field.y) * match_world_cpu_.width +
-                                  static_cast<std::size_t>(x - field.x);
-                if (full_->overlay[cell * 4U + 3U] != 0) {
-                    ++foreground;
-                    continue;
-                }
-                ++neither;
-                std::fill_n(
-                    stray.rgb.data() + (static_cast<std::size_t>(y) * stray.width + x) * 3U,
-                    3,
-                    uint8_t{255}
-                );
-                if (strays.size() < most_strays_listed)
-                    strays.emplace_back(
-                        x,
-                        y,
-                        std::array<uint8_t, 3>{before[0], before[1], before[2]},
-                        std::array<uint8_t, 3>{after[0], after[1], after[2]}
+        if (!no_board) {
+            canvas_matches_overlay("with the board shown", true);
+            write_png(picture("kill-board"), shown);
+            const int scale = hud_text_scale();
+            const int left = oa::ui::display_layout::kSourceWidth - hud::kBoardWidth;
+            const int bottom = game.player_count * hud::kBoardRowHeight + 0x2e;
+            const auto corner = board_canvas(left, hud::kBoardTop);
+            const auto end = board_canvas(oa::ui::display_layout::kSourceWidth, bottom + 1);
+            const Area board{corner.x, corner.y, end.x - corner.x, end.y - corner.y};
+            // The local player's row is lit, not shaded: it is left out, to the
+            // last column and row the board lights.
+            const auto& local = game.players[game.local_player_index];
+            const int row_bottom = hud::kBoardTop + 0x34 + local.board_row * hud::kBoardRowHeight;
+            const auto lit_corner = board_canvas(left + 4, row_bottom - 0x26);
+            const auto lit_end = board_canvas(left + hud::kBoardWidth - 4 + 1, row_bottom + 2);
+            const Area lit{
+                lit_corner.x, lit_corner.y, lit_end.x - lit_corner.x, lit_end.y - lit_corner.y
+            };
+            const Area field = battlefield();
+            const Area pointer = cursor();
+            // What the shade level darkens a channel to, as the card blends black
+            // over it at the level's alpha.
+            const double kept = 1.0 - full_fog::level_quad(hud::kBoardShadeLevel).colour.alpha;
+            std::size_t shaded = 0;
+            std::size_t foreground = 0;
+            std::size_t neither = 0;
+            std::size_t outside_changed = 0;
+            // The pixels neither shaded nor painted, for the report of a failure.
+            renderer::Surface stray = shown;
+            for (auto& byte : stray.rgb)
+                byte = static_cast<uint8_t>(byte / 2U);
+            std::vector<std::tuple<int, int, std::array<uint8_t, 3>, std::array<uint8_t, 3>>>
+                strays;
+            const auto darkened = [&](const uint8_t* before, const uint8_t* after, double share) {
+                for (std::size_t channel = 0; channel < 3; ++channel)
+                    if (std::abs(after[channel] - before[channel] * share) > most_blend_rounding)
+                        return false;
+                return true;
+            };
+            for (int y = field.y; y < field.y + field.h; ++y)
+                for (int x = field.x; x < field.x + field.w; ++x) {
+                    if (inside(pointer, x, y))
+                        continue;
+                    const uint8_t* before = pixel(hidden, x, y);
+                    const uint8_t* after = pixel(shown, x, y);
+                    if (!inside(board, x, y)) {
+                        if (!same(before, after))
+                            ++outside_changed;
+                        continue;
+                    }
+                    if (inside(lit, x, y))
+                        continue;
+                    if (darkened(before, after, kept)) {
+                        ++shaded;
+                        continue;
+                    }
+                    // The foreground: a pixel the processor painted, the same in
+                    // both tiers.
+                    const auto cell =
+                        static_cast<std::size_t>(y - field.y) * match_world_cpu_.width +
+                        static_cast<std::size_t>(x - field.x);
+                    if (full_->overlay[cell * 4U + 3U] != 0) {
+                        ++foreground;
+                        continue;
+                    }
+                    ++neither;
+                    std::fill_n(
+                        stray.rgb.data() + (static_cast<std::size_t>(y) * stray.width + x) * 3U,
+                        3,
+                        uint8_t{255}
                     );
+                    if (strays.size() < most_strays_listed)
+                        strays.emplace_back(
+                            x,
+                            y,
+                            std::array<uint8_t, 3>{before[0], before[1], before[2]},
+                            std::array<uint8_t, 3>{after[0], after[1], after[2]}
+                        );
+                }
+            // Screen columns 515-516, left of the header and the highlight, are
+            // shaded battlefield alone.
+            std::size_t margin = 0;
+            std::size_t margin_unshaded = 0;
+            for (int y = board.y; y < board.y + board.h; ++y)
+                for (int x = board.x; x < board.x + 2 * scale; ++x) {
+                    if (inside(lit, x, y) || inside(pointer, x, y))
+                        continue;
+                    ++margin;
+                    if (!darkened(pixel(hidden, x, y), pixel(shown, x, y), kept))
+                        ++margin_unshaded;
+                }
+            std::cout << "render tiers check: full tier kill board " << board.w << 'x' << board.h
+                      << ": " << shaded << " pixels shaded by the card, " << foreground
+                      << " painted, " << neither << " neither; margin " << margin << " with "
+                      << margin_unshaded << " unshaded; " << outside_changed
+                      << " changed outside\n";
+            if (shaded == 0 || foreground == 0 || neither != 0 || margin == 0 ||
+                margin_unshaded != 0 || outside_changed != 0) {
+                write_png(picture("kill-board-hidden"), hidden);
+                write_png(picture("kill-board-stray"), stray);
+                for (const auto& [x, y, before, after] : strays)
+                    std::cout << "render tiers check: full tier kill board: (" << x << ", " << y
+                              << ") was " << int{before[0]} << ' ' << int{before[1]} << ' '
+                              << int{before[2]} << ", is " << int{after[0]} << ' ' << int{after[1]}
+                              << ' ' << int{after[2]} << '\n';
+                fail("the kill board's shading or foreground is not the card's and the overlay's");
             }
-        // Screen columns 515-516, left of the header and the highlight, are
-        // shaded battlefield alone.
-        std::size_t margin = 0;
-        std::size_t margin_unshaded = 0;
-        for (int y = board.y; y < board.y + board.h; ++y)
-            for (int x = board.x; x < board.x + 2 * scale; ++x) {
-                if (inside(lit, x, y) || inside(pointer, x, y))
-                    continue;
-                ++margin;
-                if (!darkened(pixel(hidden, x, y), pixel(shown, x, y), kept))
-                    ++margin_unshaded;
+            handle_sdl_event(event, running);
+            frames = 0;
+            while (kill_board_.slide != 0 && frames < most_slide_frames) {
+                std::ignore = full_frame();
+                ++frames;
             }
-        std::cout << "render tiers check: full tier kill board " << board.w << 'x' << board.h
-                  << ": " << shaded << " pixels shaded by the card, " << foreground << " painted, "
-                  << neither << " neither; margin " << margin << " with " << margin_unshaded
-                  << " unshaded; " << outside_changed << " changed outside\n";
-        if (shaded == 0 || foreground == 0 || neither != 0 || margin == 0 || margin_unshaded != 0 ||
-            outside_changed != 0) {
-            write_png(picture("kill-board-hidden"), hidden);
-            write_png(picture("kill-board-stray"), stray);
-            for (const auto& [x, y, before, after] : strays)
-                std::cout << "render tiers check: full tier kill board: (" << x << ", " << y
-                          << ") was " << int{before[0]} << ' ' << int{before[1]} << ' '
-                          << int{before[2]} << ", is " << int{after[0]} << ' ' << int{after[1]}
-                          << ' ' << int{after[2]} << '\n';
-            fail("the kill board's shading or foreground is not the card's and the overlay's");
+            const auto gone = full_frame();
+            if (kill_board_.slide != 0)
+                fail("the kill board did not slide away");
+            if (compare(gone, hidden, field, pointer).most != 0)
+                fail("the kill board left pixels behind");
         }
-        handle_sdl_event(event, running);
-        frames = 0;
-        while (kill_board_.slide != 0 && frames < most_slide_frames) {
-            std::ignore = full_frame();
-            ++frames;
-        }
-        const auto gone = full_frame();
-        if (kill_board_.slide != 0)
-            fail("the kill board did not slide away");
-        if (compare(gone, hidden, field, pointer).most != 0)
-            fail("the kill board left pixels behind");
     }
 
     // The +stats panel: its text and edges on the overlay, the battlefield
