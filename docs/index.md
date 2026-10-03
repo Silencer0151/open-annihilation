@@ -110,6 +110,7 @@ Simulation:
 Presentation, interface and sound:
 
 - [terrain renderer](../src/present/world-renderer/README.md),
+  [card-drawn world](../src/present/gpu-world/README.md),
   [sprite animation](../src/sim/sprite-animation/README.md).
 - [game audio](../src/audio/README.md).
 - [frontend renderer](../src/ui/frontend-renderer/README.md),
