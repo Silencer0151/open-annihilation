@@ -253,3 +253,146 @@ Not wired into any drawing. The pages hold level 0 only: level 1, the exact
 half-size box the design draws sprites from when zoomed out, follows, and
 the cells are aligned for it. The gray table is the caller's, as the
 palette is; the pages build neither.
+
+## Model meshes
+
+`build_model_mesh` (`include/oa/present/gpu_world/model_meshes.hpp`) turns
+a loaded 3DO model and the primitives prepared for drawing it
+(`prepare_model` in `src/present/model`) into a `ModelMesh`:
+
+- **Triangles.** Every primitive today's raster draws becomes a fan of
+  triangles, in the prepared order: the selection primitive left out, the
+  rest sorted as the model library sorts them. A textured primitive of other
+  than four corners, which draws nothing today, adds nothing; nor does a
+  primitive with neither colour nor texture, or a colour primitive of fewer
+  than three corners. The mesh counts each. Each run (`MeshPrimitive`) names
+  its corners, consecutive vertices in the 3DO's corner order, so that a
+  consumer can still walk a whole primitive as today's fills do, and names
+  its 3DO and prepared primitives.
+- **The quad split.** Today's whole walk interpolates a quad's texels along
+  its edges and then along each row, which two triangles follow exactly only
+  where the quad projects to a parallelogram. The build places each
+  four-cornered primitive at rest (its piece's offsets, no turn), evaluates
+  that walk at the midpoint of each diagonal, and splits along the diagonal
+  whose midpoint the walk interpolates nearer the mean of its two corners;
+  the first diagonal on a tie, and where the quad cannot be walked at rest
+  (edge-on, or not convex). Other primitives fan from their first corner.
+- **Corners** (`MeshVertex`, 40 bytes, with its 3DO vertex index beside it
+  in `ModelMesh::source_vertex`): the position in piece space, in world units
+  of the loaded orientation (x and z negated), converted from the 16.16
+  coordinates exactly while they lie within 256 units (the mesh counts the
+  rest); the colour, the palette entry with the display gamma applied for a
+  colour primitive and white for a textured one, with the palette index
+  beside it so that a card may remap it through the shade rows exactly;
+  where on the texture's frame the corner lies, 0 to 1 along each axis, the
+  corners mapped in order to (0, 0), (1, 0), (1, 1) and (0, 1), which are
+  the texels (0, 0), (w - 1, 0), (w - 1, h - 1) and (0, h - 1) of the frame
+  shown, today's raster fetching the texel at the floor of u * (w - 1) and
+  v * (h - 1); the vertex normal at rest; the piece; and the primitive's
+  flags.
+- **Placement.** The processor keeps transforming each piece's vertices
+  (`PieceState::transformed_vertices`, from `rebuild_transforms` with the
+  unit's bank, heading and pitch). A builder that draws a unit places each
+  corner from the transformed vertex its `source_vertex` names, through
+  `pixel_of_model_point`, which floors the 16.16 value as today's images do,
+  so that every corner lands on today's pixel in every pose. The mesh keeps
+  no transforms of its own: the pieces (`MeshPiece`, one per 3DO object,
+  indexed like the objects) carry their parent and their offset from it, for
+  what wants the rest shape.
+- **Textures** (`MeshTexture`): each texture a mesh addresses, by its
+  sequence name as the texture library keys it and the library's own
+  `TextureSequence`, with its frame count, the size of its first frame and
+  whether the others differ from it, how its frame is chosen (fixed,
+  animated by the processor's cursor, or the owner's team colour) and
+  whether today's samplers can read it. The frame a primitive shows is the
+  sequence's frame at an index the kind gives: 0, the running frame of the
+  prepared primitive's cursor (`MeshPrimitive::prepared_index`;
+  `primitive_texture` gives the frame), or the owner's team colour. The
+  pair of the sequence and the index names a frame of the library for as
+  long as the library lives; a consumer that numbers frames for the sprite
+  pages numbers these pairs.
+- **Shade rows.** `vertex_normals` averages the unit normals of an object's
+  drawn primitives into its vertices as the building builder does, over any
+  points: the loaded vertices give the mesh's normals, which are today's for
+  a piece the script has not turned, and a piece's transformed vertices give
+  the normals today's builder shades a turned piece with. `shade_row` turns
+  a normal, the light and its scale into the row the builder takes, with its
+  truncation and its wrap of negative products. An unlit piece, and every
+  mobile unit, uses row 15.
+- **The projection** is `model_projection`, a 3x4 matrix: screen x = x,
+  screen y = -z - y / 2, depth = y, plus the draw's depth base. Today's
+  raster floors -z and y / 2 apart (`pixel_of_model_point`, from a float
+  point or from the 16.16 one); a card that floors the matrix's screen y
+  whole places a corner one row higher wherever the fraction of -z is below
+  the fraction of y / 2.
+
+Draw order and depth stay the processor's to state each frame: the pieces
+of a unit last to first with their visibility and shaded flag, the
+primitives of a piece in order, the triangles of a primitive in order; a
+unit with a depth plane writes a pixel when the stored depth byte is not
+above the new one, and one without writes every pixel in order.
+
+A model is refused when it has no objects, when its hierarchy is out of
+range, out of order or does not meet (the model runtime's rule), when the
+prepared model was prepared for another model or its model has been freed,
+when the prepared model does not match it, when a vertex index is out of
+range, or when an object, a primitive or the mesh exceeds its named bound.
+The build allocates nothing beyond those bounds.
+
+### Tests
+
+`present-gpu-world-model-meshes` checks the projection against today's
+placement over 16.16 values of every sign, from floats and from the 16.16
+values; meshes synthetic models (a square, textured quads over fixed,
+animated and team textures, a turret with an offset child) and rasterises
+them from their meshes with a small software rasteriser that walks edges and
+spans as today's does, each corner placed from the instance's transformed
+vertex, each primitive walked whole and triangle by triangle, holding the
+pixels and depth bytes equal to today's model images in all four modes
+(with and without a depth plane, lit and unlit), at rest and in turned
+poses: the pieces turned and moved by their words under a heading, and
+under bank and pitch with a tilted piece, where the lit rows come from the
+normals of the transformed vertices. It checks the quad split on a wedge and
+a kite, whose whole walk strays from the two diagonals by different amounts:
+the split joins the nearer, and its triangles come nearer today's pixels
+than the other split's. It checks the malformed models and the mismatched
+prepared models refused, and the bytes a mesh holds.
+
+`present-gpu-world-model-meshes-data` reads the installed game: every unit
+model named by `units/*.fbi` (278 in 3.1c), meshed with the installation's
+texture archives and palette and rasterised from its mesh in the frame of
+today's image, in the four modes, at rest and turned (a heading with a
+little bank and pitch), two ways:
+
+- each primitive walked whole, as today's quad and polygon fills walk it,
+  which holds the mesh's corners, order, textures, colours, normals and
+  hierarchy to today's images exactly, in both poses: every pixel and depth
+  byte of every model;
+- triangle by triangle, as a card draws it, which measures what the split
+  costs. At rest the silhouettes agree (the pixels one walk alone covers are
+  0.01% of those drawn), 13% of the drawn pixels take a colour today's image
+  has nowhere within a pixel, and the textures are sampled 1.2 texels from
+  the whole walk on average, 70% of textured pixels within one texel and
+  none farther than 63; turned, 15%, 1.4 texels, 67% and 98. The test holds
+  each model and mode to the coverage, the share of pixels farther than a
+  texel of phase and the largest texel distance, and each mode to the mean
+  and the share within one texel, with bounds at rest that a fixed split
+  from either corner breaks, so that the split is held as chosen.
+
+It also prints the memory: 6.1 MB for every unit model's mesh together,
+71 KB for the largest (held under 16 MiB and 512 KiB), how many quads split
+from their second corner (3,215 of 23,986), the counts of primitives that
+add nothing, the textures whose frames vary in size, and how many corners
+the matrix's single floor would move up a row (half of them: corners at an
+odd whole height).
+
+### Limitations
+
+The mesh holds the corners of the primitives drawn, so a frame measured
+from it can be smaller than today's image, which measures every vertex of
+every visible piece, the selection primitive's among them. The quad split is
+chosen at rest; a turned pose may favour the other diagonal, and no split
+follows today's quad walk texel for texel: the data test states how far the
+triangles stray. The mesh's normals are today's for a piece the script has
+not turned; a turned piece's rows need `vertex_normals` over its transformed
+vertices.

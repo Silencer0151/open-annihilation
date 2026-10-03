@@ -8,6 +8,7 @@
 // C++20 with no window, renderer or platform interface; the engine's
 // presentation hands the results to the card.
 
+#include "oa/present/gpu_world/model_meshes.hpp"
 #include "oa/present/gpu_world/sprite_pages.hpp"
 #include "oa/present/gpu_world/terrain_atlas.hpp"
 #include "oa/present/gpu_world/texel.hpp"

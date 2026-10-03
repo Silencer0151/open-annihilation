@@ -5,14 +5,18 @@
 # assets, one library whose parts each have their own header, source and
 # test, so that a part lands and is tested alone. Nothing draws from them
 # yet.
-add_library(oa-present-gpu-world src/terrain_atlas.cpp src/sprite_pages.cpp)
+add_library(oa-present-gpu-world src/terrain_atlas.cpp src/sprite_pages.cpp src/model_meshes.cpp)
 add_library(oa::present::gpu_world ALIAS oa-present-gpu-world)
 target_include_directories(oa-present-gpu-world PUBLIC include)
 # The terrain atlas reads a parsed TNT map and the palette bytes; the sprite
-# pages read rendered GAF frames and the present layer's surfaces.
+# pages read rendered GAF frames and the present layer's surfaces; the model
+# meshes read loaded 3DO models with the primitives the model library
+# prepares for them, and place corners as the model runtime transforms a
+# piece's vertices.
 target_link_libraries(oa-present-gpu-world
-  PUBLIC oa-present oa-formats-gaf oa-formats-hpi oa-formats-tnt oa-core-types
-  PRIVATE oa-options)
+  PUBLIC oa-present oa-present-model oa-formats-gaf oa-formats-hpi oa-formats-objects3d oa-formats-tnt
+    oa-core-types
+  PRIVATE oa-sim-model-runtime oa-base-geometry oa-base-game-math oa-options)
 target_compile_features(oa-present-gpu-world PUBLIC cxx_std_20)
 
 if(BUILD_TESTING)
@@ -41,4 +45,17 @@ if(BUILD_TESTING)
   set_tests_properties(present-gpu-world-sprite-pages PROPERTIES TIMEOUT 120)
   oa_add_game_data_test(present-gpu-world-sprite-pages-data oa-present-gpu-world-sprite-pages-test --data)
   set_tests_properties(present-gpu-world-sprite-pages-data PROPERTIES TIMEOUT 300)
+
+  # The model meshes: the projection against today's placement, synthetic
+  # models rasterised from their meshes against today's images at rest and
+  # turned, the quad split, malformed models refused and the memory figure;
+  # with --data, every unit model of the installed game against today's
+  # images, at rest and turned, with its texture archives and palette.
+  add_executable(oa-present-gpu-world-model-meshes-test tests/model_meshes_test.cpp)
+  target_link_libraries(oa-present-gpu-world-model-meshes-test PRIVATE oa-present-gpu-world
+    oa-sim-model-runtime oa-formats-hpi oa-formats-tdf oa-test-game-data oa-test-support oa-options)
+  add_test(NAME present-gpu-world-model-meshes COMMAND oa-present-gpu-world-model-meshes-test)
+  set_tests_properties(present-gpu-world-model-meshes PROPERTIES TIMEOUT 120)
+  oa_add_game_data_test(present-gpu-world-model-meshes-data oa-present-gpu-world-model-meshes-test --data)
+  set_tests_properties(present-gpu-world-model-meshes-data PROPERTIES TIMEOUT 300)
 endif()
