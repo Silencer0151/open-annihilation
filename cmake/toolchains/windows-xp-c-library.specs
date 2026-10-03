@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Read by the cross-compiler (-specs=) in a build for Windows XP that names
+# the C library to link (-mcrtdll=; mingw-w64-common.cmake). The default link
+# line names mingw-w64's extension library (mingwex) before the C library,
+# but the C library's import library calls back into it: its snprintf calls
+# __ms_vsnprintf. The lines below add the two to the end of the link line as
+# a group, which the linker searches until neither has more to give.
+
+*libgcc:
++ %{mcrtdll=*:--start-group -lmingwex -l%* --end-group}

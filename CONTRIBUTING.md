@@ -140,8 +140,9 @@ ctest --test-dir build -C Debug --output-on-failure
 ```
 
 From macOS or Linux, `tools/build_windows.sh` cross-compiles the tree for
-x86-64 Windows with mingw-w64, including static zlib and SDL3, and
-`tools/test_windows.sh` builds it in a container and runs its
+x86-64 Windows with mingw-w64, including static zlib and SDL3 (for 32-bit
+x86 with `OA_MINGW_TRIPLE=i686-w64-mingw32`, and for Windows XP as well with
+`--xp`), and `tools/test_windows.sh` builds it in a container and runs its
 tests under Wine. [docs/development/testing.md](docs/development/testing.md) covers the other
 builds, what CI runs, and writing a new test.
 

@@ -5,6 +5,16 @@
 
 #include "oa/base/threads.hpp"
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 #include <atomic>
 #include <chrono>
 
@@ -42,6 +52,22 @@ void pause_processor() noexcept {
 #endif
 }
 
+/// Suspends the calling thread, as oa::base::threads::sleep_ms does.
+///
+/// On Windows it calls the system itself. A build for Windows XP links this
+/// file whole into every program, after the libraries the program names,
+/// where oa-base-threads holds the sleep only for a program that sleeps
+/// itself.
+///
+/// @param milliseconds time to sleep; 0 gives up the rest of the time slice
+void sleep_for_ms(uint32_t milliseconds) noexcept {
+#if defined(_WIN32)
+    Sleep(milliseconds);
+#else
+    base::threads::sleep_ms(milliseconds);
+#endif
+}
+
 /// Waits a little before a thread looks at a busy word again: first on the
 /// processor, then by yielding the rest of its time slice, then by sleeping.
 ///
@@ -54,10 +80,10 @@ void back_off(uint32_t& attempts) noexcept {
     }
     if (attempts < yielding_attempts) {
         ++attempts;
-        base::threads::sleep_ms(0);
+        sleep_for_ms(0);
         return;
     }
-    base::threads::sleep_ms(sleep_between_attempts_ms);
+    sleep_for_ms(sleep_between_attempts_ms);
 }
 
 /// Returns the word as an atomic object.

@@ -217,15 +217,24 @@ and `--match-ticks N` it replays without a window.
   Studio's, also needs the configuration named when ctest runs:
   `ctest --test-dir build -C Debug --output-on-failure`.
 - **Windows from macOS or Linux:** `tools/build_windows.sh` cross-compiles
-  the tree with mingw-w64, and `tools/test_windows.sh` builds it in a
+  the tree with mingw-w64 for x86-64, or for 32-bit x86 with
+  `OA_MINGW_TRIPLE=i686-w64-mingw32`, and refuses any other triple. Each
+  target has its toolchain file in `cmake/toolchains` and keeps its
+  dependencies and build tree apart from the others' (`build-windows`,
+  `build-windows-i686`). `tools/test_windows.sh` builds the x86-64 tree in a
   container and runs its tests under Wine. Use it when a change touches
   platform-specific code. The container keeps compiled objects in a Docker
   volume that every run and every checkout shares, so a rebuild compiles only
   what changed.
-- **Windows XP:** cross-compile for 32-bit (or 64-bit) Windows with a
-  mingw-w64 toolchain that links the C library every Windows release
-  includes (not the one Windows 10 added), with zlib and SDL3 built by the
-  same toolchain, and configure with
+- **Windows XP:** `OA_MINGW_TRIPLE=i686-w64-mingw32 tools/build_windows.sh
+  --xp` builds the tree for 32-bit Windows XP SP3 into
+  `build-windows-i686-xp`, and `tools/build_windows.sh --xp` for the 64-bit
+  edition into `build-windows-xp`, with zlib and SDL3 built the same way.
+  Such a build links the C library every Windows release includes, not the
+  one Windows 10 added: the toolchain files switch a cross-compiler that
+  links the newer one by default, and a configuration that still links it
+  is refused. With another toolchain, build zlib and SDL3 with it and
+  configure with
   `-DOA_WINDOWS_XP=ON`. Engine code then compiles against the declarations of
   Windows XP and every executable runs on it; see
   [src/platform/xp-runtime](../../src/platform/xp-runtime/README.md). Check an
@@ -239,7 +248,9 @@ and `--match-ticks N` it replays without a window.
   with SSE (`OA_X86_FLOAT=sse`, the default; `fpu` computes them on the
   older floating-point unit, which changes the simulation's results) and
   doubles at a double's precision on the older unit
-  ([src/base/float-precision](../../src/base/float-precision/README.md)). Its
+  ([src/base/float-precision](../../src/base/float-precision/README.md)).
+  `cmake/toolchains/i686-w64-mingw32.cmake` builds it, and the dependencies
+  with it, for the i686 instruction set without SSE2. Its
   results must equal a 64-bit build's: run the pinned-digest tests
   (`match-determinism`, `match-trace`, `persist-bank-golden`, `game-math`,
   `game-math-extended`) on it.

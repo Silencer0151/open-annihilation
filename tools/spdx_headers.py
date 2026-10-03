@@ -101,7 +101,7 @@ HASH_COMMENT = "#"
 COMMENT_BY_SUFFIX = {
     **dict.fromkeys((".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inc", ".inl", ".m", ".mm", ".rc"),
                     LINE_COMMENT),
-    **dict.fromkeys((".py", ".sh", ".cmake", ".yml", ".yaml", ".toml"), HASH_COMMENT),
+    **dict.fromkeys((".py", ".sh", ".cmake", ".yml", ".yaml", ".toml", ".specs"), HASH_COMMENT),
 }
 COMMENT_BY_NAME = (
     ("CMakeLists.txt", HASH_COMMENT),

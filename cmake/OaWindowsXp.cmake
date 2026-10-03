@@ -8,13 +8,23 @@
 # 5.1, or 5.2 for 64-bit); and every executable links oa-platform-xp-runtime,
 # which defines the functions the C++ run-time library calls that XP lacks
 # (src/platform/xp-runtime/README.md). It needs a MinGW toolchain that links
-# the C library every Windows release includes, not the one Windows 10 added.
+# the C library every Windows release includes, not the one Windows 10 added:
+# the toolchain files in cmake/toolchains switch a cross-compiler that links
+# the newer one by default, and a build that still links it is refused.
 # OaOptions.cmake includes this file once oa-options exists.
 include_guard(GLOBAL)
 option(OA_WINDOWS_XP "Build Windows executables that also run on Windows XP" OFF)
 if(OA_WINDOWS_XP)
   if(NOT MINGW)
     message(FATAL_ERROR "OA_WINDOWS_XP needs a MinGW toolchain for Windows")
+  endif()
+  include(CheckCXXSymbolExists)
+  check_cxx_symbol_exists(_UCRT cstdlib OA_WINDOWS_XP_NEWER_C_LIBRARY)
+  if(OA_WINDOWS_XP_NEWER_C_LIBRARY)
+    message(FATAL_ERROR "OA_WINDOWS_XP needs a toolchain that links the C library every Windows "
+      "release includes, and this one links the one Windows 10 added, which Windows XP does not "
+      "have. Configure a new build tree with -DOA_WINDOWS_XP=ON and a toolchain file from "
+      "cmake/toolchains, which switches the library, or with a toolchain that links the older one.")
   endif()
   target_compile_definitions(oa-options INTERFACE _WIN32_WINNT=0x0501 WINVER=0x0501 PSAPI_VERSION=1)
   if(CMAKE_SIZEOF_VOID_P EQUAL 8)

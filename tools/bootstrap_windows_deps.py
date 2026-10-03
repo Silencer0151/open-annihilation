@@ -2,12 +2,15 @@
 # SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Cross-build the pinned zlib and SDL3 for x86-64 Windows into local/deps/windows.
+"""Cross-build the pinned zlib and SDL3 for Windows into local/deps/windows.
 
-Every library gets its own install prefix under the prefix root, which
-cmake/toolchains/x86_64-w64-mingw32.cmake searches. Build trees live beside
-the root (<root>-build) so they are never mistaken for prefixes. Nothing
-outside local/ is modified.
+The toolchain file names the target: cmake/toolchains/x86_64-w64-mingw32.cmake
+(the default) or another toolchain file there. --xp builds them for
+executables that also run on Windows XP, as a build configured with
+-DOA_WINDOWS_XP=ON links them. Every library gets its own install prefix
+under the prefix root, which the toolchain files search. Build trees live
+beside the root (<root>-build) so they are never mistaken for prefixes.
+Nothing outside local/ is modified.
 """
 import argparse
 import pathlib
@@ -49,21 +52,25 @@ def main():
     parser.add_argument("--toolchain", type=pathlib.Path,
                         default=ROOT / "cmake" / "toolchains" / "x86_64-w64-mingw32.cmake")
     parser.add_argument("--jobs", type=int, default=6)
+    parser.add_argument("--xp", action="store_true",
+                        help="build for executables that also run on Windows XP (OA_WINDOWS_XP)")
     args = parser.parse_args()
     deps = args.deps.resolve()
     prefixes = (args.prefix_root or deps / "windows").resolve()
     builds = prefixes.parent / f"{prefixes.name}-build"
     toolchain = args.toolchain.resolve()
+    # The toolchain files read OA_WINDOWS_XP to choose the C library.
+    target_options = [f"-DOA_WINDOWS_XP={'ON' if args.xp else 'OFF'}"]
 
     zlib_install = prefixes / "zlib"
     if not (zlib_install / "lib" / "libzlibstatic.a").exists():
         # zlib's own CMake lists a pre-3.5 minimum version that CMake 4 rejects.
         cross_build(zlib_source(deps), builds / "zlib", zlib_install, toolchain, args.jobs,
-                    ["-DZLIB_BUILD_EXAMPLES=OFF", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"])
+                    [*target_options, "-DZLIB_BUILD_EXAMPLES=OFF", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"])
     sdl_install = prefixes / "sdl"
     if not (sdl_install / "lib" / "cmake" / "SDL3" / "SDL3Config.cmake").exists():
         cross_build(bootstrap_sdl.sdl_source(deps), builds / "sdl", sdl_install, toolchain, args.jobs,
-                    ["-DSDL_SHARED=OFF", "-DSDL_STATIC=ON", "-DSDL_TEST_LIBRARY=OFF",
+                    [*target_options, "-DSDL_SHARED=OFF", "-DSDL_STATIC=ON", "-DSDL_TEST_LIBRARY=OFF",
                      "-DSDL_TESTS=OFF", "-DSDL_EXAMPLES=OFF"])
     print(f"Windows dependencies ready under {prefixes}")
 
