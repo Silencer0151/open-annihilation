@@ -22,8 +22,10 @@
 #include "oa/app/runtime.hpp"
 
 #include "full_presentation.hpp"
+#include "match_models.hpp"
 #include "render_host.hpp"
 #include "render_run.hpp"
+#include "runtime_full.hpp"
 #include "xrgb_conversion.hpp"
 
 #include "oa/formats/png.hpp"
@@ -94,6 +96,15 @@ constexpr std::array<float, 2> first_frame_zooms{1.37F, 2.5F};
 constexpr std::array<float, 2> kept_picture_zooms{0.5F, 2.0F};
 /// Frames the loop presents with the HUD's prescale target counted.
 constexpr int counted_hud_frames = 3;
+/// The zooms the sprite stage's frames are held to the processor's
+/// composition at: the whole-number zooms, where the card's terrain under
+/// the sprites equals the composition's nearest fill; at zoom 0.5 the card
+/// draws the terrain from its level 1, which the Full tier's own cases
+/// check, and the stage's picture is app-full-sprites' to hold.
+constexpr std::array<float, 2> full_sprite_zooms{1.0F, 2.0F};
+/// Pixels a sprite's rectangle is grown by each side in the mask of what
+/// the card draws its own way, for the card's placing between pixels.
+constexpr int sprite_mask_margin = 1;
 /// Units each side of the fight the check draws, and the ticks it plays
 /// before its first frame, so that lasers fire and units move.
 constexpr std::size_t fight_units_per_side = 10;
@@ -202,6 +213,137 @@ Difference compare(
         }
     difference.mean = channels != 0 ? sum / static_cast<double>(channels) : 0.0;
     return difference;
+}
+
+/// How far two frames differ over an area, apart from and under a mask.
+struct MaskedDifference {
+    Difference beside{}; ///< over the pixels the mask leaves
+    Difference under{};  ///< over the pixels the mask marks
+};
+
+/// Compares two frames over an area, leaving out the pixels in a second
+/// area, the pixels a mask marks counted apart from the rest.
+///
+/// @param first a frame
+/// @param second another of the same size
+/// @param area the area compared, clipped to the frames
+/// @param left_out an area not compared
+/// @param mask one byte a pixel of the frames; a set byte marks the pixel
+/// @return the differences beside and under the mask
+MaskedDifference compare_masked(
+    const renderer::Surface& first,
+    const renderer::Surface& second,
+    const Area& area,
+    const Area& left_out,
+    const std::vector<uint8_t>& mask
+) {
+    MaskedDifference difference;
+    if (first.width != second.width || first.height != second.height ||
+        mask.size() != std::size_t{first.width} * first.height) {
+        difference.beside.most = 255;
+        return difference;
+    }
+    double beside_sum = 0.0;
+    double under_sum = 0.0;
+    const int right = std::min(area.x + area.w, static_cast<int>(first.width));
+    const int bottom = std::min(area.y + area.h, static_cast<int>(first.height));
+    for (int y = std::max(area.y, 0); y < bottom; ++y)
+        for (int x = std::max(area.x, 0); x < right; ++x) {
+            if (x >= left_out.x && x < left_out.x + left_out.w && y >= left_out.y &&
+                y < left_out.y + left_out.h)
+                continue;
+            const auto pixel = static_cast<std::size_t>(y) * first.width + x;
+            Difference& counted = mask[pixel] != 0 ? difference.under : difference.beside;
+            double& sum = mask[pixel] != 0 ? under_sum : beside_sum;
+            ++counted.pixels;
+            for (std::size_t channel = 0; channel < 3; ++channel) {
+                const int delta = std::abs(
+                    int{first.rgb[pixel * 3U + channel]} - int{second.rgb[pixel * 3U + channel]}
+                );
+                counted.most = std::max(counted.most, delta);
+                sum += delta;
+            }
+        }
+    if (difference.beside.pixels != 0)
+        difference.beside.mean = beside_sum / (3.0 * static_cast<double>(difference.beside.pixels));
+    if (difference.under.pixels != 0)
+        difference.under.mean = under_sum / (3.0 * static_cast<double>(difference.under.pixels));
+    return difference;
+}
+
+/// Marks a rectangle of a mask, grown by a margin on each side.
+///
+/// @param[in,out] mask one byte a pixel of a frame
+/// @param width the frame's columns
+/// @param height the frame's rows
+/// @param x the rectangle's left column
+/// @param y its top row
+/// @param w its columns
+/// @param h its rows
+/// @param margin pixels it is grown by on each side
+void mark_rect(
+    std::vector<uint8_t>& mask,
+    uint32_t width,
+    uint32_t height,
+    int x,
+    int y,
+    int w,
+    int h,
+    int margin
+) {
+    const int left = std::max(x - margin, 0);
+    const int top = std::max(y - margin, 0);
+    const int right = std::min(x + w + margin, static_cast<int>(width));
+    const int bottom = std::min(y + h + margin, static_cast<int>(height));
+    for (int row = top; row < bottom; ++row)
+        for (int column = left; column < right; ++column)
+            mask[static_cast<std::size_t>(row) * width + static_cast<std::size_t>(column)] = 1;
+}
+
+/// Marks the pixels of a line, as the game steps it, and those within a
+/// reach of them.
+///
+/// @param[in,out] mask one byte a pixel of a frame
+/// @param width the frame's columns
+/// @param height the frame's rows
+/// @param x0 the first pixel's column
+/// @param y0 its row
+/// @param x1 the last pixel's column
+/// @param y1 its row
+/// @param reach pixels each side of the line marked with it
+void mark_line(
+    std::vector<uint8_t>& mask,
+    uint32_t width,
+    uint32_t height,
+    int x0,
+    int y0,
+    int x1,
+    int y1,
+    int reach
+) {
+    // A line off the frame is marked only where it crosses it; one far off
+    // it would step for long, so its pixels are bounded first.
+    const int bound = static_cast<int>(std::max(width, height)) * 2;
+    if (std::abs(x0) > bound || std::abs(y0) > bound || std::abs(x1) > bound ||
+        std::abs(y1) > bound)
+        return;
+    int dx = std::abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+    int dy = -std::abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+    int error = dx + dy;
+    while (true) {
+        mark_rect(mask, width, height, x0, y0, 1, 1, reach);
+        if (x0 == x1 && y0 == y1)
+            break;
+        const auto twice = error * 2;
+        if (twice >= dy) {
+            error += dy;
+            x0 += sx;
+        }
+        if (twice <= dx) {
+            error += dx;
+            y0 += sy;
+        }
+    }
 }
 
 /// Writes a frame as a PNG file.
@@ -1167,6 +1309,339 @@ int Runtime::check_render_tiers() {
         if (counts.prescale_draws != painted)
             fail("the HUD was drawn into its prescale target with its layer unchanged");
     }
+    // The Full tier's sprite stage, where --hardware-acceleration asked for
+    // Full: switched on, the graphics card draws the frame's sprites,
+    // particle squares and lines over the world layer the bands left them
+    // out of, under the overlay of what the painters changed. At a
+    // whole-number zoom the frame equals the processor's composition
+    // exactly, but under the sprites the alpha table blends, which the
+    // card blends to the true mean, along the lines, which the card draws
+    // as quads at least a pixel wide, and where a painter painted the
+    // base's own colour over a sprite, which the overlay by difference
+    // cannot carry. The world layer drawn whole for a reader differs from
+    // the one the frame kept, since the bands left the card's kinds out.
+    if (asked_level == HardwareAcceleration::full) {
+        resize(whole_scale_width, whole_scale_height);
+        update_pointer(
+            static_cast<float>(match_layout_.width - 1),
+            static_cast<float>(match_layout_.height - 1)
+        );
+        set_level(HardwareAcceleration::full);
+        if (!full_presentation())
+            fail("--hardware-acceleration=full did not switch the full tier on for the stages");
+        set_full_stages(full::stage_sprites);
+        for (const float zoom : full_sprite_zooms) {
+            at_zoom(zoom);
+            const auto read = presented();
+            if (!full_presentation() || !full_frame_drawn())
+                fail("the sprite stage did not draw the frame at zoom " + zoom_text(zoom));
+            const auto stage = full_sprite_result();
+            if (stage.pages_overflowed)
+                fail("the sprite pages overflowed at zoom " + zoom_text(zoom));
+            // What the card draws its own way, marked: the sprites the
+            // alpha table blends, every sprite at a zoom that is not a
+            // whole number, the lines, grown by their width, the units,
+            // projectiles, debris and fragments the processor draws, which
+            // the card's sprites lie over until the models stage draws
+            // them in the list's order, and every sprite that reaches a
+            // fog tile that is not wholly clear, which the fog's masks cut
+            // where the card draws the sprite whole, greyed or not at all
+            // by its cell.
+            const auto& list = match_models().draws;
+            std::vector<uint8_t> mask(std::size_t{read.width} * read.height, 0);
+            const bool whole = std::floor(zoom) == zoom;
+            const int reach = static_cast<int>(std::ceil(std::max(1.0F, zoom)));
+            const Area field = battlefield();
+            const auto scaled = [&](int32_t pixels) {
+                return static_cast<int>(
+                    std::lround(static_cast<double>(pixels) * static_cast<double>(zoom))
+                );
+            };
+            // The fog tiles that are not wholly clear, as the frame's fog
+            // laid them (apply_match_fog), each grown by a pixel for the
+            // terrain's stepping of their edges.
+            std::vector<uint8_t> fogged(mask.size(), 0);
+            std::span<const uint8_t> coverage;
+            try {
+                coverage = match_->player_coverage(match_view_player());
+            } catch (const std::exception&) {
+                coverage = {};
+            }
+            const auto& sight = match_->sight();
+            const bool los_on = match_line_of_sight_on();
+            const bool mapping_on = match_mapping_on();
+            // The viewer's sight as the sprite stage reads it.
+            full::SightView viewer_sight;
+            if (!coverage.empty() && sight.width > 0 && sight.height > 0) {
+                viewer_sight.coverage = coverage;
+                viewer_sight.player_bits = sight.player_bits;
+                viewer_sight.width = sight.width;
+                viewer_sight.height = sight.height;
+                viewer_sight.viewer_bit =
+                    static_cast<uint16_t>(1U << (sight.viewpoint_player & 0x1fU));
+                viewer_sight.line_of_sight = los_on;
+                viewer_sight.mapping = mapping_on;
+            }
+            if (!coverage.empty() && sight.width > 0 && sight.height > 0 &&
+                (los_on || mapping_on)) {
+                const auto zoom_fp =
+                    static_cast<uint32_t>(std::lround(static_cast<double>(zoom) * 65536.0));
+                const auto grid = wr::build_fog_grid(
+                    sight,
+                    coverage,
+                    {los_on, mapping_on},
+                    match_camera_x_,
+                    match_camera_z_,
+                    wr::fog_map_span(zoom_fp, field.w),
+                    wr::fog_map_span(zoom_fp, field.h)
+                );
+                const int tile = static_cast<int>(std::ceil(wr::fog_cell_pixels * zoom)) + 2;
+                for (int32_t row = 0; row < grid.height; ++row)
+                    for (int32_t column = 0; column < grid.width; ++column) {
+                        const auto& masks = grid.at(column, row);
+                        // The black over never-mapped ground is the
+                        // processor's own, over the card's sprites too; the
+                        // gray is by cell on the card.
+                        if (masks.unseen == 0)
+                            continue;
+                        mark_rect(
+                            fogged,
+                            read.width,
+                            read.height,
+                            field.x + scaled(grid.offset_x + column * wr::fog_cell_pixels) - 1,
+                            field.y + scaled(grid.offset_z + row * wr::fog_cell_pixels) - 1,
+                            tile,
+                            tile,
+                            0
+                        );
+                    }
+            }
+            const auto touches_fog = [&](int x, int y, int w, int h) {
+                for (int row = std::max(y, 0); row < std::min(y + h, static_cast<int>(read.height));
+                     ++row)
+                    for (int column = std::max(x, 0);
+                         column < std::min(x + w, static_cast<int>(read.width));
+                         ++column)
+                        if (fogged
+                                [static_cast<std::size_t>(row) * read.width +
+                                 static_cast<std::size_t>(column)] != 0)
+                            return true;
+                return false;
+            };
+            // A region the bridge captures, in map pixels about the scene's
+            // corner, on the window at the zoom.
+            const auto mark_region = [&](const oa::Rect32& region) {
+                mark_rect(
+                    mask,
+                    read.width,
+                    read.height,
+                    field.x + scaled(region.x1),
+                    field.y + scaled(region.y1),
+                    scaled(region.x2 - region.x1 + 1),
+                    scaled(region.y2 - region.y1 + 1),
+                    reach
+                );
+            };
+            uint32_t kinds_planned = 0;
+            uint32_t sprites_fogged = 0;
+            for (const auto& draw : list.draws) {
+                switch (draw.kind) {
+                case WorldDrawKind::sprite:
+                case WorldDrawKind::blended_sprite: {
+                    ++kinds_planned;
+                    const auto& sprite = list.sprites[draw.index];
+                    const int left = field.x + sprite.screen.x - scaled(sprite.frame->origin_x);
+                    const int top = field.y + sprite.screen.y - scaled(sprite.frame->origin_y);
+                    const int w = std::max(1, scaled(sprite.frame->width));
+                    const int h = std::max(1, scaled(sprite.frame->height));
+                    const bool fog_cut = touches_fog(
+                        left - sprite_mask_margin,
+                        top - sprite_mask_margin,
+                        w + 2 * sprite_mask_margin,
+                        h + 2 * sprite_mask_margin
+                    );
+                    // A sprite the card draws greyed, by the cell under its
+                    // drawn point, differs wherever the gray's masks leave
+                    // the processor's in colour.
+                    const bool greyed_by_card =
+                        full::cell_fog(
+                            viewer_sight,
+                            match_camera_x_ + static_cast<int32_t>(std::floor(
+                                                  static_cast<float>(sprite.screen.x) / zoom
+                                              )),
+                            match_camera_z_ + static_cast<int32_t>(std::floor(
+                                                  static_cast<float>(sprite.screen.y) / zoom
+                                              ))
+                        ) == full::CellFog::unseen;
+                    if (fog_cut || greyed_by_card)
+                        ++sprites_fogged;
+                    if (whole && draw.kind == WorldDrawKind::sprite && !fog_cut && !greyed_by_card)
+                        break;
+                    mark_rect(mask, read.width, read.height, left, top, w, h, sprite_mask_margin);
+                    break;
+                }
+                case WorldDrawKind::model:
+                    mark_region(list.models[draw.index].plan.region);
+                    break;
+                case WorldDrawKind::projectile:
+                    mark_region(list.projectiles[draw.index].region);
+                    break;
+                case WorldDrawKind::debris:
+                    mark_region(list.debris[draw.index].region);
+                    break;
+                case WorldDrawKind::fragment:
+                    mark_region(list.fragments[draw.index].region);
+                    break;
+                case WorldDrawKind::line: {
+                    ++kinds_planned;
+                    const auto& line = list.lines[draw.index];
+                    mark_line(
+                        mask,
+                        read.width,
+                        read.height,
+                        field.x + line.x0,
+                        field.y + line.y0,
+                        field.x + line.x1,
+                        field.y + line.y1,
+                        reach
+                    );
+                    break;
+                }
+                case WorldDrawKind::selection_line: {
+                    ++kinds_planned;
+                    // Map pixels about the camera, at the zoom.
+                    const auto& line = list.lines[draw.index];
+                    const auto at = [&](int32_t pixel) {
+                        return static_cast<int>(
+                            std::lround((static_cast<double>(pixel) + 0.5) * zoom)
+                        );
+                    };
+                    mark_line(
+                        mask,
+                        read.width,
+                        read.height,
+                        field.x + at(line.x0),
+                        field.y + at(line.y0),
+                        field.x + at(line.x1),
+                        field.y + at(line.y1),
+                        reach + 1
+                    );
+                    break;
+                }
+                case WorldDrawKind::pixel_square:
+                    ++kinds_planned;
+                    break;
+                default:
+                    break;
+                }
+            }
+            // The world layer the frame kept, without the card's kinds, and
+            // the base it was painted over.
+            const auto kept = match_world_cpu_;
+            const auto base = full_base();
+            ensure_screen_world();
+            if (full_frame_drawn())
+                fail("the standard tier's draw for a reader left the card's kinds out");
+            const auto& whole_world = match_world_cpu_;
+            // A pixel a painter painted in the base's own colour over a
+            // sprite shows the card's sprite, since the overlay by
+            // difference cannot tell the paint from the base.
+            uint32_t painted_over = 0;
+            if (base.width == kept.width && base.height == kept.height &&
+                base.rgb.size() == kept.rgb.size() && base.rgb.size() == whole_world.rgb.size()) {
+                const auto same = [](const std::vector<uint8_t>& one,
+                                     const std::vector<uint8_t>& other,
+                                     std::size_t at) {
+                    return one[at] == other[at] && one[at + 1] == other[at + 1] &&
+                           one[at + 2] == other[at + 2];
+                };
+                const auto shown = [&](uint8_t channel) {
+                    return gamma_identity_ ? channel : gamma_table_[channel];
+                };
+                for (uint32_t row = 0; row < base.height; ++row)
+                    for (uint32_t column = 0; column < base.width; ++column) {
+                        const auto at = (std::size_t{row} * base.width + column) * 3U;
+                        if (!same(kept.rgb, base.rgb, at) || !same(whole_world.rgb, base.rgb, at))
+                            continue;
+                        const auto marked =
+                            static_cast<std::size_t>(field.y + static_cast<int>(row)) * read.width +
+                            static_cast<std::size_t>(field.x + static_cast<int>(column));
+                        if (marked >= mask.size() || mask[marked] != 0)
+                            continue;
+                        // The pixel counts only where the card drew another
+                        // colour; else no sprite covered it.
+                        const auto seen = marked * 3U;
+                        if (read.rgb[seen] != shown(base.rgb[at]) ||
+                            read.rgb[seen + 1] != shown(base.rgb[at + 1]) ||
+                            read.rgb[seen + 2] != shown(base.rgb[at + 2])) {
+                            mask[marked] = 1;
+                            ++painted_over;
+                        }
+                    }
+            }
+            const auto expected = composed();
+            const auto difference = compare_masked(read, expected, field, cursor(), mask);
+            std::cout << "render tiers check: the sprite stage at zoom " << zoom_text(zoom)
+                      << " drew " << stage.sprites << " sprites (" << stage.greyed << " greyed, "
+                      << stage.refused << " refused, " << sprites_fogged
+                      << " at the gray's edge, line of sight " << (los_on ? "on" : "off")
+                      << ", mapping " << (mapping_on ? "on" : "off") << "), " << stage.squares
+                      << " squares and " << stage.lines << " lines in " << stage.batches
+                      << " batches, " << painted_over
+                      << " pixels painted over in the base's colour: beside the blends, lines, "
+                         "models and fog edges most "
+                      << difference.beside.most << " over " << difference.beside.pixels
+                      << " pixels; under them most " << difference.under.most << ", mean "
+                      << difference.under.mean << " over " << difference.under.pixels << '\n';
+            if (difference.beside.pixels == 0 || difference.beside.most != 0) {
+                write_png(
+                    report_directory / ("native-render-tiers-full-sprites-zoom-" + zoom_text(zoom) +
+                                        "-presented.png"),
+                    read
+                );
+                write_png(
+                    report_directory / ("native-render-tiers-full-sprites-zoom-" + zoom_text(zoom) +
+                                        "-composed.png"),
+                    expected
+                );
+                // Where they differ: the composition dimmed, the mask in
+                // blue, and each pixel that differs beside the mask white.
+                renderer::Surface differing = expected;
+                for (std::size_t pixel = 0; pixel < mask.size(); ++pixel) {
+                    auto* shown = differing.rgb.data() + pixel * 3U;
+                    const auto* seen = read.rgb.data() + pixel * 3U;
+                    const bool differs =
+                        shown[0] != seen[0] || shown[1] != seen[1] || shown[2] != seen[2];
+                    if (mask[pixel] != 0) {
+                        shown[0] /= 4;
+                        shown[1] /= 4;
+                        shown[2] = static_cast<uint8_t>(shown[2] / 4 + 96);
+                    } else if (differs) {
+                        shown[0] = shown[1] = shown[2] = 255;
+                    } else {
+                        shown[0] /= 2;
+                        shown[1] /= 2;
+                        shown[2] /= 2;
+                    }
+                }
+                write_png(
+                    report_directory / ("native-render-tiers-full-sprites-zoom-" + zoom_text(zoom) +
+                                        "-differing.png"),
+                    differing
+                );
+                fail(
+                    "the sprite stage's frame at zoom " + zoom_text(zoom) +
+                    " differs from the processor's composition beside the blends and lines"
+                );
+            }
+            if (kinds_planned != 0 && stage.sprites + stage.squares + stage.lines == 0)
+                fail("the card drew none of the frame's sprites at zoom " + zoom_text(zoom));
+            if (stage.sprites + stage.squares + stage.lines != 0 && kept.rgb == whole_world.rgb)
+                fail("the bands drew the card's kinds at zoom " + zoom_text(zoom));
+        }
+        set_full_stages(0);
+    }
+    // Switched off, every frame is the standard tier's again.
     switch_tier(false);
     resize(whole_scale_width, whole_scale_height);
     update_pointer(

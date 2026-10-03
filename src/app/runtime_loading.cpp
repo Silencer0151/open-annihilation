@@ -249,8 +249,9 @@ void Runtime::teardown_match() {
     end_render_tier_match();
     unit_playout_.reset();
     // Its models and radar are keyed by address; a later match can reuse the
-    // addresses.
+    // addresses, and so can the sprite pages' frames.
     match_models_.reset();
+    free_full_match_state();
     // Each 3D feature's cached image and silhouette go with the match's
     // renderer, as they did when the renderer kept them.
     for (auto& feature : match_features_)

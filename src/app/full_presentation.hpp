@@ -4,15 +4,19 @@
 // What the Full tier's presentation holds between frames (runtime_full.cpp):
 // the card's executor on the game's renderer, the match's terrain atlas,
 // built as the match loads, and the pages it was uploaded as, the target a
-// zoom between whole numbers is drawn through, the overlay of what the
-// processor drew over the terrain, and what the last Full frame drew, which
-// the render tiers check reads.
+// zoom between whole numbers is drawn through, the stages of the scene
+// builder switched on with the sprite pages and the card's pages that hold
+// them, the overlays of what the processor drew over the terrain and over
+// the stages, and what the last Full frame drew, which the render tiers
+// check reads.
 #pragma once
 
 #include "oa/app/runtime.hpp"
 
 #include "full_terrain.hpp"
 #include "oa/app/card/executor.hpp"
+#include "oa/present/gpu_world/sprite_pages.hpp"
+#include "runtime_full.hpp"
 
 #include <array>
 #include <cstddef>
@@ -40,6 +44,23 @@ inline constexpr uint8_t full_terrain_levels = 2;
 /// this, so that it holds a whole number of map pixels at every
 /// whole-number zoom up to the largest (2, 3 and 4 divide it).
 inline constexpr uint32_t full_target_grain = 12;
+
+/// Side of an ordinary sprite page, in texels, and of the largest page a
+/// frame too big for one may have of its own.
+inline constexpr uint32_t full_sprite_page_side = 1024;
+inline constexpr uint32_t full_largest_sprite_page_side = 2048;
+/// Texel memory the sprite pages may hold: four ordinary pages. A
+/// placeholder until the performance pass sets the budget.
+inline constexpr std::size_t full_sprite_page_memory = std::size_t{16} * 1024 * 1024;
+
+/// The card's page that holds a page of the sprite pages.
+struct FullCardPage {
+    card::PageHandle handle{}; ///< none for a page not made
+    uint32_t size{};           ///< texels a side it was made with
+    /// The sprite page's revision whose texels it holds; 0 for none
+    /// uploaded yet, which uploads the whole page.
+    uint64_t revision{};
+};
 
 struct Runtime::FullPresentation {
     /// What a terrain atlas was built from: the map by the storage and size
@@ -104,7 +125,68 @@ struct Runtime::FullPresentation {
     /// the terrain LINEAR straight to the window.
     bool target_refused{};
 
-    card::CardFrame frame; ///< the frame being built, its memory kept between frames
+    card::CardFrame frame; ///< the terrain's frame being built, its memory kept between frames
+
+    // The stages of the scene builder beside the terrain (full_stages.hpp).
+    uint8_t stages{}; ///< the stages switched on, among those this build draws
+    /// The last match frame's world layer leaves the card's kinds undrawn,
+    /// and the base below was kept from it.
+    bool frame_drawn{};
+    bool stages_logged{};   ///< the stages' first frame has been logged
+    bool overflow_logged{}; ///< the pages overflowing a frame has been logged
+    /// The sprite pages, with the match's palette and gray table.
+    oa::present::gpu_world::SpritePages sprite_pages{oa::present::gpu_world::Limits{
+        full_sprite_page_side, full_largest_sprite_page_side, full_sprite_page_memory
+    }};
+    /// The palette generation of the sprite pages the gray table was built for.
+    uint64_t gray_generation{};
+    std::vector<FullCardPage> card_pages; ///< the card's pages, by the sprite pages' index
+    card::CardFrame stage_frame;          ///< the stages' batches, run after the first overlay
+    /// The world layer after the fog's gray and before the fog's black and
+    /// the painters, without the card's kinds (capture_full_base).
+    renderer::Surface base;
+    /// What the fog's black and the painters changed over the base, as
+    /// ARGB8888 words, and its texture: the second overlay.
+    TiledTexture painted_texture;
+    std::vector<uint8_t> painted;
+    std::vector<uint8_t> painted_opaque_bands;
+    std::vector<uint8_t> painted_uploaded_bands;
+    bool painted_uploaded{};
+    full::SpriteStageResult sprites{}; ///< what the sprite stage did on the last frame built
+    uint64_t stage_ns{}; ///< the time the stages took to build, upload and run, last frame
+
+    /// Sets the sprite pages' palette and gray table to the match's.
+    ///
+    /// @param palette_bytes the match's palette, 4 bytes a colour
+    /// @param gamma the display gamma
+    void ensure_sprite_palette(const oa::PaletteBytes& palette_bytes, float gamma);
+
+    /// Returns the card's page for a sprite page, making it when the page
+    /// is new or has a new size.
+    ///
+    /// Throws FullCardError when the card cannot make it.
+    ///
+    /// @param page index into the sprite pages
+    /// @return the handle; none for a page the sprite pages do not hold
+    [[nodiscard]] card::PageHandle card_page(uint32_t page);
+
+    /// Returns the card's page for a sprite page (card_page), as the sprite
+    /// stage asks for it (full::SpritePageHooks::card_page).
+    ///
+    /// @param context the presentation
+    /// @param page index into the sprite pages
+    /// @return the handle
+    [[nodiscard]] static card::PageHandle card_page_hook(void* context, uint32_t page);
+
+    /// Uploads what the sprite pages changed since the card's pages last
+    /// took their texels: a page made this frame whole, another its dirty
+    /// rectangle; a page released is destroyed.
+    ///
+    /// Throws FullCardError when a page cannot be filled.
+    void upload_sprite_pages();
+
+    /// Destroys the card's pages of the sprite pages.
+    void destroy_sprite_card_pages() noexcept;
 
     // The overlay of what the processor drew over its terrain base.
     TiledTexture overlay_texture;

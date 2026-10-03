@@ -44,6 +44,7 @@ constexpr double kSavedGammaBase = 0.5;
 
 void Runtime::set_display_gamma(float gamma) {
     oa::present::set_palette_gamma(display_.context, gamma, display_.context.device_palette);
+    display_gamma_ = gamma;
     gamma_identity_ = true;
     for (std::size_t channel = 0; channel < gamma_table_.size(); ++channel) {
         gamma_table_[channel] = oa::present::gamma_channel(static_cast<uint8_t>(channel), gamma);

@@ -1684,6 +1684,9 @@ void Runtime::render_match_surface() {
     frame_draw.display = &models.display;
     frame_draw.projectile_shadow = &models.projectile_shadow;
     frame_draw.debris_view = {0, 0, vis_w - 1, vis_h - 1};
+    // In the Full tier the graphics card draws the kinds its stages take,
+    // over the world layer the bands leave them out of.
+    frame_draw.card_kinds = take_full_card_kinds();
     // A scene the area pass reduces draws its thin lines about one screen
     // pixel thick; every other frame draws them as the game always has.
     if (scaling.method == SceneMethod::area) {
@@ -1695,16 +1698,32 @@ void Runtime::render_match_surface() {
     draw_world_bands(models, frame_draw, draw_pool_.get());
     oa::present::bind_display(bound_display);
     mark_profile(OA_PROFILE_RENDER_STUFF);
-    apply_match_fog(
-        world_surface,
-        camera_x,
-        camera_y,
-        scene_view.destination_x,
-        scene_view.destination_y,
-        scene_w,
-        scene_h,
-        draw_scale
-    );
+    const auto fog_pass = [&](FogPasses passes) {
+        apply_match_fog(
+            world_surface,
+            camera_x,
+            camera_y,
+            scene_view.destination_x,
+            scene_view.destination_y,
+            scene_w,
+            scene_h,
+            draw_scale,
+            passes
+        );
+    };
+    if (frame_draw.card_kinds == 0) {
+        fog_pass(FogPasses::both);
+    } else {
+        // The Full tier keeps the world under the painters, without the
+        // card's kinds, with the ground out of sight grayed: the base the
+        // card draws its kinds over, greyed by their cells, and the picture
+        // what is painted after is found against. The black over
+        // never-mapped ground goes over the card's kinds as it goes over
+        // the processor's, so it is painted after the base is kept.
+        fog_pass(FogPasses::unseen);
+        capture_full_base(world_surface);
+        fog_pass(FogPasses::unmapped);
+    }
     // A scene drawn apart becomes the world layer's picture at the zoom, on
     // which everything after the fog is drawn in screen pixels.
     if (scaling.apart) {

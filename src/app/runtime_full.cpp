@@ -3,21 +3,28 @@
 
 // The Full tier's presentation: the terrain drawn by the graphics card from
 // the map's terrain atlas, built and uploaded as the match loads as texture
-// pages with their levels, by the level rule of full_terrain.hpp;
-// everything else the processor still draws, at the zoom over a terrain
-// base filled by the nearest fill, and the card composes it over its own
-// terrain through the overlay of what differs from that base. The planner,
-// the HUD, the painters and the readers that keep a picture run as in the
-// Basic tier. It is reached only when the tier decided for the frame is
-// Full.
+// pages with their levels, by the level rule of full_terrain.hpp, and then
+// the stages of the scene builder (runtime_full.hpp) that are switched on,
+// the sprites so far; everything else the processor still draws, at the
+// zoom over a terrain base filled by the nearest fill, and the card
+// composes it over its own terrain through overlays of what differs from
+// that base: with a stage on, what the bands drew and the fog's gray under
+// the stages' batches, and what the fog's black and the painters changed
+// over them. The planner, the HUD, the painters and the readers that keep a
+// picture run as in the Basic tier. It is reached only when the tier
+// decided for the frame is Full.
 #include "oa/app/runtime.hpp"
 
 #include "full_presentation.hpp"
+#include "graphics_report.hpp"
+#include "match_models.hpp"
 #include "render_host.hpp"
 #include "render_run.hpp"
+#include "runtime_full.hpp"
 #include "xrgb_conversion.hpp"
 
 #include "oa/base/float_precision.hpp"
+#include "oa/present/world_renderer/world_fog.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -28,7 +35,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <iostream>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -85,6 +94,9 @@ constexpr std::size_t compared_channels = 3;
     )
                                      .count());
 }
+
+/// Entries of the display gamma's table and of the gray table.
+constexpr std::size_t table_entries = 256;
 
 /// Rounds a count up to a multiple of the target's grain.
 ///
@@ -377,10 +389,217 @@ run_full_function_test(card::Executor& executor, SDL_Renderer* renderer, bool so
     return finish(failure);
 }
 
+/// Finds what a picture holds over a base, as ARGB8888 words, and uploads
+/// the bands that hold it now or held it at the last upload, so that the
+/// texture holds this picture's overlay whatever came before.
+///
+/// @param renderer the game's renderer
+/// @param picture the picture, RGB24 at the battlefield's size
+/// @param base the base it is found against, the same size
+/// @param gamma the display gamma's table; null for none
+/// @param pool the drawing threads
+/// @param[in,out] overlay the words, the battlefield's size
+/// @param[in,out] opaque_bands the bands that hold an opaque pixel now
+/// @param[in,out] uploaded_bands the bands uploaded last
+/// @param[in,out] uploaded the texture holds an uploaded overlay
+/// @param[in,out] texture the overlay's texture, made for the size
+void upload_overlay(
+    const uint8_t* picture,
+    const uint8_t* base,
+    uint32_t bf_w,
+    uint32_t bf_h,
+    const std::array<uint8_t, 256>* gamma,
+    oa::platform::job_pool::Pool* pool,
+    std::vector<uint8_t>& overlay,
+    std::vector<uint8_t>& opaque_bands,
+    std::vector<uint8_t>& uploaded_bands,
+    bool& uploaded,
+    TiledTexture& texture
+) {
+    const std::size_t pitch = std::size_t{bf_w} * card::texel_bytes;
+    convert_rgb24_overlay_argb(
+        picture, base, bf_w, bf_h, overlay.data(), pitch, gamma, opaque_bands, pool
+    );
+    const auto bands = static_cast<uint32_t>(opaque_bands.size());
+    const auto stale = [&](uint32_t band) {
+        return !uploaded || opaque_bands[band] != 0 || uploaded_bands[band] != 0;
+    };
+    for (uint32_t band = 0; band < bands;) {
+        if (!stale(band)) {
+            ++band;
+            continue;
+        }
+        uint32_t end = band + 1;
+        while (end < bands && stale(end))
+            ++end;
+        texture.update(
+            overlay.data(),
+            static_cast<int>(pitch),
+            static_cast<int>(card::texel_bytes),
+            band * xrgb_band_rows,
+            std::min(bf_h, end * xrgb_band_rows)
+        );
+        band = end;
+    }
+    uploaded_bands = opaque_bands;
+    uploaded = true;
+}
+
 } // namespace
 
 void Runtime::destroy_full_presentation(FullPresentation* full) noexcept {
     delete full;
+}
+
+void Runtime::FullPresentation::ensure_sprite_palette(
+    const oa::PaletteBytes& palette_bytes, float gamma
+) {
+    auto& pages = sprite_pages;
+    const oa::Palette palette = oa::present::palette_from_bytes(palette_bytes);
+    pages.set_palette(palette, gamma);
+    if (pages.has_gray_table() && gray_generation == pages.palette_generation())
+        return;
+    // The fog grays a pixel by its brightness: the entry nearest the grey
+    // of its colour's mean channel, so a frame's greyed cell takes that
+    // entry for each of its indices.
+    std::array<uint8_t, table_entries> levels{};
+    oa::present::world_renderer::build_gray_levels(palette, levels);
+    std::array<uint8_t, gw::gray_table_entries> gray{};
+    for (std::size_t index = 0; index < gray.size(); ++index) {
+        const auto& entry = palette.entries[index];
+        const auto level =
+            static_cast<std::size_t>((static_cast<unsigned>(entry.r) + entry.g + entry.b) / 3U);
+        gray[index] = levels[level];
+    }
+    pages.set_gray_table(gray);
+    gray_generation = pages.palette_generation();
+}
+
+card::PageHandle Runtime::FullPresentation::card_page(uint32_t page) {
+    const auto pages = sprite_pages.pages();
+    if (page >= pages.size())
+        return {};
+    if (card_pages.size() <= page)
+        card_pages.resize(std::size_t{page} + 1);
+    FullCardPage& slot = card_pages[page];
+    const uint32_t size = pages[page].size;
+    if (slot.handle != card::PageHandle{} && slot.size == size && executor.page_alive(slot.handle))
+        return slot.handle;
+    if (slot.handle != card::PageHandle{})
+        executor.destroy_page(slot.handle);
+    slot = {};
+    card::PageDescription description;
+    description.width = size;
+    description.height = size;
+    description.level_count = 1;
+    slot.handle = executor.create_page(description);
+    if (slot.handle == card::PageHandle{})
+        throw FullCardError(
+            "a sprite page of " + std::to_string(size) +
+            " texels a side could not be made: " + executor.error()
+        );
+    slot.size = size;
+    return slot.handle;
+}
+
+card::PageHandle Runtime::FullPresentation::card_page_hook(void* context, uint32_t page) {
+    return static_cast<FullPresentation*>(context)->card_page(page);
+}
+
+void Runtime::FullPresentation::upload_sprite_pages() {
+    auto& pages = sprite_pages;
+    const auto held = pages.pages();
+    for (uint32_t index = 0; index < card_pages.size() && index < held.size(); ++index) {
+        FullCardPage& slot = card_pages[index];
+        if (slot.handle == card::PageHandle{})
+            continue;
+        const gw::Page& page = held[index];
+        if (page.size == 0 || page.size != slot.size) {
+            executor.destroy_page(slot.handle);
+            slot = {};
+            continue;
+        }
+        if (slot.revision == page.revision)
+            continue;
+        const uint32_t pitch = page.size * card::texel_bytes;
+        bool uploaded = true;
+        if (slot.revision == 0) {
+            uploaded = executor.update_page(slot.handle, 0, nullptr, page.texels.data(), pitch);
+        } else if (!page.dirty.empty()) {
+            const card::Rect part{page.dirty.x, page.dirty.y, page.dirty.width, page.dirty.height};
+            const uint8_t* first =
+                page.texels.data() +
+                (std::size_t{page.dirty.y} * page.size + page.dirty.x) * card::texel_bytes;
+            uploaded = executor.update_page(slot.handle, 0, &part, first, pitch);
+        }
+        if (!uploaded)
+            throw FullCardError("a sprite page could not be filled: " + executor.error());
+        pages.clear_dirty(index);
+        slot.revision = page.revision;
+    }
+}
+
+void Runtime::FullPresentation::destroy_sprite_card_pages() noexcept {
+    for (FullCardPage& slot : card_pages)
+        if (slot.handle != card::PageHandle{})
+            executor.destroy_page(slot.handle);
+    card_pages.clear();
+}
+
+
+void Runtime::set_full_stages(uint8_t stages) {
+    if (!full_)
+        full_.reset(new FullPresentation);
+    // The terrain is the Full tier's whatever the stages asked for.
+    const auto left = static_cast<uint8_t>(stages & ~full::stages_built & ~full::stage_terrain);
+    if (left != 0 && (full_->stages | stages) != full_->stages)
+        std::cout << graphics_log_prefix << "the graphics card does not draw the "
+                  << full::stage_text(left)
+                  << " of the battlefield in this version; the processor draws them\n"
+                  << std::flush;
+    full_->stages = static_cast<uint8_t>(stages & full::stages_built);
+}
+
+uint8_t Runtime::full_stages() const noexcept {
+    return full_ ? full_->stages : uint8_t{0};
+}
+
+uint16_t Runtime::take_full_card_kinds() {
+    const uint16_t kinds = full_presentation() ? full::card_kinds(full_->stages) : uint16_t{0};
+    if (full_)
+        full_->frame_drawn = kinds != 0;
+    return kinds;
+}
+
+bool Runtime::full_frame_drawn() const noexcept {
+    return full_ && full_->frame_drawn;
+}
+
+void Runtime::capture_full_base(const oa::present::world_renderer::Surface& world) {
+    if (!full_)
+        return;
+    full_->base.width = world.width;
+    full_->base.height = world.height;
+    full_->base.rgb.assign(world.rgb.begin(), world.rgb.end());
+}
+
+full::SpriteStageResult Runtime::full_sprite_result() const noexcept {
+    return full_ ? full_->sprites : full::SpriteStageResult{};
+}
+
+renderer::Surface Runtime::full_base() const {
+    return full_ ? full_->base : renderer::Surface{};
+}
+
+void Runtime::free_full_match_state() noexcept {
+    if (!full_)
+        return;
+    free_full_match_textures();
+    full_->sprite_pages.clear();
+    full_->gray_generation = 0;
+    full_->base = {};
+    full_->frame_drawn = false;
+    full_->sprites = {};
 }
 
 bool Runtime::full_presentation() const noexcept {
@@ -422,6 +641,14 @@ void Runtime::free_full_match_textures() noexcept {
     full.opaque_bands = {};
     full.uploaded_bands = {};
     full.overlay_uploaded = false;
+    // The stages' pages and the second overlay go with the match too.
+    full.destroy_sprite_card_pages();
+    full.stage_frame = {};
+    full.painted_texture.reset();
+    full.painted = {};
+    full.painted_opaque_bands = {};
+    full.painted_uploaded_bands = {};
+    full.painted_uploaded = false;
     full.drawn = false;
 }
 
@@ -569,6 +796,15 @@ void Runtime::ensure_full_match_textures() {
         full.opaque_bands.assign(bands, 0);
         full.uploaded_bands.assign(bands, 0);
         full.overlay.assign(std::size_t{bf_w} * bf_h * 4U, 0);
+        // The second overlay, of what is painted over the stages' batches.
+        full.painted_texture.reset();
+        full.painted_texture.create(
+            sdl_.renderer, bf_w, bf_h, limit, SDL_BLENDMODE_BLEND, full.counts
+        );
+        full.painted_uploaded = false;
+        full.painted_opaque_bands.assign(bands, 0);
+        full.painted_uploaded_bands.assign(bands, 0);
+        full.painted.assign(std::size_t{bf_w} * bf_h * 4U, 0);
         // A new battlefield size needs a new target.
         full.executor.destroy_target(full.target);
         full.target = {};
@@ -620,47 +856,46 @@ bool Runtime::present_full_match_layers(bool dialogs) {
         const auto* gamma = gamma_identity_ ? nullptr : &gamma_table_;
         const auto upload_start = std::chrono::steady_clock::now();
         upload_rgb24_frame(match_hud_tex_, match_hud_cpu_);
+        // With a stage on, the frame kept the world layer without the
+        // card's kinds, after the fog's gray and before its black and the
+        // painters: the stages draw over it, and the black and the painters
+        // over them.
+        const bool staged = full.stages != 0 && full.frame_drawn && full.base.width == bf_w &&
+                            full.base.height == bf_h &&
+                            full.base.rgb.size() == match_world_cpu_.rgb.size();
         // What the processor drew over the terrain base, by difference from
         // it, uploaded in the bands that hold it now or held it at the last
         // upload, so the texture holds this frame's overlay whatever came
-        // before.
+        // before; with a stage on, what it drew under the stages, and then
+        // what the fog's black and the painters changed over them.
         const auto overlay_start = std::chrono::steady_clock::now();
-        const std::size_t pitch = std::size_t{bf_w} * 4U;
-        convert_rgb24_overlay_argb(
-            match_world_cpu_.rgb.data(),
+        upload_overlay(
+            staged ? full.base.rgb.data() : match_world_cpu_.rgb.data(),
             base.rgb.data(),
             bf_w,
             bf_h,
-            full.overlay.data(),
-            pitch,
             gamma,
+            draw_pool_.get(),
+            full.overlay,
             full.opaque_bands,
-            draw_pool_.get()
+            full.uploaded_bands,
+            full.overlay_uploaded,
+            full.overlay_texture
         );
-        const auto bands = static_cast<uint32_t>(full.opaque_bands.size());
-        const auto stale = [&](uint32_t band) {
-            return !full.overlay_uploaded || full.opaque_bands[band] != 0 ||
-                   full.uploaded_bands[band] != 0;
-        };
-        for (uint32_t band = 0; band < bands;) {
-            if (!stale(band)) {
-                ++band;
-                continue;
-            }
-            uint32_t end = band + 1;
-            while (end < bands && stale(end))
-                ++end;
-            full.overlay_texture.update(
-                full.overlay.data(),
-                static_cast<int>(pitch),
-                4,
-                band * xrgb_band_rows,
-                std::min(bf_h, end * xrgb_band_rows)
+        if (staged)
+            upload_overlay(
+                match_world_cpu_.rgb.data(),
+                full.base.rgb.data(),
+                bf_w,
+                bf_h,
+                gamma,
+                draw_pool_.get(),
+                full.painted,
+                full.painted_opaque_bands,
+                full.painted_uploaded_bands,
+                full.painted_uploaded,
+                full.painted_texture
             );
-            band = end;
-        }
-        full.uploaded_bands = full.opaque_bands;
-        full.overlay_uploaded = true;
         full.overlay_ns = nanoseconds_since(overlay_start);
         const auto present_start = std::chrono::steady_clock::now();
         phase_times_.upload += static_cast<int64_t>(nanoseconds_since(upload_start));
@@ -776,6 +1011,66 @@ bool Runtime::present_full_match_layers(bool dialogs) {
                 );
         }
         full.build_ns = nanoseconds_since(build_start);
+        // The stages' batches, on the last list the planner built, into a
+        // frame of their own, run over the first overlay; the pages' texels
+        // the stage changed go up before it runs.
+        const auto stage_start = std::chrono::steady_clock::now();
+        auto& stage_frame = full.stage_frame;
+        stage_frame.reset();
+        full.sprites = {};
+        if (staged && (full.stages & full::stage_sprites) != 0 && match_) {
+            full.ensure_sprite_palette(match_palette_, display_gamma_);
+            full::SpriteStageInputs inputs;
+            inputs.list = &match_models().draws;
+            inputs.view.origin_x = static_cast<float>(match_layout_.left);
+            inputs.view.origin_y = static_cast<float>(match_layout_.top);
+            inputs.view.scale = 1.0F;
+            inputs.view.zoom = zoom;
+            inputs.view.offset = accelerated_.frame_offset;
+            inputs.view.width = static_cast<int32_t>(bf_w);
+            inputs.view.height = static_cast<int32_t>(bf_h);
+            // The camera the sight is read at: the planner's, map pixels.
+            inputs.view.camera_x = match_camera_x_;
+            inputs.view.camera_y = match_camera_z_;
+            // The viewer's sight, as the fog reads it; none when the match
+            // cannot say, which draws every sprite in colour.
+            std::span<const uint8_t> coverage;
+            try {
+                coverage = match_->player_coverage(match_view_player());
+            } catch (const std::exception&) {
+                coverage = {};
+            }
+            const auto& sight = match_->sight();
+            if (!coverage.empty() && sight.width > 0 && sight.height > 0) {
+                inputs.sight.coverage = coverage;
+                inputs.sight.player_bits = sight.player_bits;
+                inputs.sight.width = sight.width;
+                inputs.sight.height = sight.height;
+                inputs.sight.viewer_bit =
+                    static_cast<uint16_t>(1U << (sight.viewpoint_player & 0x1fU));
+                inputs.sight.line_of_sight = match_line_of_sight_on();
+                inputs.sight.mapping = match_mapping_on();
+            }
+            inputs.palette = &match_palette_;
+            inputs.gamma = gamma;
+            const full::SpritePageHooks hooks{&full, &FullPresentation::card_page_hook};
+            full.sprites = full::emit_sprites(inputs, full.sprite_pages, hooks, stage_frame);
+            if (full.sprites.pages_overflowed && !full.overflow_logged) {
+                full.overflow_logged = true;
+                std::cout << graphics_log_prefix
+                          << "the frame's sprites do not fit the sprite pages; the card draws "
+                             "none of them this frame\n"
+                          << std::flush;
+            }
+            full.upload_sprite_pages();
+            if (!full.stages_logged) {
+                full.stages_logged = true;
+                std::cout << graphics_log_prefix << "full tier: the graphics card also draws the "
+                          << full::stage_text(full.stages) << " of the battlefield\n"
+                          << std::flush;
+            }
+        }
+        full.stage_ns = nanoseconds_since(stage_start);
         const auto execute_start = std::chrono::steady_clock::now();
         if (!full.executor.execute(frame, nullptr))
             throw FullCardError("the card refused the terrain frame: " + full.executor.error());
@@ -787,10 +1082,9 @@ bool Runtime::present_full_match_layers(bool dialogs) {
         full.drawn_batches = static_cast<uint32_t>(frame.batches.size());
         full.drawn_through_target = through_target;
         ++full.frames;
-        // The tier's own passes, timed for the step-down as Basic's are.
-        accelerated_.passes_ns += full.overlay_ns + full.build_ns + full.execute_ns;
 
-        // What the processor drew, over the card's terrain, 1:1.
+        // What the processor drew, over the card's terrain, 1:1; then the
+        // stages' batches, and what was painted over them.
         const SDL_FRect world{
             static_cast<float>(battlefield.x),
             static_cast<float>(battlefield.y),
@@ -800,6 +1094,21 @@ bool Runtime::present_full_match_layers(bool dialogs) {
         draw_one_to_one(
             sdl_.renderer, full.overlay_texture, nullptr, &world, one_to_one_scale_mode()
         );
+        if (staged) {
+            const auto stage_run_start = std::chrono::steady_clock::now();
+            if (!full.executor.execute(stage_frame, nullptr))
+                throw FullCardError(
+                    "the card refused the stages' frame: " + full.executor.error()
+                );
+            oa::base::float_precision::restore_program_float_control();
+            full.stage_ns += nanoseconds_since(stage_run_start);
+            draw_one_to_one(
+                sdl_.renderer, full.painted_texture, nullptr, &world, one_to_one_scale_mode()
+            );
+        }
+        // The tier's own passes, timed for the step-down as Basic's are.
+        accelerated_.passes_ns +=
+            full.overlay_ns + full.build_ns + full.execute_ns + full.stage_ns;
         finish_match_layers(frame_format, dialogs, upload_start, present_start);
         return true;
     } catch (const FullCardError& error) {

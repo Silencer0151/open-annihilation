@@ -9,9 +9,11 @@ with no window, renderer or platform interface. The module is one library,
 own header under `include/oa/present/gpu_world/`, its own source and its
 own test, so that the parts land separately, and `texel.hpp` holds what
 they share: `texel_bytes`, the four bytes of an RGBA8 texel. Nothing in
-this module touches SDL or a graphics API, and nothing draws from these
-records yet: the standard tier is unchanged, and no part of this module
-runs unless a later change wires it in.
+this module touches SDL or a graphics API. The Full tier
+(`src/app/runtime_full.cpp`) draws the terrain from the terrain atlas's
+pages, and its sprite stage (`src/app/runtime_full.hpp`) from the sprite
+pages; the standard tier is unchanged, and no part of this module runs
+unless that tier draws.
 
 ## The terrain atlas
 

@@ -2,10 +2,12 @@
 
 The core of the Full tier's drawing, in which the graphics card draws the
 battlefield itself: a command list that says what one frame asks the card
-to draw, and the executor that runs it on SDL's renderer. Nothing of the
-match is wired to it yet. The standard tier and the Basic tier, which
-present frames the processor drew, never reach it, and no existing
-behaviour changes.
+to draw, and the executor that runs it on SDL's renderer. The Full tier's
+scene builder (`src/app/runtime_full.hpp`) builds frames from the
+battlefield's draw list, so far its sprite stage alone, and the tier's
+presentation (`src/app/runtime_full.cpp`) runs them. The standard tier and
+the Basic tier, which present frames the processor drew, never reach it,
+and no existing behaviour changes.
 
 ## Entry points
 
@@ -147,11 +149,13 @@ quads filled as triangles, which it never checks.
 
 ## Known limitations
 
-- Wired into the match for the terrain alone: the Full tier
+- Wired into the match for the terrain, and for the sprite stage of the
+  Full tier's scene builder, switched on by `--full-stages=sprites` beside
+  `--hardware-acceleration=full` (`src/app/README.md`): the Full tier
   (`src/app/runtime_full.cpp`) draws the battlefield's terrain from the
-  terrain atlas's pages through the executor and the processor draws the
-  rest over it; the sprites, models, fog and overlays as card draws
-  follow.
+  terrain atlas's pages through the executor, then the stages' batches,
+  and the processor draws the rest over and under them; the models, fog
+  and overlays as card draws follow.
 - The composed darken mode and the pixel-art sampling mode are exercised
   only on renderers that take them; the software renderer takes neither,
   so the fallbacks are what the test covers.

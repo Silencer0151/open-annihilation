@@ -375,6 +375,31 @@ if(OA_BUILD_PLATFORM)
     target_link_libraries(oa-app-check-host-test PRIVATE oa-app-headers oa-ui-gui-layout
       oa-ui-screen-registry SDL3::SDL3 oa-options)
     add_test(NAME app-check-host COMMAND oa-app-check-host-test)
+    # The Full tier's sprite stage (runtime_full.hpp) on SDL's software
+    # renderer over a surface: a synthetic scene of sprites, blended
+    # sprites, particle squares, lines and selection lines in one list,
+    # drawn by the card from the sprite pages and by the bands on the
+    # processor; the card's picture equals the processor's exactly where
+    # sprites are opaque, at zooms 1 and 2, and within 2 levels where the
+    # alpha table blends them, with the lines held to the game's lines and
+    # the squares exact; the stage's order, batches, fog states (a sprite
+    # under a cell out of sight greyed, under a never-mapped cell left out),
+    # the refusals, the pages overflowing a frame, and a pinned digest of
+    # the frame. With --data, a scene of the installed game's GAF frames
+    # through its palette and alpha table.
+    add_executable(oa-app-full-sprites-test src/app/full_sprites_test.cpp
+      src/app/runtime_full_sprites.cpp src/app/world_draws.cpp)
+    target_link_libraries(oa-app-full-sprites-test PRIVATE oa-app-card-executor
+      oa-present-gpu-world oa-present oa-present-model oa-present-world-renderer
+      oa-formats-gaf oa-formats-hpi oa-sim-effect-particles oa-sim-model-runtime
+      oa-platform-job-pool SDL3::SDL3 oa-test-game-data oa-test-support oa-options)
+    add_test(NAME app-full-sprites COMMAND oa-app-full-sprites-test)
+    set_tests_properties(app-full-sprites PROPERTIES TIMEOUT 120
+      ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy")
+    add_test(NAME app-full-sprites-data COMMAND oa-app-full-sprites-test --data)
+    set_tests_properties(app-full-sprites-data PROPERTIES TIMEOUT 300
+      ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy")
+    oa_game_data_tests(app-full-sprites-data)
   endif()
 endif()
 # The files a director render writes (--render-script), the ffmpeg runs that
@@ -568,7 +593,7 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/runtime_match_render.cpp src/app/runtime_messages.cpp src/app/runtime_pointer.cpp
   src/app/runtime_present.cpp src/app/runtime_display.cpp
   src/app/runtime_accelerated.cpp src/app/runtime_render_tier.cpp src/app/runtime_tier_watch.cpp
-  src/app/runtime_full.cpp
+  src/app/runtime_full.cpp src/app/runtime_full_sprites.cpp
   src/app/runtime_render_tiers_check.cpp src/app/runtime_smooth_pan_check.cpp
   src/app/runtime_terrain_filter.cpp src/app/runtime_reclaim_check.cpp src/app/runtime_patrol_check.cpp src/app/runtime_fog.cpp
   src/app/runtime_reclaim_cursor_check.cpp

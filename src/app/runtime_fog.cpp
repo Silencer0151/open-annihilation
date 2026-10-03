@@ -29,7 +29,8 @@ void Runtime::apply_match_fog(
     int dest_y,
     int dest_w,
     int dest_h,
-    float draw_scale
+    float draw_scale,
+    FogPasses passes
 ) {
     if (!match_ || dest_w <= 0 || dest_h <= 0)
         return;
@@ -60,7 +61,7 @@ void Runtime::apply_match_fog(
         static_cast<int32_t>(camera_y),
         zoom_fp
     };
-    const auto grid = oa::present::world_renderer::build_fog_grid(
+    auto grid = oa::present::world_renderer::build_fog_grid(
         sight,
         coverage,
         {los_on, mapping_on},
@@ -69,6 +70,16 @@ void Runtime::apply_match_fog(
         oa::present::world_renderer::fog_map_span(zoom_fp, dest_w),
         oa::present::world_renderer::fog_map_span(zoom_fp, dest_h)
     );
+    // One pass alone leaves the other's corners clear: the gray pass then
+    // the black pass give the pixels both in one pass give, since the black
+    // goes over the gray.
+    if (passes != FogPasses::both)
+        for (auto& tile : grid.tiles) {
+            if (passes == FogPasses::unseen)
+                tile.unmapped = 0;
+            else
+                tile.unseen = 0;
+        }
     // The fog pass reads the DitheredFog bit of the match's Game word.
     fog_shading_.dithered =
         (match_->state().game.graphics_flags & init::preference_flags::dithered_fog) != 0;

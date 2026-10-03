@@ -426,9 +426,67 @@ logs it.
   of the pages and the target, Full's records and statuses beyond the
   drop, the zoom-in target and the overlay made at the loading screen
   rather than at the first frame that needs them, smooth panning, and the
-  sprites, models, fog and overlays as card draws. `app-full-terrain`
-  checks the level rule and the quads over a small map on three pages, one
-  batch per page whatever the grid's order.
+  models, fog and overlays as card draws; the sprites are the scene
+  builder's first stage, below, which `--full-stages` switches on.
+  `app-full-terrain` checks the level rule and the quads over a small map
+  on three pages, one batch per page whatever the grid's order.
+- `runtime_full.hpp`, `runtime_full_sprites.cpp`, `full_stages.hpp`: the
+  Full tier's scene builder, the stages beside the terrain by which the
+  graphics card comes to draw the whole battlefield. The builder turns the
+  planner's draw list into the card's command list (`src/app/card`): each
+  stage is one function that emits its batches into the frame's shared
+  `CardFrame` in the list's order, and each can be switched on by itself
+  with `--full-stages=STAGE[,STAGE]` (`sprites`, `models`, `fog`, or
+  `none`; `terrain` names what every Full frame draws anyway) beside
+  `--hardware-acceleration=full`, while the processor still draws the
+  rest; a stage this version does not draw is logged once and left to the
+  processor. So far the sprite stage exists
+  (`full::emit_sprites`): the sprites, blended sprites, particle squares,
+  lines and selection lines of the list, in its order, each sprite a quad
+  from its cell on the sprite pages
+  (`src/present/gpu-world`, keyed by the frame the planner drew from)
+  drawn by premultiplied alpha, which keeps the key transparent, at a
+  vertex alpha of one half where the planner blends it through the alpha
+  table, so the card blends to the true mean where the table snaps to the
+  palette; sampled nearest at a whole-number zoom, where the pixels are
+  the game's exactly, linear below 1 and pixel-art above; a sprite whose
+  drawn point lies in a cell out of sight from its greyed cell, since the
+  fog lays its tiles over the picture by map column and row alone; squares
+  as the planner's
+  rectangles; lines as quads `max(1, zoom)` pixels wide through the
+  centres of their end pixels, selection lines the same from the bridge's
+  map pixels at the zoom; consecutive draws that share their page and
+  blend in one batch, every batch under the battlefield's scissor. A frame
+  whose distinct sprites exceed the pages' memory draws none of them,
+  since a cell evicted before the frame ran would show another sprite.
+  With a stage on (`present_full_match_layers`), the bands leave the
+  card's kinds undrawn (`WorldFrameDraw::card_kinds`); the fog's gray goes
+  over the world layer, which is kept as the base (`capture_full_base`),
+  then the fog's black and the painters go over it. The card draws the
+  terrain, then what the base holds over the terrain base, the processor's
+  draws and the gray, found by difference and laid over 1:1, then the
+  stages' batches in a second frame, then what the black and the painters
+  changed over the base, found against it as Basic finds its overlay, so
+  never-mapped ground blacks out the card's sprites as it blacks out the
+  processor's. The sprite pages' texels are uploaded as they change; a
+  page's palette is the match's at the display gamma and its gray table
+  the fog's, by each entry's brightness. A card call that fails drops Full
+  for the run (`drop_full`) and presents the frame as Basic does; readers
+  that keep a picture get the standard tier's draw
+  (`ensure_screen_world`), since the world layer leaves the card's kinds
+  out. Until the models stage lands,
+  the card's sprites lie over the processor's units, and a painter that
+  paints the base's own colour over a sprite leaves the sprite showing,
+  since the overlay by difference cannot tell that paint from the base; a
+  sprite at the gray's edge is wholly grey or wholly colour by its cell.
+  `app-full-sprites` and `app-full-sprites-data` check the stage against
+  the bands' picture on SDL's software renderer (`full_sprites_test.cpp`),
+  and `--check-render-tiers`, where `--hardware-acceleration` asks for
+  Full, switches the stage on at zooms 1 and 2 and holds the frame to the
+  processor's composition beside the blends, the lines, the models, the
+  gray's edges and such painted pixels; at zoom 0.5 the terrain under the
+  sprites is the card's own level 1, which the terrain cases hold, and the
+  stage's picture is `app-full-sprites`' to hold.
 - Native pixel density: a window's density is fixed when it opens.
   `decide_window_density` (`render_host.cpp`) decides it before the window
   opens by the render policy's rule (`decide_native_density`): from 2 GiB,

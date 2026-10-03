@@ -6,6 +6,7 @@
 // acceleration, video capture and showcase options (arm-first-mission and
 // skirmish-battle), and of the options and switches an extension takes.
 #include "oa/app/app.hpp"
+#include "full_stages.hpp"
 #include "oa/app/extension.hpp"
 #include "oa/app/game_directory.hpp"
 #include "oa/app/command_line.hpp"
@@ -258,6 +259,44 @@ int main() {
                     .hardware_acceleration == HardwareAcceleration::full,
         "flags that name one level are taken"
     );
+    // The Full tier's stages a run switches on while the tier is built:
+    // named, joined by commas, or none.
+    {
+        namespace full = oa::app::full;
+        expect(plain.full_stages == 0, "no stage without --full-stages");
+        expect(
+            parse({"--full-stages=sprites"}).full_stages == full::stage_sprites,
+            "--full-stages=sprites names the sprite stage"
+        );
+        expect(
+            parse({"--full-stages=terrain,sprites,models,fog"}).full_stages == full::every_stage,
+            "--full-stages names every stage joined by commas"
+        );
+        expect(parse({"--full-stages=none"}).full_stages == 0, "--full-stages=none names no stage");
+        expect(
+            rejection({"--full-stages=trees"}) ==
+                    "--full-stages: trees is not a stage; the stages are terrain, sprites, "
+                    "models and fog" &&
+                rejection({"--full-stages=sprites,Fog"}) ==
+                    "--full-stages: Fog is not a stage; the stages are terrain, sprites, models "
+                    "and fog",
+            "a word that is no stage's name is refused"
+        );
+        expect(
+            rejection({"--full-stages="}) ==
+                    "--full-stages takes stage names joined by commas, or none" &&
+                rejection({"--full-stages=sprites,"}) ==
+                    "--full-stages takes stage names joined by commas, or none" &&
+                rejection({"--full-stages=,sprites"}) ==
+                    "--full-stages takes stage names joined by commas, or none",
+            "an empty value or an empty word is refused"
+        );
+        expect(
+            full::stage_text(full::stage_sprites | full::stage_fog) == "sprites,fog" &&
+                full::stage_text(0) == "none",
+            "the stages' names read back"
+        );
+    }
     expect(
         parse({"--headless-check", "--no-hardware-acceleration"}).hardware_acceleration ==
                 HardwareAcceleration::off &&

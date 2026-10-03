@@ -95,6 +95,9 @@ flags would. That flag names Full, which forces the Full tier while it is
 not ready for players: the Basic cases run at `basic`, and the Full cases,
 the terrain drawn by the card from the terrain atlas's pages with the rest
 drawn by the processor over it, at `full`.
+With the bare flag `native-render-tiers` and `native-demo-render-tiers`
+also switch the Full tier's sprite stage on and hold its frames to the
+processor's composition (see [src/app/README.md](../../src/app/README.md)).
 
 No window of a check opens at the display's own pixel density but
 `native-render-tiers-density`'s, which `--native-density` opens so: on the
@@ -252,6 +255,19 @@ walk runs:
 - `app-scaled-world-software` draws textures beyond a texture limit of
   1024 as tiles on SDL's software renderer and reads them back as one
   texture with no limit draws them;
+- `app-full-sprites` draws one list of sprites, blended sprites, particle
+  squares, lines and selection lines on SDL's software renderer through
+  the Full tier's sprite stage (`src/app/runtime_full.hpp`) and on the
+  processor through the bands, and holds the card's picture to the
+  processor's: exact where sprites are opaque at zooms 1 and 2, within 2
+  levels where the alpha table blends them, the squares exact, the lines
+  covering the game's lines within a pixel; with the stage's order and
+  batches, the fog's states (a sprite under a cell out of sight greyed,
+  under a never-mapped cell left out), the refusals, a frame overflowing
+  the pages and a pinned digest of its frame. `app-full-sprites-data` draws
+  a scene of the installed game's GAF frames through its palette and alpha
+  table the same way, against the processor and a reference that blends
+  to the true mean;
 - `native-renderer-ladder` (`--check-renderer-ladder`) forces each failure
   the game handles while it runs and checks that it presents on through
   it, each frame after a failure equal to the frame composed on the

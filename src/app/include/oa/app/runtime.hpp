@@ -131,6 +131,10 @@ struct MatchModels;
 struct WorldDrawList;
 class RendererHost;
 
+namespace full {
+struct SpriteStageResult;
+} // namespace full
+
 // The named-background cache and the bitmaps its handles name (index + 1).
 struct NamedBackgrounds {
     oa::ui::frontend::ResourceCache cache{};
@@ -3095,12 +3099,22 @@ class Runtime final : public menu::Host,
     /// @return the raster, bound to this runtime
     [[nodiscard]] oa::present::world_renderer::OverlayRaster source_overlay_raster();
 
+    /// The passes of the fog a draw applies: both, as the game draws them,
+    /// or one alone, which the Full tier draws apart so that the base it
+    /// keeps carries the gray and the overlay the black.
+    enum class FogPasses : uint8_t {
+        both,     ///< the gray over ground out of sight, then the black over never-mapped ground
+        unseen,   ///< the gray alone
+        unmapped, ///< the black alone
+    };
+
     /// Grays the battlefield outside the viewer's line of sight and blacks out never-mapped ground.
     ///
     /// One 32-pixel FOG.GAF tile per edge-grid cell. Tiles are placed in map space
     /// and scaled through the terrain's DDA at the draw scale, so the tile edges
     /// stay on the same map pixels at any scale. Nothing is drawn with mapping
-    /// and line of sight both off.
+    /// and line of sight both off. The gray pass and then the black pass,
+    /// applied apart, give the pixels both give in one draw.
     ///
     /// @param[in,out] destination battlefield frame, or the scene it is drawn from
     /// @param camera_x camera column in map pixels
@@ -3110,6 +3124,7 @@ class Runtime final : public menu::Host,
     /// @param dest_w battlefield width in frame pixels
     /// @param dest_h battlefield height in frame pixels
     /// @param draw_scale frame pixels per map pixel (WorldScaling::draw_scale); 0 or less is 1
+    /// @param passes the passes applied
     void apply_match_fog(
         oa::present::world_renderer::Surface& destination,
         uint32_t camera_x,
@@ -3118,7 +3133,8 @@ class Runtime final : public menu::Host,
         int dest_y,
         int dest_w,
         int dest_h,
-        float draw_scale
+        float draw_scale,
+        FogPasses passes = FogPasses::both
     );
 
     /// Loads the FOG.GAF tile sets and prepares native RGB fog levels, once.
@@ -4856,6 +4872,59 @@ class Runtime final : public menu::Host,
     /// @return true when the frame was presented; false when the Basic
     ///     tier is to present it
     [[nodiscard]] bool present_full_match_layers(bool dialogs);
+
+    /// Switches the Full tier's stages on or off for the frames from the
+    /// next: the stages named that this build draws beside the terrain
+    /// (full_stages.hpp); the others are logged once as left to the
+    /// processor.
+    ///
+    /// @param stages the stages, as bits of full_stages.hpp
+    void set_full_stages(uint8_t stages);
+
+    /// Returns the Full tier's stages switched on.
+    ///
+    /// @return the stages, as bits of full_stages.hpp; 0 for none
+    [[nodiscard]] uint8_t full_stages() const noexcept;
+
+    /// Returns the kinds of draw the graphics card draws in the frame being
+    /// drawn (card_kind_bit), which the bands leave undrawn, and notes that
+    /// the world layer leaves them undrawn (full_frame_drawn).
+    ///
+    /// @return the kinds' bits; 0 outside the Full tier and with no stage on
+    [[nodiscard]] uint16_t take_full_card_kinds();
+
+    /// Tells whether the last match frame's world layer leaves the card's
+    /// kinds undrawn, so that a reader that keeps the picture needs the
+    /// standard tier's draw (ensure_screen_world).
+    ///
+    /// @return true after such a frame, until the world is drawn whole
+    [[nodiscard]] bool full_frame_drawn() const noexcept;
+
+    /// Keeps the world layer as it stands after the fog's gray and before
+    /// the fog's black and the painters, without the card's kinds: the
+    /// picture the stages draw over, laid over the card's terrain by
+    /// difference from the terrain base, and the picture what is painted
+    /// after is found against.
+    ///
+    /// @param world the world layer
+    void capture_full_base(const oa::present::world_renderer::Surface& world);
+
+    /// Frees what the Full tier holds for a match: the sprite pages, whose
+    /// frames are keyed by addresses a later match can reuse, the base and
+    /// what free_full_match_textures frees.
+    void free_full_match_state() noexcept;
+
+    /// Returns what the sprite stage did on the last frame the Full tier
+    /// presented (runtime_full.hpp), for the checks.
+    ///
+    /// @return the stage's result; empty when none ran
+    [[nodiscard]] full::SpriteStageResult full_sprite_result() const noexcept;
+
+    /// Returns the base the last Full frame kept (capture_full_base), for
+    /// the checks.
+    ///
+    /// @return a copy of the base; empty when none was kept
+    [[nodiscard]] renderer::Surface full_base() const;
 
     /// Draws a letterboxed 640x480-style frame's texture by the chrome's
     /// filter at the letterbox's scale, from its prescale target where the
@@ -9319,6 +9388,8 @@ class Runtime final : public menu::Host,
     // Per-channel table of the display gamma for the RGB layers.
     std::array<uint8_t, 256> gamma_table_{};
     bool gamma_identity_ = true;
+    // The display gamma the table holds: the channel multiplier.
+    float display_gamma_ = 1.0F;
     // The threads the per-row drawing passes (the terrain fill, the fog and
     // the frame's conversion for the window) run their bands on, made at
     // start-up for Options::draw_threads or the machine's default; null
