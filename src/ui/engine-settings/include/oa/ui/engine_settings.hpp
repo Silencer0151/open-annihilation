@@ -38,8 +38,9 @@ inline constexpr std::string_view frame_stats = "open-annihilation.frame-stats";
 /// "desktop", or the width and height in decimal joined by an "x", as
 /// "800x600" (EngineSettings::screen_size).
 inline constexpr std::string_view screen_size = "open-annihilation.screen-size";
-/// 1 or 0 (EngineSettings::hardware_acceleration). Only a number reads:
-/// a word such as "off" gives the default.
+/// "off", "basic" or "full" (EngineSettings::hardware_acceleration). A
+/// whole number reads as the On and Off switch the setting was before: 1
+/// or any number above 0 is "full", 0 or below "off".
 inline constexpr std::string_view hardware_acceleration = "open-annihilation.hardware-acceleration";
 /// 1 or 0 (EngineSettings::vertical_sync).
 inline constexpr std::string_view vertical_sync = "open-annihilation.vertical-sync";
@@ -131,6 +132,24 @@ inline constexpr std::array<AntiAliasing, 6> anti_aliasing_levels{
     AntiAliasing::x16,
 };
 
+/// Hardware acceleration: how much of each frame the graphics card takes
+/// on. The processor still draws every pixel the game decides at Off and
+/// Basic.
+enum class HardwareAcceleration : uint8_t {
+    off,   ///< the processor draws and scales every frame, as without the setting
+    basic, ///< the graphics card scales and composes the frames, where it is able to
+    /// The graphics card also draws the battlefield. This build has no
+    /// Full tier: Full draws as Basic, and the status says so.
+    full,
+};
+
+/// The levels of hardware acceleration, in the order the dialog offers them.
+inline constexpr std::array<HardwareAcceleration, 3> hardware_acceleration_levels{
+    HardwareAcceleration::off,
+    HardwareAcceleration::basic,
+    HardwareAcceleration::full,
+};
+
 /// The settings, as the dialog shows them and the game puts them in effect.
 struct EngineSettings {
     /// Path nodes the path search may visit in a game tick, all players
@@ -145,9 +164,9 @@ struct EngineSettings {
     bool frame_stats{}; ///< the frame and tick times over the battlefield (+stats)
     /// The window's size, and the screen's in full screen, from the next start.
     ScreenSize screen_size{desktop_screen_size};
-    /// The graphics card may scale and compose the frames, where it is able
-    /// to; the processor still draws every pixel the game decides.
-    bool hardware_acceleration{};
+    /// How much of each frame the graphics card may take on, where it is
+    /// able to.
+    HardwareAcceleration hardware_acceleration{HardwareAcceleration::off};
     /// Each frame waits for the display to be ready for it, so that no frame
     /// tears, and the frame rate keeps just below the display's.
     bool vertical_sync{};
@@ -184,7 +203,7 @@ struct Inputs {
 /// maximum frame rate is light_machine_frame_rate, enhanced anti-aliasing is
 /// off and the screen size is light_machine_screen_size, or
 /// small_desktop_screen_size on a known desktop narrower or shorter than it.
-/// Hardware acceleration is On with the player's own file, on every
+/// Hardware acceleration is Full with the player's own file, on every
 /// machine, and Off with a named one; whether the graphics card is used is
 /// decided apart from the setting. Vertical sync is Off everywhere.
 ///
@@ -203,6 +222,9 @@ struct Inputs {
 /// 2; a switch is on for a number above 0. A value between a setting's
 /// stops is kept as stored. The screen size is "desktop" or one of
 /// screen_sizes as "WIDTHxHEIGHT"; any other value gives the default.
+/// Hardware acceleration is "off", "basic" or "full"
+/// (hardware_acceleration_from_text), or a whole number as the switch it
+/// was before: Full above 0, else Off; any other value gives the default.
 ///
 /// @param values the preferences
 /// @param inputs the platform, the preferences file and the installation
@@ -217,8 +239,9 @@ struct Inputs {
 /// For each setting but switch_alt: after Restore defaults (`restored`), a
 /// setting at its default has its key erased; otherwise a setting that
 /// differs from `opened` has its key written, in decimal, a switch as 1 or
-/// 0, the screen size as "desktop" or "WIDTHxHEIGHT". Every other key is
-/// left as it is. switch_alt is never written here:
+/// 0, the screen size as "desktop" or "WIDTHxHEIGHT", hardware
+/// acceleration as "off", "basic" or "full". Every other key is left as it
+/// is. switch_alt is never written here:
 /// 3.1c's SwitchAlt key goes with the frontend's own preferences.
 ///
 /// @param[in,out] values the preferences
@@ -246,6 +269,20 @@ void write_settings(
 /// @return the size, when the text is "desktop" or names one of screen_sizes
 ///     as "WIDTHxHEIGHT"; nothing otherwise
 [[nodiscard]] std::optional<ScreenSize> screen_size_from_text(std::string_view text);
+
+/// Returns the word the preferences and the command line keep a level of
+/// hardware acceleration as.
+///
+/// @param level the level
+/// @return "off", "basic" or "full"
+[[nodiscard]] std::string_view hardware_acceleration_text(HardwareAcceleration level) noexcept;
+
+/// Returns the level of hardware acceleration a word names.
+///
+/// @param text the word, in lower case as hardware_acceleration_text gives it
+/// @return the level; nothing for any other text
+[[nodiscard]] std::optional<HardwareAcceleration>
+hardware_acceleration_from_text(std::string_view text) noexcept;
 
 /// Returns the unit limit an installation's totala.ini sets.
 ///
@@ -282,8 +319,9 @@ enum class Lock : uint8_t {
     none,        ///< it can be changed
     in_game,     ///< a game is running; it applies from the next game
     set_by_host, ///< a shared game or a replay decides it
-    /// --max-fps decides the frame rate, or --hardware-acceleration or
-    /// --no-hardware-acceleration decides hardware acceleration, for this run
+    /// --max-fps decides the frame rate, or --hardware-acceleration, in any
+    /// of its forms, or --no-hardware-acceleration decides hardware
+    /// acceleration, for this run
     command_line,
     unavailable, ///< nothing in the game could make the setting help this run
 };
@@ -294,7 +332,8 @@ struct GameState {
     bool shared_game{};                  ///< the match is played with other machines
     bool replay{};                       ///< the match replays a recording
     bool frame_rate_from_command_line{}; ///< --max-fps was given
-    /// --hardware-acceleration or --no-hardware-acceleration was given.
+    /// --hardware-acceleration, in any of its forms, or
+    /// --no-hardware-acceleration was given.
     bool renderer_from_command_line{};
     /// Nothing in the game could have the graphics card scale this run's
     /// frames: the environment names a render driver, the renderer cannot,
@@ -321,8 +360,8 @@ struct Locks {
 /// set_by_host in a shared game or a replay; the maximum frame rate is
 /// locked while --max-fps decides it. Hardware acceleration is locked
 /// command_line while a flag decides it, else unavailable when nothing in
-/// the game could help, and never by a game, so that it can always be
-/// switched Off. Vertical sync is locked unavailable where the renderer
+/// the game could help, and never by a game, so that it can always be set
+/// to Off. Vertical sync is locked unavailable where the renderer
 /// cannot wait for the display, else in_game in a shared game or a replay,
 /// where its value holds until the match ends.
 ///

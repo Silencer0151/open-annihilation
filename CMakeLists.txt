@@ -212,7 +212,8 @@ add_subdirectory(src/audio)
 add_library(oa-app-headers INTERFACE)
 add_library(oa::app::headers ALIAS oa-app-headers)
 target_include_directories(oa-app-headers INTERFACE src/app/include)
-target_link_libraries(oa-app-headers INTERFACE oa-base-sha256)
+# app.hpp and render_policy.hpp include the engine settings' header.
+target_link_libraries(oa-app-headers INTERFACE oa-base-sha256 oa-ui-engine-settings)
 # oa-game's command line, which the option tests parse without a running app.
 add_library(oa-app-game-options src/app/startup.cpp)
 add_library(oa::app::game_options ALIAS oa-app-game-options)
@@ -771,10 +772,12 @@ if(OA_BUILD_PLATFORM)
       # a game, the command line and the renderer put on it, and each setting
       # taking effect. --force-capable lifts the software renderer's lock on
       # Vertical sync, which the dialog turns On and reads back from the
-      # renderer, and on Hardware acceleration, which one step turns On and
-      # Off through the dialog, from 2 GiB, to see the accelerated tier
-      # follow it at once and come back after a drop or a function test
-      # forced to fail; every frame compared is drawn on the processor.
+      # renderer, and on Hardware acceleration, which one step sets to Basic,
+      # Full and Off through the dialog, from 2 GiB, to see the accelerated
+      # tier follow it at once, Full drawn as Basic with the status saying
+      # so, and come back after a drop or a function test forced to fail;
+      # every other step leaves it Off, so every frame compared is drawn on
+      # the processor.
       set(oa_engine_settings_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/engine-settings")
       file(MAKE_DIRECTORY "${oa_engine_settings_dir}")
       add_test(NAME native-engine-settings COMMAND oa-game --game-dir "${OA_GAME_DIR}"

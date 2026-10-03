@@ -267,8 +267,8 @@ void Runtime::apply_engine_settings(const settings::EngineSettings& chosen) {
                               .value_or(oa::present::model::UnitSupersampling::off);
     if (chosen.frame_stats != before.frame_stats)
         show_frame_stats(chosen.frame_stats);
-    // Off applies at once; so does On, but in a shared game or a replay,
-    // which keeps the tier it began with until it ends.
+    // Off applies at once; so do Basic and Full, but in a shared game or a
+    // replay, which keeps the tier it began with until it ends.
     if (chosen.hardware_acceleration != before.hardware_acceleration)
         update_render_tier();
     apply_vertical_sync();
@@ -276,7 +276,8 @@ void Runtime::apply_engine_settings(const settings::EngineSettings& chosen) {
 
 AccelerationFacts Runtime::acceleration_facts() const {
     AccelerationFacts facts{};
-    const bool setting = engine_settings_ && engine_settings_->current.hardware_acceleration;
+    const auto setting = engine_settings_ ? engine_settings_->current.hardware_acceleration
+                                          : oa::ui::engine_settings::HardwareAcceleration::off;
     if (render_run_ && render_run_->host != nullptr) {
         // The facts the tier is decided from, the function test's result
         // and the presentation drawing now among them.

@@ -162,14 +162,30 @@ std::string switch_text(bool on) {
     return on ? "1" : "0";
 }
 
+/// Returns the level of hardware acceleration a stored value reads as.
+///
+/// @param text the stored value
+/// @return the level its word names; for a whole number, as the switch the
+///     setting was before, Full above 0 and Off otherwise; nothing for any
+///     other text
+std::optional<HardwareAcceleration> stored_acceleration(std::string_view text) {
+    if (const auto level = hardware_acceleration_from_text(text))
+        return level;
+    const auto number = leading_number(text);
+    if (!number || number->length != text.size())
+        return std::nullopt;
+    return number->value > 0 ? HardwareAcceleration::full : HardwareAcceleration::off;
+}
+
 } // namespace
 
 EngineSettings default_settings(const Inputs& inputs) {
     EngineSettings settings{};
     settings.escape_opens_menu = inputs.macos && inputs.players_own_profile;
-    // On for the player's own file on every machine: whether the graphics
+    // Full for the player's own file on every machine: whether the graphics
     // card is used is decided apart, so the default never moves with it.
-    settings.hardware_acceleration = inputs.players_own_profile;
+    settings.hardware_acceleration =
+        inputs.players_own_profile ? HardwareAcceleration::full : HardwareAcceleration::off;
     if (inputs.players_own_profile)
         settings.unit_limit =
             installation_unit_limit(inputs.installation_ini).value_or(default_unit_limit);
@@ -202,6 +218,26 @@ std::optional<ScreenSize> screen_size_from_text(std::string_view text) {
     return std::nullopt;
 }
 
+std::string_view hardware_acceleration_text(HardwareAcceleration level) noexcept {
+    switch (level) {
+    case HardwareAcceleration::off:
+        return "off";
+    case HardwareAcceleration::basic:
+        return "basic";
+    case HardwareAcceleration::full:
+        return "full";
+    }
+    return {};
+}
+
+std::optional<HardwareAcceleration>
+hardware_acceleration_from_text(std::string_view text) noexcept {
+    for (const HardwareAcceleration level : hardware_acceleration_levels)
+        if (text == hardware_acceleration_text(level))
+            return level;
+    return std::nullopt;
+}
+
 EngineSettings read_settings(
     const oa::platform::preferences::Values& values, const Inputs& inputs, bool switch_alt
 ) {
@@ -224,8 +260,10 @@ EngineSettings read_settings(
         settings.frame_stats = *number > 0;
     if (const auto found = values.find(std::string{key::screen_size}); found != values.end())
         settings.screen_size = screen_size_from_text(found->second).value_or(settings.screen_size);
-    if (const auto number = stored_number(values, key::hardware_acceleration))
-        settings.hardware_acceleration = *number > 0;
+    if (const auto found = values.find(std::string{key::hardware_acceleration});
+        found != values.end())
+        settings.hardware_acceleration =
+            stored_acceleration(found->second).value_or(settings.hardware_acceleration);
     if (const auto number = stored_number(values, key::vertical_sync))
         settings.vertical_sync = *number > 0;
     return settings;
@@ -305,7 +343,7 @@ void write_settings(
     store(
         values,
         key::hardware_acceleration,
-        switch_text(chosen.hardware_acceleration),
+        std::string{hardware_acceleration_text(chosen.hardware_acceleration)},
         chosen.hardware_acceleration != opened.hardware_acceleration,
         chosen.hardware_acceleration == defaults.hardware_acceleration,
         restored

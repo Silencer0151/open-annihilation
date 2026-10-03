@@ -17,6 +17,8 @@
 // hands back.
 #pragma once
 
+#include "oa/ui/engine_settings.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -27,6 +29,10 @@
 
 namespace oa::app::render_policy {
 
+/// The levels of Hardware acceleration, as the setting and the flags name
+/// them: Off, Basic and Full.
+using oa::ui::engine_settings::HardwareAcceleration;
+
 // ---------------------------------------------------------------------------
 // Tiers and the command line
 
@@ -36,11 +42,13 @@ enum class RenderTier : uint8_t {
     accelerated, ///< the processor draws; the graphics card scales and composes
 };
 
-/// What the command line asks of hardware acceleration.
+/// What the command line asks of hardware acceleration. A flag names a
+/// level of the setting and decides it for the run.
 enum class AccelerationFlag : uint8_t {
-    none, ///< neither flag: the setting decides
-    on,   ///< --hardware-acceleration
-    off,  ///< --no-hardware-acceleration
+    none,  ///< no flag: the setting decides
+    off,   ///< --no-hardware-acceleration or --hardware-acceleration=off
+    basic, ///< --hardware-acceleration=basic
+    full,  ///< --hardware-acceleration, or --hardware-acceleration=full
 };
 
 // ---------------------------------------------------------------------------
@@ -241,7 +249,9 @@ struct TierInputs {
     bool render_driver_named{};  ///< the SDL_RENDER_DRIVER environment variable is set
     bool virtual_video_driver{}; ///< the video driver is dummy or offscreen
     bool players_own_profile{};  ///< no --preferences-file was named
-    bool setting_on{};           ///< the Hardware acceleration setting is On
+    /// The Hardware acceleration setting in effect. Full is drawn as Basic
+    /// until the game draws the battlefield on the graphics card.
+    HardwareAcceleration setting{HardwareAcceleration::off};
     Capability capability{Capability::capable};
     FunctionTest function_test{FunctionTest::not_run};
     bool accelerated_unusable_record{}; ///< the driver has an accelerated-unusable record
@@ -262,11 +272,11 @@ enum class TierReason : uint8_t {
     /// Physical memory under smallest_accelerated_memory, or not reported,
     /// whatever the flags.
     memory,
-    flag_off, ///< --no-hardware-acceleration
+    flag_off, ///< --no-hardware-acceleration or --hardware-acceleration=off
     /// SDL_RENDER_DRIVER or a dummy or offscreen video driver, with no flag
     /// that lifts it.
     environment,
-    setting_off,           ///< the setting is Off and --hardware-acceleration was not given
+    setting_off,           ///< the setting is Off and no flag asks for Basic or Full
     not_capable,           ///< probe items 1 to 3 rejected the renderer
     function_test_failed,  ///< the function test drew wrongly
     records_unreadable,    ///< the records could not be read after an unclean start
@@ -297,16 +307,18 @@ struct TierDecision {
 /// The accelerated tier needs every condition: a renderer, a frame that is
 /// not a director render's, physical memory of at least
 /// smallest_accelerated_memory as the system reports it, which no flag
-/// lifts, no --no-hardware-acceleration, neither SDL_RENDER_DRIVER nor a
-/// dummy or offscreen video driver unless --hardware-acceleration or
-/// --force-capable lifts them, the setting On
-/// or --hardware-acceleration, a capable renderer or --force-capable, a
-/// function test that passed, readable records after an unclean start, no
-/// accelerated-unusable record unless --hardware-acceleration, no drop, no
-/// lost device, and in a shared game or a replay a tier that was
+/// lifts, no flag that names Off, neither SDL_RENDER_DRIVER nor a dummy or
+/// offscreen video driver unless a flag that names Basic or Full or
+/// --force-capable lifts them, Basic or Full asked for
+/// (acceleration_asked), a capable renderer or --force-capable, a function
+/// test that passed, readable records after an unclean start, no
+/// accelerated-unusable record unless a flag names Basic or Full, no drop,
+/// no lost device, and in a shared game or a replay a tier that was
 /// accelerated as its loading screen began. Where the records live in
 /// memory a trial cannot fail to be written, so FunctionTest::trial_unwritten
-/// counts as not run there.
+/// counts as not run there. Full asks for the battlefield drawn on the
+/// graphics card, which the game does not do yet: it is drawn as Basic, in
+/// the accelerated tier, until that tier is built.
 ///
 /// @param inputs the run's and the frame's facts
 /// @return the tier, and the first reason in TierReason's order that
@@ -319,7 +331,7 @@ struct TierDecision {
 /// smallest_accelerated_memory or with memory not reported. A test that
 /// failed does not run again, nor one whose trial could not be written on
 /// disk, until the host sets function_test back to FunctionTest::not_run,
-/// as switching the setting Off then On or Restore defaults does.
+/// as setting the setting to Off and back or Restore defaults does.
 ///
 /// @param inputs the run's and the frame's facts
 /// @return true when decide_render_tier answers function_test_due
@@ -339,10 +351,25 @@ inline constexpr std::array<std::string_view, 2> windowless_video_drivers{"dummy
 
 /// Returns what the command line asks of hardware acceleration.
 ///
-/// @param flag true for --hardware-acceleration, false for
-///     --no-hardware-acceleration; empty for neither
-/// @return the flag
-[[nodiscard]] AccelerationFlag acceleration_flag(std::optional<bool> flag) noexcept;
+/// @param flag the level a flag names (Options::hardware_acceleration);
+///     empty for no flag
+/// @return the flag: AccelerationFlag::none for no flag, else the level
+[[nodiscard]] AccelerationFlag acceleration_flag(std::optional<HardwareAcceleration> flag) noexcept;
+
+/// Returns the level of hardware acceleration a run asks for: the flag's
+/// where one was given, else the setting's.
+///
+/// @param flag what the command line asks
+/// @param setting the Hardware acceleration setting in effect
+/// @return Off, Basic or Full
+[[nodiscard]] HardwareAcceleration
+acceleration_asked(AccelerationFlag flag, HardwareAcceleration setting) noexcept;
+
+/// Tells whether a flag asks for the graphics card: it names Basic or Full.
+///
+/// @param flag what the command line asks
+/// @return true for AccelerationFlag::basic or full
+[[nodiscard]] bool flag_asks_for_card(AccelerationFlag flag) noexcept;
 
 /// What the host does before it draws a frame, to make its presentation
 /// match the tier decided for the frame.
@@ -362,8 +389,8 @@ enum class TierAction : uint8_t {
 ///     from the tier, else TierAction::none
 [[nodiscard]] TierAction tier_action(const TierDecision& decision, bool presentation_on) noexcept;
 
-/// Forgets what keeps the tier standard that switching Hardware
-/// acceleration Off then On, or Restore defaults, lets the run try again: a
+/// Forgets what keeps the tier standard that setting Hardware
+/// acceleration to Off and back, or Restore defaults, lets the run try again: a
 /// function test that failed or whose trial could not be written, which
 /// then runs again, and a drop, except the memory guard's.
 ///
@@ -1001,13 +1028,14 @@ inline constexpr bool native_density_measured = false;
 struct DensityInputs {
     /// --native-density, which only the render tiers check takes: native
     /// density whatever the rest of the rule says, but for the machine's
-    /// memory and --no-hardware-acceleration.
+    /// memory and a flag that names Off.
     bool asked{};
     /// The machine's physical memory in bytes, as the system reports it; 0
     /// when it does not say.
     uint64_t memory{};
     AccelerationFlag flag{AccelerationFlag::none};
-    bool setting_on{};           ///< the Hardware acceleration setting read before the window opens
+    /// The Hardware acceleration setting read before the window opens.
+    HardwareAcceleration setting{HardwareAcceleration::off};
     bool render_driver_named{};  ///< the SDL_RENDER_DRIVER environment variable is set
     bool virtual_video_driver{}; ///< the video driver is dummy or offscreen
     bool unattended{};           ///< a check, a benchmark or another scripted run
@@ -1036,13 +1064,13 @@ enum class DensityReason : uint8_t {
     /// Physical memory under smallest_accelerated_memory, or not reported,
     /// whatever the flags.
     memory,
-    flag_off, ///< --no-hardware-acceleration
+    flag_off, ///< --no-hardware-acceleration or --hardware-acceleration=off
     asked,    ///< --native-density: native density
     /// SDL_RENDER_DRIVER or a dummy or offscreen video driver.
     environment,
     unattended,       ///< an unattended run
     capture,          ///< a video capture
-    setting_off,      ///< the setting is Off and --hardware-acceleration was not given
+    setting_off,      ///< the setting is Off and no flag asks for Basic or Full
     class_unmeasured, ///< the machine's class has not been measured at native density
     budget_none,      ///< the machine starts at budget none
     remembered_rung,  ///< the remembered rung is at or below the magnify-off rung
@@ -1062,14 +1090,14 @@ struct DensityDecision {
 ///
 /// A window opens at native density only with every condition: physical
 /// memory of at least smallest_accelerated_memory, which no flag lifts; no
-/// --no-hardware-acceleration; neither SDL_RENDER_DRIVER nor a dummy or
-/// offscreen video driver; a run that is not unattended and captures no
-/// video; the setting On or --hardware-acceleration; a class measured at
-/// native density; a start above budget none, from a remembered rung, if
-/// any, above the magnify-off rung; and the native-density record.
+/// flag that names Off; neither SDL_RENDER_DRIVER nor a dummy or offscreen
+/// video driver; a run that is not unattended and captures no video; Basic
+/// or Full asked for (acceleration_asked); a class measured at native
+/// density; a start above budget none, from a remembered rung, if any,
+/// above the magnify-off rung; and the native-density record.
 /// --native-density opens it at native density whatever the conditions
-/// after --no-hardware-acceleration say. Every other window opens at the
-/// window system's density, as a first start does.
+/// after a flag that names Off say. Every other window opens at the window
+/// system's density, as a first start does.
 ///
 /// @param inputs what is known before the window opens
 /// @return the density, and the first reason in DensityReason's order that

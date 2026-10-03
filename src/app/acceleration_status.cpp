@@ -15,8 +15,12 @@ bool enough_memory_for_acceleration(uint64_t physical_memory) noexcept {
 
 AccelerationReport report_acceleration(const AccelerationFacts& facts) noexcept {
     using settings::AccelerationState;
+    using settings::HardwareAcceleration;
     AccelerationReport report{};
-    const bool flag_on = facts.flag.value_or(false);
+    // A flag that names Basic or Full asks for the graphics card.
+    const bool flag_on = facts.flag.has_value() && *facts.flag != HardwareAcceleration::off;
+    const bool flag_off = facts.flag == HardwareAcceleration::off;
+    const bool asked = facts.asked != HardwareAcceleration::off;
     // The environment's driver keeps the frames on the processor unless a
     // flag or a check lifts it.
     const bool environment = facts.environment_driver && !flag_on && !facts.force_capable;
@@ -30,7 +34,7 @@ AccelerationReport report_acceleration(const AccelerationFacts& facts) noexcept 
     // SDL's software renderer has no graphics card at all, whatever it lacks.
     const bool lacks_feature = facts.lacks_feature && !facts.software_renderer;
     // A driver that failed in this run explains the renderer it left, which
-    // switching Off then On may try again, so it locks nothing; neither does
+    // setting Off and back may try again, so it locks nothing; neither does
     // a renderer reached because records skipped the drivers before it,
     // since clearing them lets the next start try those again.
     report.acceleration_unavailable = environment || (!memory && !facts.driver_skipped) ||
@@ -47,16 +51,16 @@ AccelerationReport report_acceleration(const AccelerationFacts& facts) noexcept 
         return trouble == RecordedTrouble::stopped ? AccelerationState::game_stopped
                                                    : AccelerationState::driver_failed;
     };
-    // --hardware-acceleration ignores a record against the driver.
+    // A flag that asks for the card ignores a record against the driver.
     const bool recorded = facts.recorded != RecordedTrouble::none && !flag_on;
     if (!memory)
         report.status.state = skipping ? AccelerationState::needs_memory_driver_skipped
                                        : AccelerationState::needs_memory;
-    else if ((facts.flag == false || !facts.asked) && skipping)
+    else if ((flag_off || !asked) && skipping)
         report.status.state = AccelerationState::off_driver_skipped;
-    else if (facts.flag == false)
+    else if (flag_off)
         report.status.state = AccelerationState::off_by_command_line;
-    else if (!facts.asked)
+    else if (!asked)
         report.status.state = AccelerationState::off_by_setting;
     else if (environment)
         report.status.state = AccelerationState::environment_driver;
@@ -87,15 +91,21 @@ AccelerationReport report_acceleration(const AccelerationFacts& facts) noexcept 
     else if (facts.slow_frames_dropped && !facts.tier_accelerated)
         report.status.state = AccelerationState::slow_frames;
     else if (facts.tier_accelerated)
-        report.status.state = facts.driver_skipped ? AccelerationState::in_use_on_another_driver
+        // Full is drawn as Basic until the game draws the battlefield on the
+        // graphics card, and the status says so before anything else.
+        report.status.state = facts.asked == HardwareAcceleration::full
+                                  ? AccelerationState::full_not_built
+                              : facts.driver_skipped ? AccelerationState::in_use_on_another_driver
                               : facts.slow_frames_stepped ? AccelerationState::in_use_less_smoothing
                               : facts.no_smoothing        ? AccelerationState::in_use_no_smoothing
                                                           : AccelerationState::in_use;
     else
         report.status.state = AccelerationState::next_start;
-    // The wait says whether it is for a replay.
+    // The wait says whether it is for a replay, and which level then takes
+    // effect.
     report.status.replay =
         report.status.state == AccelerationState::waiting_for_game_end && facts.replay;
+    report.status.asked = facts.asked;
     return report;
 }
 
@@ -108,8 +118,8 @@ AccelerationFacts tier_acceleration_facts(
     using render_policy::Capability;
     AccelerationFacts facts{};
     if (inputs.flag != AccelerationFlag::none)
-        facts.flag = inputs.flag == AccelerationFlag::on;
-    facts.asked = facts.flag.value_or(inputs.setting_on);
+        facts.flag = render_policy::acceleration_asked(inputs.flag, inputs.setting);
+    facts.asked = render_policy::acceleration_asked(inputs.flag, inputs.setting);
     facts.force_capable = inputs.force_capable;
     facts.environment_driver = inputs.render_driver_named || inputs.virtual_video_driver;
     facts.physical_memory = inputs.memory;

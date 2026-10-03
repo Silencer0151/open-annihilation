@@ -752,15 +752,17 @@ struct Runtime::RendererLadder {
         return rung;
     }
 
-    /// Switches the accelerated tier on at a rung, as --hardware-acceleration
-    /// and --force-capable would, or back to what the run's own options say.
+    /// Switches the accelerated tier on at a rung, as
+    /// --hardware-acceleration=basic and --force-capable would, or back to
+    /// what the run's own options say.
     ///
     /// @param where the case
     /// @param on true to switch it on
     void accelerate(std::string_view where, bool on) {
         if (on) {
             run().rung = top_rung();
-            runtime.options_.hardware_acceleration = true;
+            runtime.options_.hardware_acceleration =
+                oa::ui::engine_settings::HardwareAcceleration::basic;
             runtime.options_.force_capable = true;
         } else {
             run().rung.reset();
@@ -1253,8 +1255,8 @@ struct Runtime::RendererLadder {
     /// Starts the game again, as its next start would: the run before ends
     /// cleanly (RendererHost::finish_records) or as a crash leaves its files,
     /// then the start reads the records in a folder, walks the drivers and
-    /// decides its first frame's tier with the setting On on the player's
-    /// own profile, under --force-capable.
+    /// decides its first frame's tier with the setting at Basic on the
+    /// player's own profile, under --force-capable.
     ///
     /// @param folder the folder of the records; empty keeps them in memory,
     ///     as with a named preferences file, with the setting at that file's
@@ -1279,7 +1281,8 @@ struct Runtime::RendererLadder {
         TierRequest request;
         request.force_capable = !folder.empty();
         request.players_own_profile = !folder.empty();
-        request.setting_on = !folder.empty();
+        request.setting = folder.empty() ? oa::ui::engine_settings::HardwareAcceleration::off
+                                         : oa::ui::engine_settings::HardwareAcceleration::basic;
         renderer.decide_start_tier(request);
         auto& state = run();
         state.pending_rebuild.clear();
@@ -1885,10 +1888,10 @@ struct Runtime::RendererLadder {
             "the path's first frame wrote no sentinel"
         );
         auto& settings = runtime.engine_settings_state().current;
-        settings.hardware_acceleration = false;
+        settings.hardware_acceleration = oa::ui::engine_settings::HardwareAcceleration::off;
         match_frames(path_zoom, 1);
-        settings.hardware_acceleration = true;
-        expect(!runtime.accelerated_.on, where, "the setting turned Off left the tier on");
+        settings.hardware_acceleration = oa::ui::engine_settings::HardwareAcceleration::basic;
+        expect(!runtime.accelerated_.on, where, "the setting set to Off left the tier on");
         expect_running(where, "switching the tier off left the path's sentinel or trial standing");
         expect(
             records_file(folder).count(std::string(rs::trial_key)) == 0,
@@ -2378,9 +2381,9 @@ struct Runtime::RendererLadder {
         renderer.set_stage_clock({&clock_ns, read_check_clock});
         const bool force_capable = runtime.options_.force_capable;
         auto& settings = runtime.engine_settings_state().current;
-        const bool setting = settings.hardware_acceleration;
+        const auto setting = settings.hardware_acceleration;
         runtime.options_.force_capable = true;
-        settings.hardware_acceleration = true;
+        settings.hardware_acceleration = oa::ui::engine_settings::HardwareAcceleration::basic;
         to_main_menu();
         expect(
             SDL_SetWindowSize(runtime.sdl_.window, records_window_width, records_window_height) &&

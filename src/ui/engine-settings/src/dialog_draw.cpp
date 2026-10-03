@@ -412,41 +412,50 @@ void draw_switch(
     );
 }
 
-/// Draws the strip of anti-aliasing levels.
+/// Draws a strip of levels: Enhanced anti-aliasing's or Hardware
+/// acceleration's.
 ///
 /// @param[in,out] target the surface
 /// @param placement where the dialog lands
 /// @param area the strip
-/// @param level the level chosen
+/// @param setting the strip's setting
+/// @param level the index of the level chosen
 /// @param hovered the pointer is over it
+/// @param locked the strip cannot be changed now: the level chosen shows
+///     without the accent
 /// @param fonts the fonts
 void draw_levels(
     renderer::Surface& target,
     const renderer::Placement& placement,
     const SourceRect& area,
-    AntiAliasing level,
+    Setting setting,
+    std::size_t level,
     bool hovered,
+    bool locked,
     const DialogFonts& fonts
 ) {
     renderer::fill_source_rect(target, placement, area, kWellColor);
     renderer::draw_outline(
         target, placement, area, hovered ? kControlHoverColor : kControlBorderColor
     );
-    for (std::size_t index = 0; index < anti_aliasing_levels.size(); ++index) {
+    const layout::Strip strip = layout::strip_of(setting);
+    for (std::size_t index = 0; index < strip.levels; ++index) {
         const SourceRect segment{
-            area.x + 1 + static_cast<int32_t>(index) * layout::level_width,
+            area.x + 1 + static_cast<int32_t>(index) * strip.level_width,
             area.y + 1,
-            layout::level_width,
+            strip.level_width,
             area.height - 2,
         };
-        const bool selected = anti_aliasing_levels[index] == level;
+        const bool selected = index == level;
         if (selected)
-            renderer::fill_source_rect(target, placement, segment, kAccentColor);
+            renderer::fill_source_rect(
+                target, placement, segment, locked ? kControlHoverColor : kAccentColor
+            );
         draw_boxed_text(
             target,
             placement,
             fonts.small,
-            layout::level_caption(anti_aliasing_levels[index]),
+            layout::strip_caption(setting, index),
             segment,
             Align::centre,
             selected ? kOnAccentColor : kButtonTextColor
@@ -646,10 +655,18 @@ void draw_section(
                 kHintColor
             );
         }
-        if (row.setting == Setting::anti_aliasing) {
-            draw_levels(
-                target, in_view, row.control_area, dialog.chosen.anti_aliasing, hovered, fonts
-            );
+        if (layout::is_strip(row.setting)) {
+            if (row.control_area.width > 0)
+                draw_levels(
+                    target,
+                    in_view,
+                    row.control_area,
+                    row.setting,
+                    layout::strip_level(dialog.chosen, row.setting),
+                    hovered,
+                    locked,
+                    fonts
+                );
         } else if (layout::is_slider(row.setting)) {
             draw_slider(
                 target,

@@ -118,20 +118,23 @@ they are open; a multiplayer game keeps running.
   size, from the next start: Desktop, the default, leaves the screen at the
   desktop's size; 640×480, 800×600, 1024×768 or 1280×1024 switches the
   screen to that size in full screen, and opens the window at that size.
-  Hardware acceleration (on by default): the graphics card scales the
-  picture, only where it is able to and the computer has at least 2 GB of
-  memory; a short test first draws known patterns on the card and reads
-  them back, and a card that draws them wrongly is not used. The game runs
+  Hardware acceleration, Off, Basic or Full (Full by default): at Basic the
+  graphics card scales the picture, only where it is able to and the
+  computer has at least 2 GB of memory; Full, where the card also draws the
+  battlefield, is not in this build yet, so choosing it draws Basic and the
+  status says so. A short test first draws known patterns on the card and
+  reads them back, and a card that draws them wrongly is not used. The game runs
   that test at start, and keeps beside its preferences file what it saw of
   each graphics driver: a driver that stopped the game, or failed, at two
   starts or in two runs in a row is passed over, or left to the processor,
   and on Linux and on Windows XP, where such a stop can halt the whole
   computer, one stop while the card is being tried is enough; the main
-  menu says so once. Switching the setting Off and On, or Restore defaults,
+  menu says so once. Setting it to Off and back, or Restore defaults,
   tries them again. Its two status lines say whether it is in use, and why not. Off,
   or wherever it is not in use, the processor draws and scales every frame,
-  as before; turned Off or On it applies at once. `--hardware-acceleration`
-  and `--no-hardware-acceleration` decide it for one run. Vertical sync
+  as before; each change applies at once. `--hardware-acceleration=off`,
+  `=basic` or `=full` (`--hardware-acceleration` alone is Full) and
+  `--no-hardware-acceleration` (Off) decide it for one run. Vertical sync
   (off by default): each frame waits for the display, so that none tears,
   and the frame rate keeps just below the display's; SDL's software
   renderer does not offer it, and neither does SDL's `direct3d` renderer,
@@ -145,15 +148,16 @@ they are open; a multiplayer game keeps running.
 Pathfinding cycles and Unit limit cannot change during a game; in a
 multiplayer game the host's settings apply. Vertical sync keeps its value
 for the length of a multiplayer game or a replay. Hardware acceleration is
-each player's own: turned off during such a game it applies at once, and
-turned on it takes effect from the next game. `--max-fps N` on the command
-line sets the frame rate for that run without changing the setting, and
-`--hardware-acceleration` or `--no-hardware-acceleration` sets Hardware
-acceleration for that run. To turn Hardware acceleration off for good
-outside the game, set the key `open-annihilation.hardware-acceleration` to
-`0` in the preferences file
-([src/platform/preferences](src/platform/preferences/README.md)): only a
-number is read, so `off` leaves the default.
+each player's own: set to Off during such a game it applies at once, and
+set to Basic or Full it takes effect from the next game. `--max-fps N` on
+the command line sets the frame rate for that run without changing the
+setting, and `--hardware-acceleration[=off|basic|full]` or
+`--no-hardware-acceleration` sets Hardware acceleration for that run. To
+turn Hardware acceleration off for good outside the game, set the key
+`open-annihilation.hardware-acceleration` to `off` in the preferences file
+([src/platform/preferences](src/platform/preferences/README.md)); `basic`
+and `full` name the other levels, and a file from an earlier version that
+holds `0` or `1` still reads as Off or Full.
 `SDL_RENDER_DRIVER=software` in the environment draws and presents every
 frame without the graphics card.
 

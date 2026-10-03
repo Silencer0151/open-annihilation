@@ -22,7 +22,7 @@ the locks a running game puts on them (`settings_locks`).
 | Graphics | Maximum frame rate | 30 to 120, steps of 5 | 120; 60 on a Raspberry Pi or a light machine with the player's own preferences file | `open-annihilation.max-fps` |
 | | Enhanced anti-aliasing | Off, 2×, 3×, 4×, 8×, 16× | Off, a Raspberry Pi and a light machine included | `open-annihilation.anti-aliasing` |
 | | Screen size, from the next start | Desktop, 640×480, 800×600, 1024×768, 1280×1024 | Desktop; 800×600 on a light machine with the player's own preferences file, 640×480 when its desktop is smaller | `open-annihilation.screen-size` (`desktop` or `800x600`) |
-| | Hardware acceleration | Off, On | On with the player's own preferences file on every machine; Off with `--preferences-file` | `open-annihilation.hardware-acceleration` |
+| | Hardware acceleration | Off, Basic, Full | Full with the player's own preferences file on every machine; Off with `--preferences-file` | `open-annihilation.hardware-acceleration` (`off`, `basic` or `full`) |
 | | Vertical sync | Off, On | Off | `open-annihilation.vertical-sync` |
 | Developer | Show performance statistics | Off, On | Off | `open-annihilation.frame-stats` |
 
@@ -42,25 +42,31 @@ the game's resolutions, so it starts there; the player can raise the rate and
 turn on anti-aliasing in the dialog like anywhere else, and Restore defaults
 puts the Pi's defaults back.
 
-Hardware acceleration lets the graphics card scale the frames where it is
-able to; the processor still draws every pixel the game decides. Its default
-depends only on the preferences file, never on the machine: whether the card
-is used is decided apart, and the card is used only with a renderer able to
-and 2 GiB of memory, which a machine sold with 2 GB counts as having. Its two
-hint lines are its status (`AccelerationStatus`), which the host gives the
-dialog when it opens and again each frame: what runs, or why not, and what
-draws the view, what the player can do, or what the card does on this
-machine. Under 2 GiB it says the machine needs more memory, whatever the
-setting; otherwise, the setting or `--no-hardware-acceleration` turned it
-off, the environment names a render driver, a shared game or a replay waits
-for its end, the graphics driver failed or the game stopped while using it,
-in this run or as the game's records of earlier ones say, no usable graphics
-card was found, the card lacks a feature, the game cannot save the files
-that guard trying it, the card is in use, on another driver where a record
-passed over one, or, on a renderer nothing has looked at yet, On takes
-effect from the next start. A driver a record passed over at this start
-shows whatever the setting. A key only reads as a number: `off` gives the
-default, and `0` turns it off.
+Hardware acceleration has three levels (`HardwareAcceleration`). Off is the
+game as it always drew: the processor draws and scales every frame. Basic
+lets the graphics card scale and compose the frames where it is able to;
+the processor still draws every pixel the game decides. Full, where the
+card also draws the battlefield, is not in this build: choosing it draws
+Basic, and the status says so. Its default depends only on the preferences
+file, never on the machine: whether the card is used is decided apart, and
+the card is used only with a renderer able to and 2 GiB of memory, which a
+machine sold with 2 GB counts as having. Its two hint lines are its status
+(`AccelerationStatus`), which the host gives the dialog when it opens and
+again each frame: what runs, or why not, and what draws the view, what the
+player can do, or what the card does on this machine. Under 2 GiB it says
+the machine needs more memory, whatever the setting; otherwise, the
+setting or a flag turned it off, the environment names a render driver, a
+shared game or a replay waits for its end, naming the level that then
+takes effect, the graphics driver failed or the game stopped while using
+it, in this run or as the game's records of earlier ones say, no usable
+graphics card was found, the card lacks a feature, the game cannot save the
+files that guard trying it, Full is not in this build and Basic is in use,
+the card is in use, on another driver where a record passed over one, or,
+on a renderer nothing has looked at yet, it takes effect from the next
+start. A driver a record passed over at this start shows whatever the
+setting. The key reads `off`, `basic` or `full`; a whole number, as the
+setting's earlier On and Off switch wrote it, reads as Full above 0 and Off
+otherwise, and any other text gives the default.
 
 Vertical sync has each frame wait for the display, so that no frame tears;
 while it is in effect the frame rate keeps just below the display's. Off,
@@ -71,8 +77,8 @@ With every default the game plays as it does without the settings. Pathfinding
 cycles and Unit limit are locked during a game; a shared game or a replay
 always plays at 1× pathfinding and the host's unit limit. Vertical sync is
 locked during a shared game or a replay, its value set before the game kept
-in effect; Hardware acceleration never is, so that it can always be turned
-off, and turned on there it takes effect from the next game.
+in effect; Hardware acceleration never is, so that it can always be set to
+Off, and set to Basic or Full there it takes effect from the next game.
 
 ## The dialog
 
@@ -95,7 +101,8 @@ edge and hairline rules, and one green accent for what is selected:
   "Shared game - still running" in amber while a shared game keeps running;
 - the sections down the left, Developer after a line, the open one marked;
 - the open section's heading and rows: a label, a hint of one or two lines,
-  and an Off/On switch, a level strip (Off, 2x, 3x, 4x, 8x, 16x) or a slider
+  and an Off/On switch, a level strip (Off, 2x, 3x, 4x, 8x, 16x for Enhanced
+  anti-aliasing; Off, Basic, Full for Hardware acceleration) or a slider
   with stops and its value under the hint;
 - Restore defaults, Cancel and OK along the bottom.
 
@@ -134,24 +141,27 @@ The game fonts have no "×" or "·", so the dialog writes "x" and "-".
 A locked setting is faded, takes no press and no keyboard focus, and shows a
 padlock with "Locked during a game", "Set by the host", "Set on the command
 line" (the frame rate under `--max-fps`, Hardware acceleration under
-`--hardware-acceleration` or `--no-hardware-acceleration`) or "Not available
-here" (Hardware acceleration when nothing in the game could help the run,
-and Vertical sync on SDL's software renderer or where each change would
-reset the graphics device). A locked slider shows the
-padlock at the right of its label line. A locked switch keeps its switch,
-faded, with the padlock left of it, so that its value still shows: Vertical
-sync's. A locked switch whose hint lines are its status, Hardware
-acceleration's, shows the padlock where the switch was, and fades only its
-label line, so that the status keeps its strength.
+`--hardware-acceleration`, in any of its forms, or
+`--no-hardware-acceleration`) or "Not available here" (Hardware
+acceleration when nothing in the game could help the run, and Vertical
+sync on SDL's software renderer or where each change would reset the
+graphics device). A locked slider shows the padlock at the right of its
+label line. A locked switch keeps its switch, faded, with the padlock left
+of it, so that its value still shows: Vertical sync's. A locked row whose
+hint lines are its status, Hardware acceleration's strip, shows the padlock
+where its control was, and fades only its label line, so that the status
+keeps its strength.
 
 Changes show at once; OK keeps them, Cancel puts back what the dialog opened
 with, Restore defaults resets every setting that is not locked. A click on a
-switch's half sets it; a press on a slider moves its knob to the nearest stop
-and drags it. Every switch reads and sets its value through one table. Each
+switch's half sets it, and a click on a strip's level chooses it; a press on
+a slider moves its knob to the nearest stop and drags it. Every switch reads
+and sets its value through one table, and every strip through another. Each
 press of Restore defaults, and each time Hardware acceleration passes from
-Off to On, adds one to `Dialog::forget_renderer_failures`, the player's
-requests to have the graphics card tried afresh; Restore defaults reports a
-change every time, even when no setting moved, so that the host acts on it.
+Off to Basic or Full, adds one to `Dialog::forget_renderer_failures`, the
+player's requests to have the graphics card tried afresh; Restore defaults
+reports a change every time, even when no setting moved, so that the host
+acts on it.
 
 | Key | Does |
 |---|---|
@@ -159,7 +169,7 @@ change every time, even when no setting moved, so that the host acts on it.
 | Escape | Cancel |
 | Tab, Down | the focus to the next control: the section's rows, Restore defaults, Cancel, OK, then the sections |
 | Shift+Tab, Up | the focus to the previous control |
-| Left, Right | a switch Off or On, a slider or the level strip one step; along the footer's buttons |
+| Left, Right | a switch Off or On, a slider or a level strip one step; along the footer's buttons |
 | Space | flips a switch, presses a button, opens a section |
 | Page Down, Page Up | scroll the section 200 pixels down or up |
 | End, Home | scroll the section to its end or its top |
@@ -173,15 +183,16 @@ moves it to a button or a section's entry does not scroll.
 ## Tests
 
 `ui-engine-settings` covers the defaults, a Raspberry Pi's and a light
-machine's included, the keys read and written, words that are no number,
-and the locks of a game, the flags and the renderer;
+machine's included, the keys read and written, Hardware acceleration's
+words and the numbers its switch once wrote, words that are no number, and
+the locks of a game, the flags and the renderer;
 `ui-engine-settings-dialog` the dialog's layout (every part inside the
 panel and none overlapping), its sections, switches and their one table,
-slider stops, level strip, keys, footer buttons, locks and the faces it
-draws; the Graphics section's five rows, their places at every offset and
-under every lock, the focus scrolling them into view, both forms of a locked
-switch, every status of Hardware acceleration and the requests to try the
-graphics card afresh; and, on sections of the test's own taller than the
+slider stops, both level strips, keys, footer buttons, locks and the faces
+it draws; the Graphics section's five rows, their places at every offset
+and under every lock, the focus scrolling them into view, both forms of a
+locked row, every status of Hardware acceleration, Full's included, and
+the requests to try the graphics card afresh; and, on sections of the test's own taller than the
 view (`SectionHooks`), its scrolling: the view and its limit, the wheel, the
 scroll bar, the scroll keys, the focus brought into view, rows the view
 cuts and the control numbers; and `ui-engine-settings-dialog-data` its
@@ -189,5 +200,6 @@ fonts, and every text fitting its place in them, a scrolled section's at
 every offset included, and every status line in the 309 columns of a hint,
 over the installed game. `native-engine-settings` sends the wheel and the
 scroll keys through the main menu's and the match's dialog, turns Vertical
-sync On in the dialog and reads it back from the renderer, and switches
-Hardware acceleration On in a shared game, where it waits for the game's end.
+sync On in the dialog and reads it back from the renderer, and sets
+Hardware acceleration to Full and to Basic in a shared game, where each
+waits for the game's end.

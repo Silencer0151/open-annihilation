@@ -218,7 +218,8 @@ void test_report_software_renderer() {
 } // namespace
 
 /// The start-up line's tier: in use, what the graphics card does at each
-/// reach; otherwise the standard tier with the status's reason.
+/// reach, Full noted as not in this build; otherwise the standard tier with
+/// the status's reason.
 void test_tier_description() {
     using oa::app::tier_description;
     using oa::ui::engine_settings::AccelerationReach;
@@ -235,25 +236,36 @@ void test_tier_description() {
     };
     OA_CHECK(
         described(AccelerationState::in_use, AccelerationReach::menus) ==
-        "accelerated tier: the graphics card scales the interface"
+        "basic tier: the graphics card scales the interface"
     );
     OA_CHECK(
         described(AccelerationState::in_use, AccelerationReach::zoomed_in) ==
-        "accelerated tier: the graphics card scales the interface and the zoomed-in view"
+        "basic tier: the graphics card scales the interface and the zoomed-in view"
     );
     OA_CHECK(
         described(AccelerationState::in_use, AccelerationReach::zoomed_out) ==
-        "accelerated tier: the graphics card scales the interface and the zoomed-in view, and "
+        "basic tier: the graphics card scales the interface and the zoomed-in view, and "
         "the zoomed-out view is smoothed"
     );
     OA_CHECK(
         described(AccelerationState::in_use_no_smoothing, AccelerationReach::nearest_zoomed_out) ==
-        "accelerated tier: the zoomed-out view is smoothed"
+        "basic tier: the zoomed-out view is smoothed"
     );
     OA_CHECK(
         described(AccelerationState::in_use, AccelerationReach::nearest_none) ==
-        "accelerated tier: the view is drawn as in the standard tier"
+        "basic tier: the view is drawn as in the standard tier"
     );
+    // Full, which the game draws as Basic, says so after the name.
+    OA_CHECK(
+        described(AccelerationState::full_not_built, AccelerationReach::menus) ==
+        "basic tier (Full is not in this build): the graphics card scales the interface"
+    );
+    OA_CHECK(
+        described(AccelerationState::full_not_built, AccelerationReach::zoomed_out) ==
+        "basic tier (Full is not in this build): the graphics card scales the interface and the "
+        "zoomed-in view, and the zoomed-out view is smoothed"
+    );
+    // Off by the setting or a flag gives that as the reason.
     for (const auto state :
          {AccelerationState::off_by_setting,
           AccelerationState::off_by_command_line,
@@ -291,7 +303,7 @@ void test_tier_description() {
             facts_of("metal", "cocoa", AdapterState::read, "Apple M2", 16384),
             tier_description(in_use)
         ) == "open-annihilation: graphics: metal on cocoa (Apple M2), textures up to 16384; "
-             "accelerated tier: the graphics card scales the interface and the zoomed-in view"
+             "basic tier: the graphics card scales the interface and the zoomed-in view"
     );
 }
 

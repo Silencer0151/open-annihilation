@@ -106,7 +106,7 @@ TierDecision decide_render_tier(const TierInputs& inputs) noexcept {
     const auto standard = [](TierReason reason) {
         return TierDecision{RenderTier::standard, reason};
     };
-    const bool flag_on = inputs.flag == AccelerationFlag::on;
+    const bool flag_on = flag_asks_for_card(inputs.flag);
     const bool on_disk = records_on_disk(inputs.players_own_profile, inputs.render_driver_named);
     if (!inputs.renderer)
         return standard(TierReason::no_renderer);
@@ -120,7 +120,9 @@ TierDecision decide_render_tier(const TierInputs& inputs) noexcept {
     if ((inputs.render_driver_named || inputs.virtual_video_driver) && !flag_on &&
         !inputs.force_capable)
         return standard(TierReason::environment);
-    if (!inputs.setting_on && !flag_on)
+    // Basic and Full both ask for the accelerated tier: the game draws Full
+    // as Basic until the battlefield is drawn on the graphics card.
+    if (acceleration_asked(inputs.flag, inputs.setting) == HardwareAcceleration::off)
         return standard(TierReason::setting_off);
     if (inputs.capability != Capability::capable && !inputs.force_capable)
         return standard(TierReason::not_capable);
@@ -170,10 +172,37 @@ bool windowless_video_driver(std::string_view video_driver) noexcept {
     );
 }
 
-AccelerationFlag acceleration_flag(std::optional<bool> flag) noexcept {
+AccelerationFlag acceleration_flag(std::optional<HardwareAcceleration> flag) noexcept {
     if (!flag)
         return AccelerationFlag::none;
-    return *flag ? AccelerationFlag::on : AccelerationFlag::off;
+    switch (*flag) {
+    case HardwareAcceleration::off:
+        return AccelerationFlag::off;
+    case HardwareAcceleration::basic:
+        return AccelerationFlag::basic;
+    case HardwareAcceleration::full:
+        return AccelerationFlag::full;
+    }
+    return AccelerationFlag::none;
+}
+
+HardwareAcceleration
+acceleration_asked(AccelerationFlag flag, HardwareAcceleration setting) noexcept {
+    switch (flag) {
+    case AccelerationFlag::none:
+        return setting;
+    case AccelerationFlag::off:
+        return HardwareAcceleration::off;
+    case AccelerationFlag::basic:
+        return HardwareAcceleration::basic;
+    case AccelerationFlag::full:
+        return HardwareAcceleration::full;
+    }
+    return setting;
+}
+
+bool flag_asks_for_card(AccelerationFlag flag) noexcept {
+    return flag == AccelerationFlag::basic || flag == AccelerationFlag::full;
 }
 
 TierAction tier_action(const TierDecision& decision, bool presentation_on) noexcept {
@@ -969,7 +998,7 @@ DensityDecision decide_native_density(const DensityInputs& inputs) noexcept {
         return window_system(DensityReason::unattended);
     if (inputs.capture)
         return window_system(DensityReason::capture);
-    if (!inputs.setting_on && inputs.flag != AccelerationFlag::on)
+    if (acceleration_asked(inputs.flag, inputs.setting) == HardwareAcceleration::off)
         return window_system(DensityReason::setting_off);
     if (!inputs.class_measured)
         return window_system(DensityReason::class_unmeasured);

@@ -752,7 +752,7 @@ render_policy::DensityDecision decide_window_density(const DensityRequest& reque
     inputs.asked = request.asked;
     inputs.memory = physical_memory();
     inputs.flag = render_policy::acceleration_flag(request.flag);
-    inputs.setting_on = request.setting_on;
+    inputs.setting = request.setting;
     const char* named = SDL_GetHint(SDL_HINT_RENDER_DRIVER);
     inputs.render_driver_named = named != nullptr && named[0] != '\0';
     const char* video_driver = SDL_GetCurrentVideoDriver();
@@ -1094,7 +1094,8 @@ void RendererHost::decide_start_tier(const TierRequest& request) {
     // so that an adapter that cannot be read or a software rasteriser keeps
     // the standard tier there too.
     if (named_ && renderer_ != nullptr && !adapter_asked_ &&
-        (request.flag.value_or(false) || request.force_capable)) {
+        (render_policy::flag_asks_for_card(render_policy::acceleration_flag(request.flag)) ||
+         request.force_capable)) {
         adapter_asked_ = true;
         take_renderer();
     }
@@ -1106,7 +1107,7 @@ void RendererHost::decide_start_tier(const TierRequest& request) {
     tier_.virtual_video_driver =
         render_policy::windowless_video_driver(video_driver != nullptr ? video_driver : "");
     tier_.players_own_profile = request.players_own_profile;
-    tier_.setting_on = request.setting_on;
+    tier_.setting = request.setting;
     tier_.memory = machine_memory();
     take_machine(machine_, tier_.memory);
     // The trial written before the test guards it, so the test runs at

@@ -4,8 +4,9 @@
 // The settings dialog: where its parts lie, its sections and rows, switches,
 // sliders and their stops, the level strip, pointer and key events, OK,
 // Cancel and Restore defaults, the locks and their texts, and what it draws.
-// The Graphics page's five rows scroll: Hardware acceleration, whose hint
-// lines are its status, and Vertical sync, each locked in its own form.
+// The Graphics page's five rows scroll: Hardware acceleration, a strip of
+// Off, Basic and Full whose hint lines are its status, and Vertical sync,
+// each locked in its own form.
 // A section of the test's own, taller than the view under the heading,
 // checks scrolling: the view and its limit, the wheel, the scroll bar, the
 // scroll keys, the focus brought into view, rows cut by the view, the
@@ -49,6 +50,7 @@ namespace geometry = oa::ui::engine_settings::geometry;
 
 using settings::DialogAction;
 using settings::DialogKey;
+using settings::HardwareAcceleration;
 using settings::Lock;
 using settings::Page;
 using settings::Setting;
@@ -85,7 +87,7 @@ std::vector<settings::Locks> lock_states() {
 }
 
 /// Every status Hardware acceleration's row shows: each state at each reach,
-/// and in a replay.
+/// in a replay, with Basic or Full asked for.
 std::vector<settings::AccelerationStatus> acceleration_statuses() {
     std::vector<settings::AccelerationStatus> statuses;
     for (int32_t state = 0; state <= static_cast<int32_t>(settings::AccelerationState::in_use);
@@ -94,13 +96,15 @@ std::vector<settings::AccelerationStatus> acceleration_statuses() {
              reach <= static_cast<int32_t>(settings::AccelerationReach::nearest_none);
              ++reach)
             for (const bool replay : {false, true})
-                statuses.push_back(
-                    settings::AccelerationStatus{
-                        static_cast<settings::AccelerationState>(state),
-                        static_cast<settings::AccelerationReach>(reach),
-                        replay,
-                    }
-                );
+                for (const auto asked : {HardwareAcceleration::basic, HardwareAcceleration::full})
+                    statuses.push_back(
+                        settings::AccelerationStatus{
+                            static_cast<settings::AccelerationState>(state),
+                            static_cast<settings::AccelerationReach>(reach),
+                            replay,
+                            asked,
+                        }
+                    );
     return statuses;
 }
 
@@ -1484,13 +1488,14 @@ void the_graphics_page_scrolls_its_five_rows() {
     }
     CHECK(open.rows.bottom == 361);
     CHECK(open.limit == 80);
-    // Hardware acceleration: a switch with two status lines; Vertical sync a
+    // Hardware acceleration: a strip of Off, Basic and Full, 34 columns a
+    // level inside its border, with two status lines; Vertical sync a
     // switch with one hint line.
     const auto& acceleration = open.rows.rows[3];
     CHECK(acceleration.setting == Setting::hardware_acceleration);
     CHECK(acceleration.hint_is_status);
-    CHECK(same_rect(acceleration.label, {158, 264, 249, 16}));
-    CHECK(same_rect(acceleration.control_area, {415, 264, 52, 16}));
+    CHECK(same_rect(acceleration.label, {158, 264, 197, 16}));
+    CHECK(same_rect(acceleration.control_area, {363, 264, 104, 16}));
     CHECK(acceleration.hint_lines == 2);
     CHECK(acceleration.hints[0].y == 282 && acceleration.hints[1].y == 294);
     const auto& vsync = open.rows.rows[4];
@@ -1501,7 +1506,7 @@ void the_graphics_page_scrolls_its_five_rows() {
     CHECK(vsync.hint_lines == 1 && vsync.hints[0].y == 341);
 
     // At the top the first three rows keep their places and Hardware
-    // acceleration's label and switch show whole; at the end the closing
+    // acceleration's label and strip show whole; at the end the closing
     // line is at 281.
     const auto top = settings::dialog_layout(dialog);
     CHECK(find_part(top, "Hardware acceleration", settings::no_control) != nullptr);
@@ -1583,13 +1588,56 @@ void every_switch_reads_and_sets_through_one_table() {
         CHECK(geometry::switch_on(state, setting) == was);
         CHECK(state == before);
     }
-    CHECK(switches == 6);
+    CHECK(switches == 5);
+    // Hardware acceleration is a strip of Off, Basic and Full, no switch:
+    // set_switch leaves it, and the strip reads and sets it by level, as
+    // Enhanced anti-aliasing's strip does.
     settings::EngineSettings both{};
     geometry::set_switch(both, Setting::hardware_acceleration, true);
+    CHECK(both.hardware_acceleration == HardwareAcceleration::off);
+    CHECK(geometry::is_strip(Setting::hardware_acceleration));
+    CHECK(geometry::is_strip(Setting::anti_aliasing));
+    CHECK(!geometry::is_strip(Setting::vertical_sync));
+    CHECK(geometry::strip_of(Setting::hardware_acceleration).levels == 3);
+    CHECK(
+        geometry::strip_of(Setting::hardware_acceleration).level_width ==
+        geometry::acceleration_level_width
+    );
+    CHECK(
+        geometry::strip_of(Setting::anti_aliasing).levels == settings::anti_aliasing_levels.size()
+    );
+    CHECK(geometry::strip_of(Setting::vertical_sync).levels == 0);
+    CHECK(geometry::strip_caption(Setting::hardware_acceleration, 0) == "Off");
+    CHECK(geometry::strip_caption(Setting::hardware_acceleration, 1) == "Basic");
+    CHECK(geometry::strip_caption(Setting::hardware_acceleration, 2) == "Full");
+    CHECK(geometry::strip_caption(Setting::hardware_acceleration, 3).empty());
+    CHECK(geometry::strip_caption(Setting::anti_aliasing, 1) == "2x");
+    geometry::set_strip_level(both, Setting::hardware_acceleration, 2);
+    CHECK(both.hardware_acceleration == HardwareAcceleration::full);
+    CHECK(geometry::strip_level(both, Setting::hardware_acceleration) == 2);
+    geometry::set_strip_level(both, Setting::hardware_acceleration, 9);
+    CHECK(both.hardware_acceleration == HardwareAcceleration::full);
+    geometry::set_strip_level(both, Setting::hardware_acceleration, 1);
+    CHECK(both.hardware_acceleration == HardwareAcceleration::basic);
+    CHECK(geometry::strip_level(both, Setting::hardware_acceleration) == 1);
+    geometry::set_strip_level(both, Setting::vertical_sync, 1);
+    CHECK(!both.vertical_sync);
     geometry::set_switch(both, Setting::vertical_sync, true);
-    CHECK(both.hardware_acceleration && both.vertical_sync);
+    CHECK(both.hardware_acceleration == HardwareAcceleration::basic && both.vertical_sync);
+    // The column under each level, and the nearest end outside the strip.
+    const renderer::SourceRect strip_area{363, 264, 104, 16};
+    const auto strip = geometry::strip_of(Setting::hardware_acceleration);
+    CHECK(geometry::level_at(strip_area, strip, 364) == 0);
+    CHECK(geometry::level_at(strip_area, strip, 397) == 0);
+    CHECK(geometry::level_at(strip_area, strip, 398) == 1);
+    CHECK(geometry::level_at(strip_area, strip, 431) == 1);
+    CHECK(geometry::level_at(strip_area, strip, 432) == 2);
+    CHECK(geometry::level_at(strip_area, strip, 466) == 2);
+    CHECK(geometry::level_at(strip_area, strip, 0) == 0);
+    CHECK(geometry::level_at(strip_area, strip, 900) == 2);
 
-    // Both new switches take a click on either half and the keys.
+    // Vertical sync's switch takes a click on either half and the keys;
+    // Hardware acceleration's strip a click on each level.
     settings::Dialog dialog = graphics_page();
     dialog.scroll[static_cast<std::size_t>(Page::graphics)] = 80;
     const auto rows = geometry::open_rows(dialog).rows.rows;
@@ -1599,53 +1647,93 @@ void every_switch_reads_and_sets_through_one_table() {
     const auto off_half = [](const renderer::SourceRect& area) {
         return Point{area.x + 4, area.y + area.height / 2};
     };
+    const auto level_centre = [](const renderer::SourceRect& area, int32_t level) {
+        return Point{
+            area.x + 1 + level * geometry::acceleration_level_width +
+                geometry::acceleration_level_width / 2,
+            area.y + area.height / 2
+        };
+    };
     CHECK(click(dialog, on_half(rows[4].control_area)) == DialogAction::changed);
     CHECK(dialog.chosen.vertical_sync);
     CHECK(click(dialog, off_half(rows[4].control_area)) == DialogAction::changed);
     CHECK(!dialog.chosen.vertical_sync);
     CHECK(dialog.forget_renderer_failures == 0);
 
-    // Hardware acceleration passing from Off to On asks for the graphics
-    // card to be tried afresh, once each time; Off again keeps the count.
-    CHECK(click(dialog, on_half(rows[3].control_area)) == DialogAction::changed);
-    CHECK(dialog.chosen.hardware_acceleration);
+    // Hardware acceleration passing from Off to Basic or Full asks for the
+    // graphics card to be tried afresh, once each time; Basic to Full, and
+    // Off again, keep the count.
+    CHECK(click(dialog, level_centre(rows[3].control_area, 1)) == DialogAction::changed);
+    CHECK(dialog.chosen.hardware_acceleration == HardwareAcceleration::basic);
     CHECK(dialog.forget_renderer_failures == 1);
-    CHECK(click(dialog, on_half(rows[3].control_area)) == DialogAction::redraw);
+    CHECK(click(dialog, level_centre(rows[3].control_area, 1)) == DialogAction::redraw);
     CHECK(dialog.forget_renderer_failures == 1);
-    CHECK(click(dialog, off_half(rows[3].control_area)) == DialogAction::changed);
+    CHECK(click(dialog, level_centre(rows[3].control_area, 2)) == DialogAction::changed);
+    CHECK(dialog.chosen.hardware_acceleration == HardwareAcceleration::full);
     CHECK(dialog.forget_renderer_failures == 1);
-    // Through the keys: Tab to it, Right On, Left Off, Space On.
+    CHECK(click(dialog, level_centre(rows[3].control_area, 0)) == DialogAction::changed);
+    CHECK(dialog.chosen.hardware_acceleration == HardwareAcceleration::off);
+    CHECK(dialog.forget_renderer_failures == 1);
+    CHECK(click(dialog, level_centre(rows[3].control_area, 2)) == DialogAction::changed);
+    CHECK(dialog.chosen.hardware_acceleration == HardwareAcceleration::full);
+    CHECK(dialog.forget_renderer_failures == 2);
+    CHECK(click(dialog, level_centre(rows[3].control_area, 0)) == DialogAction::changed);
+    CHECK(dialog.chosen.hardware_acceleration == HardwareAcceleration::off);
+    // Through the keys: Tab to it, Right a level up to Full and no further,
+    // Left back down to Off, Space nothing on a strip.
     for (int32_t press = 0; press < 4; ++press)
         static_cast<void>(settings::dialog_key(dialog, DialogKey::tab));
     CHECK(dialog.focused == settings::first_row_control + 3);
     CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
-    CHECK(dialog.forget_renderer_failures == 2);
-    CHECK(settings::dialog_key(dialog, DialogKey::left) == DialogAction::changed);
-    CHECK(settings::dialog_key(dialog, DialogKey::space) == DialogAction::changed);
-    CHECK(dialog.chosen.hardware_acceleration);
+    CHECK(dialog.chosen.hardware_acceleration == HardwareAcceleration::basic);
     CHECK(dialog.forget_renderer_failures == 3);
+    CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
+    CHECK(dialog.chosen.hardware_acceleration == HardwareAcceleration::full);
+    CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::redraw);
+    CHECK(dialog.chosen.hardware_acceleration == HardwareAcceleration::full);
+    CHECK(dialog.forget_renderer_failures == 3);
+    CHECK(settings::dialog_key(dialog, DialogKey::left) == DialogAction::changed);
+    CHECK(dialog.chosen.hardware_acceleration == HardwareAcceleration::basic);
+    CHECK(settings::dialog_key(dialog, DialogKey::left) == DialogAction::changed);
+    CHECK(dialog.chosen.hardware_acceleration == HardwareAcceleration::off);
+    CHECK(settings::dialog_key(dialog, DialogKey::left) == DialogAction::redraw);
+    CHECK(settings::dialog_key(dialog, DialogKey::space) == DialogAction::none);
+    CHECK(dialog.chosen.hardware_acceleration == HardwareAcceleration::off);
+    CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
+    CHECK(dialog.forget_renderer_failures == 4);
     CHECK(settings::dialog_key(dialog, DialogKey::tab) == DialogAction::redraw);
     CHECK(settings::dialog_key(dialog, DialogKey::space) == DialogAction::changed);
     CHECK(dialog.chosen.vertical_sync);
-    CHECK(dialog.forget_renderer_failures == 3);
+    CHECK(dialog.forget_renderer_failures == 4);
     // Cancel puts both back.
     CHECK(settings::dialog_key(dialog, DialogKey::escape) == DialogAction::cancelled);
-    CHECK(!dialog.chosen.hardware_acceleration && !dialog.chosen.vertical_sync);
+    CHECK(
+        dialog.chosen.hardware_acceleration == HardwareAcceleration::off &&
+        !dialog.chosen.vertical_sync
+    );
 
     // Restore defaults with the player's own defaults, Hardware acceleration
-    // On: every press asks once more, and reports a change though none moved.
+    // Full: every press asks once more, and reports a change though none
+    // moved.
     settings::EngineSettings own{};
-    own.hardware_acceleration = true;
+    own.hardware_acceleration = HardwareAcceleration::full;
     settings::open_dialog(dialog, own, own, {}, "v0.2.0", Page::graphics);
     CHECK(click(dialog, centre(geometry::restore_button)) == DialogAction::changed);
     CHECK(dialog.chosen == own);
     CHECK(dialog.forget_renderer_failures == 1);
     CHECK(click(dialog, centre(geometry::restore_button)) == DialogAction::changed);
     CHECK(dialog.forget_renderer_failures == 2);
-    // From Off to its default On, Restore defaults asks once.
+    // From Off to its default Full, Restore defaults asks once; from Basic
+    // it asks too, since each press has the card tried afresh.
     settings::open_dialog(dialog, {}, own, {}, "v0.2.0", Page::graphics);
     CHECK(click(dialog, centre(geometry::restore_button)) == DialogAction::changed);
-    CHECK(dialog.chosen.hardware_acceleration);
+    CHECK(dialog.chosen.hardware_acceleration == HardwareAcceleration::full);
+    CHECK(dialog.forget_renderer_failures == 1);
+    settings::EngineSettings basic{};
+    basic.hardware_acceleration = HardwareAcceleration::basic;
+    settings::open_dialog(dialog, basic, own, {}, "v0.2.0", Page::graphics);
+    CHECK(click(dialog, centre(geometry::restore_button)) == DialogAction::changed);
+    CHECK(dialog.chosen.hardware_acceleration == HardwareAcceleration::full);
     CHECK(dialog.forget_renderer_failures == 1);
 }
 
@@ -1671,14 +1759,14 @@ void the_new_rows_lock_in_their_own_forms() {
     state.shared_game = true;
     CHECK(settings::settings_locks(state).vertical_sync == Lock::unavailable);
 
-    // Hardware acceleration locked: its lock where the switch was, no switch,
+    // Hardware acceleration locked: its lock where the strip was, no strip,
     // its label 153 wide. Vertical sync locked: its switch kept, the lock 8
     // columns left of it and its label 93 wide.
     settings::Locks locks{};
     locks.hardware_acceleration = Lock::unavailable;
     locks.vertical_sync = Lock::unavailable;
     settings::EngineSettings current{};
-    current.hardware_acceleration = true;
+    current.hardware_acceleration = HardwareAcceleration::basic;
     current.vertical_sync = true;
     settings::Dialog dialog =
         graphics_page(current, locks, {settings::AccelerationState::no_usable_card, {}, false});
@@ -1692,7 +1780,7 @@ void the_new_rows_lock_in_their_own_forms() {
     CHECK(geometry::open_rows(dialog).limit == 80);
 
     // At the end: both lock texts, the status, the kept switch's captions
-    // with no control, and no control for either row.
+    // with no control, none of the strip's, and no control for either row.
     dialog.scroll[static_cast<std::size_t>(Page::graphics)] = 80;
     const auto parts = settings::dialog_layout(dialog);
     int32_t lock_texts = 0;
@@ -1706,8 +1794,10 @@ void the_new_rows_lock_in_their_own_forms() {
         find_part(parts, "Not in use: no usable graphics card was found.", settings::no_control) !=
         nullptr
     );
-    // A press where either switch is, and every key, leaves them.
+    CHECK(find_part(parts, "Basic", settings::no_control) == nullptr);
+    // A press where either control is, and every key, leaves them.
     CHECK(click(dialog, {460, 190}) == DialogAction::none);
+    CHECK(click(dialog, {380, 190}) == DialogAction::none);
     CHECK(click(dialog, {460, 250}) == DialogAction::none);
     CHECK(dialog.chosen == current);
     for (const int32_t expected :
@@ -1720,10 +1810,13 @@ void the_new_rows_lock_in_their_own_forms() {
     }
     // Restore defaults keeps both locked values.
     CHECK(click(dialog, centre(geometry::restore_button)) == DialogAction::changed);
-    CHECK(dialog.chosen.hardware_acceleration && dialog.chosen.vertical_sync);
+    CHECK(
+        dialog.chosen.hardware_acceleration == HardwareAcceleration::basic &&
+        dialog.chosen.vertical_sync
+    );
 
     // Under a flag the lock says so, and in a shared game Vertical sync is
-    // locked during the game while Hardware acceleration can still be switched.
+    // locked during the game while Hardware acceleration can still be set.
     settings::GameState flagged{true, true, false, false};
     flagged.renderer_from_command_line = true;
     settings::Dialog under_flag = graphics_page({}, settings::settings_locks(flagged));
@@ -1741,7 +1834,12 @@ void the_new_rows_lock_in_their_own_forms() {
         click(shared, {shared_rows[3].control_area.x + 48, shared_rows[3].control_area.y + 8}) ==
         DialogAction::changed
     );
-    CHECK(shared.chosen.hardware_acceleration);
+    CHECK(shared.chosen.hardware_acceleration == HardwareAcceleration::basic);
+    CHECK(
+        click(shared, {shared_rows[3].control_area.x + 90, shared_rows[3].control_area.y + 8}) ==
+        DialogAction::changed
+    );
+    CHECK(shared.chosen.hardware_acceleration == HardwareAcceleration::full);
 }
 
 void hardware_acceleration_shows_its_status() {
@@ -1756,7 +1854,7 @@ void hardware_acceleration_shows_its_status() {
 
     constexpr std::string_view off = "Off: the processor draws and scales the view.";
     constexpr std::string_view processor = "The processor draws and scales the view.";
-    constexpr std::string_view retry = "Switch it off and on, or restore defaults.";
+    constexpr std::string_view retry = "Set it to Off and back, or restore defaults.";
     constexpr std::string_view needs_memory = "Not in use: it needs at least 2 GB of memory.";
     const std::array<Expected, 16> fixed{{
         {AccelerationState::off_driver_skipped, off, "A failed graphics driver is skipped."},
@@ -1764,7 +1862,7 @@ void hardware_acceleration_shows_its_status() {
          needs_memory,
          "A failed graphics driver is skipped."},
         {AccelerationState::needs_memory, needs_memory, processor},
-        {AccelerationState::off_by_setting, off, "On lets the graphics card scale it evenly."},
+        {AccelerationState::off_by_setting, off, "Basic lets the graphics card scale it evenly."},
         {AccelerationState::off_by_command_line, off, "For this run only. The setting is kept."},
         {AccelerationState::environment_driver,
          "Not in use: the environment names a driver.",
@@ -1773,7 +1871,7 @@ void hardware_acceleration_shows_its_status() {
          "Not in use: there is too little memory.",
          processor},
         {AccelerationState::waiting_for_game_end,
-         "Off for this game: in a shared game, On",
+         "Off for this game: in a shared game, Basic",
          "takes effect from the next game."},
         {AccelerationState::engine_error, "Not in use: an error stopped it for this run.", retry},
         {AccelerationState::driver_failed, "Not in use: the graphics driver failed.", retry},
@@ -1792,24 +1890,48 @@ void hardware_acceleration_shows_its_status() {
     }};
     for (const auto& expected : fixed) {
         for (const auto& status : acceleration_statuses()) {
-            if (status.state != expected.state || status.replay)
+            // The wait names the level asked for: Basic here, Full below.
+            if (status.state != expected.state || status.replay ||
+                status.asked == HardwareAcceleration::full)
                 continue;
             CHECK(geometry::status_line(status, 0) == expected.first);
             CHECK(geometry::status_line(status, 1) == expected.second);
             CHECK(geometry::status_line(status, 2).empty());
         }
     }
-    // In a replay the wait names it.
+    // In a replay the wait names it, and Full where Full was asked for.
     settings::AccelerationStatus replay{AccelerationState::waiting_for_game_end, {}, true};
-    CHECK(geometry::status_line(replay, 0) == "Off for this game: in a replay, On");
+    CHECK(geometry::status_line(replay, 0) == "Off for this game: in a replay, Basic");
     CHECK(geometry::status_line(replay, 1) == "takes effect from the next game.");
-    // While it is in use the second line says what it does here.
-    const std::array<std::pair<AccelerationState, std::string_view>, 4> in_use{{
-        {AccelerationState::in_use_on_another_driver, "In use, on another driver: one failed."},
+    settings::AccelerationStatus full_wait{
+        AccelerationState::waiting_for_game_end, {}, false, HardwareAcceleration::full
+    };
+    CHECK(geometry::status_line(full_wait, 0) == "Off for this game: in a shared game, Full");
+    CHECK(geometry::status_line(full_wait, 1) == "takes effect from the next game.");
+    full_wait.replay = true;
+    CHECK(geometry::status_line(full_wait, 0) == "Off for this game: in a replay, Full");
+    CHECK(geometry::status_line(full_wait, 1) == "takes effect from the next game.");
+    // Every other state reads the same whichever level was asked for.
+    for (const auto& status : acceleration_statuses()) {
+        if (status.state == AccelerationState::waiting_for_game_end)
+            continue;
+        settings::AccelerationStatus other = status;
+        other.asked = HardwareAcceleration::off;
+        CHECK(geometry::status_line(status, 0) == geometry::status_line(other, 0));
+        CHECK(geometry::status_line(status, 1) == geometry::status_line(other, 1));
+    }
+    // While it is in use the first line names Basic, the tier that runs, and
+    // the second says what it does here; Full, which the game cannot draw
+    // yet, says Basic is in use in its place.
+    const std::array<std::pair<AccelerationState, std::string_view>, 5> in_use{{
+        {AccelerationState::full_not_built, "Full is not in this build: Basic is in use."},
+        {AccelerationState::in_use_on_another_driver,
+         "Basic in use, on another driver: one failed."},
         {AccelerationState::in_use_less_smoothing,
-         "In use, with less smoothing: frames were slow."},
-        {AccelerationState::in_use_no_smoothing, "In use; no smoothing when zoomed out here."},
-        {AccelerationState::in_use, "In use."},
+         "Basic in use, with less smoothing: frames were slow."},
+        {AccelerationState::in_use_no_smoothing,
+         "Basic in use; no smoothing when zoomed out here."},
+        {AccelerationState::in_use, "Basic in use."},
     }};
     const std::array<std::pair<AccelerationReach, std::string_view>, 5> reaches{{
         {AccelerationReach::menus, "It scales the menus and the interface evenly."},
@@ -1854,7 +1976,7 @@ void hardware_acceleration_shows_its_status() {
         ) == DialogAction::redraw
     );
     const auto parts = settings::dialog_layout(dialog);
-    CHECK(find_part(parts, "In use.", settings::no_control) != nullptr);
+    CHECK(find_part(parts, "Basic in use.", settings::no_control) != nullptr);
     CHECK(
         find_part(
             parts, "It scales evenly and smooths the zoomed-out view.", settings::no_control
@@ -1868,8 +1990,44 @@ void hardware_acceleration_shows_its_status() {
     CHECK(
         find_part(
             settings::dialog_layout(dialog),
-            "Off for this game: in a replay, On",
+            "Off for this game: in a replay, Basic",
             settings::no_control
+        ) != nullptr
+    );
+    CHECK(
+        settings::set_acceleration_status(
+            dialog,
+            {AccelerationState::waiting_for_game_end,
+             AccelerationReach::zoomed_out,
+             true,
+             HardwareAcceleration::full}
+        ) == DialogAction::redraw
+    );
+    CHECK(
+        find_part(
+            settings::dialog_layout(dialog),
+            "Off for this game: in a replay, Full",
+            settings::no_control
+        ) != nullptr
+    );
+    CHECK(
+        settings::set_acceleration_status(
+            dialog,
+            {AccelerationState::full_not_built,
+             AccelerationReach::menus,
+             false,
+             HardwareAcceleration::full}
+        ) == DialogAction::redraw
+    );
+    const auto full_parts = settings::dialog_layout(dialog);
+    CHECK(
+        find_part(
+            full_parts, "Full is not in this build: Basic is in use.", settings::no_control
+        ) != nullptr
+    );
+    CHECK(
+        find_part(
+            full_parts, "It scales the menus and the interface evenly.", settings::no_control
         ) != nullptr
     );
 }
@@ -2110,25 +2268,28 @@ void the_dialog_draws_the_scroll_bar_and_clips_the_rows() {
 
 void the_graphics_page_draws_its_locked_rows() {
     const auto fonts = block_fonts();
-    // At the top: the scroll bar, Hardware acceleration's switch whole and
-    // its status cut at 289.
+    // At the top: the scroll bar, Hardware acceleration's strip whole, Off
+    // chosen with the accent and Basic in the well, and its status cut at
+    // 289.
     settings::Dialog top =
         graphics_page({}, {}, {settings::AccelerationState::off_by_setting, {}, false});
     Canvas at_top = blank(settings::dialog_width, settings::dialog_height);
     settings::draw_dialog(at_top.surface, {0, 0, 1}, top, fonts);
     CHECK(at_top.at(473, 100) == kControlHover);
-    CHECK(at_top.at(418, 270) == kOffSelected);
+    CHECK(at_top.at(366, 266) == kAccent);
+    CHECK(at_top.at(400, 266) == kWell);
+    CHECK(at_top.at(434, 266) == kWell);
     CHECK(at_top.at(159, 284) == kHint);
     CHECK(at_top.at(159, 291) != kHint);
 
     // At the end, both locked Not available here: Hardware acceleration's
-    // label line faded and its status at full strength, no switch; Vertical
+    // label line faded and its status at full strength, no strip; Vertical
     // sync faded whole, its switch kept and On without the accent.
     settings::Locks locks{};
     locks.hardware_acceleration = Lock::unavailable;
     locks.vertical_sync = Lock::unavailable;
     settings::EngineSettings current{};
-    current.hardware_acceleration = true;
+    current.hardware_acceleration = HardwareAcceleration::full;
     current.vertical_sync = true;
     settings::Dialog dialog =
         graphics_page(current, locks, {settings::AccelerationState::no_usable_card, {}, false});
@@ -2138,19 +2299,21 @@ void the_graphics_page_draws_its_locked_rows() {
     CHECK(canvas.at(159, 190) == faded(kText));          // its label
     CHECK(canvas.at(159, 205) == kHint);                 // its first status line
     CHECK(canvas.at(159, 217) == kHint);                 // its second
-    CHECK(canvas.at(445, 185) == kPanel);                // no switch: neither its well
+    CHECK(canvas.at(445, 185) == kPanel);                // no strip: neither its well
     CHECK(canvas.at(445, 199) == kPanel);                // nor its border
     CHECK(canvas.at(159, 249) == faded(kText));          // Vertical sync's label
     CHECK(canvas.at(159, 264) == faded(kHint));          // its hint
     CHECK(canvas.at(444, 245) == faded(kControlHover));  // its On, without the accent
     CHECK(canvas.at(415, 250) == faded(kControlBorder)); // its switch's border
-    // Unlocked and On, both switches show the accent.
+    // Unlocked, Full and On show the accent, Full's level alone of the strip.
     settings::Dialog open =
         graphics_page(current, {}, {settings::AccelerationState::in_use, {}, false});
     open.scroll[static_cast<std::size_t>(Page::graphics)] = 80;
     Canvas unlocked = blank(settings::dialog_width, settings::dialog_height);
     settings::draw_dialog(unlocked.surface, {0, 0, 1}, open, fonts);
-    CHECK(unlocked.at(444, 186) == kAccent);
+    CHECK(unlocked.at(434, 186) == kAccent);
+    CHECK(unlocked.at(400, 186) == kWell);
+    CHECK(unlocked.at(366, 186) == kWell);
     CHECK(unlocked.at(444, 245) == kAccent);
 }
 
@@ -2234,10 +2397,19 @@ void fonts_load_and_every_text_fits_its_place() {
     for (const std::string_view text :
          {"Not in use: the game cannot save its files.",
           "Not in use: it needs at least 2 GB of memory.",
+          "Full is not in this build: Basic is in use.",
+          "Basic in use, on another driver: one failed.",
+          "Basic in use, with less smoothing: frames were slow.",
+          "Basic in use; no smoothing when zoomed out here.",
+          "Basic in use.",
+          "Off for this game: in a shared game, Basic",
           "It smooths the zoomed-out view.",
           "Here the view is drawn as when it is off.",
           "Each frame waits for the display: no tearing.",
-          "Not available here"})
+          "Not available here",
+          "Off",
+          "Basic",
+          "Full"})
         std::cout << "'" << text << "' is " << small_width(text) << " columns\n";
     // The Graphics page at every offset, under every lock and with every
     // status: every text it lists fits its place.

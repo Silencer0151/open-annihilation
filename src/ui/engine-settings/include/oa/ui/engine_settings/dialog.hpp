@@ -64,7 +64,8 @@ enum class Setting : uint8_t {
     anti_aliasing,     ///< Enhanced anti-aliasing: a strip of levels
     screen_size,       ///< Screen size: a slider
     frame_stats,       ///< Show performance statistics: a switch
-    /// Hardware acceleration: a switch whose two hint lines are its status
+    /// Hardware acceleration: a strip of Off, Basic and Full whose two hint
+    /// lines are its status
     hardware_acceleration,
     vertical_sync, ///< Vertical sync: a switch
 };
@@ -132,35 +133,41 @@ enum class DialogKey : uint8_t {
 
 /// What Hardware acceleration's status says: whether the graphics card
 /// scales the frames, and why not when it does not. The states keep the
-/// order the host tests them in; the first that applies is shown.
+/// order the host tests them in; the first that applies is shown. Basic or
+/// Full, by the setting or a flag, asks for the graphics card; Off does not.
 enum class AccelerationState : uint8_t {
     /// Off, by the setting or --no-hardware-acceleration, and a failed
     /// graphics driver was passed over at this start.
     off_driver_skipped,
-    /// On, but the machine has under 2 GiB of memory, or does not say, and a
-    /// failed graphics driver was passed over at this start.
+    /// Basic or Full, but the machine has under 2 GiB of memory, or does
+    /// not say, and a failed graphics driver was passed over at this start.
     needs_memory_driver_skipped,
     /// Not in use: the machine has under 2 GiB of memory, or does not say,
     /// whatever the setting or the flags.
     needs_memory,
     off_by_setting,      ///< Off, by the setting
-    off_by_command_line, ///< Off, by --no-hardware-acceleration
-    /// On, but the environment names a render driver, or the video driver
-    /// draws no window, so the processor scales the frames.
+    off_by_command_line, ///< Off, by --no-hardware-acceleration or --hardware-acceleration=off
+    /// Basic or Full, but the environment names a render driver, or the
+    /// video driver draws no window, so the processor scales the frames.
     environment_driver,
-    /// On, but dropped in this run when the machine ran short of memory.
+    /// Basic or Full, but dropped in this run when the machine ran short of
+    /// memory.
     too_little_memory,
-    /// On, waiting for a shared game or a replay to end: in one, On takes
-    /// effect from the next game (AccelerationStatus::replay says which).
+    /// Basic or Full, waiting for a shared game or a replay to end: in one,
+    /// either takes effect from the next game (AccelerationStatus::replay
+    /// says which, and AccelerationStatus::asked which level).
     waiting_for_game_end,
-    engine_error,             ///< On, but an error stopped it for this run
-    driver_failed,            ///< On, but the graphics driver failed, in this run or before
-    game_stopped,             ///< On, but the game stopped while using it before
-    no_usable_card,           ///< On, but no usable graphics card was found
-    lacks_feature,            ///< On, but the graphics card lacks something it needs
-    cannot_save,              ///< On, but the game cannot save the files that guard trying it
-    slow_frames,              ///< On, but frames were too slow with it in this run
-    next_start,               ///< On, from the next start
+    engine_error,   ///< Basic or Full, but an error stopped it for this run
+    driver_failed,  ///< Basic or Full, but the graphics driver failed, in this run or before
+    game_stopped,   ///< Basic or Full, but the game stopped while using it before
+    no_usable_card, ///< Basic or Full, but no usable graphics card was found
+    lacks_feature,  ///< Basic or Full, but the graphics card lacks something it needs
+    /// Basic or Full, but the game cannot save the files that guard trying it.
+    cannot_save,
+    slow_frames, ///< Basic or Full, but frames were too slow with it in this run
+    next_start,  ///< Basic or Full, from the next start
+    /// Full, which the game cannot draw yet: Basic is in use in its place.
+    full_not_built,
     in_use_on_another_driver, ///< In use, on another graphics driver: one failed
     in_use_less_smoothing,    ///< In use, with less smoothing: frames were slow
     in_use_no_smoothing,      ///< In use, with no smoothing when zoomed out on this machine
@@ -186,6 +193,9 @@ struct AccelerationStatus {
     /// The match AccelerationState::waiting_for_game_end waits for replays a
     /// recording rather than being played with other machines.
     bool replay{};
+    /// The level asked for, by the setting or a flag, which
+    /// AccelerationState::waiting_for_game_end names.
+    HardwareAcceleration asked{HardwareAcceleration::off};
 
     friend bool operator==(const AccelerationStatus&, const AccelerationStatus&) = default;
 };
@@ -222,8 +232,9 @@ struct SectionHooks {
     /// null keeps that one.
     Lock (*lock)(void* context, Setting setting, Lock lock){};
     /// Tells whether a setting's hint lines are its status: a locked switch
-    /// whose hint lines are its status shows its lock where the switch was,
-    /// and only its label line fades. Null leaves it as the dialog has it.
+    /// or strip whose hint lines are its status shows its lock where its
+    /// control was, and only its label line fades. Null leaves it as the
+    /// dialog has it.
     bool (*hint_is_status)(void* context, Setting setting){};
 };
 
@@ -242,8 +253,8 @@ struct Dialog {
     bool restored{};                   ///< Restore defaults was pressed
     /// The times the player asked, since the dialog opened, for the graphics
     /// card to be tried afresh: each press of Restore defaults, and each
-    /// time Hardware acceleration passed from Off to On. The count stays if
-    /// the switch goes back Off.
+    /// time Hardware acceleration passed from Off to Basic or Full. The
+    /// count stays if the row goes back to Off.
     uint32_t forget_renderer_failures{};
     int32_t hovered{no_control}; ///< the control under the pointer
     int32_t pressed{no_control}; ///< the control a held press is on

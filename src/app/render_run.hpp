@@ -30,7 +30,7 @@ struct AcceleratedWatch {
     render_policy::ScaleStepDown step_down{}; ///< fed the steady match frames
     /// The ladder has moved in the run, by slow frames or by a buffer the
     /// memory guard refused: each later switch-on draws at its rung, which
-    /// never rises again until Hardware acceleration is switched Off then On
+    /// never rises again until Hardware acceleration is set to Off and back
     /// or Restore defaults asks for a fresh try. The game reads and writes
     /// the renderer records but not their scale-level key, which is
     /// reserved for the rung reached, so the rung lasts for this run alone.

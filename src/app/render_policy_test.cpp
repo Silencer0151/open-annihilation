@@ -218,7 +218,7 @@ TierInputs accelerated_run() {
     inputs.renderer = true;
     inputs.memory = 8 * gibibyte;
     inputs.players_own_profile = true;
-    inputs.setting_on = true;
+    inputs.setting = HardwareAcceleration::basic;
     inputs.capability = Capability::capable;
     inputs.function_test = FunctionTest::passed;
     return inputs;
@@ -275,7 +275,7 @@ void test_decide_by_table() {
         {"under 2 GiB, flag on",
          [](TierInputs& i) {
              i.memory = gibibyte;
-             i.flag = AccelerationFlag::on;
+             i.flag = AccelerationFlag::full;
          },
          RenderTier::standard,
          TierReason::memory},
@@ -289,7 +289,7 @@ void test_decide_by_table() {
         {"memory not reported, flag on and forced",
          [](TierInputs& i) {
              i.memory = 0;
-             i.flag = AccelerationFlag::on;
+             i.flag = AccelerationFlag::full;
              i.force_capable = true;
          },
          RenderTier::standard,
@@ -333,7 +333,7 @@ void test_decide_by_table() {
         {"environment, flag on",
          [](TierInputs& i) {
              i.render_driver_named = true;
-             i.flag = AccelerationFlag::on;
+             i.flag = AccelerationFlag::full;
          },
          RenderTier::accelerated,
          TierReason::accelerated},
@@ -351,24 +351,49 @@ void test_decide_by_table() {
         {"dummy video, flag on",
          [](TierInputs& i) {
              i.virtual_video_driver = true;
-             i.flag = AccelerationFlag::on;
+             i.flag = AccelerationFlag::full;
          },
          RenderTier::accelerated,
          TierReason::accelerated},
         {"setting off",
-         [](TierInputs& i) { i.setting_on = false; },
+         [](TierInputs& i) { i.setting = HardwareAcceleration::off; },
          RenderTier::standard,
          TierReason::setting_off},
+        {"setting full, drawn as basic",
+         [](TierInputs& i) { i.setting = HardwareAcceleration::full; },
+         RenderTier::accelerated,
+         TierReason::accelerated},
         {"setting off, flag on",
          [](TierInputs& i) {
-             i.setting_on = false;
-             i.flag = AccelerationFlag::on;
+             i.setting = HardwareAcceleration::off;
+             i.flag = AccelerationFlag::full;
+         },
+         RenderTier::accelerated,
+         TierReason::accelerated},
+        {"setting off, flag basic",
+         [](TierInputs& i) {
+             i.setting = HardwareAcceleration::off;
+             i.flag = AccelerationFlag::basic;
+         },
+         RenderTier::accelerated,
+         TierReason::accelerated},
+        {"setting full, flag off",
+         [](TierInputs& i) {
+             i.setting = HardwareAcceleration::full;
+             i.flag = AccelerationFlag::off;
+         },
+         RenderTier::standard,
+         TierReason::flag_off},
+        {"environment, flag basic",
+         [](TierInputs& i) {
+             i.render_driver_named = true;
+             i.flag = AccelerationFlag::basic;
          },
          RenderTier::accelerated,
          TierReason::accelerated},
         {"setting off, forced",
          [](TierInputs& i) {
-             i.setting_on = false;
+             i.setting = HardwareAcceleration::off;
              i.force_capable = true;
          },
          RenderTier::standard,
@@ -380,7 +405,7 @@ void test_decide_by_table() {
         {"not capable, flag on",
          [](TierInputs& i) {
              i.capability = Capability::software_rasteriser;
-             i.flag = AccelerationFlag::on;
+             i.flag = AccelerationFlag::full;
          },
          RenderTier::standard,
          TierReason::not_capable},
@@ -421,7 +446,7 @@ void test_decide_by_table() {
          [](TierInputs& i) {
              i.function_test = FunctionTest::trial_unwritten;
              i.render_driver_named = true;
-             i.flag = AccelerationFlag::on;
+             i.flag = AccelerationFlag::full;
          },
          RenderTier::standard,
          TierReason::function_test_due},
@@ -443,7 +468,7 @@ void test_decide_by_table() {
         {"accelerated-unusable, flag on",
          [](TierInputs& i) {
              i.accelerated_unusable_record = true;
-             i.flag = AccelerationFlag::on;
+             i.flag = AccelerationFlag::full;
          },
          RenderTier::accelerated,
          TierReason::accelerated},
@@ -481,7 +506,7 @@ void test_decide_by_table() {
         {"dropped, flag on",
          [](TierInputs& i) {
              i.drop = Drop::memory;
-             i.flag = AccelerationFlag::on;
+             i.flag = AccelerationFlag::full;
          },
          RenderTier::standard,
          TierReason::dropped},
@@ -521,18 +546,19 @@ void test_decide_by_table() {
 }
 
 /// The conditions for the accelerated tier, written out again apart from
-/// the code under test.
+/// the code under test. Basic and Full both ask for it: the game draws
+/// Full as Basic until the battlefield is drawn on the graphics card.
 ///
 /// @param in the inputs
 /// @param function_test the function test's state to judge them with
 /// @return true when every condition holds
 bool accelerated_by_the_rules(const TierInputs& in, FunctionTest function_test) {
-    const bool flag_on = in.flag == AccelerationFlag::on;
+    const bool flag_on = in.flag == AccelerationFlag::basic || in.flag == AccelerationFlag::full;
     const bool on_disk = in.players_own_profile && !in.render_driver_named;
     return in.renderer && !in.director_frame && in.memory >= 1792 * mebibyte &&
            in.flag != AccelerationFlag::off &&
            (flag_on || in.force_capable || (!in.render_driver_named && !in.virtual_video_driver)) &&
-           (in.setting_on || flag_on) &&
+           (in.setting != HardwareAcceleration::off || flag_on) &&
            (in.capability == Capability::capable || in.force_capable) &&
            function_test == FunctionTest::passed &&
            !(in.records_unreadable_after_unclean_start && on_disk) &&
@@ -542,7 +568,13 @@ bool accelerated_by_the_rules(const TierInputs& in, FunctionTest function_test) 
 
 void test_decide_every_combination() {
     const AccelerationFlag flags[] = {
-        AccelerationFlag::none, AccelerationFlag::on, AccelerationFlag::off
+        AccelerationFlag::none,
+        AccelerationFlag::off,
+        AccelerationFlag::basic,
+        AccelerationFlag::full
+    };
+    const HardwareAcceleration settings[] = {
+        HardwareAcceleration::off, HardwareAcceleration::basic, HardwareAcceleration::full
     };
     const FunctionTest tests[] = {
         FunctionTest::not_run,
@@ -560,64 +592,66 @@ void test_decide_every_combination() {
     uint32_t accelerated = 0;
     uint32_t tests_allowed_under_2_gib = 0;
     uint32_t mismatches = 0;
-    for (uint32_t bits = 0; bits < (1u << 12); ++bits) {
+    for (uint32_t bits = 0; bits < (1u << 11); ++bits) {
         for (const AccelerationFlag flag : flags) {
-            for (const FunctionTest test : tests) {
-                for (const SharedMatchGate& gate : gates) {
-                    for (const uint64_t memory : memories) {
-                        TierInputs in;
-                        in.memory = memory;
-                        in.renderer = (bits & 1u) != 0;
-                        in.director_frame = (bits & 2u) != 0;
-                        in.force_capable = (bits & 4u) != 0;
-                        in.render_driver_named = (bits & 8u) != 0;
-                        in.virtual_video_driver = (bits & 16u) != 0;
-                        in.players_own_profile = (bits & 32u) != 0;
-                        in.setting_on = (bits & 64u) != 0;
-                        in.capability = (bits & 128u) != 0 ? Capability::capable
-                                                           : Capability::software_renderer;
-                        in.accelerated_unusable_record = (bits & 256u) != 0;
-                        in.records_unreadable_after_unclean_start = (bits & 512u) != 0;
-                        in.drop = (bits & 1024u) != 0 ? Drop::memory : Drop::none;
-                        in.device_lost = (bits & 2048u) != 0;
-                        in.flag = flag;
-                        in.function_test = test;
-                        in.match = gate;
-                        ++combinations;
-                        const TierDecision decision = decide_render_tier(in);
-                        const bool expected = accelerated_by_the_rules(in, test);
-                        if ((decision.tier == RenderTier::accelerated) != expected)
-                            ++mismatches;
-                        if ((decision.reason == TierReason::accelerated) !=
-                            (decision.tier == RenderTier::accelerated))
-                            ++mismatches;
-                        // The function test may run exactly where the tier would
-                        // be accelerated once it passed, and only when it has not
-                        // run, or skipped a trial that lives in memory and so
-                        // cannot fail to be written.
-                        const bool untested =
-                            test == FunctionTest::not_run ||
-                            (test == FunctionTest::trial_unwritten &&
-                             !records_on_disk(in.players_own_profile, in.render_driver_named));
-                        if (function_test_may_run(in) !=
-                            (untested && accelerated_by_the_rules(in, FunctionTest::passed)))
-                            ++mismatches;
-                        // Under 2 GiB, or with memory not reported, the tier is
-                        // standard for the memory alone, and the function test
-                        // never runs.
-                        if (memory < 1792 * mebibyte && in.renderer && !in.director_frame &&
-                            decide_render_tier(in).reason != TierReason::memory)
-                            ++mismatches;
-                        if (memory < 1792 * mebibyte && function_test_may_run(in))
-                            ++tests_allowed_under_2_gib;
-                        if (expected)
-                            ++accelerated;
+            for (const HardwareAcceleration setting : settings) {
+                for (const FunctionTest test : tests) {
+                    for (const SharedMatchGate& gate : gates) {
+                        for (const uint64_t memory : memories) {
+                            TierInputs in;
+                            in.memory = memory;
+                            in.renderer = (bits & 1u) != 0;
+                            in.director_frame = (bits & 2u) != 0;
+                            in.force_capable = (bits & 4u) != 0;
+                            in.render_driver_named = (bits & 8u) != 0;
+                            in.virtual_video_driver = (bits & 16u) != 0;
+                            in.players_own_profile = (bits & 32u) != 0;
+                            in.setting = setting;
+                            in.capability = (bits & 64u) != 0 ? Capability::capable
+                                                              : Capability::software_renderer;
+                            in.accelerated_unusable_record = (bits & 128u) != 0;
+                            in.records_unreadable_after_unclean_start = (bits & 256u) != 0;
+                            in.drop = (bits & 512u) != 0 ? Drop::memory : Drop::none;
+                            in.device_lost = (bits & 1024u) != 0;
+                            in.flag = flag;
+                            in.function_test = test;
+                            in.match = gate;
+                            ++combinations;
+                            const TierDecision decision = decide_render_tier(in);
+                            const bool expected = accelerated_by_the_rules(in, test);
+                            if ((decision.tier == RenderTier::accelerated) != expected)
+                                ++mismatches;
+                            if ((decision.reason == TierReason::accelerated) !=
+                                (decision.tier == RenderTier::accelerated))
+                                ++mismatches;
+                            // The function test may run exactly where the tier would
+                            // be accelerated once it passed, and only when it has not
+                            // run, or skipped a trial that lives in memory and so
+                            // cannot fail to be written.
+                            const bool untested =
+                                test == FunctionTest::not_run ||
+                                (test == FunctionTest::trial_unwritten &&
+                                 !records_on_disk(in.players_own_profile, in.render_driver_named));
+                            if (function_test_may_run(in) !=
+                                (untested && accelerated_by_the_rules(in, FunctionTest::passed)))
+                                ++mismatches;
+                            // Under 2 GiB, or with memory not reported, the tier is
+                            // standard for the memory alone, and the function test
+                            // never runs.
+                            if (memory < 1792 * mebibyte && in.renderer && !in.director_frame &&
+                                decide_render_tier(in).reason != TierReason::memory)
+                                ++mismatches;
+                            if (memory < 1792 * mebibyte && function_test_may_run(in))
+                                ++tests_allowed_under_2_gib;
+                            if (expected)
+                                ++accelerated;
+                        }
                     }
                 }
             }
         }
     }
-    OA_CHECK(combinations == (1u << 12) * 3 * 4 * 3 * 4);
+    OA_CHECK(combinations == (1u << 11) * 4 * 3 * 4 * 3 * 4);
     OA_CHECK(mismatches == 0);
     OA_CHECK(tests_allowed_under_2_gib == 0);
     OA_CHECK(accelerated > 0);
@@ -645,7 +679,7 @@ void test_function_test_gate() {
         {"software rasteriser, flag on",
          [](TierInputs& i) {
              i.capability = Capability::software_rasteriser;
-             i.flag = AccelerationFlag::on;
+             i.flag = AccelerationFlag::full;
          },
          false},
         {"virtual adapter",
@@ -663,14 +697,15 @@ void test_function_test_gate() {
         {"environment, flag on",
          [](TierInputs& i) {
              i.render_driver_named = true;
-             i.flag = AccelerationFlag::on;
+             i.flag = AccelerationFlag::full;
          },
          true},
         {"dummy video", [](TierInputs& i) { i.virtual_video_driver = true; }, false},
-        {"setting off", [](TierInputs& i) { i.setting_on = false; }, false},
+        {"setting off", [](TierInputs& i) { i.setting = HardwareAcceleration::off; }, false},
+        {"setting full", [](TierInputs& i) { i.setting = HardwareAcceleration::full; }, true},
         {"setting off, named file",
          [](TierInputs& i) {
-             i.setting_on = false;
+             i.setting = HardwareAcceleration::off;
              i.players_own_profile = false;
          },
          false},
@@ -681,7 +716,7 @@ void test_function_test_gate() {
         {"accelerated-unusable, flag on",
          [](TierInputs& i) {
              i.accelerated_unusable_record = true;
-             i.flag = AccelerationFlag::on;
+             i.flag = AccelerationFlag::full;
          },
          true},
         {"shared game",
@@ -717,7 +752,7 @@ void test_function_test_gate() {
         {"under 2 GiB, flag on",
          [](TierInputs& i) {
              i.memory = gibibyte;
-             i.flag = AccelerationFlag::on;
+             i.flag = AccelerationFlag::full;
          },
          false},
         {"under 2 GiB, forced",
@@ -731,7 +766,7 @@ void test_function_test_gate() {
          [](TierInputs& i) {
              i.memory = 0;
              i.render_driver_named = true;
-             i.flag = AccelerationFlag::on;
+             i.flag = AccelerationFlag::full;
              i.force_capable = true;
          },
          false},
@@ -760,11 +795,11 @@ void test_shared_match_gate() {
     );
     OA_CHECK(inputs.match.kind == MatchKind::shared_game);
     OA_CHECK(decide_render_tier(inputs).tier == RenderTier::accelerated);
-    inputs.setting_on = false;
+    inputs.setting = HardwareAcceleration::off;
     TierDecision decision = decide_render_tier(inputs);
     OA_CHECK(decision.reason == TierReason::setting_off);
     note_match_frame(inputs.match, decision.tier, false);
-    inputs.setting_on = true;
+    inputs.setting = HardwareAcceleration::basic;
     decision = decide_render_tier(inputs);
     OA_CHECK(decision.tier == RenderTier::standard);
     OA_CHECK(decision.reason == TierReason::waiting_for_match_end);
@@ -795,7 +830,7 @@ void test_shared_match_gate() {
     // Begun on the standard tier, with the test not yet run: neither the
     // setting nor the test starts anything before the match ends.
     inputs = accelerated_run();
-    inputs.setting_on = false;
+    inputs.setting = HardwareAcceleration::off;
     inputs.function_test = FunctionTest::not_run;
     begin_match(
         inputs.match,
@@ -803,7 +838,7 @@ void test_shared_match_gate() {
         decide_render_tier(inputs).tier == RenderTier::accelerated
     );
     OA_CHECK(!inputs.match.accelerated);
-    inputs.setting_on = true;
+    inputs.setting = HardwareAcceleration::basic;
     OA_CHECK(decide_render_tier(inputs).reason == TierReason::waiting_for_match_end);
     OA_CHECK(!function_test_may_run(inputs));
     end_match(inputs.match);
@@ -2332,7 +2367,7 @@ void test_chrome_filter_at_the_display() {
 DensityInputs native_start() {
     DensityInputs in;
     in.memory = 16 * gibibyte;
-    in.setting_on = true;
+    in.setting = HardwareAcceleration::basic;
     in.class_measured = true;
     in.budget = SceneBudget::reduced;
     in.record = true;
@@ -2363,8 +2398,8 @@ void test_native_density_by_table() {
         {"every condition", [](DensityInputs&) {}, true, DensityReason::native},
         {"--hardware-acceleration with the setting Off",
          [](DensityInputs& in) {
-             in.setting_on = false;
-             in.flag = AccelerationFlag::on;
+             in.setting = HardwareAcceleration::off;
+             in.flag = AccelerationFlag::full;
          },
          true,
          DensityReason::native},
@@ -2407,7 +2442,7 @@ void test_native_density_by_table() {
              in = DensityInputs{};
              in.memory = 2 * gibibyte;
              in.asked = true;
-             in.flag = AccelerationFlag::on;
+             in.flag = AccelerationFlag::full;
              in.render_driver_named = true;
              in.virtual_video_driver = true;
              in.unattended = true;
@@ -2421,7 +2456,7 @@ void test_native_density_by_table() {
         {"SDL_RENDER_DRIVER with --hardware-acceleration",
          [](DensityInputs& in) {
              in.render_driver_named = true;
-             in.flag = AccelerationFlag::on;
+             in.flag = AccelerationFlag::full;
          },
          false,
          DensityReason::environment},
@@ -2438,9 +2473,20 @@ void test_native_density_by_table() {
          false,
          DensityReason::capture},
         {"the setting Off",
-         [](DensityInputs& in) { in.setting_on = false; },
+         [](DensityInputs& in) { in.setting = HardwareAcceleration::off; },
          false,
          DensityReason::setting_off},
+        {"the setting Full",
+         [](DensityInputs& in) { in.setting = HardwareAcceleration::full; },
+         true,
+         DensityReason::native},
+        {"--hardware-acceleration=basic with the setting Off",
+         [](DensityInputs& in) {
+             in.setting = HardwareAcceleration::off;
+             in.flag = AccelerationFlag::basic;
+         },
+         true,
+         DensityReason::native},
         {"a class not measured",
          [](DensityInputs& in) { in.class_measured = false; },
          false,
@@ -2489,14 +2535,21 @@ bool native_by_the_rules(const DensityInputs& in) {
     if (in.asked)
         return true;
     return !in.render_driver_named && !in.virtual_video_driver && !in.unattended && !in.capture &&
-           (in.setting_on || in.flag == AccelerationFlag::on) && in.class_measured &&
-           in.budget != SceneBudget::none &&
+           (in.setting != HardwareAcceleration::off || in.flag == AccelerationFlag::basic ||
+            in.flag == AccelerationFlag::full) &&
+           in.class_measured && in.budget != SceneBudget::none &&
            (!in.remembered || (in.remembered->magnify && !in.remembered->standard)) && in.record;
 }
 
 void test_native_density_every_combination() {
     const AccelerationFlag flags[] = {
-        AccelerationFlag::none, AccelerationFlag::on, AccelerationFlag::off
+        AccelerationFlag::none,
+        AccelerationFlag::off,
+        AccelerationFlag::basic,
+        AccelerationFlag::full
+    };
+    const HardwareAcceleration settings[] = {
+        HardwareAcceleration::off, HardwareAcceleration::basic, HardwareAcceleration::full
     };
     const SceneBudget budgets[] = {SceneBudget::none, SceneBudget::reduced, SceneBudget::full};
     const uint64_t memories[] = {0, 1792 * mebibyte - 1, 1792 * mebibyte, 16 * gibibyte};
@@ -2509,44 +2562,45 @@ void test_native_density_every_combination() {
     uint32_t native = 0;
     uint32_t native_under_2_gib = 0;
     uint32_t native_by_the_shipped_rule = 0;
-    for (uint32_t bits = 0; bits < (1u << 8); ++bits)
+    for (uint32_t bits = 0; bits < (1u << 7); ++bits)
         for (const AccelerationFlag flag : flags)
-            for (const SceneBudget budget : budgets)
-                for (const uint64_t memory : memories)
-                    for (const auto& rung : remembered) {
-                        DensityInputs in;
-                        in.asked = (bits & 1u) != 0;
-                        in.setting_on = (bits & 2u) != 0;
-                        in.render_driver_named = (bits & 4u) != 0;
-                        in.virtual_video_driver = (bits & 8u) != 0;
-                        in.unattended = (bits & 16u) != 0;
-                        in.capture = (bits & 32u) != 0;
-                        in.class_measured = (bits & 64u) != 0;
-                        in.record = (bits & 128u) != 0;
-                        in.flag = flag;
-                        in.budget = budget;
-                        in.memory = memory;
-                        in.remembered = rung;
-                        ++combinations;
-                        const DensityDecision decision = decide_native_density(in);
-                        if (decision.native != native_by_the_rules(in))
-                            ++mismatches;
-                        if (decision.native != (decision.reason == DensityReason::native ||
-                                                decision.reason == DensityReason::asked))
-                            ++mismatches;
-                        if (decision.native) {
-                            ++native;
-                            if (memory < 1792 * mebibyte)
-                                ++native_under_2_gib;
+            for (const HardwareAcceleration setting : settings)
+                for (const SceneBudget budget : budgets)
+                    for (const uint64_t memory : memories)
+                        for (const auto& rung : remembered) {
+                            DensityInputs in;
+                            in.asked = (bits & 1u) != 0;
+                            in.setting = setting;
+                            in.render_driver_named = (bits & 2u) != 0;
+                            in.virtual_video_driver = (bits & 4u) != 0;
+                            in.unattended = (bits & 8u) != 0;
+                            in.capture = (bits & 16u) != 0;
+                            in.class_measured = (bits & 32u) != 0;
+                            in.record = (bits & 64u) != 0;
+                            in.flag = flag;
+                            in.budget = budget;
+                            in.memory = memory;
+                            in.remembered = rung;
+                            ++combinations;
+                            const DensityDecision decision = decide_native_density(in);
+                            if (decision.native != native_by_the_rules(in))
+                                ++mismatches;
+                            if (decision.native != (decision.reason == DensityReason::native ||
+                                                    decision.reason == DensityReason::asked))
+                                ++mismatches;
+                            if (decision.native) {
+                                ++native;
+                                if (memory < 1792 * mebibyte)
+                                    ++native_under_2_gib;
+                            }
+                            // As the game fills it today, the class is never
+                            // measured: only --native-density opens a window at
+                            // native density.
+                            in.class_measured = native_density_measured;
+                            if (decide_native_density(in).native && !in.asked)
+                                ++native_by_the_shipped_rule;
                         }
-                        // As the game fills it today, the class is never
-                        // measured: only --native-density opens a window at
-                        // native density.
-                        in.class_measured = native_density_measured;
-                        if (decide_native_density(in).native && !in.asked)
-                            ++native_by_the_shipped_rule;
-                    }
-    OA_CHECK(combinations == (1u << 8) * 3 * 3 * 4 * 3);
+    OA_CHECK(combinations == (1u << 7) * 4 * 3 * 3 * 4 * 3);
     OA_CHECK(mismatches == 0);
     OA_CHECK(native > 0);
     OA_CHECK(native_under_2_gib == 0);
@@ -2723,8 +2777,23 @@ void test_windowless_and_flag() {
          {"cocoa", "windows", "x11", "wayland", "", "dumm", "dummy "})
         OA_CHECK(!windowless_video_driver(driver));
     OA_CHECK(acceleration_flag(std::nullopt) == AccelerationFlag::none);
-    OA_CHECK(acceleration_flag(true) == AccelerationFlag::on);
-    OA_CHECK(acceleration_flag(false) == AccelerationFlag::off);
+    OA_CHECK(acceleration_flag(HardwareAcceleration::off) == AccelerationFlag::off);
+    OA_CHECK(acceleration_flag(HardwareAcceleration::basic) == AccelerationFlag::basic);
+    OA_CHECK(acceleration_flag(HardwareAcceleration::full) == AccelerationFlag::full);
+    // A flag decides over the setting; without one the setting stands.
+    for (const HardwareAcceleration setting :
+         {HardwareAcceleration::off, HardwareAcceleration::basic, HardwareAcceleration::full}) {
+        OA_CHECK(acceleration_asked(AccelerationFlag::none, setting) == setting);
+        OA_CHECK(acceleration_asked(AccelerationFlag::off, setting) == HardwareAcceleration::off);
+        OA_CHECK(
+            acceleration_asked(AccelerationFlag::basic, setting) == HardwareAcceleration::basic
+        );
+        OA_CHECK(acceleration_asked(AccelerationFlag::full, setting) == HardwareAcceleration::full);
+    }
+    OA_CHECK(!flag_asks_for_card(AccelerationFlag::none));
+    OA_CHECK(!flag_asks_for_card(AccelerationFlag::off));
+    OA_CHECK(flag_asks_for_card(AccelerationFlag::basic));
+    OA_CHECK(flag_asks_for_card(AccelerationFlag::full));
 }
 
 /// What the host does for each decision, with the presentation on and off.
@@ -2831,7 +2900,7 @@ void test_step_tier() {
     TierInputs inputs;
     inputs.renderer = true;
     inputs.memory = 8 * gibibyte;
-    inputs.setting_on = true;
+    inputs.setting = HardwareAcceleration::basic;
     StandInTest test;
     const FunctionTestHooks hooks{&test, run_stand_in_test};
     TierStep step = step_tier(inputs, true, {});
@@ -2863,16 +2932,16 @@ void test_step_tier() {
     OA_CHECK(step.action == TierAction::switch_off && inputs.match.accelerated);
     inputs.device_lost = false;
     OA_CHECK(step_tier(inputs, false, hooks).action == TierAction::switch_on);
-    inputs.setting_on = false;
+    inputs.setting = HardwareAcceleration::off;
     OA_CHECK(step_tier(inputs, true, hooks).action == TierAction::switch_off);
     OA_CHECK(!inputs.match.accelerated);
-    inputs.setting_on = true;
+    inputs.setting = HardwareAcceleration::basic;
     step = step_tier(inputs, false, hooks);
     OA_CHECK(step.decision.reason == TierReason::waiting_for_match_end);
     OA_CHECK(step.action == TierAction::none);
     end_match(inputs.match);
     OA_CHECK(step_tier(inputs, false, hooks).action == TierAction::switch_on);
-    inputs.setting_on = false;
+    inputs.setting = HardwareAcceleration::off;
     OA_CHECK(step_tier(inputs, true, hooks).action == TierAction::switch_off);
     OA_CHECK(inputs.match.kind == MatchKind::none && !inputs.match.accelerated);
     OA_CHECK(test.runs == 1);
@@ -2881,9 +2950,9 @@ void test_step_tier() {
 /// A player's run as the game drives it (step_tier): on the player's own
 /// profile the start writes the trial and runs the function test at once,
 /// and where the trial cannot be written keeps the standard tier until the
-/// player switches the setting Off then On; --hardware-acceleration and a
-/// named preferences file that turns the setting On test at start; then
-/// the setting switched Off and On, a
+/// player sets the setting to Off and back; --hardware-acceleration and a
+/// named preferences file that sets the setting to Basic or Full test at
+/// start; then the setting set to Off and back, a
 /// shared game and a replay, a failed function test retried, and the runs
 /// that stay on the standard tier whatever happens: a named preferences
 /// file at its default, the dummy video driver, under 2 GiB, headless and
@@ -2894,13 +2963,13 @@ void test_host_runs() {
     player.renderer = true;
     player.memory = eight_gibibytes;
     player.players_own_profile = true;
-    player.setting_on = true;
+    player.setting = HardwareAcceleration::full;
     player.capability = Capability::capable;
     TierInputs named_on = player;
     named_on.players_own_profile = false;
 
     // The player's own profile whose trial cannot be written: the test is
-    // skipped and the start stays standard, trying no more; Off then On
+    // skipped and the start stays standard, trying no more; Off then Basic
     // writes the trial and runs the test once, and the frame is accelerated
     // from then.
     {
@@ -2911,28 +2980,28 @@ void test_host_runs() {
         OA_CHECK(drawn_frame(inputs, on, test).reason == TierReason::trial_unwritten);
         OA_CHECK(drawn_frame(inputs, on, test).reason == TierReason::trial_unwritten);
         OA_CHECK(!on && test.runs == 0 && test.skipped == 1);
-        inputs.setting_on = false;
+        inputs.setting = HardwareAcceleration::off;
         OA_CHECK(drawn_frame(inputs, on, test).reason == TierReason::setting_off);
         forget_failures(inputs);
-        inputs.setting_on = true;
+        inputs.setting = HardwareAcceleration::basic;
         test.trial_unwritable = false;
         OA_CHECK(drawn_frame(inputs, on, test).tier == RenderTier::accelerated);
         OA_CHECK(on && test.runs == 1);
-        // Off applies at once, On again at once, with no second test.
-        inputs.setting_on = false;
+        // Off applies at once, Basic again at once, with no second test.
+        inputs.setting = HardwareAcceleration::off;
         OA_CHECK(drawn_frame(inputs, on, test).reason == TierReason::setting_off);
         OA_CHECK(!on);
-        inputs.setting_on = true;
+        inputs.setting = HardwareAcceleration::basic;
         OA_CHECK(drawn_frame(inputs, on, test).tier == RenderTier::accelerated);
         OA_CHECK(on && test.runs == 1);
         // A shared game that begins accelerated stays so; Off in it applies
-        // at once, and On waits for its end.
+        // at once, and Basic waits for its end.
         begin_match(inputs.match, MatchKind::shared_game, on);
         OA_CHECK(drawn_frame(inputs, on, test).tier == RenderTier::accelerated);
-        inputs.setting_on = false;
+        inputs.setting = HardwareAcceleration::off;
         OA_CHECK(drawn_frame(inputs, on, test).reason == TierReason::setting_off);
         OA_CHECK(!on);
-        inputs.setting_on = true;
+        inputs.setting = HardwareAcceleration::basic;
         OA_CHECK(drawn_frame(inputs, on, test).reason == TierReason::waiting_for_match_end);
         OA_CHECK(!on);
         end_match(inputs.match);
@@ -2940,26 +3009,26 @@ void test_host_runs() {
         OA_CHECK(on && test.runs == 1);
     }
     // The player's own profile, with --hardware-acceleration or without,
-    // and a named preferences file that turns the setting On, test at
+    // and a named preferences file that sets the setting to Full, test at
     // start.
     TierInputs flagged = player;
-    flagged.flag = AccelerationFlag::on;
+    flagged.flag = AccelerationFlag::full;
     for (TierInputs inputs : {player, flagged, named_on}) {
         bool on = false;
         StandInTest test;
         OA_CHECK(drawn_frame(inputs, on, test).tier == RenderTier::accelerated);
         OA_CHECK(on && test.runs == 1);
     }
-    // The setting Off at start: no test until it is turned On, and none in
-    // a replay until it ends.
+    // The setting Off at start: no test until it is set to Basic, and none
+    // in a replay until it ends.
     {
         TierInputs inputs = named_on;
-        inputs.setting_on = false;
+        inputs.setting = HardwareAcceleration::off;
         bool on = false;
         StandInTest test;
         OA_CHECK(drawn_frame(inputs, on, test).reason == TierReason::setting_off);
         begin_match(inputs.match, MatchKind::replay, on);
-        inputs.setting_on = true;
+        inputs.setting = HardwareAcceleration::basic;
         OA_CHECK(drawn_frame(inputs, on, test).reason == TierReason::waiting_for_match_end);
         OA_CHECK(!on && test.runs == 0);
         end_match(inputs.match);
@@ -2967,7 +3036,7 @@ void test_host_runs() {
         OA_CHECK(on && test.runs == 1);
     }
     // A failed test keeps the standard tier and does not run again until
-    // Off then On.
+    // Off and back.
     {
         TierInputs inputs = named_on;
         bool on = false;
@@ -2999,7 +3068,7 @@ void test_host_runs() {
         {"a named preferences file at its default",
          [](TierInputs& i) {
              i.players_own_profile = false;
-             i.setting_on = false;
+             i.setting = HardwareAcceleration::off;
          },
          TierReason::setting_off},
         {"the dummy video driver",
@@ -3011,7 +3080,7 @@ void test_host_runs() {
         {"one byte under 2 GiB with both flags",
          [](TierInputs& i) {
              i.memory = smallest_accelerated_memory - 1;
-             i.flag = AccelerationFlag::on;
+             i.flag = AccelerationFlag::full;
              i.force_capable = true;
          },
          TierReason::memory},
@@ -3045,8 +3114,8 @@ void test_host_runs() {
         TierInputs inputs = player;
         inputs.virtual_video_driver = true;
         inputs.players_own_profile = false;
-        inputs.setting_on = false;
-        inputs.flag = AccelerationFlag::on;
+        inputs.setting = HardwareAcceleration::off;
+        inputs.flag = AccelerationFlag::full;
         inputs.force_capable = true;
         inputs.capability = Capability::software_renderer;
         inputs.memory = smallest_accelerated_memory;

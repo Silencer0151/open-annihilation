@@ -343,9 +343,9 @@ logs it.
 - Native pixel density: a window's density is fixed when it opens.
   `decide_window_density` (`render_host.cpp`) decides it before the window
   opens by the render policy's rule (`decide_native_density`): from 2 GiB,
-  with neither `--no-hardware-acceleration`, `SDL_RENDER_DRIVER`, a dummy
-  or offscreen video driver, an unattended run nor a capture, with the
-  setting On or `--hardware-acceleration`, in a class of machine measured
+  with neither a flag that names Off, `SDL_RENDER_DRIVER`, a dummy
+  or offscreen video driver, an unattended run nor a capture, with Basic or
+  Full asked for by the setting or a flag, in a class of machine measured
   at native density, from a start above budget none and a remembered rung
   above magnify off, and with the `native-density` record an earlier run
   left (`note_density_run_end`, `forget_native_density`, which nothing in
@@ -382,7 +382,7 @@ logs it.
   holds none of it (`AcceleratedWatch` in `render_run.hpp`). While the
   tier draws, the memory guard samples the system's memory about once a
   second (`watch_accelerated_memory`) and drops the tier for the rest of
-  the run when it trips, which neither Off then On nor Restore defaults
+  the run when it trips, which neither Off and back nor Restore defaults
   lifts; before the tier makes its scene and overlay or a prescale target
   it asks the guard with a fresh sample (`accelerated_buffer_allowed`), and
   where the guard refuses, the tier stays on the rung below, magnify off or
@@ -407,7 +407,7 @@ logs it.
   magnification changes, since the NEAREST-chrome rung leaves the scene's
   filter as it was (`world_filter`); each step is logged once. The status
   then says the tier smooths less because frames were slow, and the last
-  step drops the tier, as the status then says, until Off then On or
+  step drops the tier, as the status then says, until Off and back or
   Restore defaults starts the ladder again from the top. A later switch-on, after
   a lost device or a shared game, keeps the rung reached. The rung is not
   kept for the next start: the game reads and writes the renderer
@@ -416,7 +416,7 @@ logs it.
   (`native-renderer-ladder-slow`) forces slow frames and sees idle frames
   and the standard tier never feeding it, a frame's ticks taken out
   against the loop's paced rate, each rung with what it frees and keeps,
-  the status, the drop, Off then On and a clock below its rate;
+  the status, the drop, Off and back and a clock below its rate;
   `--render-fault memory` (`native-renderer-ladder-memory`) forces the
   guard's sample, which refuses each buffer and then drops the tier,
   freeing the scene's buffers.
@@ -428,7 +428,7 @@ logs it.
   the 2 GiB threshold, and what probe items 1 to 3 found of the renderer:
   on Windows before Vista only `direct3d` is capable, and under
   `SDL_RENDER_DRIVER` the adapter is read only when
-  `--hardware-acceleration` or `--force-capable` asks for more than SDL's
+  a flag that asks for the card or `--force-capable` asks for more than SDL's
   own start) and, where the tier could be accelerated but for it, runs the
   start-up function test (`run_function_test`): a render target cleared
   and read back, a LINEAR reduction by half within 2 of the texels'
@@ -441,19 +441,25 @@ logs it.
   trial that cannot be written skips the test and keeps the standard tier
   (`FunctionTest::trial_unwritten`) until the player tries again. With a
   named preferences file the records live in memory and it runs where the
-  file turns the setting On. The start-up line names the tier with what it
-  does, or the reason the processor draws everything
-  (`tier_description`). Before each frame, `Runtime::update_render_tier`
+  file sets the setting to Basic or Full. The start-up line names the
+  tier, standard or basic, with what it does, "(Full is not in this
+  build)" after the name where Full was asked for, or the reason the
+  processor draws everything (`tier_description`); the `+stats` renderer
+  row names the tier the same way. Full, the battlefield drawn
+  on the graphics card, is not built yet: the render policy's request
+  (`TierInputs::setting`, `AccelerationFlag`) carries Off, Basic or Full,
+  and `decide_render_tier` draws Full as Basic, so that a later change adds
+  the tier itself. Before each frame, `Runtime::update_render_tier`
   brings the facts up to date (the flags, the setting in effect, the
   director, a lost device) and takes the frame's step from the render
   policy (`step_tier`): the tier, the function test run where only it is
   missing, the frame noted in a shared game or a replay, and the switch
   that makes the accelerated presentation match, on at the machine's
-  starting rung or off. Turning Hardware acceleration Off applies at
-  once; On applies at once too, except in a shared game or a replay, known
+  starting rung or off. Setting Hardware acceleration to Off applies at
+  once; Basic and Full apply at once too, except in a shared game or a replay, known
   from its bootstrap (`MatchBootstrap::multiplayer`, `replay`), which keeps
   the tier it began with until it ends (`begin_render_tier_match`,
-  `end_render_tier_match`). Switching it Off then On, or Restore defaults,
+  `end_render_tier_match`). Setting it to Off and back, or Restore defaults,
   clears the renderer records' strikes and failure records in memory, lets
   a failed function test or an unwritten trial try again, lifts a drop
   other than the memory guard's and starts the step-down again from the
@@ -468,9 +474,9 @@ logs it.
   (`tier_acceleration_facts`, with what the records hold,
   `RendererHost::fill_record_facts`); a driver that failed in the run, a
   record and a driver a record passed over lock nothing, so that the row
-  can retry them. `+stats` names the tier. `native-engine-settings` turns the row On and Off
-  through the dialog under `--force-capable` and retries it after a drop
-  and after a function test forced to draw wrongly.
+  can retry them. `+stats` names the tier. `native-engine-settings` sets the row to Basic, Full
+  and Off through the dialog under `--force-capable` and retries it after a
+  drop and after a function test forced to draw wrongly.
 - `runtime_match_menus.cpp`: the in-match menus. A dialog opened over the
   match HUD (the exit menu, the surrender confirmation, RESTART.GUI, the
   Game Settings sheet, the removal question) is placed as 3.1c's panel
@@ -792,14 +798,15 @@ logs it.
   windows show them, Graphics at its top and its end;
   `runtime_engine_settings_match_check.cpp` the in-game menu's button and
   dialog at those sizes, with the locks of a game played alone and of a
-  shared game, Hardware acceleration switched On in a shared game, where it
-  waits for the game's end, and the wheel scrolling the dialog, not the
+  shared game, Hardware acceleration set to Full and to Basic in a shared
+  game, where each waits for the game's end, and the wheel scrolling the dialog, not the
   battlefield; and `runtime_engine_settings_wiring_check.cpp` each setting
-  taking effect in a match, Escape's order, Vertical sync and the lock
-  either acceleration flag puts on Hardware acceleration among them. The
-  check runs with `--force-capable`, which lifts the software renderer's
-  lock on both rows; Hardware acceleration stays Off, so every frame it
-  compares is drawn on the processor. Both dialog steps also scroll a
+  taking effect in a match, Escape's order, Vertical sync, the lock
+  either acceleration flag puts on Hardware acceleration and the row set
+  to Basic, Full and Off among them. The check runs with `--force-capable`,
+  which lifts the software renderer's lock on both rows; every other step
+  leaves Hardware acceleration Off, so every frame it compares is drawn on
+  the processor. Both dialog steps also scroll a
   section of nine rows, `engine_settings_tall_section.hpp`, shown in place
   of the open section's rows; the wheel events are the check host's
   (`check_host_input.hpp`). With `--snapshot`, the check writes each of
@@ -844,7 +851,7 @@ logs it.
   struck or recorded, and what a run with more memory left of it stays for a
   start from 2 GiB to judge. Strikes and records of another adapter or engine
   version are dropped, and `clear_failures` gives every driver a fresh try, as
-  Off then On and Restore defaults do. The sentinel of the stage a start has
+  Off and back and Restore defaults do. The sentinel of the stage a start has
   reached is kept apart in `renderer-sentinel.conf`; `sentinel_step` moves it
   and the trial through a run, from `create` to `running` and each path's
   first frames, with none under `SDL_RENDER_DRIVER`. Their text and rules are

@@ -433,7 +433,7 @@ struct FrameStatsNotes {
 /// joined, and the adapter are each cut to one of the table's texts, never
 /// inside a character (whole_characters).
 struct FrameStatsRenderer {
-    std::string_view tier{};    ///< the tier frames are drawn in: "standard"
+    std::string_view tier{};    ///< the tier frames are drawn in: "standard" or "basic"
     std::string_view driver{};  ///< SDL's name for the render driver; empty without a renderer
     std::string_view adapter{}; ///< the adapter's name; empty where none was read
 };

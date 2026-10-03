@@ -214,22 +214,25 @@ void Runtime::check_engine_settings_wiring() {
         );
     }
 
-    // Hardware acceleration: either flag locks it for the run and says so;
-    // the processor draws whatever it says. Without a flag it is locked
-    // under 2 GiB, and on SDL's software renderer or the environment's
-    // driver unless --force-capable lifts them; a renderer nothing has
-    // looked at leaves it unlocked.
+    // Hardware acceleration: a flag at any level locks it for the run and
+    // says so; the processor draws whatever it says. Without a flag it is
+    // locked under 2 GiB, and on SDL's software renderer or the
+    // environment's driver unless --force-capable lifts them; a renderer
+    // nothing has looked at leaves it unlocked.
     {
         const auto kept_flag = options_.hardware_acceleration;
-        options_.hardware_acceleration = false;
+        options_.hardware_acceleration = settings::HardwareAcceleration::off;
         const auto off = engine_settings_locks();
         const auto off_report = acceleration_report();
-        options_.hardware_acceleration = true;
+        options_.hardware_acceleration = settings::HardwareAcceleration::full;
         const auto on = engine_settings_locks();
+        options_.hardware_acceleration = settings::HardwareAcceleration::basic;
+        const auto basic = engine_settings_locks();
         options_.hardware_acceleration = kept_flag;
         require(
             off.hardware_acceleration == settings::Lock::command_line &&
-                on.hardware_acceleration == settings::Lock::command_line,
+                on.hardware_acceleration == settings::Lock::command_line &&
+                basic.hardware_acceleration == settings::Lock::command_line,
             "an acceleration flag does not lock Hardware acceleration"
         );
         // Under 2 GiB the status says the machine needs more memory first,
@@ -255,12 +258,13 @@ void Runtime::check_engine_settings_wiring() {
 
     // Hardware acceleration through the dialog, where the graphics card may
     // be used: here SDL's software renderer, which --force-capable lets the
-    // accelerated tier use from 2 GiB. On draws in the accelerated tier at
-    // once, Off in the standard tier at once. A failure in the run keeps the
-    // standard tier, and the row within reach, until the row is switched
-    // Off then On or Restore defaults is pressed: a drop after a failed
-    // call, and a start-up function test that drew wrongly, which then runs
-    // again.
+    // accelerated tier use from 2 GiB. Basic draws in the accelerated tier
+    // at once, and so does Full, which the game cannot draw yet, its status
+    // saying Basic is in use; Off draws in the standard tier at once. A
+    // failure in the run keeps the standard tier, and the row within reach,
+    // until the row is set to Off and back or Restore defaults is pressed:
+    // a drop after a failed call, and a start-up function test that drew
+    // wrongly, which then runs again.
     if (options_.force_capable && !options_.hardware_acceleration && render_run_ &&
         render_run_->host != nullptr &&
         enough_memory_for_acceleration(acceleration_facts().physical_memory)) {
@@ -289,27 +293,62 @@ void Runtime::check_engine_settings_wiring() {
             std::ignore = settings::dialog_pointer_down(*dialog, x, y);
             std::ignore = take_engine_settings_action(settings::dialog_pointer_up(*dialog, x, y));
         };
-        const auto off_then_on = [&] {
-            click(row_control, "OFF");
-            require(!accelerated_presentation(), "Off did not switch the accelerated tier off");
-            click(row_control, "ON");
+        // Tells whether the dialog, its status brought up to date as the
+        // host does each frame, lists a text in its view.
+        const auto shows_dialog_text = [&](std::string_view text) {
+            auto* dialog = engine_settings_dialog();
+            require(dialog != nullptr, "the dialog is not open");
+            std::ignore = settings::set_acceleration_status(*dialog, acceleration_report().status);
+            const auto parts = settings::dialog_layout(*dialog);
+            return std::any_of(parts.begin(), parts.end(), [&](const auto& part) {
+                return part.text == text;
+            });
         };
-        require(!accelerated_presentation(), "the accelerated tier drew before it was turned On");
+        const auto off_then_on = [&] {
+            click(row_control, "Off");
+            require(!accelerated_presentation(), "Off did not switch the accelerated tier off");
+            click(row_control, "Basic");
+        };
+        require(!accelerated_presentation(), "the accelerated tier drew before it was asked for");
         state.last_page = settings::Page::graphics;
         std::ignore = open_engine_settings_dialog();
-        click(row_control, "ON");
+        click(row_control, "Basic");
         require(
-            engine_settings().hardware_acceleration && accelerated_presentation() &&
+            engine_settings().hardware_acceleration == settings::HardwareAcceleration::basic &&
+                accelerated_presentation() &&
                 inputs.function_test == render_policy::FunctionTest::passed,
-            "Hardware acceleration On did not draw in the accelerated tier at once"
+            "Hardware acceleration Basic did not draw in the accelerated tier at once"
         );
-        click(row_control, "OFF");
+        // In use, at whatever the rung this machine starts at says of it.
+        const auto in_use = [](settings::AccelerationState state) {
+            return state == settings::AccelerationState::in_use ||
+                   state == settings::AccelerationState::in_use_no_smoothing ||
+                   state == settings::AccelerationState::in_use_less_smoothing ||
+                   state == settings::AccelerationState::in_use_on_another_driver;
+        };
+        require(
+            in_use(acceleration_report().status.state),
+            "Hardware acceleration Basic does not say it is in use"
+        );
+        // Full draws Basic, and the status says Full is not in this build.
+        click(row_control, "Full");
+        require(
+            engine_settings().hardware_acceleration == settings::HardwareAcceleration::full &&
+                accelerated_presentation(),
+            "Hardware acceleration Full did not draw in the accelerated tier at once"
+        );
+        require(
+            acceleration_report().status.state == settings::AccelerationState::full_not_built &&
+                shows_dialog_text("Full is not in this build: Basic is in use."),
+            "Hardware acceleration Full does not say Basic is in use in its place"
+        );
+        click(row_control, "Off");
         require(
             !accelerated_presentation(),
             "Hardware acceleration Off did not draw in the standard tier at once"
         );
         // A drop: the standard tier, the failure said, the row within reach.
-        click(row_control, "ON");
+        click(row_control, "Basic");
         drop_acceleration("the engine settings check drops it");
         update_render_tier();
         const auto dropped = acceleration_report();
@@ -338,10 +377,10 @@ void Runtime::check_engine_settings_wiring() {
                 inputs.function_test == render_policy::FunctionTest::passed,
             "Off then On did not run the function test again"
         );
-        // Restore defaults retries too, here under --hardware-acceleration,
+        // Restore defaults retries too, here under --hardware-acceleration=basic,
         // whose lock keeps the row: the next frame draws accelerated again.
         click(settings::cancel_control, {});
-        options_.hardware_acceleration = true;
+        options_.hardware_acceleration = settings::HardwareAcceleration::basic;
         update_render_tier();
         drop_acceleration("the engine settings check drops it");
         update_render_tier();
@@ -354,7 +393,8 @@ void Runtime::check_engine_settings_wiring() {
         options_.hardware_acceleration.reset();
         update_render_tier();
         require(
-            engine_settings_dialog() == nullptr && !engine_settings().hardware_acceleration &&
+            engine_settings_dialog() == nullptr &&
+                engine_settings().hardware_acceleration == settings::HardwareAcceleration::off &&
                 !accelerated_presentation(),
             "Cancel did not put Hardware acceleration back Off"
         );

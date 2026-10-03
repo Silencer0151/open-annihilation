@@ -31,6 +31,7 @@ using oa::app::report_acceleration;
 using oa::app::render_policy::smallest_accelerated_memory;
 using State = oa::ui::engine_settings::AccelerationState;
 using Reach = oa::ui::engine_settings::AccelerationReach;
+using Level = oa::ui::engine_settings::HardwareAcceleration;
 
 /// Memory enough for the graphics card's scaling: 8 GiB.
 constexpr uint64_t kAmpleMemory = uint64_t{8} * 1024 * 1024 * 1024;
@@ -39,10 +40,10 @@ constexpr uint64_t kAmpleMemory = uint64_t{8} * 1024 * 1024 * 1024;
 constexpr uint64_t kSoldWithTwoGigabytes = uint64_t{1900} * 1024 * 1024;
 
 /// Returns the facts of a run on a machine the graphics card could help:
-/// acceleration asked for, a renderer found able and ample memory.
+/// Basic asked for, a renderer found able and ample memory.
 AccelerationFacts able() {
     AccelerationFacts facts{};
-    facts.asked = true;
+    facts.asked = Level::basic;
     facts.renderer_capable = true;
     facts.physical_memory = kAmpleMemory;
     return facts;
@@ -62,24 +63,30 @@ void the_two_gibibyte_threshold_is_the_render_policys() {
 
 void off_by_the_setting_or_the_flag() {
     auto facts = able();
-    facts.asked = false;
+    facts.asked = Level::off;
     auto report = report_acceleration(facts);
     OA_CHECK(report.status.state == State::off_by_setting);
     OA_CHECK(!report.acceleration_unavailable);
     // --no-hardware-acceleration, which asks for nothing, says so.
-    facts.flag = false;
+    facts.flag = Level::off;
     OA_CHECK(report_acceleration(facts).status.state == State::off_by_command_line);
-    // --hardware-acceleration asks for it whatever the setting.
-    facts.flag = true;
-    facts.asked = true;
+    // A flag that names Basic or Full asks for it whatever the setting.
+    facts.flag = Level::basic;
+    facts.asked = Level::basic;
     OA_CHECK(report_acceleration(facts).status.state == State::next_start);
+    // The status carries the level asked for.
+    OA_CHECK(report_acceleration(facts).status.asked == Level::basic);
+    facts.flag = Level::full;
+    facts.asked = Level::full;
+    OA_CHECK(report_acceleration(facts).status.state == State::next_start);
+    OA_CHECK(report_acceleration(facts).status.asked == Level::full);
     // From 2 GiB, Off shows first, whatever else holds.
     AccelerationFacts bare{};
     bare.physical_memory = kAmpleMemory;
     bare.software_renderer = true;
     OA_CHECK(report_acceleration(bare).status.state == State::off_by_setting);
     OA_CHECK(report_acceleration(bare).acceleration_unavailable);
-    bare.flag = false;
+    bare.flag = Level::off;
     bare.environment_driver = true;
     OA_CHECK(report_acceleration(bare).status.state == State::off_by_command_line);
 }
@@ -91,7 +98,7 @@ void the_environment_driver_keeps_the_frames_on_the_processor() {
     OA_CHECK(report.status.state == State::environment_driver);
     OA_CHECK(report.acceleration_unavailable);
     // --hardware-acceleration lifts it, as --force-capable does.
-    facts.flag = true;
+    facts.flag = Level::basic;
     report = report_acceleration(facts);
     OA_CHECK(report.status.state != State::environment_driver);
     OA_CHECK(!report.acceleration_unavailable);
@@ -111,7 +118,7 @@ void a_machine_under_two_gibibytes_keeps_the_frames_on_the_processor() {
         OA_CHECK(report.status.state == State::needs_memory);
         OA_CHECK(report.acceleration_unavailable);
         // Neither --hardware-acceleration nor --force-capable lifts it.
-        facts.flag = true;
+        facts.flag = Level::basic;
         facts.force_capable = true;
         report = report_acceleration(facts);
         OA_CHECK(report.status.state == State::needs_memory);
@@ -119,12 +126,12 @@ void a_machine_under_two_gibibytes_keeps_the_frames_on_the_processor() {
         // It is told whatever the setting, the flags, the environment's
         // driver, the renderer or the game.
         facts.force_capable = false;
-        facts.flag = false;
+        facts.flag = Level::off;
         OA_CHECK(report_acceleration(facts).status.state == State::needs_memory);
         facts.flag.reset();
-        facts.asked = false;
+        facts.asked = Level::off;
         OA_CHECK(report_acceleration(facts).status.state == State::needs_memory);
-        facts.asked = true;
+        facts.asked = Level::basic;
         facts.environment_driver = true;
         OA_CHECK(report_acceleration(facts).status.state == State::needs_memory);
         facts.environment_driver = false;
@@ -178,14 +185,20 @@ void a_renderer_not_yet_looked_at_leaves_the_row_within_reach() {
     OA_CHECK(report.status.state == State::next_start);
     OA_CHECK(!report.acceleration_unavailable);
     // Off says so, and the row stays within reach.
-    facts.asked = false;
+    facts.asked = Level::off;
     report = report_acceleration(facts);
     OA_CHECK(report.status.state == State::off_by_setting);
     OA_CHECK(!report.acceleration_unavailable);
-    // In a shared game, On waits for its end.
-    facts.asked = true;
+    // In a shared game, Basic or Full waits for its end, the status naming
+    // the level.
+    facts.asked = Level::basic;
     facts.shared_game = true;
     OA_CHECK(report_acceleration(facts).status.state == State::waiting_for_game_end);
+    OA_CHECK(report_acceleration(facts).status.asked == Level::basic);
+    facts.asked = Level::full;
+    OA_CHECK(report_acceleration(facts).status.state == State::waiting_for_game_end);
+    OA_CHECK(report_acceleration(facts).status.asked == Level::full);
+    facts.asked = Level::basic;
 }
 
 void a_shared_game_or_a_replay_waits_for_its_end() {
@@ -201,12 +214,12 @@ void a_shared_game_or_a_replay_waits_for_its_end() {
     OA_CHECK(report.status.state == State::waiting_for_game_end);
     OA_CHECK(report.status.replay);
     // Off applies at once there.
-    facts.asked = false;
+    facts.asked = Level::off;
     report = report_acceleration(facts);
     OA_CHECK(report.status.state == State::off_by_setting);
     OA_CHECK(!report.status.replay);
     // A renderer that could not help after the game says so instead.
-    facts.asked = true;
+    facts.asked = Level::basic;
     facts.renderer_capable = false;
     OA_CHECK(report_acceleration(facts).status.state == State::no_usable_card);
     // A game that began with the graphics card in use keeps it.
@@ -240,7 +253,7 @@ void a_renderer_that_lacks_a_feature_says_so() {
     facts = able();
     facts.renderer_capable = false;
     facts.lacks_feature = true;
-    facts.asked = false;
+    facts.asked = Level::off;
     OA_CHECK(report_acceleration(facts).status.state == State::off_by_setting);
 }
 
@@ -268,9 +281,9 @@ void a_driver_that_failed_says_so_until_it_is_in_use_again() {
     OA_CHECK(report_acceleration(facts).status.state == State::driver_failed);
     // Off says so first; in use again, the failure no longer shows.
     facts.shared_game = false;
-    facts.asked = false;
+    facts.asked = Level::off;
     OA_CHECK(report_acceleration(facts).status.state == State::off_by_setting);
-    facts.asked = true;
+    facts.asked = Level::basic;
     facts.tier_accelerated = true;
     OA_CHECK(report_acceleration(facts).status.state == State::in_use);
 }
@@ -295,9 +308,9 @@ void a_drop_for_memory_or_slow_frames_says_so() {
     // Off says so first; in use again after Off then On, the drop no longer
     // shows.
     facts.replay = false;
-    facts.asked = false;
+    facts.asked = Level::off;
     OA_CHECK(report_acceleration(facts).status.state == State::off_by_setting);
-    facts.asked = true;
+    facts.asked = Level::basic;
     facts.tier_accelerated = true;
     OA_CHECK(report_acceleration(facts).status.state == State::in_use);
     // From the facts the tier is decided from: the kind of drop.
@@ -305,7 +318,7 @@ void a_drop_for_memory_or_slow_frames_says_so() {
     policy::TierInputs inputs{};
     inputs.renderer = true;
     inputs.memory = kAmpleMemory;
-    inputs.setting_on = true;
+    inputs.setting = Level::basic;
     const policy::LadderState rung{};
     inputs.drop = policy::Drop::memory;
     OA_CHECK(
@@ -331,9 +344,9 @@ void an_error_of_the_games_own_says_so() {
     OA_CHECK(report_acceleration(facts).status.state == State::driver_failed);
     facts.driver_failed = false;
     // Off says so first; in use again, the error no longer shows.
-    facts.asked = false;
+    facts.asked = Level::off;
     OA_CHECK(report_acceleration(facts).status.state == State::off_by_setting);
-    facts.asked = true;
+    facts.asked = Level::basic;
     facts.tier_accelerated = true;
     OA_CHECK(report_acceleration(facts).status.state == State::in_use);
     // The tier's facts give it from the drop, and no driver failure.
@@ -341,7 +354,7 @@ void an_error_of_the_games_own_says_so() {
     policy::TierInputs inputs{};
     inputs.renderer = true;
     inputs.memory = kAmpleMemory;
-    inputs.setting_on = true;
+    inputs.setting = Level::basic;
     inputs.drop = policy::Drop::engine_fault;
     const auto tier_facts = oa::app::tier_acceleration_facts(inputs, policy::LadderState{}, false);
     OA_CHECK(tier_facts.engine_error && !tier_facts.driver_failed);
@@ -379,8 +392,75 @@ void in_use_after_slow_frames_says_it_smooths_less() {
     OA_CHECK(report_acceleration(facts).status.state == State::in_use);
     // Off still says so first.
     facts.slow_frames_stepped = true;
-    facts.asked = false;
+    facts.asked = Level::off;
     OA_CHECK(report_acceleration(facts).status.state == State::off_by_setting);
+}
+
+void full_is_drawn_as_basic_and_says_so() {
+    // Full asks for the graphics card as Basic does; while the card scales
+    // the frames the status says Full is not in this build, whatever else
+    // in use would say, and until then the usual states apply.
+    auto facts = able();
+    facts.asked = Level::full;
+    auto report = report_acceleration(facts);
+    OA_CHECK(report.status.state == State::next_start && report.status.asked == Level::full);
+    OA_CHECK(!report.acceleration_unavailable);
+    facts.tier_accelerated = true;
+    OA_CHECK(report_acceleration(facts).status.state == State::full_not_built);
+    facts.driver_skipped = true;
+    OA_CHECK(report_acceleration(facts).status.state == State::full_not_built);
+    facts.driver_skipped = false;
+    facts.slow_frames_stepped = true;
+    OA_CHECK(report_acceleration(facts).status.state == State::full_not_built);
+    facts.slow_frames_stepped = false;
+    facts.no_smoothing = true;
+    report = report_acceleration(facts);
+    OA_CHECK(report.status.state == State::full_not_built && report.status.asked == Level::full);
+    // Basic in use says so.
+    facts.asked = Level::basic;
+    OA_CHECK(report_acceleration(facts).status.state == State::in_use_no_smoothing);
+    // What stops the card stops it at Full too.
+    facts.asked = Level::full;
+    facts.tier_accelerated = false;
+    facts.driver_failed = true;
+    OA_CHECK(report_acceleration(facts).status.state == State::driver_failed);
+    facts.driver_failed = false;
+    facts.renderer_capable = false;
+    report = report_acceleration(facts);
+    OA_CHECK(report.status.state == State::no_usable_card && report.acceleration_unavailable);
+    // --hardware-acceleration, which names Full, counts as Full asked for.
+    facts = able();
+    facts.flag = Level::full;
+    facts.asked = Level::full;
+    facts.tier_accelerated = true;
+    OA_CHECK(report_acceleration(facts).status.state == State::full_not_built);
+    // From the facts the tier is decided from: the setting at Full, or a
+    // flag over it.
+    namespace policy = oa::app::render_policy;
+    policy::TierInputs inputs{};
+    inputs.renderer = true;
+    inputs.memory = kAmpleMemory;
+    inputs.setting = Level::full;
+    policy::LadderState rung{};
+    rung.filtered_chrome = true;
+    rung.magnify = true;
+    rung.budget = policy::SceneBudget::reduced;
+    auto from_tier = oa::app::tier_acceleration_facts(inputs, rung, true);
+    OA_CHECK(from_tier.asked == Level::full && !from_tier.flag);
+    OA_CHECK(report_acceleration(from_tier).status.state == State::full_not_built);
+    inputs.flag = policy::AccelerationFlag::basic;
+    from_tier = oa::app::tier_acceleration_facts(inputs, rung, true);
+    OA_CHECK(from_tier.asked == Level::basic && from_tier.flag == Level::basic);
+    OA_CHECK(report_acceleration(from_tier).status.state == State::in_use);
+    inputs.flag = policy::AccelerationFlag::off;
+    from_tier = oa::app::tier_acceleration_facts(inputs, rung, false);
+    OA_CHECK(from_tier.asked == Level::off && from_tier.flag == Level::off);
+    OA_CHECK(report_acceleration(from_tier).status.state == State::off_by_command_line);
+    inputs.flag = policy::AccelerationFlag::full;
+    inputs.setting = Level::off;
+    from_tier = oa::app::tier_acceleration_facts(inputs, rung, true);
+    OA_CHECK(from_tier.asked == Level::full && from_tier.flag == Level::full);
+    OA_CHECK(report_acceleration(from_tier).status.state == State::full_not_built);
 }
 
 void the_reach_follows_the_rung() {
@@ -412,7 +492,7 @@ void the_tier_facts_give_the_status() {
     inputs.renderer = true;
     inputs.memory = kAmpleMemory;
     inputs.players_own_profile = true;
-    inputs.setting_on = true;
+    inputs.setting = Level::basic;
     policy::LadderState rung{};
     rung.filtered_chrome = true;
     rung.magnify = true;
@@ -431,8 +511,8 @@ void the_tier_facts_give_the_status() {
         report_acceleration(tier_acceleration_facts(inputs, rung, false)).status.state ==
         State::off_by_command_line
     );
-    inputs.flag = policy::AccelerationFlag::on;
-    inputs.setting_on = false;
+    inputs.flag = policy::AccelerationFlag::basic;
+    inputs.setting = Level::off;
     OA_CHECK(
         report_acceleration(tier_acceleration_facts(inputs, rung, true)).status.state ==
         State::in_use_no_smoothing
@@ -442,7 +522,7 @@ void the_tier_facts_give_the_status() {
         report_acceleration(tier_acceleration_facts(inputs, rung, false)).status.state ==
         State::off_by_setting
     );
-    inputs.setting_on = true;
+    inputs.setting = Level::basic;
     // A failed function test lacks a feature and locks the row; a small
     // texture limit too; SDL's software renderer has no usable card.
     inputs.function_test = policy::FunctionTest::failed;
@@ -500,7 +580,7 @@ void the_tier_facts_give_the_status() {
     // Headless: no renderer, nothing ruled out by it; under 2 GiB first.
     inputs = {};
     inputs.memory = 0;
-    inputs.setting_on = true;
+    inputs.setting = Level::basic;
     report = report_acceleration(tier_acceleration_facts(inputs, rung, false));
     OA_CHECK(report.status.state == State::needs_memory && report.acceleration_unavailable);
 }
@@ -511,10 +591,10 @@ void the_records_say_what_they_hold() {
     // setting, under 2 GiB too, and frees the row there.
     auto facts = able();
     facts.driver_skipped = true;
-    facts.asked = false;
+    facts.asked = Level::off;
     auto report = report_acceleration(facts);
     OA_CHECK(report.status.state == State::off_driver_skipped && !report.acceleration_unavailable);
-    facts.flag = false;
+    facts.flag = Level::off;
     OA_CHECK(report_acceleration(facts).status.state == State::off_driver_skipped);
     facts.flag.reset();
     facts.physical_memory = 0;
@@ -553,7 +633,7 @@ void the_records_say_what_they_hold() {
     OA_CHECK(report.status.state == State::game_stopped && !report.acceleration_unavailable);
     facts.recorded = RecordedTrouble::failure;
     OA_CHECK(report_acceleration(facts).status.state == State::driver_failed);
-    facts.flag = true;
+    facts.flag = Level::basic;
     OA_CHECK(report_acceleration(facts).status.state == State::next_start);
     facts.tier_accelerated = true;
     OA_CHECK(report_acceleration(facts).status.state == State::in_use);
@@ -578,7 +658,7 @@ void the_tier_facts_give_what_the_trial_and_the_file_say() {
     inputs.renderer = true;
     inputs.memory = kAmpleMemory;
     inputs.players_own_profile = true;
-    inputs.setting_on = true;
+    inputs.setting = Level::basic;
     const policy::LadderState rung{};
     // Where the records live on disk a trial that could not be written,
     // for the function test or a path, says so; in memory it cannot fail.
@@ -621,7 +701,7 @@ void vertical_sync_is_out_of_reach_on_the_software_renderer() {
     facts = able();
     facts.environment_driver = true;
     facts.physical_memory = 0;
-    facts.asked = false;
+    facts.asked = Level::off;
     OA_CHECK(!report_acceleration(facts).vertical_sync_unavailable);
 }
 
@@ -642,6 +722,7 @@ int main() {
     an_error_of_the_games_own_says_so();
     in_use_at_the_lowest_budget_says_nothing_smooths();
     in_use_after_slow_frames_says_it_smooths_less();
+    full_is_drawn_as_basic_and_says_so();
     the_reach_follows_the_rung();
     the_tier_facts_give_the_status();
     the_records_say_what_they_hold();

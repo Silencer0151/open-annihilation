@@ -196,15 +196,39 @@ int main() {
     );
     expect(parse({"--max-fps", "0"}).max_frames_per_second == 0, "--max-fps 0 is no limit");
 
-    // Hardware acceleration's flags decide the setting for the run.
-    expect(!plain.hardware_acceleration, "neither acceleration flag, none given");
+    // Hardware acceleration's flags decide the setting for the run: a
+    // level named, Full for the bare flag, Off for --no-hardware-acceleration.
+    using oa::ui::engine_settings::HardwareAcceleration;
+    expect(!plain.hardware_acceleration, "no acceleration flag, none given");
     expect(
-        parse({"--hardware-acceleration"}).hardware_acceleration == true,
-        "--hardware-acceleration asks for acceleration"
+        parse({"--hardware-acceleration"}).hardware_acceleration == HardwareAcceleration::full,
+        "--hardware-acceleration asks for Full"
     );
     expect(
-        parse({"--no-hardware-acceleration"}).hardware_acceleration == false,
+        parse({"--hardware-acceleration=full"}).hardware_acceleration == HardwareAcceleration::full,
+        "--hardware-acceleration=full asks for Full"
+    );
+    expect(
+        parse({"--hardware-acceleration=basic"}).hardware_acceleration ==
+            HardwareAcceleration::basic,
+        "--hardware-acceleration=basic asks for Basic"
+    );
+    expect(
+        parse({"--hardware-acceleration=off"}).hardware_acceleration == HardwareAcceleration::off,
+        "--hardware-acceleration=off turns it off"
+    );
+    expect(
+        parse({"--no-hardware-acceleration"}).hardware_acceleration == HardwareAcceleration::off,
         "--no-hardware-acceleration turns it off"
+    );
+    expect(
+        rejection({"--hardware-acceleration=high"}) ==
+                "--hardware-acceleration takes off, basic or full" &&
+            rejection({"--hardware-acceleration="}) ==
+                "--hardware-acceleration takes off, basic or full" &&
+            rejection({"--hardware-acceleration=Basic"}) ==
+                "--hardware-acceleration takes off, basic or full",
+        "a level that is not off, basic or full is refused"
     );
     expect(
         rejection({"--hardware-acceleration", "--no-hardware-acceleration"}) ==
@@ -214,23 +238,50 @@ int main() {
         "both acceleration flags are refused, in either order"
     );
     expect(
-        parse({"--hardware-acceleration", "--hardware-acceleration"}).hardware_acceleration == true,
-        "a flag given twice is taken"
+        rejection({"--hardware-acceleration=basic", "--hardware-acceleration=full"}) ==
+                "--hardware-acceleration=basic and --hardware-acceleration=full cannot be used "
+                "together" &&
+            rejection({"--hardware-acceleration=basic", "--hardware-acceleration"}) ==
+                "--hardware-acceleration and --hardware-acceleration=basic cannot be used "
+                "together" &&
+            rejection({"--no-hardware-acceleration", "--hardware-acceleration=basic"}) ==
+                "--hardware-acceleration=basic and --no-hardware-acceleration cannot be used "
+                "together",
+        "flags that name different levels are refused"
     );
     expect(
-        parse({"--headless-check", "--no-hardware-acceleration"}).hardware_acceleration == false &&
+        parse({"--hardware-acceleration", "--hardware-acceleration"}).hardware_acceleration ==
+                HardwareAcceleration::full &&
+            parse({"--hardware-acceleration=off", "--no-hardware-acceleration"})
+                    .hardware_acceleration == HardwareAcceleration::off &&
+            parse({"--hardware-acceleration", "--hardware-acceleration=full"})
+                    .hardware_acceleration == HardwareAcceleration::full,
+        "flags that name one level are taken"
+    );
+    expect(
+        parse({"--headless-check", "--no-hardware-acceleration"}).hardware_acceleration ==
+                HardwareAcceleration::off &&
             parse({"--headless-check", "--hardware-acceleration"}).headless_check,
         "a headless run takes either flag"
     );
     expect(
-        oa::app::hardware_acceleration_asked(plain, true) &&
-            !oa::app::hardware_acceleration_asked(plain, false),
+        oa::app::hardware_acceleration_asked(plain, HardwareAcceleration::basic) ==
+                HardwareAcceleration::basic &&
+            oa::app::hardware_acceleration_asked(plain, HardwareAcceleration::off) ==
+                HardwareAcceleration::off,
         "without a flag the setting decides"
     );
     expect(
-        oa::app::hardware_acceleration_asked(parse({"--hardware-acceleration"}), false) &&
-            !oa::app::hardware_acceleration_asked(parse({"--no-hardware-acceleration"}), true),
-        "either flag decides over the setting"
+        oa::app::hardware_acceleration_asked(
+            parse({"--hardware-acceleration"}), HardwareAcceleration::off
+        ) == HardwareAcceleration::full &&
+            oa::app::hardware_acceleration_asked(
+                parse({"--hardware-acceleration=basic"}), HardwareAcceleration::off
+            ) == HardwareAcceleration::basic &&
+            oa::app::hardware_acceleration_asked(
+                parse({"--no-hardware-acceleration"}), HardwareAcceleration::full
+            ) == HardwareAcceleration::off,
+        "a flag decides over the setting"
     );
     expect(!plain.force_capable, "no --force-capable, none given");
     expect(

@@ -25,6 +25,9 @@
 namespace oa::app {
 namespace {
 
+/// The flag that names a level of hardware acceleration, before its value.
+constexpr std::string_view kAccelerationLevelFlag = "--hardware-acceleration=";
+
 constexpr std::size_t kMaximumRunFrames = 10'000'000;
 
 [[nodiscard]] uint32_t parse_seed(std::string_view text) {
@@ -290,7 +293,9 @@ void check_director_options(Options& options) {
     return value;
 }
 
-bool hardware_acceleration_asked(const Options& options, bool setting) noexcept {
+oa::ui::engine_settings::HardwareAcceleration hardware_acceleration_asked(
+    const Options& options, oa::ui::engine_settings::HardwareAcceleration setting
+) noexcept {
     return options.hardware_acceleration.value_or(setting);
 }
 
@@ -349,9 +354,25 @@ namespace {
     Options result;
     std::string joined_line;
     uint32_t extension_effects = 0;
-    // Both acceleration flags are refused once the line is read, wherever they stand.
-    bool acceleration_on = false;
-    bool acceleration_off = false;
+    // The acceleration flags, wherever they stand, must name one level: the
+    // first given and the first that names another are refused once the
+    // line is read.
+    using oa::ui::engine_settings::HardwareAcceleration;
+
+    struct AccelerationFlagGiven {
+        std::string text;
+        HardwareAcceleration level{};
+    };
+
+    std::optional<AccelerationFlagGiven> acceleration_first;
+    std::optional<AccelerationFlagGiven> acceleration_differing;
+    const auto take_acceleration = [&](std::string_view text, HardwareAcceleration level) {
+        result.hardware_acceleration = level;
+        if (!acceleration_first)
+            acceleration_first = AccelerationFlagGiven{std::string(text), level};
+        else if (acceleration_first->level != level && !acceleration_differing)
+            acceleration_differing = AccelerationFlagGiven{std::string(text), level};
+    };
     for (int index = 1; index < argc; ++index) {
         const std::string_view argument(argv[index]);
         auto value = [&](std::string_view name) -> std::string_view {
@@ -385,11 +406,16 @@ namespace {
             );
             result.max_frames_per_second_given = true;
         } else if (argument == "--hardware-acceleration") {
-            result.hardware_acceleration = true;
-            acceleration_on = true;
+            take_acceleration(argument, HardwareAcceleration::full);
+        } else if (argument.starts_with(kAccelerationLevelFlag)) {
+            const auto level = oa::ui::engine_settings::hardware_acceleration_from_text(
+                argument.substr(kAccelerationLevelFlag.size())
+            );
+            if (!level)
+                throw std::runtime_error("--hardware-acceleration takes off, basic or full");
+            take_acceleration(argument, *level);
         } else if (argument == "--no-hardware-acceleration") {
-            result.hardware_acceleration = false;
-            acceleration_off = true;
+            take_acceleration(argument, HardwareAcceleration::off);
         } else if (argument == "--force-capable")
             result.force_capable = true;
         else if (argument == "--native-density")
@@ -562,7 +588,7 @@ namespace {
                 << extension_text(extension, ExtensionText::usage_checks, "")
                 << "[--debug-order-lines] "
                    "[--max-fps N] "
-                   "[--hardware-acceleration | --no-hardware-acceleration] "
+                   "[--hardware-acceleration[=off|basic|full] | --no-hardware-acceleration] "
                    "[--benchmark FRAMES] [--match-ticks N "
                    "[--frame-rate FPS [--frame-log FILE] [--scroll-camera] [--march] "
                    "[--follow] [--frame-clock MS]]] "
@@ -636,10 +662,14 @@ namespace {
             std::string("-") + result.launch.unavailable_switch + " is not handled by this build"
         );
     }
-    if (acceleration_on && acceleration_off)
+    if (acceleration_differing) {
+        // Named in one order whichever came first.
+        const std::string& first = acceleration_first->text;
+        const std::string& second = acceleration_differing->text;
         throw std::runtime_error(
-            "--hardware-acceleration and --no-hardware-acceleration cannot be used together"
+            std::min(first, second) + " and " + std::max(first, second) + " cannot be used together"
         );
+    }
     if (result.campaign_mission.has_value() != !result.campaign.empty())
         throw std::runtime_error("--campaign and --mission are used together");
     if (result.campaign_restart_tick && !result.campaign_mission)

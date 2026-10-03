@@ -29,12 +29,16 @@ enum class RecordedTrouble : uint8_t {
 /// the facts the Hardware acceleration row's status and the renderer's
 /// locks follow from.
 struct AccelerationFacts {
-    /// Acceleration is asked for: either flag decides, else the Hardware
-    /// acceleration setting in effect (hardware_acceleration_asked).
-    bool asked{};
-    /// --hardware-acceleration (true) or --no-hardware-acceleration (false);
-    /// empty for neither.
-    std::optional<bool> flag{};
+    /// The level asked for: a flag decides, else the Hardware acceleration
+    /// setting in effect (hardware_acceleration_asked). Basic and Full ask
+    /// for the graphics card; Full is drawn as Basic until the game draws
+    /// the battlefield on the card.
+    oa::ui::engine_settings::HardwareAcceleration asked{
+        oa::ui::engine_settings::HardwareAcceleration::off
+    };
+    /// The level a flag names (Options::hardware_acceleration); empty for
+    /// no flag.
+    std::optional<oa::ui::engine_settings::HardwareAcceleration> flag{};
     /// --force-capable: the renderer counts as able, and neither the
     /// environment's driver nor SDL's software renderer locks a row.
     bool force_capable{};
@@ -61,7 +65,7 @@ struct AccelerationFacts {
     /// was made again.
     bool driver_failed{};
     /// The memory guard stopped the graphics card scaling the frames for the
-    /// rest of the run, which switching the setting Off then On does not
+    /// rest of the run, which setting the setting to Off and back does not
     /// lift.
     bool memory_dropped{};
     /// The step-down stopped the graphics card scaling the frames for the
@@ -135,32 +139,33 @@ struct AccelerationReport {
 ///
 /// The status is the first that applies: under 2 GiB, whatever the setting
 /// or the flags, saying so whether a record skipped a driver; Off, by
-/// either, with a driver a record skipped and still holds; Off by
-/// --no-hardware-acceleration; Off by the setting; then, with acceleration
-/// asked for, an environment that names a driver (unless
-/// --hardware-acceleration or --force-capable); a shared game or a replay,
-/// where a renderer not found unable waits for the match to end; a driver
-/// that failed in this run; the memory guard's drop in this run; an error
-/// of the game's own in this run; a record against the renderer's driver
-/// (unless --hardware-acceleration), or records that could not be read
-/// after an unclean exit, as a failure or as the game having stopped; a
-/// renderer found unable after drivers skipped by records, as their records
-/// say, or from the next start once those are cleared; a renderer found
-/// unable, SDL's software renderer among them (unless --force-capable), as
-/// lacking a feature or as no usable graphics card; a trial that could not
-/// be written; the step-down's last rung in this run, as frames too slow;
-/// in use while the graphics card scales the frames, on another driver
-/// where a record skipped one, with less smoothing once the step-down has
-/// lowered its rung for slow frames, else with no smoothing where it
-/// started at the lowest budget; and otherwise from the next start, which
-/// a renderer not yet looked at shows. Acceleration is out of reach on the
-/// environment's driver (unless --hardware-acceleration or
-/// --force-capable), under 2 GiB, or on a renderer found unable (unless
-/// --force-capable, which never lifts a failed function test), unless a
-/// record skipped a driver at this start or, on an unable renderer, a
-/// driver failed in this run; a renderer not yet looked at, a record, and a
-/// trial that could not be written leave it within reach, so that the row
-/// can try again.
+/// either, with a driver a record skipped and still holds; Off by a flag;
+/// Off by the setting; then, with Basic or Full asked for, an environment
+/// that names a driver (unless a flag asks for the card or
+/// --force-capable); a shared game or a replay, where a renderer not found
+/// unable waits for the match to end, naming the level that then takes
+/// effect; a driver that failed in this run; the memory guard's drop in
+/// this run; an error of the game's own in this run; a record against the
+/// renderer's driver (unless a flag asks for the card), or records that
+/// could not be read after an unclean exit, as a failure or as the game
+/// having stopped; a renderer found unable after drivers skipped by
+/// records, as their records say, or from the next start once those are
+/// cleared; a renderer found unable, SDL's software renderer among them
+/// (unless --force-capable), as lacking a feature or as no usable graphics
+/// card; a trial that could not be written; the step-down's last rung in
+/// this run, as frames too slow; while the graphics card scales the
+/// frames, Full asked for, which the game cannot draw yet, so Basic is in
+/// use in its place; else in use, on another driver where a record skipped
+/// one, with less smoothing once the step-down has lowered its rung for
+/// slow frames, else with no smoothing where it started at the lowest
+/// budget; and otherwise from the next start, which a renderer not yet
+/// looked at shows. Acceleration is out of reach on the environment's
+/// driver (unless a flag asks for the card or --force-capable), under
+/// 2 GiB, or on a renderer found unable (unless --force-capable, which
+/// never lifts a failed function test), unless a record skipped a driver
+/// at this start or, on an unable renderer, a driver failed in this run; a
+/// renderer not yet looked at, a record, and a trial that could not be
+/// written leave it within reach, so that the row can try again.
 /// Vertical sync is out of reach on SDL's software renderer (unless
 /// --force-capable), on a renderer whose device each change resets, and
 /// once the renderer refused it.
@@ -170,8 +175,8 @@ struct AccelerationReport {
 [[nodiscard]] AccelerationReport report_acceleration(const AccelerationFacts& facts) noexcept;
 
 /// Returns what the facts the tier is decided from say of the renderer and
-/// the run, as the settings dialog's status reads them: acceleration asked
-/// for by the flag, else by the setting; the flag; --force-capable; the
+/// the run, as the settings dialog's status reads them: the level asked
+/// for, by the flag, else by the setting; the flag; --force-capable; the
 /// environment's driver or a video driver that draws no window; the
 /// machine's memory; the renderer, where there is one, able when probe
 /// items 1 to 3 found it capable and the function test did not fail, and

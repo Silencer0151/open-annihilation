@@ -83,10 +83,11 @@ Off, and the windowed checks' `SDL_RENDER_DRIVER=software` locks both, so no
 check draws through the graphics card or waits for the display. Four
 checks pass `--force-capable`, which lifts those locks:
 `native-engine-settings`, so that it can turn Vertical sync On and read it
-back, and turn Hardware acceleration On and Off through the dialog in one
-step of its own, which from 2 GiB draws in the accelerated tier on SDL's
-software renderer and retries it after a drop or a function test forced to
-fail, every other step leaving it Off; and `native-render-tiers`,
+back, and set Hardware acceleration to Basic, Full and Off through the
+dialog in one step of its own, which from 2 GiB draws in the accelerated
+tier on SDL's software renderer, Full as Basic with the status saying so,
+and retries it after a drop or a function test forced to fail, every other
+step leaving it Off; and `native-render-tiers`,
 `native-render-tiers-density` and `native-demo-render-tiers`, which with
 `--hardware-acceleration` run the start-up function test on SDL's software
 renderer and draw in the accelerated tier, switching it off and on as the
@@ -259,8 +260,8 @@ walk runs:
   layers in tiles past a texture limit of 2048. Then it starts the game
   again and again, in the one process, on renderer records in a folder of
   its own beside its reports, removed when it ends, as the player's own
-  profile keeps them, with the setting On under `--force-capable`, 8 GiB
-  of memory taken
+  profile keeps them, with the setting at Basic under `--force-capable`,
+  8 GiB of memory taken
   and its own clock for the stages of the sentinel: a left-over trial
   struck at the first restart, also with the sentinel's file garbled or
   lost, and recorded at the second, or at the first where a fault can stop

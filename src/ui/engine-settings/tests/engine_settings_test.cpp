@@ -27,6 +27,7 @@ void check(bool condition, const char* expression, const char* file, int line) {
 
 namespace settings = oa::ui::engine_settings;
 using oa::platform::preferences::Values;
+using settings::HardwareAcceleration;
 
 /// The platform and file the tests run the player's own preferences on.
 constexpr settings::Inputs players_own_on_linux{true, false, {}};
@@ -62,13 +63,13 @@ void defaults_play_as_without_the_settings() {
     CHECK(defaults.max_frame_rate == settings::highest_frame_rate);
     CHECK(defaults.anti_aliasing == settings::AntiAliasing::off);
     CHECK(!defaults.frame_stats);
-    CHECK(!defaults.hardware_acceleration);
+    CHECK(defaults.hardware_acceleration == HardwareAcceleration::off);
     CHECK(!defaults.vertical_sync);
     CHECK(defaults == settings::EngineSettings{});
 }
 
-void hardware_acceleration_defaults_on_for_the_players_own_file_on_every_machine() {
-    // The player's own file: On on every platform and machine, a light
+void hardware_acceleration_defaults_to_full_for_the_players_own_file_on_every_machine() {
+    // The player's own file: Full on every platform and machine, a light
     // machine and a Raspberry Pi included; Vertical sync Off everywhere.
     const std::array<settings::Inputs, 5> own{{
         players_own_on_linux,
@@ -79,7 +80,7 @@ void hardware_acceleration_defaults_on_for_the_players_own_file_on_every_machine
     }};
     for (const auto& inputs : own) {
         const auto defaults = settings::default_settings(inputs);
-        CHECK(defaults.hardware_acceleration);
+        CHECK(defaults.hardware_acceleration == HardwareAcceleration::full);
         CHECK(!defaults.vertical_sync);
         CHECK(settings::read_settings({}, inputs, false) == defaults);
     }
@@ -87,48 +88,98 @@ void hardware_acceleration_defaults_on_for_the_players_own_file_on_every_machine
     for (auto inputs : own) {
         inputs.players_own_profile = false;
         const auto defaults = settings::default_settings(inputs);
-        CHECK(!defaults.hardware_acceleration);
+        CHECK(defaults.hardware_acceleration == HardwareAcceleration::off);
         CHECK(!defaults.vertical_sync);
     }
 }
 
-void the_renderer_settings_read_only_numbers() {
-    // 0 is Off and any number above it On, on either file.
+void hardware_acceleration_reads_its_words_and_the_switchs_numbers() {
+    // The words name the levels, and the levels' order is the dialog's.
+    CHECK(settings::hardware_acceleration_text(HardwareAcceleration::off) == "off");
+    CHECK(settings::hardware_acceleration_text(HardwareAcceleration::basic) == "basic");
+    CHECK(settings::hardware_acceleration_text(HardwareAcceleration::full) == "full");
+    for (const auto level : settings::hardware_acceleration_levels)
+        CHECK(
+            settings::hardware_acceleration_from_text(
+                settings::hardware_acceleration_text(level)
+            ) == level
+        );
+    CHECK(settings::hardware_acceleration_levels[0] == HardwareAcceleration::off);
+    CHECK(settings::hardware_acceleration_levels[1] == HardwareAcceleration::basic);
+    CHECK(settings::hardware_acceleration_levels[2] == HardwareAcceleration::full);
+    for (const char* text : {"", "Off", "BASIC", "Full", "on", " full", "full ", "1"})
+        CHECK(!settings::hardware_acceleration_from_text(text));
     for (const auto& inputs : {settings::Inputs{}, players_own_on_linux}) {
         const auto read = [&](std::string_view key, const char* text) {
             return settings::read_settings(one_key(key, text), inputs, false);
         };
-        CHECK(!read(settings::key::hardware_acceleration, "0").hardware_acceleration);
-        CHECK(read(settings::key::hardware_acceleration, "1").hardware_acceleration);
-        CHECK(read(settings::key::hardware_acceleration, "7").hardware_acceleration);
-        CHECK(!read(settings::key::hardware_acceleration, "-1").hardware_acceleration);
+        const auto level = [&](const char* text) {
+            return read(settings::key::hardware_acceleration, text).hardware_acceleration;
+        };
+        CHECK(level("off") == HardwareAcceleration::off);
+        CHECK(level("basic") == HardwareAcceleration::basic);
+        CHECK(level("full") == HardwareAcceleration::full);
+        // A file the On and Off switch wrote keeps working: 0 is Off and any
+        // number above it Full, on either file.
+        CHECK(level("0") == HardwareAcceleration::off);
+        CHECK(level("1") == HardwareAcceleration::full);
+        CHECK(level("7") == HardwareAcceleration::full);
+        CHECK(level("-1") == HardwareAcceleration::off);
         CHECK(!read(settings::key::vertical_sync, "0").vertical_sync);
         CHECK(read(settings::key::vertical_sync, "1").vertical_sync);
-        // A word, or anything that is not a whole number, gives the default.
+        // Any other text gives the default: another word or letter case, or
+        // what is neither a word nor a whole number. Vertical sync reads
+        // only numbers.
         const auto defaults = settings::default_settings(inputs);
-        for (const char* text : {"off", "false", "no", "on", "", " 0", "0 ", "1.0"}) {
+        for (const char* text :
+             {"Off",
+              "BASIC",
+              "Full",
+              "false",
+              "no",
+              "on",
+              "",
+              " 0",
+              "0 ",
+              "1.0",
+              " full",
+              "full "}) {
             CHECK(read(settings::key::hardware_acceleration, text) == defaults);
             CHECK(read(settings::key::vertical_sync, text) == defaults);
         }
+        CHECK(read(settings::key::vertical_sync, "off") == defaults);
     }
-    // Written as 1 or 0 only when changed; Restore defaults erases each at
-    // its default, the player's own file's On included.
+    // Written as its word, and Vertical sync as 1 or 0, only when changed;
+    // Restore defaults erases each at its default, the player's own file's
+    // Full included.
     const auto own = settings::default_settings(players_own_on_linux);
     auto off = own;
-    off.hardware_acceleration = false;
+    off.hardware_acceleration = HardwareAcceleration::off;
     off.vertical_sync = true;
     Values values;
     settings::write_settings(values, own, off, own, false);
     CHECK(values.size() == 2);
-    CHECK(values.at(std::string{settings::key::hardware_acceleration}) == "0");
+    CHECK(values.at(std::string{settings::key::hardware_acceleration}) == "off");
     CHECK(values.at(std::string{settings::key::vertical_sync}) == "1");
     CHECK(settings::read_settings(values, players_own_on_linux, false) == off);
     settings::write_settings(values, off, own, own, true);
     CHECK(values.empty());
-    // Back On by hand, on the player's own file, writes 1.
+    // Back to Full by hand, on the player's own file, writes full over the
+    // switch's 0; Basic writes basic.
     values = one_key(settings::key::hardware_acceleration, "0");
     settings::write_settings(values, off, own, own, false);
-    CHECK(values.at(std::string{settings::key::hardware_acceleration}) == "1");
+    CHECK(values.at(std::string{settings::key::hardware_acceleration}) == "full");
+    auto basic = own;
+    basic.hardware_acceleration = HardwareAcceleration::basic;
+    settings::write_settings(values, own, basic, own, false);
+    CHECK(values.at(std::string{settings::key::hardware_acceleration}) == "basic");
+    CHECK(settings::read_settings(values, players_own_on_linux, false) == basic);
+    // A file that still holds the switch's 1 reads as the player's own
+    // default, so Restore defaults then OK erases it.
+    values = one_key(settings::key::hardware_acceleration, "1");
+    CHECK(settings::read_settings(values, players_own_on_linux, false) == own);
+    settings::write_settings(values, own, own, own, true);
+    CHECK(values.empty());
 }
 
 void escape_opens_the_menu_by_default_only_on_macos_with_the_players_own_file() {
@@ -412,7 +463,7 @@ settings::EngineSettings changed_settings() {
     chosen.anti_aliasing = settings::AntiAliasing::x16;
     chosen.frame_stats = true;
     chosen.screen_size = {1024, 768};
-    chosen.hardware_acceleration = true;
+    chosen.hardware_acceleration = HardwareAcceleration::basic;
     chosen.vertical_sync = true;
     return chosen;
 }
@@ -435,7 +486,7 @@ void only_changed_settings_are_written() {
     CHECK(values.at(std::string{settings::key::anti_aliasing}) == "16");
     CHECK(values.at(std::string{settings::key::frame_stats}) == "1");
     CHECK(values.at(std::string{settings::key::screen_size}) == "1024x768");
-    CHECK(values.at(std::string{settings::key::hardware_acceleration}) == "1");
+    CHECK(values.at(std::string{settings::key::hardware_acceleration}) == "basic");
     CHECK(values.at(std::string{settings::key::vertical_sync}) == "1");
     CHECK(values.at("Total Annihilation|SwitchAlt") == "1");
     CHECK(settings::read_settings(values, {}, false) == chosen);
@@ -501,16 +552,20 @@ void the_round_trip_keeps_every_value() {
         Values values;
         settings::write_settings(values, {}, chosen, {}, false);
         CHECK(settings::read_settings(values, players_own_on_linux, false) == chosen);
-        // Hardware acceleration Off, against the player's own file's On.
+        // Every level of Hardware acceleration, against the player's own
+        // file's Full.
         const auto own = settings::default_settings(players_own_on_linux);
-        chosen.hardware_acceleration = false;
         chosen.vertical_sync = false;
-        Values off;
-        settings::write_settings(off, own, chosen, own, false);
-        CHECK(
-            settings::read_settings(off, players_own_on_linux, false).hardware_acceleration == false
-        );
-        CHECK(!settings::read_settings(off, players_own_on_linux, false).vertical_sync);
+        for (const auto acceleration : settings::hardware_acceleration_levels) {
+            chosen.hardware_acceleration = acceleration;
+            Values against_own;
+            settings::write_settings(against_own, own, chosen, own, false);
+            CHECK(
+                settings::read_settings(against_own, players_own_on_linux, false)
+                    .hardware_acceleration == acceleration
+            );
+            CHECK(!settings::read_settings(against_own, players_own_on_linux, false).vertical_sync);
+        }
     }
 }
 
@@ -635,8 +690,8 @@ int main() {
     the_path_credit_shows_as_whole_cycles();
     shared_games_and_replays_search_at_one_cycle();
     a_game_locks_the_next_game_settings();
-    hardware_acceleration_defaults_on_for_the_players_own_file_on_every_machine();
-    the_renderer_settings_read_only_numbers();
+    hardware_acceleration_defaults_to_full_for_the_players_own_file_on_every_machine();
+    hardware_acceleration_reads_its_words_and_the_switchs_numbers();
     the_renderer_settings_lock_by_the_flags_and_the_renderer();
     if (failures != 0)
         return 1;

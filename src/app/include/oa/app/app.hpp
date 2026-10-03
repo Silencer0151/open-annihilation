@@ -12,6 +12,7 @@
 #include "oa/ui/frontend_state/map_selection.hpp"
 #include "oa/sim/scenario/outcome.hpp"
 #include "oa/ui/frontend_state/skirmish_ui.hpp"
+#include "oa/ui/engine_settings.hpp"
 #include "oa/ui/screen_registry.hpp"
 #include <cstddef>
 #include <cstdint>
@@ -344,10 +345,11 @@ struct Options {
     // --max-fps was given: its rate holds for the run whatever the settings
     // say, and is never saved.
     bool max_frames_per_second_given = false;
-    // --hardware-acceleration (true) or --no-hardware-acceleration (false):
-    // decides the Hardware acceleration setting for the run whatever the
-    // settings say, and is never saved; empty when neither was given.
-    std::optional<bool> hardware_acceleration;
+    // --hardware-acceleration=off|basic|full, --hardware-acceleration (Full)
+    // or --no-hardware-acceleration (Off): decides the Hardware acceleration
+    // setting for the run whatever the settings say, and is never saved;
+    // empty when no flag was given.
+    std::optional<oa::ui::engine_settings::HardwareAcceleration> hardware_acceleration;
     // --force-capable, which only --check-render-tiers and
     // --check-engine-settings take: the renderer counts as one the graphics
     // card could scale the frames on, so that the accelerated tier runs on
@@ -358,8 +360,8 @@ struct Options {
     // --native-density, which only --check-render-tiers takes: the window
     // opens at the display's own pixel density whatever the rule for it
     // says (render_policy::decide_native_density), except under 2 GiB of
-    // memory or with --no-hardware-acceleration, and the check runs its
-    // density case.
+    // memory or with a flag that names Off, and the check runs its density
+    // case.
     bool native_density = false;
     // --frame-rate FPS: the headless match run (--match-ticks) draws every
     // frame of a loop running at FPS frames a second on a clock that
@@ -433,13 +435,15 @@ struct Extension;
 /// @return the parsed options
 [[nodiscard]] Options parse_options(int argc, char** argv, const Extension& extension);
 
-/// Tells whether the run asks for hardware acceleration: either flag decides,
-/// else the Hardware acceleration setting does.
+/// Returns the level of hardware acceleration the run asks for: a flag
+/// decides, else the Hardware acceleration setting does.
 ///
 /// @param options the parsed command line (Options::hardware_acceleration)
-/// @param setting the setting is On
-/// @return true when acceleration is asked for
-[[nodiscard]] bool hardware_acceleration_asked(const Options& options, bool setting) noexcept;
+/// @param setting the setting in effect
+/// @return Off, Basic or Full
+[[nodiscard]] oa::ui::engine_settings::HardwareAcceleration hardware_acceleration_asked(
+    const Options& options, oa::ui::engine_settings::HardwareAcceleration setting
+) noexcept;
 
 /// Parses a frame or tick count option's value.
 ///

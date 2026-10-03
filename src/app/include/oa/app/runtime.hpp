@@ -4545,7 +4545,7 @@ class Runtime final : public menu::Host,
     /// Drops the accelerated presentation for the rest of the run: logs the
     /// reason once and frees every texture and buffer it made, so that frames
     /// are presented as the standard tier presents them, and keeps the tier
-    /// standard until switching Hardware acceleration Off then On, or
+    /// standard until setting Hardware acceleration to Off and back, or
     /// Restore defaults, lifts the drop; nothing lifts the memory guard's.
     /// A drop already noted for the run keeps its kind.
     ///

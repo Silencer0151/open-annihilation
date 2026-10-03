@@ -251,12 +251,15 @@ int Runtime::check_render_tiers() {
                   << " is not capable of the accelerated tier\n";
         return skipped_exit_code;
     }
-    if (options_.hardware_acceleration != true)
+    using oa::ui::engine_settings::HardwareAcceleration;
+    if (!options_.hardware_acceleration ||
+        *options_.hardware_acceleration == HardwareAcceleration::off)
         fail("needs --hardware-acceleration, which switches the accelerated tier on");
-    // The tier as the flags decide it, switched as --hardware-acceleration
-    // and --no-hardware-acceleration switch it.
+    // The tier as the flags decide it, switched as --hardware-acceleration,
+    // at the level it was given, and --no-hardware-acceleration switch it.
+    const HardwareAcceleration asked_level = *options_.hardware_acceleration;
     const auto switch_tier = [&](bool on) {
-        options_.hardware_acceleration = on;
+        options_.hardware_acceleration = on ? asked_level : HardwareAcceleration::off;
         update_render_tier();
         if (accelerated_presentation() != on)
             fail(

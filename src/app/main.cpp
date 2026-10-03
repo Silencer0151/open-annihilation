@@ -215,7 +215,7 @@ struct HostDisplay {
         DensityRequest density;
         density.flag = options.hardware_acceleration;
         density.asked = options.native_density;
-        density.setting_on = start.hardware_acceleration;
+        density.setting = start.hardware_acceleration;
         density.unattended = options.unattended;
         density.capture = !options.capture_video.empty();
         // The driver the native-density record names under this engine's
@@ -247,7 +247,7 @@ struct HostDisplay {
         request.flag = options.hardware_acceleration;
         request.force_capable = options.force_capable;
         request.players_own_profile = !options.preferences_file.has_value();
-        request.setting_on = start.hardware_acceleration;
+        request.setting = start.hardware_acceleration;
         renderer_host.decide_start_tier(request);
     }
 

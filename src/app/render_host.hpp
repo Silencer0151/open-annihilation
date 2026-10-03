@@ -327,11 +327,14 @@ run_function_test(SDL_Renderer* renderer, const FunctionTestFaults& faults = {})
 /// What the command line, the settings and the renderer records ask of the
 /// window's pixel density as the game starts, before the window opens.
 struct DensityRequest {
-    /// --hardware-acceleration (true) or --no-hardware-acceleration (false);
-    /// empty for neither.
-    std::optional<bool> flag{};
-    bool asked{};      ///< --native-density, which only the render tiers check passes
-    bool setting_on{}; ///< the Hardware acceleration setting read before the window opens
+    /// The level a flag names (Options::hardware_acceleration); empty for
+    /// no flag.
+    std::optional<oa::ui::engine_settings::HardwareAcceleration> flag{};
+    bool asked{}; ///< --native-density, which only the render tiers check passes
+    /// The Hardware acceleration setting read before the window opens.
+    oa::ui::engine_settings::HardwareAcceleration setting{
+        oa::ui::engine_settings::HardwareAcceleration::off
+    };
     bool unattended{}; ///< a check, a benchmark or another scripted run
     bool capture{};    ///< the run captures video (--capture-video)
     /// The driver the native-density record names under the running
@@ -361,12 +364,15 @@ struct DensityRequest {
 /// What the command line and the settings ask of the tier as the game
 /// starts.
 struct TierRequest {
-    /// --hardware-acceleration (true) or --no-hardware-acceleration (false);
-    /// empty for neither.
-    std::optional<bool> flag{};
+    /// The level a flag names (Options::hardware_acceleration); empty for
+    /// no flag.
+    std::optional<oa::ui::engine_settings::HardwareAcceleration> flag{};
     bool force_capable{};       ///< --force-capable, which only a check passes
     bool players_own_profile{}; ///< no --preferences-file was named
-    bool setting_on{};          ///< the Hardware acceleration setting the run starts with
+    /// The Hardware acceleration setting the run starts with.
+    oa::ui::engine_settings::HardwareAcceleration setting{
+        oa::ui::engine_settings::HardwareAcceleration::off
+    };
 };
 
 /// The game's renderer, made for its window and kept for the run, with what
@@ -691,7 +697,7 @@ class RendererHost {
     renderer_state::Change note_running_failure(const renderer_state::Strike& failure);
 
     /// Clears the strikes and the failure records in memory, as switching
-    /// Hardware acceleration Off then On or Restore defaults does, and lets
+    /// Hardware acceleration set to Off and back or Restore defaults does, and lets
     /// a start whose records could not be read try again. The clearing
     /// waits for OK (keep_cleared_records) or Cancel (restore_records):
     /// until then the file keeps what it took away.

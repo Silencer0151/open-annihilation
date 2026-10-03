@@ -5,10 +5,11 @@
 // the game's renderer keeps (render_policy::step_tier), and acted on, with
 // the start-up function test run where only it is missing and the
 // accelerated presentation switched on or off to match, its watch started
-// as it switches on (runtime_tier_watch.cpp). Off applies at once; On
-// applies at once too, except that a match played with other machines or a
-// replay, known from its loading screen, keeps the tier it began with until
-// it ends. Once the step-down has moved, the tier switches on at the rung
+// as it switches on (runtime_tier_watch.cpp). Off applies at once; Basic
+// and Full, which the game draws as Basic until the battlefield is drawn on
+// the graphics card, apply at once too, except that a match played with
+// other machines or a replay, known from its loading screen, keeps the tier
+// it began with until it ends. Once the step-down has moved, the tier switches on at the rung
 // it reached. The renderer records follow the run: the first accelerated
 // frame moves the sentinel, switching off closes the stage of a path's
 // first frames, and what a match strikes or records is written when it
@@ -34,7 +35,7 @@ void Runtime::update_render_tier() {
     inputs.flag = policy::acceleration_flag(options_.hardware_acceleration);
     inputs.force_capable = options_.force_capable;
     if (engine_settings_)
-        inputs.setting_on = engine_settings_->current.hardware_acceleration;
+        inputs.setting = engine_settings_->current.hardware_acceleration;
     inputs.device_lost = render_run_->device_lost;
     const policy::TierStep step =
         policy::step_tier(inputs, accelerated_.on, host.function_test_hooks());

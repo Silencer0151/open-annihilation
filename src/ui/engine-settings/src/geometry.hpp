@@ -110,8 +110,13 @@ inline constexpr int32_t slider_value_gap = 10;
 inline constexpr int32_t label_gap = 8;
 /// An Off/On switch's width; each half is half of it, inside a 1-pixel border.
 inline constexpr int32_t switch_width = 52;
-/// A level strip's segment width, inside the strip's 1-pixel border.
+/// Enhanced anti-aliasing's level strip's segment width, inside the strip's
+/// 1-pixel border.
 inline constexpr int32_t level_width = 23;
+/// Hardware acceleration's level strip's segment width, inside the strip's
+/// 1-pixel border: room for Basic, its widest caption, with three clear
+/// columns each side.
+inline constexpr int32_t acceleration_level_width = 34;
 /// A lock's width: the padlock and its text, right-aligned on the label line.
 inline constexpr int32_t lock_width = 148;
 /// The padlock's width.
@@ -187,6 +192,12 @@ struct Slider {
     int32_t stops{}; ///< 2 or more
 };
 
+/// What a level strip offers: its levels' count and their width.
+struct Strip {
+    std::size_t levels{};  ///< 2 or more, left to right
+    int32_t level_width{}; ///< each level's columns, inside the strip's 1-pixel border
+};
+
 /// One row of the open section, placed.
 struct Row {
     Setting setting{};           ///< what it changes
@@ -199,7 +210,7 @@ struct Row {
     SourceRect lock_area{};      ///< its padlock and lock text; empty when unlocked
     std::array<SourceRect, most_hint_lines> hints{}; ///< its hint's lines
     std::size_t hint_lines{};                        ///< the lines its hint takes
-    /// Its switch, level strip or slider track; empty for a locked switch
+    /// Its switch, level strip or slider track; empty for a locked row
     /// whose hint lines are its status, which shows its lock there.
     SourceRect control_area{};
     SourceRect value{}; ///< a slider's value; empty for the others
@@ -245,10 +256,44 @@ struct ScrolledRows {
 /// @param stop the stop, clamped to the slider's
 void set_stop(EngineSettings& settings, Setting setting, int32_t stop) noexcept;
 
+/// Tells whether a setting is a strip of levels: Enhanced anti-aliasing and
+/// Hardware acceleration.
+///
+/// @param setting the setting
+/// @return true for a level strip, false for a slider or a switch
+[[nodiscard]] bool is_strip(Setting setting) noexcept;
+
+/// Returns what a strip setting offers.
+///
+/// @param setting a strip setting
+/// @return its levels and their width; no levels for any other setting
+[[nodiscard]] Strip strip_of(Setting setting) noexcept;
+
+/// Returns the level a strip setting shows.
+///
+/// @param settings the settings
+/// @param setting a strip setting
+/// @return its level's index, from 0 at the strip's left
+[[nodiscard]] std::size_t strip_level(const EngineSettings& settings, Setting setting) noexcept;
+
+/// Sets a strip setting to a level.
+///
+/// @param[in,out] settings the settings
+/// @param setting a strip setting; any other is left alone
+/// @param level the level's index, clamped to the strip's
+void set_strip_level(EngineSettings& settings, Setting setting, std::size_t level) noexcept;
+
+/// Returns a level's caption in a strip.
+///
+/// @param setting a strip setting
+/// @param level the level's index
+/// @return "Off", "2x", "Basic" and so on; empty past the strip's last
+[[nodiscard]] std::string_view strip_caption(Setting setting, std::size_t level) noexcept;
+
 /// Tells whether a setting is an Off/On switch.
 ///
 /// @param setting the setting
-/// @return true for a switch, false for a slider or the level strip
+/// @return true for a switch, false for a slider or a level strip
 [[nodiscard]] bool is_switch(Setting setting) noexcept;
 
 /// Tells whether a switch setting is On. Every switch is read and set
@@ -275,7 +320,7 @@ void set_switch(EngineSettings& settings, Setting setting, bool on) noexcept;
 [[nodiscard]] Lock lock_of(const Locks& locks, Setting setting) noexcept;
 
 /// Tells whether a setting's hint lines are its status: such a row, locked,
-/// shows its lock where its switch was, and only its label line fades.
+/// shows its lock where its control was, and only its label line fades.
 ///
 /// @param setting the setting
 /// @return true for Hardware acceleration, whose hint lines are its status
@@ -291,8 +336,8 @@ void set_switch(EngineSettings& settings, Setting setting, bool on) noexcept;
 /// Places the rows of a section.
 ///
 /// A locked switch keeps its switch, faded, with its lock left of it, so
-/// that its value shows; a locked switch whose hint lines are its status
-/// shows its lock where the switch was.
+/// that its value shows; a locked switch or strip whose hint lines are its
+/// status shows its lock where its control was.
 ///
 /// @param page the section
 /// @param locks the dialog's locks
@@ -391,12 +436,15 @@ scroll_thumb(int32_t scroll, int32_t limit, int32_t content_height) noexcept;
 /// @return the stop, 0 to stops - 1
 [[nodiscard]] int32_t stop_at(const SourceRect& track, int32_t column, int32_t stops) noexcept;
 
-/// Returns the segment of the level strip under a column.
+/// Returns the level of a strip under a column.
 ///
-/// @param strip the strip
+/// @param area the strip's control area
+/// @param strip what the strip offers
 /// @param column the column
-/// @return the index in anti_aliasing_levels
-[[nodiscard]] std::size_t level_at(const SourceRect& strip, int32_t column) noexcept;
+/// @return the level's index, from 0 at the strip's left to its last; the
+///     nearest end for a column outside it
+[[nodiscard]] std::size_t
+level_at(const SourceRect& area, const Strip& strip, int32_t column) noexcept;
 
 /// Returns the index of a level in anti_aliasing_levels.
 ///

@@ -42,6 +42,7 @@
 
 #include "oa/platform/preferences.hpp"
 #include "oa/test/check.hpp"
+#include "oa/ui/engine_settings.hpp"
 #include "oa/test/scratch_directory.hpp"
 
 #include <SDL3/SDL.h>
@@ -885,7 +886,7 @@ void test_function_test_fails_wrong_draws() {
 }
 
 /// The start's tier on the dummy video driver, which draws no window: with
-/// the setting On the processor draws everything, the function test does
+/// the setting at Full the processor draws everything, the function test does
 /// not run, and the line says why; a named preferences file says it is off; with
 /// --hardware-acceleration and --force-capable the function test runs and
 /// passes on SDL's software renderer and the tier is accelerated, where the
@@ -907,16 +908,22 @@ void test_start_tier_on_dummy() {
         policy::FunctionTest untested{policy::FunctionTest::not_run};
     };
 
+    using oa::ui::engine_settings::HardwareAcceleration;
     oa::app::TierRequest own{};
     own.players_own_profile = true;
-    own.setting_on = true;
+    own.setting = HardwareAcceleration::full;
     oa::app::TierRequest named{};
+    // --hardware-acceleration names Full, which the game draws as Basic and
+    // says so.
     oa::app::TierRequest flagged{};
-    flagged.flag = true;
+    flagged.flag = HardwareAcceleration::full;
     flagged.force_capable = true;
+    oa::app::TierRequest basic{};
+    basic.flag = HardwareAcceleration::basic;
+    basic.force_capable = true;
     oa::app::TierRequest refused{};
-    refused.flag = false;
-    refused.setting_on = true;
+    refused.flag = HardwareAcceleration::off;
+    refused.setting = HardwareAcceleration::basic;
     const Case cases[] = {
         {own,
          false,
@@ -927,7 +934,10 @@ void test_start_tier_on_dummy() {
         {refused,
          false,
          "standard tier: the processor draws everything (hardware acceleration is off)"},
-        {flagged, true, "accelerated tier: the graphics card scales the interface"},
+        {flagged,
+         true,
+         "basic tier (Full is not in this build): the graphics card scales the interface"},
+        {basic, true, "basic tier: the graphics card scales the interface"},
         {flagged,
          true,
          "standard tier: the processor draws everything (no usable graphics card was found)",
@@ -989,7 +999,7 @@ void test_rebuild_drops_the_tier() {
     }
     RendererHost host;
     oa::app::TierRequest flagged{};
-    flagged.flag = true;
+    flagged.flag = oa::ui::engine_settings::HardwareAcceleration::basic;
     flagged.force_capable = true;
     const auto lines = logged_lines([&]() {
         host.create(window);
@@ -1048,7 +1058,7 @@ void test_records_on_dummy() {
     faults.physical_memory = uint64_t{8} << 30;
     faults.crash_evidence = rs::CrashEvidence::two_in_a_row;
     oa::app::TierRequest flagged{};
-    flagged.flag = true;
+    flagged.flag = oa::ui::engine_settings::HardwareAcceleration::basic;
     flagged.force_capable = true;
     flagged.players_own_profile = true;
     {

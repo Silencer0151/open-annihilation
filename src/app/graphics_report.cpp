@@ -17,15 +17,15 @@ namespace render_probe = oa::platform::render_probe;
 
 namespace settings = oa::ui::engine_settings;
 
-/// What the start-up line says the accelerated tier does, by its reach.
+/// What the start-up line says the basic tier does, by its reach.
 constexpr std::string_view kScalesInterface = "the graphics card scales the interface";
 constexpr std::string_view kAndZoomedIn = " and the zoomed-in view";
 constexpr std::string_view kAndSmoothed = ", and the zoomed-out view is smoothed";
 constexpr std::string_view kSmoothedOnly = "the zoomed-out view is smoothed";
 constexpr std::string_view kAsStandard = "the view is drawn as in the standard tier";
 
-/// The reason the start-up line gives for the standard tier when Hardware
-/// acceleration is turned off.
+/// The reason the start-up line gives for the standard tier when the
+/// setting or a flag set Hardware acceleration to Off.
 constexpr std::string_view kTurnedOff = "hardware acceleration is off";
 
 /// Returns the reason the start-up line gives for the standard tier: the
@@ -64,6 +64,7 @@ std::string_view standard_reason(settings::AccelerationState state) noexcept {
     case AccelerationState::slow_frames:
         return "frames were slow";
     case AccelerationState::next_start:
+    case AccelerationState::full_not_built:
     case AccelerationState::in_use_on_another_driver:
     case AccelerationState::in_use_less_smoothing:
     case AccelerationState::in_use_no_smoothing:
@@ -99,13 +100,17 @@ render_policy::RendererFacts renderer_facts(const render_probe::AdapterFacts& fa
 std::string tier_description(const settings::AccelerationStatus& status) {
     using settings::AccelerationReach;
     using settings::AccelerationState;
-    const bool in_use = status.state == AccelerationState::in_use_on_another_driver ||
+    const bool in_use = status.state == AccelerationState::full_not_built ||
+                        status.state == AccelerationState::in_use_on_another_driver ||
                         status.state == AccelerationState::in_use_less_smoothing ||
                         status.state == AccelerationState::in_use_no_smoothing ||
                         status.state == AccelerationState::in_use;
     if (in_use) {
-        std::string text(accelerated_tier_name);
-        text += " tier: ";
+        std::string text(basic_tier_name);
+        text += " tier";
+        if (status.state == AccelerationState::full_not_built)
+            text += full_not_built_note;
+        text += ": ";
         switch (status.reach) {
         case AccelerationReach::menus:
             text += kScalesInterface;
