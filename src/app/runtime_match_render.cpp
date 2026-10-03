@@ -1268,8 +1268,10 @@ void Runtime::render_match_surface() {
         }
     };
     // How finely units are drawn (enhanced anti-aliasing); director frames
-    // draw them as without it.
-    const auto unit_level = directed ? model_render::UnitSupersampling::off : unit_supersampling_;
+    // draw them as without it, and so do frames of the Full tier, whose
+    // anti-aliasing is the graphics card's world target.
+    const auto unit_level = directed || full_presentation() ? model_render::UnitSupersampling::off
+                                                            : unit_supersampling_;
     const auto plan_unit = [&](uint16_t unit_index) {
         const auto model = unit_model(models, unit_index);
         if (model.instance == nullptr)

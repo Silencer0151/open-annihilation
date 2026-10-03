@@ -42,6 +42,16 @@ the game's resolutions, so it starts there; the player can raise the rate and
 turn on anti-aliasing in the dialog like anywhere else, and Restore defaults
 puts the Pi's defaults back.
 
+Enhanced anti-aliasing's levels keep one key and one strip in every tier,
+but mean two things. Off and Basic draw units finer on the processor at
+the level's factor, and the row's hint says so, warning of the processor
+cost from 8x. While frames are drawn in Full the processor's anti-aliasing
+never runs: the graphics card draws the whole battlefield finer and scales
+it down, 2x and 3x at 2 and 4x, 8x and 16x at 4, within what the machine
+and its memory allow. The host tells the dialog the factor in use
+(`AccelerationStatus::full_supersample`, 0 outside Full), and the hint
+then says what the level does in Full at that factor, 1:1 at Off.
+
 Hardware acceleration has three levels (`HardwareAcceleration`). Off is the
 game as it always drew: the processor draws and scales every frame. Basic
 lets the graphics card scale and compose the frames where it is able to;

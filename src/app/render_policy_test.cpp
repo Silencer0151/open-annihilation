@@ -20,7 +20,10 @@
 // with; the window's density over every input, never native under 2 GiB
 // and, as the game fills it today, only for --native-density; the chrome's
 // filter, at the display's scale on a window at native density, and the
-// magnified scene's; the prescale budget; the
+// magnified scene's; the prescale budget; the Full tier's supersample
+// factor by the Enhanced anti-aliasing level, its budget S by the machine
+// and the factor fitted to the budget and the texture limit, each world
+// target's memory printed; the
 // tiles of textures beyond the renderer's limit; and acting on the tier as
 // the game does: the windowless video drivers, the flags, what the host
 // does for each decision, what Off then On forgets, one frame's step with
@@ -33,6 +36,7 @@
 
 #include "oa/test/check.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <cstdint>
@@ -2655,6 +2659,112 @@ void test_prescale() {
     OA_CHECK(!charge_prescale(quarter, 1));
 }
 
+/// The Full tier's anti-aliasing: the factor each level of the Enhanced
+/// anti-aliasing row asks for, the budget S by the machine, the pixels a
+/// world target holds, and the factor fitted to the budget and the texture
+/// limit for battlefields about those of common windows, each target's
+/// memory printed and held within the budget.
+void test_supersampling() {
+    using oa::ui::engine_settings::AntiAliasing;
+    OA_CHECK(supersample_factor(AntiAliasing::off) == 1);
+    OA_CHECK(supersample_factor(AntiAliasing::x2) == 2);
+    OA_CHECK(supersample_factor(AntiAliasing::x3) == 2);
+    OA_CHECK(supersample_factor(AntiAliasing::x4) == 4);
+    OA_CHECK(supersample_factor(AntiAliasing::x8) == 4);
+    OA_CHECK(supersample_factor(AntiAliasing::x16) == 4);
+
+    constexpr uint64_t whole = supersample_budget_pixels;
+    constexpr uint64_t quarter = supersample_budget_pixels / 4;
+    OA_CHECK(supersample_budget(8 * gibibyte, false, false) == whole);
+    OA_CHECK(
+        supersample_budget(most_memory_at_quarter_supersample_budget + 1, false, false) == whole
+    );
+    OA_CHECK(
+        supersample_budget(most_memory_at_quarter_supersample_budget, false, false) == quarter
+    );
+    OA_CHECK(supersample_budget(0, false, false) == quarter);
+    OA_CHECK(supersample_budget(8 * gibibyte, true, false) == quarter);
+    OA_CHECK(supersample_budget(8 * gibibyte, false, true) == quarter);
+
+    // The texture and its half.
+    OA_CHECK(supersample_target_pixels(100, 50, 1) == 5000 + 1250);
+    OA_CHECK(supersample_target_pixels(100, 50, 2) == 20000 + 5000);
+    OA_CHECK(supersample_target_pixels(100, 50, 4) == 80000 + 20000);
+
+    // Battlefields about those of windows of 1920x1080, 2560x1440,
+    // 3840x2160 and 5120x1440, the HUD strips taken out, with the factor
+    // each budget allows and the memory the target then takes.
+    struct Window {
+        const char* name;
+        uint32_t width;
+        uint32_t height;
+        uint32_t at_whole;   ///< the factor fitted within S when 4x is asked
+        uint32_t at_quarter; ///< within S / 4
+    };
+
+    constexpr std::array<Window, 4> windows{{
+        {"1920x1080", 1792, 864, 4, 2},
+        {"2560x1440", 2560, 1296, 2, 1},
+        {"3840x2160", 3584, 1728, 2, 1},
+        {"5120x1440", 4864, 1152, 2, 1},
+    }};
+    for (const Window& window : windows)
+        for (const uint64_t budget : {whole, quarter}) {
+            const uint32_t fitted = fit_supersample_factor(
+                4, window.width, window.height, budget, unlimited_texture_size
+            );
+            OA_CHECK(fitted == (budget == whole ? window.at_whole : window.at_quarter));
+            const uint64_t pixels = supersample_target_pixels(window.width, window.height, fitted);
+            if (fitted == 1)
+                std::printf(
+                    "supersampling: a window of %s, a battlefield of %ux%u, a budget of %llu "
+                    "MiB: factor 1, no world target\n",
+                    window.name,
+                    window.width,
+                    window.height,
+                    static_cast<unsigned long long>(budget * 4 / (1024 * 1024))
+                );
+            else
+                std::printf(
+                    "supersampling: a window of %s, a battlefield of %ux%u, a budget of %llu "
+                    "MiB: factor %u, the world target and its half %llu MiB\n",
+                    window.name,
+                    window.width,
+                    window.height,
+                    static_cast<unsigned long long>(budget * 4 / (1024 * 1024)),
+                    fitted,
+                    static_cast<unsigned long long>(pixels * 4 / (1024 * 1024))
+                );
+            OA_CHECK(fitted == 1 || pixels <= budget);
+            // Asking for less never gives more.
+            OA_CHECK(
+                fit_supersample_factor(
+                    2, window.width, window.height, budget, unlimited_texture_size
+                ) == std::min(fitted, 2U)
+            );
+            OA_CHECK(
+                fit_supersample_factor(
+                    1, window.width, window.height, budget, unlimited_texture_size
+                ) == 1
+            );
+        }
+    // The texture limit bounds the factor as the budget does.
+    OA_CHECK(fit_supersample_factor(4, 1792, 864, whole, 4096) == 2);
+    OA_CHECK(fit_supersample_factor(4, 1792, 864, whole, 2048) == 1);
+    OA_CHECK(fit_supersample_factor(4, 1792, 864, whole, 8192) == 4);
+    OA_CHECK(fit_supersample_factor(4, 1792, 864, whole, 3584) == 2);
+    // A factor between the ones a target takes is read as the one below.
+    OA_CHECK(fit_supersample_factor(3, 640, 480, whole, unlimited_texture_size) == 2);
+    OA_CHECK(fit_supersample_factor(8, 640, 480, whole, unlimited_texture_size) == 4);
+    // No budget, or no battlefield, is no target.
+    OA_CHECK(fit_supersample_factor(4, 640, 480, 0, unlimited_texture_size) == 1);
+    OA_CHECK(fit_supersample_factor(4, 0, 480, whole, unlimited_texture_size) == 1);
+    // A target that fills the budget exactly still fits.
+    const uint64_t exact = supersample_target_pixels(640, 480, 2);
+    OA_CHECK(fit_supersample_factor(2, 640, 480, exact, unlimited_texture_size) == 2);
+    OA_CHECK(fit_supersample_factor(2, 640, 480, exact - 1, unlimited_texture_size) == 1);
+}
+
 void test_chrome_filter() {
     LadderState state;
     state.filtered_chrome = true;
@@ -3545,6 +3655,7 @@ int main() {
     test_frame_kind();
     test_rung_without();
     test_prescale();
+    test_supersampling();
     test_chrome_filter();
     test_chrome_filter_at_the_display();
     test_native_density_by_table();

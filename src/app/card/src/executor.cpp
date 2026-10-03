@@ -4,7 +4,9 @@
 // Running card command lists on SDL's renderer.
 #include "oa/app/card/executor.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -411,7 +413,8 @@ bool Executor::prepare_target(SDL_Texture* texture, uint32_t factor, const std::
     return true;
 }
 
-TargetHandle Executor::create_target(uint32_t width, uint32_t height, uint32_t factor) {
+TargetHandle
+Executor::create_target(uint32_t width, uint32_t height, uint32_t factor, bool keep_half) {
     if (!is_open()) {
         refuse("the executor is not open");
         return {};
@@ -462,9 +465,9 @@ TargetHandle Executor::create_target(uint32_t width, uint32_t height, uint32_t f
     target.halved_in = 0;
     target.clip = {true, false, {}};
     // The target is made, set to reduce LINEAR, scaled to its factor,
-    // cleared and read back, then cleared transparent; a factor of 4 also
-    // makes the half it reduces through. A failure undoes it all, with
-    // error() already set.
+    // cleared and read back, then cleared transparent; a factor of 4, and
+    // a target that keeps its half, also makes the half it reduces
+    // through. A failure undoes it all, with error() already set.
     const auto undo = [&]() {
         SDL_DestroyTexture(target.texture);
         SDL_DestroyTexture(target.half);
@@ -494,7 +497,7 @@ TargetHandle Executor::create_target(uint32_t width, uint32_t height, uint32_t f
         std::ignore = fail("SDL_CreateTexture of " + need);
         return undo();
     }
-    if (factor == largest_supersampling_factor) {
+    if (factor == largest_supersampling_factor || keep_half) {
         target.half = make(texture_width / 2, texture_height / 2);
         if (target.half == nullptr) {
             std::ignore = fail("SDL_CreateTexture of the half of " + need);
@@ -571,8 +574,30 @@ std::string Executor::check_handles(const CardFrame& frame, const SDL_Texture* f
     for (std::size_t position = 0; position < frame.batches.size(); ++position) {
         const Batch& batch = frame.batches[position];
         std::string fault = target_fault(position, batch.target, "drawn into");
-        if (fault.empty() && batch.operation == Operation::resolve)
+        if (fault.empty() &&
+            (batch.operation == Operation::resolve || batch.operation == Operation::blend_reduce))
             fault = target_fault(position, batch.source, "the source");
+        if (fault.empty() && batch.operation == Operation::blend_reduce) {
+            const Target* source = find_target(batch.source);
+            const Rect& part = batch.source_part;
+            if (source->half == nullptr)
+                fault = "batch " + std::to_string(position) + ": render target " +
+                        std::to_string(batch.source.value) +
+                        " was made without its half, which a two-level reduction reads";
+            else if (
+                uint64_t{static_cast<uint32_t>(part.x)} + static_cast<uint32_t>(part.width) >
+                    uint64_t{source->width} * source->factor ||
+                uint64_t{static_cast<uint32_t>(part.y)} + static_cast<uint32_t>(part.height) >
+                    uint64_t{source->height} * source->factor
+            )
+                fault = "batch " + std::to_string(position) +
+                        ": a source part beyond render target " +
+                        std::to_string(batch.source.value) + "'s texture of " +
+                        size_text(
+                            uint64_t{source->width} * source->factor,
+                            uint64_t{source->height} * source->factor
+                        );
+        }
         if (fault.empty() && batch.operation == Operation::draw && batch.page != PageHandle{}) {
             const Page* page = find_page(batch.page);
             if (page == nullptr)
@@ -793,19 +818,32 @@ bool Executor::run_clear(Run& run, const Batch& batch) {
     return true;
 }
 
+bool Executor::halve(Run& run, Target& source) {
+    if (source.halved_in == run_serial_)
+        return true;
+    if (!bind_texture(run, source.half) ||
+        !set_texture_blend(source.texture, source.blend, SDL_BLENDMODE_NONE))
+        return false;
+    // The half is exactly half the texture's size, so each of its pixels
+    // lands on the corner of four of the texture's and the LINEAR draw
+    // weighs the four evenly.
+    if (!SDL_RenderTexture(renderer_, source.texture, nullptr, nullptr))
+        return fail("SDL_RenderTexture halving a render target");
+    source.halved_in = run_serial_;
+    ++counts_.halvings;
+    return true;
+}
+
 bool Executor::run_resolve(Run& run, const Batch& batch) {
     Target* source = find_target(batch.source);
     SDL_Texture* picture = source->texture;
     SDL_BlendMode* picture_blend = &source->blend;
-    if (source->half != nullptr) {
-        if (source->halved_in != run_serial_) {
-            if (!bind_texture(run, source->half) ||
-                !set_texture_blend(source->texture, source->blend, SDL_BLENDMODE_NONE))
-                return false;
-            if (!SDL_RenderTexture(renderer_, source->texture, nullptr, nullptr))
-                return fail("SDL_RenderTexture halving a render target");
-            source->halved_in = run_serial_;
-        }
+    // A factor of 4 reduces through its half; a lesser factor whose target
+    // keeps a half for the two-level reduction resolves from the texture
+    // itself, since the one LINEAR draw reduces it exactly.
+    if (source->factor == largest_supersampling_factor) {
+        if (!halve(run, *source))
+            return false;
         picture = source->half;
         picture_blend = &source->half_blend;
     }
@@ -825,6 +863,63 @@ bool Executor::run_resolve(Run& run, const Batch& batch) {
     if (!SDL_RenderTexture(renderer_, picture, nullptr, &landed))
         return fail("SDL_RenderTexture of a render target");
     ++counts_.resolves;
+    return true;
+}
+
+bool Executor::run_blend_reduce(Run& run, const Batch& batch) {
+    Target* source = find_target(batch.source);
+    if (!halve(run, *source))
+        return false;
+    Target* destination = batch.target == TargetHandle{} ? nullptr : find_target(batch.target);
+    if (!bind(run, destination) || !set_clip(run, batch.scissored, batch.scissor))
+        return false;
+    // The destination is written, so its own half, if it has one, is stale.
+    if (destination != nullptr)
+        destination->halved_in = 0;
+    const Rect& part = batch.source_part;
+    const SDL_FRect texture_part{
+        static_cast<float>(part.x),
+        static_cast<float>(part.y),
+        static_cast<float>(part.width),
+        static_cast<float>(part.height)
+    };
+    const SDL_FRect half_part{
+        static_cast<float>(part.x / 2),
+        static_cast<float>(part.y / 2),
+        static_cast<float>(part.width / 2),
+        static_cast<float>(part.height / 2)
+    };
+    const SDL_FRect landed{
+        static_cast<float>(batch.destination.x),
+        static_cast<float>(batch.destination.y),
+        static_cast<float>(batch.destination.width),
+        static_cast<float>(batch.destination.height)
+    };
+    // The half at twice the scale, which at a scale of one half is the
+    // whole result: a box of four texture pixels a destination pixel.
+    if (!set_texture_blend(source->half, source->half_blend, SDL_BLENDMODE_NONE))
+        return false;
+    if (!SDL_RenderTexture(renderer_, source->half, &half_part, &landed))
+        return fail("SDL_RenderTexture of a render target's half");
+    // Then the part itself over it at alpha 1 - t, t = log2(1 / scale),
+    // which at a scale of 1 replaces the half entirely.
+    const double scale = static_cast<double>(batch.destination.width) / part.width;
+    const double t = std::clamp(std::log2(1.0 / scale), 0.0, 1.0);
+    if (t < 1.0) {
+        if (!set_texture_blend(source->texture, source->blend, SDL_BLENDMODE_BLEND))
+            return false;
+        if (!SDL_SetTextureAlphaModFloat(source->texture, static_cast<float>(1.0 - t)))
+            return fail("SDL_SetTextureAlphaModFloat of a render target");
+        const bool drawn = SDL_RenderTexture(renderer_, source->texture, &texture_part, &landed);
+        // The target's alpha is put back whatever the draw did, so that a
+        // later resolve or halving reads it whole.
+        const bool put_back = SDL_SetTextureAlphaModFloat(source->texture, 1.0F);
+        if (!drawn)
+            return fail("SDL_RenderTexture of a render target over its half");
+        if (!put_back)
+            return fail("SDL_SetTextureAlphaModFloat putting back a render target's alpha");
+    }
+    ++counts_.blend_reductions;
     return true;
 }
 
@@ -908,6 +1003,9 @@ bool Executor::execute(const CardFrame& frame, SDL_Texture* final_target) {
             break;
         case Operation::resolve:
             ran = run_resolve(run, batch);
+            break;
+        case Operation::blend_reduce:
+            ran = run_blend_reduce(run, batch);
             break;
         }
         if (!ran) {

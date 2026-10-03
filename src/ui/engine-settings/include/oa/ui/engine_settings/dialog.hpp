@@ -222,11 +222,17 @@ struct AccelerationStatus {
     /// The level asked for, by the setting or a flag, which
     /// AccelerationState::waiting_for_game_end names.
     HardwareAcceleration asked{HardwareAcceleration::off};
-    /// Full's anti-aliasing while it is in use: the samples a pixel across
-    /// the graphics card draws the view at, 1 for none, which the second
-    /// line of AccelerationState::full_in_use and
+    /// Full's anti-aliasing at the step-down's rung while it is in use: the
+    /// samples a pixel across the graphics card may draw the view at, 1 for
+    /// none, which the second line of AccelerationState::full_in_use and
     /// full_in_use_less_anti_aliasing names.
     uint8_t supersample{1};
+    /// How many times finer than the window, along each axis, the graphics
+    /// card drew the battlefield in the last Full frame: 1, 2 or 4, as the
+    /// Enhanced anti-aliasing row's level, the rung and the machine allow;
+    /// 0 while frames are not drawn in Full. The row's hint says what its
+    /// level does in Full from it.
+    uint8_t full_supersample{};
 
     friend bool operator==(const AccelerationStatus&, const AccelerationStatus&) = default;
 };

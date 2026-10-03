@@ -287,6 +287,27 @@ if(BUILD_TESTING)
   add_test(NAME app-full-terrain COMMAND oa-app-full-terrain-test)
   set_tests_properties(app-full-terrain PROPERTIES TIMEOUT 60)
 endif()
+# The Full tier's anti-aliasing (full_supersampling.hpp): how a frame at a
+# zoom is drawn through the world target at a supersample factor and
+# reduced to the window, by the factor's halvings from zoom 1 up and by the
+# two-level blend of a part drawn at zoom 1 below it; pure, so that
+# runtime_full.cpp draws by it and the render tiers check reads back by it.
+add_library(oa-app-full-supersampling src/app/full_supersampling.cpp)
+add_library(oa::app::full_supersampling ALIAS oa-app-full-supersampling)
+target_include_directories(oa-app-full-supersampling PUBLIC src/app)
+target_link_libraries(oa-app-full-supersampling PUBLIC oa-app-card PRIVATE oa-options)
+if(BUILD_TESTING)
+  # No target at a factor of 1; the whole texture resolved from zoom 1 up;
+  # below zoom 1 an even part within the texture reduced by the two-level
+  # blend at a scale within one half to 1, the destination covering the
+  # battlefield, over battlefields of either parity and zooms across the
+  # range, each reduction batch well formed.
+  add_executable(oa-app-full-supersampling-test src/app/full_supersampling_test.cpp)
+  target_link_libraries(oa-app-full-supersampling-test PRIVATE oa-app-full-supersampling
+    oa-test-support oa-options)
+  add_test(NAME app-full-supersampling COMMAND oa-app-full-supersampling-test)
+  set_tests_properties(app-full-supersampling PROPERTIES TIMEOUT 60)
+endif()
 # What the settings dialog says of the renderer (acceleration_status.hpp):
 # Hardware acceleration's status and locks and Vertical sync's lock, from
 # what the run knows of its renderer, its machine and the match.
@@ -675,8 +696,8 @@ set(oa_game_libraries oa-formats-hpi oa-app-game-options oa-app-game-directory o
   oa-data-campaign-assets oa-sim-profile oa-sim-state-hash oa-app-extensions
   oa-ui-engine-settings oa-platform-app-menu oa-platform-job-pool oa-platform-render-probe
   oa-app-render-policy oa-ui-decoded oa-base-bytes oa-base-float-precision oa-app-acceleration-status
-  oa-formats-png oa-app-full-terrain oa-app-card-executor oa-present-gpu-world
-  oa-app-full-models)
+  oa-formats-png oa-app-full-terrain oa-app-full-supersampling oa-app-card-executor
+  oa-present-gpu-world oa-app-full-models)
 # The table that combines the extensions' tables of oa-game
 # (extension_list.hpp); the extensions themselves are registered with
 # oa_add_extension (cmake/OaExtensions.cmake).

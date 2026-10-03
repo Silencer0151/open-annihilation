@@ -10,8 +10,14 @@
 // level updated; render targets at supersampling factors 2 and 4, cleared,
 // drawn into and resolved into the canvas with a downscale, by none and by
 // alpha; a transparent target drawn into and resolved by premultiplied
-// alpha, which composites a half-covered pixel at half the canvas; and a
-// factor-4 target cleared and drawn again between resolves. Where nothing
+// alpha, which composites a half-covered pixel at half the canvas; a
+// factor-4 target cleared and drawn again between resolves; a frame of
+// edges between the target's pixels at factors 2 and 4, whose reduction
+// lands each edge pixel at the share of it the drawing covers; and the
+// two-level reduction of a target that keeps its half, by one half, where
+// it is the box of four pixels, by three quarters and nine tenths, where
+// the half at twice the scale lies under the part at alpha 1 - log2(1 /
+// scale), and by 1, at factors 1 and 2 and under a scissor. Where nothing
 // blends the read-back equals the reference; where it does, the renderer's
 // own rounding of each blend keeps every channel within 2 levels of the
 // reference and 0.5 on average. Malformed frames, and frames naming a page
@@ -21,7 +27,8 @@
 // transparent; draw batches that share their state run in one geometry
 // call; and the renderer's target, scissor, draw colour and draw blend
 // mode are as the executor found them. The processor cost of frames of
-// 5,000 and 20,000 quads is measured and printed, never checked.
+// 5,000 and 20,000 quads is measured and printed, never checked, and so are
+// the texture bytes of the supersampled targets.
 //
 // The reference rasteriser samples each pixel at its centre with the
 // top-left rule, interpolates colours and texel coordinates exactly and
@@ -29,7 +36,11 @@
 // each product divided by 255 and truncated, as SDL's software renderer
 // does; the test keeps vertices on whole pixels of each target's texture
 // and texture coordinates on whole texels, where the renderer's own
-// truncation of them changes nothing.
+// truncation of them changes nothing. Its LINEAR stretch of a render
+// target places and weighs pixels as that renderer's stretch does, in
+// 16.16 positions with 7-bit fractions, the rows first and the columns
+// after, the sum truncated once; a build of that renderer without SSE2 or
+// NEON truncates after each pass and lands within a level of it.
 #include "oa/app/card/executor.hpp"
 
 #include "oa/test/check.hpp"
@@ -337,7 +348,8 @@ struct ReferenceTarget {
     uint32_t width{};
     uint32_t height{};
     uint32_t factor{};
-    Image image; ///< the size times the factor
+    bool keep_half{}; ///< made with a half for the two-level reduction
+    Image image;      ///< the size times the factor
 };
 
 /// The cross product of ab and ac.
@@ -447,6 +459,156 @@ Image halve(const Image& image) {
                     image.at(2 * x, 2 * y + 1)[channel] + image.at(2 * x + 1, 2 * y + 1)[channel];
                 out.at(x, y)[channel] = static_cast<uint8_t>(sum / 4);
             }
+    return out;
+}
+
+/// The bits of a fraction the renderer's LINEAR stretch keeps, and one in
+/// that many bits.
+constexpr uint32_t stretch_fraction_bits = 7;
+constexpr uint32_t stretch_fraction_one = 1U << stretch_fraction_bits;
+/// The bits of a position the stretch keeps below the pixel.
+constexpr uint32_t stretch_position_bits = 16;
+
+/// Where the pixels of one axis of a LINEAR stretch sample the source, as
+/// the renderer's own stretch places them: each destination pixel's centre
+/// in the source, positions in 16.16 fixed point stepped by the truncated
+/// ratio from half a step less half a pixel, the fraction kept to
+/// stretch_fraction_bits; a pixel before the first source pixel's centre
+/// reads the first pixel alone, and one past the second-last reads the
+/// last alone.
+struct StretchAxis {
+    std::vector<uint32_t> index;    ///< the lower source pixel of each destination pixel
+    std::vector<uint32_t> fraction; ///< its weight toward the next, in stretch_fraction_one
+};
+
+/// Places one axis of a LINEAR stretch.
+///
+/// @param source_count source pixels along the axis
+/// @param destination_count destination pixels along it
+/// @return the placement
+StretchAxis stretch_axis(uint32_t source_count, uint32_t destination_count) {
+    StretchAxis axis;
+    const int64_t one = int64_t{1} << stretch_position_bits;
+    const int64_t step = (int64_t{source_count} << stretch_position_bits) / destination_count;
+    const int64_t start = ((step + 1) / 2) - one / 2;
+    for (uint32_t at = 0; at < destination_count; ++at) {
+        const int64_t position = start + static_cast<int64_t>(at) * step;
+        uint32_t index = 0;
+        uint32_t fraction = 0;
+        if (position >= 0) {
+            index = static_cast<uint32_t>(position >> stretch_position_bits);
+            if (index + 2 > source_count) {
+                index = source_count - 1;
+            } else {
+                fraction = static_cast<uint32_t>(
+                               position >> (stretch_position_bits - stretch_fraction_bits)
+                           ) &
+                           (stretch_fraction_one - 1);
+            }
+        }
+        axis.index.push_back(index);
+        axis.fraction.push_back(fraction);
+    }
+    return axis;
+}
+
+/// Stretches a part of an image LINEAR, as the renderer's own stretch
+/// does: each destination pixel the two source pixels each way nearest its
+/// centre, weighted by stretch_axis's fractions, the rows blended first
+/// and then the columns, the sum truncated once, as that renderer's
+/// stretch does on a processor with SSE2 or NEON; a build without either
+/// truncates after each pass and lands within a level.
+///
+/// @param image the source
+/// @param part the part stretched, in the source's pixels
+/// @param width destination pixels across
+/// @param height destination pixels down
+/// @return the stretched part
+Image stretch_linear(const Image& image, const card::Rect& part, uint32_t width, uint32_t height) {
+    const StretchAxis across = stretch_axis(static_cast<uint32_t>(part.width), width);
+    const StretchAxis down = stretch_axis(static_cast<uint32_t>(part.height), height);
+    Image out(width, height, {});
+    const auto source = [&](uint32_t column, uint32_t row) -> const Pixel& {
+        return image.at(
+            static_cast<uint32_t>(part.x) + column, static_cast<uint32_t>(part.y) + row
+        );
+    };
+    const auto last_column = static_cast<uint32_t>(part.width - 1);
+    const auto last_row = static_cast<uint32_t>(part.height - 1);
+    for (uint32_t y = 0; y < height; ++y) {
+        const uint32_t row = down.index[y];
+        const uint32_t next_row = std::min(row + 1, last_row);
+        const uint32_t weight_down = down.fraction[y];
+        const uint32_t weight_up = stretch_fraction_one - weight_down;
+        for (uint32_t x = 0; x < width; ++x) {
+            const uint32_t column = across.index[x];
+            const uint32_t next_column = std::min(column + 1, last_column);
+            const uint32_t weight_right = across.fraction[x];
+            const uint32_t weight_left = stretch_fraction_one - weight_right;
+            for (std::size_t channel = 0; channel < 4; ++channel) {
+                // The rows first, each column of the pair, then the columns,
+                // the sum truncated once.
+                const uint32_t left = weight_up * source(column, row)[channel] +
+                                      weight_down * source(column, next_row)[channel];
+                const uint32_t right = weight_up * source(next_column, row)[channel] +
+                                       weight_down * source(next_column, next_row)[channel];
+                out.at(x, y)[channel] = static_cast<uint8_t>(
+                    (weight_left * left + weight_right * right) >> (2 * stretch_fraction_bits)
+                );
+            }
+        }
+    }
+    return out;
+}
+
+/// Blends one channel of an opaque source over a destination at an alpha,
+/// as the renderer's own blend of a texture drawn at an alpha does: the
+/// source weighted by the alpha and the destination by the rest, divided
+/// by 255 with rounding.
+///
+/// @param source the source's level
+/// @param destination the level under it
+/// @param alpha the alpha, 0 to 255
+/// @return the blended level
+uint8_t blend_at_alpha(uint32_t source, uint32_t destination, uint32_t alpha) noexcept {
+    uint32_t value = source * alpha + destination * (255 - alpha) + 1;
+    value += value >> 8;
+    return static_cast<uint8_t>(value >> 8);
+}
+
+/// Reduces a part of a target's texture by the two-level blend, as the
+/// executor does: the texture's half, stretched LINEAR at exactly one
+/// half, drawn at twice the scale, then the part drawn over it at alpha
+/// 1 - t, t = log2(1 / scale) by the scale across, left out at a scale of
+/// one half.
+///
+/// @param texture the target's texture
+/// @param part the part reduced, in the texture's pixels, even throughout
+/// @param width destination pixels across
+/// @param height destination pixels down
+/// @return the reduced part, opaque
+Image blend_reduce_reference(
+    const Image& texture, const card::Rect& part, uint32_t width, uint32_t height
+) {
+    const card::Rect whole{
+        0, 0, static_cast<int32_t>(texture.width), static_cast<int32_t>(texture.height)
+    };
+    const Image half = stretch_linear(texture, whole, texture.width / 2, texture.height / 2);
+    const card::Rect half_part{part.x / 2, part.y / 2, part.width / 2, part.height / 2};
+    Image out = stretch_linear(half, half_part, width, height);
+    const double scale = static_cast<double>(width) / part.width;
+    const double t = std::clamp(std::log2(1.0 / scale), 0.0, 1.0);
+    if (t < 1.0) {
+        const Image over = stretch_linear(texture, part, width, height);
+        const auto alpha = static_cast<uint32_t>(std::lround((1.0 - t) * 255.0));
+        for (uint32_t y = 0; y < height; ++y)
+            for (uint32_t x = 0; x < width; ++x)
+                for (std::size_t channel = 0; channel < 3; ++channel)
+                    out.at(x, y)[channel] =
+                        blend_at_alpha(over.at(x, y)[channel], out.at(x, y)[channel], alpha);
+    }
+    for (auto& pixel : out.pixels)
+        pixel[3] = 255;
     return out;
 }
 
@@ -642,6 +804,32 @@ struct Reference {
                     }
                 break;
             }
+            case card::Operation::blend_reduce: {
+                const ReferenceTarget& source = targets.at(batch.source.value);
+                OA_CHECK(source.keep_half || source.factor == card::largest_supersampling_factor);
+                const Image reduced = blend_reduce_reference(
+                    source.image,
+                    batch.source_part,
+                    static_cast<uint32_t>(batch.destination.width),
+                    static_cast<uint32_t>(batch.destination.height)
+                );
+                for (uint32_t y = 0; y < reduced.height; ++y)
+                    for (uint32_t x = 0; x < reduced.width; ++x) {
+                        const int64_t px = int64_t{batch.destination.x} + x;
+                        const int64_t py = int64_t{batch.destination.y} + y;
+                        if (px < 0 || py < 0 || px >= int64_t{image.width} * factor ||
+                            py >= int64_t{image.height} * factor)
+                            continue;
+                        if (batch.scissored &&
+                            (px < batch.scissor.x || py < batch.scissor.y ||
+                             px >= int64_t{batch.scissor.x} + batch.scissor.width ||
+                             py >= int64_t{batch.scissor.y} + batch.scissor.height))
+                            continue;
+                        image.at(static_cast<uint32_t>(px), static_cast<uint32_t>(py)) =
+                            reduced.at(x, y);
+                    }
+                break;
+            }
             }
         }
     }
@@ -694,16 +882,18 @@ struct Fixture {
     /// @param width pixels across
     /// @param height pixels down
     /// @param factor the supersampling factor
+    /// @param keep_half whether it keeps a half for the two-level reduction
     /// @return the target
-    card::TargetHandle make_target(uint32_t width, uint32_t height, uint32_t factor) {
-        const card::TargetHandle target = executor.create_target(width, height, factor);
+    card::TargetHandle
+    make_target(uint32_t width, uint32_t height, uint32_t factor, bool keep_half = false) {
+        const card::TargetHandle target = executor.create_target(width, height, factor, keep_half);
         OA_CHECK(target != card::TargetHandle{});
         if (target == card::TargetHandle{}) {
             std::fprintf(stderr, "create_target: %s\n", executor.error().c_str());
             return target;
         }
         reference.targets[target.value] = {
-            width, height, factor, Image(width * factor, height * factor, {0, 0, 0, 0})
+            width, height, factor, keep_half, Image(width * factor, height * factor, {0, 0, 0, 0})
         };
         return target;
     }
@@ -1210,6 +1400,206 @@ void test_a_target_written_again_resolves_again() {
     OA_CHECK(fixture.executor.counts().resolves == 4);
 }
 
+/// A frame drawn into a target at a supersampling factor and reduced to its
+/// size: an edge that falls between the target's pixels lands at the share
+/// of the pixel the drawing covers, one of two columns at 127 at factor 2
+/// and one of four at 63 or three of four at 191 at factor 4, a slanted
+/// edge at each pixel's share of samples, and the whole frame within the
+/// tolerance of the reference reduced by halving. The target's texture
+/// bytes are printed.
+void test_supersampled_edges_reduce_to_their_coverage() {
+    for (const uint32_t factor : {2U, 4U}) {
+        Fixture fixture;
+        const card::TargetHandle target = fixture.make_target(40, 30, factor);
+        const uint64_t texture_bytes = uint64_t{40} * 30 * factor * factor * card::texel_bytes;
+        const uint64_t half_bytes =
+            factor == card::largest_supersampling_factor ? texture_bytes / 4 : 0;
+        std::printf(
+            "a 40x30 target at factor %u holds %llu bytes of textures\n",
+            factor,
+            static_cast<unsigned long long>(fixture.executor.counts().texture_bytes)
+        );
+        OA_CHECK(fixture.executor.counts().texture_bytes == texture_bytes + half_bytes);
+        card::CardFrame frame;
+        card::Batch clear;
+        clear.operation = card::Operation::clear;
+        clear.target = target;
+        clear.colour = {0.0F, 0.0F, 0.0F, 1.0F};
+        frame.batches.push_back(clear);
+        const float step = 1.0F / static_cast<float>(factor);
+        const card::Colour white{};
+        const card::Index first = next_index(frame);
+        // A square whose left edge lies one step past column 2, so that the
+        // square covers factor - 1 of the column's samples, and whose right
+        // edge is column 12's left edge; a square whose right edge lies one
+        // step into column 30; and a triangle whose slanted edge drops one
+        // row every two columns, from (14, 16) to (2, 22), so that no sample
+        // centre lies on it.
+        card::append_quad(
+            frame, 2.0F + step, 3.0F, 10.0F - step, 10.0F, 0.0F, 0.0F, 0.0F, 0.0F, white
+        );
+        card::append_quad(frame, 20.0F, 3.0F, 10.0F + step, 10.0F, 0.0F, 0.0F, 0.0F, 0.0F, white);
+        append_triangle(
+            frame,
+            {card::Vertex{2.0F, 16.0F, white, 0.0F, 0.0F},
+             card::Vertex{14.0F, 16.0F, white, 0.0F, 0.0F},
+             card::Vertex{2.0F, 22.0F, white, 0.0F, 0.0F}}
+        );
+        draw_since(frame, first, {}, card::Blend::none, target);
+        card::Batch resolve;
+        resolve.operation = card::Operation::resolve;
+        resolve.source = target;
+        resolve.destination = {10, 10, 40, 30};
+        frame.batches.push_back(resolve);
+        OA_CHECK(card::check_frame(frame).empty());
+        const std::string what = "supersampled edges at factor " + std::to_string(factor);
+        fixture.run(what.c_str(), frame, false);
+        const Image read = fixture.canvas.read();
+        const Pixel black{0, 0, 0, 255};
+        const Pixel full{255, 255, 255, 255};
+        // The shares, as the halvings truncate them: (factor - 1) / factor
+        // and 1 / factor of white.
+        const uint8_t most_share = factor == 2 ? 127 : 191;
+        const uint8_t least_share = factor == 2 ? 127 : 63;
+        const auto grey = [](uint8_t level) { return Pixel{level, level, level, 255}; };
+        OA_CHECK(read.at(11, 15) == black);
+        OA_CHECK(read.at(12, 15) == grey(most_share));
+        OA_CHECK(read.at(13, 15) == full);
+        OA_CHECK(read.at(21, 15) == full);
+        OA_CHECK(read.at(22, 15) == black);
+        OA_CHECK(read.at(39, 15) == full);
+        OA_CHECK(read.at(40, 15) == grey(least_share));
+        OA_CHECK(read.at(41, 15) == black);
+        // The triangle's row 19: column 5 inside, column 6 covered three
+        // quarters at either factor, column 7 one quarter, column 8 outside.
+        OA_CHECK(read.at(15, 29) == full);
+        OA_CHECK(read.at(16, 29) == grey(191));
+        OA_CHECK(read.at(17, 29) == grey(63));
+        OA_CHECK(read.at(18, 29) == black);
+    }
+}
+
+/// Returns an image with every pixel opaque.
+///
+/// @param image the image
+/// @return the image with alpha 255 throughout
+Image opaque(Image image) {
+    for (auto& pixel : image.pixels)
+        pixel[3] = 255;
+    return image;
+}
+
+/// The two-level reduction of a render target that keeps its half: the
+/// target drawn 1:1 and its texture reduced by one half, where the result
+/// is the box of four pixels; by three quarters, under a scissor, and by
+/// nine tenths of a part within, where the half at twice the scale lies
+/// under the part at alpha 1 - log2(1 / scale); and by 1, where it is the
+/// part itself; at factor 1, and at factor 2 with the part in the texture's
+/// pixels; each within the tolerance of the reference, which stretches as
+/// the renderer does; the half made once a run and again for the next.
+void test_two_level_reductions_match_the_reference() {
+    const Image texels = opaque(seeded(seed_page, 64, 64));
+    constexpr uint32_t texture_width = 96;
+    constexpr uint32_t texture_height = 72;
+    for (const uint32_t factor : {1U, 2U}) {
+        Fixture fixture;
+        const card::PageHandle page = fixture.make_page({texels});
+        const card::TargetHandle target =
+            fixture.make_target(texture_width / factor, texture_height / factor, factor, true);
+        // The texture and its half.
+        const uint64_t texture_bytes = uint64_t{texture_width} * texture_height * card::texel_bytes;
+        OA_CHECK(
+            fixture.executor.counts().texture_bytes ==
+            texels.pixels.size() * card::texel_bytes + texture_bytes + texture_bytes / 4
+        );
+        card::CardFrame frame;
+        card::Batch clear;
+        clear.operation = card::Operation::clear;
+        clear.target = target;
+        clear.colour = {level(26), level(51), level(77), 1.0F};
+        frame.batches.push_back(clear);
+        // Vertices in pixels of the size: one texture pixel is `unit`.
+        const float unit = 1.0F / static_cast<float>(factor);
+        card::Index first = next_index(frame);
+        card::append_quad(
+            frame, 0.0F, 0.0F, 64.0F * unit, 64.0F * unit, 0.0F, 0.0F, 1.0F, 1.0F, {}
+        );
+        draw_since(frame, first, page, card::Blend::none, target);
+        first = next_index(frame);
+        append_triangle(
+            frame,
+            {card::Vertex{66.0F * unit, 4.0F * unit, {1.0F, 0.0F, 0.0F, 1.0F}, 0.0F, 0.0F},
+             card::Vertex{94.0F * unit, 10.0F * unit, {0.0F, 1.0F, 0.0F, 1.0F}, 0.0F, 0.0F},
+             card::Vertex{70.0F * unit, 68.0F * unit, {0.0F, 0.0F, 1.0F, 1.0F}, 0.0F, 0.0F}}
+        );
+        card::append_quad(
+            frame,
+            8.0F * unit,
+            62.0F * unit,
+            50.0F * unit,
+            8.0F * unit,
+            0.0F,
+            0.0F,
+            0.0F,
+            0.0F,
+            {1.0F, 1.0F, 0.0F, 1.0F}
+        );
+        draw_since(frame, first, {}, card::Blend::none, target);
+        const auto reduce = [&](const card::Rect& part, const card::Rect& destination) {
+            card::Batch batch;
+            batch.operation = card::Operation::blend_reduce;
+            batch.source = target;
+            batch.source_part = part;
+            batch.destination = destination;
+            frame.batches.push_back(batch);
+            return frame.batches.size() - 1;
+        };
+        const card::Rect whole{0, 0, texture_width, texture_height};
+        reduce(whole, {0, 0, 48, 36});
+        const std::size_t scissored = reduce(whole, {50, 0, 72, 54});
+        frame.batches[scissored].scissored = true;
+        frame.batches[scissored].scissor = {54, 4, 60, 40};
+        reduce(whole, {0, 40, 96, 72});
+        reduce({16, 12, 40, 30}, {120, 60, 36, 27});
+        OA_CHECK(card::check_frame(frame).empty());
+        const std::string what = "two-level reductions at factor " + std::to_string(factor);
+        fixture.run(what.c_str(), frame, false);
+        OA_CHECK(fixture.executor.counts().blend_reductions == 4);
+        OA_CHECK(fixture.executor.counts().halvings == 1);
+        // The reduction by one half is the box of four texture pixels,
+        // within the level the renderer's two truncations may lose.
+        const Image boxed = halve(fixture.reference.targets.at(target.value).image);
+        const Image read = fixture.canvas.read();
+        int most = 0;
+        for (uint32_t y = 0; y < boxed.height; ++y)
+            for (uint32_t x = 0; x < boxed.width; ++x)
+                for (std::size_t channel = 0; channel < 3; ++channel)
+                    most = std::max(
+                        most, std::abs(int{read.at(x, y)[channel]} - int{boxed.at(x, y)[channel]})
+                    );
+        std::printf(
+            "%s: the reduction by one half against the box of four: most %d\n", what.c_str(), most
+        );
+        OA_CHECK(most <= 1);
+        // Outside the scissor the canvas is untouched.
+        OA_CHECK(
+            (read.at(52, 2) == Pixel{canvas_colour[0], canvas_colour[1], canvas_colour[2], 255})
+        );
+        // The reduction by 1 is the texture itself.
+        const Image& texture = fixture.reference.targets.at(target.value).image;
+        OA_CHECK(
+            read.at(10, 50)[0] == texture.at(10, 10)[0] &&
+            read.at(90, 100)[2] == texture.at(90, 60)[2]
+        );
+        // A second frame halves again and draws the same.
+        fixture.canvas.clear();
+        fixture.reference.final_image = cleared_canvas();
+        fixture.run(what.c_str(), frame, false);
+        OA_CHECK(fixture.canvas.read().pixels == read.pixels);
+        OA_CHECK(fixture.executor.counts().halvings == 2);
+    }
+}
+
 /// A page's levels hold what the engine wrote into each, a part of one
 /// updated, and a draw names the level it reads.
 void test_levels_of_a_page() {
@@ -1293,8 +1683,8 @@ void test_malformed_frames_are_refused() {
     frame.batches[0].sampling = static_cast<card::Sampling>(9);
     refused("a sampling that names none", frame, "sampling 9 names none");
     frame = good;
-    frame.batches[0].operation = static_cast<card::Operation>(3);
-    refused("an operation that names none", frame, "operation 3 names none");
+    frame.batches[0].operation = static_cast<card::Operation>(4);
+    refused("an operation that names none", frame, "operation 4 names none");
     frame = good;
     frame.batches[0].scissored = true;
     frame.batches[0].scissor = {0, 0, 10, 0};
@@ -1336,6 +1726,40 @@ void test_malformed_frames_are_refused() {
     clear.colour.red = std::nanf("");
     frame.batches.push_back(clear);
     refused("a clear colour that is not a number", frame, "clear colour");
+    // The two-level reduction: a well-formed one of the target's whole
+    // 32x32 texture into 16x16, then each fault.
+    card::Batch two_level;
+    two_level.operation = card::Operation::blend_reduce;
+    two_level.source = target;
+    two_level.source_part = {0, 0, 32, 32};
+    two_level.destination = {0, 0, 16, 16};
+    frame = good;
+    frame.batches.push_back(two_level);
+    OA_CHECK(card::check_frame(frame).empty());
+    frame.batches.back().source = {};
+    refused("a two-level reduction of no target", frame, "reduction of no render target");
+    frame.batches.back().source = target;
+    frame.batches.back().target = target;
+    refused("a two-level reduction into itself", frame, "into itself");
+    frame.batches.back().target = {};
+    frame.batches.back().blend = card::Blend::alpha;
+    refused("a two-level reduction by alpha", frame, "blends only by none");
+    frame.batches.back().blend = card::Blend::none;
+    frame.batches.back().source_part = {0, 0, 32, 0};
+    refused("an empty source part", frame, "empty source part");
+    frame.batches.back().source_part = {-2, 0, 32, 32};
+    refused("a source part left of the texture", frame, "left of or above");
+    frame.batches.back().source_part = {0, 1, 32, 32};
+    refused("a source part on an odd row", frame, "not on even pixels");
+    frame.batches.back().source_part = {0, 0, 32, 32};
+    frame.batches.back().destination = {0, 0, 8, 16};
+    refused("a two-level reduction below one half", frame, "by one half to 1");
+    frame.batches.back().destination = {0, 0, 16, 40};
+    refused("a two-level reduction above 1", frame, "by one half to 1");
+    frame.batches.back().destination = {0, 0, 16, 16};
+    frame.batches.back().scissored = true;
+    frame.batches.back().scissor = {0, 0, 0, 4};
+    refused("a two-level reduction with an empty scissor", frame, "empty scissor");
 
     // Frames that are well formed but name what the executor does not have.
     const auto executor_refuses =
@@ -1365,6 +1789,21 @@ void test_malformed_frames_are_refused() {
     resolve.destination = {0, 0, 16, 16};
     frame.batches.push_back(resolve);
     executor_refuses("a resolve of a target that never was", frame, "the source");
+    // A two-level reduction needs a target made with its half, and a part
+    // within its texture.
+    frame = good;
+    frame.batches.push_back(two_level);
+    executor_refuses("a two-level reduction of a target without a half", frame, "without its half");
+    const card::TargetHandle halved = fixture.make_target(16, 16, 2, true);
+    frame.batches.back().source = halved;
+    OA_CHECK(fixture.executor.execute(frame, nullptr));
+    frame.batches.back().source_part = {0, 0, 32, 34};
+    frame.batches.back().destination = {0, 0, 16, 17};
+    executor_refuses("a part beyond the texture", frame, "beyond render target");
+    frame.batches.back().source_part = {4, 0, 32, 32};
+    frame.batches.back().destination = {0, 0, 16, 16};
+    executor_refuses("a part past the texture's right edge", frame, "beyond render target");
+    fixture.executor.destroy_target(halved);
     // The final target may not be one of the executor's own.
     OA_CHECK(!fixture.executor.execute(good, fixture.executor.target_texture(target)));
     OA_CHECK(fixture.executor.error().find("final target") != std::string::npos);
@@ -1710,6 +2149,8 @@ int main() {
     test_a_transparent_target_resolves_by_premultiplied_alpha();
     test_sampling_is_the_draws_own();
     test_a_target_written_again_resolves_again();
+    test_supersampled_edges_reduce_to_their_coverage();
+    test_two_level_reductions_match_the_reference();
     test_levels_of_a_page();
     test_malformed_frames_are_refused();
     test_pages_beyond_the_limit_are_refused();

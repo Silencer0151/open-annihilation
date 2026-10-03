@@ -97,7 +97,11 @@ the terrain drawn by the card from the terrain atlas's pages with the rest
 drawn by the processor over it, at `full`.
 With the bare flag `native-render-tiers` and `native-demo-render-tiers`
 also switch the Full tier's sprite stage on and hold its frames to the
-processor's composition (see [src/app/README.md](../../src/app/README.md)).
+processor's composition, and set Enhanced anti-aliasing to 2x and 4x,
+where the card draws the battlefield into a world target at that factor
+and the check holds the battlefield to the target read back and reduced
+on the processor as the card reduces it (see
+[src/app/README.md](../../src/app/README.md)).
 
 No window of a check opens at the display's own pixel density but
 `native-render-tiers-density`'s, which `--native-density` opens so: on the

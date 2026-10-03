@@ -24,10 +24,17 @@ and no existing behaviour changes.
   shade a shadow casts), a `Sampling` (`nearest`, `linear`, `pixel_art`:
   how the draw reads the page where it enlarges or reduces it, the draw's
   own, so that one page is drawn differently at different zooms) and an
-  optional scissor; a `clear` of a target; or a `resolve`, which draws a
+  optional scissor; a `clear` of a target; a `resolve`, which draws a
   render target reduced to its own size into a rectangle of another target
-  by `none`, `alpha` or `alpha_premultiplied`. Every batch names the target
-  it draws into: a `TargetHandle`, or none for the frame's final target.
+  by `none`, `alpha` or `alpha_premultiplied`; or a `blend_reduce`, which
+  draws a part of a render target's texture, on even pixels, into a
+  rectangle of another target by the two-level blend: the texture's half,
+  each pixel the mean of four, LINEAR at twice the scale, then the part
+  LINEAR over it at alpha `1 - log2(1 / scale)`, the scale across from one
+  half to 1, so that at one half the result is the box of four pixels, at
+  1 the part itself, and between the weights change evenly with the scale.
+  Every batch names the target it draws into: a `TargetHandle`, or none
+  for the frame's final target.
 - `append_quad` adds a quad as two triangles that share the diagonal from
   the top-left to the bottom-right corner. `check_frame` says what is
   malformed about a frame; the limits it holds a frame to are the named
@@ -65,7 +72,7 @@ and no existing behaviour changes.
   `direct3d` and `software` renderers hold such a page as an `ARGB8888`
   texture and reorder the bytes of each upload, which a page uploaded once
   can bear.
-- `create_target(width, height, factor)` and `destroy_target`. A render
+- `create_target(width, height, factor, keep_half)` and `destroy_target`. A render
   target is a texture of the size times the supersampling factor (1, 2 or
   4), drawn into with vertices in pixels of the size, and reduced by a
   resolve: by one LINEAR draw at factor 2, which averages each square of
@@ -77,6 +84,12 @@ and no existing behaviour changes.
   is then cleared transparent. Drawn into by `alpha_premultiplied` and
   resolved by it, a transparent target composites each partly covered
   pixel by its coverage, which is what anti-aliased models need later.
+  With `keep_half` the target keeps the half at any factor, which a
+  `blend_reduce` reads; the half's pixels count with the target's. The
+  Full tier's world target (`src/app/runtime_full.cpp`) is one: the
+  battlefield drawn at the Enhanced anti-aliasing row's factor and reduced
+  by `resolve` from zoom 1 up, or drawn at zoom 1 and reduced by
+  `blend_reduce` below it.
 - `execute(frame, final_target)` checks the frame whole, `check_frame` and
   then every page, level and target it names, refuses it with nothing drawn
   when anything is wrong, and otherwise runs the batches in order: one
@@ -140,12 +153,24 @@ at half the canvas, which it checks against the value as well as the
 reference; a factor-4 target cleared and drawn again between resolves
 shows each new content; a draw's sampling mode is set on the page only
 when it changes and keeps batches apart; a new target reads back
-transparent. It checks malformed frames and frames naming destroyed pages
-refused with nothing drawn, pages and targets beyond the limit refused
-with an error naming both, batches merged into one call, and the
-renderer's state put back; and it measures and prints the processor cost
-of frames of 5,000 and 20,000 quads, sprite quads of one colour and lit
-quads filled as triangles, which it never checks.
+transparent. A frame of edges between a target's pixels at factors 2 and
+4, resolved, lands each edge pixel at the share of it the drawing covers,
+one of two columns at 127 and one or three of four at 63 and 191, and
+matches the reference reduced by halving exactly; the two-level reduction
+of a target that keeps its half, by one half, where it is the box of four
+pixels within the level the renderer's own halving may lose, by three
+quarters under a scissor and nine tenths of a part within, and by 1, at
+factors 1 and 2, keeps within the tolerance of the reference, which
+stretches as that renderer's LINEAR does, in 16.16 positions with 7-bit
+fractions, rows then columns, truncated once, and blends a texture at an
+alpha as it does, with the half made once a run. It checks malformed
+frames, a two-level reduction's among them, and frames naming destroyed
+pages or a target made without its half refused with nothing drawn, pages
+and targets beyond the limit refused with an error naming both, batches
+merged into one call, and the renderer's state put back; and it measures
+and prints the processor cost of frames of 5,000 and 20,000 quads, sprite
+quads of one colour and lit quads filled as triangles, and the texture
+bytes of the supersampled targets, which it never checks.
 
 ## Known limitations
 

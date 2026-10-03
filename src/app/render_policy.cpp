@@ -1150,6 +1150,58 @@ ScaleFilter world_filter(const LadderState& state, double zoom) noexcept {
 }
 
 // ---------------------------------------------------------------------------
+// The Full tier's anti-aliasing: the supersample factor and the budget S
+
+uint32_t supersample_factor(oa::ui::engine_settings::AntiAliasing level) noexcept {
+    using oa::ui::engine_settings::AntiAliasing;
+    switch (level) {
+    case AntiAliasing::off:
+        return 1;
+    case AntiAliasing::x2:
+    case AntiAliasing::x3:
+        return 2;
+    case AntiAliasing::x4:
+    case AntiAliasing::x8:
+    case AntiAliasing::x16:
+        return largest_supersample_factor;
+    }
+    return 1;
+}
+
+uint64_t supersample_budget(uint64_t memory, bool light_machine, bool raspberry_pi) noexcept {
+    if (memory <= most_memory_at_quarter_supersample_budget || light_machine || raspberry_pi)
+        return supersample_budget_pixels / 4;
+    return supersample_budget_pixels;
+}
+
+uint64_t supersample_target_pixels(uint32_t width, uint32_t height, uint32_t factor) noexcept {
+    const uint64_t texture_width = uint64_t{width} * factor;
+    const uint64_t texture_height = uint64_t{height} * factor;
+    return texture_width * texture_height + (texture_width / 2) * (texture_height / 2);
+}
+
+uint32_t fit_supersample_factor(
+    uint32_t asked, uint32_t width, uint32_t height, uint64_t budget, uint32_t texture_limit
+) noexcept {
+    if (width == 0 || height == 0)
+        return 1;
+    // A render target takes 1, 2 or 4: a factor between is read as the one
+    // below it.
+    uint32_t factor = asked >= largest_supersample_factor ? largest_supersample_factor
+                      : asked >= 2                        ? 2U
+                                                          : 1U;
+    while (factor > 1) {
+        const bool within_limit =
+            texture_limit == unlimited_texture_size || (uint64_t{width} * factor <= texture_limit &&
+                                                        uint64_t{height} * factor <= texture_limit);
+        if (within_limit && supersample_target_pixels(width, height, factor) <= budget)
+            return factor;
+        factor /= 2;
+    }
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
 // Tiled textures
 
 namespace {

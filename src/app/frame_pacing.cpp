@@ -126,6 +126,8 @@ constexpr unsigned kUtf8LeadMask = 0xC0;
 constexpr unsigned kUtf8Continuation = 0x80;
 /// What joins the tier and the render driver in the renderer row's label.
 constexpr std::string_view kTierDriverJoin = ": ";
+/// What joins the tier and its anti-aliasing in the renderer row's label.
+constexpr std::string_view kTierAntiAliasingJoin = " ";
 /// The characters one of the table's texts holds, its terminating zero
 /// left out.
 constexpr std::size_t kTextCharacters = kFrameStatsTextBytes - 1;
@@ -178,6 +180,10 @@ void set_renderer_row(FrameStatsRow& row, const FrameStatsRenderer& renderer) no
         length += taken;
     };
     append(renderer.tier);
+    if (!renderer.anti_aliasing.empty()) {
+        append(kTierAntiAliasingJoin);
+        append(renderer.anti_aliasing);
+    }
     if (!renderer.driver.empty()) {
         append(kTierDriverJoin);
         append(renderer.driver);

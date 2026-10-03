@@ -442,6 +442,25 @@ void pixelart_rgb24(
     const RgbSource& scene, const ScenePlacement& placement, const RgbTarget& picture
 ) noexcept;
 
+/// Draws the scene into the picture as the card's two-level reduction does,
+/// which reduces the Full tier's world target when the view is zoomed out:
+/// the scene halved, each pixel of the half the mean of the four scene
+/// pixels under it, drawn LINEAR at twice the scale, and the scene drawn
+/// LINEAR over it at alpha 1 - t, t = log2(1 / scale) by the scale across,
+/// which runs from one half to 1; both in exact arithmetic, the mix
+/// rounded once to the nearest level with halves up. At one half the
+/// picture is the half alone, a box of four scene pixels a picture pixel;
+/// at 1 it is the scene itself; between, the weights change evenly with
+/// the scale, so nothing pops as it eases. Scene pixels beyond the edge
+/// are the edge's.
+///
+/// @param scene the scene, at least one pixel
+/// @param placement where the scene lands, its scale across from one half to 1
+/// @param[out] picture every pixel written
+void two_level_rgb24(
+    const RgbSource& scene, const ScenePlacement& placement, const RgbTarget& picture
+) noexcept;
+
 /// Lays an overlay over a picture: where an overlay pixel is opaque (alpha
 /// 255) its colour replaces the picture's, and elsewhere the picture shows.
 ///

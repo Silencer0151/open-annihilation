@@ -305,6 +305,11 @@ frame_pacing::FrameStatsRenderer Runtime::frame_stats_renderer() const {
     renderer.tier = full_presentation()          ? full_tier_name
                     : accelerated_presentation() ? basic_tier_name
                                                  : standard_tier_name;
+    // The full tier's anti-aliasing, where the world target draws it.
+    constexpr std::string_view twice = "2x";
+    constexpr std::string_view four_times = "4x";
+    const uint32_t supersample = full_supersample();
+    renderer.anti_aliasing = supersample == 2 ? twice : supersample == 4 ? four_times : "";
     renderer.driver = renderer_driver_;
     renderer.adapter = renderer_adapter_;
     return renderer;

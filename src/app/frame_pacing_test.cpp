@@ -900,6 +900,15 @@ void test_renderer_row() {
     row = oa::app::frame_pacing::frame_stats_table(window, notes, renderer).rows[kRendererRow];
     CHECK(row_reads(row, "standard: direct3d11", "", "", "", "NVIDIA GeForce RTX 3060"));
     CHECK(row.note.view().size() == kTextCharacters);
+    // The full tier's anti-aliasing follows the tier's name.
+    renderer.tier = "full";
+    renderer.anti_aliasing = "2x";
+    row = oa::app::frame_pacing::frame_stats_table(window, notes, renderer).rows[kRendererRow];
+    CHECK(row_reads(row, "full 2x: direct3d11", "", "", "", "NVIDIA GeForce RTX 3060"));
+    renderer.anti_aliasing = {};
+    row = oa::app::frame_pacing::frame_stats_table(window, notes, renderer).rows[kRendererRow];
+    CHECK(row_reads(row, "full: direct3d11", "", "", "", "NVIDIA GeForce RTX 3060"));
+    renderer.tier = "standard";
     // A two-byte character across the cut is left out whole; one that ends
     // at the cut is kept.
     renderer.adapter = "Radeon Graphics 012345\xc3\xa9t";

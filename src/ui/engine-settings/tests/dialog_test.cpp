@@ -518,6 +518,49 @@ void the_level_strip_picks_a_level() {
         find_part(demanding, "Units drawn at 16x and scaled down.", settings::no_control) != nullptr
     );
     CHECK(find_part(demanding, "Needs a fast CPU.", settings::no_control) != nullptr);
+    // While frames are drawn in Full the hint says what the level does
+    // there, at the factor in use, and never asks for a fast processor.
+    settings::AccelerationStatus full = dialog.acceleration;
+    full.full_supersample = 4;
+    CHECK(settings::set_acceleration_status(dialog, full) == DialogAction::redraw);
+    const auto in_full = settings::dialog_layout(dialog);
+    CHECK(
+        find_part(
+            in_full, "In Full the graphics card draws the view 4x finer", settings::no_control
+        ) != nullptr
+    );
+    CHECK(
+        find_part(in_full, "and scales it down for smoother edges.", settings::no_control) !=
+        nullptr
+    );
+    CHECK(find_part(in_full, "Needs a fast CPU.", settings::no_control) == nullptr);
+    full.full_supersample = 2;
+    CHECK(settings::set_acceleration_status(dialog, full) == DialogAction::redraw);
+    CHECK(
+        find_part(
+            settings::dialog_layout(dialog),
+            "In Full the graphics card draws the view 2x finer",
+            settings::no_control
+        ) != nullptr
+    );
+    full.full_supersample = 1;
+    CHECK(settings::set_acceleration_status(dialog, full) == DialogAction::redraw);
+    CHECK(
+        find_part(
+            settings::dialog_layout(dialog),
+            "In Full the graphics card draws the view 1:1;",
+            settings::no_control
+        ) != nullptr
+    );
+    full.full_supersample = 0;
+    CHECK(settings::set_acceleration_status(dialog, full) == DialogAction::redraw);
+    CHECK(
+        find_part(
+            settings::dialog_layout(dialog),
+            "Units drawn at 16x and scaled down.",
+            settings::no_control
+        ) != nullptr
+    );
 
     // Keys step along the strip and stop at its ends.
     CHECK(settings::dialog_key(dialog, DialogKey::down) == DialogAction::redraw);
@@ -2494,6 +2537,19 @@ void fonts_load_and_every_text_fits_its_place() {
             fits(dialog);
         }
     }
+    // Enhanced anti-aliasing's hint in Full, at each factor and each level.
+    for (const uint8_t supersample : {uint8_t{1}, uint8_t{2}, uint8_t{4}})
+        for (const auto& state : level_states()) {
+            settings::AccelerationStatus in_full{};
+            in_full.state = settings::AccelerationState::in_use;
+            in_full.asked = HardwareAcceleration::full;
+            in_full.full_supersample = supersample;
+            settings::Dialog dialog = graphics_page(state, {}, in_full);
+            for (const int32_t scroll : {0, 80}) {
+                dialog.scroll[static_cast<std::size_t>(Page::graphics)] = scroll;
+                fits(dialog);
+            }
+        }
 
     for (const Lock lock :
          {Lock::in_game, Lock::set_by_host, Lock::command_line, Lock::unavailable}) {

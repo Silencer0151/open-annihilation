@@ -147,6 +147,8 @@ AccelerationReport report_acceleration(const AccelerationFacts& facts) noexcept 
                            facts.replay;
     report.status.asked = facts.asked;
     report.status.supersample = facts.full_supersample;
+    // The factor drawn shows only while frames are drawn in Full.
+    report.status.full_supersample = facts.tier_accelerated ? facts.full_supersample_drawn : 0;
     return report;
 }
 

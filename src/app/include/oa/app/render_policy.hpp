@@ -1283,6 +1283,71 @@ enum class ScaleFilter : uint8_t {
 [[nodiscard]] ScaleFilter world_filter(const LadderState& state, double zoom) noexcept;
 
 // ---------------------------------------------------------------------------
+// The Full tier's anti-aliasing: the supersample factor and the budget S
+
+/// The supersample budget S: the most pixels the Full tier's world target
+/// may hold, its texture and the half the zoomed-out reduction reads
+/// together. A provisional figure, chosen without measurement.
+inline constexpr uint64_t supersample_budget_pixels = uint64_t{1} << 25;
+/// The most physical memory, in bytes, with which the budget is a quarter
+/// of supersample_budget_pixels, as it also is on a light machine and a
+/// Raspberry Pi.
+inline constexpr uint64_t most_memory_at_quarter_supersample_budget = 4 * gibibyte;
+/// The largest supersample factor: the world target's texture holds this
+/// many pixels a window pixel along each axis at most, and a render target
+/// takes 1, 2 or this.
+inline constexpr uint32_t largest_supersample_factor = 4;
+
+/// Returns the supersample factor the Enhanced anti-aliasing row asks of
+/// the Full tier, in whose frames the processor's anti-aliasing never
+/// runs: 1 for off, 2 for 2x and 3x, and 4 for 4x, 8x and 16x, the factors
+/// a render target takes.
+///
+/// @param level the row's level
+/// @return the factor, 1, 2 or 4
+[[nodiscard]] uint32_t supersample_factor(oa::ui::engine_settings::AntiAliasing level) noexcept;
+
+/// Returns the supersample budget of a machine: supersample_budget_pixels,
+/// or a quarter of it with most_memory_at_quarter_supersample_budget of
+/// physical memory or less, with memory the system does not report, on a
+/// light machine and on a Raspberry Pi.
+///
+/// @param memory physical memory in bytes, as the system reports it; 0 when it does not say
+/// @param light_machine oa::platform::light_machine
+/// @param raspberry_pi a Raspberry Pi
+/// @return the budget in pixels
+[[nodiscard]] uint64_t
+supersample_budget(uint64_t memory, bool light_machine, bool raspberry_pi) noexcept;
+
+/// Returns the pixels the Full tier's world target holds at a size and a
+/// factor: its texture, the size times the factor along each axis, and
+/// its half, which the zoomed-out reduction reads.
+///
+/// @param width window pixels across the battlefield
+/// @param height window pixels down it
+/// @param factor the supersample factor, 1, 2 or 4
+/// @return the pixels of both textures
+[[nodiscard]] uint64_t
+supersample_target_pixels(uint32_t width, uint32_t height, uint32_t factor) noexcept;
+
+/// Returns the supersample factor a world target of a size is made at: the
+/// factor asked, halved until the target's texture keeps within the
+/// renderer's texture limit along each axis and its pixels
+/// (supersample_target_pixels) within the budget; 1 when no factor above
+/// 1 does, at which the Full tier draws straight to the window and makes
+/// no world target for anti-aliasing.
+///
+/// @param asked the factor the row asks for (supersample_factor)
+/// @param width window pixels across the battlefield
+/// @param height window pixels down it
+/// @param budget the machine's budget in pixels (supersample_budget)
+/// @param texture_limit the largest texture edge the renderer makes; 0 for no limit
+/// @return the factor, 1, 2 or 4, never above `asked`
+[[nodiscard]] uint32_t fit_supersample_factor(
+    uint32_t asked, uint32_t width, uint32_t height, uint64_t budget, uint32_t texture_limit
+) noexcept;
+
+// ---------------------------------------------------------------------------
 // Tiled textures
 
 /// The largest tile, in texels, whatever the renderer allows.

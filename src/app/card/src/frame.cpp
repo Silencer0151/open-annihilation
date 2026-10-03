@@ -88,6 +88,38 @@ std::string check_resolve(const Batch& batch, std::size_t position) {
     return {};
 }
 
+/// Returns what is wrong with a two-level reduction batch, or nothing.
+///
+/// @param batch the batch
+/// @param position the batch's position in the frame
+/// @return the fault; empty for none
+std::string check_blend_reduce(const Batch& batch, std::size_t position) {
+    if (batch.source == TargetHandle{})
+        return batch_name(position) + "a two-level reduction of no render target";
+    if (batch.source == batch.target)
+        return batch_name(position) + "a two-level reduction of a render target into itself";
+    if (batch.blend != Blend::none)
+        return batch_name(position) + "a two-level reduction blends only by none";
+    const Rect& part = batch.source_part;
+    if (part.width <= 0 || part.height <= 0)
+        return batch_name(position) + "an empty source part";
+    if (part.x < 0 || part.y < 0)
+        return batch_name(position) + "a source part left of or above its texture";
+    if (part.x % 2 != 0 || part.y % 2 != 0 || part.width % 2 != 0 || part.height % 2 != 0)
+        return batch_name(position) + "a source part that is not on even pixels";
+    if (batch.destination.width <= 0 || batch.destination.height <= 0)
+        return batch_name(position) + "an empty destination";
+    const double across = static_cast<double>(batch.destination.width) / part.width;
+    const double down = static_cast<double>(batch.destination.height) / part.height;
+    if (across < smallest_blend_reduce_scale || across > 1.0 ||
+        down < smallest_blend_reduce_scale || down > 1.0)
+        return batch_name(position) + "a two-level reduction scales by one half to 1, not " +
+               std::to_string(across) + " across and " + std::to_string(down) + " down";
+    if (batch.scissored && (batch.scissor.width <= 0 || batch.scissor.height <= 0))
+        return batch_name(position) + "an empty scissor";
+    return {};
+}
+
 } // namespace
 
 void append_quad(
@@ -157,6 +189,9 @@ std::string check_frame(const CardFrame& frame) {
             break;
         case Operation::resolve:
             fault = check_resolve(batch, position);
+            break;
+        case Operation::blend_reduce:
+            fault = check_blend_reduce(batch, position);
             break;
         }
         if (!fault.empty())

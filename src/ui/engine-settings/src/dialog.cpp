@@ -45,6 +45,20 @@ constexpr std::array<Setting, 1> kDeveloperRows{Setting::frame_stats};
 /// The lowest level that draws units finer and needs the warning hint.
 constexpr AntiAliasing kDemandingLevel = AntiAliasing::x8;
 
+/// Enhanced anti-aliasing's hint while frames are drawn in Full, by the
+/// factor the graphics card draws the battlefield finer at: there the
+/// processor's anti-aliasing never runs, and the row's levels choose the
+/// factor instead, 2x and 3x giving 2 and 4x and above 4.
+constexpr std::array<std::string_view, 2> kFullAntiAliasingOff{
+    "In Full the graphics card draws the view 1:1;", "a level draws it finer for smoother edges."
+};
+constexpr std::array<std::string_view, 2> kFullAntiAliasingTwice{
+    "In Full the graphics card draws the view 2x finer", "and scales it down for smoother edges."
+};
+constexpr std::array<std::string_view, 2> kFullAntiAliasingFourTimes{
+    "In Full the graphics card draws the view 4x finer", "and scales it down for smoother edges."
+};
+
 /// A switch setting and the member of EngineSettings it is.
 struct SwitchMember {
     Setting setting{};               ///< the switch
@@ -800,7 +814,11 @@ std::string_view hint_line(
         lines = {"Lower it to save power.", {}};
         break;
     case Setting::anti_aliasing:
-        if (settings.anti_aliasing == AntiAliasing::x16)
+        if (acceleration.full_supersample != 0)
+            lines = acceleration.full_supersample >= 4   ? kFullAntiAliasingFourTimes
+                    : acceleration.full_supersample >= 2 ? kFullAntiAliasingTwice
+                                                         : kFullAntiAliasingOff;
+        else if (settings.anti_aliasing == AntiAliasing::x16)
             lines = {"Units drawn at 16x and scaled down.", "Needs a fast CPU."};
         else if (
             static_cast<uint8_t>(settings.anti_aliasing) >= static_cast<uint8_t>(kDemandingLevel)

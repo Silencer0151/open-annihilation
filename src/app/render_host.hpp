@@ -588,6 +588,14 @@ class RendererHost {
     /// @return the rung
     [[nodiscard]] render_policy::LadderState start_rung() const noexcept;
 
+    /// Sets the anti-aliasing Full starts with, which the starting rung and
+    /// its ceiling take (render_policy::StartInputs::full_supersample): the
+    /// samples a pixel across the Enhanced anti-aliasing row asks of Full's
+    /// world target.
+    ///
+    /// @param factor the row's factor, 1, 2 or 4
+    void set_full_supersample(uint8_t factor) noexcept;
+
     /// Reads the records a start keeps and applies what the last run left
     /// behind (renderer_state::RendererState::resolve_leftovers), writing
     /// the strikes and records that made: under SDL_RENDER_DRIVER none at

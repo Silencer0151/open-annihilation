@@ -138,7 +138,12 @@ clamped; `sharp_bilinear_rgb24`, NEAREST into a prescale target a whole
 number of times the scene's size and then LINEAR; `pixelart_rgb24`, the
 renderer's pixel-art filter; `overlay_rgb24`, the overlay rule: an opaque
 overlay pixel's colour replaces the picture's and a transparent one leaves
-it; and `footprint_sample_reference` and `exact_channel`, the exact average
+it; `two_level_rgb24`, the card's two-level reduction, which reduces the
+Full tier's world target when the view is zoomed out: the scene's half,
+each pixel the mean of four, drawn LINEAR at twice the scale under the
+scene drawn LINEAR at alpha 1 - log2(1 / scale), from one half, where it
+is the box of four, to 1, where it is the scene; and
+`footprint_sample_reference` and `exact_channel`, the exact average
 under a picture pixel's footprint wherever the scene lands. A
 `ScenePlacement` says where the scene lands: its scale across and down and
 the picture point its corner lands on. `scene_line_thickness` is the rule
@@ -156,8 +161,11 @@ average against the area pass's reference. `world-zoom-stability` follows a
 seeded line one map pixel wide, a map pixel a frame for 64 frames and in
 eighths of a pixel, at zooms 0.5 to 0.95: the area pass keeps each row's
 light within one level per pixel the line lit, today's point sampling
-loses the line on some frames, and a line drawn by the thin-line rule
-keeps from two thirds to four thirds of a screen pixel's light; and on a
+loses the line on some frames, a line drawn by the thin-line rule
+keeps from two thirds to four thirds of a screen pixel's light, and the
+two-level reduction keeps the line's light within 0.85 and 1.16 of the
+ideal at every zoom, exactly at 0.5, and swings no wider than plain
+bilinear reduction; and on a
 seeded map of fine detail, the area pass's frames shimmer less than point
 sampling's at 0.5, 0.6 and 0.75, and the sharp-bilinear and pixel-art
 references less than NEAREST at 1.37 and 2, the scene moving in eighths of

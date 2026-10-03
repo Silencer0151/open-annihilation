@@ -406,6 +406,116 @@ renderer::Surface composed_after(
     return composed();
 }
 
+/// Blends one channel of a texture drawn at an alpha over what is under it
+/// as SDL's software renderer blends it: the source weighted by the alpha
+/// and the destination by the rest, divided by 255 with rounding.
+///
+/// @param source the texture's level
+/// @param destination the level under it
+/// @param alpha the alpha, 0 to 255
+/// @return the blended level
+uint8_t software_blend_at_alpha(uint32_t source, uint32_t destination, uint32_t alpha) noexcept {
+    uint32_t value = source * alpha + destination * (255 - alpha) + 1;
+    value += value >> 8;
+    return static_cast<uint8_t>(value >> 8);
+}
+
+/// Reduces the Full tier's world target on the processor as the card
+/// reduces it (full_supersampling::WorldTargetPlan): from zoom 1 up by the
+/// factor's halvings, each a LINEAR draw at exactly one half, which on
+/// SDL's software renderer is that renderer's own LINEAR
+/// (software_linear_rgb24) and on a card the exact box; below zoom 1 by
+/// the two-level blend, the texture's half drawn LINEAR at twice the scale
+/// under the part drawn LINEAR at alpha 1 - log2(1 / scale), on the
+/// software renderer as that renderer stretches and blends a texture at
+/// an alpha, and on a card as the exact reference (two_level_rgb24) gives
+/// it.
+///
+/// @param texture the target's texture, RGB24, rows of `width` pixels
+/// @param width texture pixels across
+/// @param height texture pixels down
+/// @param plan how the frame was drawn through the target
+/// @param software the renderer is SDL's software renderer
+/// @return the reduced picture, RGB24 at the plan's destination's size
+std::vector<uint8_t> reduce_world_target_reference(
+    const std::vector<uint8_t>& texture,
+    uint32_t width,
+    uint32_t height,
+    const full_supersampling::WorldTargetPlan& plan,
+    bool software
+) {
+    const auto destination_width = static_cast<uint32_t>(plan.destination.width);
+    const auto destination_height = static_cast<uint32_t>(plan.destination.height);
+    std::vector<uint8_t> out(std::size_t{destination_width} * destination_height * 3U);
+    const wr::RgbTarget target{
+        out.data(), destination_width, destination_height, destination_width
+    };
+    const auto linear = [&](const wr::RgbSource& source, const wr::RgbTarget& into) {
+        const SDL_Rect landed{0, 0, static_cast<int>(into.width), static_cast<int>(into.height)};
+        if (software)
+            software_linear_rgb24(source, 1, landed, into);
+        else
+            wr::bilinear_rgb24(
+                source,
+                {static_cast<double>(into.width) / source.width,
+                 static_cast<double>(into.height) / source.height,
+                 0.0,
+                 0.0},
+                into
+            );
+    };
+    // The texture's half: a LINEAR draw at exactly one half, the box of four.
+    const uint32_t half_width = width / 2;
+    const uint32_t half_height = height / 2;
+    std::vector<uint8_t> half_storage(std::size_t{half_width} * half_height * 3U);
+    const wr::RgbSource whole{texture.data(), width, height, width};
+    linear(whole, {half_storage.data(), half_width, half_height, half_width});
+    const wr::RgbSource half{half_storage.data(), half_width, half_height, half_width};
+    if (!plan.two_level) {
+        linear(plan.factor == 4 ? half : whole, target);
+        return out;
+    }
+    const auto& part = plan.source_part;
+    const wr::RgbSource part_view{
+        texture.data() +
+            (std::size_t{static_cast<uint32_t>(part.y)} * width + static_cast<uint32_t>(part.x)) *
+                3U,
+        static_cast<uint32_t>(part.width),
+        static_cast<uint32_t>(part.height),
+        width
+    };
+    if (!software) {
+        wr::two_level_rgb24(
+            part_view,
+            {static_cast<double>(destination_width) / part.width,
+             static_cast<double>(destination_height) / part.height,
+             0.0,
+             0.0},
+            target
+        );
+        return out;
+    }
+    const wr::RgbSource half_part{
+        half_storage.data() + (std::size_t{static_cast<uint32_t>(part.y / 2)} * half_width +
+                               static_cast<uint32_t>(part.x / 2)) *
+                                  3U,
+        static_cast<uint32_t>(part.width / 2),
+        static_cast<uint32_t>(part.height / 2),
+        half_width
+    };
+    linear(half_part, target);
+    const double scale = static_cast<double>(destination_width) / part.width;
+    const double t = std::clamp(std::log2(1.0 / scale), 0.0, 1.0);
+    if (t < 1.0) {
+        std::vector<uint8_t> near(out.size());
+        linear(part_view, {near.data(), destination_width, destination_height, destination_width});
+        const auto alpha = static_cast<uint32_t>(std::lround((1.0 - t) * 255.0));
+        for (std::size_t at = 0; at < out.size(); ++at)
+            out[at] = software_blend_at_alpha(near[at], out[at], alpha);
+    }
+    return out;
+}
+
 /// Returns a name's text for a zoom: "0.5", "1", "2.5".
 ///
 /// @param zoom the zoom
@@ -2324,6 +2434,209 @@ void Runtime::check_full_render_tier(
             static_cast<float>(match_layout_.width - 1),
             static_cast<float>(match_layout_.height - 1)
         );
+    }
+    // Anti-aliasing: the Enhanced anti-aliasing row's level chooses the
+    // world target's factor, 2x giving 2 and 4x 4, within the budget S and
+    // the texture limit at this battlefield; the processor draws no unit
+    // finer in Full; and the battlefield under a transparent overlay equals
+    // the target read back and reduced on the processor as the card reduces
+    // it: by the factor's halvings from zoom 1 up, and by the two-level
+    // blend of the part drawn at zoom 1 below; with the terrain alone in
+    // the target and with the sprite stage's kinds beside it. With the row
+    // off again the target is freed and the frame drawn straight.
+    {
+        using oa::present::model::UnitSupersampling;
+        const auto level_before = unit_supersampling_;
+        const Area field = battlefield();
+        const auto bf_w = static_cast<uint32_t>(field.w);
+        const auto bf_h = static_cast<uint32_t>(field.h);
+        const Area pointer = cursor();
+        // A Full frame with the sprite stage on, whose pages are alive beside
+        // the terrain's, which full_frame does not allow for: the box filter
+        // never runs and the card draws the frame.
+        const auto staged_frame = [&]() {
+            const uint64_t runs = terrain_box_filter_runs_;
+            auto frame = presented();
+            if (terrain_box_filter_runs_ != runs)
+                fail("the box filter ran for a full frame");
+            if (!full_presentation() || !full_ || !full_->drawn)
+                fail("the frame at zoom " + zoom_text(match_zoom()) + " was not drawn by the card");
+            return frame;
+        };
+        // One case: a Full frame at a zoom with the row at a level, held to
+        // the target reduced on the processor; false when the budget allows
+        // no world target here, which skips the level.
+        const auto hold_reduced = [&](UnitSupersampling level, float zoom) {
+            unit_supersampling_ = level;
+            const uint32_t asked = oa::present::model::supersampling_factor(level);
+            const bool with_sprites = (full_stages() & full::stage_sprites) != 0;
+            at_zoom(zoom);
+            const auto read = with_sprites ? staged_frame() : full_frame();
+            const auto& full = *full_;
+            const auto& plan = full.drawn_plan;
+            const uint32_t expected = policy::fit_supersample_factor(
+                asked,
+                full_supersampling::rounded_up(bf_w, full_supersampling::target_grain),
+                full_supersampling::rounded_up(bf_h, full_supersampling::target_grain),
+                full.supersample_budget,
+                render_texture_limit()
+            );
+            if (full.supersample != expected || plan.factor != expected)
+                fail(
+                    "anti-aliasing " + std::to_string(asked) + "x drew at factor " +
+                    std::to_string(plan.factor) + ", not the " + std::to_string(expected) +
+                    " the budget allows"
+                );
+            if (plan.factor == 1) {
+                std::cout << "render tiers check: full tier anti-aliasing " << asked
+                          << "x: the budget of " << full.supersample_budget * 4 / (1024 * 1024)
+                          << " MiB allows no world target at " << bf_w << 'x' << bf_h
+                          << "; the cases are skipped\n";
+                return false;
+            }
+            for (const auto& model : match_models().draws.models)
+                if (model.plan.level != UnitSupersampling::off)
+                    fail("a unit was drawn finer on the processor in a full frame");
+            if (full.world_target == card::TargetHandle{} ||
+                full.world_target_factor != plan.factor)
+                fail("the world target is not alive at the factor drawn");
+            if (with_sprites && (!full_frame_drawn() || full.sprites.sprites == 0))
+                fail(
+                    "the sprite stage drew nothing into the world target at zoom " + zoom_text(zoom)
+                );
+            // The world target read back, the texture's size.
+            SDL_Texture* texture = full.executor.target_texture(full.world_target);
+            if (texture == nullptr || !SDL_SetRenderTarget(sdl_.renderer, texture))
+                fail(std::string("SDL_SetRenderTarget of the world target: ") + SDL_GetError());
+            SDL_Surface* read_back = SDL_RenderReadPixels(sdl_.renderer, nullptr);
+            const bool back = SDL_SetRenderTarget(sdl_.renderer, nullptr);
+            SDL_Surface* texels = read_back != nullptr
+                                      ? SDL_ConvertSurface(read_back, SDL_PIXELFORMAT_RGB24)
+                                      : nullptr;
+            SDL_DestroySurface(read_back);
+            if (texels == nullptr || !back)
+                fail(std::string("reading the world target back: ") + SDL_GetError());
+            const uint32_t texture_width = full.world_target_width * plan.factor;
+            const uint32_t texture_height = full.world_target_height * plan.factor;
+            if (static_cast<uint32_t>(texels->w) != texture_width ||
+                static_cast<uint32_t>(texels->h) != texture_height) {
+                SDL_DestroySurface(texels);
+                fail("the world target read back is not the texture's size");
+            }
+            std::vector<uint8_t> texture_rgb(std::size_t{texture_width} * texture_height * 3U);
+            for (uint32_t y = 0; y < texture_height; ++y)
+                std::memcpy(
+                    &texture_rgb[std::size_t{y} * texture_width * 3U],
+                    static_cast<const uint8_t*>(texels->pixels) +
+                        static_cast<std::ptrdiff_t>(y) * texels->pitch,
+                    std::size_t{texture_width} * 3U
+                );
+            SDL_DestroySurface(texels);
+            // Reduced on the processor as the card reduces it, and held to
+            // the battlefield under transparent overlays, the cursor and the
+            // last column and row left out.
+            const auto reduced = reduce_world_target_reference(
+                texture_rgb, texture_width, texture_height, plan, software
+            );
+            const auto reduced_width = static_cast<uint32_t>(plan.destination.width);
+            const auto overlay = full.overlay;
+            const auto top_overlay = full.painted;
+            Difference difference;
+            double sum = 0.0;
+            std::size_t channels = 0;
+            for (int y = 0; y + 1 < field.h; ++y)
+                for (int x = 0; x + 1 < field.w; ++x) {
+                    const int sx = field.x + x;
+                    const int sy = field.y + y;
+                    if (sx >= pointer.x && sx < pointer.x + pointer.w && sy >= pointer.y &&
+                        sy < pointer.y + pointer.h)
+                        continue;
+                    const auto cell = static_cast<std::size_t>(y) * bf_w + static_cast<uint32_t>(x);
+                    if (overlay[cell * 4U + 3U] != 0)
+                        continue;
+                    if (with_sprites && top_overlay.size() > cell * 4U + 3U &&
+                        top_overlay[cell * 4U + 3U] != 0)
+                        continue;
+                    const auto at = (static_cast<std::size_t>(sy) * read.width + sx) * 3U;
+                    const auto expected_at =
+                        (static_cast<std::size_t>(y) * reduced_width + static_cast<uint32_t>(x)) *
+                        3U;
+                    ++difference.pixels;
+                    for (std::size_t channel = 0; channel < 3; ++channel) {
+                        const int delta = std::abs(
+                            int{read.rgb[at + channel]} - int{reduced[expected_at + channel]}
+                        );
+                        difference.most = std::max(difference.most, delta);
+                        sum += delta;
+                        ++channels;
+                    }
+                }
+            difference.mean = channels != 0 ? sum / static_cast<double>(channels) : 0.0;
+            const int most_allowed = software ? most_software_difference : most_card_difference;
+            const double most_mean_allowed =
+                plan.two_level ? most_blended_mean_difference : most_mean_scaled_difference;
+            const std::string name = "aa-" + std::to_string(asked) + "x" +
+                                     (with_sprites ? "-sprites" : "") + "-zoom-" + zoom_text(zoom);
+            std::cout << "render tiers check: full tier anti-aliasing " << asked << "x at zoom "
+                      << zoom_text(zoom) << (with_sprites ? " with the sprite stage" : "")
+                      << ": factor " << plan.factor << ", the world target of "
+                      << full.world_target_width << 'x' << full.world_target_height << " ("
+                      << texture_width << 'x' << texture_height << " texels) and its half hold "
+                      << full.world_target_bytes / (1024 * 1024) << " MiB within the budget of "
+                      << full.supersample_budget * 4 / (1024 * 1024) << " MiB; the battlefield of "
+                      << difference.pixels << " pixels against the target reduced "
+                      << (plan.two_level ? "by the two-level blend" : "by halving")
+                      << " on the processor: most " << difference.most << ", mean "
+                      << difference.mean << "; " << cost() << '\n';
+            write_png(picture(name), read);
+            if (full.world_target_bytes > full.supersample_budget * card::texel_bytes)
+                fail("the world target exceeds the budget");
+            if (difference.pixels == 0 || difference.most > most_allowed ||
+                difference.mean > most_mean_allowed) {
+                renderer::Surface reference{
+                    reduced_width, static_cast<uint32_t>(plan.destination.height), {}
+                };
+                reference.rgb = reduced;
+                write_png(picture(name + "-reduced"), reference);
+                fail(
+                    "anti-aliasing " + std::to_string(asked) + "x at zoom " + zoom_text(zoom) +
+                    " strays from the target reduced on the processor"
+                );
+            }
+            return true;
+        };
+        bool budget_allows = true;
+        for (const auto level : {UnitSupersampling::x2, UnitSupersampling::x4}) {
+            for (const float zoom : {kMinBattlefieldZoom, 0.75F, 1.0F, 1.37F, 2.0F})
+                if (!hold_reduced(level, zoom)) {
+                    budget_allows = false;
+                    break;
+                }
+            if (!budget_allows)
+                break;
+        }
+        // Off again: the target is freed and the frame drawn straight.
+        unit_supersampling_ = level_before;
+        at_zoom(1.0F);
+        std::ignore = full_frame();
+        if (full_->world_target != card::TargetHandle{} || full_->drawn_plan.factor != 1 ||
+            full_->supersample != 1)
+            fail("the world target was kept with anti-aliasing off");
+        std::cout << "render tiers check: full tier: with anti-aliasing off again the world target "
+                     "is freed and the frame drawn straight\n";
+        // The sprite stage's kinds in the target beside the terrain, reduced
+        // with it, the processor's overlays over the reduced picture.
+        if (budget_allows) {
+            set_full_stages(full::stage_sprites);
+            for (const float zoom : {0.75F, 1.0F, 2.0F})
+                std::ignore = hold_reduced(UnitSupersampling::x2, zoom);
+            set_full_stages(0);
+            unit_supersampling_ = level_before;
+            at_zoom(1.0F);
+            std::ignore = staged_frame();
+            if (full_->world_target != card::TargetHandle{} || full_->supersample != 1)
+                fail("the world target was kept with anti-aliasing off after the sprite stage");
+        }
     }
     std::cout << "render tiers check: the full tier drew its terrain on the card at every zoom, "
               << full_->frames << " frames, with the box filter never run; pictures in "

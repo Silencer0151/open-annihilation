@@ -6,8 +6,11 @@
 // one pixel per map pixel, moved one map pixel a frame for 64 frames and in
 // eighth-pixel steps, at zooms 0.5 to 0.95: the area pass keeps its light
 // in every row within one level per pixel it touches; today's point
-// sampling loses it on some frames; and a line drawn with the thin-line
-// rule keeps at least two thirds of a screen pixel's light. On a seeded
+// sampling loses it on some frames; a line drawn with the thin-line
+// rule keeps at least two thirds of a screen pixel's light; and the card's
+// two-level reduction, the Full tier's zoomed-out world target, keeps the
+// line's light within 0.85 and 1.16 of the ideal, exactly at 0.5, and
+// swings no wider than plain bilinear reduction. On a seeded
 // map of fine detail, frames of the area pass shimmer less than point
 // sampling's at 0.5, 0.6 and 0.75, and the sharp-bilinear and pixel-art
 // references less than NEAREST at 1.37 and 2, the scene moving in eighths
@@ -46,6 +49,15 @@ constexpr uint32_t line_scene_width = 192;
 constexpr uint32_t line_scene_height = 6;
 /// Column of the line at the first frame; it moves one column left a frame.
 constexpr uint32_t line_first_column = 150;
+
+/// The bounds of a thin line's light through the two-level reduction, as a
+/// share of the ideal, across the zooms it is followed at: the model's
+/// figures, 0.86 to 1.15 at the widest, zoom 0.6, with a hundredth of room.
+constexpr double two_level_least = 0.85;
+constexpr double two_level_most = 1.16;
+/// The pixels of a row the two-level reduction may spread the line over,
+/// each rounded by up to half a level.
+constexpr double two_level_pixels_lit = 4.0;
 
 /// The least light a thin line keeps, in screen pixels of its own level.
 constexpr double thin_line_least = 2.0 / 3.0;
@@ -268,6 +280,62 @@ void test_thin_line_rule_keeps_two_thirds() {
     OA_CHECK(wr::scene_line_thickness(0.75F, 0.5F) == 2);
 }
 
+/// Follows the line one map pixel wide through the two-level reduction, a
+/// map pixel a frame: each row's light stays within two_level_least and
+/// two_level_most of the ideal at every zoom, is the ideal at zoom 0.5,
+/// where the reduction is the box of four, and swings no wider than plain
+/// bilinear reduction's across the frames.
+void test_two_level_reduction_keeps_a_thin_line() {
+    Random random{seed_line};
+    const auto level = static_cast<uint8_t>(64U + 8U * (random.next() % 24U));
+    for (const uint32_t hundredths : zoom_out_hundredths) {
+        const double zoom = static_cast<double>(hundredths) / 100.0;
+        const double ideal = static_cast<double>(level) * zoom;
+        const auto width = static_cast<uint32_t>(line_scene_width * hundredths / 100U);
+        const auto height = static_cast<uint32_t>(line_scene_height * hundredths / 100U);
+        double least = two_level_most;
+        double most = 0.0;
+        double plain_least = 10.0;
+        double plain_most = 0.0;
+        for (uint32_t frame = 0; frame < line_frames; ++frame) {
+            Picture scene = black(line_scene_width, line_scene_height);
+            draw_line(scene, line_first_column - frame, 0, 1, level);
+            Picture reduced = black(width, height);
+            wr::two_level_rgb24(scene.source(), {zoom, zoom, 0.0, 0.0}, reduced.target());
+            Picture plain = black(width, height);
+            wr::bilinear_rgb24(scene.source(), {zoom, zoom, 0.0, 0.0}, plain.target());
+            for (uint32_t row = 0; row < height; ++row) {
+                uint32_t touched = 0;
+                const double light = static_cast<double>(row_light(reduced, row, touched)) / ideal;
+                least = std::min(least, light);
+                most = std::max(most, light);
+                const double plain_light =
+                    static_cast<double>(row_light(plain, row, touched)) / ideal;
+                plain_least = std::min(plain_least, plain_light);
+                plain_most = std::max(plain_most, plain_light);
+            }
+        }
+        std::printf(
+            "a thin line at zoom %.2f: the two-level reduction keeps %.2f to %.2f of its light, "
+            "plain bilinear %.2f to %.2f\n",
+            zoom,
+            least,
+            most,
+            plain_least,
+            plain_most
+        );
+        // Rounding may take up to half a level from each pixel the line lights.
+        const double rounding = two_level_pixels_lit * 0.5 / ideal;
+        OA_CHECK(least >= two_level_least - rounding);
+        OA_CHECK(most <= two_level_most + rounding);
+        if (hundredths == 50) {
+            OA_CHECK(std::abs(least - 1.0) <= rounding);
+            OA_CHECK(std::abs(most - 1.0) <= rounding);
+        }
+        OA_CHECK(most - least <= plain_most - plain_least + 2.0 * rounding);
+    }
+}
+
 /// Returns a seeded map of fine detail: every pixel a random level.
 ///
 /// @return the map
@@ -405,6 +473,7 @@ int main() {
     test_area_keeps_a_thin_line();
     test_point_sampling_loses_a_thin_line();
     test_thin_line_rule_keeps_two_thirds();
+    test_two_level_reduction_keeps_a_thin_line();
     test_area_shimmers_less_than_point_sampling();
     test_card_filters_shimmer_less_than_nearest();
     return oa::test::check_exit_status();

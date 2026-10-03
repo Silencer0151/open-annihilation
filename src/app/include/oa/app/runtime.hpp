@@ -4616,6 +4616,15 @@ class Runtime final : public menu::Host,
     [[nodiscard]] bool
     accelerated_buffer_allowed(render_policy::AcceleratedBuffer buffer, uint64_t bytes);
 
+    /// Tells whether the memory guard allows a buffer of a size now
+    /// (render_policy::memory_guard_allows), moving no rung and dropping no
+    /// tier where it does not: for a buffer the tier can do without, as
+    /// Full's world target, which the tier draws straight instead of.
+    ///
+    /// @param bytes the buffer's size, in bytes
+    /// @return true when the guard allows it, or nothing is watched
+    [[nodiscard]] bool accelerated_buffer_fits(uint64_t bytes);
+
     /// Moves the accelerated presentation down to a lower rung for the rest
     /// of the run, as the step-down or the memory guard asks: the step-down
     /// takes the rung, the textures and targets the rung no longer draws
@@ -4853,6 +4862,60 @@ class Runtime final : public menu::Host,
     /// @param bf_w the battlefield's width in pixels
     /// @param bf_h its height in pixels
     void ensure_full_target(uint32_t bf_w, uint32_t bf_h);
+
+    /// Returns how many times finer than the window, along each axis, the
+    /// graphics card draws the battlefield while frames are presented in
+    /// the Full tier: the world target's supersample factor, 1, 2 or 4,
+    /// which the Enhanced anti-aliasing row asks for within the step-down's
+    /// rung, the budget S and the texture limit (ensure_full_world_target).
+    ///
+    /// @return the factor; 0 while frames are not presented in Full
+    [[nodiscard]] uint32_t full_supersample() const noexcept;
+
+    /// Makes the Full tier's world target for anti-aliasing at the factor
+    /// asked, lowered to what the budget S of this machine
+    /// (render_policy::supersample_budget) and the renderer's texture limit
+    /// allow at the battlefield's size (render_policy::fit_supersample_factor),
+    /// once, and again when the factor or the size changes; a factor of 1
+    /// frees it. The target keeps its half for the two-level reduction. A
+    /// target the renderer refuses, or one the memory guard refuses
+    /// (accelerated_buffer_fits), is not asked for again at that size and
+    /// factor: the tier draws straight, logged once. In a shared game or a
+    /// replay after the loading screen none is made
+    /// (render_policy::first_use_allowed): the tier draws straight until
+    /// the match ends, and preallocate_full_match_textures makes the target
+    /// as the loading screen begins. The factor in use and its target are
+    /// logged when they change.
+    ///
+    /// @param asked the factor asked, 1, 2 or 4 (render_policy::supersample_factor)
+    /// @param battlefield_width window pixels across the battlefield
+    /// @param battlefield_height window pixels down it
+    /// @param texture_limit the renderer's texture limit; 0 for none
+    void ensure_full_world_target(
+        uint32_t asked,
+        uint32_t battlefield_width,
+        uint32_t battlefield_height,
+        uint32_t texture_limit
+    );
+
+    /// Returns the supersample factor the Enhanced anti-aliasing row's
+    /// level asks of Full's world target (render_policy::supersample_factor),
+    /// within Full's rungs.
+    ///
+    /// @return the factor, 1, 2 or 4
+    [[nodiscard]] uint8_t full_supersample_setting() const noexcept;
+
+    /// Tells the renderer host the factor the row asks for, which Full's
+    /// rungs start from and their ceiling takes
+    /// (RendererHost::set_full_supersample), before a rung is taken.
+    void note_full_supersample_setting();
+
+    /// Applies a change of the Enhanced anti-aliasing row to Full's rungs
+    /// (runtime_render_tier.cpp): the host's start input follows it, and
+    /// while Full draws so does the rung's anti-aliasing, unless the
+    /// step-down has lowered it already, which never rises within the run;
+    /// the rung then caps the factor the next Full frame draws at.
+    void apply_full_supersample_setting();
 
     /// Tells whether Full may make a page or a target now: outside a shared
     /// game or a replay, or as one's loading screen begins

@@ -371,7 +371,14 @@ logs it.
   draws no more batches than the atlas has pages; and the terrain's
   processor cost, the frame's build, the card's call and the overlay, is
   printed for each zoom beside the box filter's, with pictures of each
-  zoom.
+  zoom. Its anti-aliasing cases set the row to 2x and 4x and, at zooms
+  0.5, 0.75, 1, 1.37 and 2, with the terrain alone and then with the
+  sprite stage on, require the factor the budget allows, no unit drawn
+  finer on the processor, and the battlefield under transparent overlays
+  equal to the world target read back and reduced on the processor as the
+  card reduces it, by halving from zoom 1 up and by the two-level blend
+  below, within the renderer's tolerance, the target's memory printed
+  within the budget; with the row off again the target is freed.
 - The Full tier (`runtime_full.cpp`, `full_presentation.hpp`,
   `full_terrain.hpp`, `full_terrain.cpp`): a branch of the accelerated
   presentation, taken when the tier decided for the frame is Full
@@ -453,7 +460,35 @@ logs it.
   the build, the card's call and the overlay as Full's passes. Off and
   Basic are untouched: nothing here runs unless the tier is Full, which
   only `--hardware-acceleration=full` gives while
-  `render_policy::full_ready` is false. Not yet: the `scale-level` key for
+  `render_policy::full_ready` is false.
+  Anti-aliasing in Full is the graphics card's (`full_supersampling.hpp`,
+  `ensure_full_world_target`): the Enhanced anti-aliasing row's level asks
+  for a supersample factor, off 1, 2x and 3x 2, 4x and above 4
+  (`render_policy::supersample_factor`), which Full's rungs start from
+  (`RendererHost::set_full_supersample`) and follow while the step-down
+  has not lowered them (`apply_full_supersample_setting`); the factor is
+  lowered to the rung's once frames were slow, and to what the budget S
+  of the machine, 2^25 pixels, a quarter of it at 4 GiB or less and on a
+  light machine or a Pi (`render_policy::supersample_budget`), the memory
+  guard and the renderer's texture limit allow at the battlefield's size
+  (`render_policy::fit_supersample_factor`); above 1 the card draws what
+  it draws into a world target at that factor, made once with its half
+  and remade when the factor or the battlefield changes, by the plan of
+  `full_supersampling::plan_world_target`: from zoom 1 up at the zoom, the
+  texture holding the factor's pixels a window pixel, reduced into the
+  battlefield by exact halvings (`resolve`); below zoom 1 at one texel a
+  map pixel over the part the battlefield shows, reduced by the two-level
+  blend (`blend_reduce`), the half at twice the zoom under the part at
+  alpha `1 - log2(1 / zoom)`. The processor's anti-aliasing never runs in
+  a Full frame (`unit_supersampling_` is read as off there), its overlays
+  go over the reduced picture, the factor in use is logged with the
+  target's size and memory when it changes and shows in the `+stats`
+  renderer row and in the row's hint
+  (`AccelerationStatus::full_supersample`, beside the rung's
+  `supersample`, which the status line names), and a target the renderer
+  or the memory guard refuses, or that a shared game's frame would make
+  after its loading screen, leaves the tier drawing straight.
+  Not yet: the `scale-level` key for
   Full's rungs, which the game writes for no tier, the sprite pages made
   ahead at a shared game's loading screen (a page the sprite stage would
   make during the match waits for its end instead), smooth panning, the
@@ -462,7 +497,9 @@ logs it.
   its second, built and checked), and the fog and the overlays as card
   draws.
   `app-full-terrain` checks the level rule and the quads over a small map
-  on three pages, one batch per page whatever the grid's order.
+  on three pages, one batch per page whatever the grid's order, and
+  `app-full-supersampling` the world target's plan at every kind of zoom
+  and battlefield.
 - `runtime_full.hpp`, `runtime_full_sprites.cpp`, `full_stages.hpp`: the
   Full tier's scene builder, the stages beside the terrain by which the
   graphics card comes to draw the whole battlefield. The builder turns the

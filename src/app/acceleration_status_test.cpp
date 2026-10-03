@@ -239,6 +239,13 @@ void in_use_says_what_it_does_here() {
     OA_CHECK(report.status.state == State::in_use);
     OA_CHECK(report.status.reach == Reach::nearest_none);
     OA_CHECK(!report.acceleration_unavailable);
+    // Full's anti-aliasing factor reaches the status while the card draws,
+    // and not before.
+    OA_CHECK(report.status.full_supersample == 0);
+    facts.full_supersample_drawn = 2;
+    OA_CHECK(report_acceleration(facts).status.full_supersample == 2);
+    facts.tier_accelerated = false;
+    OA_CHECK(report_acceleration(facts).status.full_supersample == 0);
 }
 
 void a_renderer_that_lacks_a_feature_says_so() {

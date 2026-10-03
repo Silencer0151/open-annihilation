@@ -265,6 +265,10 @@ void Runtime::apply_engine_settings(const settings::EngineSettings& chosen) {
                               static_cast<uint32_t>(chosen.anti_aliasing)
     )
                               .value_or(oa::present::model::UnitSupersampling::off);
+    // In Full the row's level asks the graphics card's world target for its
+    // factor instead, through the step-down's rungs.
+    if (chosen.anti_aliasing != before.anti_aliasing)
+        apply_full_supersample_setting();
     if (chosen.frame_stats != before.frame_stats)
         show_frame_stats(chosen.frame_stats);
     // Off applies at once; so do Basic and Full, but in a shared game or a
@@ -299,6 +303,7 @@ AccelerationFacts Runtime::acceleration_facts() const {
         facts.vertical_sync_refused = vertical_sync_refused_;
         facts.slow_frames_stepped = render_run_->watch && render_run_->watch->slowed;
         facts.less_anti_aliasing = render_run_->watch && render_run_->watch->full_slowed;
+        facts.full_supersample_drawn = static_cast<uint8_t>(full_supersample());
         if (match_) {
             const uint32_t extension = current_extension_state();
             facts.shared_game =

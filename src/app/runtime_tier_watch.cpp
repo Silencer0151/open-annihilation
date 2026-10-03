@@ -135,6 +135,15 @@ bool Runtime::accelerated_buffer_allowed(policy::AcceleratedBuffer buffer, uint6
     return false;
 }
 
+bool Runtime::accelerated_buffer_fits(uint64_t bytes) {
+    if (!render_run_ || !render_run_->watch)
+        return true;
+    auto& run = *render_run_;
+    if (!frame_pacer_.started && !run.forced_memory)
+        return true;
+    return policy::memory_guard_allows(run.watch->memory, system_memory(run.forced_memory), bytes);
+}
+
 void Runtime::lower_accelerated_rung(const policy::LadderState& rung, std::string_view cause) {
     if (!render_run_ || !render_run_->watch)
         return;

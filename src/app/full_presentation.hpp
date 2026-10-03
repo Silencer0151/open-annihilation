@@ -13,6 +13,7 @@
 
 #include "oa/app/runtime.hpp"
 
+#include "full_supersampling.hpp"
 #include "full_terrain.hpp"
 #include "oa/app/card/executor.hpp"
 #include "oa/present/gpu_world/sprite_pages.hpp"
@@ -137,7 +138,35 @@ struct Runtime::FullPresentation {
     /// the terrain LINEAR straight to the window.
     bool target_refused{};
 
-    card::CardFrame frame; ///< the terrain's frame being built, its memory kept between frames
+    // The world target the battlefield is drawn into for anti-aliasing
+    // (full_supersampling.hpp): at the supersample factor the Enhanced
+    // anti-aliasing row asks for, fitted to the budget S and the texture
+    // limit at the battlefield's size (Runtime::ensure_full_world_target);
+    // none at a factor of 1.
+    uint64_t supersample_budget{}; ///< S for this machine, in pixels; 0 until read
+    uint32_t supersample_asked{1}; ///< the factor the row asks for
+    uint32_t supersample{1};       ///< the factor in use: the target's, or 1 without one
+    card::TargetHandle world_target{};
+    uint32_t world_target_width{};  ///< the target's size across, in window pixels; 0 for none
+    uint32_t world_target_height{}; ///< the target's size down
+    uint32_t world_target_factor{}; ///< the factor the target was made at; 0 for none
+    uint64_t world_target_bytes{};  ///< texture bytes the target and its half hold
+    /// The renderer refused the target of this size at this factor, so the
+    /// tier draws straight until the size or the factor asked changes.
+    uint32_t refused_world_width{};
+    uint32_t refused_world_height{};
+    uint32_t refused_world_factor{};
+    /// How the last Full frame was drawn through the world target
+    /// (full_supersampling::plan_world_target): a factor of 1 for a frame
+    /// drawn straight to the window.
+    full_supersampling::WorldTargetPlan drawn_plan{};
+
+    /// Destroys the world target, with its half, and forgets its size and
+    /// factor; the factor in use and a refusal remembered are left as they
+    /// are, for ensure_full_world_target to decide.
+    void destroy_world_target() noexcept;
+
+    card::CardFrame frame; ///< the frame being built, its memory kept between frames
 
     // The stages of the scene builder beside the terrain (full_stages.hpp).
     uint8_t stages{}; ///< the stages switched on, among those this build draws

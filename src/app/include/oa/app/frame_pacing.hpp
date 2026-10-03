@@ -429,11 +429,14 @@ struct FrameStatsNotes {
     uint32_t units_between_ticks{};     ///< of those, drawn between two ticks
 };
 
-/// What the "+stats" table's renderer row names. The tier and the driver,
-/// joined, and the adapter are each cut to one of the table's texts, never
-/// inside a character (whole_characters).
+/// What the "+stats" table's renderer row names. The tier, its
+/// anti-aliasing and the driver, joined, and the adapter are each cut to
+/// one of the table's texts, never inside a character (whole_characters).
 struct FrameStatsRenderer {
-    std::string_view tier{};    ///< the tier frames are drawn in: "standard" or "basic"
+    std::string_view tier{}; ///< the tier frames are drawn in: "standard", "basic" or "full"
+    /// The anti-aliasing the full tier draws the battlefield with, "2x" or
+    /// "4x", after the tier; empty with none or in another tier.
+    std::string_view anti_aliasing{};
     std::string_view driver{};  ///< SDL's name for the render driver; empty without a renderer
     std::string_view adapter{}; ///< the adapter's name; empty where none was read
 };

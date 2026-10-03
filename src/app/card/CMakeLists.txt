@@ -23,9 +23,12 @@ if(OA_BUILD_PLATFORM)
     # alpha among them, a scissor, vertex colours, a draw's own sampling
     # mode, a page's levels and a part of one updated, render targets at
     # supersampling factors 2 and 4 resolved with a downscale, a transparent
-    # target resolved by premultiplied alpha, and a target written again
-    # between two resolves; malformed frames and frames naming a destroyed
-    # page refused with nothing drawn; pages and targets beyond the
+    # target resolved by premultiplied alpha, a target written again
+    # between two resolves, edges between a target's pixels reduced to
+    # their coverage, and the two-level reduction of a target that keeps
+    # its half against the renderer's own stretch and blend; malformed
+    # frames and frames naming a destroyed page or a target without its
+    # half refused with nothing drawn; pages and targets beyond the
     # renderer's texture limit refused with an error naming both; batches
     # that share their state merged into one call; the renderer's state put
     # back; and the processor cost of 5,000 and 20,000 quads a frame,

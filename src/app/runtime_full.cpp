@@ -10,9 +10,15 @@
 // composes it over its own terrain through overlays of what differs from
 // that base: with a stage on, what the bands drew and the fog's gray under
 // the stages' batches, and what the fog's black and the painters changed
-// over them. The planner, the HUD, the painters and the readers that keep a
-// picture run as in the Basic tier. It is reached only when the tier
-// decided for the frame is Full.
+// over them. With Enhanced anti-aliasing on, the card draws its terrain and
+// its stages into a world target at the row's supersample factor
+// (full_supersampling.hpp), within the step-down's rung, the budget S and
+// the texture limit, and reduces it to the window: by exact halvings from
+// zoom 1 up, by the two-level blend of the view drawn at zoom 1 below; the
+// processor's anti-aliasing never runs, and the processor's overlays go
+// over the reduced picture. The planner, the HUD, the painters and the
+// readers that keep a picture run as in the Basic tier. It is reached only
+// when the tier decided for the frame is Full.
 #include "oa/app/runtime.hpp"
 
 #include "full_presentation.hpp"
@@ -26,6 +32,7 @@
 #include "oa/app/renderer_records.hpp"
 
 #include "oa/base/float_precision.hpp"
+#include "oa/platform/machine.hpp"
 #include "oa/present/world_renderer/world_fog.hpp"
 
 #include <SDL3/SDL.h>
@@ -461,6 +468,65 @@ void upload_overlay(
     uploaded = true;
 }
 
+namespace supersampling = full_supersampling;
+
+static_assert(
+    policy::largest_supersample_factor == card::largest_supersampling_factor,
+    "the policy's largest supersample factor is one a render target takes"
+);
+
+/// Returns the Enhanced anti-aliasing row's level that a unit
+/// supersampling level is in effect for, which the Full tier reads its
+/// factor from (render_policy::supersample_factor): the two name the same
+/// six levels.
+///
+/// @param level the level units draw at outside Full
+/// @return the row's level
+[[nodiscard]] oa::ui::engine_settings::AntiAliasing
+anti_aliasing_level_of(oa::present::model::UnitSupersampling level) noexcept {
+    using oa::present::model::UnitSupersampling;
+    using oa::ui::engine_settings::AntiAliasing;
+    switch (level) {
+    case UnitSupersampling::off:
+        return AntiAliasing::off;
+    case UnitSupersampling::x2:
+        return AntiAliasing::x2;
+    case UnitSupersampling::x3:
+        return AntiAliasing::x3;
+    case UnitSupersampling::x4:
+        return AntiAliasing::x4;
+    case UnitSupersampling::x8:
+        return AntiAliasing::x8;
+    case UnitSupersampling::x16:
+        return AntiAliasing::x16;
+    }
+    return AntiAliasing::off;
+}
+
+/// Returns the supersample factor a Full frame asks of the world target:
+/// the Enhanced anti-aliasing row's, 1, 2 or 4, capped at the step-down's
+/// rung once it has lowered Full's anti-aliasing for slow frames
+/// (runtime_tier_watch.cpp), which never rises again within the run.
+///
+/// @param level the row's level, as units draw at it outside Full
+/// @param rung the rung the accelerated presentation draws at
+/// @param rung_lowered the step-down has lowered Full's anti-aliasing
+/// @return the factor
+[[nodiscard]] uint32_t supersample_asked(
+    oa::present::model::UnitSupersampling level, const policy::LadderState& rung, bool rung_lowered
+) noexcept {
+    const uint32_t asked = policy::supersample_factor(anti_aliasing_level_of(level));
+    return rung.full && rung_lowered ? std::min<uint32_t>(asked, rung.supersample) : asked;
+}
+
+/// Returns a count of bytes in whole mebibytes, for the log.
+///
+/// @param bytes the count
+/// @return the mebibytes
+[[nodiscard]] uint64_t mebibytes(uint64_t bytes) noexcept {
+    return bytes / (uint64_t{1024} * 1024);
+}
+
 } // namespace
 
 void Runtime::destroy_full_presentation(FullPresentation* full) noexcept {
@@ -568,6 +634,15 @@ void Runtime::FullPresentation::destroy_sprite_card_pages() noexcept {
     card_pages.clear();
 }
 
+void Runtime::FullPresentation::destroy_world_target() noexcept {
+    executor.destroy_target(world_target);
+    world_target = {};
+    world_target_width = 0;
+    world_target_height = 0;
+    world_target_factor = 0;
+    world_target_bytes = 0;
+}
+
 void Runtime::set_full_stages(uint8_t stages) {
     if (!full_)
         full_.reset(new FullPresentation);
@@ -654,6 +729,12 @@ void Runtime::free_full_match_textures() noexcept {
     full.target_width = 0;
     full.target_height = 0;
     full.target_refused = false;
+    full.destroy_world_target();
+    full.refused_world_width = 0;
+    full.refused_world_height = 0;
+    full.refused_world_factor = 0;
+    full.supersample = 1;
+    full.drawn_plan = {};
     full.atlas = {};
     full.atlas_source = {};
     full.frame = {};
@@ -769,10 +850,20 @@ void Runtime::preallocate_full_match_textures() {
         if (begin_full_path()) {
             ensure_full_match_textures();
             full.pages_from_load = true;
-            ensure_full_target(
-                static_cast<uint32_t>(std::max(0, match_layout_.battlefield_width())),
-                static_cast<uint32_t>(std::max(0, match_layout_.battlefield_height()))
-            );
+            const auto bf_w = static_cast<uint32_t>(std::max(0, match_layout_.battlefield_width()));
+            const auto bf_h = static_cast<uint32_t>(std::max(0, match_layout_.battlefield_height()));
+            ensure_full_target(bf_w, bf_h);
+            if (bf_w != 0 && bf_h != 0)
+                ensure_full_world_target(
+                    supersample_asked(
+                        unit_supersampling_,
+                        accelerated_.rung,
+                        render_run_->watch && render_run_->watch->full_slowed
+                    ),
+                    bf_w,
+                    bf_h,
+                    render_texture_limit()
+                );
         }
     } catch (const FullCardError& error) {
         take_full_failure(error.what());
@@ -813,6 +904,113 @@ void Runtime::ensure_full_target(uint32_t bf_w, uint32_t bf_h) {
     }
 }
 
+uint32_t Runtime::full_supersample() const noexcept {
+    return full_presentation() ? full_->supersample : 0;
+}
+
+void Runtime::ensure_full_world_target(
+    uint32_t asked, uint32_t battlefield_width, uint32_t battlefield_height, uint32_t texture_limit
+) {
+    auto& full = *full_;
+    if (full.supersample_budget == 0) {
+        const oa::platform::MachineTraits machine = oa::platform::read_machine_traits();
+        // The memory the tier was decided from (render_policy::TierInputs::memory).
+        const uint64_t memory = render_run_ && render_run_->host != nullptr
+                                    ? render_run_->host->tier_inputs().memory
+                                    : uint64_t{0};
+        full.supersample_budget = policy::supersample_budget(
+            memory, oa::platform::light_machine(machine), oa::platform::running_on_raspberry_pi()
+        );
+    }
+    const uint32_t size_width =
+        supersampling::rounded_up(battlefield_width, supersampling::target_grain);
+    const uint32_t size_height =
+        supersampling::rounded_up(battlefield_height, supersampling::target_grain);
+    uint32_t fitted = policy::fit_supersample_factor(
+        asked, size_width, size_height, full.supersample_budget, texture_limit
+    );
+    // A target the renderer or the memory guard refused is not asked for
+    // again at that size and factor.
+    if (fitted > 1 && full.refused_world_factor == fitted &&
+        full.refused_world_width == size_width && full.refused_world_height == size_height)
+        fitted = 1;
+    const bool kept = full.world_target != card::TargetHandle{} &&
+                      full.world_target_width == size_width &&
+                      full.world_target_height == size_height && full.world_target_factor == fitted;
+    bool waits = false;
+    if (fitted > 1 && !kept) {
+        // In a shared game or a replay after the loading screen no target is
+        // made: the target the loading screen made draws on at its factor,
+        // else the tier draws straight, until the match ends.
+        const bool may_make =
+            !render_run_ || render_run_->host == nullptr ||
+            policy::first_use_allowed(render_run_->host->tier_inputs().match, full.loading_screen);
+        const uint64_t bytes =
+            policy::supersample_target_pixels(size_width, size_height, fitted) * bytes_per_texel;
+        if (!may_make) {
+            waits = true;
+            const bool same_size = full.world_target != card::TargetHandle{} &&
+                                   full.world_target_width == size_width &&
+                                   full.world_target_height == size_height;
+            fitted = same_size ? full.world_target_factor : 1;
+        } else {
+            full.destroy_world_target();
+            if (!accelerated_buffer_fits(bytes)) {
+                // The guard's refusal costs the anti-aliasing, not the tier:
+                // the battlefield is drawn straight.
+                std::cout << graphics_log_prefix << "full tier: the world target of " << size_width
+                          << "x" << size_height << " at factor " << fitted
+                          << " would leave too little memory; the battlefield is drawn without "
+                          << "anti-aliasing\n"
+                          << std::flush;
+                full.refused_world_width = size_width;
+                full.refused_world_height = size_height;
+                full.refused_world_factor = fitted;
+                fitted = 1;
+            } else {
+                const uint64_t bytes_before = full.executor.counts().texture_bytes;
+                full.world_target =
+                    full.executor.create_target(size_width, size_height, fitted, true);
+                if (full.world_target == card::TargetHandle{}) {
+                    std::cout << graphics_log_prefix << "full tier: the world target of "
+                              << size_width << "x" << size_height << " at factor " << fitted
+                              << " could not be made (" << full.executor.error()
+                              << "); the battlefield is drawn without anti-aliasing\n"
+                              << std::flush;
+                    full.refused_world_width = size_width;
+                    full.refused_world_height = size_height;
+                    full.refused_world_factor = fitted;
+                    fitted = 1;
+                } else {
+                    full.world_target_width = size_width;
+                    full.world_target_height = size_height;
+                    full.world_target_factor = fitted;
+                    full.world_target_bytes = full.executor.counts().texture_bytes - bytes_before;
+                    std::cout << graphics_log_prefix << "full tier: anti-aliasing " << fitted
+                              << "x: the world target of " << size_width << "x" << size_height
+                              << " at factor " << fitted << " and its half hold "
+                              << mebibytes(full.world_target_bytes) << " MiB\n"
+                              << std::flush;
+                }
+            }
+        }
+    }
+    if (fitted == 1 && full.world_target != card::TargetHandle{})
+        full.destroy_world_target();
+    if (!waits && fitted < asked &&
+        (fitted != full.supersample || asked != full.supersample_asked))
+        std::cout << graphics_log_prefix << "full tier: anti-aliasing "
+                  << (fitted > 1 ? std::to_string(fitted) + "x" : std::string("off"))
+                  << ": the Enhanced anti-aliasing row asks for " << asked
+                  << "x, but the budget of "
+                  << mebibytes(full.supersample_budget * bytes_per_texel)
+                  << " MiB and the renderer allow no larger world target at " << size_width << "x"
+                  << size_height << '\n'
+                  << std::flush;
+    full.supersample = fitted;
+    full.supersample_asked = asked;
+}
+
 void Runtime::ensure_full_executor() {
     auto& full = *full_;
     if (!full.executor.is_open()) {
@@ -826,6 +1024,16 @@ void Runtime::ensure_full_executor() {
         full.atlas_source = {};
         full.target = {};
         full.target_refused = false;
+        // The executor's targets went with its last hold on the renderer.
+        full.world_target = {};
+        full.world_target_width = 0;
+        full.world_target_height = 0;
+        full.world_target_factor = 0;
+        full.world_target_bytes = 0;
+        full.refused_world_width = 0;
+        full.refused_world_height = 0;
+        full.refused_world_factor = 0;
+        full.supersample = 1;
     }
     if (!full.function_tested) {
         const bool software =
@@ -986,12 +1194,13 @@ void Runtime::ensure_full_match_textures() {
         full.painted_opaque_bands.assign(bands, 0);
         full.painted_uploaded_bands.assign(bands, 0);
         full.painted.assign(std::size_t{bf_w} * bf_h * 4U, 0);
-        // A new battlefield size needs a new target.
+        // A new battlefield size needs new targets.
         full.executor.destroy_target(full.target);
         full.target = {};
         full.target_width = 0;
         full.target_height = 0;
         full.target_refused = false;
+        full.destroy_world_target();
     }
 }
 
@@ -1118,7 +1327,158 @@ bool Runtime::present_full_match_layers(bool dialogs) {
         view.height = bf_h;
         uint32_t quads = 0;
         bool through_target = false;
-        if (full.plan.through_target) {
+        // The stages' batches go on the last list the planner built; a page
+        // a stage would make now waits in a shared game or a replay after
+        // the loading screen (FullPresentation::card_page).
+        auto& stage_frame = full.stage_frame;
+        stage_frame.reset();
+        full.sprites = {};
+        full.stage_ns = 0;
+        full.creation_allowed =
+            !render_run_ || render_run_->host == nullptr ||
+            policy::first_use_allowed(render_run_->host->tier_inputs().match, full.loading_screen);
+        const bool sprites_on = staged && (full.stages & full::stage_sprites) != 0 && match_;
+        // The sprite stage: the frame's sprites, particle squares and lines
+        // from the sprite pages, in the list's order, appended to a frame
+        // through a view: straight to the window at the battlefield's
+        // corner, or into the world target at its draw scale. The pages'
+        // texels the stage changed go up before the frame runs.
+        const auto emit_sprite_stage = [&](card::CardFrame& into,
+                                           float origin_x,
+                                           float origin_y,
+                                           float view_scale,
+                                           card::TargetHandle target) {
+            full.ensure_sprite_palette(match_palette_, display_gamma_);
+            full::SpriteStageInputs inputs;
+            inputs.list = &match_models().draws;
+            inputs.view.origin_x = origin_x;
+            inputs.view.origin_y = origin_y;
+            inputs.view.scale = view_scale;
+            inputs.view.zoom = zoom;
+            inputs.view.offset = accelerated_.frame_offset;
+            inputs.view.width = static_cast<int32_t>(bf_w);
+            inputs.view.height = static_cast<int32_t>(bf_h);
+            inputs.view.target = target;
+            // The camera the sight is read at: the planner's, map pixels.
+            inputs.view.camera_x = match_camera_x_;
+            inputs.view.camera_y = match_camera_z_;
+            // The viewer's sight, as the fog reads it; none when the match
+            // cannot say, which draws every sprite in colour.
+            std::span<const uint8_t> coverage;
+            try {
+                coverage = match_->player_coverage(match_view_player());
+            } catch (const std::exception&) {
+                coverage = {};
+            }
+            const auto& sight = match_->sight();
+            if (!coverage.empty() && sight.width > 0 && sight.height > 0) {
+                inputs.sight.coverage = coverage;
+                inputs.sight.player_bits = sight.player_bits;
+                inputs.sight.width = sight.width;
+                inputs.sight.height = sight.height;
+                inputs.sight.viewer_bit =
+                    static_cast<uint16_t>(1U << (sight.viewpoint_player & 0x1fU));
+                inputs.sight.line_of_sight = match_line_of_sight_on();
+                inputs.sight.mapping = match_mapping_on();
+            }
+            inputs.palette = &match_palette_;
+            inputs.gamma = gamma;
+            const full::SpritePageHooks hooks{&full, &FullPresentation::card_page_hook};
+            full.sprites = full::emit_sprites(inputs, full.sprite_pages, hooks, into);
+            if (full.sprites.pages_overflowed && !full.overflow_logged) {
+                full.overflow_logged = true;
+                std::cout << graphics_log_prefix
+                          << "the frame's sprites do not fit the sprite pages; the card draws "
+                             "none of them this frame\n"
+                          << std::flush;
+            }
+            full.upload_sprite_pages();
+            if (!full.stages_logged) {
+                full.stages_logged = true;
+                std::cout << graphics_log_prefix << "full tier: the graphics card also draws the "
+                          << full::stage_text(full.stages) << " of the battlefield\n"
+                          << std::flush;
+            }
+        };
+        // Anti-aliasing: the factor the Enhanced anti-aliasing row asks for,
+        // within the step-down's rung, fitted to this battlefield, and the
+        // world target at it.
+        ensure_full_world_target(
+            supersample_asked(
+                unit_supersampling_,
+                accelerated_.rung,
+                render_run_ && render_run_->watch && render_run_->watch->full_slowed
+            ),
+            bf_w,
+            bf_h,
+            limit
+        );
+        const supersampling::WorldTargetPlan supersampled =
+            supersampling::plan_world_target(zoom, full.supersample, bf_w, bf_h);
+        full.drawn_plan = supersampled;
+        // The stage's batches inside the terrain's frame, which the terrain's
+        // count leaves out.
+        uint32_t sprite_batches = 0;
+        if (supersampled.factor > 1) {
+            // The terrain into the world target, level 0 NEAREST at the
+            // plan's draw scale: from zoom 1 up the texture holds the
+            // factor's texels a window pixel, and below it one a map pixel;
+            // the sprite stage into it at the same scale; then the target
+            // reduced into the battlefield, by the factor's halvings or by
+            // the two-level blend of the part drawn.
+            through_target = true;
+            ft::TerrainPass pass;
+            pass.level = 0;
+            pass.sampling = card::Sampling::nearest;
+            pass.blend = card::Blend::none;
+            pass.alpha = 1.0F;
+            full.plan = {};
+            full.plan.passes[0] = pass;
+            full.plan.pass_count = 1;
+            full.plan.through_target = false;
+            card::Batch clear;
+            clear.operation = card::Operation::clear;
+            clear.target = full.world_target;
+            clear.colour = card::Colour{0.0F, 0.0F, 0.0F, 1.0F};
+            frame.batches.push_back(clear);
+            ft::TerrainView target_view = view;
+            target_view.origin_x = 0.0F;
+            target_view.origin_y = 0.0F;
+            target_view.scale = supersampled.draw_scale;
+            target_view.width =
+                static_cast<uint32_t>(supersampled.source_part.width) / supersampled.factor;
+            target_view.height =
+                static_cast<uint32_t>(supersampled.source_part.height) / supersampled.factor;
+            quads += ft::append_terrain_tiles(
+                frame, full.atlas, full.pages, target_view, pass, full.world_target, nullptr
+            );
+            if (sprites_on) {
+                // Size pixels per layout pixel, so that the texture holds the
+                // sprites at the factor's pixels a window pixel, or at zoom 1
+                // below zoom 1.
+                const auto stage_start = std::chrono::steady_clock::now();
+                const auto before = static_cast<uint32_t>(frame.batches.size());
+                emit_sprite_stage(
+                    frame, 0.0F, 0.0F, supersampled.draw_scale / zoom, full.world_target
+                );
+                sprite_batches = static_cast<uint32_t>(frame.batches.size()) - before;
+                full.stage_ns = nanoseconds_since(stage_start);
+            }
+            card::Batch reduce;
+            reduce.operation =
+                supersampled.two_level ? card::Operation::blend_reduce : card::Operation::resolve;
+            reduce.source = full.world_target;
+            reduce.source_part = supersampled.source_part;
+            reduce.destination = {
+                battlefield.x + supersampled.destination.x,
+                battlefield.y + supersampled.destination.y,
+                supersampled.destination.width,
+                supersampled.destination.height
+            };
+            reduce.scissored = true;
+            reduce.scissor = battlefield;
+            frame.batches.push_back(reduce);
+        } else if (full.plan.through_target) {
             ensure_full_target(bf_w, bf_h);
             const uint32_t factor = full.plan.target_zoom;
             if (full.target != card::TargetHandle{} && factor != 0 &&
@@ -1180,70 +1540,20 @@ bool Runtime::present_full_match_layers(bool dialogs) {
                     &battlefield
                 );
         }
-        full.build_ns = nanoseconds_since(build_start);
-        // The stages' batches, on the last list the planner built, into a
-        // frame of their own, run over the first overlay; the pages' texels
-        // the stage changed go up before it runs.
-        const auto stage_start = std::chrono::steady_clock::now();
-        auto& stage_frame = full.stage_frame;
-        stage_frame.reset();
-        full.sprites = {};
-        full.creation_allowed =
-            !render_run_ || render_run_->host == nullptr ||
-            policy::first_use_allowed(render_run_->host->tier_inputs().match, full.loading_screen);
-        if (staged && (full.stages & full::stage_sprites) != 0 && match_) {
-            full.ensure_sprite_palette(match_palette_, display_gamma_);
-            full::SpriteStageInputs inputs;
-            inputs.list = &match_models().draws;
-            inputs.view.origin_x = static_cast<float>(match_layout_.left);
-            inputs.view.origin_y = static_cast<float>(match_layout_.top);
-            inputs.view.scale = 1.0F;
-            inputs.view.zoom = zoom;
-            inputs.view.offset = accelerated_.frame_offset;
-            inputs.view.width = static_cast<int32_t>(bf_w);
-            inputs.view.height = static_cast<int32_t>(bf_h);
-            // The camera the sight is read at: the planner's, map pixels.
-            inputs.view.camera_x = match_camera_x_;
-            inputs.view.camera_y = match_camera_z_;
-            // The viewer's sight, as the fog reads it; none when the match
-            // cannot say, which draws every sprite in colour.
-            std::span<const uint8_t> coverage;
-            try {
-                coverage = match_->player_coverage(match_view_player());
-            } catch (const std::exception&) {
-                coverage = {};
-            }
-            const auto& sight = match_->sight();
-            if (!coverage.empty() && sight.width > 0 && sight.height > 0) {
-                inputs.sight.coverage = coverage;
-                inputs.sight.player_bits = sight.player_bits;
-                inputs.sight.width = sight.width;
-                inputs.sight.height = sight.height;
-                inputs.sight.viewer_bit =
-                    static_cast<uint16_t>(1U << (sight.viewpoint_player & 0x1fU));
-                inputs.sight.line_of_sight = match_line_of_sight_on();
-                inputs.sight.mapping = match_mapping_on();
-            }
-            inputs.palette = &match_palette_;
-            inputs.gamma = gamma;
-            const full::SpritePageHooks hooks{&full, &FullPresentation::card_page_hook};
-            full.sprites = full::emit_sprites(inputs, full.sprite_pages, hooks, stage_frame);
-            if (full.sprites.pages_overflowed && !full.overflow_logged) {
-                full.overflow_logged = true;
-                std::cout << graphics_log_prefix
-                          << "the frame's sprites do not fit the sprite pages; the card draws "
-                             "none of them this frame\n"
-                          << std::flush;
-            }
-            full.upload_sprite_pages();
-            if (!full.stages_logged) {
-                full.stages_logged = true;
-                std::cout << graphics_log_prefix << "full tier: the graphics card also draws the "
-                          << full::stage_text(full.stages) << " of the battlefield\n"
-                          << std::flush;
-            }
+        full.build_ns = nanoseconds_since(build_start) - full.stage_ns;
+        // Drawn straight, the stage's batches go into a frame of their own,
+        // run over the first overlay.
+        if (sprites_on && supersampled.factor == 1) {
+            const auto stage_start = std::chrono::steady_clock::now();
+            emit_sprite_stage(
+                stage_frame,
+                static_cast<float>(match_layout_.left),
+                static_cast<float>(match_layout_.top),
+                1.0F,
+                card::TargetHandle{}
+            );
+            full.stage_ns = nanoseconds_since(stage_start);
         }
-        full.stage_ns = nanoseconds_since(stage_start);
         const auto execute_start = std::chrono::steady_clock::now();
         // The failure --check-renderer-ladder forces stands in for the
         // card's own.
@@ -1261,12 +1571,17 @@ bool Runtime::present_full_match_layers(bool dialogs) {
         full.drawn = true;
         full.drawn_zoom = zoom;
         full.drawn_quads = quads;
-        full.drawn_batches = static_cast<uint32_t>(frame.batches.size());
+        // The terrain's batches, with the clear and the reduction of a
+        // target it drew through; the stage counts its own.
+        full.drawn_batches = static_cast<uint32_t>(frame.batches.size()) - sprite_batches;
         full.drawn_through_target = through_target;
         ++full.frames;
 
-        // What the processor drew, over the card's terrain, 1:1; then the
-        // stages' batches, and what was painted over them.
+        // What the processor drew, over the card's terrain, 1:1: under the
+        // stages' kinds where the frame was drawn straight, over the whole
+        // reduced picture where it was drawn through the world target; then
+        // the stages' batches where the target did not hold them, and what
+        // was painted over them.
         const SDL_FRect world{
             static_cast<float>(battlefield.x),
             static_cast<float>(battlefield.y),
@@ -1277,11 +1592,15 @@ bool Runtime::present_full_match_layers(bool dialogs) {
             sdl_.renderer, full.overlay_texture, nullptr, &world, one_to_one_scale_mode()
         );
         if (staged) {
-            const auto stage_run_start = std::chrono::steady_clock::now();
-            if (!full.executor.execute(stage_frame, nullptr))
-                throw FullCardError("the card refused the stages' frame: " + full.executor.error());
-            oa::base::float_precision::restore_program_float_control();
-            full.stage_ns += nanoseconds_since(stage_run_start);
+            if (supersampled.factor == 1) {
+                const auto stage_run_start = std::chrono::steady_clock::now();
+                if (!full.executor.execute(stage_frame, nullptr))
+                    throw FullCardError(
+                        "the card refused the stages' frame: " + full.executor.error()
+                    );
+                oa::base::float_precision::restore_program_float_control();
+                full.stage_ns += nanoseconds_since(stage_run_start);
+            }
             draw_one_to_one(
                 sdl_.renderer, full.painted_texture, nullptr, &world, one_to_one_scale_mode()
             );

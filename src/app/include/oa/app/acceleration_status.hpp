@@ -112,8 +112,10 @@ struct AccelerationFacts {
     /// Full's step-down lowered its anti-aliasing for slow frames in this
     /// run, short of dropping it.
     bool less_anti_aliasing{};
-    /// Full's anti-aliasing while it draws: the samples a pixel across, 1
-    /// for none.
+    /// Full's anti-aliasing at the step-down's rung while it draws: the
+    /// samples a pixel across the rung allows, 1 for none
+    /// (render_policy::LadderState::supersample), which the status's second
+    /// line names (AccelerationStatus::supersample).
     uint8_t full_supersample{1};
     /// The graphics card started at the lowest budget, where nothing smooths
     /// the zoomed-out view.
@@ -138,6 +140,12 @@ struct AccelerationFacts {
     /// A trial record that guards the graphics card's first use could not
     /// be written, so the card was not tried.
     bool trial_unwritten{};
+    /// How many times finer than the window, along each axis, the graphics
+    /// card drew the battlefield in the last Full frame: the world target's
+    /// factor in use, 1, 2 or 4, which the budget S and the texture limit
+    /// may hold under the rung's (Runtime::full_supersample); 0 while frames
+    /// are not drawn in Full (AccelerationStatus::full_supersample).
+    uint8_t full_supersample_drawn{};
 };
 
 /// The Hardware acceleration row's status and the renderer's locks, as the

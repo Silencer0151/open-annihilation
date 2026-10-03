@@ -22,6 +22,9 @@
 #include "render_host.hpp"
 #include "render_run.hpp"
 
+#include <algorithm>
+#include <cstdint>
+
 namespace oa::app {
 
 namespace policy = render_policy;
@@ -30,6 +33,8 @@ void Runtime::update_render_tier() {
     if (!render_run_ || render_run_->host == nullptr)
         return;
     RendererHost& host = *render_run_->host;
+    // The anti-aliasing a rung taken below starts Full with: the row's.
+    note_full_supersample_setting();
     policy::TierInputs& inputs = host.tier_inputs();
     inputs.renderer =
         sdl_.renderer != nullptr && sdl_.renderer == host.renderer() && !options_.headless_check;
@@ -110,6 +115,36 @@ void Runtime::forget_render_failures() {
         begin_accelerated_watch();
         switch_accelerated_presentation(true, rung);
     }
+}
+
+uint8_t Runtime::full_supersample_setting() const noexcept {
+    const auto level = engine_settings_ ? engine_settings_->current.anti_aliasing
+                                        : oa::ui::engine_settings::AntiAliasing::off;
+    return static_cast<uint8_t>(std::clamp<uint32_t>(
+        policy::supersample_factor(level), policy::full_supersample_least, policy::full_supersample_most
+    ));
+}
+
+void Runtime::note_full_supersample_setting() {
+    if (!render_run_ || render_run_->host == nullptr)
+        return;
+    render_run_->host->set_full_supersample(full_supersample_setting());
+}
+
+void Runtime::apply_full_supersample_setting() {
+    note_full_supersample_setting();
+    // While Full draws, its rungs begin at the row's factor: the rung
+    // follows a change of the row, except that the step-down, once it has
+    // lowered Full's anti-aliasing, never lets it rise again within the run.
+    if (!render_run_ || !accelerated_.on || !accelerated_.rung.full)
+        return;
+    const uint8_t factor = full_supersample_setting();
+    auto* watch = render_run_->watch.get();
+    const bool lowered = watch != nullptr && watch->full_slowed;
+    const uint8_t rung = lowered ? std::min(accelerated_.rung.supersample, factor) : factor;
+    accelerated_.rung.supersample = rung;
+    if (watch != nullptr)
+        watch->step_down.state.supersample = rung;
 }
 
 policy::LadderState Runtime::render_tier_rung() const {

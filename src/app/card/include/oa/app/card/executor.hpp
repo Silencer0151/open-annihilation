@@ -68,6 +68,8 @@ struct Counts {
     uint64_t sampling_changes{}; ///< sampling modes set on a page's level
     uint64_t clears{};           ///< clear batches run
     uint64_t resolves{};         ///< resolve batches run
+    uint64_t blend_reductions{}; ///< blend_reduce batches run
+    uint64_t halvings{};         ///< render targets halved into their half
     uint64_t pages_alive{};
     uint64_t targets_alive{};
     uint64_t texture_bytes{}; ///< bytes of every page level and render target alive
@@ -163,15 +165,21 @@ class Executor {
     /// half a factor of 4 reduces through, is cleared to a check colour and
     /// one pixel is read back, since a texture a driver failed to make
     /// draws black and reports no error; a pixel of another colour refuses
-    /// the target. It is then cleared transparent. Refuses a factor other
-    /// than 1, 2 or 4, and a texture beyond the limits or the renderer's
-    /// texture limit, with an error naming both.
+    /// the target. It is then cleared transparent. With `keep_half` the
+    /// target keeps the half at any factor, for the two-level reduction
+    /// (Operation::blend_reduce), which is refused on a target without
+    /// one; the half's texture is half the texture's size, and its pixels
+    /// count with the target's. Refuses a factor other than 1, 2 or 4, and
+    /// a texture beyond the limits or the renderer's texture limit, with
+    /// an error naming both.
     ///
     /// @param width pixels across, above 0
     /// @param height pixels down, above 0
     /// @param factor the supersampling factor, 1, 2 or 4
+    /// @param keep_half whether the target keeps a half for the two-level reduction
     /// @return the target's handle; none, with error() set, when it was not made
-    [[nodiscard]] TargetHandle create_target(uint32_t width, uint32_t height, uint32_t factor);
+    [[nodiscard]] TargetHandle
+    create_target(uint32_t width, uint32_t height, uint32_t factor, bool keep_half = false);
 
     /// Destroys a render target; a handle that names no target is ignored.
     ///
@@ -235,7 +243,10 @@ class Executor {
         bool alive{};
         uint32_t generation{};
         SDL_Texture* texture{}; ///< the size times the factor
-        SDL_Texture* half{};    ///< the texture halved once, for a factor of 4; else null
+        /// The texture halved once: for a factor of 4, which resolves
+        /// through it, and for a target made with keep_half, which the
+        /// two-level reduction reads it from; else null.
+        SDL_Texture* half{};
         uint32_t width{};
         uint32_t height{};
         uint32_t factor{};
@@ -399,6 +410,14 @@ class Executor {
     /// @return false when SDL refused
     bool run_clear(Run& run, const Batch& batch);
 
+    /// Halves a render target's texture into its half, unless done this
+    /// run with the texture not written since.
+    ///
+    /// @param[in,out] run the run
+    /// @param[in,out] source the target, which has a half
+    /// @return false when SDL refused
+    bool halve(Run& run, Target& source);
+
     /// Runs a resolve batch: halves a factor-4 source once into its half,
     /// unless done this run with the source not written since, then draws
     /// the source reduced into the destination.
@@ -407,6 +426,17 @@ class Executor {
     /// @param batch the batch
     /// @return false when SDL refused
     bool run_resolve(Run& run, const Batch& batch);
+
+    /// Runs a blend_reduce batch: halves the source unless done this run
+    /// with the source not written since, draws the part's half LINEAR
+    /// into the destination, then the part LINEAR over it at alpha 1 - t,
+    /// t = log2(1 / scale) by the scale across, left out at a scale of
+    /// one half, where it would add nothing.
+    ///
+    /// @param[in,out] run the run
+    /// @param batch the batch
+    /// @return false when SDL refused
+    bool run_blend_reduce(Run& run, const Batch& batch);
 
     /// Puts back what the run found: the final target bound, with its own
     /// scissor, draw colour and draw blend mode.

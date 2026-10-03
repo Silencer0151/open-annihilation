@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 namespace oa::present::world_renderer {
 
@@ -223,6 +224,71 @@ void pixelart_rgb24(
                 (static_cast<double>(x) + 0.5 - placement.offset_x) / placement.scale_x;
             const auto across = pixelart_tap(u, placement.scale_x);
             write_interpolated(scene, across, down, picture.rgb + picture_offset(picture, x, y));
+        }
+    }
+}
+
+void two_level_rgb24(
+    const RgbSource& scene, const ScenePlacement& placement, const RgbTarget& picture
+) noexcept {
+    if (!drawable(scene, placement, picture))
+        return;
+    // The half: each pixel the mean of the four scene pixels under it, the
+    // scene's edge repeated where its size is odd, kept unrounded.
+    const uint32_t half_width = (scene.width + 1U) / 2U;
+    const uint32_t half_height = (scene.height + 1U) / 2U;
+    std::vector<double> half(std::size_t{half_width} * half_height * area_pixel_bytes);
+    for (uint32_t y = 0; y < half_height; ++y)
+        for (uint32_t x = 0; x < half_width; ++x)
+            for (uint32_t channel = 0; channel < area_pixel_bytes; ++channel) {
+                const int64_t column = 2 * int64_t{x};
+                const int64_t row = 2 * int64_t{y};
+                half[(std::size_t{y} * half_width + x) * area_pixel_bytes + channel] =
+                    (clamped_level(scene, column, row, channel) +
+                     clamped_level(scene, column + 1, row, channel) +
+                     clamped_level(scene, column, row + 1, channel) +
+                     clamped_level(scene, column + 1, row + 1, channel)) /
+                    4.0;
+            }
+    const auto half_level = [&](int64_t column, int64_t row, uint32_t channel) {
+        const auto x = static_cast<std::size_t>(std::clamp<int64_t>(column, 0, half_width - 1));
+        const auto y = static_cast<std::size_t>(std::clamp<int64_t>(row, 0, half_height - 1));
+        return half[(y * half_width + x) * area_pixel_bytes + channel];
+    };
+    const auto mix = [](double first, double second, double weight) {
+        return first * (1.0 - weight) + second * weight;
+    };
+    const double t = std::clamp(std::log2(1.0 / placement.scale_x), 0.0, 1.0);
+    for (uint32_t y = 0; y < picture.height; ++y) {
+        const double v = (static_cast<double>(y) + 0.5 - placement.offset_y) / placement.scale_y;
+        const LinearTap down = linear_tap(v);
+        // The half's pixel k spans scene pixels 2k and 2k + 1.
+        const LinearTap half_down = linear_tap(v / 2.0);
+        for (uint32_t x = 0; x < picture.width; ++x) {
+            const double u =
+                (static_cast<double>(x) + 0.5 - placement.offset_x) / placement.scale_x;
+            const LinearTap across = linear_tap(u);
+            const LinearTap half_across = linear_tap(u / 2.0);
+            auto* out = picture.rgb + picture_offset(picture, x, y);
+            for (uint32_t channel = 0; channel < area_pixel_bytes; ++channel) {
+                const double far =
+                    mix(mix(half_level(half_across.first, half_down.first, channel),
+                            half_level(half_across.first + 1, half_down.first, channel),
+                            half_across.weight),
+                        mix(half_level(half_across.first, half_down.first + 1, channel),
+                            half_level(half_across.first + 1, half_down.first + 1, channel),
+                            half_across.weight),
+                        half_down.weight);
+                const double near =
+                    mix(mix(clamped_level(scene, across.first, down.first, channel),
+                            clamped_level(scene, across.first + 1, down.first, channel),
+                            across.weight),
+                        mix(clamped_level(scene, across.first, down.first + 1, channel),
+                            clamped_level(scene, across.first + 1, down.first + 1, channel),
+                            across.weight),
+                        down.weight);
+                out[channel] = rounded_level(mix(near, far, t));
+            }
         }
     }
 }
