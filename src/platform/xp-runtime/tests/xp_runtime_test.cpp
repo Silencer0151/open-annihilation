@@ -6,9 +6,8 @@
 // excludes them, a condition wait hands work between threads and times out,
 // and a one-time initialisation runs once for many threads and again after
 // failing. With MinGW, on Windows: the file stand-ins agree with the
-// system's own calls for a file this test writes, the functions under the
-// system's names lock, wait and run once, and the steady clock reads the
-// performance counter.
+// system's own calls for a file this test writes, and the functions under
+// the system's names lock, wait and run once.
 #include "oa/platform/xp_runtime.hpp"
 
 #include "oa/base/threads.hpp"
@@ -25,7 +24,6 @@
 #define _WIN32_WINNT 0x0601
 #include <windows.h>
 
-#include <chrono>
 #include <cwchar>
 #include <string>
 #endif
@@ -280,53 +278,6 @@ void test_windows_names() {
     CHECK(GetThreadId(GetCurrentThread()) == GetCurrentThreadId());
     CHECK(GetActiveProcessorCount(ALL_PROCESSOR_GROUPS) >= 1);
 }
-
-/// How many times test_steady_clock reads the clock.
-constexpr int clock_readings = 100;
-
-/// Converts a performance counter reading to nanoseconds, rounded down.
-///
-/// @param counter the reading
-/// @param frequency the counter's ticks per second
-/// @return the reading in nanoseconds
-int64_t counter_nanoseconds(int64_t counter, int64_t frequency) {
-    constexpr int64_t nanoseconds_per_second = 1'000'000'000;
-    return counter / frequency * nanoseconds_per_second +
-           counter % frequency * nanoseconds_per_second / frequency;
-}
-
-/// Checks that the steady clock reads the performance counter, not the time
-/// of day: each reading lies between the counter's own readings just before
-/// and just after it, allowing a nanosecond for a clock that rounds to the
-/// nearest.
-void test_steady_clock() {
-    LARGE_INTEGER frequency{};
-    CHECK(QueryPerformanceFrequency(&frequency));
-    if (frequency.QuadPart <= 0)
-        return;
-    for (int reading = 0; reading < clock_readings; ++reading) {
-        LARGE_INTEGER before{};
-        LARGE_INTEGER after{};
-        QueryPerformanceCounter(&before);
-        const auto since_start = std::chrono::steady_clock::now().time_since_epoch();
-        QueryPerformanceCounter(&after);
-        const int64_t steady =
-            std::chrono::duration_cast<std::chrono::nanoseconds>(since_start).count();
-        const int64_t earliest = counter_nanoseconds(before.QuadPart, frequency.QuadPart);
-        const int64_t latest = counter_nanoseconds(after.QuadPart, frequency.QuadPart) + 1;
-        CHECK(steady >= earliest && steady <= latest);
-        if (steady < earliest || steady > latest) {
-            std::fprintf(
-                stderr,
-                "steady clock %lld ns, performance counter %lld to %lld ns\n",
-                static_cast<long long>(steady),
-                static_cast<long long>(earliest),
-                static_cast<long long>(latest)
-            );
-            return;
-        }
-    }
-}
 #endif
 
 } // namespace
@@ -339,7 +290,6 @@ int main() {
 #if defined(__MINGW32__)
     test_file_stand_ins();
     test_windows_names();
-    test_steady_clock();
 #endif
     if (failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);

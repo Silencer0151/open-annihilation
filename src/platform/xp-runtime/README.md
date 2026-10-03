@@ -57,20 +57,10 @@ they call the system themselves: an XP build links them into every program
 after the libraries it names, where only a program that sleeps itself would
 have the sleep from oa-base-threads.
 
-## The steady clock
-
-A C++ run-time library built without a monotonic clock reads its steady
-clock from the time of day, which on Windows XP advances in steps of
-15.625 ms and on every Windows jumps when the clock is set: too coarse to
-time the engine's frames and ticks, and not steady. With such a library,
-and MinGW, `src/steady_clock.cpp` defines the steady clock itself, on the
-performance counter, in nanoseconds since the system started (whole seconds
-and the rest of the count converted apart, rounded down), as other C++
-run-time libraries for Windows do. It defines the system clock too, as the
-time of day in nanoseconds since 1970, in steps of 100 ns, because the
-library defines both in one object, which would otherwise be linked beside
-these definitions. With a C++ library whose steady clock is monotonic, the
-file defines nothing.
+The steady clock an XP build needs, on the performance counter rather than
+the time of day, is not here: every MinGW build takes it from
+[src/platform/steady-clock](../steady-clock/README.md), for Windows XP or
+not.
 
 `platform-xp-runtime` checks, on every system, that a slim lock keeps four
 threads' increments whole, that readers share it and exclude a writer, that
@@ -78,7 +68,5 @@ a condition hands work between two threads and times out, and that a
 one-time initialisation runs once for four threads and runs again after it
 fails. With MinGW on Windows it also checks that the file stand-ins read the
 same size, times, attributes and final path as the system's calls for a file
-it writes, that the functions under the system's names lock, wait, run
-once and keep fiber-local values, and that the steady clock reads the
-performance counter: each reading lies between the counter's own readings
-just before and just after it.
+it writes, and that the functions under the system's names lock, wait, run
+once and keep fiber-local values.

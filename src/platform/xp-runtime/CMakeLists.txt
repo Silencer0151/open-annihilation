@@ -4,17 +4,15 @@
 # The functions that Windows XP lacks and the C++ run-time library calls:
 # slim locks, condition variables and one-time initialisation on every
 # system (where they are tested), and with MinGW the definitions under the
-# names programs import them by, and a steady clock on the performance
-# counter where the C++ library's reads the time of day, which
-# cmake/OaWindowsXp.cmake links into every executable of an OA_WINDOWS_XP
-# build.
+# names programs import them by, which cmake/OaWindowsXp.cmake links into
+# every executable of an OA_WINDOWS_XP build.
 add_library(oa-platform-xp-runtime src/slim_sync.cpp)
 add_library(oa::platform::xp_runtime ALIAS oa-platform-xp-runtime)
 target_include_directories(oa-platform-xp-runtime PUBLIC include)
 target_compile_features(oa-platform-xp-runtime PUBLIC cxx_std_20)
 target_link_libraries(oa-platform-xp-runtime PRIVATE oa-base-threads oa-options)
 if(MINGW)
-  target_sources(oa-platform-xp-runtime PRIVATE src/windows_functions.cpp src/steady_clock.cpp)
+  target_sources(oa-platform-xp-runtime PRIVATE src/windows_functions.cpp)
   target_link_libraries(oa-platform-xp-runtime PRIVATE psapi)
 endif()
 

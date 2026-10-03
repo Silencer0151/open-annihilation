@@ -76,6 +76,13 @@ if(NOT TARGET oa-options)
     target_link_libraries(oa-options INTERFACE
       "$<$<STREQUAL:$<TARGET_PROPERTY:TYPE>,EXECUTABLE>:$<LINK_LIBRARY:WHOLE_ARCHIVE,$<TARGET_NAME_IF_EXISTS:oa-base-float-precision>>>")
   endif()
+  # Every executable of a MinGW build takes its steady clock from the
+  # performance counter, whole, before the linker reaches the C++ run-time
+  # library, whose own may read the time of day (src/platform/steady-clock).
+  if(MINGW)
+    target_link_libraries(oa-options INTERFACE
+      "$<$<STREQUAL:$<TARGET_PROPERTY:TYPE>,EXECUTABLE>:$<LINK_LIBRARY:WHOLE_ARCHIVE,$<TARGET_NAME_IF_EXISTS:oa-platform-steady-clock>>>")
+  endif()
   # A 32-bit POSIX build uses 64-bit file offsets and file serial numbers,
   # so it can examine every file and folder a file system holds, however
   # large the file or its serial number.
