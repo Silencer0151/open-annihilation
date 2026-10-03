@@ -31,10 +31,9 @@ struct AcceleratedWatch {
     /// The ladder has moved in the run, by slow frames or by a buffer the
     /// memory guard refused: each later switch-on draws at its rung, which
     /// never rises again until Hardware acceleration is switched Off then On
-    /// or Restore defaults asks for a fresh try. The rung reached is what
-    /// the renderer records' scale-level key is to keep for the next start;
-    /// the game keeps the records but does not read or write that key yet,
-    /// so it lasts for this run alone.
+    /// or Restore defaults asks for a fresh try. The game reads and writes
+    /// the renderer records but not their scale-level key, which is
+    /// reserved for the rung reached, so the rung lasts for this run alone.
     bool moved{};
     /// The step-down has lowered the rung for slow frames since the ladder
     /// last started from the top, so the status says the tier smooths less;

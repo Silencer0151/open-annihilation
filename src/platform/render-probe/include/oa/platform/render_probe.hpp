@@ -179,6 +179,14 @@ names_software_rasteriser(std::string_view name, uint32_t vendor, uint32_t devic
 /// @return true for direct3d
 [[nodiscard]] bool loses_device_in_ordinary_use(std::string_view renderer) noexcept;
 
+/// Says whether a render driver resets its device at each change of the
+/// wait for the display, Vertical sync: direct3d, SDL's Direct3D 9
+/// renderer. Such a reset may leave the device lost.
+///
+/// @param renderer SDL's name for the render driver
+/// @return true for direct3d
+[[nodiscard]] bool vertical_sync_resets_device(std::string_view renderer) noexcept;
+
 /// Says whether the accelerated tier has been run with this build's system
 /// and processor architecture on a render driver: metal on 64-bit ARM
 /// macOS, and direct3d11 on x86 and x64 Windows. Every other class is one

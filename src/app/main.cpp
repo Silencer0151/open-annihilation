@@ -219,8 +219,8 @@ struct HostDisplay {
         density.unattended = options.unattended;
         density.capture = !options.capture_video.empty();
         // The driver the native-density record names under this engine's
-        // version. The game does not write the scale-level key yet, so no
-        // rung is remembered for it.
+        // version. The game writes no scale-level key, so no rung is
+        // remembered for it.
         if (const auto driver = renderer_state::native_density_driver(
                 renderer_host.records().records(), place.engine_version
             ))

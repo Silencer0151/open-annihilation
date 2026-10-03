@@ -202,10 +202,12 @@ logs it.
   terrain fill and its box filter, the fog, the model bridge and the
   sprites, particles and lines of the list take, while units and features
   are culled, and the order overlays, build ghost, selection band and every
-  painter after them placed, in screen pixels at the zoom. The game draws
-  at the zoom, its scene the world layer itself; a check may draw the scene
-  at another scale apart from the world layer, which a nearest resample
-  (`resample_nearest_rgb24`) then fills at the zoom. What the match reads
+  painter after them placed, in screen pixels at the zoom. The standard
+  tier draws at the zoom, its scene the world layer itself; a check may
+  draw the scene at another scale apart from the world layer, which a
+  nearest resample (`resample_nearest_rgb24`) then fills at the zoom; and
+  the accelerated presentation (below) draws a zoomed-out scene at a draw
+  scale of its own and reduces it by the area pass. What the match reads
   back from drawing (the view in Game, the on-screen list, the piece
   transforms, the radar) follows the zoom and the camera alone;
   `native-match-layers` draws the scene at 1 apart at zoom 1, 0.5 and 2 and
@@ -223,7 +225,7 @@ logs it.
   highest draw scale its scene budget allows (`accelerated_draw_scale`: the
   zoom times the square root of the budget's scene pixels per battlefield
   pixel and of its most scene pixels over the battlefield's, from the zoom
-  to 1; both numbers are placeholders until measured) and reduced by the
+  to 1; both numbers provisional, chosen without measurement) and reduced by the
   area pass, unless the budget is none or the zoom over the draw scale is
   above the cut-off of 0.9, where the frame draws at the zoom; zoom 1 draws
   as always; above it the scene is drawn at 1 and magnified, unless magnify
@@ -337,7 +339,7 @@ logs it.
   (`check_smooth_panning`, `runtime_smooth_pan_check.cpp`); that a zoom
   ease makes no texture; and that prescale targets are drawn once a
   painted frame; it writes pictures of one moment at zoom 0.5, 1 and 2.5
-  in both tiers. The records are wired (below).
+  in both tiers.
 - Native pixel density: a window's density is fixed when it opens.
   `decide_window_density` (`render_host.cpp`) decides it before the window
   opens by the render policy's rule (`decide_native_density`): from 2 GiB,
@@ -346,11 +348,11 @@ logs it.
   setting On or `--hardware-acceleration`, in a class of machine measured
   at native density, from a start above budget none and a remembered rung
   above magnify off, and with the `native-density` record an earlier run
-  left (`note_density_run_end`, `forget_native_density`, rules the game
-  does not apply yet). The start reads the records before the window opens
+  left (`note_density_run_end`, `forget_native_density`, which nothing in
+  the game calls). The start reads the records before the window opens
   (`HostDisplay`, `RendererHost::open_records`), so the key's driver
   reaches the rule, though no remembered rung does, since the game writes
-  no `scale-level` key yet. No class has been measured
+  no `scale-level` key. No class has been measured
   (`native_density_measured`), so only `--native-density`, which the
   render tiers check alone takes, opens a window at native density; every
   other opens at the window system's density, as before. On a window at
@@ -366,7 +368,7 @@ logs it.
   chrome's filter at any other, plain LINEAR where that filter would need a
   prescale target (`one_to_one_scale_mode`). Below zoom 1 the area pass,
   where it runs, still runs at the layout's size at every density, and the
-  card enlarges its result by the density: the scene is not yet magnified
+  card enlarges its result by the density: the scene is not magnified
   there by the zoom times the density over the draw scale. Pointer events
   reach the layout through SDL's view, so picking is unchanged; the edge
   scroll is one layout pixel deep there (`edge_scroll_depth`); screenshots,
@@ -408,8 +410,8 @@ logs it.
   step drops the tier, as the status then says, until Off then On or
   Restore defaults starts the ladder again from the top. A later switch-on, after
   a lost device or a shared game, keeps the rung reached. The rung is not
-  yet kept for the next start: the game reads and writes the renderer
-  records, but not yet their `scale-level` key, which is to hold it.
+  kept for the next start: the game reads and writes the renderer
+  records, but not their `scale-level` key, which is reserved for it.
   `--check-renderer-ladder --render-fault slow`
   (`native-renderer-ladder-slow`) forces slow frames and sees idle frames
   and the standard tier never feeding it, a frame's ticks taken out
@@ -520,8 +522,8 @@ logs it.
   or when free physical memory stays under a sixteenth of it for 3 s;
   where the system reports no free memory, its memory pressure at the
   critical level stands in for it, or else more than 128 hard page faults
-  a second. These are conservative placeholders until a run on period
-  hardware measures them. Before the tier makes a buffer of its own,
+  a second. These figures are conservative, chosen without a measurement
+  on period hardware. Before the tier makes a buffer of its own,
   `memory_guard_allows` tells whether free memory would stay at or above
   its threshold and committed memory at or under its own.
   `app-memory-guard` tests it by table, and `platform-system-memory`
@@ -769,9 +771,10 @@ logs it.
   what the graphics card does at its rung (`acceleration_reach`). A runtime
   without it does not look at the renderer: only SDL's software renderer
   is known unable. Vertical sync is locked
-  on SDL's software renderer; on SDL's `direct3d` renderer, where each
-  change resets the graphics device and the game cannot yet recover one
-  the reset leaves lost; and once the renderer refused it.
+  on SDL's software renderer; on SDL's `direct3d` renderer
+  (`render_probe::vertical_sync_resets_device`), where each change resets
+  the graphics device and the game does not recover one the reset leaves
+  lost; and once the renderer refused it.
   `Runtime::acceleration_facts` gathers those facts, both hosts refresh
   the status each frame while the dialog is open, and
   `Runtime::apply_vertical_sync` asks the renderer to wait for the display

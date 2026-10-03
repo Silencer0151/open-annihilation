@@ -73,8 +73,8 @@ scene under its footprint, each scene pixel weighted by the area of it the
 footprint covers. The scale `m`, screen pixels per scene pixel, is 16.16
 fixed point from one half to one; the scene starts at the picture's corner,
 and picture column `x` covers scene columns `[x / m, (x + 1) / m)`, at most
-three of them, and rows alike. Only the accelerated presentation calls it,
-which nothing but a check switches on yet: the game's zoomed-out
+three of them, and rows alike. Only the accelerated presentation calls it
+([src/app](../../app/README.md)); in the standard tier the game's zoomed-out
 battlefield is drawn as before, terrain averaged over whole map pixels and
 units point-sampled.
 

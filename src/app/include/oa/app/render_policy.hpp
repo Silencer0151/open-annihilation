@@ -810,14 +810,14 @@ inline constexpr uint32_t slow_percent = 125;
 inline constexpr uint32_t very_slow_percent = 200;
 /// The share of the target period, in percent, above which the tier's own
 /// passes cost a rung that owns them a step while frames are late. A
-/// placeholder until it is measured.
+/// provisional figure, chosen without measurement.
 inline constexpr uint32_t passes_percent = 10;
 /// The area pass favours a step to the blend when it takes at least one part
 /// in this many of the draw measure: a third.
 inline constexpr uint32_t blend_area_parts = 3;
 /// The present measure's share of the target period, in percent, under
-/// which uploads count as cheap enough for the blend. A placeholder until
-/// it is measured.
+/// which uploads count as cheap enough for the blend. A provisional
+/// figure, chosen without measurement.
 inline constexpr uint32_t blend_present_percent = 25;
 /// The most samples a pool keeps: three seconds at the loop's highest
 /// paced rate of 120 frames a second, and some.
@@ -1080,7 +1080,7 @@ struct DensityDecision {
 // Chrome filtering and the prescale budget
 
 /// The prescale budget B: the most pixels all prescale targets alive at once
-/// may hold. A placeholder until it is measured.
+/// may hold. A provisional figure, chosen without measurement.
 inline constexpr uint64_t prescale_budget_pixels = uint64_t{1} << 23;
 
 /// Returns the pixels a rung's prescale targets may hold together.

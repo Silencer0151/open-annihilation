@@ -11,8 +11,8 @@
 // pressure, or else the process's hard page faults, stands in for it. Both
 // thresholds scale with physical memory, and the guard also tells the tier
 // whether a new buffer of its own would leave free memory above the
-// threshold. The constants are conservative placeholders until a run on
-// real period hardware measures them. The guard reads no clock and calls no
+// threshold. The constants are conservative, chosen without a measurement
+// on period hardware. The guard reads no clock and calls no
 // system: the accelerated tier's watch (runtime_tier_watch.cpp) samples the
 // system and hands it each sample.
 #pragma once
@@ -31,16 +31,16 @@ inline constexpr uint64_t memory_guard_sample_interval_ns = 1'000'000'000;
 inline constexpr uint64_t memory_guard_low_hold_ns = 3'000'000'000;
 
 /// Committed memory above physical memory divided by this trips the guard:
-/// above half of it. A conservative placeholder.
+/// above half of it. A conservative figure, chosen without measurement.
 inline constexpr uint64_t memory_guard_committed_divisor = 2;
 
 /// Free physical memory below physical memory divided by this is low: under
-/// a sixteenth of it. A conservative placeholder.
+/// a sixteenth of it. A conservative figure, chosen without measurement.
 inline constexpr uint64_t memory_guard_free_divisor = 16;
 
 /// Hard page faults a second above which free memory counts as low, where
 /// the system reports neither free memory nor its memory pressure. A
-/// conservative placeholder.
+/// conservative figure, chosen without measurement.
 inline constexpr uint64_t memory_guard_hard_faults_per_second = 128;
 
 /// Nanoseconds in a second, for the rate of hard page faults.

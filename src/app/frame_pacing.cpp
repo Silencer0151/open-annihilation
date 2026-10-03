@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <string_view>
@@ -551,6 +552,13 @@ FrameStatsTable frame_stats_widest_table() noexcept {
     set_text(table.rows[kCountRow].note, "0000 between ticks");
     // The renderer row stays empty: the panel cuts its names to its width.
     return table;
+}
+
+uint64_t steady_now_ns() noexcept {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                     std::chrono::steady_clock::now().time_since_epoch()
+    )
+                                     .count());
 }
 
 } // namespace oa::app::frame_pacing

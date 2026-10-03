@@ -3,10 +3,11 @@
 
 // The probe's pure tables: the names of software and virtual rasterisers,
 // the drivers that report a fixed texture limit or need their adapter read,
-// the one driver that may be accelerated on Windows before Vista, the class
-// of machine the accelerated tier has been run on, and the video
-// drivers whose windows have a framebuffer of their own. Built on every
-// system.
+// the one driver that may be accelerated on Windows before Vista, loses its
+// device in ordinary use and resets it at each change of the wait for the
+// display, the class of machine the accelerated tier has been run on, and
+// the video drivers whose windows have a framebuffer of their own. Built on
+// every system.
 #include "oa/platform/render_probe.hpp"
 
 #include <algorithm>
@@ -57,6 +58,9 @@ constexpr std::array<std::string_view, 3> kAdapterNeeded{"direct3d12", "vulkan",
 constexpr std::string_view kBeforeVistaRenderer = "direct3d";
 /// The renderer whose device is lost in ordinary use: SDL's Direct3D 9 one.
 constexpr std::string_view kDeviceLosingRenderer = "direct3d";
+/// The renderer that resets its device at each change of the wait for the
+/// display: SDL's Direct3D 9 one.
+constexpr std::string_view kDeviceResettingRenderer = "direct3d";
 
 /// SDL's name of the render driver the accelerated tier has been run on with
 /// this build's system and processor architecture; empty for none.
@@ -190,6 +194,10 @@ bool capable_before_vista(std::string_view renderer) noexcept {
 
 bool loses_device_in_ordinary_use(std::string_view renderer) noexcept {
     return renderer == kDeviceLosingRenderer;
+}
+
+bool vertical_sync_resets_device(std::string_view renderer) noexcept {
+    return renderer == kDeviceResettingRenderer;
 }
 
 bool accelerated_tier_run(std::string_view renderer) noexcept {

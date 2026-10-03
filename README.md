@@ -134,12 +134,13 @@ they are open; a multiplayer game keeps running.
   and `--no-hardware-acceleration` decide it for one run. Vertical sync
   (off by default): each frame waits for the display, so that none tears,
   and the frame rate keeps just below the display's; SDL's software
-  renderer does not offer it, and neither, for now, does SDL's `direct3d`
-  renderer, whose graphics device each change would reset. The Graphics
+  renderer does not offer it, and neither does SDL's `direct3d` renderer,
+  whose graphics device each change would reset. The Graphics
   section is taller than the dialog and scrolls, with the mouse wheel, its
   scroll bar, Page Up, Page Down, Home and End.
 - **Developer:** Show performance statistics: frame and tick times over the
-  battlefield, as the `+stats` console command shows them.
+  battlefield, and the renderer in use, as the `+stats` console command
+  shows them.
 
 Pathfinding cycles and Unit limit cannot change during a game; in a
 multiplayer game the host's settings apply. Vertical sync keeps its value

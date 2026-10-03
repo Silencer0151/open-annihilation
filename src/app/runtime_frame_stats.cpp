@@ -20,7 +20,6 @@
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -94,16 +93,6 @@ constexpr uint64_t kReadoutEasesPerSecond = kDefaultMaxFramesPerSecond;
 /// with one.
 constexpr uint64_t kMostReadoutEases = 8;
 
-/// Returns the steady clock's reading.
-///
-/// @return nanoseconds since the steady clock's epoch
-uint64_t steady_now_ns() {
-    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                     std::chrono::steady_clock::now().time_since_epoch()
-    )
-                                     .count());
-}
-
 /// Tells whether an event comes from the player's keyboard, pointer, touch or controller.
 ///
 /// @param event the event
@@ -156,11 +145,11 @@ void Runtime::set_presentation_alpha(float alpha) noexcept {
 }
 
 uint64_t Runtime::frame_clock_ns() const {
-    return frame_run_clock_ns_ ? *frame_run_clock_ns_ : steady_now_ns();
+    return frame_run_clock_ns_ ? *frame_run_clock_ns_ : frame_pacing::steady_now_ns();
 }
 
 void Runtime::begin_loop_frame() {
-    const uint64_t now = steady_now_ns();
+    const uint64_t now = frame_pacing::steady_now_ns();
     // The frame that ends now, and the samples of the one that starts, are
     // graded against the rate and the wait chosen as the last frame ended.
     frame_stats_.allowance_ns =
@@ -263,7 +252,7 @@ void Runtime::present_frame_between_ticks(bool stepped, uint32_t ticks_before) {
 }
 
 void Runtime::pace_next_frame(bool& running) {
-    const uint64_t now = steady_now_ns();
+    const uint64_t now = frame_pacing::steady_now_ns();
     if (now > loop_frame_start_ns_)
         note_frame_measure(frame_stats_, FrameMeasure::work, now - loop_frame_start_ns_);
     FrameActivity activity{};
@@ -304,7 +293,7 @@ void Runtime::pace_next_frame(bool& running) {
 
 void Runtime::note_input_activity(const SDL_Event& event) {
     if (input_event(event))
-        last_input_ns_ = steady_now_ns();
+        last_input_ns_ = frame_pacing::steady_now_ns();
 }
 
 void Runtime::show_frame_stats(bool shown) {

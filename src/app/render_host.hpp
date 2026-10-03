@@ -348,7 +348,7 @@ struct DensityRequest {
 /// density (render_policy::decide_native_density), from the request and
 /// what the machine reports: its physical memory, the scene budget it
 /// starts at with the record's driver, SDL_RENDER_DRIVER and the video
-/// driver. The class of no machine has been measured at native density yet
+/// driver. No class of machine is measured at native density
 /// (render_policy::native_density_measured), so only --native-density opens
 /// the window at native density. A window that does is logged.
 ///

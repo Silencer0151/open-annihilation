@@ -999,7 +999,7 @@ void RendererHost::take_renderer() {
     oa::base::float_precision::restore_program_float_control();
     tier_.renderer = renderer_ != nullptr;
     // The renderer is assessed at the host's texture limit, which a fault
-    // hook may lower. No command line accepts a virtual adapter yet.
+    // hook may lower. No command line option accepts a virtual adapter.
     render_policy::RendererFacts renderer = renderer_facts(facts_);
     renderer.max_texture_size = texture_limit();
     tier_.capability = render_policy::assess_renderer(renderer, machine_.legacy_windows, false);

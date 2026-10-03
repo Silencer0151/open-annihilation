@@ -75,7 +75,7 @@ struct AccelerationFacts {
     /// after an error of the game's own, which says nothing of the driver.
     bool engine_error{};
     /// Each change of the wait for the display resets the renderer's device,
-    /// and the game does not yet recover a device such a reset leaves lost.
+    /// and the game does not recover a device such a reset leaves lost.
     bool vertical_sync_resets_device{};
     /// The renderer refused, in this run, to wait for the display.
     bool vertical_sync_refused{};

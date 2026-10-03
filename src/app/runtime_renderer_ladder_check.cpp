@@ -23,6 +23,7 @@
 #include "graphics_report.hpp"
 #include "render_host.hpp"
 #include "render_run.hpp"
+#include "oa/app/frame_pacing.hpp"
 #include "oa/app/renderer_state.hpp"
 #include "oa/base/float_precision.hpp"
 #include "oa/platform/preferences.hpp"
@@ -100,16 +101,6 @@ constexpr uint64_t ticked_span_ns = 4'000'000'000;
 /// the HUD is drawn through a prescale target.
 constexpr int part_scale_width = 1024;
 constexpr int part_scale_height = 768;
-
-/// Returns the steady clock's time, as render() reads it.
-///
-/// @return nanoseconds since the clock's epoch
-uint64_t steady_now_ns() {
-    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                     std::chrono::steady_clock::now().time_since_epoch()
-    )
-                                     .count());
-}
 
 /// Counts the reports of a changed floating-point setting.
 ///
@@ -575,7 +566,7 @@ struct Runtime::RendererLadder {
     /// while another program holds the screen, waits for its reset: its failures make no rebuild and nothing is
     /// read back; after the reset a failure makes the renderer again.
     void device_lost(uint32_t frame) {
-        constexpr std::string_view where = "d3d9-lost";
+        constexpr std::string_view where = "lost-wait";
         start_match();
         auto& faults = run().host->faults();
         render_probe::DeviceState answer = render_probe::DeviceState::lost;
@@ -640,9 +631,9 @@ struct Runtime::RendererLadder {
         // Each frame that is not steady differs in one thing alone from the
         // steady frames that follow.
         run().unsteady_until_ns = 0;
-        run().screen_since_ns = steady_now_ns();
+        run().screen_since_ns = frame_pacing::steady_now_ns();
         expect_stall_passed_over(where, "in a match's first 5 s");
-        run().screen_since_ns = steady_now_ns() - match_begun_ns;
+        run().screen_since_ns = frame_pacing::steady_now_ns() - match_begun_ns;
         SDL_Event resized{};
         resized.type = SDL_EVENT_WINDOW_RESIZED;
         resized.window.windowID = SDL_GetWindowID(runtime.sdl_.window);
@@ -785,7 +776,7 @@ struct Runtime::RendererLadder {
     /// window change, at the full rate, with the match clock at its rate.
     void steady_frames() {
         run().unsteady_until_ns = 0;
-        run().screen_since_ns = steady_now_ns() - match_begun_ns;
+        run().screen_since_ns = frame_pacing::steady_now_ns() - match_begun_ns;
         runtime.frame_wait_ = frame_pacing::FrameWait::precise;
         runtime.match_timing_.actual_rate = runtime.match_timing_.requested_rate;
     }

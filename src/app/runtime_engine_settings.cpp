@@ -12,6 +12,7 @@
 #include "render_run.hpp"
 #include "screen_size.hpp"
 #include "oa/platform/machine.hpp"
+#include "oa/platform/render_probe.hpp"
 #include "oa/sim/ground_orders/search_worker.hpp"
 
 #include <SDL3/SDL.h>
@@ -36,6 +37,7 @@
 namespace oa::app {
 
 namespace settings = oa::ui::engine_settings;
+namespace render_probe = oa::platform::render_probe;
 
 static_assert(settings::base_path_search_nodes == oa::sim::ground_orders::search_tick_credit);
 static_assert(settings::lowest_frame_rate == kLowestMaxFramesPerSecond);
@@ -62,11 +64,6 @@ constexpr std::string_view kInstallationIniName = "totala.ini";
 
 /// SDL's names of the video drivers that draw no window.
 constexpr std::array<std::string_view, 2> kWindowlessVideoDrivers{"dummy", "offscreen"};
-
-/// SDL's name of the renderer that resets its device at each change of the
-/// wait for the display. The game does not yet recover a device such a reset
-/// leaves lost, so Vertical sync is out of reach there.
-constexpr std::string_view kDeviceResettingRenderer = "direct3d";
 
 /// Returns a text in lower case, ASCII letters only.
 ///
@@ -294,7 +291,8 @@ AccelerationFacts Runtime::acceleration_facts() const {
         facts.force_capable = options_.force_capable;
         render_run_->host->fill_record_facts(facts);
         const std::string_view renderer_name = render_run_->host->facts().renderer;
-        facts.vertical_sync_resets_device = renderer_name == kDeviceResettingRenderer;
+        facts.vertical_sync_resets_device =
+            render_probe::vertical_sync_resets_device(renderer_name);
         facts.vertical_sync_refused = vertical_sync_refused_;
         facts.slow_frames_stepped = render_run_->watch && render_run_->watch->slowed;
         if (match_) {
@@ -322,7 +320,7 @@ AccelerationFacts Runtime::acceleration_facts() const {
     const char* renderer = sdl_.renderer != nullptr ? SDL_GetRendererName(sdl_.renderer) : nullptr;
     const std::string_view renderer_name = renderer != nullptr ? renderer : "";
     facts.software_renderer = renderer_name == SDL_SOFTWARE_RENDERER;
-    facts.vertical_sync_resets_device = renderer_name == kDeviceResettingRenderer;
+    facts.vertical_sync_resets_device = render_probe::vertical_sync_resets_device(renderer_name);
     facts.vertical_sync_refused = vertical_sync_refused_;
     if (match_) {
         const uint32_t extension = current_extension_state();

@@ -72,18 +72,18 @@ struct WorldScaling {
 ) noexcept;
 
 /// Scene pixels per battlefield pixel the full scene budget allows, k: the
-/// draw scale is at most the zoom times its square root. A placeholder until
-/// the accelerated tier's frames are measured.
+/// draw scale is at most the zoom times its square root. A provisional
+/// figure, chosen without a measurement of the accelerated tier's frames.
 inline constexpr double full_budget_scene_ratio = 4.0;
-/// Most scene pixels the full scene budget allows, P. A placeholder.
+/// Most scene pixels the full scene budget allows, P. A provisional figure.
 inline constexpr uint64_t full_budget_scene_pixels = uint64_t{1} << 23;
-/// Scene pixels per battlefield pixel the reduced scene budget allows. A placeholder.
+/// Scene pixels per battlefield pixel the reduced scene budget allows. A provisional figure.
 inline constexpr double reduced_budget_scene_ratio = 2.25;
-/// Most scene pixels the reduced scene budget allows. A placeholder.
+/// Most scene pixels the reduced scene budget allows. A provisional figure.
 inline constexpr uint64_t reduced_budget_scene_pixels = uint64_t{1} << 22;
 /// The zoom over the draw scale above which the area pass is skipped and
 /// the scene drawn at the zoom: the pass would change almost nothing. A
-/// placeholder.
+/// provisional figure.
 inline constexpr double area_cut_off = 0.9;
 
 /// Returns the draw scale the accelerated tier draws a zoomed-out battlefield at.

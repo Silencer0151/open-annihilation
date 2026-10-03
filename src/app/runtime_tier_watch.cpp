@@ -16,7 +16,6 @@
 #include "render_host.hpp"
 #include "render_run.hpp"
 
-#include <chrono>
 #include <cstdint>
 #include <iostream>
 #include <memory>
@@ -36,16 +35,6 @@ namespace policy = render_policy;
 constexpr std::string_view slow_frames_cause = "frames were slow";
 /// What the log says moved the rung when the memory guard refused a buffer.
 constexpr std::string_view refused_buffer_cause = "too little memory for a new buffer";
-
-/// Returns the steady clock's time.
-///
-/// @return nanoseconds since the clock's epoch
-uint64_t steady_now_ns() {
-    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                     std::chrono::steady_clock::now().time_since_epoch()
-    )
-                                     .count());
-}
 
 /// Returns the system's memory as the memory guard is to see it: the
 /// sample a check forces, else the system's own.
@@ -109,7 +98,7 @@ void Runtime::watch_accelerated_memory() {
     if (!frame_pacer_.started && !run.forced_memory)
         return;
     auto& guard = run.watch->memory;
-    const uint64_t now = steady_now_ns();
+    const uint64_t now = frame_pacing::steady_now_ns();
     if (!policy::memory_guard_sample_due(guard, now))
         return;
     if (policy::observe_memory(guard, system_memory(run.forced_memory), now) ==
@@ -193,7 +182,7 @@ void Runtime::feed_render_step_down(uint64_t present_ns) {
     frame.previous_interval_ns = watch.previous_interval_ns;
     if (frame.tier != policy::RenderTier::accelerated || run.device_lost)
         return;
-    const uint64_t now = steady_now_ns();
+    const uint64_t now = frame_pacing::steady_now_ns();
     policy::FrameSample sample = present_frame_facts(now);
     sample.now_ns = now;
     sample.interval_ns = watch.frame_interval_ns;

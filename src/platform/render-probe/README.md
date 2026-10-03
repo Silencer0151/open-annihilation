@@ -46,6 +46,13 @@ only declares `SDL_Renderer`.
 - `capable_before_vista(renderer)`: true only for `direct3d`, SDL's
   Direct3D 9 renderer, the one driver that may draw through the graphics
   card on Windows before Vista; any other there keeps the standard tier.
+- `loses_device_in_ordinary_use(renderer)`: true only for `direct3d`, whose
+  Direct3D 9 device is lost in ordinary use, when its exclusive full screen
+  loses the focus, the screen is locked or the display mode changes; what
+  fails on it while the game runs is never recorded against it.
+- `vertical_sync_resets_device(renderer)`: true only for `direct3d`, which
+  resets its device at each change of the wait for the display; such a
+  reset may leave the device lost.
 - `accelerated_tier_run(renderer)`: true for the one driver the
   accelerated tier has been run on with this build's system and processor
   architecture, `metal` on 64-bit ARM macOS and `direct3d11` on x86 and
@@ -65,6 +72,12 @@ only declares `SDL_Renderer`.
   through with no graphics driver; elsewhere, as on `cocoa`, `wayland` and
   `kmsdrm`, SDL presents it through a texture of a hardware render driver,
   which the framebuffer hint names.
+- `device_state(renderer)`: whether the renderer's device can draw, as
+  SDL's `direct3d` renderer's Direct3D 9 device answers through the device
+  SDL made: `ok`, `lost` (it cannot be reset yet), `not_reset` (it can be
+  reset now), or `unknown` for every other renderer and every system but
+  Windows. `device_state_from_result(result)` reads one such answer, which
+  a test can drive.
 
 ## How each interface is read
 
@@ -99,7 +112,9 @@ it asks `native_window_framebuffer` what to set the framebuffer hint to
 before SDL's software renderer. The render policy reads what the probe
 found (`adapter_needed`, `capable_before_vista`, the classification, the
 corrected limit) to tell whether the renderer can be accelerated, and `accelerated_tier_run` and
-`untried_arm_processor` for the rung it starts at.
+`untried_arm_processor` for the rung it starts at. The settings lock
+Vertical sync on a renderer `vertical_sync_resets_device` names, since the
+game does not recover a device such a reset leaves lost.
 
 ## Tests
 
@@ -107,12 +122,13 @@ corrected limit) to tell whether the renderer can be accelerated, and `accelerat
 give, in any letter case, and real cards' names against them; WARP's
 identifiers; the drivers that report a fixed texture limit or need their
 adapter read, the one driver that may be accelerated on Windows before
-Vista, and the class the accelerated tier has been run on; the
-classification and the cleaning of names; what `describe_reported` reads
-through a stand-in reader, for SDL's software renderer and for others,
-with the adapter read or skipped, named, failing or blank; the video
-drivers whose windows have a framebuffer of their own; and SDL's software
-renderer on the dummy video driver described.
+Vista, loses its device in ordinary use and resets it at each change of
+the wait for the display, and the class the accelerated tier has been run
+on; the classification and the cleaning of names; what `describe_reported`
+reads through a stand-in reader, for SDL's software renderer and for
+others, with the adapter read or skipped, named, failing or blank; the
+video drivers whose windows have a framebuffer of their own; and SDL's
+software renderer on the dummy video driver described.
 
 The readers of the graphics interfaces themselves have no automated test:
 the checks run on the dummy video driver, where SDL makes only its software
@@ -122,13 +138,12 @@ limit at 8192 and a skipped read left the adapter empty.
 
 ## Known limitations
 
-- It does not yet report a Direct3D 9 device's lost state, or an OpenGL
-  out-of-memory error.
-- The test does not yet read its own executable's imports on Windows to show
+- It does not report an OpenGL out-of-memory error.
+- The test does not read its own executable's imports on Windows to show
   that no graphics library is linked; list a Windows build's imports to
   check it.
 - The Windows readers have been compiled only by the cross-compiled
-  Windows build (x86-64), not yet by the compiler of the Windows build CI
+  Windows build (x86-64), not by the compiler of the Windows build CI
   makes. The Direct3D 12 read calls `ID3D12Device::GetAdapterLuid`, whose
   returned structure each toolchain's headers declare in their own way;
   build the module with that compiler before relying on it there.

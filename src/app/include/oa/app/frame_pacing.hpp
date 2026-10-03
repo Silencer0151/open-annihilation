@@ -65,6 +65,12 @@ struct FramePacer {
 ///     or now_ns
 [[nodiscard]] uint64_t begin_paced_frame(FramePacer& pacer, uint64_t now_ns) noexcept;
 
+/// Reads the steady clock the loop paces its frames on and measures them
+/// by.
+///
+/// @return nanoseconds since the clock's epoch
+[[nodiscard]] uint64_t steady_now_ns() noexcept;
+
 /// Schedules the next frame and returns how long to wait for it.
 ///
 /// Frames are due 1 / frames_per_second apart, counted from the start of the

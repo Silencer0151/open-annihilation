@@ -7,11 +7,11 @@
 #include "graphics_report.hpp"
 #include "render_host.hpp"
 #include "render_run.hpp"
+#include "oa/app/frame_pacing.hpp"
 #include "oa/app/full_screen.hpp"
 #include "oa/platform/render_probe.hpp"
 #include "oa/sim/messages.hpp"
 #include <SDL3/SDL.h>
-#include <chrono>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
@@ -46,16 +46,6 @@ constexpr uint64_t match_warming_ns = 5'000'000'000;
 /// rule's 2 s.
 constexpr uint64_t forced_stall_ns = 2'500'000'000;
 
-/// Returns the steady clock's time.
-///
-/// @return nanoseconds since the clock's epoch
-uint64_t steady_now_ns() {
-    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                     std::chrono::steady_clock::now().time_since_epoch()
-    )
-                                     .count());
-}
-
 /// Logs a line about the graphics on standard output.
 ///
 /// @param text what follows the graphics prefix
@@ -79,7 +69,8 @@ bool Runtime::take_render_event(const SDL_Event& event) {
     case SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED:
         // The window may move or shrink for a while after.
         if (render_run_)
-            render_run_->unsteady_until_ns = steady_now_ns() + unsteady_after_window_ns;
+            render_run_->unsteady_until_ns =
+                frame_pacing::steady_now_ns() + unsteady_after_window_ns;
         return false;
     case SDL_EVENT_WINDOW_FOCUS_LOST:
         // Exclusive full screen loses its device with the focus on some
@@ -254,7 +245,7 @@ void Runtime::note_present_time(uint64_t present_ns) {
     const bool forced = render_fault_due(RenderFaultPoint::stall);
     ++run.presented;
     ++run.presented_since_rebuild;
-    const uint64_t now = steady_now_ns();
+    const uint64_t now = frame_pacing::steady_now_ns();
     const uint64_t interval = run.last_present_ns != 0 ? now - run.last_present_ns : 0;
     run.last_present_ns = now;
     // What the step-down measures between two presents, once the

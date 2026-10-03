@@ -121,7 +121,8 @@ Presentation, interface and sound:
 Platform and application:
 
 - [user preferences](../src/platform/preferences/README.md),
-  [job pool](../src/platform/job-pool/README.md).
+  [job pool](../src/platform/job-pool/README.md),
+  [render probe](../src/platform/render-probe/README.md).
 - [src/app](../src/app/README.md): the game application, `open-annihilation`,
   adding a screen or overlay, the extension table, and network play's
   place in the game.

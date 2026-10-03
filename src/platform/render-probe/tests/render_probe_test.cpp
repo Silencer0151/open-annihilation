@@ -6,12 +6,14 @@
 // Microsoft Basic Render Driver's identifiers; the drivers that report a
 // fixed texture limit; the classification and cleaning of what a driver
 // reports; the drivers that need their adapter read, the one driver that
-// may be accelerated on Windows before Vista and the class the accelerated
-// tier has been run on; what describe reads, through a stand-in reader, for
-// each renderer and each choice of reading; the video drivers whose windows
-// have a framebuffer of their own; and a Direct3D 9 device's answers read as
-// its states. Then SDL's software renderer on the dummy video driver,
-// described as the game describes it, and its device state, unknown.
+// may be accelerated on Windows before Vista, loses its device in ordinary
+// use and resets it at each change of the wait for the display, and the
+// class the accelerated tier has been run on; what describe reads, through
+// a stand-in reader, for each renderer and each choice of reading; the
+// video drivers whose windows have a framebuffer of their own; and a
+// Direct3D 9 device's answers read as its states. Then SDL's software
+// renderer on the dummy video driver, described as the game describes it,
+// and its device state, unknown.
 #include "oa/platform/render_probe.hpp"
 
 #include "oa/test/check.hpp"
@@ -191,6 +193,15 @@ void test_loses_device_in_ordinary_use() {
     for (const std::string_view renderer :
          {"opengl", "direct3d11", "direct3d12", "vulkan", "metal", "software", "", "Direct3D"})
         OA_CHECK(!loses_device_in_ordinary_use(renderer));
+}
+
+/// Only direct3d, SDL's Direct3D 9 renderer, resets its device at each
+/// change of the wait for the display, in SDL's own spelling.
+void test_vertical_sync_resets_device() {
+    OA_CHECK(vertical_sync_resets_device("direct3d"));
+    for (const std::string_view renderer :
+         {"opengl", "direct3d11", "direct3d12", "vulkan", "metal", "software", "", "Direct3D"})
+        OA_CHECK(!vertical_sync_resets_device(renderer));
 }
 
 /// What a stand-in reader gives describe_reported, and how often it was
@@ -488,6 +499,7 @@ int main() {
     test_run_class();
     test_capable_before_vista();
     test_loses_device_in_ordinary_use();
+    test_vertical_sync_resets_device();
     test_describe_reported();
     test_classify();
     test_clean_name();
