@@ -13,6 +13,7 @@
 #include "oa/ui/frontend_multiplayer/restrict.hpp"
 #include "oa/test/game_assets.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
