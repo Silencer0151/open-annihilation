@@ -47,6 +47,16 @@ int32_t scaled_length(int32_t value, double scale) noexcept {
     return std::max(1, static_cast<int32_t>(std::lround(static_cast<double>(value) * scale)));
 }
 
+/// Returns the scale the side column is drawn at: the chrome's, or the
+/// smaller one a side-column page taller than the window gives it
+/// (display_layout::fit_side_column).
+///
+/// @param match the match's layout
+/// @return canvas pixels per source pixel of the side column
+double column_scale(const layout::MatchLayout& match) noexcept {
+    return match.column_narrowed() ? match.column_scale : match.scale;
+}
+
 /// Tells whether a point lies in a rectangle.
 ///
 /// @param rect the rectangle
@@ -192,12 +202,14 @@ Runtime::EngineSettingsMatchHost::button_rect(const layout::MatchLayout& match, 
             scaled_length(source.height, scale)
         };
     }
-    // The side column hangs from the window's top left corner at its scale.
+    // The side column hangs from the window's top left corner at its own
+    // scale, and the in-game menu in it with the button.
+    const double scale = column_scale(match);
     return {
-        static_cast<int>(std::lround(static_cast<double>(button_source_x) * match.scale)),
-        static_cast<int>(std::lround(static_cast<double>(button_source_y) * match.scale)),
-        scaled_length(settings::ingame_button_side, match.scale),
-        scaled_length(settings::ingame_button_side, match.scale)
+        static_cast<int>(std::lround(static_cast<double>(button_source_x) * scale)),
+        static_cast<int>(std::lround(static_cast<double>(button_source_y) * scale)),
+        scaled_length(settings::ingame_button_side, scale),
+        scaled_length(settings::ingame_button_side, scale)
     };
 }
 
@@ -210,10 +222,10 @@ oa::ui::frontend_renderer::Surface Runtime::EngineSettingsMatchHost::button_face
     bool fit
 ) {
     namespace renderer = oa::ui::frontend_renderer;
-    // Fitted, the face takes the button's own scale.
+    // Fitted, the face takes the button's own scale; else the side column's.
     const double shown_scale =
         fit ? static_cast<double>(button_rect(match, true).width) / settings::ingame_button_side
-            : match.scale;
+            : column_scale(match);
     const int32_t scale = std::max(1, static_cast<int32_t>(std::ceil(shown_scale)));
     const renderer::Placement placement{0, 0, scale};
     renderer::Surface face;

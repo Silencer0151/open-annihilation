@@ -53,6 +53,22 @@ constexpr int kUltrawideWidth = 2560;
 /// An ultrawide window's height.
 constexpr int kUltrawideHeight = 1080;
 
+/// The rows of a side-column page taller than the game's own 480, as a
+/// mod's build page may be: it narrows the side column on a window whose
+/// height decides the chrome's scale.
+constexpr int kTallPageRows = 540;
+
+/// Windows the OA button is placed on without a game: 4:3, 16:10 (and the
+/// same at two pixels a point) and 16:9.
+constexpr std::array<std::pair<int, int>, 6> kPlacedWindows{{
+    {1024, 768},
+    {1440, 900},
+    {1512, 982},
+    {2880, 1800},
+    {3024, 1964},
+    {1920, 1080},
+}};
+
 /// The section whose rows a game locks: Common Tweaks.
 constexpr std::array<settings::Page, 1> kLockedPages{settings::Page::common_tweaks};
 
@@ -413,6 +429,46 @@ void Runtime::check_engine_settings_in_match() {
         // The in-game menu shows the button under Resume.
         show_match_pause_menu();
         require(ingame_menu_column_shown(), "the in-game menu's column does not show" + on);
+        // The button lies in the menu's panel, at the same place in it on
+        // every window: this window, and the others with the game's pages and
+        // with a page that narrows the side column.
+        const auto& panel_record = match_hud_->layout.gadgets.front().common;
+        const layout::Rect menu_panel{
+            panel_record.x, panel_record.y, panel_record.width, panel_record.height
+        };
+        const auto check_in_menu = [&](const layout::MatchLayout& match, const std::string& where) {
+            const auto panel = layout::source_rect_to_canvas(
+                match, menu_panel.x, menu_panel.y, menu_panel.width, menu_panel.height
+            );
+            const auto placed = MatchHost::button_rect(match);
+            const double scale = match.column_narrowed() ? match.column_scale : match.scale;
+            const auto at = [scale](int source) {
+                return static_cast<int>(std::lround(static_cast<double>(source) * scale));
+            };
+            require(
+                placed.x >= panel.x && placed.y >= panel.y &&
+                    placed.x + placed.width <= panel.x + panel.width &&
+                    placed.y + placed.height <= panel.y + panel.height,
+                "the OA button leaves the in-game menu" + where
+            );
+            require(
+                std::abs(placed.x - panel.x - at(MatchHost::button_source_x - menu_panel.x)) <= 1 &&
+                    std::abs(placed.y - panel.y - at(MatchHost::button_source_y - menu_panel.y)) <=
+                        1,
+                "the OA button is not under Resume" + where
+            );
+        };
+        check_in_menu(match_layout_, on);
+        for (const auto& [placed_width, placed_height] : kPlacedWindows) {
+            const auto plain = layout::make_match_layout(placed_width, placed_height);
+            const std::string window =
+                " on a " + std::to_string(placed_width) + 'x' + std::to_string(placed_height);
+            check_in_menu(plain, window + " window");
+            check_in_menu(
+                layout::fit_side_column(plain, kTallPageRows),
+                window + " window whose side column a taller page narrows"
+            );
+        }
         send_check_pointer(SDL_EVENT_MOUSE_MOTION, {width - 1, height - 1}, 0);
         render();
         const auto menu = composed();

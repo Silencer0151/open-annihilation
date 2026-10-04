@@ -121,7 +121,10 @@ struct Runtime::EngineSettingsMatchHost {
     safe_area(const oa::ui::display_layout::MatchLayout& layout) noexcept;
 
     /// Returns where the OA button shows on the match's canvas: under Resume
-    /// in the side column at its scale; fitted to the safe area, where a
+    /// in the side column at the column's own scale, which a side-column page
+    /// taller than the window makes smaller than the bars' (so the button
+    /// stays in the in-game menu at every window size); fitted to the safe
+    /// area, where a
     /// placed region showing that part of the column puts it, else in the
     /// column as the 640x480 frame fitted to the safe area from its top left
     /// corner places it.
