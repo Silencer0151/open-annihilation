@@ -89,6 +89,14 @@ T& opaque() {
     return *reinterpret_cast<T*>(storage);
 }
 
+/// Returns a reference of a type complete here that the hooks pass on and
+/// never use, to zeroed storage of the type's size and alignment.
+template <typename T>
+T& placeholder() {
+    alignas(T) static unsigned char storage[sizeof(T)]{};
+    return *reinterpret_cast<T*>(storage);
+}
+
 void post_nothing(void*, const char*, uint8_t, uint8_t) {
 }
 
@@ -405,7 +413,7 @@ void test_every_in_order() {
     table.ready(context, runtime);
     table.check_multiplayer_menu(context, runtime);
     table.frame(context, runtime, FrameStage::pump);
-    table.match_game(context, opaque<oa::Game>());
+    table.match_game(context, placeholder<oa::Game>());
     table.match_event(context, runtime, MatchEvent::finished);
     table.check_console(context, runtime, nullptr, nullptr);
     table.draw_loading(context, runtime, opaque<oa::Surface>(), nullptr);
@@ -460,7 +468,8 @@ void test_first_to_take() {
     expect(!table.simulation_step(context, runtime), "nobody steps");
     expect(!table.give_resources(context, runtime, 0, 1, 5.0F, true), "nobody gives");
     expect(
-        !table.player_gone(context, runtime, opaque<oa::World>(), opaque<oa::Player>()), "nobody"
+        !table.player_gone(context, runtime, placeholder<oa::World>(), placeholder<oa::Player>()),
+        "nobody"
     );
     expect(!table.close_requested(context, runtime), "nobody answers a close");
     calls.clear();
@@ -477,7 +486,8 @@ void test_first_to_take() {
     expect(table.simulation_step(context, runtime), "the derived steps");
     expect(table.give_resources(context, runtime, 0, 1, 5.0F, true), "the derived gives");
     expect(
-        table.player_gone(context, runtime, opaque<oa::World>(), opaque<oa::Player>()), "it tells"
+        table.player_gone(context, runtime, placeholder<oa::World>(), placeholder<oa::Player>()),
+        "it tells"
     );
     expect(table.close_requested(context, runtime), "the derived answers a close");
     expect(
