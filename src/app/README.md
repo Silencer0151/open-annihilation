@@ -1989,9 +1989,8 @@ into the records and decisions of the modules that carry them out, and
   game's fonts, with Latin-1 drawn with the glyphs the fonts hold and the
   rest in the modern fonts at the fonts' own size. `paint_text` (the
   labels, the clock, the frame statistics), `overlay_gui_text` (the message
-  log, the status readouts), `draw_board_text` (the kill board), the
-  end-of-game statistics and the battle room's chat and names draw this
-  way; menu and dialog labels, and the loading screen whatever the
+  log, the status readouts) and `draw_board_text` (the kill board) draw
+  this way; menu and dialog labels, and the loading screen whatever the
   settings say, keep the game's fonts for every character they hold.
   Over the battlefield the text grows with the size: the message log steps
   by its font's height at the size (`message_log_step`), breaks a line

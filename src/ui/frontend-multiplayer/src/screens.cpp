@@ -1297,28 +1297,6 @@ void gray_buttons(
     }
 }
 
-/// Tells whether a control shows game text, which the Language
-/// settings may draw in the modern fonts: the battle room's chat (OUTPUT)
-/// and the players' names (PLAYER0 to PLAYER9).
-///
-/// @param name the control's name
-/// @return true for those controls
-bool shows_game_text(std::string_view name) {
-    constexpr std::string_view chat = "OUTPUT";
-    constexpr std::string_view player = "PLAYER";
-    const auto same = [](std::string_view a, std::string_view b) {
-        return a.size() == b.size() &&
-               std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
-                   return std::toupper(static_cast<unsigned char>(x)) ==
-                          std::toupper(static_cast<unsigned char>(y));
-               });
-    };
-    if (same(name, chat))
-        return true;
-    return name.size() == player.size() + 1 && same(name.substr(0, player.size()), player) &&
-           std::isdigit(static_cast<unsigned char>(name.back())) != 0;
-}
-
 /// Builds a button's presentation: its condition, caption stage and frame.
 ///
 /// A grayed button with art that 3.1c grays and shades is presented as an
@@ -1343,7 +1321,6 @@ renderer::ButtonPresentation button_presentation(
     const auto& control = res.panel.controls[static_cast<std::size_t>(index)];
     renderer::ButtonPresentation presentation;
     presentation.name = gadget.common.name;
-    presentation.game_text = shows_game_text(gadget.common.name);
     // A button shows itself held only while the pointer that pressed it is over it.
     const bool held = index == res.pressed && res.pressed == res.hovered;
     if (control.grayed)
@@ -1507,14 +1484,18 @@ void compose_layout(
                 {gadget.common.name,
                  std::span<const std::string>(control.items),
                  static_cast<std::size_t>(std::max<int16_t>(0, control.list_first)),
-                 static_cast<std::size_t>(std::max<int16_t>(0, control.list_selection)),
-                 shows_game_text(gadget.common.name)}
+                 static_cast<std::size_t>(std::max<int16_t>(0, control.list_selection))}
             );
         layout.gadgets.push_back(std::move(gadget));
     }
 }
 
 /// Draws text in a font, clipped to a box, in the screen's palette.
+///
+/// The text keeps the game's own fonts whatever the Language settings say,
+/// the battle room's chat entry included, as do the screens' lists and
+/// buttons: a character the font lacks is drawn in the modern fonts, as with
+/// them off.
 ///
 /// @param[in,out] surface image drawn on
 /// @param res screen resources
@@ -1524,8 +1505,6 @@ void compose_layout(
 /// @param y top of the box in pixels
 /// @param width box width in pixels
 /// @param height box height in pixels
-/// @param game_text the text is game text, such as typed chat, which the
-///        Language settings may draw in the modern fonts
 void draw_text_in(
     renderer::Surface& surface,
     const Resources& res,
@@ -1534,14 +1513,13 @@ void draw_text_in(
     int32_t x,
     int32_t y,
     int32_t width,
-    int32_t height,
-    bool game_text = false
+    int32_t height
 ) {
     if (surface.width == 0 || width <= 0 || height <= 0)
         return;
     const auto& palette = res.screen.background.palette.has_value() ? *res.screen.background.palette
                                                                     : res.screen.gui_palette;
-    if (renderer::needs_text_runs(text, game_text)) {
+    if (renderer::needs_text_runs(text, false)) {
         const std::size_t ink = static_cast<std::size_t>(formats::fnt::foreground_index) * 4U;
         std::ignore = renderer::draw_fnt_game_text(
             surface,
@@ -1552,7 +1530,7 @@ void draw_text_in(
             {palette[ink], palette[ink + 1], palette[ink + 2]},
             palette,
             {x, y, x + width - 1, y + height - 1},
-            game_text
+            false
         );
         return;
     }
@@ -1598,7 +1576,6 @@ void draw_text_in(
 /// @param y top of the box in pixels
 /// @param width box width in pixels
 /// @param height box height in pixels
-/// @param game_text the text is game text
 void draw_text(
     renderer::Surface& surface,
     const Resources& res,
@@ -1606,10 +1583,9 @@ void draw_text(
     int32_t x,
     int32_t y,
     int32_t width,
-    int32_t height,
-    bool game_text = false
+    int32_t height
 ) {
-    draw_text_in(surface, res, res.screen.font, text, x, y, width, height, game_text);
+    draw_text_in(surface, res, res.screen.font, text, x, y, width, height);
 }
 
 /// Draws each seated player's game version over the player's colour square, as 3.1c does.
@@ -1843,8 +1819,7 @@ void draw_text_boxes(renderer::Surface& surface, Resources& res) {
             control.x + res.offset_x + 3,
             control.y + res.offset_y + 3,
             control.width - 4,
-            control.height - 2,
-            true
+            control.height - 2
         );
     }
 }

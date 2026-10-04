@@ -38,6 +38,10 @@ constexpr int32_t kSwatchTexelInset = 1;
 // The score table is drawn twice over these fills of an 8-bit frame: a pixel
 // that comes out the same both times was drawn.
 constexpr uint8_t kPassFill[2] = {0x00, 0xff};
+// The score table keeps the game's own fonts whatever the Language settings
+// say: its names and values are not drawn as game text, and a character a
+// font lacks is drawn in the modern fonts, as with them off.
+constexpr bool kScoreGameText = false;
 
 struct EndgameOverlay {
     EndgameView view{};
@@ -153,9 +157,9 @@ void draw_name(
 ) {
     ScoreNameDraw name{};
     place_score_name(row, game.scores[row.player].name, label_font(overlay), &name);
-    // Game text the modern fonts draw goes on the screen's RGB pixels after
-    // the table (draw_score_game_text).
-    if (oa::ui::frontend_renderer::needs_text_runs(name.text, true))
+    // A name with a character the font lacks goes on the screen's RGB pixels
+    // after the table (draw_score_game_text).
+    if (oa::ui::frontend_renderer::needs_text_runs(name.text, kScoreGameText))
         return;
     draw_indexed_text(target, overlay.name_font, name.text, name.x, name.y);
 }
@@ -190,7 +194,7 @@ void draw_bar(
         oa::Rect32{draw.inner_left, draw.inner_top, draw.fill_right, draw.inner_bottom},
         game.ui_colors[kFillColor]
     );
-    if (oa::ui::frontend_renderer::needs_text_runs(draw.label, true))
+    if (oa::ui::frontend_renderer::needs_text_runs(draw.label, kScoreGameText))
         return;
     draw_indexed_text(target, label_font(overlay), draw.label, draw.label_x, draw.label_y);
 }
@@ -225,8 +229,9 @@ font_color(const EndgameOverlay& overlay, const oa::formats::fnt::Font& font) {
     return color;
 }
 
-// The names and bar values the modern fonts draw, on the screen's RGB pixels:
-// a name centred on its label and cut at the label's right edge, a value
+// The names and bar values with a character their font lacks, on the
+// screen's RGB pixels, that character in the modern fonts and the rest in the
+// font: a name centred on its label and cut at the label's right edge, a value
 // centred on its bar.
 void draw_score_game_text(
     oa::ui::frontend_renderer::Surface& surface, const EndgameOverlay& overlay, const Game& game
@@ -243,8 +248,8 @@ void draw_score_game_text(
     for (uint32_t r = 0; r < layout.row_count; ++r) {
         const ScoreRow& row = layout.rows[r];
         const char* name = game.scores[row.player].name;
-        if (renderer::needs_text_runs(name, true)) {
-            const int32_t width = renderer::measure_fnt_game_text(names, name, true);
+        if (renderer::needs_text_runs(name, kScoreGameText)) {
+            const int32_t width = renderer::measure_fnt_game_text(names, name, kScoreGameText);
             ScoreNameDraw placed{};
             place_score_name(row, name, values, &placed);
             renderer::TextClip label = screen;
@@ -259,7 +264,7 @@ void draw_score_game_text(
                 font_color(overlay, names),
                 palette,
                 label,
-                true
+                kScoreGameText
             );
         }
         for (const ScoreBar& bar : row.bars) {
@@ -267,9 +272,10 @@ void draw_score_game_text(
                 continue;
             ScoreBarDraw draw{};
             draw_score_bar(bar, row.y, values, &draw);
-            if (!renderer::needs_text_runs(draw.label, true))
+            if (!renderer::needs_text_runs(draw.label, kScoreGameText))
                 continue;
-            const int32_t width = renderer::measure_fnt_game_text(values, draw.label, true);
+            const int32_t width =
+                renderer::measure_fnt_game_text(values, draw.label, kScoreGameText);
             std::ignore = renderer::draw_fnt_game_text(
                 surface,
                 values,
@@ -279,7 +285,7 @@ void draw_score_game_text(
                 font_color(overlay, values),
                 palette,
                 screen,
-                true
+                kScoreGameText
             );
         }
     }

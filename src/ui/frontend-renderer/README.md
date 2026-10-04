@@ -168,9 +168,7 @@ text as the player's Language settings choose
   as labels, so the loading screen keeps the game's fonts.
   `draw_gadget_glyphs` draws a font's bytes as they are.
 - `draw_fnt_game_text` and `measure_fnt_game_text` do the same with an FNT
-  font on the RGB screens; the battle room's chat (`ListPresentation`) and
-  its players' names (`ButtonPresentation`) set `game_text`, and so does its
-  chat entry.
+  font on the RGB screens.
 
 `frontend-gadget-draw` (`test_gadget_text_game_runs`) checks a missing
 character drawn in the modern fonts on the font's baseline, the text after

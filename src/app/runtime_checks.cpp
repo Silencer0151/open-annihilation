@@ -1379,6 +1379,29 @@ void Runtime::check_selection_visuals(const std::function<void(renderer::Surface
               << " selection boxes\n";
 }
 
+void Runtime::require_game_fonts(std::string_view screen, const std::function<void()>& draw) {
+    if (!modern_fonts_open())
+        return;
+    const auto kept = engine_settings();
+    auto game_fonts = kept;
+    game_fonts.modern_fonts = false;
+    auto modern = kept;
+    modern.modern_fonts = true;
+    modern.text_size = oa::present::highest_text_size;
+    apply_engine_settings(game_fonts);
+    draw();
+    const auto expected = surface_;
+    apply_engine_settings(modern);
+    draw();
+    const bool same = surface_.width == expected.width && surface_.height == expected.height &&
+                      surface_.rgb == expected.rgb;
+    apply_engine_settings(kept);
+    draw();
+    if (!same)
+        throw std::runtime_error(std::string(screen) + " changed with the modern fonts on");
+    std::cout << screen << " drew the same with the modern fonts on and off\n";
+}
+
 void Runtime::check_navigation() {
     const fs::path report_directory = "local/reports";
     fs::create_directories(report_directory);
@@ -1395,31 +1418,21 @@ void Runtime::check_navigation() {
     draw_loading_screen();
     write_ppm(report_directory / "native-loading.ppm", surface_);
     write_display_pcx(report_directory / "native-loading.pcx");
-    // The loading screen keeps the game's own fonts whatever the Language &
-    // Text settings say: with the modern fonts on, at the largest text
-    // size, it draws as with them off.
-    if (modern_fonts_open()) {
-        const auto game_fonts = surface_;
-        const auto kept = engine_settings();
-        auto modern = kept;
-        modern.modern_fonts = true;
-        modern.text_size = oa::present::highest_text_size;
-        apply_engine_settings(modern);
-        draw_loading_screen();
-        const bool same = surface_.width == game_fonts.width &&
-                          surface_.height == game_fonts.height && surface_.rgb == game_fonts.rgb;
-        apply_engine_settings(kept);
-        if (!same)
-            throw std::runtime_error(
-                "navigation check: the loading screen changed with the modern fonts on"
-            );
-        std::cout << "navigation check: the loading screen keeps the game's fonts with the "
-                     "modern fonts on\n";
-    }
+    // The loading screen and the menus' screens keep the game's own fonts
+    // whatever the Language settings say.
+    require_game_fonts("navigation check: the loading screen", [this] { draw_loading_screen(); });
     exercise_click(menu::resource_name(menu::Button::single_player));
     if (screen_ != Screen::single_player || surface_.width != kCanvasWidth)
         throw std::runtime_error("navigation check did not reach SINGLE.GUI");
     write_ppm(report_directory / "native-single.ppm", surface_);
+    exercise_click(entry::resource_name(entry::Button::options));
+    if (screen_ != Screen::options || surface_.width != kCanvasWidth)
+        throw std::runtime_error("navigation check did not reach STARTOPT.GUI");
+    write_ppm(report_directory / "native-options.ppm", surface_);
+    require_game_fonts("navigation check: the Options screen", [this] { rebuild_surface(); });
+    exercise_click("CANCEL");
+    if (screen_ != Screen::single_player)
+        throw std::runtime_error("navigation check: CANCEL did not leave STARTOPT.GUI");
     check_options_gamma();
     exercise_click(entry::resource_name(entry::Button::skirmish));
     if (screen_ != Screen::skirmish || surface_.width != kCanvasWidth)
@@ -1638,6 +1651,7 @@ void Runtime::check_navigation() {
         throw std::runtime_error("ENDMSN.GUI did not load campaign result gadgets");
     check_endgame_screen(report_directory);
     write_ppm(report_directory / "native-campaign-end.ppm", surface_);
+    require_game_fonts("navigation check: the mission's statistics", [this] { rebuild_surface(); });
     check_campaign_advance(report_directory);
     const auto between = check_save_dialog(report_directory, "NAVBETWEEN");
     if (!between.between_missions ||

@@ -72,10 +72,8 @@ how game text is drawn, with or without the hack:
   Text size, in the game fonts' colours, each pixel the nearest colour of
   the palette in use. That is the message log and the chat line being
   typed, the bottom bar's and the map's labels, the whiteboard's labels,
-  the clock and the frame statistics, the kill board, the end-of-game
-  statistics' names and values, and the battle room's chat, chat entry and
-  player names. Menu labels and text in the game's pictures keep the
-  game's fonts.
+  the clock and the frame statistics, and the kill board. Menu labels and
+  text in the game's pictures keep the game's fonts.
 - The **loading screen** keeps the game's fonts whatever the settings say:
   its few words are part of the game's look. A character a font lacks, such
   as in a player's name in a network game's load, is drawn in the modern
@@ -141,9 +139,7 @@ bar's readouts, the bottom bar's unit panel and status strip, the build
 buttons' captions, the digits under and over a unit's bar, the kill
 board, the resource panel and its clock, wind and tidal lines, the frame
 statistics, the debug keys' line, the commander placement's prompt and
-Done button, an extension's overlay, and every gadget of the menus' and
-lobbies' screens: the battle room's chat, chat entry and names, and the
-end-of-game statistics.
+Done button, and an extension's overlay.
 
 ### Text sent and received
 

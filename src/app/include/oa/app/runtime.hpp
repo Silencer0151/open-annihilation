@@ -1018,7 +1018,9 @@ class Runtime final : public menu::Host,
     ///
     /// Walks SINGLE.GUI and SKIRMISH.GUI into a skirmish and through the match,
     /// map selection, campaign, save, end-game and dialog checks, writing frames
-    /// to local/reports. Game data with no skirmish map runs
+    /// to local/reports. The loading screen, STARTOPT.GUI and the won
+    /// mission's statistics keep the game's own fonts with the modern fonts on
+    /// (require_game_fonts()). Game data with no skirmish map runs
     /// check_navigation_without_maps() instead. Throws std::runtime_error at the
     /// first failure.
     void check_navigation();
@@ -1035,6 +1037,18 @@ class Runtime final : public menu::Host,
     ///
     /// @param report_directory directory the frames are written to
     void check_navigation_without_maps(const fs::path& report_directory);
+
+    /// Checks that a screen keeps the game's own fonts whatever the Language
+    /// settings say: drawn with the modern fonts on, at the largest text
+    /// size, it equals the frame drawn with them off. The player's settings
+    /// are put back and the screen drawn with them again. Does nothing when
+    /// the modern fonts do not open.
+    ///
+    /// Throws std::runtime_error when the two frames differ.
+    ///
+    /// @param screen the check and the screen, which begin the error message
+    /// @param draw draws the screen into surface_
+    void require_game_fonts(std::string_view screen, const std::function<void()>& draw);
 
     /// Steps the end screen of a finished mission until it leaves for the frontend.
     ///
@@ -5519,9 +5533,10 @@ class Runtime final : public menu::Host,
     /// leaves for the end screen, which keeps that frame (the software cursor
     /// aside) and shows it at the match's size, growing no brighter, until the
     /// darkening ends. The panel that follows shows Main Menu alone, in the
-    /// single button housing of the Outcome0 background. Writes
-    /// native-match-end-outcome.ppm and native-match-end-panel.ppm. Throws
-    /// std::runtime_error on a failure.
+    /// single button housing of the Outcome0 background, and its statistics
+    /// keep the game's own fonts with the modern fonts on
+    /// (require_game_fonts()). Writes native-match-end-outcome.ppm and
+    /// native-match-end-panel.ppm. Throws std::runtime_error on a failure.
     ///
     /// @param report_directory directory the frame is written to
     void check_presented_match_end(const fs::path& report_directory);

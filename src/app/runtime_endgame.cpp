@@ -745,6 +745,8 @@ void Runtime::check_presented_match_end(const std::filesystem::path& report_dire
         throw std::runtime_error("match end check: the end screen reached no panel");
     rebuild_surface();
     write_ppm(report_directory / "native-match-end-panel.ppm", surface_);
+    // The statistics keep the game's own fonts whatever the Language settings say.
+    require_game_fonts("match end check: the statistics screen", [this] { rebuild_surface(); });
     const auto* main_menu = widget("MainMenu");
     const auto* start = widget("Start");
     if (main_menu == nullptr || main_menu->common.active == 0 ||
