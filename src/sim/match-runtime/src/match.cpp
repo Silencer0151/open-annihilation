@@ -25,6 +25,24 @@ void clear_projectile_pool(oa::World& world) {
     world.game.projectile_count = 0;
 }
 
+/// Copies a unit's flags, bucket and attachment links and owner state into
+/// its spatial projection; an ownerless unit keeps the owner state it had.
+///
+/// @param world World holding the unit's owner.
+/// @param unit The unit.
+/// @param[in,out] projected The unit's spatial projection.
+void fill_projection(
+    const oa::World& world, const oa::Unit& unit, sim::spatial_state::Unit& projected
+) {
+    projected.flags = unit.flags;
+    projected.next_in_bucket = link_next(unit);
+    projected.first_attachment = link_first_child(unit);
+    if (const auto* owner = oa::world_unit_owner(&world, &unit)) {
+        projected.owner_object_present = owner->in_use != 0;
+        projected.owner_status = owner->status;
+    }
+}
+
 // Sight grid fills: a mapped word holds one bit per player, a coverage byte
 // counts the units that see the cell.
 constexpr uint16_t mapped_by_nobody = 0x0000;
@@ -512,15 +530,29 @@ void Match::note_wind(sim::world_environment::WindRefresh result) noexcept {
 
 const RuntimeTypeFields& Match::fields(sim::unit_spawn::Slot& slot) const {
     if (slot.unit)
-        for (std::size_t i = 0; i < input_.types.size(); ++i)
-            if (slot.unit->type == &input_.types[i].simulation) {
-                if (input_.fields[i].definition)
-                    return input_.fields[i];
-                fault_.note("runtime type has no FBI definition");
-                return unresolved_fields();
-            }
+        if (const auto entry = type_entry(input_.types, *slot.unit)) {
+            if (input_.fields[*entry].definition)
+                return input_.fields[*entry];
+            fault_.note("runtime type has no FBI definition");
+            return unresolved_fields();
+        }
     fault_.note("unit type outside runtime table");
     return unresolved_fields();
+}
+
+std::optional<std::size_t> Match::type_entry(
+    std::span<const sim::unit_spawn::Type> types, const sim::simulation_state::Unit& unit
+) {
+    const sim::simulation_state::UnitType* type = unit.type;
+    if (type == nullptr)
+        return std::nullopt;
+    if (const auto ref = unit.record.def;
+        ref != 0 && ref <= types.size() && &types[ref - 1u].simulation == type)
+        return ref - 1u;
+    for (std::size_t i = 0; i < types.size(); ++i)
+        if (&types[i].simulation == type)
+            return i;
+    return std::nullopt;
 }
 
 const RuntimeTypeFields& Match::unresolved_fields() noexcept {
@@ -913,11 +945,8 @@ sim::spatial_state::Unit& Match::project_spatial(sim::unit_spawn::Slot& slot) {
         s.max_water_depth = metadata->max_water_depth;
         s.min_water_depth = metadata->min_water_depth;
     }
-    for (const auto& type : world_.types)
-        if (&type.simulation == slot.unit->type) {
-            s.bm_code = std::bit_cast<int8_t>(type.bm_code);
-            break;
-        }
+    if (const auto entry = type_entry(world_.types, *slot.unit))
+        s.bm_code = std::bit_cast<int8_t>(world_.types[*entry].bm_code);
     s.flags = slot.unit->flags;
     s.yard_open = (slot.record.build_flags & 4) != 0;
     s.yard_mask = unit_yard(slot);
@@ -925,17 +954,41 @@ sim::spatial_state::Unit& Match::project_spatial(sim::unit_spawn::Slot& slot) {
 }
 
 void Match::prepare_spatial_state() {
+    const auto& world = state();
+    for (std::size_t i = 0; i < slots_.size(); ++i)
+        fill_projection(world, world.units[i], spatial_units_[i]);
+}
+
+void Match::fill_spatial_unit(void* match, sim::spatial_state::Unit& projected) {
+    auto& self = *static_cast<Match*>(match);
+    const auto& world = self.state();
+    const auto index = static_cast<std::size_t>(&projected - self.spatial_units_.data());
+    fill_projection(world, world.units[index], projected);
+}
+
+sim::spatial_state::Unit& Match::begin_spatial_change(sim::unit_spawn::Slot& slot) {
+    auto& projected = project_spatial(slot);
+    sim::spatial_state::begin_fill_round(spatial_, projected);
+    spatial_.fill_unit = &Match::fill_spatial_unit;
+    spatial_.fill_context = this;
+    return projected;
+}
+
+void Match::end_spatial_change(bool write_back) {
+    spatial_.fill_unit = nullptr;
+    spatial_.fill_context = nullptr;
+    if (!write_back)
+        return;
+    // The units the change never reached hold what synchronize_spatial_state
+    // would write back to them already.
     auto& world = state();
-    for (std::size_t i = 0; i < slots_.size(); ++i) {
-        auto& projected = spatial_units_[i];
-        const auto& unit = world.units[i];
-        projected.flags = unit.flags;
-        projected.next_in_bucket = link_next(unit);
-        projected.first_attachment = link_first_child(unit);
-        if (const auto* owner = oa::world_unit_owner(&world, &unit)) {
-            projected.owner_object_present = owner->in_use != 0;
-            projected.owner_status = owner->status;
-        }
+    for (auto id = spatial_.last_filled;
+         id != sim::spatial_state::no_unit && id < spatial_units_.size();
+         id = spatial_units_[id].previous_filled) {
+        auto& unit = world.units[id];
+        unit.flags = spatial_units_[id].flags;
+        if (!unit.attach_parent)
+            unit.attach_next = oa::oa_unit_ref_from_slot(spatial_units_[id].next_in_bucket);
     }
 }
 
@@ -951,9 +1004,8 @@ void Match::synchronize_spatial_state() {
 
 const formats::objects3d::UnitTypeBounds*
 Match::bounds_for(const sim::simulation_state::Unit& unit) const {
-    for (std::size_t i = 0; i < input_.types.size(); ++i)
-        if (unit.type == &input_.types[i].simulation && type_bounds_[i])
-            return &*type_bounds_[i];
+    if (const auto entry = type_entry(input_.types, unit); entry && type_bounds_[*entry])
+        return &*type_bounds_[*entry];
     return nullptr;
 }
 
@@ -976,11 +1028,10 @@ void Match::place_unit(
         slot.unit->flags |= OA_UNIT_FLAG_POSITION_DIRTY;
         return;
     }
-    prepare_spatial_state();
-    auto& projected = project_spatial(slot);
+    auto& projected = begin_spatial_change(slot);
     spatial_.tick = simulation_.tick;
     const auto removed = sim::spatial_state::remove_occupancy(projected, spatial_, map_listeners_);
-    synchronize_spatial_state();
+    end_spatial_change(true);
     if (removed != sim::spatial_state::Error::none) {
         fault_.note("occupancy removal rejected spatial state");
         return;
@@ -1051,32 +1102,31 @@ void Match::finish_commander_placement() noexcept {
 
 void Match::refresh_restored_footprint(uint16_t index) {
     auto& slot = slots_.at(index);
-    prepare_spatial_state();
-    auto& projected = project_spatial(slot);
+    auto& projected = begin_spatial_change(slot);
     spatial_.tick = simulation_.tick;
     const auto result =
         sim::spatial_state::refresh_footprint_occupancy(projected, spatial_, map_listeners_);
-    synchronize_spatial_state();
+    end_spatial_change(true);
     if (result != sim::spatial_state::Error::none)
         fault_.note("restored footprint refresh rejected spatial state");
 }
 
 void Match::register_occupancy(sim::unit_spawn::Slot& slot) {
     // Collision can change flags on previously inserted units as well as this unit.
-    prepare_spatial_state();
-    auto& s = project_spatial(slot);
+    auto& s = begin_spatial_change(slot);
     spatial_.tick = simulation_.tick;
     const auto result = sim::spatial_state::register_unit(s, spatial_, map_listeners_);
     if (slot.unit->object_present && movement_[slot.unit_index])
         movement_[slot.unit_index]->occupancy_changed_tick = s.object_tick;
     if (result != sim::spatial_state::Error::none) {
+        end_spatial_change(false);
         fault_.note(
             "unit spatial registration rejected branch/state",
             std::to_string(static_cast<int>(result))
         );
         return;
     }
-    synchronize_spatial_state();
+    end_spatial_change(true);
 }
 
 void Match::notify_created(sim::unit_spawn::Slot& slot) {
@@ -1146,12 +1196,7 @@ bool Match::unit_visible(uint8_t player, uint16_t index) const {
         return true;
     if (slot.record.state_flags & 4)
         return false;
-    const formats::objects3d::UnitTypeBounds* bounds = nullptr;
-    for (std::size_t i = 0; i < input_.types.size(); ++i)
-        if (unit.type == &input_.types[i].simulation && type_bounds_[i]) {
-            bounds = &*type_bounds_[i];
-            break;
-        }
+    const formats::objects3d::UnitTypeBounds* bounds = bounds_for(unit);
     if (!bounds) {
         fault_.note("visibility query requires resolved unit bounds");
         return false;
@@ -1348,12 +1393,7 @@ int32_t Match::sample_terrain_height(uint32_t x, uint32_t z) {
 std::vector<Match::NanoLaser> Match::nano_lasers() const {
     std::vector<NanoLaser> beams;
     auto add = [&](const std::array<uint32_t, 3>& from, const sim::simulation_state::Unit& target) {
-        const formats::objects3d::UnitTypeBounds* bounds = nullptr;
-        for (std::size_t i = 0; i < input_.types.size(); ++i)
-            if (target.type == &input_.types[i].simulation && type_bounds_[i]) {
-                bounds = &*type_bounds_[i];
-                break;
-            }
+        const formats::objects3d::UnitTypeBounds* bounds = bounds_for(target);
         const std::array<uint32_t, 3> position = target.position;
         std::array<int32_t, 3> min_p{
             std::bit_cast<int32_t>(position[0]),

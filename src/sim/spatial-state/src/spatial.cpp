@@ -73,7 +73,7 @@ Error occupy(Plot& plot, bool air_layer, Unit& unit, World& world) {
     if (slot != no_unit) {
         if (slot >= world.units.size())
             return Error::invalid_unit_id;
-        auto& previous = world.units[slot];
+        auto& previous = unit_entry(world, slot);
         if (!previous.owner_object_present || previous.owner_status != 3) {
             previous.flags |= collision_other;
             unit.flags |= collision_self;
@@ -85,6 +85,17 @@ Error occupy(Plot& plot, bool air_layer, Unit& unit, World& world) {
     }
     slot = unit.id;
     return Error::none;
+}
+
+void begin_fill_round(World& world, Unit& filled) noexcept {
+    if (++world.fill_round == 0) {
+        for (auto& unit : world.units)
+            unit.filled_round = 0;
+        world.fill_round = 1;
+    }
+    filled.filled_round = world.fill_round;
+    filled.previous_filled = no_unit;
+    world.last_filled = filled.id;
 }
 
 Error move_bucket(Unit& unit, std::optional<std::size_t> target, World& world) {
@@ -103,7 +114,7 @@ Error move_bucket(Unit& unit, std::optional<std::size_t> target, World& world) {
             while (*link != unit.id) {
                 if (*link == no_unit || *link >= world.units.size() || ++steps > world.units.size())
                     return Error::broken_bucket_chain;
-                link = &world.units[*link].next_in_bucket;
+                link = &unit_entry(world, *link).next_in_bucket;
             }
             *link = unit.next_in_bucket;
             unit.next_in_bucket = no_unit;
@@ -123,7 +134,7 @@ Error bucket_unlink(Bucket& chain, Unit& unit, World& world) {
     while (*link != unit.id) {
         if (*link == no_unit || *link >= world.units.size() || ++steps > world.units.size())
             return Error::broken_bucket_chain;
-        link = &world.units[*link].next_in_bucket;
+        link = &unit_entry(world, *link).next_in_bucket;
     }
     *link = unit.next_in_bucket;
     unit.next_in_bucket = no_unit;
@@ -411,7 +422,7 @@ Error visit_overlapping_units(
             while (id != no_unit) {
                 if (id >= world.units.size() || ++steps > world.units.size())
                     return Error::broken_bucket_chain;
-                auto& parent = world.units[id];
+                auto& parent = unit_entry(world, id);
                 if (overlapping(parent))
                     if (const auto error = visit(parent, world, context); error != Error::none)
                         return error;
@@ -420,7 +431,7 @@ Error visit_overlapping_units(
                 while (child != no_unit) {
                     if (child >= world.units.size() || ++child_steps > world.units.size())
                         return Error::broken_bucket_chain;
-                    auto& attached = world.units[child];
+                    auto& attached = unit_entry(world, child);
                     if (overlapping(attached))
                         if (const auto error = visit(attached, world, context);
                             error != Error::none)
@@ -524,7 +535,7 @@ Error remove_unit(Unit& unit, World& world, Host& host) {
         while (*link != unit.id) {
             if (*link == no_unit || *link >= world.units.size() || ++steps > world.units.size())
                 return Error::broken_bucket_chain;
-            link = &world.units[*link].next_in_bucket;
+            link = &unit_entry(world, *link).next_in_bucket;
         }
         *link = unit.next_in_bucket;
         unit.next_in_bucket = no_unit;

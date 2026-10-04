@@ -306,7 +306,6 @@ class TickHost::VtolMissions {
     /// @return True when the unit was off the map and a goal toward the
     ///     centre was installed.
     bool return_to_map() {
-        match().prepare_spatial_state();
         const auto& projected = match().project_spatial(s);
         if (!projected.bucket_linked || projected.bucket)
             return false;
@@ -438,7 +437,6 @@ class TickHost::VtolMissions {
     // circle round the destination and search again from there.
     uint32_t seek_landing_site() {
         const auto here = vtol::position_of(s.record);
-        match().prepare_spatial_state();
         const auto& projected = match().project_spatial(s);
         if (can_land_at(projected, here[0], here[2])) {
             run_script("EndTransport", true);

@@ -2292,6 +2292,23 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// Writes the spatial projections' flags and bucket links back to the
     /// units after spatial mutations.
     void synchronize_spatial_state();
+    /// Starts a spatial mutation around one unit.
+    ///
+    /// Projects the unit, then lets the collision code fill each other unit's
+    /// projection (flags, links, owner state, as prepare_spatial_state does)
+    /// when it first reaches that unit, so the mutation reads and writes the
+    /// same values as after prepare_spatial_state. End it with
+    /// end_spatial_change.
+    ///
+    /// @param slot Unit the mutation is about.
+    /// @return The unit's projection.
+    sim::spatial_state::Unit& begin_spatial_change(sim::unit_spawn::Slot& slot);
+    /// Ends a spatial mutation begun with begin_spatial_change.
+    ///
+    /// @param write_back True writes the flags and bucket links of every unit
+    ///     the mutation reached back to the units, as synchronize_spatial_state
+    ///     does; false leaves the units as they are.
+    void end_spatial_change(bool write_back);
 
     /// Returns the viewpoint player's sight grid.
     const sim::visibility_state::PlayerSightGrid& sight() const noexcept { return sight_; }
@@ -3538,6 +3555,23 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// @param slot Unit to project.
     /// @return The unit's projection.
     sim::spatial_state::Unit& project_spatial(sim::unit_spawn::Slot& slot);
+    /// Fills one unit's spatial projection from its unit (flags, links,
+    /// owner state), as prepare_spatial_state does for every unit.
+    ///
+    /// @param match The Match.
+    /// @param[in,out] projected The unit's projection.
+    static void fill_spatial_unit(void* match, sim::spatial_state::Unit& projected);
+    /// Returns the entry of a runtime type table that holds a unit's type.
+    ///
+    /// The entry the unit's type reference (Unit.def) indexes is tried first;
+    /// otherwise the table is searched.
+    ///
+    /// @param types Runtime types.
+    /// @param unit Unit whose type is looked up.
+    /// @return The entry's index, or nullopt when no entry holds the type.
+    static std::optional<std::size_t> type_entry(
+        std::span<const sim::unit_spawn::Type> types, const sim::simulation_state::Unit& unit
+    );
     /// Starts TargetCleared(slot) on the unit's script, as clearing a weapon
     /// target does.
     ///

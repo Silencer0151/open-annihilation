@@ -228,11 +228,79 @@ void bucket_chain() {
     );
 }
 
+// With a fill hook set, an occupant is filled once per round, before occupy
+// reads its owner state, and each round lists the entries it filled.
+void fill_rounds() {
+    std::vector<spatial::Unit> units(4);
+    for (std::size_t i = 1; i < units.size(); ++i)
+        units[i].id = static_cast<spatial::UnitId>(i);
+    auto w = world(units);
+    auto& left = w.plots[3 * 8 + 2];
+    auto& right = w.plots[3 * 8 + 3];
+    left.ground = 2;
+    right.ground = 2;
+
+    struct Fills {
+        std::array<int, 4> count{};
+    } fills;
+
+    w.fill_unit = [](void* context, spatial::Unit& unit) {
+        ++static_cast<Fills*>(context)->count[unit.id];
+        unit.owner_object_present = true;
+        unit.owner_status = 3;
+    };
+    w.fill_context = &fills;
+
+    spatial::begin_fill_round(w, units[1]);
+    check(
+        w.last_filled == 1 && units[1].previous_filled == spatial::no_unit,
+        "a round starts with the entry it was given"
+    );
+    check(spatial::occupy(left, false, units[1], w) == spatial::Error::none, "occupy left");
+    check(fills.count[2] == 1 && fills.count[1] == 0, "the occupant is filled, the mover is not");
+    check(
+        left.ground == 1 && (units[2].flags & spatial::collision_self) != 0 &&
+            (units[1].flags & spatial::collision_other) != 0,
+        "occupy reads the filled owner state"
+    );
+    check(
+        w.last_filled == 2 && units[2].previous_filled == 1, "the round lists the filled occupant"
+    );
+    units[2].owner_status = 0;
+    check(spatial::occupy(right, false, units[1], w) == spatial::Error::none, "occupy right");
+    check(
+        fills.count[2] == 1 && right.ground == 2 &&
+            (units[2].flags & spatial::collision_other) != 0,
+        "an entry is filled once per round"
+    );
+
+    spatial::begin_fill_round(w, units[1]);
+    check(spatial::occupy(right, false, units[1], w) == spatial::Error::none, "occupy again");
+    check(fills.count[2] == 2 && right.ground == 1, "a new round fills the occupant again");
+
+    w.fill_unit = nullptr;
+    units[2].owner_status = 0;
+    check(
+        &spatial::unit_entry(w, 2) == &units[2] && units[2].owner_status == 0 &&
+            fills.count[2] == 2,
+        "without a fill hook entries are read as they stand"
+    );
+
+    w.fill_round = 0xffffffffu;
+    units[3].filled_round = 5;
+    spatial::begin_fill_round(w, units[1]);
+    check(
+        w.fill_round == 1 && units[3].filled_round == 0 && units[1].filled_round == 1,
+        "a wrapped round number clears every entry's round"
+    );
+}
+
 int main() {
     try {
         overlap_walk();
         bucket_grid();
         bucket_chain();
+        fill_rounds();
         std::vector<spatial::Unit> units(6);
         for (std::size_t i = 1; i < units.size(); ++i)
             units[i].id = static_cast<spatial::UnitId>(i);

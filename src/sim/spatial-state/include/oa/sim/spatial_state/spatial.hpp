@@ -261,6 +261,11 @@ struct Unit {
     int16_t max_water_depth{}; // UnitDef.max_water_depth
     int16_t min_water_depth{}; // UnitDef.min_water_depth
     int8_t bm_code{};          // UnitDef.bm_code
+    // Kept by unit_entry while World::fill_unit is set: the World::fill_round
+    // that last filled this entry, and the entry that round filled before it
+    // (no_unit for the round's first).
+    uint32_t filled_round{};
+    UnitId previous_filled{};
 };
 
 /// The most plot writes World::written_occupants lists.
@@ -285,6 +290,16 @@ struct World {
     std::span<Unit> units; // indexed by UnitId
     uint32_t tick{};       // Game.tick
     uint8_t sea_level{};   // Game.sea_level
+    // When set, unit_entry hands each entry of `units` to fill_unit (with
+    // fill_context) the first time it reaches the entry in a round, before the
+    // entry is read or written, so the host can fill it from its own records.
+    // Null reads the entries as they stand.
+    void (*fill_unit)(void* context, Unit& unit){};
+    void* fill_context{};
+    uint32_t fill_round{}; // the current round of fill_unit calls
+    // The entry the current round filled last; the round's entries chain back
+    // through Unit.previous_filled.
+    UnitId last_filled{};
 };
 enum class Error {
     none,
@@ -316,6 +331,37 @@ struct Host {
     /// @param old_tick the unit's object tick before removal
     virtual void notify_object_footprint_removed(Unit& unit, uint32_t old_tick) = 0;
 };
+
+/// Starts a round of World::fill_unit calls.
+///
+/// Every entry of the unit table counts as unfilled again except `filled`,
+/// which the host has filled itself and which starts the round's list. When
+/// the round number wraps, every entry's filled_round is cleared first.
+///
+/// @param[in,out] world world whose round starts
+/// @param[in,out] filled entry of world.units the host has already filled
+void begin_fill_round(World& world, Unit& filled) noexcept;
+
+/// Returns an entry of the unit table, filled for the current round.
+///
+/// With World::fill_unit set, an entry the round has not reached yet is
+/// added to the round's list and handed to fill_unit before it is returned.
+/// The spatial operations reach every entry other than the one they are given
+/// through this.
+///
+/// @param[in,out] world world holding the unit table
+/// @param id unit ID; must be below the table size
+/// @return the entry
+[[nodiscard]] inline Unit& unit_entry(World& world, UnitId id) {
+    auto& unit = world.units[id];
+    if (world.fill_unit != nullptr && unit.filled_round != world.fill_round) {
+        unit.filled_round = world.fill_round;
+        unit.previous_filled = world.last_filled;
+        world.last_filled = id;
+        world.fill_unit(world.fill_context, unit);
+    }
+    return unit;
+}
 
 /// Writes a unit into one layer of a plot, and lists the plot in
 /// World::written_occupants.

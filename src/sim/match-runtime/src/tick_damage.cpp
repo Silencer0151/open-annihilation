@@ -509,11 +509,10 @@ void Match::teardown_dead_unit(
     );
     // Every dead unit's footprint is cleared, buildings included, and the
     // unit leaves its bucket chain.
-    prepare_spatial_state();
-    auto& projected = project_spatial(slot);
+    auto& projected = begin_spatial_change(slot);
     spatial_.tick = simulation_.tick;
     const auto removed = sim::spatial_state::remove_unit(projected, spatial_, map_listeners_);
-    synchronize_spatial_state();
+    end_spatial_change(true);
     if (removed != sim::spatial_state::Error::none) {
         fault_.note("death occupancy removal rejected spatial state");
         return;

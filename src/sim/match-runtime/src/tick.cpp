@@ -378,13 +378,12 @@ void Match::link_carried_unit(uint16_t child, uint16_t parent, int8_t piece, uin
     const auto slot_count = state().unit_slot_count;
     const auto old = link_parent(units[child]);
     if (old == 0) {
-        prepare_spatial_state();
-        auto& projected = project_spatial(child_slot);
+        auto& projected = begin_spatial_change(child_slot);
         auto* bucket = projected.bucket_linked ? bucket_for(projected) : nullptr;
         if (bucket && sim::spatial_state::bucket_unlink(*bucket, projected, spatial_) ==
                           sim::spatial_state::Error::none)
             projected.bucket_linked = false;
-        synchronize_spatial_state();
+        end_spatial_change(true);
     } else if (old < slot_count) {
         // Unlink the child from the old parent's sibling chain.
         uint32_t previous = 0;
@@ -422,13 +421,12 @@ void Match::link_carried_unit(uint16_t child, uint16_t parent, int8_t piece, uin
             child_unit.flags &= ~attached_without_piece;
     } else {
         child_unit.flags &= ~attached_without_piece;
-        prepare_spatial_state();
-        auto& projected = project_spatial(child_slot);
+        auto& projected = begin_spatial_change(child_slot);
         if (auto* bucket = bucket_for(projected)) {
             sim::spatial_state::bucket_push_front(*bucket, projected);
             projected.bucket_linked = true;
         }
-        synchronize_spatial_state();
+        end_spatial_change(true);
     }
     if (auto* movement = ground_runtime(child))
         movement->movement.flags =

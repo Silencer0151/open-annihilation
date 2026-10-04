@@ -156,7 +156,6 @@ uint32_t TickHost::dispatch_mission(
             } else
                 result = 1;
         } else if (order.phase == 2) {
-            match.prepare_spatial_state();
             auto& projected = match.project_spatial(s);
             const bool airborne = (s.unit->flags & 3u) == 2;
             if ((s.unit->type->flags & OA_UNIT_DEF_FLAG_CAN_FLY) == 0 || !airborne) {

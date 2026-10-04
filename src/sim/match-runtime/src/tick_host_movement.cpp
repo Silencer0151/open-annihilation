@@ -215,7 +215,7 @@ bool TickHost::can_occupy(
         match.fault_.note("moving collision requires resolved type and terrain metadata");
         return false;
     }
-    match.prepare_spatial_state();
+    // The test reads only this unit's projection and the plots.
     auto& projected = match.project_spatial(s);
     const auto result =
         sim::spatial_state::can_occupy(projected, s.unit_index, cell, mode, match.spatial_);
@@ -227,12 +227,11 @@ bool TickHost::can_occupy(
 void TickHost::remove_occupancy(sim::unit_movement::Unit& u) {
     auto& s = movement_slot(u);
     ground(*s.unit).write_slot();
-    match.prepare_spatial_state();
-    auto& projected = match.project_spatial(s);
+    auto& projected = match.begin_spatial_change(s);
     match.spatial_.tick = match.simulation_.tick;
     const auto result =
         sim::spatial_state::remove_occupancy(projected, match.spatial_, match.map_listeners_);
-    match.synchronize_spatial_state();
+    match.end_spatial_change(true);
     ground(*s.unit).project_slot();
     if (result != sim::spatial_state::Error::none)
         match.fault_.note("moving occupancy removal rejected spatial state");
