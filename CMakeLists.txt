@@ -1572,7 +1572,8 @@ if(OA_BUILD_PLATFORM)
       # window, and both interface types' pointer buttons, through SDL input:
       # left clicks and right presses on open ground, units and the radar,
       # shift clicks taking queued orders and a build site back, mouse look,
-      # and a factory build button's right click taking its type off the queue.
+      # and a factory build button's right click taking its type off the queue;
+      # and the system's pointer in place of the game's cursor without the focus.
       set(oa_pointer_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/pointer-interfaces")
       file(MAKE_DIRECTORY "${oa_pointer_check_dir}")
       add_test(NAME native-pointer-interfaces COMMAND oa-game --game-dir "${OA_GAME_DIR}"

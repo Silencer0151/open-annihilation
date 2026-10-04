@@ -101,6 +101,19 @@ void Runtime::check_pointer_interfaces() {
     const auto peewee = spawn("ARMPW", 64, 0);
 
     bool running = true;
+    // Without the focus the system's pointer shows over the window and the
+    // game draws no cursor of its own; with the focus back, only the game's.
+    for (const bool active : {false, true}) {
+        SDL_Event focus{};
+        focus.type = active ? SDL_EVENT_WINDOW_FOCUS_GAINED : SDL_EVENT_WINDOW_FOCUS_LOST;
+        focus.window.windowID = SDL_GetWindowID(sdl_.window);
+        dispatch_event(focus, running);
+        require(
+            pointer_shows_cursor() == active && SDL_CursorVisible() != active,
+            active ? "two pointers, or none, with the focus back"
+                   : "two pointers, or none, without the focus"
+        );
+    }
     const auto send = [&](SDL_EventType type, uint8_t button, float x, float y, SDL_Keymod mods) {
         float window_x = 0.0F;
         float window_y = 0.0F;
@@ -449,7 +462,8 @@ void Runtime::check_pointer_interfaces() {
             match_->queued_build_count(factory, builder) == 1,
         "a right click on ARMPW did not take it off the queue ahead of ARMCK"
     );
-    std::cout << "pointer interface check: left-click interface clicks, shift cancels, right "
+    std::cout << "pointer interface check: one pointer with and without the focus; "
+                 "left-click interface clicks, shift cancels, right "
                  "press deselect/cancel/radar scroll/mouse look and build-site cancel; "
                  "right-click interface deselect, default orders, guard, cancels and radar; "
                  "factory right click took ARMPW off ahead of ARMCK\n";

@@ -828,10 +828,19 @@ class Runtime final : public menu::Host,
     ///
     /// A focus gain or loss sets the flag. Any other event while inactive sets it
     /// again when the window has input focus, since the loading pump and the input
-    /// drain discard events, a focus gain among them.
+    /// drain discard events, a focus gain among them. With the game's cursors
+    /// loaded, the system's pointer shows while the flag is clear and hides
+    /// when it is set again.
     ///
     /// @param event event just received
     void note_window_activation(const SDL_Event& event);
+
+    /// Tests whether the game's cursor shows at the system's pointer.
+    ///
+    /// @return true while the application is active and the pointer is over
+    ///     the window, or with no window; false where the system's pointer
+    ///     shows instead
+    [[nodiscard]] bool pointer_shows_cursor() const;
 
     /// Tests whether the loop keeps ticking while the window is inactive.
     ///
@@ -2274,7 +2283,8 @@ class Runtime final : public menu::Host,
     ///
     /// The elapsed ticks, the cursor step and pointer read, the match's order
     /// cursor, then the cursor for the pointer over or off the top panel; the
-    /// cursor is drawn into the frame unless the match presents in layers.
+    /// cursor is drawn into the frame unless the match presents in layers, or
+    /// the system's pointer shows instead (pointer_shows_cursor).
     void tick_and_draw_cursor();
 
     /// The panel a match dialog opened over, as 3.1c keeps it drawn under the
@@ -6765,7 +6775,8 @@ class Runtime final : public menu::Host,
     /// Throws std::runtime_error when the world cannot be drawn.
     void ensure_screen_world();
 
-    /// Presents the software cursor at the pointer.
+    /// Presents the software cursor at the pointer, unless the system's
+    /// pointer shows instead (pointer_shows_cursor).
     ///
     /// On a window at native density the cursor over the match's layers is
     /// drawn with them at the display's pixels (one_to_one_scale_mode), and

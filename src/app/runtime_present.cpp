@@ -778,7 +778,8 @@ void Runtime::present_software_cursor(bool match_layers) {
             return;
         cursor_x = touch.x;
         cursor_y = touch.y;
-    }
+    } else if (!pointer_shows_cursor())
+        return;
     const auto rendered = oa::formats::gaf::render_normal(*cursor_image_);
     if (!rendered.ok())
         return;
