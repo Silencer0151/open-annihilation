@@ -143,7 +143,10 @@ oa::FixedVec3 piece_at(void* context, oa::World*, oa::Unit* unit, uint32_t) {
 }
 
 uint16_t direction_of(void*, int32_t dx, int32_t dz) {
-    return static_cast<uint16_t>(std::atan2(dx, dz) * 32768.0 / 3.14159265358979323846);
+    // From -32768 to 32768, wrapped into the unsigned direction's 16 bits.
+    return static_cast<uint16_t>(
+        static_cast<int32_t>(std::atan2(dx, dz) * 32768.0 / 3.14159265358979323846)
+    );
 }
 
 uint32_t distance_of(void*, int32_t dx, int32_t dz) {
