@@ -808,6 +808,11 @@ class Runtime final : public menu::Host,
     /// @return the layout
     [[nodiscard]] oa::ui::display_layout::MatchLayout lay_out_match(int width, int height);
 
+    /// Keeps the player's skirmish setup before a saved, recorded or network
+    /// game fills skirmish_settings_ with its own players, so the preferences
+    /// keep the player's. A setup already kept stays kept.
+    void keep_player_skirmish_settings();
+
   private:
 
     /// Runs one pass of the idle loop.
@@ -11294,11 +11299,6 @@ class Runtime final : public menu::Host,
 
     /// Saves the preferences and writes the preferences file.
     void save_preferences() override;
-
-    /// Keeps the player's skirmish setup before a saved, recorded or network
-    /// game fills skirmish_settings_ with its own players, so the preferences
-    /// keep the player's. A setup already kept stays kept.
-    void keep_player_skirmish_settings();
 
     /// Returns the main menu's environment object.
     ///
