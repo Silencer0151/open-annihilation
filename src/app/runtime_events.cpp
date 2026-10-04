@@ -192,6 +192,10 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
             load(Screen::main_menu);
         return;
     }
+    // Any other key may be the quick key of one of the panel's buttons.
+    if (event.type == SDL_EVENT_KEY_DOWN && frontend_has_keyboard() &&
+        press_frontend_quick_key(event.key))
+        return;
     if (event.type == SDL_EVENT_MOUSE_WHEEL && screen_ == Screen::match) {
         // ui.megamap takes the wheel first.
         if (megamap_on()) {
@@ -424,12 +428,7 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
                     select_campaign_list_row(released_name, y);
                     activate();
                 } else {
-                    const bool close_after =
-                        screen_ == Screen::map_selection &&
-                        (released_name == "LOAD" || released_name == "PREVMENU");
-                    activate();
-                    if (close_after)
-                        close_map_modal();
+                    click_selected_frontend_gadget();
                 }
             }
             selected_ = -1;
@@ -437,6 +436,48 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
     }
     if (exit_requested_)
         running = false;
+}
+
+void Runtime::click_selected_frontend_gadget() {
+    const auto& name = resources_.layout.gadgets[static_cast<std::size_t>(selected_)].common.name;
+    const bool close_after =
+        screen_ == Screen::map_selection && (name == "LOAD" || name == "PREVMENU");
+    activate();
+    if (close_after)
+        close_map_modal();
+}
+
+bool Runtime::press_frontend_quick_key(const SDL_KeyboardEvent& key) {
+    // Keys with Ctrl, Alt or the system key down type no character, and a
+    // held key's repeats press nothing more.
+    if (key.repeat || (key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0 ||
+        key.key == SDLK_UNKNOWN || key.key >= SDLK_DELETE)
+        return false;
+    const auto typed = std::tolower(static_cast<int>(key.key));
+    const auto& gadgets = resources_.layout.gadgets;
+    for (std::size_t index = 1; index < gadgets.size(); ++index) {
+        const auto& gadget = gadgets[index];
+        const auto* button = std::get_if<oa::ui::gui_layout::ButtonFields>(&gadget.fields);
+        if (gadget.common.active == 0 || button == nullptr || button->grayed_out ||
+            button->quick_key == 0 ||
+            std::tolower(static_cast<unsigned char>(button->quick_key)) != typed)
+            continue;
+        // The screens' handlers read the selected gadget or the one under the
+        // pointer; a screen that stays up then has the gadget under the
+        // pointer hovered again, with its help.
+        const auto pointer_hover = hovered_;
+        event_button_ = 1;
+        selected_ = static_cast<int32_t>(index);
+        hovered_ = index;
+        click_selected_frontend_gadget();
+        selected_ = -1;
+        if (hovered_ == index) {
+            hovered_ = pointer_hover;
+            refresh_help_text();
+        }
+        return true;
+    }
+    return false;
 }
 
 bool Runtime::frontend_gadget_pressable(std::size_t index) const {

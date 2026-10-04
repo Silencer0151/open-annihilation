@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// MAINMENU.GUI's buttons under the pointer and held down, then the setup
-// screens' options clicked through the SDL presenter as a player does: each
-// click changes its setting and what the screen shows for it before Start,
-// the help line follows the pointer, and the chosen options tab shows pressed.
-// Alt+Enter switches the window to full screen and back on a menu and in a
-// match.
+// MAINMENU.GUI's buttons under the pointer, held down and pressed by their
+// quick keys, then the setup screens' options clicked through the SDL
+// presenter as a player does: each click changes its setting and what the
+// screen shows for it before Start, the help line follows the pointer, and the
+// chosen options tab shows pressed. Alt+Enter switches the window to full
+// screen and back on a menu and in a match.
 #include "oa/app/runtime.hpp"
 #include "oa/data/persist/save_sections.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
@@ -331,6 +332,96 @@ void Runtime::check_frontend_controls() {
         require(screen_ == Screen::main_menu, name + " released away from it was chosen");
         expect(repainted(idle_menu, frame(), name) == 0, name + " stays pressed after the release");
     }
+
+    // Each MAINMENU.GUI button's quick key presses it, in either case, as a
+    // click does, and a held key's repeats press nothing more: SINGLE opens
+    // SINGLE.GUI, whose PrevMenu key comes back; MULTI opens the multiplayer
+    // screens, which Escape leaves, or a notice saying why it cannot; INTRO,
+    // with the display's full-screen flag cleared so that no movie plays,
+    // says over the menu that it needs full screen; EXIT ends the run, and
+    // the check goes on from the menu as it was.
+    const auto type_key = [&](SDL_Keycode code, bool shifted = false, bool repeat = false) {
+        SDL_Event event{};
+        event.type = SDL_EVENT_KEY_DOWN;
+        event.key.windowID = SDL_GetWindowID(sdl_.window);
+        event.key.scancode = SDL_GetScancodeFromKey(code, nullptr);
+        event.key.key = code;
+        event.key.mod = static_cast<SDL_Keymod>(shifted ? SDL_KMOD_LSHIFT : SDL_KMOD_NONE);
+        event.key.down = true;
+        event.key.repeat = repeat;
+        dispatch_event(event, running);
+        event.type = SDL_EVENT_KEY_UP;
+        event.key.down = false;
+        event.key.repeat = false;
+        dispatch_event(event, running);
+        idle_tick();
+    };
+    // The key a button's quick key is typed with: a letter's key gives its
+    // lower case, with Shift down for the upper case.
+    const auto quick_key = [&](std::string_view name) {
+        const auto* fields =
+            std::get_if<oa::ui::gui_layout::ButtonFields>(&gadget_named(name).fields);
+        require(
+            fields != nullptr && fields->quick_key != 0, std::string(name) + " has no quick key"
+        );
+        return static_cast<SDL_Keycode>(
+            std::tolower(static_cast<unsigned char>(fields->quick_key))
+        );
+    };
+    const auto on_main_menu = [&] {
+        return screen_ == Screen::main_menu && state_.state == frontend::state_id::main_menu &&
+               dialogs::dialog_count() == 0;
+    };
+    const auto single_key = quick_key(menu::resource_name(menu::Button::single_player));
+    const auto multi_key = quick_key(menu::resource_name(menu::Button::multiplayer));
+    const auto intro_key = quick_key(menu::resource_name(menu::Button::intro));
+    const auto exit_key = quick_key(menu::resource_name(menu::Button::exit));
+    for (const bool shifted : {false, true}) {
+        type_key(single_key, shifted);
+        require(screen_ == Screen::single_player, "SINGLE's quick key did not open SINGLE.GUI");
+        // SINGLE's key is Skirmish's on SINGLE.GUI.
+        type_key(single_key, shifted, true);
+        require(screen_ == Screen::single_player, "SINGLE's held quick key pressed SINGLE.GUI's");
+        type_key(quick_key(entry::resource_name(entry::Button::previous_menu)), !shifted);
+        require(on_main_menu(), "PrevMenu's quick key did not return to the main menu");
+    }
+    type_key(multi_key);
+    require(
+        screen_ != Screen::main_menu || dialogs::dialog_count() != 0,
+        "MULTI's quick key opened nothing"
+    );
+    if (dialogs::dialog_count() != 0) {
+        auto context = screen_context();
+        require(dialogs::dialog_click(&context, "OK"), "MULTI's notice has no OK");
+        run_pending_notice_return();
+    } else
+        type_key(SDLK_ESCAPE);
+    require(on_main_menu(), "Escape did not leave what MULTI's quick key opened");
+    {
+        const auto display_flags = state_.video_context_flags;
+        state_.video_context_flags =
+            static_cast<uint8_t>(display_flags & ~frontend::flags::fullscreen_mode);
+        type_key(intro_key, true);
+        state_.video_context_flags = display_flags;
+        const bool told = dialogs::dialog_count() != 0;
+        if (told) {
+            auto context = screen_context();
+            require(dialogs::dialog_click(&context, "OK"), "INTRO's message has no OK");
+        }
+        require(on_main_menu(), "INTRO's quick key left the main menu");
+        require(told == offers_movies(), "INTRO's quick key did not press INTRO");
+    }
+    {
+        const auto menu_state = state_;
+        type_key(exit_key);
+        const bool exited = exit_requested_;
+        exit_requested_ = false;
+        running = true;
+        state_ = menu_state;
+        require(exited, "EXIT's quick key did not end the run");
+    }
+    std::cout << "frontend controls check: MAINMENU.GUI's quick keys press SINGLE, MULTI, INTRO "
+                 "and EXIT, and SINGLE.GUI's PrevMenu\n";
 
     // SKIRMISH.GUI.
     exercise_click(menu::resource_name(menu::Button::single_player));

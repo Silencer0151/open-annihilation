@@ -5387,19 +5387,21 @@ class Runtime final : public menu::Host,
 
     /// Checks that every option of the setup screens shows what a click set.
     ///
-    /// Through the SDL presenter: on SKIRMISH.GUI each rule button, Difficulty,
-    /// the first rows' player, side, colour, allegiance, metal and energy
-    /// controls and a map chosen through SELMAP.GUI; on NEWGAME.GUI the
-    /// difficulty and the side buttons; on the options screen the VISUALS and
-    /// SPEEDS tabs and every staged button of their panels. Each click must
-    /// change the setting and the caption, frame, text or pressed button shown
-    /// for it, with the pixels to match, before Start; the clicked options tab
-    /// must stay pressed and the others raised. HELPTEXT must show the help of
-    /// the control under the pointer: the new help of a clicked rule button,
-    /// the first row's allegiance, metal and energy hints, and nothing over its
-    /// player, side and colour. --snapshot takes the skirmish, new-campaign and
-    /// options frames as <stem>-<step>.ppm. Throws std::runtime_error listing
-    /// every mismatch.
+    /// First each MAINMENU.GUI button's quick key must press it, in either
+    /// case, and a held key's repeat nothing more; SINGLE.GUI's PrevMenu key
+    /// must return to the menu. Through the SDL presenter: on SKIRMISH.GUI each
+    /// rule button, Difficulty, the first rows' player, side, colour,
+    /// allegiance, metal and energy controls and a map chosen through
+    /// SELMAP.GUI; on NEWGAME.GUI the difficulty and the side buttons; on the
+    /// options screen the VISUALS and SPEEDS tabs and every staged button of
+    /// their panels. Each click must change the setting and the caption, frame,
+    /// text or pressed button shown for it, with the pixels to match, before
+    /// Start; the clicked options tab must stay pressed and the others raised.
+    /// HELPTEXT must show the help of the control under the pointer: the new
+    /// help of a clicked rule button, the first row's allegiance, metal and
+    /// energy hints, and nothing over its player, side and colour. --snapshot
+    /// takes the skirmish, new-campaign and options frames as
+    /// <stem>-<step>.ppm. Throws std::runtime_error listing every mismatch.
     void check_frontend_controls();
 
     /// Checks the engine screens' scroll bars through the SDL presenter.
@@ -6934,6 +6936,23 @@ class Runtime final : public menu::Host,
     /// instead would rebuild MAINMENU while its signal stays initialize, dropping
     /// a press before its release.
     void activate();
+
+    /// Acts on the selected gadget of the current screen as a click released
+    /// over it does: activate() runs its screen's handler, and SELMAP.GUI's
+    /// LOAD and PREVMENU then close the map modal.
+    void click_selected_frontend_gadget();
+
+    /// Presses the frontend screen's button whose quick key a key is, as a
+    /// left click released over it does.
+    ///
+    /// The key presses the first active button in the panel's record order
+    /// whose quick key it is in either case; a grayed-out button takes no key
+    /// and passes it on. A key with Ctrl, Alt or the system key down, or a
+    /// held key's repeat, presses nothing.
+    ///
+    /// @param key the key pressed
+    /// @return true when the key pressed a button
+    bool press_frontend_quick_key(const SDL_KeyboardEvent& key);
 
     /// Steps the stage of the selected button as releasing a click on it does.
     ///
@@ -10366,7 +10385,8 @@ class Runtime final : public menu::Host,
     ///
     /// Quit ends the loop, a resize lays the frame out again, typed text feeds
     /// the chat line, keys go to the match hotkeys, the typed-key hooks and the
-    /// end panel, Escape backs out of the current screen, the wheel zooms the
+    /// end panel, Escape backs out of the current screen, other keys press the
+    /// frontend screen's buttons whose quick keys they are, the wheel zooms the
     /// match or scrolls a list, and pointer events drive the frontend screens
     /// or the match.
     ///
