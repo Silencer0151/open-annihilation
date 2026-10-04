@@ -888,8 +888,12 @@ savegame_host_path(const SaveRoots& roots, std::string_view path, SavePathUse us
     std::error_code error;
     if (std::filesystem::exists(written, error))
         return written;
-    const std::filesystem::path earlier = roots.earlier / utf8_path(rest);
-    return std::filesystem::exists(earlier, error) ? earlier : written;
+    for (const auto& folder : roots.earlier) {
+        const std::filesystem::path earlier = folder / utf8_path(rest);
+        if (std::filesystem::exists(earlier, error))
+            return earlier;
+    }
+    return written;
 }
 
 SaveFiles savegame_host_files(const SaveRoots* roots) {
@@ -909,13 +913,13 @@ SaveFiles savegame_host_files(const SaveRoots* roots) {
         const auto wanted = upper(
             dot == std::string_view::npos ? std::string() : std::string(spec.substr(dot + 1))
         );
-        // The save directory's files, then those of the earlier folder whose
-        // names it does not hold.
+        // The save directory's files, then those of each earlier folder
+        // whose names the folders before it do not hold.
         std::vector<std::filesystem::path> folders{
             savegame_host_path(where, directory, SavePathUse::write)
         };
-        if (upper(directory) == upper(std::string(kSaveDirectory)) && !where.earlier.empty())
-            folders.push_back(where.earlier);
+        if (upper(directory) == upper(std::string(kSaveDirectory)))
+            folders.insert(folders.end(), where.earlier.begin(), where.earlier.end());
         std::vector<std::string> listed;
         for (const auto& folder : folders) {
             std::error_code error;

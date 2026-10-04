@@ -107,6 +107,9 @@ games moved and the ones left where they were, `"12 0"`; while it is there
 the move is not made again. `open-annihilation.saves-moved-notice` is `due`
 while the main menu's notice of a move that moved or left a saved game
 waits to be shown, and `told` once it has shown.
+`open-annihilation.loose-saves-moved` and
+`open-annihilation.loose-saves-moved-notice` do the same for the move of
+3.1c's saved games loose in `Saves` into `Saves/default`.
 A mod whose profile names a registry root of its own keeps the game's
 `<section>|<name>` settings under `registry:<root>\<section>|<name>` keys
 instead, as the mod keeps them under its own registry key, and its first run

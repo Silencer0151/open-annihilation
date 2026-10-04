@@ -469,7 +469,7 @@ std::size_t radar_mismatches(
 }
 
 /// Leaves no saved game for the dialogs to list while it lives: the saves
-/// folder, and the earlier one the dialogs list too, are moved aside, and
+/// folder, and the earlier ones the dialogs list too, are moved aside, and
 /// put back when it goes.
 class HeldSaves {
   public:
@@ -479,8 +479,8 @@ class HeldSaves {
     /// @param roots where the saved games lie (Runtime::save_roots)
     explicit HeldSaves(const oa::ui::frontend::SaveRoots& roots) {
         hold(roots.saves);
-        if (!roots.earlier.empty())
-            hold(roots.earlier);
+        for (const auto& earlier : roots.earlier)
+            hold(earlier);
     }
 
     HeldSaves(const HeldSaves&) = delete;
@@ -2328,11 +2328,13 @@ void Runtime::check_load_save() {
                 );
         };
     // The files the dialogs list: the saves folder's, and those of the
-    // folder that held saved games before while it is there.
+    // folders that held saved games before while they are there.
     std::size_t save_files = 0;
-    for (const fs::path& listed_folder : {check_roots.saves, check_roots.earlier}) {
-        if (listed_folder.empty())
-            continue;
+    std::vector<fs::path> listed_folders{check_roots.saves};
+    listed_folders.insert(
+        listed_folders.end(), check_roots.earlier.begin(), check_roots.earlier.end()
+    );
+    for (const fs::path& listed_folder : listed_folders) {
         std::error_code listing;
         for (const auto& entry : fs::directory_iterator(listed_folder, listing))
             if (entry.is_regular_file())

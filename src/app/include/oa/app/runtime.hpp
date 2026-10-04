@@ -687,18 +687,27 @@ class Runtime final : public menu::Host,
     /// @return the folder, absolute; empty before the runtime has started
     [[nodiscard]] const fs::path& user_folder() const noexcept;
 
-    /// Returns the folder this run's saved games are written to: Saves in
-    /// the player's own folder, or with a mod Saves/<mod id>, so that no two
-    /// mods share a list of saved games.
+    /// Returns the id of the mod whose folders in Saves, Screenshots and
+    /// Films this run's files go in: its profile's; empty for 3.1c and for a
+    /// mod folder without a profile, whose files go with 3.1c's in default
+    /// (user_folder.hpp).
+    ///
+    /// @return the id; empty without a profile
+    [[nodiscard]] std::string_view files_mod_id() const noexcept;
+
+    /// Returns the folder this run's saved games are written to:
+    /// Saves/<mod id> in the player's own folder, or Saves/default without
+    /// a mod, so that no two mods share a list of saved games.
     ///
     /// @return the folder; it need not exist
     [[nodiscard]] fs::path saves_folder() const;
 
     /// Returns where the save and load dialogs' paths lie: a path in
-    /// SAVEGAME in saves_folder, or, for reading, in save_game_root's
-    /// SAVEGAME folder, which held saved games before, while that folder is
-    /// there and the saves folder lacks the name; any other relative path
-    /// under save_game_root.
+    /// SAVEGAME in saves_folder, or, for reading, in a folder that held
+    /// saved games before, while it is there and the folders before it lack
+    /// the name: without a mod, Saves itself while it holds a file, then
+    /// save_game_root's SAVEGAME folder; any other relative path under
+    /// save_game_root.
     ///
     /// @return the roots
     [[nodiscard]] oa::ui::frontend::SaveRoots save_roots() const;
@@ -706,8 +715,8 @@ class Runtime final : public menu::Host,
     /// Returns the host path of a path the game names, in UTF-8 with '\'
     /// or '/' between its parts: as savegame_host_path places it over
     /// save_roots, then, within the player's own folder, its screenshots
-    /// folder, matched without case, is Screenshots and a MOVIE folder lies
-    /// in Films.
+    /// folder, matched without case, is the mod's folder in Screenshots and
+    /// a MOVIE folder lies in its folder in Films (place_capture_path).
     ///
     /// @param path the path
     /// @param use whether it is read or written
@@ -3297,18 +3306,20 @@ class Runtime final : public menu::Host,
     void check_engine_settings_wiring();
 
     /// Chooses the player's own folder (user_folder) and, with the player's
-    /// own preferences file, moves the saved games from beside it into its
-    /// Saves once (move_saves_once). With --preferences-file or
-    /// --user-folder nothing is moved: the dialogs list the saved games
-    /// beside the preferences file where they are.
+    /// own preferences file, moves the saved games from beside it, and those
+    /// of 3.1c loose in Saves, into their folders in Saves once
+    /// (move_saves_once). With --preferences-file or --user-folder nothing
+    /// is moved: the dialogs list the saved games where they are.
     void start_user_folder();
 
     /// Moves the saved games from beside the preferences file into the
     /// player's own folder's Saves (move_earlier_saves) while the
-    /// preferences record no move, saying what happened on standard error,
-    /// which the log keeps. A move that moved or left a file is recorded in
-    /// the preferences, which are written, and one that moved or left a
-    /// saved game makes the main menu's notice due (tell_saves_moved).
+    /// preferences record no such move, then those of 3.1c loose in Saves
+    /// into Saves/default (move_loose_saves) while they record no such
+    /// move, saying what happened on standard error, which the log keeps.
+    /// A move that moved or left a file is recorded in the preferences,
+    /// which are written, and one that moved or left a saved game makes the
+    /// main menu's notice due (tell_saves_moved).
     void move_saves_once();
 
     /// The player's own folder's opener and the main menu's notice of the
@@ -3343,8 +3354,8 @@ class Runtime final : public menu::Host,
     /// @return true while it shows
     [[nodiscard]] bool saves_notice_shown() const noexcept;
 
-    /// Shows the notice of the saved games' move over the main menu, once:
-    /// while the preferences say it is due, once the main menu, its own and
+    /// Shows the notice of the saved games' moves over the main menu, once:
+    /// while the preferences say one is due, once the main menu, its own and
     /// not a screen package's, has shown for a frame and stays, with no
     /// dialog over it and no settings dialog. Showing it records it told and
     /// writes the preferences. A run nobody watches shows none and leaves it
@@ -10706,8 +10717,9 @@ class Runtime final : public menu::Host,
     std::string application_directory() override;
 
     /// Returns the Image Output Directory used in place of the game's
-    /// default: the player's own folder, whose screenshots folder is
-    /// Screenshots and whose MOVIE folders lie in Films (game_file_path).
+    /// default: the player's own folder, whose screenshots folder is the
+    /// mod's folder in Screenshots and whose MOVIE folders lie in its folder
+    /// in Films (game_file_path).
     ///
     /// @return the folder in UTF-8; empty before the folder is chosen
     std::string own_image_output_directory() override;

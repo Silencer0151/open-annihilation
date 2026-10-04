@@ -29,8 +29,8 @@ struct Runtime::UserFolderState {
     /// The notice while it shows: the move's, or the mod's warning; empty
     /// while none shows.
     std::optional<oa::ui::engine_settings::Notice> notice;
-    /// The folder the notice's button shows: Saves in the player's own
-    /// folder, or the mod's folder.
+    /// The folder the notice's button shows: Saves/default in the player's
+    /// own folder, or the mod's folder.
     fs::path notice_folder;
     /// The screen the notice shows over, which it closes on leaving: the
     /// main menu, or the screen whose start the mod's warning refused.

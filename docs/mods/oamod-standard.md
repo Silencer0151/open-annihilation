@@ -396,8 +396,8 @@ Every run that plays a profile names it and its sim hash.
 
 Game folders are never written to.
 
-- **Saved games** go to `Saves` in the player's own folder,
-  `Documents/Open Annihilation/Saves` ("Where it keeps its files" in the
+- **Saved games** go to `Saves/default` in the player's own folder,
+  `Documents/Open Annihilation/Saves/default` ("Where it keeps its files" in the
   [installation guides](../installation/macos.md#where-it-keeps-its-files)),
   and with a profile to `Saves/<id>`, so different mods never share a list
   of saved games. The saved games versions before 0.7 kept beside the

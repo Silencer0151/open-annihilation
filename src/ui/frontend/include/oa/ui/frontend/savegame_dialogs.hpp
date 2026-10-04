@@ -371,23 +371,25 @@ struct SaveRoots {
     std::filesystem::path root;
     /// The folder that stands for kSaveDirectory: every file is written here.
     std::filesystem::path saves;
-    /// A folder whose files the dialogs find too, where `saves` holds none
-    /// of the same name, matched without case: one that held saved games
-    /// before and still holds some; empty for none.
-    std::filesystem::path earlier;
+    /// Folders whose files the dialogs find too, in order, where `saves` and
+    /// the folders before them hold none of the same name, matched without
+    /// case: ones that held saved games before and still hold some; empty
+    /// for none.
+    std::vector<std::filesystem::path> earlier;
 };
 
 /// How a path is used.
 enum class SavePathUse : uint8_t {
-    read,  ///< read or removed: found in SaveRoots::earlier when only it holds the name
+    read,  ///< read or removed: found in SaveRoots::earlier when only they hold the name
     write, ///< written or made: always under SaveRoots::saves
 };
 
 /// Returns the host path of a path the game names, in UTF-8 with '\' or '/'
 /// between its parts. One that starts with kSaveDirectory, matched without
-/// case, lies in SaveRoots::saves, or for reading in SaveRoots::earlier
-/// when only that folder holds its name; any other relative path lies under
-/// SaveRoots::root; an absolute path stays where it is.
+/// case, lies in SaveRoots::saves, or for reading in the first of
+/// SaveRoots::earlier that holds its name when SaveRoots::saves does not;
+/// any other relative path lies under SaveRoots::root; an absolute path
+/// stays where it is.
 ///
 /// @param roots where the paths lie
 /// @param path the path
@@ -400,9 +402,9 @@ savegame_host_path(const SaveRoots& roots, std::string_view path, SavePathUse us
 ///
 /// Paths use '\' as the game does and are mapped onto the host file system
 /// by savegame_host_path; the find walk over the save directory lists the
-/// files of SaveRoots::saves, then those of SaveRoots::earlier whose names
-/// it does not hold, matches extensions case-insensitively and reports write
-/// times in seconds.
+/// files of SaveRoots::saves, then those of each of SaveRoots::earlier whose
+/// names the folders before it do not hold, matches extensions
+/// case-insensitively and reports write times in seconds.
 ///
 /// @param roots where the paths lie; must outlive the services
 /// @return The services, with `roots` as their context.

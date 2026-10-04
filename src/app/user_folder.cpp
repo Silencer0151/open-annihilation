@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// The player's own folder: where it is, the move of saved games from where
-// earlier versions kept them, and the notice of that move; and the warning
-// that a mod's games cannot start until its files are in its folder.
+// The player's own folder: where it is, the folders each mod's files go in,
+// the moves of saved games from where earlier versions kept them, and the
+// notice of those moves; and the warning that a mod's games cannot start
+// until its files are in its folder.
 
 #include "oa/app/user_folder.hpp"
 
@@ -11,6 +12,8 @@
 #include <cctype>
 #include <charconv>
 #include <cstddef>
+#include <initializer_list>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -21,6 +24,13 @@ namespace oa::app {
 namespace fs = std::filesystem;
 
 namespace {
+
+/// The name of the Image Output Directory's screenshots folder, matched
+/// without case.
+constexpr std::string_view game_screenshots_name = "SCREENSHOTS";
+/// What the name of a film's folder below the Image Output Directory starts
+/// with, a number after it.
+constexpr std::string_view game_film_prefix = "MOVIE";
 
 /// Converts UTF-8 text to a path.
 ///
@@ -48,6 +58,71 @@ std::string capitals(std::string_view text) {
     for (auto& character : raised)
         character = static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
     return raised;
+}
+
+/// Tells whether a folder's name is a film's: MOVIE, matched without case,
+/// then digits, or the '*' of a search for them.
+///
+/// @param name the name
+/// @return true for a film's folder
+bool film_folder_name(std::string_view name) {
+    const std::string raised = capitals(name);
+    if (!raised.starts_with(game_film_prefix))
+        return false;
+    const std::string_view rest = std::string_view(raised).substr(game_film_prefix.size());
+    return std::all_of(rest.begin(), rest.end(), [](char character) {
+        return (character >= '0' && character <= '9') || character == '*';
+    });
+}
+
+/// Records a move under a preference, and its notice due under another
+/// when it moved or left a saved game.
+///
+/// @param[in,out] values the preferences
+/// @param move what the move did
+/// @param record the preference that records it
+/// @param notice the preference that records its notice
+void record_move(
+    platform::preferences::Values& values,
+    const SavesMove& move,
+    std::string_view record,
+    std::string_view notice
+) {
+    values[std::string(record)] = std::to_string(move.moved) + " " + std::to_string(move.left);
+    if (move.moved != 0 || move.left != 0)
+        values[std::string(notice)] = std::string(saves_notice_due);
+}
+
+/// Reads what a recorded move moved and left.
+///
+/// @param values the preferences
+/// @param record the preference that records it
+/// @return the counts; nullopt when it is absent or cannot be read
+std::optional<RecordedMove>
+read_move(const platform::preferences::Values& values, std::string_view record) {
+    const auto found = values.find(std::string(record));
+    if (found == values.end())
+        return std::nullopt;
+    const std::string& text = found->second;
+    RecordedMove move;
+    const char* const end = text.data() + text.size();
+    const auto first = std::from_chars(text.data(), end, move.moved);
+    if (first.ec != std::errc{} || first.ptr == end || *first.ptr != ' ')
+        return std::nullopt;
+    const auto second = std::from_chars(first.ptr + 1, end, move.left);
+    if (second.ec != std::errc{} || second.ptr != end)
+        return std::nullopt;
+    return move;
+}
+
+/// Tells whether a move's notice waits to be shown.
+///
+/// @param values the preferences
+/// @param notice the preference that records its notice
+/// @return true while it holds saves_notice_due
+bool notice_due(const platform::preferences::Values& values, std::string_view notice) {
+    const auto found = values.find(std::string(notice));
+    return found != values.end() && found->second == saves_notice_due;
 }
 
 /// Returns "1 saved game" or "N saved games".
@@ -98,9 +173,59 @@ fs::path choose_user_folder(
     return plain_folder(fallback);
 }
 
+std::string mod_subfolder_name(std::string_view mod_id) {
+    if (mod_id.empty())
+        return std::string(no_mod_folder_name);
+    if (mod_id == no_mod_folder_name)
+        return std::string(default_id_folder_name);
+    return std::string(mod_id);
+}
+
 fs::path saves_folder(const fs::path& user_folder, std::string_view mod_id) {
-    const fs::path saves = user_folder / std::string(saves_folder_name);
-    return mod_id.empty() ? saves : saves / from_utf8(mod_id);
+    return user_folder / std::string(saves_folder_name) / from_utf8(mod_subfolder_name(mod_id));
+}
+
+fs::path screenshots_folder(const fs::path& user_folder, std::string_view mod_id) {
+    return user_folder / std::string(screenshots_folder_name) /
+           from_utf8(mod_subfolder_name(mod_id));
+}
+
+fs::path films_folder(const fs::path& user_folder, std::string_view mod_id) {
+    return user_folder / std::string(films_folder_name) / from_utf8(mod_subfolder_name(mod_id));
+}
+
+fs::path
+place_capture_path(const fs::path& path, const fs::path& user_folder, std::string_view mod_id) {
+    if (user_folder.empty())
+        return path;
+    const fs::path relative = path.lexically_normal().lexically_relative(user_folder);
+    if (relative.empty())
+        return path;
+    auto part = relative.begin();
+    const std::string first = to_utf8(*part);
+    if (first == "." || first == "..")
+        return path;
+    fs::path placed;
+    if (capitals(first) == game_screenshots_name)
+        placed = screenshots_folder(user_folder, mod_id);
+    else if (film_folder_name(first))
+        placed = films_folder(user_folder, mod_id) / *part;
+    else
+        return path;
+    for (++part; part != relative.end(); ++part)
+        placed /= *part;
+    return placed;
+}
+
+bool holds_a_file(const fs::path& folder) {
+    std::error_code error;
+    for (fs::directory_iterator entry{folder, error}, end; !error && entry != end;
+         entry.increment(error)) {
+        std::error_code status;
+        if (entry->is_regular_file(status))
+            return true;
+    }
+    return false;
 }
 
 std::optional<fs::path> entry_without_case(const fs::path& folder, std::string_view name) {
@@ -297,32 +422,50 @@ SavesMove move_earlier_saves(
     return move;
 }
 
-void record_saves_move(platform::preferences::Values& values, const SavesMove& move) {
-    values[std::string(saves_moved_preference)] =
-        std::to_string(move.moved) + " " + std::to_string(move.left);
-    if (move.moved != 0 || move.left != 0)
-        values[std::string(saves_notice_preference)] = std::string(saves_notice_due);
-}
-
-std::optional<RecordedMove> recorded_saves_move(const platform::preferences::Values& values) {
-    const auto found = values.find(std::string(saves_moved_preference));
-    if (found == values.end())
-        return std::nullopt;
-    const std::string& text = found->second;
-    RecordedMove move;
-    const char* const end = text.data() + text.size();
-    const auto first = std::from_chars(text.data(), end, move.moved);
-    if (first.ec != std::errc{} || first.ptr == end || *first.ptr != ' ')
-        return std::nullopt;
-    const auto second = std::from_chars(first.ptr + 1, end, move.left);
-    if (second.ec != std::errc{} || second.ptr != end)
-        return std::nullopt;
+SavesMove move_loose_saves(const fs::path& user_folder, const FileMoveHooks& hooks) {
+    SavesMove move;
+    // Only files move; a Saves that holds none, or only folders, stays as
+    // it is.
+    const fs::path saves = user_folder / std::string(saves_folder_name);
+    if (holds_a_file(saves))
+        move_saves_folder(saves, saves_folder(user_folder, {}), move, hooks);
     return move;
 }
 
+void record_saves_move(platform::preferences::Values& values, const SavesMove& move) {
+    record_move(values, move, saves_moved_preference, saves_notice_preference);
+}
+
+void record_loose_saves_move(platform::preferences::Values& values, const SavesMove& move) {
+    record_move(values, move, loose_saves_moved_preference, loose_saves_notice_preference);
+}
+
+std::optional<RecordedMove> recorded_saves_move(const platform::preferences::Values& values) {
+    return read_move(values, saves_moved_preference);
+}
+
+std::optional<RecordedMove> recorded_loose_saves_move(const platform::preferences::Values& values) {
+    return read_move(values, loose_saves_moved_preference);
+}
+
 bool saves_notice_due_in(const platform::preferences::Values& values) {
-    const auto found = values.find(std::string(saves_notice_preference));
-    return found != values.end() && found->second == saves_notice_due;
+    return notice_due(values, saves_notice_preference) ||
+           notice_due(values, loose_saves_notice_preference);
+}
+
+MovesTold moves_to_tell(const platform::preferences::Values& values) {
+    MovesTold moves;
+    if (notice_due(values, saves_notice_preference))
+        moves.beside_preferences = recorded_saves_move(values);
+    if (notice_due(values, loose_saves_notice_preference))
+        moves.loose_in_saves = recorded_loose_saves_move(values);
+    return moves;
+}
+
+void record_saves_notice_told(platform::preferences::Values& values) {
+    for (const std::string_view notice : {saves_notice_preference, loose_saves_notice_preference})
+        if (notice_due(values, notice))
+            values[std::string(notice)] = std::string(saves_notice_told);
 }
 
 FolderOpenerHooks recorded_folder_opener(std::vector<fs::path>& requests) noexcept {
@@ -375,8 +518,14 @@ std::string file_uri(const fs::path& folder) {
     return uri;
 }
 
-oa::ui::engine_settings::Notice
-saves_moved_notice(const RecordedMove& move, const fs::path& saves) {
+oa::ui::engine_settings::Notice saves_moved_notice(const MovesTold& moves, const fs::path& saves) {
+    // The moves told, added together.
+    RecordedMove move;
+    for (const auto& told : {moves.beside_preferences, moves.loose_in_saves})
+        if (told) {
+            move.moved += told->moved;
+            move.left += told->left;
+        }
     oa::ui::engine_settings::Notice notice;
     notice.title = "SAVED GAMES MOVED";
     notice.open_caption = "OPEN FOLDER";
@@ -395,9 +544,16 @@ saves_moved_notice(const RecordedMove& move, const fs::path& saves) {
                  (move.left == 1 ? "it is" : "they are") + ". The log says why.",
              false}
         );
-    notice.paragraphs.push_back(
-        {"Screenshots, films and mods now go in the same Open Annihilation folder.", false}
-    );
+    if (moves.beside_preferences)
+        notice.paragraphs.push_back(
+            {"Screenshots, films and mods now go in the same Open Annihilation folder.", false}
+        );
+    if (moves.loose_in_saves)
+        notice.paragraphs.push_back(
+            {"Saved games, screenshots and films now go in a folder for each mod, or in " +
+                 std::string(no_mod_folder_name) + " without a mod.",
+             false}
+        );
     return notice;
 }
 

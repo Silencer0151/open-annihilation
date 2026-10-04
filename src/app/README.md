@@ -1605,39 +1605,52 @@ find: `--user-folder`, else the preferences' `open-annihilation.user-folder`,
 else `Open Annihilation` in their Documents folder
 (`oa::platform::preferences::default_user_folder`), or beside a named
 `--preferences-file`, so that a check never reaches the Documents folder
-(`choose_user_folder`, `user_folder_beside`). It holds `Saves`, with
-`Saves/<mod id>` for each mod's, `Screenshots`, `Films` and `Mods`, each
-made when first needed. `runtime_user_folder.cpp` puts it in effect:
+(`choose_user_folder`, `user_folder_beside`). It holds `Saves`,
+`Screenshots` and `Films`, each with a folder for each mod, named after its
+id, and `default` for games without a mod's profile, 3.1c's and a mod
+folder's without an `oamod.yaml` (`mod_subfolder_name`; a mod whose id is
+`default` takes `default (mod)`, which no kebab-case id can be), and
+`Mods`, each made when first needed. `runtime_user_folder.cpp` puts it in
+effect:
 
 - **Paths:** `Runtime::game_file_path` places each path the game names: a
-  `SAVEGAME` path in `Runtime::saves_folder`, or for reading in the
-  `SAVEGAME` folder beside the preferences file while that folder holds the
-  name and Saves does not (`savegame_host_path`, `SaveRoots`); any other
-  relative path under `save_game_root`, as before; and within the player's
-  own folder, which is the Image Output Directory by default
-  (`own_image_output_directory`), the `screenshots` folder is `Screenshots`
-  and a `MOVIEnnn` folder lies in `Films`. A stored Image Output Directory
-  that is the game's default, the game folder's folder named after the
-  user, gives way to it; any other one the player chose wins.
-- **The move:** the first start with the player's own preferences file
+  `SAVEGAME` path in `Runtime::saves_folder`, or for reading in a folder
+  that held saved games before while it holds the name and the folders
+  before it do not: without a mod, `Saves` itself while it holds a file,
+  then the `SAVEGAME` folder beside the preferences file
+  (`savegame_host_path`, `SaveRoots`); any other relative path under
+  `save_game_root`, as before; and within the player's own folder, which is
+  the Image Output Directory by default (`own_image_output_directory`), the
+  `screenshots` folder is the mod's folder in `Screenshots` and a
+  `MOVIEnnn` folder lies in its folder in `Films` (`place_capture_path`).
+  A stored Image Output Directory that is the game's default, the game
+  folder's folder named after the user, gives way to it; any other one the
+  player chose wins, used as it is.
+- **The moves:** the first start with the player's own preferences file
   that finds no `open-annihilation.saves-moved` record moves the saved
   games earlier versions kept beside that file, `SAVEGAME` and each
-  `mods/<id>/SAVEGAME`, into `Saves` and `Saves/<id>` (`move_saves_once`,
-  `move_earlier_saves`); with `--preferences-file` or `--user-folder`
-  nothing moves, so that a folder named for one start never takes them
-  from the next. Nothing is overwritten: a name Saves holds, matched
-  without case, is kept, and the file moved takes a free one,
+  `mods/<id>/SAVEGAME`, into `Saves/default` and `Saves/<id>`
+  (`move_saves_once`, `move_earlier_saves`), and one that finds no
+  `open-annihilation.loose-saves-moved` record moves the files loose in
+  `Saves` itself into `Saves/default` (`move_loose_saves`); loose
+  screenshots and films stay where they are. With `--preferences-file` or
+  `--user-folder` nothing moves, so that a folder named for one start
+  never takes them from the next. Nothing is overwritten: a name the folder
+  moved to holds, matched without case, is kept, and the file moved takes a
+  free one,
   `NAME (2).SAV` (`free_file_name`). A file is renamed, else
   copied and the original removed once the copy is whole, else left where
   it is, where the dialogs and the console still find it. Each step is said
   on standard error, which the log keeps. A move that moved or left a file
-  is recorded, and one that moved or left a saved game makes the notice
-  due (`record_saves_move`).
+  is recorded, and one that moved or left a saved game makes its notice
+  due (`record_saves_move`, `record_loose_saves_move`).
 - **The notice:** `tell_saves_moved` shows it over the darkened main menu
   once, as the renderer records' notice is shown: in the settings dialog's
-  look (`oa/ui/engine_settings/notice.hpp`), with the count, the Saves
-  path wrapped at its separators, and that screenshots, films and mods now
-  go in the same folder; **Open folder** shows Saves and **OK**, Enter and
+  look (`oa/ui/engine_settings/notice.hpp`), with the count of the moves
+  whose notice is due (`moves_to_tell`), the `Saves/default` path wrapped
+  at its separators, and that screenshots, films and mods now go in the
+  same folder, or that each mod's go in a folder of its own; **Open
+  folder** shows `Saves/default` and **OK**, Enter and
   Escape close it (`UserFolderState`). Showing it records it `told`. A run
   nobody watches leaves it due.
 - **Opening folders:** the settings' Your files buttons and the notice show
@@ -1797,7 +1810,8 @@ runtime then:
   game's; a first run seeds the profile's registry seeds where no value of
   that name, matched without case, exists (`seed_registry`);
 - keeps saved games in `Saves/<id>` in the player's own folder
-  (`Runtime::saves_folder`);
+  (`Runtime::saves_folder`), and screenshots and films in
+  `Screenshots/<id>` and `Films/<id>` (`Runtime::game_file_path`);
 - reads the movies, the music folder and the disc archives through the
   folders, the mod folder first; a profile whose `cd-check` is false always
   finds its disc.
@@ -1884,8 +1898,9 @@ into the records and decisions of the modules that carry them out, and
   stored width or height to it as they are read (`display_mode_setting`).
   Ctrl+F9 and Print Screen, on release and on every screen before the
   screen sees them (`handle_view_rule_key`), save the frame as an 8-bit
-  PCX in the Image Output Directory's `screenshots` folder, the player's
-  own folder's `Screenshots` by default (`Runtime::game_file_path`), named by
+  PCX in the Image Output Directory's `screenshots` folder, the mod's
+  folder in the player's own folder's `Screenshots` by default
+  (`Runtime::game_file_path`), named by
   the date, the map and the players, or SHOT outside a match, with the
   first unused number from 0 (`screenshot_file_name`,
   `capture_named_screenshot`). The graphics-driver warning `dx-warning`

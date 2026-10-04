@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // --check-user-folder: the player's own folder beside the check's
-// preferences file, the saved games moved into it once, the paths the game
-// names placed in it, the main menu's notice of the move shown once and
-// closed, and the settings' Your files buttons, all through a recorded
-// opener, so that no file manager opens.
+// preferences file, the saved games moved into it once, those loose in Saves
+// into Saves/default once, the paths the game names placed in it, a save, a
+// screenshot and a film in the folders of the mod played, the main menu's
+// notice of the moves shown once and closed, and the settings' Your files
+// buttons, all through a recorded opener, so that no file manager opens.
 
 #include "engine_settings_menu_host.hpp"
 #include "engine_settings_state.hpp"
@@ -29,6 +30,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -136,40 +138,47 @@ void Runtime::check_user_folder() {
         "the player's folder is not \"Open Annihilation\" beside the preferences file"
     );
     // Each run starts from nothing: no record, no folder of its own, and
-    // saved games where earlier versions kept them, one of them named as one
-    // in Saves is.
+    // saved games where earlier versions kept them, beside the preferences
+    // file and loose in Saves, two of them named as ones in Saves/default
+    // are.
     preference_values_.clear();
     platform_preferences::save(preference_path_, preference_values_);
     fs::remove_all(user_folder_, error);
     fs::remove_all(earlier_root / "SAVEGAME", error);
     fs::remove_all(earlier_root / "mods", error);
     const fs::path saves = oa::app::saves_folder(user_folder_, {});
+    const fs::path loose = user_folder_ / "Saves";
+    require(saves == loose / "default", "3.1c's saved games do not go in Saves/default");
     write_file(earlier_root / "SAVEGAME" / "ALPHA.SAV", "alpha");
     write_file(earlier_root / "SAVEGAME" / "BETA.SAV", "beta");
     write_file(earlier_root / "SAVEGAME" / "UNITS.LST", "list");
     write_file(earlier_root / "mods" / "check-mod" / "SAVEGAME" / "GAMMA.SAV", "gamma");
     write_file(saves / "alpha.sav", "kept");
+    write_file(loose / "LOOSE.SAV", "loose");
+    write_file(loose / "BETA.SAV", "loose beta");
 
     // A start with a named preferences file moves nothing: what lies beside
-    // it stays, and the dialogs find it there.
+    // it and in Saves stays, and the dialogs find it there.
     start_user_folder();
     require(
         read_file(earlier_root / "SAVEGAME" / "ALPHA.SAV") == "alpha" &&
+            read_file(loose / "LOOSE.SAV") == "loose" &&
             !preference_values_.contains(std::string(saves_moved_preference)) &&
-            save_roots().earlier == earlier_root / "SAVEGAME",
-        "a start with --preferences-file moved the saved games beside it"
+            !preference_values_.contains(std::string(loose_saves_moved_preference)) &&
+            save_roots().earlier == std::vector<fs::path>{loose, earlier_root / "SAVEGAME"},
+        "a start with --preferences-file moved the saved games beside it or in Saves"
     );
-    // The move, as a start with the player's own file makes it: three saved
-    // games, the one named twice kept under another name, nothing
-    // overwritten, the emptied folders gone, the move recorded and its
-    // notice due.
+    // The moves, as a start with the player's own file makes them: three
+    // saved games from beside the preferences file and two loose in Saves,
+    // each named twice kept under another name, nothing overwritten, the
+    // emptied folders gone, the moves recorded and their notices due.
     move_saves_once();
     require(read_file(saves / "alpha.sav") == "kept", "the move overwrote a saved game");
     require(read_file(saves / "ALPHA (2).SAV") == "alpha", "ALPHA.SAV was not kept beside it");
     require(read_file(saves / "BETA.SAV") == "beta", "BETA.SAV did not move");
     require(read_file(saves / "UNITS.LST") == "list", "the restriction list did not move");
     require(
-        read_file(saves / "check-mod" / "GAMMA.SAV") == "gamma",
+        read_file(loose / "check-mod" / "GAMMA.SAV") == "gamma",
         "a mod's saved game did not move into its own folder"
     );
     require(
@@ -177,37 +186,58 @@ void Runtime::check_user_folder() {
             !fs::exists(earlier_root / "mods" / "check-mod" / "SAVEGAME", error),
         "the emptied earlier folders stayed"
     );
+    require(read_file(saves / "LOOSE.SAV") == "loose", "a saved game loose in Saves did not move");
+    require(
+        read_file(saves / "BETA (2).SAV") == "loose beta" && !holds_a_file(loose),
+        "the saved games loose in Saves did not all move into Saves/default"
+    );
     const auto recorded = recorded_saves_move(preference_values_);
     require(recorded && recorded->moved == 3 && recorded->left == 0, "the move is not recorded");
-    require(saves_notice_due_in(preference_values_), "the move's notice is not due");
+    const auto loose_recorded = recorded_loose_saves_move(preference_values_);
     require(
-        platform_preferences::load(preference_path_).contains(std::string(saves_moved_preference)),
-        "the move's record was not written"
+        loose_recorded && loose_recorded->moved == 2 && loose_recorded->left == 0,
+        "the move of the saved games loose in Saves is not recorded"
+    );
+    const auto told = moves_to_tell(preference_values_);
+    require(
+        saves_notice_due_in(preference_values_) && told.beside_preferences && told.loose_in_saves,
+        "the moves' notices are not due"
+    );
+    const auto written = platform_preferences::load(preference_path_);
+    require(
+        written.contains(std::string(saves_moved_preference)) &&
+            written.contains(std::string(loose_saves_moved_preference)),
+        "the moves' records were not written"
     );
 
-    // Once recorded, the move is not made again: a saved game an earlier
-    // version writes later stays, and the dialogs find it where it is.
+    // Once recorded, the moves are not made again: saved games an earlier
+    // version writes later stay, and the dialogs find them where they are.
     write_file(earlier_root / "SAVEGAME" / "DELTA.SAV", "delta");
+    write_file(loose / "EPSILON.SAV", "epsilon");
     move_saves_once();
     require(
-        read_file(earlier_root / "SAVEGAME" / "DELTA.SAV") == "delta",
+        read_file(earlier_root / "SAVEGAME" / "DELTA.SAV") == "delta" &&
+            read_file(loose / "EPSILON.SAV") == "epsilon",
         "a second start moved the saved games again"
     );
     const auto roots = save_roots();
-    require(roots.saves == saves, "the saved games are not written to Saves");
+    require(roots.saves == saves, "the saved games are not written to Saves/default");
     require(
-        roots.earlier == earlier_root / "SAVEGAME" &&
+        roots.earlier == std::vector<fs::path>{loose, earlier_root / "SAVEGAME"} &&
             game_file_path("SAVEGAME\\DELTA.SAV", ui::frontend::SavePathUse::read) ==
                 earlier_root / "SAVEGAME" / "DELTA.SAV" &&
+            game_file_path("SAVEGAME\\EPSILON.SAV", ui::frontend::SavePathUse::read) ==
+                loose / "EPSILON.SAV" &&
             game_file_path("savegame\\BETA.SAV", ui::frontend::SavePathUse::read) ==
                 saves / "BETA.SAV" &&
             game_file_path("SAVEGAME\\DELTA.SAV", ui::frontend::SavePathUse::write) ==
                 saves / "DELTA.SAV",
-        "the earlier folder's saved game is not read where it is, or written to Saves"
+        "the earlier folders' saved games are not read where they are, or written to "
+        "Saves/default"
     );
 
     // Captures: the player's own folder is the Image Output Directory, its
-    // screenshots folder Screenshots and its films in Films.
+    // screenshots folder Screenshots/default and its films in Films/default.
     const std::string output = own_image_output_directory();
     require(
         output == path_to_utf8(user_folder_) && preferences_.image_output_directory == output,
@@ -215,16 +245,16 @@ void Runtime::check_user_folder() {
     );
     require(
         game_file_path(output + "\\screenshots\\SHOT0001.pcx", ui::frontend::SavePathUse::write) ==
-                user_folder_ / "Screenshots" / "SHOT0001.pcx" &&
+                user_folder_ / "Screenshots" / "default" / "SHOT0001.pcx" &&
             game_file_path(output + "\\MOVIE001\\FRAM0001.pcx", ui::frontend::SavePathUse::write) ==
-                user_folder_ / "Films" / "MOVIE001" / "FRAM0001.pcx" &&
+                user_folder_ / "Films" / "default" / "MOVIE001" / "FRAM0001.pcx" &&
             game_file_path(output + "\\MOVIE*", ui::frontend::SavePathUse::write) ==
-                user_folder_ / "Films" / "MOVIE*",
-        "screenshots and films do not go in Screenshots and Films"
+                user_folder_ / "Films" / "default" / "MOVIE*",
+        "screenshots and films do not go in Screenshots/default and Films/default"
     );
     std::cout << "user folder check: 3 saved games moved into " << path_to_utf8(saves)
-              << ", none overwritten, once; screenshots and films go in its Screenshots and "
-                 "Films\n";
+              << " and 2 loose in Saves after them, none overwritten, once; screenshots and "
+                 "films go in Screenshots/default and Films/default\n";
 
     // The notice, over the main menu.
     const auto previous_tick = fake_frontend_tick_;
@@ -252,18 +282,19 @@ void Runtime::check_user_folder() {
     for (int pass = 0; pass < 4; ++pass)
         tell_saves_moved();
     require(saves_notice_shown(), "the notice did not show over the main menu");
+    const auto told_now = platform_preferences::load(preference_path_);
     require(
         !saves_notice_due_in(preference_values_) &&
-            platform_preferences::load(preference_path_).at(std::string(saves_notice_preference)) ==
-                saves_notice_told,
+            told_now.at(std::string(saves_notice_preference)) == saves_notice_told &&
+            told_now.at(std::string(loose_saves_notice_preference)) == saves_notice_told,
         "the notice shown was not recorded told"
     );
     const auto& notice = *state.notice;
     require(
-        notice.title == "SAVED GAMES MOVED" && notice.paragraphs.size() == 3 &&
-            notice.paragraphs[0].text == "3 saved games have moved to:" &&
+        notice.title == "SAVED GAMES MOVED" && notice.paragraphs.size() == 4 &&
+            notice.paragraphs[0].text == "5 saved games have moved to:" &&
             notice.paragraphs[1].path && notice.paragraphs[1].text == path_to_utf8(saves),
-        "the notice does not say that 3 saved games moved to Saves"
+        "the notice does not say that 5 saved games moved to Saves/default"
     );
     // Over the darkened main menu, centred, in the settings dialog's look.
     const int32_t height = settings::notice_height(notice, fonts);
@@ -341,8 +372,65 @@ void Runtime::check_user_folder() {
               << ", showed Saves, said why one could not be shown and "
                  "closed on Enter\n";
 
-    // Your files: the row shows the folder; its buttons show this run's
-    // Saves, Screenshots and the Mods folder, made when missing.
+    // A save, a screenshot and a film land in the folders of the mod
+    // played: default without a mod, and the mod's id with a made-up one,
+    // whose save the dialogs list for it alone.
+    const auto played = options_.mod_profile;
+    auto made_up = std::make_shared<data::mod_profile::ModProfile>();
+    made_up->id = "made-up-mod";
+    const auto listed_saves = [this] {
+        const auto listing = save_roots();
+        auto files = ui::frontend::savegame_host_files(&listing);
+        std::vector<std::string> found;
+        files.find(
+            files.context,
+            "SAVEGAME\\*.SAV",
+            [](void* user, const data::campaign::FindRecord& record) {
+                static_cast<std::vector<std::string>*>(user)->push_back(record.name);
+            },
+            &found
+        );
+        return found;
+    };
+    const auto lands = [&](std::string_view folder, std::string_view save_name) {
+        const fs::path save =
+            game_file_path("SAVEGAME\\" + std::string(save_name), ui::frontend::SavePathUse::write);
+        write_file(save, "check");
+        capture_named_screenshot();
+        const std::string shot = status_;
+        const std::string film = output + "\\MOVIE001";
+        fs::create_directories(game_file_path(film, ui::frontend::SavePathUse::write), error);
+        begin_film_capture(film.c_str());
+        const auto names = listed_saves();
+        require(
+            save == user_folder_ / "Saves" / folder / save_name &&
+                std::find(names.begin(), names.end(), save_name) != names.end(),
+            "a save does not land in Saves/" + std::string(folder) + ", or is not listed there"
+        );
+        require(
+            fs::is_regular_file(user_folder_ / "Screenshots" / folder / path_from_utf8(shot)) &&
+                holds_a_file(user_folder_ / "Films" / folder / "MOVIE001"),
+            "a screenshot or a film does not land in Screenshots/" + std::string(folder) +
+                " and Films/" + std::string(folder)
+        );
+    };
+    lands("default", "CHECK.SAV");
+    options_.mod_profile = made_up;
+    lands("made-up-mod", "MADEUP.SAV");
+    const auto mod_saves = listed_saves();
+    options_.mod_profile = played;
+    const auto game_saves = listed_saves();
+    require(
+        std::find(mod_saves.begin(), mod_saves.end(), "CHECK.SAV") == mod_saves.end() &&
+            std::find(game_saves.begin(), game_saves.end(), "MADEUP.SAV") == game_saves.end(),
+        "a made-up mod and the game without a mod share their saved games"
+    );
+    std::cout << "user folder check: a save, a screenshot and a film land in Saves, Screenshots "
+                 "and Films/default without a mod and in their made-up-mod folders with one\n";
+
+    // Your files: the row shows the folder; its buttons show Saves and
+    // Screenshots, which hold each mod's folder, and the Mods folder, made
+    // when missing.
     open_engine_settings_from_menu();
     auto* dialog = engine_settings_dialog();
     require(dialog != nullptr, "the settings dialog did not open");
@@ -360,7 +448,7 @@ void Runtime::check_user_folder() {
             "a Your files button closed the dialog"
         );
     }
-    const std::vector<fs::path> shown{saves, user_folder_ / "Screenshots", user_folder_ / "Mods"};
+    const std::vector<fs::path> shown{loose, user_folder_ / "Screenshots", user_folder_ / "Mods"};
     require(state.opened == shown, "Your files did not show Saves, Screenshots and Mods");
     require(
         std::all_of(

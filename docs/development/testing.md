@@ -76,13 +76,15 @@ that file too, so that no check writes into the Documents folder; on macOS
 the Documents folder does not follow `$HOME`, so a temporary `HOME` does not
 keep a run without a named file out of it. `native-user-folder`
 (`--check-user-folder`) checks that folder: saved games where earlier
-versions kept them left alone by a start with a named file, then moved into
-its `Saves` once as a start with the player's own file moves them, one
-named as a saved game
-already there kept beside it, a mod's into its own folder, the earlier
-folder still read while it holds one, screenshots and films placed in
-`Screenshots` and `Films`, the main menu's notice of the move shown once in
-the settings dialog's look and closed, its Open folder button and the
+versions kept them, beside the preferences file and loose in `Saves`, left
+alone by a start with a named file, then moved into its `Saves/default`
+once as a start with the player's own file moves them, one named as a saved
+game already there kept beside it, a mod's into its own folder, the earlier
+folders still read while they hold one, a save, a screenshot and a film
+placed in the `default` folders of `Saves`, `Screenshots` and `Films`
+without a mod and in a made-up mod's own with one, the main menu's notice
+of the moves shown once in the settings dialog's look and closed, its Open
+folder button and the
 settings' Your files buttons through a recorded opener, and the `Mods`
 folder's mods listed on the Mods page. With `--snapshot` it writes the
 notice and the Your files row beside the snapshot. `native-mod-switch`

@@ -274,10 +274,12 @@ add_library(oa-app-game-files src/app/game_files_import.cpp src/app/game_files_s
 add_library(oa::app::game_files ALIAS oa-app-game-files)
 target_link_libraries(oa-app-game-files PUBLIC oa-app-headers oa-app-game-directory oa-app-mod-profile
   oa-base-threads PRIVATE oa-formats-zip oa-platform-preferences oa-options)
-# The player's own folder: where it is, the folders it holds, the one-time
-# move of saved games from beside the preferences file into its Saves, and
-# the main menu's notice of that move; and the warning, in the same look,
-# that a mod's games cannot start until its files are in its folder.
+# The player's own folder: where it is, the folders it holds, a folder for
+# each mod in Saves, Screenshots and Films, the one-time moves of saved
+# games from beside the preferences file and loose in Saves into those
+# folders, and the main menu's notice of those moves; and the warning, in
+# the same look, that a mod's games cannot start until its files are in its
+# folder.
 # The game shows a folder in the system's file manager itself
 # (user_folder_open.cpp).
 add_library(oa-app-user-folder src/app/user_folder.cpp)
@@ -616,12 +618,15 @@ if(BUILD_TESTING)
   target_link_libraries(oa-app-mod-summary-test PRIVATE oa-app-mod-profile oa-formats-png oa-test-support
     oa-options)
   add_test(NAME app-mod-summary COMMAND oa-app-mod-summary-test)
-  # The player's own folder in scratch folders: where it is, the saved
-  # games moved once and nothing overwritten, renames and copies refused,
-  # the record of the move and the notice it gives; and what keeps a mod's
-  # games from starting, and the warning that says so.
+  # The player's own folder in scratch folders: where it is, each mod's
+  # folders, a folder mod's without a profile and an Image Output Directory
+  # the player chose, the saved games moved once and nothing overwritten,
+  # renames and copies refused, the records of the moves and the notice
+  # they give; and what keeps a mod's games from starting, and the warning
+  # that says so.
   add_executable(oa-app-user-folder-test src/app/user_folder_test.cpp)
-  target_link_libraries(oa-app-user-folder-test PRIVATE oa-app-user-folder oa-test-support oa-options)
+  target_link_libraries(oa-app-user-folder-test PRIVATE oa-app-user-folder oa-app-mod-profile
+    oa-test-support oa-options)
   add_test(NAME app-user-folder COMMAND oa-app-user-folder-test)
   add_executable(oa-game-directory-test src/app/game_directory_test.cpp)
   target_link_libraries(oa-game-directory-test PRIVATE oa-app-game-directory oa-app-headers oa-formats-hpi
@@ -1220,13 +1225,15 @@ if(OA_BUILD_PLATFORM)
         WORKING_DIRECTORY "${oa_engine_settings_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # The player's own folder beside the check's preferences file: saved
-      # games where earlier versions kept them moved into its Saves once,
-      # one named as a saved game there kept beside it, a mod's into its own
-      # folder; saved games read from the earlier folder while it is there;
-      # screenshots and films placed in Screenshots and Films; the notice of
-      # the move shown once over the main menu in the settings dialog's
-      # look, its Open folder button and Enter; and the settings' Your files
-      # buttons and the Mods folder's mods, through a recorded opener.
+      # games where earlier versions kept them, beside the preferences file
+      # and loose in Saves, moved into Saves/default once, one named as a
+      # saved game there kept beside it, a mod's into its own folder; saved
+      # games read from the earlier folders while they are there; a save, a
+      # screenshot and a film in the folders of the mod played, without a
+      # mod and with a made-up one; the notice of the moves shown once over
+      # the main menu in the settings dialog's look, its Open folder button
+      # and Enter; and the settings' Your files buttons and the Mods
+      # folder's mods, through a recorded opener.
       set(oa_user_folder_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/user-folder")
       file(MAKE_DIRECTORY "${oa_user_folder_dir}")
       add_test(NAME native-user-folder COMMAND oa-game --game-dir "${OA_GAME_DIR}"

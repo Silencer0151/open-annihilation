@@ -135,9 +135,9 @@ Annihilation** folder in your Documents folder: the folder
 
 | Folder | What it holds |
 | --- | --- |
-| `Saves` | saved games; a mod's in `Saves/<mod id>` |
-| `Screenshots` | screenshots (Ctrl+F9) and posters (`MakePoster`) |
-| `Films` | films (Ctrl+F10), a `MOVIEnnn` folder each |
+| `Saves` | saved games, a mod's in `Saves/<mod id>` and those without a mod in `Saves/default` |
+| `Screenshots` | screenshots (Ctrl+F9) and posters (`MakePoster`), in a folder for each mod as in `Saves` |
+| `Films` | films (Ctrl+F10), a `MOVIEnnn` folder each, in a folder for each mod as in `Saves` |
 | `Mods` | mods you add, each in a folder of its own, which the settings' Mods page lists besides the game folder's `mods` folder ([mods](../mods/README.md#installing-a-mod)) |
 
 The game makes each folder the first time it needs it. In the settings (the
@@ -158,11 +158,12 @@ when `XDG_DATA_HOME` is set.
 
 **Saved games from earlier versions.** Versions before 0.7 kept saved games
 in a `SAVEGAME` folder in `~/.config/open-annihilation`, and a mod's in
-`mods/<mod id>/SAVEGAME` there. The first start of a later version moves
-them into `Saves`, once, and the main menu then says how many moved and
-where, with a button that opens the folder. Nothing is overwritten: a saved
-game whose name `Saves` holds already is moved as `NAME (2).SAV`, keeping
-both. One that cannot be moved stays where it is, and the game still lists
+`mods/<mod id>/SAVEGAME` there; 0.7.0 kept those without a mod in `Saves`
+itself. The first start of a later version moves them into `Saves/default`,
+and a mod's into `Saves/<mod id>`, once, and the main menu then says how
+many moved and where, with a button that opens the folder. Nothing is
+overwritten: a saved game whose name that folder holds already is moved as
+`NAME (2).SAV`, keeping both. One that cannot be moved stays where it is, and the game still lists
 it there. The log says what moved and what did not. An earlier version
 started afterwards no longer sees the saved games that moved.
 

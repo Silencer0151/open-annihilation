@@ -1,11 +1,14 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// The player's own folder in scratch folders: where it is, the saved games
-// moved from where earlier versions kept them, names kept apart, renames and
-// copies that fail, the record of the move and the notice it gives.
+// The player's own folder in scratch folders: where it is, the folders each
+// mod's files go in, the saved games moved from where earlier versions kept
+// them, names kept apart, renames and copies that fail, the records of the
+// moves and the notice they give.
 
 #include "oa/app/user_folder.hpp"
+
+#include "oa/app/mod_profile_loader.hpp"
 
 #include "oa/test/check.hpp"
 #include "oa/test/scratch_directory.hpp"
@@ -22,6 +25,7 @@ namespace {
 
 namespace fs = std::filesystem;
 using oa::app::FileMoveHooks;
+using oa::app::MovesTold;
 using oa::app::RecordedMove;
 using oa::app::SavesMove;
 
@@ -92,9 +96,66 @@ void the_folder_is_chosen_in_order() {
         oa::app::choose_user_folder(std::nullopt, values, fallback) ==
         fs::current_path().root_path() / "a" / "c"
     );
-    // Saves, and a mod's own folder in it.
-    OA_CHECK(oa::app::saves_folder("/u", {}) == fs::path("/u") / "Saves");
-    OA_CHECK(oa::app::saves_folder("/u", "my-mod") == fs::path("/u") / "Saves" / "my-mod");
+}
+
+void each_mod_has_its_own_folders(const fs::path& scratch) {
+    const fs::path user = scratch / "layout" / "Open Annihilation";
+    // Saves, Screenshots and Films hold a folder for each mod, default
+    // without one; a mod whose id is default takes a name no id can.
+    OA_CHECK(oa::app::saves_folder(user, {}) == user / "Saves" / "default");
+    OA_CHECK(oa::app::saves_folder(user, "my-mod") == user / "Saves" / "my-mod");
+    OA_CHECK(oa::app::saves_folder(user, "default") == user / "Saves" / "default (mod)");
+    OA_CHECK(oa::app::screenshots_folder(user, "my-mod") == user / "Screenshots" / "my-mod");
+    OA_CHECK(oa::app::films_folder(user, {}) == user / "Films" / "default");
+    // The captures the game names in the player's own folder, its
+    // screenshots folder matched without case, go in the mod's folders.
+    const fs::path shot = user / "screenshots" / "SHOT0001.pcx";
+    const fs::path frame = user / "MOVIE001" / "FRAM0001.pcx";
+    OA_CHECK(
+        oa::app::place_capture_path(shot, user, {}) ==
+        user / "Screenshots" / "default" / "SHOT0001.pcx"
+    );
+    OA_CHECK(
+        oa::app::place_capture_path(frame, user, {}) ==
+        user / "Films" / "default" / "MOVIE001" / "FRAM0001.pcx"
+    );
+    OA_CHECK(
+        oa::app::place_capture_path(user / "SCREENSHOTS", user, "my-mod") ==
+        user / "Screenshots" / "my-mod"
+    );
+    OA_CHECK(
+        oa::app::place_capture_path(frame, user, "my-mod") ==
+        user / "Films" / "my-mod" / "MOVIE001" / "FRAM0001.pcx"
+    );
+    OA_CHECK(
+        oa::app::place_capture_path(user / "MOVIE*", user, "my-mod") ==
+        user / "Films" / "my-mod" / "MOVIE*"
+    );
+    // A folder mod without an oamod.yaml plays without a profile, so its
+    // files go with the game's in default.
+    const fs::path plain = scratch / "layout" / "Mods" / "Plain Folder";
+    const fs::path game = scratch / "layout" / "game";
+    fs::create_directories(plain);
+    fs::create_directories(game);
+    const auto resolved =
+        oa::app::resolve_folder_profile({plain, game}, {plain, {}, false, nullptr});
+    OA_CHECK(resolved.errors.empty() && !resolved.profile);
+    const std::string id = resolved.profile ? resolved.profile->id : std::string();
+    OA_CHECK(oa::app::saves_folder(user, id) == user / "Saves" / "default");
+    OA_CHECK(
+        oa::app::place_capture_path(shot, user, id) ==
+        user / "Screenshots" / "default" / "SHOT0001.pcx"
+    );
+    // An Image Output Directory the player chose is used as it is, and so
+    // is any other path.
+    const fs::path chosen = scratch / "layout" / "Pictures" / "screenshots" / "SHOT0001.pcx";
+    OA_CHECK(oa::app::place_capture_path(chosen, user, "my-mod") == chosen);
+    const fs::path chosen_film = scratch / "layout" / "Pictures" / "MOVIE002";
+    OA_CHECK(oa::app::place_capture_path(chosen_film, user, {}) == chosen_film);
+    OA_CHECK(
+        oa::app::place_capture_path(user / "Saves" / "A.SAV", user, {}) == user / "Saves" / "A.SAV"
+    );
+    OA_CHECK(oa::app::place_capture_path(shot, {}, {}) == shot);
 }
 
 void free_names_keep_both_files() {
@@ -116,13 +177,14 @@ void the_saved_games_move_once_and_overwrite_nothing(const fs::path& scratch) {
     write(root / "mods" / "empty-mod" / "SAVEGAME" / ".keep-folder" / "x", "x");
     write(root / "preferences.conf", "kept");
     // A save of the same name, in another case, is there already.
-    write(user / "Saves" / "one.sav", "newer one");
+    const fs::path saves = user / "Saves" / "default";
+    write(saves / "one.sav", "newer one");
     const SavesMove move = oa::app::move_earlier_saves(root, user);
     OA_CHECK(move.moved == 3 && move.renamed == 1 && move.left == 0 && move.other_files == 1);
-    OA_CHECK(read(user / "Saves" / "one.sav") == "newer one");
-    OA_CHECK(read(user / "Saves" / "ONE (2).SAV") == "one");
-    OA_CHECK(read(user / "Saves" / "TWO.SAV") == "two");
-    OA_CHECK(read(user / "Saves" / "UNITS.LST") == "list");
+    OA_CHECK(read(saves / "one.sav") == "newer one");
+    OA_CHECK(read(saves / "ONE (2).SAV") == "one");
+    OA_CHECK(read(saves / "TWO.SAV") == "two");
+    OA_CHECK(read(saves / "UNITS.LST") == "list");
     OA_CHECK(read(user / "Saves" / "my-mod" / "THREE.SAV") == "three");
     // The emptied folders go; a folder holding a folder stays; the
     // preferences stay where they are.
@@ -147,6 +209,40 @@ void the_saved_games_move_once_and_overwrite_nothing(const fs::path& scratch) {
     OA_CHECK(none.moved == 0 && none.left == 0);
 }
 
+void the_saved_games_loose_in_saves_move_into_default(const fs::path& scratch) {
+    const fs::path user = scratch / "loose" / "Open Annihilation";
+    const fs::path saves = user / "Saves";
+    // A Saves that holds only folders moves nothing and stays.
+    write(saves / "my-mod" / "MINE.SAV", "mine");
+    const SavesMove nothing = oa::app::move_loose_saves(user);
+    OA_CHECK(nothing.moved == 0 && nothing.other_files == 0 && nothing.lines.empty());
+    OA_CHECK(!oa::app::holds_a_file(saves) && !fs::exists(saves / "default"));
+    // 3.1c's saved games and their lists move into default, one named as a
+    // saved game there kept beside it; the mods' folders stay as they are.
+    write(saves / "OLD.SAV", "old");
+    write(saves / "UNITS.LST", "list");
+    write(saves / "default" / "old.sav", "newer");
+    const SavesMove move = oa::app::move_loose_saves(user);
+    OA_CHECK(move.moved == 1 && move.renamed == 1 && move.left == 0 && move.other_files == 1);
+    OA_CHECK(read(saves / "default" / "old.sav") == "newer");
+    OA_CHECK(read(saves / "default" / "OLD (2).SAV") == "old");
+    OA_CHECK(read(saves / "default" / "UNITS.LST") == "list");
+    OA_CHECK(read(saves / "my-mod" / "MINE.SAV") == "mine");
+    OA_CHECK(!oa::app::holds_a_file(saves) && fs::is_directory(saves));
+    // One that cannot move stays where it is.
+    write(saves / "STUCK.SAV", "stuck");
+    FileMoveHooks stuck{};
+    stuck.rename = [](void*, const fs::path&, const fs::path&, std::error_code& error) {
+        error = std::make_error_code(std::errc::cross_device_link);
+    };
+    stuck.copy = [](void*, const fs::path&, const fs::path&, std::error_code& error) {
+        error = std::make_error_code(std::errc::no_space_on_device);
+    };
+    const SavesMove left = oa::app::move_loose_saves(user, stuck);
+    OA_CHECK(left.moved == 0 && left.left == 1);
+    OA_CHECK(read(saves / "STUCK.SAV") == "stuck");
+}
+
 /// Refuses every rename, as across volumes.
 void refuse_rename(void*, const fs::path&, const fs::path&, std::error_code& error) {
     error = std::make_error_code(std::errc::cross_device_link);
@@ -166,7 +262,7 @@ void a_refused_rename_copies_and_a_refused_copy_leaves_the_file(const fs::path& 
     across.rename = refuse_rename;
     const SavesMove copied = oa::app::move_earlier_saves(root, user, across);
     OA_CHECK(copied.moved == 1 && copied.left == 0);
-    OA_CHECK(read(user / "Saves" / "FAR.SAV") == "far away");
+    OA_CHECK(read(user / "Saves" / "default" / "FAR.SAV") == "far away");
     OA_CHECK(!fs::exists(root / "SAVEGAME" / "FAR.SAV"));
 
     write(root / "SAVEGAME" / "STUCK.SAV", "stuck");
@@ -179,9 +275,9 @@ void a_refused_rename_copies_and_a_refused_copy_leaves_the_file(const fs::path& 
     // Nothing is lost or half there: the originals stay, no part copy.
     OA_CHECK(read(root / "SAVEGAME" / "STUCK.SAV") == "stuck");
     OA_CHECK(read(root / "SAVEGAME" / "STUCK.LST") == "list");
-    OA_CHECK(!fs::exists(user / "Saves" / "STUCK.SAV"));
-    OA_CHECK(!fs::exists(user / "Saves" / "STUCK.LST"));
-    OA_CHECK(names_in(user / "Saves") == std::vector<std::string>{"FAR.SAV"});
+    OA_CHECK(!fs::exists(user / "Saves" / "default" / "STUCK.SAV"));
+    OA_CHECK(!fs::exists(user / "Saves" / "default" / "STUCK.LST"));
+    OA_CHECK(names_in(user / "Saves" / "default") == std::vector<std::string>{"FAR.SAV"});
     OA_CHECK(std::any_of(left.lines.begin(), left.lines.end(), [](const std::string& line) {
         return line.find("lists it where it is") != std::string::npos;
     }));
@@ -214,8 +310,22 @@ void the_move_is_recorded_and_its_notice_waits() {
     OA_CHECK(oa::app::saves_notice_due_in(values));
     const auto counts = oa::app::recorded_saves_move(values);
     OA_CHECK(counts && counts->moved == 12 && counts->left == 2);
-    values[std::string(oa::app::saves_notice_preference)] = std::string(oa::app::saves_notice_told);
+    // The move of those loose in Saves is recorded and waits apart; both
+    // notices are told at once.
+    SavesMove loose;
+    loose.moved = 4;
+    oa::app::record_loose_saves_move(values, loose);
+    OA_CHECK(values.at(std::string(oa::app::loose_saves_moved_preference)) == "4 0");
+    const auto told = oa::app::moves_to_tell(values);
+    OA_CHECK(told.beside_preferences && told.beside_preferences->moved == 12);
+    OA_CHECK(told.loose_in_saves && told.loose_in_saves->moved == 4);
+    oa::app::record_saves_notice_told(values);
     OA_CHECK(!oa::app::saves_notice_due_in(values));
+    OA_CHECK(
+        values.at(std::string(oa::app::loose_saves_notice_preference)) == oa::app::saves_notice_told
+    );
+    const auto none = oa::app::moves_to_tell(values);
+    OA_CHECK(!none.beside_preferences && !none.loose_in_saves);
     for (const char* bad : {"", "12", "12 x", "x 2", "12 2 3", "-1 2"}) {
         values[std::string(oa::app::saves_moved_preference)] = bad;
         OA_CHECK(!oa::app::recorded_saves_move(values));
@@ -224,7 +334,7 @@ void the_move_is_recorded_and_its_notice_waits() {
 
 void the_notice_says_what_moved_and_where() {
     const fs::path saves = fs::path("/home/player/Documents/Open Annihilation/Saves");
-    const auto notice = oa::app::saves_moved_notice(RecordedMove{12, 0}, saves);
+    const auto notice = oa::app::saves_moved_notice(MovesTold{RecordedMove{12, 0}, {}}, saves);
     OA_CHECK(notice.title == "SAVED GAMES MOVED" && notice.open_caption == "OPEN FOLDER");
     OA_CHECK(notice.paragraphs.size() == 3);
     OA_CHECK(notice.paragraphs[0].text == "12 saved games have moved to:");
@@ -233,14 +343,14 @@ void the_notice_says_what_moved_and_where() {
         notice.paragraphs[2].text ==
         "Screenshots, films and mods now go in the same Open Annihilation folder."
     );
-    const auto one = oa::app::saves_moved_notice(RecordedMove{1, 1}, saves);
+    const auto one = oa::app::saves_moved_notice(MovesTold{RecordedMove{1, 1}, {}}, saves);
     OA_CHECK(one.paragraphs.size() == 4);
     OA_CHECK(one.paragraphs[0].text == "1 saved game has moved to:");
     OA_CHECK(
         one.paragraphs[2].text ==
         "1 saved game could not be moved, so the game lists it where it is. The log says why."
     );
-    const auto stuck = oa::app::saves_moved_notice(RecordedMove{0, 3}, saves);
+    const auto stuck = oa::app::saves_moved_notice(MovesTold{RecordedMove{0, 3}, {}}, saves);
     OA_CHECK(stuck.paragraphs.size() == 4);
     OA_CHECK(stuck.paragraphs[0].text == "New saved games go in:");
     OA_CHECK(stuck.paragraphs[1].path && stuck.paragraphs[1].text == saves.string());
@@ -249,6 +359,23 @@ void the_notice_says_what_moved_and_where() {
         "3 saved games could not be moved, so the game lists them where they are. The log says "
         "why."
     );
+    // The move of those loose in Saves says where each mod's go; told with
+    // the other, the counts add up and both say theirs.
+    const auto loose = oa::app::saves_moved_notice(MovesTold{{}, RecordedMove{2, 0}}, saves);
+    OA_CHECK(loose.paragraphs.size() == 3);
+    OA_CHECK(loose.paragraphs[0].text == "2 saved games have moved to:");
+    OA_CHECK(
+        loose.paragraphs[2].text ==
+        "Saved games, screenshots and films now go in a folder for each mod, or in default "
+        "without a mod."
+    );
+    const auto both =
+        oa::app::saves_moved_notice(MovesTold{RecordedMove{1, 0}, RecordedMove{1, 1}}, saves);
+    OA_CHECK(both.paragraphs.size() == 5);
+    OA_CHECK(both.paragraphs[0].text == "2 saved games have moved to:");
+    OA_CHECK(both.paragraphs[2].text.starts_with("1 saved game could not be moved"));
+    OA_CHECK(both.paragraphs[3].text.starts_with("Screenshots, films and mods"));
+    OA_CHECK(both.paragraphs[4].text.starts_with("Saved games, screenshots and films"));
 }
 
 void a_mod_without_its_units_cannot_start() {
@@ -375,8 +502,10 @@ void a_folder_has_a_file_uri() {
 int main() {
     const fs::path scratch = oa::test::make_scratch_directory("oa-user-folder");
     the_folder_is_chosen_in_order();
+    each_mod_has_its_own_folders(scratch);
     free_names_keep_both_files();
     the_saved_games_move_once_and_overwrite_nothing(scratch);
+    the_saved_games_loose_in_saves_move_into_default(scratch);
     a_refused_rename_copies_and_a_refused_copy_leaves_the_file(scratch);
     the_move_is_recorded_and_its_notice_waits();
     the_notice_says_what_moved_and_where();

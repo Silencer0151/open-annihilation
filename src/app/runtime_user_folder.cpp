@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // The player's own folder: chosen at start, the saved games moved into it
-// once, the paths the game names placed in it, its folders shown in the
-// system's file manager, and the main menu's notice of the move, drawn over
-// the darkened main menu in the settings dialog's look; the mod's warning
-// (runtime_mod_warning.cpp) is drawn and driven as the same notice.
+// once, the paths the game names placed in it, in the folders of the mod
+// played, its folders shown in the system's file manager, and the main
+// menu's notice of the moves, drawn over the darkened main menu in the
+// settings dialog's look; the mod's warning (runtime_mod_warning.cpp) is
+// drawn and driven as the same notice.
 
 #include "engine_settings_state.hpp"
 #include "user_folder_state.hpp"
@@ -23,8 +24,6 @@
 
 #include <SDL3/SDL.h>
 
-#include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <exception>
 #include <iostream>
@@ -47,37 +46,24 @@ constexpr int16_t kNoticeOverlayZ = 101;
 constexpr uint32_t kNoticeMenuFrames = 2;
 /// The sound OK plays as it closes the notice.
 constexpr std::string_view kCloseSound = "Options";
-/// The name of the folder of the player's own folder that holds
-/// screenshots, as 3.1c names it below the Image Output Directory.
-constexpr std::string_view kGameScreenshotsName = "SCREENSHOTS";
-/// What the name of a film's folder below the Image Output Directory starts
-/// with, a number after it.
-constexpr std::string_view kGameFilmPrefix = "MOVIE";
 
-/// Returns a text with its ASCII letters raised.
+/// Says on standard error, which the log keeps, what a move of saved games
+/// did.
 ///
-/// @param text the text
-/// @return the text in capitals
-std::string capitals(std::string_view text) {
-    std::string raised(text);
-    for (auto& character : raised)
-        character = static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
-    return raised;
-}
-
-/// Tells whether a folder's name is a film's: MOVIE, matched without case,
-/// then digits, or the '*' of a search for them.
-///
-/// @param name the name
-/// @return true for a film's folder
-bool film_folder_name(std::string_view name) {
-    const std::string raised = capitals(name);
-    if (!raised.starts_with(kGameFilmPrefix))
+/// @param move what it did
+/// @param saves the folder it moved 3.1c's saved games to
+/// @return true when it moved or left a file, which is then recorded
+bool report_saves_move(const SavesMove& move, const fs::path& saves) {
+    for (const auto& line : move.lines)
+        std::cerr << "open-annihilation: " << line << '\n';
+    if (move.moved == 0 && move.left == 0 && move.other_files == 0)
         return false;
-    const std::string_view rest = std::string_view(raised).substr(kGameFilmPrefix.size());
-    return std::all_of(rest.begin(), rest.end(), [](char character) {
-        return (character >= '0' && character <= '9') || character == '*';
-    });
+    std::cerr << "open-annihilation: " << move.moved
+              << (move.moved == 1 ? " saved game" : " saved games") << " moved to "
+              << path_to_utf8(saves) << (move.left != 0 ? ", " : "")
+              << (move.left != 0 ? std::to_string(move.left) + " left where they were" : "")
+              << '\n';
+    return true;
 }
 
 /// Tells whether the run is one nobody watches: unattended, on CI, or on a
@@ -132,35 +118,40 @@ void Runtime::start_user_folder() {
     user_folder_ = choose_user_folder(options_.user_folder, preference_values_, fallback);
     // Only the player's own preferences file had the saved games the game
     // kept beside it; a named file's folder may hold anything, which stays.
-    // They move only into the folder every start uses: a folder named for
-    // one start would take them from every later one, and the dialogs list
-    // them where they are instead.
+    // They, and those loose in Saves, move only within the folder every
+    // start uses: a folder named for one start would take them from every
+    // later one, or its recorded move would stand for every other folder's,
+    // and the dialogs list them where they are instead.
     const bool one_start_folder = options_.user_folder && !options_.user_folder->empty();
     if (!options_.preferences_file && !one_start_folder)
         move_saves_once();
 }
 
 void Runtime::move_saves_once() {
-    // The saved games move once; a recorded move is not made again.
-    if (preference_values_.contains(std::string(saves_moved_preference)))
-        return;
+    // Each move is made once; a recorded move is not made again. The saved
+    // games beside the preferences file move first, then those of 3.1c that
+    // lie loose in Saves.
+    const fs::path saves = oa::app::saves_folder(user_folder_, {});
+    bool recorded = false;
     std::error_code error;
     const fs::path preference_folder =
         fs::absolute(preference_path_, error).lexically_normal().parent_path();
-    if (error)
+    if (!error && !preference_values_.contains(std::string(saves_moved_preference))) {
+        const SavesMove move = move_earlier_saves(preference_folder, user_folder_);
+        if (report_saves_move(move, saves)) {
+            record_saves_move(preference_values_, move);
+            recorded = true;
+        }
+    }
+    if (!preference_values_.contains(std::string(loose_saves_moved_preference))) {
+        const SavesMove move = move_loose_saves(user_folder_);
+        if (report_saves_move(move, saves)) {
+            record_loose_saves_move(preference_values_, move);
+            recorded = true;
+        }
+    }
+    if (!recorded)
         return;
-    const SavesMove move = move_earlier_saves(preference_folder, user_folder_);
-    for (const auto& line : move.lines)
-        std::cerr << "open-annihilation: " << line << '\n';
-    if (move.moved == 0 && move.left == 0 && move.other_files == 0)
-        return;
-    std::cerr << "open-annihilation: " << move.moved
-              << (move.moved == 1 ? " saved game" : " saved games") << " moved to "
-              << path_to_utf8(oa::app::saves_folder(user_folder_, {}))
-              << (move.left != 0 ? ", " : "")
-              << (move.left != 0 ? std::to_string(move.left) + " left where they were" : "")
-              << '\n';
-    record_saves_move(preference_values_, move);
     preferences_dirty_ = true;
     try {
         flush_preferences();
@@ -174,23 +165,30 @@ const fs::path& Runtime::user_folder() const noexcept {
     return user_folder_;
 }
 
+std::string_view Runtime::files_mod_id() const noexcept {
+    return options_.mod_profile ? std::string_view(options_.mod_profile->id) : std::string_view{};
+}
+
 fs::path Runtime::saves_folder() const {
-    return oa::app::saves_folder(
-        user_folder_, options_.mod_profile ? options_.mod_profile->id : std::string_view{}
-    );
+    return oa::app::saves_folder(user_folder_, files_mod_id());
 }
 
 ui::frontend::SaveRoots Runtime::save_roots() const {
     ui::frontend::SaveRoots roots{save_game_root(), saves_folder(), {}};
-    // The folder that held saved games before, while it is there: what
-    // could not move, or what an earlier version saved since.
+    // The folders that held saved games before, while they hold some: what
+    // could not move, or what an earlier version saved since. 3.1c's lay
+    // loose in Saves, and before that in SAVEGAME beside the preferences
+    // file, as each mod's did in its mods/<id> folder there.
+    const fs::path loose = user_folder_ / std::string(saves_folder_name);
+    if (files_mod_id().empty() && !user_folder_.empty() && holds_a_file(loose))
+        roots.earlier.push_back(loose);
     std::error_code absolute_error;
     const fs::path root = fs::absolute(roots.root, absolute_error).lexically_normal();
     if (const auto earlier =
             entry_without_case(absolute_error ? roots.root : root, earlier_saves_folder_name)) {
         std::error_code error;
         if (fs::is_directory(*earlier, error))
-            roots.earlier = *earlier;
+            roots.earlier.push_back(*earlier);
     }
     return roots;
 }
@@ -201,29 +199,12 @@ fs::path Runtime::game_file_path(std::string_view path, ui::frontend::SavePathUs
         use == ui::frontend::SavePathUse::read
             ? save_roots()
             : ui::frontend::SaveRoots{save_game_root(), saves_folder(), {}};
-    const fs::path host = ui::frontend::savegame_host_path(roots, path, use);
-    if (user_folder_.empty())
-        return host;
     // Within the player's own folder, which stands for the Image Output
-    // Directory by default, its screenshots folder is Screenshots and each
-    // MOVIE folder lies in Films.
-    const fs::path relative = host.lexically_normal().lexically_relative(user_folder_);
-    if (relative.empty())
-        return host;
-    auto part = relative.begin();
-    const std::string first = path_to_utf8(*part);
-    if (first == "." || first == "..")
-        return host;
-    fs::path placed;
-    if (capitals(first) == kGameScreenshotsName)
-        placed = user_folder_ / std::string(screenshots_folder_name);
-    else if (film_folder_name(first))
-        placed = user_folder_ / std::string(films_folder_name) / path_from_utf8(first);
-    else
-        return host;
-    for (++part; part != relative.end(); ++part)
-        placed /= *part;
-    return placed;
+    // Directory by default, its screenshots folder is the mod's folder in
+    // Screenshots and each MOVIE folder lies in its folder in Films.
+    return place_capture_path(
+        ui::frontend::savegame_host_path(roots, path, use), user_folder_, files_mod_id()
+    );
 }
 
 std::string Runtime::own_image_output_directory() {
@@ -398,14 +379,15 @@ void Runtime::tell_saves_moved() {
     // A run nobody watches leaves it due for one someone does.
     if (unwatched_run(options_.unattended) && !state.check_shows_notice)
         return;
-    if (const auto move = recorded_saves_move(preference_values_)) {
-        state.notice = saves_moved_notice(*move, oa::app::saves_folder(user_folder_, {}));
+    const MovesTold moves = moves_to_tell(preference_values_);
+    if (moves.beside_preferences || moves.loose_in_saves) {
+        state.notice = saves_moved_notice(moves, oa::app::saves_folder(user_folder_, {}));
         state.notice_folder = oa::app::saves_folder(user_folder_, {});
         state.notice_screen = Screen::main_menu;
         ++state.notices_shown;
     }
     // Told from now on: no later start shows it again.
-    preference_values_[std::string(saves_notice_preference)] = std::string(saves_notice_told);
+    record_saves_notice_told(preference_values_);
     preferences_dirty_ = true;
     try {
         flush_preferences();

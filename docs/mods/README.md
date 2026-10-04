@@ -271,8 +271,11 @@ covers network compatibility.
 ## Saves and settings
 
 Game folders are never written to. With a profile, saved games go to
-`Saves/<id>` in the player's own Open Annihilation folder, so each mod keeps
-its own list of saved games. Versions before 0.7 kept them in
+`Saves/<id>` in the player's own Open Annihilation folder, and screenshots
+and films to `Screenshots/<id>` and `Films/<id>`, so each mod keeps its own
+list of saved games; without one, as for a mod folder without an
+`oamod.yaml`, they go to the `default` folders, and a mod whose id is
+`default` uses `default (mod)`. Versions before 0.7 kept them in
 `mods/<id>/SAVEGAME` beside the preferences file; the first start of a
 later version moves them there once, with the saved games of 3.1c. A save
 made under a profile records the profile's id, version and hashes, and

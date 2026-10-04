@@ -681,12 +681,13 @@ void Runtime::list_save_files(
         return std::toupper(static_cast<unsigned char>(a)) ==
                std::toupper(static_cast<unsigned char>(b));
     };
-    // The saved games' folder, then the folder that held them before, whose
+    // The saved games' folder, then the folders that held them before, whose
     // names are taken too.
     std::vector<fs::path> folders{path.parent_path()};
-    const auto earlier = save_roots().earlier;
-    if (!earlier.empty() && path.parent_path() == saves_folder())
-        folders.push_back(earlier);
+    if (path.parent_path() == saves_folder()) {
+        const auto earlier = save_roots().earlier;
+        folders.insert(folders.end(), earlier.begin(), earlier.end());
+    }
     for (const auto& folder : folders) {
         std::error_code error;
         for (const auto& entry : fs::directory_iterator(folder, error)) {

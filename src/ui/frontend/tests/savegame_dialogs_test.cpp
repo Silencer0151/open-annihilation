@@ -550,19 +550,24 @@ OA_TEST(persist_reader_reads_radar_image) {
     std::filesystem::remove_all(root, error);
 }
 
-// The saves folder and an earlier one: the dialogs list both, the saves
-// folder's file winning a name both hold, matched without case; a save is
-// read from the earlier folder only while the saves folder lacks its name,
-// and every file is written to the saves folder.
-OA_TEST(host_files_list_an_earlier_folder_too) {
+// The saves folder and two earlier ones: the dialogs list all three, the
+// file of the folder listed first winning a name two hold, matched without
+// case; a save is read from an earlier folder only while the folders before
+// it lack its name, and every file is written to the saves folder.
+OA_TEST(host_files_list_the_earlier_folders_too) {
     const auto scratch = oa::test::make_scratch_directory("oa-ui-frontend-earlier-saves");
-    const SaveRoots roots{scratch / "root", scratch / "Saves", scratch / "SAVEGAME"};
+    const auto earlier = scratch / "SAVEGAME";
+    const auto loose = scratch / "Loose";
+    const SaveRoots roots{scratch / "root", scratch / "Saves", {earlier, loose}};
     std::filesystem::create_directories(roots.saves);
-    std::filesystem::create_directories(roots.earlier);
+    std::filesystem::create_directories(earlier);
+    std::filesystem::create_directories(loose);
     write_real_save(roots.saves / "outpost.SAV", true);
-    write_real_save(roots.earlier / "OUTPOST.sav", false);
-    write_real_save(roots.earlier / "older.SAV", false);
-    std::ofstream(roots.earlier / "units.LST") << "list";
+    write_real_save(earlier / "OUTPOST.sav", false);
+    write_real_save(earlier / "older.SAV", false);
+    write_real_save(loose / "OLDER.sav", false);
+    write_real_save(loose / "loose.SAV", false);
+    std::ofstream(earlier / "units.LST") << "list";
     // Paths: the save directory without case, others under the root, an
     // absolute path where it is.
     OA_CHECK(
@@ -570,8 +575,10 @@ OA_TEST(host_files_list_an_earlier_folder_too) {
         roots.saves / "outpost.SAV"
     );
     OA_CHECK(
-        savegame_host_path(roots, "savegame\\older.SAV", SavePathUse::read) ==
-        roots.earlier / "older.SAV"
+        savegame_host_path(roots, "savegame\\older.SAV", SavePathUse::read) == earlier / "older.SAV"
+    );
+    OA_CHECK(
+        savegame_host_path(roots, "SAVEGAME\\loose.SAV", SavePathUse::read) == loose / "loose.SAV"
     );
     OA_CHECK(
         savegame_host_path(roots, "SaveGame/older.SAV", SavePathUse::write) ==
@@ -587,8 +594,9 @@ OA_TEST(host_files_list_an_earlier_folder_too) {
     );
     const auto absolute = scratch / "elsewhere" / "shot.pcx";
     OA_CHECK(savegame_host_path(roots, absolute.string(), SavePathUse::write) == absolute);
-    // The listing: the saves folder's outpost and the earlier older; the
-    // earlier OUTPOST.sav is hidden by its name.
+    // The listing: the saves folder's outpost, the earlier older and the
+    // loose one; the earlier OUTPOST.sav and the loose OLDER.sav are hidden
+    // by their names.
     SaveDialogContext context;
     context.files = savegame_host_files(&roots);
     context.reader = savegame_persist_reader(&roots);
@@ -602,7 +610,7 @@ OA_TEST(host_files_list_an_earlier_folder_too) {
         &found
     );
     std::sort(found.begin(), found.end());
-    OA_CHECK((found == std::vector<std::string>{"older.SAV", "outpost.SAV"}));
+    OA_CHECK((found == std::vector<std::string>{"loose.SAV", "older.SAV", "outpost.SAV"}));
     std::vector<std::string> lists;
     context.files.find(
         context.files.context,
@@ -613,9 +621,9 @@ OA_TEST(host_files_list_an_earlier_folder_too) {
         &lists
     );
     OA_CHECK((lists == std::vector<std::string>{"units.LST"}));
-    // Both saves read, the earlier one from where it is; a list is read
+    // The saves read, the earlier ones from where they are; a list is read
     // from the earlier folder and written to the saves folder.
-    OA_CHECK(savegame_build_list(context) == 2);
+    OA_CHECK(savegame_build_list(context) == 3);
     std::vector<uint8_t> bytes;
     OA_CHECK(context.files.read_file(context.files.context, "SAVEGAME\\units.LST", bytes));
     OA_CHECK(std::string(bytes.begin(), bytes.end()) == "list");
@@ -623,7 +631,7 @@ OA_TEST(host_files_list_an_earlier_folder_too) {
     OA_CHECK(std::filesystem::exists(roots.saves / "units.LST"));
     // A removal takes the file where it is.
     OA_CHECK(context.files.remove(context.files.context, "SAVEGAME\\older.SAV"));
-    OA_CHECK(!std::filesystem::exists(roots.earlier / "older.SAV"));
+    OA_CHECK(!std::filesystem::exists(earlier / "older.SAV"));
     std::error_code error;
     std::filesystem::remove_all(scratch, error);
 }

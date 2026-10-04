@@ -800,18 +800,22 @@ bool Runtime::take_engine_settings_action(settings::DialogAction action) {
     case settings::DialogAction::redraw:
         return false;
     case settings::DialogAction::open_folder: {
-        // Your files: the folder this run's saved games go in, where
-        // screenshots go, or the player's Mods folder. The dialog stays open.
+        // Your files: Saves, which holds each mod's saved games; where
+        // screenshots go, Screenshots, which holds each mod's, while no Image
+        // Output Directory is set; or the player's Mods folder. The dialog
+        // stays open.
         fs::path folder;
         switch (dialog->folder_to_open) {
         case settings::FolderButton::saves:
-            folder = saves_folder();
+            folder = user_folder_ / std::string(saves_folder_name);
             break;
         case settings::FolderButton::screenshots:
             folder = game_file_path(
                 preferences_.image_output_directory + "\\screenshots",
                 ui::frontend::SavePathUse::write
             );
+            if (folder == oa::app::screenshots_folder(user_folder_, files_mod_id()))
+                folder = folder.parent_path();
             break;
         case settings::FolderButton::mods:
             folder = user_folder_ / std::string(user_mods_folder_name);

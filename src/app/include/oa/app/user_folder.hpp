@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // The player's own folder, "Open Annihilation" in their Documents folder:
-// where it is, the folders it holds (Saves, Screenshots, Films and Mods), the
-// one-time move of saved games from where earlier versions kept them, beside
-// the preferences file, and the main menu's notice of that move; and the
-// warning, in the same look, that a mod's games cannot start until its files
-// are in its folder. Nothing here reads the clock or SDL; the runtime does
-// the rest.
+// where it is, the folders it holds (Saves, Screenshots and Films, each with a
+// folder for each mod, and Mods), the one-time moves of saved games from where
+// earlier versions kept them, beside the preferences file and loose in Saves,
+// and the main menu's notice of those moves; and the warning, in the same
+// look, that a mod's games cannot start until its files are in its folder.
+// Nothing here reads the clock or SDL; the runtime does the rest.
 #pragma once
 
 #include "oa/platform/preferences.hpp"
@@ -24,15 +24,23 @@
 
 namespace oa::app {
 
-/// The folder of the player's own folder that holds the saved games of 3.1c,
-/// and a folder of its own for each mod's, named after the mod's id.
+/// The folder of the player's own folder that holds the saved games, in a
+/// folder for each mod (mod_subfolder_name).
 inline constexpr std::string_view saves_folder_name = "Saves";
 /// The folder of the player's own folder screenshots and posters go in
-/// while no Image Output Directory is set.
+/// while no Image Output Directory is set, in a folder for each mod.
 inline constexpr std::string_view screenshots_folder_name = "Screenshots";
 /// The folder of the player's own folder film captures go in while no
-/// Image Output Directory is set.
+/// Image Output Directory is set, in a folder for each mod.
 inline constexpr std::string_view films_folder_name = "Films";
+/// The folder of Saves, Screenshots and Films that holds the files of games
+/// played without a mod's profile: 3.1c's, and a mod folder's that holds no
+/// oamod.yaml.
+inline constexpr std::string_view no_mod_folder_name = "default";
+/// The folder of Saves, Screenshots and Films that holds the files of a mod
+/// whose id is no_mod_folder_name, a name no id can take, since an id is
+/// kebab-case.
+inline constexpr std::string_view default_id_folder_name = "default (mod)";
 /// The folder of the player's own folder whose mod folders the Mod setting
 /// offers besides the game folder's mods folder.
 inline constexpr std::string_view user_mods_folder_name = "Mods";
@@ -64,6 +72,17 @@ inline constexpr std::string_view saves_notice_preference = "open-annihilation.s
 inline constexpr std::string_view saves_notice_due = "due";
 /// saves_notice_preference's value once the notice has shown.
 inline constexpr std::string_view saves_notice_told = "told";
+/// The preference that records that the saved games of 3.1c kept loose in
+/// Saves were moved into its no_mod_folder_name folder, so that the move
+/// never runs again: the saved games moved and the ones left where they
+/// were, as saves_moved_preference holds them.
+inline constexpr std::string_view loose_saves_moved_preference =
+    "open-annihilation.loose-saves-moved";
+/// The preference that records the main menu's notice of that move, as
+/// saves_notice_preference records the notice of the move from beside the
+/// preferences file.
+inline constexpr std::string_view loose_saves_notice_preference =
+    "open-annihilation.loose-saves-moved-notice";
 
 /// The folder a run with --preferences-file keeps as the player's own,
 /// beside that file, unless --user-folder or the file's own key names one,
@@ -90,13 +109,62 @@ user_folder_beside(const std::filesystem::path& preferences_file);
     const std::filesystem::path& fallback
 );
 
+/// Returns the name of the folder of Saves, Screenshots and Films that holds
+/// the files of games played with a mod, or without one.
+///
+/// @param mod_id the id of the mod's profile; empty without one
+/// @return the id; no_mod_folder_name without one, and
+///     default_id_folder_name for the id no_mod_folder_name
+[[nodiscard]] std::string mod_subfolder_name(std::string_view mod_id);
+
 /// Returns the folder the saved games of a game or a mod are kept in.
 ///
 /// @param user_folder the player's own folder
-/// @param mod_id the id of the mod's profile; empty for 3.1c
-/// @return Saves, or Saves/<mod id> for a mod
+/// @param mod_id the id of the mod's profile; empty without one
+/// @return Saves/<mod_subfolder_name(mod_id)>: Saves/default without a mod
 [[nodiscard]] std::filesystem::path
 saves_folder(const std::filesystem::path& user_folder, std::string_view mod_id);
+
+/// Returns the folder the screenshots and posters of a game or a mod go in
+/// while no Image Output Directory is set.
+///
+/// @param user_folder the player's own folder
+/// @param mod_id the id of the mod's profile; empty without one
+/// @return Screenshots/<mod_subfolder_name(mod_id)>
+[[nodiscard]] std::filesystem::path
+screenshots_folder(const std::filesystem::path& user_folder, std::string_view mod_id);
+
+/// Returns the folder that holds the MOVIEnnn folders of a game's or a mod's
+/// films while no Image Output Directory is set.
+///
+/// @param user_folder the player's own folder
+/// @param mod_id the id of the mod's profile; empty without one
+/// @return Films/<mod_subfolder_name(mod_id)>
+[[nodiscard]] std::filesystem::path
+films_folder(const std::filesystem::path& user_folder, std::string_view mod_id);
+
+/// Places a path in the player's own folder, which stands for the Image
+/// Output Directory while none is set: its screenshots folder, SCREENSHOTS
+/// matched without case, is screenshots_folder, and a MOVIEnnn folder, or
+/// the MOVIE* of a search for them, lies in films_folder. Any other path,
+/// and a path outside the player's own folder, such as one in an Image
+/// Output Directory the player chose, stays as it is.
+///
+/// @param path the path, absolute
+/// @param user_folder the player's own folder; empty places nothing
+/// @param mod_id the id of the mod's profile; empty without one
+/// @return the path placed
+[[nodiscard]] std::filesystem::path place_capture_path(
+    const std::filesystem::path& path,
+    const std::filesystem::path& user_folder,
+    std::string_view mod_id
+);
+
+/// Tells whether a folder holds a file, the folders within it apart.
+///
+/// @param folder the folder
+/// @return true when it holds one; false when it is missing or cannot be listed
+[[nodiscard]] bool holds_a_file(const std::filesystem::path& folder);
 
 /// Finds a folder's entry whose name matches, without case.
 ///
@@ -185,6 +253,18 @@ void move_saves_folder(
     const FileMoveHooks& hooks = {}
 );
 
+/// Moves the files of 3.1c's saved games that lie loose in Saves, where
+/// earlier versions kept them, into saves_folder(user_folder, "")
+/// (move_saves_folder): never overwriting one, and leaving where it is one
+/// that cannot move, which the dialogs still list. Saves stays, and so do
+/// the folders it holds.
+///
+/// @param user_folder the player's own folder
+/// @param hooks stand-ins for the file system's rename and copy
+/// @return what the move did; nothing when Saves holds no file
+[[nodiscard]] SavesMove
+move_loose_saves(const std::filesystem::path& user_folder, const FileMoveHooks& hooks = {});
+
 /// Records a move in the preferences: saves_moved_preference, and the notice
 /// due when it moved or left a saved game.
 ///
@@ -192,13 +272,22 @@ void move_saves_folder(
 /// @param move what the move did
 void record_saves_move(platform::preferences::Values& values, const SavesMove& move);
 
+/// Records the move of the saved games loose in Saves (move_loose_saves) in
+/// the preferences: loose_saves_moved_preference, and its notice due
+/// (loose_saves_notice_preference) when it moved or left a saved game.
+///
+/// @param[in,out] values the preferences
+/// @param move what the move did
+void record_loose_saves_move(platform::preferences::Values& values, const SavesMove& move);
+
 /// The counts a recorded move keeps for its notice.
 struct RecordedMove {
     std::size_t moved{}; ///< saved games moved
     std::size_t left{};  ///< saved games left where they were
 };
 
-/// Reads what a recorded move moved and left.
+/// Reads what the recorded move from beside the preferences file moved and
+/// left.
 ///
 /// @param values the preferences
 /// @return the counts; nullopt when no move is recorded, or its value
@@ -206,11 +295,44 @@ struct RecordedMove {
 [[nodiscard]] std::optional<RecordedMove>
 recorded_saves_move(const platform::preferences::Values& values);
 
-/// Tells whether the main menu's notice of the move waits to be shown.
+/// Reads what the recorded move of the saved games loose in Saves moved and
+/// left.
 ///
 /// @param values the preferences
-/// @return true while saves_notice_preference holds saves_notice_due
+/// @return the counts; nullopt when no move is recorded, or its value
+///         cannot be read
+[[nodiscard]] std::optional<RecordedMove>
+recorded_loose_saves_move(const platform::preferences::Values& values);
+
+/// Tells whether the main menu's notice of a move waits to be shown.
+///
+/// @param values the preferences
+/// @return true while saves_notice_preference or
+///     loose_saves_notice_preference holds saves_notice_due
 [[nodiscard]] bool saves_notice_due_in(const platform::preferences::Values& values);
+
+/// The moves the main menu's notice tells of.
+struct MovesTold {
+    /// The move from beside the preferences file (move_earlier_saves);
+    /// empty when the notice tells nothing of it.
+    std::optional<RecordedMove> beside_preferences;
+    /// The move of the saved games loose in Saves (move_loose_saves); empty
+    /// when the notice tells nothing of it.
+    std::optional<RecordedMove> loose_in_saves;
+};
+
+/// Returns the moves whose notice waits: each whose notice preference holds
+/// saves_notice_due and whose record can be read.
+///
+/// @param values the preferences
+/// @return the moves; both empty when none waits
+[[nodiscard]] MovesTold moves_to_tell(const platform::preferences::Values& values);
+
+/// Records the notices that waited as told, so that no later start shows
+/// them again.
+///
+/// @param[in,out] values the preferences
+void record_saves_notice_told(platform::preferences::Values& values);
 
 /// What opening a folder in the system's file manager came to.
 struct FolderOpening {
@@ -275,17 +397,20 @@ open_folder(const FolderOpenerHooks& hooks, const std::filesystem::path& folder)
 /// @return the URI
 [[nodiscard]] std::string file_uri(const std::filesystem::path& folder);
 
-/// Returns the notice of the move, in the engine's own words, in English:
-/// how many saved games moved and to which Saves folder, or with none moved
-/// that new ones go there, its path whole for the notice to wrap; how many
-/// could not move and stay listed where they were; and that screenshots,
-/// films and mods now go in the same Open Annihilation folder.
+/// Returns the notice of the moves, in the engine's own words, in English:
+/// how many saved games moved, the moves told added together, and to which
+/// folder, or with none moved that new ones go there, its path whole for the
+/// notice to wrap; how many could not move and stay listed where they were;
+/// for the move from beside the preferences file, that screenshots, films
+/// and mods now go in the same Open Annihilation folder; and for the move
+/// of those loose in Saves, that saved games, screenshots and films go in a
+/// folder for each mod, or no_mod_folder_name without one.
 ///
-/// @param move what the move moved and left
-/// @param saves the Saves folder of 3.1c's saved games
+/// @param moves the moves told
+/// @param saves the folder of 3.1c's saved games (saves_folder)
 /// @return the notice, with "OPEN FOLDER" for the folder's button
 [[nodiscard]] oa::ui::engine_settings::Notice
-saves_moved_notice(const RecordedMove& move, const std::filesystem::path& saves);
+saves_moved_notice(const MovesTold& moves, const std::filesystem::path& saves);
 
 /// A side and the unit that is its commander, as SIDEDATA names them.
 struct SideCommander {
