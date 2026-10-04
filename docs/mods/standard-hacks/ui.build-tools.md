@@ -114,6 +114,11 @@ that building's turned footprint.
   with its `kickout` parameter the builder also orders those units off.
   Another player's unit, or one of the player's own buildings, still
   refuses the site, which keeps the refusal colour.
+- The player's own unit in unit slot 1, usually their Commander, makes
+  the outline yellow as any other does. Another player's unit in that
+  slot does not refuse the site, as
+  [orders.build-site-kickout](orders.build-site-kickout.md) describes,
+  and leaves the outline in colour 10.
 - Every building of a line or ring is outlined the same way.
 
 ### Dragging a unit with Alt
@@ -184,10 +189,12 @@ agree between machines.
 - Tests:
   - `app-view-rules` (`build_tool_layouts` in `src/app/view_rules_test.cpp`,
     and `view_settings_round_trip` for the settings).
-  - `match-build-cursor` (`own_units_pass_with_the_rule` in
+  - `match-build-cursor` (`own_units_pass_with_the_rule` and
+    `outline_over_each_unit` in
     `src/sim/match-runtime/tests/build_cursor_test.cpp`): the site test
-    reports a site let through over the placing player's own unit, and
-    leaves the report alone for an empty site.
+    reports a site let through over the placing player's own unit, in
+    unit slot 1 or any other, and leaves the report alone for an empty
+    site and for another player's unit in slot 1.
   - `match-order-rules` (`drag_sends_units_ahead` in
     `src/sim/match-runtime/tests/order_rules_test.cpp`): an idle unit gets
     a move, a walking unit walks to its old point again after the move,

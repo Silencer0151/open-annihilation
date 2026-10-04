@@ -482,7 +482,8 @@ struct BuildSiteOptions {
     /// Set to true, when not null, as the placing player's own units let the
     /// build cursor's site through (orders.build-site-kickout
     /// place-over-own-units), so a building placed there needs them moved
-    /// off; left as it is otherwise.
+    /// off: also for such a unit in the skipped slot or out of the placer's
+    /// sight; left as it is otherwise.
     bool* over_own_units{};
 };
 

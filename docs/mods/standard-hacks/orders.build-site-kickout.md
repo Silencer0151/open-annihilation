@@ -46,7 +46,9 @@ are held by the placing player's own mobile units. These are units with
 a movement object. Other players' units, and the player's own buildings,
 still block the site. The engine reproduces one quirk of the cursor:
 while this parameter is on, the unit in unit slot 1 never blocks the
-cursor, whoever owns it.
+cursor, whoever owns it. When that unit is one of the player's own mobile
+units, usually their Commander, the site counts as one over their own
+units like any other.
 
 **`kickout`:** each time a builder finds its site blocked, it orders
 units off the footprint, the turned one for a building turned east or west
@@ -145,8 +147,9 @@ on all three parameters, which are part of the profile hash.
     (`src/sim/match-runtime/tests/unit_rules_test.cpp`): a ground builder
     whose building is turned east clears the turned footprint and leaves a
     unit beside it.
-  - `own_units_refuse_without_the_rule`, `own_units_pass_with_the_rule`
-    and `other_parameters_leave_the_cursor_alone` in `match-build-cursor`
+  - `own_units_refuse_without_the_rule`, `own_units_pass_with_the_rule`,
+    `outline_over_each_unit` and `other_parameters_leave_the_cursor_alone`
+    in `match-build-cursor`
     (`src/sim/match-runtime/tests/build_cursor_test.cpp`).
 
 ## Full configuration schema

@@ -103,13 +103,18 @@ std::optional<uint8_t> Match::building_site(
             if ((mask & yard_claims_plot) != 0 &&
                 (plot.flags & sim::spatial_state::plot_claimed) != 0 && in_sight)
                 return std::nullopt;
+            // The placer's own units that move off let the site through and
+            // report it as over them, whatever slot they hold and whether the
+            // placer sees them; any other unit refuses it unless it holds
+            // skip_unit's slot or stands out of the placer's sight.
             if ((mask & yard_refuses_units) != 0 && plot.ground != sim::spatial_state::no_unit &&
-                !own_mobile_unit(plot.ground, options.own_units_player) &&
-                plot.ground != skip_unit && in_sight) {
-                if (!(own_units_pass && placer_moves_off(plot.ground)))
+                !own_mobile_unit(plot.ground, options.own_units_player)) {
+                if (own_units_pass && placer_moves_off(plot.ground)) {
+                    if (options.over_own_units != nullptr)
+                        *options.over_own_units = true;
+                } else if (plot.ground != skip_unit && in_sight) {
                     return std::nullopt;
-                if (options.over_own_units != nullptr)
-                    *options.over_own_units = true;
+                }
             }
             if ((mask & yard_refuses_features) != 0 && plot.blocking_feature)
                 return std::nullopt;
