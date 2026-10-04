@@ -802,7 +802,9 @@ void Playout::plan_ahead(
     const double fastest = std::max(top_speed, speed);
     std::array<std::array<double, 2>, 3> route{};
     const int32_t count = std::min<int32_t>(motion.route_count, 3);
-    for (int32_t i = 0; i < 3; ++i) {
+    // Without a shared route the points stay zero; only a route of two or
+    // more points is followed.
+    for (int32_t i = 0; count > 0 && i < 3; ++i) {
         const auto& point = motion.route[static_cast<std::size_t>(std::clamp(i, 0, count - 1))];
         route[static_cast<std::size_t>(i)] = {
             static_cast<double>(point[0]), static_cast<double>(point[1])

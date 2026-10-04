@@ -720,6 +720,36 @@ void test_slot_reused_within_a_tick() {
     }
 }
 
+void test_ground_unit_without_a_route() {
+    // A unit on the ground whose owner shared no route brakes along its
+    // heading; braking its whole speed in one tick, it stops at once, and
+    // every frame shows it where its newest record put it.
+    Scene scene;
+    scene.world->unit_defs[kbot].brake_rate = kbot_speed;
+    Playout playout;
+    Hooks hooks{};
+    hooks.motion = [](void*, uint32_t, Motion& motion) noexcept {
+        motion.ground = true;
+        motion.speed = kbot_speed;
+    };
+    scene.spawn(walker, kbot, walk_x(0), fixed(500));
+    uint32_t poses = 0;
+    bool reported = false;
+    for (uint32_t tick = 1; tick <= 60; ++tick) {
+        scene.world->game.tick = tick;
+        scene.world->game.players[mirrored_player].last_sim_tick = steady(tick);
+        playout.observe(*scene.world, hooks);
+        for (uint32_t k = 0; k < frames_per_tick; ++k) {
+            const auto pose = playout.unit_pose(walker, {tick, k * whole_tick / frames_per_tick});
+            if (!pose)
+                continue;
+            ++poses;
+            CHECK_ONCE(reported, pose->position.x == walk_x(0) && pose->position.z == fixed(500));
+        }
+    }
+    CHECK(poses != 0);
+}
+
 void test_slow_owner() {
     // An owner whose game runs slower than this machine's: the clock runs at
     // the owner's pace, so the walker keeps moving rather than catching up
@@ -951,6 +981,7 @@ int main() {
     test_creation();
     test_death();
     test_slot_reused_within_a_tick();
+    test_ground_unit_without_a_route();
     test_slow_owner();
     test_frames_over_a_batch();
     test_same_tick_observed_twice();
