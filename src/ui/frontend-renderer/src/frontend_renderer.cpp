@@ -22,6 +22,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -1045,24 +1046,59 @@ ScreenResources load_screen(AssetStore& assets, const ScreenAssetNames& names) {
 
 namespace {
 
-/// Reads MAINMENU.GUI from one mounted archive.
+/// Returns whether one archive holds a file at a path.
+///
+/// @param archive the archive
+/// @param path the file's path in the archive
+/// @return true when the path names a file, not a folder
+bool holds_file(const HpiArchive& archive, std::string_view path) {
+    const auto node = archive.lookup(path);
+    return node && !archive.nodes()[*node].directory();
+}
+
+/// Returns whether a mounted archive lies in a mod's folder: directly in a
+/// folder of the store above the last one, the game folder.
 ///
 /// @param assets the asset store
 /// @param archive the archive's mount path
-/// @return the bytes, or nullopt when the archive is not mounted or holds no
-///         such file
-std::optional<std::vector<uint8_t>>
-main_menu_layout_in(const AssetStore& assets, const std::filesystem::path& archive) {
+/// @return true when a mod's folder holds the archive
+bool in_mod_folder(const AssetStore& assets, const std::filesystem::path& archive) {
+    const auto folders = assets.loose_roots();
+    for (std::size_t folder = 0; folder + 1 < folders.size(); ++folder) {
+        std::error_code error;
+        for (std::filesystem::directory_iterator entry{folders[folder], error}, last;
+             !error && entry != last;
+             entry.increment(error)) {
+            // Mount paths are canonical, so a linked file is its target.
+            std::error_code resolve_error;
+            const auto resolved = std::filesystem::weakly_canonical(entry->path(), resolve_error);
+            if (!resolve_error && resolved == archive)
+                return true;
+        }
+    }
+    return false;
+}
+
+/// Finds the MAINMENU.GUI the main menu takes with no overlay drawn over it.
+///
+/// Walks the mounted archives in lookup order and takes the first copy whose
+/// archive also holds FrontendX or lies in a mod's folder. A copy in another
+/// archive brings a layout without a background, as a layout made for an
+/// overlay drawn over the menu does, and is passed over.
+///
+/// @param assets the asset store
+/// @return the bytes and their archive, or nullopt when no copy qualifies
+std::optional<AssetData> main_menu_layout_without_overlay(const AssetStore& assets) {
+    const auto layout = oa::data::defs::gui_path(main_menu_layout_file);
     const auto mounts = assets.mount_paths();
     for (std::size_t index = 0; index < mounts.size(); ++index) {
-        if (mounts[index] != archive)
-            continue;
         const auto& mounted = assets.mounted(index);
-        const auto layout = oa::data::defs::gui_path(main_menu_layout_file);
-        const auto node = mounted.lookup(layout);
-        if (!node || mounted.nodes()[*node].directory())
-            return std::nullopt;
-        return ui::decoded::require(mounted.read_node(*node), layout);
+        if (!holds_file(mounted, layout))
+            continue;
+        if (!holds_file(mounted, main_menu_background) && !in_mod_folder(assets, mounts[index]))
+            continue;
+        auto bytes = ui::decoded::require(mounted.read_node(*mounted.lookup(layout)), layout);
+        return AssetData{std::move(bytes), mounts[index], true};
     }
     return std::nullopt;
 }
@@ -1072,14 +1108,11 @@ main_menu_layout_in(const AssetStore& assets, const std::filesystem::path& archi
 MainMenuResources load_main_menu(AssetStore& assets, MainMenuLayout layout) {
     const auto main_menu_layout = oa::data::defs::gui_path(main_menu_layout_file);
     auto gui = assets.read(main_menu_layout);
-    // With no overlay, an archived layout goes with the archived background
-    // it was drawn for, when that archive holds one.
-    if (layout == MainMenuLayout::base_game && gui.archived) {
-        const auto background = assets.providing_archive(main_menu_background);
-        if (background && *background != gui.source)
-            if (auto bytes = main_menu_layout_in(assets, *background))
-                gui = {std::move(*bytes), *background, true};
-    }
+    // With no overlay, an archived layout made for one is passed over; a
+    // loose layout comes first, as loose files do.
+    if (layout == MainMenuLayout::base_game && gui.archived)
+        if (auto own = main_menu_layout_without_overlay(assets))
+            gui = std::move(*own);
     auto result = load_screen_with_layout(
         assets,
         {main_menu_layout,

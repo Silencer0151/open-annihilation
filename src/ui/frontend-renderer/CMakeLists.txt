@@ -34,7 +34,7 @@ if(BUILD_TESTING)
   oa_add_game_data_test(frontend-artless-draw-data oa-artless-draw-test --data)
 
   # The installed game's MAINMENU.GUI, the one laid out for FrontendX, which
-  # the main menu takes with no overlay drawn over it.
+  # the main menu takes with no overlay drawn over it, and a mod folder's own.
   add_executable(oa-main-menu-layout-test tests/main_menu_layout_test.cpp)
   target_link_libraries(oa-main-menu-layout-test PRIVATE oa-ui-frontend-renderer oa-test-game-data)
   oa_add_game_data_test(frontend-main-menu-layout oa-main-menu-layout-test)

@@ -4,16 +4,18 @@ This component turns the game's `FrontendX` PCX, `guipal` palette,
 `MAINMENU.GUI` layout, and `MAINMENU.GAF` sprites into a portable RGB surface.
 `load_main_menu` uses `oa::AssetStore`, so loose resources and mounted archives
 keep the game's lookup order. An add-on archive may carry its own
-`MAINMENU.GUI`, laid out for a main-menu overlay drawn over the menu, which
-shadows the one laid out for `FrontendX`. `MainMenuLayout::with_overlay` takes
-the top copy. `MainMenuLayout::base_game`, which the application takes
-whenever no overlay stands over the menu, takes the copy in the archive that
-provides `FrontendX` (`totala1.hpi`'s, whose four buttons at x 139 and 409 sit
-inside FrontendX's pipe frames), so that the layout goes with the background
-it was drawn for. It takes the top copy when `FrontendX` or that copy is a
-loose file, or when the archive that provides `FrontendX` holds no
-`MAINMENU.GUI`; an add-on archive that carries a `MAINMENU.GUI` but no
-`FrontendX` is then passed over, where 3.1c would show its layout.
+`MAINMENU.GUI`, and no `FrontendX`, laid out for a main-menu overlay drawn
+over the menu; it shadows the layout that goes with `FrontendX`.
+`MainMenuLayout::with_overlay` takes the top copy, as 3.1c does.
+`MainMenuLayout::base_game`, which the application takes whenever no overlay
+stands over the menu, takes a loose copy first; else the first archived copy,
+in lookup order, whose archive also holds `FrontendX` (`totala1.hpi`'s, whose
+four buttons at x 139 and 409 sit inside FrontendX's pipe frames) or lies in
+a mod's folder layered over the game folder; else the top copy. It passes
+over a copy in any other archive, which 3.1c shows when it comes first. A mod
+that brings its own `FrontendX` and no `MAINMENU.GUI`, its art drawn around
+the game's buttons, so keeps those buttons in its frames, and a mod's own
+`MAINMENU.GUI` applies in whichever of its archives it lies.
 
 `load_screen` accepts explicit layout, PCX, palette, and GAF resource names for
 the other frontend screens. The explicit names matter: the renderer does not

@@ -151,10 +151,11 @@ void bind_screen_buttons(ScreenResources& resources, std::size_t first);
 void fit_buttons_to_frames(ScreenResources& resources, std::size_t first);
 
 // Which MAINMENU.GUI the main menu takes. An add-on archive may carry a
-// MAINMENU.GUI whose SINGLE/MULTI/INTRO/EXIT sit under the buttons of a
-// main-menu overlay drawn over the menu, outside FrontendX's pipe frames.
-// With an overlay drawn, the top copy applies; with none, the layout of the
-// archive that provides FrontendX, which fits its frames.
+// MAINMENU.GUI, and no FrontendX, whose SINGLE/MULTI/INTRO/EXIT sit under
+// the buttons of a main-menu overlay drawn over the menu, outside
+// FrontendX's pipe frames. With an overlay drawn, the top copy applies; with
+// none, such a copy is passed over for the next one down, so that a
+// FrontendX drawn for the game's own layout, a mod's among them, keeps it.
 enum class MainMenuLayout : uint8_t { with_overlay, base_game };
 
 /// Loads the four resources of the main menu screen.
@@ -165,9 +166,10 @@ enum class MainMenuLayout : uint8_t { with_overlay, base_game };
 ///
 /// @param assets Asset store.
 /// @param layout with_overlay takes the top copy of MAINMENU.GUI; base_game
-///        takes the copy in the archive that provides FrontendX, and the top
-///        copy when FrontendX or that top copy is a loose file or that
-///        archive holds no MAINMENU.GUI.
+///        takes a loose copy first, then the first archived copy whose
+///        archive also holds FrontendX or lies in a mod's folder (a folder of
+///        the store above the game folder), and the top copy when no archive
+///        qualifies.
 /// @return The loaded resources.
 /// @throws std::runtime_error when a resource is missing or malformed, or
 ///         FrontendX is not 640x480.
