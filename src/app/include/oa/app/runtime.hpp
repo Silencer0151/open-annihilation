@@ -10246,7 +10246,7 @@ class Runtime final : public menu::Host,
     /// @param pointer_y canvas row of the pointer
     void handle_match_zoom(float wheel_y, float pointer_x, float pointer_y);
 
-    /// Scrolls the camera with the arrow and WASD keys and at the screen's edges.
+    /// Scrolls the camera with the arrow keys and at the screen's edges.
     ///
     /// The pointer on the screen's outermost pixels (its outermost window
     /// point on a high-density display) scrolls toward that edge, and in a

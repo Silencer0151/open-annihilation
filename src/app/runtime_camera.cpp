@@ -555,13 +555,15 @@ void Runtime::pan_match_camera() {
     // A --frame-rate run's held scroll is an arrow key.
     if (frame_run_clock_ns_)
         dx += frame_run_scroll_;
-    if (keys[SDL_SCANCODE_LEFT] || keys[SDL_SCANCODE_A])
+    // Only the arrow keys scroll, as in 3.1c: the letter keys stay the
+    // game's own commands (A attack, S stop and so on).
+    if (keys[SDL_SCANCODE_LEFT])
         --dx;
-    if (keys[SDL_SCANCODE_RIGHT] || keys[SDL_SCANCODE_D])
+    if (keys[SDL_SCANCODE_RIGHT])
         ++dx;
-    if (keys[SDL_SCANCODE_UP] || keys[SDL_SCANCODE_W])
+    if (keys[SDL_SCANCODE_UP])
         --dz;
-    if (keys[SDL_SCANCODE_DOWN] || keys[SDL_SCANCODE_S])
+    if (keys[SDL_SCANCODE_DOWN])
         ++dz;
     // The pointer on the screen's outermost pixels scrolls toward that edge,
     // and in a corner both ways, whatever panel lies under it, as in 3.1c: in
