@@ -8,6 +8,8 @@
 // planner rebuilt, with today's arithmetic for the path the processor draws
 // the piece by: a cached piece as the cached image places it, a moving piece
 // as the flat draw places it, a carried unit as its carrier composes it.
+// A textured quad is drawn as strips across its rows, so that its texels
+// run as the processor's walk runs them.
 // Within a unit drawn with a depth plane the polygons are drawn in the
 // order the plane shows them: of two that overlap, the one higher where
 // they overlap goes later, and at the same height the one the processor
@@ -91,6 +93,18 @@ constexpr int32_t depth_byte_max = 0xff;
 constexpr int32_t nano_band_depth = 4;
 /// The corners of a textured primitive the image fills.
 constexpr size_t quad_corner_count = 4;
+/// The most a textured quad's strips move its texels along a row from
+/// where the processor's walk puts them, in pixels of the target. A strip
+/// whose width changes by d pixels from its top to its bottom moves them
+/// by up to d / 4, at its middle row.
+constexpr float strip_shift_allowed = 0.25F;
+/// Where a pixel's centre lies within it, across and down.
+constexpr float pixel_centre = 0.5F;
+/// Past this many vertices or indices in the frame, textured quads are
+/// drawn as their two triangles, so that a frame of many models stays
+/// within what the card takes.
+constexpr size_t most_strip_frame_vertices = card::most_frame_vertices / 2;
+constexpr size_t most_strip_frame_indices = card::most_frame_indices / 2;
 /// The empty map pixels kept round the plane a nanoframe's outline is
 /// found on, past the rows' last pixels the outline reaches.
 constexpr int32_t outline_plane_margin = 2;
@@ -148,7 +162,8 @@ struct Polygon {
     bool bright{};     ///< drawn from the bright page
     bool flat_page{};  ///< the flat variant of its frame: the image key a colour
     /// The mesh whose fan splits the polygon, with the primitive; a null
-    /// mesh fans from the first corner.
+    /// mesh fans from the first corner. A textured quad is drawn as strips
+    /// across its rows instead where it is not a parallelogram on screen.
     const gw::ModelMesh* mesh{};
     uint32_t primitive{};
     const Sprite* texture{}; ///< null for a polygon filled with its corners' colours
@@ -760,6 +775,9 @@ struct ModelStage::Impl {
     /// the library, and the next number to give.
     std::unordered_map<const void*, uint64_t> numbers;
     uint64_t next_number{first_texture_number};
+    /// Whether each texture frame has a texel of the image key, by the
+    /// frame's address in the library.
+    std::unordered_map<const void*, bool> keyed_texels;
     std::unordered_map<const Model*, MeshEntry> meshes;
     card::PageHandle solid_page{};
     card::TargetHandle shadow_target{};
@@ -789,6 +807,7 @@ struct ModelStage::Impl {
     void forget_contents() {
         numbers.clear();
         next_number = first_texture_number;
+        keyed_texels.clear();
         meshes.clear();
     }
 };
@@ -1026,6 +1045,8 @@ class Emitter {
     );
     void emit_polygons(const Canvas& surface);
     void emit_polygon(const Canvas& surface, const Polygon& polygon);
+    [[nodiscard]] bool has_keyed_texels(const Sprite& sprite);
+    [[nodiscard]] bool walk_strips(const Canvas& surface, std::span<const Corner> corners);
     void emit_outline(const Canvas& surface);
     void emit_silhouettes(const Canvas& surface, card::Blend blend, const card::Colour& shade);
 
@@ -1070,6 +1091,9 @@ class Emitter {
     int32_t camera_z_{};
     std::vector<card::Vertex> vertices_;
     std::vector<card::Index> indices_;
+    /// A textured quad's strips, built beside its corners and triangles.
+    std::vector<card::Vertex> strip_vertices_;
+    std::vector<card::Index> strip_indices_;
 };
 
 uint64_t Emitter::frame_number(const void* key) {
@@ -1606,6 +1630,167 @@ void Emitter::append(
     frame_.batches.push_back(batch);
 }
 
+/// Tells whether a texture frame has a texel of the image key, which the
+/// frame's keyed variant leaves transparent. A frame is read once.
+///
+/// @param sprite the frame
+/// @return true when one of its texels is the image key
+bool Emitter::has_keyed_texels(const Sprite& sprite) {
+    const auto [found, added] = impl_.keyed_texels.try_emplace(&sprite, false);
+    if (added && sprite.data != nullptr) {
+        const auto* pixels = static_cast<const uint8_t*>(sprite.data);
+        const auto size = static_cast<size_t>(sprite.width) * sprite.height;
+        found->second = std::find(pixels, pixels + size, draw::image_key) != pixels + size;
+    }
+    return found->second;
+}
+
+/// Cuts a textured quad into strips across its rows, so that its texels
+/// run as the processor's walk runs them: in proportion down each side
+/// from the topmost corner to the bottommost, then in proportion along
+/// each row from the left side to the right. Two triangles would bend them
+/// where they meet, unless the quad is a parallelogram.
+///
+/// @param surface the canvas the quad is drawn on
+/// @param corners the quad's corners, which vertices_ holds placed on the
+///     surface with their texture coordinates and colours
+/// @return true with the strips in strip_vertices_ and strip_indices_, no
+///     strip where every row is empty; false, with nothing built, for a
+///     quad its two triangles draw as the walk does (a parallelogram, or
+///     one of no height), for a quad with a side that turns back up or
+///     runs along a row between two sloped edges, and once the frame holds
+///     most_strip_frame_vertices or most_strip_frame_indices
+bool Emitter::walk_strips(const Canvas& surface, std::span<const Corner> corners) {
+    if (corners.size() != quad_corner_count || vertices_.size() != quad_corner_count ||
+        frame_.vertices.size() >= most_strip_frame_vertices ||
+        frame_.indices.size() >= most_strip_frame_indices)
+        return false;
+    if (corners[0].x + corners[2].x == corners[1].x + corners[3].x &&
+        corners[0].y + corners[2].y == corners[1].y + corners[3].y)
+        return false;
+    size_t top = 0;
+    size_t bottom = 0;
+    for (size_t k = 1; k < quad_corner_count; ++k) {
+        if (corners[k].y < corners[top].y)
+            top = k;
+        if (corners[bottom].y < corners[k].y)
+            bottom = k;
+    }
+    if (corners[top].y == corners[bottom].y)
+        return false;
+
+    // Each side's sloped edges from the top corner down to the bottom one:
+    // the left side runs back through the corners, the right side forward.
+    // An edge along a row has no rows of its own.
+    struct Edge {
+        size_t from{};
+        size_t to{};
+    };
+
+    using Side = std::array<Edge, quad_corner_count>;
+    const auto walk_side = [&](bool forward, Side& edges, size_t& count) {
+        size_t reached = top;
+        for (size_t k = top; k != bottom;) {
+            const size_t next = forward ? (k + 1) % quad_corner_count
+                                        : (k + quad_corner_count - 1) % quad_corner_count;
+            if (corners[next].y < corners[k].y)
+                return false;
+            if (corners[k].y < corners[next].y) {
+                if (count != 0 && reached != k)
+                    return false;
+                edges[count++] = {k, next};
+                reached = next;
+            }
+            k = next;
+        }
+        return count != 0;
+    };
+    Side left_side{};
+    Side right_side{};
+    size_t left_count = 0;
+    size_t right_count = 0;
+    if (!walk_side(false, left_side, left_count) || !walk_side(true, right_side, right_count))
+        return false;
+    // Where an edge crosses a row of the target: its corners' places,
+    // texture coordinates and colours, each in proportion along it.
+    const auto on_edge = [&](const Edge& edge, float y) {
+        const card::Vertex& from = vertices_[edge.from];
+        const card::Vertex& to = vertices_[edge.to];
+        const float t = (y - from.y) / (to.y - from.y);
+        if (t <= 0.0F)
+            return from;
+        if (t >= 1.0F)
+            return to;
+        card::Vertex end;
+        end.x = from.x + t * (to.x - from.x);
+        end.y = y;
+        end.u = from.u + t * (to.u - from.u);
+        end.v = from.v + t * (to.v - from.v);
+        end.colour.red = from.colour.red + t * (to.colour.red - from.colour.red);
+        end.colour.green = from.colour.green + t * (to.colour.green - from.colour.green);
+        end.colour.blue = from.colour.blue + t * (to.colour.blue - from.colour.blue);
+        end.colour.alpha = from.colour.alpha + t * (to.colour.alpha - from.colour.alpha);
+        return end;
+    };
+    strip_vertices_.clear();
+    strip_indices_.clear();
+    // Cuts the quad at a row, and adds the strip from the cut above unless
+    // neither of its rows reaches right of its left end: the walk draws
+    // nothing of a row whose right end is not past its left.
+    const auto cut = [&](const Edge& on_left, const Edge& on_right, float y) {
+        const auto below = static_cast<card::Index>(strip_vertices_.size());
+        strip_vertices_.push_back(on_edge(on_left, y));
+        strip_vertices_.push_back(on_edge(on_right, y));
+        if (below == 0)
+            return;
+        const card::Index above = below - 2;
+        if (strip_vertices_[above + 1].x <= strip_vertices_[above].x &&
+            strip_vertices_[below + 1].x <= strip_vertices_[below].x)
+            return;
+        for (const card::Index index : {above, above + 1, below + 1, above, below + 1, below})
+            strip_indices_.push_back(index);
+    };
+    // Between two corners' rows each side runs along one edge. A strip
+    // there moves the texels along a row by a quarter of its height times
+    // how much faster one edge slopes than the other, at most; the strips
+    // are cut at every corner's row, and at rows of pixel centres as many
+    // rows apart as keep that within strip_shift_allowed. More than a
+    // strip's height outside the surface's scissor only the corners' rows
+    // are cut, since nothing there is seen.
+    const float view_top = surface.scissored ? static_cast<float>(surface.scissor.y) : 0.0F;
+    const float view_bottom = surface.scissored
+                                  ? view_top + static_cast<float>(surface.scissor.height)
+                                  : static_cast<float>(card::largest_target_edge);
+    size_t left = 0;
+    size_t right = 0;
+    cut(left_side[0], right_side[0], vertices_[top].y);
+    while (left < left_count && right < right_count) {
+        const Edge& left_edge = left_side[left];
+        const Edge& right_edge = right_side[right];
+        const auto slope = [&](const Edge& edge) {
+            return static_cast<float>(corners[edge.to].x - corners[edge.from].x) /
+                   static_cast<float>(corners[edge.to].y - corners[edge.from].y);
+        };
+        const float narrowing = std::fabs(slope(right_edge) - slope(left_edge));
+        const int32_t lower_row = std::min(corners[left_edge.to].y, corners[right_edge.to].y);
+        const float lower = surface.origin_y + static_cast<float>(lower_row) * scale_;
+        if (narrowing > 0.0F) {
+            const float rows = std::max(1.0F, std::floor(4.0F * strip_shift_allowed / narrowing));
+            const float upper = std::max(strip_vertices_.back().y, view_top - rows);
+            const float last = std::min(lower, view_bottom + rows);
+            for (float y = std::floor(upper - pixel_centre) + 1.0F + pixel_centre; y < last;
+                 y += rows)
+                cut(left_edge, right_edge, y);
+        }
+        cut(left_edge, right_edge, lower);
+        if (corners[left_edge.to].y == lower_row)
+            ++left;
+        if (corners[right_edge.to].y == lower_row)
+            ++right;
+    }
+    return true;
+}
+
 void Emitter::emit_polygon(const Canvas& surface, const Polygon& polygon) {
     if (polygon.corner_count < 3)
         return;
@@ -1665,6 +1850,21 @@ void Emitter::emit_polygon(const Canvas& surface, const Polygon& polygon) {
     if (indices_.size() < 3)
         return;
     indices_.resize(indices_.size() - indices_.size() % 3);
+    // A textured quad is drawn as strips across its rows. Where a strip's
+    // end meets another polygon's edge between that edge's corners, the
+    // card may leave a pixel to neither, so a quad that draws every pixel
+    // it covers opaque has its two triangles drawn beneath the strips.
+    if (polygon.texture != nullptr && walk_strips(surface, corners)) {
+        if (strip_indices_.empty())
+            return;
+        const auto opaque_corner = [](const Corner& corner) { return corner.colour.alpha >= 1.0F; };
+        const bool opaque = std::ranges::all_of(corners, opaque_corner) &&
+                            (polygon.flat_page || !has_keyed_texels(*polygon.texture));
+        if (opaque)
+            append(surface, placed.page, card::Blend::alpha, vertices_, indices_);
+        std::swap(vertices_, strip_vertices_);
+        std::swap(indices_, strip_indices_);
+    }
     append(surface, placed.page, card::Blend::alpha, vertices_, indices_);
     ++counts_.polygons;
     if (!polygon.underwater || !ensure_solid_page())

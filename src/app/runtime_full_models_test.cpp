@@ -91,6 +91,20 @@ constexpr int32_t unit_x = 80;
 constexpr int32_t unit_z = 80;
 /// Half the side of the square model, in world units.
 constexpr int32_t half_side = 8;
+/// The textured trapezoid's half widths at its narrow and wide ends and its
+/// half depth, in world units: its sides slope half a pixel a row.
+constexpr int32_t trapezoid_narrow_half = 5;
+constexpr int32_t trapezoid_wide_half = 16;
+constexpr int32_t trapezoid_half_depth = 11;
+/// The step between the points the trapezoid's texture is read at, in
+/// pixels of the target.
+constexpr double trapezoid_sample_step = 0.25;
+/// How far the card may draw the trapezoid's texels along a row from where
+/// the walk puts them, in pixels of the target: a quarter of a pixel, and
+/// the rounding of the card's arithmetic.
+constexpr double trapezoid_shift_allowed = 0.26;
+/// How far the card may draw them across a row from the walk's, in texels.
+constexpr double trapezoid_across_allowed = 0.01;
 /// A heading that slopes the square's edges, and a turn with bank and pitch.
 constexpr RotationWords turned_heading{0, 0x0a00, 0};
 constexpr RotationWords installed_turn{0x0300, 0x3000, 0x0200};
@@ -362,6 +376,22 @@ std::shared_ptr<Model> textured_model() {
             names[i]
         ));
     }
+    model->objects.push_back(object);
+    return model;
+}
+
+/// A textured quad facing the camera whose ends lie along rows, one end
+/// narrower than the other, over the fixed texture.
+std::shared_ptr<Model> trapezoid_model() {
+    auto model = std::make_shared<Model>();
+    Object object;
+    const int32_t narrow = trapezoid_narrow_half * unit;
+    const int32_t wide = trapezoid_wide_half * unit;
+    const int32_t depth = trapezoid_half_depth * unit;
+    object.vertices = {
+        {-narrow, 0, -depth}, {narrow, 0, -depth}, {wide, 0, depth}, {-wide, 0, depth}
+    };
+    object.primitives.push_back(primitive({0, 3, 2, 1}, 0, "plain"));
     model->objects.push_back(object);
     return model;
 }
@@ -1028,6 +1058,141 @@ void test_textured() {
     // so that corner lands at the top right of the rightmost square.
     const uint8_t* corner = drawn.at(unit_x + 29, unit_z - half_side);
     OA_CHECK(corner[3] == 255 && corner[0] == 32);
+}
+
+/// Finds the texture coordinates the card draws at a point of the target:
+/// those of the last textured triangle drawn over it, in proportion to the
+/// point's place in it.
+///
+/// @param frame the frame drawn
+/// @param x the point, in pixels of the target
+/// @param y
+/// @param[out] u the texture coordinates there, 0 to 1 across the page
+/// @param[out] v
+/// @return false when no textured triangle covers the point
+bool card_texture_at(const card::CardFrame& frame, double x, double y, double& u, double& v) {
+    bool found = false;
+    for (const card::Batch& batch : frame.batches) {
+        if (batch.operation != card::Operation::draw || batch.page == card::PageHandle{})
+            continue;
+        for (uint32_t k = 0; k + 2 < batch.index_count; k += 3) {
+            const card::Vertex& a = frame.vertices[frame.indices[batch.first_index + k]];
+            const card::Vertex& b = frame.vertices[frame.indices[batch.first_index + k + 1]];
+            const card::Vertex& c = frame.vertices[frame.indices[batch.first_index + k + 2]];
+            const auto twice_area =
+                [](double ax, double ay, double bx, double by, double cx, double cy) {
+                    return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+                };
+            const double area = twice_area(a.x, a.y, b.x, b.y, c.x, c.y);
+            if (area == 0.0)
+                continue;
+            const double at_a = twice_area(x, y, b.x, b.y, c.x, c.y) / area;
+            const double at_b = twice_area(a.x, a.y, x, y, c.x, c.y) / area;
+            const double at_c = 1.0 - at_a - at_b;
+            if (at_a < 0.0 || at_b < 0.0 || at_c < 0.0)
+                continue;
+            u = at_a * a.u + at_b * b.u + at_c * c.u;
+            v = at_a * a.v + at_b * b.v + at_c * c.v;
+            found = true;
+        }
+    }
+    return found;
+}
+
+// A textured trapezoid at zoom 1 and zoom 4: wherever the card draws it,
+// its texels lie where the processor's walk puts them, in proportion down
+// its sloped sides and then along each row, to within a quarter of a pixel
+// along the row; two triangles would bend them along their shared diagonal,
+// 5.5 pixels at zoom 1. At zoom 1 it draws no pixel far from the processor's.
+void test_textured_trapezoid() {
+    TextureFixture textures;
+    Scene scene(gray_palette(), std::move(textures.library));
+    SceneUnit& trapezoid = scene.add_unit(trapezoid_model(), 1, unit_x, unit_z);
+    for (const float zoom : {1.0F, 4.0F}) {
+        Card card(scene, zoom);
+        ProcessorPicture processor;
+        scene.begin_frame(processor, 0);
+        scene.plan_unit(trapezoid);
+        scene.raster_processor(processor);
+        const CardPicture drawn = card.raster(scene, zoom);
+        OA_CHECK(card.stage.counts().polygons == 1);
+        if (zoom == 1.0F) {
+            const auto c = compare(drawn, processor, scene);
+            print("textured trapezoid", c);
+            OA_CHECK(c.far_coverage == 0);
+        }
+        // The trapezoid's corners: its textured vertices at its top and
+        // bottom rows, the leftmost and the rightmost of each.
+        std::vector<card::Vertex> textured;
+        for (const card::Batch& batch : card.frame.batches)
+            if (batch.operation == card::Operation::draw && batch.page != card::PageHandle{})
+                for (uint32_t k = 0; k < batch.index_count; ++k)
+                    textured.push_back(
+                        card.frame.vertices[card.frame.indices[batch.first_index + k]]
+                    );
+        OA_CHECK(!textured.empty());
+        if (textured.empty())
+            continue;
+        const auto [lowest, highest] = std::ranges::minmax(textured, {}, &card::Vertex::y);
+        card::Vertex top_left = lowest;
+        card::Vertex top_right = lowest;
+        card::Vertex bottom_left = highest;
+        card::Vertex bottom_right = highest;
+        for (const card::Vertex& vertex : textured) {
+            if (vertex.y == lowest.y && vertex.x < top_left.x)
+                top_left = vertex;
+            if (vertex.y == lowest.y && vertex.x > top_right.x)
+                top_right = vertex;
+            if (vertex.y == highest.y && vertex.x < bottom_left.x)
+                bottom_left = vertex;
+            if (vertex.y == highest.y && vertex.x > bottom_right.x)
+                bottom_right = vertex;
+        }
+        OA_CHECK(top_right.x - top_left.x < bottom_right.x - bottom_left.x);
+        const double page = card.stage.pages().pages()[0].size;
+        double most_along = 0.0;
+        double most_across = 0.0;
+        std::size_t read = 0;
+        for (double y = lowest.y + trapezoid_sample_step; y < highest.y;
+             y += trapezoid_sample_step) {
+            const double down = (y - lowest.y) / (static_cast<double>(highest.y) - lowest.y);
+            const auto at_row = [down](float from, float to) { return from + down * (to - from); };
+            const double left = at_row(top_left.x, bottom_left.x);
+            const double right = at_row(top_right.x, bottom_right.x);
+            const double left_u = at_row(top_left.u, bottom_left.u);
+            const double left_v = at_row(top_left.v, bottom_left.v);
+            const double row_u = at_row(top_right.u, bottom_right.u) - left_u;
+            const double row_v = at_row(top_right.v, bottom_right.v) - left_v;
+            const double row_squared = row_u * row_u + row_v * row_v;
+            for (double x = left + trapezoid_sample_step; x < right; x += trapezoid_sample_step) {
+                double u = 0.0;
+                double v = 0.0;
+                OA_CHECK(card_texture_at(card.frame, x, y, u, v));
+                // The card's coordinates less the walk's, along the row's
+                // texture coordinates and across them.
+                const double share = (x - left) / (right - left);
+                const double off_u = u - (left_u + share * row_u);
+                const double off_v = v - (left_v + share * row_v);
+                const double along = (off_u * row_u + off_v * row_v) / row_squared;
+                most_along = std::max(most_along, std::fabs(along) * (right - left));
+                most_across = std::max(
+                    most_across, std::hypot(off_u - along * row_u, off_v - along * row_v) * page
+                );
+                ++read;
+            }
+        }
+        std::printf(
+            "textured trapezoid at zoom %.0f: %zu points, %.3f pixels along a row at most, %.3f "
+            "texels across\n",
+            static_cast<double>(zoom),
+            read,
+            most_along,
+            most_across
+        );
+        OA_CHECK(read > 0);
+        OA_CHECK(most_along <= trapezoid_shift_allowed);
+        OA_CHECK(most_across <= trapezoid_across_allowed);
+    }
 }
 
 // A unit with a depth plane: the higher square listed first draws over the
@@ -2087,6 +2252,7 @@ int main(int argc, char** argv) {
         test_square();
         test_back_face();
         test_textured();
+        test_textured_trapezoid();
         test_depth_sorted();
         test_resting_on_depth_plane();
         test_lit_building();

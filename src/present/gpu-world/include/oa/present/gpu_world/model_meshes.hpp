@@ -233,7 +233,9 @@ struct MeshTexture {
 /// a fan from corner 0 (corners 0 and 2 joined) or from corner 1 (1 and 3
 /// joined), corner 0 on a tie and where the quad cannot be walked at rest
 /// (edge-on, or not convex). The split is chosen once; a turned pose may
-/// favour the other.
+/// favour the other. A consumer that follows the walk itself draws a
+/// textured quad as strips across its rows instead, as the Full tier's
+/// models do wherever the quad is not a parallelogram on screen.
 struct MeshPrimitive {
     uint32_t first_index{};
     uint32_t index_count{};
