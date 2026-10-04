@@ -2302,6 +2302,97 @@ void Runtime::check_full_render_tier(
                       << " by " << bar_case.height << ", " << bars.size() << " laid out, " << shown
                       << " held to the frame\n";
         }
+
+        // The +stats panel covers the health bars under it in every tier:
+        // with the camera moved for a bar at full health to lie at the
+        // panel's middle, no pixel of such a bar's fill inside the panel
+        // shows the fill's colour, which the panel never draws in. The view
+        // is zoomed in so that a bar can come under the panel when the
+        // commander starts by the map's edge.
+        const uint8_t full_health = game.ui_colors[oa::ui::hud::kHealthHighColor];
+        constexpr int stats_zoom = 4;
+        for (const HardwareAcceleration level :
+             {HardwareAcceleration::off, HardwareAcceleration::basic, HardwareAcceleration::full}) {
+            const std::string where = level_name(level);
+            const auto frame = [&]() {
+                return level == HardwareAcceleration::full ? full_frame() : presented();
+            };
+            set_level(level);
+            at_zoom(static_cast<float>(stats_zoom));
+            show_frame_stats(true);
+            std::ignore = frame();
+            if (!frame_stats_place_)
+                fail("+stats placed no panel " + where);
+            const Area field = battlefield();
+            // The panel's middle on the battlefield, where a map pixel is
+            // stats_zoom pixels.
+            const auto& panel = frame_stats_place_->panel;
+            const int middle_x = panel.x + panel.width / 2 - field.x;
+            const int middle_y = panel.y + panel.height / 2 - field.y;
+            const auto camera = view_camera();
+            const auto [map_width, map_height] = shown_map_size();
+            const int most_x = std::max(0, map_width - visible_map_width());
+            const int most_z = std::max(0, map_height - visible_map_height());
+            bool moved = false;
+            for (const auto& bar : drawn_health_bars_) {
+                const int camera_x =
+                    camera[0] + ((bar.fill.x1 + bar.fill.x2) / 2 - middle_x) / stats_zoom;
+                const int camera_z =
+                    camera[1] + ((bar.fill.y1 + bar.fill.y2) / 2 - middle_y) / stats_zoom;
+                if (bar.fill_color != full_health || camera_x < 0 || camera_z < 0 ||
+                    camera_x > most_x || camera_z > most_z)
+                    continue;
+                match_camera_x_ = camera_x;
+                match_camera_z_ = camera_z;
+                moved = true;
+                break;
+            }
+            if (!moved)
+                fail("no health bar at full health " + where + " can lie under the +stats panel");
+            const auto read = frame();
+            write_png(
+                report_directory / ("native-render-tiers-stats-over-health-bars-" + where + ".png"),
+                read
+            );
+            if (!frame_stats_place_)
+                fail("+stats placed no panel " + where);
+            const auto& covered = frame_stats_place_->panel;
+            const Area pointer = cursor();
+            const auto fill_colour = colour(full_health);
+            std::size_t under = 0;
+            std::size_t showing = 0;
+            for (const auto& bar : drawn_health_bars_) {
+                if (bar.fill_color != full_health)
+                    continue;
+                for (int32_t y = bar.fill.y1; y <= bar.fill.y2; ++y)
+                    for (int32_t x = bar.fill.x1; x <= bar.fill.x2; ++x) {
+                        const int at_x = x + field.x;
+                        const int at_y = y + field.y;
+                        if (at_x < covered.x || at_y < covered.y ||
+                            at_x >= covered.x + covered.width ||
+                            at_y >= covered.y + covered.height ||
+                            (at_x >= pointer.x && at_y >= pointer.y &&
+                             at_x < pointer.x + pointer.w && at_y < pointer.y + pointer.h))
+                            continue;
+                        ++under;
+                        const std::size_t at = (static_cast<std::size_t>(at_y) * read.width +
+                                                static_cast<std::size_t>(at_x)) *
+                                               3U;
+                        if (std::equal(
+                                fill_colour.begin(), fill_colour.end(), read.rgb.data() + at
+                            ))
+                            ++showing;
+                    }
+            }
+            show_frame_stats(false);
+            std::cout << "render tiers check: +stats over the health bars " << where << ": "
+                      << under << " pixels of bars at full health under the panel, " << showing
+                      << " showing their colour\n";
+            if (under == 0)
+                fail("no health bar " + where + " lay under the +stats panel");
+            if (showing != 0)
+                fail("health bars " + where + " show over the +stats panel");
+        }
         game.graphics_flags = graphics_flags;
     }
 

@@ -6582,8 +6582,10 @@ class Runtime final : public menu::Host,
     /// Takes a painter's shading of the world under it, by a level of the
     /// display's shade or light tables, as a quad for the card to draw
     /// (full_fog::level_quad), in the Full tier while the overlay canvas is
-    /// the paint target (paints_full_canvas). Elsewhere the painter shades
-    /// the layer itself.
+    /// the paint target (paints_full_canvas). The card draws the quad under
+    /// the canvas, so the canvas's own pixels in the rectangle, such as
+    /// health bars painted before, are shaded here by the same quad.
+    /// Elsewhere the painter shades the layer itself.
     ///
     /// @param x the rectangle's left column, in pixels of the battlefield layer
     /// @param y its top row
@@ -6596,8 +6598,10 @@ class Runtime final : public menu::Host,
     /// Takes a painter's blend of a colour over the world under it, at an
     /// opacity in 256ths (frontend_renderer::blend_rect), as a quad for the
     /// card to draw, in the Full tier while the overlay canvas is the paint
-    /// target (paints_full_canvas). Elsewhere the painter blends the layer
-    /// itself.
+    /// target (paints_full_canvas). The card draws the quad under the
+    /// canvas, so the canvas's own pixels in the rectangle, such as health
+    /// bars painted before, are blended here as blend_rect blends them.
+    /// Elsewhere the painter blends the layer itself.
     ///
     /// @param x the rectangle's left column, in pixels of the battlefield layer
     /// @param y its top row
@@ -6614,7 +6618,8 @@ class Runtime final : public menu::Host,
     /// most, each channel the lesser of the world's and the colour's, as a
     /// quad for the card to draw (card::Blend::minimum), in the Full tier
     /// while the overlay canvas is the paint target (paints_full_canvas).
-    /// A renderer without the minimum blend draws the colour itself.
+    /// A renderer without the minimum blend draws the colour itself. The
+    /// canvas's own pixels in the rectangle are held to the colour here.
     ///
     /// @param x the rectangle's left column, in pixels of the battlefield layer
     /// @param y its top row

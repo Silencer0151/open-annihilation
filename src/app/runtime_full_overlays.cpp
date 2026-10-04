@@ -6,7 +6,8 @@
 // canvas's key colour, which the world layer is cleared to before the
 // painters paint it; and the quads the painters that shade the world beneath
 // them, the kill board, the +stats panel and game text in the modern fonts,
-// ask the card to draw in place of reading the world.
+// ask the card to draw in place of reading the world, with the same shading
+// of what the canvas holds under them.
 #include "oa/app/runtime.hpp"
 
 #include "full_fog.hpp"
@@ -14,7 +15,9 @@
 #include "xrgb_conversion.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -29,6 +32,85 @@ constexpr float blend_opacity_whole = 256.0F;
 constexpr double channel_whole = 255.0;
 /// The most quads a pixel's count of them holds.
 constexpr int most_counted_quads = 255;
+
+/// Gives a channel's level with a quad's colour drawn over it, as the card
+/// draws the quad by its blend.
+///
+/// @param under the level under the quad, from 0 to 255
+/// @param colour the quad colour's level, from 0 to 255
+/// @param alpha the quad's alpha, from 0 to 1
+/// @param blend the quad's blend
+/// @return the level shown, neither rounded nor held to 0 to 255
+double blended_level(double under, double colour, double alpha, card::Blend blend) noexcept {
+    double shown = under;
+    switch (blend) {
+    case card::Blend::none:
+        shown = colour;
+        break;
+    case card::Blend::alpha:
+        shown = colour * alpha + under * (1.0 - alpha);
+        break;
+    case card::Blend::alpha_premultiplied:
+        shown = colour + under * (1.0 - alpha);
+        break;
+    case card::Blend::additive:
+        shown = under + colour * alpha;
+        break;
+    case card::Blend::modulate:
+        shown = under * colour / channel_whole;
+        break;
+    case card::Blend::darken:
+        shown = under * (1.0 - alpha);
+        break;
+    case card::Blend::minimum:
+        shown = std::min(under, colour);
+        break;
+    }
+    return shown;
+}
+
+/// Draws a painter's quad over the overlay canvas's own pixels inside it,
+/// those not its key colour, by the quad's blend. The card draws the quad
+/// under the canvas, over the world alone, so what the canvas holds there
+/// from the painters before, such as health bars, markers and labels, is
+/// covered here as the world is; over a quad of alpha blend the pixels come
+/// out as frontend_renderer::blend_rect blends them in the other tiers.
+///
+/// @param[in,out] canvas the paint target holding the canvas's pixels
+/// @param key the canvas's key colour
+/// @param quad the quad, in pixels of the canvas
+/// @param colour the quad's colour before the display gamma, as the canvas
+///     holds its pixels
+void cover_canvas_paint(
+    renderer::Surface& canvas,
+    const std::array<uint8_t, 3>& key,
+    const FullWorldQuad& quad,
+    const std::array<uint8_t, 3>& colour
+) {
+    const auto columns = static_cast<int64_t>(canvas.width);
+    const auto rows = static_cast<int64_t>(canvas.height);
+    if (canvas.rgb.size() < static_cast<std::size_t>(columns * rows) * 3U)
+        return;
+    const int64_t left = std::max<int64_t>(quad.x, 0);
+    const int64_t top = std::max<int64_t>(quad.y, 0);
+    const int64_t right = std::min<int64_t>(int64_t{quad.x} + quad.width, columns);
+    const int64_t bottom = std::min<int64_t>(int64_t{quad.y} + quad.height, rows);
+    const auto alpha = static_cast<double>(quad.colour.alpha);
+    for (int64_t y = top; y < bottom; ++y)
+        for (int64_t x = left; x < right; ++x) {
+            uint8_t* pixel = canvas.rgb.data() + static_cast<std::size_t>(y * columns + x) * 3U;
+            if (std::equal(key.begin(), key.end(), pixel))
+                continue;
+            for (std::size_t channel = 0; channel < 3; ++channel)
+                pixel[channel] = static_cast<uint8_t>(std::lround(
+                    std::clamp(
+                        blended_level(pixel[channel], colour[channel], alpha, quad.blend),
+                        0.0,
+                        channel_whole
+                    )
+                ));
+        }
+}
 
 } // namespace
 
@@ -101,6 +183,14 @@ bool Runtime::paint_world_level(int x, int y, int width, int height, int32_t lev
     if (quad.colour.alpha <= 0.0F)
         return true;
     full_->world_quads.push_back({x, y, width, height, quad.colour, quad.blend});
+    // The level's colour is black or white, the same through the gamma.
+    const auto level_colour = static_cast<uint8_t>(quad.colour.red > 0.0F ? 255 : 0);
+    cover_canvas_paint(
+        paint_target(),
+        full_overlay_key(),
+        full_->world_quads.back(),
+        {level_colour, level_colour, level_colour}
+    );
     return true;
 }
 
@@ -114,6 +204,7 @@ bool Runtime::paint_world_blend(
     card::Colour shown = full::flat_colour(colour, gamma_identity_ ? nullptr : &gamma_table_);
     shown.alpha = std::min(1.0F, static_cast<float>(opacity) / blend_opacity_whole);
     full_->world_quads.push_back({x, y, width, height, shown, card::Blend::alpha});
+    cover_canvas_paint(paint_target(), full_overlay_key(), full_->world_quads.back(), colour);
     return true;
 }
 
@@ -124,6 +215,7 @@ bool Runtime::paint_world_minimum(
         return false;
     const card::Colour shown = full::flat_colour(colour, gamma_identity_ ? nullptr : &gamma_table_);
     full_->world_quads.push_back({x, y, width, height, shown, card::Blend::minimum});
+    cover_canvas_paint(paint_target(), full_overlay_key(), full_->world_quads.back(), colour);
     return true;
 }
 
@@ -161,31 +253,7 @@ std::vector<uint8_t> replay_world_quads(
                 over[at] = static_cast<uint8_t>(std::min(over[at] + 1, most_counted_quads));
                 for (std::size_t channel = 0; channel < 3; ++channel) {
                     uint8_t& level = picture[at * 3U + channel];
-                    const auto under = static_cast<double>(level);
-                    double shown = under;
-                    switch (blend) {
-                    case card::Blend::none:
-                        shown = colour[channel];
-                        break;
-                    case card::Blend::alpha:
-                        shown = colour[channel] * alpha + under * (1.0 - alpha);
-                        break;
-                    case card::Blend::alpha_premultiplied:
-                        shown = colour[channel] + under * (1.0 - alpha);
-                        break;
-                    case card::Blend::additive:
-                        shown = under + colour[channel] * alpha;
-                        break;
-                    case card::Blend::modulate:
-                        shown = under * colour[channel] / channel_whole;
-                        break;
-                    case card::Blend::darken:
-                        shown = under * (1.0 - alpha);
-                        break;
-                    case card::Blend::minimum:
-                        shown = std::min(under, colour[channel]);
-                        break;
-                    }
+                    const double shown = blended_level(level, colour[channel], alpha, blend);
                     level =
                         static_cast<uint8_t>(std::lround(std::clamp(shown, 0.0, channel_whole)));
                 }
