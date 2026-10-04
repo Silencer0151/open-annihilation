@@ -751,8 +751,10 @@ void Runtime::check_engine_settings_in_match() {
             const auto choose = [&](std::string_view caption,
                                     settings::HardwareAcceleration level,
                                     std::string_view waiting) {
+                // The layout outlives the loop: segment points into it.
+                const auto strip_layout = settings::dialog_layout(*dialog);
                 const settings::LayoutPart* segment = nullptr;
-                for (const auto& part : settings::dialog_layout(*dialog))
+                for (const auto& part : strip_layout)
                     if (part.control == settings::first_row_control + 3 && part.text == caption)
                         segment = &part;
                 require(

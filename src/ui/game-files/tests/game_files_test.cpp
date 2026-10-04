@@ -979,7 +979,8 @@ void presses_return_their_commands() {
     Model short_space = ready;
     short_space.space_short = true;
     OA_CHECK(press(short_space, tablet, {ControlKind::copy}).command == Command::none);
-    const Item* copy = item_of(lay_out(short_space, tablet), {ControlKind::copy});
+    const Layout short_layout = lay_out(short_space, tablet);
+    const Item* copy = item_of(short_layout, {ControlKind::copy});
     OA_CHECK(copy != nullptr && !copy->enabled);
     OA_CHECK(
         press(short_space, tablet, {ControlKind::check_space}).command == Command::recheck_space
