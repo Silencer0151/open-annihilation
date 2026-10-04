@@ -8,7 +8,9 @@
 // its name at UNITNAME, each as the unit's file gives it in the language,
 // read here from the file itself. Put back to English, the same places
 // show the files' own Name and Description, and the pixels change where the
-// two differ.
+// two differ. In the language, the in-game menu's exit menu captions
+// RESTART as the game data translates "Restart", and no caption of it draws
+// past its button.
 
 #include "oa/app/runtime.hpp"
 #include "oa/data/defs/layout.hpp"
@@ -17,6 +19,7 @@
 #include "oa/formats/tdf.hpp"
 #include "oa/sim/unit_spawn/spawn.hpp"
 #include "oa/ui/hud/unit_info.hpp"
+#include "oa/ui/gui_layout.hpp"
 #include "oa/ui/hud/unit_panel.hpp"
 
 #include <SDL3/SDL.h>
@@ -30,6 +33,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace oa::app {
@@ -42,6 +46,8 @@ namespace languages = oa::data::languages;
 constexpr std::size_t kChangedTextPixels = 8;
 /// Columns right of NAME and DESCRIPTION the bottom bar's lines may reach.
 constexpr int kLineReach = 200;
+/// The caption the exit menu gives RESTART, before translation.
+constexpr const char* kRestartCaption = "Restart";
 
 [[noreturn]] void fail(std::string_view what, std::string_view how = {}) {
     throw std::runtime_error(
@@ -287,13 +293,95 @@ void Runtime::check_unit_language() {
     } else if (expected != &languages::english()) {
         fail("found no unit on the commander's first page whose file differs in", expected->tag);
     }
+    // The in-game menu, then its exit menu. RESTART reads as the game data
+    // translates its caption, or as written where it has no translation.
+    const std::string tag(expected->tag);
+    show_match_pause_menu();
+    snapshot("native-unit-language-" + tag + "-menu.ppm");
+    activate_pause_gadget("EXIT");
+    const auto exit_menu = std::string(oa::data::defs::gui_path("EXITMENU.GUI"));
+    if (!match_hud_ || match_hud_panel_ != exit_menu || match_hud_->layout.gadgets.empty())
+        fail("EXIT did not open", exit_menu);
+    snapshot("native-unit-language-" + tag + "-exit-menu.ppm");
+    auto& gadgets = match_hud_->layout.gadgets;
+    const auto caption_of = [&](std::string_view name) -> std::string* {
+        for (auto& gadget : gadgets)
+            if (gadget.common.name == name)
+                if (auto* button = std::get_if<oa::ui::gui_layout::ButtonFields>(&gadget.fields))
+                    return &button->text;
+        return nullptr;
+    };
+    const char* restart_translated = game_translation(kRestartCaption);
+    const std::string restart_shown =
+        restart_translated != nullptr ? restart_translated : kRestartCaption;
+    if (const auto* restart = caption_of("RESTART");
+        restart == nullptr || *restart != restart_shown)
+        fail(
+            "RESTART reads '" + (restart != nullptr ? *restart : std::string()) + "', not",
+            "'" + restart_shown + "'"
+        );
+    // Every caption is cut to fit its button: drawn without the captions,
+    // the panel is the same outside its buttons.
+    render_match_surface();
+    const auto with_captions = match_hud_cpu_;
+    std::vector<std::string> captions;
+    for (auto& gadget : gadgets)
+        if (auto* button = std::get_if<oa::ui::gui_layout::ButtonFields>(&gadget.fields))
+            captions.push_back(std::exchange(button->text, std::string()));
+    render_match_surface();
+    const auto without_captions = match_hud_cpu_;
+    auto next_caption = captions.begin();
+    for (auto& gadget : gadgets)
+        if (auto* button = std::get_if<oa::ui::gui_layout::ButtonFields>(&gadget.fields))
+            button->text = std::move(*next_caption++);
+    render_match_surface();
+    const auto& root = gadgets.front().common;
+    const auto on_button = [&](int x, int y) {
+        return std::any_of(gadgets.begin() + 1, gadgets.end(), [x, y](const auto& gadget) {
+            const auto& record = gadget.common;
+            return record.active != 0 && x >= record.x && x < record.x + record.width &&
+                   y >= record.y && y < record.y + record.height;
+        });
+    };
+    std::size_t spilled = 0;
+    const auto hud_width = static_cast<int>(with_captions.width);
+    const auto hud_height = static_cast<int>(with_captions.height);
+    for (int y = std::max(0, static_cast<int>(root.y));
+         y < std::min(hud_height, root.y + root.height);
+         ++y)
+        for (int x = std::max(0, static_cast<int>(root.x));
+             x < std::min(hud_width, root.x + root.width);
+             ++x) {
+            if (on_button(x, y))
+                continue;
+            const auto at =
+                (static_cast<std::size_t>(y) * with_captions.width + static_cast<std::size_t>(x)) *
+                3U;
+            if (!std::equal(
+                    with_captions.rgb.begin() + static_cast<std::ptrdiff_t>(at),
+                    with_captions.rgb.begin() + static_cast<std::ptrdiff_t>(at + 3U),
+                    without_captions.rgb.begin() + static_cast<std::ptrdiff_t>(at)
+                ))
+                ++spilled;
+        }
+    if (spilled != 0)
+        fail(
+            "the captions of " + exit_menu + " draw " + std::to_string(spilled) +
+                " pixels past their buttons in",
+            tag
+        );
+    activate_pause_gadget("CANCEL");
+    resume_match_pause();
+
     std::cout << "unit language check: " << expected->english_name << ", " << checked
               << " build buttons showed their unit files' names and descriptions in it"
               << (differing ? ", and " + differing->unit_name +
                                   "'s changed back to English and "
                                   "returned"
                             : std::string{})
-              << "; the commander is '" << commander_in_language.name << "'\n";
+              << "; the commander is '" << commander_in_language.name
+              << "'; the exit menu's RESTART reads '" << restart_shown
+              << "', each caption within its button\n";
 }
 
 } // namespace oa::app

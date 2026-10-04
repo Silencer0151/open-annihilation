@@ -1550,7 +1550,9 @@ if(OA_BUILD_PLATFORM)
       # SDL input on dummy devices, the commander's build buttons show their
       # unit files' names and descriptions in the language at the bottom
       # bar's NAME and DESCRIPTION, and the commander its name at UNITNAME;
-      # put back to English, the same places show the files' own texts.
+      # put back to English, the same places show the files' own texts. In
+      # the language the in-game menu's exit menu captions RESTART as the
+      # game data translates it, and no caption of it runs past its button.
       foreach(oa_language_case IN ITEMS "english;en;en" "german;de;de" "french;fr;fr" "italian;it;it"
           "spanish;es;es" "system;system;fr")
         list(GET oa_language_case 0 oa_language_name)

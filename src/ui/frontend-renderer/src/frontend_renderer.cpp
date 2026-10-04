@@ -52,6 +52,8 @@ constexpr uint8_t palette_button_fill = 20;
 constexpr std::size_t grayed_frame_offset = 2;
 constexpr std::size_t grayed_shade_row = 0x20 - 0x14;
 constexpr std::size_t shade_table_rows = 32;
+// A button's caption shows no wider than its record less this many pixels.
+constexpr int32_t caption_margin = 6;
 
 struct Rectangle {
     int left = 0;
@@ -344,11 +346,28 @@ void blit_stretched(
     }
 }
 
+// Cuts characters from a caption's end until it is no wider than `limit`
+// pixels, or nothing is left; a character is a byte of the game's code
+// page, or a whole UTF-8 sequence where the game text is UTF-8.
+std::string_view fitted_caption(
+    const formats::fnt::Font& font, std::string_view text, int32_t limit, bool game_text
+) {
+    const bool utf8 = present::game_text_settings().utf8;
+    while (!text.empty() && measure_fnt_game_text(font, text, game_text) > limit)
+        text = text.substr(0, utf8 ? present::last_character_start(text) : text.size() - 1);
+    return text;
+}
+
 // Draws a button's caption, and the underline under its quick key when the
-// caption is centred and the button is not grayed.
+// caption is centred and the button is not grayed. The caption, or the
+// first stage's of a button with stages, loses characters from its end
+// until it is no wider than the record less caption_margin, and is then
+// placed as a caption that fits: centred, a long label shows its start
+// inside the button rather than running past both its sides.
 void draw_button_text(
     Surface& surface,
     const ui::gui_layout::Gadget& gadget,
+    int32_t record_width,
     ButtonCondition condition,
     const formats::fnt::Font& selected_font,
     const PaletteBytes& active_palette,
@@ -360,7 +379,9 @@ void draw_button_text(
     const auto* fields = std::get_if<ui::gui_layout::ButtonFields>(&gadget.fields);
     if (fields == nullptr || fields->text.empty())
         return;
-    const auto text = staged_caption(fields->text, selected_stage);
+    auto text = staged_caption(fields->text, selected_stage);
+    if (text.data() == fields->text.data())
+        text = fitted_caption(selected_font, text, record_width - caption_margin, game_text);
     if (text.empty())
         return;
     const auto text_width = measure_fnt_game_text(selected_font, text, game_text);
@@ -1298,6 +1319,7 @@ void render_screen_into(
             draw_button_text(
                 result,
                 resolved_gadget,
+                gadget.common.width,
                 condition,
                 resources.font,
                 active_palette,
@@ -1352,6 +1374,7 @@ void render_screen_into(
         draw_button_text(
             result,
             gadget,
+            gadget.common.width,
             condition,
             resources.font,
             active_palette,

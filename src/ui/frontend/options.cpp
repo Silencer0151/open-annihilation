@@ -5,10 +5,12 @@
 #include "oa/ui/frontend/options.hpp"
 #include "oa/base/game_math.hpp"
 
+#include "oa/data/languages/translation.hpp"
 #include "oa/ui/gui_input/gadget_panel.hpp"
 #include "oa/ui/gui_layout/gui_gadget.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
@@ -38,6 +40,9 @@ constexpr uint8_t kChatVolumeStep = 5; // chat bytes are stage * 5
 constexpr int16_t kGamePanelExtraWidth = 0x96;
 constexpr int16_t kGamePanelFillerX = 0x80;
 constexpr std::string_view kFillerName = "PANEL";
+/// The bytes, NUL included, of the longest text panel_set_text looks up in
+/// the game's translation; a longer text shows as it is.
+constexpr std::size_t kTranslationKeyBytes = 0x200;
 constexpr uint8_t kSoundModeMask = 7;
 constexpr uint8_t kSoundModeOff = 0;
 constexpr uint8_t kSoundModeTest = 1;
@@ -296,7 +301,14 @@ void panel_set_text(Panel& panel, std::string_view name, std::string_view text) 
     auto* control = panel_control(panel, name);
     if (control == nullptr)
         return;
-    set_control_text(*control, text);
+    // The text shows in the language shown, as the texts a GUI file holds do.
+    std::array<char, kTranslationKeyBytes> key{};
+    const char* translated = nullptr;
+    if (text.size() < key.size()) {
+        std::memcpy(key.data(), text.data(), text.size());
+        translated = oa::data::languages::installed_translation(nullptr, key.data());
+    }
+    set_control_text(*control, translated != nullptr ? std::string_view(translated) : text);
     panel.dirty = true;
     if (control->type != ControlType::button)
         return;

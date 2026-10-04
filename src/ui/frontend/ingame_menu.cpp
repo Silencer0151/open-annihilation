@@ -7,14 +7,12 @@
 #include "oa/data/match_rules/difficulty_names.hpp"
 #include "oa/ui/campaign/frontend_host.hpp"
 #include "oa/ui/campaign/single_player.hpp"
-#include "oa/ui/gui_layout.hpp"
 
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string_view>
-#include <utility>
 
 namespace oa::ui::frontend {
 
@@ -55,12 +53,8 @@ bool is_multiplayer(const IngameContext& context) noexcept {
 ///
 /// @param[in,out] panel the loaded YESORNO panel
 void set_choice_labels(Panel& panel) {
-    const auto translate = ui::gui_layout::game_translation_lookup();
-    for (const auto& [name, caption] :
-         {std::pair<std::string_view, std::string_view>{"CHOICE1", "Yes"}, {"CHOICE2", "No"}}) {
-        const auto translated = translate(caption);
-        panel_set_text(panel, name, translated ? std::string_view(*translated) : caption);
-    }
+    panel_set_text(panel, "CHOICE1", "Yes");
+    panel_set_text(panel, "CHOICE2", "No");
 }
 
 // Checks the disc a campaign or skirmish restart/load needs; false after

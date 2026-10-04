@@ -213,10 +213,13 @@ void panel_set_grayed(Panel& panel, std::string_view name, bool grayed) noexcept
 /// @param disabled New grayed state.
 void panel_set_disabled(Panel& panel, std::string_view name, bool disabled) noexcept;
 
-/// Replaces a record's text and marks the panel dirty.
+/// Replaces a record's text, in the language shown, and marks the panel dirty.
 ///
-/// A button then takes the quick key its new caption gives it, as the
-/// gadget engine assigns one (ui::gui_input::caption_quick_key): none for a
+/// The text is the game's own: the record shows the game data's translation
+/// of it (oa/data/languages/translation.hpp), or the text itself where the
+/// data has none, as a text a GUI file holds shows. A button then takes the
+/// quick key its new caption gives it, as the gadget engine assigns one
+/// (ui::gui_input::caption_quick_key): none for a
 /// button with stages, the key it had with the no_quick_key attribute or an
 /// empty caption, else the first caption letter no other button's key
 /// takes (ui::gui_input::free_quick_key). The panel's labels hold no quick
@@ -225,7 +228,7 @@ void panel_set_disabled(Panel& panel, std::string_view name, bool disabled) noex
 ///
 /// @param[in,out] panel Panel searched.
 /// @param name Record name; a missing record changes nothing.
-/// @param text New text.
+/// @param text New text, before translation.
 void panel_set_text(Panel& panel, std::string_view name, std::string_view text) noexcept;
 
 // ---------------------------------------------------------------------------

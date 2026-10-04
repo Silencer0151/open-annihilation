@@ -5,7 +5,7 @@
 add_library(oa-ui-frontend options.cpp ingame_menu.cpp savegame_dialogs.cpp main_menu.cpp
   end_mission.cpp resource_palette.cpp)
 add_library(oa::ui::frontend ALIAS oa-ui-frontend)
-target_link_libraries(oa-ui-frontend PRIVATE oa-base-text oa-base-game-math)
+target_link_libraries(oa-ui-frontend PRIVATE oa-base-text oa-base-game-math oa-data-languages)
 target_include_directories(oa-ui-frontend PUBLIC include)
 target_link_libraries(oa-ui-frontend PUBLIC oa-ui-frontend-state oa-ui-gui-layout oa-present
   oa-present-world-renderer oa-ui-campaign oa-data-campaign oa-data-match-rules PRIVATE oa-data-persist oa-options

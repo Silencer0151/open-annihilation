@@ -266,6 +266,67 @@ void test_caption_placement() {
     CHECK(caption_at(21, 21, left, 8, 12));
 }
 
+// A caption wider than its button less 6 pixels loses characters from its
+// end until it is no wider, and is then placed as a caption that fits:
+// centred, its start shows inside the button and nothing is drawn past the
+// button's sides. A caption that fits is drawn whole.
+void test_caption_cut_to_button() {
+    namespace renderer = oa::ui::frontend_renderer;
+    constexpr uint8_t ground = 99;
+    constexpr uint8_t glyph_colour = 7;
+    constexpr uint8_t button_fill = 20;
+    constexpr int16_t left_edge = 5;
+    constexpr int16_t button_width = 20;
+    constexpr std::size_t screen_width = 40;
+    constexpr std::size_t screen_height = 20;
+    renderer::ScreenResources resources;
+    resources.background.width = screen_width;
+    resources.background.height = screen_height;
+    resources.background.rgb.assign(screen_width * screen_height * 3U, 0);
+    for (std::size_t pixel = 0; pixel < screen_width * screen_height; ++pixel)
+        resources.background.rgb[pixel * 3] = ground;
+    for (std::size_t index = 0; index < 256; ++index)
+        resources.gui_palette[index * 4] = static_cast<uint8_t>(index);
+    resources.background.palette = resources.gui_palette;
+    // Glyphs 3 pixels wide and 4 high: the text is 6 high.
+    oa::formats::fnt::Glyph glyph;
+    glyph.width = 3;
+    glyph.height = 4;
+    glyph.pixels.assign(12, glyph_colour);
+    glyph.coverage.assign(12, 1);
+    for (const char character : {'I', 'A', 'B'})
+        resources.font.glyphs[static_cast<unsigned char>(character)] = glyph;
+    const renderer::ButtonPresentation state{
+        "CAPTION", renderer::ButtonCondition::normal, std::nullopt, std::nullopt, std::nullopt
+    };
+    const auto drawn_with = [&](const char* text, int16_t width) {
+        auto caption = button("CAPTION", left_edge, left_edge, width, 10);
+        caption.common.attributes = 2; // centred caption
+        std::get<oa::ui::gui_layout::ButtonFields>(caption.fields).text = text;
+        resources.layout.gadgets = {caption};
+        return renderer::render_screen(resources, {&state, 1});
+    };
+    // A row of the glyphs, which start at 5 + (10 - 1 - 6) / 2 = 6, below the
+    // button's bevel.
+    constexpr std::size_t row = 7;
+    // "ABABABAB" is 24 wide; cut to 14 or less it is "ABAB", 12 wide, at
+    // x = 5 + (19 - 12) / 2 + 1 = 9 to 20.
+    auto drawn = drawn_with("ABABABAB", button_width);
+    CHECK(red_at(drawn, 8, row) == button_fill && red_at(drawn, 9, row) == glyph_colour);
+    CHECK(red_at(drawn, 20, row) == glyph_colour && red_at(drawn, 21, row) == button_fill);
+    for (std::size_t x = 0; x < screen_width; ++x)
+        if (x < static_cast<std::size_t>(left_edge) ||
+            x >= static_cast<std::size_t>(left_edge + button_width))
+            CHECK(red_at(drawn, x, row) == ground);
+    // A caption exactly as wide as the button less 6 is drawn whole: "ABAB"
+    // in a button 18 wide, at x = 5 + (17 - 12) / 2 + 1 = 8 to 19; one more
+    // character is cut off.
+    drawn = drawn_with("ABAB", 18);
+    CHECK(red_at(drawn, 8, row) == glyph_colour && red_at(drawn, 19, row) == glyph_colour);
+    const auto cut = drawn_with("ABABA", 18);
+    CHECK(cut.rgb == drawn.rgb);
+}
+
 // Six grayed-out 64x64 art buttons drawn in all 256 colours of a palette
 // whose colours all differ, as a builder's page of empty build slots is:
 // every pixel is darkened to the shade table's colour for its own gray, and
@@ -814,6 +875,7 @@ int main() {
     test_grayed_art_cost();
     test_quick_key_and_focus();
     test_caption_placement();
+    test_caption_cut_to_button();
     test_blend_rect();
     test_shade_panel_below();
     if (failures != 0) {

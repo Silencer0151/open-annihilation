@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <utility>
 
 namespace oa::ui::frontend::test {
 namespace {
@@ -374,6 +375,61 @@ OA_GAME_DATA_TEST(yes_or_no_quick_keys_follow_the_language) {
     OA_CHECK(text_of(watching, "CHOICE1") == "Yes");
     OA_CHECK(panel_control(watching, "CHOICE1")->quick_key == 'Y');
     OA_CHECK(panel_control(watching, "CHOICE2")->quick_key == 'N');
+}
+
+/// Answers the French of the texts the in-game menus set, as
+/// gamedata\translate.tdf gives them in the game's code page.
+///
+/// @param text the text
+/// @return its French, or null for any other text
+const char* french_menu_texts(void*, const char* text) {
+    static constexpr std::pair<const char*, const char*> kFrench[] = {
+        {"Restart", "Red\xE9marrer"},
+        {"Settings", "Jeu"},
+        {"Surrender this battle and return to main menu?",
+         "Abandonner cette bataille et retourner au menu principal?"},
+        {"Exit the Battle", "Quitter la bataille"},
+    };
+    for (const auto& [english, french] : kFrench)
+        if (std::strcmp(text, english) == 0)
+            return french;
+    return nullptr;
+}
+
+OA_GAME_DATA_TEST(texts_the_menus_set_follow_the_language) {
+    Panel options;
+    Panel exit_menu;
+    Panel confirm;
+    if (!load_panel(options, "armopt.gui") || !load_panel(exit_menu, "exitmenu.gui") ||
+        !load_panel(confirm, "yesorno.gui"))
+        return;
+    Calls calls;
+    auto context = make_context(calls, SessionKind::skirmish);
+    oa::data::languages::set_translation_hooks({nullptr, french_menu_texts, nullptr});
+    ingame_enter_options(options, context);
+    ingame_enter_exit_menu(exit_menu, context);
+    context.exit_kind = ExitKind::main_menu;
+    ingame_enter_exit_confirm(confirm, context);
+    Panel spectator;
+    load_panel(spectator, "yesorno.gui");
+    context.exit_kind = ExitKind::leave_game;
+    context.spectating = true;
+    ingame_enter_exit_confirm(spectator, context);
+    oa::data::languages::set_translation_hooks({});
+    // Each shows as the game data translates it; Restart's caption still
+    // gives its button the quick key R.
+    OA_CHECK(text_of(options, "MISSION") == "Jeu");
+    OA_CHECK(text_of(exit_menu, "RESTART") == "Red\xE9marrer");
+    OA_CHECK(panel_control(exit_menu, "RESTART")->quick_key == 'R');
+    OA_CHECK(
+        text_of(confirm, "TITLE") == "Abandonner cette bataille et retourner au menu principal?"
+    );
+    OA_CHECK(text_of(spectator, "TITLE") == "Quitter la bataille");
+    // A text without a translation shows as it is.
+    OA_CHECK(text_of(exit_menu, "MAINMENU") == "Exit to Menu");
+    // With no translation the texts are the English ones.
+    ingame_enter_exit_menu(exit_menu, context);
+    OA_CHECK(text_of(exit_menu, "RESTART") == "Restart");
 }
 
 OA_GAME_DATA_TEST(continue_watching_prompt) {
