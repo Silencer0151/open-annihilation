@@ -64,8 +64,9 @@ struct Runtime::EngineSettingsState {
     /// when no retry cleared them.
     RendererHost* records_host{};
     std::optional<oa::ui::engine_settings::Dialog> dialog; ///< the open dialog
-    /// The section the dialog showed when it last closed; it opens there.
-    oa::ui::engine_settings::Page last_page{oa::ui::engine_settings::Page::common_tweaks};
+    /// The section the dialog showed when it last closed; it opens there,
+    /// and on Mods the first time.
+    oa::ui::engine_settings::Page last_page{oa::ui::engine_settings::Page::mods};
     std::optional<oa::ui::engine_settings::DialogFonts> fonts; ///< loaded on first use
     bool fonts_missing{}; ///< loading the fonts failed; they are not tried again
     /// The icon the header and the OA buttons draw: the window icon's
