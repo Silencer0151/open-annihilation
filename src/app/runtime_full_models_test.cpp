@@ -7,7 +7,8 @@
 // bridge as a band of the match frame draws it. Synthetic scenes: a flat
 // square at rest and turned, a back-facing polygon left out, textured quads
 // over fixed, animated and team textures with the running and the first
-// frame, a unit with a depth plane whose polygons the sort orders, a lit
+// frame, units with a depth plane whose polygons are ordered as the plane
+// shows them, one a panel resting on a square drawn after it, a lit
 // building's darkened and brightened rows and its flat colours through the
 // shade table, a cloaked unit at half alpha over an opaque canvas, a
 // building under construction with its bands and outline, units under the
@@ -238,6 +239,27 @@ std::shared_ptr<Model> stacked_model() {
         object.primitives.begin(), primitive({4, 7, 6, 5}, second_ink, nullptr)
     );
     model->objects.push_back(object);
+    return model;
+}
+
+/// A square four units up, and a child piece over it: a panel rising from
+/// the square's height inside its edge to eight units higher well past it,
+/// so gently that where the two overlap the panel's depth is still the
+/// square's. The panel's piece is drawn first and the square's last.
+std::shared_ptr<Model> resting_model() {
+    auto model = std::make_shared<Model>();
+    model->objects.push_back(square_object(4, ink, nullptr));
+    Object panel;
+    const int32_t w = 4 * unit;
+    const int32_t foot = 4 * unit;
+    const int32_t tip = 44 * unit;
+    const int32_t low = 4 * unit;
+    const int32_t high = 12 * unit;
+    panel.vertices = {{-w, low, foot}, {w, low, foot}, {w, high, tip}, {-w, high, tip}};
+    panel.primitives.push_back(primitive({0, 3, 2, 1}, second_ink, nullptr));
+    panel.parent = 0;
+    model->objects[0].first_child = 1;
+    model->objects.push_back(panel);
     return model;
 }
 
@@ -1026,6 +1048,32 @@ void test_depth_sorted() {
     OA_CHECK(top[0] == second_ink && top[3] == 255);
     const uint8_t* ground = drawn.at(unit_x, unit_z + 6);
     OA_CHECK(ground[0] == ink && ground[3] == 255);
+    OA_CHECK(card.stage.counts().polygons == 2);
+}
+
+// A unit with a depth plane whose panel rests on its square: the plane keeps
+// the square, drawn later, where the two have the same depth, so the square
+// shows whole under the panel's foot, and the panel past the square's edge.
+void test_resting_on_depth_plane() {
+    Scene scene;
+    SceneUnit& resting = scene.add_unit(resting_model(), 1, unit_x, unit_z);
+    resting.unit->flags2 |= OA_UNIT_FLAG2_Z_BUFFER;
+    Card card(scene);
+    ProcessorPicture processor;
+    scene.begin_frame(processor, 0);
+    scene.plan_unit(resting);
+    scene.raster_processor(processor);
+    const CardPicture drawn = card.raster(scene);
+    check_exact("resting on the depth plane", compare(drawn, processor, scene));
+    std::size_t square = 0;
+    std::size_t panel = 0;
+    for (std::size_t i = 0; i < drawn.rgba.size(); i += 4)
+        if (drawn.rgba[i + 3] == 255) {
+            square += drawn.rgba[i] == ink ? 1 : 0;
+            panel += drawn.rgba[i] == second_ink ? 1 : 0;
+        }
+    OA_CHECK(square == static_cast<std::size_t>(4 * half_side * half_side));
+    OA_CHECK(panel > 0);
     OA_CHECK(card.stage.counts().polygons == 2);
 }
 
@@ -2040,6 +2088,7 @@ int main(int argc, char** argv) {
         test_back_face();
         test_textured();
         test_depth_sorted();
+        test_resting_on_depth_plane();
         test_lit_building();
         test_cloaked();
         test_nanoframe();

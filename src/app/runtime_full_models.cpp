@@ -8,9 +8,12 @@
 // planner rebuilt, with today's arithmetic for the path the processor draws
 // the piece by: a cached piece as the cached image places it, a moving piece
 // as the flat draw places it, a carried unit as its carrier composes it.
-// Within a unit drawn with a depth plane the polygons are sorted lowest
-// first by their depth, which stands in for the plane; a unit without one
-// keeps the processor's order. The palette's tables are approximated as the
+// Within a unit drawn with a depth plane the polygons are drawn in the
+// order the plane shows them: of two that overlap, the one higher where
+// they overlap goes later, and at the same height the one the processor
+// draws later, as the plane keeps a later pixel of the same height; the
+// rest lowest mean depth first. A unit without one keeps the processor's
+// order. The palette's tables are approximated as the
 // design says: the shade rows as a per-vertex multiplier with a bright page
 // for the rows above unlit, the alpha table as alpha 0.5, the blue table as
 // a halved colour and an additive lift, the nanoframe's bands per polygon
@@ -30,8 +33,11 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <functional>
+#include <numeric>
 #include <span>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 
 namespace oa::app::full {
@@ -91,6 +97,23 @@ constexpr int32_t outline_plane_margin = 2;
 /// The most map pixels a side of that plane takes; a model wider or
 /// taller than that draws no outline.
 constexpr int32_t most_outline_plane_side = 4096;
+/// The least area two polygons must share, in square frame pixels at zoom
+/// 1, for the depth plane's order to weigh them against each other.
+constexpr double least_shared_area = 1.0 / 1024.0;
+/// How far outside a fan triangle, as a share of its weights, a point may
+/// lie and still be taken as inside it.
+constexpr double fan_weight_tolerance = 1e-6;
+/// What an interpolated depth may fall short of a whole depth by and still
+/// be floored to it: the rounding of the interpolation, so that a point
+/// whose depth is whole by its corners takes that depth.
+constexpr double depth_rounding_allowance = 1e-6;
+/// The 64-bit FNV-1a digest a unit's polygon shapes are folded into: its
+/// start and its multiplier.
+constexpr uint64_t shape_digest_start = 0xcbf29ce484222325ULL;
+constexpr uint64_t shape_digest_multiplier = 0x100000001b3ULL;
+/// The most units whose polygon order is kept from frame to frame; one
+/// more forgets them all.
+constexpr size_t most_kept_plane_orders = 4096;
 /// The edge of the white page every solid fill draws from, so that each
 /// renderer draws the fill with the batch's own blend.
 constexpr uint32_t solid_page_edge = 2;
@@ -114,6 +137,7 @@ struct Corner {
     float u{};
     float v{};
     card::Colour colour{};
+    int32_t depth{}; ///< the depth plane's value at the corner; units' polygons alone
 };
 
 /// One polygon to emit, in the order and the look the processor draws it.
@@ -352,6 +376,375 @@ int64_t winding(std::span<const Corner> corners) noexcept {
     return sum;
 }
 
+/// A point in frame pixels at zoom 1, between pixel centres.
+struct PlanePoint {
+    double x{};
+    double y{};
+};
+
+/// What the depth plane's order reads of one polygon: whether it draws, the
+/// rectangle round its corners in frame pixels, and its lowest and highest
+/// corner depth.
+struct PolygonExtent {
+    bool drawn{};
+    int32_t left{};
+    int32_t right{};
+    int32_t top{};
+    int32_t bottom{};
+    int32_t lowest{};
+    int32_t highest{};
+};
+
+/// Scratch of the order a unit's depth plane gives its polygons, kept from
+/// unit to unit.
+struct PlaneOrderScratch {
+    std::vector<PolygonExtent> extents;
+    std::vector<uint32_t> by_mean; ///< the polygons, lowest mean depth first
+    std::vector<uint32_t> ranks;   ///< each polygon's place in by_mean
+    std::vector<uint32_t> by_left; ///< the drawn polygons, leftmost first
+    /// Each pair of overlapping polygons: the one drawn under, then the one
+    /// drawn over it.
+    std::vector<std::pair<uint32_t, uint32_t>> edges;
+    std::vector<uint32_t> first_over; ///< where each polygon's overs start in overs
+    std::vector<uint32_t> next_over;  ///< where each polygon's next over goes in overs
+    std::vector<uint32_t> overs;
+    std::vector<uint32_t> unders_left; ///< each polygon's unders not yet placed
+    std::vector<uint32_t> ready;       ///< ranks whose unders are all placed, a heap
+    std::vector<uint8_t> placed;
+    std::vector<PlanePoint> shared;
+    std::vector<PlanePoint> clipped;
+    std::vector<Polygon> ordered;
+};
+
+/// A unit's polygon order, kept while its polygons keep their shape.
+struct KeptPlaneOrder {
+    uint64_t shape{};            ///< the digest of the shape the order was found for
+    std::vector<uint32_t> order; ///< the polygons by their place in the processor's order
+};
+
+/// Twice the signed area of the triangle a point and an edge make, positive
+/// when the point lies on the inner side of an edge of a polygon whose
+/// winding is positive.
+double edge_side(const PlanePoint& from, const PlanePoint& to, const PlanePoint& point) noexcept {
+    return (to.x - from.x) * (point.y - from.y) - (to.y - from.y) * (point.x - from.x);
+}
+
+/// Returns a corner's place as a plane point, from an origin of whole frame
+/// pixels, so that the same shape gives the same points wherever it lies.
+PlanePoint plane_point(const Corner& corner, const Corner& origin) noexcept {
+    return {
+        static_cast<double>(int64_t{corner.x} - origin.x),
+        static_cast<double>(int64_t{corner.y} - origin.y)
+    };
+}
+
+/// Finds the depth a polygon's corners give a point, interpolated across
+/// the fan triangle from the first corner that holds it.
+///
+/// @param corners the polygon's corners, of positive winding
+/// @param origin the corner the point is placed from
+/// @param point the point
+/// @param[out] depth the interpolated depth, before it is floored
+/// @return false when no fan triangle holds the point
+bool depth_at(
+    std::span<const Corner> corners, const Corner& origin, const PlanePoint& point, double& depth
+) noexcept {
+    const PlanePoint first = plane_point(corners[0], origin);
+    for (size_t k = 1; k + 1 < corners.size(); ++k) {
+        const PlanePoint second = plane_point(corners[k], origin);
+        const PlanePoint third = plane_point(corners[k + 1], origin);
+        const double area = edge_side(first, second, third);
+        if (area == 0.0)
+            continue;
+        const double first_weight = edge_side(second, third, point) / area;
+        const double second_weight = edge_side(third, first, point) / area;
+        const double third_weight = edge_side(first, second, point) / area;
+        if (first_weight < -fan_weight_tolerance || second_weight < -fan_weight_tolerance ||
+            third_weight < -fan_weight_tolerance)
+            continue;
+        depth = first_weight * corners[0].depth + second_weight * corners[k].depth +
+                third_weight * corners[k + 1].depth;
+        return true;
+    }
+    return false;
+}
+
+/// Finds the centre of the area two polygons of positive winding share,
+/// taking them as convex.
+///
+/// @param first one polygon's corners
+/// @param second the other's
+/// @param origin the corner the centre is placed from
+/// @param[in,out] scratch the clipping scratch
+/// @param[out] centre the centre of the shared area
+/// @return false when they share less than least_shared_area
+bool shared_centre(
+    std::span<const Corner> first,
+    std::span<const Corner> second,
+    const Corner& origin,
+    PlaneOrderScratch& scratch,
+    PlanePoint& centre
+) {
+    auto& shared = scratch.shared;
+    auto& clipped = scratch.clipped;
+    shared.clear();
+    for (const Corner& corner : second)
+        shared.push_back(plane_point(corner, origin));
+    for (size_t k = 0; k < first.size() && !shared.empty(); ++k) {
+        const PlanePoint from = plane_point(first[k], origin);
+        const PlanePoint to = plane_point(first[(k + 1) % first.size()], origin);
+        clipped.clear();
+        for (size_t m = 0; m < shared.size(); ++m) {
+            const PlanePoint& here = shared[m];
+            const PlanePoint& next = shared[(m + 1) % shared.size()];
+            const double here_side = edge_side(from, to, here);
+            const double next_side = edge_side(from, to, next);
+            if (here_side >= 0.0)
+                clipped.push_back(here);
+            if ((here_side >= 0.0) != (next_side >= 0.0)) {
+                const double along = here_side / (here_side - next_side);
+                clipped.push_back(
+                    {here.x + along * (next.x - here.x), here.y + along * (next.y - here.y)}
+                );
+            }
+        }
+        shared.swap(clipped);
+    }
+    if (shared.size() < 3)
+        return false;
+    double twice_area = 0.0;
+    double x_sum = 0.0;
+    double y_sum = 0.0;
+    for (size_t m = 0; m < shared.size(); ++m) {
+        const PlanePoint& here = shared[m];
+        const PlanePoint& next = shared[(m + 1) % shared.size()];
+        const double cross = here.x * next.y - next.x * here.y;
+        twice_area += cross;
+        x_sum += (here.x + next.x) * cross;
+        y_sum += (here.y + next.y) * cross;
+    }
+    if (std::abs(twice_area) < 2.0 * least_shared_area)
+        return false;
+    centre = {x_sum / (3.0 * twice_area), y_sum / (3.0 * twice_area)};
+    return true;
+}
+
+/// Digests the shape of a unit's polygons: how many corners each has, and
+/// each corner's place from the first polygon's first corner and its depth,
+/// all the order the depth plane gives them depends on.
+///
+/// @param corners the frame's corners
+/// @param polygons the unit's polygons
+/// @return the digest
+uint64_t
+polygon_shape(std::span<const Corner> corners, std::span<const Polygon> polygons) noexcept {
+    uint64_t digest = shape_digest_start;
+    const auto fold = [&digest](int64_t value) {
+        digest = (digest ^ static_cast<uint64_t>(value)) * shape_digest_multiplier;
+    };
+    fold(static_cast<int64_t>(polygons.size()));
+    if (polygons.empty())
+        return digest;
+    const Corner& origin = corners[polygons.front().first_corner];
+    for (const Polygon& polygon : polygons) {
+        fold(polygon.corner_count);
+        for (const Corner& corner : corners.subspan(polygon.first_corner, polygon.corner_count)) {
+            fold(int64_t{corner.x} - origin.x);
+            fold(int64_t{corner.y} - origin.y);
+            fold(corner.depth);
+        }
+    }
+    return digest;
+}
+
+/// Finds the order a unit's depth plane shows its polygons in.
+///
+/// The polygons come in the processor's order. Of two that overlap, the
+/// later in the result is the one the plane shows where they overlap: the
+/// higher there, its depth floored as the plane keeps it, and at the same
+/// height the one the processor draws later, which the plane lets over a
+/// pixel of the same height. Where the overlaps leave the order open, as
+/// for polygons apart, the lower mean depth goes first and the processor's
+/// order among equals; where they contradict one another, the lowest mean
+/// depth left goes next. The same shape anywhere gives the same order.
+///
+/// @param corners the frame's corners
+/// @param polygons the unit's polygons, at least one
+/// @param[in,out] scratch the scratch
+/// @param[out] order the polygons by their place in `polygons`, in drawing order
+void find_plane_order(
+    std::span<const Corner> corners,
+    std::span<const Polygon> polygons,
+    PlaneOrderScratch& scratch,
+    std::vector<uint32_t>& order
+) {
+    const auto count = static_cast<uint32_t>(polygons.size());
+    const Corner& origin = corners[polygons.front().first_corner];
+    const auto corners_of = [&](uint32_t index) {
+        const Polygon& polygon = polygons[index];
+        return corners.subspan(polygon.first_corner, polygon.corner_count);
+    };
+    auto& extents = scratch.extents;
+    extents.assign(count, PolygonExtent{});
+    for (uint32_t i = 0; i < count; ++i) {
+        if (polygons[i].corner_count < 3)
+            continue;
+        const std::span<const Corner> own = corners_of(i);
+        PolygonExtent& extent = extents[i];
+        extent.drawn = winding(own) > 0;
+        extent.left = extent.right = own[0].x;
+        extent.top = extent.bottom = own[0].y;
+        extent.lowest = extent.highest = own[0].depth;
+        for (const Corner& corner : own) {
+            extent.left = std::min(extent.left, corner.x);
+            extent.right = std::max(extent.right, corner.x);
+            extent.top = std::min(extent.top, corner.y);
+            extent.bottom = std::max(extent.bottom, corner.y);
+            extent.lowest = std::min(extent.lowest, corner.depth);
+            extent.highest = std::max(extent.highest, corner.depth);
+        }
+    }
+    auto& by_mean = scratch.by_mean;
+    by_mean.resize(count);
+    std::iota(by_mean.begin(), by_mean.end(), 0U);
+    std::stable_sort(by_mean.begin(), by_mean.end(), [&](uint32_t a, uint32_t b) {
+        return polygons[a].depth < polygons[b].depth;
+    });
+    auto& ranks = scratch.ranks;
+    ranks.resize(count);
+    for (uint32_t rank = 0; rank < count; ++rank)
+        ranks[by_mean[rank]] = rank;
+    // The drawn polygons by their left edge, so that each meets only those
+    // starting left of its right edge.
+    auto& by_left = scratch.by_left;
+    by_left.clear();
+    for (uint32_t i = 0; i < count; ++i)
+        if (extents[i].drawn)
+            by_left.push_back(i);
+    std::sort(by_left.begin(), by_left.end(), [&](uint32_t a, uint32_t b) {
+        return extents[a].left < extents[b].left;
+    });
+    auto& edges = scratch.edges;
+    edges.clear();
+    for (size_t first = 0; first < by_left.size(); ++first) {
+        for (size_t second = first + 1; second < by_left.size(); ++second) {
+            if (extents[by_left[second]].left >= extents[by_left[first]].right)
+                break;
+            const uint32_t earlier = std::min(by_left[first], by_left[second]);
+            const uint32_t later = std::max(by_left[first], by_left[second]);
+            const PolygonExtent& under = extents[earlier];
+            const PolygonExtent& over = extents[later];
+            if (under.bottom <= over.top || over.bottom <= under.top)
+                continue;
+            bool later_shows = false;
+            if (under.highest <= over.lowest) {
+                later_shows = true;
+            } else if (over.highest < under.lowest) {
+                later_shows = false;
+            } else {
+                PlanePoint centre;
+                double earlier_depth = 0.0;
+                double later_depth = 0.0;
+                if (!shared_centre(
+                        corners_of(earlier), corners_of(later), origin, scratch, centre
+                    ) ||
+                    !depth_at(corners_of(earlier), origin, centre, earlier_depth) ||
+                    !depth_at(corners_of(later), origin, centre, later_depth))
+                    continue;
+                later_shows = std::floor(later_depth + depth_rounding_allowance) >=
+                              std::floor(earlier_depth + depth_rounding_allowance);
+            }
+            edges.emplace_back(later_shows ? earlier : later, later_shows ? later : earlier);
+        }
+    }
+    // Each polygon's overs, gathered by the polygon under them.
+    auto& first_over = scratch.first_over;
+    auto& overs = scratch.overs;
+    auto& unders_left = scratch.unders_left;
+    first_over.assign(count + 1, 0);
+    unders_left.assign(count, 0);
+    for (const auto& [under, over] : edges) {
+        ++first_over[under + 1];
+        ++unders_left[over];
+    }
+    for (uint32_t i = 0; i < count; ++i)
+        first_over[i + 1] += first_over[i];
+    overs.resize(edges.size());
+    auto& next_over = scratch.next_over;
+    next_over.assign(first_over.begin(), first_over.end() - 1);
+    for (const auto& [under, over] : edges)
+        overs[next_over[under]++] = over;
+    auto& ready = scratch.ready;
+    auto& placed = scratch.placed;
+    ready.clear();
+    placed.assign(count, 0);
+    order.clear();
+    // A heap of ranks whose top is the lowest.
+    const std::greater<uint32_t> lowest_first;
+    for (uint32_t i = 0; i < count; ++i)
+        if (unders_left[i] == 0)
+            ready.push_back(ranks[i]);
+    std::make_heap(ready.begin(), ready.end(), lowest_first);
+    uint32_t lowest_left = 0;
+    while (order.size() < count) {
+        uint32_t next = count;
+        while (!ready.empty() && next == count) {
+            std::pop_heap(ready.begin(), ready.end(), lowest_first);
+            const uint32_t candidate = by_mean[ready.back()];
+            ready.pop_back();
+            if (placed[candidate] == 0)
+                next = candidate;
+        }
+        if (next == count) {
+            // The overlaps go round in a circle: the lowest mean depth left.
+            while (placed[by_mean[lowest_left]] != 0)
+                ++lowest_left;
+            next = by_mean[lowest_left];
+        }
+        placed[next] = 1;
+        order.push_back(next);
+        for (uint32_t k = first_over[next]; k < first_over[next + 1]; ++k) {
+            const uint32_t over = overs[k];
+            if (placed[over] == 0 && unders_left[over] != 0 && --unders_left[over] == 0) {
+                ready.push_back(ranks[over]);
+                std::push_heap(ready.begin(), ready.end(), lowest_first);
+            }
+        }
+    }
+}
+
+/// Orders a unit's polygons as its depth plane shows them (find_plane_order),
+/// with the order kept for the unit while its polygons keep their shape.
+///
+/// @param unit_key the unit's draw state, which the order is kept by
+/// @param corners the frame's corners
+/// @param[in,out] polygons the unit's polygons, reordered
+/// @param[in,out] scratch the scratch
+/// @param[in,out] kept the orders kept by unit
+void order_as_depth_plane(
+    const void* unit_key,
+    std::span<const Corner> corners,
+    std::vector<Polygon>& polygons,
+    PlaneOrderScratch& scratch,
+    std::unordered_map<const void*, KeptPlaneOrder>& kept
+) {
+    if (polygons.empty())
+        return;
+    const uint64_t shape = polygon_shape(corners, polygons);
+    if (kept.size() >= most_kept_plane_orders && !kept.contains(unit_key))
+        kept.clear();
+    KeptPlaneOrder& entry = kept[unit_key];
+    if (entry.order.size() != polygons.size() || entry.shape != shape) {
+        find_plane_order(corners, polygons, scratch, entry.order);
+        entry.shape = shape;
+    }
+    auto& ordered = scratch.ordered;
+    ordered.clear();
+    for (const uint32_t index : entry.order)
+        ordered.push_back(polygons[index]);
+    polygons.swap(ordered);
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -375,6 +768,9 @@ struct ModelStage::Impl {
     // Scratch of a frame's emission, kept from frame to frame.
     std::vector<Corner> corners;
     std::vector<Polygon> polygons;
+    PlaneOrderScratch plane_order;
+    /// Each depth-plane unit's polygon order, by its draw state.
+    std::unordered_map<const void*, KeptPlaneOrder> kept_plane_orders;
     std::vector<OutlineRun> outline_runs;
     /// The primitives a nanoframe's outline is found from: their corners,
     /// and how many corners each takes and whether it fills the image.
@@ -887,6 +1283,7 @@ void Emitter::add_piece_polygons(
             Corner corner;
             corner.x = placed.x;
             corner.y = placed.y;
+            corner.depth = placed.depth;
             corner.u = vertex.u;
             corner.v = vertex.v;
             depth_sum += placed.depth;
@@ -1465,7 +1862,7 @@ void Emitter::draw_model(const ModelDraw& drawn) {
     }
     // A depth image: the image's pieces, the moving pieces drawn again over
     // it and the carried units composed into it are one picture whose depth
-    // plane the sort stands in for.
+    // plane the order of its polygons stands in for (order_as_depth_plane).
     if (unfinished) {
         // An unfinished unit's image holds every piece; a mobile one draws
         // them again with the running frames, unless its moving pieces wait
@@ -1551,10 +1948,8 @@ void Emitter::draw_model(const ModelDraw& drawn) {
     apply_water_and_digger(
         0, lift > 0 ? int32_t{static_cast<uint8_t>(lift + base)} : -1, own, is_digger(model)
     );
-    std::stable_sort(
-        impl_.polygons.begin(), impl_.polygons.end(), [](const Polygon& a, const Polygon& b) {
-            return a.depth < b.depth;
-        }
+    order_as_depth_plane(
+        model.state, impl_.corners, impl_.polygons, impl_.plane_order, impl_.kept_plane_orders
     );
     emit_polygons(battlefield());
     emit_outline(battlefield());
@@ -2035,6 +2430,7 @@ void ModelStage::close(card::Executor& executor) noexcept {
     pages_.clear();
     bright_pages_.clear();
     impl_->forget_contents();
+    impl_->kept_plane_orders.clear();
 }
 
 void ModelStage::emit_shadows(
