@@ -23,6 +23,8 @@ import re
 import subprocess
 import sys
 import tarfile
+import time
+import urllib.error
 import urllib.request
 
 VERSION = "3.4.16"
@@ -38,6 +40,13 @@ PINNED = {
 }
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 DOWNLOAD_LIMIT = 64 * 1024 * 1024
+# A download that fails with a rate limit (HTTP 429), a server error (5xx) or a
+# lost connection is tried again: at most DOWNLOAD_ATTEMPTS times, waiting
+# DOWNLOAD_WAITS seconds between them, or the server's Retry-After when it
+# names at most DOWNLOAD_LONGEST_WAIT seconds.
+DOWNLOAD_ATTEMPTS = 6
+DOWNLOAD_WAITS = (5, 10, 20, 40, 60)
+DOWNLOAD_LONGEST_WAIT = 120
 # A release number as SDL's archives spell it. It becomes part of a URL and
 # of folder names, so nothing else is taken.
 VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
@@ -67,12 +76,33 @@ SELF_TEST_FOLDERS = {
 }
 
 
+def download(url):
+    """Read url, at most DOWNLOAD_LIMIT + 1 bytes, trying again after a passing failure."""
+    for attempt in range(DOWNLOAD_ATTEMPTS):
+        try:
+            with urllib.request.urlopen(url, timeout=60) as response:
+                return response.read(DOWNLOAD_LIMIT + 1)
+        except urllib.error.HTTPError as error:
+            if error.code != 429 and error.code < 500 or attempt + 1 == DOWNLOAD_ATTEMPTS:
+                raise
+            asked = error.headers.get("Retry-After", "") if error.headers else ""
+            wait = int(asked) if asked.isdigit() and int(asked) <= DOWNLOAD_LONGEST_WAIT else DOWNLOAD_WAITS[attempt]
+            reason = f"HTTP {error.code}"
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
+            if attempt + 1 == DOWNLOAD_ATTEMPTS:
+                raise
+            wait = DOWNLOAD_WAITS[attempt]
+            reason = str(error)
+        print(f"Download failed ({reason}); trying again in {wait} s", flush=True)
+        time.sleep(wait)
+    raise RuntimeError(f"{url} could not be downloaded")
+
+
 def fetch_archive(archive, url, sha256):
     """Download url to archive unless it exists; verify the SHA-256 either way."""
     if not archive.exists():
         print(f"Downloading {url}", flush=True)
-        with urllib.request.urlopen(url, timeout=60) as response:
-            data = response.read(DOWNLOAD_LIMIT + 1)
+        data = download(url)
         if len(data) > DOWNLOAD_LIMIT:
             raise RuntimeError(f"{archive.name} exceeds download limit")
         if hashlib.sha256(data).hexdigest() != sha256:
