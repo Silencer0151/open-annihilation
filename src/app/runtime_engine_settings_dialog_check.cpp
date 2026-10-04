@@ -4,7 +4,9 @@
 // --check-engine-settings, the dialog's part: the dialog on the main menu
 // driven through the SDL presenter's pointer and keys (every section, each
 // setting changed and in effect at once, Vertical sync read back from the
-// renderer, OK, Cancel and Restore defaults and the preferences they
+// renderer, Menu scaling's whole steps in the window's presentation at once,
+// Native pixel density kept for the next start, OK, Cancel and Restore
+// defaults and the preferences they
 // leave, Developer Mode's overrides in effect and kept), and the main menu
 // with its OA button and the dialog as the window shows them at several
 // sizes, the Graphics section at its top and its end, and the Developer
@@ -230,6 +232,10 @@ std::string_view label_of(settings::Setting setting) {
         return "Hardware acceleration";
     case settings::Setting::vertical_sync:
         return "Vertical sync";
+    case settings::Setting::menu_scaling:
+        return "Menu scaling";
+    case settings::Setting::native_density:
+        return "Native pixel density";
     case settings::Setting::modern_fonts:
         return "Use modern fonts for game text";
     case settings::Setting::text_outline:
@@ -691,10 +697,10 @@ void Runtime::check_engine_settings_dialog() {
             (ruled_out ? settings::Lock::unavailable : settings::Lock::none),
         "Hardware acceleration is not locked as the renderer and the memory give it"
     );
-    // Vertical sync: Down to it scrolls Graphics to its end, and Right turns
-    // it On, in effect at once: the renderer waits for the display. On SDL's
-    // software renderer it is out of reach unless --force-capable lifts it,
-    // as the command that registers this check does.
+    // Vertical sync: Down to it scrolls Graphics to show it whole, and Right
+    // turns it On, in effect at once: the renderer waits for the display. On
+    // SDL's software renderer it is out of reach unless --force-capable lifts
+    // it, as the command that registers this check does.
     const bool vertical_sync = dialog->locks.vertical_sync == settings::Lock::none;
     require(
         vertical_sync == options_.force_capable,
@@ -704,8 +710,8 @@ void Runtime::check_engine_settings_dialog() {
         require(!renderer_waits(sdl_.renderer), "the renderer waits for the display at Off");
         focus(settings::first_row_control + 4, "Vertical sync");
         require(
-            dialog->scroll[static_cast<std::size_t>(settings::Page::graphics)] == 80,
-            "the focus on Vertical sync did not scroll Graphics to its end"
+            dialog->scroll[static_cast<std::size_t>(settings::Page::graphics)] == 72,
+            "the focus on Vertical sync did not scroll Graphics to show it"
         );
         require(
             shows_text(
@@ -725,6 +731,57 @@ void Runtime::check_engine_settings_dialog() {
             "Vertical sync is locked other than on the software renderer"
         );
     }
+    // Menu scaling: Whole steps sets the window's presentation at once, in
+    // whole steps where the window holds the menu, else letterboxed.
+    const auto presentation = [this] {
+        int width = 0;
+        int height = 0;
+        SDL_RendererLogicalPresentation mode = SDL_LOGICAL_PRESENTATION_DISABLED;
+        require(
+            SDL_GetRenderLogicalPresentation(sdl_.renderer, &width, &height, &mode),
+            "the renderer has no logical presentation"
+        );
+        return mode;
+    };
+    const auto held_whole = [this] {
+        int width = 0;
+        int height = 0;
+        require(
+            SDL_GetRenderOutputSize(sdl_.renderer, &width, &height), "the renderer has no size"
+        );
+        return render_policy::frame_fit(
+                   render_policy::MenuScaling::whole_steps,
+                   width,
+                   height,
+                   kCanvasWidth,
+                   kCanvasHeight
+               ) == render_policy::FrameFit::whole_steps;
+    };
+    require(
+        presentation() == SDL_LOGICAL_PRESENTATION_LETTERBOX,
+        "Sharp does not letterbox the main menu"
+    );
+    focus(settings::first_row_control + 5, "Menu scaling");
+    click(settings::first_row_control + 5, "Whole steps", "Menu scaling's Whole steps");
+    chosen.menu_scaling = settings::MenuScaling::whole_steps;
+    expect("Menu scaling Whole steps");
+    require(
+        presentation() == (held_whole() ? SDL_LOGICAL_PRESENTATION_INTEGER_SCALE
+                                        : SDL_LOGICAL_PRESENTATION_LETTERBOX),
+        "Menu scaling Whole steps did not set the window's presentation at once"
+    );
+    // Native pixel density: On is kept for the next start, and the window
+    // keeps the density it opened at.
+    const bool dense = native_density_window();
+    focus(settings::first_row_control + 6, "Native pixel density");
+    click(settings::first_row_control + 6, "ON", "Native pixel density's On");
+    chosen.native_density = true;
+    expect("Native pixel density On");
+    require(
+        native_density_window() == dense &&
+            shows_text(settings::dialog_layout(*dialog), "Applies from the next start."),
+        "Native pixel density On changed the open window, or does not say when it applies"
+    );
 
     // The text drawing reads the Language section at once. Text size
     // waits for the modern fonts, Off with a named preferences file: locked,
@@ -816,6 +873,8 @@ void Runtime::check_engine_settings_dialog() {
     };
     if (vertical_sync)
         expected_keys.emplace(std::string(settings::key::vertical_sync), "1");
+    expected_keys.emplace(std::string(settings::key::menu_scaling), "whole-steps");
+    expected_keys.emplace(std::string(settings::key::native_density), "1");
     const auto saved = oa::platform::preferences::load(preference_path_);
     require(engine_keys(saved) == expected_keys, "OK did not save exactly the settings changed");
     require(saved_general_number("SwitchAlt") == 1, "OK did not save SwitchAlt");
@@ -855,6 +914,10 @@ void Runtime::check_engine_settings_dialog() {
         "Restore defaults did not reset every setting at once"
     );
     require(!renderer_waits(sdl_.renderer), "Restore defaults did not stop the renderer waiting");
+    require(
+        presentation() == SDL_LOGICAL_PRESENTATION_LETTERBOX,
+        "Restore defaults did not letterbox the main menu again"
+    );
     tap(SDLK_ESCAPE);
     require(
         engine_settings_dialog() == nullptr && engine_settings() == chosen,
@@ -1511,7 +1574,7 @@ void Runtime::check_engine_settings_window_sizes() {
             // Graphics scrolls: at its end too, as the window shows the picture.
             tap(SDLK_END);
             require(
-                dialog->scroll[static_cast<std::size_t>(page)] == 80,
+                dialog->scroll[static_cast<std::size_t>(page)] == 198,
                 "End did not scroll Graphics to its end" + on
             );
             present(presented, picture);

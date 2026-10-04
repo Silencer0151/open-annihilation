@@ -378,9 +378,7 @@ struct TouchCheckAccess {
     send_finger(Runtime& runtime, TouchRun& run, SDL_EventType type, HeldFinger finger) {
         float window_x = finger.x;
         float window_y = finger.y;
-        if (!SDL_RenderCoordinatesToWindow(
-                runtime.sdl_.renderer, finger.x, finger.y, &window_x, &window_y
-            ))
+        if (!frame_to_window(runtime.sdl_.renderer, finger.x, finger.y, &window_x, &window_y))
             fail(
                 Lane::check, std::string("cannot place a finger on the window: ") + SDL_GetError()
             );
@@ -401,9 +399,7 @@ struct TouchCheckAccess {
             if (held.id == finger.id) {
                 float held_x = held.x;
                 float held_y = held.y;
-                (void)SDL_RenderCoordinatesToWindow(
-                    runtime.sdl_.renderer, held.x, held.y, &held_x, &held_y
-                );
+                (void)frame_to_window(runtime.sdl_.renderer, held.x, held.y, &held_x, &held_y);
                 event.tfinger.dx = (window_x - held_x) / static_cast<float>(width);
                 event.tfinger.dy = (window_y - held_y) / static_cast<float>(height);
             }
@@ -653,9 +649,7 @@ struct TouchCheckAccess {
     ) {
         float window_x = 0.0F;
         float window_y = 0.0F;
-        if (!SDL_RenderCoordinatesToWindow(
-                runtime.sdl_.renderer, point.x, point.y, &window_x, &window_y
-            ))
+        if (!frame_to_window(runtime.sdl_.renderer, point.x, point.y, &window_x, &window_y))
             fail(Lane::check, SDL_GetError());
         for (const auto type :
              {SDL_EVENT_MOUSE_MOTION, SDL_EVENT_MOUSE_BUTTON_DOWN, SDL_EVENT_MOUSE_BUTTON_UP}) {

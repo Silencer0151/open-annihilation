@@ -214,7 +214,7 @@ void Runtime::check_saved_games_unavailable() {
     float window_x = static_cast<float>(load_game->common.x + load_game->common.width / 2);
     float window_y = static_cast<float>(load_game->common.y + load_game->common.height / 2);
     if (sdl_.renderer != nullptr &&
-        !SDL_RenderCoordinatesToWindow(sdl_.renderer, window_x, window_y, &window_x, &window_y))
+        !frame_to_window(sdl_.renderer, window_x, window_y, &window_x, &window_y))
         throw std::runtime_error(std::string("SDL_RenderCoordinatesToWindow: ") + SDL_GetError());
     bool running = true;
     for (const auto type : {SDL_EVENT_MOUSE_BUTTON_DOWN, SDL_EVENT_MOUSE_BUTTON_UP}) {

@@ -509,12 +509,17 @@ struct Options {
     // nor SDL's software renderer locks Hardware acceleration or Vertical
     // sync. It never lifts the 2 GiB rule.
     bool force_capable = false;
-    // --native-density, which only --check-render-tiers takes: the window
-    // opens at the display's own pixel density whatever the rule for it
-    // says (render_policy::decide_native_density), except under 2 GiB of
-    // memory or with a flag that names Off, and the check runs its density
-    // case.
+    // --native-density: for this run the window opens at the display's own
+    // pixel density whatever the Native pixel density setting and the rule
+    // for it say (render_policy::decide_native_density), except under 2 GiB
+    // of memory or with a flag that names Off; it is never saved. With
+    // --check-render-tiers the check runs its density case.
     bool native_density = false;
+    // The platform the game is built for opens every window at the
+    // display's own pixel density (the OA_NATIVE_DENSITY_WINDOWS build
+    // option, which main sets before the run starts); false on the desktop.
+    // The Native pixel density setting is then always on.
+    bool native_density_windows = false;
     // --frame-rate FPS: the headless match run (--match-ticks) draws every
     // frame of a loop running at FPS frames a second on a clock that
     // advances a frame at a time, each frame between two ticks as the

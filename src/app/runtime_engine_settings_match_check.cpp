@@ -616,7 +616,7 @@ void Runtime::check_engine_settings_in_match() {
             const auto* graphics = engine_settings_dialog();
             require(
                 graphics != nullptr &&
-                    graphics->scroll[static_cast<std::size_t>(settings::Page::graphics)] == 80,
+                    graphics->scroll[static_cast<std::size_t>(settings::Page::graphics)] == 198,
                 "End did not scroll Graphics to its end" + on
             );
             const auto parts = settings::dialog_layout(*graphics);

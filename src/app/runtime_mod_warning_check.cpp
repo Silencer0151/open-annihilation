@@ -304,7 +304,7 @@ void Runtime::check_mod_warning() {
                 );
             }
         require(
-            SDL_RenderCoordinatesToWindow(sdl_.renderer, x, y, &x, &y),
+            frame_to_window(sdl_.renderer, x, y, &x, &y),
             "a finger could not be placed on the window"
         );
         int width = 0;

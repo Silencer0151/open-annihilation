@@ -108,6 +108,7 @@ settings::Inputs Runtime::EngineSettingsState::inputs(const Runtime& runtime) {
         inputs.desktop = runtime.engine_settings_->desktop;
     }
     inputs.units_per_player = runtime.limits_.units_per_player;
+    inputs.native_density_windows = runtime.options_.native_density_windows;
     if (runtime.engine_settings_) {
         inputs.mod_folders = runtime.engine_settings_->mod_folders;
         inputs.profile_id = runtime.engine_settings_->profile_id;
@@ -374,6 +375,11 @@ oa::present::TextStyle Runtime::text_style() const {
     return settings::text_style(engine_settings_->current);
 }
 
+render_policy::MenuScaling Runtime::menu_scaling() const noexcept {
+    return engine_settings_ ? engine_settings_->current.menu_scaling
+                            : render_policy::MenuScaling::sharp;
+}
+
 const settings::EngineSettings& Runtime::engine_settings() {
     EngineSettingsState::take_live_settings(*this);
     return engine_settings_state().current;
@@ -416,6 +422,10 @@ void Runtime::apply_engine_settings(const settings::EngineSettings& chosen) {
     if (chosen.hardware_acceleration != before.hardware_acceleration)
         update_render_tier();
     apply_vertical_sync();
+    // Menu scaling applies at once to a screen drawn as one frame: whole
+    // steps set the window's presentation, and every frame takes its filter.
+    if (chosen.menu_scaling != before.menu_scaling && screen_ != Screen::match)
+        apply_output_mode();
     if (chosen.developer_mode != before.developer_mode ||
         chosen.hack_overrides != before.hack_overrides)
         apply_hack_overrides();

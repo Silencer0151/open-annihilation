@@ -58,6 +58,10 @@ inline constexpr std::string_view picked_mod_directory = "open-annihilation.pick
 inline constexpr std::string_view hardware_acceleration = "open-annihilation.hardware-acceleration";
 /// 1 or 0 (EngineSettings::vertical_sync).
 inline constexpr std::string_view vertical_sync = "open-annihilation.vertical-sync";
+/// "sharp", "whole-steps" or "unfiltered" (EngineSettings::menu_scaling).
+inline constexpr std::string_view menu_scaling = "open-annihilation.menu-scaling";
+/// 1 or 0 (EngineSettings::native_density).
+inline constexpr std::string_view native_density = "open-annihilation.native-density";
 /// 1 or 0 (EngineSettings::modern_fonts).
 inline constexpr std::string_view modern_fonts = "open-annihilation.modern-fonts";
 /// 1 or 0 (EngineSettings::text_outline).
@@ -266,6 +270,30 @@ inline constexpr std::array<HardwareAcceleration, 3> hardware_acceleration_level
     HardwareAcceleration::full,
 };
 
+/// Menu scaling: how the menus and the other screens the game draws at
+/// 640x480 are enlarged to the window.
+enum class MenuScaling : uint8_t {
+    /// As large as the window holds, each of the screen's pixels as wide as
+    /// the next: where the graphics card has the pixel-art filter, the edge
+    /// between two of them blends over at most one column of the window;
+    /// elsewhere as unfiltered.
+    sharp,
+    /// The largest whole number of window pixels to each of the screen's
+    /// pixels that the window holds, the rest of the window black; as sharp
+    /// in a window smaller than 640x480.
+    whole_steps,
+    /// As large as the window holds, each of the screen's pixels repeated
+    /// over the window's pixels it covers, as without the setting.
+    unfiltered,
+};
+
+/// The ways of Menu scaling, in the order the dialog offers them.
+inline constexpr std::array<MenuScaling, 3> menu_scaling_choices{
+    MenuScaling::sharp,
+    MenuScaling::whole_steps,
+    MenuScaling::unfiltered,
+};
+
 /// What a one-finger drag on the battlefield does (the Touch section's One-finger drag).
 enum class TouchDrag : uint8_t {
     automatic, ///< a selection box on a tablet, scrolling on a phone
@@ -349,6 +377,13 @@ struct EngineSettings {
     /// Each frame waits for the display to be ready for it, so that no frame
     /// tears, and the frame rate keeps just below the display's.
     bool vertical_sync{};
+    /// How the menus are enlarged to the window.
+    MenuScaling menu_scaling{MenuScaling::sharp};
+    /// The window opens at the display's own pixel density, from the next
+    /// start: on macOS the Retina resolution, elsewhere the display's scale.
+    /// Always on where the platform opens every window so
+    /// (Inputs::native_density_windows).
+    bool native_density{};
     /// Game text is drawn in the modern fonts, which hold the letters of
     /// many languages, rather than the game's own 8-bit fonts. On by default
     /// with the player's own preferences file (default_settings).
@@ -422,6 +457,10 @@ struct Inputs {
     /// oa::data::mod_profile::base_game_id without a mod. Empty reads no
     /// overrides.
     std::string_view profile_id{};
+    /// The platform the game is built for opens every window at the
+    /// display's own pixel density, so that Native pixel density is always
+    /// on.
+    bool native_density_windows{};
 };
 
 /// Returns the highest unit limit the setting offers and keeps.
@@ -446,7 +485,9 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// small_desktop_screen_size on a known desktop narrower or shorter than it.
 /// Hardware acceleration is Full with the player's own file, on every
 /// machine, and Off with a named one; whether the graphics card is used is
-/// decided apart from the setting. Vertical sync is Off everywhere. Modern
+/// decided apart from the setting. Vertical sync is Off everywhere. Menu
+/// scaling is Sharp everywhere. Native pixel density is Off, but On where
+/// the platform opens every window at native density. Modern
 /// fonts for game text are On with the player's own file and Off with a
 /// named one; their outline and shadow are On, their background Off and
 /// their size default_text_size everywhere. The language is the operating
@@ -490,7 +531,10 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// touch_drag_text and touch_latches_text write, and any other value gives
 /// the default; the hold delay reads as a number, put on its nearest stop
 /// within its range (snapped_touch_hold_ms); Haptics and Left-handed layout
-/// read as every switch does.
+/// read as every switch does. Menu scaling reads the words
+/// menu_scaling_text writes, and any other value gives the default; Native
+/// pixel density reads as every switch does, but stays on where the
+/// platform opens every window at native density.
 ///
 /// @param values the preferences
 /// @param inputs the platform, the preferences file and the installation
@@ -506,8 +550,9 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// setting at its default has its key erased; otherwise a setting that
 /// differs from `opened` has its key written, in decimal, a switch as 1 or
 /// 0, the screen size as "desktop" or "WIDTHxHEIGHT", hardware
-/// acceleration as "off", "basic" or "full", One-finger drag and QUEUE and
-/// ADD as their words (touch_drag_text, touch_latches_text), the hold delay
+/// acceleration as "off", "basic" or "full", Menu scaling, One-finger drag
+/// and QUEUE and ADD as their words (menu_scaling_text, touch_drag_text,
+/// touch_latches_text), the hold delay
 /// in milliseconds, the mod and the picked folder as their paths, or erased
 /// for none; Restore defaults leaves the picked folder as it is. The picked
 /// folder's key is then erased unless the mod key names the same folder,
@@ -602,6 +647,18 @@ stored_language(const oa::platform::preferences::Values& values, bool players_ow
 [[nodiscard]] std::optional<HardwareAcceleration>
 hardware_acceleration_from_text(std::string_view text) noexcept;
 
+/// Returns the word the preferences keep a way of Menu scaling as.
+///
+/// @param scaling the way
+/// @return "sharp", "whole-steps" or "unfiltered"
+[[nodiscard]] std::string_view menu_scaling_text(MenuScaling scaling) noexcept;
+
+/// Returns the way of Menu scaling a word names.
+///
+/// @param text the word, in lower case as menu_scaling_text gives it
+/// @return the way; nothing for any other text
+[[nodiscard]] std::optional<MenuScaling> menu_scaling_from_text(std::string_view text) noexcept;
+
 /// Returns the word the preferences keep a way of One-finger drag as.
 ///
 /// @param drag the way
@@ -684,6 +741,9 @@ enum class Lock : uint8_t {
     /// The modern fonts are off: the game's own fonts, which draw game text
     /// then, have fixed sizes.
     needs_modern_fonts,
+    /// The platform opens every window at the display's own pixel density,
+    /// so the setting is always on.
+    always_on,
 };
 
 /// The game the dialog opens over.
@@ -708,6 +768,12 @@ struct GameState {
     /// --mod-dir or --base-game was given, which decides the mod the run
     /// plays.
     bool mod_from_command_line{};
+    /// The platform opens every window at the display's own pixel density
+    /// (Inputs::native_density_windows).
+    bool native_density_windows{};
+    /// --native-density was given, which opened this run's window at the
+    /// display's own pixel density.
+    bool native_density_from_command_line{};
 };
 
 /// What the dialog cannot change, and what its header says of the game.
@@ -728,6 +794,9 @@ struct Locks {
     /// from a start without the flag that set it aside; locked in_game, the
     /// row shows the mod the game plays, and the main menu chooses another.
     Lock mod{};
+    /// Native pixel density: locked command_line, the stored choice stays
+    /// shown and takes effect from a start without the flag.
+    Lock native_density{};
 };
 
 /// Returns the locks a game state puts on the settings.
@@ -743,7 +812,10 @@ struct Locks {
 /// command_line while 3.1c's command line names one, and never by a game:
 /// it changes only what players read. The mod is locked command_line while
 /// --mod-dir or --base-game decides it, else in_game during any game: it is
-/// chosen from the main menu.
+/// chosen from the main menu. Native pixel density is locked always_on where
+/// the platform opens every window at native density, else command_line
+/// while --native-density decides it, and never by a game: it takes effect
+/// from the next start. No game locks Menu scaling.
 ///
 /// @param state the game the dialog opens over
 /// @return the locks

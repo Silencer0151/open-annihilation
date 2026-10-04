@@ -15,8 +15,9 @@
 // The tier comes from the game's own decision: --hardware-acceleration
 // switches it on after the start-up function test passed, and the check
 // switches it off and on again as --no-hardware-acceleration and
-// --hardware-acceleration would. With --native-density the window opened at
-// the display's own density, and after the main menu and the loading screen
+// --hardware-acceleration would. With --native-density, or the Native pixel
+// density setting on, the window opened at the display's own density, and
+// after the main menu and the loading screen
 // the check runs its density case alone: the match laid out in window
 // points, read back at the display's size, at zoom 1 and a whole-number
 // density the processor's composition enlarged by nearest replication, and
@@ -1124,12 +1125,12 @@ int Runtime::check_render_tiers() {
         }
     };
 
-    // --native-density: the window opened at the display's own density, and
-    // this case alone runs, since every other compares the read-back with
-    // the processor's composition pixel for pixel.
-    if (options_.native_density) {
+    // --native-density, or the setting: the window opened at the display's
+    // own density, and this case alone runs, since every other compares the
+    // read-back with the processor's composition pixel for pixel.
+    if (options_.native_density || engine_settings().native_density) {
         if (!native_density_window())
-            fail("--native-density did not open the window at native density");
+            fail("native density was asked for, but the window did not open at it");
         // The match is laid out in window points.
         int points_w = 0;
         int points_h = 0;
@@ -1206,7 +1207,7 @@ int Runtime::check_render_tiers() {
         );
         float window_x = 0.0F;
         float window_y = 0.0F;
-        if (!SDL_RenderCoordinatesToWindow(
+        if (!frame_to_window(
                 sdl_.renderer,
                 static_cast<float>(point.x),
                 static_cast<float>(point.y),

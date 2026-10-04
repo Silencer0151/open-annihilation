@@ -451,7 +451,7 @@ void Runtime::check_engine_settings_wiring() {
     SDL_Event wheel{};
     wheel.type = SDL_EVENT_MOUSE_WHEEL;
     wheel.wheel.y = 1.0F;
-    SDL_RenderCoordinatesToWindow(
+    std::ignore = frame_to_window(
         sdl_.renderer,
         static_cast<float>(match_layout_.left + match_layout_.battlefield_width() / 2),
         static_cast<float>(match_layout_.top + match_layout_.battlefield_height() / 2),

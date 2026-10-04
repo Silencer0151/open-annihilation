@@ -18,13 +18,14 @@
 // the game feeds it its presented frames; the rung the tier stays on when
 // the memory guard refuses a buffer, and the words each step is logged
 // with; the window's density over every input, never native under 2 GiB
-// and, as the game fills it today, only for --native-density; the chrome's
-// filter, at the display's scale on a window at native density, and the
-// magnified scene's; the prescale budget; the Full tier's supersample
-// factor by the Enhanced anti-aliasing level, its budget S by the machine
-// and the factor fitted to the budget and the texture limit, each world
-// target's memory printed; the
-// tiles of textures beyond the renderer's limit; and acting on the tier as
+// and, as the game fills it today, only on a platform at native density,
+// for --native-density and for the Native pixel density setting; the
+// chrome's filter, at the display's scale on a window at native density,
+// and the magnified scene's; how each Menu scaling way holds a 640x480
+// frame and the filter it draws it with; the prescale budget; the Full
+// tier's supersample factor by the Enhanced anti-aliasing level, its
+// budget S by the machine and the factor fitted to the budget and the
+// texture limit, each world target's memory printed; the tiles of textures beyond the renderer's limit; and acting on the tier as
 // the game does: the windowless video drivers, the flags, what the host
 // does for each decision, what Off then On forgets, one frame's step with
 // its function test and its note of a shared game, the function test's
@@ -39,6 +40,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <initializer_list>
@@ -1996,6 +1998,74 @@ void test_chrome_filter() {
     OA_CHECK(!function_test_may_run(floor));
 }
 
+// Menu scaling: how each way holds the 640x480 frame in windows of the
+// common sizes, one smaller than the frame and one of an odd width, and the
+// filter it draws with in each tier.
+void test_frame_fit_and_filter() {
+    struct Window {
+        int32_t width;
+        int32_t height;
+        int32_t whole_scale; ///< the largest whole step that fits; 0 below 640x480
+    };
+
+    const Window windows[] = {
+        {640, 480, 1},
+        {800, 600, 1},
+        {1280, 800, 1},
+        {1366, 768, 1},
+        {1920, 1080, 2},
+        {2000, 1250, 2},
+        {600, 400, 0},
+        {1001, 625, 1},
+    };
+    LadderState accelerated;
+    accelerated.filtered_chrome = true;
+    accelerated.card = CardFilter::pixelart;
+    LadderState prescaled = accelerated;
+    prescaled.card = CardFilter::prescale_full;
+    for (const Window& window : windows) {
+        // The letterbox's scale: the frame as large as the window holds.
+        const double letterbox = std::min(window.width / 640.0, window.height / 480.0);
+        const bool letterbox_whole = std::floor(letterbox) == letterbox;
+        for (const MenuScaling scaling :
+             {MenuScaling::sharp, MenuScaling::whole_steps, MenuScaling::unfiltered}) {
+            const FrameFit fit = frame_fit(scaling, window.width, window.height, 640, 480);
+            const bool whole_steps = scaling == MenuScaling::whole_steps && window.whole_scale > 0;
+            OA_CHECK(fit == (whole_steps ? FrameFit::whole_steps : FrameFit::letterbox));
+            const double scale = whole_steps ? double(window.whole_scale) : letterbox;
+            // Unfiltered, whole steps and any whole-number scale repeat
+            // each pixel in every tier; otherwise PIXELART where it works.
+            const bool repeated = scaling == MenuScaling::unfiltered || whole_steps ||
+                                  (!whole_steps && letterbox_whole);
+            OA_CHECK(frame_wants_pixelart(scaling, scale) == !repeated);
+            for (const bool works : {false, true})
+                OA_CHECK(
+                    frame_filter(scaling, nullptr, works, scale) ==
+                    (repeated || !works ? ScaleFilter::nearest : ScaleFilter::pixelart)
+                );
+            OA_CHECK(
+                frame_filter(scaling, &accelerated, false, scale) ==
+                (repeated ? ScaleFilter::nearest : ScaleFilter::pixelart)
+            );
+            OA_CHECK(
+                frame_filter(scaling, &prescaled, true, scale) ==
+                (repeated ? ScaleFilter::nearest : ScaleFilter::sharp_bilinear)
+            );
+        }
+    }
+    // A frame of any other size is held alike: the load and save dialogs
+    // over a match of the window's own size take one step.
+    OA_CHECK(frame_fit(MenuScaling::whole_steps, 1366, 768, 1366, 768) == FrameFit::whole_steps);
+    OA_CHECK(frame_fit(MenuScaling::whole_steps, 1365, 768, 1366, 768) == FrameFit::letterbox);
+    OA_CHECK(frame_fit(MenuScaling::whole_steps, 1366, 767, 1366, 768) == FrameFit::letterbox);
+    OA_CHECK(frame_fit(MenuScaling::whole_steps, 1366, 768, 0, 0) == FrameFit::letterbox);
+    // The accelerated tier's NEAREST-chrome rung keeps the chrome's filter.
+    LadderState nearest_chrome = accelerated;
+    nearest_chrome.filtered_chrome = false;
+    OA_CHECK(frame_filter(MenuScaling::sharp, &nearest_chrome, true, 1.5) == ScaleFilter::nearest);
+    OA_CHECK(!frame_wants_pixelart(MenuScaling::sharp, 0.0));
+}
+
 // On a window at native density every scale is the one at the display's
 // pixels, the layout's scale times the density, and the whole-number test
 // is made on that product.
@@ -2245,6 +2315,44 @@ void test_native_density_by_table() {
          },
          true,
          DensityReason::platform},
+        {"the Native pixel density setting, nothing recorded or measured",
+         [](DensityInputs& in) {
+             in = DensityInputs{};
+             in.memory = 2 * gibibyte;
+             in.chosen = true;
+         },
+         true,
+         DensityReason::chosen},
+        {"the setting on the dummy driver in an unattended capture",
+         [](DensityInputs& in) {
+             in.chosen = true;
+             in.virtual_video_driver = true;
+             in.unattended = true;
+             in.capture = true;
+         },
+         true,
+         DensityReason::chosen},
+        {"the setting under 2 GiB",
+         [](DensityInputs& in) {
+             in.chosen = true;
+             in.memory = 1 * gibibyte;
+         },
+         false,
+         DensityReason::memory},
+        {"the setting with --no-hardware-acceleration",
+         [](DensityInputs& in) {
+             in.chosen = true;
+             in.flag = AccelerationFlag::off;
+         },
+         false,
+         DensityReason::flag_off},
+        {"--native-density and the setting",
+         [](DensityInputs& in) {
+             in.asked = true;
+             in.chosen = true;
+         },
+         true,
+         DensityReason::asked},
         {"a platform at native density with --hardware-acceleration=basic",
          [](DensityInputs& in) {
              in.platform_native = true;
@@ -2269,7 +2377,7 @@ void test_native_density_by_table() {
 bool native_by_the_rules(const DensityInputs& in) {
     if (in.memory < 1792 * mebibyte || in.flag == AccelerationFlag::off)
         return false;
-    if (in.platform_native || in.asked)
+    if (in.platform_native || in.asked || in.chosen)
         return true;
     return !in.render_driver_named && !in.virtual_video_driver && !in.unattended && !in.capture &&
            (in.setting != HardwareAcceleration::off || in.flag == AccelerationFlag::basic ||
@@ -2300,7 +2408,7 @@ void test_native_density_every_combination() {
     uint32_t native_under_2_gib = 0;
     uint32_t native_by_the_shipped_rule = 0;
     uint32_t reasons_out_of_order = 0;
-    for (uint32_t bits = 0; bits < (1u << 8); ++bits)
+    for (uint32_t bits = 0; bits < (1u << 9); ++bits)
         for (const AccelerationFlag flag : flags)
             for (const HardwareAcceleration setting : settings)
                 for (const SceneBudget budget : budgets)
@@ -2316,6 +2424,7 @@ void test_native_density_every_combination() {
                             in.class_measured = (bits & 32u) != 0;
                             in.record = (bits & 64u) != 0;
                             in.platform_native = (bits & 128u) != 0;
+                            in.chosen = (bits & 256u) != 0;
                             in.flag = flag;
                             in.budget = budget;
                             in.memory = memory;
@@ -2326,7 +2435,8 @@ void test_native_density_every_combination() {
                                 ++mismatches;
                             if (decision.native != (decision.reason == DensityReason::native ||
                                                     decision.reason == DensityReason::platform ||
-                                                    decision.reason == DensityReason::asked))
+                                                    decision.reason == DensityReason::asked ||
+                                                    decision.reason == DensityReason::chosen))
                                 ++mismatches;
                             // The platform's density is decided after the
                             // memory and a flag that names Off, before
@@ -2337,21 +2447,26 @@ void test_native_density_every_combination() {
                                 ++reasons_out_of_order;
                             if (decision.reason == DensityReason::asked && in.platform_native)
                                 ++reasons_out_of_order;
+                            // The setting gives way to the platform and to
+                            // --native-density, and only to them.
+                            if (decision.reason == DensityReason::chosen &&
+                                (in.platform_native || in.asked))
+                                ++reasons_out_of_order;
                             if (decision.native) {
                                 ++native;
                                 if (memory < 1792 * mebibyte)
                                     ++native_under_2_gib;
                             }
                             // As the game fills it today, the class is never
-                            // measured: only a platform at native density
-                            // and --native-density open a window at native
-                            // density.
+                            // measured: only a platform at native density,
+                            // --native-density and the setting open a window
+                            // at native density.
                             in.class_measured = native_density_measured;
-                            if (decide_native_density(in).native && !in.asked &&
+                            if (decide_native_density(in).native && !in.asked && !in.chosen &&
                                 !in.platform_native)
                                 ++native_by_the_shipped_rule;
                         }
-    OA_CHECK(combinations == (1u << 8) * 4 * 3 * 3 * 4 * 3);
+    OA_CHECK(combinations == (1u << 9) * 4 * 3 * 3 * 4 * 3);
     OA_CHECK(mismatches == 0);
     OA_CHECK(reasons_out_of_order == 0);
     OA_CHECK(native > 0);
@@ -2907,6 +3022,7 @@ int main() {
     test_supersampling();
     test_chrome_filter();
     test_chrome_filter_at_the_display();
+    test_frame_fit_and_filter();
     test_native_density_by_table();
     test_native_density_every_combination();
     test_tiles_by_table();

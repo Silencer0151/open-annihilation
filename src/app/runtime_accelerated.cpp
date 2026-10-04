@@ -611,7 +611,9 @@ void Runtime::draw_accelerated_screen(
     const auto w = static_cast<uint32_t>(width);
     const auto h = static_cast<uint32_t>(height);
     auto& state = accelerated_;
-    if (policy::chrome_filter(state.rung, scale) == policy::ScaleFilter::sharp_bilinear) {
+    const policy::ScaleFilter filter =
+        policy::frame_filter(menu_scaling(), &state.rung, false, scale);
+    if (filter == policy::ScaleFilter::sharp_bilinear) {
         const uint32_t factor = accelerated_prescale_factor(scale, w, h, 0);
         // A target of a new size is made only where the memory guard allows it.
         const bool made = state.screen_prescale.made() &&
@@ -631,9 +633,8 @@ void Runtime::draw_accelerated_screen(
         {0.0F, 0.0F, static_cast<float>(width), static_cast<float>(height)},
         {0.0F, 0.0F, static_cast<float>(width), static_cast<float>(height)}
     };
-    const CardScale screen_scale = accelerated_card_scale(
-        policy::chrome_filter(state.rung, scale), scale, w, h, state.screen_prescale
-    );
+    const CardScale screen_scale =
+        accelerated_card_scale(filter, scale, w, h, state.screen_prescale);
     note_card_scale_drawn(screen_scale);
     sharp_draw(
         sdl_.renderer,

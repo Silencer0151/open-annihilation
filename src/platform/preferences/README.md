@@ -134,6 +134,8 @@ of range is clamped. A switch is On for any number above 0: a word such as
 | `open-annihilation.screen-size` | `desktop`, or `640x480`, `800x600`, `1024x768` or `1280x1024` | `desktop`; with the player's own file on a light machine, `800x600`, or `640x480` on a smaller desktop |
 | `open-annihilation.hardware-acceleration` | `off`, `basic` or `full`; a whole number from an earlier version reads as `off` at 0 or below, else `full` | `full` with the player's own file, else `off` |
 | `open-annihilation.vertical-sync` | 0 or 1 | 0 |
+| `open-annihilation.menu-scaling` | `sharp`, `whole-steps` or `unfiltered` | `sharp` |
+| `open-annihilation.native-density` | 0 or 1 | 0; 1 where the platform opens every window at native density |
 | `open-annihilation.modern-fonts` | 0 or 1 | 1 with the player's own file, else 0 |
 | `open-annihilation.text-outline` | 0 or 1 | 1 |
 | `open-annihilation.text-shadow` | 0 or 1 | 1 |

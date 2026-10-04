@@ -46,12 +46,14 @@ constexpr std::array<Setting, 3> kCommonTweaksRows{
     Setting::path_search,
 };
 /// Graphics' rows.
-constexpr std::array<Setting, 5> kGraphicsRows{
+constexpr std::array<Setting, 7> kGraphicsRows{
     Setting::max_frame_rate,
     Setting::anti_aliasing,
     Setting::screen_size,
     Setting::hardware_acceleration,
     Setting::vertical_sync,
+    Setting::menu_scaling,
+    Setting::native_density,
 };
 /// Language's rows: the language first, and the text size right
 /// under the switch it needs.
@@ -273,13 +275,14 @@ struct SwitchMember {
 };
 
 /// Every switch and its value: the one table switch_on and set_switch read.
-constexpr std::array<SwitchMember, 16> kSwitches{{
+constexpr std::array<SwitchMember, 17> kSwitches{{
     {Setting::wheel_zoom, &EngineSettings::wheel_zoom, nullptr},
     {Setting::escape_opens_menu, &EngineSettings::escape_opens_menu, nullptr},
     {Setting::switch_alt, &EngineSettings::switch_alt, nullptr},
     {Setting::developer_mode, &EngineSettings::developer_mode, nullptr},
     {Setting::frame_stats, &EngineSettings::frame_stats, nullptr},
     {Setting::vertical_sync, &EngineSettings::vertical_sync, nullptr},
+    {Setting::native_density, &EngineSettings::native_density, nullptr},
     {Setting::modern_fonts, &EngineSettings::modern_fonts, nullptr},
     {Setting::text_outline, &EngineSettings::text_outline, nullptr},
     {Setting::text_shadow, &EngineSettings::text_shadow, nullptr},
@@ -297,6 +300,14 @@ constexpr std::array<std::string_view, 3> kAccelerationCaptions{"Off", "Basic", 
 static_assert(
     kAccelerationCaptions.size() == hardware_acceleration_levels.size(),
     "every level of hardware acceleration has its caption"
+);
+/// Menu scaling's captions, in menu_scaling_choices' order.
+constexpr std::array<std::string_view, 3> kMenuScalingCaptions{
+    "Sharp", "Whole steps", "Unfiltered"
+};
+static_assert(
+    kMenuScalingCaptions.size() == menu_scaling_choices.size(),
+    "every way of Menu scaling has its caption"
 );
 /// One-finger drag's captions, in touch_drag_choices' order.
 constexpr std::array<std::string_view, 3> kTouchDragCaptions{"Automatic", "Box", "Scroll"};
@@ -752,7 +763,8 @@ void set_stop(
 
 bool is_strip(Setting setting) noexcept {
     return setting == Setting::anti_aliasing || setting == Setting::hardware_acceleration ||
-           setting == Setting::touch_drag || setting == Setting::touch_latches;
+           setting == Setting::menu_scaling || setting == Setting::touch_drag ||
+           setting == Setting::touch_latches;
 }
 
 Strip strip_of(Setting setting) noexcept {
@@ -761,6 +773,8 @@ Strip strip_of(Setting setting) noexcept {
         return Strip{anti_aliasing_levels.size(), level_width};
     case Setting::hardware_acceleration:
         return Strip{hardware_acceleration_levels.size(), acceleration_level_width};
+    case Setting::menu_scaling:
+        return Strip{menu_scaling_choices.size(), menu_scaling_level_width};
     case Setting::touch_drag:
         return Strip{touch_drag_choices.size(), touch_drag_level_width};
     case Setting::touch_latches:
@@ -776,6 +790,8 @@ std::size_t strip_level(const EngineSettings& settings, Setting setting) noexcep
         return level_index(settings.anti_aliasing);
     case Setting::hardware_acceleration:
         return choice_place(hardware_acceleration_levels, settings.hardware_acceleration);
+    case Setting::menu_scaling:
+        return choice_place(menu_scaling_choices, settings.menu_scaling);
     case Setting::touch_drag:
         return choice_place(touch_drag_choices, settings.touch_drag);
     case Setting::touch_latches:
@@ -797,6 +813,9 @@ void set_strip_level(EngineSettings& settings, Setting setting, std::size_t leve
     case Setting::hardware_acceleration:
         settings.hardware_acceleration = hardware_acceleration_levels[clamped];
         break;
+    case Setting::menu_scaling:
+        settings.menu_scaling = menu_scaling_choices[clamped];
+        break;
     case Setting::touch_drag:
         settings.touch_drag = touch_drag_choices[clamped];
         break;
@@ -814,6 +833,8 @@ std::string_view strip_caption(Setting setting, std::size_t level) noexcept {
     switch (setting) {
     case Setting::anti_aliasing:
         return level_caption(anti_aliasing_levels[level]);
+    case Setting::menu_scaling:
+        return kMenuScalingCaptions[level];
     case Setting::touch_drag:
         return kTouchDragCaptions[level];
     case Setting::touch_latches:
@@ -1009,6 +1030,8 @@ Lock lock_of(const Locks& locks, Setting setting) noexcept {
         return locks.hardware_acceleration;
     case Setting::vertical_sync:
         return locks.vertical_sync;
+    case Setting::native_density:
+        return locks.native_density;
     case Setting::mex_snap_radius:
         return locks.mex_snap;
     case Setting::wreck_snap_radius:
@@ -1401,6 +1424,10 @@ std::string_view label_of(Setting setting) noexcept {
         return "Hardware acceleration";
     case Setting::vertical_sync:
         return "Vertical sync";
+    case Setting::menu_scaling:
+        return "Menu scaling";
+    case Setting::native_density:
+        return "Native pixel density";
     case Setting::modern_fonts:
         return "Use modern fonts for game text";
     case Setting::text_outline:
@@ -1547,6 +1574,27 @@ std::string_view hint_line(
     case Setting::vertical_sync:
         lines = {"Each frame waits for the display: no tearing.", {}};
         break;
+    case Setting::menu_scaling:
+        // What the way chosen does to the menus.
+        switch (settings.menu_scaling) {
+        case MenuScaling::sharp:
+            lines = {"The menus fill the window, every pixel", "as wide as the next."};
+            break;
+        case MenuScaling::whole_steps:
+            lines = {
+                "The largest whole-number scale that fits:", "smaller menus, every pixel square."
+            };
+            break;
+        case MenuScaling::unfiltered:
+            lines = {"The menus fill the window, unfiltered,", "as the game always drew them."};
+            break;
+        }
+        break;
+    case Setting::native_density:
+        lines = {
+            "The display's own pixel density (Retina on a Mac).", "Applies from the next start."
+        };
+        break;
     case Setting::modern_fonts:
         lines = {"Modern fonts for in-game text,", "including internationalization."};
         break;
@@ -1666,6 +1714,8 @@ std::size_t hint_line_count(Setting setting) noexcept {
     case Setting::modern_fonts:
     case Setting::text_size:
     case Setting::language:
+    case Setting::menu_scaling:
+    case Setting::native_density:
     case Setting::touch_drag:
     case Setting::touch_latches:
     case Setting::touch_left_handed:
@@ -1866,6 +1916,8 @@ std::string_view lock_text(Lock lock) noexcept {
         return "Set by the mod";
     case Lock::needs_modern_fonts:
         return "Needs modern fonts";
+    case Lock::always_on:
+        return "Always on here";
     }
     return {};
 }
@@ -2480,6 +2532,12 @@ void copy_setting(EngineSettings& to, const EngineSettings& from, Setting settin
         break;
     case Setting::vertical_sync:
         to.vertical_sync = from.vertical_sync;
+        break;
+    case Setting::menu_scaling:
+        to.menu_scaling = from.menu_scaling;
+        break;
+    case Setting::native_density:
+        to.native_density = from.native_density;
         break;
     case Setting::modern_fonts:
         to.modern_fonts = from.modern_fonts;

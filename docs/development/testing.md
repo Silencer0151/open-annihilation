@@ -162,8 +162,10 @@ processor's picture, under the fog, over the never-mapped ground's black
 and over the kill board.
 
 No window of a check opens at the display's own pixel density but
-`native-render-tiers-density`'s, which `--native-density` opens so: on the
-dummy video driver its density is 1, and the check holds the match laid out
+`native-render-tiers-density`'s, which `--native-density` opens so, and
+`native-render-tiers-density-setting`'s, which the Native pixel density
+setting in its preferences file opens so: on the dummy video driver its
+density is 1, and the check holds the match laid out
 in window points, read back at the display's size, at zoom 1 equal to the
 processor's composition, and picking the unit drawn under the pointer. On a
 display above density 1, such as a laptop's built-in display, run the same

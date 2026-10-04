@@ -180,7 +180,15 @@ in a dialog of their own
   (off by default): each frame waits for the display, so that none tears,
   and the frame rate keeps just below the display's; SDL's software
   renderer does not offer it, and neither does SDL's `direct3d` renderer,
-  whose graphics device each change would reset. The Graphics
+  whose graphics device each change would reset. Menu scaling, how the
+  menus, drawn at 640×480, fill the window, applies at once: Sharp, the
+  default, as large as the window holds with every pixel as wide as the
+  next, where the graphics card can; Whole steps, the largest whole-number
+  scale that fits, smaller but crisp; Unfiltered, as before. Native pixel
+  density (off by default), from the next start: the window uses the
+  display's own resolution, the Retina resolution on a Mac;
+  `--native-density` turns it on for one run, and on iPhone and iPad it is
+  always on. The Graphics
   section is taller than the dialog and scrolls, with the mouse wheel, its
   scroll bar, Page Up, Page Down, Home and End.
 - **Touch**, listed while the game has touch controls (on iPhone and iPad,

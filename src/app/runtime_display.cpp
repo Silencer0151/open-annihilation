@@ -210,6 +210,9 @@ void Runtime::present_indexed_frame(
             out[x] = output.texels[row[x]];
     }
     SDL_UnlockTexture(output.texture);
+    // The standard tier's scale mode is found before the frame begins: the
+    // first look at the pixel-art mode draws into a target of its own.
+    const SDL_ScaleMode standard_mode = standard_frame_scale_mode(width);
     if (!SDL_SetRenderDrawColor(sdl_.renderer, 0, 0, 0, 255) || !SDL_RenderClear(sdl_.renderer))
         throw_present_error("SDL render");
     // Each frame the sink presents is a new picture.
@@ -222,8 +225,8 @@ void Runtime::present_indexed_frame(
             take_acceleration_error(error);
         }
     }
-    if (!drawn && !SDL_RenderTexture(sdl_.renderer, output.texture, nullptr, nullptr))
-        throw_present_error("SDL render");
+    if (!drawn)
+        draw_frame(sdl_.renderer, output.texture, standard_mode);
     present_software_cursor(false);
     capture_render_target();
     if (render_fault_due(RenderFaultPoint::present))

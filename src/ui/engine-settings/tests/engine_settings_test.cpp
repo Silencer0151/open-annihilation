@@ -1411,6 +1411,115 @@ void a_folder_without_a_profile_keeps_its_overrides_under_its_own_id() {
     CHECK(base_read.hack_overrides.front().hack == "ai.attack-wave-size");
 }
 
+void menu_scaling_and_native_density_default_read_and_round_trip() {
+    CHECK(settings::key::menu_scaling == "open-annihilation.menu-scaling");
+    CHECK(settings::key::native_density == "open-annihilation.native-density");
+    settings::Inputs own_mac = players_own_on_linux;
+    own_mac.macos = true;
+    settings::Inputs light = players_own_on_linux;
+    light.light_machine = true;
+    // Sharp and Off everywhere, a file without the keys alike.
+    for (const auto& inputs : {settings::Inputs{}, players_own_on_linux, own_mac, light}) {
+        const auto defaults = settings::default_settings(inputs);
+        CHECK(defaults.menu_scaling == settings::MenuScaling::sharp);
+        CHECK(!defaults.native_density);
+        CHECK(settings::read_settings({}, inputs, false) == defaults);
+    }
+    // The words each way is kept as, and back; any other value gives Sharp.
+    for (const auto scaling : settings::menu_scaling_choices)
+        CHECK(settings::menu_scaling_from_text(settings::menu_scaling_text(scaling)) == scaling);
+    CHECK(settings::menu_scaling_text(settings::MenuScaling::sharp) == "sharp");
+    CHECK(settings::menu_scaling_text(settings::MenuScaling::whole_steps) == "whole-steps");
+    CHECK(settings::menu_scaling_text(settings::MenuScaling::unfiltered) == "unfiltered");
+    const auto scaling = [](const char* text) {
+        return read_one(settings::key::menu_scaling, text).menu_scaling;
+    };
+    CHECK(scaling("whole-steps") == settings::MenuScaling::whole_steps);
+    CHECK(scaling("unfiltered") == settings::MenuScaling::unfiltered);
+    CHECK(scaling("sharp") == settings::MenuScaling::sharp);
+    for (const char* text : {"", "Sharp", "whole_steps", "whole", "1", "2", "nearest", " sharp"})
+        CHECK(scaling(text) == settings::MenuScaling::sharp);
+    // The density reads as every switch does.
+    CHECK(read_one(settings::key::native_density, "1").native_density);
+    CHECK(read_one(settings::key::native_density, "4").native_density);
+    CHECK(!read_one(settings::key::native_density, "0").native_density);
+    CHECK(!read_one(settings::key::native_density, "on").native_density);
+    auto expected = settings::read_settings({}, {}, false);
+    expected.menu_scaling = settings::MenuScaling::unfiltered;
+    CHECK(read_one(settings::key::menu_scaling, "unfiltered") == expected);
+
+    // Each change alone writes its key alone and reads back; Restore
+    // defaults then OK erases it, back to Sharp and Off.
+    const auto defaults = settings::default_settings(players_own_on_linux);
+    for (const auto chosen_scaling :
+         {settings::MenuScaling::whole_steps, settings::MenuScaling::unfiltered}) {
+        auto chosen = defaults;
+        chosen.menu_scaling = chosen_scaling;
+        Values values;
+        settings::write_settings(values, defaults, chosen, defaults, false);
+        CHECK(values.size() == 1);
+        CHECK(
+            values.at(std::string{settings::key::menu_scaling}) ==
+            settings::menu_scaling_text(chosen_scaling)
+        );
+        CHECK(settings::read_settings(values, players_own_on_linux, false) == chosen);
+        settings::write_settings(values, chosen, defaults, defaults, true);
+        CHECK(values.empty());
+        CHECK(
+            settings::read_settings(values, players_own_on_linux, false).menu_scaling ==
+            settings::MenuScaling::sharp
+        );
+    }
+    auto dense = defaults;
+    dense.native_density = true;
+    Values values;
+    settings::write_settings(values, defaults, dense, defaults, false);
+    CHECK(values.size() == 1);
+    CHECK(values.at(std::string{settings::key::native_density}) == "1");
+    CHECK(settings::read_settings(values, players_own_on_linux, false) == dense);
+    // Turned off by hand, the key stays, written as Off.
+    settings::write_settings(values, dense, defaults, defaults, false);
+    CHECK(values.at(std::string{settings::key::native_density}) == "0");
+    CHECK(!settings::read_settings(values, players_own_on_linux, false).native_density);
+    settings::write_settings(values, defaults, dense, defaults, false);
+    settings::write_settings(values, dense, defaults, defaults, true);
+    CHECK(values.empty());
+
+    // Where the platform opens every window at native density it is On, as
+    // stored and by default, and a stored Off does not turn it off.
+    settings::Inputs dense_platform = players_own_on_linux;
+    dense_platform.native_density_windows = true;
+    const auto platform_defaults = settings::default_settings(dense_platform);
+    CHECK(platform_defaults.native_density);
+    CHECK(settings::read_settings({}, dense_platform, false).native_density);
+    Values off;
+    off[std::string{settings::key::native_density}] = "0";
+    CHECK(settings::read_settings(off, dense_platform, false).native_density);
+    // Unchanged, nothing is written; Restore defaults erases the key.
+    Values platform_values;
+    settings::write_settings(
+        platform_values, platform_defaults, platform_defaults, platform_defaults, false
+    );
+    CHECK(platform_values.empty());
+    settings::write_settings(off, platform_defaults, platform_defaults, platform_defaults, true);
+    CHECK(!off.contains(std::string{settings::key::native_density}));
+
+    // The locks: the platform's before the command line's; no game locks
+    // either row.
+    using settings::Lock;
+    settings::GameState state{};
+    CHECK(settings::settings_locks(state).native_density == Lock::none);
+    state.in_game = true;
+    state.shared_game = true;
+    CHECK(settings::settings_locks(state).native_density == Lock::none);
+    state.native_density_from_command_line = true;
+    CHECK(settings::settings_locks(state).native_density == Lock::command_line);
+    state.native_density_windows = true;
+    CHECK(settings::settings_locks(state).native_density == Lock::always_on);
+    state.native_density_from_command_line = false;
+    CHECK(settings::settings_locks(state).native_density == Lock::always_on);
+}
+
 int main() {
     defaults_play_as_without_the_settings();
     escape_opens_the_menu_by_default_only_on_macos_with_the_players_own_file();
@@ -1450,6 +1559,7 @@ int main() {
     the_hold_delay_is_held_to_its_range_and_stops();
     the_touch_settings_round_trip_and_restore();
     the_backups_switch_is_off_by_default_and_round_trips();
+    menu_scaling_and_native_density_default_read_and_round_trip();
     if (failures != 0)
         return 1;
     std::cout << "engine settings: ok\n";

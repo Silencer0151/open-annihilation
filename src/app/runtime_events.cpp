@@ -195,8 +195,7 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
     if (event.type == SDL_EVENT_MOUSE_WHEEL && screen_ == Screen::match) {
         // ui.megamap takes the wheel first.
         if (megamap_on()) {
-            if (sdl_.renderer != nullptr &&
-                !SDL_ConvertEventToRenderCoordinates(sdl_.renderer, &event))
+            if (sdl_.renderer != nullptr && !convert_event_to_frame(sdl_.renderer, event))
                 return;
             if (megamap_wheel(event.wheel.y, event.wheel.mouse_x, event.wheel.mouse_y))
                 return;
@@ -206,8 +205,7 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
             return;
         }
         // With the Mouse wheel zoom setting off the wheel does nothing here.
-        if (!engine_settings().wheel_zoom ||
-            !SDL_ConvertEventToRenderCoordinates(sdl_.renderer, &event))
+        if (!engine_settings().wheel_zoom || !convert_event_to_frame(sdl_.renderer, event))
             return;
         handle_match_zoom(event.wheel.y, event.wheel.mouse_x, event.wheel.mouse_y);
         return;
@@ -241,8 +239,7 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
     if (event.type == SDL_EVENT_MOUSE_MOTION || event.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
         event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
         // Headless checks have no renderer and send canvas coordinates.
-        if (sdl_.renderer != nullptr &&
-            !SDL_ConvertEventToRenderCoordinates(sdl_.renderer, &event)) {
+        if (sdl_.renderer != nullptr && !convert_event_to_frame(sdl_.renderer, event)) {
             if (options_.trace_input)
                 std::cerr << "input coordinate conversion failed: " << SDL_GetError() << '\n';
             return;

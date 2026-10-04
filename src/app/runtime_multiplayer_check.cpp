@@ -44,7 +44,7 @@ SDL_Event pointer_event(
     float window_x = 0.0F;
     float window_y = 0.0F;
     require(
-        SDL_RenderCoordinatesToWindow(
+        frame_to_window(
             renderer, static_cast<float>(x), static_cast<float>(y), &window_x, &window_y
         ),
         SDL_GetError()

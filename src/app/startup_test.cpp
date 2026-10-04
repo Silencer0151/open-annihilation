@@ -890,8 +890,9 @@ int main() {
             "--check-engine-settings and --check-kill-board",
         "--force-capable with another check is refused"
     );
-    // --native-density opens the render tiers check's window at the
-    // display's own density, and goes with that check alone.
+    // --native-density opens the window at the display's own density for
+    // one run, whatever the setting says; with the render tiers check it
+    // runs that check's density case.
     const auto density = parse(
         {"--check-render-tiers", "--hardware-acceleration", "--force-capable", "--native-density"}
     );
@@ -904,21 +905,19 @@ int main() {
             !parse({"--hardware-acceleration"}).native_density,
         "no native density unasked"
     );
+    const auto played = parse({"--native-density"});
     expect(
-        rejection({"--native-density"}) ==
-            "--native-density is accepted only with --check-render-tiers",
-        "--native-density alone is refused"
+        played.native_density && !played.check_render_tiers && !played.unattended,
+        "--native-density alone is a player's run at native density"
     );
     for (const auto& other : std::vector<std::vector<const char*>>{
              {"--check-engine-settings", "--native-density"},
-             {"--check-renderer-ladder", "--native-density"},
              {"--hardware-acceleration", "--native-density"},
-             {"--headless-check", "--native-density"},
+             {"--no-hardware-acceleration", "--native-density"},
          })
-        expect(
-            rejection(other) == "--native-density is accepted only with --check-render-tiers",
-            "--native-density with another run is refused"
-        );
+        expect(parse(other).native_density, "--native-density goes with another run");
+    // The platform's density is main's to set, never the command line's.
+    expect(!parse({"--native-density"}).native_density_windows, "no platform density parsed");
 
     // The director view check runs headless on the fixed clock, past the
     // intro, with nobody there.

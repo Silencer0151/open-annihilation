@@ -118,7 +118,7 @@ void Runtime::drive_mouse_look(bool begin) {
         float window_x = 0.0F;
         float window_y = 0.0F;
         if (self->sdl_.renderer != nullptr && self->sdl_.window != nullptr &&
-            SDL_RenderCoordinatesToWindow(
+            frame_to_window(
                 self->sdl_.renderer,
                 static_cast<float>(canvas.x),
                 static_cast<float>(canvas.y),

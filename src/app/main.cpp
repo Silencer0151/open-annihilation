@@ -269,8 +269,9 @@ struct HostDisplay {
         // own only where the rule allows it (decide_window_density).
         DensityRequest density;
         density.flag = options.hardware_acceleration;
-        density.platform_native = kNativeDensityWindows;
+        density.platform_native = options.native_density_windows;
         density.asked = options.native_density;
+        density.chosen = start.native_density;
         density.setting = start.hardware_acceleration;
         density.unattended = options.unattended;
         density.capture = !options.capture_video.empty();
@@ -860,6 +861,7 @@ int main(int argc, char** argv) {
         for (uint32_t restarts = 0;; ++restarts) {
             auto options = parsed;
             options.restarts = restarts;
+            options.native_density_windows = kNativeDensityWindows;
             // A soft restart returns to the main menu without the movies.
             if (restarts > 0)
                 options.skip_intro = true;

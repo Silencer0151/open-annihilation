@@ -31,6 +31,7 @@ settings::Inputs start_inputs(const Options& options, settings::ScreenSize deskt
     inputs.raspberry_pi = oa::platform::running_on_raspberry_pi();
     inputs.light_machine = oa::platform::light_machine(oa::platform::read_machine_traits());
     inputs.desktop = desktop;
+    inputs.native_density_windows = options.native_density_windows;
     return inputs;
 }
 

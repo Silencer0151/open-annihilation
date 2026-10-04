@@ -1174,7 +1174,7 @@ void Runtime::check_selection_visuals(const std::function<void(renderer::Surface
         float window_x = static_cast<float>(x) + 0.5F;
         float window_y = static_cast<float>(y) + 0.5F;
         if (sdl_.renderer != nullptr &&
-            !SDL_RenderCoordinatesToWindow(sdl_.renderer, window_x, window_y, &window_x, &window_y))
+            !frame_to_window(sdl_.renderer, window_x, window_y, &window_x, &window_y))
             throw std::runtime_error(
                 std::string("SDL_RenderCoordinatesToWindow: ") + SDL_GetError()
             );

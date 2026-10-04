@@ -749,12 +749,15 @@ std::string function_test_log_line(std::string_view failure) {
 /// pixel density" to say why.
 ///
 /// @param reason the reason a window opens at native density
-/// @return " (--native-density)", " (as every window of this platform)", or
-///     empty when every condition of the rule holds
+/// @return " (--native-density)", " (the Native pixel density setting)",
+///     " (as every window of this platform)", or empty when every condition
+///     of the rule holds
 std::string_view native_density_reason(render_policy::DensityReason reason) noexcept {
     switch (reason) {
     case render_policy::DensityReason::asked:
         return " (--native-density)";
+    case render_policy::DensityReason::chosen:
+        return " (the Native pixel density setting)";
     case render_policy::DensityReason::platform:
         return " (as every window of this platform)";
     default:
@@ -768,6 +771,7 @@ render_policy::DensityDecision decide_window_density(const DensityRequest& reque
     render_policy::DensityInputs inputs;
     inputs.platform_native = request.platform_native;
     inputs.asked = request.asked;
+    inputs.chosen = request.chosen;
     inputs.memory = physical_memory();
     inputs.flag = render_policy::acceleration_flag(request.flag);
     inputs.setting = request.setting;

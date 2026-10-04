@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "check_host_input.hpp"
+#include "oa/app/frame_coordinates.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -43,7 +44,7 @@ struct WindowPoint {
 WindowPoint window_point(SDL_Renderer* renderer, int32_t x, int32_t y) {
     WindowPoint point{static_cast<float>(x), static_cast<float>(y)};
     if (renderer != nullptr &&
-        !SDL_RenderCoordinatesToWindow(
+        !frame_to_window(
             renderer, static_cast<float>(x), static_cast<float>(y), &point.x, &point.y
         ))
         throw std::runtime_error(std::string("check host: ") + SDL_GetError());

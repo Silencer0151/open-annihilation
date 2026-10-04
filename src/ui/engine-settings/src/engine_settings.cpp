@@ -240,6 +240,9 @@ EngineSettings default_settings(const Inputs& inputs) {
                 .value_or(inputs.units_per_player.default_limit);
     else
         settings.unit_limit = inputs.units_per_player.default_limit;
+    // Where the platform opens every window at native density, the setting
+    // says so.
+    settings.native_density = inputs.native_density_windows;
     if (inputs.players_own_profile && inputs.raspberry_pi) {
         settings.max_frame_rate = raspberry_pi_frame_rate;
         settings.anti_aliasing = AntiAliasing::off;
@@ -286,6 +289,25 @@ hardware_acceleration_from_text(std::string_view text) noexcept {
     for (const HardwareAcceleration level : hardware_acceleration_levels)
         if (text == hardware_acceleration_text(level))
             return level;
+    return std::nullopt;
+}
+
+std::string_view menu_scaling_text(MenuScaling scaling) noexcept {
+    switch (scaling) {
+    case MenuScaling::sharp:
+        return "sharp";
+    case MenuScaling::whole_steps:
+        return "whole-steps";
+    case MenuScaling::unfiltered:
+        return "unfiltered";
+    }
+    return {};
+}
+
+std::optional<MenuScaling> menu_scaling_from_text(std::string_view text) noexcept {
+    for (const MenuScaling scaling : menu_scaling_choices)
+        if (text == menu_scaling_text(scaling))
+            return scaling;
     return std::nullopt;
 }
 
@@ -357,6 +379,11 @@ EngineSettings read_settings(
             stored_acceleration(found->second).value_or(settings.hardware_acceleration);
     if (const auto number = stored_number(values, key::vertical_sync))
         settings.vertical_sync = *number > 0;
+    if (const auto found = values.find(std::string{key::menu_scaling}); found != values.end())
+        settings.menu_scaling =
+            menu_scaling_from_text(found->second).value_or(settings.menu_scaling);
+    if (const auto number = stored_number(values, key::native_density))
+        settings.native_density = inputs.native_density_windows || *number > 0;
     for (const TextSwitch& entry : text_switches)
         if (const auto number = stored_number(values, entry.key))
             settings.*entry.member = *number > 0;
@@ -493,6 +520,22 @@ void write_settings(
         switch_text(chosen.vertical_sync),
         chosen.vertical_sync != opened.vertical_sync,
         chosen.vertical_sync == defaults.vertical_sync,
+        restored
+    );
+    store(
+        values,
+        key::menu_scaling,
+        std::string{menu_scaling_text(chosen.menu_scaling)},
+        chosen.menu_scaling != opened.menu_scaling,
+        chosen.menu_scaling == defaults.menu_scaling,
+        restored
+    );
+    store(
+        values,
+        key::native_density,
+        switch_text(chosen.native_density),
+        chosen.native_density != opened.native_density,
+        chosen.native_density == defaults.native_density,
         restored
     );
     for (const TextSwitch& entry : text_switches)
@@ -664,6 +707,11 @@ Locks settings_locks(const GameState& state) noexcept {
     locks.vertical_sync = state.vertical_sync_unavailable                        ? Lock::unavailable
                           : state.in_game && (state.shared_game || state.replay) ? Lock::in_game
                                                                                  : Lock::none;
+    // The window's density holds for the run and changes from the next
+    // start, so no game locks it.
+    locks.native_density = state.native_density_windows             ? Lock::always_on
+                           : state.native_density_from_command_line ? Lock::command_line
+                                                                    : Lock::none;
     // The language changes only what players read, so no game locks it.
     locks.language = state.language_from_command_line ? Lock::command_line : Lock::none;
     // A game keeps the mod it plays; the main menu chooses another. The

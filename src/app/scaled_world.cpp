@@ -106,6 +106,56 @@ void draw_one_to_one(
         throw AccelerationError(std::string("SDL_FlushRenderer: ") + SDL_GetError());
 }
 
+bool set_frame_presentation(
+    SDL_Renderer* renderer, render_policy::MenuScaling scaling, int width, int height
+) {
+    int output_width = 0;
+    int output_height = 0;
+    if (!SDL_GetRenderOutputSize(renderer, &output_width, &output_height))
+        return false;
+    const auto fit = render_policy::frame_fit(scaling, output_width, output_height, width, height);
+    return SDL_SetRenderLogicalPresentation(
+        renderer,
+        width,
+        height,
+        fit == render_policy::FrameFit::whole_steps ? SDL_LOGICAL_PRESENTATION_INTEGER_SCALE
+                                                    : SDL_LOGICAL_PRESENTATION_LETTERBOX
+    );
+}
+
+void draw_frame(SDL_Renderer* renderer, SDL_Texture* texture, SDL_ScaleMode mode) {
+    const bool filtered = mode != SDL_SCALEMODE_NEAREST && SDL_SetTextureScaleMode(texture, mode);
+    const bool drawn = SDL_RenderTexture(renderer, texture, nullptr, nullptr);
+    const bool run = !filtered || !drawn || run_draws_before_scale_mode_changes(renderer);
+    if (filtered)
+        std::ignore = SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
+    if (!drawn)
+        throw_present_error("SDL_RenderTexture");
+    if (!run)
+        throw_present_error("SDL_FlushRenderer");
+}
+
+void draw_frame(SDL_Renderer* renderer, TiledTexture& frame, SDL_ScaleMode mode) {
+    const bool filtered = mode != SDL_SCALEMODE_NEAREST && frame.set_scale_mode(mode);
+    if (!filtered) {
+        // A refused mode may have reached some tiles: all go back to NEAREST.
+        if (mode != SDL_SCALEMODE_NEAREST)
+            std::ignore = frame.set_scale_mode(SDL_SCALEMODE_NEAREST);
+        frame.draw(renderer, nullptr, nullptr);
+        return;
+    }
+    try {
+        frame.draw(renderer, nullptr, nullptr);
+    } catch (...) {
+        std::ignore = frame.set_scale_mode(SDL_SCALEMODE_NEAREST);
+        throw;
+    }
+    const bool run = run_draws_before_scale_mode_changes(renderer);
+    std::ignore = frame.set_scale_mode(SDL_SCALEMODE_NEAREST);
+    if (!run)
+        throw_present_error("SDL_FlushRenderer");
+}
+
 namespace {
 
 namespace policy = render_policy;

@@ -632,7 +632,7 @@ bool translate_input(
     case SDL_EVENT_MOUSE_WHEEL: {
         SDL_Event converted = event;
         // Headless checks have no renderer and send canvas coordinates.
-        if (renderer != nullptr && !SDL_ConvertEventToRenderCoordinates(renderer, &converted))
+        if (renderer != nullptr && !convert_event_to_frame(renderer, converted))
             return false;
         input.modifiers = modifiers;
         if (converted.type == SDL_EVENT_MOUSE_MOTION) {

@@ -206,7 +206,7 @@ void Runtime::check_match_orders() {
         );
         float window_x = 0;
         float window_y = 0;
-        if (!SDL_RenderCoordinatesToWindow(
+        if (!frame_to_window(
                 sdl_.renderer,
                 static_cast<float>(rect.x) + static_cast<float>(rect.width) / 2.0F,
                 static_cast<float>(rect.y) + static_cast<float>(rect.height) / 2.0F,
@@ -549,7 +549,7 @@ void Runtime::check_command_buttons(uint16_t peewee, uint16_t commander) {
     const auto send_pointer = [&](float canvas_x, float canvas_y, bool press) {
         float window_x = 0;
         float window_y = 0;
-        if (!SDL_RenderCoordinatesToWindow(sdl_.renderer, canvas_x, canvas_y, &window_x, &window_y))
+        if (!frame_to_window(sdl_.renderer, canvas_x, canvas_y, &window_x, &window_y))
             throw std::runtime_error(
                 std::string("SDL_RenderCoordinatesToWindow: ") + SDL_GetError()
             );
@@ -711,7 +711,7 @@ void Runtime::check_hud_buttons_under_pointer(uint16_t peewee, uint16_t commande
     const auto send = [&](SDL_EventType type, layout::Point canvas) {
         float window_x = 0;
         float window_y = 0;
-        if (!SDL_RenderCoordinatesToWindow(
+        if (!frame_to_window(
                 sdl_.renderer,
                 static_cast<float>(canvas.x),
                 static_cast<float>(canvas.y),

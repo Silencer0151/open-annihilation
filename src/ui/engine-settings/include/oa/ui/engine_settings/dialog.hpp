@@ -157,6 +157,9 @@ enum class Setting : uint8_t {
     /// its Saves, Screenshots and Mods folders in the system's file manager;
     /// it changes no setting
     user_folder,
+    /// Menu scaling: a strip of Sharp, Whole steps and Unfiltered
+    menu_scaling,
+    native_density, ///< Native pixel density: a switch
 };
 
 /// Returns the settings a section shows, top to bottom.

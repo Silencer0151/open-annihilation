@@ -37,6 +37,16 @@
 // prescale target at a whole-number scale and does not draw its source into
 // the target again while the source's revision is unchanged. A prescale
 // target is checked by its read-back when made.
+//
+// The menus' frame of 640x480 under each way of Menu scaling, in windows of
+// the common sizes, one smaller than the frame, and ones of an odd width and
+// height: the rectangle it is drawn in is whole, centred, as large as the
+// window holds, or in the largest whole step, and the frame read back fills
+// exactly that rectangle; a point of the frame placed in the window and
+// mapped back is the same point, and the middle of each edge pixel of the
+// rectangle maps to the middle of the frame's edge pixel, where SDL reckons
+// half a pixel as well. PIXELART, which the standard tier asks for, draws
+// the frame as NEAREST on that renderer.
 #include "oa/app/scaled_world.hpp"
 
 #include "oa/present/world_renderer/scene_filter.hpp"
@@ -1335,6 +1345,243 @@ void test_overlay_over_a_picture() {
 
 } // namespace card
 
+/// The menus' frame under each way of Menu scaling.
+namespace frame_presentation {
+using oa::app::render_policy::MenuScaling;
+
+/// The frame's size, in its own pixels.
+constexpr int kFrameWidth = 640;
+constexpr int kFrameHeight = 480;
+/// How close a point mapped there and back stays to itself, in frame pixels.
+constexpr float kMappingTolerance = 0.002F;
+
+/// A window size, and the largest whole step of the frame it holds; 0 for
+/// one smaller than the frame.
+struct Window {
+    int width{};
+    int height{};
+    int whole_step{};
+};
+
+/// A software renderer over a surface of a window's size.
+struct Output {
+    SDL_Surface* surface{};
+    SDL_Renderer* renderer{};
+
+    /// Makes the surface and its renderer.
+    ///
+    /// @param width the surface's width
+    /// @param height the surface's height
+    Output(int width, int height) {
+        surface = SDL_CreateSurface(width, height, SDL_PIXELFORMAT_XRGB8888);
+        if (surface != nullptr)
+            renderer = SDL_CreateSoftwareRenderer(surface);
+    }
+
+    Output(const Output&) = delete;
+    Output& operator=(const Output&) = delete;
+
+    ~Output() {
+        if (renderer != nullptr)
+            SDL_DestroyRenderer(renderer);
+        if (surface != nullptr)
+            SDL_DestroySurface(surface);
+    }
+};
+
+/// Returns the rectangle of the output's pixels that are not black, read
+/// from its surface: SDL's own read-back covers the letterbox alone.
+///
+/// @param output the output, drawn
+/// @return the bounding rectangle; empty when every pixel is black
+SDL_Rect lit_rectangle(const Output& output) {
+    OA_CHECK(SDL_FlushRenderer(output.renderer));
+    SDL_Surface* const read = output.surface;
+    int left = read->w;
+    int top = read->h;
+    int right = -1;
+    int bottom = -1;
+    for (int y = 0; y < read->h; ++y)
+        for (int x = 0; x < read->w; ++x) {
+            uint8_t red = 0, green = 0, blue = 0;
+            if (!SDL_ReadSurfacePixel(read, x, y, &red, &green, &blue, nullptr) ||
+                (red | green | blue) == 0)
+                continue;
+            left = std::min(left, x);
+            top = std::min(top, y);
+            right = std::max(right, x);
+            bottom = std::max(bottom, y);
+        }
+    if (right < 0)
+        return {};
+    return {left, top, right - left + 1, bottom - top + 1};
+}
+
+/// Maps a window point into the frame through a mouse press, as the game
+/// converts its events.
+///
+/// @param renderer the renderer
+/// @param x the window column
+/// @param y the window row
+/// @return the frame point
+SDL_FPoint frame_point(SDL_Renderer* renderer, float x, float y) {
+    SDL_Event event{};
+    event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+    event.button.x = x;
+    event.button.y = y;
+    OA_CHECK(oa::app::convert_event_to_frame(renderer, event));
+    return {event.button.x, event.button.y};
+}
+
+void test_each_way_in_each_window() {
+    const Window windows[] = {
+        {640, 480, 1},
+        {800, 600, 1},
+        {1280, 800, 1},
+        {1366, 768, 1},
+        {1920, 1080, 2},
+        {2000, 1250, 2},
+        {600, 400, 0},
+        {1001, 625, 1},
+        {1000, 625, 1},
+        {1001, 751, 1},
+    };
+    // A white frame, drawn over a black output.
+    std::vector<uint8_t> white(static_cast<std::size_t>(kFrameWidth) * kFrameHeight * 3U, 255);
+    int halves = 0;
+    for (const Window& window : windows)
+        for (const MenuScaling scaling :
+             {MenuScaling::sharp, MenuScaling::whole_steps, MenuScaling::unfiltered}) {
+            Output output(window.width, window.height);
+            OA_CHECK(output.renderer != nullptr);
+            if (output.renderer == nullptr)
+                continue;
+            OA_CHECK(
+                oa::app::set_frame_presentation(output.renderer, scaling, kFrameWidth, kFrameHeight)
+            );
+            // As after a frame's present: SDL before 3.4 places the draws
+            // queued before the next run of its queue where the presentation
+            // was before.
+            OA_CHECK(SDL_FlushRenderer(output.renderer));
+            SDL_FRect reckoned{};
+            OA_CHECK(SDL_GetRenderLogicalPresentationRect(output.renderer, &reckoned));
+            if (reckoned.x != std::floor(reckoned.x) || reckoned.y != std::floor(reckoned.y))
+                ++halves;
+            const SDL_Rect drawn = oa::app::drawn_frame_rect(reckoned);
+            // Whole steps where they are asked for and the window holds the
+            // frame; otherwise as large as the window holds, filling it
+            // across or down at the frame's shape.
+            if (scaling == MenuScaling::whole_steps && window.whole_step > 0) {
+                OA_CHECK(drawn.w == kFrameWidth * window.whole_step);
+                OA_CHECK(drawn.h == kFrameHeight * window.whole_step);
+            } else {
+                OA_CHECK(
+                    (drawn.w == window.width && drawn.h <= window.height) ||
+                    (drawn.h == window.height && drawn.w <= window.width)
+                );
+                OA_CHECK(std::abs(drawn.w * kFrameHeight - drawn.h * kFrameWidth) < kFrameWidth);
+            }
+            // Centred on whole pixels: the margins differ by a pixel at most.
+            OA_CHECK(drawn.x == (window.width - drawn.w) / 2);
+            OA_CHECK(drawn.y == (window.height - drawn.h) / 2);
+
+            // The frame read back fills that rectangle exactly, drawn NEAREST
+            // and as the standard tier asks for PIXELART alike.
+            SDL_Texture* frame = SDL_CreateTexture(
+                output.renderer,
+                SDL_PIXELFORMAT_RGB24,
+                SDL_TEXTUREACCESS_STATIC,
+                kFrameWidth,
+                kFrameHeight
+            );
+            OA_CHECK(frame != nullptr);
+            if (frame == nullptr)
+                continue;
+            OA_CHECK(SDL_UpdateTexture(frame, nullptr, white.data(), kFrameWidth * 3));
+            OA_CHECK(SDL_SetTextureScaleMode(frame, SDL_SCALEMODE_NEAREST));
+            for (const auto filter :
+                 {oa::app::render_policy::ScaleFilter::nearest,
+                  oa::app::render_policy::ScaleFilter::pixelart}) {
+                OA_CHECK(SDL_SetRenderDrawColor(output.renderer, 0, 0, 0, 255));
+                OA_CHECK(SDL_RenderClear(output.renderer));
+                oa::app::draw_frame(output.renderer, frame, oa::app::direct_scale_mode(filter));
+                const SDL_Rect lit = lit_rectangle(output);
+                const bool same =
+                    lit.x == drawn.x && lit.y == drawn.y && lit.w == drawn.w && lit.h == drawn.h;
+                if (!same)
+                    std::fprintf(
+                        stderr,
+                        "frame in %dx%d: drawn %d,%d %dx%d, read back %d,%d %dx%d\n",
+                        window.width,
+                        window.height,
+                        drawn.x,
+                        drawn.y,
+                        drawn.w,
+                        drawn.h,
+                        lit.x,
+                        lit.y,
+                        lit.w,
+                        lit.h
+                    );
+                OA_CHECK(same);
+            }
+            SDL_DestroyTexture(frame);
+
+            // A point of the frame placed in the window maps back to itself.
+            for (const float x : {0.5F, 1.5F, 319.5F, 638.5F, 639.5F})
+                for (const float y : {0.5F, 239.5F, 479.5F}) {
+                    float window_x = 0.0F;
+                    float window_y = 0.0F;
+                    OA_CHECK(oa::app::frame_to_window(output.renderer, x, y, &window_x, &window_y));
+                    const SDL_FPoint back = frame_point(output.renderer, window_x, window_y);
+                    OA_CHECK(std::abs(back.x - x) < kMappingTolerance);
+                    OA_CHECK(std::abs(back.y - y) < kMappingTolerance);
+                }
+            // The middle of each edge pixel of the rectangle lies on the
+            // frame's edge pixel, at the place the drawn frame shows it.
+            const auto expected = [](int pixel, int origin, int drawn_size, int frame_size) {
+                return (static_cast<float>(pixel - origin) + 0.5F) *
+                       static_cast<float>(frame_size) / static_cast<float>(drawn_size);
+            };
+            const int last_x = drawn.x + drawn.w - 1;
+            const int last_y = drawn.y + drawn.h - 1;
+            const SDL_FPoint first = frame_point(
+                output.renderer,
+                static_cast<float>(drawn.x) + 0.5F,
+                static_cast<float>(drawn.y) + 0.5F
+            );
+            const SDL_FPoint last = frame_point(
+                output.renderer,
+                static_cast<float>(last_x) + 0.5F,
+                static_cast<float>(last_y) + 0.5F
+            );
+            OA_CHECK(
+                std::abs(first.x - expected(drawn.x, drawn.x, drawn.w, kFrameWidth)) <
+                kMappingTolerance
+            );
+            OA_CHECK(
+                std::abs(first.y - expected(drawn.y, drawn.y, drawn.h, kFrameHeight)) <
+                kMappingTolerance
+            );
+            OA_CHECK(
+                std::abs(last.x - expected(last_x, drawn.x, drawn.w, kFrameWidth)) <
+                kMappingTolerance
+            );
+            OA_CHECK(
+                std::abs(last.y - expected(last_y, drawn.y, drawn.h, kFrameHeight)) <
+                kMappingTolerance
+            );
+            OA_CHECK(static_cast<int>(std::floor(first.x)) == 0);
+            OA_CHECK(static_cast<int>(std::floor(first.y)) == 0);
+            OA_CHECK(static_cast<int>(std::floor(last.x)) == kFrameWidth - 1);
+            OA_CHECK(static_cast<int>(std::floor(last.y)) == kFrameHeight - 1);
+        }
+    // Some of these windows leave SDL's own reckoning half a pixel off.
+    OA_CHECK(halves > 0);
+}
+
+} // namespace frame_presentation
+
 } // namespace
 
 int main() {
@@ -1353,6 +1600,7 @@ int main() {
     card::test_tiles_hold_their_gutters();
     card::test_prescale_tiles_draw_as_one_target();
     card::test_overlay_over_a_picture();
+    frame_presentation::test_each_way_in_each_window();
     SDL_Quit();
     const int status = oa::test::check_exit_status();
     if (status == 0)

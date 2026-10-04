@@ -536,8 +536,10 @@ if(OA_BUILD_PLATFORM)
     # LINEAR, modelled on the processor, within 2 levels; NEAREST exact at
     # whole-number scales; PIXELART as NEAREST, as that renderer gives it;
     # scenes and prescale targets in tiles with their gutters, drawing as
-    # one texture does; the overlay over a picture; and no prescale target
-    # made or drawn again needlessly.
+    # one texture does; the overlay over a picture; no prescale target
+    # made or drawn again needlessly; and the menus' frame under each way of
+    # Menu scaling, its rectangle whole, centred and where it is drawn, and
+    # the pointer mapped onto it there.
     add_executable(oa-app-scaled-world-test src/app/scaled_world_test.cpp)
     target_link_libraries(oa-app-scaled-world-test PRIVATE oa-app-render-host
       oa-present-world-renderer SDL3::SDL3 oa-test-support oa-options)
@@ -1151,6 +1153,21 @@ if(OA_BUILD_PLATFORM)
       set_tests_properties(native-render-tiers-density PROPERTIES
         TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_render_density_check_dir}" SKIP_RETURN_CODE 77
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # The same case with the Native pixel density setting on in the
+      # preferences file in place of --native-density.
+      set(oa_render_density_setting_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/native-checks/render-density-setting")
+      file(MAKE_DIRECTORY "${oa_render_density_setting_dir}")
+      file(WRITE "${oa_render_density_setting_dir}/render-density.conf"
+        "open-annihilation-preferences 1\n"
+        "\"open-annihilation.native-density\" \"1\"\n")
+      add_test(NAME native-render-tiers-density-setting COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-render-tiers --hardware-acceleration --force-capable
+        --preferences-file "${oa_render_density_setting_dir}/render-density.conf")
+      set_tests_properties(native-render-tiers-density-setting PROPERTIES
+        TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_render_density_setting_dir}" SKIP_RETURN_CODE 77
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # LOADGAME.GUI from Single Player and, through the SDL presenter, as the
       # save and load dialogs over a paused skirmish: each centred on the

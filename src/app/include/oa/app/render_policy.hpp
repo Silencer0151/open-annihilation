@@ -34,6 +34,8 @@ namespace oa::app::render_policy {
 /// The levels of Hardware acceleration, as the setting and the flags name
 /// them: Off, Basic and Full.
 using oa::ui::engine_settings::HardwareAcceleration;
+/// The ways of Menu scaling: Sharp, Whole steps and Unfiltered.
+using oa::ui::engine_settings::MenuScaling;
 
 // ---------------------------------------------------------------------------
 // Tiers and the command line
@@ -892,9 +894,9 @@ describe_step(const LadderState& before, const LadderState& after) noexcept;
 /// driver together, has yet been measured at native density against the
 /// standard tier on the same machine and found to cost no more frame time,
 /// so the rule (decide_native_density) opens no window at native density
-/// by itself; --native-density still asks for it for a check, and a
-/// platform whose windows are at native density asks for it for every
-/// window (DensityInputs::platform_native).
+/// by itself; --native-density and the Native pixel density setting still
+/// ask for it, and a platform whose windows are at native density asks for
+/// it for every window (DensityInputs::platform_native).
 inline constexpr bool native_density_measured = false;
 
 /// Everything decide_native_density reads, known before the window opens.
@@ -905,10 +907,13 @@ struct DensityInputs {
     /// option): native density whatever the rest of the rule says, but for
     /// the machine's memory and a flag that names Off.
     bool platform_native{};
-    /// --native-density, which only the render tiers check takes: native
-    /// density whatever the rest of the rule says, but for the machine's
-    /// memory and a flag that names Off.
+    /// --native-density: native density whatever the rest of the rule says,
+    /// but for the machine's memory and a flag that names Off.
     bool asked{};
+    /// The Native pixel density setting is on: native density whatever the
+    /// rest of the rule says, but for the machine's memory and a flag that
+    /// names Off, as --native-density.
+    bool chosen{};
     /// The machine's physical memory in bytes, as the system reports it; 0
     /// when it does not say.
     uint64_t memory{};
@@ -946,6 +951,7 @@ enum class DensityReason : uint8_t {
     flag_off, ///< --no-hardware-acceleration or --hardware-acceleration=off
     platform, ///< the platform opens its windows at native density: native density
     asked,    ///< --native-density: native density
+    chosen,   ///< the Native pixel density setting: native density
     /// SDL_RENDER_DRIVER or a dummy or offscreen video driver.
     environment,
     unattended,       ///< an unattended run
@@ -975,15 +981,15 @@ struct DensityDecision {
 /// or Full asked for (acceleration_asked); a class measured at native
 /// density; a start above budget none, from a remembered rung, if any,
 /// above the magnify-off rung; and the native-density record.
-/// A platform whose windows are at native density, and --native-density,
-/// open it at native density whatever the conditions after a flag that
-/// names Off say. Every other window opens at the window system's density,
-/// as a first start does.
+/// A platform whose windows are at native density, --native-density and the
+/// Native pixel density setting open it at native density whatever the
+/// conditions after a flag that names Off say. Every other window opens at
+/// the window system's density, as a first start does.
 ///
 /// @param inputs what is known before the window opens
 /// @return the density, and the first reason in DensityReason's order that
-///     decided it; DensityReason::native, platform or asked exactly when it
-///     is native
+///     decided it; DensityReason::native, platform, asked or chosen exactly
+///     when it is native
 [[nodiscard]] DensityDecision decide_native_density(const DensityInputs& inputs) noexcept;
 
 // ---------------------------------------------------------------------------
@@ -1049,6 +1055,62 @@ enum class ScaleFilter : uint8_t {
 ///     NEAREST-chrome rung; otherwise PIXELART, sharp-bilinear or plain
 ///     LINEAR, as the card's magnification says
 [[nodiscard]] ScaleFilter chrome_filter(const LadderState& state, double scale) noexcept;
+
+/// How the window holds a screen drawn as one frame: the menus, the
+/// loading screen and the other screens of 640x480, and a dialog over the
+/// frame of its own size.
+enum class FrameFit : uint8_t {
+    /// As large as the window holds, centred, the rest of the window black.
+    letterbox,
+    /// The largest whole number of window pixels to each of the frame's
+    /// that the window holds, centred, the rest of the window black.
+    whole_steps,
+};
+
+/// Decides how the window holds a frame.
+///
+/// @param scaling the Menu scaling setting
+/// @param window_width the window's width, in the pixels the frame is drawn in
+/// @param window_height the window's height, in the same pixels
+/// @param frame_width the frame's width, in its own pixels
+/// @param frame_height the frame's height, in its own pixels
+/// @return whole steps where the setting asks for them and the window holds
+///     the frame at least once across and down; a smaller window, where one
+///     whole step would lose the frame's edges, letterboxes it as Sharp does
+[[nodiscard]] FrameFit frame_fit(
+    MenuScaling scaling,
+    int32_t window_width,
+    int32_t window_height,
+    int32_t frame_width,
+    int32_t frame_height
+) noexcept;
+
+/// Returns how a frame the window holds (frame_fit) is scaled to it.
+///
+/// Unfiltered, and any whole-number scale, repeat each of the frame's
+/// pixels (NEAREST). Otherwise, as Sharp, which Whole steps falls back to
+/// in a window smaller than the frame: in the accelerated tier the
+/// chrome's filter (chrome_filter); in the standard tier PIXELART where
+/// the renderer's pixel-art scale mode works, else NEAREST.
+///
+/// @param scaling the Menu scaling setting
+/// @param accelerated the accelerated tier's rung; null in the standard tier
+/// @param pixelart the renderer's pixel-art scale mode works; read only in
+///     the standard tier
+/// @param scale window pixels per frame pixel, above 0
+/// @return the filter
+[[nodiscard]] ScaleFilter frame_filter(
+    MenuScaling scaling, const LadderState* accelerated, bool pixelart, double scale
+) noexcept;
+
+/// Tells whether a frame's filter in the standard tier turns on the
+/// renderer's pixel-art scale mode, so that whether it works is worth
+/// finding out (frame_filter).
+///
+/// @param scaling the Menu scaling setting
+/// @param scale window pixels per frame pixel, above 0
+/// @return true unless the setting is Unfiltered or the scale a whole number
+[[nodiscard]] bool frame_wants_pixelart(MenuScaling scaling, double scale) noexcept;
 
 /// Returns how the card magnifies the battlefield's scene while the rung
 /// magnifies it. The NEAREST-chrome rung leaves it as it is: only the

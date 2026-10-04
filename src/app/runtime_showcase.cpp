@@ -297,7 +297,7 @@ void Runtime::run_showcase() {
     const auto glide = [&](float canvas_x, float canvas_y) {
         float to_x = 0.0F;
         float to_y = 0.0F;
-        if (!SDL_RenderCoordinatesToWindow(sdl_.renderer, canvas_x, canvas_y, &to_x, &to_y))
+        if (!frame_to_window(sdl_.renderer, canvas_x, canvas_y, &to_x, &to_y))
             fail(std::string("SDL_RenderCoordinatesToWindow: ") + SDL_GetError());
         const float from_x = pointer_x;
         const float from_y = pointer_y;

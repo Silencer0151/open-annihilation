@@ -5836,7 +5836,8 @@ class Runtime final : public menu::Host,
     ///
     /// A match lays the battlefield and chrome out for the window's pixel size;
     /// other screens present at the canvas size, the load and save dialogs at the
-    /// size of the frame they are drawn over. The layout and the pointer's
+    /// size of the frame they are drawn over, letterboxed or in whole steps
+    /// as the Menu scaling setting asks (set_frame_presentation). The layout and the pointer's
     /// known place change at once. When SDL refuses, the renderer is made
     /// again at the next render() (note_present_error); without a renderer
     /// host std::runtime_error is thrown. A match's window beyond the
@@ -6264,6 +6265,34 @@ class Runtime final : public menu::Host,
     ///
     /// @return the scale mode
     [[nodiscard]] SDL_ScaleMode one_to_one_scale_mode() const;
+
+    /// Returns the Menu scaling setting in effect.
+    ///
+    /// @return the setting; Sharp before the settings are read
+    [[nodiscard]] render_policy::MenuScaling menu_scaling() const noexcept;
+
+    /// Returns the scale mode the standard tier draws a frame over the
+    /// logical presentation with (render_policy::frame_filter): PIXELART
+    /// where Menu scaling and the frame's scale ask for it and the
+    /// renderer's pixel-art scale mode works (frame_pixelart_works), else
+    /// NEAREST.
+    ///
+    /// @param width the frame's width, in its own pixels
+    /// @return the scale mode
+    [[nodiscard]] SDL_ScaleMode standard_frame_scale_mode(int width);
+
+    /// Tells whether the renderer's pixel-art scale mode works, for the
+    /// frames the standard tier draws; found once a renderer and kept until
+    /// its textures are forgotten. The start-up function test's finding
+    /// counts where it ran; else the probe (probe_pixelart) runs once, on a
+    /// machine with the memory the accelerated tier needs, past Windows XP,
+    /// on a renderer the policy counts capable whose driver no record and no
+    /// failure in this run holds against, and that is not SDL's software
+    /// renderer, which draws PIXELART as NEAREST. Anywhere else, and without
+    /// a renderer host, it does not.
+    ///
+    /// @return true where PIXELART draws as it should
+    [[nodiscard]] bool frame_pixelart_works();
 
     /// Drops the accelerated presentation for the rest of the run: logs the
     /// reason once and frees every texture and buffer it made, so that frames
@@ -6783,7 +6812,8 @@ class Runtime final : public menu::Host,
     [[nodiscard]] bool present_full_match_layers(bool dialogs);
 
     /// Draws a letterboxed 640x480-style frame's texture by the chrome's
-    /// filter at the letterbox's scale, from its prescale target where the
+    /// filter at the letterbox's scale, as Menu scaling asks
+    /// (render_policy::frame_filter), from its prescale target where the
     /// filter is sharp-bilinear: the front end's and the loading screen's.
     ///
     /// Throws AccelerationError when a call only the accelerated tier makes fails.
@@ -11514,6 +11544,9 @@ class Runtime final : public menu::Host,
     // The front end's texture, at output_texture_w_ by output_texture_h_;
     // after sdl_, so that it goes first.
     TiledTexture frontend_texture_;
+    // Whether the renderer's pixel-art scale mode works for the standard
+    // tier's frames (frame_pixelart_works); empty until it is found.
+    std::optional<bool> frame_pixelart_{};
     // The mode Alt+Enter last asked the window for.
     FullScreenSwitch full_screen_switch_{};
     oa::ui::display_layout::MatchLayout match_layout_{};

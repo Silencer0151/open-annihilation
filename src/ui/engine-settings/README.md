@@ -33,6 +33,8 @@ the locks a running game puts on them (`settings_locks`).
 | | Screen size, from the next start | Desktop, 640×480, 800×600, 1024×768, 1280×1024 | Desktop; 800×600 on a light machine with the player's own preferences file, 640×480 when its desktop is smaller | `open-annihilation.screen-size` (`desktop` or `800x600`) |
 | | Hardware acceleration | Off, Basic, Full | Full with the player's own preferences file on every machine; Off with `--preferences-file` | `open-annihilation.hardware-acceleration` (`off`, `basic` or `full`) |
 | | Vertical sync | Off, On | Off | `open-annihilation.vertical-sync` |
+| | Menu scaling | Sharp, Whole steps, Unfiltered | Sharp | `open-annihilation.menu-scaling` (`sharp`, `whole-steps` or `unfiltered`) |
+| | Native pixel density, from the next start | Off, On; always On where the platform opens every window at native density | Off | `open-annihilation.native-density` |
 | Touch, listed only while the game has touch controls | One-finger drag | Automatic (a selection box on a tablet, scrolling on a phone), Box, Scroll | Automatic | `open-annihilation.touch-drag` (`automatic`, `box` or `scroll`) |
 | | Hold delay | 250 to 700 ms, steps of 50; a stored delay is held to the range and put on its nearest step | 350 ms | `open-annihilation.touch-hold-delay` |
 | | QUEUE and ADD | Stay on, One action | Stay on | `open-annihilation.touch-latches` (`stay-on` or `one-action`) |
@@ -300,7 +302,7 @@ and the footer never move. A section whose rows, with 8 clear pixels under
 the last row's line, are taller than the view scrolls by whole source
 pixels, and shows a scroll bar in the margin right of its rows: a well like
 a switch's, its thumb as tall as the view's share of the section and never
-under 16 pixels. Graphics, with five rows, is taller than its view by 80
+under 16 pixels. Graphics, with seven rows, is taller than its view by 198
 pixels, Language, with the Language drop-down, four switches and the
 Text size slider, by 129, and Touch, with its two strips, the Hold delay
 slider and two switches, by 62; Controls and Common Tweaks fit, Common
@@ -398,11 +400,13 @@ A locked setting is faded, takes no press and no keyboard focus, and shows a
 padlock with "Locked during a game", "Set by the host", "Set on the command
 line" (the frame rate under `--max-fps`, Hardware acceleration under
 `--hardware-acceleration`, in any of its forms, or
-`--no-hardware-acceleration`), "Not available here" (Hardware
+`--no-hardware-acceleration`, Native pixel density under
+`--native-density`), "Not available here" (Hardware
 acceleration when nothing in the game could help the run, and Vertical
 sync on SDL's software renderer or where each change would reset the
-graphics device) or "Needs modern fonts" (Text size while the modern fonts
-are Off). A locked slider shows the padlock at the right of its
+graphics device), "Needs modern fonts" (Text size while the modern fonts
+are Off) or "Always on here" (Native pixel density where the platform
+opens every window at native density). A locked slider shows the padlock at the right of its
 label line. A locked switch keeps its switch, faded, with the padlock left
 of it, so that its value still shows: Vertical sync's. A locked row whose
 hint lines are its status, Hardware acceleration's strip, shows the padlock
@@ -639,7 +643,7 @@ Escape, Left, Right, Tab and Shift+Tab on it, the rest of the dialog taking
 nothing meanwhile, the locks during a game and by the command line with
 their notes, inert rows and disabled button, and OPEN MODS FOLDER asking
 for the Mods folder;
-the Graphics section's five rows, their places at every offset
+the Graphics section's seven rows, their places at every offset
 and under every lock, the focus scrolling them into view, both forms of a
 locked row, every status of Hardware acceleration, Full's included, and
 the requests to try the graphics card afresh; on sections of the test's own taller than the

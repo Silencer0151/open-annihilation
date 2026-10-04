@@ -830,7 +830,7 @@ namespace {
                    "[--user-folder PATH] "
                    "[--mute] "
                    "[--check-navigation] [--check-match-dialogs] [--check-match-layers] "
-                   "[--check-render-tiers [--force-capable] [--native-density]] "
+                   "[--check-render-tiers [--force-capable]] "
                    "[--check-match-orders] [--check-factory-orders] [--check-unit-speech] "
                    "[--check-download-builds] [--check-stockpile-builds] "
                    "[--check-unit-page-memory] [--check-side-column] [--check-match-bars] "
@@ -853,6 +853,7 @@ namespace {
                 << "[--debug-order-lines] "
                    "[--max-fps N] "
                    "[--hardware-acceleration[=off|basic|full] | --no-hardware-acceleration] "
+                   "[--native-density] "
                    "[--benchmark FRAMES] [--match-ticks N "
                    "[--frame-rate FPS [--frame-log FILE] [--scroll-camera] [--march] "
                    "[--follow] [--frame-clock MS]]] "
@@ -985,8 +986,6 @@ namespace {
             "--force-capable is accepted only with --check-render-tiers, "
             "--check-engine-settings and --check-kill-board"
         );
-    if (result.native_density && !result.check_render_tiers)
-        throw std::runtime_error("--native-density is accepted only with --check-render-tiers");
     if (result.render_fault && !result.check_renderer_ladder)
         throw std::runtime_error("--render-fault needs --check-renderer-ladder");
     check_game_files_options(result);

@@ -117,7 +117,7 @@ void Runtime::check_pointer_interfaces() {
     const auto send = [&](SDL_EventType type, uint8_t button, float x, float y, SDL_Keymod mods) {
         float window_x = 0.0F;
         float window_y = 0.0F;
-        if (!SDL_RenderCoordinatesToWindow(sdl_.renderer, x, y, &window_x, &window_y))
+        if (!frame_to_window(sdl_.renderer, x, y, &window_x, &window_y))
             fail(SDL_GetError());
         SDL_Event event{};
         event.type = type;
@@ -568,7 +568,7 @@ void Runtime::check_pointer_picks() {
     const auto send = [&](SDL_EventType type, uint8_t button, float x, float y, SDL_Keymod mods) {
         float window_x = 0.0F;
         float window_y = 0.0F;
-        if (!SDL_RenderCoordinatesToWindow(sdl_.renderer, x, y, &window_x, &window_y))
+        if (!frame_to_window(sdl_.renderer, x, y, &window_x, &window_y))
             fail_pick(SDL_GetError());
         SDL_Event event{};
         event.type = type;

@@ -133,7 +133,7 @@ void Runtime::check_unit_language() {
     const auto send_motion = [&](float x, float y) {
         float window_x = 0.0F;
         float window_y = 0.0F;
-        if (!SDL_RenderCoordinatesToWindow(sdl_.renderer, x, y, &window_x, &window_y))
+        if (!frame_to_window(sdl_.renderer, x, y, &window_x, &window_y))
             fail(SDL_GetError());
         SDL_Event event{};
         event.type = SDL_EVENT_MOUSE_MOTION;

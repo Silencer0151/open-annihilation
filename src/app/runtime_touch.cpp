@@ -377,7 +377,7 @@ bool TouchDispatchAccess::take_finger(Runtime& runtime, const SDL_Event& event, 
     bool converted = false;
     if (runtime.sdl_.renderer != nullptr && runtime.sdl_.window != nullptr) {
         SDL_Event copy = event;
-        if (SDL_ConvertEventToRenderCoordinates(runtime.sdl_.renderer, &copy)) {
+        if (convert_event_to_frame(runtime.sdl_.renderer, copy)) {
             x = copy.tfinger.x;
             y = copy.tfinger.y;
             converted = true;
@@ -537,7 +537,7 @@ bool TouchDispatchAccess::take_pointer(Runtime& runtime, const SDL_Event& event)
     }
     SDL_Event converted = event;
     if (runtime.sdl_.renderer != nullptr &&
-        !SDL_ConvertEventToRenderCoordinates(runtime.sdl_.renderer, &converted))
+        !convert_event_to_frame(runtime.sdl_.renderer, converted))
         return false;
     const hud::Point point{
         static_cast<int>(std::floor(converted.button.x)),

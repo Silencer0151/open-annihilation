@@ -127,7 +127,7 @@ void Runtime::check_frontend_controls() {
         float window_x = 0.0F;
         float window_y = 0.0F;
         require(
-            SDL_RenderCoordinatesToWindow(
+            frame_to_window(
                 sdl_.renderer, static_cast<float>(x), static_cast<float>(y), &window_x, &window_y
             ),
             SDL_GetError()

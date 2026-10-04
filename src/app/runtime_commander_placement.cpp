@@ -274,7 +274,7 @@ void Runtime::check_commander_placement() {
         float window_x = 0.0F;
         float window_y = 0.0F;
         require_placement(
-            SDL_RenderCoordinatesToWindow(sdl_.renderer, x, y, &window_x, &window_y), SDL_GetError()
+            frame_to_window(sdl_.renderer, x, y, &window_x, &window_y), SDL_GetError()
         );
         SDL_Event event{};
         event.type = type;

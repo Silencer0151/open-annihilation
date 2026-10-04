@@ -11,6 +11,7 @@
 #include "touch_layer.hpp"
 #include "xrgb_conversion.hpp"
 #include "oa/base/float_precision.hpp"
+#include "oa/platform/machine.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -128,9 +129,7 @@ void Runtime::apply_output_mode() {
             height = battlefield->height;
         }
         try {
-            if (!SDL_SetRenderLogicalPresentation(
-                    sdl_.renderer, width, height, SDL_LOGICAL_PRESENTATION_LETTERBOX
-                ))
+            if (!set_frame_presentation(sdl_.renderer, menu_scaling(), width, height))
                 throw_present_error("SDL logical presentation");
             ensure_texture(width, height);
         } catch (const PresentError& error) {
@@ -876,6 +875,46 @@ SDL_ScaleMode Runtime::one_to_one_scale_mode() const {
     );
 }
 
+SDL_ScaleMode Runtime::standard_frame_scale_mode(int width) {
+    SDL_FRect area{};
+    if (sdl_.renderer == nullptr || width <= 0 ||
+        !SDL_GetRenderLogicalPresentationRect(sdl_.renderer, &area) || !(area.w > 0.0F))
+        return SDL_SCALEMODE_NEAREST;
+    const double scale = static_cast<double>(area.w) / static_cast<double>(width);
+    const auto scaling = menu_scaling();
+    // The pixel-art mode is looked for only where the frame would take it.
+    const bool pixelart =
+        render_policy::frame_wants_pixelart(scaling, scale) && frame_pixelart_works();
+    return direct_scale_mode(render_policy::frame_filter(scaling, nullptr, pixelart, scale));
+}
+
+bool Runtime::frame_pixelart_works() {
+    if (frame_pixelart_)
+        return *frame_pixelart_;
+    bool works = false;
+    if (render_run_ && sdl_.renderer != nullptr && !render_run_->device_lost) {
+        const RendererHost& host = *render_run_->host;
+        const render_policy::TierInputs& tier = host.tier_inputs();
+        const char* name = SDL_GetRendererName(sdl_.renderer);
+        const bool software =
+            name != nullptr && name == oa::platform::render_probe::software_renderer;
+        // The probe draws into a render target of its own, so it runs only
+        // where the graphics card could be used for more.
+        const bool probe = tier.function_test == render_policy::FunctionTest::not_run &&
+                           !software && tier.memory >= render_policy::smallest_accelerated_memory &&
+                           !oa::platform::running_on_windows_before_vista() &&
+                           tier.capability == render_policy::Capability::capable &&
+                           !tier.accelerated_unusable_record &&
+                           tier.drop == render_policy::Drop::none && !tier.device_lost;
+        if (tier.function_test == render_policy::FunctionTest::passed)
+            works = host.start_rung().card == render_policy::CardFilter::pixelart;
+        else if (probe)
+            works = probe_pixelart(sdl_.renderer, nullptr);
+    }
+    frame_pixelart_ = works;
+    return works;
+}
+
 void Runtime::render() {
     if (render_run_ && !render_run_->pending_rebuild.empty() && !render_run_->device_lost)
         rebuild_renderer(render_run_->pending_rebuild);
@@ -932,6 +971,9 @@ void Runtime::present_front_end() {
     } else {
         upload_rgb24_tiles(frontend_texture_, surface_, gamma ? &gamma_table_ : nullptr);
     }
+    // The standard tier's scale mode is found before the frame begins: the
+    // first look at the pixel-art mode draws into a target of its own.
+    const SDL_ScaleMode standard_mode = standard_frame_scale_mode(output_texture_w_);
     if (!SDL_RenderClear(sdl_.renderer))
         throw_present_error("SDL render");
     // The front end's picture goes through the card's filter where it is one
@@ -951,7 +993,7 @@ void Runtime::present_front_end() {
         }
     }
     if (!drawn)
-        frontend_texture_.draw(sdl_.renderer, nullptr, nullptr);
+        draw_frame(sdl_.renderer, frontend_texture_, standard_mode);
     capture_render_target();
     if (render_fault_due(RenderFaultPoint::present))
         throw PresentError("injected present error");

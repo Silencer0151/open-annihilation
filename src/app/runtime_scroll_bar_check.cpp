@@ -161,7 +161,7 @@ Point Runtime::scroll_canvas_point(int32_t x, int32_t y) const {
 void Runtime::send_check_pointer(SDL_EventType type, Point canvas, uint8_t button, uint8_t clicks) {
     float x = static_cast<float>(canvas.x);
     float y = static_cast<float>(canvas.y);
-    if (sdl_.renderer != nullptr && !SDL_RenderCoordinatesToWindow(sdl_.renderer, x, y, &x, &y))
+    if (sdl_.renderer != nullptr && !frame_to_window(sdl_.renderer, x, y, &x, &y))
         throw std::runtime_error(std::string("SDL_RenderCoordinatesToWindow: ") + SDL_GetError());
     SDL_Event event{};
     event.type = type;

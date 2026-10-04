@@ -334,7 +334,8 @@ struct DensityRequest {
     /// display's own pixel density (the OA_NATIVE_DENSITY_WINDOWS build
     /// option, which main.cpp passes); false on the desktop.
     bool platform_native{};
-    bool asked{}; ///< --native-density, which only the render tiers check passes
+    bool asked{};  ///< --native-density
+    bool chosen{}; ///< the Native pixel density setting is on
     /// The Hardware acceleration setting read before the window opens.
     oa::ui::engine_settings::HardwareAcceleration setting{
         oa::ui::engine_settings::HardwareAcceleration::off
@@ -357,8 +358,9 @@ struct DensityRequest {
 /// starts at with the record's driver, SDL_RENDER_DRIVER and the video
 /// driver. No class of machine is measured at native density
 /// (render_policy::native_density_measured), so only a platform whose
-/// windows are at native density and --native-density open the window at
-/// native density. A window that does is logged, with the reason.
+/// windows are at native density, --native-density and the Native pixel
+/// density setting open the window at native density. A window that does
+/// is logged, with the reason.
 ///
 /// SDL's video must be started, and the window not yet made.
 ///

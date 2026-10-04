@@ -310,7 +310,9 @@ logs it.
   camera's map pixel and forgets the offset; the picture kept for a
   reader is the standard tier's, on the camera's map pixel. The HUD strips, the front end and the
   loading screen are drawn by `sharp_draw`: NEAREST at a whole-number
-  scale, else PIXELART or sharp-bilinear, their prescale targets drawn
+  scale, else PIXELART or sharp-bilinear, the front end and the loading
+  screen NEAREST at every scale under Menu scaling's Unfiltered
+  (`frame_filter`), their prescale targets drawn
   again when the layer's revision moved. Whatever paints a layer moves its
   revision, and every frame the loop presents paints the HUD, and the front
   end too unless its panel keeps the frame shown, so the target is drawn
@@ -645,12 +647,13 @@ logs it.
   (`HostDisplay`, `RendererHost::open_records`), so the key's driver
   reaches the rule, though no remembered rung does, since the game writes
   no `scale-level` key. No class has been measured
-  (`native_density_measured`), so only `--native-density`, which the
-  render tiers check alone takes, and a build whose platform opens its
-  windows at native density (the `OA_NATIVE_DENSITY_WINDOWS` build option,
-  `DensityReason::platform`, decided right after the memory and a flag
-  that names Off) open a window at native density; every other opens at
-  the window system's density, as before. On a window at
+  (`native_density_measured`), so only `--native-density`, the Native
+  pixel density setting (`DensityReason::chosen`, after the flag), and a
+  build whose platform opens its windows at native density (the
+  `OA_NATIVE_DENSITY_WINDOWS` build option, `DensityReason::platform`,
+  decided right after the memory and a flag that names Off) open a window
+  at native density; every other opens at the window system's density, as
+  before. On a window at
   native density (`at_native_density`) `apply_output_mode` lays the match
   out in window points and stretches it over the display's pixels by
   logical presentation, so the processor draws what it draws on any other
@@ -668,8 +671,9 @@ logs it.
   reach the layout through SDL's view, so picking is unchanged; the edge
   scroll is one layout pixel deep there (`edge_scroll_depth`); screenshots,
   film frames and snapshots keep the layout's size. With
-  `--native-density`, `--check-render-tiers` runs its density case alone
-  after the main menu and the loading screen (`native-render-tiers-density`
+  `--native-density` or the setting, `--check-render-tiers` runs its
+  density case alone after the main menu and the loading screen
+  (`native-render-tiers-density` and `native-render-tiers-density-setting`
   on the dummy video driver, whose density is 1, and by hand on a display
   above density 1).
 - The accelerated tier's watch (`runtime_tier_watch.cpp`), made when the
@@ -1325,10 +1329,15 @@ logs it.
   with one-texel gutters beyond it, for the standard tier's window-size
   layers and the accelerated tier's scene and overlay; `PresentError` and
   `AccelerationError`; and the accelerated tier's drawing on the card
-  (`PrescaleTarget`, `draw_scaled_world`, `sharp_draw`, `probe_pixelart`).
-  `app-scaled-world-software` checks on SDL's software renderer that tiles
-  read back as one texture does, and the card's drawing against that
-  renderer's own filters.
+  (`PrescaleTarget`, `draw_scaled_world`, `sharp_draw`, `probe_pixelart`);
+  and a screen of one frame, letterboxed or in whole steps as Menu scaling
+  asks (`set_frame_presentation`), drawn by the standard tier with the
+  pixel-art mode where it works (`draw_frame`). `frame_coordinates.hpp`
+  maps the pointer onto such a frame where it is drawn, on whole pixels
+  where SDL reckons half of one. `app-scaled-world-software` checks on
+  SDL's software renderer that tiles read back as one texture does, the
+  card's drawing against that renderer's own filters, and the frame's
+  rectangle and the pointer's mapping under each way of Menu scaling.
 - `render_policy.hpp`, `render_policy.cpp` (`oa-app-render-policy`): the
   decisions of hardware-accelerated presentation as pure functions, with
   no SDL, no files and no clock, of which the game uses so far the walk of
@@ -1364,7 +1373,9 @@ logs it.
   remembered rung (`resume_rung`), each step described for the log
   (`describe_step`); the rung the tier stays on
   where the memory guard refuses a buffer (`rung_without`); the chrome's
-  filter (`chrome_filter`), the magnified scene's (`world_filter`) and the
+  filter (`chrome_filter`), the magnified scene's (`world_filter`), how a
+  screen of one frame fills the window and the filter it is drawn with
+  under Menu scaling (`frame_fit`, `frame_filter`) and the
   prescale budget; and the tiles of a texture beyond the renderer's limit
   (`plan_tiles`). The names of the drivers' graphics interfaces stay with
   the platform: the policy takes each driver's traits (`DriverTraits`).

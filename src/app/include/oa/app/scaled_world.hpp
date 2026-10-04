@@ -15,6 +15,7 @@
 // the frame as it does.
 #pragma once
 
+#include "oa/app/frame_coordinates.hpp"
 #include "oa/app/render_policy.hpp"
 #include "oa/platform/job_pool.hpp"
 #include "oa/present/world_renderer/scene_filter.hpp"
@@ -499,6 +500,48 @@ void draw_one_to_one(
     const SDL_FRect* destination,
     SDL_ScaleMode mode
 );
+
+/// Sets the renderer's logical presentation for a screen drawn as one
+/// frame: the menus, the loading screen and the other screens of 640x480,
+/// and a dialog over a frame of its own size. The window holds the frame as
+/// render_policy::frame_fit decides for the renderer's output size:
+/// letterboxed, or in whole steps (SDL_LOGICAL_PRESENTATION_INTEGER_SCALE),
+/// which only a window that holds the frame at least once is given, since
+/// SDL would show one step of a larger frame cut by the window's edges.
+///
+/// @param renderer the renderer
+/// @param scaling the Menu scaling setting
+/// @param width the frame's width, in its own pixels
+/// @param height the frame's height, in its own pixels
+/// @return false when SDL refused
+[[nodiscard]] bool set_frame_presentation(
+    SDL_Renderer* renderer, render_policy::MenuScaling scaling, int width, int height
+);
+
+/// Draws a frame's texture over the logical presentation in the standard
+/// tier with a scale mode for this draw alone, and sets it back to NEAREST
+/// after; at NEAREST it is the one draw the standard tier makes. A mode the
+/// renderer refuses draws the frame NEAREST. An SDL older than 3.2.10 runs
+/// the queued draws before the mode goes back, as draw_one_to_one does.
+///
+/// Throws PresentError when SDL refuses the draw or running the queue.
+///
+/// @param renderer the renderer
+/// @param texture the frame's texture, whose scale mode is NEAREST
+/// @param mode the scale mode
+void draw_frame(SDL_Renderer* renderer, SDL_Texture* texture, SDL_ScaleMode mode);
+
+/// Draws a frame held in tiles (TiledTexture::draw) over the logical
+/// presentation in the standard tier with a scale mode for this draw alone,
+/// as the other draw_frame does.
+///
+/// Throws as TiledTexture::draw throws, and PresentError when SDL refuses
+/// running the queue.
+///
+/// @param renderer the renderer the frame was made on
+/// @param frame the frame, whose scale mode is NEAREST
+/// @param mode the scale mode
+void draw_frame(SDL_Renderer* renderer, TiledTexture& frame, SDL_ScaleMode mode);
 
 /// Probes whether the renderer's pixel-art scale mode works: a 2x1 black
 /// and white texture drawn at 2.5 times into a 5x1 target must read back

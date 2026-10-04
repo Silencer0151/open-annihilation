@@ -842,7 +842,7 @@ void Runtime::check_match_dialogs() {
         throw std::runtime_error("match dialog check: HELP.GUI has no OK button");
     float window_x = 0;
     float window_y = 0;
-    if (!SDL_RenderCoordinatesToWindow(
+    if (!frame_to_window(
             sdl_.renderer,
             static_cast<float>(panel.x + ok->common.x + ok->common.width / 2),
             static_cast<float>(panel.y + ok->common.y + ok->common.height / 2),
@@ -1505,7 +1505,7 @@ void Runtime::check_in_game_briefing(const fs::path& report_directory) {
         require(gadget != nullptr, "has no " + std::string(name));
         float window_x = 0;
         float window_y = 0;
-        if (!SDL_RenderCoordinatesToWindow(
+        if (!frame_to_window(
                 sdl_.renderer,
                 static_cast<float>(root.x + gadget->common.x + gadget->common.width / 2),
                 static_cast<float>(root.y + gadget->common.y + gadget->common.height / 2),
@@ -1673,7 +1673,7 @@ void Runtime::check_placed_dialogs(const fs::path& report_directory) {
     const auto click_at = [this](float x, float y) {
         float window_x = 0;
         float window_y = 0;
-        if (!SDL_RenderCoordinatesToWindow(sdl_.renderer, x, y, &window_x, &window_y))
+        if (!frame_to_window(sdl_.renderer, x, y, &window_x, &window_y))
             throw std::runtime_error(
                 std::string("SDL_RenderCoordinatesToWindow: ") + SDL_GetError()
             );
@@ -2207,7 +2207,7 @@ void Runtime::check_load_save() {
     const auto click = [&](int32_t x, int32_t y) {
         float window_x = 0;
         float window_y = 0;
-        if (!SDL_RenderCoordinatesToWindow(
+        if (!frame_to_window(
                 sdl_.renderer, static_cast<float>(x), static_cast<float>(y), &window_x, &window_y
             ))
             throw std::runtime_error(
@@ -2833,7 +2833,7 @@ void Runtime::check_end_panel_load_cancel() {
         float window_y = static_cast<float>(y);
         // Headless, the events carry the screen's own coordinates.
         if (sdl_.renderer != nullptr &&
-            !SDL_RenderCoordinatesToWindow(
+            !frame_to_window(
                 sdl_.renderer, static_cast<float>(x), static_cast<float>(y), &window_x, &window_y
             ))
             fail(std::string("SDL_RenderCoordinatesToWindow: ") + SDL_GetError());

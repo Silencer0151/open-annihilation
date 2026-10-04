@@ -730,6 +730,8 @@ DensityDecision decide_native_density(const DensityInputs& inputs) noexcept {
         return DensityDecision{true, DensityReason::platform};
     if (inputs.asked)
         return DensityDecision{true, DensityReason::asked};
+    if (inputs.chosen)
+        return DensityDecision{true, DensityReason::chosen};
     if (inputs.render_driver_named || inputs.virtual_video_driver)
         return window_system(DensityReason::environment);
     if (inputs.unattended)
@@ -805,6 +807,33 @@ ScaleFilter chrome_filter(const LadderState& state, double scale) noexcept {
         return ScaleFilter::linear;
     }
     return ScaleFilter::nearest;
+}
+
+FrameFit frame_fit(
+    MenuScaling scaling,
+    int32_t window_width,
+    int32_t window_height,
+    int32_t frame_width,
+    int32_t frame_height
+) noexcept {
+    if (scaling != MenuScaling::whole_steps || frame_width <= 0 || frame_height <= 0 ||
+        window_width < frame_width || window_height < frame_height)
+        return FrameFit::letterbox;
+    return FrameFit::whole_steps;
+}
+
+bool frame_wants_pixelart(MenuScaling scaling, double scale) noexcept {
+    return scaling != MenuScaling::unfiltered && scale > 0.0 && std::floor(scale) != scale;
+}
+
+ScaleFilter frame_filter(
+    MenuScaling scaling, const LadderState* accelerated, bool pixelart, double scale
+) noexcept {
+    if (!frame_wants_pixelart(scaling, scale))
+        return ScaleFilter::nearest;
+    if (accelerated != nullptr)
+        return chrome_filter(*accelerated, scale);
+    return pixelart ? ScaleFilter::pixelart : ScaleFilter::nearest;
 }
 
 ScaleFilter world_filter(const LadderState& state, double zoom) noexcept {
