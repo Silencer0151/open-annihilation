@@ -4,16 +4,22 @@
 // oa-game command-line parsing of the trace stream, seed, drawing threads,
 // game directory, data folder, window size, frame rate, hardware
 // acceleration, video capture and showcase options (arm-first-mission and
-// skirmish-battle), and of the options and switches an extension takes.
+// skirmish-battle), the Game files screen's check and its companions, and
+// of the options and switches an extension takes; last, --help's listing of
+// the Game files options, read as the program ends.
 #include "oa/app/app.hpp"
 #include "oa/app/extension.hpp"
 #include "oa/app/game_directory.hpp"
 #include "oa/app/command_line.hpp"
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <iostream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -170,10 +176,205 @@ void renderer_ladder_options() {
     );
 }
 
+// --check-game-files, its companions and --no-game-files-screen.
+void game_files_options() {
+    const auto check = parse({"--check-game-files"});
+    expect(
+        check.check_game_files && check.unattended && check.frame_limit == 30u &&
+            check.game_files_route == oa::app::GameFilesRoute::folder &&
+            check.game_files_expect == oa::app::GameFilesExpect::main_menu &&
+            check.game_files_source.empty() && !check.game_files_free_bytes &&
+            !check.game_files_copy_rate && !check.game_files_stop_after &&
+            !check.no_game_files_screen,
+        "--check-game-files runs the folder route unattended to 30 frames of the main menu"
+    );
+    expect(
+        parse({"--check-game-files", "--frames", "5"}).frame_limit == 5u,
+        "--frames sets how long the check stays at the main menu"
+    );
+    const auto plain = parse({});
+    expect(
+        !plain.check_game_files && !plain.no_game_files_screen && !plain.unattended,
+        "a player's run checks nothing and keeps the Game files screen"
+    );
+    const std::pair<const char*, oa::app::GameFilesRoute> routes[] = {
+        {"folder", oa::app::GameFilesRoute::folder},
+        {"demo", oa::app::GameFilesRoute::demo},
+        {"copy-yourself", oa::app::GameFilesRoute::copy_yourself},
+        {"manage", oa::app::GameFilesRoute::manage},
+    };
+    for (const auto& [name, route] : routes)
+        expect(
+            parse({"--check-game-files", "--game-files-route", name}).game_files_route == route,
+            name
+        );
+    const std::pair<const char*, oa::app::GameFilesExpect> expectations[] = {
+        {"main-menu", oa::app::GameFilesExpect::main_menu},
+        {"stopped-kept", oa::app::GameFilesExpect::stopped_kept},
+        {"resumed", oa::app::GameFilesExpect::resumed},
+        {"not-a-game", oa::app::GameFilesExpect::not_a_game},
+        {"short-space", oa::app::GameFilesExpect::short_space},
+        {"next-start", oa::app::GameFilesExpect::next_start},
+    };
+    for (const auto& [name, expected] : expectations)
+        expect(
+            parse({"--check-game-files", "--game-files-expect", name}).game_files_expect ==
+                expected,
+            name
+        );
+    const auto companions = parse(
+        {"--check-game-files",
+         "--game-files-source",
+         "Total Annihilation.exe",
+         "--game-files-free-bytes",
+         "0",
+         "--game-files-copy-rate",
+         "4000000",
+         "--game-files-stop-after",
+         "8000000"}
+    );
+    expect(
+        companions.game_files_source == "Total Annihilation.exe" &&
+            companions.game_files_free_bytes == 0u &&
+            companions.game_files_copy_rate == 4'000'000u &&
+            companions.game_files_stop_after == 8'000'000u,
+        "the companions take their values, no free space among them"
+    );
+    expect(
+        parse({"--check-game-files", "--game-files-free-bytes", "18446744073709551615"})
+                .game_files_free_bytes == 18'446'744'073'709'551'615u,
+        "the free space takes any 64-bit count"
+    );
+    expect(
+        rejection({"--check-game-files", "--game-files-route", "cloud"}) ==
+            "--game-files-route takes folder, demo, copy-yourself or manage",
+        "an unknown route is refused"
+    );
+    expect(
+        rejection({"--check-game-files", "--game-files-expect", "menu"}) ==
+            "--game-files-expect takes main-menu, stopped-kept, resumed, not-a-game, "
+            "short-space or next-start",
+        "an unknown expectation is refused"
+    );
+    for (const char* refused : {"-1", "lots", "18446744073709551616", "12 "})
+        expect(
+            rejection({"--check-game-files", "--game-files-free-bytes", refused}) ==
+                "--game-files-free-bytes expects a whole number of bytes",
+            refused
+        );
+    for (const char* option : {"--game-files-copy-rate", "--game-files-stop-after"})
+        expect(
+            rejection({"--check-game-files", option, "0"}) ==
+                std::string(option) + " expects a whole number of bytes above 0",
+            option
+        );
+    expect(
+        rejection({"--check-game-files", "--game-files-source"}) ==
+            "--game-files-source requires a value",
+        "--game-files-source takes a value"
+    );
+    const std::vector<std::vector<const char*>> lone_companions = {
+        {"--game-files-route", "demo"},
+        {"--game-files-expect", "resumed"},
+        {"--game-files-source", "folder"},
+        {"--game-files-free-bytes", "5"},
+        {"--game-files-copy-rate", "5"},
+        {"--game-files-stop-after", "5"},
+    };
+    for (const auto& arguments : lone_companions)
+        expect(
+            rejection(arguments) == std::string(arguments[0]) + " needs --check-game-files",
+            arguments[0]
+        );
+    const std::vector<std::pair<std::vector<const char*>, const char*>> conflicts = {
+        {{"--game-dir", "/games/ta"}, "--game-dir"},
+        {{"--choose-game-dir"}, "--choose-game-dir"},
+        {{"--archive", "totala1.hpi"}, "--archive"},
+        {{"--no-game-files-screen"}, "--no-game-files-screen"},
+        {{"--headless-check"}, "--headless-check"},
+        {{"--render-script", "film.oascript"}, "--render-script"},
+        {{"--generate-script", "game.tad"}, "--generate-script"},
+        {{"--capture-video", "check.mp4"}, "--capture-video"},
+        {{"--showcase", "arm-first-mission"}, "--showcase"},
+        {{"--benchmark", "10"}, "--benchmark"},
+        {{"--check-touch-controls"}, "--check-touch-controls"},
+        {{"--check-engine-settings"}, "--check-engine-settings"},
+        {{"--check-navigation"}, "--check-navigation"},
+        {{"--check-render-tiers"}, "--check-render-tiers"},
+        {{"--check-unit-language", "fr"}, "--check-unit-language"},
+        {{"--check-director-view"}, "--check-director-view"},
+    };
+    for (const auto& [arguments, named] : conflicts) {
+        std::vector<const char*> line{"--check-game-files"};
+        line.insert(line.end(), arguments.begin(), arguments.end());
+        expect(
+            rejection(line) == std::string("--check-game-files cannot be used with ") + named, named
+        );
+    }
+    TestExtension state;
+    const auto extension = test_extension(state);
+    expect(
+        rejection({"--check-game-files", "--extra", "x"}, extension) ==
+            "--check-game-files cannot be used with --headless-check",
+        "an extension's headless run is refused as a headless check"
+    );
+    const auto notice = parse({"--no-game-files-screen", "--game-dir", "/games/ta"});
+    expect(
+        notice.no_game_files_screen && !notice.check_game_files && !notice.unattended &&
+            notice.game_dir == "/games/ta",
+        "--no-game-files-screen is the player's own switch"
+    );
+}
+
+// --help, captured from the standard output, which it ends the program
+// after writing.
+std::ostringstream& help_text() {
+    static std::ostringstream text;
+    return text;
+}
+
+// Reads the captured --help as the program ends, and ends it with the
+// status of every check.
+void check_help_at_exit() {
+    const std::string text = help_text().str();
+    const auto at = [&text](std::string_view part) { return text.find(part); };
+    const auto absent = std::string::npos;
+    expect(at("usage: open-annihilation") == 0, "--help writes the usage");
+    expect(
+        at("[--check-touch-controls] [--check-game-files] ") != absent,
+        "--help lists --check-game-files with the other checks, after --check-touch-controls"
+    );
+    expect(
+        at("[--touch-controls] [--game-files-route folder|demo|copy-yourself|manage] "
+           "[--game-files-expect main-menu|stopped-kept|resumed|not-a-game|short-space|"
+           "next-start] [--game-files-source PATH] [--game-files-free-bytes N] "
+           "[--game-files-copy-rate BYTES] [--game-files-stop-after BYTES] "
+           "[--no-game-files-screen] ") != absent,
+        "--help lists the check's companions and --no-game-files-screen after --touch-controls"
+    );
+    std::cout.rdbuf(nullptr);
+    std::_Exit(failures == 0 ? 0 : 1);
+}
+
+// Writes --help into help_text and ends the program there, which
+// check_help_at_exit reads.
+[[noreturn]] void help_lists_the_game_files_options() {
+    std::ignore = help_text();
+    std::cout.rdbuf(help_text().rdbuf());
+    if (std::atexit(check_help_at_exit) != 0) {
+        std::fputs("FAILED: the --help check could not be registered\n", stderr);
+        std::_Exit(1);
+    }
+    std::ignore = parse({"--help"});
+    std::fputs("FAILED: --help did not end the program\n", stderr);
+    std::_Exit(1);
+}
+
 } // namespace
 
 int main() {
     renderer_ladder_options();
+    game_files_options();
     const auto plain = parse({"--headless-check"});
     expect(plain.trace_digest.empty() && plain.trace_units.empty(), "no trace without the flag");
     expect(!plain.seed, "no fixed seed without the flag");
@@ -904,5 +1105,6 @@ int main() {
             "--showcase plays in a window; it is not a check or benchmark",
         "a showcase is not a check"
     );
-    return failures == 0 ? 0 : 1;
+    // Last: --help ends the program.
+    help_lists_the_game_files_options();
 }

@@ -1038,8 +1038,10 @@ void show_hud_over_battlefield(
     const std::vector<uint8_t>* cover,
     int32_t source_bottom = oa::ui::display_layout::kSourceBottomBarY
 ) {
+    // On the phone layout the HUD layer's panels show through their placed
+    // regions, never on the battlefield.
     if (area.width <= 0 || area.height <= 0 || hud.rgb.empty() || world.rgb.empty() ||
-        layout.scale <= 0.0)
+        layout.scale <= 0.0 || oa::ui::display_layout::placed_mode(layout))
         return;
     const auto unscaled = [&layout](int32_t value) {
         return static_cast<int32_t>(std::lround(static_cast<double>(value) / layout.scale));
@@ -1423,6 +1425,10 @@ bool Runtime::load_match_hud_layout(const std::string& layout) {
 }
 
 int Runtime::match_column_rows() const {
+    // The phone layout shows no side column: its sheets place the page's
+    // gadgets one by one, so pages keep the rows they were authored for.
+    if (match_layout_.phone)
+        return kCanvasHeight;
     const auto scale = match_layout_.scale > 0.0 ? match_layout_.scale : 1.0;
     const auto rows =
         static_cast<int>(std::floor(static_cast<double>(match_layout_.height) / scale));
@@ -1939,7 +1945,10 @@ void Runtime::draw_end_overlay() {
 }
 
 void Runtime::draw_battlefield_panel() {
-    if (!match_hud_ || match_hud_->layout.gadgets.empty() || match_hud_cpu_.rgb.empty())
+    // On the phone layout the panel shows whole through its placed region
+    // (refresh_placed_hud_regions), over the touch controls.
+    if (!match_hud_ || match_hud_->layout.gadgets.empty() || match_hud_cpu_.rgb.empty() ||
+        oa::ui::display_layout::placed_mode(match_layout_))
         return;
     // The panels kept under the HUD panel show darkened where they lie over
     // the battlefield, as they showed when the panel over each opened.
@@ -2234,8 +2243,15 @@ void Runtime::compose_match_dialog(renderer::Surface& hud) {
     }
     // The dialog stays over the panel under it in the layer right of the
     // side column; over the side column it is drawn at the canvas's pixels
-    // (draw_battlefield_panel).
-    paste_area(hud, dialog, root.x, root.y, kBattlefieldLeft);
+    // (draw_battlefield_panel). On the phone layout, which shows no side
+    // column, the whole dialog stays in the layer, for its placed region.
+    paste_area(
+        hud,
+        dialog,
+        root.x,
+        root.y,
+        oa::ui::display_layout::placed_mode(match_layout_) ? 0 : kBattlefieldLeft
+    );
 }
 
 namespace {
@@ -2276,6 +2292,16 @@ std::optional<oa::ui::display_layout::Rect> Runtime::placed_panel_area() const {
     if (match_hud_placement_ == 0 || !match_paused_ || match_finished_ || !match_hud_ ||
         match_hud_->layout.gadgets.empty() || match_layout_.scale <= 0.0)
         return std::nullopt;
+    // On the phone layout the dialog is the sheet region placed for it.
+    if (oa::ui::display_layout::placed_mode(match_layout_)) {
+        const std::size_t count = std::min<std::size_t>(
+            match_layout_.placed_count, oa::ui::display_layout::kMaxPlacedRegions
+        );
+        for (std::size_t index = count; index > 0; --index)
+            if (match_layout_.placed[index - 1].role == oa::ui::display_layout::RegionRole::sheet)
+                return match_layout_.placed[index - 1].canvas;
+        return std::nullopt;
+    }
     const auto& root = match_hud_->layout.gadgets.front().common;
     if (root.width <= 0 || root.height <= 0)
         return std::nullopt;
@@ -3218,6 +3244,10 @@ oa::ui::display_layout::Rect Runtime::preferences_panel_rows() const {
 
 void Runtime::place_preferences_rows(renderer::Surface& hud) {
     preferences_hud_ = {};
+    // The phone layout shows the panel whole through its placed region, the
+    // rows where the panel has them.
+    if (oa::ui::display_layout::placed_mode(match_layout_))
+        return;
     const auto rows = preferences_panel_rows();
     constexpr int32_t band_top = oa::ui::display_layout::kSourceBottomBarY;
     const auto bottom = rows.y + rows.height;

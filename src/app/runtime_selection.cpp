@@ -76,7 +76,7 @@ void Runtime::handle_match_left_click(float x, float y, int32_t clicks) {
             issue_pointer_ground_blast(x, y, queueing());
         return;
     }
-    const bool force_attack = (SDL_GetModState() & SDL_KMOD_CTRL) != 0;
+    const bool force_attack = (input_modifiers(ModifierUse::keyboard) & SDL_KMOD_CTRL) != 0;
     if ((match_command_ == MatchCommand::none && !force_attack) ||
         match_command_ == MatchCommand::move || match_command_ == MatchCommand::repair ||
         match_command_ == MatchCommand::guard) {

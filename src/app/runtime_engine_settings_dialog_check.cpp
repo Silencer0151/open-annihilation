@@ -16,6 +16,7 @@
 #include "engine_settings_tall_section.hpp"
 
 #include "oa/app/acceleration_status.hpp"
+#include "oa/app/game_files_hooks.hpp"
 #include "oa/app/runtime.hpp"
 #include "oa/data/mod_profile/overrides.hpp"
 #include "oa/platform/preferences.hpp"
@@ -112,8 +113,12 @@ std::string_view page_slug(settings::Page page) {
         return "graphics";
     case settings::Page::language_text:
         return "text";
+    case settings::Page::touch:
+        return "touch";
     case settings::Page::developer:
         return "developer";
+    case settings::Page::game_files:
+        return "game-files";
     case settings::Page::mod_keys:
     case settings::Page::mod_patrol:
     case settings::Page::mod_guard:
@@ -458,6 +463,15 @@ void Runtime::check_engine_settings_dialog() {
     // Every section through its entry in the list: its rows, and nothing
     // outside the dialog changes.
     auto* dialog = open("from the main menu");
+    // The main menu's dialog lists Game files only where the platform brings
+    // game files in; this game lists it exactly then.
+    const bool game_files = game_files_import_offered(game_files_hooks());
+    require(
+        dialog->game_files == game_files &&
+            shows_text(settings::dialog_layout(*dialog), "Game files") == game_files,
+        game_files ? "the main menu's dialog does not list Game files"
+                   : "the main menu's dialog lists Game files where no game files are brought in"
+    );
     auto before = frame();
     for (const auto page : kPages) {
         const auto name = std::string(page_slug(page));
@@ -944,12 +958,108 @@ void Runtime::check_engine_settings_dialog() {
         engine_settings_state().last_developer_list.reset();
         engine_settings_state().last_page = settings::Page::path_search;
     }
+
+    // With touch controls the dialog lists Touch between Language & Text and
+    // Developer, with its five rows at their defaults; a finger's press near
+    // a switch takes it, and a mouse press there does nothing.
+    {
+        // The touch controls go back off however the block ends.
+        struct TouchControlsOn {
+            Runtime& runtime;
+            bool before;
+
+            ~TouchControlsOn() {
+                runtime.options_.touch_controls = before;
+                runtime.engine_settings_state().finger_pointer = false;
+                runtime.engine_settings_state().last_page = settings::Page::path_search;
+            }
+        } touch_on{*this, options_.touch_controls};
+
+        options_.touch_controls = true;
+        // A finger's click as the touch controls send it: on the picture's
+        // pixels, from no window, from the touch mouse.
+        const auto finger = [this](SDL_EventType type, layout::Point at) {
+            SDL_Event event{};
+            event.type = type;
+            if (type == SDL_EVENT_MOUSE_MOTION) {
+                event.motion.which = SDL_TOUCH_MOUSEID;
+                event.motion.x = static_cast<float>(at.x);
+                event.motion.y = static_cast<float>(at.y);
+            } else {
+                event.button.which = SDL_TOUCH_MOUSEID;
+                event.button.button = SDL_BUTTON_LEFT;
+                event.button.down = type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+                event.button.clicks = 1;
+                event.button.x = static_cast<float>(at.x);
+                event.button.y = static_cast<float>(at.y);
+            }
+            bool running = true;
+            dispatch_event(event, running);
+            require(running, "a finger in the dialog ended the run");
+        };
+        const auto finger_click = [&](layout::Point at) {
+            finger(SDL_EVENT_MOUSE_MOTION, at);
+            finger(SDL_EVENT_MOUSE_BUTTON_DOWN, at);
+            finger(SDL_EVENT_MOUSE_BUTTON_UP, at);
+        };
+        dialog = open("with touch controls");
+        require(dialog->touch, "the dialog opened with touch controls does not list Touch");
+        auto parts = settings::dialog_layout(*dialog);
+        const auto* text_entry =
+            find_part(parts, settings::page_control(settings::Page::language_text), {});
+        const auto* touch_entry =
+            find_part(parts, settings::page_control(settings::Page::touch), {});
+        const auto* developer_entry =
+            find_part(parts, settings::page_control(settings::Page::developer), {});
+        require(
+            text_entry != nullptr && touch_entry != nullptr && developer_entry != nullptr &&
+                touch_entry->text == "Touch" && text_entry->rect.y < touch_entry->rect.y &&
+                touch_entry->rect.y < developer_entry->rect.y,
+            "Touch is not listed between Language & Text and Developer"
+        );
+        click(settings::page_control(settings::Page::touch), {}, "Touch's entry");
+        require(engine_settings_dialog()->page == settings::Page::touch, "Touch did not show");
+        parts = settings::dialog_layout(*engine_settings_dialog());
+        for (const std::string_view text :
+             {"One-finger drag",
+              "Automatic",
+              "Hold delay",
+              "350 ms",
+              "QUEUE and ADD",
+              "Stay on",
+              "Haptics"})
+            require(shows_text(parts, text), "Touch does not show " + std::string(text));
+        // Haptics, the fourth row, is On; a press left of its switch, two
+        // thirds of the touch controls' reach from its Off half, takes it.
+        const auto* haptics_off = find_part(parts, settings::first_row_control + 3, "OFF");
+        require(haptics_off != nullptr && engine_settings().touch_haptics, "Haptics is not On");
+        const int32_t reach = EngineSettingsState::finger_reach(*this, 1.0);
+        const layout::Point beside{
+            placement.x + haptics_off->rect.x - 1 - reach * 2 / 3,
+            placement.y + haptics_off->rect.y + haptics_off->rect.height / 2
+        };
+        click_at(beside.x - placement.x, beside.y - placement.y);
+        require(engine_settings().touch_haptics, "a mouse press beside Haptics' switch took it");
+        finger_click({beside.x - reach, beside.y});
+        require(engine_settings().touch_haptics, "a finger's press out of reach took Haptics");
+        finger_click(beside);
+        require(
+            !engine_settings().touch_haptics,
+            "a finger's press beside Haptics' switch did not take it"
+        );
+        tap(SDLK_ESCAPE);
+        require(
+            engine_settings_dialog() == nullptr && engine_settings() == defaults,
+            "Escape did not put Haptics back"
+        );
+    }
     rest();
     host.latched_key = 0;
     fake_frontend_tick_ = previous_tick;
     std::cout << "engine settings check: every section, each setting through the dialog's "
-                 "pointer and keys, OK, Cancel and Restore defaults, the keys they save, and "
-                 "Developer Mode's overrides in effect and kept\n";
+                 "pointer and keys, OK, Cancel and Restore defaults, the keys they save, "
+                 "Developer Mode's overrides in effect and kept, and the Touch section with a "
+                 "finger's press taking the nearest control\n";
 }
 
 void Runtime::check_engine_settings_window_sizes() {

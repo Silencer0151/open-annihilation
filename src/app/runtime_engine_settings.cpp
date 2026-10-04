@@ -6,6 +6,7 @@
 
 #include "engine_settings_state.hpp"
 #include "oa/app/game_directory.hpp"
+#include "oa/app/game_files_hooks.hpp"
 #include "oa/app/mod_profile_loader.hpp"
 
 #include "oa/app/acceleration_status.hpp"
@@ -19,12 +20,14 @@
 #include "oa/platform/machine.hpp"
 #include "oa/platform/render_probe.hpp"
 #include "oa/sim/ground_orders/search_worker.hpp"
+#include "oa/ui/touch_hud.hpp"
 
 #include <SDL3/SDL.h>
 
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -214,6 +217,33 @@ bool Runtime::EngineSettingsState::escape_opens_menu(Runtime& runtime) {
     return runtime.engine_settings_state().current.escape_opens_menu;
 }
 
+void Runtime::EngineSettingsState::note_pointer_source(Runtime& runtime, const SDL_Event& event) {
+    switch (event.type) {
+    case SDL_EVENT_MOUSE_MOTION:
+        runtime.engine_settings_state().finger_pointer = event.motion.which == SDL_TOUCH_MOUSEID;
+        return;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+        runtime.engine_settings_state().finger_pointer = event.button.which == SDL_TOUCH_MOUSEID;
+        return;
+    case SDL_EVENT_MOUSE_WHEEL:
+        runtime.engine_settings_state().finger_pointer = false;
+        return;
+    default:
+        return;
+    }
+}
+
+int32_t
+Runtime::EngineSettingsState::finger_reach(const Runtime& runtime, double canvas_per_pixel) {
+    // The pick distance in window points, as canvas pixels of the screen
+    // shown, then as pixels of what is drawn at the scale.
+    const double canvas = static_cast<double>(oa::ui::touch_hud::gadget_pick_points) *
+                          static_cast<double>(runtime.touch_px_per_point());
+    const double per_pixel = canvas_per_pixel > 0.0 ? canvas_per_pixel : 1.0;
+    return std::max(int32_t{1}, static_cast<int32_t>(std::lround(canvas / per_pixel)));
+}
+
 void Runtime::destroy_engine_settings_state(EngineSettingsState* state) noexcept {
     // A retry the player never confirmed is put back before the run ends,
     // so that its clean exit writes the records the dialog opened with.
@@ -320,6 +350,11 @@ void Runtime::apply_engine_settings(const settings::EngineSettings& chosen) {
     // The language shows at once in what is drawn each frame; screens and
     // panels show it once they are opened again.
     set_language_choice(chosen.language);
+    // The Touch section takes effect at once too: the touch controls read
+    // the settings in effect at every finger and every frame.
+    // So does Include in device backups, on the game files themselves.
+    if (chosen.game_files_backed_up != before.game_files_backed_up)
+        EngineSettingsState::apply_game_files_backups(*this, chosen.game_files_backed_up);
 }
 
 const oa::data::mod_profile::ModProfile* Runtime::mod_profile() const noexcept {
@@ -628,6 +663,10 @@ settings::Dialog& Runtime::open_engine_settings_dialog(settings::DialogKind kind
     auto& dialog = state.dialog.emplace();
     state.retries_taken = 0;
     state.records_host = nullptr;
+    // The Game files section is the main menu's: where the platform brings
+    // game files in, Manage… runs over the menu, never over a match.
+    const bool game_files =
+        screen_ == Screen::main_menu && game_files_import_offered(game_files_hooks());
     settings::open_dialog(
         dialog,
         state.current,
@@ -639,8 +678,11 @@ settings::Dialog& Runtime::open_engine_settings_dialog(settings::DialogKind kind
         settings::highest_offered_unit_limit(limits_.units_per_player),
         state.mod_names,
         state.profile_hacks,
-        &system_language()
+        &system_language(),
+        touch_controls_active(),
+        game_files
     );
+    fill_game_files_rows(dialog);
     // Developer Mode opens as it was left: its open areas and hacks and its filter.
     if (state.last_developer_list) {
         dialog.developer.areas_open = state.last_developer_list->areas_open;
@@ -716,6 +758,10 @@ bool Runtime::take_engine_settings_action(settings::DialogAction action) {
         state.dialog.reset();
         return true;
     }
+    case settings::DialogAction::manage_game_files:
+        // The dialog stays open under the Game files screen.
+        open_game_files_manage();
+        return false;
     }
     return false;
 }

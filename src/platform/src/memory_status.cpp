@@ -13,7 +13,12 @@
 #include <windows.h>
 #include <psapi.h>
 #elif defined(__APPLE__)
+#if __has_include(<libproc.h>)
 #include <libproc.h>
+#define OA_HAVE_LIBPROC 1
+#else
+#include <atomic>
+#endif
 #include <mach/mach.h>
 #include <mach/task_info.h>
 #include <sys/resource.h>
@@ -164,9 +169,23 @@ bool sample_process_memory(void*, MemorySample* out) noexcept {
     out->private_resident = info.internal;
     out->shared_resident = info.external;
     out->peak_working_set = info.resident_size_peak;
+#ifdef OA_HAVE_LIBPROC
     rusage_info_v4 usage{};
     if (proc_pid_rusage(getpid(), RUSAGE_INFO_V4, reinterpret_cast<rusage_info_t*>(&usage)) == 0)
         out->peak_mapped = usage.ri_lifetime_max_phys_footprint;
+#else
+    // Without the process usage library the system gives no lifetime peak, so the peak is the
+    // largest footprint this process has sampled so far: it can miss a peak between two
+    // samples, never overstate one.
+    static std::atomic<uint64_t> largest_sampled{};
+    uint64_t largest = largest_sampled.load(std::memory_order_relaxed);
+    while (largest < info.phys_footprint &&
+           !largest_sampled.compare_exchange_weak(
+               largest, info.phys_footprint, std::memory_order_relaxed
+           )) {
+    }
+    out->peak_mapped = std::max(largest, static_cast<uint64_t>(info.phys_footprint));
+#endif
     return true;
 #elif defined(__linux__)
     // /proc/self/statm: total, resident, shared and text sizes in pages.

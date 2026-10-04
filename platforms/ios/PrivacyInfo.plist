@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The game's privacy manifest, copied into the bundle as PrivacyInfo.xcprivacy
+  (platforms/ios/CMakeLists.txt). The game tracks no one, talks to no tracking domain and
+  collects no data: what it reads and writes stays on the device, and LAN games talk only to
+  the other players' devices. The system calls Apple asks apps to give a reason for, as the
+  linked game makes them (README.md, "Privacy manifest", says how they were found):
+    file timestamps: the game's own files in its container, its game folder, the copy being
+    made into it and its saves (C617.1); and the files and folders the player chose in the
+    system's file picker on the Game files screen, whose times are read to resume an
+    interrupted copy and to notice a file that changed since (3B52.1);
+    system boot time: the clock that times frames and events (35F9.1);
+    disk space: whether the disk has room before the game writes game files, when it unpacks
+    the 1997 demo's data or copies the player's game files in (E174.1), and the free space it
+    shows the player on the Game files screen and in its settings, and when there is not
+    enough (85F4.1).
+-->
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>C617.1</string>
+				<string>3B52.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>35F9.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryDiskSpace</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>E174.1</string>
+				<string>85F4.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

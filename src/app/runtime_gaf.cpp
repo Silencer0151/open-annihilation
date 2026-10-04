@@ -386,13 +386,23 @@ void Runtime::tick_and_draw_cursor() {
         return;
     if (surface_.rgb.empty() || cursor_image_ == nullptr)
         return;
+    // With touch controls the cursor is hidden while no finger rests, or
+    // lifted above the finger on the battlefield.
+    float cursor_x = pointer_x_;
+    float cursor_y = pointer_y_;
+    if (const auto touch = touch_cursor(); touch.replaces_pointer) {
+        if (!touch.visible)
+            return;
+        cursor_x = touch.x;
+        cursor_y = touch.y;
+    }
     const auto rendered = oa::formats::gaf::render_normal(*cursor_image_);
     if (!rendered.ok())
         return;
     const auto& frame = *rendered.frame;
     const auto& pal = match_palette_.size() >= 1024 ? match_palette_ : resources_.gui_palette;
-    const int destination_x = static_cast<int>(pointer_x_) - frame.origin_x;
-    const int destination_y = static_cast<int>(pointer_y_) - frame.origin_y;
+    const int destination_x = static_cast<int>(cursor_x) - frame.origin_x;
+    const int destination_y = static_cast<int>(cursor_y) - frame.origin_y;
     for (std::size_t row = 0; row < frame.height; ++row) {
         for (std::size_t column = 0; column < frame.width; ++column) {
             const auto offset = row * frame.width + column;

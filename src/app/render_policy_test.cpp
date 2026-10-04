@@ -2191,6 +2191,67 @@ void test_native_density_by_table() {
          [](DensityInputs& in) { in.record = false; },
          false,
          DensityReason::no_record},
+        {"a platform at native density",
+         [](DensityInputs& in) { in.platform_native = true; },
+         true,
+         DensityReason::platform},
+        {"a platform at native density at a first start, on the dummy driver, unattended",
+         [](DensityInputs& in) {
+             in = DensityInputs{};
+             in.memory = 2 * gibibyte;
+             in.platform_native = true;
+             in.render_driver_named = true;
+             in.virtual_video_driver = true;
+             in.unattended = true;
+             in.capture = true;
+         },
+         true,
+         DensityReason::platform},
+        {"a platform at native density with the setting Off",
+         [](DensityInputs& in) {
+             in.platform_native = true;
+             in.setting = HardwareAcceleration::off;
+             in.class_measured = false;
+             in.budget = SceneBudget::none;
+             in.remembered = remembered_rung(true, true, true);
+         },
+         true,
+         DensityReason::platform},
+        {"a platform at native density under 2 GiB",
+         [](DensityInputs& in) {
+             in.platform_native = true;
+             in.memory = 1792 * mebibyte - 1;
+         },
+         false,
+         DensityReason::memory},
+        {"a platform at native density with memory not reported",
+         [](DensityInputs& in) {
+             in.platform_native = true;
+             in.memory = 0;
+         },
+         false,
+         DensityReason::memory},
+        {"a platform at native density with --no-hardware-acceleration",
+         [](DensityInputs& in) {
+             in.platform_native = true;
+             in.flag = AccelerationFlag::off;
+         },
+         false,
+         DensityReason::flag_off},
+        {"a platform at native density with --native-density",
+         [](DensityInputs& in) {
+             in.platform_native = true;
+             in.asked = true;
+         },
+         true,
+         DensityReason::platform},
+        {"a platform at native density with --hardware-acceleration=basic",
+         [](DensityInputs& in) {
+             in.platform_native = true;
+             in.flag = AccelerationFlag::basic;
+         },
+         true,
+         DensityReason::platform},
     };
     for (const Case& test : cases) {
         DensityInputs in = native_start();
@@ -2208,7 +2269,7 @@ void test_native_density_by_table() {
 bool native_by_the_rules(const DensityInputs& in) {
     if (in.memory < 1792 * mebibyte || in.flag == AccelerationFlag::off)
         return false;
-    if (in.asked)
+    if (in.platform_native || in.asked)
         return true;
     return !in.render_driver_named && !in.virtual_video_driver && !in.unattended && !in.capture &&
            (in.setting != HardwareAcceleration::off || in.flag == AccelerationFlag::basic ||
@@ -2238,7 +2299,8 @@ void test_native_density_every_combination() {
     uint32_t native = 0;
     uint32_t native_under_2_gib = 0;
     uint32_t native_by_the_shipped_rule = 0;
-    for (uint32_t bits = 0; bits < (1u << 7); ++bits)
+    uint32_t reasons_out_of_order = 0;
+    for (uint32_t bits = 0; bits < (1u << 8); ++bits)
         for (const AccelerationFlag flag : flags)
             for (const HardwareAcceleration setting : settings)
                 for (const SceneBudget budget : budgets)
@@ -2253,6 +2315,7 @@ void test_native_density_every_combination() {
                             in.capture = (bits & 16u) != 0;
                             in.class_measured = (bits & 32u) != 0;
                             in.record = (bits & 64u) != 0;
+                            in.platform_native = (bits & 128u) != 0;
                             in.flag = flag;
                             in.budget = budget;
                             in.memory = memory;
@@ -2262,22 +2325,35 @@ void test_native_density_every_combination() {
                             if (decision.native != native_by_the_rules(in))
                                 ++mismatches;
                             if (decision.native != (decision.reason == DensityReason::native ||
+                                                    decision.reason == DensityReason::platform ||
                                                     decision.reason == DensityReason::asked))
                                 ++mismatches;
+                            // The platform's density is decided after the
+                            // memory and a flag that names Off, before
+                            // everything else.
+                            if (in.platform_native && memory >= 1792 * mebibyte &&
+                                flag != AccelerationFlag::off &&
+                                decision.reason != DensityReason::platform)
+                                ++reasons_out_of_order;
+                            if (decision.reason == DensityReason::asked && in.platform_native)
+                                ++reasons_out_of_order;
                             if (decision.native) {
                                 ++native;
                                 if (memory < 1792 * mebibyte)
                                     ++native_under_2_gib;
                             }
                             // As the game fills it today, the class is never
-                            // measured: only --native-density opens a window at
-                            // native density.
+                            // measured: only a platform at native density
+                            // and --native-density open a window at native
+                            // density.
                             in.class_measured = native_density_measured;
-                            if (decide_native_density(in).native && !in.asked)
+                            if (decide_native_density(in).native && !in.asked &&
+                                !in.platform_native)
                                 ++native_by_the_shipped_rule;
                         }
-    OA_CHECK(combinations == (1u << 7) * 4 * 3 * 3 * 4 * 3);
+    OA_CHECK(combinations == (1u << 8) * 4 * 3 * 3 * 4 * 3);
     OA_CHECK(mismatches == 0);
+    OA_CHECK(reasons_out_of_order == 0);
     OA_CHECK(native > 0);
     OA_CHECK(native_under_2_gib == 0);
     OA_CHECK(native_by_the_shipped_rule == 0);

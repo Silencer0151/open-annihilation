@@ -122,6 +122,20 @@ inline constexpr int32_t level_width = 23;
 /// 1-pixel border: room for Basic, its widest caption, with three clear
 /// columns each side.
 inline constexpr int32_t acceleration_level_width = 34;
+/// One-finger drag's level strip's segment width, inside the strip's
+/// 1-pixel border: room for Automatic, its widest caption, with three clear
+/// columns each side.
+inline constexpr int32_t touch_drag_level_width = 59;
+/// QUEUE and ADD's level strip's segment width, inside the strip's 1-pixel
+/// border: room for One action, its widest caption, with three clear
+/// columns each side.
+inline constexpr int32_t touch_latches_level_width = 64;
+/// MANAGE…'s width, Game files' button on its summary row's label line:
+/// room for its caption in the small font with clear columns each side.
+inline constexpr int32_t manage_button_width = 76;
+/// The most characters a line of a host's text under a row holds, broken
+/// between words: what fits the section's width in the small font.
+inline constexpr std::size_t hint_line_characters = 50;
 /// A lock's width: the padlock and its text, right-aligned on the label line.
 inline constexpr int32_t lock_width = 148;
 /// The padlock's width.
@@ -491,8 +505,8 @@ void set_stop(
     size_t offered_mods = 0
 ) noexcept;
 
-/// Tells whether a setting is a strip of levels: Enhanced anti-aliasing and
-/// Hardware acceleration.
+/// Tells whether a setting is a strip of levels: Enhanced anti-aliasing,
+/// Hardware acceleration, One-finger drag and QUEUE and ADD.
 ///
 /// @param setting the setting
 /// @return true for a level strip, false for a slider or a switch
@@ -522,7 +536,8 @@ void set_strip_level(EngineSettings& settings, Setting setting, std::size_t leve
 ///
 /// @param setting a strip setting
 /// @param level the level's index
-/// @return "Off", "2x", "Basic" and so on; empty past the strip's last
+/// @return "Off", "2x", "Basic", "Automatic", "Stay on" and so on; empty
+///     past the strip's last
 [[nodiscard]] std::string_view strip_caption(Setting setting, std::size_t level) noexcept;
 
 /// Tells whether a setting is a drop-down: a field that shows the choice
@@ -592,10 +607,25 @@ void set_choice(EngineSettings& settings, Setting setting, std::size_t index);
 /// @return the item's rectangle, inside the list's border
 [[nodiscard]] SourceRect choice_item(const SourceRect& list, int32_t shown) noexcept;
 
+/// Tells whether a setting's row has a button on its label line that asks
+/// the host to act: Game files' summary row and its MANAGE….
+///
+/// @param setting the setting
+/// @return true for Setting::game_files_summary
+[[nodiscard]] bool is_button(Setting setting) noexcept;
+
+/// Tells whether a setting's row only shows text and takes no press: Where
+/// the files are.
+///
+/// @param setting the setting
+/// @return true for Setting::game_files_location
+[[nodiscard]] bool is_text(Setting setting) noexcept;
+
 /// Tells whether a setting is an Off/On switch.
 ///
 /// @param setting the setting
-/// @return true for a switch, false for a slider, a level strip or a drop-down
+/// @return true for a switch, false for a slider, a level strip, a
+///     drop-down, a button or a text row
 [[nodiscard]] bool is_switch(Setting setting) noexcept;
 
 /// Tells whether a switch setting is On. Every switch is read and set
@@ -802,17 +832,26 @@ scroll_thumb(int32_t scroll, int32_t limit, int32_t content_height) noexcept;
     const ScrollArea& area, int32_t thumb_top, int32_t limit, int32_t content_height
 ) noexcept;
 
-/// Returns a section's entry in the list.
+/// Returns a section's entry in the list: at its place among the sections
+/// its kind of dialog lists (dialog_pages), Developer under the line before
+/// it.
 ///
 /// @param page the section
+/// @param touch the dialog lists Touch (Dialog::touch)
+/// @param game_files the dialog lists Game files (Dialog::game_files)
 /// @return its rectangle
-[[nodiscard]] SourceRect list_item(Page page) noexcept;
+[[nodiscard]] SourceRect list_item(Page page, bool touch = false, bool game_files = false) noexcept;
 
-/// Returns the line before the Developer section in the list.
+/// Returns the line before the Developer section in the list, under the
+/// entries the engine's settings list above Developer.
 ///
+/// @param touch the dialog lists Touch (Dialog::touch)
+/// @param game_files the dialog lists Game files (Dialog::game_files)
 /// @return its rectangle, one row high
-[[nodiscard]] SourceRect list_divider() noexcept;
+[[nodiscard]] SourceRect list_divider(bool touch = false, bool game_files = false) noexcept;
 
+/// MANAGE…'s caption.
+inline constexpr std::string_view manage_text = "MANAGE…";
 /// The caption of Restore profile values.
 inline constexpr std::string_view restore_profile_text = "RESTORE PROFILE VALUES";
 /// What a rule (sim-scope) hack says under its summary.
@@ -887,7 +926,10 @@ level_at(const SourceRect& area, const Strip& strip, int32_t column) noexcept;
 /// @return the label
 [[nodiscard]] std::string_view label_of(Setting setting) noexcept;
 
-/// Returns a hint's line.
+/// Returns a hint's line, as the source writes it: Include in device
+/// backups' first line holds {device}, which row_hint fills, and the Game
+/// files section's other rows have none of their own (row_hint gives the
+/// host's texts).
 ///
 /// @param setting the setting
 /// @param settings the settings shown; the anti-aliasing hint depends on its level
@@ -916,6 +958,45 @@ status_line(const AccelerationStatus& acceleration, std::size_t line) noexcept;
 /// @param setting the setting
 /// @return 1 or 2
 [[nodiscard]] std::size_t hint_line_count(Setting setting) noexcept;
+
+/// Returns a line of the text under a row as the dialog shows it: the
+/// hint's (hint_line), or for the Game files rows the host's texts: the
+/// summary and its sizes line, the backups hint with the device's name
+/// (Dialog::game_files_device, "device" without one), and where the files
+/// are, broken into lines between words (break_lines).
+///
+/// @param dialog the dialog
+/// @param setting the row's setting
+/// @param line the line, from 0
+/// @return the line; empty past the last
+[[nodiscard]] std::string row_hint(const Dialog& dialog, Setting setting, std::size_t line);
+
+/// Returns a setting's label as the dialog shows it (label_of).
+///
+/// @param setting the setting
+/// @return the label
+[[nodiscard]] std::string_view row_label(Setting setting) noexcept;
+
+/// Breaks a text into lines of at most a number of characters, between
+/// words, after a location's mark between folders (›) where one stands in a
+/// line's second half; a word longer than a line is cut at the line's end.
+/// Characters are counted as UTF-8 characters, not bytes.
+///
+/// @param text the text, UTF-8
+/// @param characters the most characters a line holds, 1 or more
+/// @param most_lines the most lines kept; the rest of the text is dropped
+/// @return the lines, in order; none for an empty text
+[[nodiscard]] std::vector<std::string>
+break_lines(std::string_view text, std::size_t characters, std::size_t most_lines);
+
+/// Returns a section's entry in the list of a dialog of any kind: as
+/// list_item places it for the engine's settings and a mod's options, at
+/// the top for a Language & Text dialog's one section.
+///
+/// @param dialog the dialog
+/// @param page the section
+/// @return its rectangle
+[[nodiscard]] SourceRect dialog_list_item(const Dialog& dialog, Page page) noexcept;
 
 /// Returns a slider's value as it is shown.
 ///

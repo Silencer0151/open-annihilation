@@ -169,6 +169,24 @@ enum class MatchCommand {
     guard
 };
 
+/// Where the Game files screen's check goes (--game-files-route).
+enum class GameFilesRoute : uint8_t {
+    folder,        ///< CHOOSE FOLDER: a folder copied in (default)
+    demo,          ///< CHOOSE INSTALLER: the demo's installer
+    copy_yourself, ///< I HAVE COPIED IT: files the player copied into the game folder's parent
+    manage,        ///< the management state over an installed folder
+};
+
+/// What the Game files screen's check expects (--game-files-expect).
+enum class GameFilesExpect : uint8_t {
+    main_menu,    ///< the route ends at the main menu (default)
+    stopped_kept, ///< STOP, KEEP WHAT WAS COPIED, then quit (with --game-files-stop-after)
+    resumed,      ///< the continue banner, the same folder chosen, files skipped, main menu
+    not_a_game,   ///< the problem "This folder does not hold a Total Annihilation installation"
+    short_space,  ///< the problem "Not enough space"
+    next_start,   ///< the manage route's change applied by the next start's recovery
+};
+
 struct Options {
     // Empty until main() resolves it when --game-dir is not passed.
     fs::path game_dir;
@@ -331,6 +349,28 @@ struct Options {
     // clicks and right presses, shift cancels, radar scrolls, mouse look and a
     // factory build button's right click.
     bool check_pointer_interfaces = false;
+    /// --check-touch-controls: the touch controls, driven by finger events, on a skirmish.
+    bool check_touch_controls = false;
+    /// --touch-controls: touch controls on with no touch screen, to check their layout.
+    bool touch_controls = false;
+    /// --check-game-files: the Game files screen driven through a route by scripted hooks.
+    bool check_game_files = false;
+    /// --no-game-files-screen: with no usable game folder, the notice with its look-again
+    /// button instead of the Game files screen, where the platform offers both.
+    bool no_game_files_screen = false;
+    /// --game-files-route folder|demo|copy-yourself|manage: the check's route.
+    GameFilesRoute game_files_route{};
+    /// --game-files-expect main-menu|stopped-kept|resumed|not-a-game|short-space|next-start:
+    /// what the check expects the route to reach.
+    GameFilesExpect game_files_expect{};
+    /// --game-files-source PATH: the folder, or the installer, the check's picker answers.
+    fs::path game_files_source{};
+    /// --game-files-free-bytes N: the free space the check's hooks report.
+    std::optional<uint64_t> game_files_free_bytes{};
+    /// --game-files-copy-rate BYTES: the bytes a second the check's copy is held to.
+    std::optional<uint64_t> game_files_copy_rate{};
+    /// --game-files-stop-after BYTES: the check presses STOP once this much was copied.
+    std::optional<uint64_t> game_files_stop_after{};
     // Clicks MULTI on the main menu through the SDL presenter and checks
     // what it reaches: network play's check of the multiplayer screens (the
     // check_multiplayer_menu hook); over game data with no multiplayer map,

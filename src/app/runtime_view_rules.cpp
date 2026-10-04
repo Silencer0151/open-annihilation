@@ -96,7 +96,7 @@ bool Runtime::snap_override_held() const {
 
 bool Runtime::view_key_held(uint32_t code) const {
     const auto key = static_cast<SDL_Keycode>(code);
-    const auto modifiers = SDL_GetModState();
+    const auto modifiers = input_modifiers(ModifierUse::keyboard);
     // Either Alt, Ctrl or Shift key stands for its kind.
     if (key == SDLK_LALT || key == SDLK_RALT)
         return (modifiers & SDL_KMOD_ALT) != 0;

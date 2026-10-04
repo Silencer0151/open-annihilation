@@ -1325,7 +1325,10 @@ bool Runtime::present_full_match_layers(bool dialogs) {
         phase_times_.upload += static_cast<int64_t>(nanoseconds_since(upload_start));
         if (!SDL_SetRenderDrawColor(sdl_.renderer, 0, 0, 0, 255) || !SDL_RenderClear(sdl_.renderer))
             throw_present_error("SDL_RenderClear");
-        draw_accelerated_hud_strips();
+        // In placed mode the HUD's pieces are drawn after the world
+        // (finish_match_layers).
+        if (!oa::ui::display_layout::placed_mode(match_layout_))
+            draw_accelerated_hud_strips();
 
         // The card's frame: the terrain from the pages, by the level rule at
         // the zoom, and everything over it.

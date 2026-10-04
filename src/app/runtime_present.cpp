@@ -6,6 +6,9 @@
 #include "graphics_report.hpp"
 #include "render_host.hpp"
 #include "render_run.hpp"
+#include "oa/app/input_hints.hpp"
+#include "phone_hud.hpp"
+#include "touch_layer.hpp"
 #include "xrgb_conversion.hpp"
 #include "oa/base/float_precision.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
@@ -62,14 +65,23 @@ void Runtime::apply_output_mode() {
         // window of that size; elsewhere a layout pixel is a window pixel.
         const bool native_density = native_density_window();
         int width = kCanvasWidth, height = kCanvasHeight;
+        // The window's size in points, from which the layout's density, its
+        // safe area and (with touch controls) its device class come; none
+        // without a window.
+        int window_width = 0, window_height = 0;
         if (sdl_.window != nullptr) {
             if (native_density)
                 SDL_GetWindowSize(sdl_.window, &width, &height);
             else
                 SDL_GetWindowSizeInPixels(sdl_.window, &width, &height);
+            SDL_GetWindowSize(sdl_.window, &window_width, &window_height);
         }
         const auto laid_out = match_layout_;
-        match_layout_ = oa::ui::display_layout::make_match_layout(width, height);
+        match_layout_ = make_window_match_layout(
+            width, height, window_width, window_height, window_safe_insets()
+        );
+        // On a phone the HUD's pieces are placed for this canvas.
+        refresh_placed_hud_regions();
         // On a screen of another size the pointer's place is known again
         // only once SDL reports it.
         if (match_layout_.width != laid_out.width || match_layout_.height != laid_out.height)
@@ -212,6 +224,10 @@ WorldScaling Runtime::world_scaling() const {
 }
 
 void Runtime::initialize_sdl() {
+    // Touch controls on from the start read fingers and the pen with their
+    // own hints; a desktop without them keeps SDL's.
+    if (touch_controls_active())
+        oa::app::set_input_hints();
     if (sdl_.window == nullptr || sdl_.renderer == nullptr) {
         if (!SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1"))
             throw std::runtime_error("SDL mouse focus click-through hint was rejected");
@@ -407,6 +423,8 @@ void Runtime::destroy_match_layer_textures() {
         match_dialog_side_tex_ = nullptr;
     }
     destroy_engine_settings_textures();
+    // The touch layer's texture goes with them; the next present makes it again.
+    TouchDrawAccess::forget_textures(*this);
     match_dialog_side_tex_w_ = match_dialog_side_tex_h_ = 0;
     match_hud_tex_w_ = match_hud_tex_h_ = 0;
     match_cursor_tex_w_ = match_cursor_tex_h_ = 0;
@@ -452,19 +470,23 @@ void Runtime::compose_match_layers(renderer::Surface& frame) {
     frame.rgb.assign(static_cast<std::size_t>(frame.width) * frame.height * 3U, 0);
     if (match_hud_cpu_.rgb.empty() || match_world_cpu_.rgb.empty())
         return;
-    for (const auto& strip : match_hud_strips())
-        scale_blit(
-            frame,
-            match_hud_cpu_,
-            strip.x,
-            strip.y,
-            strip.w,
-            strip.h,
-            strip.source_x,
-            strip.source_y,
-            strip.source_w,
-            strip.source_h
-        );
+    PhoneHudAccess::prepare_frame(*this);
+    // In placed mode the HUD's pieces go over the full-bleed battlefield.
+    const bool placed = oa::ui::display_layout::placed_mode(match_layout_);
+    if (!placed)
+        for (const auto& strip : match_hud_strips())
+            scale_blit(
+                frame,
+                match_hud_cpu_,
+                strip.x,
+                strip.y,
+                strip.w,
+                strip.h,
+                strip.source_x,
+                strip.source_y,
+                strip.source_w,
+                strip.source_h
+            );
     blit_rect(
         frame,
         match_world_cpu_,
@@ -475,6 +497,8 @@ void Runtime::compose_match_layers(renderer::Surface& frame) {
         static_cast<int>(match_world_cpu_.width),
         static_cast<int>(match_world_cpu_.height)
     );
+    if (placed)
+        PhoneHudAccess::blit_regions(*this, frame);
     if (!match_dialog_side_.rgb.empty() && placed_panel_area())
         blit_rect(
             frame,
@@ -494,6 +518,10 @@ void Runtime::compose_match_frame(renderer::Surface& frame) {
         return;
     const auto pixels = static_cast<std::size_t>(frame.width) * frame.height;
     apply_gamma_rgb(frame.rgb.data(), pixels, 3);
+    // The touch controls go over the world and the HUD, under the settings
+    // and the dialogs; the placed regions over the touch controls' sheets.
+    compose_touch_layer(frame);
+    compose_placed_hud_regions(frame);
     compose_engine_settings_layer(frame);
     if (!match_use_layers_ || oa::ui::frontend_dialogs::dialog_count() == 0 ||
         match_dialog_rgba_.size() != pixels * 4U)
@@ -547,6 +575,7 @@ bool Runtime::compose_match_dialog_layer() {
 void Runtime::present_match_layers() {
     if (match_hud_cpu_.rgb.empty() || match_world_cpu_.rgb.empty())
         return;
+    PhoneHudAccess::prepare_frame(*this);
     const bool dialogs = compose_match_dialog_layer();
     if (accelerated_presentation()) {
         try {
@@ -592,22 +621,25 @@ void Runtime::present_match_layers() {
     // (1280x1024) size: right of the bars and under the side column.
     if (!SDL_SetRenderDrawColor(sdl_.renderer, 0, 0, 0, 255) || !SDL_RenderClear(sdl_.renderer))
         throw_present_error("SDL_RenderClear");
-    for (const auto& strip : match_hud_strips()) {
-        const SDL_FRect source{
-            static_cast<float>(strip.source_x),
-            static_cast<float>(strip.source_y),
-            static_cast<float>(strip.source_w),
-            static_cast<float>(strip.source_h)
-        };
-        const SDL_FRect destination{
-            static_cast<float>(strip.x),
-            static_cast<float>(strip.y),
-            static_cast<float>(strip.w),
-            static_cast<float>(strip.h)
-        };
-        if (!SDL_RenderTexture(sdl_.renderer, match_hud_tex_, &source, &destination))
-            throw_present_error("SDL_RenderTexture");
-    }
+    // In placed mode the HUD's pieces are drawn after the world
+    // (finish_match_layers).
+    if (!oa::ui::display_layout::placed_mode(match_layout_))
+        for (const auto& strip : match_hud_strips()) {
+            const SDL_FRect source{
+                static_cast<float>(strip.source_x),
+                static_cast<float>(strip.source_y),
+                static_cast<float>(strip.source_w),
+                static_cast<float>(strip.source_h)
+            };
+            const SDL_FRect destination{
+                static_cast<float>(strip.x),
+                static_cast<float>(strip.y),
+                static_cast<float>(strip.w),
+                static_cast<float>(strip.h)
+            };
+            if (!SDL_RenderTexture(sdl_.renderer, match_hud_tex_, &source, &destination))
+                throw_present_error("SDL_RenderTexture");
+        }
     const SDL_FRect world{
         static_cast<float>(match_layout_.left),
         static_cast<float>(match_layout_.top),
@@ -628,6 +660,10 @@ void Runtime::finish_match_layers(
     // native density: NEAREST, but in the accelerated tier at a density
     // that is not a whole number.
     const SDL_ScaleMode one_to_one = one_to_one_scale_mode();
+    // The touch controls go over the world and the HUD, under the dialogs;
+    // the placed regions over the touch controls' sheets.
+    present_touch_layer();
+    present_placed_hud_regions();
     // A placed dialog's part over the side column goes over the HUD layer.
     if (!match_dialog_side_.rgb.empty() && placed_panel_area()) {
         ensure_streaming_texture(
@@ -696,6 +732,16 @@ void Runtime::capture_render_target() {
 void Runtime::present_software_cursor(bool match_layers) {
     if (!cursors_loaded_ || cursor_image_ == nullptr)
         return;
+    // With touch controls the cursor is hidden while no finger rests, or
+    // lifted above the finger on the battlefield.
+    float cursor_x = pointer_x_;
+    float cursor_y = pointer_y_;
+    if (const auto touch = touch_cursor(); touch.replaces_pointer) {
+        if (!touch.visible)
+            return;
+        cursor_x = touch.x;
+        cursor_y = touch.y;
+    }
     const auto rendered = oa::formats::gaf::render_normal(*cursor_image_);
     if (!rendered.ok())
         return;
@@ -753,8 +799,8 @@ void Runtime::present_software_cursor(bool match_layers) {
     }
     SDL_UnlockTexture(match_cursor_tex_);
     const SDL_FRect dest{
-        pointer_x_ - static_cast<float>(frame.origin_x),
-        pointer_y_ - static_cast<float>(frame.origin_y),
+        cursor_x - static_cast<float>(frame.origin_x),
+        cursor_y - static_cast<float>(frame.origin_y),
         static_cast<float>(frame.width),
         static_cast<float>(frame.height)
     };

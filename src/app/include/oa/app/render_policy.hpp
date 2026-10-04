@@ -892,11 +892,19 @@ describe_step(const LadderState& before, const LadderState& after) noexcept;
 /// driver together, has yet been measured at native density against the
 /// standard tier on the same machine and found to cost no more frame time,
 /// so the rule (decide_native_density) opens no window at native density
-/// by itself; --native-density still asks for it for a check.
+/// by itself; --native-density still asks for it for a check, and a
+/// platform whose windows are at native density asks for it for every
+/// window (DensityInputs::platform_native).
 inline constexpr bool native_density_measured = false;
 
 /// Everything decide_native_density reads, known before the window opens.
 struct DensityInputs {
+    /// The platform the game is built for opens its windows at the
+    /// display's own pixel density, where it would otherwise scale a
+    /// lower-density window softly (the OA_NATIVE_DENSITY_WINDOWS build
+    /// option): native density whatever the rest of the rule says, but for
+    /// the machine's memory and a flag that names Off.
+    bool platform_native{};
     /// --native-density, which only the render tiers check takes: native
     /// density whatever the rest of the rule says, but for the machine's
     /// memory and a flag that names Off.
@@ -936,6 +944,7 @@ enum class DensityReason : uint8_t {
     /// whatever the flags.
     memory,
     flag_off, ///< --no-hardware-acceleration or --hardware-acceleration=off
+    platform, ///< the platform opens its windows at native density: native density
     asked,    ///< --native-density: native density
     /// SDL_RENDER_DRIVER or a dummy or offscreen video driver.
     environment,
@@ -966,13 +975,15 @@ struct DensityDecision {
 /// or Full asked for (acceleration_asked); a class measured at native
 /// density; a start above budget none, from a remembered rung, if any,
 /// above the magnify-off rung; and the native-density record.
-/// --native-density opens it at native density whatever the conditions
-/// after a flag that names Off say. Every other window opens at the window
-/// system's density, as a first start does.
+/// A platform whose windows are at native density, and --native-density,
+/// open it at native density whatever the conditions after a flag that
+/// names Off say. Every other window opens at the window system's density,
+/// as a first start does.
 ///
 /// @param inputs what is known before the window opens
 /// @return the density, and the first reason in DensityReason's order that
-///     decided it; DensityReason::native or asked exactly when it is native
+///     decided it; DensityReason::native, platform or asked exactly when it
+///     is native
 [[nodiscard]] DensityDecision decide_native_density(const DensityInputs& inputs) noexcept;
 
 // ---------------------------------------------------------------------------

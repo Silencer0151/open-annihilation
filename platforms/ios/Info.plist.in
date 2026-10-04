@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The iOS and iPadOS bundle's properties, configured when the build is configured
+  (platforms/ios/CMakeLists.txt). The game is landscape: an iPhone takes the two landscape
+  orientations; an iPad takes all four, because iPadOS letterboxes a landscape-only app in a
+  portrait screen, and the game turns its own view in a portrait screen instead
+  (src/ios_platform.mm). Full screen on every device with no status bar, the icon the asset
+  compiler makes (CFBundleIcons names its files), no encryption beyond the system's own, the
+  local network wording for LAN games, the Documents folder visible in the Files app and the
+  Finder, a mouse or trackpad read as a pointer, and the type of the game's archives (.hpi,
+  .ufo, .ccx and .gp3 files), which the Game files screen's picker offers when the player adds
+  archives (src/ios_game_files.mm).
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Open Annihilation</string>
+	<key>CFBundleIcons</key>
+	<dict>
+		<key>CFBundlePrimaryIcon</key>
+		<dict>
+			<key>CFBundleIconFiles</key>
+			<array>
+				<string>AppIcon60x60</string>
+			</array>
+			<key>CFBundleIconName</key>
+			<string>AppIcon</string>
+		</dict>
+	</dict>
+	<key>CFBundleIcons~ipad</key>
+	<dict>
+		<key>CFBundlePrimaryIcon</key>
+		<dict>
+			<key>CFBundleIconFiles</key>
+			<array>
+				<string>AppIcon60x60</string>
+				<string>AppIcon76x76</string>
+			</array>
+			<key>CFBundleIconName</key>
+			<string>AppIcon</string>
+		</dict>
+	</dict>
+	<key>CFBundleExecutable</key>
+	<string>@OA_IOS_EXECUTABLE@</string>
+	<key>CFBundleIdentifier</key>
+	<string>@OA_IOS_BUNDLE_IDENTIFIER@</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Open Annihilation</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@OA_IOS_VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@OA_IOS_VERSION@</string>
+	<key>CFBundleSupportedPlatforms</key>
+	<array>
+		<string>@OA_IOS_PLATFORM@</string>
+	</array>
+	<key>DTPlatformName</key>
+	<string>@OA_IOS_SDK@</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.strategy-games</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>MinimumOSVersion</key>
+	<string>@OA_IOS_DEPLOYMENT_TARGET@</string>
+	<key>UIDeviceFamily</key>
+	<array>
+		<integer>1</integer>
+		<integer>2</integer>
+	</array>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>arm64</string>
+	</array>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+	</array>
+	<key>UIRequiresFullScreen</key>
+	<true/>
+	<key>UIStatusBarHidden</key>
+	<true/>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Open Annihilation looks for games on your local network and connects to the players in them, for multiplayer games over your wireless or wired network.</string>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>net.coreprime.open-annihilation.game-archive</string>
+			<key>UTTypeDescription</key>
+			<string>Total Annihilation game archive</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>hpi</string>
+					<string>ufo</string>
+					<string>ccx</string>
+					<string>gp3</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+</dict>
+</plist>

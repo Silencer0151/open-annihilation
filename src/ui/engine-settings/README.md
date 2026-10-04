@@ -31,9 +31,27 @@ the locks a running game puts on them (`settings_locks`).
 | | Font outline | Off, On | On | `open-annihilation.text-outline` |
 | | Font shadow | Off, On | On | `open-annihilation.text-shadow` |
 | | Game text background | Off, On | Off | `open-annihilation.text-background` |
+| Touch, listed only while the game has touch controls | One-finger drag | Automatic (a selection box on a tablet, scrolling on a phone), Box, Scroll | Automatic | `open-annihilation.touch-drag` (`automatic`, `box` or `scroll`) |
+| | Hold delay | 250 to 700 ms, steps of 50; a stored delay is held to the range and put on its nearest step | 350 ms | `open-annihilation.touch-hold-delay` |
+| | QUEUE and ADD | Stay on, One action | Stay on | `open-annihilation.touch-latches` (`stay-on` or `one-action`) |
+| | Haptics | Off, On | On | `open-annihilation.touch-haptics` |
+| | Left-handed layout | Off, On | Off | `open-annihilation.touch-left-handed` |
+| Game files, listed only in the main menu's dialog where the platform brings game files in | Include in device backups | Off, On | Off | `open-annihilation.game-files-backed-up` |
 | Developer | Enable Developer Mode | Off, On | Off | `open-annihilation.developer-mode` |
 | | Show performance statistics | Off, On | Off | `open-annihilation.frame-stats` |
 | | The overrides of the profile's standard hacks, in Developer Mode's list | any hack on or off, with its parameters | none | `open-annihilation.hack-overrides.<id>`, the id of the profile the game plays, `ta-3.1c` without a mod |
+
+The Touch section is the same everywhere, every machine and preferences
+file alike. A stored One-finger drag or QUEUE and ADD that is none of their
+words, like any value that is no whole number for the others, reads as the
+default. The touch controls read the settings in effect at every finger and
+every frame, so a change in the dialog takes effect at once. One-finger
+drag says what a finger dragged on the battlefield does; a hold followed by
+a drag draws a selection box whatever it says, and two fingers scroll. The
+hold delay is how long a finger stays down before it counts as a hold, which
+opens the order menu, gives a build button's right press or shows a
+control's help. QUEUE and ADD says whether a tapped QUEUE, ADD or x5 stays on
+until it is tapped again or turns off after the next order or selection.
 
 A mod's limits (`oa::data::limits`, handed in through `Inputs::units_per_player`
 and `match_path_search_nodes`) change three things: the unit limit a player
@@ -165,7 +183,8 @@ Off, and set to Basic or Full there it takes effect from the next game.
 `engine_settings/dialog.hpp` holds the dialog (`Dialog`), what pointer, wheel
 and key events do to it (`dialog_pointer_down` and the others, `dialog_wheel`,
 `dialog_key`), where its parts lie (`dialog_layout`), and how it and the OA
-button are drawn (`draw_dialog`, `draw_oa_button`) without the game's art, in
+button are drawn (`draw_dialog`, `draw_oa_button`, and `draw_oa_mark` for
+the mark alone on other screens) without the game's art, in
 the game's own fonts (`load_dialog_fonts`): its button font for labels,
 values, the section list and the title, and its smaller label font for the
 section heading, hints, locks, captions and the version, each readied for
@@ -183,7 +202,18 @@ a bevelled square with the icon 3 source pixels inside its edge: lit with
 a green ring inside the bevel under the pointer, and, while held, its bevel
 sunk and the icon a pixel right and down. Without the icon, an empty
 picture, the header and the button draw the OA mark instead: green "OA"
-letters in a green outlined square.
+letters in a green outlined square. `draw_oa_mark` draws the same icon
+filling a square, or the mark the OA button shows at rest, so that other
+screens, such as the Game files screen, show the OA mark as the dialog
+does.
+
+Where a game font has no ellipsis, as neither of the dialog's has, the
+dialog draws and measures each ellipsis in a text as three full stops in
+the game font, so that a caption such as MANAGE… keeps the game font's
+look and fits its button like every other caption; the mark between a
+location's folders (›) is drawn as a greater-than sign the same way. The
+texts themselves, and their translations, keep their characters; every
+other character the game font lacks is drawn in the modern fonts.
 
 It is 480 by 324 source pixels, a dark gunmetal panel with a one-pixel raised
 edge and hairline rules, and one green accent for what is selected:
@@ -192,13 +222,15 @@ edge and hairline rules, and one green accent for what is selected:
   ANNIHILATION SETTINGS" and the version, with "Shared game - still
   running" in amber while a shared game keeps running;
 - the sections down the left (AI & Pathfinding, Controls & Input,
-  Gameplay, Graphics, Language & Text), Developer after a line, the open
-  one marked;
+  Gameplay, Graphics, Language & Text, Touch while the game has touch
+  controls, and Game files where the host lists it), Developer after a
+  line, the open one marked;
 - the open section's heading and rows: a label, a hint of one or two lines,
   and an Off/On switch, a level strip (Off, 2x, 4x, 8x, 16x for Enhanced
-  anti-aliasing; Off, Basic, Full for Hardware acceleration), a slider
-  with stops and its value under the hint, or a drop-down under the hint:
-  a field showing the choice, with an arrow at its right;
+  anti-aliasing; Off, Basic, Full for Hardware acceleration; Automatic,
+  Box, Scroll for One-finger drag; Stay on, One action for QUEUE and ADD),
+  a slider with stops and its value under the hint, or a drop-down under
+  the hint: a field showing the choice, with an arrow at its right;
 - Restore defaults, Cancel and OK along the bottom.
 
 A section holds any number of rows. They lie in a view under the section's
@@ -209,9 +241,10 @@ the last row's line, are taller than the view scrolls by whole source
 pixels, and shows a scroll bar in the margin right of its rows: a well like
 a switch's, its thumb as tall as the view's share of the section and never
 under 16 pixels. Graphics, with five rows, is taller than its view by 80
-pixels, and Language & Text, with the Language drop-down, four switches
-and the Text size slider, by 129; every other section fits and draws as if
-there were no scrolling,
+pixels, Language & Text, with the Language drop-down, four switches
+and the Text size slider, by 129, and Touch, with its two strips, the Hold
+delay slider and two switches, by 62; every other section fits and draws as
+if there were no scrolling,
 with no bar. Each section keeps its offset while the
 dialog is open, and every section starts at its top each time it opens. A
 row the view cuts shows the part inside it and takes a press only there;
@@ -229,9 +262,68 @@ focus, and a press on it leaves the focus where it is. While a press is held
 the wheel and the scroll keys do nothing, so only a drag of the scroll bar
 scrolls then. No scroll changes a setting or moves the focus.
 
-Controls are numbered: the sections' entries 0 to 5 (a mod's options' 0
-to 4), Restore defaults 6, Cancel 7, OK 8, the scroll bar 9, and the open
-section's rows from 10, with no upper end.
+Controls are numbered: the sections' entries 0 to 7, each its place in the
+list with Touch whether or not Touch is listed (Touch 5, Developer 6, so a
+dialog without Touch has no control 5), and Game files 7 after Developer,
+so that Touch and Developer keep their numbers in every dialog (a mod's
+options' 0 to 4); Restore defaults 8, Cancel 9, OK 10, the scroll bar 11,
+and the open section's rows from 12, with no upper end. The list draws its
+entries by their place in the list it shows, and the focus walks that list,
+so the dialog without Touch or Game files draws and answers exactly as it
+did before they were added.
+
+The Touch section is listed only while the game has touch controls:
+`Dialog::touch`, which the host gives `open_dialog` and keeps with
+`set_touch_controls` each frame, so that Touch shows from the moment a
+finger turns the touch controls on (`dialog_pages(kind, touch)`). A dialog
+asked to open on Touch without them opens on AI & Pathfinding.
+
+The Game files section is listed, between Touch (or Language & Text) and
+Developer, only where the host says so (`Dialog::game_files`, given to
+`open_dialog`): the main menu's dialog of a game whose platform brings game
+files in. A dialog asked to open on Game files without it opens on AI &
+Pathfinding. Its three rows:
+
+- Installed: what is installed and, under it, the sizes line, both the
+  host's texts (`Dialog::game_files_summary`, `game_files_sizes`), with
+  MANAGE… at the label line's right, a green button like OK with its
+  caption, drawn "MANAGE...", centred inside it. MANAGE… is a button: a click on it, or
+  Space while it has the focus, returns `DialogAction::manage_game_files`,
+  and the host opens the Game files screen with the dialog left open under
+  it. Left and Right do nothing to it.
+- Include in device backups: a switch, Off by default, whose hint names
+  the device ("After restoring this tablet from a backup, add the game
+  files again.", from `Dialog::game_files_device`, "device" without one).
+  It is put in effect as it changes; Restore defaults turns it Off, and a
+  dialog that does not list Game files keeps it through Restore defaults.
+- Where the files are: the host's text (`Dialog::game_files_location`) in
+  up to two lines of at most 50 characters, broken between words, after
+  the mark between a location's folders where one stands in a line's
+  second half. It takes no press and no focus.
+
+The host's texts keep to their lines' columns as they are drawn.
+
+`open_language_text_dialog` opens a dialog of the third kind,
+`DialogKind::language_text`: Language & Text alone, its entry at the top
+of the list, with Restore defaults, which restores that section's
+settings alone (each locked one kept), Cancel and OK. The Game files
+screen opens it before the game's files are installed: given
+`DialogFonts` that hold no glyphs, every text of the dialog is drawn and
+measured in the modern fonts (the game-text hooks the host installs), the
+regular font's in the message face and the small font's in the status
+face, each at the game fonts' size and centred on its box as a game font's
+capitals are. A character a game font lacks is drawn in the modern fonts
+at the game fonts' size.
+
+A finger's press (`dialog_finger_down`) that lands on no control takes the
+nearest control within a reach the host gives, in the dialog's own pixels,
+pressed at its pixel nearest the finger; while a drop-down's list is open,
+the nearest of its items. The press's moves and its release are moved as
+far as the press was (`Dialog::finger_shift_x`, `finger_shift_y`), so that
+a release where the finger landed acts on the control it took: a switch's
+nearer half, a strip's nearer level, a slider dragged along its track. A
+mouse press is never moved. The game's hosts give it the touch controls'
+pick distance, 22 points, as the dialog's pixels on the screen shown.
 
 The game fonts have no "×" or "·", so the dialog writes "x" and "-". Its
 texts are UTF-8: each character the game font has a glyph for, a
@@ -369,9 +461,9 @@ values clears them. The host keeps which areas and hacks are open and the
 filter while the game runs (`DeveloperList`).
 
 Developer's controls are numbered from the open section's first row's:
-Enable Developer Mode 10, Show performance statistics 11, Show Active Only
-12, Restore profile values 13, and the list's rows that take input from
-14, in the list's order. Every header takes the focus and a press, which
+Enable Developer Mode 11, Show performance statistics 12, Show Active Only
+13, Restore profile values 14, and the list's rows that take input from
+15, in the list's order. Every header takes the focus and a press, which
 opens or closes it; a press on a hack's switch sets it. Space opens or
 closes an area or a hack and flips a switch; Left and Right close and open
 an area, turn a hack or a switch Off and On, and move a slider a stop.
@@ -417,9 +509,14 @@ them, a file with CR LF line ends, the round trip, the size's range and
 clamping, Restore defaults and the text style they make; the language:
 its defaults, a file without it, the values read, a tag the game does not
 know kept in the file, the round trip, Restore defaults and the command
-line's lock; and Developer Mode's switch and overrides: a file without
+line's lock; Developer Mode's switch and overrides: a file without
 them, the overrides kept under each profile's id and read back, erased
-when none are left, and kept by Restore defaults;
+when none are left, and kept by Restore defaults; and the Touch section's
+keys, its defaults on every machine, its words read and others dropped, the
+hold delay held to its range and put on its nearest step, and its round
+trip and Restore defaults; and the backups switch: Off by default on every
+machine, read as every switch, written alone and erased by Restore
+defaults;
 `ui-engine-settings-dialog` the dialog's layout (every part inside the
 panel and none overlapping), its sections, switches and their one table,
 slider stops, both level strips, keys, footer buttons, locks and the faces
@@ -445,9 +542,30 @@ while Off, a hack turned on and off, a switch, a slider and a set's value
 set through the pointer and the keys, the overrides kept and dropped as
 the profile's own values come back, Restore profile values, Show Active
 Only and its count, the list's scrolling and focus, and its summaries'
-lines; and `ui-engine-settings-dialog-data` its fonts, and every text
+lines; Touch: listed only with touch controls, at its place in the list
+with the line and Developer under it, the list without it where it always
+was, each entry's number the same with and without it, the focus walking
+it, its rows, their texts, strips, slider stops and switches, Restore
+defaults and Cancel, the dialog with it drawn alike but for the list from
+its entry down, and a finger's press taking the nearest control within
+reach (15 points off a switch takes it, 30 points off nothing, a mouse
+press 15 points off nothing) at several scales, a slider dragged from under
+its track and an open list's nearest item; Game files: listed only with
+its flag, between Touch or Language & Text and Developer, the line and
+Developer under it, its entry numbered 7 with Touch 5 and Developer 6, the
+focus walking it, its three rows and their texts, MANAGE… returning
+`manage_game_files` to a click, to Space and to a finger beside it, the
+switch by either half and the keys, Restore defaults and Cancel, where the
+files are taking no press and no focus, and the lines a location breaks
+into; the Language & Text dialog: its one entry at the top, its focus,
+Restore defaults restoring its section alone and keeping a locked
+language, and with fonts that hold no glyphs every text drawn and measured
+in scripted modern fonts; and
+`ui-engine-settings-dialog-data` its fonts, and every text
 fitting its place in them, a scrolled section's at every offset included,
-every status line in the 309 columns of a hint, and every row of
+Touch's with each way of its strips, every status line in the 309 columns
+of a hint, the Game files section with a host's usual texts and the
+Language & Text dialog, and every row of
 Developer Mode's list with every area and hack open and every hack on,
 over the installed game. `native-engine-settings` sends the wheel and the
 scroll keys through the main menu's and the match's dialog, turns Vertical
@@ -457,3 +575,8 @@ waits for the game's end. It also finds Text size locked with the modern
 fonts Off, turns them On and raises the size a stop, which the text style
 reads at once and OK saves, and chooses Deutsch from the Language
 drop-down, which puts German in effect at once, and steps back to English.
+With touch controls on it finds Touch listed between Language & Text and
+Developer with its rows at their defaults, and a finger's press beside
+Haptics' switch taking it where a mouse press there does nothing; in the
+match, it checks that on a phone the dialog and the OA button fit the
+safe area.

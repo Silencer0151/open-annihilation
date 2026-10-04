@@ -9,6 +9,14 @@
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_opengl.h>
+// Where SDL_opengl.h declares nothing (systems with OpenGL ES only), the same names come
+// from the OpenGL ES 2 header.
+#ifndef GL_RENDERER
+#include <SDL3/SDL_opengles2.h>
+#endif
+#ifndef GLAPIENTRY
+#define GLAPIENTRY GL_APIENTRY
+#endif
 
 namespace oa::platform::render_probe::readers {
 namespace {

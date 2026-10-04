@@ -53,6 +53,23 @@ path = [
 SPDX-FileCopyrightText = "The Open Annihilation Authors; see COPYRIGHT"
 SPDX-License-Identifier = "GPL-3.0-only"
 
+# The files of the builds for other platforms (platforms/) that cannot hold
+# a comment: their documents, bundle property lists and templates, launch
+# screens, data, images, build settings and entitlements.
+[[annotations]]
+path = [
+    "platforms/**.md",
+    "platforms/**.plist",
+    "platforms/**.plist.in",
+    "platforms/**.storyboard",
+    "platforms/**.json",
+    "platforms/**.png",
+    "platforms/**.xcconfig",
+    "platforms/**.entitlements",
+]
+SPDX-FileCopyrightText = "The Open Annihilation Authors; see COPYRIGHT"
+SPDX-License-Identifier = "GPL-3.0-only"
+
 # The short encoded tones the music decoder's tests decode
 # (src/audio/tests/README.md says how they were made).
 [[annotations]]

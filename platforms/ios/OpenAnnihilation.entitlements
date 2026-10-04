@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The entitlements of device builds signed with OA_IOS_MULTICAST_ENTITLEMENT on
+  (platforms/ios/CMakeLists.txt, README.md "LAN games on a device"): LAN games find each
+  other by broadcast, which iOS allows only with the multicast networking entitlement. Apple
+  grants it to a developer team on request; a team without it cannot sign with this file, and
+  simulator builds never use it.
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.developer.networking.multicast</key>
+	<true/>
+</dict>
+</plist>

@@ -322,11 +322,15 @@ void Runtime::draw_megamap() {
     auto& state = megamap_;
     auto& world = match_->state();
     const auto& game = world.game;
+    // The map is drawn in the overlays' area (the battlefield, or with the
+    // touch controls on, the part of it they leave clear), on the
+    // battlefield's layer, whose origin is the battlefield's corner.
+    const auto area = overlay_area();
     const auto layout = hud::megamap_layout(
-        0,
-        0,
-        match_layout_.battlefield_width(),
-        match_layout_.battlefield_height(),
+        area.x - match_layout_.battlefield_x(),
+        area.y - match_layout_.battlefield_y(),
+        area.width,
+        area.height,
         game.map_pixel_width,
         game.map_pixel_height
     );
@@ -336,7 +340,8 @@ void Runtime::draw_megamap() {
         layout.height != state.layout.height || layout.left != state.layout.left ||
         layout.top != state.layout.top)
         build_megamap_terrain(layout);
-    // The bars, then the terrain shaded by what the viewer has mapped and sees.
+    // The bars, across the whole battlefield, then the terrain shaded by
+    // what the viewer has mapped and sees.
     const uint8_t unexplored = game.ui_colors[wr::ui_color_unexplored];
     fill_hud_rect(
         0, 0, match_layout_.battlefield_width(), match_layout_.battlefield_height(), unexplored
@@ -529,13 +534,20 @@ bool Runtime::megamap_pointer(const SDL_Event& event, float x, float y) {
         state.pointer_y = py;
         return state.pressed;
     }
-    if (!battlefield_contains(x, y) && !(state.pressed && event.type == SDL_EVENT_MOUSE_BUTTON_UP))
+    // Presses are taken in the overlays' area, where the map is drawn, and
+    // not on a touch control or a placed part of the HUD; the release of a
+    // press taken is taken wherever it lands.
+    const auto area = overlay_area();
+    const bool in_area = x >= static_cast<float>(area.x) && y >= static_cast<float>(area.y) &&
+                         x < static_cast<float>(area.x + area.width) &&
+                         y < static_cast<float>(area.y + area.height) && !placed_hud_covers(x, y);
+    if (!in_area && !(state.pressed && event.type == SDL_EVENT_MOUSE_BUTTON_UP))
         return false;
     auto& world = match_->state();
     world.game.local_player_index = match_local_player_;
     state.pointer_x = px;
     state.pointer_y = py;
-    const bool shift = (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
+    const bool shift = (input_modifiers(ModifierUse::selection) & SDL_KMOD_SHIFT) != 0;
     if (event.button.button == SDL_BUTTON_RIGHT) {
         if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
             // The default order, or the armed one, at the map point.

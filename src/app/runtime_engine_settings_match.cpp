@@ -6,6 +6,7 @@
 // layer of their own goes over the match's layers.
 
 #include "engine_settings_match_host.hpp"
+#include "engine_settings_state.hpp"
 
 #include "oa/app/runtime.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
@@ -56,6 +57,17 @@ bool rect_contains(const layout::Rect& rect, float x, float y) noexcept {
     return x >= static_cast<float>(rect.x) && y >= static_cast<float>(rect.y) &&
            x < static_cast<float>(rect.x + rect.width) &&
            y < static_cast<float>(rect.y + rect.height);
+}
+
+/// Tells whether a source rectangle lies wholly in another.
+///
+/// @param inner the rectangle
+/// @param outer the other
+/// @return true when no part of it lies outside
+bool source_holds(const layout::Rect& outer, const layout::Rect& inner) noexcept {
+    return inner.x >= outer.x && inner.y >= outer.y &&
+           inner.x + inner.width <= outer.x + outer.width &&
+           inner.y + inner.height <= outer.y + outer.height;
 }
 
 } // namespace
@@ -135,8 +147,50 @@ bool Runtime::EngineSettingsMatchHost::button_shown(Runtime& runtime) {
     return runtime.ingame_menu_column_shown() && runtime.engine_settings_fonts() != nullptr;
 }
 
+bool Runtime::EngineSettingsMatchHost::fits_safe_area(const Runtime& runtime) {
+    return runtime.touch_controls_active() && runtime.touch_phone_class();
+}
+
 layout::Rect
-Runtime::EngineSettingsMatchHost::button_rect(const layout::MatchLayout& match) noexcept {
+Runtime::EngineSettingsMatchHost::safe_area(const layout::MatchLayout& match) noexcept {
+    const auto& safe = match.safe;
+    return {
+        safe.left,
+        safe.top,
+        std::max(match.width - safe.left - safe.right, 0),
+        std::max(match.height - safe.top - safe.bottom, 0)
+    };
+}
+
+layout::Rect
+Runtime::EngineSettingsMatchHost::button_rect(const layout::MatchLayout& match, bool fit) noexcept {
+    const layout::Rect source{
+        button_source_x, button_source_y, settings::ingame_button_side, settings::ingame_button_side
+    };
+    const auto safe = safe_area(match);
+    if (fit && safe.width > 0 && safe.height > 0) {
+        // Where a placed region shows that part of the side column, the
+        // button stands on it.
+        const std::size_t count =
+            std::min<std::size_t>(match.placed_count, layout::kMaxPlacedRegions);
+        for (std::size_t index = count; index > 0; --index)
+            if (source_holds(match.placed[index - 1].source, source))
+                return layout::source_rect_to_canvas(
+                    match, source.x, source.y, source.width, source.height
+                );
+        // Else the column as the 640x480 frame fitted to the safe area
+        // places it, from the safe area's top left corner.
+        const double scale = std::min(
+            static_cast<double>(safe.width) / layout::kSourceWidth,
+            static_cast<double>(safe.height) / layout::kSourceHeight
+        );
+        return {
+            safe.x + static_cast<int>(std::lround(static_cast<double>(source.x) * scale)),
+            safe.y + static_cast<int>(std::lround(static_cast<double>(source.y) * scale)),
+            scaled_length(source.width, scale),
+            scaled_length(source.height, scale)
+        };
+    }
     // The side column hangs from the window's top left corner at its scale.
     return {
         static_cast<int>(std::lround(static_cast<double>(button_source_x) * match.scale)),
@@ -151,10 +205,15 @@ oa::ui::frontend_renderer::Surface Runtime::EngineSettingsMatchHost::button_face
     settings::ButtonLook look,
     bool darkened,
     const settings::DialogFonts& fonts,
-    const oa::ui::frontend_renderer::RgbaPicture& icon
+    const oa::ui::frontend_renderer::RgbaPicture& icon,
+    bool fit
 ) {
     namespace renderer = oa::ui::frontend_renderer;
-    const int32_t scale = std::max(1, static_cast<int32_t>(std::ceil(match.scale)));
+    // Fitted, the face takes the button's own scale.
+    const double shown_scale =
+        fit ? static_cast<double>(button_rect(match, true).width) / settings::ingame_button_side
+            : match.scale;
+    const int32_t scale = std::max(1, static_cast<int32_t>(std::ceil(shown_scale)));
     const renderer::Placement placement{0, 0, scale};
     renderer::Surface face;
     face.width = static_cast<uint32_t>(settings::ingame_button_side * scale);
@@ -173,7 +232,20 @@ oa::ui::frontend_renderer::Surface Runtime::EngineSettingsMatchHost::button_face
 }
 
 layout::Rect
-Runtime::EngineSettingsMatchHost::dialog_rect(const layout::MatchLayout& match) noexcept {
+Runtime::EngineSettingsMatchHost::dialog_rect(const layout::MatchLayout& match, bool fit) noexcept {
+    const auto safe = safe_area(match);
+    if (fit && safe.width > 0 && safe.height > 0) {
+        // The largest scale that shows the whole dialog in the safe area.
+        const double scale = std::min(
+            static_cast<double>(safe.width) / settings::dialog_width,
+            static_cast<double>(safe.height) / settings::dialog_height
+        );
+        const int32_t width = std::min(scaled_length(settings::dialog_width, scale), safe.width);
+        const int32_t height = std::min(scaled_length(settings::dialog_height, scale), safe.height);
+        return {
+            safe.x + (safe.width - width) / 2, safe.y + (safe.height - height) / 2, width, height
+        };
+    }
     const int32_t width = scaled_length(settings::dialog_width, match.scale);
     const int32_t height = scaled_length(settings::dialog_height, match.scale);
     return {
@@ -185,9 +257,9 @@ Runtime::EngineSettingsMatchHost::dialog_rect(const layout::MatchLayout& match) 
 }
 
 layout::Point Runtime::EngineSettingsMatchHost::dialog_point(
-    const layout::MatchLayout& match, float x, float y
+    const layout::MatchLayout& match, float x, float y, bool fit
 ) noexcept {
-    const auto rect = dialog_rect(match);
+    const auto rect = dialog_rect(match, fit);
     const auto source = [](float offset, int32_t shown, int32_t drawn) {
         return static_cast<int>(
             std::floor(static_cast<double>(offset) * static_cast<double>(drawn) / shown)
@@ -217,7 +289,8 @@ bool Runtime::EngineSettingsMatchHost::take_action(
 void Runtime::EngineSettingsMatchHost::take_dialog_input(
     Runtime& runtime, settings::Dialog& dialog, const ScreenInput& input
 ) {
-    const auto point = dialog_point(runtime.match_layout_, input.x, input.y);
+    const bool fit = fits_safe_area(runtime);
+    const auto point = dialog_point(runtime.match_layout_, input.x, input.y, fit);
     // OK and Cancel sound as they do on the main menu.
     const auto take_sounded = [&runtime](settings::DialogAction action) {
         if (action == settings::DialogAction::accepted)
@@ -244,10 +317,23 @@ void Runtime::EngineSettingsMatchHost::take_dialog_input(
     case ScreenInputKind::pointer_move:
         std::ignore = take_sounded(settings::dialog_pointer_move(dialog, point.x, point.y));
         return;
-    case ScreenInputKind::pointer_down:
-        if (input.button == SDL_BUTTON_LEFT)
-            std::ignore = take_sounded(settings::dialog_pointer_down(dialog, point.x, point.y));
+    case ScreenInputKind::pointer_down: {
+        if (input.button != SDL_BUTTON_LEFT)
+            return;
+        // A finger's press takes the nearest control within reach, the
+        // reach in the dialog's pixels as it shows on the canvas.
+        if (runtime.engine_settings_state().finger_pointer) {
+            const auto shown = dialog_rect(runtime.match_layout_, fit);
+            const int32_t reach = EngineSettingsState::finger_reach(
+                runtime, static_cast<double>(shown.width) / settings::dialog_width
+            );
+            std::ignore =
+                take_sounded(settings::dialog_finger_down(dialog, point.x, point.y, reach));
+            return;
+        }
+        std::ignore = take_sounded(settings::dialog_pointer_down(dialog, point.x, point.y));
         return;
+    }
     case ScreenInputKind::pointer_up:
         if (input.button == SDL_BUTTON_LEFT)
             std::ignore = take_sounded(settings::dialog_pointer_up(dialog, point.x, point.y));
@@ -303,7 +389,9 @@ bool Runtime::EngineSettingsMatchHost::take_input(Runtime& runtime, const Screen
         host.button_pressed = false;
         return false;
     }
-    const bool over = rect_contains(button_rect(runtime.match_layout_), input.x, input.y);
+    const bool over = rect_contains(
+        button_rect(runtime.match_layout_, fits_safe_area(runtime)), input.x, input.y
+    );
     if (over != host.button_hovered)
         ++host.revision;
     host.button_hovered = over;
@@ -350,13 +438,18 @@ void Runtime::EngineSettingsMatchHost::overlay_tick(ScreenContext*, void* state)
     auto& runtime = *static_cast<Runtime*>(state);
     close_when_column_hidden(runtime);
     // Hardware acceleration's status follows the renderer while the dialog
-    // is open; the layer is drawn again only when it changes.
+    // is open, and Touch shows once a finger turns the touch controls on;
+    // the layer is drawn again only when either changes.
     auto& host = runtime.engine_settings_match_host();
     if (auto* dialog = host.dialog_open ? runtime.engine_settings_dialog() : nullptr;
-        dialog != nullptr &&
-        settings::set_acceleration_status(*dialog, runtime.acceleration_report().status) ==
+        dialog != nullptr) {
+        if (settings::set_acceleration_status(*dialog, runtime.acceleration_report().status) ==
             settings::DialogAction::redraw)
-        ++host.revision;
+            ++host.revision;
+        if (settings::set_touch_controls(*dialog, runtime.touch_controls_active()) ==
+            settings::DialogAction::redraw)
+            ++host.revision;
+    }
 }
 
 void Runtime::EngineSettingsMatchHost::stamp(
@@ -398,10 +491,23 @@ bool Runtime::EngineSettingsMatchHost::refresh_layer(Runtime& runtime) {
     const auto* dialog = host.dialog_open ? runtime.engine_settings_dialog() : nullptr;
     const auto* fonts = runtime.engine_settings_fonts();
     const auto& match = runtime.match_layout_;
+    const bool fit = fits_safe_area(runtime);
+    const auto button_at = button_rect(match, fit);
+    const auto dialog_at = dialog_rect(match, fit);
     LayerLook look{};
     look.width = match.width;
     look.height = match.height;
     look.scale = match.scale;
+    look.placed = {
+        button_at.x,
+        button_at.y,
+        button_at.width,
+        button_at.height,
+        dialog_at.x,
+        dialog_at.y,
+        dialog_at.width,
+        dialog_at.height,
+    };
     look.button_shown =
         fonts != nullptr && runtime.screen_ == Screen::match && runtime.ingame_menu_column_shown();
     look.dialog_shown = fonts != nullptr && dialog != nullptr && look.button_shown;
@@ -425,9 +531,9 @@ bool Runtime::EngineSettingsMatchHost::refresh_layer(Runtime& runtime) {
         static_cast<settings::ButtonLook>(look.button_look),
         look.dialog_shown,
         *fonts,
-        runtime.engine_settings_icon()
+        runtime.engine_settings_icon(),
+        fit
     );
-    const auto button_at = button_rect(match);
     host.layer_bounds = button_at;
     if (look.dialog_shown) {
         // The whole screen darkens, the button with it; the dialog goes over.
@@ -447,7 +553,7 @@ bool Runtime::EngineSettingsMatchHost::refresh_layer(Runtime& runtime) {
         drawn.height = static_cast<uint32_t>(settings::dialog_height);
         drawn.rgb.assign(static_cast<std::size_t>(drawn.width) * drawn.height * 3U, 0);
         settings::draw_dialog(drawn, unscaled, *dialog, *fonts, runtime.engine_settings_icon());
-        stamp(host.layer_rgba, look.width, look.height, drawn, dialog_rect(match));
+        stamp(host.layer_rgba, look.width, look.height, drawn, dialog_at);
     }
     host.drawn = look;
     host.uploaded.reset();

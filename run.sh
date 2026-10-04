@@ -57,6 +57,8 @@ folder and plays that, checking it again on later starts.
   --preferences-file PATH  Use an explicit preferences profile (useful for testing)
   --data-dir PATH     Unpack the demo's game data here instead of the per-user
                       data folder (useful for testing)
+  --ios-simulator     Build for the iOS simulator and run there (platforms/ios/run.sh)
+  --ios-device        Build for iPhone and iPad devices (platforms/ios/run.sh --device)
   --help              Show this help
 
 Network play:
@@ -80,6 +82,12 @@ require_value() {
         exit 2
     fi
 }
+
+# The iOS and iPadOS builds have their own script; the remaining arguments go to it.
+case "${1:-}" in
+    --ios-simulator) shift; exec "$repo_dir/platforms/ios/run.sh" "$@" ;;
+    --ios-device) shift; exec "$repo_dir/platforms/ios/run.sh" --device "$@" ;;
+esac
 
 while [[ $# -gt 0 ]]; do
     case "$1" in

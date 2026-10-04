@@ -1854,7 +1854,8 @@ void Runtime::render_match_surface() {
     // build site or the drag box. The fog's profile category takes the time
     // of both.
     if (!bare) {
-        if (control_key_down(oa::ui::gui_input::ControlKey::shift))
+        if (control_key_down(oa::ui::gui_input::ControlKey::shift) ||
+            virtual_shift(ModifierUse::order))
             // What the pass drew is for the checks alone.
             std::ignore = draw_order_overlays(world_surface, painted);
         draw_build_ghost(world_surface, painted);

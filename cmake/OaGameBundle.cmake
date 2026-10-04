@@ -9,13 +9,19 @@
 # switcher and the menu bar show, "Open Annihilation", and its identifier.
 # The bundle takes the executable's name because CMake names a bundle after
 # its target's OUTPUT_NAME; the macOS release packages (tools/release_macos.sh)
-# name it as its Info.plist does, "Open Annihilation.app". Elsewhere the game
-# is the executable alone.
+# name it as its Info.plist does, "Open Annihilation.app". On the other Apple
+# systems (iOS and iPadOS) the game is a flat application bundle: the
+# executable, its Info.plist and the files that travel with it all sit at the
+# bundle's root, with no Contents/ or Resources/ folder (a Resources/ folder
+# there stops the system from installing the bundle), and the project that
+# builds for that system (platforms/ios) gives the bundle its Info.plist.
+# Elsewhere the game is the executable alone.
 #
 # The files that travel with the game, such as the licence notices and what
 # the extensions add (their GAME_FILES, cmake/OaExtensions.cmake), go in the folder
 # SDL_GetBasePath() names at run time: the bundle's Contents/Resources on
-# macOS, the executable's own folder elsewhere. oa_game_bundle() stores that
+# macOS, the flat bundle itself on the other Apple systems, the executable's
+# own folder elsewhere. oa_game_bundle() stores that
 # folder, as a generator expression, in the target's OA_GAME_FILES_DIR
 # property; a command names it as
 #   $<GENEX_EVAL:$<TARGET_PROPERTY:oa-game,OA_GAME_FILES_DIR>>
@@ -52,7 +58,9 @@ function(oa_macos_minimum_version)
 endfunction()
 
 # Lays out the game target: an application bundle on macOS, with the
-# project's version and the icon in its Resources, and the
+# project's version and the icon in its Resources; a flat bundle with the
+# project's version on the other Apple systems, whose Info.plist the
+# building project sets (MACOSX_BUNDLE_INFO_PLIST); and the
 # OA_GAME_FILES_DIR property everywhere. Sets
 # OA_MACOS_MINIMUM_VERSION in the caller's scope on macOS, where the
 # Info.plist template reads it; call it from the directory that defines the
@@ -60,6 +68,14 @@ endfunction()
 function(oa_game_bundle target)
   if(NOT APPLE)
     set_target_properties(${target} PROPERTIES OA_GAME_FILES_DIR "$<TARGET_FILE_DIR:${target}>")
+    return()
+  endif()
+  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    set_target_properties(${target} PROPERTIES
+      MACOSX_BUNDLE TRUE
+      MACOSX_BUNDLE_BUNDLE_VERSION "${open_annihilation_VERSION}"
+      MACOSX_BUNDLE_SHORT_VERSION_STRING "${open_annihilation_VERSION}"
+      OA_GAME_FILES_DIR "$<TARGET_BUNDLE_DIR:${target}>")
     return()
   endif()
   oa_macos_minimum_version()

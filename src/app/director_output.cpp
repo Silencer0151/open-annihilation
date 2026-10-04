@@ -34,6 +34,10 @@
 #include <fcntl.h>
 #endif
 
+#ifndef OA_PROCESS_SPAWNING
+#error "OA_PROCESS_SPAWNING (0 or 1) says whether the game may start other programs"
+#endif
+
 namespace oa::app {
 
 namespace fs = std::filesystem;
@@ -179,7 +183,9 @@ void remove_file(const fs::path& path) {
 
 /// Starts the encoder.
 ///
-/// Throws std::runtime_error when it cannot be started.
+/// Throws std::runtime_error when it cannot be started, as in a build that
+/// starts no other programs (the OA_PROCESS_SPAWNING build option), which
+/// never tries.
 ///
 /// @param arguments the arguments, the program's name first
 /// @param piped true: its standard input is a pipe from this process
@@ -187,6 +193,13 @@ void remove_file(const fs::path& path) {
 [[nodiscard]] SDL_Process* start_encoder(const std::vector<std::string>& arguments, bool piped) {
     if (arguments.empty())
         throw std::logic_error("the encoder runs with its program's name");
+#if !OA_PROCESS_SPAWNING
+    std::ignore = piped;
+    throw std::runtime_error(
+        "cannot start " + arguments.front() + ": this build starts no other programs (" +
+        director_encoder_variable + "=" + director_encoder_off + " renders without it)"
+    );
+#else
     std::vector<const char*> argv;
     argv.reserve(arguments.size() + 1);
     for (const auto& argument : arguments)
@@ -218,6 +231,7 @@ void remove_file(const fs::path& path) {
             " renders without it): " + SDL_GetError()
         );
     return process;
+#endif
 }
 
 /// Makes writes to a process's input wait for the process: SDL opens the

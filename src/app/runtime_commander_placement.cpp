@@ -15,6 +15,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <iostream>
@@ -71,6 +72,100 @@ bool on_done_button(int x, int y) {
            y <= kDoneY + kDoneHitBottom;
 }
 
+/// Returns where a point of the 640x480 battlefield the prompt and the Done
+/// button are laid out on lies on the canvas: where the battlefield's own
+/// mapping puts it, moved by as much as the overlays' area's corner lies
+/// from the battlefield's. Without the touch controls the area is the
+/// battlefield, and the point is the battlefield's mapping alone; on a
+/// phone, whose HUD shows in placed regions, the battlefield's mapping is
+/// taken whatever region shows that part of the 640x480 screen.
+///
+/// @param layout the match layout
+/// @param area the overlays' area (Runtime::overlay_area), canvas pixels
+/// @param x source column
+/// @param y source row
+/// @return the point, canvas pixels
+oa::ui::display_layout::Point overlay_point(
+    const oa::ui::display_layout::MatchLayout& layout,
+    const oa::ui::display_layout::Rect& area,
+    int x,
+    int y
+) {
+    namespace layout_space = oa::ui::display_layout;
+    const auto point = layout_space::placed_mode(layout)
+                           ? layout_space::source_battlefield_to_canvas(layout, x, y)
+                           : layout_space::source_to_canvas(layout, x, y);
+    return {point.x + area.x - layout.battlefield_x(), point.y + area.y - layout.battlefield_y()};
+}
+
+/// Returns the canvas rectangle a 640x480 rectangle of the battlefield
+/// covers, both corners placed as overlay_point places them.
+///
+/// @param layout the match layout
+/// @param area the overlays' area, canvas pixels
+/// @param x source left edge
+/// @param y source top edge
+/// @param width source width
+/// @param height source height
+/// @return the rectangle, canvas pixels
+oa::ui::display_layout::Rect overlay_rect(
+    const oa::ui::display_layout::MatchLayout& layout,
+    const oa::ui::display_layout::Rect& area,
+    int x,
+    int y,
+    int width,
+    int height
+) {
+    const auto origin = overlay_point(layout, area, x, y);
+    const auto corner = overlay_point(layout, area, x + width, y + height);
+    oa::ui::display_layout::Rect rect{};
+    rect.x = origin.x;
+    rect.y = origin.y;
+    rect.width = corner.x - origin.x;
+    rect.height = corner.y - origin.y;
+    return rect;
+}
+
+/// Tells whether a canvas point is on the Done button where overlay_rect
+/// places it: inside its left and right edges and its pressable rows, as
+/// on_done_button tells for a 640x480 point.
+///
+/// @param layout the match layout
+/// @param area the overlays' area, canvas pixels
+/// @param x canvas column
+/// @param y canvas row
+/// @return true on the button's pressable part
+bool on_placed_done_button(
+    const oa::ui::display_layout::MatchLayout& layout,
+    const oa::ui::display_layout::Rect& area,
+    float x,
+    float y
+) {
+    const auto pressable = overlay_rect(
+        layout,
+        area,
+        kSourceWidth - kDoneFromRight + 1,
+        kDoneY + kDoneHitTop,
+        kDoneWidth - 1,
+        kDoneHitBottom - kDoneHitTop + 1
+    );
+    return x >= static_cast<float>(pressable.x) && y >= static_cast<float>(pressable.y) &&
+           x < static_cast<float>(pressable.x + pressable.width) &&
+           y < static_cast<float>(pressable.y + pressable.height);
+}
+
+/// Tells whether a canvas point lies in an area.
+///
+/// @param area canvas rectangle
+/// @param x canvas column
+/// @param y canvas row
+/// @return true inside its left and top edges and short of its right and bottom ones
+bool area_holds(const oa::ui::display_layout::Rect& area, float x, float y) {
+    return x >= static_cast<float>(area.x) && y >= static_cast<float>(area.y) &&
+           x < static_cast<float>(area.x + area.width) &&
+           y < static_cast<float>(area.y + area.height);
+}
+
 } // namespace
 
 bool Runtime::commander_placement_pointer(const SDL_Event& event, float x, float y) {
@@ -81,7 +176,19 @@ bool Runtime::commander_placement_pointer(const SDL_Event& event, float x, float
         return false;
     }
     const bool placing = match_->commander_placement() == CommanderPlacement::placing;
-    const auto point = hud_source_point(x, y);
+    // The prompt and the button stand in the overlays' area: the
+    // battlefield, or with the touch controls on, the part of it they leave
+    // clear, where the button is found on the canvas
+    // (draw_commander_placement); without them it is found at the 640x480
+    // point under the pointer.
+    const auto area = overlay_area();
+    const bool touch = touch_controls_active();
+    const auto on_done = [&] {
+        if (touch)
+            return on_placed_done_button(match_layout_, area, x, y);
+        const auto point = hud_source_point(x, y);
+        return on_done_button(point.x, point.y);
+    };
     if (event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
         if (event.button.button != SDL_BUTTON_LEFT)
             return false;
@@ -92,17 +199,18 @@ bool Runtime::commander_placement_pointer(const SDL_Event& event, float x, float
         if (!commander_done_held_)
             return false;
         commander_done_held_ = false;
-        if (placing && on_done_button(point.x, point.y))
+        if (placing && on_done())
             match_->finish_commander_placement();
         return true;
     }
     if (event.type != SDL_EVENT_MOUSE_BUTTON_DOWN || event.button.button != SDL_BUTTON_LEFT)
         return false;
-    if (placing && on_done_button(point.x, point.y)) {
+    if (placing && on_done()) {
         commander_done_held_ = true;
         return true;
     }
-    if (!battlefield_contains(x, y))
+    // A press on a touch control or a placed part of the HUD is theirs.
+    if (!area_holds(area, x, y) || placed_hud_covers(x, y))
         return false;
     // A press moves the commander there, as often as the player likes.
     const auto at = battlefield_map_point(x, y);
@@ -118,19 +226,31 @@ void Runtime::draw_commander_placement() {
     const PanelText panel(*this);
     const auto& game = match_->state().game;
     const auto text_color = oa::ui::hud::readout_color(game, oa::ui::hud::kReadoutTextColor);
+    // Painted on the battlefield's layer, laid out on the 640x480
+    // battlefield and placed in the overlays' area: the battlefield, or with
+    // the touch controls on, the part of it they leave clear.
+    const auto area = overlay_area();
+    const auto label = [&](int x, int y, std::string_view text) {
+        const auto canvas = overlay_point(match_layout_, area, x, y);
+        const auto at = canvas_paint(canvas.x, canvas.y);
+        draw_match_label(at.x, at.y, text, text_color);
+    };
+    const auto fill = [&](int x, int y, int width, int height, uint8_t color) {
+        const auto rect = overlay_rect(match_layout_, area, x, y, width, height);
+        const auto at = canvas_paint(rect.x, rect.y);
+        fill_hud_rect(at.x, at.y, std::max(1, rect.width), std::max(1, rect.height), color);
+    };
     const int prompt_x = kSourceWidth - kPromptFromRight;
     if (match_->commander_placement() == CommanderPlacement::waiting) {
-        draw_hud_label(prompt_x, kPromptY, "Waiting for others to finish", text_color);
+        label(prompt_x, kPromptY, "Waiting for others to finish");
         return;
     }
-    draw_hud_label(prompt_x, kPromptY, "Place your commander and click done", text_color);
+    label(prompt_x, kPromptY, "Place your commander and click done");
     const int left = kSourceWidth - kDoneFromRight;
-    fill_source_rect(left, kDoneY, kDoneWidth, kDoneHeight, kDoneEdgeColor);
-    fill_source_rect(left + 1, kDoneY + 1, kDoneWidth - 2, kDoneHeight - 2, kDoneFaceColor);
+    fill(left, kDoneY, kDoneWidth, kDoneHeight, kDoneEdgeColor);
+    fill(left + 1, kDoneY + 1, kDoneWidth - 2, kDoneHeight - 2, kDoneFaceColor);
     const int held = commander_done_held_ ? 1 : 0;
-    draw_hud_label(
-        left + kDoneLabelInsetX + held, kDoneY + kDoneLabelInsetY + held, "Done", text_color
-    );
+    label(left + kDoneLabelInsetX + held, kDoneY + kDoneLabelInsetY + held, "Done");
 }
 
 void Runtime::check_commander_placement() {
@@ -173,8 +293,9 @@ void Runtime::check_commander_placement() {
     // A click in the battlefield's middle moves the commander's whole x and
     // z there and keeps their fractions and its height.
     const auto before = commander->position;
-    const float x = static_cast<float>(match_layout_.left + match_layout_.battlefield_width() / 2);
-    const float y = static_cast<float>(match_layout_.top + match_layout_.battlefield_height() / 3);
+    const auto area = overlay_area();
+    const float x = static_cast<float>(area.x + area.width / 2);
+    const float y = static_cast<float>(area.y + area.height / 3);
     const auto at = battlefield_map_point(x, y);
     click(x, y);
     const auto& moved = commander->position;
@@ -195,8 +316,11 @@ void Runtime::check_commander_placement() {
     render_match_surface();
     compose_match_frame(composed);
     // A press and release on Done ends the placing.
-    const auto done = oa::ui::display_layout::source_to_canvas(
-        match_layout_, kSourceWidth - kDoneFromRight + kDoneWidth / 2, kDoneY + kDoneHeight / 2
+    const auto done = overlay_point(
+        match_layout_,
+        area,
+        kSourceWidth - kDoneFromRight + kDoneWidth / 2,
+        kDoneY + kDoneHeight / 2
     );
     click(static_cast<float>(done.x), static_cast<float>(done.y));
     require_placement(

@@ -184,6 +184,51 @@ bool is_button(const oa::ui::gui_layout::Gadget& gadget) {
     return gadget.common.type == oa::ui::gui_layout::GadgetType::button;
 }
 
+/// One command word of the order page and the order it arms.
+struct OrderWord {
+    std::string_view word{};
+    uint8_t order = 0;
+};
+
+// The order page's command words in the order a button's name is tried, as
+// the order panel tries them: UNLOAD before LOAD, which it holds.
+constexpr OrderWord kOrderWords[] = {
+    {"MOVE", armed::move},
+    {"STOP", armed::default_order},
+    {"ATTACK", armed::attack},
+    {"BLAST", armed::blast},
+    {"DEFEND", armed::defend},
+    {"REPAIR", armed::repair},
+    {"PATROL", armed::patrol},
+    {"RECLAIM", armed::reclaim},
+    {"CAPTURE", armed::capture},
+    {"UNLOAD", armed::unload},
+    {"LOAD", armed::load},
+};
+
+/// Returns the command word a name holds, as the order panel reads a button's name.
+///
+/// @param name an order panel name or a button's name
+/// @return the first command word the name holds, or null
+const OrderWord* order_word_in(std::string_view name) {
+    for (const auto& word : kOrderWords)
+        if (name.find(word.word) != std::string_view::npos)
+            return &word;
+    return nullptr;
+}
+
+/// Tells whether a button's name is one of the order page's standing order toggles, whose
+/// names may hold a command word (MOVEORD holds MOVE).
+///
+/// @param name the button's name
+/// @return true for FIREORD, MOVEORD, ONOFF and CLOAK
+bool standing_order_toggle(std::string_view name) {
+    for (const std::string_view toggle : {"FIREORD", "MOVEORD", "ONOFF", "CLOAK"})
+        if (name.find(toggle) != std::string_view::npos)
+            return true;
+    return false;
+}
+
 } // namespace
 
 bool Runtime::press_match_command_button(std::size_t index) {
@@ -212,6 +257,64 @@ bool Runtime::press_match_command_button(std::size_t index) {
     const auto order = oa::ui::hud::armed_order_of(game);
     match_command_ = MatchCommand::none;
     status_ = gadget.common.name.find("STOP") != std::string::npos ? "Stop" : "";
+    for (const auto& armed_command : kArmedCommands)
+        if (armed_command.order == order) {
+            match_command_ = armed_command.command;
+            status_ = armed_command.prompt;
+            break;
+        }
+    return true;
+}
+
+bool Runtime::arm_match_command(std::string_view name, bool toggle) {
+    if (!match_)
+        return false;
+    const auto* word = order_word_in(name);
+    if (word == nullptr || word->word != name || !order_command_available(name))
+        return false;
+    const bool stop = word->order == armed::default_order;
+    auto command = MatchCommand::none;
+    for (const auto& armed_command : kArmedCommands)
+        if (armed_command.order == word->order)
+            command = armed_command.command;
+    const bool armed_now = !stop && command != MatchCommand::none && match_command_ == command;
+    if (armed_now && !toggle)
+        return true;
+    // The loaded page's button for the order is pressed, so it lights and
+    // its association group clears as a click does.
+    if (match_hud_) {
+        const auto& gadgets = match_hud_->layout.gadgets;
+        for (std::size_t index = 1; index < gadgets.size() && index < match_hud_states_.size();
+             ++index) {
+            const auto& gadget = gadgets[index];
+            if (!is_button(gadget) || standing_order_toggle(gadget.common.name) ||
+                order_word_in(gadget.common.name) != word)
+                continue;
+            auto& state = match_hud_states_[index];
+            // The press turns a lit button off and an unlit one on: a button
+            // left lit for an order no longer armed starts unlit, and the armed
+            // order's unlit button is taken back by name below.
+            if (armed_now && state.status == 0)
+                break;
+            if (!armed_now)
+                state.status = 0;
+            return press_match_command_button(index);
+        }
+    }
+    // With no such button loaded (a build page), the order is armed by name
+    // as its button would arm it.
+    auto events = order_panel_events();
+    events.apply_standing_order = [](void* user, const char*, int32_t) {
+        auto& self = *static_cast<Runtime*>(user);
+        self.for_each_selected([&](uint16_t id) { self.match_->issue_stop(id); });
+    };
+    auto& game = match_->state().game;
+    const std::string order_name(name);
+    if (!oa::ui::hud::order_panel_command(game, order_name.c_str(), armed_now ? 0 : 1, events))
+        return false;
+    const auto order = oa::ui::hud::armed_order_of(game);
+    match_command_ = MatchCommand::none;
+    status_ = stop ? "Stop" : "";
     for (const auto& armed_command : kArmedCommands)
         if (armed_command.order == order) {
             match_command_ = armed_command.command;

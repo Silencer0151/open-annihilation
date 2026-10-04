@@ -1,21 +1,34 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// The game directory host over SDL's native folder dialog and message boxes.
+// The game directory host over SDL's native folder dialog and message boxes,
+// with the platform's default folder and advice from its hooks.
 #include "oa/app/app.hpp"
 #include "oa/app/game_directory.hpp"
+#include "oa/app/game_files_hooks.hpp"
+#include "oa/app/platform_hooks.hpp"
 #include <SDL3/SDL.h>
+#include <array>
 #include <atomic>
 #include <iostream>
 #include <string>
 #include <tuple>
 
+#ifndef OA_NATIVE_FOLDER_DIALOG
+#error "OA_NATIVE_FOLDER_DIALOG (0 or 1) says whether the build offers the system's folder dialog"
+#endif
+
 namespace oa::app {
 namespace {
 
-constexpr const char* kDialogTitle = "Choose your Total Annihilation folder";
+// The build asks for the game folder with the system's folder dialog (the
+// OA_NATIVE_FOLDER_DIALOG build option; on for the desktop).
+constexpr bool kNativeFolderDialog = OA_NATIVE_FOLDER_DIALOG != 0;
 constexpr const char* kMessageTitle = "Open Annihilation";
+#if OA_NATIVE_FOLDER_DIALOG
+constexpr const char* kDialogTitle = "Choose your Total Annihilation folder";
 constexpr Uint32 kDialogPollMs = 50;
+#endif
 
 // Video runs only while the dialogs are up, and the hints set for them are
 // dropped with it; HostDisplay starts its own.
@@ -36,6 +49,7 @@ struct NativeDialogs {
     }
 };
 
+#if OA_NATIVE_FOLDER_DIALOG
 // SDL answers inside the call on macOS, on a worker thread on Windows and for
 // zenity, and from event pumping for the desktop portal: the fields are
 // written before `done` is released and read after it is acquired.
@@ -57,6 +71,7 @@ void SDLCALL folder_chosen(void* userdata, const char* const* filelist, int) {
     }
     wait->done.store(true, std::memory_order_release);
 }
+#endif
 
 bool start_video(NativeDialogs& dialogs) {
     if (dialogs.video_started || dialogs.video_failed)
@@ -81,6 +96,7 @@ bool start_video(NativeDialogs& dialogs) {
     return true;
 }
 
+#if OA_NATIVE_FOLDER_DIALOG
 FolderPick pick_folder(void* context, const fs::path& start, fs::path* chosen, std::string* error) {
     auto& dialogs = *static_cast<NativeDialogs*>(context);
     if (!start_video(dialogs)) {
@@ -130,6 +146,7 @@ FolderPick pick_folder(void* context, const fs::path& start, fs::path* chosen, s
     *chosen = path_from_utf8(wait.path);
     return FolderPick::chosen;
 }
+#endif
 
 void tell_user(void* context, Notice kind, std::string_view text) {
     const std::string message(text);
@@ -142,6 +159,40 @@ void tell_user(void* context, Notice kind, std::string_view text) {
         std::cerr << "open-annihilation: message box: " << SDL_GetError() << '\n';
 }
 
+/// Shows a notice with one button and waits for it to be pressed, before
+/// the game's window exists or after; the text goes to the error output too.
+///
+/// @param context the dialogs
+/// @param kind information or warning
+/// @param text the notice's text
+/// @param button the button's label
+/// @return false when the notice could not be shown
+bool ask_user(void* context, Notice kind, std::string_view text, std::string_view button) {
+    const std::string message(text);
+    const std::string label(button);
+    std::cerr << message << '\n';
+    // Without video the box below fails, and that is reported.
+    std::ignore = start_video(*static_cast<NativeDialogs*>(context));
+    // Return and Escape press the one button too.
+    const std::array<SDL_MessageBoxButtonData, 1> buttons{{
+        {SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT | SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT,
+         0,
+         label.c_str()},
+    }};
+    SDL_MessageBoxData data{};
+    data.flags = kind == Notice::information ? SDL_MESSAGEBOX_INFORMATION : SDL_MESSAGEBOX_WARNING;
+    data.title = kMessageTitle;
+    data.message = message.c_str();
+    data.numbuttons = static_cast<int>(buttons.size());
+    data.buttons = buttons.data();
+    int pressed = -1;
+    if (!SDL_ShowMessageBox(&data, &pressed)) {
+        std::cerr << "open-annihilation: message box: " << SDL_GetError() << '\n';
+        return false;
+    }
+    return true;
+}
+
 // The dialogs, and where the demo's archive is unpacked.
 struct NativeHost {
     NativeDialogs dialogs;
@@ -152,13 +203,34 @@ struct NativeHost {
     ModChoice mod;
 };
 
+// Without the folder dialog in the build, the host offers none
+// (find_game_directory), and nothing that reaches this asks SDL for one.
 FolderPick
 pick_native_folder(void* context, const fs::path& start, fs::path* chosen, std::string* error) {
+#if OA_NATIVE_FOLDER_DIALOG
     return pick_folder(&static_cast<NativeHost*>(context)->dialogs, start, chosen, error);
+#else
+    std::ignore = context;
+    std::ignore = start;
+    std::ignore = chosen;
+    *error = "this build offers no folder dialog";
+    return FolderPick::unavailable;
+#endif
 }
 
 void tell_native_user(void* context, Notice kind, std::string_view text) {
     tell_user(&static_cast<NativeHost*>(context)->dialogs, kind, text);
+}
+
+/// Shows the missing-folder notice with its look-again button (ask_user).
+///
+/// @param context the native host
+/// @param kind information or warning
+/// @param text the notice's text
+/// @param button the button's label
+/// @return false when the notice could not be shown
+bool ask_native_user(void* context, Notice kind, std::string_view text, std::string_view button) {
+    return ask_user(&static_cast<NativeHost*>(context)->dialogs, kind, text, button);
 }
 
 GameInstall inspect(void* context, const fs::path& folder) {
@@ -173,9 +245,50 @@ GameInstall inspect(void* context, const fs::path& folder) {
     return text == nullptr ? std::string_view{} : std::string_view(text);
 }
 
+/// Looks for the platform's default game folder (PlatformHooks's
+/// default_game_folder); the desktop has none.
+///
+/// @param[out] folder the folder, when there is one
+/// @return true when the platform gave one
+bool platform_folder(fs::path* folder) {
+    const PlatformHooks& hooks = platform_hooks();
+    if (hooks.default_game_folder == nullptr)
+        return false;
+    std::string found;
+    if (!hooks.default_game_folder(hooks.context, &found) || found.empty())
+        return false;
+    *folder = path_from_utf8(found);
+    return true;
+}
+
+/// Looks for the platform's default game folder again, for the
+/// missing-folder notice's look-again button.
+///
+/// @param[out] folder the folder, when there is one
+/// @return true when the platform gave one
+bool find_native_platform_default(void*, fs::path* folder) {
+    return platform_folder(folder);
+}
+
+// Fills the request with the platform's default game folder, the advice it
+// gives without one and the label of the notice's look-again button
+// (platform_hooks()); the desktop has none of them.
+void take_platform_folder(GameDirectoryRequest& request) {
+    const PlatformHooks& hooks = platform_hooks();
+    fs::path folder;
+    if (platform_folder(&folder))
+        request.platform_default = std::move(folder);
+    if (hooks.missing_game_folder_advice != nullptr)
+        request.platform_advice =
+            std::string(text_or_empty(hooks.missing_game_folder_advice(hooks.context)));
+    if (hooks.game_folder_check_again != nullptr)
+        request.check_again_label =
+            std::string(text_or_empty(hooks.game_folder_check_again(hooks.context)));
+}
+
 } // namespace
 
-std::optional<GameDirectory> find_game_directory(const Options& options) {
+std::optional<GameDirectory> find_game_directory(const Options& options, GameFilesNeeded* needed) {
     GameDirectoryRequest request;
     request.argument = options.game_dir;
     request.choose = options.choose_game_dir;
@@ -191,6 +304,13 @@ std::optional<GameDirectory> find_game_directory(const Options& options) {
         values = oa::platform::preferences::load(preference_file(options.preferences_file));
     if (request.argument.empty())
         request.stored = stored_game_directory(values);
+    take_platform_folder(request);
+    // The Game files screen takes the place of the missing-folder notice
+    // where the platform brings game files in, unless the player asked for
+    // the notice; a scripted run never opens it, but for its own check.
+    request.import_offered = needed != nullptr && game_files_import_offered(game_files_hooks()) &&
+                             !options.no_game_files_screen &&
+                             (!request.unattended || options.check_game_files);
     NativeHost native;
     native.mod.folder = chosen_mod_directory(options.mod_dir, options.base_game, values);
     // A mod folder chosen earlier that is gone is dropped with a notice, and
@@ -220,8 +340,12 @@ std::optional<GameDirectory> find_game_directory(const Options& options) {
             native.data_folder_problem = error.what();
         }
     }
-    const GameDirectoryHost host{&native, pick_native_folder, tell_native_user, inspect};
-    return resolve_game_directory(request, host);
+    GameDirectoryHost host{
+        &native, kNativeFolderDialog ? pick_native_folder : nullptr, tell_native_user, inspect
+    };
+    host.ask = ask_native_user;
+    host.find_platform_default = find_native_platform_default;
+    return resolve_game_directory(request, host, needed);
 }
 
 } // namespace oa::app

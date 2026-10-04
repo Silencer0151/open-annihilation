@@ -52,9 +52,17 @@ enum class Page : uint8_t {
     gameplay,      ///< Gameplay: the unit limit and the mod
     graphics,      ///< Graphics
     language_text, ///< Language & Text: how game text is drawn
+    /// Touch: how the touch controls answer a finger; listed only while the
+    /// game has touch controls (Dialog::touch)
+    touch,
     /// Developer, after a divider: its rows over Developer Mode's list of
     /// the standard hacks
     developer,
+    /// Game files: what is installed, the backups switch and where the
+    /// files are; listed, between Touch and Developer, only where the
+    /// platform brings game files in and the dialog is the main menu's
+    /// (Dialog::game_files)
+    game_files,
     mod_keys,   ///< the mod's keys
     mod_patrol, ///< what patrolling builders do
     mod_guard,  ///< what guarding builders do
@@ -62,23 +70,35 @@ enum class Page : uint8_t {
     mod_chat,   ///< the wreck snap, the chat and the resource bar
 };
 
-/// The number of sections, of both kinds of dialog.
-inline constexpr std::size_t page_count = 11;
-/// The most sections a dialog lists: the engine's settings' six; a mod's
-/// options have five.
-inline constexpr std::size_t most_listed_pages = 6;
+/// The number of sections, of every kind of dialog.
+inline constexpr std::size_t page_count = 13;
+/// The most sections a dialog lists: the engine's settings' eight with
+/// Touch and Game files, six without them; a mod's options have five.
+inline constexpr std::size_t most_listed_pages = 8;
 
 /// Which settings a dialog shows.
 enum class DialogKind : uint8_t {
-    engine,      ///< the engine's settings: the first six sections
+    /// the engine's settings: the sections up to Developer, Touch among them
+    /// only while the game has touch controls
+    engine,
     mod_options, ///< a mod's options: the last five sections
+    /// Language & Text alone, as the Game files screen opens it before the
+    /// game's files are installed
+    language_text,
 };
 
 /// Returns the sections a kind of dialog lists, in order.
 ///
 /// @param kind the dialog's kind
-/// @return six sections for the engine's settings, five for a mod's options
-[[nodiscard]] std::span<const Page> dialog_pages(DialogKind kind) noexcept;
+/// @param touch the game has touch controls (Dialog::touch), so that the
+///     engine's settings list Touch between Language & Text and Developer
+/// @param game_files the dialog lists Game files (Dialog::game_files),
+///     between Touch and Developer
+/// @return six sections for the engine's settings, seven with Touch or
+///     Game files, eight with both; five for a mod's options and one for
+///     Language & Text alone, whatever the other two say
+[[nodiscard]] std::span<const Page>
+dialog_pages(DialogKind kind, bool touch = false, bool game_files = false) noexcept;
 
 /// The settings, as the dialog's rows show them.
 enum class Setting : uint8_t {
@@ -99,11 +119,17 @@ enum class Setting : uint8_t {
     /// Language: a drop-down of System default and the languages the game
     /// draws, each named in itself
     language,
-    modern_fonts,      ///< Use modern fonts for game text: a switch
-    text_outline,      ///< Font outline: a switch
-    text_shadow,       ///< Font shadow: a switch
-    text_background,   ///< Game text background: a switch
-    text_size,         ///< Text size: a slider, locked while modern fonts are off
+    modern_fonts,    ///< Use modern fonts for game text: a switch
+    text_outline,    ///< Font outline: a switch
+    text_shadow,     ///< Font shadow: a switch
+    text_background, ///< Game text background: a switch
+    text_size,       ///< Text size: a slider, locked while modern fonts are off
+    /// One-finger drag: a strip of Automatic, Box and Scroll
+    touch_drag,
+    touch_hold_delay,  ///< Hold delay: a slider of milliseconds
+    touch_latches,     ///< QUEUE and ADD: a strip of Stay on and One action
+    touch_haptics,     ///< Haptics: a switch
+    touch_left_handed, ///< Left-handed layout: a switch
     mod,               ///< Mod: a slider of none and the offered mod folders
     snap_override_key, ///< the mod's snap override key: a slider of option_keys
     autoclick_key,     ///< the mod's autoclick key: a slider of option_keys
@@ -120,6 +146,10 @@ enum class Setting : uint8_t {
     full_rings,        ///< Full rings: a switch
     chat_backdrop,     ///< Accessible chat: a switch
     panel_background,  ///< the resource bar's background: a slider of three
+    /// Game files: what is installed, its sizes line and a MANAGE… button
+    game_files_summary,
+    game_files_backed_up, ///< Include in device backups: a switch, with its hint
+    game_files_location,  ///< Where the files are: a text row
 };
 
 /// Returns the settings a section shows, top to bottom.
@@ -134,25 +164,29 @@ enum class Setting : uint8_t {
 
 // Every control has a number: the sections' entries, then the footer's
 // buttons, then the scroll bar, then the open section's rows, which have no
-// upper end, so a row never takes a fixed control's number.
+// upper end, so a row never takes a fixed control's number. The entries
+// keep room for the most sections a dialog lists, so every other number is
+// the same whether or not the dialog lists Touch.
 
 /// No control: what Dialog::hovered, pressed and focused hold when they name none.
 inline constexpr int32_t no_control = -1;
-/// The first section's entry in the list; the others follow in the order
-/// the dialog lists them (dialog_pages).
+/// The first section's entry in the list; each section's entry is its
+/// place among its kind of dialog's sections with Touch (page_control),
+/// whether or not the dialog lists Touch.
 inline constexpr int32_t first_page_control = 0;
-/// Restore defaults.
-inline constexpr int32_t restore_control = 6;
+/// Restore defaults: the first number after the sections' entries.
+inline constexpr int32_t restore_control =
+    first_page_control + static_cast<int32_t>(most_listed_pages);
 /// Cancel.
-inline constexpr int32_t cancel_control = 7;
+inline constexpr int32_t cancel_control = restore_control + 1;
 /// OK.
-inline constexpr int32_t ok_control = 8;
+inline constexpr int32_t ok_control = cancel_control + 1;
 /// The open section's scroll bar, shown while its rows are taller than the
 /// space they scroll in. It takes no keyboard focus.
-inline constexpr int32_t scroll_bar_control = 9;
+inline constexpr int32_t scroll_bar_control = ok_control + 1;
 /// The open section's first row's control; the next rows' follow it, one
 /// for each row the section has.
-inline constexpr int32_t first_row_control = 10;
+inline constexpr int32_t first_row_control = scroll_bar_control + 1;
 /// Developer's rows, over its list: Enable Developer Mode, then Show
 /// performance statistics.
 inline constexpr int32_t developer_row_count = 2;
@@ -172,9 +206,16 @@ static_assert(
         ok_control < scroll_bar_control && scroll_bar_control < first_row_control,
     "the sections' entries come first, then the footer's buttons, the scroll bar and the rows"
 );
+static_assert(
+    static_cast<std::size_t>(Page::developer) < most_listed_pages &&
+        static_cast<std::size_t>(Page::mod_chat) + 1 == page_count,
+    "every section of the engine's settings has an entry's number, and every section a scroll"
+);
 
 /// Returns the control of a section's entry in the list: its place among
-/// its kind of dialog's sections.
+/// its kind of dialog's sections, Touch counted whether or not it is
+/// listed, so that Touch is 5 and Developer 6 in every dialog of the
+/// engine's settings, and a dialog without Touch has no control 5.
 ///
 /// @param page the section
 /// @return its control's number
@@ -306,6 +347,9 @@ enum class DialogAction : uint8_t {
     changed,
     accepted,  ///< OK: keep Dialog::chosen in effect, save it and close the dialog
     cancelled, ///< Cancel: put Dialog::opened back in effect and close the dialog
+    /// MANAGE… was pressed: the host opens the Game files screen and keeps
+    /// the dialog open
+    manage_game_files,
 };
 
 /// How the OA button looks.
@@ -406,6 +450,12 @@ struct Dialog {
     bool pointer_known{}; ///< the dialog has had a pointer event
     int32_t pointer_x{};  ///< the last pointer event's column, in source pixels
     int32_t pointer_y{};  ///< the last pointer event's row, in source pixels
+    /// The columns a finger's held press was moved by to reach the control
+    /// it took (dialog_finger_down); the press's moves and its release are
+    /// moved as far. Zero for a press on a control and for every mouse
+    /// press.
+    int32_t finger_shift_x{};
+    int32_t finger_shift_y{}; ///< the rows a finger's held press was moved by, as finger_shift_x
     /// A check's own section in place of the dialog's; null for the dialog's.
     const SectionHooks* section_hooks{};
     /// The unit limit slider's highest stop (highest_offered_unit_limit).
@@ -414,6 +464,22 @@ struct Dialog {
     std::vector<std::string> mod_names;
     /// Which settings it shows.
     DialogKind kind{DialogKind::engine};
+    /// The game has touch controls, so that the engine's settings list
+    /// Touch (dialog_pages); a host gives it to open_dialog and keeps it
+    /// with set_touch_controls.
+    bool touch{};
+    /// The Game files section is listed (dialog_pages): a host gives it to
+    /// open_dialog where the platform brings game files in and the dialog is
+    /// the main menu's.
+    bool game_files{};
+    /// The Game files section's summary: "3.1c · Core Contingency · Battle Tactics · music · 1 mod".
+    std::string game_files_summary{};
+    /// Its sizes line: what the game files use and what is free on the device.
+    std::string game_files_sizes{};
+    /// Where the files are: the platform's folder_location word.
+    std::string game_files_location{};
+    /// The device's name in the backups switch's hint.
+    std::string game_files_device{};
     /// Developer Mode's list of the standard hacks.
     DeveloperList developer{};
     /// The language the operating system's preferred locales choose, which
@@ -524,6 +590,11 @@ dialog_text_width(const DialogFonts& fonts, DialogFont font, std::string_view te
 /// @param system_language the language the operating system's preferred
 ///     locales choose, which the Language drop-down's System default names;
 ///     null names English
+/// @param touch the game has touch controls, so that the dialog lists Touch
+///     (Dialog::touch); without them, a dialog asked to show Touch shows its
+///     first section instead
+/// @param game_files the dialog lists Game files (Dialog::game_files);
+///     without it, a dialog asked to show Game files shows its first section
 void open_dialog(
     Dialog& dialog,
     const EngineSettings& current,
@@ -535,7 +606,9 @@ void open_dialog(
     uint16_t highest_offered_unit = highest_unit_limit,
     std::span<const std::string> mod_names = {},
     std::span<const oa::data::mod_profile::HackState> profile_hacks = {},
-    const oa::data::languages::Language* system_language = nullptr
+    const oa::data::languages::Language* system_language = nullptr,
+    bool touch = false,
+    bool game_files = false
 );
 
 /// Opens the dialog over a mod's options (ui.options-dialog): its sections
@@ -556,6 +629,30 @@ void open_mod_options_dialog(
     Page page = Page::mod_keys
 );
 
+/// Opens the dialog over the Language & Text section alone
+/// (DialogKind::language_text), as the Game files screen opens it before
+/// the game's files are installed: it lists that one section and keeps
+/// Restore defaults, which restores only that section's settings, Cancel
+/// and OK. Drawn with DialogFonts that hold no glyphs, every text is in the
+/// modern fonts.
+///
+/// @param[out] dialog the dialog; whatever it held is replaced
+/// @param current the settings in effect
+/// @param defaults what Restore defaults sets
+/// @param locks what cannot be changed now
+/// @param version the header's version text
+/// @param system_language the language the operating system's preferred
+///     locales choose, which the Language drop-down's System default names;
+///     null names English
+void open_language_text_dialog(
+    Dialog& dialog,
+    const EngineSettings& current,
+    const EngineSettings& defaults,
+    const Locks& locks,
+    std::string_view version,
+    const oa::data::languages::Language* system_language = nullptr
+);
+
 /// Gives the dialog Hardware acceleration's status as it is now; a host
 /// calls it each frame while the dialog is open.
 ///
@@ -565,11 +662,23 @@ void open_mod_options_dialog(
 [[nodiscard]] DialogAction
 set_acceleration_status(Dialog& dialog, const AccelerationStatus& acceleration) noexcept;
 
+/// Tells the dialog whether the game has touch controls now; a host calls
+/// it each frame while the dialog is open, so that Touch is listed from the
+/// moment a finger turns the touch controls on. A dialog that stops listing
+/// Touch while it shows it shows its first section, and the focus leaves
+/// Touch's controls.
+///
+/// @param[in,out] dialog the dialog
+/// @param touch the game has touch controls (Dialog::touch)
+/// @return DialogAction::redraw when the list changed, else DialogAction::none
+[[nodiscard]] DialogAction set_touch_controls(Dialog& dialog, bool touch) noexcept;
+
 /// Moves the pointer: hovers a control, or drags what a held press holds. A
 /// slider's knob follows the pointer's column only; the scroll bar's thumb
 /// follows its row only, wherever the pointer goes, and the open section
 /// scrolls with the thumb. Over an open drop-down list it marks the item
-/// under it.
+/// under it. While a finger's press is held, the point is moved as the
+/// press was (dialog_finger_down).
 ///
 /// @param[in,out] dialog the dialog
 /// @param x the pointer's column, in source pixels from the dialog's left edge
@@ -593,10 +702,28 @@ set_acceleration_status(Dialog& dialog, const AccelerationStatus& acceleration) 
 /// @return what the press asks of the host
 [[nodiscard]] DialogAction dialog_pointer_down(Dialog& dialog, int32_t x, int32_t y);
 
+/// Presses with a finger: as dialog_pointer_down, but a press with no
+/// control under it takes the nearest control whose pressable part lies
+/// within `reach` of it, pressed at that part's point nearest the finger;
+/// while a drop-down list is open, the nearest of its items. The press's
+/// moves and its release are then moved as far as the press was
+/// (Dialog::finger_shift_x and finger_shift_y), so that a release where the
+/// finger landed acts on the control it took. With nothing within reach it
+/// does what dialog_pointer_down does.
+///
+/// @param[in,out] dialog the dialog
+/// @param x the finger's column, in source pixels from the dialog's left edge
+/// @param y the finger's row, in source pixels from the dialog's top edge
+/// @param reach how far a control may lie from the finger, in source pixels:
+///     the touch controls' pick distance in the dialog's own pixels
+/// @return what the press asks of the host
+[[nodiscard]] DialogAction dialog_finger_down(Dialog& dialog, int32_t x, int32_t y, int32_t reach);
+
 /// Releases the pointer's button: a release over the control the press held
 /// acts on it; over a drop-down's field, it opens the field's list, marking
 /// the item chosen. A release over the list item the press held chooses the
-/// item and closes the list.
+/// item and closes the list. A finger's release is moved as its press was
+/// (dialog_finger_down).
 ///
 /// @param[in,out] dialog the dialog
 /// @param x the pointer's column, in source pixels from the dialog's left edge
@@ -685,6 +812,23 @@ void draw_oa_button(
     int32_t side,
     ButtonLook look,
     const DialogFonts& fonts,
+    const oa::ui::frontend_renderer::RgbaPicture& icon
+);
+
+/// Draws the Open Annihilation mark alone, for other screens that show it
+/// as the dialog does: the icon scaled to fill a square at the surface's
+/// own resolution, or without the icon the OA mark the OA button shows at
+/// rest, green letters in a green outlined square 20/32 of the square's
+/// side in its middle. Nothing else of the square is drawn.
+///
+/// @param[in,out] target the surface
+/// @param placement where the square's top left corner lands, and its scale
+/// @param side the square's side, in source pixels; 0 or less draws nothing
+/// @param icon the Open Annihilation icon; an empty picture draws the OA mark
+void draw_oa_mark(
+    oa::ui::frontend_renderer::Surface& target,
+    const oa::ui::frontend_renderer::Placement& placement,
+    int32_t side,
     const oa::ui::frontend_renderer::RgbaPicture& icon
 );
 

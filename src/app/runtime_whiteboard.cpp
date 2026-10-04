@@ -70,7 +70,14 @@ bool Runtime::whiteboard_pointer(const SDL_Event& event, float x, float y) {
     const bool busy = input.drawing || input.erasing || input.moving >= 0;
     if (!whiteboard_on() || (!busy && !whiteboard_key_held()))
         return false;
-    if (!busy && event.type != SDL_EVENT_MOUSE_MOTION && !battlefield_contains(x, y))
+    // A stroke starts in the overlays' area (the battlefield, or with the
+    // touch controls on, the part of it they leave clear), not on a touch
+    // control or a placed part of the HUD; one under way goes on anywhere.
+    const auto area = overlay_area();
+    const bool in_area = x >= static_cast<float>(area.x) && y >= static_cast<float>(area.y) &&
+                         x < static_cast<float>(area.x + area.width) &&
+                         y < static_cast<float>(area.y + area.height) && !placed_hud_covers(x, y);
+    if (!busy && event.type != SDL_EVENT_MOUSE_MOTION && !in_area)
         return false;
     const auto point = battlefield_map_point(x, y);
     const auto color = hud::player_dot_color(match_->state(), match_local_player_);
@@ -183,7 +190,8 @@ bool Runtime::whiteboard_key(const SDL_KeyboardEvent& key) {
     if (key.scancode != kWhiteboardScancode || !whiteboard_on())
         return false;
     // Ctrl and the key go to the newest marker another player placed.
-    if ((SDL_GetModState() & SDL_KMOD_CTRL) != 0 && whiteboard_.received_marker)
+    if ((input_modifiers(ModifierUse::keyboard) & SDL_KMOD_CTRL) != 0 &&
+        whiteboard_.received_marker)
         set_camera_position(
             whiteboard_.received_x - visible_map_width() / 2,
             whiteboard_.received_y - visible_map_height() / 2,

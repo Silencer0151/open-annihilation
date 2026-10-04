@@ -34,63 +34,18 @@ constexpr std::string_view kWhatToChoose =
 constexpr std::string_view kNoArchives =
     "It holds no Total Annihilation archives (.hpi, .ufo, .ccx or rev31.gp3 files)";
 
-// Why a folder without archives cannot be played, from what the search for
-// the demo's installer found.
-[[nodiscard]] std::string archive_problem(const DemoSetup& demo) {
-    switch (demo.outcome) {
-    case DemoOutcome::not_searched:
-        break;
-    case DemoOutcome::no_installer:
-        return std::string(kNoArchives) +
-               " and no installer of the Total Annihilation demo (1997).";
-    case DemoOutcome::unrecognised: {
-        std::string names;
-        for (std::size_t i = 0; i < demo.rejected.size(); ++i) {
-            if (i != 0)
-                names += i + 1 == demo.rejected.size() ? " and " : ", ";
-            names += path_to_utf8(demo.rejected[i].filename());
-        }
-        return std::string(kNoArchives) + ", and " + names +
-               (demo.rejected.size() == 1 ? " is not" : " are not") +
-               " the release of the Total Annihilation demo (1997) that Open Annihilation "
-               "recognises.";
-    }
-    case DemoOutcome::ready:
-        return "The Total Annihilation demo (1997) unpacked to " + path_to_utf8(demo.archive) +
-               " could not be opened.";
-    case DemoOutcome::unpack_failed:
-        return "It holds the installer of the Total Annihilation demo (1997), " +
-               path_to_utf8(demo.installer.filename()) +
-               ", but its game data could not be unpacked: " + demo.problem + '.';
-    case DemoOutcome::disk_full:
-        return "It holds the installer of the Total Annihilation demo (1997), " +
-               path_to_utf8(demo.installer.filename()) + ", but the disk is full: " + demo.problem +
-               '.';
-    }
-    return std::string(kNoArchives) + '.';
-}
+constexpr std::string_view kNeedInstallation =
+    "Open Annihilation needs your Total Annihilation installation.";
 
-[[nodiscard]] std::string install_problem(const GameInstall& install) {
-    if (!install.problem.empty())
-        return "It could not be read: " + install.problem;
-    if (!install.profile_errors.empty()) {
-        std::string text = "Its mod profile cannot be used:";
-        for (const auto& error : install.profile_errors)
-            text += "\n  " + error;
-        return text;
-    }
-    if (!install.folder)
-        return "The folder does not exist.";
-    if (install.archives.empty())
-        return archive_problem(install.demo);
-    std::string text = "Its archives lack ";
-    for (std::size_t i = 0; i < install.missing.size(); ++i) {
-        if (i != 0)
-            text += ", ";
-        text += install.missing[i];
-    }
-    return text + '.';
-}
+// The notice's first sentence while it stays up with its look-again button,
+// as the player copies the files in.
+constexpr std::string_view kNeedFiles = "Open Annihilation needs your Total Annihilation files.";
+
+// What to do where no dialog can ask for the folder, unless the platform
+// gives its own advice.
+constexpr std::string_view kGameDirAdvice =
+    "Name your Total Annihilation folder on the command line:\n\n"
+    "open-annihilation --game-dir PATH";
 
 [[nodiscard]] bool equal_ignoring_case(std::string_view left, std::string_view right) {
     if (left.size() != right.size())
@@ -113,6 +68,60 @@ constexpr std::string_view kNoArchives =
         install.problem = error.what();
         return install;
     }
+}
+
+// The advice given where no dialog can ask for the folder: the platform's,
+// else the command line's.
+[[nodiscard]] std::string missing_folder_advice(const GameDirectoryRequest& request) {
+    return request.platform_advice.empty() ? std::string(kGameDirAdvice) : request.platform_advice;
+}
+
+// A folder resolution looked at and could not play, and why.
+struct RefusedFolder {
+    fs::path folder;
+    std::string problem;
+    /// The folder is there: it exists, or it could not be read.
+    bool there{};
+};
+
+/// Says that no folder can be played and that no dialog can ask for one:
+/// which folders were looked at and why each cannot be played, then the
+/// advice.
+///
+/// @param request the platform's advice
+/// @param platform the platform's default folder and why it cannot be played; none when it is
+///     not there
+/// @param stored the folder chosen earlier and why it can no longer be used; none when there is
+///     none
+/// @param looking_again the notice stays up with its look-again button: it asks for the files
+/// @return the notice's text
+[[nodiscard]] std::string no_folder_text(
+    const GameDirectoryRequest& request,
+    const std::optional<RefusedFolder>& platform,
+    const std::optional<RefusedFolder>& stored,
+    bool looking_again
+) {
+    std::string text(looking_again ? kNeedFiles : kNeedInstallation);
+    if (platform)
+        text += "\n\nIt looks for it first in:\n\n" + path_to_utf8(platform->folder) + "\n\n" +
+                platform->problem;
+    if (stored)
+        text += "\n\nThe Total Annihilation folder chosen earlier can no longer be used:\n\n" +
+                path_to_utf8(stored->folder) + "\n\n" + stored->problem;
+    text += "\n\n" + missing_folder_advice(request);
+    return text;
+}
+
+// Tells the user that no folder can be played and that no dialog can ask
+// for one: which folders were looked at and why each cannot be played,
+// then the advice.
+void tell_no_folder(
+    const GameDirectoryHost& host,
+    const GameDirectoryRequest& request,
+    const std::optional<RefusedFolder>& platform,
+    const std::optional<RefusedFolder>& stored
+) {
+    host.tell_user(host.context, Notice::warning, no_folder_text(request, platform, stored, false));
 }
 
 // The resolved folder: where it lies, its archives and, when it held the
@@ -171,9 +180,11 @@ void discover_archives(const fs::path& root, GameInstall& install) {
     // over one folder holding the files of both.
     oa::AssetStore probe(install.folders);
     for (const auto& outcome : probe.discover(discovery_plan_of(install.profile.get())))
-        if (!outcome.mounted && !outcome.already_mounted)
+        if (!outcome.mounted && !outcome.already_mounted) {
             std::cerr << "open-annihilation: skipping archive "
                       << path_to_utf8(outcome.path.filename()) << ": " << outcome.error << '\n';
+            install.skipped.push_back(SkippedArchive{outcome.path, outcome.error});
+        }
     take_mounted(root, probe, install);
 }
 
@@ -183,25 +194,154 @@ void take_archive(const fs::path& root, const fs::path& archive, GameInstall& in
     install.folders = {root};
     oa::AssetStore probe(root);
     std::string error;
-    if (!probe.try_mount(archive, &error))
+    if (!probe.try_mount(archive, &error)) {
         std::cerr << "open-annihilation: skipping archive " << path_to_utf8(archive.filename())
                   << ": " << error << '\n';
+        install.skipped.push_back(SkippedArchive{archive, error});
+    }
     take_mounted(root, probe, install);
 }
 
+/// Tells whether the missing-folder notice looks again instead of ending the
+/// start: the platform gave its look-again button and the host can show it.
+///
+/// @param host the dialogs
+/// @param request the button's label
+/// @return true when the notice is asked again until a folder is usable
+[[nodiscard]] bool looks_again(const GameDirectoryHost& host, const GameDirectoryRequest& request) {
+    return host.ask != nullptr && !request.check_again_label.empty() && !request.unattended;
+}
+
+/// Shows the missing-folder notice with its look-again button until a folder
+/// can be played: after each press the platform's default folder is looked
+/// for again and inspected, then the folder chosen earlier, and the first
+/// usable one is taken. Otherwise the notice is written again from what was
+/// found, the platform's folder named once it is there, and shown again.
+///
+/// @param host the dialogs, the notice and the inspection
+/// @param request the stored folder, the advice and the button's label
+/// @param platform the platform's default folder and why it cannot be played, as first found
+/// @param stored the folder chosen earlier and why it can no longer be used, as first found
+/// @return the usable folder; nullopt when the notice could not be shown
+[[nodiscard]] std::optional<GameDirectory> ask_until_usable(
+    const GameDirectoryHost& host,
+    const GameDirectoryRequest& request,
+    std::optional<RefusedFolder> platform,
+    std::optional<RefusedFolder> stored
+) {
+    for (;;) {
+        if (!host.ask(
+                host.context,
+                Notice::warning,
+                no_folder_text(request, platform, stored, true),
+                request.check_again_label
+            ))
+            return std::nullopt;
+        // The platform's folder may have appeared since the start.
+        fs::path platform_folder = request.platform_default;
+        if (host.find_platform_default != nullptr) {
+            fs::path found;
+            platform_folder = host.find_platform_default(host.context, &found) ? found : fs::path{};
+        }
+        platform.reset();
+        if (!platform_folder.empty()) {
+            auto install = inspect_folder(host, platform_folder);
+            if (usable(install))
+                return resolved(platform_folder, std::move(install), GameDirectorySource::platform);
+            platform = RefusedFolder{
+                platform_folder,
+                describe_install_problem(install),
+                install.folder || !install.problem.empty()
+            };
+        }
+        stored.reset();
+        if (request.stored && !request.stored->empty()) {
+            const auto folder = path_from_utf8(*request.stored);
+            auto install = inspect_folder(host, folder);
+            if (usable(install))
+                return resolved(folder, std::move(install), GameDirectorySource::stored);
+            stored = RefusedFolder{
+                folder,
+                describe_install_problem(install),
+                install.folder || !install.problem.empty()
+            };
+        }
+    }
+}
+
 } // namespace
+
+std::string describe_archive_problem(const DemoSetup& demo) {
+    switch (demo.outcome) {
+    case DemoOutcome::not_searched:
+        break;
+    case DemoOutcome::no_installer:
+        return std::string(kNoArchives) +
+               " and no installer of the Total Annihilation demo (1997).";
+    case DemoOutcome::unrecognised: {
+        std::string names;
+        for (std::size_t i = 0; i < demo.rejected.size(); ++i) {
+            if (i != 0)
+                names += i + 1 == demo.rejected.size() ? " and " : ", ";
+            names += path_to_utf8(demo.rejected[i].filename());
+        }
+        return std::string(kNoArchives) + ", and " + names +
+               (demo.rejected.size() == 1 ? " is not" : " are not") +
+               " the release of the Total Annihilation demo (1997) that Open Annihilation "
+               "recognises.";
+    }
+    case DemoOutcome::ready:
+        return "The Total Annihilation demo (1997) unpacked to " + path_to_utf8(demo.archive) +
+               " could not be opened.";
+    case DemoOutcome::unpack_failed:
+        return "It holds the installer of the Total Annihilation demo (1997), " +
+               path_to_utf8(demo.installer.filename()) +
+               ", but its game data could not be unpacked: " + demo.problem + '.';
+    case DemoOutcome::disk_full:
+        return "It holds the installer of the Total Annihilation demo (1997), " +
+               path_to_utf8(demo.installer.filename()) + ", but the disk is full: " + demo.problem +
+               '.';
+    }
+    return std::string(kNoArchives) + '.';
+}
+
+std::string describe_install_problem(const GameInstall& install) {
+    if (!install.problem.empty())
+        return "It could not be read: " + install.problem;
+    if (!install.profile_errors.empty()) {
+        std::string text = "Its mod profile cannot be used:";
+        for (const auto& error : install.profile_errors)
+            text += "\n  " + error;
+        return text;
+    }
+    if (!install.folder)
+        return "The folder does not exist.";
+    if (install.archives.empty())
+        return describe_archive_problem(install.demo);
+    std::string text = "Its archives lack ";
+    for (std::size_t i = 0; i < install.missing.size(); ++i) {
+        if (i != 0)
+            text += ", ";
+        text += install.missing[i];
+    }
+    return text + '.';
+}
 
 GameInstall inspect_game_install(
     const fs::path& root,
     const fs::path& data_folder,
     const DemoRelease& release,
-    const ModChoice& mod
+    const ModChoice& mod,
+    const fs::path& overlay
 ) {
     GameInstall install;
     std::error_code error;
     install.folder = fs::is_directory(root, error);
     if (!install.folder)
         return install;
+    // Files laid over the folder come first, ahead of the mod folder.
+    if (!overlay.empty())
+        install.folders.push_back(overlay);
     if (!mod.folder.empty()) {
         if (!fs::is_directory(mod.folder, error)) {
             install.profile_errors.push_back(
@@ -237,8 +377,13 @@ bool usable(const GameInstall& install) {
            !install.archives.empty() && install.missing.empty();
 }
 
-std::optional<GameDirectory>
-resolve_game_directory(const GameDirectoryRequest& request, const GameDirectoryHost& host) {
+std::optional<GameDirectory> resolve_game_directory(
+    const GameDirectoryRequest& request, const GameDirectoryHost& host, GameFilesNeeded* needed
+) {
+    // The Game files screen's report says nothing until resolution has
+    // found no usable folder with the screen offered.
+    if (needed != nullptr)
+        *needed = GameFilesNeeded{};
     if (!request.argument.empty()) {
         if (request.archives_named)
             return GameDirectory{
@@ -260,27 +405,74 @@ resolve_game_directory(const GameDirectoryRequest& request, const GameDirectoryH
         if (!install.problem.empty() || !install.profile_errors.empty() || install.archives.empty())
             throw std::runtime_error(
                 "the folder --game-dir names cannot be played: " + path_to_utf8(request.argument) +
-                " (" + install_problem(install) + ")"
+                " (" + describe_install_problem(install) + ")"
             );
         return resolved(request.argument, std::move(install), GameDirectorySource::argument);
     }
-    if (request.unattended) {
-        if (request.choose)
-            throw std::runtime_error(
-                "--choose-game-dir opens a dialog, which CI and the dummy or offscreen video "
-                "driver never show"
+    // With no dialog in the build, nothing can be chosen.
+    const bool dialog = host.pick_folder != nullptr;
+    if (request.choose && request.unattended)
+        throw std::runtime_error(
+            "--choose-game-dir opens a dialog, which CI and the dummy or offscreen video "
+            "driver never show"
+        );
+    if (request.choose && !dialog)
+        throw std::runtime_error(
+            "--choose-game-dir opens the folder dialog, which this build does not offer; name "
+            "the folder with --game-dir PATH"
+        );
+    // The platform's own folder comes before the stored one: where the
+    // platform moves the folders an app keeps, a stored path goes stale.
+    std::optional<RefusedFolder> platform_refused;
+    if (!request.choose && !request.platform_default.empty()) {
+        auto install = inspect_folder(host, request.platform_default);
+        if (usable(install))
+            return resolved(
+                request.platform_default, std::move(install), GameDirectorySource::platform
             );
-        if (!request.stored || request.stored->empty())
+        platform_refused = RefusedFolder{
+            request.platform_default,
+            describe_install_problem(install),
+            install.folder || !install.problem.empty()
+        };
+    }
+    // Where the Game files screen is offered, a start with no usable folder
+    // opens it in place of any notice; the folder chosen earlier is still
+    // tried first, and an unattended run that checks the screen does not stop.
+    if (request.import_offered && needed != nullptr && !request.choose) {
+        if (request.stored && !request.stored->empty()) {
+            const auto stored = path_from_utf8(*request.stored);
+            auto install = inspect_folder(host, stored);
+            if (usable(install))
+                return resolved(stored, std::move(install), GameDirectorySource::stored);
+        }
+        needed->needed = true;
+        if (platform_refused && platform_refused->there) {
+            needed->folder = platform_refused->folder;
+            needed->problem = platform_refused->problem;
+        }
+        return std::nullopt;
+    }
+    if (request.unattended) {
+        if (!request.stored || request.stored->empty()) {
+            if (platform_refused)
+                throw std::runtime_error(
+                    "the default Total Annihilation folder cannot be played: " +
+                    path_to_utf8(platform_refused->folder) + " (" + platform_refused->problem +
+                    "), none was chosen earlier and nobody can answer the folder dialog in "
+                    "this run; name one with --game-dir PATH"
+                );
             throw std::runtime_error(
                 "no Total Annihilation folder is known and nobody can answer the folder dialog "
                 "in this run; name it with --game-dir PATH"
             );
+        }
         const auto stored = path_from_utf8(*request.stored);
         auto install = inspect_folder(host, stored);
         if (!usable(install))
             throw std::runtime_error(
                 "the Total Annihilation folder chosen earlier can no longer be used: " +
-                path_to_utf8(stored) + " (" + install_problem(install) +
+                path_to_utf8(stored) + " (" + describe_install_problem(install) +
                 "); name one with --game-dir PATH"
             );
         return resolved(stored, std::move(install), GameDirectorySource::stored);
@@ -292,20 +484,45 @@ resolve_game_directory(const GameDirectoryRequest& request, const GameDirectoryH
             auto install = inspect_folder(host, start);
             if (usable(install))
                 return resolved(start, std::move(install), GameDirectorySource::stored);
+            if (!dialog) {
+                const RefusedFolder stored{
+                    start,
+                    describe_install_problem(install),
+                    install.folder || !install.problem.empty()
+                };
+                // The platform's look-again button keeps the notice up until
+                // a folder can be played.
+                if (looks_again(host, request))
+                    return ask_until_usable(host, request, platform_refused, stored);
+                tell_no_folder(host, request, platform_refused, stored);
+                return std::nullopt;
+            }
             host.tell_user(
                 host.context,
                 Notice::information,
                 "The Total Annihilation folder chosen earlier can no longer be used:\n\n" +
-                    path_to_utf8(start) + "\n\n" + install_problem(install) +
+                    path_to_utf8(start) + "\n\n" + describe_install_problem(install) +
                     "\n\nChoose the folder again."
             );
         }
     } else if (!request.choose) {
+        if (!dialog) {
+            if (looks_again(host, request))
+                return ask_until_usable(host, request, platform_refused, std::nullopt);
+            tell_no_folder(host, request, platform_refused, std::nullopt);
+            return std::nullopt;
+        }
+        // The dialog opens where the platform keeps the game, or nearest it.
+        std::string looked_at;
+        if (platform_refused) {
+            start = platform_refused->folder;
+            looked_at = "\nIt looks for it first in:\n\n" + path_to_utf8(platform_refused->folder) +
+                        "\n\n" + platform_refused->problem + '\n';
+        }
         host.tell_user(
             host.context,
             Notice::information,
-            "Open Annihilation needs your Total Annihilation installation.\n\n" +
-                std::string(kWhatToChoose) +
+            std::string(kNeedInstallation) + "\n" + looked_at + "\n" + std::string(kWhatToChoose) +
                 "\nIt is remembered for later starts; --choose-game-dir changes it."
         );
     }
@@ -331,7 +548,7 @@ resolve_game_directory(const GameDirectoryRequest& request, const GameDirectoryH
                 host.context,
                 Notice::warning,
                 "This folder does not hold a Total Annihilation installation:\n\n" +
-                    path_to_utf8(chosen) + "\n\n" + install_problem(install) + "\n\n" +
+                    path_to_utf8(chosen) + "\n\n" + describe_install_problem(install) + "\n\n" +
                     std::string(kWhatToChoose)
             );
             start = chosen;
@@ -351,9 +568,7 @@ resolve_game_directory(const GameDirectoryRequest& request, const GameDirectoryH
                 host.context,
                 Notice::warning,
                 "Open Annihilation could not get a folder from the system's folder dialog:\n" +
-                    error +
-                    "\n\nName your Total Annihilation folder on the command line:\n\n"
-                    "open-annihilation --game-dir PATH"
+                    error + "\n\n" + missing_folder_advice(request)
             );
             return std::nullopt;
         }

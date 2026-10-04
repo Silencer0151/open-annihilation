@@ -726,6 +726,8 @@ DensityDecision decide_native_density(const DensityInputs& inputs) noexcept {
         return window_system(DensityReason::memory);
     if (inputs.flag == AccelerationFlag::off)
         return window_system(DensityReason::flag_off);
+    if (inputs.platform_native)
+        return DensityDecision{true, DensityReason::platform};
     if (inputs.asked)
         return DensityDecision{true, DensityReason::asked};
     if (inputs.render_driver_named || inputs.virtual_video_driver)

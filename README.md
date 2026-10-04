@@ -6,7 +6,6 @@
   <a href="https://github.com/open-annihilation/open-annihilation/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/open-annihilation/open-annihilation?style=flat-square&label=release&color=c0392b"></a>
   <a href="https://github.com/open-annihilation/open-annihilation/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/open-annihilation/open-annihilation/total?style=flat-square&color=2c3e50"></a>
   <a href="LICENSE"><img alt="Licence: GPL v3" src="https://img.shields.io/badge/licence-GPL%20v3-2c3e50?style=flat-square"></a>
-  <a href="https://github.com/open-annihilation/open-annihilation/releases"><img alt="Platforms: macOS, Windows, Linux" src="https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-2c3e50?style=flat-square"></a>
   <a href="https://discord.gg/GWgWTQKuv"><img alt="Discord" src="https://img.shields.io/badge/Discord-join%20us-5865F2?style=flat-square&logo=discord&logoColor=white"></a>
 </p>
 
@@ -16,7 +15,7 @@
   <a href="https://github.com/open-annihilation/open-annihilation/releases"><img alt="Linux" src="https://img.shields.io/badge/Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black"></a>
   <a href="https://github.com/open-annihilation/open-annihilation/releases"><img alt="macOS" src="https://img.shields.io/badge/macOS-000000?style=for-the-badge&logo=apple&logoColor=white"></a>
   <a href="https://github.com/open-annihilation/open-annihilation/releases"><img alt="Windows" src="https://img.shields.io/badge/Windows-0078D6?style=for-the-badge"></a>
-  <a href="https://github.com/open-annihilation/open-annihilation/releases"><img alt="iOS: soon" title="iOS: soon" src="https://img.shields.io/badge/iOS-soon-808080?style=for-the-badge&logo=apple&logoColor=c8c8c8&labelColor=5a5a5a"></a>
+  <a href="docs/installation/ios.md"><img alt="iOS" src="https://img.shields.io/badge/iOS-000000?style=for-the-badge&logo=apple&logoColor=white"></a>
   <a href="https://github.com/open-annihilation/open-annihilation/releases"><img alt="Steam Deck: soon" title="Steam Deck: soon" src="https://img.shields.io/badge/Steam%20Deck-soon-808080?style=for-the-badge&logo=steamdeck&logoColor=c8c8c8&labelColor=5a5a5a"></a>
 </p>
 
@@ -50,11 +49,22 @@ copyright and trademarks of their respective owners.
 Step-by-step guides to downloading Open Annihilation, getting the game data
 from your copy of Total Annihilation and starting the game:
 
-| | Platform | Guide |
-|:---:|---|---|
-| <img alt="macOS" src="docs/images/platforms/macos.svg"> | macOS 11 or later, Intel and Apple silicon | [Installing on macOS](docs/installation/macos.md) |
-| <img alt="Windows" src="docs/images/platforms/windows.svg"> | Windows XP SP3 to Windows 11: 64-bit, 32-bit and ARM | [Installing on Windows](docs/installation/windows.md) |
-| <img alt="Linux" src="docs/images/platforms/linux.svg"><br><img alt="Raspberry Pi" src="docs/images/platforms/raspberry-pi.svg"> | Linux and Raspberry Pi: 64-bit PC, 64-bit ARM and 32-bit ARM | [Installing on Linux](docs/installation/linux.md) |
+<table>
+  <thead>
+    <tr><th></th><th align="left">Platform</th><th align="left">Guide</th></tr>
+  </thead>
+  <tbody>
+    <tr><th colspan="3" align="left">Desktop platforms</th></tr>
+    <tr><td align="center"><img alt="macOS" src="docs/images/platforms/macos.svg"></td><td>macOS 11 or later, Intel and Apple silicon</td><td><a href="docs/installation/macos.md">Installing on macOS</a></td></tr>
+    <tr><td align="center"><img alt="Windows" src="docs/images/platforms/windows.svg"></td><td>Windows XP SP3 to Windows 11: 64-bit, 32-bit and ARM</td><td><a href="docs/installation/windows.md">Installing on Windows</a></td></tr>
+    <tr><td align="center"><img alt="Linux" src="docs/images/platforms/linux.svg"></td><td>Linux: 64-bit PC, 64-bit ARM and 32-bit ARM</td><td><a href="docs/installation/linux.md">Installing on Linux</a></td></tr>
+  </tbody>
+  <tbody>
+    <tr><th colspan="3" align="left">Mobile &amp; small form factor</th></tr>
+    <tr><td align="center"><img alt="iOS" src="docs/images/platforms/ios.svg"></td><td>iPhone and iPad: iOS and iPadOS 15 or later, built on your own Mac</td><td><a href="docs/installation/ios.md">Installing on iPhone and iPad</a></td></tr>
+    <tr><td align="center"><img alt="Raspberry Pi" src="docs/images/platforms/raspberry-pi.svg"></td><td>Raspberry Pi 2, 3, 4, 400 and 5 with Raspberry Pi OS Bookworm or later</td><td><a href="docs/installation/linux.md#raspberry-pi">Installing on Raspberry Pi</a></td></tr>
+  </tbody>
+</table>
 
 ## How the project works
 
@@ -157,6 +167,19 @@ they are open; a multiplayer game keeps running.
   outline (on by default), Font shadow (on by default) and Game text
   background, a shaded box behind each line (off by default), shape the
   modern text.
+- **Touch**, listed while the game has touch controls (on iPhone and iPad,
+  on a touch screen once a finger touches it, or with `--touch-controls`):
+  One-finger drag, Automatic (the default: a selection box on a tablet,
+  scrolling on a phone), Box or Scroll; a hold then a drag always draws a
+  box, and two fingers scroll. Hold delay, 250 to 700 ms in steps of 50
+  (350 by default): how long a finger stays down before it counts as a
+  hold. QUEUE and ADD: Stay on (the default), a tapped QUEUE, ADD or x5
+  stays on until it is tapped again, or One action, it turns off after the
+  next order or selection. Haptics (on by default): a short vibration as a
+  touch control acts. Left-handed layout (off by default): the minimap and
+  the thumb controls on the right, the orders on the left. A finger's press
+  near a control of the dialog takes the nearest within 22 points, and on a
+  phone the dialog fits the screen's safe area.
 - **Developer:** Enable Developer Mode (off by default) changes the
   standard hacks of the mod being played, or of 3.1c without one, without
   editing its profile ([docs/mods](docs/mods/README.md#developer-mode)). A

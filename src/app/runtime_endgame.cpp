@@ -355,8 +355,10 @@ void Runtime::start_endgame() {
     state.host.finish_shade = [](void* context) { runtime_of(context).finish_battlefield_shade(); };
     state.host.open_cd_check = [](void* context) { runtime_of(context).show_cd_check(); };
     state.host.open_panel = [](void* context) { runtime_of(context).open_end_panel(nullptr); };
-    state.host.button_held = [](void*) {
-        return (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_LMASK) != 0;
+    // A finger resting on the screen holds the button as the left button does.
+    state.host.button_held = [](void* context) {
+        return (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_LMASK) != 0 ||
+               runtime_of(context).touch_finger_count() != 0;
     };
     state.host.play_sound = [](void* context, const char* name) {
         runtime_of(context).play_ui_sound(name, 0);

@@ -410,6 +410,162 @@ walk runs:
   pages, and Basic at the next sample while memory stays short. Each skips
   under 2 GiB.
 
+### Touch controls
+
+The touch controls ([docs/touch-controls.md](../touch-controls.md)) are
+tested without a touch screen. Three tests need no game data:
+
+- `ui-touch-gestures` feeds the gesture recogniser
+  (`src/ui/touch-gestures`) timelines of finger reports with explicit
+  times: taps and double taps, the slop, holds at the shortest, default and
+  longest hold delays, both one-finger drag settings, two-finger taps, pans
+  with their velocity, pinches, a second finger during a drag, a third
+  finger, cancels and resets;
+- `ui-touch-hud` holds the controls' model (`src/ui/touch-hud`) to its
+  rules: the device class from the window's size in points, the QUEUE, ADD
+  and x5 latches in both modes, the tablet layout at 1180x820 and the phone
+  layout at 852x393 and 956x440 with their safe areas, the rail's length,
+  the drawer's and the MORE sheet's cells, the overlays' clear area, the
+  left-handed mirror, hit testing with the fat finger's reach, the radial
+  and the help and label texts;
+- `app-touch-paint` checks the touch layer's drawing primitives: rounded
+  rectangles blended over a known background, the icon marks inside their
+  boxes, text coverage and clipping at the layer's edges.
+
+Over the installation, `native-touch-controls` and
+`native-touch-controls-phone` run `--check-touch-controls` in a window of
+the dummy video driver, at 1180x820 (an iPad's size in points, the tablet
+layout) and at 852x393 (an iPhone's, the phone layout). The check turns the
+touch controls on, starts a skirmish and sends `SDL_EVENT_FINGER_*` events
+from a touch device of its own through the game's event dispatch, with its
+own clock for the fingers' times and a frame run between steps as the game's
+loop runs it. Each case starts from a known selection and fails on its own,
+naming what is missing and the part of the touch controls that owns it; the
+run ends with one line starting `touch controls check:` that counts the
+cases passed and names the ones that failed, and exits non-zero if any
+failed. The tablet run checks taps (with the fat finger's 12 pt reach), a
+double tap, ground orders, boxes, a hold then a drag, the Scroll setting,
+QUEUE, ADD and One action, a factory's buttons (+1, a hold's −1, x5, the
+pressed look of a resting finger and a finger sliding off), the two-finger
+tap, pinch and pan keeping the map under the fingers, the order wheel
+(Patrol, its QUEUE hub lighting the 3.1c PATROL button, Info, a greyed
+place), building placement (a drag moving the ghost under the finger, a
+hold near the ghost placing it there, a double tap or a hold away from it
+placing where the finger is, a refused site staying armed, QUEUE keeping the
+placement for the next site, CANCEL, CLEAR and a two-finger tap ending
+it), the minimap, edge scrolling and auto-scroll, fingers of other
+devices, the Cmd keys, the modifiers with no latch, PAUSE and the
+lifecycle's pause through
+the in-game menu, taps against the same mouse clicks, the overlays kept
+clear of the controls, help on a long press, the groups' STORE and chips and
+SELECT ▾'s All. The phone run checks the full-bleed layout and its placed
+regions, the safe area of 59, 0, 59 and 21 points, scrolling, the rail, the
+build drawer for a factory and for a building (with the same placement
+gestures, each started from the drawer), the zoom buttons, controls
+that keep their taps from the battlefield, MORE's INFO, the left-handed
+layout, the start zoom of 1.25, the chat line, message log and kill board on
+a phone, and the fingers of other devices, the modifiers, PAUSE and the
+lifecycle, help, groups and SELECT ▾ there too. Both write snapshots of the
+composed frame into their working directories,
+`native-checks/touch-controls` and `native-checks/touch-controls-phone` in
+the build tree: `touch-tablet.ppm`, `touch-phone.ppm`,
+`touch-phone-safe.ppm`, `touch-radial.ppm`, `touch-placement.ppm`,
+`touch-overlays.ppm` (the message log, the chat line and the kill board at
+once), `touch-drawer.ppm` and `touch-more.ppm`, before the cases run. To run
+one by hand:
+
+```sh
+SDL_VIDEO_DRIVER=dummy SDL_AUDIO_DRIVER=dummy SDL_RENDER_DRIVER=software \
+    build/open-annihilation.app/Contents/MacOS/open-annihilation \
+    --game-dir "/path/to/Total Annihilation" --skip-intro --mute \
+    --check-touch-controls --resolution 852x393 \
+    --preferences-file /tmp/touch-controls-phone.conf
+```
+
+`--touch-controls` switches the touch controls on with no touch screen, to
+look at their layout in a window: with `--resolution 852x393` it shows the
+phone layout. A run without it and without a finger never turns them on,
+which the rest of the suite relies on: every other check, digest and
+recording is the same as before the touch controls existed.
+
+### Game files screen
+
+The Game files screen ([docs/game-files.md](../game-files.md)) and the
+import behind it are tested on the desktop, where no platform installs the
+hooks that offer the screen to players. These tests need no game data:
+
+- `app-game-files-import` checks the import core (`oa-app-game-files`)
+  over synthetic folders: the files left out and why, the name check and
+  the search two levels down, the plan's parts and switches, the space a
+  copy needs, the copy into the staging folder, stopping, resuming, the
+  commit, recovery at the next start, adopting files the player copied,
+  and the additions and removals of the management state;
+- `ui-game-files` lays out the screen's model (`src/ui/game-files`) at
+  1194x834 points, at 852x393 with a phone's safe area and at 640x480, and
+  checks button heights, the safe area, text inside its box, hit tests,
+  focus, presses and the texts;
+- `game-directory` checks resolution with the screen offered (no notice, the
+  report the screen opens with, the stored folder still tried first, a check
+  run that does not stop) and the missing-folder notice's Check again, which
+  looks again until a folder can be played; `game-options` checks
+  `--check-game-files`, its companions and `--no-game-files-screen`;
+  `ui-engine-settings-dialog` checks the settings dialog's Game files
+  section, listed only where the host says, and the Language & Text dialog
+  the screen opens, drawn in the modern fonts before the game's own are
+  installed.
+
+`app-game-files-import-data` copies a subset of the installation
+`OA_GAME_DIR` names, checks it and commits it, and takes the demo route
+over the installer `OA_DEMO_INSTALLER` names; it skips without them.
+
+Over the installation, `tools/check_native_game_files.py` runs the game
+with `--check-game-files` in a work folder under `native-checks/` of the
+build tree, over a subset of the installation linked into it (copied where
+the volume refuses links), on the dummy drivers and the software renderer.
+The check drives the screen through taps and keys as a finger and a
+keyboard would, fails with the step it waited for when one does not come,
+and each test passes when the game prints `game-files check: <variant>:
+passed`:
+
+- `native-game-files`: CHOOSE FOLDER through Ready to copy (its list of
+  files left out, a switch off and on), copying and Ready to play to the
+  main menu, at 1194x834, with the OA · Aa dialog opened and cancelled on
+  the way; the game folder then holds the subset and none of the files left
+  out, and it was kept out of the device's backups;
+- `native-game-files-phone`: the same in the phone form, at 852x393;
+- `native-game-files-demo`: CHOOSE INSTALLER with the demo's installer, its
+  game data unpacked (skipped without `OA_DEMO_INSTALLER`);
+- `native-game-files-copy-yourself`: I HAVE COPIED IT with nothing there,
+  the files copied in by the check under another name, CHECK AGAIN, USE IT;
+- `native-game-files-stop`: a copy held to 4 MB a second; after 8 MB the
+  game leaves the screen and comes back while it goes on, then leaves again
+  until its time away runs out and the copy pauses and starts again on
+  return; then STOP, keeping what was copied;
+- `native-game-files-resume`: the next start continues that copy, skipping
+  the files already copied (it needs `native-game-files-stop`);
+- `native-game-files-not-game`: a folder that holds no installation, chosen
+  with a mouse click, left with Escape;
+- `native-game-files-short-space`: not enough space for the copy, COPY off,
+  CHECK AGAIN;
+- `native-game-files-manage`: the management state: adding a mod,
+  checking, removing the music, DONE;
+- `native-game-files-manage-next-start`: the next start applies the
+  removal (it needs `native-game-files-manage`).
+
+Each writes pictures of every state it waits for into its work folder,
+`game-files-<variant>-<nn>-<step>-<window|tablet|phone>.png`: the window's
+frame and the same state painted at a tablet's and a phone's size, for
+people to review. One variant can be run by hand:
+
+```sh
+python3 tools/check_native_game_files.py \
+  --game build/open-annihilation.app/Contents/MacOS/open-annihilation \
+  --work /tmp/game-files-folder --variant folder --game-dir "$OA_GAME_DIR"
+```
+
+A run without `--check-game-files` and without the hooks never
+opens the screen, so every other check, digest and recording is unchanged.
+
 ### Other builds
 
 - **Core only**, without SDL or game data: configure with

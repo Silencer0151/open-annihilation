@@ -31,9 +31,13 @@ struct Runtime::EngineSettingsMatchHost {
     /// What the settings layer shows, at which size: the layer is drawn
     /// again only when this changes.
     struct LayerLook {
-        int32_t width{};       ///< the layer's width, in window pixels
-        int32_t height{};      ///< the layer's height, in window pixels
-        double scale{};        ///< the side column's scale
+        int32_t width{};  ///< the layer's width, in window pixels
+        int32_t height{}; ///< the layer's height, in window pixels
+        double scale{};   ///< the side column's scale
+        /// The OA button's and the dialog's rectangles, x, y, width and
+        /// height each, in window pixels: they move with the safe area on a
+        /// phone (fits_safe_area).
+        std::array<int32_t, 8> placed{};
         bool button_shown{};   ///< the OA button shows
         bool dialog_shown{};   ///< the dialog shows over the darkened screen
         uint8_t button_look{}; ///< the button's oa::ui::engine_settings::ButtonLook
@@ -100,12 +104,33 @@ struct Runtime::EngineSettingsMatchHost {
     /// @return true while the button shows
     [[nodiscard]] static bool button_shown(Runtime& runtime);
 
-    /// Returns where the OA button shows on the match's canvas.
+    /// Tells whether the dialog and the OA button fit the window's safe area
+    /// rather than the side column's scale: the touch controls are on and the
+    /// window is phone class, whose side column is no longer drawn at a
+    /// scale of its own.
+    ///
+    /// @param runtime the runtime
+    /// @return true on a phone with touch controls
+    [[nodiscard]] static bool fits_safe_area(const Runtime& runtime);
+
+    /// Returns the window's safe area on the match's canvas.
     ///
     /// @param layout the match's layout
+    /// @return the canvas less its safe-area insets, in window pixels
+    [[nodiscard]] static oa::ui::display_layout::Rect
+    safe_area(const oa::ui::display_layout::MatchLayout& layout) noexcept;
+
+    /// Returns where the OA button shows on the match's canvas: under Resume
+    /// in the side column at its scale; fitted to the safe area, where a
+    /// placed region showing that part of the column puts it, else in the
+    /// column as the 640x480 frame fitted to the safe area from its top left
+    /// corner places it.
+    ///
+    /// @param layout the match's layout
+    /// @param fit the button fits the safe area (fits_safe_area)
     /// @return the button's rectangle, in window pixels
     [[nodiscard]] static oa::ui::display_layout::Rect
-    button_rect(const oa::ui::display_layout::MatchLayout& layout) noexcept;
+    button_rect(const oa::ui::display_layout::MatchLayout& layout, bool fit = false) noexcept;
 
     /// Draws the OA button's face as the match's layer shows it: at the
     /// whole-number scale at or above the side column's, so that its icon
@@ -117,31 +142,40 @@ struct Runtime::EngineSettingsMatchHost {
     /// @param darkened the dialog shows over the screen
     /// @param fonts the dialog's fonts
     /// @param icon the Open Annihilation icon; empty draws the OA mark
+    /// @param fit the button fits the safe area (fits_safe_area): the face
+    ///     takes the whole-number scale at or above the button's own
     /// @return the face, ingame_button_side source pixels a side at that scale
     [[nodiscard]] static oa::ui::frontend_renderer::Surface button_face(
         const oa::ui::display_layout::MatchLayout& layout,
         oa::ui::engine_settings::ButtonLook look,
         bool darkened,
         const oa::ui::engine_settings::DialogFonts& fonts,
-        const oa::ui::frontend_renderer::RgbaPicture& icon
+        const oa::ui::frontend_renderer::RgbaPicture& icon,
+        bool fit = false
     );
 
     /// Returns where the dialog shows on the match's canvas: at the side
-    /// column's scale, centred in the area right of the column.
+    /// column's scale, centred in the area right of the column; fitted to
+    /// the safe area, at the largest scale that shows it whole there
+    /// (min(safe width / dialog_width, safe height / dialog_height)), centred
+    /// in it.
     ///
     /// @param layout the match's layout
+    /// @param fit the dialog fits the safe area (fits_safe_area)
     /// @return the dialog's rectangle, in window pixels
     [[nodiscard]] static oa::ui::display_layout::Rect
-    dialog_rect(const oa::ui::display_layout::MatchLayout& layout) noexcept;
+    dialog_rect(const oa::ui::display_layout::MatchLayout& layout, bool fit = false) noexcept;
 
     /// Maps a point on the canvas to the dialog's source pixels.
     ///
     /// @param layout the match's layout
     /// @param x the point's column, in window pixels
     /// @param y the point's row, in window pixels
+    /// @param fit the dialog fits the safe area (fits_safe_area)
     /// @return the point, in source pixels from the dialog's top left corner
-    [[nodiscard]] static oa::ui::display_layout::Point
-    dialog_point(const oa::ui::display_layout::MatchLayout& layout, float x, float y) noexcept;
+    [[nodiscard]] static oa::ui::display_layout::Point dialog_point(
+        const oa::ui::display_layout::MatchLayout& layout, float x, float y, bool fit = false
+    ) noexcept;
 
     /// Copies a surface into a rectangle of an opaque-or-clear layer, each
     /// layer pixel taking the surface pixel it lands on (nearest), fully

@@ -70,6 +70,31 @@ int32_t message_line_step(const oa::formats::fnt::Font& font) {
 // height kept, as the log's lines are cut only by the battlefield's edge.
 constexpr int kGuiTextRowsBelowPen = 32;
 
+/// Returns the canvas corner of the message log: the point of the 640x480
+/// battlefield the log starts at, where the battlefield's own mapping puts
+/// it, moved by as much as the overlays' area's corner lies from the
+/// battlefield's. Without the touch controls the area is the battlefield and
+/// the corner is the battlefield's mapping alone; on a phone, whose HUD shows
+/// in placed regions, the battlefield's mapping is taken whatever region
+/// shows that part of the 640x480 screen.
+///
+/// @param layout the match layout
+/// @param area the overlays' area (Runtime::overlay_area), canvas pixels
+/// @return the corner, canvas pixels
+oa::ui::display_layout::Point message_log_corner(
+    const oa::ui::display_layout::MatchLayout& layout, const oa::ui::display_layout::Rect& area
+) {
+    namespace layout_space = oa::ui::display_layout;
+    const auto point = layout_space::placed_mode(layout)
+                           ? layout_space::source_battlefield_to_canvas(
+                                 layout, oa::ui::hud::kMessageLogLeft, oa::ui::hud::kMessageLogTop
+                             )
+                           : layout_space::source_to_canvas(
+                                 layout, oa::ui::hud::kMessageLogLeft, oa::ui::hud::kMessageLogTop
+                             );
+    return {point.x + area.x - layout.battlefield_x(), point.y + area.y - layout.battlefield_y()};
+}
+
 } // namespace
 
 void Runtime::load_common_fonts() {
@@ -247,13 +272,13 @@ std::vector<std::string> Runtime::message_log_rows(std::string_view text, int32_
     const auto& run = runs.front();
     const auto face =
         gui ? renderer::gui_font_face(gui_font_) : renderer::fnt_font_face(message_font());
-    // Each row reaches the battlefield's right edge from where the line's
-    // text starts.
+    // Each row reaches the right edge of the overlays' area (the
+    // battlefield's without the touch controls) from where the line's text
+    // starts.
     const int scale = hud_text_scale();
-    const auto corner = oa::ui::display_layout::source_to_canvas(
-        match_layout_, oa::ui::hud::kMessageLogLeft, oa::ui::hud::kMessageLogTop
-    );
-    const int right = match_layout_.left + match_layout_.battlefield_width();
+    const auto area = overlay_area();
+    const auto corner = message_log_corner(match_layout_, area);
+    const int right = area.x + area.width;
     const int width = right - (corner.x + (x - oa::ui::hud::kMessageLogLeft) * scale);
     for (const auto& span :
          oa::present::modern_text_rows(run.text, face, scale, painted_text_size(run), width))
@@ -262,10 +287,9 @@ std::vector<std::string> Runtime::message_log_rows(std::string_view text, int32_
 }
 
 int32_t Runtime::message_log_most_rows(int32_t step) {
-    const auto corner = oa::ui::display_layout::source_to_canvas(
-        match_layout_, oa::ui::hud::kMessageLogLeft, oa::ui::hud::kMessageLogTop
-    );
-    int bottom = match_layout_.top + match_layout_.battlefield_height();
+    const auto area = overlay_area();
+    const auto corner = message_log_corner(match_layout_, area);
+    int bottom = area.y + area.height;
     // The rows stop a row above the clock while it shows.
     const int scale = hud_text_scale();
     if (const auto clock = console_clock_pen_row())
@@ -303,11 +327,14 @@ void Runtime::draw_match_message_log() {
     };
 
     const bool gui = !gui_font_.sequences.empty();
+    // The log is painted on the battlefield's layer, from its corner in the
+    // overlays' area.
+    const auto log_corner = message_log_corner(match_layout_, overlay_area());
     Paint paint{
         this,
         &message_font(),
         {255, 255, 255},
-        hud_canvas(oa::ui::hud::kMessageLogLeft, oa::ui::hud::kMessageLogTop),
+        canvas_paint(log_corner.x, log_corner.y),
         hud_text_scale(),
         message_log_step(),
         oa::present::game_text_size(),
@@ -450,11 +477,10 @@ void Runtime::draw_match_message_log() {
 }
 
 CanvasRect Runtime::message_log_rect(std::size_t lines) {
-    const auto corner = oa::ui::display_layout::source_to_canvas(
-        match_layout_, oa::ui::hud::kMessageLogLeft, oa::ui::hud::kMessageLogTop
-    );
-    const int right = match_layout_.left + match_layout_.battlefield_width();
-    const int bottom = match_layout_.top + match_layout_.battlefield_height();
+    const auto area = overlay_area();
+    const auto corner = message_log_corner(match_layout_, area);
+    const int right = area.x + area.width;
+    const int bottom = area.y + area.height;
     const auto height = static_cast<std::size_t>(message_log_step()) *
                         static_cast<std::size_t>(hud_text_scale()) * lines;
     return {
@@ -645,9 +671,8 @@ void Runtime::check_game_speed_messages() {
     // The canvas pixels of the log's screen pixel (x, y) are a scale x scale
     // block from the log's corner.
     const int scale = hud_text_scale();
-    const auto log_corner = oa::ui::display_layout::source_to_canvas(
-        match_layout_, oa::ui::hud::kMessageLogLeft, oa::ui::hud::kMessageLogTop
-    );
+    const auto overlays = overlay_area();
+    const auto log_corner = message_log_corner(match_layout_, overlays);
     const auto rgb_at = [](const renderer::Surface& frame, int x, int y) {
         std::array<uint8_t, 3> rgb{};
         if (x < 0 || y < 0 || x >= static_cast<int>(frame.width) ||
@@ -682,9 +707,10 @@ void Runtime::check_game_speed_messages() {
         return count;
     };
     constexpr const char* kChatText = "<sender> hello";
-    const auto battlefield_right =
-        oa::ui::hud::kMessageLogLeft +
-        (match_layout_.left + match_layout_.battlefield_width() - log_corner.x) / scale;
+    // The log's right edge, in the log's screen pixels: the right edge of the
+    // overlays' area, the battlefield's without the touch controls.
+    const auto log_right =
+        oa::ui::hud::kMessageLogLeft + (overlays.x + overlays.width - log_corner.x) / scale;
 
     const auto empty = frame_now();
     host->post_message(host->context, kChatText, messages::kind_player_chat, sender);
@@ -737,9 +763,8 @@ void Runtime::check_game_speed_messages() {
     const auto text_bottom = marked.text_y + marked.line_height;
     const auto gap_changed =
         changed_in(empty, marked_frame, square[2], marked.text_y, marked.text_x, text_bottom);
-    const auto text_changed = changed_in(
-        empty, marked_frame, marked.text_x, marked.text_y, battlefield_right, text_bottom
-    );
+    const auto text_changed =
+        changed_in(empty, marked_frame, marked.text_x, marked.text_y, log_right, text_bottom);
     if (gap_changed != 0 || text_changed < kTextMinPixels)
         throw std::runtime_error(
             "speed check: the sender's line does not start its text past the logo (" +
@@ -808,18 +833,16 @@ void Runtime::check_game_speed_messages() {
     std::size_t glyph_pixels = 0, wrong = 0, stray = 0;
     const int32_t band_top = oa::ui::hud::kMessageLogTop;
     const int32_t band_bottom = plain.text_y + 2 * reach;
-    each_pixel(
-        oa::ui::hud::kMessageLogLeft, band_top, battlefield_right, band_bottom, [&](int x, int y) {
-            const int32_t source_x = oa::ui::hud::kMessageLogLeft + (x - log_corner.x) / scale;
-            const int32_t source_y = oa::ui::hud::kMessageLogTop + (y - log_corner.y) / scale;
-            if (const auto index = patch_glyph(source_x, source_y)) {
-                ++glyph_pixels;
-                wrong += rgb_at(plain_frame, x, y) != palette_rgb(*index) ? 1 : 0;
-            } else if (rgb_at(plain_frame, x, y) != rgb_at(empty, x, y)) {
-                ++stray;
-            }
+    each_pixel(oa::ui::hud::kMessageLogLeft, band_top, log_right, band_bottom, [&](int x, int y) {
+        const int32_t source_x = oa::ui::hud::kMessageLogLeft + (x - log_corner.x) / scale;
+        const int32_t source_y = oa::ui::hud::kMessageLogTop + (y - log_corner.y) / scale;
+        if (const auto index = patch_glyph(source_x, source_y)) {
+            ++glyph_pixels;
+            wrong += rgb_at(plain_frame, x, y) != palette_rgb(*index) ? 1 : 0;
+        } else if (rgb_at(plain_frame, x, y) != rgb_at(empty, x, y)) {
+            ++stray;
         }
-    );
+    });
     if (glyph_pixels == 0 || wrong != 0 || stray != 0)
         throw std::runtime_error(
             "speed check: the line from no player is not hattfont12 at its pen (" +
@@ -870,19 +893,14 @@ void Runtime::check_game_speed_messages() {
     const auto four_lines = frame_now();
     const auto fourth_top = oa::ui::hud::kMessageLogTop + 3 * step;
     const auto fourth = changed_in(
-        quiet,
-        four_lines,
-        oa::ui::hud::kMessageLogLeft,
-        fourth_top,
-        battlefield_right,
-        fourth_top + step
+        quiet, four_lines, oa::ui::hud::kMessageLogLeft, fourth_top, log_right, fourth_top + step
     );
     const auto below = changed_in(
         quiet,
         four_lines,
         oa::ui::hud::kMessageLogLeft,
         fourth_top + step,
-        battlefield_right,
+        log_right,
         fourth_top + 2 * step
     );
     if (fourth < kTextMinPixels || below != 0)

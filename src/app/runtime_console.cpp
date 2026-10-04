@@ -713,7 +713,7 @@ bool Runtime::handle_console_hotkey(const SDL_KeyboardEvent& key) {
         code = console::hotkey::insert;
     else if (developer && key.key == SDLK_F11)
         code = console::hotkey::f11;
-    else if ((SDL_GetModState() & SDL_KMOD_CTRL) != 0 && f10)
+    else if ((input_modifiers(ModifierUse::keyboard) & SDL_KMOD_CTRL) != 0 && f10)
         code = console::hotkey::control_f10;
     else if (developer && remaps && f10)
         code = console::hotkey::f10;
@@ -809,7 +809,10 @@ std::optional<int> Runtime::console_clock_pen_row() {
     ));
     const int pen_rise =
         layout::kSourceBottomBarY - hud::clock_pen_row(layout::kSourceHeight, height);
-    return match_layout_.bottom_bar_y() - pen_rise * hud_text_scale();
+    // Above the bottom of the overlays' area: the bottom bar's top, or with
+    // the touch controls on, the top of what they lay along the bottom.
+    const auto area = overlay_area();
+    return area.y + area.height - pen_rise * hud_text_scale();
 }
 
 void Runtime::draw_console_clock() {
@@ -840,9 +843,8 @@ void Runtime::draw_console_clock() {
     );
     ensure_ui_colors();
     const auto scale = hud_text_scale();
-    const auto at = canvas_paint(
-        match_layout_.left + (hud::kClockLeft - layout::kSourceLeft) * scale, *pen_row
-    );
+    const auto at =
+        canvas_paint(overlay_area().x + (hud::kClockLeft - layout::kSourceLeft) * scale, *pen_row);
     draw_match_text(font, at.x, at.y, text, ui_colors_[hud::kClockColorSlot], scale);
 }
 

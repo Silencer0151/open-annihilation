@@ -34,6 +34,17 @@ namespace {
 namespace policy = render_policy;
 namespace wr = oa::present::world_renderer;
 
+/// Returns the scale the HUD layer is drawn at: the chrome's, or in placed
+/// mode the largest a placed region draws at.
+///
+/// @param layout the match layout
+/// @return the scale, in layout pixels per source pixel
+double hud_chrome_scale(const oa::ui::display_layout::MatchLayout& layout) {
+    return oa::ui::display_layout::placed_mode(layout) && layout.chrome_scale > 0.0
+               ? layout.chrome_scale
+               : layout.scale;
+}
+
 /// Steps the zoom range above 1 is walked in to find the largest prescale
 /// target a magnified scene needs.
 constexpr int prescale_zoom_steps = 960;
@@ -236,8 +247,9 @@ void Runtime::ensure_accelerated_match_textures() {
     const auto bf_h = static_cast<uint32_t>(battlefield_height);
     const uint32_t limit = state.texture_limit;
     // The HUD layer's prescale target, at the chrome's scale on the
-    // display, made larger only when a taller build page needs it.
-    const double chrome = match_layout_.scale * density;
+    // display (in placed mode the largest a region draws at), made larger
+    // only when a taller build page needs it.
+    const double chrome = hud_chrome_scale(match_layout_) * density;
     const uint32_t hud_w = match_hud_cpu_.width;
     const uint32_t hud_h = match_hud_cpu_.height;
     if (hud_w != 0 && hud_h != 0 &&
@@ -445,7 +457,10 @@ void Runtime::present_accelerated_match_layers(bool dialogs) {
     // Every scale is the one at the display's pixels: on a window at native
     // density the layout's scale times the density.
     const double density = match_display_density();
-    draw_accelerated_hud_strips();
+    // In placed mode the HUD's pieces are drawn after the world
+    // (finish_match_layers).
+    if (!oa::ui::display_layout::placed_mode(match_layout_))
+        draw_accelerated_hud_strips();
     const SDL_Rect battlefield{
         match_layout_.left, match_layout_.top, static_cast<int>(bf_w), static_cast<int>(bf_h)
     };
@@ -516,20 +531,45 @@ void Runtime::present_accelerated_match_layers(bool dialogs) {
 
 void Runtime::draw_accelerated_hud_strips() {
     auto& state = accelerated_;
-    // The HUD strips by the chrome's filter, at the display's scale.
+    // The HUD strips by the chrome's filter, at the display's scale; in
+    // placed mode the placed regions instead, at the largest region's scale.
     std::vector<SharpPart> strips;
-    for (const auto& strip : match_hud_strips())
-        strips.push_back(
-            {{static_cast<float>(strip.source_x),
-              static_cast<float>(strip.source_y),
-              static_cast<float>(strip.source_w),
-              static_cast<float>(strip.source_h)},
-             {static_cast<float>(strip.x),
-              static_cast<float>(strip.y),
-              static_cast<float>(strip.w),
-              static_cast<float>(strip.h)}}
+    if (oa::ui::display_layout::placed_mode(match_layout_)) {
+        const std::size_t count = std::min<std::size_t>(
+            match_layout_.placed_count, oa::ui::display_layout::kMaxPlacedRegions
         );
-    const double chrome = match_layout_.scale * match_display_density();
+        for (std::size_t index = 0; index < count; ++index) {
+            const auto& region = match_layout_.placed[index];
+            if (region.source.width <= 0 || region.source.height <= 0 || region.canvas.width <= 0 ||
+                region.canvas.height <= 0)
+                continue;
+            strips.push_back(
+                {{static_cast<float>(region.source.x),
+                  static_cast<float>(region.source.y),
+                  static_cast<float>(region.source.width),
+                  static_cast<float>(region.source.height)},
+                 {static_cast<float>(region.canvas.x),
+                  static_cast<float>(region.canvas.y),
+                  static_cast<float>(region.canvas.width),
+                  static_cast<float>(region.canvas.height)}}
+            );
+        }
+        if (strips.empty())
+            return;
+    } else {
+        for (const auto& strip : match_hud_strips())
+            strips.push_back(
+                {{static_cast<float>(strip.source_x),
+                  static_cast<float>(strip.source_y),
+                  static_cast<float>(strip.source_w),
+                  static_cast<float>(strip.source_h)},
+                 {static_cast<float>(strip.x),
+                  static_cast<float>(strip.y),
+                  static_cast<float>(strip.w),
+                  static_cast<float>(strip.h)}}
+            );
+    }
+    const double chrome = hud_chrome_scale(match_layout_) * match_display_density();
     const CardScale hud_scale = accelerated_card_scale(
         policy::chrome_filter(state.rung, chrome),
         chrome,

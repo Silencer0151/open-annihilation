@@ -203,14 +203,32 @@ struct FaceFont {
     const renderer::TextFont& font;                     ///< the game font
     const present::FontCharacters& characters;          ///< what it draws
     present::TextFace face{present::TextFace::message}; ///< the modern face for the rest
+    /// The game font holds no glyphs, as before the game's files are
+    /// installed: the modern face draws every text.
+    bool modern_only{};
 };
+
+/// Tells whether a font holds any glyph.
+///
+/// @param font the font
+/// @return false for a font with no glyph at all
+bool holds_glyphs(const oa::formats::fnt::Font& font) noexcept {
+    return std::any_of(font.glyphs.begin(), font.glyphs.end(), [](const auto& glyph) {
+        return glyph.has_value();
+    });
+}
 
 /// Returns the dialog's regular font.
 ///
 /// @param fonts the dialog's fonts
 /// @return the regular font, which the message face stands in for
 FaceFont regular_of(const DialogFonts& fonts) noexcept {
-    return {fonts.regular, fonts.regular_characters, present::TextFace::message};
+    return {
+        fonts.regular,
+        fonts.regular_characters,
+        present::TextFace::message,
+        !holds_glyphs(fonts.regular.font)
+    };
 }
 
 /// Returns the dialog's small font.
@@ -218,7 +236,32 @@ FaceFont regular_of(const DialogFonts& fonts) noexcept {
 /// @param fonts the dialog's fonts
 /// @return the small font, which the status face stands in for
 FaceFont small_of(const DialogFonts& fonts) noexcept {
-    return {fonts.small, fonts.small_characters, present::TextFace::status};
+    return {
+        fonts.small,
+        fonts.small_characters,
+        present::TextFace::status,
+        !holds_glyphs(fonts.small.font)
+    };
+}
+
+/// Returns how many rows a font's capitals stand: the game font's nominal
+/// height, or for a font the modern face stands in for wholly, the rows
+/// its capital H stands above its baseline.
+///
+/// @param font the font
+/// @return the rows, in source pixels
+int32_t capitals_of(const FaceFont& font) {
+    if (!font.modern_only)
+        return font.font.font.nominal_height;
+    const auto layers =
+        present::modern_text("H", font.face, 1, present::game_font_text_size, false);
+    if (!layers || layers->width <= 0)
+        return 0;
+    for (int32_t row = 0; row < layers->height && row < layers->baseline; ++row)
+        for (int32_t column = 0; column < layers->width; ++column)
+            if (layers->fill[static_cast<std::size_t>(row * layers->width + column)] != 0)
+                return layers->baseline - row;
+    return 0;
 }
 
 /// Tells whether a text is all ASCII, which a game font draws byte for byte.
@@ -240,20 +283,64 @@ std::size_t character_bytes(std::string_view text) noexcept {
     return sequence.bytes != 0 ? sequence.bytes : 1;
 }
 
+/// A character a game font may lack, and the characters it draws in its place.
+struct StandIn {
+    char32_t character{};        ///< the character
+    std::string_view utf8{};     ///< the character in UTF-8
+    std::string_view in_place{}; ///< what the game font draws instead
+};
+
+/// The characters the dialog's texts use that the game's fonts lack, each with
+/// what the game font draws in its place: the ellipsis as three full stops, and
+/// the mark between a location's folders as a greater-than sign.
+constexpr std::array<StandIn, 2> kStandIns{{
+    {U'\u2026', "\u2026", "..."},
+    {U'\u203a', "\u203a", ">"},
+}};
+
+/// Returns a text as a font shows it: where its game font lacks a character
+/// of kStandIns, the characters it draws in its place, so that a caption
+/// such as MANAGE\u2026 keeps to the game font's look and size and no letter
+/// of the modern fonts, with its dark outline, sits among the game font's.
+///
+/// @param font the font
+/// @param text the text
+/// @return the text to draw and measure
+std::string shown_in(const FaceFont& font, std::string_view text) {
+    std::string shown(text);
+    if (font.modern_only)
+        return shown;
+    for (const StandIn& stand_in : kStandIns) {
+        if (font.characters.byte_for(stand_in.character))
+            continue;
+        for (std::size_t at = shown.find(stand_in.utf8); at != std::string::npos;
+             at = shown.find(stand_in.utf8, at + stand_in.in_place.size()))
+            shown.replace(at, stand_in.utf8.size(), stand_in.in_place);
+    }
+    return shown;
+}
+
 /// Returns a UTF-8 text's width: the characters the font draws at its
 /// glyphs' widths, the others as the modern fonts draw them.
 ///
 /// @param font the font
-/// @param text the text
+/// @param shown_text the text
 /// @return the width, in source pixels
-int32_t text_width_of(const FaceFont& font, std::string_view text) {
+int32_t text_width_of(const FaceFont& font, std::string_view shown_text) {
+    const std::string drawn = shown_in(font, shown_text);
+    const std::string_view text = drawn;
+    if (font.modern_only) {
+        const auto layers =
+            present::modern_text(text, font.face, 1, present::game_font_text_size, false);
+        return layers ? layers->advance : 0;
+    }
     if (plain_ascii(text))
         return renderer::text_width(font.font, text);
     int32_t width = 0;
     for (const auto& run : present::split_text(text, font.characters)) {
         if (!run.modern)
             width += renderer::text_width(font.font, run.text);
-        else if (const auto layers = present::modern_text(run.text, font.face, 1, false))
+        else if (const auto layers = present::modern_text(run.text, font.face, 1, run.size, false))
             width += layers->advance;
     }
     return width;
@@ -272,6 +359,32 @@ int32_t tracked_width(const FaceFont& font, std::string_view text, int32_t track
     for (std::size_t at = 0; at < text.size(); at += character_bytes(text.substr(at)))
         ++characters;
     return text_width_of(font, text) + tracking * (characters - 1);
+}
+
+/// Returns how far a tracked text drawn wholly in the modern face moves the pen, one character
+/// at a time at the placement's scale, as draw_boxed_text draws it.
+///
+/// @param font the font (modern_only)
+/// @param text the text
+/// @param tracking the extra columns after each character but the last
+/// @param placement_scale the placement's scale
+/// @return the width, in source pixels
+int32_t modern_tracked_width(
+    const FaceFont& font, std::string_view text, int32_t tracking, int32_t placement_scale
+) {
+    const int32_t scale = std::max(placement_scale, 1);
+    int32_t width = 0;
+    for (std::size_t at = 0; at < text.size();) {
+        const std::size_t bytes = character_bytes(text.substr(at));
+        if (at > 0)
+            width += tracking;
+        if (const auto layers = present::modern_text(
+                text.substr(at, bytes), font.face, scale, present::game_font_text_size, false
+            ))
+            width += (layers->advance + scale - 1) / scale;
+        at += bytes;
+    }
+    return width;
 }
 
 /// Draws a UTF-8 text: the characters the font draws with its glyphs, the
@@ -295,15 +408,22 @@ int32_t draw_face_text(
     int32_t pen_row,
     Rgb color
 ) {
-    if (plain_ascii(text))
+    if (!font.modern_only && plain_ascii(text))
         return renderer::draw_text(target, placement, font.font, text, pen, pen_row, color);
     const int32_t scale = std::max(placement.scale, 1);
-    for (const auto& run : present::split_text(text, font.characters)) {
+    // A font the modern face stands in for wholly draws the whole text in it.
+    std::vector<present::TextRun> runs;
+    if (font.modern_only)
+        runs.push_back(present::TextRun{true, std::string(text), present::game_font_text_size});
+    else
+        runs = present::split_text(text, font.characters);
+    const int32_t capitals = capitals_of(font);
+    for (const auto& run : runs) {
         if (!run.modern) {
             pen = renderer::draw_text(target, placement, font.font, run.text, pen, pen_row, color);
             continue;
         }
-        const auto layers = present::modern_text(run.text, font.face, scale, false);
+        const auto layers = present::modern_text(run.text, font.face, scale, run.size, false);
         if (!layers || placement.scale < 1)
             continue;
         auto canvas = present::rgb_canvas(
@@ -322,7 +442,7 @@ int32_t draw_face_text(
             );
         }
         // A game font's capitals stand on the row under its nominal height.
-        const int32_t baseline = pen_row + 1 + font.font.font.nominal_height;
+        const int32_t baseline = pen_row + 1 + capitals;
         present::lay_text(
             canvas, *layers, placement.x + pen * scale, placement.y + baseline * scale, color
         );
@@ -352,8 +472,10 @@ void draw_boxed_text(
     Rgb color,
     int32_t tracking = 0
 ) {
-    // The interface's own words in the language shown.
-    text = layout::shown_text(text);
+    // The interface's own words in the language shown, with the characters
+    // its game font stands in for.
+    const std::string drawn = shown_in(font, layout::shown_text(text));
+    text = drawn;
     const int32_t width = tracked_width(font, text, tracking);
     int32_t pen = box.x;
     if (align == Align::centre)
@@ -361,7 +483,7 @@ void draw_boxed_text(
     else if (align == Align::right)
         pen = box.x + box.width - width;
     // A game font's capitals start one row under the pen row.
-    const int32_t capitals = font.font.font.nominal_height;
+    const int32_t capitals = capitals_of(font);
     const int32_t pen_row = box.y + (box.height - capitals) / 2 - 1;
     if (tracking == 0) {
         draw_face_text(target, placement, font, text, pen, pen_row, color);
@@ -433,8 +555,21 @@ void draw_header(
         kTextColor,
         layout::heading_tracking
     );
+    // The modern fonts draw the title wider than the game's font: the suffix follows it.
+    const FaceFont regular = regular_of(fonts);
+    const int32_t title_right = regular.modern_only
+                                    ? std::max(
+                                          title.x + title.width,
+                                          title.x + modern_tracked_width(
+                                                        regular,
+                                                        layout::shown_text(layout::title_text),
+                                                        layout::heading_tracking,
+                                                        placement.scale
+                                                    )
+                                      )
+                                    : title.x + title.width;
     const SourceRect suffix{
-        title.x + title.width + layout::header_gap,
+        title_right + layout::header_gap,
         layout::header_top,
         layout::title_suffix_width,
         layout::header_height,
@@ -503,9 +638,11 @@ void draw_list(
         target, placement, {layout::list_rule_column, layout::body_top, 1, body_height}, kRuleColor
     );
     if (dialog.kind == DialogKind::engine)
-        renderer::fill_source_rect(target, placement, layout::list_divider(), kRuleColor);
-    for (const Page page : dialog_pages(dialog.kind)) {
-        const SourceRect item = layout::list_item(page);
+        renderer::fill_source_rect(
+            target, placement, layout::list_divider(dialog.touch, dialog.game_files), kRuleColor
+        );
+    for (const Page page : dialog_pages(dialog.kind, dialog.touch, dialog.game_files)) {
+        const SourceRect item = layout::dialog_list_item(dialog, page);
         const int32_t control = page_control(page);
         const bool selected = page == dialog.page;
         const bool hovered = dialog.hovered == control || dialog.pressed == control;
@@ -700,6 +837,38 @@ void draw_slider(
         face = kAccentLightColor;
     renderer::fill_source_rect(target, placement, knob_rect, face);
     renderer::draw_outline(target, placement, knob_rect, kOnAccentColor);
+}
+
+/// Draws a button that asks the host to act, as OK is drawn: the accent's
+/// face, lighter under the pointer and darker while held, with its caption
+/// in the small font.
+///
+/// @param[in,out] target the surface
+/// @param placement where the dialog lands
+/// @param area the button
+/// @param caption its caption
+/// @param hovered the pointer is over it
+/// @param held a press on it is held
+/// @param fonts the fonts
+void draw_action_button(
+    renderer::Surface& target,
+    const renderer::Placement& placement,
+    const SourceRect& area,
+    std::string_view caption,
+    bool hovered,
+    bool held,
+    const DialogFonts& fonts
+) {
+    Rgb face = kAccentColor;
+    if (held)
+        face = kAccentHeldColor;
+    else if (hovered)
+        face = kAccentLightColor;
+    renderer::fill_source_rect(target, placement, area, face);
+    renderer::draw_outline(target, placement, area, kAccentLightColor);
+    draw_boxed_text(
+        target, placement, small_of(fonts), caption, area, Align::centre, kOnAccentColor
+    );
 }
 
 /// Returns a placement that draws only inside a rectangle, and inside the
@@ -1177,23 +1346,41 @@ void draw_section(
             target,
             in_view,
             regular_of(fonts),
-            layout::label_of(row.setting),
+            layout::row_label(row.setting),
             row.label,
             Align::left,
             kTextColor
         );
+        // The host's texts under a Game files row keep to their line's
+        // columns.
+        const bool host_text = layout::is_button(row.setting) || layout::is_text(row.setting);
         for (std::size_t line = 0; line < row.hint_lines; ++line) {
+            const std::string hint = layout::row_hint(dialog, row.setting, line);
+            const SourceRect& box = row.hints[line];
             draw_boxed_text(
                 target,
-                in_view,
+                host_text
+                    ? clipped_to(in_view, {box.x, layout::view.y, box.width, layout::view.height})
+                    : in_view,
                 small_of(fonts),
-                layout::hint_line(row.setting, dialog.chosen, dialog.acceleration, line),
+                hint,
                 row.hints[line],
                 Align::left,
                 kHintColor
             );
         }
-        if (layout::is_strip(row.setting)) {
+        // Where the files are shows text alone: it has no control to draw.
+        if (layout::is_button(row.setting)) {
+            draw_action_button(
+                target,
+                in_view,
+                row.control_area,
+                layout::manage_text,
+                hovered,
+                dialog.pressed == row.control && dialog.hovered == row.control,
+                fonts
+            );
+        } else if (layout::is_strip(row.setting)) {
             if (row.control_area.width > 0)
                 draw_levels(
                     target,
@@ -1359,6 +1546,34 @@ void draw_footer(
     }
 }
 
+/// Draws the OA mark in a square whose top left corner is source pixel
+/// (0, 0): letters in an outlined square of 20/32 of its side, in its
+/// middle, the large letters where they fit with room round them.
+///
+/// @param[in,out] target the surface
+/// @param placement where the square lands, and its scale
+/// @param side the square's side, in source pixels
+/// @param accent the outline's and the letters' colour
+void draw_mark_square(
+    renderer::Surface& target, const renderer::Placement& placement, int32_t side, Rgb accent
+) {
+    const int32_t square_side = side * kButtonSquareNumerator / kButtonSquareDenominator;
+    const int32_t square_offset = (side - square_side) / 2;
+    renderer::draw_outline(
+        target, placement, {square_offset, square_offset, square_side, square_side}, accent
+    );
+    const renderer::Mark& mark =
+        square_side - 2 >= kLargeMarkWidth + 2 * kLargeMarkMargin ? kLargeMark : kSmallMark;
+    renderer::draw_mark(
+        target,
+        placement,
+        mark,
+        square_offset + (square_side - mark.width) / 2,
+        square_offset + (square_side - mark.height + 1) / 2,
+        accent
+    );
+}
+
 /// Returns the characters a GUI font draws: every glyph that is not the
 /// picture of glyph 0, the font's box for a missing character.
 ///
@@ -1462,22 +1677,24 @@ void draw_oa_button(
         );
         return;
     }
-    const int32_t square_side = side * kButtonSquareNumerator / kButtonSquareDenominator;
-    const int32_t square_offset = (side - square_side) / 2;
-    const Rgb accent = look == ButtonLook::idle ? kAccentColor : kAccentLightColor;
-    renderer::draw_outline(
-        target, placement, {square_offset, square_offset, square_side, square_side}, accent
+    draw_mark_square(
+        target, placement, side, look == ButtonLook::idle ? kAccentColor : kAccentLightColor
     );
-    const renderer::Mark& mark =
-        square_side - 2 >= kLargeMarkWidth + 2 * kLargeMarkMargin ? kLargeMark : kSmallMark;
-    renderer::draw_mark(
-        target,
-        placement,
-        mark,
-        square_offset + (square_side - mark.width) / 2,
-        square_offset + (square_side - mark.height + 1) / 2,
-        accent
-    );
+}
+
+void draw_oa_mark(
+    renderer::Surface& target,
+    const renderer::Placement& placement,
+    int32_t side,
+    const renderer::RgbaPicture& icon
+) {
+    if (side <= 0)
+        return;
+    if (renderer::picture_drawable(icon)) {
+        renderer::draw_picture(target, placement, {0, 0, side, side}, icon);
+        return;
+    }
+    draw_mark_square(target, placement, side, kAccentColor);
 }
 
 } // namespace oa::ui::engine_settings

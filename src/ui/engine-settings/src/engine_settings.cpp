@@ -187,7 +187,8 @@ std::optional<HardwareAcceleration> stored_acceleration(std::string_view text) {
     return number->value > 0 ? HardwareAcceleration::full : HardwareAcceleration::off;
 }
 
-/// A Language & Text switch: its key and the member of EngineSettings it is.
+/// A switch of the Language & Text, the Touch or the Game files section: its
+/// key and the member of EngineSettings it is.
 struct TextSwitch {
     std::string_view key;            ///< its preferences key
     bool EngineSettings::* member{}; ///< its value
@@ -199,6 +200,14 @@ constexpr std::array<TextSwitch, 4> text_switches{{
     {key::text_outline, &EngineSettings::text_outline},
     {key::text_shadow, &EngineSettings::text_shadow},
     {key::text_background, &EngineSettings::text_background},
+}};
+
+/// The Touch and Game files sections' switches, read and written as the
+/// Language & Text ones.
+constexpr std::array<TextSwitch, 3> touch_switches{{
+    {key::touch_haptics, &EngineSettings::touch_haptics},
+    {key::touch_left_handed, &EngineSettings::touch_left_handed},
+    {key::game_files_backed_up, &EngineSettings::game_files_backed_up},
 }};
 
 /// Returns the key a profile's overrides are kept under.
@@ -280,6 +289,42 @@ hardware_acceleration_from_text(std::string_view text) noexcept {
     return std::nullopt;
 }
 
+std::string_view touch_drag_text(TouchDrag drag) noexcept {
+    switch (drag) {
+    case TouchDrag::automatic:
+        return "automatic";
+    case TouchDrag::box:
+        return "box";
+    case TouchDrag::scroll:
+        return "scroll";
+    }
+    return {};
+}
+
+std::optional<TouchDrag> touch_drag_from_text(std::string_view text) noexcept {
+    for (const TouchDrag drag : touch_drag_choices)
+        if (text == touch_drag_text(drag))
+            return drag;
+    return std::nullopt;
+}
+
+std::string_view touch_latches_text(TouchLatches latches) noexcept {
+    switch (latches) {
+    case TouchLatches::stay_on:
+        return "stay-on";
+    case TouchLatches::one_action:
+        return "one-action";
+    }
+    return {};
+}
+
+std::optional<TouchLatches> touch_latches_from_text(std::string_view text) noexcept {
+    for (const TouchLatches latches : touch_latches_choices)
+        if (text == touch_latches_text(latches))
+            return latches;
+    return std::nullopt;
+}
+
 EngineSettings read_settings(
     const oa::platform::preferences::Values& values, const Inputs& inputs, bool switch_alt
 ) {
@@ -326,6 +371,16 @@ EngineSettings read_settings(
     }
     if (const auto number = stored_number(values, key::developer_mode))
         settings.developer_mode = *number > 0;
+    if (const auto found = values.find(std::string{key::touch_drag}); found != values.end())
+        settings.touch_drag = touch_drag_from_text(found->second).value_or(settings.touch_drag);
+    if (const auto number = stored_number(values, key::touch_hold_delay))
+        settings.touch_hold_ms = snapped_touch_hold_ms(*number);
+    if (const auto found = values.find(std::string{key::touch_latches}); found != values.end())
+        settings.touch_latches =
+            touch_latches_from_text(found->second).value_or(settings.touch_latches);
+    for (const TextSwitch& entry : touch_switches)
+        if (const auto number = stored_number(values, entry.key))
+            settings.*entry.member = *number > 0;
     if (!inputs.profile_id.empty())
         if (const auto found = values.find(overrides_key(inputs.profile_id)); found != values.end())
             settings.hack_overrides = mod_profile::read_overrides(found->second);
@@ -459,6 +514,39 @@ void write_settings(
         chosen.developer_mode == defaults.developer_mode,
         restored
     );
+    store(
+        values,
+        key::touch_drag,
+        std::string{touch_drag_text(chosen.touch_drag)},
+        chosen.touch_drag != opened.touch_drag,
+        chosen.touch_drag == defaults.touch_drag,
+        restored
+    );
+    store(
+        values,
+        key::touch_hold_delay,
+        std::to_string(chosen.touch_hold_ms),
+        chosen.touch_hold_ms != opened.touch_hold_ms,
+        chosen.touch_hold_ms == defaults.touch_hold_ms,
+        restored
+    );
+    store(
+        values,
+        key::touch_latches,
+        std::string{touch_latches_text(chosen.touch_latches)},
+        chosen.touch_latches != opened.touch_latches,
+        chosen.touch_latches == defaults.touch_latches,
+        restored
+    );
+    for (const TextSwitch& entry : touch_switches)
+        store(
+            values,
+            entry.key,
+            switch_text(chosen.*entry.member),
+            chosen.*entry.member != opened.*entry.member,
+            chosen.*entry.member == defaults.*entry.member,
+            restored
+        );
     // Restore defaults keeps the overrides: Restore profile values clears them.
     if (!profile_id.empty() && chosen.hack_overrides != opened.hack_overrides) {
         if (chosen.hack_overrides.empty())

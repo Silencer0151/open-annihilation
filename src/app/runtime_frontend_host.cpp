@@ -549,6 +549,8 @@ void Runtime::drain_input() {
             break;
     }
     SDL_FlushEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST);
+    // The fingers whose lifts were dropped here are let go.
+    touch_screen_changed();
     // The window events dropped here may have changed whether the pointer is
     // kept on the screen; the window's own state settles it.
     keep_pointer_on_screen(sdl_.window);

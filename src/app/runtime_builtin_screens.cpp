@@ -602,7 +602,9 @@ bool overlay_applies(const OverlayDesc& overlay, ScreenId screen) {
     return overlay.screen == kScreenAny || overlay.screen == screen;
 }
 
-bool translate_input(const SDL_Event& event, SDL_Renderer* renderer, ScreenInput& input) {
+bool translate_input(
+    const SDL_Event& event, SDL_Renderer* renderer, uint16_t modifiers, ScreenInput& input
+) {
     input = {};
     switch (event.type) {
     case SDL_EVENT_KEY_DOWN:
@@ -624,7 +626,7 @@ bool translate_input(const SDL_Event& event, SDL_Renderer* renderer, ScreenInput
         // Headless checks have no renderer and send canvas coordinates.
         if (renderer != nullptr && !SDL_ConvertEventToRenderCoordinates(renderer, &converted))
             return false;
-        input.modifiers = static_cast<uint16_t>(SDL_GetModState());
+        input.modifiers = modifiers;
         if (converted.type == SDL_EVENT_MOUSE_MOTION) {
             input.kind = ScreenInputKind::pointer_move;
             input.x = converted.motion.x;
@@ -707,7 +709,12 @@ bool Runtime::dispatch_screen_input(const SDL_Event& event) {
     if (!wanted)
         return false;
     ScreenInput input{};
-    if (!translate_input(event, sdl_.renderer, input))
+    if (!translate_input(
+            event,
+            sdl_.renderer,
+            static_cast<uint16_t>(input_modifiers(ModifierUse::keyboard)),
+            input
+        ))
         return false;
     auto context = screen_context(&input);
     bool taken = false;

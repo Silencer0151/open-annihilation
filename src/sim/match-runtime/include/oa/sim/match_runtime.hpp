@@ -2960,7 +2960,7 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     );
 
     struct RuntimeOrder {
-        sim::simulation_state::Order order;
+        sim::simulation_state::Order order{};
         sim::ground_orders::OrderState extra;
         sim::air::AirGoal air_goal{}; // goal of an aircraft order
         AttackOrderState attack;

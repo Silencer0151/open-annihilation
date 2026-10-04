@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Export options for an ad hoc build, for the team's registered test devices, installed from a
+  download link or Apple Configurator (xcodebuild -exportArchive -exportOptionsPlist;
+  README.md "Archives"). Replace YOUR_TEAM_ID with the ten-character team ID of the Apple
+  developer team that signs the game.
+-->
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>release-testing</string>
+	<key>teamID</key>
+	<string>YOUR_TEAM_ID</string>
+	<key>signingStyle</key>
+	<string>automatic</string>
+</dict>
+</plist>

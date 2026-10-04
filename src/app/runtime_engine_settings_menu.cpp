@@ -7,6 +7,7 @@
 // open the settings on whichever screen can show them.
 
 #include "engine_settings_menu_host.hpp"
+#include "engine_settings_state.hpp"
 
 #include "oa/app/runtime.hpp"
 #include "oa/ui/engine_settings/dialog.hpp"
@@ -190,8 +191,14 @@ int Runtime::EngineSettingsMenuHost::dialog_event(ScreenContext* context, void*)
         action = settings::dialog_pointer_move(*dialog, x, y);
         break;
     case ScreenInputKind::pointer_down:
+        // A finger's press takes the nearest control within reach; the
+        // dialog lies on the picture at its own scale.
         if (input.button == SDL_BUTTON_LEFT)
-            action = settings::dialog_pointer_down(*dialog, x, y);
+            action = runtime.engine_settings_state().finger_pointer
+                         ? settings::dialog_finger_down(
+                               *dialog, x, y, EngineSettingsState::finger_reach(runtime, 1.0)
+                           )
+                         : settings::dialog_pointer_down(*dialog, x, y);
         break;
     case ScreenInputKind::pointer_up:
         if (input.button == SDL_BUTTON_LEFT)
@@ -236,10 +243,13 @@ void Runtime::EngineSettingsMenuHost::dialog_tick(ScreenContext* context, void*)
         return;
     if (runtime.screen_ == Screen::main_menu) {
         // Hardware acceleration's status follows the renderer while the
-        // dialog shows; the main menu is drawn every frame.
-        if (auto* dialog = runtime.engine_settings_dialog())
+        // dialog shows, and Touch shows once a finger turns the touch
+        // controls on; the main menu is drawn every frame.
+        if (auto* dialog = runtime.engine_settings_dialog()) {
             std::ignore =
                 settings::set_acceleration_status(*dialog, runtime.acceleration_report().status);
+            std::ignore = settings::set_touch_controls(*dialog, runtime.touch_controls_active());
+        }
         return;
     }
     host.dialog_shown = false;
@@ -324,6 +334,8 @@ void Runtime::request_engine_settings() {
 }
 
 bool Runtime::take_engine_settings_request(const SDL_Event& event) {
+    // Whether the pointer event the screens are about to see is a finger's.
+    EngineSettingsState::note_pointer_source(*this, event);
     if (!is_engine_settings_menu_event(event))
         return false;
     request_engine_settings();

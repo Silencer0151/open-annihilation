@@ -315,6 +315,16 @@ int Runtime::run() {
         return 0;
     }
     initialize_sdl();
+    // The app lifecycle's events are acted on as SDL queues them, until the
+    // run ends however it ends.
+    install_lifecycle_watch();
+
+    struct LifecycleWatchRemoval {
+        Runtime* runtime{};
+
+        ~LifecycleWatchRemoval() { runtime->remove_lifecycle_watch(); }
+    } lifecycle_watch_removal{this};
+
     if (options_.check_match_dialogs) {
         check_match_dialogs();
         flush_preferences();
@@ -410,6 +420,11 @@ int Runtime::run() {
         flush_preferences();
         return 0;
     }
+    if (options_.check_touch_controls) {
+        check_touch_controls();
+        flush_preferences();
+        return 0;
+    }
     if (options_.check_multiplayer_menu) {
         check_multiplayer_menu();
         flush_preferences();
@@ -481,6 +496,17 @@ void Runtime::run_frame(bool& running) {
 void Runtime::dispatch_event(SDL_Event& event, bool& running) {
     note_window_activation(event);
     note_input_activity(event);
+    // A hardware keyboard's Cmd alternates stand for their keys while touch
+    // controls are on; the app lifecycle's events, which the watch acted on,
+    // reach no screen; the touch controls take fingers and the presses on
+    // their controls.
+    remap_command_key(event);
+    if (take_lifecycle_event(event))
+        return;
+    if (take_touch_event(event, running)) {
+        apply_screen_request();
+        return;
+    }
     // The renderer's own events reach no screen.
     if (take_render_event(event))
         return;
@@ -518,6 +544,8 @@ void Runtime::idle_tick() {
     if (screen_ == Screen::briefing && !briefing_from_pause_)
         tick_mission_briefing();
     move_match_camera();
+    // The touch controls' timers, camera and layout.
+    tick_touch();
     // Each game frame opens a profile window, and the pump, the
     // ticks and the drawing are charged as they end.
     const bool profiled = screen_ == Screen::match && match_;

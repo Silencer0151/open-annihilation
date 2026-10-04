@@ -11,8 +11,17 @@ Every document in the repository, by what you want to do.
   - [macOS](installation/macos.md)
   - [Windows](installation/windows.md), including Windows XP
   - [Linux and Raspberry Pi](installation/linux.md)
+  - [iPhone and iPad](installation/ios.md), built on your own Mac
 - [VARIANCES.md](../VARIANCES.md): where the engine always differs from
   3.1c, on purpose.
+- [touch-controls.md](touch-controls.md): playing with fingers on an iPad,
+  an iPhone or a touch screen: the gestures, the tablet and phone layouts,
+  QUEUE, ADD and x5, the order wheel, building, the Touch settings, the
+  keyboard's Cmd keys and the Pencil.
+- [game-files.md](game-files.md): the Game files screen that brings your
+  Total Annihilation files onto an iPhone or an iPad: its three routes,
+  stopping and continuing a copy, Settings › Game files and managing the
+  files, and the `--check-game-files` check.
 - [languages.md](languages.md): the language the game shows its text in:
   how it is chosen (3.1c's command line, the Language setting, the
   operating system), what the game data translates in German, French,
@@ -50,6 +59,9 @@ Every document in the repository, by what you want to do.
   input.
 - [AGENTS.md](../AGENTS.md): the working process for AI coding agents; the
   rules it points to are in [development/conventions.md](development/conventions.md).
+- [platforms/ios/README.md](../platforms/ios/README.md): building and running
+  the game for iPad and iPhone: the Xcode project, the simulator and device
+  builds, and copying the game data onto the device.
 - [development/releasing.md](development/releasing.md): building, signing,
   notarizing and checking the macOS release packages with
   `tools/release_macos.sh`, on the maintainer's Mac.

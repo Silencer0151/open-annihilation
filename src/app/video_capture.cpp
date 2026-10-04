@@ -26,11 +26,21 @@
 #include <fcntl.h>
 #endif
 
+#ifndef OA_PROCESS_SPAWNING
+#error "OA_PROCESS_SPAWNING (0 or 1) says whether the game may start other programs"
+#endif
+
 namespace oa::app {
 
 namespace fs = std::filesystem;
 
 namespace {
+
+// The game may start other programs, the encoder among them (the
+// OA_PROCESS_SPAWNING build option; on for the desktop).
+constexpr bool kProcessSpawning = OA_PROCESS_SPAWNING != 0;
+// Why a build without that ability captures nothing.
+constexpr const char* kNoSpawning = "this build starts no other programs";
 
 // The mix SDL's disk audio driver writes: 32-bit float samples.
 constexpr const char* kMixFormat = "f32le";
@@ -77,8 +87,14 @@ fs::path beside(const fs::path& video, const char* suffix) {
 }
 
 // Starts the encoder with `arguments`; standard input is piped from the game
-// when `piped`, and its messages go to the game's standard error.
+// when `piped`, and its messages go to the game's standard error. A build
+// that starts no other programs fails here instead.
 SDL_Process* start_encoder(const std::vector<std::string>& arguments, bool piped) {
+#if !OA_PROCESS_SPAWNING
+    std::ignore = arguments;
+    std::ignore = piped;
+    fail(std::string("cannot start ") + capture_encoder + ": " + kNoSpawning);
+#else
     std::vector<const char*> argv;
     for (const auto& argument : arguments)
         argv.push_back(argument.c_str());
@@ -104,6 +120,7 @@ SDL_Process* start_encoder(const std::vector<std::string>& arguments, bool piped
             ", which capture needs on PATH: " + SDL_GetError()
         );
     return process;
+#endif
 }
 
 // SDL opens a process's input without blocking; the capture hands each frame
@@ -296,6 +313,9 @@ void prepare_capture_audio(const fs::path& video) {
 
 VideoCapture::VideoCapture(const fs::path& video, int width, int height)
     : files_(capture_files(video)), width_(width), height_(height) {
+    // Nothing is opened for a capture whose encoder cannot be started.
+    if constexpr (!kProcessSpawning)
+        fail(std::string(capture_encoder) + " cannot be started: " + kNoSpawning);
     if (width <= 0 || height <= 0 || width % 2 != 0 || height % 2 != 0)
         fail(
             "the window is " + std::to_string(width) + 'x' + std::to_string(height) +

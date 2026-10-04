@@ -330,6 +330,10 @@ struct DensityRequest {
     /// The level a flag names (Options::hardware_acceleration); empty for
     /// no flag.
     std::optional<oa::ui::engine_settings::HardwareAcceleration> flag{};
+    /// The platform the game is built for opens its windows at the
+    /// display's own pixel density (the OA_NATIVE_DENSITY_WINDOWS build
+    /// option, which main.cpp passes); false on the desktop.
+    bool platform_native{};
     bool asked{}; ///< --native-density, which only the render tiers check passes
     /// The Hardware acceleration setting read before the window opens.
     oa::ui::engine_settings::HardwareAcceleration setting{
@@ -352,8 +356,9 @@ struct DensityRequest {
 /// what the machine reports: its physical memory, the scene budget it
 /// starts at with the record's driver, SDL_RENDER_DRIVER and the video
 /// driver. No class of machine is measured at native density
-/// (render_policy::native_density_measured), so only --native-density opens
-/// the window at native density. A window that does is logged.
+/// (render_policy::native_density_measured), so only a platform whose
+/// windows are at native density and --native-density open the window at
+/// native density. A window that does is logged, with the reason.
 ///
 /// SDL's video must be started, and the window not yet made.
 ///
@@ -668,6 +673,14 @@ class RendererHost {
     ///
     /// @param drawn the accelerated paths the frame was drawn with
     void note_presented_frame(PathSet drawn);
+
+    /// Says whether the start-up stage stands: the renderer's first frames,
+    /// which note_presented_frame counts until it passes. A screen that
+    /// waits for the player keeps presenting while it stands, so that a run
+    /// the system ends there is not taken for the driver's failure.
+    ///
+    /// @return true while the sentinel stands at `standard` or `accelerated`
+    [[nodiscard]] bool start_stage_open() const noexcept;
 
     /// Takes note that an accelerated path is about to be used. Its first
     /// use in the run, once the start-up stage has passed, writes the trial

@@ -641,8 +641,11 @@ logs it.
   reaches the rule, though no remembered rung does, since the game writes
   no `scale-level` key. No class has been measured
   (`native_density_measured`), so only `--native-density`, which the
-  render tiers check alone takes, opens a window at native density; every
-  other opens at the window system's density, as before. On a window at
+  render tiers check alone takes, and a build whose platform opens its
+  windows at native density (the `OA_NATIVE_DENSITY_WINDOWS` build option,
+  `DensityReason::platform`, decided right after the memory and a flag
+  that names Off) open a window at native density; every other opens at
+  the window system's density, as before. On a window at
   native density (`at_native_density`) `apply_output_mode` lays the match
   out in window points and stretches it over the display's pixels by
   logical presentation, so the processor draws what it draws on any other
@@ -1424,12 +1427,110 @@ logs it.
   drawn; that the local runner and the world are as without the playout;
   and that, with no such player, every frame is.
 
+## Touch controls
+
+The touch controls ([docs/touch-controls.md](../../docs/touch-controls.md))
+are a way to play added beside the mouse and the keyboard. They switch on
+when the build sets the capability `OA_TOUCH_FIRST` (a touch-first platform's build does),
+when `--touch-controls` is passed, when a direct-touch finger arrives or
+when `--check-touch-controls` forces them, and then stay on for the run
+(`touch_controls_active`). Until then none of their code draws, lays out or
+reads anything, so a desktop with a mouse plays as before. Every order a
+finger gives goes through the Runtime functions a mouse or a key reaches, so
+saves, recordings and network games are unaffected.
+
+- `runtime_touch.cpp` is the dispatcher. `dispatch_event` hands it every
+  event after the Cmd alternates (`remap_command_key`) and the lifecycle
+  events; `take_touch_event` takes fingers from direct-touch devices,
+  claims each by what it lands on (an open sheet or the order wheel, a touch
+  control, a dialog, a gadget of the 3.1c panel or of a placed region, the
+  minimap, the battlefield, a frontend screen) and drops the mouse events
+  SDL itself made from a finger. Battlefield fingers feed one gesture
+  recogniser (`src/ui/touch-gestures`); every other claimed finger has its
+  own for tap and hold. Taps, boxes and frontend presses become synthetic
+  mouse events (`which` `SDL_TOUCH_MOUSEID`, `windowID` 0) sent back through
+  `dispatch_event`, so they reach the engine as clicks; a battlefield tap is
+  sent once the recogniser knows it is a tap, a gadget's press at landing
+  and its release at lift. `tick_touch`, from `idle_tick`, runs the hold
+  timers, inertia, auto-scroll and the ghost's anchor, writes the HUD state
+  (selection text, the tap's action, the rail, the lit and paused looks) and
+  lays out the controls' frame with `oa::ui::touch_hud::lay_out`.
+- `runtime_touch_actions.cpp` holds what each control, sheet item and
+  wheel item does; `runtime_touch_camera.cpp` the camera a finger moves:
+  `pan_match_camera_by` (the map follows the finger) and
+  `zoom_match_about` (a pinch's zoom and anchor applied at once, so the map
+  stays under the fingers), inertia and auto-scroll.
+- `runtime_input_modifiers.cpp`: every place the engine reads the modifier
+  keys asks `input_modifiers(use)` for its own use, so a latch gives Shift
+  only to its kind of action: ADD to selecting, QUEUE to orders, placement
+  and the queued-order overlays, x5 to build buttons. Without the touch
+  state it is exactly `SDL_GetModState()`. `press_match_key` runs a key with
+  modifiers held for the call (SELECT ▾'s items), `refresh_pointer_modifiers`
+  brings the pointer's key word up to a changed latch, and `play_haptic`
+  reaches the platform's haptics.
+- `runtime_touch_hud.cpp` draws the controls into a layer of their own,
+  composed over the CPU frame (`compose_touch_layer`) and presented in every
+  tier (`present_touch_layer`), with the primitives of `touch_paint.*`
+  (`oa-app-touch-paint`, tested by `app-touch-paint`).
+- `runtime_phone_hud.cpp` lays out the match for the window
+  (`make_window_match_layout`): on a phone the battlefield fills the canvas
+  and the 3.1c HUD's minimap, resources, drawer cells, MORE sheet gadgets
+  and panels are drawn into placed regions (`display_layout`'s placed
+  mode), whose hit tests map back to the HUD's own gadgets; on a tablet the
+  3.1c layout with the window's density and safe area. `overlay_area` is
+  where the message log, the chat line, the kill board, the megamap, the
+  whiteboard and the commander placement prompt go: the battlefield less
+  the touch controls, or the battlefield itself without them.
+- `runtime_touch_check.cpp` is `--check-touch-controls`
+  ([testing.md](../../docs/development/testing.md#touch-controls)).
+
+`touch_state.hpp` defines `Runtime::TouchState`, made on first use and
+null on a desktop that never sees touch (`touch_`): the HUD state the
+dispatcher writes and the drawing reads (`oa::ui::touch_hud::HudState`),
+the window's viewport and the frame laid out for it, the safe-area insets
+a check sets in place of the window's, and each part's own state:
+`TouchDispatch` (`touch_dispatch.hpp`: claimed fingers, the recognisers,
+the check's clock and forcing, the pulse a synthetic key holds, inertia),
+`TouchLayer` (`touch_layer.hpp`: the layer, its texture and fonts) and
+`PhoneHud` (`phone_hud.hpp`). `runtime.hpp` declares every touch member
+once, and each part keeps its private helpers in a friend struct of its
+own whose static functions take `Runtime&`: `TouchDispatchAccess`,
+`TouchDrawAccess`, `PhoneHudAccess`, `OverlayAccess` (the overlays'
+anchors), `TouchCheckAccess` (the check) and `LifecycleAccess`.
+
+`platform_hooks.hpp` (`oa::app::PlatformHooks`, library
+`oa-app-platform-hooks`) is what the platform the game runs on provides
+beyond SDL, filled once by the platform's extension init: haptics, a
+default game folder, the advice shown when there is none and the label of
+its look-again button, and a call when the window opens; every member may be null, and the desktop leaves
+them all null. `input_hints.hpp` (`set_input_hints`) sets the touch and pen
+hints the touch controls read input with: no mouse made from fingers, no
+fingers made from the mouse, the pen as a mouse that hovers. It runs before
+video starts when the touch controls are on from the start and again when
+the first finger switches them on, so a desktop that never sees a finger
+keeps SDL's own hints; a hint an environment variable holds is reported and
+left as the variable says.
+
+`runtime_lifecycle.cpp` watches the app lifecycle events with an SDL event
+watch, so they are acted on as they happen rather than when the loop next
+polls: going to the background opens the in-game menu over a running game
+played on this machine alone, which holds it (the Pause key's bit is left
+alone), and saves the preferences; the system's low-memory warning lets the
+cached model images go. `take_lifecycle_event` keeps every lifecycle event
+from reaching a screen.
+
 ## Game folder
 
-`game_directory.cpp` finds the installation: `--game-dir`, else the folder
+`game_directory.cpp` finds the installation: `--game-dir`, else the
+platform's default folder while it is usable (`PlatformHooks`'
+`default_game_folder`; a platform's folders may move, so it ranks above
+the remembered one and is never remembered itself), else the folder
 remembered in the preferences, else the folder dialog
 (`game_directory_dialog.cpp`) until the player picks a usable folder, which
-is then remembered. A folder that holds no game archives but holds the
+is then remembered. A build without the folder dialog
+(`OA_NATIVE_FOLDER_DIALOG` off) never asks: it tells the player which
+folders it looked at, why each cannot be played, and the platform's advice
+(`missing_game_folder_advice`), else the `--game-dir` advice. A folder that holds no game archives but holds the
 installer of the Total Annihilation demo (1997) is usable too:
 `demo_installer.cpp` recognises the installer by its size and SHA-256, never
 by its name, and unpacks the game data archive it carries, checked by its
@@ -1445,6 +1546,36 @@ not the release the engine recognises, and a failed unpacking or a full disk
 is reported the same way.
 `DemoRelease` holds everything that identifies the release, in one place, so
 that the tests (`demo_installer_test.cpp`) substitute a synthetic one.
+
+## Game files screen
+
+Where the platform brings game files into the game's own storage (on a
+phone or a tablet, whose apps cannot read the player's installation where
+it is), it installs `GameFilesHooks` (`game_files_hooks.hpp`, in
+`oa-app-platform-hooks`): its file picker, listing and copying the chosen
+files, free space, time to finish a copy away from the screen, device
+backups and its own words. The desktop installs none, so
+`game_files_import_offered` is false there and nothing below runs. Where
+they are installed, resolution reports a missing folder in
+`GameFilesNeeded` instead of a notice, and the Game files screen opens on
+the game's window ([docs/game-files.md](../../docs/game-files.md)).
+
+- `game_files_import.hpp` (`oa-app-game-files`, no SDL) is the import:
+  `game_files_import.cpp` (the files left out, the name check, the plan,
+  the space a copy needs, what is installed), `game_files_scan.cpp`
+  (listing a source and the `SourceScan` worker), `game_files_run.cpp`
+  (the chunked copy and the `ImportRun` worker) and `game_files_state.cpp`
+  (the state file, the commit, recovery at the next start, adopting copied
+  files, backups). `game_files_import_test.cpp` tests it.
+- `game_files_screen.cpp` runs the screen's loop and controller over the
+  model of [src/ui/game-files](../ui/game-files/README.md);
+  `game_files_paint.cpp` paints its layout with the touch controls' painter
+  and the bundled fonts; `game_files_dialog.cpp` hosts the Language & Text
+  settings over it.
+- `game_files_check.cpp` is `--check-game-files`: scripted hooks, the route
+  driven by taps and keys, pictures of each step and the verdict line.
+- `runtime_game_files.cpp` fills Settings › Game files and opens the
+  screen's management state from its MANAGE… button over the main menu.
 
 ## Mod profile and mod folders
 

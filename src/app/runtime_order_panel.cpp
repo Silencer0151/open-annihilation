@@ -260,8 +260,11 @@ oa::ui::hud::BuildPanelHost Runtime::build_panel_host() {
                 return self.run_match_order_button(index, name);
         return false;
     };
+    // x5 is the build buttons' Shift while touch controls are on.
     host.shift_down = [](void* user) {
-        return static_cast<Runtime*>(user)->control_key_down(oa::ui::gui_input::ControlKey::shift);
+        const auto& self = *static_cast<Runtime*>(user);
+        return self.control_key_down(oa::ui::gui_input::ControlKey::shift) ||
+               self.virtual_shift(ModifierUse::build_button);
     };
     // ui.selection-shortcuts: with Ctrl held a shift-click steps by 100.
     if (ui_rules().selection_shortcuts.enabled)

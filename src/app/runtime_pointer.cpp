@@ -513,11 +513,15 @@ bool Runtime::gadget_command_available(const oa::ui::gui_layout::Gadget& gadget)
     const auto type = oa::sim::unit_spawn::find_type_index(spawn_type_names_, gadget.common.name);
     if (type != 0)
         return true;
+    return order_command_available(gadget.common.name);
+}
+
+bool Runtime::order_command_available(std::string_view name) const {
     const auto* definition =
         selected_match_unit_ != 0 ? definition_for(selected_match_unit_) : nullptr;
     if (definition == nullptr)
         return true;
-    const auto action = match_hud_action(gadget.common.name);
+    const auto action = match_hud_action(name);
     if (action == "MOVE")
         return definition->can_move;
     if (action == "ATTACK")

@@ -531,10 +531,12 @@ void Runtime::draw_extension_overlay() {
     MatchOverlay overlay{};
     overlay.painter = this;
     overlay.game = &match_->state().game;
-    const auto corner = canvas_paint(match_layout_.left, match_layout_.top);
+    // Over the battlefield, clear of the touch controls while they are on.
+    const auto area = overlay_area();
+    const auto corner = canvas_paint(area.x, area.y);
     overlay.left = corner.x;
     overlay.top = corner.y;
-    overlay.bottom = canvas_paint(match_layout_.left, match_layout_.bottom_bar_y()).y;
+    overlay.bottom = canvas_paint(area.x, area.y + area.height).y;
     overlay.scale = hud_text_scale();
     // A font's height is the low byte of its header's first word, which the
     // game steps from one line to the next by; the conversion keeps that byte.
@@ -1034,9 +1036,16 @@ void Runtime::blit_match_minimap() {
     const int dest_w = std::max(1, extent.x - origin.x);
     const int dest_h = std::max(1, extent.y - origin.y);
     scale_blit(paint_target(), mini, origin.x, origin.y, dest_w, dest_h, 0, 0, pic_w, pic_h);
-    // Radar clicks arrive in canvas pixels, wherever the picture is painted.
-    const auto hit =
+    // Radar clicks arrive in canvas pixels, wherever the picture is painted;
+    // on the phone layout only while a placed region shows the minimap (the
+    // build drawer covers it while open).
+    auto hit =
         oa::ui::display_layout::source_rect_to_canvas(match_layout_, off_x, off_y, pic_w, pic_h);
+    if (oa::ui::display_layout::placed_mode(match_layout_)) {
+        const auto* region = oa::ui::display_layout::source_region_at(match_layout_, off_x, off_y);
+        if (region == nullptr || region->role != oa::ui::display_layout::RegionRole::minimap)
+            hit = {};
+    }
     radar_picture_ = {hit.x, hit.y, hit.width, hit.height};
     radar_map_w_ = game.map_pixel_width;
     radar_map_h_ = game.map_pixel_height;

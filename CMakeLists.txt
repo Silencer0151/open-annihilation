@@ -58,6 +58,10 @@ target_link_libraries(oa-test-match INTERFACE oa-test-support oa-sim-match-runti
 # oa-options, the compile options every target that compiles engine code
 # links (cmake/OaOptions.cmake).
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/OaOptions.cmake")
+# What the platform the game is built for can do: OA_PROCESS_SPAWNING,
+# OA_NATIVE_FOLDER_DIALOG, OA_NATIVE_DENSITY_WINDOWS and OA_TOUCH_FIRST
+# (cmake/OaPlatformCapabilities.cmake).
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/OaPlatformCapabilities.cmake")
 # The sanitizers instrument every target in this tree, not only those that
 # link oa-options, and stop at the first report so the test that made it
 # fails. oa-options carries the same flags, so the targets of a project that
@@ -202,6 +206,10 @@ add_subdirectory(src/sim/trace)
 add_subdirectory(src/sim/state-hash)
 add_subdirectory(src/ui)
 add_subdirectory(src/ui/display-layout)
+# The touch controls' gesture recogniser and model (docs/touch-controls.md).
+add_subdirectory(src/ui/touch-gestures)
+add_subdirectory(src/ui/touch-hud)
+add_subdirectory(src/ui/game-files)
 add_subdirectory(src/ui/screen-registry)
 add_subdirectory(src/sim/session)
 if(TARGET oa-media-intro-player)
@@ -247,6 +255,16 @@ add_library(oa-app-mod-profile src/app/mod_profile_loader.cpp src/app/mod_folder
 add_library(oa::app::mod_profile ALIAS oa-app-mod-profile)
 target_link_libraries(oa-app-mod-profile PUBLIC oa-app-headers oa-data-mod-profile oa-data-defs
   oa-formats-hpi oa-platform-preferences PRIVATE oa-options)
+# Bringing the player's game files into the game's own storage, with no SDL:
+# the files copied and left out, the name check, the plan, the space it
+# needs, the listing and the copy on worker threads, the state file, the
+# commit and recovery, and the additions and removals of the management
+# state (game_files_import.hpp, docs/game-files.md).
+add_library(oa-app-game-files src/app/game_files_import.cpp src/app/game_files_scan.cpp
+  src/app/game_files_run.cpp src/app/game_files_state.cpp)
+add_library(oa::app::game_files ALIAS oa-app-game-files)
+target_link_libraries(oa-app-game-files PUBLIC oa-app-headers oa-app-game-directory oa-app-mod-profile
+  oa-base-threads PRIVATE oa-formats-zip oa-platform-preferences oa-options)
 # The renderer records: what the engine has seen of each render driver on
 # this machine, and the sentinel of the stage a start has reached. Their text
 # and rules are pure (renderer_records.hpp); renderer_state.hpp keeps them in
@@ -368,6 +386,32 @@ add_library(oa-app-acceleration-status src/app/acceleration_status.cpp)
 add_library(oa::app::acceleration_status ALIAS oa-app-acceleration-status)
 target_link_libraries(oa-app-acceleration-status PUBLIC oa-app-headers oa-ui-engine-settings
   oa-app-render-policy PRIVATE oa-options)
+# Painting for the touch controls' layer: RGBA rectangles, the controls'
+# icon marks and their text (touch_paint.hpp, docs/touch-controls.md).
+add_library(oa-app-touch-paint src/app/touch_paint.cpp)
+add_library(oa::app::touch_paint ALIAS oa-app-touch-paint)
+target_compile_features(oa-app-touch-paint PUBLIC cxx_std_20)
+# The text is drawn with the fonts that travel with the game.
+target_link_libraries(oa-app-touch-paint PUBLIC oa-platform-text-font PRIVATE oa-options)
+if(BUILD_TESTING)
+  # Rectangles clipped to the canvas, the icon marks and the text.
+  add_executable(oa-app-touch-paint-test src/app/touch_paint_test.cpp)
+  target_link_libraries(oa-app-touch-paint-test PRIVATE oa-app-touch-paint oa-test-support oa-options)
+  # The text checks read the bundled fonts beside the test, as the game does.
+  oa_copy_text_fonts(oa-app-touch-paint-test "$<TARGET_FILE_DIR:oa-app-touch-paint-test>")
+  add_test(NAME app-touch-paint COMMAND oa-app-touch-paint-test)
+endif()
+if(OA_BUILD_PLATFORM)
+  # What the platform the game runs on provides beyond SDL (haptics, the
+  # default game folder and its advice, the window's opening, and bringing
+  # game files in), which a platform's extension init fills, and the touch
+  # and pen hints the touch controls read input with (platform_hooks.hpp,
+  # game_files_hooks.hpp, input_hints.hpp).
+  add_library(oa-app-platform-hooks src/app/platform_hooks.cpp src/app/input_hints.cpp
+    src/app/game_files_hooks.cpp)
+  add_library(oa::app::platform_hooks ALIAS oa-app-platform-hooks)
+  target_link_libraries(oa-app-platform-hooks PUBLIC oa-app-headers PRIVATE SDL3::SDL3 oa-options)
+endif()
 # The developer's video capture (--capture-video): presented frames and the
 # mix SDL plays, encoded by the ffmpeg program (docs/capture.md).
 if(OA_BUILD_PLATFORM)
@@ -561,6 +605,17 @@ if(BUILD_TESTING)
   add_test(NAME demo-installer-data COMMAND oa-demo-installer-test --data)
   set_tests_properties(demo-installer-data PROPERTIES TIMEOUT 300)
   oa_demo_installer_tests(demo-installer-data)
+  # The import core over synthetic folders: the leave-out table, the name
+  # check, the plan and its space, the copy, stopping and resuming, the
+  # commit, recovery, adopting and the additions and removals; with --data,
+  # a subset of OA_GAME_DIR and the demo route over OA_DEMO_INSTALLER.
+  add_executable(oa-app-game-files-import-test src/app/game_files_import_test.cpp)
+  target_link_libraries(oa-app-game-files-import-test PRIVATE oa-app-game-files oa-test-support
+    oa-test-game-data oa-options)
+  add_test(NAME app-game-files-import COMMAND oa-app-game-files-import-test)
+  oa_add_game_data_test(app-game-files-import-data oa-app-game-files-import-test --data)
+  set_tests_properties(app-game-files-import-data PROPERTIES TIMEOUT 300)
+  oa_demo_installer_tests(app-game-files-import-data)
   # The renderer records by table: the text of every key and value, values
   # that cannot be read, strikes that become records and what clears them,
   # and the native-density key a run writes or erases as it ends.
@@ -752,11 +807,17 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/runtime_engine_settings_app_menu.cpp src/app/runtime_engine_settings_dialog_check.cpp
   src/app/runtime_view_rules.cpp src/app/runtime_game_text.cpp src/app/runtime_language.cpp
   src/app/runtime_renderer.cpp src/app/runtime_renderer_ladder_check.cpp
-  src/app/runtime_visual_rules_check.cpp)
-# The run manifest of a director render and the settings dialog's header
-# name the engine's version, and the renderer records are written under it.
+  src/app/runtime_visual_rules_check.cpp
+  src/app/runtime_touch.cpp src/app/runtime_touch_actions.cpp src/app/runtime_touch_camera.cpp
+  src/app/runtime_input_modifiers.cpp src/app/runtime_touch_check.cpp src/app/runtime_touch_hud.cpp
+  src/app/runtime_phone_hud.cpp src/app/runtime_lifecycle.cpp
+  src/app/game_files_screen.cpp src/app/game_files_paint.cpp src/app/game_files_dialog.cpp
+  src/app/game_files_check.cpp src/app/runtime_game_files.cpp)
+# The run manifest of a director render, the settings dialog's header and the
+# Game files screen's header name the engine's version, and the renderer
+# records are written under it.
 set_property(SOURCE src/app/runtime_director.cpp src/app/runtime_engine_settings.cpp
-  src/app/main.cpp APPEND
+  src/app/main.cpp src/app/game_files_screen.cpp src/app/runtime_game_files.cpp APPEND
   PROPERTY COMPILE_DEFINITIONS "OA_ENGINE_VERSION=\"${PROJECT_VERSION}\"")
 set(oa_game_libraries oa-formats-hpi oa-app-game-options oa-app-game-directory oa-app-mod-profile
   oa-app-view-rules
@@ -771,7 +832,8 @@ set(oa_game_libraries oa-formats-hpi oa-app-game-options oa-app-game-directory o
   oa-platform-render-probe oa-app-render-policy oa-ui-decoded oa-base-bytes oa-base-float-precision oa-base-text
   oa-app-acceleration-status oa-formats-png oa-data-languages oa-platform-locale
   oa-app-full-terrain oa-app-full-supersampling oa-app-full-fog oa-app-card-executor
-  oa-present-gpu-world oa-app-full-models)
+  oa-present-gpu-world oa-app-full-models oa-app-platform-hooks oa-app-touch-paint
+  oa-ui-touch-gestures oa-ui-touch-hud oa-app-game-files oa-ui-game-files)
 # The table that combines the extensions' tables of oa-game
 # (extension_list.hpp); the extensions themselves are registered with
 # oa_add_extension (cmake/OaExtensions.cmake).
@@ -1334,6 +1396,27 @@ if(OA_BUILD_PLATFORM)
       set_tests_properties(native-pointer-interfaces PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_pointer_check_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # --check-touch-controls: the touch controls, driven by finger events through the
+      # dispatcher, on a skirmish: taps, boxes, latches, the radial, placement, the
+      # minimap, pinch and pan, the lifecycle pause, and the tablet (1180x820) or
+      # phone (852x393) layout; it writes touch-<case>.ppm snapshots for people.
+      set(oa_touch_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/touch-controls")
+      file(MAKE_DIRECTORY "${oa_touch_check_dir}")
+      add_test(NAME native-touch-controls COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-touch-controls --resolution 1180x820
+        --preferences-file "${oa_touch_check_dir}/touch-controls.conf")
+      set_tests_properties(native-touch-controls PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_touch_check_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # The same for the phone layout, on a window of an iPhone's size.
+      set(oa_touch_phone_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/touch-controls-phone")
+      file(MAKE_DIRECTORY "${oa_touch_phone_check_dir}")
+      add_test(NAME native-touch-controls-phone COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-touch-controls --resolution 852x393
+        --preferences-file "${oa_touch_phone_check_dir}/touch-controls-phone.conf")
+      set_tests_properties(native-touch-controls-phone PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_touch_phone_check_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # --check-multiplayer-menu: MULTI clicked through SDL input opens the
       # multiplayer screens, which network play's check walks. Scribbled
       # frees turn a focus handed back to a closed window into a fault.
@@ -1352,6 +1435,49 @@ if(OA_BUILD_PLATFORM)
           --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
           --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
         set_tests_properties(native-saveload PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
+        # --check-game-files: the Game files screen driven through its routes
+        # by taps and keys, over a subset of OA_GAME_DIR linked into a work
+        # folder, writing game-files-<variant>-<nn>-<step>-*.png pictures for
+        # people (tools/check_native_game_files.py, docs/game-files.md). The
+        # -resume and -manage-next-start halves reuse the work folder their
+        # first halves leave.
+        set(oa_game_files_variants folder phone demo copy-yourself stop resume not-game short-space
+          manage manage-next-start)
+        foreach(variant IN LISTS oa_game_files_variants)
+          if(variant STREQUAL "folder")
+            set(oa_game_files_test native-game-files)
+          else()
+            set(oa_game_files_test native-game-files-${variant})
+          endif()
+          set(oa_game_files_work ${variant})
+          set(oa_game_files_extra "")
+          if(variant STREQUAL "resume")
+            set(oa_game_files_work stop)
+            list(APPEND oa_game_files_extra --keep-work)
+          elseif(variant STREQUAL "manage-next-start")
+            set(oa_game_files_work manage)
+            list(APPEND oa_game_files_extra --keep-work)
+          elseif(variant STREQUAL "phone")
+            list(APPEND oa_game_files_extra --resolution 852x393)
+          elseif(variant STREQUAL "demo")
+            list(APPEND oa_game_files_extra --demo-installer "${OA_DEMO_INSTALLER}")
+          endif()
+          add_test(NAME ${oa_game_files_test} COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_game_files.py"
+            --game $<TARGET_FILE:oa-game>
+            --work "${CMAKE_CURRENT_BINARY_DIR}/native-checks/game-files-${oa_game_files_work}"
+            --variant ${variant} --game-dir "${OA_GAME_DIR}" --skip-code ${OA_GAME_DATA_SKIP_CODE}
+            ${oa_game_files_extra})
+          set_tests_properties(${oa_game_files_test} PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+            PASS_REGULAR_EXPRESSION "game-files check: .*: passed")
+          oa_game_data_tests(${oa_game_files_test})
+        endforeach()
+        oa_demo_installer_tests(native-game-files-demo)
+        set_tests_properties(native-game-files-stop PROPERTIES FIXTURES_SETUP game-files-stop)
+        set_tests_properties(native-game-files-resume PROPERTIES FIXTURES_REQUIRED game-files-stop)
+        set_tests_properties(native-game-files-manage PROPERTIES FIXTURES_SETUP game-files-manage)
+        set_tests_properties(native-game-files-manage-next-start PROPERTIES
+          FIXTURES_REQUIRED game-files-manage)
         # The game's start on the dummy video driver, with no render driver
         # named: SDL's walk ends on its software renderer, which has no
         # adapter and no texture limit, and the start-up line names it, its

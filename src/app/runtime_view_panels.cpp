@@ -137,9 +137,24 @@ void Runtime::draw_clock_line() {
     const auto& game = world.game;
     const bool watching = local_player_watches();
     const auto text_color = oa::ui::hud::readout_color(game, oa::ui::hud::kReadoutTextColor);
+    // At the top left of the overlays' area (the battlefield, or with the
+    // touch controls on, the part of it they leave clear), as far from its
+    // corner as from the battlefield's; painted on the battlefield's layer.
+    const auto area = overlay_area();
+    const auto label = [&](int y, const char* text) {
+        namespace layout = oa::ui::display_layout;
+        const auto point = layout::placed_mode(match_layout_)
+                               ? layout::source_battlefield_to_canvas(match_layout_, kClockLineX, y)
+                               : layout::source_to_canvas(match_layout_, kClockLineX, y);
+        const auto at = canvas_paint(
+            point.x + area.x - match_layout_.battlefield_x(),
+            point.y + area.y - match_layout_.battlefield_y()
+        );
+        draw_match_label(at.x, at.y, text, text_color);
+    };
     char line[64];
     hud::format_game_time(line, sizeof line, game.tick);
-    draw_hud_label(kClockLineX, kClockLineY, line, text_color);
+    label(kClockLineY, line);
     const auto& wind = match_->environment_wind();
     hud::format_wind(
         line,
@@ -153,9 +168,9 @@ void Runtime::draw_clock_line() {
         ),
         watching
     );
-    draw_hud_label(kClockLineX, kClockLineY + kClockLineStep, line, text_color);
+    label(kClockLineY + kClockLineStep, line);
     hud::format_tidal(line, sizeof line, game.tidal_strength);
-    draw_hud_label(kClockLineX, kClockLineY + 2 * kClockLineStep, line, text_color);
+    label(kClockLineY + 2 * kClockLineStep, line);
 }
 
 bool Runtime::resource_panel_pointer(const SDL_Event& event, float x, float y) {

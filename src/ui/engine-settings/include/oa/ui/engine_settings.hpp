@@ -68,6 +68,18 @@ inline constexpr std::string_view text_size = "open-annihilation.text-size";
 inline constexpr std::string_view language = "open-annihilation.language";
 /// 1 or 0 (EngineSettings::developer_mode).
 inline constexpr std::string_view developer_mode = "open-annihilation.developer-mode";
+/// "automatic", "box" or "scroll" (EngineSettings::touch_drag).
+inline constexpr std::string_view touch_drag = "open-annihilation.touch-drag";
+/// Milliseconds, decimal (EngineSettings::touch_hold_ms).
+inline constexpr std::string_view touch_hold_delay = "open-annihilation.touch-hold-delay";
+/// "stay-on" or "one-action" (EngineSettings::touch_latches).
+inline constexpr std::string_view touch_latches = "open-annihilation.touch-latches";
+/// 1 or 0 (EngineSettings::touch_haptics).
+inline constexpr std::string_view touch_haptics = "open-annihilation.touch-haptics";
+/// 1 or 0 (EngineSettings::touch_left_handed).
+inline constexpr std::string_view touch_left_handed = "open-annihilation.touch-left-handed";
+/// 1 or 0 (EngineSettings::game_files_backed_up).
+inline constexpr std::string_view game_files_backed_up = "open-annihilation.game-files-backed-up";
 /// The start of the key a profile's overrides of its standard hacks are
 /// kept under, which the profile's id ends (Inputs::profile_id), as
 /// "open-annihilation.hack-overrides.ta-3.1c": their text as
@@ -249,6 +261,62 @@ inline constexpr std::array<HardwareAcceleration, 3> hardware_acceleration_level
     HardwareAcceleration::full,
 };
 
+/// What a one-finger drag on the battlefield does (the Touch section's One-finger drag).
+enum class TouchDrag : uint8_t {
+    automatic, ///< a selection box on a tablet, scrolling on a phone
+    box,       ///< a selection box
+    scroll,    ///< the map follows the finger
+};
+
+/// Whether QUEUE, ADD and x5 stay on after use (the Touch section's QUEUE and ADD).
+enum class TouchLatches : uint8_t {
+    stay_on,    ///< a latched control stays on until tapped again
+    one_action, ///< a latched control turns off after the first action that uses it
+};
+
+/// The shortest hold delay of the touch controls, in milliseconds.
+inline constexpr uint32_t lowest_touch_hold_ms = 250;
+/// The longest hold delay of the touch controls, in milliseconds.
+inline constexpr uint32_t highest_touch_hold_ms = 700;
+/// The hold delay's step, in milliseconds.
+inline constexpr uint32_t touch_hold_step_ms = 50;
+/// The hold delay of the touch controls when the player has chosen none, in milliseconds.
+inline constexpr uint32_t default_touch_hold_ms = 350;
+static_assert(
+    (highest_touch_hold_ms - lowest_touch_hold_ms) % touch_hold_step_ms == 0 &&
+        (default_touch_hold_ms - lowest_touch_hold_ms) % touch_hold_step_ms == 0,
+    "the hold delay's stops run from its lowest to its highest, its default among them"
+);
+
+/// The ways of One-finger drag, in the order the dialog offers them.
+inline constexpr std::array<TouchDrag, 3> touch_drag_choices{
+    TouchDrag::automatic,
+    TouchDrag::box,
+    TouchDrag::scroll,
+};
+
+/// The ways of QUEUE and ADD, in the order the dialog offers them.
+inline constexpr std::array<TouchLatches, 2> touch_latches_choices{
+    TouchLatches::stay_on,
+    TouchLatches::one_action,
+};
+
+/// Returns a hold delay as the setting keeps it: held to its range and put
+/// on its nearest stop.
+///
+/// @param milliseconds the delay, in milliseconds
+/// @return lowest_touch_hold_ms to highest_touch_hold_ms, a whole number of
+///     touch_hold_step_ms above the lowest; half a step rounds up
+[[nodiscard]] constexpr uint32_t snapped_touch_hold_ms(int64_t milliseconds) noexcept {
+    const int64_t lowest = lowest_touch_hold_ms;
+    const int64_t highest = highest_touch_hold_ms;
+    const int64_t step = touch_hold_step_ms;
+    const int64_t held = milliseconds < lowest    ? lowest
+                         : milliseconds > highest ? highest
+                                                  : milliseconds;
+    return static_cast<uint32_t>(lowest + (held - lowest + step / 2) / step * step);
+}
+
 /// The settings, as the dialog shows them and the game puts them in effect.
 struct EngineSettings {
     /// Path nodes the path search may visit in a game tick, all players
@@ -261,6 +329,13 @@ struct EngineSettings {
     uint32_t max_frame_rate{highest_frame_rate};   ///< frames a second
     AntiAliasing anti_aliasing{AntiAliasing::off}; ///< enhanced anti-aliasing of units
     bool frame_stats{}; ///< the frame and tick times over the battlefield (+stats)
+    TouchDrag touch_drag{TouchDrag::automatic};        ///< One-finger drag
+    uint32_t touch_hold_ms{default_touch_hold_ms};     ///< Hold delay, ms
+    TouchLatches touch_latches{TouchLatches::stay_on}; ///< QUEUE and ADD
+    bool touch_haptics{true};                          ///< Haptics
+    bool touch_left_handed{};                          ///< Left-handed layout
+    /// The game files are kept in the device's backups (only where the platform keeps them).
+    bool game_files_backed_up{};
     /// The window's size, and the screen's in full screen, from the next start.
     ScreenSize screen_size{desktop_screen_size};
     /// How much of each frame the graphics card may take on, where it is
@@ -365,7 +440,10 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// named one; their outline and shadow are On, their background Off and
 /// their size default_text_size everywhere. The language is the operating
 /// system's choice with the player's own file and English, the game's own
-/// default, with a named one. Developer Mode is Off, with no overrides.
+/// default, with a named one. Developer Mode is Off, with no overrides. The
+/// Touch section is the same everywhere: One-finger drag Automatic, Hold
+/// delay default_touch_hold_ms, QUEUE and ADD Stay on, Haptics On and
+/// Left-handed layout Off.
 ///
 /// @param inputs the platform, the preferences file and the installation
 /// @return the defaults
@@ -393,7 +471,12 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// read from the key that Inputs::profile_id ends, as
 /// oa::data::mod_profile::read_overrides reads them: none without the key,
 /// from a text the profile grammar does not read as a mapping (one that
-/// names a hack twice among them), or with an empty profile id.
+/// names a hack twice among them), or with an empty profile id. In the
+/// Touch section, One-finger drag and QUEUE and ADD read the words
+/// touch_drag_text and touch_latches_text write, and any other value gives
+/// the default; the hold delay reads as a number, put on its nearest stop
+/// within its range (snapped_touch_hold_ms); Haptics and Left-handed layout
+/// read as every switch does.
 ///
 /// @param values the preferences
 /// @param inputs the platform, the preferences file and the installation
@@ -409,7 +492,9 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// setting at its default has its key erased; otherwise a setting that
 /// differs from `opened` has its key written, in decimal, a switch as 1 or
 /// 0, the screen size as "desktop" or "WIDTHxHEIGHT", hardware
-/// acceleration as "off", "basic" or "full", the mod as its folder's path,
+/// acceleration as "off", "basic" or "full", One-finger drag and QUEUE and
+/// ADD as their words (touch_drag_text, touch_latches_text), the hold delay
+/// in milliseconds, the mod as its folder's path,
 /// or erased for none. The overrides, when they differ from `opened`, are
 /// written under the key `profile_id` ends, as
 /// oa::data::mod_profile::overrides_text writes them, or that key is
@@ -490,6 +575,30 @@ stored_language(const oa::platform::preferences::Values& values, bool players_ow
 /// @return the level; nothing for any other text
 [[nodiscard]] std::optional<HardwareAcceleration>
 hardware_acceleration_from_text(std::string_view text) noexcept;
+
+/// Returns the word the preferences keep a way of One-finger drag as.
+///
+/// @param drag the way
+/// @return "automatic", "box" or "scroll"
+[[nodiscard]] std::string_view touch_drag_text(TouchDrag drag) noexcept;
+
+/// Returns the way of One-finger drag a word names.
+///
+/// @param text the word, in lower case as touch_drag_text gives it
+/// @return the way; nothing for any other text
+[[nodiscard]] std::optional<TouchDrag> touch_drag_from_text(std::string_view text) noexcept;
+
+/// Returns the word the preferences keep a way of QUEUE and ADD as.
+///
+/// @param latches the way
+/// @return "stay-on" or "one-action"
+[[nodiscard]] std::string_view touch_latches_text(TouchLatches latches) noexcept;
+
+/// Returns the way of QUEUE and ADD a word names.
+///
+/// @param text the word, in lower case as touch_latches_text gives it
+/// @return the way; nothing for any other text
+[[nodiscard]] std::optional<TouchLatches> touch_latches_from_text(std::string_view text) noexcept;
 
 /// Returns the unit limit an installation's totala.ini sets.
 ///

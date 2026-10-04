@@ -745,10 +745,28 @@ std::string function_test_log_line(std::string_view failure) {
     return line;
 }
 
+/// Returns what the log adds after "the window opens at the display's own
+/// pixel density" to say why.
+///
+/// @param reason the reason a window opens at native density
+/// @return " (--native-density)", " (as every window of this platform)", or
+///     empty when every condition of the rule holds
+std::string_view native_density_reason(render_policy::DensityReason reason) noexcept {
+    switch (reason) {
+    case render_policy::DensityReason::asked:
+        return " (--native-density)";
+    case render_policy::DensityReason::platform:
+        return " (as every window of this platform)";
+    default:
+        return {};
+    }
+}
+
 } // namespace
 
 render_policy::DensityDecision decide_window_density(const DensityRequest& request) {
     render_policy::DensityInputs inputs;
+    inputs.platform_native = request.platform_native;
     inputs.asked = request.asked;
     inputs.memory = physical_memory();
     inputs.flag = render_policy::acceleration_flag(request.flag);
@@ -775,9 +793,7 @@ render_policy::DensityDecision decide_window_density(const DensityRequest& reque
     const render_policy::DensityDecision decision = render_policy::decide_native_density(inputs);
     if (decision.native)
         std::cout << graphics_log_prefix << "the window opens at the display's own pixel density"
-                  << (decision.reason == render_policy::DensityReason::asked ? " (--native-density)"
-                                                                             : "")
-                  << '\n'
+                  << native_density_reason(decision.reason) << '\n'
                   << std::flush;
     return decision;
 }
@@ -1256,6 +1272,12 @@ void RendererHost::set_stage_clock(const StageClock& clock) noexcept {
 
 void RendererHost::note_first_accelerated_frame() {
     std::ignore = step_sentinel(renderer_state::LifeEvent::first_accelerated_frame);
+}
+
+bool RendererHost::start_stage_open() const noexcept {
+    using renderer_state::SentinelStage;
+    return life_.stage &&
+           (*life_.stage == SentinelStage::standard || *life_.stage == SentinelStage::accelerated);
 }
 
 void RendererHost::note_presented_frame(PathSet drawn) {

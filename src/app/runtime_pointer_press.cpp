@@ -46,7 +46,8 @@ void Runtime::record_pointer_event(const SDL_Event& event) {
         keys |= button_key(event.button.button);
     else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP)
         keys &= ~button_key(event.button.button);
-    const auto mods = SDL_GetModState();
+    // The pointer key word's Shift is QUEUE's while touch controls are on.
+    const auto mods = input_modifiers(ModifierUse::order);
     if ((mods & SDL_KMOD_SHIFT) != 0)
         keys |= input::pointer_key_shift;
     if ((mods & SDL_KMOD_CTRL) != 0)

@@ -60,6 +60,11 @@ struct Runtime::EngineSettingsState {
     /// visible part, decoded on first use.
     std::optional<WindowIcon> icon;
     bool icon_missing{}; ///< decoding the icon failed; it is not tried again
+    /// The pointer event being taken comes from a finger: its mouse is
+    /// SDL_TOUCH_MOUSEID, as the touch controls' clicks and SDL's own are.
+    /// A finger's press takes the nearest control of the dialog within the
+    /// touch controls' pick distance.
+    bool finger_pointer{};
 
     /// The battlefield's zoom when the dialog opened, which Cancel eases back to.
     float opened_zoom_target{};
@@ -211,6 +216,36 @@ struct Runtime::EngineSettingsState {
     /// @param runtime the runtime
     /// @return the Escape opens the game menu setting
     [[nodiscard]] static bool escape_opens_menu(Runtime& runtime);
+
+    /// Notes whether a pointer event comes from a finger
+    /// (finger_pointer); other events leave the note as it is. The
+    /// application loop calls it for every event before the screens see it
+    /// (Runtime::take_engine_settings_request).
+    ///
+    /// @param runtime the runtime
+    /// @param event the event just received
+    static void note_pointer_source(Runtime& runtime, const SDL_Event& event);
+
+    /// Returns how far from a control a finger's press may land and still
+    /// take it: the touch controls' pick distance
+    /// (oa::ui::touch_hud::gadget_pick_points) on the screen shown, in
+    /// pixels of something drawn at a scale.
+    ///
+    /// @param runtime the runtime
+    /// @param canvas_per_pixel canvas pixels a pixel of it is drawn as: 1 for
+    ///     the canvas itself, the dialog's scale for its source pixels
+    /// @return the distance, in its pixels, rounded; at least 1
+    [[nodiscard]] static int32_t finger_reach(const Runtime& runtime, double canvas_per_pixel);
+
+    /// Puts the Include in device backups setting in effect on the game
+    /// files at once: the game folder, the import's staging folder and the
+    /// demo's unpacked data are kept in the device's backups or out of them
+    /// (game_files::apply_backup_setting). Nothing where the platform brings
+    /// no game files in (runtime_game_files.cpp).
+    ///
+    /// @param runtime the runtime
+    /// @param backed_up the game files are kept in the device's backups
+    static void apply_game_files_backups(Runtime& runtime, bool backed_up);
 };
 
 } // namespace oa::app

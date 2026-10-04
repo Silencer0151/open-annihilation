@@ -378,16 +378,30 @@ void Runtime::run_stage_lines(std::span<const StageLine> lines) {
             namespace settings = oa::ui::engine_settings;
             std::string rest;
             std::getline(line >> std::ws, rest);
+            // The sections as the dialog lists them, Touch with touch controls;
+            // each entry's control is its section's page_control.
+            const bool touch = touch_controls_active();
             settings::Dialog names;
-            settings::open_dialog(names, {}, {}, {}, {}, settings::Page::path_search);
-            const auto pages = settings::dialog_pages(settings::DialogKind::engine);
+            settings::open_dialog(
+                names,
+                {},
+                {},
+                {},
+                {},
+                settings::Page::path_search,
+                {},
+                settings::highest_unit_limit,
+                {},
+                {},
+                nullptr,
+                touch
+            );
             std::optional<settings::Page> page;
-            for (const auto& part : settings::dialog_layout(names)) {
-                const int32_t index = part.control - settings::first_page_control;
-                if (part.text == rest && index >= 0 &&
-                    static_cast<std::size_t>(index) < pages.size())
-                    page = pages[static_cast<std::size_t>(index)];
-            }
+            for (const auto& part : settings::dialog_layout(names))
+                for (const auto listed :
+                     settings::dialog_pages(settings::DialogKind::engine, touch))
+                    if (part.text == rest && part.control == settings::page_control(listed))
+                        page = listed;
             if (!page)
                 throw std::runtime_error(where + ": the settings have no section " + rest);
             engine_settings_state().last_page = *page;

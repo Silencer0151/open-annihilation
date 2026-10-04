@@ -97,6 +97,51 @@ void Runtime::check_engine_settings_in_match() {
     const fs::path report_directory = "local/reports";
     fs::create_directories(report_directory);
     require(engine_settings_fonts() != nullptr, "the dialog's fonts are missing");
+
+    // On a phone with touch controls the dialog and the OA button fit the
+    // safe area: an 852x393-point landscape phone at three pixels a point,
+    // its sides 59 points in and its bottom 21.
+    {
+        const layout::Insets insets{177, 0, 177, 63};
+        const auto phone = layout::make_phone_layout(2556, 1179, 3.0, insets);
+        const auto safe = MatchHost::safe_area(phone);
+        require(
+            safe.x == 177 && safe.y == 0 && safe.width == 2202 && safe.height == 1116,
+            "the phone's safe area is not the canvas less its insets"
+        );
+        const auto inside_safe = [&safe](const layout::Rect& rect) {
+            return rect.width > 0 && rect.height > 0 && rect.x >= safe.x && rect.y >= safe.y &&
+                   rect.x + rect.width <= safe.x + safe.width &&
+                   rect.y + rect.height <= safe.y + safe.height;
+        };
+        const auto dialog_at = MatchHost::dialog_rect(phone, true);
+        // min(2202 / 480, 1116 / 324): the safe area's height decides.
+        const double scale = 1116.0 / settings::dialog_height;
+        require(
+            inside_safe(dialog_at) && dialog_at.height == 1116 &&
+                dialog_at.width == static_cast<int>(std::lround(settings::dialog_width * scale)) &&
+                std::abs(2 * dialog_at.x + dialog_at.width - (2 * safe.x + safe.width)) <= 1,
+            "the dialog does not fit the phone's safe area, centred"
+        );
+        const auto point = MatchHost::dialog_point(
+            phone,
+            static_cast<float>(dialog_at.x + dialog_at.width - 1),
+            static_cast<float>(dialog_at.y + dialog_at.height - 1),
+            true
+        );
+        require(
+            point.x == settings::dialog_width - 1 && point.y == settings::dialog_height - 1,
+            "the fitted dialog's corner does not map to its last source pixel"
+        );
+        const auto button = MatchHost::button_rect(phone, true);
+        require(inside_safe(button), "the OA button leaves the phone's safe area");
+        const auto unfitted = MatchHost::dialog_rect(phone);
+        require(
+            unfitted.width == settings::dialog_width && !inside_safe(MatchHost::button_rect(phone)),
+            "without fitting, the dialog does not keep the side column's scale"
+        );
+    }
+
     const Extension saved_extension = extension_;
     bool running = true;
     const auto send_key = [&](SDL_Keycode key, SDL_Keymod modifiers, bool down, bool repeat) {
@@ -184,6 +229,8 @@ void Runtime::check_engine_settings_in_match() {
     const auto show_page = [&](settings::Page page, const std::string& on) {
         auto* dialog = engine_settings_dialog();
         require(dialog != nullptr, "the dialog closed" + on);
+        // The Game files section belongs to the main menu's dialog alone.
+        require(!dialog->game_files, "the in-game dialog lists Game files" + on);
         for (const auto& part : settings::dialog_layout(*dialog))
             if (part.control == settings::page_control(page)) {
                 click_dialog(part.rect);

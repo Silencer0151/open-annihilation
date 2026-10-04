@@ -30,6 +30,9 @@ constexpr std::string_view kAccelerationLevelFlag = "--hardware-acceleration=";
 
 constexpr std::size_t kMaximumRunFrames = 10'000'000;
 
+/// The frames a --check-game-files run draws at the main menu when --frames is not given.
+constexpr std::size_t kGameFilesCheckFrames = 30;
+
 [[nodiscard]] uint32_t parse_seed(std::string_view text) {
     uint32_t value = 0;
     const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
@@ -136,6 +139,147 @@ constexpr uint64_t kLatestFrameClockMs = 1'000'000'000'000;
         value > kLatestFrameClockMs)
         throw std::runtime_error("--frame-clock expects milliseconds from 0 through 1000000000000");
     return value;
+}
+
+/// Returns the byte count a --game-files-* option names.
+///
+/// Throws std::runtime_error naming `option` unless the whole text is a
+/// decimal integer that fits 64 bits; `positive` refuses 0 too.
+///
+/// @param text the option's value
+/// @param option the option, for the error
+/// @param positive true when 0 is refused
+/// @return the bytes
+[[nodiscard]] uint64_t
+parse_game_files_bytes(std::string_view text, std::string_view option, bool positive) {
+    uint64_t value = 0;
+    const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (text.empty() || result.ec != std::errc{} || result.ptr != text.data() + text.size() ||
+        (positive && value == 0))
+        throw std::runtime_error(
+            std::string(option) + (positive ? " expects a whole number of bytes above 0"
+                                            : " expects a whole number of bytes")
+        );
+    return value;
+}
+
+/// Returns the route a --game-files-route value names.
+///
+/// Throws std::runtime_error unless it is folder, demo, copy-yourself or manage.
+///
+/// @param text the option's value
+/// @return the route
+[[nodiscard]] GameFilesRoute parse_game_files_route(std::string_view text) {
+    if (text == "folder")
+        return GameFilesRoute::folder;
+    if (text == "demo")
+        return GameFilesRoute::demo;
+    if (text == "copy-yourself")
+        return GameFilesRoute::copy_yourself;
+    if (text == "manage")
+        return GameFilesRoute::manage;
+    throw std::runtime_error("--game-files-route takes folder, demo, copy-yourself or manage");
+}
+
+/// Returns the expectation a --game-files-expect value names.
+///
+/// Throws std::runtime_error unless it is main-menu, stopped-kept, resumed,
+/// not-a-game, short-space or next-start.
+///
+/// @param text the option's value
+/// @return the expectation
+[[nodiscard]] GameFilesExpect parse_game_files_expect(std::string_view text) {
+    if (text == "main-menu")
+        return GameFilesExpect::main_menu;
+    if (text == "stopped-kept")
+        return GameFilesExpect::stopped_kept;
+    if (text == "resumed")
+        return GameFilesExpect::resumed;
+    if (text == "not-a-game")
+        return GameFilesExpect::not_a_game;
+    if (text == "short-space")
+        return GameFilesExpect::short_space;
+    if (text == "next-start")
+        return GameFilesExpect::next_start;
+    throw std::runtime_error(
+        "--game-files-expect takes main-menu, stopped-kept, resumed, not-a-game, short-space or "
+        "next-start"
+    );
+}
+
+/// Checks the Game files screen's options: the --game-files-* companions need
+/// --check-game-files, which refuses a named or chosen game folder, named
+/// archives, the notice in place of the screen (--no-game-files-screen), a
+/// headless run, the director's runs, a capture, a showcase, a benchmark and
+/// the other checks, and runs unattended to the main menu.
+/// --no-game-files-screen is the player's own switch and needs nothing.
+///
+/// Throws std::runtime_error naming the options that cannot be used together.
+///
+/// @param[in,out] options the parsed options; a --check-game-files run gets
+///        unattended, and a frame limit when none was given
+void check_game_files_options(Options& options) {
+    if (!options.check_game_files) {
+        const std::pair<bool, const char*> companions[] = {
+            {options.game_files_route != GameFilesRoute::folder, "--game-files-route"},
+            {options.game_files_expect != GameFilesExpect::main_menu, "--game-files-expect"},
+            {!options.game_files_source.empty(), "--game-files-source"},
+            {options.game_files_free_bytes.has_value(), "--game-files-free-bytes"},
+            {options.game_files_copy_rate.has_value(), "--game-files-copy-rate"},
+            {options.game_files_stop_after.has_value(), "--game-files-stop-after"},
+        };
+        for (const auto& [given, name] : companions)
+            if (given)
+                throw std::runtime_error(std::string(name) + " needs --check-game-files");
+        return;
+    }
+    // The director's runs and checks are headless: they are named before
+    // --headless-check, which they set.
+    const std::pair<bool, const char*> refused[] = {
+        {!options.game_dir.empty(), "--game-dir"},
+        {options.choose_game_dir, "--choose-game-dir"},
+        {!options.archives.empty(), "--archive"},
+        {options.no_game_files_screen, "--no-game-files-screen"},
+        {!options.generate_script.empty(), "--generate-script"},
+        {!options.render_script.empty(), "--render-script"},
+        {options.check_director_view, "--check-director-view"},
+        {options.check_director_render, "--check-director-render"},
+        {options.check_interpolation, "--check-interpolation"},
+        {options.check_unit_playout, "--check-unit-playout"},
+        {options.headless_check, "--headless-check"},
+        {!options.capture_video.empty(), "--capture-video"},
+        {options.showcase != Showcase::none, "--showcase"},
+        {options.benchmark_frames.has_value(), "--benchmark"},
+        {options.check_navigation, "--check-navigation"},
+        {options.check_match_dialogs, "--check-match-dialogs"},
+        {options.check_load_save, "--check-load-save"},
+        {options.check_frontend_controls, "--check-frontend-controls"},
+        {options.check_scroll_bars, "--check-scroll-bars"},
+        {options.check_engine_settings, "--check-engine-settings"},
+        {options.check_renderer_ladder, "--check-renderer-ladder"},
+        {options.check_briefing_narration, "--check-briefing-narration"},
+        {options.check_match_layers, "--check-match-layers"},
+        {options.check_render_tiers, "--check-render-tiers"},
+        {options.check_match_orders, "--check-match-orders"},
+        {options.check_factory_orders, "--check-factory-orders"},
+        {options.check_unit_speech, "--check-unit-speech"},
+        {options.check_download_builds, "--check-download-builds"},
+        {options.check_side_column, "--check-side-column"},
+        {options.check_kill_board, "--check-kill-board"},
+        {!options.check_unit_language.empty(), "--check-unit-language"},
+        {options.check_patrol_reclaim, "--check-patrol-reclaim"},
+        {options.check_reclaim_cursor, "--check-reclaim-cursor"},
+        {options.check_pointer_interfaces, "--check-pointer-interfaces"},
+        {options.check_touch_controls, "--check-touch-controls"},
+        {options.check_multiplayer_menu, "--check-multiplayer-menu"},
+    };
+    for (const auto& [given, name] : refused)
+        if (given)
+            throw std::runtime_error(std::string("--check-game-files cannot be used with ") + name);
+    // The route ends at the main menu, which the run leaves after a few frames.
+    if (!options.frame_limit)
+        options.frame_limit = kGameFilesCheckFrames;
+    options.unattended = true;
 }
 
 /// Returns the drawing threads a --draw-threads or OA_DRAW_THREADS value names.
@@ -302,6 +446,7 @@ void check_director_options(Options& options) {
         {options.check_patrol_reclaim, "--check-patrol-reclaim"},
         {options.check_reclaim_cursor, "--check-reclaim-cursor"},
         {options.check_pointer_interfaces, "--check-pointer-interfaces"},
+        {options.check_touch_controls, "--check-touch-controls"},
         {options.check_multiplayer_menu, "--check-multiplayer-menu"},
         {options.check_director_view, "--check-director-view"},
         {options.check_director_render, "--check-director-render"},
@@ -580,6 +725,26 @@ namespace {
             result.check_reclaim_cursor = true;
         else if (argument == "--check-pointer-interfaces")
             result.check_pointer_interfaces = true;
+        else if (argument == "--check-touch-controls")
+            result.check_touch_controls = true;
+        else if (argument == "--touch-controls")
+            result.touch_controls = true;
+        else if (argument == "--check-game-files")
+            result.check_game_files = true;
+        else if (argument == "--no-game-files-screen")
+            result.no_game_files_screen = true;
+        else if (argument == "--game-files-route")
+            result.game_files_route = parse_game_files_route(value(argument));
+        else if (argument == "--game-files-expect")
+            result.game_files_expect = parse_game_files_expect(value(argument));
+        else if (argument == "--game-files-source")
+            result.game_files_source = path_from_utf8(value(argument));
+        else if (argument == "--game-files-free-bytes")
+            result.game_files_free_bytes = parse_game_files_bytes(value(argument), argument, false);
+        else if (argument == "--game-files-copy-rate")
+            result.game_files_copy_rate = parse_game_files_bytes(value(argument), argument, true);
+        else if (argument == "--game-files-stop-after")
+            result.game_files_stop_after = parse_game_files_bytes(value(argument), argument, true);
         else if (argument == "--check-multiplayer-menu")
             result.check_multiplayer_menu = true;
         else if (argument == "--check-director-view")
@@ -635,7 +800,8 @@ namespace {
                    "[--check-download-builds] [--check-side-column] [--check-kill-board] "
                    "[--check-unit-language TAG] "
                    "[--check-patrol-reclaim] [--check-reclaim-cursor] "
-                   "[--check-pointer-interfaces] "
+                   "[--check-pointer-interfaces] [--check-touch-controls] "
+                   "[--check-game-files] "
                    "[--check-multiplayer-menu] "
                    "[--check-load-save] [--check-frontend-controls] "
                    "[--check-scroll-bars] [--check-engine-settings [--force-capable]] "
@@ -652,7 +818,13 @@ namespace {
                    "[--frame-rate FPS [--frame-log FILE] [--scroll-camera] [--march] "
                    "[--follow] [--frame-clock MS]]] "
                    "[--campaign NAME --mission N [--past-outcome] [--restart-at TICK]] "
-                   "[--resolution WxH] "
+                   "[--resolution WxH] [--touch-controls] "
+                   "[--game-files-route folder|demo|copy-yourself|manage] "
+                   "[--game-files-expect main-menu|stopped-kept|resumed|not-a-game|short-space|"
+                   "next-start] "
+                   "[--game-files-source PATH] [--game-files-free-bytes N] "
+                   "[--game-files-copy-rate BYTES] [--game-files-stop-after BYTES] "
+                   "[--no-game-files-screen] "
                    "[--zoom FACTOR] [--combat UNITS [--busy-combat]] [--stage FILE] "
                    "[--reclaim-check] "
                    "[--camera X,Z] "
@@ -778,6 +950,7 @@ namespace {
         throw std::runtime_error("--native-density is accepted only with --check-render-tiers");
     if (result.render_fault && !result.check_renderer_ladder)
         throw std::runtime_error("--render-fault needs --check-renderer-ladder");
+    check_game_files_options(result);
     result.fixed_clock =
         result.headless_check || result.check_match_layers || result.check_render_tiers ||
         result.check_match_dialogs || result.check_load_save || result.check_frontend_controls ||
@@ -786,13 +959,32 @@ namespace {
         result.check_download_builds || result.check_side_column || result.check_kill_board ||
         !result.check_unit_language.empty() || result.check_patrol_reclaim ||
         result.check_reclaim_cursor || result.check_pointer_interfaces ||
-        result.check_director_view || result.check_director_render || result.check_interpolation ||
-        result.check_unit_playout;
+        result.check_touch_controls || result.check_director_view || result.check_director_render ||
+        result.check_interpolation || result.check_unit_playout;
     // A capture and a showcase need the application's own loop and window,
     // which checks and benchmarks do not run.
     const bool check_run = result.fixed_clock || result.check_navigation ||
                            result.check_multiplayer_menu || result.check_briefing_narration ||
                            result.benchmark_frames;
+#if OA_PROCESS_SPAWNING == 0
+    // The capture and the director's encoder run the ffmpeg program, which a
+    // build without OA_PROCESS_SPAWNING cannot start. A render with encoding
+    // off (OA_DIRECTOR_ENCODER=none, director_output.hpp) starts nothing.
+    if (!result.capture_video.empty())
+        throw std::runtime_error(
+            "--capture-video needs the ffmpeg program, and this build starts no "
+            "other programs"
+        );
+    if (!result.render_script.empty()) {
+        const auto encoder = oa::platform::environment_value("OA_DIRECTOR_ENCODER");
+        if (!encoder || *encoder != "none")
+            throw std::runtime_error(
+                "--render-script encodes its video with the ffmpeg program, and "
+                "this build starts no other programs; set "
+                "OA_DIRECTOR_ENCODER=none to render without it"
+            );
+    }
+#endif
     if (!result.capture_video.empty() && check_run)
         throw std::runtime_error(
             "--capture-video captures the game or a --showcase, not a check or benchmark"
@@ -807,6 +999,8 @@ namespace {
                         result.benchmark_frames || result.frame_limit || !result.snapshot.empty() ||
                         result.showcase != Showcase::none;
     if ((extension_effects & option_effect::unattended) != 0)
+        result.unattended = true;
+    if (result.check_game_files)
         result.unattended = true;
 #ifdef _WIN32
     // On Windows a player's run starts full screen; -d, with any suffix, keeps

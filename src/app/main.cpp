@@ -1,14 +1,22 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// oa-game entry point: display setup, intro playback and runtime launch.
+// oa-game entry point: display setup, the Game files screen where the game
+// folder is missing and the platform brings game files in, intro playback
+// and runtime launch.
 #include "oa/app/runtime.hpp"
+#include "game_files_check.hpp"
+#include "game_files_screen.hpp"
 #include "render_host.hpp"
 #include "screen_size.hpp"
 #include "oa/app/extension_list.hpp"
 #include "oa/app/full_screen.hpp"
 #include "oa/app/game_directory.hpp"
+#include "oa/app/game_files_hooks.hpp"
+#include "oa/app/game_files_import.hpp"
+#include "oa/app/input_hints.hpp"
 #include "oa/app/mod_profile_loader.hpp"
+#include "oa/app/platform_hooks.hpp"
 #include "oa/app/video_capture.hpp"
 #include "oa/app/window_icon.hpp"
 #include "oa/base/float_precision.hpp"
@@ -18,6 +26,7 @@
 #include "oa/platform/log_files.hpp"
 #include "oa/platform/preferences.hpp"
 #include "oa/platform/system.hpp"
+#include "oa/ui/engine_settings.hpp"
 #include <SDL3/SDL.h>
 #include <cinttypes>
 #include <cstdio>
@@ -27,6 +36,7 @@
 #include <iostream>
 #include <memory>
 #include <new>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -37,9 +47,24 @@
 #ifndef OA_ENGINE_VERSION
 #error "OA_ENGINE_VERSION names the engine's version, which the renderer records are written under"
 #endif
+#ifndef OA_NATIVE_DENSITY_WINDOWS
+#error "OA_NATIVE_DENSITY_WINDOWS (0 or 1) says whether the window opens at native density"
+#endif
+#ifndef OA_TOUCH_FIRST
+#error "OA_TOUCH_FIRST (0 or 1) says whether the touch controls are on from the start"
+#endif
 
 namespace oa::app {
 namespace {
+
+// The platform the game is built for opens its windows at the display's own
+// pixel density, where it would otherwise scale a lower-density window
+// softly (the OA_NATIVE_DENSITY_WINDOWS build option; off on the desktop).
+constexpr bool kNativeDensityWindows = OA_NATIVE_DENSITY_WINDOWS != 0;
+// The touch controls are on from the start (the OA_TOUCH_FIRST build option;
+// off on the desktop, where the first finger or --touch-controls switches
+// them on and the runtime sets their input hints then).
+constexpr bool kTouchFirst = OA_TOUCH_FIRST != 0;
 
 // Process exit status after an out-of-memory report.
 constexpr int kOutOfMemoryExitStatus = 3;
@@ -172,6 +197,9 @@ struct HostDisplay {
     // the probe found of it.
     RendererHost renderer_host{};
     bool active = false;
+    /// initialize has run: the window opens once, early for the Game files
+    /// screen or where the game opens it.
+    bool initialized = false;
     // The mode Alt+Enter last asked for while the intro movies play.
     FullScreenSwitch full_screen{};
 
@@ -185,12 +213,17 @@ struct HostDisplay {
     /// first frame is drawn in, from the flags and the Hardware acceleration
     /// setting read before the window opens (RendererHost::decide_start_tier).
     /// A window of a set screen size takes the display mode nearest it in
-    /// full screen.
+    /// full screen. A build whose touch controls are on from the start sets
+    /// their input hints before SDL starts (set_input_hints), and the
+    /// platform's window_ready hook, when there is one, is told once the
+    /// window and its renderer are made.
     ///
     /// Throws std::runtime_error when SDL, the window or the renderer fails.
+    /// It runs at most once (initialized).
     ///
     /// @param options the parsed command line
     void initialize(const Options& options) {
+        initialized = true;
         if (!SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1"))
             throw std::runtime_error("SDL mouse focus click-through hint was rejected");
         // Closing the window reaches the game as a close request, which a
@@ -201,6 +234,10 @@ struct HostDisplay {
         // A capture takes the game's sound for itself before SDL starts it.
         if (!options.capture_video.empty())
             prepare_capture_audio(options.capture_video);
+        // Touch controls on from the start read fingers and the pen with
+        // their own hints from the first event; a desktop build keeps SDL's.
+        if constexpr (kTouchFirst)
+            set_input_hints();
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO))
             throw std::runtime_error(std::string("SDL_Init: ") + SDL_GetError());
         active = true;
@@ -218,6 +255,7 @@ struct HostDisplay {
         // own only where the rule allows it (decide_window_density).
         DensityRequest density;
         density.flag = options.hardware_acceleration;
+        density.platform_native = kNativeDensityWindows;
         density.asked = options.native_density;
         density.setting = start.hardware_acceleration;
         density.unattended = options.unattended;
@@ -253,6 +291,10 @@ struct HostDisplay {
         request.players_own_profile = !options.preferences_file.has_value();
         request.setting = start.hardware_acceleration;
         renderer_host.decide_start_tier(request);
+        // The platform finishes the window once it shows the renderer's
+        // view; the desktop has no such hook.
+        if (const PlatformHooks& hooks = platform_hooks(); hooks.window_ready != nullptr)
+            hooks.window_ready(hooks.context, window);
     }
 
     /// Ends the run's renderer records cleanly, deleting the sentinel, and
@@ -379,6 +421,109 @@ void start_log() {
     }
 }
 
+/// What the start needs where the platform brings game files in: the
+/// import's folders, the backups setting, what the start's recovery found
+/// and whether the Game files screen may open.
+struct GameFilesStart {
+    /// The platform's hooks are installed, and the game folder and the data
+    /// folder are known: what an import left is taken up at the start and
+    /// the backups setting is applied after resolution.
+    bool installed{};
+    /// The screen may be offered as well: the player did not ask for the
+    /// notice instead (--no-game-files-screen).
+    bool offered{};
+    game_files::ImportPaths paths{};            ///< the game folder, staging and state
+    oa::platform::preferences::Values values{}; ///< the preferences, for the backups and the mod
+    bool backed_up{};                           ///< the game files are kept in device backups
+    game_files::RecoveryResult recovery{};      ///< what the start's recovery found
+};
+
+/// Prepares the start where the platform brings game files in: the
+/// import's folders, the backups setting from the preferences, and the
+/// recovery of an import a stop or a change for this start left (renames
+/// only), with or without the screen (--no-game-files-screen). Without the
+/// hooks nothing is done.
+///
+/// @param options the parsed command line
+/// @return what the start needs; nothing installed without the hooks
+GameFilesStart start_game_files(const Options& options) {
+    GameFilesStart start;
+    const GameFilesHooks& hooks = game_files_hooks();
+    if (!game_files_import_offered(hooks))
+        return start;
+    std::string game_folder;
+    if (!hooks.game_folder(hooks.context, &game_folder) || game_folder.empty())
+        return start;
+    fs::path data_folder;
+    if (options.data_dir) {
+        data_folder = *options.data_dir;
+    } else {
+        try {
+            data_folder = oa::platform::preferences::data_directory();
+        } catch (const std::exception& error) {
+            std::cerr << "open-annihilation: the game files cannot be brought in: " << error.what()
+                      << '\n';
+            return start;
+        }
+    }
+    start.installed = true;
+    start.offered = !options.no_game_files_screen;
+    start.paths = game_files::import_paths(path_from_utf8(game_folder), data_folder);
+    // An unattended run reads only a preferences file it was given.
+    if (!options.unattended || options.preferences_file)
+        start.values = oa::platform::preferences::load(preference_file(options.preferences_file));
+    start.backed_up =
+        oa::ui::engine_settings::read_settings(start.values, {}, false).game_files_backed_up;
+    start.recovery = game_files::recover_import(hooks, start.paths, start.backed_up);
+    return start;
+}
+
+/// Runs the Game files screen until the game folder resolves: the window
+/// opens first, once, and stays for the game. Each PLAY resolves the folder
+/// again; a refused folder opens the screen again with the reason.
+///
+/// @param options the parsed command line
+/// @param display the game's display, initialised here when it is not yet
+/// @param start the import's folders, the preferences and the recovery
+/// @param[in,out] needed why there is no folder; resolution fills it again
+/// @param[out] game_directory the folder, once it resolves
+/// @return true to go on with the start; false when the screen was closed
+bool run_game_files_until_resolved(
+    const Options& options,
+    HostDisplay& display,
+    GameFilesStart& start,
+    GameFilesNeeded& needed,
+    std::optional<GameDirectory>& game_directory
+) {
+    while (!game_directory && needed.needed) {
+        if (!display.initialized)
+            display.initialize(options);
+        GameFilesScreenRequest request;
+        request.window = display.window;
+        request.renderer = display.renderer_host.renderer();
+        request.host = &display.renderer_host;
+        request.entry = GameFilesEntry::first_run;
+        request.paths = start.paths;
+        request.recovery = start.recovery;
+        request.needed = needed;
+        request.mod.folder = chosen_mod_directory(options.mod_dir, options.base_game, start.values);
+        request.mod.profile_file = options.mod_file;
+        request.mod.accept_unimplemented_hacks = options.accept_unimplemented_hacks;
+        request.mod.preferences = &start.values;
+        request.version = std::string("v") + OA_ENGINE_VERSION;
+        request.preferences_file = options.preferences_file;
+        request.players_own_profile = !options.preferences_file.has_value();
+        if (options.check_game_files)
+            request.check = game_files_check_hooks(options);
+        if (run_game_files_screen(request) == GameFilesEnd::quit)
+            return false;
+        // The continue banner shows once.
+        start.recovery = {};
+        game_directory = find_game_directory(options, &needed);
+    }
+    return true;
+}
+
 // A fatal error goes to the log, and to the terminal the game was started
 // from; a game started from the desktop has no terminal, so it shows in an
 // error box instead.
@@ -408,6 +553,10 @@ int main(int argc, char** argv) {
         const ExtensionList extensions(registered_extensions());
         const Extension& extension = extensions.combined();
         auto options = parse_options(argc, argv, extension);
+        // The Game files screen's check installs its scripted platform
+        // before anything reads the hooks.
+        if (options.check_game_files)
+            install_game_files_check(options);
         // --print-profile prints the resolved mod profile and stops.
         if (options.print_profile)
             return print_mod_profile(
@@ -424,13 +573,30 @@ int main(int argc, char** argv) {
         if (!options.headless_check && !options.unattended &&
             !oa::platform::log_files::output_captured())
             start_log();
+        // Where the platform brings game files in, what a stopped import or
+        // a change waiting for this start left is taken up before the
+        // folder is looked for.
+        GameFilesStart game_files = start_game_files(options);
+        // The window opens where the game opens it, or early for the Game
+        // files screen, and only once.
+        HostDisplay display;
         // The game folder's profile, --mod's or the mod folder's or its own,
         // is resolved while the folder is inspected, before any archive is
         // mounted, so that one the engine cannot use stops the run with its
         // errors.
-        auto game_directory = find_game_directory(options);
+        GameFilesNeeded needed;
+        auto game_directory = find_game_directory(options, game_files.offered ? &needed : nullptr);
+        // Without a usable folder, the Game files screen brings one in.
+        if (!run_game_files_until_resolved(options, display, game_files, needed, game_directory))
+            return options.check_game_files ? finish_game_files_check(options, 0) : 0;
         if (!game_directory)
-            return 1;
+            return options.check_game_files ? finish_game_files_check(options, 1) : 1;
+        // The game files are kept out of device backups unless the player
+        // put them back in, with or without the screen.
+        if (game_files.installed)
+            game_files::apply_backup_setting(
+                game_files_hooks(), game_files.paths, game_files.backed_up
+            );
         // A folder that held the demo's installer is played from the folder
         // its archive was unpacked to, and remembered as chosen.
         options.game_dir = game_directory->installation;
@@ -468,9 +634,13 @@ int main(int argc, char** argv) {
         }
         // Every later read of game data uses the profile's layout.
         oa::data::defs::use_data_layout(data_layout_of(options.mod_profile.get()));
-        HostDisplay display;
-        if (!options.headless_check)
+        if (!options.headless_check && !display.initialized)
             display.initialize(options);
+        // The Game files check's management route runs its pass over the
+        // installed folder before the game starts.
+        if (options.check_game_files && options.game_files_route == GameFilesRoute::manage &&
+            !run_game_files_manage_check(options, display.window, display.renderer_host.renderer()))
+            return finish_game_files_check(options, 1);
         play_intro(options, options.headless_check ? nullptr : &display);
         // The movies present on the game's renderer.
         oa::base::float_precision::restore_program_float_control();
@@ -501,6 +671,11 @@ int main(int argc, char** argv) {
                 throw std::runtime_error(std::string("SDL window size: ") + SDL_GetError());
             capture = std::make_unique<VideoCapture>(options.capture_video, width, height);
         }
+        // The Game files check reads its options again for its verdict once
+        // the runtime, which takes them, has run.
+        std::optional<Options> checked_options;
+        if (options.check_game_files)
+            checked_options = options;
         // The runtime holds hundreds of kilobytes of game state, so it lives
         // on the heap: the main thread's stack is 1 MiB on Windows.
         const auto runtime = std::make_unique<Runtime>(
@@ -513,7 +688,8 @@ int main(int argc, char** argv) {
         );
         runtime->take_video_capture(std::move(capture));
         runtime->take_full_screen_switch(display.full_screen);
-        return runtime->run();
+        const int status = runtime->run();
+        return checked_options ? finish_game_files_check(*checked_options, status) : status;
     } catch (const std::exception& error) {
         report_fatal(error.what());
         return 1;

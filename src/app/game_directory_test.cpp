@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// Game directory resolution order with a scripted dialog host, installation
-// checks on synthetic installs, and the stored folder's preference round trip.
+// Game directory resolution order with a scripted dialog host, with and
+// without the platform's default folder and advice and with no dialog at all,
+// installation checks on synthetic installs, and the stored folder's
+// preference round trip.
 // With --install it checks that the installation OA_GAME_DIR names is usable.
 #include "oa/app/game_directory.hpp"
 #include "oa/formats/hpi.hpp"
@@ -11,11 +13,14 @@
 #include <chrono>
 #include <cstdio>
 #include <fstream>
+#include <functional>
 #include <initializer_list>
 #include <map>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -47,8 +52,48 @@ struct ScriptedHost {
     std::vector<Notice> kinds;
     std::vector<std::string> notices;
     std::size_t inspections = 0;
+    // The look-again notice: the texts and labels it was shown with, what
+    // each press changes before resolution looks again, and how many times
+    // it can be shown at all.
+    std::vector<std::string> asked;
+    std::vector<std::string> labels;
+    std::vector<std::function<void(ScriptedHost&)>> presses;
+    std::size_t shown_at_most = 1000;
+    // What looking for the platform's default folder again finds, and how
+    // many times it was looked for.
+    std::optional<fs::path> platform_found;
+    std::size_t platform_lookups = 0;
 
     GameDirectoryHost host() { return {this, pick_folder, tell_user, inspect}; }
+
+    // The host with the look-again notice and the platform's search.
+    GameDirectoryHost asking_host() {
+        auto h = host();
+        h.ask = ask;
+        h.find_platform_default = find_platform_default;
+        return h;
+    }
+
+    static bool ask(void* context, Notice kind, std::string_view text, std::string_view button) {
+        auto& self = *static_cast<ScriptedHost*>(context);
+        if (self.asked.size() >= self.shown_at_most)
+            return false;
+        self.kinds.push_back(kind);
+        self.asked.emplace_back(text);
+        self.labels.emplace_back(button);
+        if (self.asked.size() <= self.presses.size())
+            self.presses[self.asked.size() - 1](self);
+        return true;
+    }
+
+    static bool find_platform_default(void* context, fs::path* folder) {
+        auto& self = *static_cast<ScriptedHost*>(context);
+        ++self.platform_lookups;
+        if (!self.platform_found)
+            return false;
+        *folder = *self.platform_found;
+        return true;
+    }
 
     static FolderPick
     pick_folder(void* context, const fs::path& start, fs::path* chosen, std::string* error) {
@@ -349,6 +394,688 @@ void check_resolution_order() {
     }
 }
 
+const fs::path kPlatform = "/container/Documents/Total Annihilation";
+constexpr const char* kAdvice =
+    "Copy your Total Annihilation folder into the game's Documents folder.";
+
+// A request with the platform's default folder and advice, as
+// find_game_directory fills it where the platform's hooks give them.
+GameDirectoryRequest platform_request(
+    const fs::path& platform,
+    std::optional<std::string> stored,
+    bool unattended = false,
+    std::string advice = kAdvice
+) {
+    GameDirectoryRequest request;
+    request.stored = std::move(stored);
+    request.unattended = unattended;
+    request.platform_default = platform;
+    request.platform_advice = std::move(advice);
+    return request;
+}
+
+// The scripted host as a build without the folder dialog gives it: no
+// dialog to pick with.
+GameDirectoryHost without_dialog(ScriptedHost& host) {
+    auto h = host.host();
+    h.pick_folder = nullptr;
+    return h;
+}
+
+void check_platform_default() {
+    {
+        auto host = with_installs();
+        host.installs[kPlatform] = true;
+        auto h = host.host();
+        auto request = platform_request(kPlatform, path_to_utf8(kGog));
+        request.argument = kCd;
+        const auto result = resolve_game_directory(request, h);
+        expect(
+            result && result->path == kCd && result->source == GameDirectorySource::argument &&
+                host.inspections == 1,
+            "--game-dir wins over the platform's default folder, which is not looked at"
+        );
+    }
+    {
+        auto host = with_installs();
+        host.installs[kPlatform] = true;
+        auto h = host.host();
+        const auto result =
+            resolve_game_directory(platform_request(kPlatform, path_to_utf8(kGog)), h);
+        expect(
+            result && result->path == kPlatform && result->installation == kPlatform &&
+                result->source == GameDirectorySource::platform && result->archives.size() == 1,
+            "a usable platform default wins over a usable stored folder"
+        );
+        expect(
+            host.starts.empty() && host.notices.empty() && host.inspections == 1,
+            "a usable platform default asks nothing and looks at nothing else"
+        );
+        expect(
+            result && result->source != GameDirectorySource::chosen,
+            "a platform default is not remembered as the chosen folder"
+        );
+    }
+    {
+        auto host = with_installs();
+        auto h = host.host();
+        const auto result =
+            resolve_game_directory(platform_request(kPlatform, path_to_utf8(kGog)), h);
+        expect(
+            result && result->path == kGog && result->source == GameDirectorySource::stored &&
+                host.starts.empty() && host.notices.empty() && host.inspections == 2,
+            "a missing platform default falls back to the usable stored folder without a notice"
+        );
+    }
+    {
+        auto host = with_installs();
+        host.installs[kPlatform] = false;
+        auto h = host.host();
+        const auto result =
+            resolve_game_directory(platform_request(kPlatform, path_to_utf8(kGog)), h);
+        expect(
+            result && result->path == kGog && result->source == GameDirectorySource::stored,
+            "a platform default without archives falls back to the stored folder"
+        );
+    }
+    {
+        auto host = with_installs();
+        host.unreadable = {{kPlatform, "No mapping for the Unicode character"}};
+        auto h = host.host();
+        const auto result =
+            resolve_game_directory(platform_request(kPlatform, path_to_utf8(kGog)), h);
+        expect(
+            result && result->path == kGog && result->source == GameDirectorySource::stored,
+            "a platform default the check cannot read falls back to the stored folder"
+        );
+    }
+    {
+        auto host = with_installs();
+        host.installs[kPlatform] = true;
+        auto h = host.host();
+        const auto result =
+            resolve_game_directory(platform_request(kPlatform, path_to_utf8(kMoved), true), h);
+        expect(
+            result && result->path == kPlatform &&
+                result->source == GameDirectorySource::platform && host.notices.empty(),
+            "an unattended run takes a usable platform default before the stored folder"
+        );
+    }
+    {
+        auto host = with_installs();
+        auto h = host.host();
+        const auto result =
+            resolve_game_directory(platform_request(kPlatform, path_to_utf8(kGog), true), h);
+        expect(
+            result && result->path == kGog && result->source == GameDirectorySource::stored,
+            "an unattended run falls back from a missing platform default to the stored folder"
+        );
+    }
+    {
+        auto host = with_installs();
+        auto h = host.host();
+        std::string refusal;
+        try {
+            (void)resolve_game_directory(platform_request(kPlatform, std::nullopt, true), h);
+        } catch (const std::runtime_error& error) {
+            refusal = error.what();
+        }
+        expect(
+            contains(refusal, path_to_utf8(kPlatform)) &&
+                contains(refusal, "The folder does not exist.") &&
+                contains(refusal, "--game-dir PATH") && host.starts.empty() && host.notices.empty(),
+            "an unattended run with neither folder names the platform default and --game-dir"
+        );
+    }
+    {
+        auto host = with_installs();
+        host.installs[kPlatform] = true;
+        host.picks = {{FolderPick::chosen, kCd, {}}};
+        auto h = host.host();
+        auto request = platform_request(kPlatform, path_to_utf8(kGog));
+        request.choose = true;
+        const auto result = resolve_game_directory(request, h);
+        expect(
+            result && result->path == kCd && result->source == GameDirectorySource::chosen &&
+                host.starts.size() == 1 && host.starts[0] == kGog,
+            "--choose-game-dir passes over a usable platform default to the dialog"
+        );
+    }
+    {
+        auto host = with_installs();
+        host.picks = {{FolderPick::chosen, kCd, {}}};
+        auto h = host.host();
+        const auto result = resolve_game_directory(platform_request(kPlatform, std::nullopt), h);
+        expect(
+            result && result->path == kCd && result->source == GameDirectorySource::chosen,
+            "a first run with a missing platform default asks with the dialog"
+        );
+        expect(
+            host.starts.size() == 1 && host.starts[0] == kPlatform,
+            "the dialog opens where the platform keeps the game"
+        );
+        expect(
+            host.notices.size() == 1 && host.kinds[0] == Notice::information &&
+                contains(host.notices[0], path_to_utf8(kPlatform)) &&
+                contains(host.notices[0], "The folder does not exist.") &&
+                contains(host.notices[0], "totala1.hpi"),
+            "the first run says where the game was looked for before the dialog"
+        );
+    }
+    {
+        auto host = with_installs();
+        host.picks = {
+            {FolderPick::unavailable, {}, "File dialog driver unsupported"},
+            {FolderPick::unavailable, {}, "File dialog driver unsupported"},
+        };
+        auto h = host.host();
+        const auto result =
+            resolve_game_directory(platform_request(kPlatform, path_to_utf8(kMoved)), h);
+        expect(!result, "no usable folder and no dialog does not start the game");
+        expect(
+            host.notices.size() == 2 && host.kinds[1] == Notice::warning &&
+                contains(host.notices[1], "File dialog driver unsupported") &&
+                contains(host.notices[1], kAdvice) && !contains(host.notices[1], "--game-dir"),
+            "an unavailable dialog gives the platform's advice in place of --game-dir"
+        );
+    }
+}
+
+void check_without_dialog() {
+    {
+        auto host = with_installs();
+        host.picks = {{FolderPick::chosen, kCd, {}}};
+        const auto h = without_dialog(host);
+        const auto result = resolve_game_directory(platform_request(kPlatform, std::nullopt), h);
+        expect(!result, "without a dialog, no usable folder does not start the game");
+        expect(host.starts.empty(), "a build without the folder dialog never asks for a folder");
+        expect(
+            host.notices.size() == 1 && host.kinds[0] == Notice::warning &&
+                contains(host.notices[0], path_to_utf8(kPlatform)) &&
+                contains(host.notices[0], "The folder does not exist.") &&
+                contains(host.notices[0], kAdvice) && !contains(host.notices[0], "--game-dir"),
+            "without a dialog, one notice says where the game was looked for and the advice"
+        );
+    }
+    {
+        auto host = with_installs();
+        host.installs[kPlatform] = false;
+        host.picks = {{FolderPick::chosen, kCd, {}}};
+        const auto h = without_dialog(host);
+        const auto result =
+            resolve_game_directory(platform_request(kPlatform, path_to_utf8(kMoved)), h);
+        expect(!result && host.starts.empty(), "without a dialog, a moved folder is not asked for");
+        expect(
+            host.notices.size() == 1 && contains(host.notices[0], path_to_utf8(kPlatform)) &&
+                contains(host.notices[0], "no Total Annihilation archives") &&
+                contains(host.notices[0], "chosen earlier") &&
+                contains(host.notices[0], "/games/moved") && contains(host.notices[0], kAdvice),
+            "without a dialog, the notice gives why each folder cannot be played"
+        );
+    }
+    {
+        auto host = with_installs();
+        const auto h = without_dialog(host);
+        const auto result = resolve_game_directory({{}, path_to_utf8(kMoved), false, false}, h);
+        expect(!result && host.starts.empty(), "without a dialog or a platform default, nothing");
+        expect(
+            host.notices.size() == 1 && contains(host.notices[0], "chosen earlier") &&
+                contains(host.notices[0], "--game-dir PATH"),
+            "without the platform's advice, the notice names --game-dir"
+        );
+    }
+    {
+        auto host = with_installs();
+        const auto h = without_dialog(host);
+        const auto result = resolve_game_directory({}, h);
+        expect(
+            !result && host.notices.size() == 1 &&
+                contains(host.notices[0], "needs your Total Annihilation installation") &&
+                contains(host.notices[0], "--game-dir PATH"),
+            "a first run without a dialog or platform names --game-dir"
+        );
+    }
+    {
+        auto host = with_installs();
+        host.installs[kPlatform] = true;
+        const auto h = without_dialog(host);
+        const auto result = resolve_game_directory(platform_request(kPlatform, std::nullopt), h);
+        expect(
+            result && result->source == GameDirectorySource::platform && host.notices.empty(),
+            "without a dialog, a usable platform default starts the game"
+        );
+    }
+    {
+        auto host = with_installs();
+        const auto h = without_dialog(host);
+        const auto result =
+            resolve_game_directory(platform_request(kPlatform, path_to_utf8(kGog)), h);
+        expect(
+            result && result->path == kGog && result->source == GameDirectorySource::stored &&
+                host.notices.empty(),
+            "without a dialog, a usable stored folder still starts the game"
+        );
+    }
+    {
+        auto host = with_installs();
+        const auto h = without_dialog(host);
+        auto request = platform_request(kPlatform, path_to_utf8(kGog));
+        request.choose = true;
+        std::string refusal;
+        try {
+            (void)resolve_game_directory(request, h);
+        } catch (const std::runtime_error& error) {
+            refusal = error.what();
+        }
+        expect(
+            contains(refusal, "--choose-game-dir") && contains(refusal, "does not offer") &&
+                host.notices.empty(),
+            "--choose-game-dir is refused where the build offers no dialog"
+        );
+    }
+}
+
+// The missing-folder notice's look-again button (Phase 0 of bringing the
+// game files in): the notice stays up, looking again after each press,
+// until a folder can be played.
+void check_look_again() {
+    constexpr const char* kLabel = "Check again";
+    {
+        // The folder is copied while the notice shows: missing at the start,
+        // there without its archives after the first press, whole after the
+        // second.
+        auto host = with_installs();
+        host.presses = {
+            [](ScriptedHost& self) {
+                self.platform_found = kPlatform;
+                self.installs[kPlatform] = false;
+            },
+            [](ScriptedHost& self) { self.installs[kPlatform] = true; },
+        };
+        auto h = without_dialog(host);
+        h.ask = ScriptedHost::ask;
+        h.find_platform_default = ScriptedHost::find_platform_default;
+        auto request = platform_request({}, std::nullopt);
+        request.check_again_label = kLabel;
+        const auto result = resolve_game_directory(request, h);
+        expect(
+            result && result->path == kPlatform &&
+                result->source == GameDirectorySource::platform && result->archives.size() == 1,
+            "the look-again notice goes on into the game once the folder can be played"
+        );
+        expect(
+            host.asked.size() == 2 && host.labels.size() == 2 && host.labels[0] == kLabel &&
+                host.labels[1] == kLabel && host.kinds[0] == Notice::warning,
+            "the notice is shown with the platform's one button until the folder is usable"
+        );
+        expect(
+            host.platform_lookups == 2 && host.notices.empty() && host.starts.empty(),
+            "each press looks for the platform's folder again, and nothing else is told"
+        );
+        expect(
+            host.asked.size() == 2 &&
+                host.asked[0] ==
+                    std::string("Open Annihilation needs your Total Annihilation files.\n\n") +
+                        kAdvice,
+            "the look-again notice asks for the files, then gives the platform's advice"
+        );
+        expect(
+            host.asked.size() == 2 && !contains(host.asked[0], "It looks for it first in") &&
+                contains(host.asked[0], kAdvice) &&
+                contains(
+                    host.asked[1], "It looks for it first in:\n\n" + path_to_utf8(kPlatform)
+                ) &&
+                contains(host.asked[1], "no Total Annihilation archives") &&
+                contains(host.asked[1], kAdvice),
+            "the notice names the platform's folder and why once the folder is there"
+        );
+    }
+    {
+        // The folder chosen earlier comes back usable: it is taken after
+        // the platform's, which is still not there.
+        auto host = with_installs();
+        host.installs.erase(kGog);
+        host.presses = {[](ScriptedHost& self) { self.installs[kGog] = true; }};
+        auto h = without_dialog(host);
+        h.ask = ScriptedHost::ask;
+        h.find_platform_default = ScriptedHost::find_platform_default;
+        auto request = platform_request(kPlatform, path_to_utf8(kGog));
+        request.check_again_label = kLabel;
+        const auto result = resolve_game_directory(request, h);
+        expect(
+            result && result->path == kGog && result->source == GameDirectorySource::stored &&
+                host.asked.size() == 1 && host.platform_lookups == 1,
+            "a press takes the stored folder when the platform's is not there"
+        );
+        expect(
+            host.asked.size() == 1 &&
+                contains(
+                    host.asked[0], "It looks for it first in:\n\n" + path_to_utf8(kPlatform)
+                ) &&
+                contains(host.asked[0], "chosen earlier") &&
+                contains(host.asked[0], path_to_utf8(kGog)),
+            "the first notice says why each folder looked at cannot be played"
+        );
+    }
+    {
+        // Without the platform's search the start's folder is looked at again.
+        auto host = with_installs();
+        host.installs[kPlatform] = false;
+        host.presses = {[](ScriptedHost& self) { self.installs[kPlatform] = true; }};
+        auto h = without_dialog(host);
+        h.ask = ScriptedHost::ask;
+        auto request = platform_request(kPlatform, std::nullopt);
+        request.check_again_label = kLabel;
+        const auto result = resolve_game_directory(request, h);
+        expect(
+            result && result->path == kPlatform && host.asked.size() == 1 &&
+                host.platform_lookups == 0,
+            "without the platform's search the start's platform folder is looked at again"
+        );
+    }
+    {
+        // A notice that cannot be shown ends the start as before.
+        auto host = with_installs();
+        host.shown_at_most = 0;
+        auto h = without_dialog(host);
+        h.ask = ScriptedHost::ask;
+        h.find_platform_default = ScriptedHost::find_platform_default;
+        auto request = platform_request(kPlatform, std::nullopt);
+        request.check_again_label = kLabel;
+        const auto result = resolve_game_directory(request, h);
+        expect(
+            !result && host.asked.empty() && host.platform_lookups == 0 && host.notices.empty(),
+            "a look-again notice that cannot be shown ends the start, looking no further"
+        );
+    }
+    {
+        // A press after which the notice can no longer be shown ends it too.
+        auto host = with_installs();
+        host.shown_at_most = 1;
+        auto h = without_dialog(host);
+        h.ask = ScriptedHost::ask;
+        h.find_platform_default = ScriptedHost::find_platform_default;
+        auto request = platform_request(kPlatform, std::nullopt);
+        request.check_again_label = kLabel;
+        const auto result = resolve_game_directory(request, h);
+        expect(
+            !result && host.asked.size() == 1 && host.platform_lookups == 1,
+            "the notice ends the start once it cannot be shown again"
+        );
+    }
+    {
+        // Without the label, or without a host that can ask, the notice is
+        // today's, word for word.
+        const std::string expected = "Open Annihilation needs your Total Annihilation "
+                                     "installation.\n\nIt looks for it first in:\n\n" +
+                                     path_to_utf8(kPlatform) +
+                                     "\n\nThe folder does not exist.\n\nThe Total Annihilation "
+                                     "folder chosen earlier can no longer be used:\n\n" +
+                                     path_to_utf8(kMoved) + "\n\nThe folder does not exist.\n\n" +
+                                     kAdvice;
+        auto host = with_installs();
+        auto h = without_dialog(host);
+        h.ask = ScriptedHost::ask;
+        h.find_platform_default = ScriptedHost::find_platform_default;
+        const auto result =
+            resolve_game_directory(platform_request(kPlatform, path_to_utf8(kMoved)), h);
+        expect(
+            !result && host.asked.empty() && host.notices.size() == 1 &&
+                host.notices[0] == expected && host.kinds[0] == Notice::warning,
+            "without the look-again label the notice is told once, as before"
+        );
+        auto unasked = with_installs();
+        auto plain = without_dialog(unasked);
+        auto request = platform_request(kPlatform, path_to_utf8(kMoved));
+        request.check_again_label = kLabel;
+        const auto told = resolve_game_directory(request, plain);
+        expect(
+            !told && unasked.notices.size() == 1 && unasked.notices[0] == expected,
+            "a host that cannot ask tells the notice once, as before"
+        );
+    }
+    {
+        // A first run without the platform's folder or a stored one gives
+        // the --game-dir advice word for word without the label.
+        auto host = with_installs();
+        auto h = without_dialog(host);
+        h.ask = ScriptedHost::ask;
+        const auto result = resolve_game_directory({}, h);
+        expect(
+            !result && host.asked.empty() && host.notices.size() == 1 &&
+                host.notices[0] ==
+                    "Open Annihilation needs your Total Annihilation installation.\n\nName "
+                    "your Total Annihilation folder on the command line:\n\n"
+                    "open-annihilation --game-dir PATH",
+            "the first run's notice without a platform is today's"
+        );
+    }
+    {
+        // An unattended run never shows the notice: it stops as before.
+        auto host = with_installs();
+        auto h = without_dialog(host);
+        h.ask = ScriptedHost::ask;
+        auto request = platform_request(kPlatform, std::nullopt, true);
+        request.check_again_label = kLabel;
+        std::string refusal;
+        try {
+            (void)resolve_game_directory(request, h);
+        } catch (const std::runtime_error& error) {
+            refusal = error.what();
+        }
+        expect(
+            contains(refusal, "--game-dir PATH") && host.asked.empty(),
+            "an unattended run with the label still stops with the --game-dir advice"
+        );
+    }
+    {
+        // A build with the folder dialog asks with it, label or not.
+        auto host = with_installs();
+        host.picks = {{FolderPick::chosen, kCd, {}}};
+        auto h = host.asking_host();
+        auto request = platform_request(kPlatform, std::nullopt);
+        request.check_again_label = kLabel;
+        const auto result = resolve_game_directory(request, h);
+        expect(
+            result && result->path == kCd && result->source == GameDirectorySource::chosen &&
+                host.asked.empty(),
+            "the folder dialog is used where the build offers it"
+        );
+    }
+}
+
+// Where the platform brings game files in, a start with no usable folder
+// reports it for the Game files screen instead of a notice.
+void check_game_files_offered() {
+    const auto offered_request =
+        [](const fs::path& platform, std::optional<std::string> stored, bool unattended = false) {
+            auto request = platform_request(platform, std::move(stored), unattended);
+            request.import_offered = true;
+            request.check_again_label = "Check again";
+            return request;
+        };
+    {
+        auto host = with_installs();
+        auto h = without_dialog(host);
+        h.ask = ScriptedHost::ask;
+        GameFilesNeeded needed;
+        needed.problem = "left over";
+        const auto result = resolve_game_directory(offered_request({}, std::nullopt), h, &needed);
+        expect(
+            !result && needed.needed && needed.folder.empty() && needed.problem.empty(),
+            "no platform folder and no stored one: the screen is needed, naming no folder"
+        );
+        expect(
+            host.notices.empty() && host.asked.empty() && host.starts.empty(),
+            "the screen offered shows no notice and asks nothing"
+        );
+    }
+    {
+        auto host = with_installs();
+        host.installs[kPlatform] = false;
+        auto h = without_dialog(host);
+        GameFilesNeeded needed;
+        const auto result =
+            resolve_game_directory(offered_request(kPlatform, path_to_utf8(kMoved)), h, &needed);
+        expect(
+            !result && needed.needed && needed.folder == kPlatform &&
+                needed.problem == "It holds no Total Annihilation archives (.hpi, .ufo, .ccx or "
+                                  "rev31.gp3 files)." &&
+                host.notices.empty() && host.inspections == 2,
+            "a platform folder that cannot be played is named with why, after the stored one"
+        );
+    }
+    {
+        auto host = with_installs();
+        auto h = without_dialog(host);
+        GameFilesNeeded needed;
+        needed.needed = true;
+        const auto result =
+            resolve_game_directory(offered_request(kPlatform, path_to_utf8(kGog)), h, &needed);
+        expect(
+            result && result->path == kGog && result->source == GameDirectorySource::stored &&
+                !needed.needed && host.notices.empty(),
+            "the stored folder is still tried first, and the report is cleared"
+        );
+    }
+    {
+        auto host = with_installs();
+        host.installs[kPlatform] = true;
+        auto h = without_dialog(host);
+        GameFilesNeeded needed;
+        const auto result =
+            resolve_game_directory(offered_request(kPlatform, path_to_utf8(kGog)), h, &needed);
+        expect(
+            result && result->source == GameDirectorySource::platform && !needed.needed &&
+                host.inspections == 1,
+            "a usable platform folder is taken first with the screen offered"
+        );
+    }
+    {
+        auto host = with_installs();
+        auto h = without_dialog(host);
+        GameFilesNeeded needed;
+        bool threw = false;
+        std::optional<GameDirectory> result;
+        try {
+            result = resolve_game_directory(
+                offered_request(kPlatform, path_to_utf8(kMoved), true), h, &needed
+            );
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        expect(
+            !threw && !result && needed.needed && needed.folder.empty(),
+            "an unattended run that checks the screen does not stop for lack of a folder"
+        );
+    }
+    {
+        auto host = with_installs();
+        host.picks = {{FolderPick::chosen, kCd, {}}};
+        auto h = host.host();
+        GameFilesNeeded needed;
+        const auto result = resolve_game_directory(offered_request({}, std::nullopt), h, &needed);
+        expect(
+            !result && needed.needed && host.starts.empty() && host.notices.empty(),
+            "with the screen offered the folder dialog does not open"
+        );
+    }
+    {
+        // Without the report to fill, the request plays as without the screen.
+        auto host = with_installs();
+        auto h = without_dialog(host);
+        const auto result = resolve_game_directory(offered_request(kPlatform, std::nullopt), h);
+        expect(
+            !result && host.notices.size() == 1 && contains(host.notices[0], kAdvice),
+            "the screen is offered only with a report to fill"
+        );
+    }
+    {
+        // --game-dir still wins, and a refused one still stops the start.
+        auto host = with_installs();
+        auto h = without_dialog(host);
+        GameFilesNeeded needed;
+        auto request = offered_request({}, std::nullopt);
+        request.argument = kCd;
+        const auto result = resolve_game_directory(request, h, &needed);
+        expect(
+            result && result->source == GameDirectorySource::argument && !needed.needed,
+            "--game-dir wins with the screen offered"
+        );
+    }
+}
+
+// The texts resolution shows for a folder that cannot be played.
+void check_problem_texts() {
+    GameInstall install;
+    install.problem = "No mapping for the Unicode character";
+    expect(
+        describe_install_problem(install) == "It could not be read: No mapping for the Unicode "
+                                             "character",
+        "a folder that could not be read says why"
+    );
+    install = GameInstall{};
+    install.folder = true;
+    install.profile_errors = {"oamod.yaml: unknown hack", "oamod.yaml: bad limit"};
+    expect(
+        describe_install_problem(install) ==
+            "Its mod profile cannot be used:\n  oamod.yaml: unknown hack\n  oamod.yaml: bad limit",
+        "a profile that cannot be used lists its errors"
+    );
+    install = GameInstall{};
+    expect(
+        describe_install_problem(install) == "The folder does not exist.",
+        "a missing folder says so"
+    );
+    install.folder = true;
+    expect(
+        describe_install_problem(install) ==
+            "It holds no Total Annihilation archives (.hpi, .ufo, .ccx or rev31.gp3 files).",
+        "a folder without archives names the archives"
+    );
+    install.archives = {"/games/x/totala1.hpi"};
+    install.missing = {"guis/mainmenu.gui", "gamedata/sound.tdf"};
+    expect(
+        describe_install_problem(install) ==
+            "Its archives lack guis/mainmenu.gui, gamedata/sound.tdf.",
+        "archives lacking resources name them"
+    );
+    DemoSetup demo;
+    demo.outcome = DemoOutcome::no_installer;
+    expect(
+        describe_archive_problem(demo) == "It holds no Total Annihilation archives (.hpi, .ufo, "
+                                          ".ccx or rev31.gp3 files) and no installer of the Total "
+                                          "Annihilation demo (1997).",
+        "a folder without the demo's installer says so"
+    );
+    demo.outcome = DemoOutcome::unrecognised;
+    demo.rejected = {"/games/x/setup.exe", "/games/x/other.exe"};
+    expect(
+        describe_archive_problem(demo) ==
+            "It holds no Total Annihilation archives (.hpi, .ufo, .ccx or rev31.gp3 files), and "
+            "setup.exe and other.exe are not the release of the Total Annihilation demo (1997) "
+            "that Open Annihilation recognises.",
+        "unrecognised installers are named"
+    );
+    demo = DemoSetup{};
+    demo.outcome = DemoOutcome::disk_full;
+    demo.installer = "/games/x/TA_Demo.exe";
+    demo.problem = "no space left on device";
+    expect(
+        describe_archive_problem(demo) ==
+            "It holds the installer of the Total Annihilation demo (1997), TA_Demo.exe, but the "
+            "disk is full: no space left on device.",
+        "a full disk while unpacking says so"
+    );
+    install = GameInstall{};
+    install.folder = true;
+    install.demo = demo;
+    expect(
+        describe_install_problem(install) == describe_archive_problem(demo),
+        "a folder without archives says what the search for the installer found"
+    );
+}
+
 void check_environment() {
     expect(!unattended_environment("", ""), "a desktop session may ask");
     expect(!unattended_environment("", "cocoa"), "a named desktop driver may ask");
@@ -427,6 +1154,47 @@ void check_installs(const fs::path& temporary) {
     expect(
         dialog_location(install / "gone" / "deeper") == location,
         "the dialog opens at the nearest existing folder"
+    );
+}
+
+// Archives that cannot be mounted are recorded, and files laid over a
+// folder come first.
+void check_skipped_and_overlay(const fs::path& temporary) {
+    const auto folder = temporary / "skipped";
+    fs::create_directories(folder);
+    write_file(
+        folder / "totala1.hpi",
+        archive_of({"guis/mainmenu.gui", "palettes/palette.pal", "gamedata/sidedata.tdf"})
+    );
+    write_file(folder / "ccdata.ccx", {'n', 'o', 't', ' ', 'a', 'n', ' ', 'a', 'r', 'c', 'h'});
+    const auto install = inspect_game_install(folder);
+    expect(
+        install.skipped.size() == 1 && install.skipped[0].path.filename() == "ccdata.ccx" &&
+            !install.skipped[0].error.empty(),
+        "an archive that cannot be mounted is recorded with what the mount said"
+    );
+    expect(
+        install.archives.size() == 1 && install.missing.size() == 1 &&
+            install.missing[0] == "gamedata/sound.tdf",
+        "the other archives are still taken"
+    );
+    const auto overlay = temporary / "overlay";
+    fs::create_directories(overlay);
+    write_file(overlay / "btdata.ccx", archive_of({"gamedata/sound.tdf"}));
+    const auto layered = inspect_game_install(folder, {}, demo_1997, {}, overlay);
+    expect(
+        layered.folders.size() == 2 && layered.folders.front() == overlay &&
+            layered.folders.back() == folder,
+        "the overlay comes before the folder"
+    );
+    expect(
+        usable(layered) && layered.archives.size() == 2,
+        "the overlay's archives are checked with the folder's"
+    );
+    const auto plain = inspect_game_install(folder);
+    expect(
+        plain.folders.size() == 1 && plain.folders.front() == folder,
+        "without an overlay the folder stands alone"
     );
 }
 
@@ -588,9 +1356,15 @@ int main(int argc, char** argv) {
         ("oa-game-directory-test-" +
          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     check_resolution_order();
+    check_platform_default();
+    check_without_dialog();
+    check_look_again();
+    check_game_files_offered();
+    check_problem_texts();
     check_environment();
     try {
         check_installs(temporary);
+        check_skipped_and_overlay(temporary);
         check_mod_folders(temporary);
         check_preferences(temporary);
     } catch (const std::exception& error) {

@@ -11,6 +11,7 @@
 #include "full_screen.hpp"
 #include "match_model_draws.hpp"
 #include "megamap_state.hpp"
+#include "platform_hooks.hpp"
 #include "offline_services.hpp"
 #include "scaled_world.hpp"
 #include "video_capture.hpp"
@@ -1532,6 +1533,326 @@ class Runtime final : public menu::Host,
     // through OA_RUNTIME_EXTENSION_MEMBERS declares a friend of its own there.
     friend class NetworkPlay;
 
+    // ---- Touch controls (docs/touch-controls.md) --------------------------------------
+
+    /// Which Shift a modifier read stands for: the hardware keyboard's alone, or with the
+    /// touch latch that gives Shift to that kind of action.
+    enum class ModifierUse : uint8_t {
+        keyboard,     ///< keys and checks: the keyboard and a synthetic key's pulse only
+        selection,    ///< selection taps, boxes and group recall: + ADD
+        order,        ///< orders, area orders, placement and the queued-order overlays: + QUEUE
+        build_button, ///< build buttons' +5/-5: + x5
+    };
+
+    /// Returns the modifiers for a use: SDL_GetModState(), the pulse a synthetic key carries, and
+    /// SDL_KMOD_LSHIFT when the use's latch is active.
+    ///
+    /// Without touch state it is exactly SDL_GetModState(). Every place the engine reads the
+    /// modifier keys asks this for its own use. [runtime_input_modifiers.cpp]
+    ///
+    /// @param use what the read is for
+    /// @return SDL_Keymod bits
+    [[nodiscard]] SDL_Keymod input_modifiers(ModifierUse use) const;
+
+    /// Returns whether the touch latch for a use gives Shift now (false for keyboard).
+    /// [runtime_input_modifiers.cpp]
+    ///
+    /// @param use what the read is for
+    /// @return whether QUEUE, ADD or x5 (by use) is latched or held; false without touch state
+    [[nodiscard]] bool virtual_shift(ModifierUse use) const;
+
+    /// Rewrites the Shift and Control bits of Game.pointer_state[2] from input_modifiers(order),
+    /// so queueing() follows a latch changed with no pointer event since.
+    ///
+    /// No-op outside a running match. [runtime_input_modifiers.cpp]
+    void refresh_pointer_modifiers();
+
+    /// Runs a key through handle_match_hotkey as if pressed with `mods`.
+    ///
+    /// `mods` are held as the pulse for the call, so every input_modifiers read sees them.
+    /// [runtime_input_modifiers.cpp]
+    ///
+    /// @param key the key pressed
+    /// @param mods SDL_Keymod bits held with it
+    void press_match_key(SDL_Keycode key, SDL_Keymod mods);
+
+    /// Rewrites a hardware key event with Cmd held into the key it stands for while touch
+    /// controls are active: Cmd+. → Escape, Cmd+1..4 → F1..F4, Cmd+P → Pause (Cmd removed).
+    ///
+    /// Leaves every other event unchanged. [runtime_input_modifiers.cpp]
+    ///
+    /// @param[in,out] event the event dispatch_event is given
+    void remap_command_key(SDL_Event& event) const;
+
+    /// Plays a haptic through the platform hook when the Touch setting allows haptics.
+    /// [runtime_input_modifiers.cpp]
+    ///
+    /// @param kind the moment the haptic marks
+    void play_haptic(oa::app::Haptic kind) const;
+
+    /// The touch controls' state (touch_state.hpp).
+    struct TouchState;
+
+    /// Frees the touch state. [runtime_touch.cpp]
+    ///
+    /// @param state state to free; null is allowed
+    static void destroy_touch_state(TouchState* state) noexcept;
+
+    /// Returns the touch state, made on first use. [runtime_touch.cpp]
+    ///
+    /// @return the state
+    TouchState& touch_state();
+
+    /// Returns the touch state, or null when none was made. [runtime_touch.cpp]
+    ///
+    /// @return the state, or null
+    [[nodiscard]] const TouchState* touch_state_if_made() const;
+
+    /// Takes finger events (and, under SDL 3.4, pinch events while two battlefield fingers are
+    /// down) and a real pointer's clicks on touch controls. [runtime_touch.cpp]
+    ///
+    /// @param[in,out] event the event dispatch_event is given
+    /// @param[in,out] running cleared when the event ends the run
+    /// @return whether the event was taken
+    bool take_touch_event(SDL_Event& event, bool& running);
+
+    /// Runs the touch controls' frame: hold timers, inertia, auto-scroll, the ghost anchor, the
+    /// hover point, the status text and the layout. Called from idle_tick. [runtime_touch.cpp]
+    void tick_touch();
+
+    /// Drops every finger: the screen changed and its events were flushed. [runtime_touch.cpp]
+    void touch_screen_changed();
+
+    /// Prepares the touch controls for a match that just started. [runtime_touch.cpp]
+    void touch_match_started();
+
+    /// Returns whether touch controls are on.
+    ///
+    /// They are on when the build sets OA_TOUCH_FIRST, when the command line passes
+    /// --touch-controls, when a direct-touch finger has arrived in this run, or when the touch
+    /// check forces them; once on they stay on for the run. [runtime_touch.cpp]
+    ///
+    /// @return whether touch controls are on
+    [[nodiscard]] bool touch_controls_active() const;
+
+    /// Returns how many fingers are down on any claimed target (0 without touch state), so the
+    /// frame pacing and the end screen treat a resting finger as a held button.
+    /// [runtime_touch.cpp; the Interfaces stage writes the real body over TouchDispatch's count]
+    ///
+    /// @return fingers down
+    [[nodiscard]] uint8_t touch_finger_count() const;
+
+    /// Returns canvas pixels per window point on the current screen.
+    ///
+    /// On the match it is match_layout_.px_per_point; on frontend screens the canvas width over
+    /// the width, in window points, of the logical presentation rectangle
+    /// (SDL_GetRenderLogicalPresentationRect, converted from output pixels with the render output
+    /// size over the window size); 1 without a window, and the canvas width over the window width
+    /// without a renderer. [runtime_touch.cpp; real body by the Interfaces stage]
+    ///
+    /// @return canvas pixels per window point, > 0
+    [[nodiscard]] float touch_px_per_point() const;
+
+    /// Returns whether the window is phone class: oa::ui::touch_hud::classify_device on the
+    /// window's size in points (the canvas size over touch_px_per_point() without a window).
+    /// [runtime_touch.cpp; real body by the Interfaces stage]
+    ///
+    /// @return whether the phone layout applies
+    [[nodiscard]] bool touch_phone_class() const;
+
+    /// Where the game cursor is drawn while touch controls are on.
+    struct TouchCursor {
+        bool replaces_pointer{}; ///< false: draw at the pointer as today
+        bool visible{};          ///< with replaces_pointer: draw at x,y, else draw none
+        float x{};               ///< canvas pixels
+        float y{};               ///< canvas pixels
+    };
+
+    /// Returns where the cursor goes: hidden with no finger down and no real pointer used since
+    /// the last finger; at the finger on the battlefield.
+    /// [runtime_touch.cpp]
+    ///
+    /// @return where to draw the cursor; replaces_pointer false without touch controls
+    [[nodiscard]] TouchCursor touch_cursor() const;
+
+    /// Moves the camera by a canvas delta, as a finger drags the map under it.
+    ///
+    /// The map follows the finger: pass the finger's motion negated. Divides by match_zoom(),
+    /// carries the fractions, stops tracking, drops an eased zoom's anchor (zoom_anchored_ =
+    /// false: a pinch never leaves one, see zoom_match_about), sets camera_moved_ and clamps the
+    /// stored camera to the map as view_camera does. [runtime_touch_camera.cpp]
+    ///
+    /// @param dx canvas pixels, positive moves the view right
+    /// @param dy canvas pixels, positive moves the view down
+    void pan_match_camera_by(float dx, float dy);
+
+    /// Zooms the battlefield by a factor about a canvas point at once, as a pinch does.
+    ///
+    /// Anchors the map pixel under the point as handle_match_zoom does, sets match_zoom_ and
+    /// match_zoom_target_ together to the clamped product (no easing), applies the anchor
+    /// (apply_zoom_anchor), clears zoom_anchored_, sets camera_moved_ and stops tracking. The
+    /// map pixel under the point stays under it. The wheel and the zoom −/+ buttons keep the
+    /// eased handle_match_zoom. [runtime_touch_camera.cpp]
+    ///
+    /// @param factor the zoom now over the zoom before, > 0
+    /// @param x canvas x of the point, pixels
+    /// @param y canvas y of the point, pixels
+    void zoom_match_about(float factor, float x, float y);
+
+    /// Takes back an armed order or a pending building (reloading the panel's page), else clears
+    /// the selection: the Escape key's first two steps, never the in-game menu.
+    /// [runtime_hotkeys.cpp, extracted by the Interfaces stage]
+    void clear_or_cancel_match_command();
+
+    /// Arms an order by its order-panel name whatever page the panel shows, as its button does.
+    ///
+    /// The names are MOVE, STOP, ATTACK, BLAST, DEFEND, REPAIR, PATROL, RECLAIM, CAPTURE,
+    /// UNLOAD and LOAD; STOP gives the stop at once. With toggle, arming the armed order disarms
+    /// it. When the loaded page has a button whose name holds the order's name, it presses that
+    /// button through press_match_command_button(index), so the button lights and its
+    /// association group clears; only with no such button loaded (a build page) does it arm by
+    /// name alone. [runtime_match_hud.cpp, extracted by the Interfaces stage]
+    ///
+    /// @param name the order panel name
+    /// @param toggle whether arming the armed order disarms it
+    /// @return whether the name named an order the selection can take
+    bool arm_match_command(std::string_view name, bool toggle);
+
+    /// Returns whether the primary selected unit can take the order a panel name names (the
+    /// second half of gadget_command_available). [runtime_pointer.cpp, extracted]
+    ///
+    /// @param name an order panel name, or a gadget name with a side prefix (ARM, COR)
+    /// @return true when it can, or when no unit is selected
+    [[nodiscard]] bool order_command_available(std::string_view name) const;
+
+    /// Composes the touch layer over a CPU frame (headless snapshots, checks).
+    /// [runtime_touch_hud.cpp]
+    ///
+    /// @param[in,out] frame the composed match frame, canvas pixels
+    void compose_touch_layer(renderer::Surface& frame);
+
+    /// Draws the touch layer with the renderer; called by finish_match_layers in every tier.
+    ///
+    /// Draws nothing off the match screen or while touch controls are off.
+    /// [runtime_touch_hud.cpp]
+    void present_touch_layer();
+
+    /// Lays out the match for the canvas: make_match_layout, or make_phone_layout plus the placed
+    /// regions when touch controls are active in the phone class; also px_per_point and safe.
+    ///
+    /// With touch on and px_per_point > 1 the tablet chrome is capped at kMaxChromeScale ×
+    /// px_per_point (make_match_layout's three-argument form); otherwise exactly
+    /// make_match_layout(width, height) in the fields it sets. [runtime_phone_hud.cpp]
+    ///
+    /// @param width canvas pixels
+    /// @param height canvas pixels
+    /// @param window_width window points; 0 or less when there is no window
+    /// @param window_height window points; 0 or less when there is no window
+    /// @param safe safe-area insets in window points
+    /// @return the layout
+    [[nodiscard]] oa::ui::display_layout::MatchLayout make_window_match_layout(
+        int width,
+        int height,
+        int window_width,
+        int window_height,
+        oa::ui::display_layout::Insets safe
+    ) const;
+
+    /// Returns the window's safe-area insets in window points: TouchState::safe_override when
+    /// set, else from SDL_GetWindowSafeArea (none when it fails or is empty).
+    /// [runtime_phone_hud.cpp; real body by the Interfaces stage]
+    ///
+    /// @return insets in window points
+    [[nodiscard]] oa::ui::display_layout::Insets window_safe_insets() const;
+
+    /// Returns where battlefield overlays (message log, chat line, kill board, megamap,
+    /// whiteboard, commander placement) go, in canvas pixels.
+    ///
+    /// TouchState::frame.clear while touch controls are on and the frame is ready, else the
+    /// battlefield rectangle of match_layout_. [runtime_phone_hud.cpp; real body by the
+    /// Interfaces stage]
+    ///
+    /// @return canvas pixels
+    [[nodiscard]] oa::ui::display_layout::Rect overlay_area() const;
+
+    /// Gadgets of the loaded HUD page that a phone sheet shows as placed regions, in order.
+    struct SheetGadgets {
+        std::array<int16_t, 12> toggles{}; ///< order-page toggles (MORE: 2 across)
+        uint8_t toggle_count{};            ///< toggles in use
+        std::array<int16_t, 12> buttons{}; ///< build tiles, order buttons (3 across)
+        uint8_t button_count{};            ///< buttons in use
+    };
+
+    /// Returns the drawer's gadgets: the loaded build page's tiles (kCommonUnitButton or
+    /// kCommonWeaponButton) on the BUILD tab, or the loaded orders page's order and toggle
+    /// gadgets on the ORDERS tab, all as buttons. Empty when no such page is loaded.
+    /// [runtime_phone_hud.cpp]
+    ///
+    /// @return the gadgets' indices in the loaded HUD
+    [[nodiscard]] SheetGadgets drawer_sheet_gadgets() const;
+
+    /// Returns the MORE sheet's gadgets from the loaded orders page: toggles FIREORD, MOVEORD,
+    /// ONOFF, CLOAK (those present), then the order buttons the selection can take that the
+    /// rail (TouchState::hud.rail, first rail_count − 1 slots) does not show.
+    /// [runtime_phone_hud.cpp]
+    ///
+    /// @return the gadgets' indices in the loaded HUD
+    [[nodiscard]] SheetGadgets more_sheet_gadgets() const;
+
+    /// Rebuilds match_layout_'s placed regions from the loaded HUD page, the touch frame and
+    /// the open sheet; no-op unless match_layout_.phone. [runtime_phone_hud.cpp]
+    void refresh_placed_hud_regions();
+
+    /// Returns whether a canvas point lies on a placed HUD region or a touch control, so the
+    /// battlefield must not take it. False on a desktop without touch. [runtime_phone_hud.cpp]
+    ///
+    /// @param x canvas x in pixels
+    /// @param y canvas y in pixels
+    /// @return whether a region or control covers the point
+    [[nodiscard]] bool placed_hud_covers(float x, float y) const;
+
+    /// Draws the placed regions over a CPU frame. [runtime_phone_hud.cpp]
+    ///
+    /// @param[in,out] frame the composed match frame, canvas pixels
+    void compose_placed_hud_regions(renderer::Surface& frame);
+
+    /// Draws the placed regions with the renderer (after the world, every tier).
+    /// [runtime_phone_hud.cpp]
+    void present_placed_hud_regions();
+
+    /// Registers the app lifecycle event watch (once). [runtime_lifecycle.cpp]
+    void install_lifecycle_watch();
+
+    /// Removes the app lifecycle event watch, when it is registered. [runtime_lifecycle.cpp]
+    void remove_lifecycle_watch();
+
+    /// Handles an app lifecycle event inside the watch: background pause, preference flush, low
+    /// memory. Main thread only. [runtime_lifecycle.cpp]
+    ///
+    /// @param event the app lifecycle event
+    void handle_lifecycle_event(const SDL_Event& event);
+
+    /// Takes every app lifecycle event in dispatch_event (the watch already acted on it), so
+    /// none reaches a screen. [runtime_lifecycle.cpp]
+    ///
+    /// @param event the event dispatch_event is given
+    /// @return whether taken
+    bool take_lifecycle_event(const SDL_Event& event);
+
+    /// Checks the touch controls, driven by finger events through the dispatcher, on a
+    /// skirmish (--check-touch-controls): taps, boxes, latches, the radial, placement, the
+    /// minimap, pinch and pan, the lifecycle pause, and the tablet or phone layout the window's
+    /// size gives. Throws std::runtime_error on a failure. [runtime_touch_check.cpp]
+    void check_touch_controls();
+
+    // One access struct per lane of the touch controls: static helpers that take Runtime&.
+    friend struct TouchDispatchAccess; // the dispatcher (touch_dispatch.hpp)
+    friend struct TouchDrawAccess;     // the touch layer's drawing (touch_layer.hpp)
+    friend struct PhoneHudAccess;      // the phone layout (phone_hud.hpp)
+    friend struct OverlayAccess;       // the battlefield overlays (runtime_messages.cpp)
+    friend struct TouchCheckAccess;    // the touch check (runtime_touch_check.cpp)
+    friend struct LifecycleAccess;     // the app lifecycle (runtime_lifecycle.cpp)
+
     /// Registers the screen packages of screens.inc and the extension's.
     ///
     /// Dispatcher steps nobody took are bound to a handler that ignores them.
@@ -2691,6 +3012,16 @@ class Runtime final : public menu::Host,
 
     /// Opens the dialog over the darkened main menu.
     void open_engine_settings_from_menu();
+
+    /// Opens the Game files screen over the main menu (Settings › Game files › Manage…),
+    /// which does not respond until it is closed, then refreshes the section's rows
+    /// (runtime_game_files.cpp).
+    void open_game_files_manage();
+
+    /// Fills the settings dialog's Game files rows: summary, sizes, location, backups.
+    ///
+    /// @param[in,out] dialog the open dialog
+    void fill_game_files_rows(oa::ui::engine_settings::Dialog& dialog);
 
     /// Tells whether a key opens the settings: Cmd+, on macOS, Ctrl+, elsewhere.
     ///
@@ -6323,8 +6654,10 @@ class Runtime final : public menu::Host,
     /// Converts a point of the kills board's 640x480 screen to the canvas.
     ///
     /// The board is laid out on a 640x480 screen whose right edge is the
-    /// canvas's and whose y 32 is the battlefield's top; a screen pixel is a
-    /// hud_text_scale() block.
+    /// right edge of the overlays' area (overlay_area: the battlefield's,
+    /// which reaches the canvas's, or with the touch controls on the part of
+    /// it they leave clear) and whose y 32 is that area's top; a screen pixel
+    /// is a hud_text_scale() block.
     ///
     /// @param x board screen column
     /// @param y board screen row
@@ -7134,7 +7467,8 @@ class Runtime final : public menu::Host,
     /// @return true when the megamap took the roll
     bool megamap_wheel(float amount, float x, float y);
 
-    /// Draws the open megamap over the battlefield.
+    /// Draws the open megamap over the battlefield: the bars across it, the
+    /// map in the overlays' area (overlay_area).
     void draw_megamap();
 
     /// Draws a ring on the megamap.
@@ -7148,6 +7482,8 @@ class Runtime final : public menu::Host,
     /// Takes a pointer event on the open megamap: the left button selects the
     /// unit under it, a box, or with a double-click every unit of a type; the
     /// right button gives the selection orders at the point.
+    /// Presses are taken in the overlays' area and not where placed_hud_covers
+    /// claims; the release of a press taken is taken anywhere.
     ///
     /// @param event the pointer event
     /// @param x pointer column on the canvas
@@ -7178,6 +7514,8 @@ class Runtime final : public menu::Host,
     /// stroke runs: the left button draws, carries a marker or, double, writes
     /// one; the middle button's release places a dot; the right button wipes
     /// along its path or, double, erases a spot.
+    /// A stroke starts in the overlays' area and not where placed_hud_covers
+    /// claims.
     ///
     /// @param event the pointer event
     /// @param x pointer column on the canvas
@@ -7207,11 +7545,13 @@ class Runtime final : public menu::Host,
     void draw_whiteboard(const oa::present::world_renderer::BattlefieldViewport& viewport);
 
     /// Takes a pointer event while the local player places its commander
-    /// (setup.commander-warp, Match::commander_placement): a left press on
-    /// the battlefield moves the commander to the map point under it, and a
+    /// (setup.commander-warp, Match::commander_placement): a left press in
+    /// the overlays' area (overlay_area), not on a touch control or a placed
+    /// part of the HUD, moves the commander to the map point under it, and a
     /// left press and release on the Done button ends the placing. The
     /// release of a press it took is its own as well, so no click reaches
-    /// the battlefield.
+    /// the battlefield. With the touch controls on, the Done button is found
+    /// on the canvas where draw_commander_placement draws it.
     ///
     /// @param event the pointer event
     /// @param x pointer column on the canvas
@@ -7219,7 +7559,8 @@ class Runtime final : public menu::Host,
     /// @return true when the placement took the event
     bool commander_placement_pointer(const SDL_Event& event, float x, float y);
 
-    /// Draws the commander placement over the battlefield: while placing,
+    /// Draws the commander placement in the overlays' area (overlay_area), as
+    /// far from its corner as from the battlefield's: while placing,
     /// "Place your commander and click done" and the Done button; once done,
     /// "Waiting for others to finish".
     void draw_commander_placement();
@@ -7418,6 +7759,8 @@ class Runtime final : public menu::Host,
     /// centred on the TALK field while the field and two rows above and
     /// below it hold it; a taller line leaves the field empty and rises over
     /// the battlefield (draw_risen_chat_line).
+    /// With the touch controls on it draws nothing: the line stands in the
+    /// overlays' area instead (draw_risen_chat_line).
     void draw_chat_entry();
 
     /// Returns the TALK field the chat line is typed in.
@@ -7436,12 +7779,15 @@ class Runtime final : public menu::Host,
     [[nodiscard]] std::optional<oa::present::TextLayers> chat_line_layers(int scale, int width);
 
     /// Draws the chat line over the battlefield while it is taller than the
-    /// TALK field and two rows above and below it: a black box across the
-    /// battlefield, standing on its bottom edge, as tall as the line with
-    /// two rows above and below it, and the line in it at the
-    /// battlefield's scale from the column the field's text starts at.
-    /// Drawn after the message log and the clock, it covers what lies under
-    /// it.
+    /// TALK field and two rows above and below it, and every line while the
+    /// touch controls are on: a black box across the overlays' area
+    /// (overlay_area), standing on its bottom edge, as tall as the line with
+    /// two rows above and below it, and the line in it at the battlefield's
+    /// scale from the column the field's text starts at (the area's left with
+    /// the touch controls on). With the touch controls on and the game's fonts
+    /// drawing the line, as much of its end as fits is drawn in them on the
+    /// same box. Drawn after the message log and the clock, it covers what
+    /// lies under it.
     void draw_risen_chat_line();
 
     /// Checks the overlays the match draws over the battlefield and in the bars.
@@ -8277,15 +8623,17 @@ class Runtime final : public menu::Host,
 
     /// Draws the message log on the battlefield layer.
     ///
-    /// The log draws down from screen (0x8a, 0x34), just inside the
-    /// battlefield's top-left corner. The corner scales with the chrome and the
+    /// The log draws down from screen (0x8a, 0x34), just inside the top-left
+    /// corner of the overlays' area (overlay_area: the battlefield, or with the
+    /// touch controls on the part of it they leave clear), as far from that
+    /// corner as from the battlefield's. The corner scales with the chrome and the
     /// lines grow with the HUD text scale. A line's text is written in the
     /// GUI's font, hattfont12.gaf, in the font's own colours; without it, in
     /// COMIX in the line's UI colour. A line with a sender starts with the
     /// logo of the sender's colour: the whole frame of the logo sequence
     /// stretched over the square the log sets aside for it. While the modern
     /// fonts draw game text, the lines step by message_log_step, a line
-    /// wider than the battlefield leaves is broken into rows
+    /// wider than the overlays' area leaves is broken into rows
     /// (message_log_rows), each with its own backdrop, and the oldest lines
     /// give way while the rows do not fit (message_log_most_rows).
     void draw_match_message_log();
@@ -8298,7 +8646,7 @@ class Runtime final : public menu::Host,
     [[nodiscard]] int32_t message_log_step();
 
     /// Breaks a line of the message log into the rows the modern fonts draw
-    /// it in, each reaching the battlefield's right edge from where the
+    /// it in, each reaching the overlays' area's right edge from where the
     /// line's text starts (oa::present::modern_text_rows).
     ///
     /// @param text the line's game text
@@ -8308,7 +8656,7 @@ class Runtime final : public menu::Host,
     [[nodiscard]] std::vector<std::string> message_log_rows(std::string_view text, int32_t x);
 
     /// Returns the most rows the message log may take: those that fit
-    /// between its top and the battlefield's bottom, or a row above the
+    /// between its top and the overlays' area's bottom, or a row above the
     /// clock while it shows.
     ///
     /// @param step the step from one row to the next, in source pixels
@@ -8317,7 +8665,7 @@ class Runtime final : public menu::Host,
 
     /// Returns the canvas rectangle some log lines cover in the composed frame.
     ///
-    /// From the log's corner across to the battlefield's right edge, cut at its
+    /// From the log's corner across to the overlays' area's right edge, cut at its
     /// bottom.
     ///
     /// @param lines number of log lines
@@ -11482,6 +11830,12 @@ class Runtime final : public menu::Host,
     std::unique_ptr<RenderRun, void (*)(RenderRun*) noexcept> render_run_{
         nullptr, destroy_render_run
     };
+    // The touch controls' state; null until a finger or the touch capability needs it.
+    // Declared after render_run_, so its textures go before the renderer they belong to.
+    std::unique_ptr<TouchState, void (*)(TouchState*) noexcept> touch_{
+        nullptr, destroy_touch_state
+    };
+    bool lifecycle_watch_installed_ = false; // install_lifecycle_watch ran
     // The SDL event type the macOS Settings… item posts; 0 while none is registered.
     uint32_t engine_settings_menu_event_{};
     // Whether the Settings… item was last enabled; empty before the first sync.

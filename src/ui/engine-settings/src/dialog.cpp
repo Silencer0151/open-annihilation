@@ -58,6 +58,22 @@ constexpr std::array<Setting, 6> kLanguageTextRows{
     Setting::text_shadow,
     Setting::text_background,
 };
+/// Touch's rows: how a finger's drag and hold work, then the latches, the
+/// haptics and the side the controls stand on.
+constexpr std::array<Setting, 5> kTouchRows{
+    Setting::touch_drag,
+    Setting::touch_hold_delay,
+    Setting::touch_latches,
+    Setting::touch_haptics,
+    Setting::touch_left_handed,
+};
+/// Game files' rows: what is installed with its MANAGE… button, the
+/// backups switch, and where the files are.
+constexpr std::array<Setting, 3> kGameFilesRows{
+    Setting::game_files_summary,
+    Setting::game_files_backed_up,
+    Setting::game_files_location,
+};
 /// Developer's rows, over its list.
 constexpr std::array<Setting, developer_row_count> kDeveloperRows{
     Setting::developer_mode,
@@ -93,7 +109,8 @@ constexpr std::array<Setting, 3> kModChatRows{
     Setting::chat_backdrop,
     Setting::panel_background,
 };
-/// The engine's sections, in the list's order.
+/// The engine's sections, in the list's order, while the game has no touch
+/// controls.
 constexpr std::array<Page, 6> kEnginePages{
     Page::path_search,
     Page::controls,
@@ -103,6 +120,64 @@ constexpr std::array<Page, 6> kEnginePages{
     Page::developer,
 };
 static_assert(kEnginePages.size() <= most_listed_pages);
+/// The engine's sections, in the list's order, while the game has touch
+/// controls: Touch between Language & Text and Developer.
+constexpr std::array<Page, 7> kTouchEnginePages{
+    Page::path_search,
+    Page::controls,
+    Page::gameplay,
+    Page::graphics,
+    Page::language_text,
+    Page::touch,
+    Page::developer,
+};
+static_assert(kTouchEnginePages.size() < most_listed_pages);
+/// The engine's sections, in the list's order, in the main menu's dialog of
+/// a game that brings game files in: Game files between Language & Text and
+/// Developer.
+constexpr std::array<Page, 7> kGameFilesEnginePages{
+    Page::path_search,
+    Page::controls,
+    Page::gameplay,
+    Page::graphics,
+    Page::language_text,
+    Page::game_files,
+    Page::developer,
+};
+static_assert(kGameFilesEnginePages.size() < most_listed_pages);
+/// The engine's sections with Touch and Game files both listed, Game files
+/// between Touch and Developer.
+constexpr std::array<Page, 8> kTouchGameFilesEnginePages{
+    Page::path_search,
+    Page::controls,
+    Page::gameplay,
+    Page::graphics,
+    Page::language_text,
+    Page::touch,
+    Page::game_files,
+    Page::developer,
+};
+static_assert(kTouchGameFilesEnginePages.size() == most_listed_pages);
+/// The one section a Language & Text dialog lists.
+constexpr std::array<Page, 1> kLanguageTextPages{Page::language_text};
+
+/// Tells whether every section's entry number is its place in the list of
+/// the engine's settings with Touch, the list without Touch only leaving
+/// Touch's number out.
+///
+/// @return true when page_control follows the list with Touch
+constexpr bool entries_follow_the_list() noexcept {
+    for (std::size_t index = 0; index < kTouchEnginePages.size(); ++index)
+        if (page_control(kTouchEnginePages[index]) != static_cast<int32_t>(index))
+            return false;
+    return true;
+}
+
+static_assert(entries_follow_the_list(), "each entry's number is its place with Touch listed");
+static_assert(
+    page_control(Page::game_files) == page_control(Page::developer) + 1,
+    "Game files' entry number follows Developer's, so Touch and Developer keep theirs"
+);
 /// The mod options' sections, in the list's order.
 constexpr std::array<Page, 5> kModPages{
     Page::mod_keys, Page::mod_patrol, Page::mod_guard, Page::mod_tools, Page::mod_chat
@@ -193,7 +268,7 @@ struct SwitchMember {
 };
 
 /// Every switch and its value: the one table switch_on and set_switch read.
-constexpr std::array<SwitchMember, 13> kSwitches{{
+constexpr std::array<SwitchMember, 16> kSwitches{{
     {Setting::wheel_zoom, &EngineSettings::wheel_zoom, nullptr},
     {Setting::escape_opens_menu, &EngineSettings::escape_opens_menu, nullptr},
     {Setting::switch_alt, &EngineSettings::switch_alt, nullptr},
@@ -204,6 +279,9 @@ constexpr std::array<SwitchMember, 13> kSwitches{{
     {Setting::text_outline, &EngineSettings::text_outline, nullptr},
     {Setting::text_shadow, &EngineSettings::text_shadow, nullptr},
     {Setting::text_background, &EngineSettings::text_background, nullptr},
+    {Setting::touch_haptics, &EngineSettings::touch_haptics, nullptr},
+    {Setting::touch_left_handed, &EngineSettings::touch_left_handed, nullptr},
+    {Setting::game_files_backed_up, &EngineSettings::game_files_backed_up, nullptr},
     {Setting::optimize_dt_rows, nullptr, &ModOptions::optimize_dt_rows},
     {Setting::full_rings, nullptr, &ModOptions::full_rings},
     {Setting::chat_backdrop, nullptr, &ModOptions::chat_backdrop},
@@ -215,6 +293,29 @@ static_assert(
     kAccelerationCaptions.size() == hardware_acceleration_levels.size(),
     "every level of hardware acceleration has its caption"
 );
+/// One-finger drag's captions, in touch_drag_choices' order.
+constexpr std::array<std::string_view, 3> kTouchDragCaptions{"Automatic", "Box", "Scroll"};
+static_assert(
+    kTouchDragCaptions.size() == touch_drag_choices.size(),
+    "every way of One-finger drag has its caption"
+);
+/// QUEUE and ADD's captions, in touch_latches_choices' order.
+constexpr std::array<std::string_view, 2> kTouchLatchesCaptions{"Stay on", "One action"};
+static_assert(
+    kTouchLatchesCaptions.size() == touch_latches_choices.size(),
+    "every way of QUEUE and ADD has its caption"
+);
+
+/// Returns a choice's place among the choices a strip offers.
+///
+/// @param choices the strip's choices, left to right
+/// @param chosen the choice
+/// @return its index; 0 for a choice not offered
+template <typename Choice, std::size_t Count>
+std::size_t choice_place(const std::array<Choice, Count>& choices, Choice chosen) noexcept {
+    const auto found = std::find(choices.begin(), choices.end(), chosen);
+    return found == choices.end() ? 0 : static_cast<std::size_t>(found - choices.begin());
+}
 
 /// Returns a switch's entry in the table.
 ///
@@ -484,6 +585,7 @@ bool is_slider(Setting setting) noexcept {
     case Setting::wreck_snap_radius:
     case Setting::panel_background:
     case Setting::text_size:
+    case Setting::touch_hold_delay:
         return true;
     default:
         return false;
@@ -521,6 +623,10 @@ Slider slider_of(Setting setting, uint16_t highest_offered_unit, size_t offered_
         return Slider{most_snap_radius + 1};
     case Setting::text_size:
         return Slider{(highest_text_size - lowest_text_size) / text_size_step + 1};
+    case Setting::touch_hold_delay:
+        return Slider{static_cast<int32_t>(
+            (highest_touch_hold_ms - lowest_touch_hold_ms) / touch_hold_step_ms + 1
+        )};
     default:
         return Slider{2};
     }
@@ -591,6 +697,9 @@ int32_t stop_of(
     case Setting::text_size:
         stop = steps_from(settings.text_size, lowest_text_size, text_size_step);
         break;
+    case Setting::touch_hold_delay:
+        stop = steps_from(settings.touch_hold_ms, lowest_touch_hold_ms, touch_hold_step_ms);
+        break;
     default:
         break;
     }
@@ -649,13 +758,18 @@ void set_stop(
     case Setting::text_size:
         settings.text_size = lowest_text_size + clamped * text_size_step;
         break;
+    case Setting::touch_hold_delay:
+        settings.touch_hold_ms =
+            lowest_touch_hold_ms + static_cast<uint32_t>(clamped) * touch_hold_step_ms;
+        break;
     default:
         break;
     }
 }
 
 bool is_strip(Setting setting) noexcept {
-    return setting == Setting::anti_aliasing || setting == Setting::hardware_acceleration;
+    return setting == Setting::anti_aliasing || setting == Setting::hardware_acceleration ||
+           setting == Setting::touch_drag || setting == Setting::touch_latches;
 }
 
 Strip strip_of(Setting setting) noexcept {
@@ -664,6 +778,10 @@ Strip strip_of(Setting setting) noexcept {
         return Strip{anti_aliasing_levels.size(), level_width};
     case Setting::hardware_acceleration:
         return Strip{hardware_acceleration_levels.size(), acceleration_level_width};
+    case Setting::touch_drag:
+        return Strip{touch_drag_choices.size(), touch_drag_level_width};
+    case Setting::touch_latches:
+        return Strip{touch_latches_choices.size(), touch_latches_level_width};
     default:
         return Strip{};
     }
@@ -673,16 +791,12 @@ std::size_t strip_level(const EngineSettings& settings, Setting setting) noexcep
     switch (setting) {
     case Setting::anti_aliasing:
         return level_index(settings.anti_aliasing);
-    case Setting::hardware_acceleration: {
-        const auto found = std::find(
-            hardware_acceleration_levels.begin(),
-            hardware_acceleration_levels.end(),
-            settings.hardware_acceleration
-        );
-        return found == hardware_acceleration_levels.end()
-                   ? 0
-                   : static_cast<std::size_t>(found - hardware_acceleration_levels.begin());
-    }
+    case Setting::hardware_acceleration:
+        return choice_place(hardware_acceleration_levels, settings.hardware_acceleration);
+    case Setting::touch_drag:
+        return choice_place(touch_drag_choices, settings.touch_drag);
+    case Setting::touch_latches:
+        return choice_place(touch_latches_choices, settings.touch_latches);
     default:
         return 0;
     }
@@ -693,22 +807,50 @@ void set_strip_level(EngineSettings& settings, Setting setting, std::size_t leve
     if (strip.levels == 0)
         return;
     const std::size_t clamped = std::min(level, strip.levels - 1);
-    if (setting == Setting::anti_aliasing)
+    switch (setting) {
+    case Setting::anti_aliasing:
         settings.anti_aliasing = anti_aliasing_levels[clamped];
-    else if (setting == Setting::hardware_acceleration)
+        break;
+    case Setting::hardware_acceleration:
         settings.hardware_acceleration = hardware_acceleration_levels[clamped];
+        break;
+    case Setting::touch_drag:
+        settings.touch_drag = touch_drag_choices[clamped];
+        break;
+    case Setting::touch_latches:
+        settings.touch_latches = touch_latches_choices[clamped];
+        break;
+    default:
+        break;
+    }
 }
 
 std::string_view strip_caption(Setting setting, std::size_t level) noexcept {
     if (level >= strip_of(setting).levels)
         return {};
-    if (setting == Setting::anti_aliasing)
+    switch (setting) {
+    case Setting::anti_aliasing:
         return level_caption(anti_aliasing_levels[level]);
-    return kAccelerationCaptions[level];
+    case Setting::touch_drag:
+        return kTouchDragCaptions[level];
+    case Setting::touch_latches:
+        return kTouchLatchesCaptions[level];
+    default:
+        return kAccelerationCaptions[level];
+    }
+}
+
+bool is_button(Setting setting) noexcept {
+    return setting == Setting::game_files_summary;
+}
+
+bool is_text(Setting setting) noexcept {
+    return setting == Setting::game_files_location;
 }
 
 bool is_switch(Setting setting) noexcept {
-    return !is_slider(setting) && !is_strip(setting) && !is_choice(setting);
+    return !is_slider(setting) && !is_strip(setting) && !is_choice(setting) &&
+           !is_button(setting) && !is_text(setting);
 }
 
 bool is_choice(Setting setting) noexcept {
@@ -864,6 +1006,8 @@ Rows place_rows(Page page, const Locks& locks, int32_t scroll, const SectionHook
             control_width = static_cast<int32_t>(strip.levels) * strip.level_width + 2;
         } else if (is_switch(row.setting)) {
             control_width = switch_width;
+        } else if (is_button(row.setting)) {
+            control_width = manage_button_width;
         }
         if (control_width == 0 || (locked && row.hint_is_status)) {
             // A slider's lock, or the lock of a switch or strip whose hint
@@ -1028,16 +1172,27 @@ int32_t scroll_at(
     return (limit * along + travel / 2) / travel;
 }
 
-SourceRect list_item(Page page) noexcept {
-    const auto index = page_control(page) - first_page_control;
+SourceRect list_item(Page page, bool touch, bool game_files) noexcept {
+    // Each entry at its place in the list its dialog shows; Touch, which
+    // only a dialog that lists it asks for, keeps its own place.
+    const auto kind = static_cast<int32_t>(page) >= static_cast<int32_t>(Page::mod_keys)
+                          ? DialogKind::mod_options
+                          : DialogKind::engine;
+    const auto listed = dialog_pages(kind, touch, game_files);
+    const auto found = std::find(listed.begin(), listed.end(), page);
+    const auto index = found != listed.end() ? static_cast<int32_t>(found - listed.begin())
+                                             : page_control(page) - first_page_control;
     int32_t top = list_first_top + index * (list_item_height + list_item_gap);
     if (page == Page::developer)
-        top = list_divider().y + 1 + list_divider_margin;
+        top = list_divider(touch, game_files).y + 1 + list_divider_margin;
     return {list_item_left, top, list_item_width, list_item_height};
 }
 
-SourceRect list_divider() noexcept {
-    const int32_t above = static_cast<int32_t>(Page::developer);
+SourceRect list_divider(bool touch, bool game_files) noexcept {
+    // Under the entries listed above Developer.
+    const auto listed = dialog_pages(DialogKind::engine, touch, game_files);
+    const auto developer = std::find(listed.begin(), listed.end(), Page::developer);
+    const auto above = static_cast<int32_t>(developer - listed.begin());
     const int32_t row = list_first_top + above * (list_item_height + list_item_gap) -
                         list_item_gap + list_divider_margin;
     return {
@@ -1100,8 +1255,12 @@ std::string_view page_name(Page page) noexcept {
         return "Graphics";
     case Page::language_text:
         return "Language & Text";
+    case Page::touch:
+        return "Touch";
     case Page::developer:
         return "Developer";
+    case Page::game_files:
+        return "Game files";
     case Page::mod_keys:
         return "Keys";
     case Page::mod_patrol:
@@ -1128,8 +1287,12 @@ std::string_view page_heading(Page page) noexcept {
         return "GRAPHICS";
     case Page::language_text:
         return "LANGUAGE & TEXT";
+    case Page::touch:
+        return "TOUCH";
     case Page::developer:
         return "DEVELOPER";
+    case Page::game_files:
+        return "GAME FILES";
     case Page::mod_keys:
         return "MOD KEYS";
     case Page::mod_patrol:
@@ -1182,6 +1345,16 @@ std::string_view label_of(Setting setting) noexcept {
         return "Text size";
     case Setting::language:
         return "Language";
+    case Setting::touch_drag:
+        return "One-finger drag";
+    case Setting::touch_hold_delay:
+        return "Hold delay";
+    case Setting::touch_latches:
+        return "QUEUE and ADD";
+    case Setting::touch_haptics:
+        return "Haptics";
+    case Setting::touch_left_handed:
+        return "Left-handed layout";
     case Setting::mod:
         return "Mod";
     case Setting::snap_override_key:
@@ -1211,6 +1384,12 @@ std::string_view label_of(Setting setting) noexcept {
         return "Accessible chat";
     case Setting::panel_background:
         return "Resource bar background";
+    case Setting::game_files_summary:
+        return "Installed";
+    case Setting::game_files_backed_up:
+        return "Include in device backups";
+    case Setting::game_files_location:
+        return "Where the files are";
     }
     return {};
 }
@@ -1320,6 +1499,35 @@ std::string_view hint_line(
                                   : "The game's own fonts have fixed sizes.",
         };
         break;
+    case Setting::touch_drag:
+        // What a drag does now, and what still gives the other.
+        switch (settings.touch_drag) {
+        case TouchDrag::automatic:
+            lines = {"Automatic: a selection box on a tablet,", "scrolling on a phone."};
+            break;
+        case TouchDrag::box:
+            lines = {"A drag draws a selection box;", "two fingers scroll the map."};
+            break;
+        case TouchDrag::scroll:
+            lines = {"A drag scrolls the map;", "hold, then drag, for a selection box."};
+            break;
+        }
+        break;
+    case Setting::touch_hold_delay:
+        lines = {"How long a finger stays down for a hold.", {}};
+        break;
+    case Setting::touch_latches:
+        lines =
+            settings.touch_latches == TouchLatches::one_action
+                ? Lines{"A tapped QUEUE, ADD or x5 turns off", "after the next order or selection."}
+                : Lines{"A tapped QUEUE, ADD or x5 stays on", "until it is tapped again."};
+        break;
+    case Setting::touch_haptics:
+        lines = {"A short vibration as a touch control acts.", {}};
+        break;
+    case Setting::touch_left_handed:
+        lines = {"The minimap and the thumb controls on the", "right, the orders on the left."};
+        break;
     case Setting::mod:
         lines = {"A mod folder from the game's mods folder.", "Applies from the next start."};
         break;
@@ -1360,6 +1568,15 @@ std::string_view hint_line(
     case Setting::panel_background:
         lines = {"Behind the resource bar's text.", {}};
         break;
+    case Setting::game_files_summary:
+    case Setting::game_files_location:
+        // Their lines are the host's (row_hint): what is installed and its
+        // sizes, and where the files are.
+        break;
+    case Setting::game_files_backed_up:
+        // row_hint names the device in place of {device}.
+        lines = {"After restoring this {device} from a backup,", "add the game files again."};
+        break;
     }
     return line < lines.size() ? lines[line] : std::string_view{};
 }
@@ -1375,6 +1592,12 @@ std::size_t hint_line_count(Setting setting) noexcept {
     case Setting::modern_fonts:
     case Setting::text_size:
     case Setting::language:
+    case Setting::touch_drag:
+    case Setting::touch_latches:
+    case Setting::touch_left_handed:
+    case Setting::game_files_summary:
+    case Setting::game_files_backed_up:
+    case Setting::game_files_location:
         return 2;
     default:
         return 1;
@@ -1442,9 +1665,111 @@ std::string value_text(
                std::string(shown_text("cells"));
     case Setting::text_size:
         return std::to_string(settings.text_size) + "%";
+    case Setting::touch_hold_delay:
+        return std::to_string(settings.touch_hold_ms) + " " + std::string(shown_text("ms"));
     default:
         return {};
     }
+}
+
+std::string row_hint(const Dialog& dialog, Setting setting, std::size_t line) {
+    switch (setting) {
+    case Setting::game_files_summary:
+        // What is installed, then its size and the free space.
+        if (line == 0)
+            return dialog.game_files_summary;
+        return line == 1 ? dialog.game_files_sizes : std::string{};
+    case Setting::game_files_location: {
+        const auto lines = break_lines(dialog.game_files_location, hint_line_characters, 2);
+        return line < lines.size() ? lines[line] : std::string{};
+    }
+    case Setting::game_files_backed_up: {
+        // The device's own name, or the neutral word, in the line shown.
+        std::string text(shown_text(hint_line(setting, dialog.chosen, dialog.acceleration, line)));
+        constexpr std::string_view device_field = "{device}";
+        const std::string device = dialog.game_files_device.empty()
+                                       ? std::string(shown_text("device"))
+                                       : dialog.game_files_device;
+        for (std::size_t at = text.find(device_field); at != std::string::npos;
+             at = text.find(device_field, at + device.size()))
+            text.replace(at, device_field.size(), device);
+        return text;
+    }
+    default:
+        return std::string(hint_line(setting, dialog.chosen, dialog.acceleration, line));
+    }
+}
+
+std::string_view row_label(Setting setting) noexcept {
+    return label_of(setting);
+}
+
+std::vector<std::string>
+break_lines(std::string_view text, std::size_t characters, std::size_t most_lines) {
+    // The mark between a location's folders: "Open Annihilation › Total
+    // Annihilation".
+    constexpr std::string_view location_mark = "›";
+    std::vector<std::string> lines;
+    characters = std::max<std::size_t>(characters, 1);
+    // Where each character starts, so that lines count characters and never
+    // cut one.
+    const auto next = [&text](std::size_t at) {
+        const auto lead = static_cast<unsigned char>(text[at]);
+        std::size_t bytes = 1;
+        if (lead >= 0xf0)
+            bytes = 4;
+        else if (lead >= 0xe0)
+            bytes = 3;
+        else if (lead >= 0xc0)
+            bytes = 2;
+        return std::min(at + bytes, text.size());
+    };
+    std::size_t start = 0;
+    while (start < text.size() && lines.size() < most_lines) {
+        while (start < text.size() && text[start] == ' ')
+            ++start;
+        if (start >= text.size())
+            break;
+        std::size_t end = start;
+        std::size_t count = 0;
+        std::size_t last_space = std::string_view::npos;
+        // A space after a location's separator, which keeps the folders'
+        // names whole.
+        std::size_t last_separator = std::string_view::npos;
+        while (end < text.size() && count < characters) {
+            if (text[end] == ' ') {
+                last_space = end;
+                if (end >= start + location_mark.size() &&
+                    text.substr(end - location_mark.size(), location_mark.size()) == location_mark)
+                    last_separator = end;
+            }
+            end = next(end);
+            ++count;
+        }
+        // The rest fits, or the line breaks after its last separator in its
+        // second half, else where a word ends, at its last space, or a word
+        // longer than a line is cut.
+        if (end < text.size()) {
+            if (last_separator != std::string_view::npos &&
+                last_separator - start >= (end - start) / 2)
+                end = last_separator;
+            else if (text[end] != ' ' && last_space != std::string_view::npos && last_space > start)
+                end = last_space;
+        }
+        std::string_view line = text.substr(start, end - start);
+        while (!line.empty() && line.back() == ' ')
+            line.remove_suffix(1);
+        lines.emplace_back(line);
+        start = end;
+    }
+    return lines;
+}
+
+SourceRect dialog_list_item(const Dialog& dialog, Page page) noexcept {
+    if (dialog.kind != DialogKind::language_text)
+        return list_item(page, dialog.touch, dialog.game_files);
+    // A Language & Text dialog lists its one section at the top.
+    return {list_item_left, list_first_top, list_item_width, list_item_height};
 }
 
 std::string_view lock_text(Lock lock) noexcept {
@@ -1573,8 +1898,8 @@ control_at(const Dialog& dialog, const layout::ScrolledRows& open, int32_t x, in
         if (contains(layout::footer_button(control), x, y))
             return control;
     }
-    for (const Page page : dialog_pages(dialog.kind)) {
-        if (contains(layout::list_item(page), x, y))
+    for (const Page page : dialog_pages(dialog.kind, dialog.touch, dialog.game_files)) {
+        if (contains(layout::dialog_list_item(dialog, page), x, y))
             return page_control(page);
     }
     return no_control;
@@ -1590,8 +1915,9 @@ control_at(const Dialog& dialog, const layout::ScrolledRows& open, int32_t x, in
 /// @return the controls
 std::vector<int32_t> focus_order(const Dialog& dialog, const layout::ScrolledRows& open) {
     std::vector<int32_t> order;
+    // A row that only shows text takes no focus.
     for (const layout::Row& row : open.rows.rows) {
-        if (row.lock == Lock::none)
+        if (row.lock == Lock::none && row.control_area.width > 0)
             order.push_back(row.control);
     }
     if (layout::developer_page(dialog)) {
@@ -1606,7 +1932,7 @@ std::vector<int32_t> focus_order(const Dialog& dialog, const layout::ScrolledRow
     order.push_back(restore_control);
     order.push_back(cancel_control);
     order.push_back(ok_control);
-    for (const Page page : dialog_pages(dialog.kind))
+    for (const Page page : dialog_pages(dialog.kind, dialog.touch, dialog.game_files))
         order.push_back(page_control(page));
     return order;
 }
@@ -1996,6 +2322,28 @@ void copy_setting(EngineSettings& to, const EngineSettings& from, Setting settin
     case Setting::language:
         to.language = from.language;
         break;
+    case Setting::touch_drag:
+        to.touch_drag = from.touch_drag;
+        break;
+    case Setting::touch_hold_delay:
+        to.touch_hold_ms = from.touch_hold_ms;
+        break;
+    case Setting::touch_latches:
+        to.touch_latches = from.touch_latches;
+        break;
+    case Setting::touch_haptics:
+        to.touch_haptics = from.touch_haptics;
+        break;
+    case Setting::touch_left_handed:
+        to.touch_left_handed = from.touch_left_handed;
+        break;
+    case Setting::game_files_backed_up:
+        to.game_files_backed_up = from.game_files_backed_up;
+        break;
+    case Setting::game_files_summary:
+    case Setting::game_files_location:
+        // Text rows, which keep no setting.
+        break;
     case Setting::mod:
         to.mod = from.mod;
         break;
@@ -2063,11 +2411,24 @@ DialogAction restore_defaults(Dialog& dialog) {
         dialog.restored = true;
         return DialogAction::changed;
     }
+    if (dialog.kind == DialogKind::language_text) {
+        // Language & Text alone: only its settings go back to their
+        // defaults, each locked one kept.
+        for (const Setting setting :
+             layout::section_settings(Page::language_text, dialog.section_hooks))
+            if (layout::row_lock(dialog.locks, setting, dialog.section_hooks) == Lock::none)
+                copy_setting(dialog.chosen, dialog.defaults, setting);
+        dialog.restored = true;
+        return DialogAction::changed;
+    }
     EngineSettings restored = dialog.defaults;
     restored.mod_options = before.mod_options;
     // The overrides stay: Restore profile values clears them.
     restored.hack_overrides = before.hack_overrides;
-    for (const Page page : dialog_pages(dialog.kind)) {
+    // The backups switch changes only where the dialog lists it.
+    if (!dialog.game_files)
+        restored.game_files_backed_up = before.game_files_backed_up;
+    for (const Page page : dialog_pages(dialog.kind, dialog.touch, dialog.game_files)) {
         for (const Setting setting : layout::section_settings(page, dialog.section_hooks)) {
             if (layout::row_lock(dialog.locks, setting, dialog.section_hooks) != Lock::none)
                 copy_setting(restored, before, setting);
@@ -2131,10 +2492,11 @@ DialogAction activate(Dialog& dialog, const layout::ScrolledRows& open, int32_t 
         return cancel(dialog);
     if (control == ok_control)
         return accept(dialog);
-    const auto pages = dialog_pages(dialog.kind);
-    if (control >= first_page_control &&
-        control < first_page_control + static_cast<int32_t>(pages.size()))
-        return show_page(dialog, pages[static_cast<std::size_t>(control - first_page_control)]);
+    // A section's entry, by its number: a dialog without Touch has no
+    // entry numbered as Touch.
+    for (const Page page : dialog_pages(dialog.kind, dialog.touch, dialog.game_files))
+        if (control == page_control(page))
+            return show_page(dialog, page);
     if (layout::developer_page(dialog)) {
         if (control == active_only_control)
             return developer::set_active_only(dialog, !dialog.developer.active_only);
@@ -2146,6 +2508,9 @@ DialogAction activate(Dialog& dialog, const layout::ScrolledRows& open, int32_t 
     const layout::Row* row = row_of(open.rows, control);
     if (row != nullptr && row->lock == Lock::none && layout::is_choice(row->setting))
         return open_choices(dialog, *row);
+    // MANAGE… asks the host to open the Game files screen.
+    if (row != nullptr && row->lock == Lock::none && layout::is_button(row->setting))
+        return DialogAction::manage_game_files;
     if (row == nullptr || row->lock != Lock::none || !layout::is_switch(row->setting))
         return DialogAction::none;
     const EngineSettings before = dialog.chosen;
@@ -2176,6 +2541,144 @@ DialogAction drag_to(Dialog& dialog, const layout::Row& row, int32_t column) noe
     return changed_or_redraw(dialog, before);
 }
 
+/// A part of the dialog where a press acts on a control.
+struct PressArea {
+    int32_t control{no_control}; ///< the control
+    layout::SourceRect rect{};   ///< where it answers a press
+};
+
+/// Returns the part two rectangles share.
+///
+/// @param a a rectangle
+/// @param b another
+/// @return the rectangle in both; zero wide or high when they do not meet
+layout::SourceRect common_part(const layout::SourceRect& a, const layout::SourceRect& b) noexcept {
+    const int32_t left = std::max(a.x, b.x);
+    const int32_t top = std::max(a.y, b.y);
+    const int32_t right = std::min(a.x + a.width, b.x + b.width);
+    const int32_t bottom = std::min(a.y + a.height, b.y + b.height);
+    return {left, top, std::max(right - left, int32_t{0}), std::max(bottom - top, int32_t{0})};
+}
+
+/// Returns the parts where a press acts on a control now, as control_at
+/// tries them: on Developer its list's rows that take input, Show Active
+/// Only and Restore profile values while it is enabled; the open section's
+/// unlocked rows where the view shows them; the scroll bar while the
+/// section scrolls; the footer's buttons; the sections' entries.
+///
+/// @param dialog the dialog
+/// @param open the open section's rows
+/// @return the parts; a row the view hides has none
+std::vector<PressArea> press_areas(const Dialog& dialog, const layout::ScrolledRows& open) {
+    std::vector<PressArea> areas;
+    const auto add = [&areas](int32_t control, const layout::SourceRect& rect) {
+        if (rect.width > 0 && rect.height > 0)
+            areas.push_back(PressArea{control, rect});
+    };
+    if (layout::developer_page(dialog)) {
+        for (const layout::ListRow& row : open.list.rows)
+            if (list_row_takes_input(row))
+                add(row.control, common_part(row.control_area, layout::developer_view));
+        add(active_only_control, layout::active_only_switch);
+        if (developer::restore_profile_enabled(dialog))
+            add(restore_profile_control, layout::restore_profile_button);
+    }
+    for (const layout::Row& row : open.rows.rows)
+        if (row.lock == Lock::none)
+            add(row.control, common_part(row.control_area, layout::view));
+    if (open.limit > 0)
+        add(scroll_bar_control, open.area.hit);
+    for (const int32_t control : {restore_control, cancel_control, ok_control})
+        add(control, layout::footer_button(control));
+    for (const Page page : dialog_pages(dialog.kind, dialog.touch, dialog.game_files))
+        add(page_control(page), layout::dialog_list_item(dialog, page));
+    return areas;
+}
+
+/// A point of the dialog, in source pixels.
+struct SourcePoint {
+    int32_t x{}; ///< column
+    int32_t y{}; ///< row
+};
+
+/// Returns a rectangle's pixel nearest a point.
+///
+/// @param rect the rectangle, not empty
+/// @param x the point's column
+/// @param y the point's row
+/// @return the point itself inside the rectangle, else the nearest pixel on its edge
+SourcePoint nearest_pixel(const layout::SourceRect& rect, int32_t x, int32_t y) noexcept {
+    return {
+        std::clamp(x, rect.x, rect.x + rect.width - 1),
+        std::clamp(y, rect.y, rect.y + rect.height - 1),
+    };
+}
+
+/// Returns the square of the distance between two points.
+///
+/// @param a a point
+/// @param b another
+/// @return the distance squared, in source pixels squared
+int64_t distance_squared(SourcePoint a, SourcePoint b) noexcept {
+    const int64_t across = int64_t{a.x} - b.x;
+    const int64_t down = int64_t{a.y} - b.y;
+    return across * across + down * down;
+}
+
+/// Returns where a finger's press lands: the finger's own point over a
+/// control, else the nearest point of the nearest control within reach;
+/// while a drop-down list is open, the finger's point over one of its
+/// items, else the nearest point of the nearest item within reach.
+///
+/// @param dialog the dialog
+/// @param open the open section's rows
+/// @param x the finger's column
+/// @param y the finger's row
+/// @param reach how far a control may lie from the finger, in source pixels
+/// @return the point the press takes; the finger's own with nothing within reach
+SourcePoint finger_target(
+    const Dialog& dialog, const layout::ScrolledRows& open, int32_t x, int32_t y, int32_t reach
+) {
+    const SourcePoint finger{x, y};
+    if (reach <= 0)
+        return finger;
+    const int64_t within = int64_t{reach} * reach;
+    std::optional<SourcePoint> best;
+    int64_t best_distance = 0;
+    const auto consider = [&](SourcePoint candidate) {
+        const int64_t distance = distance_squared(candidate, finger);
+        if (distance <= within && (!best || distance < best_distance)) {
+            best = candidate;
+            best_distance = distance;
+        }
+    };
+    if (const auto list = open_list(dialog, open)) {
+        if (list_item_at(dialog, *list, x, y) >= 0)
+            return finger;
+        for (int32_t shown = 0; shown < list->shown; ++shown)
+            if (dialog.list_first + shown < static_cast<int32_t>(list->choices))
+                consider(nearest_pixel(layout::choice_item(list->rect, shown), x, y));
+        return best.value_or(finger);
+    }
+    if (control_at(dialog, open, x, y) != no_control)
+        return finger;
+    // A part another control covers at its nearest pixel is passed over.
+    for (const PressArea& area : press_areas(dialog, open)) {
+        const SourcePoint candidate = nearest_pixel(area.rect, x, y);
+        if (control_at(dialog, open, candidate.x, candidate.y) == area.control)
+            consider(candidate);
+    }
+    return best.value_or(finger);
+}
+
+/// Tells whether a press is held: on a control, or on an open list's item.
+///
+/// @param dialog the dialog
+/// @return true while a press is held
+bool press_held(const Dialog& dialog) noexcept {
+    return dialog.pressed != no_control || dialog.list_pressed >= 0;
+}
+
 } // namespace
 
 std::span<const Setting> page_settings(Page page) noexcept {
@@ -2190,8 +2693,12 @@ std::span<const Setting> page_settings(Page page) noexcept {
         return layout::kGraphicsRows;
     case Page::language_text:
         return layout::kLanguageTextRows;
+    case Page::touch:
+        return layout::kTouchRows;
     case Page::developer:
         return layout::kDeveloperRows;
+    case Page::game_files:
+        return layout::kGameFilesRows;
     case Page::mod_keys:
         return layout::kModKeysRows;
     case Page::mod_patrol:
@@ -2206,9 +2713,20 @@ std::span<const Setting> page_settings(Page page) noexcept {
     return {};
 }
 
-std::span<const Page> dialog_pages(DialogKind kind) noexcept {
-    return kind == DialogKind::mod_options ? std::span<const Page>(layout::kModPages)
-                                           : std::span<const Page>(layout::kEnginePages);
+std::span<const Page> dialog_pages(DialogKind kind, bool touch, bool game_files) noexcept {
+    switch (kind) {
+    case DialogKind::engine:
+        break;
+    case DialogKind::mod_options:
+        return layout::kModPages;
+    case DialogKind::language_text:
+        return layout::kLanguageTextPages;
+    }
+    if (game_files)
+        return touch ? std::span<const Page>(layout::kTouchGameFilesEnginePages)
+                     : std::span<const Page>(layout::kGameFilesEnginePages);
+    return touch ? std::span<const Page>(layout::kTouchEnginePages)
+                 : std::span<const Page>(layout::kEnginePages);
 }
 
 void open_dialog(
@@ -2222,9 +2740,13 @@ void open_dialog(
     uint16_t highest_offered_unit,
     std::span<const std::string> mod_names,
     std::span<const oa::data::mod_profile::HackState> profile_hacks,
-    const oa::data::languages::Language* system_language
+    const oa::data::languages::Language* system_language,
+    bool touch,
+    bool game_files
 ) {
     dialog = Dialog{};
+    dialog.touch = touch;
+    dialog.game_files = game_files;
     dialog.system_language = system_language;
     dialog.highest_offered_unit = highest_offered_unit;
     dialog.mod_names.assign(mod_names.begin(), mod_names.end());
@@ -2234,7 +2756,10 @@ void open_dialog(
     dialog.locks = locks;
     dialog.acceleration = acceleration;
     dialog.version = std::string(version);
-    dialog.page = page;
+    // Touch and Game files show only while they are listed.
+    dialog.page = (page == Page::touch && !touch) || (page == Page::game_files && !game_files)
+                      ? dialog_pages(DialogKind::engine).front()
+                      : page;
     if (profile_hacks.empty())
         dialog.developer.profile = oa::data::mod_profile::base_hack_states();
     else
@@ -2258,6 +2783,30 @@ void open_mod_options_dialog(
         dialog.page = pages.front();
 }
 
+void open_language_text_dialog(
+    Dialog& dialog,
+    const EngineSettings& current,
+    const EngineSettings& defaults,
+    const Locks& locks,
+    std::string_view version,
+    const oa::data::languages::Language* system_language
+) {
+    open_dialog(
+        dialog,
+        current,
+        defaults,
+        locks,
+        version,
+        Page::language_text,
+        {},
+        highest_unit_limit,
+        {},
+        {},
+        system_language
+    );
+    dialog.kind = DialogKind::language_text;
+}
+
 DialogAction
 set_acceleration_status(Dialog& dialog, const AccelerationStatus& acceleration) noexcept {
     if (dialog.acceleration == acceleration)
@@ -2266,7 +2815,31 @@ set_acceleration_status(Dialog& dialog, const AccelerationStatus& acceleration) 
     return DialogAction::redraw;
 }
 
+DialogAction set_touch_controls(Dialog& dialog, bool touch) noexcept {
+    if (dialog.touch == touch)
+        return DialogAction::none;
+    dialog.touch = touch;
+    if (dialog.kind != DialogKind::engine || touch)
+        return DialogAction::redraw;
+    // Touch's entry and rows leave the dialog: what pointed at them points
+    // at nothing, and Touch's section gives way to the first.
+    const int32_t entry = page_control(Page::touch);
+    for (int32_t* control : {&dialog.hovered, &dialog.pressed, &dialog.focused})
+        if (*control == entry || (dialog.page == Page::touch && *control >= first_row_control))
+            *control = no_control;
+    if (dialog.page == Page::touch) {
+        static_cast<void>(show_page(dialog, dialog_pages(DialogKind::engine).front()));
+        dialog.dragging = false;
+    }
+    return DialogAction::redraw;
+}
+
 DialogAction dialog_pointer_move(Dialog& dialog, int32_t x, int32_t y) {
+    // A finger's held press moves as it was moved to the control it took.
+    if (press_held(dialog)) {
+        x += dialog.finger_shift_x;
+        y += dialog.finger_shift_y;
+    }
     note_pointer(dialog, x, y);
     layout::ScrolledRows open = layout::open_rows(dialog);
     // An open list marks the item under the pointer.
@@ -2301,6 +2874,8 @@ DialogAction dialog_pointer_move(Dialog& dialog, int32_t x, int32_t y) {
 }
 
 DialogAction dialog_pointer_down(Dialog& dialog, int32_t x, int32_t y) {
+    dialog.finger_shift_x = 0;
+    dialog.finger_shift_y = 0;
     note_pointer(dialog, x, y);
     layout::ScrolledRows open = layout::open_rows(dialog);
     // An open list takes the press: on an item it holds the item; anywhere
@@ -2361,7 +2936,25 @@ DialogAction dialog_pointer_down(Dialog& dialog, int32_t x, int32_t y) {
     return DialogAction::redraw;
 }
 
+DialogAction dialog_finger_down(Dialog& dialog, int32_t x, int32_t y, int32_t reach) {
+    const SourcePoint target = finger_target(dialog, layout::open_rows(dialog), x, y, reach);
+    const DialogAction action = dialog_pointer_down(dialog, target.x, target.y);
+    if (press_held(dialog)) {
+        dialog.finger_shift_x = target.x - x;
+        dialog.finger_shift_y = target.y - y;
+    }
+    return action;
+}
+
 DialogAction dialog_pointer_up(Dialog& dialog, int32_t x, int32_t y) {
+    // A finger's release lands as its press was moved; the next press
+    // starts afresh.
+    if (press_held(dialog)) {
+        x += dialog.finger_shift_x;
+        y += dialog.finger_shift_y;
+    }
+    dialog.finger_shift_x = 0;
+    dialog.finger_shift_y = 0;
     note_pointer(dialog, x, y);
     const layout::ScrolledRows open = layout::open_rows(dialog);
     // A release over the list item the press held chooses it.
@@ -2394,6 +2987,8 @@ DialogAction dialog_pointer_up(Dialog& dialog, int32_t x, int32_t y) {
     const layout::Row* row = row_of(open.rows, control);
     if (row != nullptr && layout::is_choice(row->setting))
         return open_choices(dialog, *row);
+    if (row != nullptr && layout::is_button(row->setting))
+        return DialogAction::manage_game_files;
     if (row != nullptr) {
         const EngineSettings before = dialog.chosen;
         if (layout::is_strip(row->setting)) {
@@ -2455,7 +3050,8 @@ DialogAction dialog_key(Dialog& dialog, DialogKey key) {
     }
     const layout::Row* row = row_of(rows, dialog.focused);
     if (row != nullptr) {
-        if (row->lock != Lock::none)
+        // A button has no steps.
+        if (row->lock != Lock::none || layout::is_button(row->setting))
             return shown;
         const EngineSettings before = dialog.chosen;
         step(dialog.chosen, row->setting, up, dialog.highest_offered_unit, dialog.mod_names.size());
@@ -2674,8 +3270,8 @@ std::vector<LayoutPart> dialog_layout(const Dialog& dialog) {
     }
 
     // The section list.
-    for (const Page page : dialog_pages(dialog.kind)) {
-        const layout::SourceRect item = layout::list_item(page);
+    for (const Page page : dialog_pages(dialog.kind, dialog.touch, dialog.game_files)) {
+        const layout::SourceRect item = layout::dialog_list_item(dialog, page);
         parts.push_back(
             LayoutPart{
                 {item.x + layout::list_text_offset,
@@ -2690,7 +3286,7 @@ std::vector<LayoutPart> dialog_layout(const Dialog& dialog) {
         );
     }
     if (dialog.kind == DialogKind::engine)
-        control_part(layout::list_divider(), no_control);
+        control_part(layout::list_divider(dialog.touch, dialog.game_files), no_control);
 
     // The open section.
     text_part(
@@ -2713,7 +3309,7 @@ std::vector<LayoutPart> dialog_layout(const Dialog& dialog) {
     for (const layout::Row& row : open.rows.rows) {
         // A locked row's control is drawn but takes no press.
         const int32_t control = row.lock == Lock::none ? row.control : no_control;
-        row_text(row.label, layout::label_of(row.setting), DialogFont::regular);
+        row_text(row.label, layout::row_label(row.setting), DialogFont::regular);
         if (row.lock != Lock::none) {
             const layout::SourceRect text_area{
                 row.lock_area.x + layout::padlock_width + layout::padlock_gap,
@@ -2732,13 +3328,24 @@ std::vector<LayoutPart> dialog_layout(const Dialog& dialog) {
             );
             row_text(text_area, layout::lock_text(row.lock), DialogFont::small);
         }
-        for (std::size_t line = 0; line < row.hint_lines; ++line)
-            row_text(
-                row.hints[line],
-                layout::hint_line(row.setting, dialog.chosen, dialog.acceleration, line),
-                DialogFont::small
+        for (std::size_t line = 0; line < row.hint_lines; ++line) {
+            const std::string hint = layout::row_hint(dialog, row.setting, line);
+            if (!hint.empty())
+                row_text(row.hints[line], hint, DialogFont::small);
+        }
+        if (layout::is_text(row.setting))
+            continue;
+        if (layout::is_button(row.setting)) {
+            row_part(
+                LayoutPart{
+                    row.control_area,
+                    std::string(layout::shown_text(layout::manage_text)),
+                    DialogFont::small,
+                    0,
+                    control,
+                }
             );
-        if (layout::is_strip(row.setting) && row.control_area.width > 0) {
+        } else if (layout::is_strip(row.setting) && row.control_area.width > 0) {
             const layout::Strip strip = layout::strip_of(row.setting);
             for (std::size_t level = 0; level < strip.levels; ++level) {
                 row_part(

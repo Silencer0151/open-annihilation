@@ -127,6 +127,10 @@ oa::ui::display_layout::Point Runtime::frontend_panel_point(float x, float y) co
 oa::ui::display_layout::Point Runtime::hud_source_point(float x, float y) const {
     const auto canvas_x = static_cast<int>(x);
     const auto canvas_y = static_cast<int>(y);
+    // On the phone layout every piece of the HUD, panels and dialogs
+    // included, shows through its placed region.
+    if (oa::ui::display_layout::placed_mode(match_layout_))
+        return oa::ui::display_layout::canvas_to_source(match_layout_, canvas_x, canvas_y);
     const auto rows = preferences_panel_rows();
     if (rows.width > 0 && rows.height > 0 && canvas_x >= match_layout_.left &&
         match_layout_.scale > 0.0) {

@@ -50,7 +50,7 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
     // instead (Game.pinned_unit_a), or unpins without one.
     if (key.key == SDLK_F1 || key.scancode == SDL_SCANCODE_F1) {
         auto& game = match_->state().game;
-        if ((SDL_GetModState() & SDL_KMOD_SHIFT) != 0) {
+        if ((input_modifiers(ModifierUse::keyboard) & SDL_KMOD_SHIFT) != 0) {
             game.pinned_unit_a_valid = game.cursor_unit_id != 0 ? 1U : 0U;
             if (game.cursor_unit_id != 0)
                 game.pinned_unit_a = game.cursor_unit_id;
@@ -85,7 +85,7 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
             std::ignore = handle_console_hotkey(key);
         return true;
     }
-    if ((SDL_GetModState() & SDL_KMOD_CTRL) != 0 &&
+    if ((input_modifiers(ModifierUse::keyboard) & SDL_KMOD_CTRL) != 0 &&
         (key.key == SDLK_F9 || key.scancode == SDL_SCANCODE_F9)) {
         capture_screenshot();
         return true;
@@ -131,13 +131,7 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
         if (match_paused_)
             return false;
         if (match_command_ != MatchCommand::none || pending_build_type_ != 0) {
-            reset_match_command();
-            pending_build_type_ = 0;
-            oa::sim::gameplay_input::set_pointer_command(
-                match_->state().game, oa::sim::gameplay_input::OrderCommand::default_order
-            );
-            apply_match_hud_for_selection();
-            status_ = "Command cancelled";
+            clear_or_cancel_match_command();
             return true;
         }
         if (!match_finished_ && !has_local_selection() &&
@@ -145,14 +139,12 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
             show_match_pause_menu();
             return true;
         }
-        clear_local_selection();
-        apply_match_hud_for_selection();
-        status_ = "Selection cleared";
+        clear_or_cancel_match_command();
         return true;
     }
     if (match_paused_)
         return false;
-    const auto mods = SDL_GetModState();
+    const auto mods = input_modifiers(ModifierUse::keyboard);
     if ((mods & SDL_KMOD_CTRL) != 0 && (key.key == SDLK_D || key.scancode == SDL_SCANCODE_D) &&
         selected_match_unit_ != 0) {
         match_->toggle_self_destruct(selected_local_ids());
@@ -306,6 +298,24 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
     return false;
 }
 
+void Runtime::clear_or_cancel_match_command() {
+    if (!match_)
+        return;
+    if (match_command_ != MatchCommand::none || pending_build_type_ != 0) {
+        reset_match_command();
+        pending_build_type_ = 0;
+        oa::sim::gameplay_input::set_pointer_command(
+            match_->state().game, oa::sim::gameplay_input::OrderCommand::default_order
+        );
+        apply_match_hud_for_selection();
+        status_ = "Command cancelled";
+        return;
+    }
+    clear_local_selection();
+    apply_match_hud_for_selection();
+    status_ = "Selection cleared";
+}
+
 void Runtime::select_match_unit(float x, float y, int32_t clicks) {
     if (!match_)
         return;
@@ -313,7 +323,7 @@ void Runtime::select_match_unit(float x, float y, int32_t clicks) {
     auto& world = match_->state();
     world.game.local_player_index = match_local_player_;
     const auto id = hovered_match_unit_;
-    const bool toggle = (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
+    const bool toggle = (input_modifiers(ModifierUse::selection) & SDL_KMOD_SHIFT) != 0;
     // The unit under the cursor, when it is a selectable local unit, is
     // selected in place of the others, or toggled with shift; the local
     // units on screen are then visited for 'n'.
@@ -805,6 +815,10 @@ bool Runtime::click_unit_info(float x, float y) {
 }
 
 void Runtime::draw_unit_info_panel() {
+    // On the phone layout the panel shows through its placed region
+    // (refresh_placed_hud_regions), over the touch controls.
+    if (oa::ui::display_layout::placed_mode(match_layout_))
+        return;
     if (!unit_info_panel_ || unit_info_panel_->frame.rgb.empty())
         return;
     const auto& root = unit_info_panel_->root;
@@ -899,6 +913,11 @@ std::optional<oa::present::TextLayers> Runtime::chat_line_layers(int scale, int 
 void Runtime::draw_chat_entry() {
     if (!chat_composing_)
         return;
+    // With the touch controls on, the line stands over the battlefield in
+    // the overlays' area instead (draw_risen_chat_line), on a phone, whose
+    // HUD shows no bottom bar, and on a tablet alike.
+    if (touch_controls_active())
+        return;
     ensure_talk_panel();
     if (talk_layout_->gadgets.empty())
         return;
@@ -950,36 +969,69 @@ void Runtime::draw_chat_entry() {
 void Runtime::draw_risen_chat_line() {
     if (!chat_composing_)
         return;
-    const auto box = chat_text_box();
-    if (!box)
-        return;
-    // Only a line taller than the TALK field and the rows round it rises.
-    const auto in_box = chat_line_layers(1, box->width - 2 * kChatTextInset);
-    if (!in_box || in_box->height <= box->height + 2 * kChatTextInset)
-        return;
-    // Across the battlefield, standing on its bottom edge, the text from
-    // the column the field's text starts at; in canvas pixels.
+    // With the touch controls on, every line stands over the battlefield
+    // (draw_chat_entry leaves the TALK field alone then); without them only
+    // a line taller than the TALK field and the rows round it rises.
+    const bool touch = touch_controls_active();
+    std::optional<HudRect> box;
+    if (!touch) {
+        box = chat_text_box();
+        if (!box)
+            return;
+        const auto in_box = chat_line_layers(1, box->width - 2 * kChatTextInset);
+        if (!in_box || in_box->height <= box->height + 2 * kChatTextInset)
+            return;
+    }
+    // Across the overlays' area (the battlefield, or with the touch controls
+    // on the part of it they leave clear), standing on its bottom edge, the
+    // text from the column the field's text starts at, or from the area's
+    // left with the touch controls on; in canvas pixels.
     namespace layout = oa::ui::display_layout;
     const int scale = hud_text_scale();
-    const int left = match_layout_.left;
-    const int right = match_layout_.left + match_layout_.battlefield_width();
+    const auto area = overlay_area();
+    const int left = area.x;
+    const int right = area.x + area.width;
     const int inset = kChatTextInset * scale;
-    const int pen = std::clamp(
-        layout::source_to_canvas(match_layout_, box->x + kChatTextInset, layout::kSourceBottomBarY)
-            .x,
-        left + inset,
-        right
-    );
+    int pen = left + inset;
+    if (box) {
+        const auto field = layout::source_to_canvas(
+            match_layout_, box->x + kChatTextInset, layout::kSourceBottomBarY
+        );
+        pen = std::clamp(field.x, left + inset, right);
+    }
     const auto layers = chat_line_layers(scale, right - pen - inset);
-    if (!layers || right <= left)
+    if (right <= left)
         return;
-    const int bottom = match_layout_.top + match_layout_.battlefield_height();
-    const int top = std::max(bottom - layers->height - 2 * inset, match_layout_.top);
+    const int bottom = area.y + area.height;
+    if (layers) {
+        const int top = std::max(bottom - layers->height - 2 * inset, area.y);
+        const auto at = canvas_paint(left, top);
+        fill_hud_rect(at.x, at.y, right - left, bottom - top, view_rules::chat_backdrop_color);
+        std::ignore = paint_modern_text(
+            *layers, at.x + pen - left, at.y + inset + layers->baseline, palette_rgb(kChatTextColor)
+        );
+        return;
+    }
+    // The game's fonts draw the line: with the touch controls on it stands
+    // in the overlays' area all the same, as much of its end as fits, the
+    // cursor after it, on the same box.
+    const oa::formats::fnt::Font* font = touch ? match_label_font() : nullptr;
+    if (font == nullptr)
+        return;
+    const std::string typed = chat_buffer_ + chat_composition_;
+    const int room = right - pen - inset;
+    std::size_t from = 0;
+    std::string line = typed_game_text(typed) + "_";
+    while (from < typed.size() && match_text_width(*font, line, scale) > room) {
+        const auto character = oa::present::utf8_sequence(std::string_view(typed).substr(from));
+        from += std::max<std::size_t>(character.bytes, 1);
+        line = typed_game_text(std::string_view(typed).substr(from)) + "_";
+    }
+    const int text_height = static_cast<int>(oa::formats::fnt::line_height(*font)) * scale;
+    const int top = std::max(bottom - text_height - 2 * inset, area.y);
     const auto at = canvas_paint(left, top);
     fill_hud_rect(at.x, at.y, right - left, bottom - top, view_rules::chat_backdrop_color);
-    std::ignore = paint_modern_text(
-        *layers, at.x + pen - left, at.y + inset + layers->baseline, palette_rgb(kChatTextColor)
-    );
+    draw_match_text(font, at.x + pen - left, at.y + inset, line, kChatTextColor, scale);
 }
 
 namespace {

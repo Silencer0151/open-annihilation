@@ -7,7 +7,11 @@
 // on them. The Language & Text switches and text size: their defaults, a
 // file without them, a file with CR LF line ends, the round trip, the text
 // size's range and the text style the drawing reads. Developer Mode's
-// switch and the overrides kept under each profile's id.
+// switch and the overrides kept under each profile's id. The Touch
+// section's settings: their keys, defaults, words, the hold delay's range
+// and stops, unknown values, and the round trip. The Game files section's
+// backups switch: Off by default everywhere, read, written and restored as
+// every switch.
 
 #include "oa/ui/engine_settings.hpp"
 
@@ -1105,6 +1109,199 @@ void the_mod_is_stored_as_its_folder() {
     CHECK(!values.contains(std::string{settings::key::mod_directory}));
 }
 
+void the_touch_settings_default_alike_everywhere() {
+    CHECK(settings::key::touch_drag == "open-annihilation.touch-drag");
+    CHECK(settings::key::touch_hold_delay == "open-annihilation.touch-hold-delay");
+    CHECK(settings::key::touch_latches == "open-annihilation.touch-latches");
+    CHECK(settings::key::touch_haptics == "open-annihilation.touch-haptics");
+    CHECK(settings::key::touch_left_handed == "open-annihilation.touch-left-handed");
+    settings::Inputs own_mac = players_own_on_linux;
+    own_mac.macos = true;
+    settings::Inputs pi = players_own_on_linux;
+    pi.raspberry_pi = true;
+    settings::Inputs light = players_own_on_linux;
+    light.light_machine = true;
+    for (const auto& inputs : {settings::Inputs{}, players_own_on_linux, own_mac, pi, light}) {
+        const auto defaults = settings::default_settings(inputs);
+        CHECK(defaults.touch_drag == settings::TouchDrag::automatic);
+        CHECK(defaults.touch_hold_ms == settings::default_touch_hold_ms);
+        CHECK(defaults.touch_hold_ms == 350);
+        CHECK(defaults.touch_latches == settings::TouchLatches::stay_on);
+        CHECK(defaults.touch_haptics);
+        CHECK(!defaults.touch_left_handed);
+        // A file without the keys reads the defaults.
+        CHECK(settings::read_settings({}, inputs, false) == defaults);
+    }
+}
+
+void the_touch_settings_read_their_words_and_drop_others() {
+    // The words each way is kept as, and back.
+    for (const auto drag : settings::touch_drag_choices)
+        CHECK(settings::touch_drag_from_text(settings::touch_drag_text(drag)) == drag);
+    for (const auto latches : settings::touch_latches_choices)
+        CHECK(settings::touch_latches_from_text(settings::touch_latches_text(latches)) == latches);
+    CHECK(settings::touch_drag_text(settings::TouchDrag::automatic) == "automatic");
+    CHECK(settings::touch_drag_text(settings::TouchDrag::box) == "box");
+    CHECK(settings::touch_drag_text(settings::TouchDrag::scroll) == "scroll");
+    CHECK(settings::touch_latches_text(settings::TouchLatches::stay_on) == "stay-on");
+    CHECK(settings::touch_latches_text(settings::TouchLatches::one_action) == "one-action");
+    const auto drag = [](const char* text) {
+        return read_one(settings::key::touch_drag, text).touch_drag;
+    };
+    CHECK(drag("box") == settings::TouchDrag::box);
+    CHECK(drag("scroll") == settings::TouchDrag::scroll);
+    CHECK(drag("automatic") == settings::TouchDrag::automatic);
+    for (const char* text : {"", "Box", "SCROLL", " box", "box ", "1", "2", "boxes", "drag"})
+        CHECK(drag(text) == settings::TouchDrag::automatic);
+    const auto latches = [](const char* text) {
+        return read_one(settings::key::touch_latches, text).touch_latches;
+    };
+    CHECK(latches("one-action") == settings::TouchLatches::one_action);
+    CHECK(latches("stay-on") == settings::TouchLatches::stay_on);
+    for (const char* text : {"", "one_action", "One-action", "1", "once", "one-action "})
+        CHECK(latches(text) == settings::TouchLatches::stay_on);
+    // The switches read as every switch does; a value that is no number is
+    // dropped for the default.
+    CHECK(!read_one(settings::key::touch_haptics, "0").touch_haptics);
+    CHECK(!read_one(settings::key::touch_haptics, "-1").touch_haptics);
+    CHECK(read_one(settings::key::touch_haptics, "1").touch_haptics);
+    CHECK(read_one(settings::key::touch_haptics, "off").touch_haptics);
+    CHECK(read_one(settings::key::touch_left_handed, "1").touch_left_handed);
+    CHECK(read_one(settings::key::touch_left_handed, "7").touch_left_handed);
+    CHECK(!read_one(settings::key::touch_left_handed, "0").touch_left_handed);
+    CHECK(!read_one(settings::key::touch_left_handed, "yes").touch_left_handed);
+    // One key changes its own setting alone.
+    auto expected = settings::read_settings({}, {}, false);
+    expected.touch_drag = settings::TouchDrag::scroll;
+    CHECK(read_one(settings::key::touch_drag, "scroll") == expected);
+}
+
+void the_hold_delay_is_held_to_its_range_and_stops() {
+    static_assert(settings::snapped_touch_hold_ms(275) == 300);
+    static_assert(settings::snapped_touch_hold_ms(274) == 250);
+    CHECK(settings::lowest_touch_hold_ms == 250 && settings::highest_touch_hold_ms == 700);
+    CHECK(settings::touch_hold_step_ms == 50);
+    const auto hold = [](const char* text) {
+        return read_one(settings::key::touch_hold_delay, text).touch_hold_ms;
+    };
+    // Each stop reads as itself.
+    for (uint32_t ms = 250; ms <= 700; ms += 50)
+        CHECK(hold(std::to_string(ms).c_str()) == ms);
+    // Out of range, the nearest end; between stops, the nearest stop, half a
+    // step up.
+    CHECK(hold("0") == 250 && hold("-40") == 250 && hold("249") == 250 && hold("100") == 250);
+    CHECK(hold("701") == 700 && hold("5000") == 700 && hold("99999999999999") == 700);
+    CHECK(hold("274") == 250 && hold("275") == 300 && hold("299") == 300 && hold("324") == 300);
+    CHECK(hold("326") == 350 && hold("374") == 350 && hold("375") == 400 && hold("699") == 700);
+    CHECK(hold("+450") == 450);
+    // What is no whole number gives the default.
+    for (const char* text : {"", "fast", "350ms", " 350", "350 ", "0.4", "0x100"})
+        CHECK(hold(text) == settings::default_touch_hold_ms);
+}
+
+void the_touch_settings_round_trip_and_restore() {
+    const auto defaults = settings::default_settings(players_own_on_linux);
+
+    struct Change {
+        std::string_view key;
+        std::string_view text;
+        void (*apply)(settings::EngineSettings&);
+    };
+
+    const std::array<Change, 6> changes{{
+        {settings::key::touch_drag,
+         "box",
+         [](settings::EngineSettings& chosen) { chosen.touch_drag = settings::TouchDrag::box; }},
+        {settings::key::touch_drag,
+         "scroll",
+         [](settings::EngineSettings& chosen) { chosen.touch_drag = settings::TouchDrag::scroll; }},
+        {settings::key::touch_hold_delay,
+         "600",
+         [](settings::EngineSettings& chosen) { chosen.touch_hold_ms = 600; }},
+        {settings::key::touch_latches,
+         "one-action",
+         [](settings::EngineSettings& chosen) {
+             chosen.touch_latches = settings::TouchLatches::one_action;
+         }},
+        {settings::key::touch_haptics,
+         "0",
+         [](settings::EngineSettings& chosen) { chosen.touch_haptics = false; }},
+        {settings::key::touch_left_handed, "1", [](settings::EngineSettings& chosen) {
+             chosen.touch_left_handed = true;
+         }},
+    }};
+    // Each change alone writes its key alone, reads back, and Restore
+    // defaults then OK erases it.
+    for (const Change& change : changes) {
+        auto chosen = defaults;
+        change.apply(chosen);
+        Values values;
+        settings::write_settings(values, defaults, chosen, defaults, false);
+        CHECK(values.size() == 1);
+        CHECK(values.at(std::string{change.key}) == change.text);
+        CHECK(settings::read_settings(values, players_own_on_linux, false) == chosen);
+        settings::write_settings(values, chosen, defaults, defaults, true);
+        CHECK(values.empty());
+    }
+    // All of them at once: five keys, read back alike.
+    auto chosen = defaults;
+    for (const Change& change : changes)
+        change.apply(chosen);
+    Values values;
+    settings::write_settings(values, defaults, chosen, defaults, false);
+    CHECK(values.size() == 5);
+    CHECK(values.at(std::string{settings::key::touch_drag}) == "scroll");
+    CHECK(settings::read_settings(values, players_own_on_linux, false) == chosen);
+    // An unchanged setting is never written, even away from its default.
+    Values again;
+    settings::write_settings(again, chosen, chosen, defaults, false);
+    CHECK(again.empty());
+    // Back to the defaults by hand keeps keys, written as the defaults.
+    settings::write_settings(values, chosen, defaults, defaults, false);
+    CHECK(values.at(std::string{settings::key::touch_drag}) == "automatic");
+    CHECK(values.at(std::string{settings::key::touch_hold_delay}) == "350");
+    CHECK(values.at(std::string{settings::key::touch_latches}) == "stay-on");
+    CHECK(values.at(std::string{settings::key::touch_haptics}) == "1");
+    CHECK(values.at(std::string{settings::key::touch_left_handed}) == "0");
+    CHECK(settings::read_settings(values, players_own_on_linux, false) == defaults);
+}
+
+void the_backups_switch_is_off_by_default_and_round_trips() {
+    CHECK(settings::key::game_files_backed_up == "open-annihilation.game-files-backed-up");
+    settings::Inputs own_mac = players_own_on_linux;
+    own_mac.macos = true;
+    settings::Inputs light = players_own_on_linux;
+    light.light_machine = true;
+    for (const auto& inputs : {settings::Inputs{}, players_own_on_linux, own_mac, light}) {
+        CHECK(!settings::default_settings(inputs).game_files_backed_up);
+        CHECK(!settings::read_settings({}, inputs, false).game_files_backed_up);
+    }
+    // It reads as every switch does.
+    CHECK(read_one(settings::key::game_files_backed_up, "1").game_files_backed_up);
+    CHECK(read_one(settings::key::game_files_backed_up, "3").game_files_backed_up);
+    CHECK(!read_one(settings::key::game_files_backed_up, "0").game_files_backed_up);
+    CHECK(!read_one(settings::key::game_files_backed_up, "on").game_files_backed_up);
+    auto expected = settings::read_settings({}, {}, false);
+    expected.game_files_backed_up = true;
+    CHECK(read_one(settings::key::game_files_backed_up, "1") == expected);
+    // Turned on, only its key is written; Restore defaults then erases it.
+    const auto defaults = settings::default_settings(players_own_on_linux);
+    auto chosen = defaults;
+    chosen.game_files_backed_up = true;
+    Values values;
+    settings::write_settings(values, defaults, chosen, defaults, false);
+    CHECK(values.size() == 1);
+    CHECK(values.at(std::string{settings::key::game_files_backed_up}) == "1");
+    CHECK(settings::read_settings(values, players_own_on_linux, false) == chosen);
+    settings::write_settings(values, chosen, defaults, defaults, true);
+    CHECK(values.empty());
+    // Turned off again by hand, the key stays, written as Off.
+    settings::write_settings(values, defaults, chosen, defaults, false);
+    settings::write_settings(values, chosen, defaults, defaults, false);
+    CHECK(values.at(std::string{settings::key::game_files_backed_up}) == "0");
+    CHECK(!settings::read_settings(values, players_own_on_linux, false).game_files_backed_up);
+}
+
 int main() {
     defaults_play_as_without_the_settings();
     escape_opens_the_menu_by_default_only_on_macos_with_the_players_own_file();
@@ -1136,6 +1333,11 @@ int main() {
     the_language_reads_writes_and_restores();
     a_preferences_file_with_crlf_line_ends_reads_its_settings();
     developer_mode_and_its_overrides_are_kept_under_the_profiles_id();
+    the_touch_settings_default_alike_everywhere();
+    the_touch_settings_read_their_words_and_drop_others();
+    the_hold_delay_is_held_to_its_range_and_stops();
+    the_touch_settings_round_trip_and_restore();
+    the_backups_switch_is_off_by_default_and_round_trips();
     if (failures != 0)
         return 1;
     std::cout << "engine settings: ok\n";

@@ -91,10 +91,14 @@ class PaletteLookup {
 } // namespace
 
 oa::ui::display_layout::Point Runtime::board_canvas(int x, int y) const {
+    // The board hangs from the top right corner of the overlays' area: the
+    // battlefield's, or with the touch controls on, the part of it they
+    // leave clear (left of the rail, under PAUSE and MENU on a phone).
     const int scale = hud_text_scale();
+    const auto area = overlay_area();
     return {
-        match_layout_.width - (oa::ui::display_layout::kSourceWidth - x) * scale,
-        match_layout_.top + (y - oa::ui::display_layout::kSourceTop) * scale
+        area.x + area.width - (oa::ui::display_layout::kSourceWidth - x) * scale,
+        area.y + (y - oa::ui::display_layout::kSourceTop) * scale
     };
 }
 
@@ -613,7 +617,8 @@ void Runtime::check_kill_board() {
     const auto corner = board_canvas(left, hud::kBoardTop);
     const auto end = board_canvas(oa::ui::display_layout::kSourceWidth, bottom + 1);
     const Rect board{corner.x, corner.y, end.x - corner.x, end.y - corner.y};
-    if (board.x + board.width != match_layout_.width || board.y != match_layout_.top)
+    const auto overlays = overlay_area();
+    if (board.x + board.width != overlays.x + overlays.width || board.y != overlays.y)
         throw std::runtime_error("kill board check: the board is not at the battlefield's corner");
     if (differing_outside(hidden, shown, {board, cursor}) != 0)
         throw std::runtime_error("kill board check: the frame changed outside the board");

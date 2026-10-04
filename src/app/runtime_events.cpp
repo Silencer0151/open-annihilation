@@ -21,6 +21,17 @@
 #include <variant>
 
 namespace oa::app {
+namespace {
+
+/// Returns the mouse a pointer event comes from.
+///
+/// @param event a mouse motion or button event
+/// @return its `which`: SDL_TOUCH_MOUSEID for one made from a finger
+SDL_MouseID event_mouse_id(const SDL_Event& event) noexcept {
+    return event.type == SDL_EVENT_MOUSE_MOTION ? event.motion.which : event.button.which;
+}
+
+} // namespace
 
 void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
     if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
@@ -44,10 +55,12 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
         return;
     }
     // Entering or leaving full screen lays the screen out again at the size
-    // the window ends at, which some window systems report only then.
+    // the window ends at, which some window systems report only then; so
+    // does a change of the window's safe area.
     if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
         event.type == SDL_EVENT_WINDOW_RESIZED || event.type == SDL_EVENT_WINDOW_ENTER_FULLSCREEN ||
-        event.type == SDL_EVENT_WINDOW_LEAVE_FULLSCREEN) {
+        event.type == SDL_EVENT_WINDOW_LEAVE_FULLSCREEN ||
+        event.type == SDL_EVENT_WINDOW_SAFE_AREA_CHANGED) {
         apply_output_mode();
         if (screen_ == Screen::match && match_ && selected_tnt_)
             render_match_surface();
@@ -211,8 +224,11 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
         const float x = event.type == SDL_EVENT_MOUSE_MOTION ? event.motion.x : event.button.x;
         const float y = event.type == SDL_EVENT_MOUSE_MOTION ? event.motion.y : event.button.y;
         // Where the pointer is on the match's screen is known once SDL
-        // reports it there (the screen's edges scroll the camera only then).
-        match_pointer_known_ = screen_ == Screen::match;
+        // reports it there (the screen's edges scroll the camera only then);
+        // the events the touch controls make for a finger leave it unknown,
+        // since a finger is no pointer resting at an edge.
+        match_pointer_known_ =
+            screen_ == Screen::match && event_mouse_id(event) != SDL_TOUCH_MOUSEID;
         update_pointer(x, y);
         // The commander placement (setup.commander-warp) takes the pointer
         // first; ui.resource-panel's panel floats over the battlefield and
@@ -242,8 +258,10 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
             if (follow_pointer_modes(event))
                 return;
         }
+        // A press on a placed HUD region or a touch control is not the
+        // battlefield's.
         if (screen_ == Screen::match && event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
-            !match_paused_ && !match_finished_ && !hovered_ && match_) {
+            !match_paused_ && !match_finished_ && !hovered_ && match_ && !placed_hud_covers(x, y)) {
             if (event.button.button == SDL_BUTTON_RIGHT) {
                 // ui.selection-shortcuts takes a right double-click too.
                 if (!selection_shortcut_double_click(x, y, event.button.clicks))
@@ -267,7 +285,7 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
         if (screen_ == Screen::match && event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
             event.button.button == SDL_BUTTON_LEFT && !match_paused_ && !match_finished_ &&
             match_command_ == MatchCommand::none && !hovered_ && !radar_contains(x, y) &&
-            x >= static_cast<float>(match_layout_.left) &&
+            !placed_hud_covers(x, y) && x >= static_cast<float>(match_layout_.left) &&
             y >= static_cast<float>(match_layout_.top) &&
             x < static_cast<float>(match_layout_.left + match_layout_.battlefield_width()) &&
             y < static_cast<float>(match_layout_.top + match_layout_.battlefield_height())) {
@@ -285,7 +303,7 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
                 return;
             }
             if (match_drag_ && !match_drag_is_click()) {
-                const bool add = (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
+                const bool add = (input_modifiers(ModifierUse::selection) & SDL_KMOD_SHIFT) != 0;
                 const auto [from, to] = match_drag_corners(live_viewport(
                     static_cast<uint32_t>(match_camera_x_), static_cast<uint32_t>(match_camera_z_)
                 ));

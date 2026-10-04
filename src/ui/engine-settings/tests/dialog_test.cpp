@@ -16,7 +16,17 @@
 // section: its two rows over Developer Mode's list of the standard hacks,
 // the list's areas and hacks opening and closing, static while Off, each
 // kind of parameter's control, the overrides it makes, Restore profile
-// values, Show Active Only, its scrolling and its focus.
+// values, Show Active Only, its scrolling and its focus. The Touch section,
+// listed only with touch controls: its place in the list, the entries'
+// numbers kept with and without it, its rows and their values, and a
+// finger's press taking the nearest control within reach. The Game files
+// section, listed only where the host says the platform brings game files
+// in: its place in the list and its entry's number, its rows (what is
+// installed with MANAGE…, the backups switch with the device's name, where
+// the files are), MANAGE… asking the host, and the switch. The Language &
+// Text dialog: its one section, Restore defaults restoring that section
+// alone, and every text drawn in the modern fonts when its fonts hold no
+// glyphs.
 // With --data, its fonts from the installed game and every text fitting its
 // place.
 
@@ -28,12 +38,15 @@
 
 #include "oa/data/mod_profile/overrides.hpp"
 #include "oa/data/mod_profile/registry.hpp"
+#include "oa/present/game_text.hpp"
 #include "oa/test/game_assets.hpp"
 #include "oa/test/game_data.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
+#include <cstdlib>
 #include <iostream>
 #include <limits>
 #include <set>
@@ -75,6 +88,42 @@ constexpr std::array<Page, 6> kPages{
     Page::gameplay,
     Page::graphics,
     Page::language_text,
+    Page::developer,
+};
+
+/// The engine's sections while the game has touch controls: Touch between
+/// Language & Text and Developer.
+constexpr std::array<Page, 7> kTouchPages{
+    Page::path_search,
+    Page::controls,
+    Page::gameplay,
+    Page::graphics,
+    Page::language_text,
+    Page::touch,
+    Page::developer,
+};
+
+/// The engine's sections in the main menu's dialog of a game that brings
+/// game files in: Game files between Language & Text and Developer.
+constexpr std::array<Page, 7> kGameFilesPages{
+    Page::path_search,
+    Page::controls,
+    Page::gameplay,
+    Page::graphics,
+    Page::language_text,
+    Page::game_files,
+    Page::developer,
+};
+
+/// The engine's sections with Touch and Game files both listed.
+constexpr std::array<Page, 8> kTouchGameFilesPages{
+    Page::path_search,
+    Page::controls,
+    Page::gameplay,
+    Page::graphics,
+    Page::language_text,
+    Page::touch,
+    Page::game_files,
     Page::developer,
 };
 
@@ -131,6 +180,65 @@ settings::Dialog opened(Page page, const settings::Locks& locks = {}) {
     return dialog;
 }
 
+/// Returns a dialog of the engine's settings opened on a section, with or
+/// without touch controls.
+settings::Dialog opened_with_touch(Page page, bool touch = true) {
+    settings::Dialog dialog;
+    settings::open_dialog(
+        dialog,
+        settings::EngineSettings{},
+        settings::EngineSettings{},
+        {},
+        "v0.2.0",
+        page,
+        {},
+        settings::highest_unit_limit,
+        {},
+        {},
+        nullptr,
+        touch
+    );
+    return dialog;
+}
+
+/// Returns a dialog of the engine's settings opened on a section with the
+/// Game files section listed, with or without touch controls, its rows
+/// filled as a host fills them.
+settings::Dialog opened_with_game_files(Page page, bool touch = false) {
+    settings::Dialog dialog;
+    settings::open_dialog(
+        dialog,
+        settings::EngineSettings{},
+        settings::EngineSettings{},
+        {},
+        "v0.2.0",
+        page,
+        {},
+        settings::highest_unit_limit,
+        {},
+        {},
+        nullptr,
+        touch,
+        true
+    );
+    dialog.game_files_summary = "3.1c \u00b7 Core Contingency \u00b7 Battle Tactics \u00b7 music";
+    dialog.game_files_sizes = "1.1 GB \u00b7 37 GB free on this tablet";
+    dialog.game_files_location = "In the file manager: Open Annihilation \u203a Total Annihilation";
+    dialog.game_files_device = "tablet";
+    return dialog;
+}
+
+/// The list's entries as the dialog lists them: each entry's control and
+/// its rectangle, top to bottom.
+std::vector<std::pair<int32_t, renderer::SourceRect>> list_entries(const settings::Dialog& dialog) {
+    std::vector<std::pair<int32_t, renderer::SourceRect>> entries;
+    for (const auto& part : settings::dialog_layout(dialog))
+        if (part.control >= settings::first_page_control &&
+            part.control < settings::restore_control)
+            entries.emplace_back(part.control, part.rect);
+    return entries;
+}
+
 bool overlap(const renderer::SourceRect& a, const renderer::SourceRect& b) {
     return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height &&
            b.y < a.y + a.height;
@@ -161,6 +269,11 @@ struct Point {
 
 Point centre(const renderer::SourceRect& rect) {
     return {rect.x + rect.width / 2, rect.y + rect.height / 2};
+}
+
+/// Tells whether two rectangles are the same.
+bool same_entry(const renderer::SourceRect& a, const renderer::SourceRect& b) {
+    return a.x == b.x && a.y == b.y && a.width == b.width && a.height == b.height;
 }
 
 DialogAction click(settings::Dialog& dialog, Point point) {
@@ -1554,20 +1667,28 @@ void a_long_section_scrolls_by_its_overflow() {
 }
 
 void control_numbers_put_the_rows_after_every_fixed_control() {
-    for (std::size_t index = 0; index < kPages.size(); ++index)
-        CHECK(settings::page_control(kPages[index]) == static_cast<int32_t>(index));
-    CHECK(settings::restore_control == 6);
-    CHECK(settings::cancel_control == 7);
-    CHECK(settings::ok_control == 8);
-    CHECK(settings::scroll_bar_control == 9);
-    CHECK(settings::first_row_control == 10);
+    // Each entry is its place in the list with Touch, whether or not the
+    // dialog lists Touch: the five sections before Touch are 0 to 4, Touch
+    // 5 and Developer 6; Game files, listed only by the main menu's dialog
+    // of a game that brings game files in, is 7.
+    for (std::size_t index = 0; index < kTouchPages.size(); ++index)
+        CHECK(settings::page_control(kTouchPages[index]) == static_cast<int32_t>(index));
+    CHECK(settings::page_control(Page::touch) == 5);
+    CHECK(settings::page_control(Page::developer) == 6);
+    CHECK(settings::page_control(Page::game_files) == 7);
+    CHECK(settings::most_listed_pages == 8);
+    CHECK(settings::restore_control == 8);
+    CHECK(settings::cancel_control == 9);
+    CHECK(settings::ok_control == 10);
+    CHECK(settings::scroll_bar_control == 11);
+    CHECK(settings::first_row_control == 12);
     // Developer's two rows come first, Enable Developer Mode and Show
     // performance statistics, then its footer's switch and button, then
     // its list's rows.
-    CHECK(settings::developer_mode_control == 10);
-    CHECK(settings::active_only_control == 12);
-    CHECK(settings::restore_profile_control == 13);
-    CHECK(settings::first_hack_list_control == 14);
+    CHECK(settings::developer_mode_control == 12);
+    CHECK(settings::active_only_control == 14);
+    CHECK(settings::restore_profile_control == 15);
+    CHECK(settings::first_hack_list_control == 16);
 
     // Every row's number comes after every fixed control's, and each is its own.
     Scrolling all(nine_rows());
@@ -4081,6 +4202,98 @@ void developer_texts_fit(const settings::DialogFonts& fonts) {
         );
 }
 
+/// Checks that MANAGE\u2026 draws as the other buttons do, in the game's small
+/// font with its ellipsis as three full stops, and centred inside its box with
+/// clear columns each side at every scale.
+///
+/// @param fonts the dialog's fonts
+void manage_draws_in_the_game_font_inside_its_button(const settings::DialogFonts& fonts) {
+    const int32_t width =
+        settings::dialog_text_width(fonts, settings::DialogFont::small, "MANAGE\u2026");
+    const auto stops =
+        static_cast<int32_t>(oa::formats::fnt::measure_text(fonts.small.font, "MANAGE..."));
+    CHECK(width == stops);
+    CHECK(width + 2 * 3 <= geometry::manage_button_width);
+    // The mark between a location's folders, as a greater-than sign.
+    CHECK(
+        settings::dialog_text_width(
+            fonts, settings::DialogFont::small, "On My iPhone \u203a Open Annihilation"
+        ) ==
+        static_cast<int32_t>(
+            oa::formats::fnt::measure_text(fonts.small.font, "On My iPhone > Open Annihilation")
+        )
+    );
+    std::cout << "'MANAGE\u2026' is " << width << " columns in " << geometry::manage_button_width
+              << '\n';
+
+    constexpr renderer::Rgb kAccentLight{0xb6, 0xe0, 0x5a};
+    constexpr renderer::Rgb kOnAccent{0x10, 0x12, 0x0d};
+    for (const bool touch : {false, true}) {
+        const settings::Dialog dialog = opened_with_game_files(Page::game_files, touch);
+        const auto rows = geometry::open_rows(dialog).rows;
+        CHECK(!rows.rows.empty());
+        if (rows.rows.empty())
+            continue;
+        const renderer::SourceRect button = rows.rows.front().control_area;
+        CHECK(button.width == geometry::manage_button_width);
+        for (const int32_t scale : {1, 2, 3}) {
+            Canvas canvas = blank(
+                static_cast<uint32_t>(settings::dialog_width * scale),
+                static_cast<uint32_t>(settings::dialog_height * scale)
+            );
+            settings::draw_dialog(canvas.surface, {0, 0, scale}, dialog, fonts, kNoIcon);
+            // Inside the button only its face, its edge and its caption, in the
+            // text's colour on the face, show.
+            int32_t left = button.width * scale;
+            int32_t right = -1;
+            int32_t top = button.height * scale;
+            int32_t bottom = -1;
+            bool clean = true;
+            for (int32_t y = 0; y < button.height * scale; ++y)
+                for (int32_t x = 0; x < button.width * scale; ++x) {
+                    const renderer::Rgb seen =
+                        canvas.at(button.x * scale + x, button.y * scale + y);
+                    if (seen == kAccent || seen == kAccentLight)
+                        continue;
+                    // The caption's pixels, its letters' edges mixed into the face.
+                    left = std::min(left, x);
+                    right = std::max(right, x);
+                    top = std::min(top, y);
+                    bottom = std::max(bottom, y);
+                    for (std::size_t channel = 0; channel < seen.size(); ++channel)
+                        if (seen[channel] < kOnAccent[channel] ||
+                            seen[channel] > kAccent[channel]) {
+                            if (clean)
+                                std::cerr << "MANAGE\u2026 at scale " << scale << ": colour "
+                                          << int{seen[0]} << ',' << int{seen[1]} << ','
+                                          << int{seen[2]} << " at " << x << ',' << y << '\n';
+                            clean = false;
+                        }
+                }
+            CHECK(clean);
+            CHECK(right >= left);
+            // Clear columns each side, the caption centred as every caption is,
+            // by its letters' advances: within the font's two columns of bearing.
+            const int32_t before = left;
+            const int32_t after = button.width * scale - 1 - right;
+            CHECK(before >= 3 * scale && after >= 3 * scale);
+            CHECK(std::abs(before - after) <= 2 * scale);
+            CHECK(top >= scale && button.height * scale - 1 - bottom >= scale);
+            // Nothing of the caption spills past the button's right edge.
+            for (int32_t y = 0; y < button.height * scale; ++y)
+                for (int32_t x = 0; x < 4 * scale; ++x) {
+                    const int32_t column = (button.x + button.width) * scale + x;
+                    if (column < static_cast<int32_t>(canvas.surface.width))
+                        CHECK(canvas.at(column, button.y * scale + y) != kOnAccent);
+                }
+            if (!clean || before < 3 * scale || after < 3 * scale ||
+                std::abs(before - after) > 2 * scale)
+                std::cerr << "MANAGE\u2026 at scale " << scale << ": " << before << " and " << after
+                          << " clear columns\n";
+        }
+    }
+}
+
 void fonts_load_and_every_text_fits_its_place() {
     auto assets = oa::test::require_game_assets("the settings dialog's fonts");
     const auto fonts = settings::load_dialog_fonts(assets);
@@ -4140,6 +4353,39 @@ void fonts_load_and_every_text_fits_its_place() {
         }
     }
     the_dialog_draws_its_faces_and_accents(fonts);
+
+    // The Touch section, with each way of its strips and at every offset,
+    // and the list with Touch in it: every text fits its place.
+    for (const auto drag : settings::touch_drag_choices)
+        for (const auto latches : settings::touch_latches_choices) {
+            settings::Dialog dialog = opened_with_touch(Page::touch);
+            dialog.chosen.touch_drag = drag;
+            dialog.chosen.touch_latches = latches;
+            dialog.chosen.touch_hold_ms = settings::highest_touch_hold_ms;
+            const int32_t limit = geometry::open_rows(dialog).limit;
+            for (int32_t scroll = 0; scroll <= limit; ++scroll) {
+                dialog.scroll[static_cast<std::size_t>(Page::touch)] = scroll;
+                for (const auto& part : settings::dialog_layout(dialog)) {
+                    if (part.text.empty())
+                        continue;
+                    const auto& font = part.font == settings::DialogFont::regular
+                                           ? fonts.regular.font
+                                           : fonts.small.font;
+                    const auto width =
+                        static_cast<int32_t>(oa::formats::fnt::measure_text(font, part.text)) +
+                        part.tracking * static_cast<int32_t>(part.text.size() - 1);
+                    if (width > part.rect.width || font.nominal_height > part.rect.height) {
+                        std::cerr << "'" << part.text << "' is " << width << " wide in a box "
+                                  << part.rect.width << " wide\n";
+                        CHECK(width <= part.rect.width);
+                        CHECK(font.nominal_height <= part.rect.height);
+                    }
+                }
+            }
+        }
+    for (const std::string_view text : {"Automatic", "Scroll", "Stay on", "One action"})
+        std::cout << "'" << text << "' is "
+                  << oa::formats::fnt::measure_text(fonts.small.font, text) << " columns\n";
 
     // A section that scrolls: every text it lists fits its place at every
     // offset, and each lock's text fits beside a kept switch as on a slider.
@@ -4265,6 +4511,39 @@ void fonts_load_and_every_text_fits_its_place() {
         CHECK(lock_texts == 2);
     }
     developer_texts_fit(fonts);
+
+    // The Game files section with a host's usual texts, and the Language &
+    // Text dialog alone: every text fits its place, as the dialog measures
+    // it (the characters the game fonts lack in the modern fonts).
+    const auto dialog_fits = [&](const settings::Dialog& dialog) {
+        for (const auto& part : settings::dialog_layout(dialog)) {
+            if (part.text.empty())
+                continue;
+            const int32_t width = settings::dialog_text_width(fonts, part.font, part.text) +
+                                  part.tracking * static_cast<int32_t>(part.text.size() - 1);
+            if (width > part.rect.width) {
+                std::cerr << "'" << part.text << "' is " << width << " wide in a box "
+                          << part.rect.width << " wide\n";
+                CHECK(width <= part.rect.width);
+            }
+        }
+    };
+    for (const bool touch : {false, true}) {
+        settings::Dialog files = opened_with_game_files(Page::game_files, touch);
+        files.game_files_summary =
+            "3.1c \u00b7 Core Contingency \u00b7 Battle Tactics \u00b7 music \u00b7 1 mod";
+        files.game_files_sizes = "1.1 GB \u00b7 11 GB free on this tablet";
+        files.game_files_location =
+            "In the file manager: On My tablet \u203a Open Annihilation \u203a Total "
+            "Annihilation";
+        dialog_fits(files);
+        files.game_files_device.clear();
+        dialog_fits(files);
+    }
+    settings::Dialog language;
+    settings::open_language_text_dialog(language, {}, {}, {}, "v0.6.0");
+    dialog_fits(language);
+    manage_draws_in_the_game_font_inside_its_button(fonts);
 }
 
 void the_mod_options_dialog_lists_its_own_sections() {
@@ -4354,6 +4633,844 @@ void a_mod_set_snap_radius_is_locked() {
     CHECK(dialog.chosen.mod_options.wreck_snap_radius == 4);
 }
 
+void touch_is_listed_only_with_touch_controls() {
+    // Without touch controls the engine's settings list their six sections,
+    // with Touch seven; a mod's options list their five either way.
+    const auto engine = settings::dialog_pages(settings::DialogKind::engine);
+    CHECK(std::equal(engine.begin(), engine.end(), kPages.begin(), kPages.end()));
+    const auto touch = settings::dialog_pages(settings::DialogKind::engine, true);
+    CHECK(std::equal(touch.begin(), touch.end(), kTouchPages.begin(), kTouchPages.end()));
+    const auto mods = settings::dialog_pages(settings::DialogKind::mod_options, true);
+    CHECK(std::equal(mods.begin(), mods.end(), kModPages.begin(), kModPages.end()));
+
+    // The list without Touch lies where it always has: 21 rows an entry from
+    // row 36, the line at 145 and Developer under it at 151.
+    constexpr std::array<int32_t, 5> kTops{36, 57, 78, 99, 120};
+    for (std::size_t index = 0; index < kTops.size(); ++index)
+        CHECK(geometry::list_item(kPages[index]).y == kTops[index]);
+    CHECK(geometry::list_divider().y == 145);
+    CHECK(geometry::list_item(Page::developer).y == 151);
+    CHECK(geometry::list_item(Page::mod_chat).y == 120);
+    // With Touch, Touch takes the sixth place and the line and Developer
+    // move down by an entry.
+    for (std::size_t index = 0; index < kTops.size(); ++index)
+        CHECK(geometry::list_item(kTouchPages[index], true).y == kTops[index]);
+    CHECK(geometry::list_item(Page::touch, true).y == 141);
+    CHECK(geometry::list_divider(true).y == 166);
+    CHECK(geometry::list_item(Page::developer, true).y == 172);
+    CHECK(geometry::list_item(Page::mod_chat, true).y == 120);
+
+    // Each section's entry keeps its number with or without Touch listed;
+    // a dialog without Touch has no entry numbered as Touch.
+    for (const Page page : kPages) {
+        const auto plain = list_entries(opened_with_touch(page, false));
+        const auto with_touch = list_entries(opened_with_touch(page));
+        CHECK(plain.size() == kPages.size());
+        CHECK(with_touch.size() == kTouchPages.size());
+        for (std::size_t index = 0; index < plain.size(); ++index) {
+            CHECK(plain[index].first == settings::page_control(kPages[index]));
+            CHECK(plain[index].first != settings::page_control(Page::touch));
+        }
+        for (std::size_t index = 0; index < with_touch.size(); ++index)
+            CHECK(with_touch[index].first == settings::page_control(kTouchPages[index]));
+    }
+    const auto parts = settings::dialog_layout(opened_with_touch(Page::path_search, false));
+    CHECK(find_part(parts, "Touch", settings::no_control) == nullptr);
+    const auto touch_parts = settings::dialog_layout(opened_with_touch(Page::path_search));
+    const auto* entry = find_part(touch_parts, "Touch", settings::no_control);
+    CHECK(entry != nullptr && entry->control == settings::page_control(Page::touch));
+
+    // Touch opens only where it is listed.
+    CHECK(opened_with_touch(Page::touch, false).page == Page::path_search);
+    CHECK(opened_with_touch(Page::touch).page == Page::touch);
+    CHECK(opened(Page::developer).page == Page::developer && !opened(Page::developer).touch);
+
+    // A click on Touch's entry shows it; Developer's entry still shows
+    // Developer, where it stands with Touch listed.
+    settings::Dialog dialog = opened_with_touch(Page::path_search);
+    CHECK(click(dialog, centre(geometry::list_item(Page::touch, true))) == DialogAction::redraw);
+    CHECK(dialog.page == Page::touch);
+    CHECK(
+        click(dialog, centre(geometry::list_item(Page::developer, true))) == DialogAction::redraw
+    );
+    CHECK(dialog.page == Page::developer);
+
+    // The keyboard focus walks the entries in the list's order, Touch among
+    // them.
+    settings::Dialog keys = opened_with_touch(Page::path_search);
+    std::vector<int32_t> walked;
+    for (int32_t press = 0; press < 12; ++press) {
+        static_cast<void>(settings::dialog_key(keys, DialogKey::tab));
+        if (keys.focused < settings::restore_control)
+            walked.push_back(keys.focused);
+    }
+    CHECK(walked.size() == kTouchPages.size());
+    for (std::size_t index = 0; index < walked.size() && index < kTouchPages.size(); ++index)
+        CHECK(walked[index] == settings::page_control(kTouchPages[index]));
+
+    // The touch controls coming on list Touch at once; going off, a dialog
+    // showing Touch shows its first section.
+    settings::Dialog later = opened_with_touch(Page::graphics, false);
+    CHECK(settings::set_touch_controls(later, false) == DialogAction::none);
+    CHECK(settings::set_touch_controls(later, true) == DialogAction::redraw);
+    CHECK(later.touch && list_entries(later).size() == kTouchPages.size());
+    CHECK(click(later, centre(geometry::list_item(Page::touch, true))) == DialogAction::redraw);
+    later.focused = settings::first_row_control;
+    CHECK(settings::set_touch_controls(later, false) == DialogAction::redraw);
+    CHECK(later.page == Page::path_search && later.focused == settings::no_control);
+    CHECK(list_entries(later).size() == kPages.size());
+}
+
+void game_files_is_listed_only_where_the_host_says() {
+    // With the flag the engine's settings list Game files between Language
+    // & Text, or Touch, and Developer; a mod's options and Language & Text
+    // alone never do.
+    const auto plain = settings::dialog_pages(settings::DialogKind::engine, false, false);
+    CHECK(std::equal(plain.begin(), plain.end(), kPages.begin(), kPages.end()));
+    const auto files = settings::dialog_pages(settings::DialogKind::engine, false, true);
+    CHECK(std::equal(files.begin(), files.end(), kGameFilesPages.begin(), kGameFilesPages.end()));
+    const auto both = settings::dialog_pages(settings::DialogKind::engine, true, true);
+    CHECK(
+        std::equal(
+            both.begin(), both.end(), kTouchGameFilesPages.begin(), kTouchGameFilesPages.end()
+        )
+    );
+    const auto mods = settings::dialog_pages(settings::DialogKind::mod_options, true, true);
+    CHECK(std::equal(mods.begin(), mods.end(), kModPages.begin(), kModPages.end()));
+    CHECK(settings::dialog_pages(settings::DialogKind::language_text, true, true).size() == 1);
+
+    // Its entry takes the place after Language & Text, or after Touch, and
+    // the line and Developer move down an entry; the entries above stay.
+    constexpr std::array<int32_t, 5> kTops{36, 57, 78, 99, 120};
+    for (std::size_t index = 0; index < kTops.size(); ++index) {
+        CHECK(geometry::list_item(kGameFilesPages[index], false, true).y == kTops[index]);
+        CHECK(geometry::list_item(kTouchGameFilesPages[index], true, true).y == kTops[index]);
+    }
+    CHECK(geometry::list_item(Page::game_files, false, true).y == 141);
+    CHECK(geometry::list_divider(false, true).y == 166);
+    CHECK(geometry::list_item(Page::developer, false, true).y == 172);
+    CHECK(geometry::list_item(Page::touch, true, true).y == 141);
+    CHECK(geometry::list_item(Page::game_files, true, true).y == 162);
+    CHECK(geometry::list_divider(true, true).y == 187);
+    CHECK(geometry::list_item(Page::developer, true, true).y == 193);
+    CHECK(
+        geometry::list_item(Page::developer, true, true).y + geometry::list_item_height <
+        geometry::footer_rule_row
+    );
+
+    // Touch is 5, Developer 6 and Game files 7 in every dialog: a dialog
+    // without Touch has no control 5, one without Game files no control 7.
+    CHECK(settings::page_control(Page::touch) == 5);
+    CHECK(settings::page_control(Page::developer) == 6);
+    CHECK(settings::page_control(Page::game_files) == 7);
+    for (const bool touch : {false, true}) {
+        const auto entries = list_entries(opened_with_game_files(Page::path_search, touch));
+        const auto& order = touch ? std::span<const Page>(kTouchGameFilesPages)
+                                  : std::span<const Page>(kGameFilesPages);
+        CHECK(entries.size() == order.size());
+        for (std::size_t index = 0; index < entries.size() && index < order.size(); ++index) {
+            CHECK(entries[index].first == settings::page_control(order[index]));
+            CHECK(entries[index].second.y == geometry::list_item(order[index], touch, true).y);
+        }
+    }
+    for (const auto& [control, rect] : list_entries(opened_with_touch(Page::path_search)))
+        CHECK(control != settings::page_control(Page::game_files));
+    const auto parts = settings::dialog_layout(opened_with_game_files(Page::path_search));
+    const auto* entry = find_part(parts, "Game files", settings::no_control);
+    CHECK(entry != nullptr && entry->control == settings::page_control(Page::game_files));
+    CHECK(
+        find_part(settings::dialog_layout(opened(Page::path_search)), "Game files", 0) == nullptr
+    );
+
+    // Game files opens only where it is listed.
+    CHECK(opened(Page::game_files).page == Page::path_search);
+    CHECK(opened_with_game_files(Page::game_files).page == Page::game_files);
+    CHECK(opened_with_game_files(Page::game_files).game_files);
+
+    // A click on its entry shows it; the focus walks the entries in the
+    // list's order, Game files among them.
+    settings::Dialog dialog = opened_with_game_files(Page::path_search, true);
+    CHECK(
+        click(dialog, centre(geometry::list_item(Page::game_files, true, true))) ==
+        DialogAction::redraw
+    );
+    CHECK(dialog.page == Page::game_files);
+    CHECK(
+        click(dialog, centre(geometry::list_item(Page::developer, true, true))) ==
+        DialogAction::redraw
+    );
+    CHECK(dialog.page == Page::developer);
+    settings::Dialog keys = opened_with_game_files(Page::path_search, true);
+    std::vector<int32_t> walked;
+    for (int32_t press = 0; press < 13; ++press) {
+        static_cast<void>(settings::dialog_key(keys, DialogKey::tab));
+        if (keys.focused < settings::restore_control)
+            walked.push_back(keys.focused);
+    }
+    CHECK(walked.size() == kTouchGameFilesPages.size());
+    for (std::size_t index = 0; index < walked.size() && index < kTouchGameFilesPages.size();
+         ++index)
+        CHECK(walked[index] == settings::page_control(kTouchGameFilesPages[index]));
+    // Touch going off keeps Game files listed.
+    CHECK(settings::set_touch_controls(keys, false) == DialogAction::redraw);
+    CHECK(list_entries(keys).size() == kGameFilesPages.size());
+}
+
+void game_files_shows_what_is_installed_the_backups_and_the_folder() {
+    const auto rows = settings::page_settings(Page::game_files);
+    CHECK(rows.size() == 3);
+    CHECK(rows.size() == 3 && rows[0] == Setting::game_files_summary);
+    CHECK(rows.size() == 3 && rows[1] == Setting::game_files_backed_up);
+    CHECK(rows.size() == 3 && rows[2] == Setting::game_files_location);
+    CHECK(geometry::is_button(Setting::game_files_summary));
+    CHECK(geometry::is_text(Setting::game_files_location));
+    CHECK(geometry::is_switch(Setting::game_files_backed_up));
+    CHECK(!geometry::is_switch(Setting::game_files_summary));
+    CHECK(!geometry::is_switch(Setting::game_files_location));
+
+    // MANAGE… stands at the label line's right; the switch where every
+    // switch stands; where the files are has no control. Every row fits the
+    // view.
+    const auto placed = geometry::place_rows(Page::game_files, {});
+    CHECK(placed.rows.size() == 3);
+    const auto& summary = placed.rows[0];
+    CHECK(summary.control == settings::first_row_control);
+    CHECK(summary.control_area.width == geometry::manage_button_width);
+    CHECK(summary.control_area.x + summary.control_area.width == geometry::content_right);
+    CHECK(summary.control_area.y == summary.label.y);
+    CHECK(summary.label.x + summary.label.width + geometry::label_gap == summary.control_area.x);
+    CHECK(summary.hint_lines == 2);
+    const auto& backups = placed.rows[1];
+    CHECK(backups.control_area.width == geometry::switch_width);
+    CHECK(backups.hint_lines == 2);
+    const auto& location = placed.rows[2];
+    CHECK(location.control_area.width == 0 && location.hint_lines == 2);
+    CHECK(geometry::scroll_limit(geometry::content_height(placed, 0)) == 0);
+
+    // The layout: the host's texts, MANAGE… as the first row's control, the
+    // switch's halves as the second's, nothing pressable for the third.
+    settings::Dialog dialog = opened_with_game_files(Page::game_files);
+    const auto parts = settings::dialog_layout(dialog);
+    for (const std::string_view text :
+         {"GAME FILES",
+          "Installed",
+          "3.1c \u00b7 Core Contingency \u00b7 Battle Tactics \u00b7 music",
+          "1.1 GB \u00b7 37 GB free on this tablet",
+          "Include in device backups",
+          "After restoring this tablet from a backup,",
+          "add the game files again.",
+          "Where the files are",
+          "In the file manager: Open Annihilation \u203a",
+          "Total Annihilation"})
+        CHECK(find_part(parts, text, settings::no_control) != nullptr);
+    const auto* manage = find_part(parts, "MANAGE\u2026", settings::no_control);
+    CHECK(manage != nullptr && manage->control == settings::first_row_control);
+    CHECK(manage != nullptr && same_entry(manage->rect, summary.control_area));
+    const auto* annihilation = find_part(parts, "Total Annihilation", settings::no_control);
+    CHECK(annihilation != nullptr && annihilation->control == settings::no_control);
+    const auto* off = find_part(parts, "OFF", settings::no_control);
+    CHECK(off != nullptr && off->control == settings::first_row_control + 1);
+    for (const auto& part : parts)
+        CHECK(part.control != settings::first_row_control + 2);
+    // No two parts overlap, and each lies inside the dialog.
+    const renderer::SourceRect face{
+        geometry::edge,
+        geometry::edge,
+        settings::dialog_width - 2 * geometry::edge,
+        settings::dialog_height - 2 * geometry::edge,
+    };
+    for (std::size_t a = 0; a < parts.size(); ++a) {
+        CHECK(inside(parts[a].rect, face));
+        for (std::size_t b = a + 1; b < parts.size(); ++b)
+            CHECK(!overlap(parts[a].rect, parts[b].rect));
+    }
+    // Every control is pressed where it is drawn.
+    for (const auto& part : parts) {
+        if (part.control == settings::no_control)
+            continue;
+        const Point point = centre(part.rect);
+        static_cast<void>(settings::dialog_pointer_move(dialog, point.x, point.y));
+        CHECK(dialog.hovered == part.control);
+    }
+    // A focus outline round MANAGE… keeps clear of the label and its lines.
+    const renderer::SourceRect focus{
+        summary.control_area.x - geometry::focus_inset,
+        summary.control_area.y - geometry::focus_inset,
+        summary.control_area.width + 2 * geometry::focus_inset,
+        summary.control_area.height + 2 * geometry::focus_inset,
+    };
+    CHECK(!overlap(focus, summary.label));
+    for (std::size_t line = 0; line < summary.hint_lines; ++line)
+        CHECK(!overlap(focus, summary.hints[line]));
+
+    // Without the device's name the hint says "device"; the host's empty
+    // texts list nothing.
+    settings::Dialog neutral = opened_with_game_files(Page::game_files);
+    neutral.game_files_device.clear();
+    neutral.game_files_sizes.clear();
+    const auto neutral_parts = settings::dialog_layout(neutral);
+    CHECK(find_part(neutral_parts, "After restoring this device from a backup,", 0) != nullptr);
+    for (const auto& part : neutral_parts)
+        CHECK(!same_entry(part.rect, summary.hints[1]));
+    CHECK(geometry::row_hint(neutral, Setting::game_files_summary, 1).empty());
+
+    // A long location breaks between words into two lines at most.
+    const auto lines = geometry::break_lines(
+        "Shown as: On My tablet \u203a Open Annihilation \u203a Total Annihilation", 50, 2
+    );
+    CHECK(lines.size() == 2);
+    CHECK(
+        lines.size() == 2 && lines[0] == "Shown as: On My tablet \u203a Open Annihilation \u203a"
+    );
+    CHECK(lines.size() == 2 && lines[1] == "Total Annihilation");
+    // The mark in the line's second half is taken over a later space.
+    const auto early = geometry::break_lines(
+        "In the file manager: On My tablet \u203a Open Annihilation \u203a Total Annihilation",
+        50,
+        2
+    );
+    CHECK(early.size() == 2 && early[0] == "In the file manager: On My tablet \u203a");
+    CHECK(early.size() == 2 && early[1] == "Open Annihilation \u203a Total Annihilation");
+    // Without a mark in the line's second half it breaks at its last space.
+    const auto plain_words = geometry::break_lines(
+        "In the file manager: Open Annihilation's own folder for games", 50, 2
+    );
+    CHECK(plain_words.size() == 2);
+    CHECK(plain_words.size() == 2 && plain_words[1] == "folder for games");
+    CHECK(geometry::break_lines("", 50, 2).empty());
+    CHECK(geometry::break_lines("short", 50, 2) == std::vector<std::string>{"short"});
+    const auto cut = geometry::break_lines(std::string(120, 'x'), 50, 2);
+    CHECK(cut.size() == 2 && cut[0].size() == 50 && cut[1].size() == 50);
+    const auto words = geometry::break_lines("one two three four", 9, 5);
+    CHECK(words == (std::vector<std::string>{"one two", "three", "four"}));
+}
+
+void manage_asks_the_host_and_the_backups_switch_changes_at_once() {
+    const auto placed = geometry::place_rows(Page::game_files, {});
+    const auto manage = placed.rows[0].control_area;
+    const auto backups = placed.rows[1].control_area;
+    // A click on MANAGE… asks the host to open the Game files screen and
+    // changes no setting; a press released elsewhere asks nothing.
+    settings::Dialog dialog = opened_with_game_files(Page::game_files);
+    const auto before = dialog.chosen;
+    CHECK(click(dialog, centre(manage)) == DialogAction::manage_game_files);
+    CHECK(dialog.chosen == before && dialog.pressed == settings::no_control);
+    static_cast<void>(settings::dialog_pointer_down(dialog, manage.x + 2, manage.y + 2));
+    CHECK(dialog.pressed == settings::first_row_control);
+    CHECK(settings::dialog_pointer_up(dialog, 300, 290) == DialogAction::redraw);
+    // A press on where the files are takes nothing.
+    const auto location = placed.rows[2].hints[0];
+    CHECK(
+        settings::dialog_pointer_down(dialog, location.x + 4, location.y + 4) == DialogAction::none
+    );
+    CHECK(dialog.pressed == settings::no_control);
+    static_cast<void>(settings::dialog_pointer_up(dialog, location.x + 4, location.y + 4));
+
+    // The switch, Off at first, turns on by either half and by the keys, and
+    // each change asks the host to put it in effect at once.
+    CHECK(!dialog.chosen.game_files_backed_up);
+    CHECK(click(dialog, {backups.x + backups.width - 4, backups.y + 4}) == DialogAction::changed);
+    CHECK(dialog.chosen.game_files_backed_up);
+    CHECK(click(dialog, {backups.x + 4, backups.y + 4}) == DialogAction::changed);
+    CHECK(!dialog.chosen.game_files_backed_up);
+
+    // The keys: the focus takes MANAGE…, then the switch, then the footer,
+    // never where the files are. Space on MANAGE… asks the host; Left and
+    // Right do nothing to it.
+    settings::Dialog keys = opened_with_game_files(Page::game_files);
+    CHECK(settings::dialog_key(keys, DialogKey::tab) == DialogAction::redraw);
+    CHECK(keys.focused == settings::first_row_control);
+    CHECK(settings::dialog_key(keys, DialogKey::space) == DialogAction::manage_game_files);
+    CHECK(settings::dialog_key(keys, DialogKey::right) == DialogAction::none);
+    CHECK(settings::dialog_key(keys, DialogKey::left) == DialogAction::none);
+    CHECK(keys.chosen == before);
+    CHECK(settings::dialog_key(keys, DialogKey::tab) == DialogAction::redraw);
+    CHECK(keys.focused == settings::first_row_control + 1);
+    CHECK(settings::dialog_key(keys, DialogKey::right) == DialogAction::changed);
+    CHECK(keys.chosen.game_files_backed_up);
+    CHECK(settings::dialog_key(keys, DialogKey::space) == DialogAction::changed);
+    CHECK(!keys.chosen.game_files_backed_up);
+    CHECK(settings::dialog_key(keys, DialogKey::tab) == DialogAction::redraw);
+    CHECK(keys.focused == settings::restore_control);
+
+    // Restore defaults turns the switch Off; Cancel puts back what it
+    // opened with.
+    settings::Dialog restore = opened_with_game_files(Page::game_files);
+    restore.chosen.game_files_backed_up = true;
+    CHECK(click(restore, centre(geometry::restore_button)) == DialogAction::changed);
+    CHECK(!restore.chosen.game_files_backed_up);
+    settings::Dialog opened_on;
+    settings::EngineSettings on{};
+    on.game_files_backed_up = true;
+    settings::open_dialog(
+        opened_on,
+        on,
+        {},
+        {},
+        "v0.2.0",
+        Page::game_files,
+        {},
+        settings::highest_unit_limit,
+        {},
+        {},
+        nullptr,
+        false,
+        true
+    );
+    CHECK(click(opened_on, {backups.x + 4, backups.y + 4}) == DialogAction::changed);
+    CHECK(click(opened_on, centre(geometry::cancel_button)) == DialogAction::cancelled);
+    CHECK(opened_on.chosen.game_files_backed_up);
+    // A dialog that does not list Game files keeps the switch through
+    // Restore defaults.
+    settings::Dialog in_game;
+    settings::open_dialog(in_game, on, {}, {}, "v0.2.0", Page::controls);
+    CHECK(click(in_game, centre(geometry::restore_button)) == DialogAction::changed);
+    CHECK(in_game.chosen.game_files_backed_up);
+
+    // A finger beside MANAGE… takes it within reach, and its release where
+    // it landed asks the host.
+    settings::Dialog finger = opened_with_game_files(Page::game_files);
+    const Point below{manage.x + manage.width / 2, manage.y + manage.height + 6};
+    static_cast<void>(settings::dialog_finger_down(finger, below.x, below.y, 22));
+    CHECK(finger.pressed == settings::first_row_control);
+    CHECK(settings::dialog_pointer_up(finger, below.x, below.y) == DialogAction::manage_game_files);
+}
+
+/// What the scripted modern fonts drew: every line they were asked for.
+std::vector<std::string> modern_lines;
+
+/// Draws a line in the scripted modern fonts: each character a block 5
+/// columns wide and 9 rows high over a baseline 9 rows down, the pen
+/// moving 6 columns a character.
+std::shared_ptr<const oa::present::TextMask>
+scripted_modern_draw(void*, std::string_view text, oa::present::TextFace, int32_t scale, int32_t) {
+    modern_lines.emplace_back(text);
+    auto mask = std::make_shared<oa::present::TextMask>();
+    std::size_t characters = 0;
+    for (std::size_t at = 0; at < text.size(); ++at)
+        if ((static_cast<unsigned char>(text[at]) & 0xc0) != 0x80)
+            ++characters;
+    const int32_t advance = 6 * scale;
+    mask->width = std::max<int32_t>(1, static_cast<int32_t>(characters) * advance);
+    mask->height = 12 * scale;
+    mask->baseline = 9 * scale;
+    mask->advance = static_cast<int32_t>(characters) * advance;
+    mask->alpha.assign(static_cast<std::size_t>(mask->width * mask->height), 0);
+    for (std::size_t character = 0; character < characters; ++character) {
+        for (int32_t row = 0; row < 9 * scale; ++row)
+            for (int32_t column = 0; column < 5 * scale; ++column)
+                mask->alpha[static_cast<std::size_t>(
+                    row * mask->width + static_cast<int32_t>(character) * advance + column
+                )] = 255;
+        mask->character_ends.push_back(static_cast<int32_t>(character + 1) * advance);
+    }
+    return mask;
+}
+
+/// The settings the scripted modern fonts draw with: no outline, shadow or
+/// background, so that only the letters' colour is laid.
+oa::present::TextSettings scripted_text_settings(void*) {
+    oa::present::TextSettings settings;
+    settings.style.outline = false;
+    settings.style.shadow = false;
+    settings.style.background = false;
+    return settings;
+}
+
+void language_text_lists_one_section_and_draws_without_the_game_fonts() {
+    settings::Dialog dialog;
+    settings::EngineSettings current{};
+    current.unit_limit = settings::highest_unit_limit;
+    current.text_size = settings::highest_text_size;
+    settings::EngineSettings defaults{};
+    settings::open_language_text_dialog(dialog, current, defaults, {}, "v0.6");
+    CHECK(dialog.kind == settings::DialogKind::language_text);
+    CHECK(dialog.page == Page::language_text);
+    CHECK(!dialog.touch && !dialog.game_files);
+    // One entry, at the top of the list, keeping its number.
+    const auto entries = list_entries(dialog);
+    CHECK(entries.size() == 1);
+    CHECK(entries.size() == 1 && entries[0].first == settings::page_control(Page::language_text));
+    CHECK(entries.size() == 1 && entries[0].second.y == 36);
+    const auto parts = settings::dialog_layout(dialog);
+    for (const std::string_view absent : {"Graphics", "Developer", "Game files", "Touch"})
+        CHECK(find_part(parts, absent, settings::no_control) == nullptr);
+    for (const std::string_view present :
+         {"Language & Text", "LANGUAGE & TEXT", "Language", "RESTORE DEFAULTS", "CANCEL", "OK"})
+        CHECK(find_part(parts, present, settings::no_control) != nullptr);
+    // Where Graphics' entry would be, nothing is pressed.
+    const auto graphics = centre(geometry::list_item(Page::graphics));
+    CHECK(click(dialog, graphics) == DialogAction::none);
+    CHECK(dialog.page == Page::language_text);
+    // The focus walks its rows, the footer and its one entry.
+    settings::Dialog keys = dialog;
+    std::vector<int32_t> walked;
+    for (int32_t press = 0; press < 20; ++press) {
+        static_cast<void>(settings::dialog_key(keys, DialogKey::tab));
+        if (keys.focused < settings::restore_control)
+            walked.push_back(keys.focused);
+    }
+    CHECK(!walked.empty());
+    for (const int32_t control : walked)
+        CHECK(control == settings::page_control(Page::language_text));
+    // Restore defaults restores Language & Text's settings alone.
+    CHECK(click(dialog, centre(geometry::restore_button)) == DialogAction::changed);
+    CHECK(dialog.chosen.text_size == defaults.text_size);
+    CHECK(dialog.chosen.unit_limit == settings::highest_unit_limit);
+    CHECK(dialog.restored);
+    // Restore defaults keeps a locked language.
+    settings::Dialog locked;
+    settings::EngineSettings french{};
+    french.language = "fr";
+    settings::Locks locks{};
+    locks.language = Lock::command_line;
+    settings::open_language_text_dialog(locked, french, defaults, locks, "v0.6");
+    CHECK(click(locked, centre(geometry::restore_button)) == DialogAction::changed);
+    CHECK(locked.chosen.language == "fr");
+
+    // With fonts that hold no glyphs, every text is drawn in the modern
+    // fonts and measured by them.
+    const settings::DialogFonts empty{};
+    oa::present::GameTextHooks hooks{};
+    hooks.draw = scripted_modern_draw;
+    hooks.settings = scripted_text_settings;
+    oa::present::set_game_text_hooks(hooks);
+    CHECK(settings::dialog_text_width(empty, settings::DialogFont::regular, "Language") == 48);
+    CHECK(settings::dialog_text_width(empty, settings::DialogFont::small, "OK") == 12);
+    modern_lines.clear();
+    Canvas canvas = blank(settings::dialog_width, settings::dialog_height);
+    settings::draw_dialog(canvas.surface, {0, 0, 1}, dialog, empty, kNoIcon);
+    const auto drew = [](std::string_view text) {
+        return std::find(modern_lines.begin(), modern_lines.end(), text) != modern_lines.end();
+    };
+    CHECK(drew("OPEN ANNIHILATION") || drew("O"));
+    CHECK(drew("Language & Text"));
+    CHECK(drew("Language"));
+    CHECK(drew("OK"));
+    CHECK(drew("v0.6"));
+    // The label's letters are drawn in the text colour inside its box, the
+    // capitals centred as a game font's are.
+    constexpr renderer::Rgb kText{0xe7, 0xe8, 0xdf};
+    const auto label = geometry::place_rows(Page::language_text, {}).rows[0].label;
+    bool letters = false;
+    for (int32_t y = label.y; y < label.y + label.height; ++y)
+        for (int32_t x = label.x; x < label.x + 48; ++x)
+            letters = letters || canvas.at(x, y) == kText;
+    CHECK(letters);
+    CHECK(canvas.at(label.x + 2, label.y - 1) != kText);
+    oa::present::set_game_text_hooks({});
+    // Without the modern fonts nothing draws the texts, and nothing fails.
+    Canvas bare = blank(settings::dialog_width, settings::dialog_height);
+    settings::draw_dialog(bare.surface, {0, 0, 1}, dialog, empty, kNoIcon);
+    CHECK(settings::dialog_text_width(empty, settings::DialogFont::regular, "Language") == 0);
+}
+
+void touch_shows_its_rows_and_their_values() {
+    const auto rows = settings::page_settings(Page::touch);
+    CHECK(rows.size() == 5);
+    constexpr std::array<Setting, 5> kTouchRows{
+        Setting::touch_drag,
+        Setting::touch_hold_delay,
+        Setting::touch_latches,
+        Setting::touch_haptics,
+        Setting::touch_left_handed,
+    };
+    CHECK(std::equal(rows.begin(), rows.end(), kTouchRows.begin(), kTouchRows.end()));
+    CHECK(geometry::is_strip(Setting::touch_drag) && geometry::is_strip(Setting::touch_latches));
+    CHECK(geometry::is_slider(Setting::touch_hold_delay));
+    CHECK(geometry::is_switch(Setting::touch_haptics));
+    CHECK(geometry::is_switch(Setting::touch_left_handed));
+
+    settings::Dialog dialog = opened_with_touch(Page::touch);
+    // Every part inside the dialog and apart, at every offset; no game lock
+    // reaches a Touch row.
+    // Its five rows are taller than the view, by 62 rows.
+    const auto open = geometry::open_rows(dialog);
+    CHECK(open.limit == 62);
+    const renderer::SourceRect face{
+        geometry::edge,
+        geometry::edge,
+        settings::dialog_width - 2 * geometry::edge,
+        settings::dialog_height - 2 * geometry::edge,
+    };
+    for (const auto& locks : lock_states()) {
+        const auto placed = geometry::place_rows(Page::touch, locks);
+        for (const auto& row : placed.rows)
+            CHECK(row.lock == Lock::none);
+    }
+    for (int32_t scroll = 0; scroll <= open.limit; ++scroll) {
+        dialog.scroll[static_cast<std::size_t>(Page::touch)] = scroll;
+        const auto parts = settings::dialog_layout(dialog);
+        for (std::size_t a = 0; a < parts.size(); ++a) {
+            CHECK(inside(parts[a].rect, face));
+            for (std::size_t b = a + 1; b < parts.size(); ++b)
+                CHECK(!overlap(parts[a].rect, parts[b].rect));
+        }
+    }
+    dialog.scroll = {};
+
+    // At its top: the heading, the rows' labels, hints, captions and values.
+    auto parts = settings::dialog_layout(dialog);
+    for (const std::string_view text :
+         {"TOUCH",
+          "One-finger drag",
+          "Automatic: a selection box on a tablet,",
+          "scrolling on a phone.",
+          "Automatic",
+          "Box",
+          "Scroll",
+          "Hold delay",
+          "How long a finger stays down for a hold.",
+          "350 ms",
+          "QUEUE and ADD",
+          "A tapped QUEUE, ADD or x5 stays on",
+          "until it is tapped again.",
+          "Stay on",
+          "One action",
+          "Haptics",
+          "A short vibration as a touch control acts."})
+        CHECK(find_part(parts, text, settings::no_control) != nullptr);
+    // At its end: Left-handed layout.
+    CHECK(settings::dialog_key(dialog, DialogKey::end) == DialogAction::redraw);
+    parts = settings::dialog_layout(dialog);
+    for (const std::string_view text :
+         {"Left-handed layout",
+          "The minimap and the thumb controls on the",
+          "right, the orders on the left."})
+        CHECK(find_part(parts, text, settings::no_control) != nullptr);
+    CHECK(settings::dialog_key(dialog, DialogKey::home) == DialogAction::redraw);
+
+    // The strips: a click on a caption picks it, and the hint follows.
+    const auto click_caption = [&](int32_t control, std::string_view caption) {
+        const auto shown = settings::dialog_layout(dialog);
+        const auto* part = find_part(shown, caption, settings::no_control);
+        CHECK(part != nullptr && part->control == control);
+        return part != nullptr ? click(dialog, centre(part->rect)) : DialogAction::none;
+    };
+    CHECK(click_caption(settings::first_row_control, "Box") == DialogAction::changed);
+    CHECK(dialog.chosen.touch_drag == settings::TouchDrag::box);
+    CHECK(
+        find_part(settings::dialog_layout(dialog), "A drag draws a selection box;", -1) != nullptr
+    );
+    CHECK(click_caption(settings::first_row_control, "Scroll") == DialogAction::changed);
+    CHECK(dialog.chosen.touch_drag == settings::TouchDrag::scroll);
+    CHECK(
+        find_part(settings::dialog_layout(dialog), "hold, then drag, for a selection box.", -1) !=
+        nullptr
+    );
+    CHECK(click_caption(settings::first_row_control + 2, "One action") == DialogAction::changed);
+    CHECK(dialog.chosen.touch_latches == settings::TouchLatches::one_action);
+    CHECK(
+        find_part(settings::dialog_layout(dialog), "after the next order or selection.", -1) !=
+        nullptr
+    );
+
+    // The hold delay: ten stops of 50 ms from 250 to 700, each its own value.
+    CHECK(geometry::slider_of(Setting::touch_hold_delay).stops == 10);
+    settings::EngineSettings state{};
+    CHECK(geometry::stop_of(state, Setting::touch_hold_delay) == 2);
+    for (int32_t stop = 0; stop < 10; ++stop) {
+        geometry::set_stop(state, Setting::touch_hold_delay, stop);
+        CHECK(
+            state.touch_hold_ms ==
+            settings::lowest_touch_hold_ms + 50U * static_cast<uint32_t>(stop)
+        );
+        CHECK(geometry::stop_of(state, Setting::touch_hold_delay) == stop);
+        CHECK(
+            geometry::value_text(Setting::touch_hold_delay, state) ==
+            std::to_string(state.touch_hold_ms) + " ms"
+        );
+    }
+    geometry::set_stop(state, Setting::touch_hold_delay, 40);
+    CHECK(state.touch_hold_ms == settings::highest_touch_hold_ms);
+    // The arrows step it by a stop; a press at its track's ends sets the ends.
+    dialog.focused = settings::first_row_control + 1;
+    CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
+    CHECK(dialog.chosen.touch_hold_ms == 400);
+    CHECK(settings::dialog_key(dialog, DialogKey::left) == DialogAction::changed);
+    CHECK(settings::dialog_key(dialog, DialogKey::left) == DialogAction::changed);
+    CHECK(dialog.chosen.touch_hold_ms == 300);
+    const auto track = geometry::open_rows(dialog).rows.rows[1].control_area;
+    static_cast<void>(click(dialog, {track.x, track.y + track.height / 2}));
+    CHECK(dialog.chosen.touch_hold_ms == settings::lowest_touch_hold_ms);
+    static_cast<void>(click(dialog, {track.x + track.width - 1, track.y + track.height / 2}));
+    CHECK(dialog.chosen.touch_hold_ms == settings::highest_touch_hold_ms);
+    CHECK(find_part(settings::dialog_layout(dialog), "700 ms", settings::no_control) != nullptr);
+
+    // The switches.
+    const auto haptics = geometry::open_rows(dialog).rows.rows[3].control_area;
+    CHECK(click(dialog, {haptics.x + 2, haptics.y + 4}) == DialogAction::changed);
+    CHECK(!dialog.chosen.touch_haptics);
+    dialog.focused = settings::first_row_control + 4;
+    CHECK(settings::dialog_key(dialog, DialogKey::space) == DialogAction::changed);
+    CHECK(dialog.chosen.touch_left_handed);
+
+    // Restore defaults puts every Touch row back; Cancel what it opened with.
+    CHECK(click(dialog, centre(geometry::restore_button)) == DialogAction::changed);
+    CHECK(dialog.chosen.touch_drag == settings::TouchDrag::automatic);
+    CHECK(dialog.chosen.touch_hold_ms == settings::default_touch_hold_ms);
+    CHECK(dialog.chosen.touch_latches == settings::TouchLatches::stay_on);
+    CHECK(dialog.chosen.touch_haptics && !dialog.chosen.touch_left_handed);
+    CHECK(settings::dialog_key(dialog, DialogKey::escape) == DialogAction::cancelled);
+    CHECK(dialog.chosen == dialog.opened);
+}
+
+void touch_changes_only_its_entry_and_the_sections_under_it() {
+    // A section drawn with Touch listed differs from it drawn without only
+    // in the list from Touch's entry down: the open section, the header,
+    // the footer and the entries above Touch's are drawn alike.
+    const auto fonts = block_fonts();
+    const int32_t touch_top = geometry::list_item(Page::touch, true).y;
+    for (const Page page : kPages) {
+        Canvas plain = blank(settings::dialog_width, settings::dialog_height);
+        Canvas touch = blank(settings::dialog_width, settings::dialog_height);
+        settings::draw_dialog(
+            plain.surface, {0, 0, 1}, opened_with_touch(page, false), fonts, kNoIcon
+        );
+        settings::draw_dialog(touch.surface, {0, 0, 1}, opened_with_touch(page), fonts, kNoIcon);
+        std::size_t differing_outside = 0;
+        std::size_t differing_below = 0;
+        for (int32_t y = 0; y < settings::dialog_height; ++y)
+            for (int32_t x = 0; x < settings::dialog_width; ++x) {
+                if (plain.at(x, y) == touch.at(x, y))
+                    continue;
+                const bool in_list = x > geometry::edge && x < geometry::list_rule_column &&
+                                     y >= touch_top && y < geometry::footer_rule_row;
+                ++(in_list ? differing_below : differing_outside);
+            }
+        CHECK(differing_outside == 0);
+        CHECK(differing_below > 0);
+    }
+}
+
+void a_finger_takes_the_nearest_control() {
+    // The touch controls' reach in the dialog's pixels: 22 points, as many
+    // canvas pixels a point as the screen has, over the dialog's scale.
+    const auto reach_at = [](double pixels_per_point, double dialog_scale) {
+        return static_cast<int32_t>(std::lround(22.0 * pixels_per_point / dialog_scale));
+    };
+    CHECK(reach_at(1.0, 1.0) == 22);
+    CHECK(reach_at(3.0, 2.0) == 33);
+    for (const auto& [pixels_per_point, dialog_scale] :
+         {std::pair{1.0, 1.0}, std::pair{3.0, 2.0}, std::pair{2.0, 1.75}}) {
+        const int32_t reach = reach_at(pixels_per_point, dialog_scale);
+        // 15 and 30 points in the dialog's pixels.
+        const auto points = [&](double count) {
+            return static_cast<int32_t>(std::lround(count * pixels_per_point / dialog_scale));
+        };
+        settings::Dialog dialog = opened_with_touch(Page::touch);
+        const auto haptics = geometry::open_rows(dialog).rows.rows[3].control_area;
+        const int32_t middle = haptics.y + haptics.height / 2;
+        CHECK(dialog.chosen.touch_haptics);
+        // A mouse press 15 points left of the switch takes nothing.
+        const Point near_left{haptics.x - points(15), middle};
+        CHECK(
+            settings::dialog_pointer_down(dialog, near_left.x, near_left.y) == DialogAction::none
+        );
+        CHECK(dialog.pressed == settings::no_control);
+        CHECK(settings::dialog_pointer_up(dialog, near_left.x, near_left.y) == DialogAction::none);
+        CHECK(dialog.chosen.touch_haptics);
+        // A finger 30 points off takes nothing either.
+        const Point far_left{haptics.x - points(30), middle};
+        CHECK(
+            settings::dialog_finger_down(dialog, far_left.x, far_left.y, reach) ==
+            DialogAction::none
+        );
+        CHECK(dialog.pressed == settings::no_control);
+        CHECK(dialog.finger_shift_x == 0 && dialog.finger_shift_y == 0);
+        CHECK(settings::dialog_pointer_up(dialog, far_left.x, far_left.y) == DialogAction::none);
+        CHECK(dialog.chosen.touch_haptics);
+        // A finger 15 points off takes the switch at its nearest pixel, its
+        // Off half, and the release where it landed turns it Off.
+        CHECK(
+            settings::dialog_finger_down(dialog, near_left.x, near_left.y, reach) ==
+            DialogAction::redraw
+        );
+        CHECK(dialog.pressed == settings::first_row_control + 3);
+        CHECK(dialog.finger_shift_x == points(15) && dialog.finger_shift_y == 0);
+        CHECK(
+            settings::dialog_pointer_move(dialog, near_left.x, near_left.y) == DialogAction::none
+        );
+        CHECK(
+            settings::dialog_pointer_up(dialog, near_left.x, near_left.y) == DialogAction::changed
+        );
+        CHECK(!dialog.chosen.touch_haptics);
+        CHECK(dialog.finger_shift_x == 0 && dialog.finger_shift_y == 0);
+    }
+    {
+        // Under the switch's On half, 15 points down at a pixel a point, it
+        // turns it On again: the scroll bar right of the switch and OK under
+        // it lie farther.
+        settings::Dialog dialog = opened_with_touch(Page::touch);
+        dialog.chosen.touch_haptics = false;
+        const auto haptics = geometry::open_rows(dialog).rows.rows[3].control_area;
+        const Point under{haptics.x + 28, haptics.y + haptics.height - 1 + 15};
+        static_cast<void>(settings::dialog_finger_down(dialog, under.x, under.y, 22));
+        CHECK(dialog.pressed == settings::first_row_control + 3);
+        CHECK(dialog.finger_shift_x == 0 && dialog.finger_shift_y == -15);
+        CHECK(settings::dialog_pointer_up(dialog, under.x, under.y) == DialogAction::changed);
+        CHECK(dialog.chosen.touch_haptics);
+        // Farther down, OK is nearer than the switch, and a finger there
+        // takes OK.
+        const Point lower{under.x, under.y + 8};
+        static_cast<void>(settings::dialog_finger_down(dialog, lower.x, lower.y, 22));
+        CHECK(dialog.pressed == settings::ok_control);
+        CHECK(settings::dialog_pointer_up(dialog, lower.x, lower.y) == DialogAction::accepted);
+    }
+
+    // A finger on a control presses it where it lands.
+    settings::Dialog dialog = opened_with_touch(Page::touch);
+    const auto ok = centre(geometry::ok_button);
+    static_cast<void>(settings::dialog_finger_down(dialog, ok.x, ok.y, 22));
+    CHECK(dialog.pressed == settings::ok_control);
+    CHECK(dialog.finger_shift_x == 0 && dialog.finger_shift_y == 0);
+    CHECK(settings::dialog_pointer_up(dialog, ok.x, ok.y) == DialogAction::accepted);
+
+    // A finger under a slider's track drags its knob along the track.
+    dialog = opened_with_touch(Page::touch);
+    const auto track = geometry::open_rows(dialog).rows.rows[1].control_area;
+    const int32_t below = track.y + track.height - 1 + 8;
+    CHECK(
+        settings::dialog_finger_down(dialog, track.x, below, 22) == DialogAction::changed &&
+        dialog.chosen.touch_hold_ms == settings::lowest_touch_hold_ms && dialog.dragging
+    );
+    CHECK(
+        settings::dialog_pointer_move(dialog, track.x + track.width - 1, below) ==
+        DialogAction::changed
+    );
+    CHECK(dialog.chosen.touch_hold_ms == settings::highest_touch_hold_ms);
+    CHECK(
+        settings::dialog_pointer_up(dialog, track.x + track.width - 1, below) ==
+        DialogAction::redraw
+    );
+    CHECK(!dialog.dragging && dialog.pressed == settings::no_control);
+
+    // A finger beside the footer's buttons takes the nearest: under OK.
+    dialog = opened_with_touch(Page::touch);
+    const Point under_ok{ok.x, geometry::ok_button.y + geometry::ok_button.height - 1 + 5};
+    static_cast<void>(settings::dialog_finger_down(dialog, under_ok.x, under_ok.y, 22));
+    CHECK(dialog.pressed == settings::ok_control);
+    CHECK(settings::dialog_pointer_up(dialog, under_ok.x, under_ok.y) == DialogAction::accepted);
+
+    // While a drop-down list is open, a finger beside it takes its nearest
+    // item, and the release where it landed chooses that item.
+    settings::Dialog languages = language_dialog();
+    const auto field = geometry::open_rows(languages).rows.rows[0].control_area;
+    static_cast<void>(click(languages, centre(field)));
+    CHECK(languages.open_list == settings::first_row_control);
+    const auto list = geometry::choice_list(field, geometry::choice_count(Setting::language));
+    const auto second = geometry::choice_item(list, 1);
+    const Point beside_list{list.x + list.width + 6, second.y + second.height / 2};
+    static_cast<void>(settings::dialog_finger_down(languages, beside_list.x, beside_list.y, 22));
+    CHECK(languages.list_pressed == 1);
+    CHECK(
+        settings::dialog_pointer_up(languages, beside_list.x, beside_list.y) ==
+        DialogAction::changed
+    );
+    CHECK(languages.open_list == settings::no_control);
+    CHECK(geometry::choice_index(languages.chosen, Setting::language) == 1);
+}
+
 } // namespace
 
 /// Returns the columns of a row of a canvas that show a colour.
@@ -4429,12 +5546,54 @@ void the_oa_button_shows_the_icon_or_the_mark() {
     CHECK(broken.surface.rgb == marked.surface.rgb);
 }
 
+void the_oa_mark_alone_shows_the_icon_or_the_button_mark() {
+    const IconPicture icon = solid_icon();
+    const auto mark = [](int32_t side, const renderer::RgbaPicture& picture, int32_t scale = 1) {
+        Canvas canvas =
+            blank(static_cast<uint32_t>(side * scale), static_cast<uint32_t>(side * scale));
+        settings::draw_oa_mark(canvas.surface, {0, 0, scale}, side, picture);
+        return canvas;
+    };
+    // The icon fills the square, and nothing else is drawn: no face, no bevel.
+    const Canvas iconic = mark(26, icon.picture());
+    CHECK(columns_of(iconic, 13, kIconColor).size() == 26);
+    CHECK(iconic.at(0, 0) == (renderer::Rgb{0, 0, 0})); // the icon's clear corner
+    CHECK(iconic.at(25, 25) == kIconColor);
+    // Three times as large, at the surface's own resolution.
+    const Canvas sharp = mark(26, icon.picture(), 3);
+    CHECK(columns_of(sharp, 40, kIconColor).size() == 78);
+    // Without the icon, the OA button's mark at rest: the green outlined
+    // square 20/32 of the side, the rest left as it was.
+    const Canvas marked = mark(settings::menu_button_side, kNoIcon);
+    CHECK(marked.at(6, 6) == kAccent && marked.at(25, 25) == kAccent);
+    CHECK(marked.at(5, 6) == (renderer::Rgb{0, 0, 0}));
+    CHECK(marked.at(0, 0) == (renderer::Rgb{0, 0, 0}));
+    Canvas button = blank(settings::menu_button_side, settings::menu_button_side);
+    settings::draw_oa_button(
+        button.surface,
+        {0, 0, 1},
+        settings::menu_button_side,
+        settings::ButtonLook::idle,
+        settings::DialogFonts{},
+        kNoIcon
+    );
+    for (int32_t y = 0; y < settings::menu_button_side; ++y)
+        for (int32_t x = 0; x < settings::menu_button_side; ++x)
+            if (marked.at(x, y) == kAccent)
+                CHECK(button.at(x, y) == kAccent);
+    // Nothing for no side.
+    Canvas none = blank(4, 4);
+    settings::draw_oa_mark(none.surface, {0, 0, 1}, 0, kNoIcon);
+    CHECK(none.at(1, 1) == (renderer::Rgb{0, 0, 0}));
+}
+
 int main(int argc, char** argv) {
     if (oa::test::game_data_requested(argc, argv))
         fonts_load_and_every_text_fits_its_place();
     else {
         opening_shows_the_settings_in_effect();
         the_oa_button_shows_the_icon_or_the_mark();
+        the_oa_mark_alone_shows_the_icon_or_the_button_mark();
         every_part_lies_inside_the_dialog_and_apart();
         each_section_shows_its_rows();
         a_click_on_an_entry_shows_its_section();
@@ -4489,6 +5648,14 @@ int main(int argc, char** argv) {
         summaries_break_into_lines_the_fonts_hold();
         the_open_list_keeps_its_parts_apart();
         the_developer_section_draws_its_parts();
+        touch_is_listed_only_with_touch_controls();
+        touch_shows_its_rows_and_their_values();
+        touch_changes_only_its_entry_and_the_sections_under_it();
+        a_finger_takes_the_nearest_control();
+        game_files_is_listed_only_where_the_host_says();
+        game_files_shows_what_is_installed_the_backups_and_the_folder();
+        manage_asks_the_host_and_the_backups_switch_changes_at_once();
+        language_text_lists_one_section_and_draws_without_the_game_fonts();
     }
     if (failures != 0)
         return 1;

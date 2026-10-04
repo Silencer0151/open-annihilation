@@ -347,6 +347,7 @@ void Runtime::enter_match_view() {
     select_local_commander();
     apply_match_hud_for_selection();
     render_match_surface();
+    touch_match_started();
 }
 
 void Runtime::select_local_commander() {

@@ -109,6 +109,12 @@ bool input_event(const SDL_Event& event) {
     case SDL_EVENT_FINGER_DOWN:
     case SDL_EVENT_FINGER_UP:
     case SDL_EVENT_FINGER_MOTION:
+    case SDL_EVENT_FINGER_CANCELED:
+#if SDL_VERSION_ATLEAST(3, 4, 0)
+    case SDL_EVENT_PINCH_BEGIN:
+    case SDL_EVENT_PINCH_UPDATE:
+    case SDL_EVENT_PINCH_END:
+#endif
     case SDL_EVENT_GAMEPAD_AXIS_MOTION:
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
     case SDL_EVENT_GAMEPAD_BUTTON_UP:
@@ -259,8 +265,10 @@ void Runtime::pace_next_frame(bool& running) {
     activity.match_advancing =
         match_clock_steps() && (match_->state().game.sim_run_flags & console::kSimRunPaused) == 0;
     activity.camera_moving = camera_moved_;
+    // A finger resting on the screen is a held button: hold timers, ghost
+    // drags and auto-scroll need the full rate.
     activity.input_recent = (last_input_ns_ != 0 && now - last_input_ns_ < kInputActivityNs) ||
-                            SDL_GetMouseState(nullptr, nullptr) != 0;
+                            SDL_GetMouseState(nullptr, nullptr) != 0 || touch_finger_count() != 0;
     activity.unattended = options_.unattended;
     paced_frames_per_second_ = paced_frame_rate(options_.max_frames_per_second, activity);
     // While the renderer waits for the display, the loop keeps just below
