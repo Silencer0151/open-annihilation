@@ -269,6 +269,10 @@ void preferences() {
     custom.number("Games", 1);
     custom.number("PlayMovie", 0);
     custom.numbers[SettingsHost::key(init::skirmish_section, "Player0Controller")] = 2;
+    // A stored 0, below the least the setup's buttons give, reads as unset;
+    // an amount the buttons can give is kept.
+    custom.numbers[SettingsHost::key(init::skirmish_section, "Player0Metal")] = 0;
+    custom.numbers[SettingsHost::key(init::skirmish_section, "Player0Energy")] = 1500;
     custom.strings[SettingsHost::key(init::general_section, "SkirmishMap")] = "Saved Map";
     custom.override_enabled = 0x100;
     custom.nickname = "abcdefghijklmnopq";
@@ -289,6 +293,10 @@ void preferences() {
         settings.map_name == "Saved Map" && settings.slots[0].controller == 2 &&
             state.play_intro_movie == 0,
         "stored values"
+    );
+    require(
+        settings.slots[0].metal == 1000 && settings.slots[0].energy == 1500,
+        "stored amounts below the setup's least read as unset"
     );
     require((p.display_flags & 2) != 0 && (p.graphics_flags & 1) == 0, "bit extraction");
     require(

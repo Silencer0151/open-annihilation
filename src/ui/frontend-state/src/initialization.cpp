@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/ui/frontend_state/initialization.hpp"
+#include "oa/ui/frontend_state/skirmish_ui.hpp"
 #include <algorithm>
 #include <bit>
 #include <cstring>
@@ -412,8 +413,15 @@ void load_preferences(
         slot.side = field("Side", index % 2);
         slot.color = field("Color", index);
         slot.alliance = field("AllyGroup", 5);
-        slot.metal = field("Metal", 1000);
-        slot.energy = field("Energy", 1000);
+        // A stored amount below the least the setup's buttons give is one an
+        // earlier version wrote by mistake (a saved or network game's 0), and
+        // reads as unset.
+        const auto amount = [&](std::string_view suffix) {
+            const int32_t value = field(suffix, 1000);
+            return value < skirmish_ui::resource_minimum ? 1000 : value;
+        };
+        slot.metal = amount("Metal");
+        slot.energy = amount("Energy");
     }
     state.play_intro_movie = std::bit_cast<int32_t>(number("PlayMovie", 1));
     const auto depth = number("DisplaymodeDepth", 0);

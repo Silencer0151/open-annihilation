@@ -8,6 +8,7 @@
 // Alt+Enter switches the window to full screen and back on a menu and in a
 // match.
 #include "oa/app/runtime.hpp"
+#include "oa/data/persist/save_sections.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
 
 #include <SDL3/SDL.h>
@@ -337,6 +338,27 @@ void Runtime::check_frontend_controls() {
     click(entry::resource_name(entry::Button::skirmish));
     require(screen_ == Screen::skirmish, "Skirmish did not open SKIRMISH.GUI");
     snapshot("skirmish-start");
+    // Every row shows the metal and energy of the setup's slot, each in the
+    // range the row's clicks keep it in.
+    const auto expect_row_resources = [&](const entry::SkirmishSettings& setup,
+                                          std::string_view when) {
+        for (int32_t row = 0; row < setup.slot_count; ++row) {
+            const auto& row_slot = setup.slots[static_cast<std::size_t>(row)];
+            for (const auto& [resource, amount] :
+                 {std::pair{std::string_view("Metal"), row_slot.metal},
+                  std::pair{std::string_view("Energy"), row_slot.energy}}) {
+                const auto gadget = std::string(resource) + std::to_string(row);
+                const auto shown = label_text(gadget);
+                expect(
+                    shown == std::to_string(amount) && amount >= skirmish::resource_minimum &&
+                        amount <= skirmish::resource_maximum,
+                    gadget + " shows '" + shown + "' " + std::string(when) + " for " +
+                        std::to_string(amount)
+                );
+            }
+        }
+    };
+    expect_row_resources(skirmish_settings_, "on opening");
     auto& rules = preferences_.skirmish;
 
     // The rule buttons, each with the SKIRMISH.GUI caption its setting shows.
@@ -1085,6 +1107,66 @@ void Runtime::check_frontend_controls() {
     const char* video_driver = SDL_GetCurrentVideoDriver();
     if (video_driver != nullptr && std::string_view(video_driver) == "dummy")
         expect(pointer_kept_in_full_screen, "full screen never kept the pointer on the window");
+
+    // A saved game leaves the skirmish setup as it was, even when the
+    // preferences are saved while it runs, as the in-game options save them:
+    // the rows show the same metal and energy, the preferences keep them,
+    // and the next Start gives each player its row's.
+    const entry::SkirmishSettings setup_before_save = skirmish_settings_;
+    const fs::path saved_game = "frontend-controls.sav";
+    if (!save_match_game(
+            saved_game,
+            oa::data::persist::command_line_description,
+            oa::data::persist::command_line_game_id
+        ))
+        fail("could not save the match: " + status_);
+    if (!load_saved_game(saved_game) || !match_)
+        fail("could not load the saved match: " + status_);
+    save_preferences();
+    leave_match();
+    load(Screen::main_menu);
+    exercise_click(menu::resource_name(menu::Button::single_player));
+    require(screen_ == Screen::single_player, "did not reach SINGLE.GUI after a saved game");
+    click(entry::resource_name(entry::Button::skirmish));
+    require(screen_ == Screen::skirmish, "Skirmish did not open SKIRMISH.GUI after a saved game");
+    snapshot("skirmish-after-saved-game");
+    expect(
+        skirmish_settings_.slot_count == setup_before_save.slot_count,
+        "SKIRMISH.GUI shows " + std::to_string(skirmish_settings_.slot_count) +
+            " rows after a saved game, not " + std::to_string(setup_before_save.slot_count)
+    );
+    expect_row_resources(setup_before_save, "after a saved game");
+    for (int32_t row = 0; row < setup_before_save.slot_count; ++row) {
+        const auto& kept = setup_before_save.slots[static_cast<std::size_t>(row)];
+        for (const auto& [resource, amount] :
+             {std::pair{std::string_view("Metal"), kept.metal},
+              std::pair{std::string_view("Energy"), kept.energy}}) {
+            const auto preference = "Player" + std::to_string(row) + std::string(resource);
+            const auto stored = read_number(init::skirmish_section, preference);
+            expect(
+                stored && *stored == static_cast<uint32_t>(amount),
+                preference + " is not stored as " + std::to_string(amount) + " after a saved game"
+            );
+        }
+    }
+    exercise_click(skirmish::resource_name(skirmish::Button::start));
+    require(screen_ == Screen::match && match_, "Start did not enter a match after a saved game");
+    for (std::size_t player = 0; player < OA_PLAYER_COUNT; ++player) {
+        const auto& kept = setup_before_save.slots[player];
+        if (kept.controller == entry::controller::disabled)
+            continue;
+        const auto& record = match_->state().game.players[player];
+        expect(
+            record.metal == static_cast<float>(kept.metal) &&
+                record.energy == static_cast<float>(kept.energy),
+            "player " + std::to_string(player) + " starts with " +
+                std::to_string(static_cast<int32_t>(record.metal)) + " metal and " +
+                std::to_string(static_cast<int32_t>(record.energy)) + " energy, not " +
+                std::to_string(kept.metal) + " and " + std::to_string(kept.energy)
+        );
+    }
+    std::cout << "frontend controls check: after a saved game the " << setup_before_save.slot_count
+              << " rows keep their metal and energy, and Start gives each player its row's\n";
 
     if (!problems.empty()) {
         std::string report;

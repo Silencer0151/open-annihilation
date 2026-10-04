@@ -11295,6 +11295,11 @@ class Runtime final : public menu::Host,
     /// Saves the preferences and writes the preferences file.
     void save_preferences() override;
 
+    /// Keeps the player's skirmish setup before a saved, recorded or network
+    /// game fills skirmish_settings_ with its own players, so the preferences
+    /// keep the player's. A setup already kept stays kept.
+    void keep_player_skirmish_settings();
+
     /// Returns the main menu's environment object.
     ///
     /// @return the environment
@@ -11527,6 +11532,10 @@ class Runtime final : public menu::Host,
     /// folder, kept whole when it is too long for Game.capture_path.
     std::string film_folder_;
     entry::SkirmishSettings skirmish_settings_{};
+    /// The player's own skirmish setup while a saved, recorded or network
+    /// game's players fill skirmish_settings_ for its match; the preferences
+    /// save it in their place. Empty while skirmish_settings_ is the player's.
+    std::optional<entry::SkirmishSettings> player_skirmish_settings_;
     skirmish::UiState skirmish_ui_{};
     TypedKeyHook typed_key_hook_ = TypedKeyHook::none;
     skirmish::TypedKeys typed_keys_{};

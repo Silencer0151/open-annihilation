@@ -1186,6 +1186,31 @@ if(OA_BUILD_PLATFORM)
       set_tests_properties(native-frontend-controls PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_frontend_controls_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # The same under a mod profile that seeds ten skirmish players: each of
+      # the ten rows shows its own metal and energy, also after a saved game,
+      # and each player starts with its row's.
+      set(oa_frontend_ten_players_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/native-checks/frontend-controls-ten-players")
+      file(MAKE_DIRECTORY "${oa_frontend_ten_players_dir}")
+      file(WRITE "${oa_frontend_ten_players_dir}/ten-players.oamod.yaml"
+        "oamod: 1\n"
+        "id: ten-players\n"
+        "name: Ten players\n"
+        "version: \"1.0\"\n"
+        "requires: {base: ta-3.1c, catalogue: 1}\n"
+        "author: {name: unknown}\n"
+        "packaging: {revision: 1, date: 2026-10-05, packager: Open Annihilation}\n"
+        "settings:\n"
+        "  registry-seeds: {NumSkirmishPlayers: 10}\n")
+      add_test(NAME native-frontend-controls-ten-players COMMAND oa-game
+        --game-dir "${OA_GAME_DIR}" --skip-intro --mute --check-frontend-controls
+        --mod "${oa_frontend_ten_players_dir}/ten-players.oamod.yaml"
+        --snapshot "${oa_frontend_ten_players_dir}/frontend-controls.ppm"
+        --preferences-file "${oa_frontend_ten_players_dir}/frontend-controls.conf")
+      set_tests_properties(native-frontend-controls-ten-players PROPERTIES
+        TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT} WORKING_DIRECTORY "${oa_frontend_ten_players_dir}"
+        FAIL_REGULAR_EXPRESSION "after a saved game the [0-9] rows"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # The scroll bars of the options' SOUND panel, SELMAP.GUI's map list,
       # NEWGAME.GUI's mission list and the match's preferences, driven
       # through the SDL presenter: each draws

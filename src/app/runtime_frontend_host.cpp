@@ -409,8 +409,18 @@ void Runtime::discover_first_map() {
 }
 
 void Runtime::save_preferences() {
-    init::save_preferences(state_, skirmish_settings_, preferences_, *this);
+    init::save_preferences(
+        state_,
+        player_skirmish_settings_ ? *player_skirmish_settings_ : skirmish_settings_,
+        preferences_,
+        *this
+    );
     flush_preferences();
+}
+
+void Runtime::keep_player_skirmish_settings() {
+    if (!player_skirmish_settings_)
+        player_skirmish_settings_ = skirmish_settings_;
 }
 
 // MAINMENU callback boundary.

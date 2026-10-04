@@ -1453,6 +1453,7 @@ bool Runtime::load_saved_game(const fs::path& path) {
     preferences_.skirmish_location = static_cast<uint32_t>(summary.location);
     state_.player_count = static_cast<uint16_t>(summary.players);
     const std::string map(summary.mission.data());
+    keep_player_skirmish_settings();
     skirmish_settings_.map_name = map;
     if (select_map(map) == 0 || map_player_capacity() == 0) {
         status_ = "Saved map '" + map + "' is not available";

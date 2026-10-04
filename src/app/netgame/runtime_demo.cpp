@@ -91,6 +91,7 @@ void NetworkPlay::start_demo_playback() {
     // The match is built for the view of the first recorded player, the
     // others as computer slots; demo_session_begin then makes every recorded
     // player remote and the watcher after them local.
+    runtime_.keep_player_skirmish_settings();
     for (std::size_t slot = 0; slot < runtime_.skirmish_settings_.slots.size(); ++slot) {
         auto& target = runtime_.skirmish_settings_.slots[slot];
         target = {};

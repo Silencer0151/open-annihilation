@@ -653,6 +653,7 @@ struct NetworkPlay::NetHost {
         // viewpoint with the lobby's teams. Remote humans are entered as
         // computer slots so the bootstrap never takes one of them as local;
         // match_launch_apply restores every status afterwards.
+        runtime.keep_player_skirmish_settings();
         for (int32_t slot = 0; slot < mp::kSlotCount; ++slot) {
             auto& player = mp::slot_player(lobby, slot);
             const auto* info = mp::slot_info(lobby, slot);
