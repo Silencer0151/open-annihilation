@@ -1127,9 +1127,9 @@ logs it.
   application menu's Settings… item open it; nothing opens over a message
   box or a frame a package owns. Enter is OK and Escape is Cancel; the key
   that closed the dialog does nothing more until it is released, so that a
-  held Escape never reaches the main menu's own Escape, which ends the
-  program. Another screen replacing the main menu closes the dialog as
-  Cancel does. `engine_settings_match_host.hpp` and
+  held key never reaches the main menu, where Escape itself does nothing.
+  Another screen replacing the main menu closes the dialog as Cancel does.
+  `engine_settings_match_host.hpp` and
   `runtime_engine_settings_match.cpp` are the in-game menu's host, and
   `runtime_engine_settings_app_menu.cpp` the application menu's item.
   `acceleration_status.hpp` and `acceleration_status.cpp`
@@ -1161,7 +1161,8 @@ logs it.
   the SDL presenter over a preferences file it empties first:
   `runtime_engine_settings_check.cpp` holds the main menu's part, with each
   look of the button and the darkened menu under the dialog compared pixel
-  for pixel with what they should draw;
+  for pixel with what they should draw, Escape doing nothing on the menu
+  itself and EXIT ending the run;
   `runtime_engine_settings_dialog_check.cpp` the dialog driven by the
   pointer, the wheel and the keys (every section, scrolling, each setting in
   effect at once, Vertical sync read back from the renderer, Font shadow

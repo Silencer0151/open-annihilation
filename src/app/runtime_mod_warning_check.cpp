@@ -609,8 +609,7 @@ void Runtime::check_mod_warning() {
             saves_notice_shown() && state.opened == std::vector<fs::path>{path_from_utf8(hollow)},
             "OPEN MOD FOLDER did not show the mod's folder, or closed the warning"
         );
-        // Escape closes it, and its release never reaches the main menu,
-        // whose Escape ends the program.
+        // Escape closes it, and its release never reaches the main menu.
         close_with(SDLK_ESCAPE, Screen::main_menu, "the main menu");
         // Once from each start: it shows no more over the main menu.
         for (int pass = 0; pass < 4; ++pass)

@@ -48,7 +48,7 @@ struct Runtime::UserFolderState {
     uint32_t mod_warnings_shown{};
     /// The key whose press closed the notice (Escape or Enter), until it is
     /// released; 0 for none. Its presses do nothing until then, so that a
-    /// held key never reaches the main menu, whose Escape ends the program.
+    /// held key never reaches the main menu.
     uint32_t latched_key{};
     /// --check-user-folder and --check-mod-warning show the main menu's
     /// notices although nobody watches the run.

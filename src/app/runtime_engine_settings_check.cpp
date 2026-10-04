@@ -350,7 +350,7 @@ void Runtime::check_engine_settings_in_menu() {
     );
 
     // Cancel (Escape) puts back the settings the dialog opened with, and its
-    // held key never reaches the main menu, whose Escape ends the program.
+    // held key never reaches the main menu.
     const auto opened = dialog->opened;
     dialog->chosen.wheel_zoom = !opened.wheel_zoom;
     (void)take_engine_settings_action(settings::DialogAction::changed);
@@ -368,8 +368,12 @@ void Runtime::check_engine_settings_in_menu() {
         "Escape held after the dialog closed ended the run"
     );
     require(release(SDLK_ESCAPE) && host.latched_key == 0, "Escape's release did not count");
-    require(!press(SDLK_ESCAPE), "Escape on the main menu no longer ends the run");
-    (void)release(SDLK_ESCAPE);
+    // On the main menu itself Escape does nothing.
+    require(
+        press(SDLK_ESCAPE) && release(SDLK_ESCAPE) && !exit_requested_ &&
+            screen_ == Screen::main_menu && engine_settings_dialog() == nullptr,
+        "Escape on the main menu ended the run or left the menu"
+    );
 
     // OK (Enter) keeps the settings chosen; Enter held does nothing more.
     shortcut();
@@ -446,6 +450,14 @@ void Runtime::check_engine_settings_in_menu() {
     require(engine_settings_dialog() != nullptr, "the request did not open the dialog");
     require(press(SDLK_ESCAPE) && release(SDLK_ESCAPE), "Escape in the dialog ended the run");
     require(engine_settings_dialog() == nullptr, "Escape did not close the dialog");
+
+    // EXIT ends the program. The check then goes on from the menu as it was.
+    const auto menu_state = state_;
+    exercise_click(menu::resource_name(menu::Button::exit));
+    const bool exited = exit_requested_;
+    exit_requested_ = false;
+    state_ = menu_state;
+    require(exited, "EXIT did not end the run");
 
     fake_frontend_tick_ = previous_tick;
     std::cout << "engine settings check: the OA button at " << bottom.x << ',' << bottom.y << " ("

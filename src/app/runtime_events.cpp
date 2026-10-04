@@ -164,11 +164,9 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
     }
     if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
         if (screen_ == Screen::main_menu) {
-            // In state 7 escape belongs to the package that owns the frame. A
-            // held key's repeats do not quit: the press may have closed a
-            // dialog over the menu.
-            if (!frame_owned_by_package() && !event.key.repeat)
-                running = false;
+            // The main menu itself does nothing with Escape, as in 3.1c: EXIT
+            // and closing the window end the program. A dialog or notice over
+            // the menu takes the key before it gets here.
         } else if (screen_ == Screen::map_selection)
             close_map_modal();
         else if (screen_ == Screen::match) {

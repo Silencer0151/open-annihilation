@@ -21,7 +21,7 @@ struct Runtime::EngineSettingsMenuHost {
     bool dialog_shown{};
     /// The key whose press closed the dialog (Escape or Enter), until it is
     /// released; 0 for none. Its presses do nothing until then, so that a
-    /// held key never reaches the main menu, whose Escape ends the program.
+    /// held key never reaches the main menu.
     uint32_t latched_key{};
 
     /// Tells whether the OA button shows on the main menu: the menu's own
