@@ -119,9 +119,9 @@ bool load_side_data(
     const Files* files, SideTable* table, const char* variant, const SideFontResolver* fonts
 ) noexcept;
 
-/// Builds the path of a file a side's section names: anims/<intgaf>.GAF or
-/// fonts/<font>.FNT, from the variant directory when it holds the file, as
-/// build_variant_path chooses.
+/// Builds the path of a file a side's section names: the GAF file in anims/
+/// its intgaf names or the FNT file in fonts/ its font names, from the
+/// variant directory when it holds the file, as build_variant_path chooses.
 ///
 /// @param files file boundary used for the variant's existence check
 /// @param table loaded side table
@@ -143,8 +143,8 @@ bool side_file_path(
 ) noexcept;
 
 /// Lists the files loaded sides name that the game data lacks: a side's
-/// intgaf when anims/<intgaf>.GAF is missing from both the variant and the
-/// plain directory, and its font when fonts/<font>.FNT is.
+/// intgaf when its GAF file in anims/ is missing from both the variant and
+/// the plain directory, and its font when its FNT file in fonts/ is.
 ///
 /// @param files file boundary; null finds every named file missing
 /// @param table loaded side table
