@@ -15,7 +15,8 @@
 // per-unit or per-weapon data key, the last step, applies to that unit or
 // weapon only, when its files are read.)
 //
-// The profile is validated as it is read. An unknown key, hack, script
+// The profile is validated as it is read. A missing author or packaging
+// block, an unknown key, hack, script
 // extension or data key, a value of the wrong type or out of range, an
 // index mounted twice, a binding of a fixed parameter, a constraint broken,
 // a data key whose hack is off, or a hack this engine does not implement yet
@@ -61,6 +62,19 @@ struct RegistrySeed {
     bool integer{};      ///< the profile wrote an integer, not a string
 };
 
+/// Who made a mod, as its profile names them.
+struct Author {
+    std::string name{};  ///< "unknown" when nobody is known
+    std::string email{}; ///< empty when the profile gives no address
+};
+
+/// Who packaged a mod's profile and files, when, and how often since.
+struct Packaging {
+    int64_t revision{};     ///< counts the package's updates from 1; 0 for base 3.1c
+    std::string date{};     ///< the day the package was made, as YYYY-MM-DD
+    std::string packager{}; ///< who made the package
+};
+
 /// Everything a resolved profile says about a mod.
 ///
 /// A default-constructed ModProfile is base 3.1c.
@@ -68,6 +82,8 @@ struct ModProfile {
     std::string id{};      ///< the mod's stable id, kebab-case
     std::string name{};    ///< the mod's display name
     std::string version{}; ///< the mod's version
+    Author author{};
+    Packaging packaging{};
     Identity identity{};
     Layout layout{};
     limits::Limits limits{}; ///< the profile's limits block; 3.1c's when it has none

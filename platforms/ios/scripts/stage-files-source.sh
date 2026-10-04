@@ -302,6 +302,8 @@ oamod: 1
 id: picker-test-mod
 name: Picker Test Mod
 version: "1.0"
+author: {name: unknown}
+packaging: {revision: 1, date: 2026-10-04, packager: Open Annihilation}
 PROFILE
     printf 'A test mod of the Game files screen. It changes nothing.\n' > "$target/readme.txt"
     printf 'Wrote the test mod %s\n' "$target"

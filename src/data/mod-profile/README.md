@@ -62,7 +62,9 @@ does not implement yet into a warning, for development, and `overrides`.
 
 
 Every refusal is a `Diagnostic` naming the profile, the line and column, the
-offending path and what is wrong: an unknown key, hack, parameter, preset,
+offending path and what is wrong: a missing `author` or `packaging` block
+or one of their required values, a malformed e-mail address or a date that
+is no calendar day; an unknown key, hack, parameter, preset,
 script extension or data key; a value of the wrong type, out of range, not
 a multiple, too long, not matching its pattern, repeated or not ascending;
 an index mounted twice, inside 3.1c's own range or holding an extension of
@@ -74,7 +76,9 @@ game treats its INI and registry.
 
 The full hash is the SHA-256 of the canonical form; the sim hash, the one
 every machine of a network game must share, that of the sim-scope part,
-which leaves out the id, name, version, settings and every `view` value.
+which leaves out the id, name, version, author, packaging, settings and
+every `view` value. `ModProfile::author` and `ModProfile::packaging` hold
+who made the mod and who packaged it, when and in which revision.
 `describe_resolution` writes the effective profile and both hashes, as
 `--print-profile` prints them.
 

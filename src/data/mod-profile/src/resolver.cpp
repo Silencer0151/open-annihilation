@@ -71,12 +71,14 @@ using registry::ValueSpec;
 using registry::ValueType;
 
 /// The top-level keys a profile may hold.
-constexpr std::array<std::string_view, 14> top_keys{
+constexpr std::array<std::string_view, 16> top_keys{
     "oamod",
     "id",
     "name",
     "version",
     "requires",
+    "author",
+    "packaging",
     "identity",
     "layout",
     "limits",
@@ -88,7 +90,21 @@ constexpr std::array<std::string_view, 14> top_keys{
     "settings",
 };
 /// The top-level keys whose values the effective profile carries as written.
-constexpr std::array<std::string_view, 5> meta_keys{"oamod", "id", "name", "version", "requires"};
+/// None of them enters the sim hash except oamod.
+constexpr std::array<std::string_view, 7> meta_keys{
+    "oamod", "id", "name", "version", "requires", "author", "packaging"
+};
+/// The keys of the author block; name is required.
+constexpr std::array<std::string_view, 2> author_keys{"name", "email"};
+/// The keys of the packaging block; all are required.
+constexpr std::array<std::string_view, 3> packaging_keys{"revision", "date", "packager"};
+/// The longest author or packager name, in bytes.
+constexpr size_t person_name_max_length = 128;
+/// The longest e-mail address, in bytes, as mail paths allow.
+constexpr size_t email_max_length = 254;
+/// The range of a package's revision.
+constexpr int64_t packaging_revision_min = 1;
+constexpr int64_t packaging_revision_max = 65535;
 /// The blocks that must be mappings.
 constexpr std::array<std::string_view, 8> map_blocks{
     "identity",
@@ -128,6 +144,63 @@ bool kebab_case(std::string_view text) {
         previous = c;
     }
     return true;
+}
+
+/// Tells whether text reads as an e-mail address.
+///
+/// Checks the shape only: one @ with text on both sides, a dot inside the
+/// part after it, and no white space or control characters.
+///
+/// @param text the address
+/// @return true for an address of at most email_max_length bytes in that shape
+bool email_address(std::string_view text) {
+    if (text.empty() || text.size() > email_max_length)
+        return false;
+    for (const char c : text) {
+        if (static_cast<unsigned char>(c) <= ' ' || c == '\x7f')
+            return false;
+    }
+    const size_t at = text.find('@');
+    if (at == 0 || at == std::string_view::npos || text.find('@', at + 1) != std::string_view::npos)
+        return false;
+    const std::string_view domain = text.substr(at + 1);
+    const size_t dot = domain.find('.');
+    return dot != std::string_view::npos && dot != 0 && domain.back() != '.';
+}
+
+/// Tells whether text is an ISO 8601 calendar date, YYYY-MM-DD, that exists.
+///
+/// @param text the date
+/// @return true for a four-digit year, a month 01 to 12 and a day within that
+///         month, February counting 29 days in Gregorian leap years
+bool calendar_date(std::string_view text) {
+    constexpr size_t year_digits = 4;
+    constexpr size_t month_start = year_digits + 1;
+    constexpr size_t day_start = month_start + 3;
+    constexpr size_t date_length = day_start + 2;
+    if (text.size() != date_length || text[month_start - 1] != '-' || text[day_start - 1] != '-')
+        return false;
+    const auto digits = [text](size_t start, size_t count, int& value) {
+        value = 0;
+        for (const char c : text.substr(start, count)) {
+            if (c < '0' || c > '9')
+                return false;
+            value = value * 10 + (c - '0');
+        }
+        return true;
+    };
+    int year = 0;
+    int month = 0;
+    int day = 0;
+    if (!digits(0, year_digits, year) || !digits(month_start, 2, month) ||
+        !digits(day_start, 2, day))
+        return false;
+    if (month < 1 || month > 12 || day < 1)
+        return false;
+    constexpr std::array<int, 12> month_days{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    const bool leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    const int days = month == 2 && leap ? 29 : month_days[static_cast<size_t>(month - 1)];
+    return day <= days;
 }
 
 /// Lower-cases ASCII letters.
@@ -291,6 +364,8 @@ class Resolver {
                 error(id->position, "id", "id must be kebab-case");
         }
         check_requires(root);
+        check_author(root);
+        check_packaging(root);
         for (const Node& entry : root.children) {
             if (entry.key.kind == KeyKind::string &&
                 std::find(meta_keys.begin(), meta_keys.end(), entry.key.text) != meta_keys.end())
@@ -349,6 +424,113 @@ class Resolver {
                     " does not match base " + std::string{base_game} + ", catalogue " +
                     std::to_string(registry::table().catalogue)
             );
+    }
+
+    /// Checks that a block is a mapping of known keys, and reports each other key.
+    ///
+    /// @param root the profile's top-level mapping
+    /// @param block the block's key
+    /// @param keys the keys the block may hold
+    /// @param shape what the block must be, for the message when it is missing or not a mapping
+    /// @return the block, or nullptr when it is missing or not a mapping
+    template <size_t count>
+    const Node* known_block(
+        const Node& root,
+        std::string_view block,
+        const std::array<std::string_view, count>& keys,
+        std::string_view shape
+    ) {
+        const Node* node = formats::oamod::find_entry(root, block);
+        if (node == nullptr || node->kind != NodeKind::mapping) {
+            error(
+                node ? node->position : TextPosition{},
+                std::string{block},
+                std::string{block} + " must be " + std::string{shape}
+            );
+            return nullptr;
+        }
+        std::string have;
+        for (const std::string_view key : keys)
+            have += (have.empty() ? "" : ", ") + std::string{key};
+        for (const Node& entry : node->children) {
+            if (entry.key.kind != KeyKind::string ||
+                std::find(keys.begin(), keys.end(), entry.key.text) == keys.end())
+                error(
+                    entry.key.position,
+                    std::string{block} + "." + entry.key.text,
+                    "unknown " + std::string{block} + " key '" + entry.key.text + "' (have [" +
+                        have + "])"
+                );
+        }
+        return node;
+    }
+
+    /// Checks one person's name in a block: a string of 1 to person_name_max_length bytes.
+    ///
+    /// @param block the block holding it
+    /// @param path the name's path, such as author.name
+    /// @param key its key in the block
+    void check_person_name(const Node& block, const std::string& path, std::string_view key) {
+        const Node* value = formats::oamod::find_entry(block, key);
+        if (value == nullptr || value->kind != NodeKind::string || value->text.empty() ||
+            value->text.size() > person_name_max_length)
+            error(
+                value ? value->position : block.position,
+                path,
+                path + " must be a string of 1 to " + std::to_string(person_name_max_length) +
+                    " bytes"
+            );
+    }
+
+    /// Checks the author block: a name, "unknown" when nobody is known, and
+    /// an optional e-mail address.
+    ///
+    /// @param root the profile's top-level mapping
+    void check_author(const Node& root) {
+        const Node* author =
+            known_block(root, "author", author_keys, "an object with a name and an optional email");
+        if (author == nullptr)
+            return;
+        check_person_name(*author, "author.name", "name");
+        const Node* email = formats::oamod::find_entry(*author, "email");
+        if (email != nullptr && (email->kind != NodeKind::string || !email_address(email->text)))
+            error(
+                email->position,
+                "author.email",
+                "author.email must be an e-mail address such as name@example.com"
+            );
+    }
+
+    /// Checks the packaging block: the package's revision, the day it was
+    /// made and who made it, each required.
+    ///
+    /// @param root the profile's top-level mapping
+    void check_packaging(const Node& root) {
+        const Node* packaging = known_block(
+            root, "packaging", packaging_keys, "an object with a revision, a date and a packager"
+        );
+        if (packaging == nullptr)
+            return;
+        const Node* revision = formats::oamod::find_entry(*packaging, "revision");
+        int64_t number = 0;
+        if (revision == nullptr || revision->kind != NodeKind::number ||
+            !formats::oamod::integer_value(revision->number, number) ||
+            number < packaging_revision_min || number > packaging_revision_max)
+            error(
+                revision ? revision->position : packaging->position,
+                "packaging.revision",
+                "packaging.revision must be an integer from " +
+                    std::to_string(packaging_revision_min) + " to " +
+                    std::to_string(packaging_revision_max)
+            );
+        const Node* date = formats::oamod::find_entry(*packaging, "date");
+        if (date == nullptr || date->kind != NodeKind::string || !calendar_date(date->text))
+            error(
+                date ? date->position : packaging->position,
+                "packaging.date",
+                "packaging.date must be an ISO 8601 date, YYYY-MM-DD"
+            );
+        check_person_name(*packaging, "packaging.packager", "packager");
     }
 
     /// Finds the identity, layout, string or media entry of a profile key.
@@ -1439,6 +1621,22 @@ class Resolver {
              : key == "name" ? resolution.profile.name
                              : resolution.profile.version) = std::move(text);
         }
+        const auto text_of = [](const Value* block, std::string_view key) {
+            const Value* value = block != nullptr ? find_member(*block, key) : nullptr;
+            return value != nullptr ? value->text : std::string{};
+        };
+        const Value* author = find_member(effective, "author");
+        resolution.profile.author.name = text_of(author, "name");
+        resolution.profile.author.email = text_of(author, "email");
+        const Value* packaging = find_member(effective, "packaging");
+        if (const Value* revision =
+                packaging != nullptr ? find_member(*packaging, "revision") : nullptr;
+            revision != nullptr)
+            (void)formats::oamod::integer_value(
+                revision->number, resolution.profile.packaging.revision
+            );
+        resolution.profile.packaging.date = text_of(packaging, "date");
+        resolution.profile.packaging.packager = text_of(packaging, "packager");
         resolution.profile.registry_seeds = seeds_;
         fill_records(effective, resolution.profile);
         // The registry's ranges and constraints keep every limit in the range

@@ -67,7 +67,9 @@ constexpr std::string_view head = "oamod: 1\n"
                                   "id: {id}\n"
                                   "name: t\n"
                                   "version: \"1\"\n"
-                                  "requires: {base: ta-3.1c, catalogue: 1}\n";
+                                  "requires: {base: ta-3.1c, catalogue: 1}\n"
+                                  "author: {name: unknown}\n"
+                                  "packaging: {revision: 1, date: 2026-10-04, packager: t}\n";
 
 /// A profile with every way of writing limits and hacks, and settings bindings.
 constexpr std::string_view single_body =
@@ -228,7 +230,7 @@ void test_single_profile() {
     );
     OA_CHECK(
         digest_text(r.profile.full_hash) ==
-        "1c3ee80ad599278f8ddd283c1774e0751beb7627920684584f7e095b162026eb"
+        "6cf56cae2f2be7c4039bad5f5eb8d40d9781eec07bc317ec3c6c59207d27763b"
     );
     // Every hack turned on here that waits for its implementation says so.
     OA_CHECK(
@@ -281,7 +283,7 @@ void test_single_profile() {
         );
         OA_CHECK(
             digest_text(r2.resolution->profile.full_hash) ==
-            "a1f92126d5b13aeb390ddcb99687ea652669b1287620f6002903f3d835fd945e"
+            "3ede0bbfdd007205a6ce4ff463547877de2e586199f4aaac8ac25ce33e6ad30b"
         );
         bool clamped = false;
         for (const Diagnostic& warning : r2.warnings)
@@ -297,7 +299,7 @@ void test_single_profile() {
     OA_CHECK(r3.resolution && r3.resolution->profile.full_hash != r.profile.full_hash);
     OA_CHECK(
         r3.resolution && digest_text(r3.resolution->profile.full_hash) ==
-                             "0648408b4bfe2c2e6496f583621592c78333b7bca18ab441d870b5c3538eadb4"
+                             "fc9f3d3e760e885d2e86947dbe3932523f4d1673509965203ca1fb2fed82cce8"
     );
     // A setting that does not read as its type is ignored with a warning.
     ResolveOptions junk{};
@@ -355,7 +357,7 @@ void test_base_profile() {
     );
     OA_CHECK(
         digest_text(profile.full_hash) ==
-        "4d9a38630ed077e14712df16d3528b1750af60642f241acca9b3716de6518803"
+        "93e104addbcc13711a9c169f9296e63b4bb4b52fe0562e7e23bde7c916d37f02"
     );
     OA_CHECK(
         describe_resolution(*result.resolution).find("sha256-sim  1502111e") != std::string::npos
@@ -625,7 +627,7 @@ void test_refusals() {
     OA_CHECK(
         !bounded.errors.empty() &&
         format_diagnostic(bounded.errors[0]) ==
-            "test.oamod:8:12: hacks.units.id-reuse-delay.ticks: 40000 is outside [0, 30000]"
+            "test.oamod:10:12: hacks.units.id-reuse-delay.ticks: 40000 is outside [0, 30000]"
     );
     const ResolveResult listed =
         resolve(profile_text("pos", "hacks:\n  veterancy.model: {default-thresholds: [5, x]}\n"));
@@ -637,14 +639,121 @@ void test_refusals() {
     );
 }
 
+/// Replaces a profile's author and packaging lines.
+///
+/// @param id the profile's id
+/// @param author the author line, empty to leave it out
+/// @param packaging the packaging line, empty to leave it out
+/// @return the profile's text
+std::string with_meta(std::string_view id, std::string_view author, std::string_view packaging) {
+    std::string text = profile_text(id);
+    const size_t author_line = text.find("author:");
+    text.erase(author_line);
+    text += author.empty() ? "" : std::string{author} + "\n";
+    text += packaging.empty() ? "" : std::string{packaging} + "\n";
+    return text;
+}
+
+void test_author_and_packaging() {
+    // Both blocks are carried as written and fill the profile's records.
+    const ResolveResult full = resolve(with_meta(
+        "meta",
+        "author: {name: A. Modder, email: a.modder@example.com}",
+        "packaging: {revision: 3, date: \"2024-02-29\", packager: P. Packer}"
+    ));
+    OA_CHECK(full.resolution.has_value());
+    if (full.resolution) {
+        const ModProfile& profile = full.resolution->profile;
+        OA_CHECK(profile.author.name == "A. Modder");
+        OA_CHECK(profile.author.email == "a.modder@example.com");
+        OA_CHECK(profile.packaging.revision == 3);
+        OA_CHECK(profile.packaging.date == "2024-02-29");
+        OA_CHECK(profile.packaging.packager == "P. Packer");
+        OA_CHECK(text_of(at(*full.resolution, {"author", "email"})) == "\"a.modder@example.com\"");
+        OA_CHECK(text_of(at(*full.resolution, {"packaging", "revision"})) == "3");
+    }
+    // The e-mail address may be left out; a plain date reads as text.
+    const ResolveResult plain = resolve(profile_text("plain"));
+    OA_CHECK(plain.resolution.has_value());
+    if (plain.resolution && full.resolution) {
+        OA_CHECK(plain.resolution->profile.author.name == "unknown");
+        OA_CHECK(plain.resolution->profile.author.email.empty());
+        OA_CHECK(plain.resolution->profile.packaging.date == "2026-10-04");
+        // They are not rules: the sim hash ignores them and the full hash does not.
+        OA_CHECK(plain.resolution->profile.sim_hash == full.resolution->profile.sim_hash);
+        OA_CHECK(plain.resolution->profile.full_hash != full.resolution->profile.full_hash);
+    }
+
+    struct Case {
+        std::string_view author;
+        std::string_view packaging;
+        std::string_view needle;
+    };
+
+    constexpr std::string_view author_ok = "author: {name: unknown}";
+    constexpr std::string_view packaging_ok =
+        "packaging: {revision: 1, date: 2026-10-04, packager: p}";
+    const Case cases[] = {
+        {"", packaging_ok, "author must be an object"},
+        {"author: Somebody", packaging_ok, "author must be an object"},
+        {"author: {email: a@example.com}", packaging_ok, "author.name must be a string"},
+        {"author: {name: \"\"}", packaging_ok, "author.name must be a string of 1 to 128"},
+        {"author: {name: 5}", packaging_ok, "author.name must be a string"},
+        {"author: {name: a, mail: a@example.com}", packaging_ok, "unknown author key 'mail'"},
+        {"author: {name: a, email: nobody}", packaging_ok, "author.email must be an e-mail"},
+        {"author: {name: a, email: a@b}", packaging_ok, "author.email must be an e-mail"},
+        {"author: {name: a, email: \"a b@example.com\"}", packaging_ok, "author.email must be"},
+        {"author: {name: a, email: a@@example.com}", packaging_ok, "author.email must be"},
+        {author_ok, "", "packaging must be an object"},
+        {author_ok, "packaging: {date: 2026-10-04, packager: p}", "packaging.revision must be"},
+        {author_ok, "packaging: {revision: 0, date: 2026-10-04, packager: p}", "from 1 to 65535"},
+        {author_ok, "packaging: {revision: 1.5, date: 2026-10-04, packager: p}", "revision must"},
+        {author_ok, "packaging: {revision: \"1\", date: 2026-10-04, packager: p}", "revision must"},
+        {author_ok, "packaging: {revision: 1, packager: p}", "packaging.date must be an ISO 8601"},
+        {author_ok, "packaging: {revision: 1, date: 2026-02-29, packager: p}", "packaging.date"},
+        {author_ok, "packaging: {revision: 1, date: 2026-13-01, packager: p}", "packaging.date"},
+        {author_ok, "packaging: {revision: 1, date: 2026-1-04, packager: p}", "packaging.date"},
+        {author_ok, "packaging: {revision: 1, date: 20261004, packager: p}", "packaging.date"},
+        {author_ok, "packaging: {revision: 1, date: 2026-10-04}", "packaging.packager must be"},
+        {author_ok,
+         "packaging: {revision: 1, date: 2026-10-04, packager: p, notes: x}",
+         "unknown packaging key 'notes' (have [revision, date, packager])"},
+    };
+    for (const Case& refusal : cases) {
+        const bool refused =
+            refused_with(with_meta("bad", refusal.author, refusal.packaging), refusal.needle);
+        if (!refused)
+            std::fprintf(
+                stderr,
+                "  case: %.*s / %.*s\n",
+                static_cast<int>(refusal.author.size()),
+                refusal.author.data(),
+                static_cast<int>(refusal.packaging.size()),
+                refusal.packaging.data()
+            );
+        OA_CHECK(refused);
+    }
+    // A leap day of a leap year is a date; 1900 was not a leap year, 2000 was.
+    OA_CHECK(
+        resolve(
+            with_meta("leap", author_ok, "packaging: {revision: 1, date: 2000-02-29, packager: p}")
+        )
+            .resolution.has_value()
+    );
+    OA_CHECK(refused_with(
+        with_meta("century", author_ok, "packaging: {revision: 1, date: 1900-02-29, packager: p}"),
+        "packaging.date"
+    ));
+}
+
 /// The hashes the reference resolver gives each reference profile: sim, then full.
 constexpr std::pair<std::string_view, std::string_view> reference_hashes[] = {
     {"f7a558e891e845b270f26fc5faf59cf39b5911733d5f3e51778ffc435749449f",
-     "9232c1040ed73e2898b3784e74462a700bcf5f2d761625645007aa83df12d926"},
+     "5c9921fc978e16b78e124cb9c5833077f0f632cff8a53bee4e1fb7cb78d2f29b"},
     {"237a8fa4ba09d0951d7bfcd1b2a5aafb84bba9861758024eeab443b5ba6296d7",
-     "b22ffb22baa72d6510194157782f7c819634735ac6972b643db060411e1bd428"},
+     "a85526d8eca0478248075a919237e948fc355145ed1a802f54eb8c4a55440600"},
     {"7bd577f653cf4ca28223b9e9631346374446278b9bca92d4d06c87d494c2ec02",
-     "0f8a3204da1c53d4fa574e761d091052636ee6ab6b39ddf3edd8e5f85a977a77"},
+     "89089cda1b673194de5d1f5d82f19c8f7b60e3b454fbbaee68d22665b077987b"},
 };
 
 /// Resolves every reference profile and checks it against its pinned hashes.
@@ -996,6 +1105,7 @@ int main(int argc, char** argv) {
     test_comments_and_true();
     test_unimplemented();
     test_refusals();
+    test_author_and_packaging();
     test_overrides();
     test_override_text_and_states();
     return oa::test::check_exit_status();

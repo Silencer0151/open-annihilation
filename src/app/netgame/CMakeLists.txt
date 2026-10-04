@@ -163,6 +163,8 @@ if(BUILD_TESTING AND TARGET oa-game AND IS_DIRECTORY "${OA_GAME_DIR}")
     "name: Loopback whiteboard\n"
     "version: \"1.0\"\n"
     "requires: {base: ta-3.1c, catalogue: 1}\n"
+    "author: {name: unknown}\n"
+    "packaging: {revision: 1, date: 2026-10-04, packager: Open Annihilation}\n"
     "hacks:\n"
     "  recorder.ta-demo-recorder: true\n"
     "  ui.whiteboard: true\n")

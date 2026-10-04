@@ -60,6 +60,8 @@ id: every-network-rule
 name: "Every network rule"
 version: "1.0"
 requires: {base: ta-3.1c, catalogue: 1}
+author: {name: unknown}
+packaging: {revision: 1, date: 2026-10-04, packager: Open Annihilation}
 identity:
   network-version: [7, 4]
   replay-network-version: [3, 1]
@@ -104,6 +106,8 @@ id: no-speed-lock
 name: "No speed lock"
 version: "1.0"
 requires: {base: ta-3.1c, catalogue: 1}
+author: {name: unknown}
+packaging: {revision: 1, date: 2026-10-04, packager: Open Annihilation}
 hacks:
   console.game-speed-range: {min: 5, max: 15, syncon: false}
   recorder.ta-demo-recorder: true
@@ -125,6 +129,8 @@ id: no-channel
 name: "No channel"
 version: "1.0"
 requires: {base: ta-3.1c, catalogue: 1}
+author: {name: unknown}
+packaging: {revision: 1, date: 2026-10-04, packager: Open Annihilation}
 hacks:
   network.vercheck: true
   network.vote-reject: true

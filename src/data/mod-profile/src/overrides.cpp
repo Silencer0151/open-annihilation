@@ -182,7 +182,10 @@ std::string base_game_profile_text() {
            "name: \"Total Annihilation 3.1c\"\n"
            "version: \"3.1c\"\n"
            "requires: {base: ta-3.1c, catalogue: " +
-           std::to_string(registry::table().catalogue) + "}\n";
+           std::to_string(registry::table().catalogue) +
+           "}\n"
+           "author: {name: Cavedog Entertainment}\n"
+           "packaging: {revision: 1, date: 2026-10-04, packager: Open Annihilation}\n";
 }
 
 } // namespace oa::data::mod_profile

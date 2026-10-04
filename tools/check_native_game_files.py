@@ -73,6 +73,8 @@ MOD_PROFILE = (
     "name: {name}\n"
     'version: "1.0"\n'
     "requires: {{base: ta-3.1c, catalogue: 1}}\n"
+    "author: {{name: unknown}}\n"
+    "packaging: {{revision: 1, date: 2026-10-04, packager: Open Annihilation}}\n"
 )
 
 # The window the variants open when --resolution names none: a tablet's, in points.

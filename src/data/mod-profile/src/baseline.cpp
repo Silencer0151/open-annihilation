@@ -54,7 +54,9 @@ std::string baseline_profile_text() {
                        "version: \"1\"\n"
                        "requires: {base: ta-3.1c, catalogue: ";
     text += std::to_string(table.catalogue);
-    text += "}\n";
+    text += "}\n"
+            "author: {name: Open Annihilation}\n"
+            "packaging: {revision: 1, date: 2026-10-04, packager: Open Annihilation}\n";
     if (!limits.empty())
         text += "limits:\n" + limits;
     if (!hacks.empty())

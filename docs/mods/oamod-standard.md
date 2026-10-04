@@ -140,8 +140,9 @@ parameters, a settings binding, or replacement text and media.
 
 ### 3.1 Top-level keys
 
-Only these keys may appear at the top level. `oamod`, `id`, `name` and
-`version` are required; every other key is optional.
+Only these keys may appear at the top level. `oamod`, `id`, `name`,
+`version`, `author` and `packaging` are required; every other key is
+optional.
 
 | Key | Holds | Example |
 | --- | --- | --- |
@@ -150,6 +151,8 @@ Only these keys may appear at the top level. `oamod`, `id`, `name` and
 | `name` | The mod's display name, a string | `name: Example Mod` |
 | `version` | The mod's version, a string | `version: "2.1"` |
 | `requires` | The base game and registry catalogue the profile is written for: `base` must be `ta-3.1c` and `catalogue` must be `1` | `requires: {base: ta-3.1c, catalogue: 1}` |
+| `author` | Who made the mod: `name`, and optionally `email` | `author: {name: A. Modder}` |
+| `packaging` | Who packaged the profile and the mod's files, when, and how often since: `revision`, `date` and `packager` | `packaging: {revision: 1, date: 2026-10-04, packager: P. Packer}` |
 | `identity` | Display version, network version bytes, settings file, registry root, side names | `network-version: [20, 1]` |
 | `layout` | Revision archive, archive patterns, directory names, unit file extension, map units section, disc check | `directories: {units: unitsX}` |
 | `limits` | Engine limits | `effects: {queue: 8192}` |
@@ -163,6 +166,21 @@ Only these keys may appear at the top level. `oamod`, `id`, `name` and
 `identity`, `layout`, `limits`, `hacks`, `data-keys`, `strings`, `media` and
 `settings` must each be a mapping when present.
 
+`author` and `packaging` are mappings of these keys, and hold nothing else:
+
+| Key | Holds | Required |
+| --- | --- | --- |
+| `author.name` | The mod's author or team, a string of 1 to 128 bytes; `unknown` when nobody is known | yes |
+| `author.email` | The author's e-mail address, a string of at most 254 bytes with one `@` and a dot in the part after it | no |
+| `packaging.revision` | The package's revision, an integer from 1 to 65,535: 1 for the first package, raised by one for each update of the same mod version | yes |
+| `packaging.date` | The day the package was made, an ISO 8601 calendar date `YYYY-MM-DD` that exists | yes |
+| `packaging.packager` | Who made the package, a string of 1 to 128 bytes | yes |
+
+They describe the package, not the rules: they enter the full hash, never
+the sim hash ([11](#11-the-resolved-profile-and-its-hashes)). A date written
+plainly, `date: 2026-10-04`, is a string, as [3.3](#33-strict-yaml-rules)
+says.
+
 ### 3.2 A minimal profile
 
 ```yaml
@@ -171,6 +189,8 @@ oamod: 1
 id: small-mod
 name: Small Mod
 version: "1.0"
+author: {name: A. Modder}
+packaging: {revision: 1, date: 2026-10-04, packager: A. Modder}
 
 limits:
   units-per-player: {default: 500, max: 1000}
@@ -266,6 +286,9 @@ on:
   be, too long, not matching its pattern, of the wrong length, repeated or
   not in ascending order where the parameter requires it;
 - `requires` naming another base game or catalogue;
+- a missing `author` or `packaging` block, a missing `author.name`,
+  `packaging.revision`, `packaging.date` or `packaging.packager`, a
+  malformed e-mail address, or a date that is not a calendar day;
 - a script index mounted twice, outside 0 to 65,535, or inside 3.1c's own
   range 1 to 20; an extension mounted at two indices; an extension of the
   other direction;
@@ -802,7 +825,8 @@ does not show the others yet.
 
 Resolution gives the **effective profile**: every value the profile sets,
 resolved in the order of [5.3](#53-resolution-order). It holds `oamod`,
-`id`, `name`, `version` and `requires` as written; every identity, layout,
+`id`, `name`, `version`, `requires`, `author` and `packaging` as written;
+every identity, layout,
 string and media value, written or at its baseline; every limit, with each
 parameter; every hack that is on, with each parameter; the script
 extensions with their fidelity; the data-key bindings; and the settings
@@ -819,8 +843,8 @@ change it, so two profiles that mean the same thing hash the same.
   values, every limit and every hack whose entry is sim scope with its
   sim-scope parameters, the script extensions and their fidelity, and the
   sim-scope data keys. It leaves out `id`, `name`, `version`, `requires`,
-  the settings block, strings, media, the visual hacks and every view
-  value.
+  `author`, `packaging`, the settings block, strings, media, the visual
+  hacks and every view value.
 
 The sim hash names the ruleset. Two profiles with the same sim hash play the
 same game, even when their names, comments or display choices differ. It is
@@ -949,6 +973,8 @@ id: example-mod
 name: Example Mod
 version: "2.1"
 requires: {base: ta-3.1c, catalogue: 1}
+author: {name: Example Team, email: team@example.com}
+packaging: {revision: 2, date: 2026-10-04, packager: P. Packer}
 
 identity:
   display-version: "2.1"
@@ -1038,8 +1064,9 @@ What it plays:
   play at their defaults;
   [`weapons.high-arc-ballistic`](standard-hacks/weapons.high-arc-ballistic.md)
   is written off on purpose.
-- The `strings` and `media` values and the `settings` block change the full
-  hash but not the sim hash.
+- The `author` and `packaging` blocks, the `strings` and `media` values and
+  the `settings` block change the full hash but not the sim hash. The
+  package is the mod's second revision of version 2.1.
 
 ## 15. Glossary
 
@@ -1047,6 +1074,7 @@ What it plays:
 | --- | --- |
 | 3.1c | Total Annihilation at version 3.1c, unmodified. Every baseline in this document is its behaviour. |
 | Profile, `oamod.yaml` | The strict YAML file in the root of a mod's folder that describes the mod as changes from 3.1c. |
+| Package, packaging revision | A mod's profile and files as one person put them together on one day; its revision counts the updates of that package from 1. |
 | Game folder | The installed game. Under a mod folder it must be plain 3.1c, with no `oamod.yaml`. |
 | Mod folder | A folder holding a mod's files and its `oamod.yaml`, in the game folder's `mods` folder or named with `--mod-dir`. It plays as if copied over the game folder. |
 | Copied install | A mod installed by copying its files into the game folder itself. |

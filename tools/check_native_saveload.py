@@ -323,7 +323,9 @@ def baseline_profile(target):
         elif entry.get("kind") == "hack":
             hacks.append(f"  {name}: {{preset: baseline}}\n")
     text = ("oamod: 1\nid: baseline-rules\nname: \"Every rule at its baseline\"\nversion: \"1\"\n"
-            f"requires: {{base: ta-3.1c, catalogue: {registry['catalogue']}}}\n")
+            f"requires: {{base: ta-3.1c, catalogue: {registry['catalogue']}}}\n"
+            "author: {name: Open Annihilation}\n"
+            "packaging: {revision: 1, date: 2026-10-04, packager: Open Annihilation}\n")
     if limits:
         text += "limits:\n" + "".join(limits)
     if hacks:

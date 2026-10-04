@@ -911,6 +911,8 @@ if(OA_BUILD_PLATFORM)
         "name: Sing sounds\n"
         "version: \"1.0\"\n"
         "requires: {base: ta-3.1c, catalogue: 1}\n"
+        "author: {name: unknown}\n"
+        "packaging: {revision: 1, date: 2026-10-04, packager: Open Annihilation}\n"
         "strings:\n"
         "  cheat: {sing-sounds: [beep, boop]}\n")
       add_test(NAME native-campaign-sing-sounds COMMAND oa-game --game-dir "${OA_GAME_DIR}"
@@ -993,6 +995,8 @@ if(OA_BUILD_PLATFORM)
         "name: Visual rules\n"
         "version: \"1.0\"\n"
         "requires: {base: ta-3.1c, catalogue: 1}\n"
+        "author: {name: unknown}\n"
+        "packaging: {revision: 1, date: 2026-10-04, packager: Open Annihilation}\n"
         "hacks:\n"
         "  ui.megamap: true\n"
         "  ui.whiteboard: true\n"

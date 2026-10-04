@@ -32,7 +32,13 @@ constexpr std::string_view base_profile = "oamod: 1\n"
                                           "id: example\n"
                                           "name: Example mod\n"
                                           "version: \"1.0\"\n"
-                                          "requires: {base: ta-3.1c, catalogue: 1}\n";
+                                          "requires: {base: ta-3.1c, catalogue: 1}\n"
+                                          "author:\n"
+                                          "  name: unknown\n"
+                                          "packaging:\n"
+                                          "  revision: 1\n"
+                                          "  date: 2026-10-04\n"
+                                          "  packager: Open Annihilation\n";
 
 /// Writes a file.
 ///
