@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // A game folder's profile with the settings it binds, the mod folders a game
-// folder offers, and what a profile sets for the data layout and discovery.
+// folder offers, and what a profile sets for the data layout, discovery and
+// the movies.
 
 #include "oa/app/mod_profile_loader.hpp"
 
@@ -394,6 +395,25 @@ DiscoveryPlan discovery_plan_of(const mod_profile::ModProfile* profile) {
     plan.ufo_pattern = profile->layout.archive_patterns.ufo;
     plan.hpi_pattern = profile->layout.archive_patterns.hpi;
     return plan;
+}
+
+std::string_view movie_file_of(const mod_profile::ModProfile* profile, std::string_view movie) {
+    if (profile == nullptr)
+        return movie;
+    // Each movie is known by 3.1c's file for it, its entry's baseline.
+    const mod_profile::MediaMovies base{};
+    const auto& movies = profile->media.movies;
+    if (movie == base.logo)
+        return movies.logo;
+    if (movie == base.intro)
+        return movies.intro;
+    if (movie == base.ending_a)
+        return movies.ending_a;
+    if (movie == base.ending_b)
+        return movies.ending_b;
+    if (movie == base.credits)
+        return movies.credits;
+    return movie;
 }
 
 } // namespace oa::app

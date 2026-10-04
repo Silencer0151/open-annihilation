@@ -229,6 +229,18 @@ bool seed_registry(
 /// @return the plan
 [[nodiscard]] DiscoveryPlan discovery_plan_of(const data::mod_profile::ModProfile* profile);
 
+/// Returns the file of the Data folder a profile plays one of the game's
+/// movies from (`media.movies`).
+///
+/// @param profile the profile; null for the base game's movies
+/// @param movie the movie, by the file 3.1c plays it from: 1.zrb the logo,
+///        2.zrb the intro, 3.zrb and 4.zrb the campaign endings, 5.zrb the
+///        credits
+/// @return the profile's file for that movie, empty where it plays none;
+///         `movie` itself without a profile, or for any other name
+[[nodiscard]] std::string_view
+movie_file_of(const data::mod_profile::ModProfile* profile, std::string_view movie);
+
 /// Finds the profile in the root of a folder.
 ///
 /// @param folder the folder

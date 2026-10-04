@@ -45,6 +45,14 @@ struct UnitPanelHooks {
     /// its own under recorder.ten-player-replay allied-fake-player. With
     /// allied_units_shown every player's units then show what own units do.
     bool viewer_allies_every_player{};
+    /// Status word shown, as written whatever the language, in place of the
+    /// building missions' "Nanolathing" (strings.status.nanolathing); null
+    /// shows "Nanolathing" through `localize`.
+    const char* nanolathing_status{};
+    /// Status word shown, as written whatever the language, in place of a
+    /// paralysed unit's "Paralyzed" (strings.status.paralyzed); null shows
+    /// "Paralyzed" through `localize`.
+    const char* paralyzed_status{};
 };
 
 /// What the unit panel shows at UNITNAME2 and DAMAGEBAR2.
@@ -95,7 +103,8 @@ struct UnitPanelSnapshot {
 /// OA_UNIT_DEF_ABILITY_SHOW_PLAYER_NAME), its damage bar unless it is an
 /// enemy whose type hides damage, and its owner's logo. The viewer's own units, and every unit while the debug keys are on,
 /// add the rates, the kill count (armed units with kills), the head order's
-/// status text and then, for the viewer's own units only, either the
+/// status text (UnitPanelHooks::nanolathing_status and paralyzed_status in
+/// place of those two words) and then, for the viewer's own units only, either the
 /// stockpile build's progress or the head order's target when the viewer
 /// sees it.
 ///

@@ -999,11 +999,13 @@ int Runtime::run_headless_campaign(std::size_t ticks) {
                              );
     };
     // --restart-at: every cheat typed through the chat line takes effect in
-    // the campaign; then pause, EXIT, EXITMENU's RESTART, then RESTART.GUI's
+    // the campaign, and the log and the leave question show the profile's
+    // texts; then pause, EXIT, EXITMENU's RESTART, then RESTART.GUI's
     // RESTART at the stored difficulty must start the mission over, with
     // cheats still allowed.
     const auto restart_mission = [&](std::size_t tick) {
         check_console_campaign_cheats();
+        check_profile_texts();
         show_match_pause_menu();
         activate_pause_gadget("EXIT");
         if (!hud_has("MAINMENU"))

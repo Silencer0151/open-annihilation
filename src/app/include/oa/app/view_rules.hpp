@@ -542,4 +542,32 @@ void apply_dialog_options(
 [[nodiscard]] oa::ui::engine_settings::Locks
 dialog_option_locks(const data::mod_profile::UiRules& ui) noexcept;
 
+/// The texts a profile's strings show in place of the engine's own. Each is
+/// null where the profile leaves 3.1c's text, or without a profile: the
+/// engine's own text then shows, in the player's language where the game
+/// data translates it. A text that differs from 3.1c's is shown as the
+/// profile writes it, whatever the language.
+struct ProfileTexts {
+    const char* nanolathing_status{}; ///< strings.status.nanolathing
+    const char* paralyzed_status{};   ///< strings.status.paralyzed
+    const char* leave_question{};     ///< strings.message.exit-confirm
+    const char* kill_lead{};          ///< strings.message.kill-lead
+    /// strings.message.elimination, each ending compared with 3.1c's own.
+    std::array<const char*, 3> elimination_endings{};
+};
+
+/// Returns the texts a profile's strings show in place of the engine's own.
+///
+/// @param profile the resolved profile; null plays 3.1c's
+/// @return the texts, pointing into `profile`; all null without one
+[[nodiscard]] ProfileTexts profile_texts(const data::mod_profile::ModProfile* profile) noexcept;
+
+/// Returns the name of the main-menu gadget a click on which opens the
+/// credits (strings.gadget.credits).
+///
+/// @param profile the resolved profile; null plays 3.1c's
+/// @return the profile's name, or 3.1c's "Credits" without one
+[[nodiscard]] std::string_view
+credits_gadget(const data::mod_profile::ModProfile* profile) noexcept;
+
 } // namespace oa::app::view_rules

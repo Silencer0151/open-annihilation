@@ -6,7 +6,8 @@
 // and exit status, a --mod profile's limits block filling the Limits record,
 // a --mod profile the engine cannot use stopping the run with every error, and
 // the player's settings in the mod's INI file reaching the parameters the
-// profile binds; and a folder the player picks checked as a mod folder.
+// profile binds; the file each of the game's movies plays from; and a folder
+// the player picks checked as a mod folder.
 
 #include "oa/app/mod_profile_loader.hpp"
 #include "oa/data/defs/layout.hpp"
@@ -15,6 +16,7 @@
 #include "oa/test/check.hpp"
 #include "oa/test/scratch_directory.hpp"
 
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -282,6 +284,38 @@ void test_layout(const fs::path& scratch) {
     OA_CHECK(plan.ccx_pattern == "*.CCX" && plan.hpi_pattern == "*.HPI");
 }
 
+/// Checks the file each of the game's movies plays from: 3.1c's without a
+/// profile or with one at its baselines, else the profile's, empty for none.
+///
+/// @param scratch a folder for the profile
+void test_movies(const fs::path& scratch) {
+    constexpr std::array<std::string_view, 5> base_files{
+        "1.zrb", "2.zrb", "3.zrb", "4.zrb", "5.zrb"
+    };
+    const oa::data::mod_profile::ModProfile unchanged{};
+    for (const std::string_view base_file : base_files) {
+        OA_CHECK(movie_file_of(nullptr, base_file) == base_file);
+        OA_CHECK(movie_file_of(&unchanged, base_file) == base_file);
+    }
+    const fs::path file = scratch / "movies.oamod";
+    write(
+        file,
+        std::string{base_profile} +
+            "media:\n"
+            "  movies: {logo: \"\", intro: open.zrb, ending-a: won-a.smk, ending-b: won-b.smk,\n"
+            "           credits: \"\"}\n"
+    );
+    const auto result = load_mod_profile(file, false);
+    OA_CHECK(result.resolution.has_value());
+    const auto& profile = result.resolution->profile;
+    OA_CHECK(movie_file_of(&profile, "1.zrb").empty());
+    OA_CHECK(movie_file_of(&profile, "2.zrb") == "open.zrb");
+    OA_CHECK(movie_file_of(&profile, "3.zrb") == "won-a.smk");
+    OA_CHECK(movie_file_of(&profile, "4.zrb") == "won-b.smk");
+    OA_CHECK(movie_file_of(&profile, "5.zrb").empty());
+    OA_CHECK(movie_file_of(&profile, "6.zrb") == "6.zrb");
+}
+
 void test_mod_folders(const fs::path& scratch) {
     const fs::path game = scratch / "offered";
     fs::create_directories(game / "MODS" / "beta");
@@ -398,6 +432,7 @@ int main() {
     test_check(scratch);
     test_settings(scratch);
     test_layout(scratch);
+    test_movies(scratch);
     test_mod_folders(scratch);
     test_picked_folder(scratch);
     test_folder_overrides_id(scratch);

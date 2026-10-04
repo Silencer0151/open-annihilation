@@ -2,13 +2,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // The in-game message log: the 30-line ring in Game.chat_lines that the
-// match screen shows, chat lines, wrapped notices and the "player destroyed"
-// announcement.
+// match screen shows, chat lines, wrapped notices, the "player destroyed"
+// announcement and the kills board's new leader.
 #pragma once
 
 #include "oa/core/world.h"
 
+#include <cstddef>
 #include <cstdint>
+#include <string_view>
 
 namespace oa::sim::messages {
 
@@ -42,6 +44,9 @@ inline constexpr const char* elimination_messages[elimination_message_count] = {
     "vermin have been exterminated",
     "forces have gone to a better place",
 };
+// The line announcing the kills board's new leader: %s takes the player's
+// name and %d its board score.
+inline constexpr const char* kill_lead_message = "%s has taken the lead with %d kills";
 inline constexpr const char* side_name_arm = "Arm";
 inline constexpr const char* side_name_core = "Core";
 
@@ -89,6 +94,15 @@ struct Hooks {
     /// Names side slot 0 or 1 in an elimination message; null names them
     /// side_name_arm and side_name_core.
     const char* (*side_name)(void* context, uint8_t side){};
+    /// Gives the ending of an elimination message in place of
+    /// elimination_messages[index] (index 0 to 2), shown as written whatever
+    /// the language; null, or a null return, shows that ending through
+    /// `translate`.
+    const char* (*elimination_ending)(void* context, uint32_t index){};
+    /// Gives the text of the kills board's new-leader line in place of
+    /// kill_lead_message, shown whatever the language; null, or a null
+    /// return, takes kill_lead_message through `translate`.
+    const char* (*kill_lead_text)(void* context){};
 };
 
 /// Returns the number of lines the ring keeps (Game.text_lines).
@@ -179,10 +193,43 @@ void post_notice(World& world, const char* text, const Hooks& hooks);
 
 /// Announces that a player was destroyed with one of three random taunts.
 ///
+/// The line is the side's name, a space and the ending the random stream
+/// picks: Hooks::elimination_ending's, or elimination_messages' through the
+/// translation hook.
+///
 /// @param[in,out] world message log
 /// @param player destroyed player
-/// @param hooks random stream, translation, sound and panel services
+/// @param hooks random stream, endings, translation, sound and panel services
 void post_elimination(World& world, const Player& player, const Hooks& hooks);
+
+/// Writes the kills board's new-leader line from its text.
+///
+/// The text is copied as written, except that its first %s gives way to the
+/// player's name, its first %d to the score and each %% to one %. A text
+/// without %s or %d shows what it has; a further %s or %d, and any other
+/// sequence starting with %, is shown as written. The text is never read as a
+/// format.
+///
+/// @param[out] out the line, always terminated; cut to `size` - 1 characters
+/// @param size bytes of `out`; 0 writes nothing
+/// @param text the line's text; null writes an empty line
+/// @param name the player's name
+/// @param score the player's board score
+void format_kill_lead(
+    char* out, size_t size, const char* text, std::string_view name, int32_t score
+) noexcept;
+
+/// Announces that a player took the top row of the kills board.
+///
+/// Posts a status line from no player: Hooks::kill_lead_text, or
+/// kill_lead_message through the translation hook, with the player's name
+/// (Player.name) and its board score put in by format_kill_lead.
+///
+/// @param[in,out] world message log
+/// @param leader the player now at the top of the board
+/// @param score its board score
+/// @param hooks text, translation, sound and panel services
+void post_kill_lead(World& world, const Player& leader, int16_t score, const Hooks& hooks);
 
 /// Formats a chat line, hands it to the other players and adds it to the log.
 ///

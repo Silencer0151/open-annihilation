@@ -129,14 +129,63 @@ int main() {
         (message_line(v->game, 4)->kind & 0xf) == kind_elimination
     );
 
+    // A profile's ending replaces the one the roll picks, and is not
+    // translated; a null one leaves that ending to the translation hook.
+    struct Endings {
+        const char* replaced = nullptr;
+        uint32_t asked = 99;
+    } endings;
+
+    Hooks profiled = h;
+    profiled.context = &endings;
+    profiled.random = [](void*) -> uint32_t { return 5; };
+    profiled.translate = [](void*, const char* text) -> const char* {
+        return std::strcmp(text, elimination_messages[2]) == 0 ? "ist fort" : nullptr;
+    };
+    profiled.elimination_ending = [](void* c, uint32_t index) {
+        auto& e = *static_cast<Endings*>(c);
+        e.asked = index;
+        return e.replaced;
+    };
+    post_elimination(*v, p, profiled);
+    CHECK(endings.asked == 2 && std::strcmp(message_line(v->game, 5)->text, "Arm ist fort") == 0);
+    endings.replaced = "has been made-up";
+    post_elimination(*v, p, profiled);
+    CHECK(std::strcmp(message_line(v->game, 6)->text, "Arm has been made-up") == 0);
+
+    // The kills board's new leader: a status line from no player.
+    std::memcpy(p.name, "Ada", 4);
+    post_kill_lead(*v, p, 7, h);
+    CHECK(std::strcmp(message_line(v->game, 7)->text, "Ada has taken the lead with 7 kills") == 0);
+    CHECK(
+        message_line(v->game, 7)->sender == sender_none &&
+        (message_line(v->game, 7)->kind & 0xf) == kind_status
+    );
+    Hooks lead = h;
+    lead.kill_lead_text = [](void*) -> const char* { return "%d kills: %s leads"; };
+    post_kill_lead(*v, p, 12, lead);
+    CHECK(std::strcmp(message_line(v->game, 8)->text, "12 kills: Ada leads") == 0);
+
+    // The text is never a format: each of %s and %d is put in once, %% is
+    // one %, and everything else is shown as written.
+    char lead_line[64];
+    format_kill_lead(lead_line, sizeof lead_line, "%s %s %d %d %x %% %", "Ada", -3);
+    CHECK(std::strcmp(lead_line, "Ada %s -3 %d %x % %") == 0);
+    format_kill_lead(lead_line, sizeof lead_line, "%s leads", "Ada", 3);
+    CHECK(std::strcmp(lead_line, "Ada leads") == 0);
+    format_kill_lead(lead_line, sizeof lead_line, "A new leader", "Ada", 3);
+    CHECK(std::strcmp(lead_line, "A new leader") == 0);
+    format_kill_lead(lead_line, 6, "%s has %d", "Adalbert", 3);
+    CHECK(std::strcmp(lead_line, "Adalb") == 0);
+
     std::memcpy(p.second_name, "Steve", 6);
     v->game.chat_mode = OA_CHAT_MODE_EVERYONE;
     post_chat(*v, p, "gg", 2, nullptr, h);
-    CHECK(std::strcmp(message_line(v->game, 5)->text, "<Steve> gg") == 0);
+    CHECK(std::strcmp(message_line(v->game, 9)->text, "<Steve> gg") == 0);
     CHECK(r.shared == 1 && r.recorded == 1);
     v->game.chat_mode = OA_CHAT_MODE_ALLIES;
     post_chat(*v, p, "hi", 2, "Bob", h);
-    CHECK(std::strcmp(message_line(v->game, 6)->text, "<Steve->Bob> hi") == 0);
+    CHECK(std::strcmp(message_line(v->game, 10)->text, "<Steve->Bob> hi") == 0);
     CHECK(r.shared == 2 && r.recorded == 1);
 
     // Expiry: the oldest line goes once it has been up for TextScroll + 1

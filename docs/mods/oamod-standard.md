@@ -123,8 +123,8 @@ flowchart LR
 | Data keys | Extra keys in unit and weapon files | Data loaders | `VeterancyThresholds: veterancy.thresholds` |
 | Standard hacks | Behaviour switches with parameters | The module that owns each rule | `units.id-reuse-delay: true` |
 | Settings | Bindings to the mod's INI and registry settings, and registry seeds | The resolver | `limits.effects.queue: {ini: Preferences/SfxLimit}` |
-| Strings | Replacement engine texts | Checked and hashed; the interface does not show them yet ([10](#10-strings-and-media)) | `status: {nanolathing: Building}` |
-| Media | Front-end movie names | Checked and hashed; the front end does not play them yet ([10](#10-strings-and-media)) | `movies: {intro: ""}` |
+| Strings | Replacement engine texts | The interface ([10](#10-strings-and-media)) | `status: {nanolathing: Building}` |
+| Media | Front-end movie names | The front end ([10](#10-strings-and-media)) | `movies: {intro: ""}` |
 
 The **hack registry**,
 [`src/data/mod-profile/registry/hack-registry.yaml`](../../src/data/mod-profile/registry/hack-registry.yaml),
@@ -869,11 +869,10 @@ scope, so they stay out of the sim hash.
 | `media.movies.credits` | The credits movie | `5.zrb` | string, at most 12 |
 
 An empty movie name means no movie at that point. This engine checks both
-blocks and keeps them in the full hash. Of them it uses
-`strings.cheat.sing-sounds` so far: while `+Sing` is on, unit speech plays
-the first of the two sounds on one 30-tick window in eight and the second
-on the others, each named as below the `sounds` directory; the interface
-does not show the others yet.
+blocks and keeps them in the full hash. While `+Sing` is on, unit speech
+plays the first of the two `strings.cheat.sing-sounds` on one 30-tick
+window in eight and the second on the others, each named as below the
+`sounds` directory.
 
 ## 11. The resolved profile and its hashes
 

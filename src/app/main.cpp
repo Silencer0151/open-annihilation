@@ -365,6 +365,11 @@ void play_intro_file(
               << " frame(s)" << (result.skipped ? ", skipped\n" : "\n");
 }
 
+/// Plays the movies the game starts with, the logo then the intro, unless a
+/// switch skips them.
+///
+/// @param options the parsed command line, with the mod profile played
+/// @param host the window the movies show in; null for a headless run
 void play_intro(const Options& options, HostDisplay* host) {
     // The game's -c, -n and -y switches skip the movies too. This startup
     // path runs before the preferences load, so the PlayMovie preference
@@ -372,16 +377,24 @@ void play_intro(const Options& options, HostDisplay* host) {
     // switches while PlayMovie is set.
     if (options.skip_intro || options.launch.skip_intro != 0)
         return;
-    // Frontend state 0 plays Data/1.zrb (the publisher's logo), then state 1
-    // plays Data/2.zrb (game intro), then state 2 loads MAINMENU.GUI. A mod
-    // folder's movie replaces the game folder's.
+    // Frontend state 0 plays the logo movie (Data/1.zrb, the publisher's
+    // logo, in 3.1c), then state 1 the intro (Data/2.zrb), then state 2
+    // loads MAINMENU.GUI. The mod profile names each movie's file
+    // (media.movies), and an empty name plays none there. A mod folder's
+    // movie replaces the game folder's.
     const oa::AssetStore folders(options.game_folders);
-    const auto movie = [&](std::string_view name) {
+    const auto play = [&](std::string_view name, bool snapshot) {
+        if (name.empty())
+            return;
         const auto found = folders.loose_file(std::string("Data/") + std::string(name));
-        return found ? *found : options.game_dir / "Data" / std::string(name);
+        play_intro_file(
+            options, found ? *found : options.game_dir / "Data" / std::string(name), snapshot, host
+        );
     };
-    play_intro_file(options, movie("1.zrb"), false, host);
-    play_intro_file(options, movie("2.zrb"), true, host);
+    const oa::data::mod_profile::MediaMovies base_movies{};
+    const auto& movies = options.mod_profile ? options.mod_profile->media.movies : base_movies;
+    play(movies.logo, false);
+    play(movies.intro, true);
 }
 
 /// Writes each game file and listing a run looks up to a file, one a line,

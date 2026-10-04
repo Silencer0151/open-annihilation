@@ -131,6 +131,12 @@ OA_GAME_DATA_TEST(exit_menu_and_confirmation) {
         return;
     ingame_enter_exit_confirm(confirm, context);
     OA_CHECK(text_of(confirm, "TITLE") == "Surrender this battle and exit to the system?");
+    // A profile's question is asked in its place, as written.
+    context.leave_question = "Abandon this made-up war?";
+    ingame_enter_exit_confirm(confirm, context);
+    OA_CHECK(text_of(confirm, "TITLE") == "Abandon this made-up war?");
+    context.leave_question.clear();
+    ingame_enter_exit_confirm(confirm, context);
     OA_CHECK(text_of(confirm, "CHOICE1") == "Yes");
     OA_CHECK(panel_control(confirm, "CHOICE1")->quick_key == 'Y');
     OA_CHECK(panel_control(confirm, "CHOICE2")->quick_key == 'N');

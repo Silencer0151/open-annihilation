@@ -13,6 +13,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <string_view>
 
 namespace oa::ui::frontend {
@@ -55,6 +56,10 @@ struct IngameContext {
     // The label the game's return names in place of the main menu,
     // zero-terminated; empty for none.
     std::array<char, kReturnLabelBytes> return_label{};
+    // The question asked before leaving the game in place of
+    // kLeaveGameTitle, shown as written whatever the language
+    // (strings.message.exit-confirm); empty asks kLeaveGameTitle.
+    std::string leave_question;
     uint8_t quit_flags = 0;         // Game.outcome_flags
     bool restart_requested = false; // Game.restart_requested
     // The game data holds LOADGAME.GUI, the dialog SAVEGAME and LOADGAME open.
@@ -141,8 +146,9 @@ inline constexpr std::string_view kLeaveGameTitle = "Surrender this battle and e
 /// Sets up YESORNO as the exit confirmation, titled from the exit kind.
 ///
 /// Main menu asks "Surrender this battle and return to main menu?" (the
-/// return label instead of "main menu" when it fits); leaving asks
-/// kLeaveGameTitle, or "Exit the Battle" for a spectator. Enter and Escape both answer kExitConfirmDefault.
+/// return label instead of "main menu" when it fits); leaving asks the
+/// context's leave_question, else kLeaveGameTitle, or "Exit the Battle" for a
+/// spectator. Enter and Escape both answer kExitConfirmDefault.
 /// CHOICE1 and CHOICE2 read "Yes" and "No" in the language shown, and each
 /// takes as its quick key the first letter of its caption that the other's
 /// key does not hold: Y and N in English, J and N in German, as in 3.1c.

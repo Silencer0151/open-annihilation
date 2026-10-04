@@ -4,6 +4,7 @@
 #include "oa/app/view_rules.hpp"
 #include "oa/present/world_renderer/world_display_modes.hpp"
 #include "oa/ui/frontend_multiplayer/lobby.hpp"
+#include "oa/ui/frontend_state/main_menu.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -708,6 +709,32 @@ oa::ui::engine_settings::Locks dialog_option_locks(const data::mod_profile::UiRu
     if (!snap.enabled || snap.wreck_max <= 0)
         locks.wreck_snap = oa::ui::engine_settings::Lock::set_by_mod;
     return locks;
+}
+
+ProfileTexts profile_texts(const data::mod_profile::ModProfile* profile) noexcept {
+    ProfileTexts texts{};
+    if (profile == nullptr)
+        return texts;
+    const auto changed = [](const std::string& value, const std::string& original) {
+        return value != original ? value.c_str() : nullptr;
+    };
+    // 3.1c's texts, built once: the unit panel asks every frame.
+    static const data::mod_profile::Strings baseline{};
+    const auto& strings = profile->strings;
+    texts.nanolathing_status = changed(strings.status.nanolathing, baseline.status.nanolathing);
+    texts.paralyzed_status = changed(strings.status.paralyzed, baseline.status.paralyzed);
+    texts.leave_question = changed(strings.message.exit_confirm, baseline.message.exit_confirm);
+    texts.kill_lead = changed(strings.message.kill_lead, baseline.message.kill_lead);
+    for (std::size_t index = 0; index < texts.elimination_endings.size(); ++index)
+        texts.elimination_endings[index] =
+            changed(strings.message.elimination[index], baseline.message.elimination[index]);
+    return texts;
+}
+
+std::string_view credits_gadget(const data::mod_profile::ModProfile* profile) noexcept {
+    namespace menu = oa::ui::frontend_state::main_menu;
+    return profile != nullptr ? std::string_view(profile->strings.gadget.credits)
+                              : menu::resource_name(menu::Button::credits);
 }
 
 } // namespace oa::app::view_rules

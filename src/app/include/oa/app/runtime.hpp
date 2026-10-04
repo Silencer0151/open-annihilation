@@ -9686,6 +9686,15 @@ class Runtime final : public menu::Host,
     /// failure.
     void check_console_campaign_cheats();
 
+    /// Checks the mod profile's texts in the running match.
+    ///
+    /// The kills board's new-leader line and an elimination line posted to
+    /// the log, and the question a request to close the window asks, are the
+    /// profile's strings.message texts where they differ from 3.1c's, else
+    /// the engine's own in English. The question is answered No. Throws
+    /// std::runtime_error on a failure.
+    void check_profile_texts();
+
     /// Types every cheat 3.1c registers through the chat line and checks what
     /// it does to the running match, leaving the match's rules as it found
     /// them.
@@ -10486,7 +10495,7 @@ class Runtime final : public menu::Host,
     ///
     /// A missing or failed movie is shown on the status line.
     ///
-    /// @param filename movie file (1.zrb .. 5.zrb)
+    /// @param filename the movie's file in the Data folder (1.zrb .. 5.zrb in 3.1c)
     void play_movie_resource(std::string_view filename);
 
     /// Takes an event the movie player hands on while a movie plays: a
@@ -10513,10 +10522,12 @@ class Runtime final : public menu::Host,
     /// @return 0
     uint32_t query(frontend::Query query, frontend::State& state) override;
 
-    /// Plays a frontend movie.
+    /// Plays a frontend movie from the file the mod profile names for it
+    /// (movie_file_of); a movie whose name the profile leaves empty plays
+    /// nothing.
     ///
     /// @param state dispatcher state
-    /// @param filename movie resource (1.zrb .. 5.zrb)
+    /// @param filename the movie, by 3.1c's file for it (1.zrb .. 5.zrb)
     void play_movie(frontend::State& state, std::string_view filename) override;
 
     /// Shows or hides the cursor overlay.

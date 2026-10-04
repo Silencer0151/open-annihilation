@@ -184,10 +184,66 @@ void post_elimination(World& world, const Player& player, const Hooks& hooks) {
                        : slot == 0                ? side_name_arm
                                                   : side_name_core;
     const uint32_t roll = hooks.random != nullptr ? hooks.random(hooks.context) : 0;
-    const char* taunt = translate(hooks, elimination_messages[roll % elimination_message_count]);
+    const uint32_t ending = roll % elimination_message_count;
+    const char* replaced = hooks.elimination_ending != nullptr
+                               ? hooks.elimination_ending(hooks.context, ending)
+                               : nullptr;
+    const char* taunt =
+        replaced != nullptr ? replaced : translate(hooks, elimination_messages[ending]);
     char line[formatted_bytes];
     std::snprintf(line, sizeof line, "%s %s", side, taunt);
     post_message(world, line, kind_elimination, 0, player.index, hooks);
+}
+
+void format_kill_lead(
+    char* out, size_t size, const char* text, std::string_view name, int32_t score
+) noexcept {
+    if (out == nullptr || size == 0)
+        return;
+    size_t written = 0;
+    const auto append = [&](std::string_view part) {
+        const size_t room = size - 1 - written;
+        const size_t count = part.size() < room ? part.size() : room;
+        std::memcpy(out + written, part.data(), count);
+        written += count;
+    };
+    char digits[12];
+    const int digit_count = std::snprintf(digits, sizeof digits, "%d", static_cast<int>(score));
+    const std::string_view number(digits, digit_count > 0 ? static_cast<size_t>(digit_count) : 0);
+    bool name_placed = false;
+    bool score_placed = false;
+    for (const char* at = text; at != nullptr && *at != '\0'; ++at) {
+        if (*at == '%' && at[1] == 's' && !name_placed) {
+            append(name);
+            name_placed = true;
+            ++at;
+        } else if (*at == '%' && at[1] == 'd' && !score_placed) {
+            append(number);
+            score_placed = true;
+            ++at;
+        } else if (*at == '%' && at[1] == '%') {
+            append("%");
+            ++at;
+        } else {
+            append({at, 1});
+        }
+    }
+    out[written] = '\0';
+}
+
+void post_kill_lead(World& world, const Player& leader, int16_t score, const Hooks& hooks) {
+    const char* replaced =
+        hooks.kill_lead_text != nullptr ? hooks.kill_lead_text(hooks.context) : nullptr;
+    const char* text = replaced != nullptr ? replaced : translate(hooks, kill_lead_message);
+    const auto* name_end =
+        static_cast<const char*>(std::memchr(leader.name, '\0', sizeof leader.name));
+    const std::string_view name(
+        leader.name,
+        name_end != nullptr ? static_cast<size_t>(name_end - leader.name) : sizeof leader.name
+    );
+    char line[formatted_bytes];
+    format_kill_lead(line, sizeof line, text, name, score);
+    post_message(world, line, kind_status, 0, sender_none, hooks);
 }
 
 void post_chat(

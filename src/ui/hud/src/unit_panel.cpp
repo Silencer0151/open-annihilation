@@ -78,6 +78,20 @@ const console::MissionTagTable& mission_tags() {
     return table;
 }
 
+/// Returns the status word the hooks put in place of a mission's own.
+///
+/// @param hooks the panel's services
+/// @param status the mission's status text
+/// @return UnitPanelHooks::nanolathing_status or paralyzed_status for those
+///     two words, or null to show `status` through the language lookup
+const char* replaced_status(const UnitPanelHooks& hooks, const char* status) noexcept {
+    if (std::strcmp(status, console::kNanolathingStatus) == 0)
+        return hooks.nanolathing_status;
+    if (std::strcmp(status, console::kParalyzedStatus) == 0)
+        return hooks.paralyzed_status;
+    return nullptr;
+}
+
 /// Tells whether the viewer sees a unit, through UnitPanelHooks::can_see.
 bool sees(const UnitPanelHooks& hooks, const Player* viewer, const Unit& unit) {
     return viewer != nullptr && hooks.can_see != nullptr &&
@@ -184,11 +198,13 @@ UnitPanelSnapshot unit_panel_snapshot(
                 panel.kills, sizeof panel.kills, unit->veteran_level, hooks.localize, hooks.context
             );
     }
+    const char* status = head_order_status_text(overlay, unit);
+    const char* replaced = replaced_status(hooks, status);
     std::snprintf(
         panel.mission_text,
         sizeof panel.mission_text,
         "%s",
-        localized(hooks.localize, hooks.context, head_order_status_text(overlay, unit))
+        replaced != nullptr ? replaced : localized(hooks.localize, hooks.context, status)
     );
     // The stockpile build and the head order's target are shown for the
     // viewer's own units only (and its allies' under allied_units_shown).

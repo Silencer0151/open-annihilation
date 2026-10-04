@@ -29,6 +29,7 @@ namespace {
 // Mission indices in name order (kMissionOverlays).
 constexpr uint8_t kMissionMobileBuild = 25;
 constexpr uint8_t kMissionMoveGround = 26;
+constexpr uint8_t kMissionParalyze = 27;
 constexpr uint8_t kMissionBuildWeapon = 13;
 
 constexpr uint16_t kArmlab = 1;
@@ -51,6 +52,10 @@ struct Panel {
     // a word not listed is kept. Null leaves the panel without a lookup.
     const std::vector<std::pair<std::string_view, std::string_view>>* words = nullptr;
     std::string looked_up;
+    // A profile's status words (UnitPanelHooks::nanolathing_status and
+    // paralyzed_status); null keeps the panel's own.
+    const char* nanolathing_status = nullptr;
+    const char* paralyzed_status = nullptr;
 
     Panel() {
         world.add_player(0, 1);
@@ -103,6 +108,8 @@ struct Panel {
         h.allied_units_shown = allied_units_shown;
         h.viewer_allies_every_player = viewer_allies_every_player;
         h.veterancy_level = veterancy_level;
+        h.nanolathing_status = nanolathing_status;
+        h.paralyzed_status = paralyzed_status;
         if (words != nullptr)
             h.localize = [](void* context, const char* text) -> const char* {
                 auto& self = *static_cast<Panel*>(context);
@@ -530,6 +537,31 @@ void test_kill_line_words() {
     }
 }
 
+/// A profile's status words replace "Nanolathing" and "Paralyzed" as
+/// written whatever the language, and leave every other status word to the
+/// language lookup.
+void test_profile_status_words() {
+    using Words = std::vector<std::pair<std::string_view, std::string_view>>;
+    const Words words{{"Nanolathing", "Nanolithe"}, {"Paralyzed", "Fige"}, {"Moving", "Bouge"}};
+    Panel p;
+    p.words = &words;
+    p.world.spawn(1, kTank);
+    p.world.spawn(2, kArmlab);
+    p.world.spawn(3, kTank);
+    p.order(1, kMissionMobileBuild, 2);
+    p.order(3, kMissionParalyze);
+    // Without the profile's words the panel shows its own, in the language.
+    CHECK(std::strcmp(p.shown(1).mission_text, "Nanolithe") == 0);
+    CHECK(std::strcmp(p.shown(3).mission_text, "Fige") == 0);
+    p.nanolathing_status = "Building";
+    p.paralyzed_status = "Stunned";
+    CHECK(std::strcmp(p.shown(1).mission_text, "Building") == 0);
+    CHECK(std::strcmp(p.shown(3).mission_text, "Stunned") == 0);
+    p.primary[1].clear();
+    p.order(1, kMissionMoveGround);
+    CHECK(std::strcmp(p.shown(1).mission_text, "Bouge") == 0);
+}
+
 int main() {
     test_idle_and_orders();
     test_enemy_units();
@@ -545,6 +577,7 @@ int main() {
     test_viewer_allied_with_every_player();
     test_veterancy_label();
     test_kill_line_words();
+    test_profile_status_words();
     std::puts("ui-hud-unit-panel-test: ok");
     return 0;
 }

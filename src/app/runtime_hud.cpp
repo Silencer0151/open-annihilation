@@ -909,6 +909,10 @@ void Runtime::draw_unit_panel() {
     hooks.allied_units_shown = ui.allied_unit_display.enabled;
     hooks.viewer_allies_every_player =
         match_->slotless_viewer() == oa::sim::match_runtime::SlotlessViewer::ally_of_every_player;
+    // The profile's status words, where they differ from 3.1c's.
+    const auto texts = view_rules::profile_texts(mod_profile());
+    hooks.nanolathing_status = texts.nanolathing_status;
+    hooks.paralyzed_status = texts.paralyzed_status;
     if (ui.veterancy_label.enabled)
         hooks.veterancy_level = [](void* context, const oa::Unit& unit) -> uint32_t {
             const auto& self = *static_cast<Runtime*>(context);

@@ -7,6 +7,7 @@
 #include "oa/app/hook_call.hpp"
 #include "oa/ui/decoded.hpp"
 #include "oa/app/game_directory.hpp"
+#include "oa/app/view_rules.hpp"
 #include "oa/data/campaign/campaign_assets.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
 #include "oa/data/campaign/map_catalog.hpp"
@@ -114,7 +115,11 @@ uint32_t Runtime::query(frontend::Query query, frontend::State&) {
 }
 
 void Runtime::play_movie(frontend::State&, std::string_view filename) {
-    play_movie_resource(filename);
+    // The mod profile names each movie's file (media.movies); an empty name
+    // plays none, and the frontend goes straight on to what follows.
+    const auto file = movie_file_of(mod_profile(), filename);
+    if (!file.empty())
+        play_movie_resource(file);
 }
 
 void Runtime::set_cursor_visible(frontend::State&, int32_t visible) {
@@ -418,7 +423,12 @@ void Runtime::release_sparks() {
 }
 
 uint32_t Runtime::button_result(menu::MenuHandle, menu::Button button) {
-    return oa::ui::gui_input::button_result(input_menu(), menu::resource_name(button));
+    // The credits open from the gadget the profile names
+    // (strings.gadget.credits); a name no gadget has opens nothing.
+    const std::string_view name = button == menu::Button::credits
+                                      ? view_rules::credits_gadget(mod_profile())
+                                      : menu::resource_name(button);
+    return oa::ui::gui_input::button_result(input_menu(), name);
 }
 
 void Runtime::play_sound(menu::Sound sound, uint32_t) {

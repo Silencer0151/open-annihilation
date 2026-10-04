@@ -14,6 +14,7 @@
 #include "oa/sim/speed.hpp"
 #include "oa/ui/console/console.hpp"
 #include "oa/ui/hud/chat_panel.hpp"
+#include "oa/ui/frontend/ingame_menu.hpp"
 #include "oa/ui/frontend_renderer/gadget_draw.hpp"
 #include "oa/ui/frontend_renderer/game_text.hpp"
 #include "oa/present/game_text.hpp"
@@ -32,6 +33,7 @@
 #include <string_view>
 #include <tuple>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace oa::app {
@@ -143,6 +145,17 @@ messages::Hooks Runtime::message_hooks() {
     // The log's own phrases, such as the elimination taunts and the speed
     // line, in the game's language, as gamedata\translate.tdf gives them.
     hooks.translate = translation_hook;
+    // The profile's kill-lead line and elimination endings, where they
+    // differ from 3.1c's, in place of the log's own whatever the language.
+    hooks.kill_lead_text = [](void* context) {
+        return view_rules::profile_texts(static_cast<Runtime*>(context)->mod_profile()).kill_lead;
+    };
+    hooks.elimination_ending = [](void* context, uint32_t index) -> const char* {
+        const auto endings =
+            view_rules::profile_texts(static_cast<Runtime*>(context)->mod_profile())
+                .elimination_endings;
+        return index < endings.size() ? endings[index] : nullptr;
+    };
     // The extension adds its hooks to a copy, which replaces the engine's
     // only when the hook returns: one that throws leaves the log with the
     // engine's own hooks for this call. The report goes to standard error
@@ -176,6 +189,14 @@ void Runtime::bind_message_log() {
     match_->kill_board.flash = [](void* context, uint8_t killer, uint8_t victim) {
         oa::ui::hud::flash_kill(static_cast<Runtime*>(context)->kill_board_, killer, victim);
     };
+    // A player taking the top row of the kills board is announced in the log
+    // with its board score.
+    match_->kill_board.took_lead = [](void* context, uint8_t player, int16_t score) {
+        auto& runtime = *static_cast<Runtime*>(context);
+        auto& world = runtime.match_->state();
+        if (const oa::Player* leader = oa::world_player(&world, player))
+            messages::post_kill_lead(world, *leader, score, runtime.message_hooks());
+    };
     // Once a player's last unit is gone: a multiplayer game
     // announces the player leaving, a skirmish its forces' end, a campaign
     // nothing.
@@ -199,6 +220,62 @@ void Runtime::bind_message_log() {
                              if (!runtime.campaign_mission_)
                                  messages::post_elimination(world, *owner, runtime.message_hooks());
                          }};
+}
+
+void Runtime::check_profile_texts() {
+    const auto require = [](bool ok, const std::string& what) {
+        if (!ok)
+            throw std::runtime_error("profile text check: " + what);
+    };
+    require(match_ && screen_ == Screen::match && !match_paused_, "no running match");
+    auto& world = match_->state();
+    const auto texts = view_rules::profile_texts(mod_profile());
+    const auto last_line = [this] {
+        const auto lines = match_message_lines();
+        return lines.empty() ? std::string() : lines.back();
+    };
+    const uint8_t viewer = world.game.viewpoint_player;
+    require(viewer < OA_PLAYER_COUNT, "no viewed player");
+    const oa::Player& player = world.game.players[viewer];
+    // The kills board's new leader, with its name and board score.
+    require(match_->kill_board.took_lead != nullptr, "the kills board's new leader is not posted");
+    match_->kill_board.took_lead(match_->kill_board.context, viewer, 3);
+    char lead[messages::text_bytes];
+    messages::format_kill_lead(
+        lead,
+        sizeof lead,
+        texts.kill_lead != nullptr ? texts.kill_lead : messages::kill_lead_message,
+        {player.name, strnlen(player.name, sizeof player.name)},
+        3
+    );
+    require(last_line() == lead, "the new leader's line reads \"" + last_line() + '"');
+    // The elimination line ends with one of the three endings.
+    messages::post_elimination(world, player, message_hooks());
+    const auto eliminated = last_line();
+    bool ending_shown = false;
+    for (uint32_t index = 0; index < messages::elimination_message_count; ++index) {
+        const char* ending = texts.elimination_endings[index] != nullptr
+                                 ? texts.elimination_endings[index]
+                                 : messages::elimination_messages[index];
+        ending_shown = ending_shown || eliminated.ends_with(std::string(" ") + ending);
+    }
+    require(ending_shown, "the elimination line reads \"" + eliminated + '"');
+    // The question a request to close the window asks, answered No.
+    request_match_close();
+    std::string title;
+    if (match_hud_)
+        for (const auto& gadget : match_hud_->layout.gadgets)
+            if (const auto* label = std::get_if<oa::ui::gui_layout::LabelFields>(&gadget.fields);
+                label != nullptr && gadget.common.name == "TITLE")
+                title = label->text;
+    const std::string_view question = texts.leave_question != nullptr
+                                          ? std::string_view(texts.leave_question)
+                                          : oa::ui::frontend::kLeaveGameTitle;
+    require(match_paused_ && title == question, "the leave question reads \"" + title + '"');
+    activate_pause_gadget("CHOICE2");
+    require(!match_paused_ && !exit_requested_, "No did not return to the running match");
+    std::cout << "profile text check: \"" << lead << "\", \"" << eliminated << "\", \"" << title
+              << "\"\n";
 }
 
 void Runtime::post_match_message(

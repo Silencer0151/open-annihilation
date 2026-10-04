@@ -67,6 +67,16 @@ enum class IngamePanel : uint8_t {
 // into it.
 constexpr const char* kPreferencesLayout = "PREFS.GUI";
 
+/// Returns the question a profile asks before the player leaves the game.
+///
+/// @param profile the resolved profile; null plays 3.1c's
+/// @return its strings.message.exit-confirm where that differs from 3.1c's,
+///     else empty, which asks the engine's own question
+std::string profile_leave_question(const oa::data::mod_profile::ModProfile* profile) {
+    const char* question = view_rules::profile_texts(profile).leave_question;
+    return question != nullptr ? question : "";
+}
+
 // Options/in-game menu state that outlives one click. The runtime
 // shows one frontend screen at a time, so a single session suffices.
 struct MatchMenuSession {
@@ -2748,6 +2758,7 @@ void Runtime::activate_pause_gadget(std::string_view name) {
     );
     context.in_game = true;
     context.return_label = return_label_;
+    context.leave_question = profile_leave_question(mod_profile());
     // Opens EXITMENU or YESORNO over the in-game menu: 3.1c centres each
     // right of the HUD strip over the BackTile face, as neither names a
     // picture of its own. The exit menu darkens the menu under it; the
@@ -3031,6 +3042,7 @@ void Runtime::request_match_close() {
     );
     context.in_game = true;
     context.return_label = return_label_;
+    context.leave_question = profile_leave_question(mod_profile());
     panel_from_widgets(session.panel, match_hud_->layout, widget_text_stages_);
     ui::ingame_open_leave_confirm(session.panel, context);
     panel_to_widgets(session.panel, match_hud_->layout, widget_gaf_frames_, widget_text_stages_);

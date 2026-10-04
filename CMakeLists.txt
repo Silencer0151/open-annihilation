@@ -959,9 +959,10 @@ if(OA_BUILD_PLATFORM)
         --match-ticks 60 --restart-at 30
         --preferences-file "${CMAKE_CURRENT_BINARY_DIR}/native-checks/campaign-restart.conf")
       set_tests_properties(native-campaign-restart PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
-      # The same under a mod profile that names its own two sing sounds
-      # (strings.cheat.sing-sounds): +sing sings with them, never with
-      # 3.1c's.
+      # The same under a mod profile that names its own texts: +sing sings
+      # with its two sounds (strings.cheat.sing-sounds), never with 3.1c's,
+      # and the log's new-leader and elimination lines and the leave question
+      # are its strings.message texts.
       set(oa_sing_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/campaign-sing-sounds")
       file(MAKE_DIRECTORY "${oa_sing_check_dir}")
       file(WRITE "${oa_sing_check_dir}/sing-sounds.oamod.yaml"
@@ -973,6 +974,12 @@ if(OA_BUILD_PLATFORM)
         "author: {name: unknown}\n"
         "packaging: {revision: 1, date: 2026-10-04, packager: Open Annihilation}\n"
         "strings:\n"
+        "  status: {nanolathing: Building, paralyzed: Stunned}\n"
+        "  message:\n"
+        "    exit-confirm: \"Abandon this made-up war?\"\n"
+        "    kill-lead: \"%d kills put %s ahead\"\n"
+        "    elimination: [have folded, have been made up, are out]\n"
+        "  gadget: {credits: Thanks}\n"
         "  cheat: {sing-sounds: [beep, boop]}\n")
       add_test(NAME native-campaign-sing-sounds COMMAND oa-game --game-dir "${OA_GAME_DIR}"
         --skip-intro --mute --headless-check --campaign "Arm Campaign" --mission 0
@@ -981,6 +988,30 @@ if(OA_BUILD_PLATFORM)
       set_tests_properties(native-campaign-sing-sounds PROPERTIES
         TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT} WORKING_DIRECTORY "${oa_sing_check_dir}"
         FAIL_REGULAR_EXPRESSION "sounds/(honk|sing)\\.wav")
+      # The start plays the movies a mod profile names (media.movies): with
+      # an empty logo and 5.zrb as its intro, only 5.zrb, and never 3.1c's
+      # 1.zrb or 2.zrb, before the main menu; a game without the movies
+      # finds 5.zrb missing.
+      set(oa_movies_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/intro-movies")
+      file(MAKE_DIRECTORY "${oa_movies_check_dir}")
+      file(WRITE "${oa_movies_check_dir}/intro-movies.oamod.yaml"
+        "oamod: 1\n"
+        "id: intro-movies\n"
+        "name: Intro movies\n"
+        "version: \"1.0\"\n"
+        "requires: {base: ta-3.1c, catalogue: 1}\n"
+        "author: {name: unknown}\n"
+        "packaging: {revision: 1, date: 2026-10-05, packager: Open Annihilation}\n"
+        "media:\n"
+        "  movies: {logo: \"\", intro: 5.zrb}\n")
+      add_test(NAME native-intro-movies COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --mute --headless-check --frames 1 --mod "${oa_movies_check_dir}/intro-movies.oamod.yaml"
+        --preferences-file "${oa_movies_check_dir}/intro-movies.conf")
+      set_tests_properties(native-intro-movies PROPERTIES
+        TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT} WORKING_DIRECTORY "${oa_movies_check_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy"
+        PASS_REGULAR_EXPRESSION "intro (5\\.[Zz][Rr][Bb]: decoded 1 frame|missing: \"[^\"]*5\\.zrb\").*native check: the game offers"
+        FAIL_REGULAR_EXPRESSION "[^0-9][12]\\.[Zz][Rr][Bb]")
       # The match frame presented through SDL on dummy devices must equal the
       # CPU composition headless runs use, with the overlays visible, and a
       # nano particle fills a square two pixels on a side at zoom 1 and four

@@ -517,6 +517,35 @@ void options_dialog_round_trip() {
     OA_CHECK(unset.mex_snap == es::Lock::set_by_mod);
 }
 
+/// A profile's strings show only where they differ from 3.1c's, each
+/// elimination ending on its own; the credits gadget is the profile's name.
+void profile_texts_follow_the_profile() {
+    namespace vr = oa::app::view_rules;
+    const auto none = vr::profile_texts(nullptr);
+    OA_CHECK(none.nanolathing_status == nullptr && none.kill_lead == nullptr);
+    OA_CHECK(vr::credits_gadget(nullptr) == "Credits");
+    oa::data::mod_profile::ModProfile profile{};
+    const auto baseline = vr::profile_texts(&profile);
+    OA_CHECK(baseline.nanolathing_status == nullptr && baseline.paralyzed_status == nullptr);
+    OA_CHECK(baseline.leave_question == nullptr && baseline.kill_lead == nullptr);
+    for (const char* ending : baseline.elimination_endings)
+        OA_CHECK(ending == nullptr);
+    profile.strings.status.nanolathing = "Building";
+    profile.strings.status.paralyzed = "Stunned";
+    profile.strings.message.exit_confirm = "Abandon this made-up war?";
+    profile.strings.message.kill_lead = "%s leads with %d";
+    profile.strings.message.elimination[1] = "have been made up";
+    profile.strings.gadget.credits = "Thanks";
+    const auto texts = vr::profile_texts(&profile);
+    OA_CHECK(std::string_view(texts.nanolathing_status) == "Building");
+    OA_CHECK(std::string_view(texts.paralyzed_status) == "Stunned");
+    OA_CHECK(std::string_view(texts.leave_question) == "Abandon this made-up war?");
+    OA_CHECK(std::string_view(texts.kill_lead) == "%s leads with %d");
+    OA_CHECK(texts.elimination_endings[0] == nullptr && texts.elimination_endings[2] == nullptr);
+    OA_CHECK(std::string_view(texts.elimination_endings[1]) == "have been made up");
+    OA_CHECK(vr::credits_gadget(&profile) == "Thanks");
+}
+
 int main() {
     match_display_rules_follow_the_profile();
     victory_announcement_gate();
@@ -533,6 +562,7 @@ int main() {
     chat_helpers();
     share_sliders();
     options_dialog_round_trip();
+    profile_texts_follow_the_profile();
     std::cout << "view rules checked\n";
     return oa::test::check_exit_status();
 }

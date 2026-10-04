@@ -25,6 +25,12 @@ struct MissionTagRecord {
     const char* name{};
 };
 
+/// The status text of the building missions (MobileBuild, HelpBuild,
+/// BuildingBuild, BuildWeapon and their aircraft forms).
+inline constexpr const char* kNanolathingStatus = "Nanolathing";
+/// The status text of the Paralyze mission.
+inline constexpr const char* kParalyzedStatus = "Paralyzed";
+
 // Bit of attributes[3]: the mission runs on the secondary order queue.
 inline constexpr uint8_t kMissionAttributeSecondaryQueue = 0x04;
 inline constexpr size_t kMissionSecondaryAttribute = 3;
