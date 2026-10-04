@@ -10,7 +10,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
+#include <cstdint>
 
 namespace oa::sim::match_runtime {
 namespace {
@@ -33,6 +35,17 @@ uint8_t back_z(const MapPlot& plot) noexcept {
 
 const FeatureDef* table_def(const World& world, uint16_t word) noexcept {
     return word < world.feature_def_count ? &world.feature_defs[word] : nullptr;
+}
+
+// The low byte of a feature's metal truncated to a signed 64-bit whole
+// number; a value past that range truncates to its least, whose low byte is
+// zero.
+uint8_t metal_byte(float metal) noexcept {
+    constexpr double signed_64_limit = 0x1p63;
+    const auto value = static_cast<double>(metal);
+    if (!(value >= -signed_64_limit && value < signed_64_limit))
+        return 0;
+    return static_cast<uint8_t>(static_cast<int64_t>(value));
 }
 
 // The origin word of the footprint covering a plot; a continuation whose
@@ -285,7 +298,8 @@ void Match::place_map_features() {
                 plot.feature_record =
                     static_cast<uint16_t>((resolved.feature_back_x << 8) | resolved.feature_back_z);
         }
-        // Then the mission schema's features are placed.
+        // Then the mission schema's features are placed, and every feature
+        // standing paints its metal.
         features::apply_feature_placements(
             world,
             host,
@@ -293,12 +307,55 @@ void Match::place_map_features() {
             static_cast<int32_t>(input_.mission_features.size()),
             find_mission_feature
         );
+        paint_feature_metal();
     }
     // The map edges are hidden once every feature is placed.
     features::void_hidden_edges(world, lava_world_ != 0);
     project_feature_plots(
         {0, 0}, {static_cast<int16_t>(width), static_cast<int16_t>(world.game.map_height)}
     );
+}
+
+void Match::paint_feature_metal() {
+    auto& world = state();
+    const auto width = world.game.map_width;
+    const auto height = world.game.map_height;
+    const auto cells = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+    for (std::size_t index = 0; index < cells; ++index) {
+        const auto* def = table_def(world, world.plots[index].feature);
+        if (def == nullptr || def->metal == 0.0F || std::isnan(def->metal) ||
+            (def->flags & OA_FEATURE_FLAG_INDESTRUCTIBLE) == 0)
+            continue;
+        const auto metal = metal_byte(def->metal);
+        const auto origin_x = static_cast<int32_t>(index % static_cast<std::size_t>(width));
+        const auto origin_z = static_cast<int32_t>(index / static_cast<std::size_t>(width));
+        for (int32_t row = 0; row < def->footprint_z; ++row)
+            for (int32_t column = 0; column < def->footprint_x; ++column) {
+                const auto x = origin_x + column;
+                const auto z = origin_z + row;
+                if (x >= width || z >= height)
+                    continue;
+                const auto cell = static_cast<std::size_t>(z) * static_cast<std::size_t>(width) +
+                                  static_cast<std::size_t>(x);
+                world.plots[cell].metal = metal;
+                spatial_.plots[cell].metal = metal;
+                if (plot_metal_)
+                    plot_metal_[cell].movement_cost = metal;
+            }
+    }
+}
+
+void Match::adopt_plot_metal() {
+    const auto& world = state();
+    const auto cells = static_cast<std::size_t>(std::max(world.game.map_width, 0)) *
+                       static_cast<std::size_t>(std::max(world.game.map_height, 0));
+    for (std::size_t index = 0; index < cells; ++index) {
+        const auto metal = world.plots[index].metal;
+        if (index < spatial_.plots.size())
+            spatial_.plots[index].metal = metal;
+        if (plot_metal_)
+            plot_metal_[index].movement_cost = metal;
+    }
 }
 
 void Match::project_feature_plots(std::array<int16_t, 2> cell, std::array<int16_t, 2> footprint) {

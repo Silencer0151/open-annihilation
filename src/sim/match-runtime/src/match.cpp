@@ -415,6 +415,11 @@ Match::Match(const OfflineInputs& input, OfflineServices& services)
             spatial_.plots[i].feature_footprint_z = input.collision_plots[i].feature_footprint_z;
         }
     }
+    // The plot metal is copied here too, for the features to paint; input_
+    // keeps no reference to it.
+    plot_metal_ = std::make_unique<sim::visibility_state::TerrainCell[]>(cells);
+    std::copy(input.terrain_values.begin(), input.terrain_values.end(), plot_metal_.get());
+    input_.terrain_values = {};
     sim::spatial_state::build_buckets(spatial_);
     sight_.width = input.sight_width;
     sight_.height = input.sight_height;
@@ -794,12 +799,14 @@ void Match::initialize_extraction_rate(sim::unit_spawn::Slot& slot, SlotRuntime&
         unit.speed,
         fault_
     );
+    const auto width = static_cast<int32_t>(input_.map.attribute_width);
+    const auto height = static_cast<int32_t>(input_.map.attribute_height);
+    const std::span<const sim::visibility_state::TerrainCell> metal(
+        plot_metal_.get(),
+        plot_metal_ ? static_cast<std::size_t>(width) * static_cast<std::size_t>(height) : 0
+    );
     (void)sim::visibility_state::initialize_terrain_speed(
-        unit,
-        {static_cast<int32_t>(input_.map.attribute_width),
-         static_cast<int32_t>(input_.map.attribute_height),
-         input_.terrain_values},
-        unit.script_present ? &script : nullptr
+        unit, {width, height, metal}, unit.script_present ? &script : nullptr
     );
     slot.record.extracted_metal = unit.speed;
 }

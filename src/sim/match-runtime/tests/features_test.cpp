@@ -4,8 +4,9 @@
 // Map features in a running match: reclaim sequences, fire from a weapon
 // spreading by the feature pass, die sequences leaving featuredead and a
 // geothermal vent's smoke placed with the map; the mission schema's
-// placements after the map's own, the header's water damage, the meteor
-// storm's step and launch, and a small blast at a wreck's edge.
+// placements after the map's own and the metal the features paint, the
+// header's water damage, the meteor storm's step and launch, and a small
+// blast at a wreck's edge.
 #include "combat_fixture.hpp"
 #include "oa/sim/weapon_execution/projectile_pool.hpp"
 #include "oa/sim/weapon_execution/weapon_launch.hpp"
@@ -382,6 +383,45 @@ void mission_features_follow_the_map() {
     std::cout << "mission features follow the map passed\n";
 }
 
+// Once every feature is placed, the schema's as well as the map's, each
+// indestructible feature with metal paints the low byte of that metal over
+// its footprint. The match plots hold it too, and a new extractor's rate is
+// its type's rate times the sum of each footprint plot's metal plus one. A
+// saved game's restored metal takes the place of the painted metal.
+void schema_metal_features_paint_their_metal() {
+    auto options = feature_options();
+    constexpr uint16_t ore = 7;
+    auto& def = options.features.emplace_back();
+    std::snprintf(def.name, sizeof def.name, "%s", "Ore");
+    def.footprint_x = def.footprint_z = 3;
+    def.flags = OA_FEATURE_FLAG_SPRITE | OA_FEATURE_FLAG_INDESTRUCTIBLE;
+    def.seq_name = standing;
+    def.metal = 479.0F; // low byte 223
+    set_links(def, features::no_feature, features::no_feature, features::no_feature);
+    features::FeaturePlacement entry{};
+    std::snprintf(entry.name, sizeof entry.name, "%s", "Ore");
+    entry.x = 9;
+    entry.z = 9;
+    options.mission_features = {entry};
+    Fixture f(options);
+    const auto& world = f.match->state();
+    const auto& spatial = f.match->spatial().plots;
+    CHECK(world.plots[plot(9, 9)].feature == ore);
+    for (const auto cell : {plot(9, 9), plot(11, 11)})
+        CHECK(world.plots[cell].metal == 223 && spatial[cell].metal == 223);
+    CHECK(world.plots[plot(12, 11)].metal == 0 && spatial[plot(12, 11)].metal == 0);
+    // The rock's metal is reclaimed, not painted: it is not indestructible.
+    CHECK(world.plots[plot(4, 4)].metal == 0);
+    f.def.extracts_metal = 0.5F;
+    CHECK(f.spawn(0, 10 * 16 + 8, 10 * 16 + 8).record.extracted_metal == 0.5F * 224);
+    CHECK(f.spawn(0, 2 * 16 + 8, 2 * 16 + 8).record.extracted_metal == 0.5F);
+    f.match->state().plots[plot(2, 3)].metal = 40;
+    f.match->adopt_plot_metal();
+    CHECK(spatial[plot(2, 3)].metal == 40 && spatial[plot(10, 10)].metal == 223);
+    CHECK(f.spawn(1, 2 * 16 + 8, 3 * 16 + 8).record.extracted_metal == 0.5F * 41);
+    std::cout << "schema metal features paint their metal passed\n";
+}
+
 // The schema load reads waterdoesdamage and waterdamage from
 // the GlobalHeader; the unit tick applies them.
 void water_damage_comes_from_the_header() {
@@ -594,6 +634,7 @@ int main() {
         destroyed_tree_leaves_its_remnant();
         vent_smokes_every_five_ticks();
         mission_features_follow_the_map();
+        schema_metal_features_paint_their_metal();
         water_damage_comes_from_the_header();
         meteor_storm_steps_every_tick();
         edge_hits_leave_a_wreck_whole();

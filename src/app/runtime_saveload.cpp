@@ -666,6 +666,7 @@ void Runtime::SaveLoadState::stage_sight(Runtime& runtime, SaveLoadState& state)
 // Takes the metal and placing-player bits a load restored into the canonical
 // plots, and the restored sight words, into the match.
 void Runtime::SaveLoadState::apply_plots(Runtime& runtime, const SaveLoadState& state) {
+    runtime.match_->adopt_plot_metal();
     const oa::World& world = runtime.match_->state();
     auto& plots = runtime.match_->spatial().plots;
     const int32_t map_width = world.game.map_width;
@@ -674,7 +675,6 @@ void Runtime::SaveLoadState::apply_plots(Runtime& runtime, const SaveLoadState& 
                        static_cast<std::size_t>(std::max(map_height, 0));
     for (std::size_t i = 0; i < cells && i < plots.size(); ++i) {
         const oa::MapPlot& plot = world.plots[i];
-        plots[i].metal = plot.metal;
         plots[i].flags = static_cast<uint8_t>(
             (plots[i].flags & ~persist::plot_flags_player_features) |
             (plot.flags & persist::plot_flags_player_features)

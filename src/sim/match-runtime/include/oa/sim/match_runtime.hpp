@@ -172,7 +172,8 @@ struct OfflineInputs {
     std::span<sim::unit_spawn::Type> types; // includes reserved index0; stable lifetime
     std::span<const RuntimeTypeFields> fields;
     const sim::combat_state::WeaponRegistry& weapons;
-    // MapPlot.metal (settings metal + feature overlays), NOT TNT padding.
+    // MapPlot.metal (settings metal + the map's feature overlays), NOT TNT
+    // padding. The match copies it while it is constructed.
     std::span<const sim::visibility_state::TerrainCell> terrain_values;
     std::span<const sim::visibility_state::SightMask> sight_masks;
     int32_t sight_width{}, sight_height{};
@@ -2170,6 +2171,11 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     /// Returns the spatial state: plots, buckets and unit projections.
     const sim::spatial_state::World& spatial() const noexcept { return spatial_; }
 
+    /// Takes the metal of every canonical plot, as a saved game's Metal
+    /// section restored it, into the match plots and into the metal a new
+    /// extractor's rate reads.
+    void adopt_plot_metal();
+
     /// Returns the integer terrain height at a map position.
     ///
     /// @param x Signed 16.16 map x as a bit pattern.
@@ -2868,17 +2874,25 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
 
     /// Places the map's features on the canonical plots, from the loader's
     /// resolved plots in row-major order (markers first, then FeatureDefs),
-    /// then the mission schema's placements; hides the map edges and
-    /// projects the result onto the match plots. While a savegame resumes
-    /// only the markers are placed, but each plot's metal still starts from
-    /// the loader's, which holds the metal of the map's indestructible
-    /// features. The save's Metal section then replaces it; a save whose
-    /// Metal section is missing or not one byte per cell keeps that metal,
-    /// where the game keeps the map's metal without it.
+    /// then the mission schema's placements, and paints the metal of the
+    /// features standing; hides the map edges and projects the result onto
+    /// the match plots. While a savegame resumes only the markers are
+    /// placed, but each plot's metal still starts from the loader's, which
+    /// holds the metal of the map's indestructible features. The save's
+    /// Metal section then replaces it; a save whose Metal section is missing
+    /// or not one byte per cell keeps that metal, where the game keeps the
+    /// map's metal without it.
     ///
     /// A placed-feature pool smaller than the game's is noted and places
     /// nothing.
     void place_map_features();
+    /// Paints, in plot order, the metal of each indestructible feature
+    /// standing on the canonical plots over its footprint: the low byte of
+    /// the metal truncated to a whole number goes to the canonical plots, the
+    /// match plots and the metal a new extractor's rate reads. A feature
+    /// whose metal is zero or not a number paints nothing, and cells off the
+    /// map are skipped.
+    void paint_feature_metal();
     /// Rewrites the match plots' feature fields over a rectangle from the
     /// canonical plots and FeatureDef table.
     ///
@@ -3302,6 +3316,9 @@ class Match final : private SpawnSubsystems, private UnitValueHost {
     // never resized.
     std::vector<sim::air::AirGoal> mirrored_air_goals_;
     sim::spatial_state::World spatial_;
+    // Each plot's metal (MapPlot.metal) as a new extractor's rate reads it,
+    // one per plot of the map; none while the inputs are refused.
+    std::unique_ptr<sim::visibility_state::TerrainCell[]> plot_metal_;
     // Whether the inputs held the map's collision plots, which moving
     // collision requires.
     bool collision_terrain_{};
