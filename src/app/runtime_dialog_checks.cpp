@@ -870,8 +870,9 @@ void Runtime::check_match_dialogs() {
     check_in_game_briefing(report_directory);
     check_placed_dialogs(report_directory);
 
-    // Over a new skirmish: the window's close request, a held Escape, the
-    // OPTIONS lightbar and a unit's speech with its order's caption.
+    // Over a new skirmish: the window's close request, a held Escape, held
+    // keys in the chat line, the OPTIONS lightbar and a unit's speech with
+    // its order's caption.
     load(Screen::main_menu);
     start_benchmark_skirmish();
     const auto require = [](bool ok, const std::string& failure) {
@@ -918,6 +919,46 @@ void Runtime::check_match_dialogs() {
     };
     // A held Escape's repeats open no menu.
     require(send(escape(true)) && !match_paused_, "a held Escape opened the pause menu");
+    // Each repeat of a held Backspace deletes a character from the chat
+    // line. Repeats press no hotkey: held Enter opens the line once, and its
+    // repeats neither send it nor close it.
+    const auto chat_key = [](SDL_Keycode code, SDL_Scancode scancode, bool repeat) {
+        SDL_Event event{};
+        event.type = SDL_EVENT_KEY_DOWN;
+        event.key.key = code;
+        event.key.scancode = scancode;
+        event.key.down = true;
+        event.key.repeat = repeat;
+        return event;
+    };
+    require(
+        send(chat_key(SDLK_RETURN, SDL_SCANCODE_RETURN, false)) && chat_composing_,
+        "Enter did not open the chat line"
+    );
+    require(
+        send(chat_key(SDLK_RETURN, SDL_SCANCODE_RETURN, true)) &&
+            send(chat_key(SDLK_RETURN, SDL_SCANCODE_RETURN, true)) && chat_composing_ &&
+            chat_buffer_.empty(),
+        "a held Enter's repeats sent or closed the chat line"
+    );
+    SDL_Event typed{};
+    typed.type = SDL_EVENT_TEXT_INPUT;
+    typed.text.text = "abcd";
+    require(send(typed) && chat_buffer_ == "abcd", "the chat line did not take typed text");
+    require(
+        send(chat_key(SDLK_BACKSPACE, SDL_SCANCODE_BACKSPACE, false)) &&
+            send(chat_key(SDLK_BACKSPACE, SDL_SCANCODE_BACKSPACE, true)) &&
+            send(chat_key(SDLK_BACKSPACE, SDL_SCANCODE_BACKSPACE, true)) && chat_buffer_ == "a",
+        "a held Backspace did not take a character from the chat line with each repeat"
+    );
+#if defined(SDL_PLATFORM_MACOS) && SDL_VERSION_ATLEAST(3, 4, 0)
+    // On macOS a held letter repeats too, rather than opening the accents menu.
+    require(
+        !SDL_GetHintBoolean(SDL_HINT_MAC_PRESS_AND_HOLD, true),
+        "a held key opens macOS's accents menu"
+    );
+#endif
+    close_chat_line();
     require(
         send(close_request(SDL_EVENT_WINDOW_CLOSE_REQUESTED)) && !exit_requested_,
         "closing the window ended a running match"

@@ -8015,7 +8015,9 @@ class Runtime final : public menu::Host,
     /// screen and 'n' centres on the next unvisited local unit. Outside a
     /// multiplayer game 'h' does nothing.
     ///
-    /// @param key keyboard event; repeats are ignored
+    /// @param key keyboard event; a repeat presses no hotkey, and only
+    ///        Backspace's repeats are taken, by the chat line or a marker's
+    ///        text being typed
     /// @return true when the key was taken
     bool handle_match_hotkey(const SDL_KeyboardEvent& key);
 

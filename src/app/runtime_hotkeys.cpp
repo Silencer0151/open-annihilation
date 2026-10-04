@@ -40,11 +40,17 @@
 namespace oa::app {
 
 bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
-    if (screen_ != Screen::match || !match_ || key.repeat)
+    if (screen_ != Screen::match || !match_)
         return false;
     // The surrender confirmation takes the keys ahead of the chat line and
     // a marker's text, which keep what was typed for after it.
     const bool question = match_question_open();
+    // A held key's repeats press no hotkey, but held Backspace goes on
+    // deleting from the chat line or a marker's text being typed, as held
+    // keys go on typing in 3.1c; held letters arrive as repeated text.
+    if (key.repeat &&
+        (question || key.key != SDLK_BACKSPACE || (!chat_composing_ && !whiteboard_input_.editing)))
+        return false;
     if ((!question && whiteboard_key(key)) || megamap_key(key))
         return true;
     // F4 pins the kills board out (Game.graphics_flags 0x80).

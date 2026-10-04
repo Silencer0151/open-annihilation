@@ -815,6 +815,13 @@ void report_fatal(const std::string& message) {
 using namespace oa::app;
 
 int main(int argc, char** argv) {
+#if defined(SDL_PLATFORM_MACOS) && SDL_VERSION_ATLEAST(3, 4, 0)
+    // A held key repeats while text is typed, as on the other systems,
+    // rather than opening macOS's accents menu. SDL reads the hint once, as
+    // its video first starts, for the folder dialog or the window; an
+    // environment variable of the hint's name decides instead.
+    std::ignore = SDL_SetHint(SDL_HINT_MAC_PRESS_AND_HOLD, "0");
+#endif
     error_log_folder = oa::platform::error_log_directory(SDL_GetBasePath());
     std::set_new_handler(handle_out_of_memory);
     oa::base::float_precision::program_float_control().hooks.changed = report_float_control_change;
