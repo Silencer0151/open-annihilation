@@ -238,6 +238,13 @@ struct HostDisplay {
         // as a quit SDL adds on its own.
         if (!SDL_SetHint(SDL_HINT_QUIT_ON_LAST_WINDOW_CLOSE, "0"))
             throw std::runtime_error("SDL last-window quit hint was rejected");
+#ifdef SDL_PLATFORM_MACOS
+        // In full screen the menu bar and the Dock stay hidden at the
+        // screen's edges, whether Alt+Enter or the title bar's full-screen
+        // button switched the window; an environment variable of the hint's
+        // name keeps them reachable instead.
+        std::ignore = SDL_SetHint(SDL_HINT_VIDEO_MAC_FULLSCREEN_MENU_VISIBILITY, "0");
+#endif
         // A capture takes the game's sound for itself before SDL starts it.
         if (!options.capture_video.empty())
             prepare_capture_audio(options.capture_video);
