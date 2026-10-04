@@ -275,6 +275,11 @@ void Runtime::load_engine_settings() {
     state.raspberry_pi = start.raspberry_pi;
     state.light_machine = start.light_machine;
     state.desktop = start.desktop;
+    // A picked folder that is no longer the mod stored is forgotten; the
+    // file loses its key with the next save.
+    if (settings::remembered_picked_folder(preference_values_).empty() &&
+        preference_values_.erase(std::string(settings::key::picked_mod_directory)) > 0)
+        preferences_dirty_ = true;
     list_offered_mods();
     state.physical_memory = oa::platform::read_machine_traits().memory;
     // The overrides are read under the profile's id, and laid over it as
@@ -320,11 +325,11 @@ void Runtime::list_offered_mods() {
         const auto own = list_mods_in(user_folder_ / std::string(user_mods_folder_name));
         offered.insert(offered.end(), own.begin(), own.end());
     }
-    if (const auto picked =
-            preference_values_.find(std::string(settings::key::picked_mod_directory));
-        picked != preference_values_.end() && !picked->second.empty()) {
+    // The picked folder is listed only while it is the mod stored.
+    if (const std::string picked = settings::remembered_picked_folder(preference_values_);
+        !picked.empty()) {
         std::error_code missing;
-        const fs::path folder = path_from_utf8(picked->second);
+        const fs::path folder = path_from_utf8(picked);
         if (fs::is_directory(folder, missing))
             offered.push_back(folder);
     }

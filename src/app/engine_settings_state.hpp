@@ -39,7 +39,8 @@ struct Runtime::EngineSettingsState {
     /// The mod folders Mods lists, as absolute UTF-8 paths, read once at
     /// start: the game folder's mods folder's (list_mod_folders), the
     /// player's own Mods folder's, the folder an earlier Pick Folder...
-    /// stored while it is still a folder, and the one played.
+    /// stored while it is the mod stored and still a folder, and the one
+    /// played.
     std::vector<std::string> mod_folders;
     /// Their titles, in the same order, as Mods shows them (read_mod_summary).
     std::vector<std::string> mod_names;

@@ -15,7 +15,7 @@ the locks a running game puts on them (`settings_locks`).
 | Section | Setting | Range | Default | Key |
 |---|---|---|---|---|
 | Mods | Mod | No Mod, or one of the mod folders the game finds | No Mod | `open-annihilation.mod-directory` (the folder's path; absent for No Mod) |
-| | A mod folder chosen outside the folders the game finds, kept as stored | any folder | none | `open-annihilation.picked-mod-directory` (the folder's path; absent for none) |
+| | A mod folder chosen outside the folders the game finds, kept while it is the Mod | any folder | none | `open-annihilation.picked-mod-directory` (the folder's path; absent for none, erased once another mod or No Mod is stored) |
 | Controls | Mouse wheel zoom | Off, On | On | `open-annihilation.wheel-zoom` |
 | | Escape opens the game menu | Off, On | On on macOS, Off elsewhere and with `--preferences-file` | `open-annihilation.escape-opens-menu` |
 | | Select groups without Alt | Off, On | Off | 3.1c's SwitchAlt |
@@ -218,10 +218,13 @@ takes a press or the focus, and OPEN MODS FOLDER is disabled. While
 the same way, with "The command line chose this run's mod." A stored mod
 folder the game folder does not offer reads as the stored one
 (`EngineSettings::picked_mod_folder`); a file without either key, as
-earlier versions wrote, reads No Mod. Developer Mode keeps its overrides
-under the id of the profile the game plays, and No Mod the plain 3.1c
-baseline's (`ta-3.1c`), which no mod's profile can take. A mod folder
-without a profile keeps its own under `folder:` and its path
+earlier versions wrote, reads No Mod. The picked folder is remembered only
+while it is the Mod (`remembered_picked_folder`): a picked folder's key
+naming any other folder reads as none, and `write_settings` erases it, so
+that a switch to another mod or No Mod forgets the folder. Developer Mode
+keeps its overrides under the id of the profile the game plays, and No Mod
+the plain 3.1c baseline's (`ta-3.1c`), which no mod's profile can take. A
+mod folder without a profile keeps its own under `folder:` and its path
 (`folder_overrides_id` in the application), which no profile's kebab-case
 id can be either.
 
@@ -592,8 +595,10 @@ words and the numbers its switch once wrote, words that are no number, and
 the locks of a game, the flags and the renderer, and the Language
 switches and text size: their defaults, 80% among them, a file without
 them, a file with CR LF line ends, the mod and the picked folder stored as
-their paths, No Mod keeping the picked folder, a mod folder not offered
-read as the picked one, and files without the keys; the round trip, the
+their paths, the picked folder kept while it is the mod and through
+Restore defaults, forgotten when another mod or No Mod is chosen and when
+its key names a folder that is not the mod, a mod folder not offered read
+as the picked one, and files without the keys; the round trip, the
 size's range and
 clamping, Restore defaults and the text style they make; the language:
 its defaults, a file without it, the values read, a tag the game does not
@@ -696,8 +701,11 @@ safe area.
 On Mods it finds No Mod played first and a folder stored by an earlier
 version's Pick Folder... listed by its oamod.yaml's name; a click on that
 row asks the Switch Mod question, which Escape and CANCEL put away with the
-Mod unchanged; --base-game locks the page with its note, and a start that
-plays a folder without a profile keeps the overrides under the folder's own
-id. Over a match it finds Mods locked with its note, the mod played first,
-and neither a press nor a key asking to switch. `native-mod-switch` switches
-the mod ten times through the question, each a soft restart.
+Mod unchanged; --base-game locks the page with its note; SWITCH from that
+folder played to No Mod erases its keys, after which the next start no
+longer lists it, and a start erases a picked folder's key that names a
+folder other than the mod stored; and a start that plays a folder without
+a profile keeps the overrides under the folder's own id. Over a match it
+finds Mods locked with its note, the mod played first, and neither a press
+nor a key asking to switch. `native-mod-switch` switches the mod ten times
+through the question, each a soft restart.

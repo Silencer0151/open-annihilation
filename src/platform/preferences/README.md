@@ -90,7 +90,9 @@ the Open Annihilation settings' Mods page to layer over that folder, as an
 absolute UTF-8 path; absent, the game folder plays as it is.
 `open-annihilation.picked-mod-directory` holds the folder an earlier
 version's Pick Folder... chose, as an absolute UTF-8 path, which the Mods
-page lists while the folder still exists; absent, there is none.
+page lists while the folder still exists. It is kept only while
+`open-annihilation.mod-directory` names the same folder: once another mod
+or No Mod is chosen, it is erased. Absent, there is none.
 `open-annihilation.user-folder` holds the folder the player keeps their
 saved games, screenshots, films and mods in, as an absolute UTF-8 path, in
 place of `Open Annihilation` in Documents; absent or relative, the default

@@ -1303,12 +1303,13 @@ void the_backups_switch_is_off_by_default_and_round_trips() {
     CHECK(!settings::read_settings(values, players_own_on_linux, false).game_files_backed_up);
 }
 
-void a_picked_folder_is_stored_and_kept() {
+void a_picked_folder_is_kept_while_it_is_played() {
     const std::vector<std::string> folders{"/games/ta/mods/alpha"};
     settings::Inputs inputs{};
     inputs.mod_folders = folders;
     const settings::EngineSettings defaults{};
     const std::string picked = "/home/player/my mods/Some Mod";
+    const std::string picked_key{settings::key::picked_mod_directory};
 
     // A picked folder is the mod and the picked folder, each under its key.
     Values values;
@@ -1318,28 +1319,38 @@ void a_picked_folder_is_stored_and_kept() {
     settings::write_settings(values, defaults, chosen, defaults, false);
     CHECK(values.size() == 2);
     CHECK(values.at(std::string{settings::key::mod_directory}) == picked);
-    CHECK(values.at(std::string{settings::key::picked_mod_directory}) == picked);
+    CHECK(values.at(picked_key) == picked);
     auto read = settings::read_settings(values, inputs, false);
     CHECK(read.mod_folder == picked && read.picked_mod_folder == picked);
 
-    // No Mod keeps the picked folder among the choices.
-    auto none = chosen;
-    none.mod_folder.clear();
-    settings::write_settings(values, chosen, none, defaults, false);
-    CHECK(!values.contains(std::string{settings::key::mod_directory}));
-    CHECK(values.at(std::string{settings::key::picked_mod_directory}) == picked);
-    read = settings::read_settings(values, inputs, false);
-    CHECK(read.mod_folder.empty() && read.picked_mod_folder == picked);
-
-    // An offered mod keeps it too, and Restore defaults leaves it.
-    auto offered = none;
-    offered.mod_folder = folders[0];
-    settings::write_settings(values, none, offered, defaults, false);
+    // Restore defaults leaves the mod played, and the picked folder with it.
     auto restored = defaults;
+    restored.mod_folder = picked;
     restored.picked_mod_folder = picked;
-    settings::write_settings(values, offered, restored, defaults, true);
-    CHECK(!values.contains(std::string{settings::key::mod_directory}));
-    CHECK(values.at(std::string{settings::key::picked_mod_directory}) == picked);
+    settings::write_settings(values, chosen, restored, defaults, true);
+    CHECK(values.at(picked_key) == picked);
+
+    // Another mod, or No Mod, forgets it.
+    for (const std::string& next_mod : {folders[0], std::string{}}) {
+        Values played = values;
+        auto switched = chosen;
+        switched.mod_folder = next_mod;
+        settings::write_settings(played, chosen, switched, defaults, false);
+        CHECK(!played.contains(picked_key));
+        read = settings::read_settings(played, inputs, false);
+        CHECK(read.mod_folder == next_mod && read.picked_mod_folder.empty());
+    }
+
+    // A key an earlier version left naming a folder that is not the mod
+    // reads as none, and the next save erases it.
+    Values stale;
+    stale[picked_key] = picked;
+    stale[std::string{settings::key::mod_directory}] = folders[0];
+    read = settings::read_settings(stale, inputs, false);
+    CHECK(read.mod_folder == folders[0] && read.picked_mod_folder.empty());
+    CHECK(settings::remembered_picked_folder(stale).empty());
+    settings::write_settings(stale, read, read, defaults, false);
+    CHECK(!stale.contains(picked_key));
 
     // A mod folder the game folder does not offer reads as the picked one,
     // as a file a version without Pick Folder... wrote may hold.
@@ -1421,7 +1432,7 @@ int main() {
     a_mods_path_budget_scales_the_credit();
     a_game_locks_the_next_game_settings();
     the_mod_is_stored_as_its_folder();
-    a_picked_folder_is_stored_and_kept();
+    a_picked_folder_is_kept_while_it_is_played();
     an_older_preferences_file_reads_no_mod();
     a_folder_without_a_profile_keeps_its_overrides_under_its_own_id();
     hardware_acceleration_defaults_to_full_for_the_players_own_file_on_every_machine();

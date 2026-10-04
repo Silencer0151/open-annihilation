@@ -1686,8 +1686,13 @@ The settings' **Mods** page (`runtime_engine_settings.cpp`) lists the mod
 folders of the game folder's `mods` folder (`list_mod_folders`), of the
 player's own `Documents/Open Annihilation/Mods` (`list_mods_in`), the folder
 an earlier version's Pick Folder... stored
-(`open-annihilation.picked-mod-directory`) while it is still a folder, and
-the one played; a folder listed twice shows once. `read_mod_summary`
+(`open-annihilation.picked-mod-directory`) while it is the mod stored
+(`open-annihilation.mod-directory`) and still a folder, and the one played;
+a folder listed twice shows once. Once another mod or No Mod is stored, the
+picked folder is forgotten: the save erases its key, a start that finds the
+key naming another folder erases it with the next save, and the folder is
+listed only while the game folder's `mods` folder or the player's own Mods
+holds it. `read_mod_summary`
 (`mod_summary.hpp`) reads each row from the folder alone, without resolving
 its profile: its `oamod.yaml`'s name, version and description, and its
 `oamod.png` badge, decoded by the engine's PNG reader

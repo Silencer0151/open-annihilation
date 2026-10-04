@@ -88,7 +88,9 @@ The list holds, in this order:
 - **No Mod**, 3.1c as it is, when it is not the one being played;
 - every other mod, by title: each folder in the game folder's `mods`
   folder and in your own Mods folder, and the folder an earlier version's
-  Pick Folder... chose, while it still exists.
+  Pick Folder... chose, while it is still your chosen mod and still
+  exists. Once you switch to another mod or No Mod, the game forgets that
+  folder.
 
 To play a mod folder kept elsewhere, put it in the Mods folder. Under the
 list, **Open Mods Folder** opens your Mods folder in the system's file

@@ -3160,14 +3160,16 @@ class Runtime final : public menu::Host,
     EngineSettingsState& engine_settings_state();
 
     /// Reads the settings from the preferences and the installation and puts
-    /// them in effect; the frontend's preferences are loaded first.
+    /// them in effect; the frontend's preferences are loaded first. A picked
+    /// folder's key that no longer names the mod stored is erased, and
+    /// saved with the next change (settings::remembered_picked_folder).
     void load_engine_settings();
 
     /// Lists the mod folders the settings' Mods page offers, each with what
     /// its oamod.yaml and oamod.png give (read_mod_summary): the game
     /// folder's mods folder's, the player's own Mods folder's, the folder an
-    /// earlier version's Pick Folder... stored while it is still a folder,
-    /// and the one played, each once.
+    /// earlier version's Pick Folder... stored while it is the mod stored and
+    /// still a folder, and the one played, each once.
     void list_offered_mods();
 
     /// Ends the run after this frame for main() to start the game afresh

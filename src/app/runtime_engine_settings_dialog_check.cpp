@@ -1086,11 +1086,13 @@ void Runtime::check_engine_settings_dialog() {
     }
     // Mods: the mod played first, marked PLAYING, then the mods by title as
     // their oamod.yaml names them, a folder without one by its name, and a
-    // folder an earlier version's Pick Folder... stored while it is still a
-    // folder. A click on another row asks the Switch Mod question, which
-    // CANCEL puts away with nothing changed. --base-game locks the page and
-    // says so; a stored mod folder that is gone reads as No Mod, played, and
-    // OK replaces it.
+    // folder an earlier version's Pick Folder... stored while it is the mod
+    // stored and still a folder. A click on another row asks the Switch Mod
+    // question, which CANCEL puts away with nothing changed. --base-game
+    // locks the page and says so; SWITCH from the picked folder played to No
+    // Mod forgets the folder, as a start does a picked folder that is not
+    // the mod stored; a stored mod folder that is gone reads as No Mod,
+    // played, and OK replaces it.
     {
         auto& state = engine_settings_state();
         const fs::path base = fs::absolute(preference_path_).parent_path();
@@ -1106,6 +1108,7 @@ void Runtime::check_engine_settings_dialog() {
         const std::string empty = path_to_utf8(empty_folder);
         const std::string mod_key{settings::key::mod_directory};
         const std::string picked_key{settings::key::picked_mod_directory};
+        preference_values_[mod_key] = picked;
         preference_values_[picked_key] = picked;
         list_offered_mods();
         const auto parts_now = [&] { return settings::dialog_layout(*engine_settings_dialog()); };
@@ -1217,6 +1220,52 @@ void Runtime::check_engine_settings_dialog() {
         );
         click(settings::cancel_control, "CANCEL", "Cancel");
         options_.base_game = false;
+        // SWITCH from the picked folder played to No Mod erases both keys,
+        // and the next start, which plays No Mod, no longer lists the folder.
+        {
+            const auto lists_picked = [&] {
+                return std::find(state.mod_folders.begin(), state.mod_folders.end(), picked) !=
+                       state.mod_folders.end();
+            };
+            const auto game_folders = options_.game_folders;
+            const fs::path game_folder =
+                game_folders.empty() ? options_.game_dir : game_folders.back();
+            options_.game_folders = {mod_folder, game_folder};
+            load_engine_settings();
+            require(
+                state.playing_mod_folder == picked && engine_settings().mod_folder == picked &&
+                    preference_values_.contains(picked_key),
+                "the picked folder stored does not play"
+            );
+            open("over the picked folder played");
+            click(settings::page_control(settings::Page::mods), {}, "Mods' entry");
+            int32_t no_mod_control = settings::no_control;
+            const auto rows = settings::mod_rows(*engine_settings_dialog());
+            for (std::size_t index = 0; index < rows.size(); ++index)
+                if (rows[index].offered == settings::no_mod_row)
+                    no_mod_control = settings::first_row_control + static_cast<int32_t>(index);
+            click(no_mod_control, {}, "No Mod's row");
+            click(settings::question_yes_control, "SWITCH", "the question's SWITCH");
+            const auto switched = oa::platform::preferences::load(preference_path_);
+            require(
+                soft_restart_requested() && engine_settings_dialog() == nullptr &&
+                    !switched.contains(mod_key) && !switched.contains(picked_key),
+                "SWITCH away from the picked folder did not forget it"
+            );
+            soft_restart_requested_ = false;
+            exit_requested_ = false;
+            options_.game_folders = game_folders;
+            load_engine_settings();
+            require(!lists_picked(), "Mods lists the picked folder after a switch away from it");
+            // A picked folder's key that names a folder other than the mod
+            // stored is erased at start, and the folder is not listed.
+            preference_values_[picked_key] = picked;
+            load_engine_settings();
+            require(
+                !preference_values_.contains(picked_key) && !lists_picked(),
+                "a start kept a picked folder that is not the mod stored"
+            );
+        }
         // A stored mod folder that is gone, which the start dropped: No Mod
         // shows as played, and OK replaces the stored folder.
         const std::string gone = path_to_utf8((base / "gone-mod").lexically_normal());

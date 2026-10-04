@@ -48,8 +48,9 @@ inline constexpr std::string_view screen_size = "open-annihilation.screen-size";
 /// none (EngineSettings::mod_folder).
 inline constexpr std::string_view mod_directory = "open-annihilation.mod-directory";
 /// The folder the player picked with an earlier version's Pick Folder...,
-/// as a UTF-8 path, which the Mods page lists while it is still a folder;
-/// absent for none (EngineSettings::picked_mod_folder).
+/// as a UTF-8 path, kept only while key::mod_directory names the same
+/// folder; the Mods page lists it while it is still a folder. Absent for
+/// none (EngineSettings::picked_mod_folder).
 inline constexpr std::string_view picked_mod_directory = "open-annihilation.picked-mod-directory";
 /// "off", "basic" or "full" (EngineSettings::hardware_acceleration). A
 /// whole number reads as the On and Off switch the setting was before: 1
@@ -371,8 +372,9 @@ struct EngineSettings {
     /// none, the game as 3.1c plays it.
     std::string mod_folder;
     /// The folder the player picked with an earlier version's Pick
-    /// Folder..., as an absolute UTF-8 path, which the Mods page lists while
-    /// it is still a folder; empty for none.
+    /// Folder..., as an absolute UTF-8 path, while it is the mod
+    /// (mod_folder); the Mods page lists it while it is still a folder.
+    /// Empty for none.
     std::string picked_mod_folder;
     /// Developer Mode: the player's overrides of the standard hacks
     /// (hack_overrides) are laid over the profile the game plays. Off, the
@@ -472,9 +474,10 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// Hardware acceleration is "off", "basic" or "full"
 /// (hardware_acceleration_from_text), or a whole number as the switch it
 /// was before: Full above 0, else Off; any other value gives the default.
-/// The mod is the stored folder, and the picked folder the stored one; a
-/// mod folder the game folder does not offer is the picked folder whatever
-/// that key holds, so that the Mods page lists it. The Language switches
+/// The mod is the stored folder, and the picked folder the one
+/// remembered_picked_folder gives; a mod folder the game folder does not
+/// offer is the picked folder whatever that key holds, so that the Mods
+/// page lists it. The Language switches
 /// (modern fonts, text outline, shadow and background) and Developer Mode
 /// read as every
 /// switch does, and the text size as every number, lowest_text_size to
@@ -506,9 +509,11 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// acceleration as "off", "basic" or "full", One-finger drag and QUEUE and
 /// ADD as their words (touch_drag_text, touch_latches_text), the hold delay
 /// in milliseconds, the mod and the picked folder as their paths, or erased
-/// for none; Restore defaults leaves the picked folder as it is. The
-/// overrides, when they differ from `opened`, are
-/// written under the key `profile_id` ends, as
+/// for none; Restore defaults leaves the picked folder as it is. The picked
+/// folder's key is then erased unless the mod key names the same folder,
+/// a key an earlier save left included: once another mod or No Mod is
+/// chosen, the picked folder is forgotten. The overrides, when they differ
+/// from `opened`, are written under the key `profile_id` ends, as
 /// oa::data::mod_profile::overrides_text writes them, or that key is
 /// erased when none are left; Restore defaults leaves them as they are.
 /// Every other key is left as it is. switch_alt is never written here:
@@ -529,6 +534,17 @@ void write_settings(
     bool restored,
     std::string_view profile_id = {}
 );
+
+/// Returns the folder the player picked, as the preferences remember it.
+///
+/// A picked folder is remembered only while it is the mod played: the
+/// picked folder's key (key::picked_mod_directory) counts while the mod key
+/// (key::mod_directory) holds the same path; a key naming any other folder,
+/// or with no mod stored, is stale and gives none.
+///
+/// @param values the preferences
+/// @return the picked folder's path; empty for none
+[[nodiscard]] std::string remembered_picked_folder(const oa::platform::preferences::Values& values);
 
 /// Returns the language the preferences choose: the language key's value
 /// when it is oa::data::languages::system_choice or the tag of a language

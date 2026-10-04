@@ -363,9 +363,7 @@ EngineSettings read_settings(
     if (const auto number = stored_number(values, key::text_size))
         settings.text_size = clamped(*number, lowest_text_size, highest_text_size);
     settings.language = stored_language(values, inputs.players_own_profile);
-    if (const auto found = values.find(std::string{key::picked_mod_directory});
-        found != values.end())
-        settings.picked_mod_folder = found->second;
+    settings.picked_mod_folder = remembered_picked_folder(values);
     if (const auto found = values.find(std::string{key::mod_directory}); found != values.end()) {
         settings.mod_folder = found->second;
         // A folder the game folder does not offer was picked: it is kept as
@@ -414,6 +412,9 @@ void write_settings(
         store_folder(key::mod_directory, chosen.mod_folder);
     if (chosen.picked_mod_folder != opened.picked_mod_folder)
         store_folder(key::picked_mod_directory, chosen.picked_mod_folder);
+    // A picked folder is forgotten once it is no longer the mod stored.
+    if (remembered_picked_folder(values).empty())
+        values.erase(std::string{key::picked_mod_directory});
     store(
         values,
         key::path_search_nodes,
@@ -567,6 +568,14 @@ void write_settings(
         else
             values[overrides_key(profile_id)] = mod_profile::overrides_text(chosen.hack_overrides);
     }
+}
+
+std::string remembered_picked_folder(const oa::platform::preferences::Values& values) {
+    const auto picked = values.find(std::string{key::picked_mod_directory});
+    const auto mod = values.find(std::string{key::mod_directory});
+    if (picked == values.end() || mod == values.end() || picked->second != mod->second)
+        return {};
+    return picked->second;
 }
 
 std::string
