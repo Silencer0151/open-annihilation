@@ -1225,10 +1225,13 @@ void recovery(const fs::path& scratch) {
         // A folder moved into place.
         const auto paths = case_paths(scratch / "recover n");
         write_text(paths.documents / "TA Pack" / "totala1.hpi", "a");
-        const auto moved = path_to_utf8(paths.documents / "TA Pack");
-        write_state(
-            paths.state_file, "phase = committing\nmode = replace\nmove-source = " + moved + "\n"
-        );
+        // Written by write_import_state, which escapes the backslashes of a Windows path.
+        ImportState moved;
+        moved.phase = ImportPhase::committing;
+        moved.mode = ImportMode::replace;
+        moved.parts.fill(true);
+        moved.move_source = path_to_utf8(paths.documents / "TA Pack");
+        OA_CHECK(write_import_state(paths.state_file, moved, &error));
         const auto result = recover_import(hooks, paths, false);
         OA_CHECK(result.outcome == Recovery::finished_commit && result.commit.ok);
         OA_CHECK(there(paths.game_folder / "totala1.hpi") && !there(paths.documents / "TA Pack"));
