@@ -9,6 +9,8 @@
 #include "oa/formats/oamod.hpp"
 
 #include <cstdint>
+#include <string>
+#include <string_view>
 #include <utility>
 
 namespace oa::data::mod_profile {
@@ -17,6 +19,16 @@ namespace {
 
 /// The top-level key of an effective profile's hacks.
 constexpr std::string_view hacks_key = "hacks";
+
+/// The base game's author, as the base-game profile names it: the company
+/// that made the game, as its archives' copyright trailer names it
+/// (oa/formats/hpi.hpp). It is written as bytes, with no terminating NUL.
+constexpr char base_game_author_chars[] = {0x43, 0x61, 0x76, 0x65, 0x64, 0x6f, 0x67,
+                                           0x20, 0x45, 0x6e, 0x74, 0x65, 0x72, 0x74,
+                                           0x61, 0x69, 0x6e, 0x6d, 0x65, 0x6e, 0x74};
+/// The same name as text.
+constexpr std::string_view base_game_author{base_game_author_chars, sizeof base_game_author_chars};
+static_assert(base_game_author.size() == 21);
 
 /// Returns the registry's standard hacks, gathered once.
 ///
@@ -184,7 +196,9 @@ std::string base_game_profile_text() {
            "requires: {base: ta-3.1c, catalogue: " +
            std::to_string(registry::table().catalogue) +
            "}\n"
-           "author: {name: Cavedog Entertainment}\n"
+           "author: {name: " +
+           std::string(base_game_author) +
+           "}\n"
            "packaging: {revision: 1, date: 2026-10-04, packager: Open Annihilation}\n";
 }
 

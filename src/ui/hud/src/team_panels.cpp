@@ -522,8 +522,12 @@ void open_removal_question(
     TranslateText translate,
     void* translate_context
 ) {
-    set_control_text(controls, find_control(controls, "CHOICE1"), "Yes");
-    set_control_text(controls, find_control(controls, "CHOICE2"), "No");
+    set_control_text(
+        controls, find_control(controls, "CHOICE1"), translated(translate, translate_context, "Yes")
+    );
+    set_control_text(
+        controls, find_control(controls, "CHOICE2"), translated(translate, translate_context, "No")
+    );
     char name[kPlayerNameBytes + 1]{};
     if (player < OA_PLAYER_COUNT)
         std::memcpy(name, world.game.players[player].name, kPlayerNameBytes);

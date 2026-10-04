@@ -103,6 +103,12 @@ constexpr int32_t installed_z = 260;
 /// than a pixel.
 constexpr std::size_t edge_pixels_allowed = 40;
 constexpr std::size_t steep_edge_pixels_allowed = 4;
+/// The first SDL release whose software renderer samples a texture drawn
+/// through a triangle at the texel each pixel's centre lands on. An older
+/// one takes the texel beside it over parts of a triangle, so on it a
+/// textured model is held to cover what the processor covers, not to its
+/// texels.
+constexpr int triangle_texels_version = SDL_VERSIONNUM(3, 4, 0);
 /// Bounds on each installed model alone, looser than the sweep's.
 constexpr double installed_model_far_coverage_share = 0.03;
 constexpr std::size_t installed_model_far_coverage_pixels = 12;
@@ -813,6 +819,15 @@ void check_exact(const char* what, const full::ModelRasterComparison& c, std::si
     OA_CHECK(c.edge_coverage <= edges);
 }
 
+/// Tells whether the SDL library the test runs on, which can be older than
+/// the headers it was built with, samples a textured triangle's texels at
+/// pixel centres.
+///
+/// @return true from triangle_texels_version on
+bool card_samples_triangle_texels() {
+    return SDL_GetVersion() >= triangle_texels_version;
+}
+
 /// Holds a textured scene: every pixel both draw the same or a texel of
 /// phase apart, since the card interpolates the texels at pixel centres
 /// where the processor's walk steps from the row's start; no pixel drawn
@@ -820,7 +835,7 @@ void check_exact(const char* what, const full::ModelRasterComparison& c, std::si
 void check_textured(const char* what, const full::ModelRasterComparison& c, std::size_t edges = 0) {
     print(what, c);
     OA_CHECK(c.drawn > 0);
-    OA_CHECK(c.far == 0);
+    OA_CHECK(c.far == 0 || !card_samples_triangle_texels());
     OA_CHECK(c.far_coverage == 0);
     OA_CHECK(c.edge_coverage <= edges);
 }
@@ -1038,7 +1053,7 @@ void test_lit_building() {
     // The rows scale the texels: the table snaps to the nearest gray, the
     // card multiplies, within the tolerance; the squares' row is a bright
     // one, so their frames went to the bright page.
-    OA_CHECK(lit.far == 0);
+    OA_CHECK(lit.far == 0 || !card_samples_triangle_texels());
     if (lit.far != 0)
         print_far(drawn, processor, scene);
     OA_CHECK(card.stage.bright_pages().memory().frames == 3);
@@ -1230,14 +1245,14 @@ void test_nanoframe_pulse_lag() {
 void test_mobile_nanoframe_once_built() {
     for (const bool once_built : {false, true}) {
         Scene scene;
-        SceneUnit& unit = scene.add_unit(square_model(), 1, unit_x, unit_z);
-        unit.unit->build_remaining = 0.5F;
+        SceneUnit& mobile = scene.add_unit(square_model(), 1, unit_x, unit_z);
+        mobile.unit->build_remaining = 0.5F;
         scene.tick = 7;
         scene.renderer.moving_pieces_once_built = once_built;
         Card card(scene);
         ProcessorPicture processor;
         scene.begin_frame(processor, 0);
-        scene.plan_unit(unit);
+        scene.plan_unit(mobile);
         scene.raster_processor(processor);
         const CardPicture drawn = card.raster(scene);
         const auto c = compare(drawn, processor, scene);
@@ -1461,7 +1476,7 @@ void test_faded_shadows() {
     Scene scene;
     SceneUnit& vehicle = scene.add_unit(square_model(), 1, unit_x, unit_z);
     vehicle.unit->position.y = 4 * unit;
-    const auto model = square_model(third_ink);
+    const std::shared_ptr<const Model> model = square_model(third_ink);
     const draw::PreparedModel& prepared = draw::prepare_model(scene.library, model);
     constexpr uint16_t flags = draw::graphics_shadows | draw::graphics_vehicle_shadows;
     draw::ShadowTable table;
@@ -1550,7 +1565,7 @@ void test_faded_shadows() {
 // fragment, flat as the processor draws them.
 void test_flat_objects() {
     Scene scene;
-    const auto model = square_model(third_ink);
+    const std::shared_ptr<const Model> model = square_model(third_ink);
     scene.add_unit(model, 1, unit_x, unit_z);
     const draw::PreparedModel& prepared = draw::prepare_model(scene.library, model);
     Card card(scene);

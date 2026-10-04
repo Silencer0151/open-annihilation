@@ -48,6 +48,7 @@
 #include <system_error>
 #include <tuple>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace oa::ui::frontend_multiplayer {
@@ -170,6 +171,10 @@ struct Ui {
     // A request to close the window asked for the exit confirmation, which
     // the screen's next tick opens.
     bool exit_confirm_requested = false;
+    // The quick key, lowercase, that answered a yes-or-no question at the
+    // last key press; zero for none. The character it types is dropped, so
+    // it never reaches the text box focused under the question.
+    int answered_key = 0;
 
     Ui() {
         data::campaign::campaign_file_init(&map_context);
@@ -1292,7 +1297,7 @@ void gray_buttons(
     }
 }
 
-/// Tells whether a control shows game text, which the Language & Text
+/// Tells whether a control shows game text, which the Language
 /// settings may draw in the modern fonts: the battle room's chat (OUTPUT)
 /// and the players' names (PLAYER0 to PLAYER9).
 ///
@@ -1520,7 +1525,7 @@ void compose_layout(
 /// @param width box width in pixels
 /// @param height box height in pixels
 /// @param game_text the text is game text, such as typed chat, which the
-///        Language & Text settings may draw in the modern fonts
+///        Language settings may draw in the modern fonts
 void draw_text_in(
     renderer::Surface& surface,
     const Resources& res,
@@ -2414,6 +2419,42 @@ void leave_screen(ScreenContext* ctx, void* /*state*/) {
     ui().exit_confirm_requested = false;
 }
 
+/// Names the active button whose quick key a key is, in either case.
+///
+/// A grayed-out button takes no key; a key with Ctrl, Alt or the system key
+/// down types no character and names none.
+///
+/// @param panel the panel in front
+/// @param input the key press
+/// @return the button's name, or empty for none
+std::string quick_key_button(const Panel& panel, const ScreenInput& input) {
+    if ((input.modifiers & (oa::app::kInputModifierCtrl | oa::app::kInputModifierAlt |
+                            oa::app::kInputModifierSystem)) != 0 ||
+        input.key == 0 || input.key >= 0x80)
+        return {};
+    const auto typed = std::tolower(static_cast<int>(input.key));
+    const auto count = std::min<int32_t>(panel.count, static_cast<int32_t>(kPanelControls));
+    for (int32_t index = 1; index < count; ++index) {
+        const auto& control = panel.controls[static_cast<std::size_t>(index)];
+        if (control.type != ControlType::button || control.active == 0 || control.grayed ||
+            control.quick_key == 0 ||
+            std::tolower(static_cast<unsigned char>(control.quick_key)) != typed)
+            continue;
+        return std::string(control_name(control));
+    }
+    return {};
+}
+
+/// Tells whether typed text is the character of the quick key that answered a question.
+///
+/// @param text the typed text, UTF-8
+/// @param answered the quick key, lowercase, or zero for none
+/// @return true for that one character, in either case
+bool typed_answered_key(const char* text, int answered) {
+    return answered != 0 && text != nullptr && text[0] != '\0' && text[1] == '\0' &&
+           std::tolower(static_cast<unsigned char>(text[0])) == answered;
+}
+
 int screen_event(ScreenContext* ctx, void*) {
     auto& state = ui();
     state.ctx = ctx;
@@ -2469,14 +2510,29 @@ int screen_event(ScreenContext* ctx, void*) {
             wheel_list(ctx, res, panel_hit(panel, px, py), input->wheel_y > 0);
         return 1;
     case ScreenInputKind::text:
+        // The character a quick key types after its press answered a
+        // question goes nowhere.
+        if (typed_answered_key(input->text, std::exchange(state.answered_key, 0)))
+            return 1;
         if (input->text != nullptr)
             multiplayer_type(ctx, input->text);
         return 1;
     case ScreenInputKind::key_down:
+        state.answered_key = 0;
         if (!state.message.empty()) {
             if (input->key == kSdlKeyReturn || input->key == kSdlKeyEscape)
                 state.message.clear();
             return 1;
+        }
+        // The yes-or-no questions take their buttons' quick keys, in either
+        // case: Y and N in English. A key with Ctrl, Alt or the system key
+        // down types no character.
+        if (state.modal_kind == ModalKind::confirm || state.modal_kind == ModalKind::exit_confirm) {
+            if (const auto name = quick_key_button(panel, *input); !name.empty()) {
+                state.answered_key = std::tolower(static_cast<int>(input->key));
+                (void)multiplayer_click(ctx, name.c_str());
+                return 1;
+            }
         }
         if (input->key == kSdlKeyBackspace && panel.focus > 0 && panel.focus < panel.count) {
             auto& control = panel.controls[static_cast<std::size_t>(panel.focus)];
@@ -2800,6 +2856,7 @@ void multiplayer_reset() noexcept {
     state.base = Resources{};
     close_modal();
     state.message.clear();
+    state.answered_key = 0;
     state.in_lobby = false;
     state.banner_said.clear();
     state.custom_net = custom;

@@ -7,6 +7,11 @@
 
 #include "oa/app/asset_files.hpp"
 #include "oa/app/hook_call.hpp"
+#include "oa/app/mod_profile_loader.hpp"
+#include "oa/data/defs/files.hpp"
+#include "oa/data/defs/layout.hpp"
+#include "oa/formats/hpi.hpp"
+#include "oa/formats/tdf.hpp"
 #include "oa/sim/scenario/commander_rules.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
 #include "oa/sim/selection.hpp"
@@ -15,10 +20,13 @@
 #include "match_fault.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <iterator>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -53,18 +61,131 @@ const oa::Unit* live_side_commander(oa::World& world, uint8_t index) {
     return nullptr;
 }
 
+/// Returns the report that ends a start whose sides name a file the game's
+/// files lack.
+///
+/// @param table the side table
+/// @param missing the first missing file
+/// @return the file's path and the side that names it
+std::string side_file_report(
+    const oa::data::defs::SideTable& table, const oa::data::defs::SideMissingFile& missing
+) {
+    const auto& name = table.sides[missing.side].name;
+    return std::string(missing.path) + ", which GAMEDATA/SIDEDATA.TDF names for the " +
+           std::string(name, strnlen(name, sizeof name)) + " side, is missing";
+}
+
+/// Returns what ends a start whose side table loaded so: the first section a
+/// side lacks, or no side at all.
+///
+/// @param loaded the file loaded and every side was complete
+/// @param table the side table
+/// @return the report; empty when the table can be played
+std::string side_table_problem(bool loaded, const oa::data::defs::SideTable& table) {
+    if (!loaded && table.error[0] != '\0')
+        return table.error;
+    if (table.count == 0)
+        return "gamedata/sidedata.tdf contains no side definitions";
+    return {};
+}
+
+/// Returns the first file a side table's sides name that the files lack.
+///
+/// @param files the game's files
+/// @param table the side table
+/// @param language the language word whose folders are looked in first
+/// @return the report; empty when every file is there
+std::string first_side_file_gap(
+    const oa::data::defs::Files& files, const oa::data::defs::SideTable& table, const char* language
+) {
+    std::array<oa::data::defs::SideMissingFile, oa::data::defs::side_missing_file_capacity>
+        missing{};
+    if (oa::data::defs::side_missing_files(&files, table, language, missing) == 0)
+        return {};
+    return side_file_report(table, missing.front());
+}
+
 } // namespace
 
 void Runtime::load_side_table() {
+    // The language the game starts in, whose folders are looked in first for
+    // SIDEDATA and the files its sides name, all read once for the run.
+    const char* language = game_language();
+    side_files_language_ = language != nullptr ? language : "";
     const oa::data::defs::Files files = asset_files(assets_);
-    // No language variant directory, and Side.font stays null: the match HUD
-    // loads its own CONSOLE.FNT and nothing reads the handle.
-    if (!oa::data::defs::load_side_data(&files, &side_table_, nullptr, nullptr) &&
-        side_table_.error[0] != '\0')
-        throw std::runtime_error(side_table_.error);
-    if (side_table_.count == 0)
-        throw std::runtime_error("gamedata/sidedata.tdf contains no side definitions");
+    // Side.font stays null: the match HUD loads the viewed side's font by its
+    // name and nothing reads the handle.
+    const bool loaded =
+        oa::data::defs::load_side_data(&files, &side_table_, side_files_language_.c_str(), nullptr);
+    if (auto problem = side_table_problem(loaded, side_table_); !problem.empty())
+        throw std::runtime_error(problem);
     skirmish_ui_.side_count = static_cast<int32_t>(side_table_.count);
+}
+
+std::string Runtime::side_data_path() const {
+    const oa::data::defs::Files files = asset_files(assets_);
+    char path[oa::data::defs::path_capacity];
+    oa::data::defs::build_variant_path(
+        &files,
+        path,
+        sizeof path,
+        oa::data::defs::directory_name(oa::data::defs::DataDirectory::gamedata),
+        "sidedata",
+        "tdf",
+        side_files_language_.c_str()
+    );
+    return path;
+}
+
+std::vector<oa::data::defs::SideMissingFile> Runtime::missing_side_files() const {
+    const oa::data::defs::Files files = asset_files(assets_);
+    std::array<oa::data::defs::SideMissingFile, oa::data::defs::side_missing_file_capacity>
+        missing{};
+    const auto count = oa::data::defs::side_missing_files(
+        &files, side_table_, side_files_language_.c_str(), missing
+    );
+    return {missing.begin(), missing.begin() + std::min<std::size_t>(count, missing.size())};
+}
+
+void Runtime::require_side_files() {
+    // A mod's games start without them, and it warns of them.
+    if (plays_mod())
+        return;
+    const oa::data::defs::Files files = asset_files(assets_);
+    if (auto gap = first_side_file_gap(files, side_table_, side_files_language_.c_str());
+        !gap.empty())
+        throw std::runtime_error(gap);
+}
+
+std::string Runtime::side_data_problem_over(
+    const fs::path& folder, const fs::path& game_folder, const char* language
+) const {
+    // The mod folder over the game folder, with the archives discovery mounts
+    // from both, as that start mounts them.
+    oa::AssetStore probe(std::vector<fs::path>{folder, game_folder});
+    std::ignore = probe.discover(discovery_plan_of(nullptr));
+    const oa::data::defs::Files files = asset_files(probe);
+    // Without a profile the base game's layout names the data's folders.
+    const oa::data::defs::DataLayout base_layout;
+    char path[oa::data::defs::path_capacity];
+    oa::data::defs::build_variant_path(
+        &files,
+        path,
+        sizeof path,
+        base_layout.directories[static_cast<std::size_t>(oa::data::defs::DataDirectory::gamedata)]
+            .c_str(),
+        "sidedata",
+        "tdf",
+        language
+    );
+    oa::formats::tdf::Document document;
+    oa::formats::tdf::document_init(&document);
+    // As load_side_data reads it.
+    const bool read = oa::data::defs::load_tdf_file(&files, path, &document, nullptr);
+    const auto table = std::make_unique<oa::data::defs::SideTable>();
+    const bool complete = oa::data::defs::side_table_load(&document, table.get(), nullptr);
+    oa::formats::tdf::document_free(&document);
+    return side_table_problem(read && complete, *table);
 }
 
 std::vector<std::string> Runtime::saved_game_side_names() const {
@@ -243,9 +364,15 @@ void Runtime::check_player_records(std::string_view context) {
     if (!match_)
         throw std::runtime_error(label + " player check needs a match");
     oa::World& world = match_->state();
-    if (world.game.side_count < 2 || std::strcmp(world.game.sides[0].commander, "ARMCOM") != 0 ||
-        std::strcmp(world.game.sides[1].commander, "CORCOM") != 0)
-        throw std::runtime_error(label + " player check: Game.sides lacks ARMCOM and CORCOM");
+    // Game.sides holds each SIDEDATA side, with the commander it names.
+    if (world.game.side_count < 2 || world.game.side_count != side_table_.count)
+        throw std::runtime_error(label + " player check: Game.sides lacks the SIDEDATA sides");
+    for (uint32_t side = 0; side < world.game.side_count; ++side)
+        if (std::strcmp(world.game.sides[side].commander, side_table_.sides[side].commander) != 0)
+            throw std::runtime_error(
+                label + " player check: Game.sides " + std::to_string(side) +
+                " does not name its SIDEDATA commander"
+            );
     uint32_t bound = 0;
     for (uint32_t slot = 0; slot < OA_PLAYER_COUNT; ++slot) {
         const auto& setup = skirmish_settings_.slots[slot];

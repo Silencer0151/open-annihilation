@@ -51,7 +51,10 @@ if(MSVC)
   # floating-point expressions, which /fp:strict does not take as static
   # initializers, and an option given after /W4 or /fp:strict would only
   # override it with a warning. Decoded music takes no part in a match.
-  target_compile_options(oa-audio-music-codecs PRIVATE /w)
+  # /W0 turns every warning off, as /w does, and a generator that sets a
+  # warning level of its own takes it as the target's level instead of
+  # adding it after its own.
+  target_compile_options(oa-audio-music-codecs PRIVATE /W0)
 else()
   target_link_libraries(oa-audio-music-codecs PRIVATE oa-options)
   target_compile_options(oa-audio-music-codecs PRIVATE -w)
@@ -101,8 +104,9 @@ if(OA_BUILD_PLATFORM)
   target_compile_definitions(oa-audio-output PRIVATE OA_AUDIO_HAVE_SDL_OUTPUT=1)
 endif()
 if(BUILD_TESTING)
-  # The mixer's conversion, gains, feeds and clamping, and the buffered
-  # output's ring of buffers on a device the test plays by hand.
+  # The integer resampler, the mixer's conversion, gains, feeds and
+  # clamping, and the buffered output's ring of buffers on a device the
+  # test plays by hand.
   add_executable(oa-audio-output-test tests/sound_output_test.cpp)
   target_link_libraries(oa-audio-output-test PRIVATE oa-audio-output oa-options)
   add_test(NAME audio-output COMMAND oa-audio-output-test)
@@ -152,7 +156,8 @@ if(BUILD_TESTING)
     add_test(NAME audio-sdl-sink COMMAND oa-audio-sdl-sink-test)
     set_tests_properties(audio-sdl-sink PROPERTIES TIMEOUT 60)
     # The WAV player's one stream: its delay, one playing, stopping at once
-    # and replacement, on the dummy device, which plays in real time.
+    # and replacement, on the dummy device, which plays in real time; and a
+    # placed start's two sides, on a mixer the test runs by hand.
     add_executable(oa-audio-sdl-player-test tests/sdl_player_test.cpp)
     target_link_libraries(oa-audio-sdl-player-test PRIVATE oa-audio-sdl oa-test-support)
     add_test(NAME audio-sdl-player COMMAND oa-audio-sdl-player-test)

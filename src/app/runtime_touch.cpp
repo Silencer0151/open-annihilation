@@ -843,10 +843,11 @@ void TouchDispatchAccess::claim(Runtime& runtime, ClaimedFinger& finger) {
         as_control(control);
         return;
     }
-    // 2. A dialog or the settings, over any screen, take the finger as a
-    //    pointer; they find the nearest control themselves.
+    // 2. A dialog, the settings or a notice of the player's folder or the
+    //    mod, over any screen, take the finger as a pointer; they find the
+    //    nearest control themselves.
     if (oa::ui::frontend_dialogs::dialog_count() != 0 ||
-        runtime.engine_settings_dialog() != nullptr) {
+        runtime.engine_settings_dialog() != nullptr || runtime.saves_notice_shown()) {
         finger.target = TouchTarget::frontend;
         return;
     }

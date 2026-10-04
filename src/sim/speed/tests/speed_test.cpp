@@ -27,6 +27,12 @@ const messages::MessageLine* newest(Game& g) {
     const uint32_t index = g.chat_head == 0 ? OA_CHAT_LINE_COUNT - 1 : g.chat_head - 1u;
     return messages::message_line(g, index);
 }
+
+/// Returns the newest chat line's text, or empty text when there is no line.
+const char* newest_text(Game& g) {
+    const messages::MessageLine* line = newest(g);
+    return line != nullptr ? line->text : "";
+}
 } // namespace
 
 int main() {
@@ -52,11 +58,14 @@ int main() {
     CHECK(g.requested_speed == 11 && g.current_speed == 11);
     const auto* line = newest(g);
     CHECK(line != nullptr && std::strcmp(line->text, "Game Speed  +1\n") == 0);
-    CHECK((line->kind & 0x0f) == messages::kind_status && line->sender == messages::sender_none);
+    CHECK(
+        line != nullptr && (line->kind & 0x0f) == messages::kind_status &&
+        line->sender == messages::sender_none
+    );
     CHECK(g.chat_head == 1);
 
     CHECK(speed::lower_speed(*w, hooks) == 10);
-    CHECK(std::strcmp(newest(g)->text, "Game Speed Normal") == 0 && g.chat_head == 2);
+    CHECK(std::strcmp(newest_text(g), "Game Speed Normal") == 0 && g.chat_head == 2);
 
     // Clamped; an unchanged requested speed posts nothing but still resets
     // the current speed.
@@ -66,7 +75,7 @@ int main() {
     CHECK(g.current_speed == speed::fastest);
     CHECK(speed::raise_speed(*w, hooks) == speed::fastest && g.chat_head == 3);
     CHECK(speed::set_speed(*w, -5, hooks) == speed::slowest && g.chat_head == 4);
-    CHECK(std::strcmp(newest(g)->text, "Game Speed   -9\n") == 0);
+    CHECK(std::strcmp(newest_text(g), "Game Speed   -9\n") == 0);
     CHECK(speed::lower_speed(*w, hooks) == speed::slowest && g.chat_head == 4);
 
     // A translation replaces the words, not the number.
@@ -97,7 +106,7 @@ int main() {
     CHECK(speed::lower_speed(*w, hooks) == 1);
     CHECK(speed::lower_speed(*w, hooks, unlocked) == 0);
     CHECK(g.requested_speed == 0 && g.current_speed == 0 && g.sim_run_flags == 0);
-    CHECK(std::strcmp(newest(g)->text, "Game Speed   -10\n") == 0);
+    CHECK(std::strcmp(newest_text(g), "Game Speed   -10\n") == 0);
     CHECK(speed::lower_speed(*w, hooks, unlocked) == 0);
     CHECK(speed::set_speed(*w, -3, hooks, unlocked) == 0);
     // Without the range, a set from 0 clamps back up to 1.

@@ -6,6 +6,7 @@
 
 #include "check_host_input.hpp"
 #include "engine_settings_match_host.hpp"
+#include "engine_settings_state.hpp"
 #include "engine_settings_tall_section.hpp"
 
 #include "oa/app/runtime.hpp"
@@ -17,6 +18,7 @@
 #include <cmath>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -51,17 +53,32 @@ constexpr int kUltrawideWidth = 2560;
 /// An ultrawide window's height.
 constexpr int kUltrawideHeight = 1080;
 
-/// The sections whose rows a game locks: AI & Pathfinding and Gameplay.
-constexpr std::array<settings::Page, 2> kLockedPages{
-    settings::Page::path_search, settings::Page::gameplay
+/// The section whose rows a game locks: Common Tweaks.
+constexpr std::array<settings::Page, 1> kLockedPages{settings::Page::common_tweaks};
+
+/// Common Tweaks' rows a game locks: the unit limit and the pathfinding cycles.
+constexpr std::array<int32_t, 2> kLockedRows{
+    settings::first_row_control + 1, settings::first_row_control + 2
 };
+
+/// How Mods' note during a game starts; the note may take two lines.
+constexpr std::string_view kModInGameNote = "Locked during a game.";
+
+/// The keys that move the focus, each pressed in turn round every control
+/// and back: Tab, Shift+Tab, Down and Up.
+constexpr std::array<std::pair<SDL_Keycode, SDL_Keymod>, 4> kFocusKeys{{
+    {SDLK_TAB, SDL_KMOD_NONE},
+    {SDLK_TAB, SDL_KMOD_SHIFT},
+    {SDLK_DOWN, SDL_KMOD_NONE},
+    {SDLK_UP, SDL_KMOD_NONE},
+}};
 
 /// Returns the name a section's snapshots carry.
 ///
-/// @param page AI & Pathfinding or Gameplay
+/// @param page Common Tweaks
 /// @return a short name
 std::string_view locked_page_slug(settings::Page page) {
-    return page == settings::Page::path_search ? "path" : "gameplay";
+    return page == settings::Page::common_tweaks ? "tweaks" : "page";
 }
 
 /// Tells whether the dialog's layout shows a text.
@@ -272,7 +289,9 @@ void Runtime::check_engine_settings_in_match() {
             auto unlocked = *engine_settings_dialog();
             unlocked.locks = {};
             for (const auto& part : settings::dialog_layout(unlocked))
-                if (part.control == settings::first_row_control && part.text.empty()) {
+                if (std::find(kLockedRows.begin(), kLockedRows.end(), part.control) !=
+                        kLockedRows.end() &&
+                    part.text.empty()) {
                     click_dialog(
                         {part.rect.x + part.rect.width - 2, part.rect.y, 1, part.rect.height}
                     );
@@ -285,6 +304,70 @@ void Runtime::check_engine_settings_in_match() {
                 "a locked row changed under a press or a key" + on
             );
         }
+    };
+
+    // Mods during a game keeps the mod played and says that the main menu
+    // chooses the mod: no press on a row and no key asks the Switch Mod
+    // question, and OPEN MODS FOLDER is inert.
+    const auto expect_mod_locked = [&](const std::string& on) {
+        show_page(settings::Page::mods, on);
+        const auto kept = engine_settings();
+        auto* dialog = engine_settings_dialog();
+        const auto parts = settings::dialog_layout(*dialog);
+        require(
+            dialog->locks.mod == settings::Lock::in_game &&
+                std::any_of(
+                    parts.begin(),
+                    parts.end(),
+                    [](const settings::LayoutPart& part) {
+                        return part.text.starts_with(kModInGameNote);
+                    }
+                ),
+            "Mods is not locked during a game with its note" + on
+        );
+        // No mod plays in the check, whatever the setting holds.
+        const auto rows = settings::mod_rows(*dialog);
+        require(
+            !rows.empty() && rows.front().playing && rows.front().offered == settings::no_mod_row,
+            "Mods does not show the mod played first" + on
+        );
+        // A press on every row and on OPEN MODS FOLDER, where they are
+        // unlocked.
+        auto unlocked = *dialog;
+        unlocked.locks = {};
+        for (const auto& part : settings::dialog_layout(unlocked))
+            if (part.control >= settings::first_row_control)
+                click_dialog(part.rect);
+        // The keys move the focus round every control and back, never onto
+        // a row; on Mods' entry, where the focus comes back to, the arrows
+        // and Space change nothing.
+        const auto entry = settings::page_control(settings::Page::mods);
+        require(
+            engine_settings_dialog()->focused == entry,
+            "a click on Mods' entry did not focus it" + on
+        );
+        for (const auto& [key, modifiers] : kFocusKeys) {
+            for (int press = 0; press < 12; ++press) {
+                tap_key(key, modifiers);
+                require(
+                    engine_settings_dialog() != nullptr &&
+                        engine_settings_dialog()->focused < settings::first_row_control,
+                    "a key moved the focus onto a locked row of Mods" + on
+                );
+            }
+        }
+        require(
+            engine_settings_dialog()->focused == entry,
+            "the keys did not bring the focus back to Mods' entry" + on
+        );
+        for (const auto key : {SDLK_RIGHT, SDLK_LEFT, SDLK_SPACE, SDLK_Y})
+            tap_key(key, SDL_KMOD_NONE);
+        dialog = engine_settings_dialog();
+        require(
+            dialog != nullptr && dialog->switch_question == settings::no_question &&
+                !soft_restart_requested() && engine_settings() == kept,
+            "a press or a key asked to switch the mod or changed a setting during a game" + on
+        );
     };
 
     for (const auto& [width, height] :
@@ -462,6 +545,7 @@ void Runtime::check_engine_settings_in_match() {
             std::to_string(differing) + " presented pixels differ from the composed frame" + on
         );
         expect_locks("Locked during a game", "match-dialog-alone", size, on);
+        expect_mod_locked(on);
         require(
             !shows_text(
                 settings::dialog_layout(*engine_settings_dialog()), "Shared game - still running"
@@ -628,6 +712,17 @@ void Runtime::check_engine_settings_in_match() {
             "the dialog does not say the shared game is still running" + on
         );
         expect_locks("Set by the host", "match-dialog-shared", size, on);
+        show_page(settings::Page::mods, on);
+        require(
+            engine_settings_dialog()->locks.mod == settings::Lock::in_game &&
+                std::ranges::any_of(
+                    settings::dialog_layout(*engine_settings_dialog()),
+                    [](const settings::LayoutPart& part) {
+                        return part.text.starts_with(kModInGameNote);
+                    }
+                ),
+            "a shared game does not lock Mods with its note" + on
+        );
         // Graphics in a shared game: Vertical sync is locked during the game,
         // its value set before the game kept in effect; Hardware acceleration
         // can still be set, and Basic or Full waits for the game to end, so
@@ -711,6 +806,19 @@ void Runtime::check_engine_settings_in_match() {
     }
     leave_match();
     load(Screen::main_menu);
+    // Back on the main menu Mods is unlocked.
+    send_key(SDLK_COMMA, kShortcutModifier, true, false);
+    send_key(SDLK_COMMA, kShortcutModifier, false, false);
+    {
+        const auto* dialog = engine_settings_dialog();
+        require(
+            dialog != nullptr && dialog->locks.mod == settings::Lock::none &&
+                engine_settings_locks().mod == settings::Lock::none,
+            "Mods is locked on the main menu after a game"
+        );
+    }
+    tap_key(SDLK_ESCAPE, SDL_KMOD_NONE);
+    require(engine_settings_dialog() == nullptr, "Escape did not close the main menu's dialog");
     if (!SDL_SetWindowSize(sdl_.window, kDefaultWindowWidth, kDefaultWindowHeight) ||
         !SDL_SyncWindow(sdl_.window))
         throw std::runtime_error(std::string("SDL_SetWindowSize: ") + SDL_GetError());

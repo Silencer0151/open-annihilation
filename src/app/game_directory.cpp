@@ -4,6 +4,7 @@
 // Game directory resolution and installation checks for oa-game.
 #include "oa/app/game_directory.hpp"
 #include "oa/formats/hpi.hpp"
+#include "oa/platform/files.hpp"
 #include <cctype>
 #include <iostream>
 #include <stdexcept>
@@ -47,6 +48,38 @@ constexpr std::string_view kGameDirAdvice =
     "Name your Total Annihilation folder on the command line:\n\n"
     "open-annihilation --game-dir PATH";
 
+} // namespace
+
+std::string path_length_problem(
+    const fs::path& folder, std::size_t names, std::size_t longest, bool long_paths_turned_off
+) {
+    std::error_code error;
+    const auto absolute = fs::absolute(folder, error);
+    const std::size_t length = (error ? folder : absolute).native().size();
+    if (length + names <= longest)
+        return {};
+    std::string text = "its path is " + std::to_string(length) + " characters long, and ";
+    if (length <= longest)
+        text += "the names of the files in it make their paths longer than the " +
+                std::to_string(longest) + " characters this system opens. ";
+    else
+        text += "this system opens paths of at most " + std::to_string(longest) + " characters. ";
+    if (long_paths_turned_off)
+        text += "Turn on long paths in Windows (Windows 10, version 1607, or later), or move the "
+                "folder to one with a shorter path.";
+    else
+        text += "Move the folder to one with a shorter path.";
+    return text;
+}
+
+std::string path_length_problem(const fs::path& folder, std::size_t names) {
+    return path_length_problem(
+        folder, names, oa::platform::longest_path(), oa::platform::long_paths_turned_off()
+    );
+}
+
+namespace {
+
 [[nodiscard]] bool equal_ignoring_case(std::string_view left, std::string_view right) {
     if (left.size() != right.size())
         return false;
@@ -64,8 +97,12 @@ constexpr std::string_view kGameDirAdvice =
     try {
         return host.inspect(host.context, folder);
     } catch (const std::exception& error) {
+        // A folder whose files' paths are longer than the system opens is
+        // reported as such, rather than by the error of the call that failed.
         GameInstall install;
-        install.problem = error.what();
+        install.problem = path_length_problem(folder, file_name_room);
+        if (install.problem.empty())
+            install.problem = error.what();
         return install;
     }
 }
@@ -337,15 +374,19 @@ GameInstall inspect_game_install(
     GameInstall install;
     std::error_code error;
     install.folder = fs::is_directory(root, error);
-    if (!install.folder)
+    if (!install.folder) {
+        install.problem = path_length_problem(root);
         return install;
+    }
     // Files laid over the folder come first, ahead of the mod folder.
     if (!overlay.empty())
         install.folders.push_back(overlay);
     if (!mod.folder.empty()) {
         if (!fs::is_directory(mod.folder, error)) {
+            const auto reason = path_length_problem(mod.folder);
             install.profile_errors.push_back(
-                path_to_utf8(mod.folder) + ": the mod folder does not exist"
+                path_to_utf8(mod.folder) + ": the mod folder " +
+                (reason.empty() ? "does not exist" : "cannot be read: " + reason)
             );
             return install;
         }
@@ -362,6 +403,11 @@ GameInstall inspect_game_install(
         return install;
     discover_archives(root, install);
     if (!install.archives.empty() || install.profile)
+        return install;
+    // No archive mounts from a folder whose files' paths are longer than the
+    // system opens; that is the reason given, not a missing archive.
+    install.problem = path_length_problem(root, file_name_room);
+    if (!install.problem.empty())
         return install;
     // A folder with no archives may hold the demo's installer; its unpacked
     // archive, checked, is the one archive mounted from the folder it was

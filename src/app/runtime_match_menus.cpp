@@ -36,6 +36,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -444,8 +445,9 @@ void panel_to_widgets(
     }
 }
 
-// Load-game dialog overlay: lists the SAVEGAME directory beside the user
-// preferences through the load-game handlers and fills the list and preview
+// Load-game dialog overlay: lists the saved games of the player's own Saves
+// folder, and of the SAVEGAME folder beside the preferences that held them
+// before, through the load-game handlers and fills the list and preview
 // text of the built-in LOADGAME.GUI screen. In its save role
 // GAMENAME takes the typed name the game is saved under.
 struct LoadGameOverlay {
@@ -454,7 +456,7 @@ struct LoadGameOverlay {
     oa::ui::gui_layout::Layout layout;
     ui::Panel panel;
     ui::SaveDialogContext saves;
-    fs::path root;
+    ui::SaveRoots roots;
     std::optional<oa::formats::fnt::Font> font;
     std::vector<std::string> rows;            // GAMES list text
     std::vector<std::string> side_names;      // shown for a save's "Side" index
@@ -488,7 +490,7 @@ void load_overlay_bind(ScreenContext* ctx, LoadGameOverlay& overlay) {
     ui::panel_load_layout(overlay.panel, overlay.layout);
     // Saves are listed where the runtime writes and loads them.
     const auto& runtime = *static_cast<const Runtime*>(ctx->host);
-    overlay.root = runtime.save_game_root();
+    overlay.roots = runtime.save_roots();
     auto& saves = overlay.saves;
     // A dialog opens without the lists and picture a previous one kept.
     ui::savegame_release_lists(saves);
@@ -496,8 +498,8 @@ void load_overlay_bind(ScreenContext* ctx, LoadGameOverlay& overlay) {
     overlay.side_views.assign(overlay.side_names.begin(), overlay.side_names.end());
     saves.side_names = overlay.side_views;
     saves.difficulty_names = runtime.difficulty_names();
-    saves.files = ui::savegame_host_files(&overlay.root);
-    saves.reader = ui::savegame_persist_reader(&overlay.root);
+    saves.files = ui::savegame_host_files(&overlay.roots);
+    saves.reader = ui::savegame_persist_reader(&overlay.roots);
     saves.host = {};
     saves.host.context = &overlay;
     saves.host.play_sound = [](void* state, const char* sound) {
@@ -565,8 +567,8 @@ int32_t load_overlay_row_height(const LoadGameOverlay& overlay) {
 // Rows start two pixels into the list.
 constexpr int32_t kListRowInset = 2;
 
-// Acts on what the save dialog's handler decided: CANCEL leaves through the
-// built-in handler; a save writes the game and closes the dialog.
+// Acts on what the save dialog's handler decided: CANCEL closes the dialog,
+// and a save writes the game and closes it.
 int save_overlay_result(
     ScreenContext* ctx, LoadGameOverlay& overlay, const ui::SaveDialogResult& result
 ) {
@@ -574,7 +576,8 @@ int save_overlay_result(
     auto& runtime = *static_cast<Runtime*>(ctx->host);
     switch (result.action) {
     case ui::SaveDialogAction::cancelled:
-        return 0;
+        runtime.close_save_dialog();
+        return 1;
     case ui::SaveDialogAction::save: {
         const auto* name = ui::panel_control(panel, "GAMENAME");
         const std::string description(
@@ -591,8 +594,9 @@ int save_overlay_result(
     }
 }
 
-// The save dialog's press on a control: a button acts, and the name field
-// only keeps the keys, as savegame_on_save_press says.
+// The save dialog's click on a control: a button acts once released over,
+// and a press on the name field only keeps the keys, as
+// savegame_on_save_press says.
 int save_overlay_press(ScreenContext* ctx, LoadGameOverlay& overlay, int32_t hit) {
     overlay.context = ctx;
     const auto result = ui::savegame_on_save_press(overlay.panel, overlay.saves, hit);
@@ -667,6 +671,26 @@ load_overlay_activate(ScreenContext* ctx, LoadGameOverlay& overlay, int32_t cont
     return result.action;
 }
 
+/// Clicks a button of the bound dialog, once a press on it is released over
+/// it.
+///
+/// CANCEL leaves the dialog for the screen it was opened over. In the load
+/// dialog LOAD starts the selected save; in the save dialog OK saves under
+/// GAMENAME and DELETE removes the selected save.
+///
+/// @param[in,out] ctx the screen; its host is the Runtime
+/// @param[in,out] overlay the bound dialog
+/// @param control index of the clicked button, from 1 to the panel's record count
+void load_overlay_click(ScreenContext* ctx, LoadGameOverlay& overlay, int32_t control) {
+    if (overlay.save_role) {
+        // What the click did shows in the dialog, or in the screen it left.
+        std::ignore = save_overlay_press(ctx, overlay, control);
+        return;
+    }
+    if (load_overlay_activate(ctx, overlay, control) == ui::SaveDialogAction::cancelled)
+        static_cast<Runtime*>(ctx->host)->leave_load_dialog();
+}
+
 // The load dialog's keys, as LOADGAME.GUI's defaults give them: Return is OK
 // (LOAD), which starts the selected save, and Escape is CANCEL, which leaves
 // the dialog as the button does. A message open over the dialog takes the
@@ -734,18 +758,13 @@ int load_overlay_event(ScreenContext* ctx, void*) {
         return 1;
     }
     overlay.context = nullptr;
-    if (overlay.save_role)
-        return save_overlay_press(ctx, overlay, hit);
-    switch (load_overlay_activate(ctx, overlay, hit)) {
-    case ui::SaveDialogAction::cancelled:
-        return 0; // the built-in handler leaves the screen
-    case ui::SaveDialogAction::load:
-    case ui::SaveDialogAction::invalid:
-    case ui::SaveDialogAction::refreshed:
-        return 1;
-    default:
+    // The dialog's buttons are pressed and released as the screen's own are:
+    // the press holds the button, and only a release over it clicks it
+    // (Runtime::activate_load_game_gadget).
+    if (panel.controls[static_cast<std::size_t>(hit)].type == ui::ControlType::button)
         return 0;
-    }
+    // A press on the save dialog's name field only gives it the keys.
+    return overlay.save_role ? save_overlay_press(ctx, overlay, hit) : 0;
 }
 
 void load_overlay_text(
@@ -1235,6 +1254,35 @@ void Runtime::close_save_dialog() {
     leave_options_screen();
 }
 
+void Runtime::activate_load_game_gadget() {
+    if (!hovered_ || *hovered_ >= resources_.layout.gadgets.size())
+        return;
+    const auto name = resources_.layout.gadgets[*hovered_].common.name;
+    // The bound dialog acts for its own records: a shown button is clicked,
+    // and GAMES takes its rows on the press (load_overlay_event).
+    auto& overlay = load_overlay();
+    const auto control = overlay.bound ? ui::panel_find(overlay.panel, name) : -1;
+    if (control >= 0) {
+        const auto& record = overlay.panel.controls[static_cast<std::size_t>(control)];
+        if (record.active != 0 && record.type == ui::ControlType::button) {
+            auto context = screen_context();
+            load_overlay_click(&context, overlay, control);
+        }
+        return;
+    }
+    // Without the dialog's records, there is no save to act on.
+    if (name == "CANCEL" || name == "PREV" || name == "PREVMENU") {
+        leave_load_dialog();
+        return;
+    }
+    if (name == "LOAD" || name == "LOADGAME") {
+        status_ = "No saved games in the preferences directory yet.";
+        return;
+    }
+    if (name == "DELETE")
+        status_ = "No saved games to delete.";
+}
+
 void Runtime::set_screen_label(std::string_view name, std::string_view text) {
     if (auto* gadget = widget(name))
         if (auto* label = std::get_if<oa::ui::gui_layout::LabelFields>(&gadget->fields))
@@ -1278,24 +1326,36 @@ void Runtime::present_load_game_panel(std::vector<renderer::ListPresentation>& l
     lists.push_back({"GAMES", overlay.rows, frontend_list_first("GAMES").value_or(0), selected});
 }
 
-bool Runtime::load_match_hud_layout(const std::string& layout) {
+bool Runtime::load_match_hud_layout(const std::string& layout, oa::ui::hud::SidePage side_page) {
     // A new panel's scroll bars are bound once it is placed.
     hud_scrolls_ = {};
     hud_scrolls_layout_ = nullptr;
     hud_scrolls_count_ = 0;
-    const auto prefix = match_side_prefix();
-    const auto panel = prefix == "cor" ? "anims/CORINT.GAF" : "anims/ARMINT.GAF";
-    const auto tile = "bitmaps/" + prefix + "guisidetile.pcx";
-    try {
-        // Command icons live in commongui.gaf; side chrome lives in ARMINT/CORINT.
-        match_hud_ = renderer::load_screen(
-            assets_, {layout, tile, "palettes/guipal.pal", "anims/commongui.gaf", panel}
-        );
-    } catch (const std::exception& error) {
-        std::cerr << "match HUD '" << layout << "' unavailable: " << error.what() << '\n';
-        return false;
+    // A side whose section names no intgaf, or whose GAF lacks PANELTOP,
+    // PANELSIDE or PANELBOT, is drawn without the missing pieces; 3.1c reads
+    // the missing piece through a null entry as its load screen draws the
+    // viewed side's panels, and faults. A GAF a mod lacks, or that cannot be
+    // read, is drawn as none named.
+    auto panel = match_side_panel_gaf();
+    const auto tile = "bitmaps/" + match_side_prefix() + "guisidetile.pcx";
+    for (;;) {
+        try {
+            // Command icons live in commongui.gaf; the side's chrome lives in
+            // the GAF its intgaf names.
+            match_hud_ = renderer::load_screen(
+                assets_, {layout, tile, "palettes/guipal.pal", "anims/commongui.gaf", panel}
+            );
+            break;
+        } catch (const std::exception& error) {
+            std::cerr << "match HUD '" << layout << "' unavailable: " << error.what() << '\n';
+            if (panel.empty())
+                return false;
+            panel.clear();
+        }
     }
     match_hud_panel_ = layout;
+    match_hud_side_page_ = side_page;
+    match_hud_authored_.clear();
     match_hud_placement_ = 0;
     match_panel_under_.reset();
     match_hud_side_backdrop_ = {};
@@ -1318,25 +1378,20 @@ bool Runtime::load_match_hud_layout(const std::string& layout) {
     const auto& icon_palette =
         match_hud_->background.palette ? *match_hud_->background.palette : match_hud_->gui_palette;
     const auto stem = fs::path(layout).stem().string();
-    append_gaf_file(match_hud_->sprites, "anims/" + stem + ".GAF");
-    append_gaf_file(match_hud_->sprites, panel);
-    const oa::ui::gui_layout::Gadget* header = nullptr;
-    for (const auto& gadget : match_hud_->layout.gadgets) {
-        if (gadget.common.name == "HEADER") {
-            header = &gadget;
-            break;
-        }
+    // The page's own GAF comes before commongui's art: a button it names
+    // (a commander's BLAST, say) takes the page's art.
+    {
+        oa::formats::gaf::Archive own;
+        append_gaf_file(own, "anims/" + stem + ".GAF");
+        auto& hud_sequences = match_hud_->sprites.sequences;
+        hud_sequences.insert(
+            hud_sequences.begin(),
+            std::make_move_iterator(own.sequences.begin()),
+            std::make_move_iterator(own.sequences.end())
+        );
     }
-    // ARMOPT's type-0 panel is named armopt.GUI, not HEADER. Child xpos/ypos
-    // still live in that (0,128) well, same as ARMGEN.
-    if (header == nullptr) {
-        for (const auto& gadget : match_hud_->layout.gadgets) {
-            if (gadget.common.type == oa::ui::gui_layout::GadgetType::panel) {
-                header = &gadget;
-                break;
-            }
-        }
-    }
+    if (!panel.empty())
+        append_gaf_file(match_hud_->sprites, panel);
     bind_gadget_gaf_art();
     for (auto& gadget : match_hud_->layout.gadgets) {
         // A gaffile button keeps its authored size.
@@ -1350,64 +1405,71 @@ bool Runtime::load_match_hud_layout(const std::string& layout) {
         gadget.common.width = static_cast<int16_t>(sequence->frames.front().width);
         gadget.common.height = static_cast<int16_t>(sequence->frames.front().height);
     }
-    // HEADER is the type-0 panel at screen (0,128). Child xpos/ypos in ARMGEN
-    // and ARMCOMn live in that panel: ARMORDERS ypos=4 is not a screen row.
-    // The 0x7e-pixel radar picture, drawn at Game.radar_offset_x and
-    // radar_offset_y, occupies the well above.
-    if (header != nullptr) {
-        const auto origin_x = header->common.x;
-        const auto origin_y = header->common.y;
-        for (auto& gadget : match_hud_->layout.gadgets) {
-            if (&gadget == header)
-                continue;
-            if (gadget.common.width <= 0 || gadget.common.height <= 0)
-                continue;
-            gadget.common.x = static_cast<int16_t>(gadget.common.x + origin_x);
-            gadget.common.y = static_cast<int16_t>(gadget.common.y + origin_y);
-        }
-    }
-    fit_match_build_page();
-    try {
-        // SIDEDATA.TDF font=console for in-game metal/energy numerals.
-        constexpr std::string_view console_font = "fonts/CONSOLE.FNT";
-        match_small_font_ = oa::ui::decoded::require(
-            oa::formats::fnt::load_fnt(assets_, console_font), console_font
+    const auto* header = place_in_side_panel(match_hud_->layout.gadgets);
+    for (const auto& gadget : match_hud_->layout.gadgets)
+        match_hud_authored_.push_back(
+            {gadget.common.x, gadget.common.y, gadget.common.height, gadget.common.active}
         );
-    } catch (const std::exception& error) {
-        std::cerr << "match CONSOLE.FNT unavailable: " << error.what() << '\n';
-        match_small_font_ = small_font_;
+    fit_match_build_page();
+    // The viewed side's SIDEDATA font, for the resource numbers, the unit
+    // panel and the squad numbers. 3.1c draws a side that names none in the
+    // font last made active: COMIX, which the message log makes active as it
+    // draws while it shows lines, except in a frame after the side panel's
+    // GUI text was drawn again, which leaves that GUI's font; with no
+    // message lines, the font of the GUI text drawn last, or COMIX from the
+    // load screen before any. The engine draws them in COMIX in every case.
+    // A font a mod lacks, or that cannot be read, is drawn as none named.
+    auto side_font = match_side_font();
+    if (!side_font.empty())
+        try {
+            match_small_font_ =
+                oa::ui::decoded::require(oa::formats::fnt::load_fnt(assets_, side_font), side_font);
+        } catch (const std::exception& error) {
+            std::cerr << "match font " << side_font << " unavailable: " << error.what() << '\n';
+            side_font.clear();
+        }
+    match_side_names_font_ = !side_font.empty();
+    if (!match_side_names_font_)
+        match_small_font_ = message_font_ ? message_font_ : small_font_;
+    // The bars' rows are black from column 128 on under the side art and
+    // the bars' art, as the game's screen is under its bars.
+    if (auto& background = match_hud_->background;
+        background.width > static_cast<uint32_t>(kBattlefieldLeft) &&
+        background.height >= static_cast<uint32_t>(kCanvasHeight) &&
+        background.rgb.size() >= std::size_t{background.width} * background.height * 3U) {
+        const std::size_t width = background.width;
+        const auto clear_rows = [&background, width](int first_row, int count) {
+            for (int row = first_row; row < first_row + count; ++row)
+                std::fill_n(
+                    background.rgb.begin() +
+                        static_cast<std::ptrdiff_t>(
+                            (static_cast<std::size_t>(row) * width + kBattlefieldLeft) * 3U
+                        ),
+                    (width - kBattlefieldLeft) * 3U,
+                    uint8_t{0}
+                );
+        };
+        clear_rows(0, kBattlefieldTop);
+        clear_rows(kCanvasHeight - kBattlefieldBottom, kBattlefieldBottom);
     }
     overlay_gaf_sequence(
         match_hud_->background, match_hud_->shared_sprites, "PANELSIDE", 0, 0, icon_palette
     );
-    if (const auto* top = gaf_sequence(match_hud_->shared_sprites, "PANELTOP");
-        top && !top->frames.empty()) {
-        panel_top_width_ = static_cast<int>(top->frames.front().width);
-        // Under ui.interface-fixes bar-clamp art reaching the battlefield
-        // keeps one row less than its top edge.
-        const auto& fixes = ui_rules().interface_fixes;
-        const bool clamp =
-            fixes.enabled &&
-            fixes.fixes.contains(oa::data::mod_profile::UiInterfaceFixesFixes::bar_clamp);
-        if (auto rendered = oa::formats::gaf::render_normal(top->frames.front()); rendered.ok()) {
-            auto frame = *rendered.frame;
-            frame.height = static_cast<uint16_t>(std::max<int32_t>(
-                0, oa::ui::hud::top_panel_rows(frame.height, kBattlefieldTop, clamp)
-            ));
-            blit_gaf_frame(match_hud_->background, frame, kBattlefieldLeft, 0, icon_palette);
-        }
-    }
-    const auto* bottom = gaf_sequence(match_hud_->shared_sprites, "PANELBOT");
-    if (bottom != nullptr && !bottom->frames.empty()) {
+    // A unit's page draws the art its panel names (ARMPAN and the like) at
+    // the panel's place, over the column's chrome and under its controls.
+    if (const auto* fields = header != nullptr
+                                 ? std::get_if<oa::ui::gui_layout::PanelFields>(&header->fields)
+                                 : nullptr;
+        side_page != oa::ui::hud::SidePage::other && fields != nullptr && !fields->panel.empty())
         overlay_gaf_sequence(
             match_hud_->background,
-            match_hud_->shared_sprites,
-            "PANELBOT",
-            kBattlefieldLeft,
-            kCanvasHeight - static_cast<int>(bottom->frames.front().height),
+            match_hud_->sprites,
+            fields->panel,
+            header->common.x,
+            header->common.y,
             icon_palette
         );
-    }
+    draw_match_bars(0);
     // The panel's image records go over the chrome: ARMOPT's OPTBG and
     // PREFS's IGOPT in the command well, under the radar PANELSIDE frames.
     const auto& gadgets = match_hud_->layout.gadgets;
@@ -1424,48 +1486,137 @@ bool Runtime::load_match_hud_layout(const std::string& layout) {
     return true;
 }
 
+void Runtime::draw_match_bars(int from_column) {
+    if (!match_hud_)
+        return;
+    auto& background = match_hud_->background;
+    const int width = static_cast<int>(background.width);
+    const int rows = static_cast<int>(background.height);
+    if (width <= from_column || rows < kCanvasHeight ||
+        background.rgb.size() <
+            static_cast<std::size_t>(width) * static_cast<std::size_t>(rows) * 3U)
+        return;
+    const auto& palette = background.palette ? *background.palette : match_hud_->gui_palette;
+    const auto bar_art =
+        [this](std::string_view name) -> std::optional<oa::formats::gaf::RenderedFrame> {
+        const auto* sequence = gaf_sequence(match_hud_->shared_sprites, name);
+        if (sequence == nullptr || sequence->frames.empty())
+            return std::nullopt;
+        auto frame = oa::formats::gaf::render_normal(sequence->frames.front());
+        if (!frame.ok())
+            return std::nullopt;
+        return *frame.frame;
+    };
+    const auto top = bar_art("PANELTOP");
+    const auto bottom = bar_art("PANELBOT");
+    // A piece of art, unscaled: its first `piece_rows` rows from (x, y),
+    // on the layer's columns from `from_column` on.
+    const auto piece =
+        [&](const oa::formats::gaf::RenderedFrame& frame, int x, int y, int piece_rows) {
+            const int frame_width = frame.width;
+            const int shown_rows = std::min<int>(piece_rows, frame.height);
+            for (int row = 0; row < shown_rows; ++row) {
+                const int layer_row = y + row;
+                if (layer_row < 0 || layer_row >= rows)
+                    continue;
+                for (int column = std::max(0, from_column - x);
+                     column < frame_width && x + column < width;
+                     ++column) {
+                    const auto offset = static_cast<std::size_t>(row) * frame.width +
+                                        static_cast<std::size_t>(column);
+                    if (offset >= frame.coverage.size() || frame.coverage[offset] == 0)
+                        continue;
+                    const auto colour = static_cast<std::size_t>(frame.pixels[offset]) * 4U;
+                    if (colour + 2 >= palette.size())
+                        continue;
+                    const auto at = (static_cast<std::size_t>(layer_row) * background.width +
+                                     static_cast<std::size_t>(x + column)) *
+                                    3U;
+                    background.rgb[at] = palette[colour];
+                    background.rgb[at + 1] = palette[colour + 1];
+                    background.rgb[at + 2] = palette[colour + 2];
+                }
+            }
+        };
+    // Under ui.interface-fixes bar-clamp art reaching the battlefield keeps
+    // one row less than its top edge.
+    const auto& fixes = ui_rules().interface_fixes;
+    const bool clamp =
+        fixes.enabled &&
+        fixes.fixes.contains(oa::data::mod_profile::UiInterfaceFixesFixes::bar_clamp);
+    const int top_rows = oa::ui::hud::top_panel_rows(
+        top ? static_cast<int32_t>(top->height) : kBattlefieldTop, kBattlefieldTop, clamp
+    );
+    // The top bar: PANELTOP from column 129, then PANELBOT at its own width
+    // after it, to the layer's right edge, each from its first row.
+    int x = oa::ui::display_layout::kSourceBarArtLeft;
+    if (top) {
+        piece(*top, x, 0, top_rows);
+        x += top->width;
+    }
+    if (!bottom || bottom->width == 0)
+        return;
+    for (; x < width; x += bottom->width)
+        piece(*bottom, x, 0, top_rows);
+    // The bottom bar: PANELBOT from column 129 at its own width, its first
+    // 32 rows on the bar's.
+    for (x = oa::ui::display_layout::kSourceBarArtLeft; x < width; x += bottom->width)
+        piece(*bottom, x, kCanvasHeight - kBattlefieldBottom, kBattlefieldBottom);
+}
+
+void Runtime::extend_match_bars(int width) {
+    if (!match_hud_ || width <= static_cast<int>(match_hud_->background.width))
+        return;
+    auto& background = match_hud_->background;
+    const std::size_t was = background.width;
+    const std::size_t rows = background.height;
+    if (was == 0 || rows == 0 || background.rgb.size() != was * rows * 3U)
+        return;
+    // Each row keeps its pixels, black after them.
+    const auto widen = [rows, was, width](std::vector<uint8_t>& pixels, std::size_t bytes) {
+        const auto wider_width = static_cast<std::size_t>(width);
+        std::vector<uint8_t> wider(wider_width * rows * bytes, 0);
+        for (std::size_t row = 0; row < rows; ++row)
+            std::copy_n(
+                pixels.begin() + static_cast<std::ptrdiff_t>(row * was * bytes),
+                static_cast<std::ptrdiff_t>(was * bytes),
+                wider.begin() + static_cast<std::ptrdiff_t>(row * wider_width * bytes)
+            );
+        pixels = std::move(wider);
+    };
+    widen(background.rgb, 3);
+    if (background.indices.size() == was * rows)
+        widen(background.indices, 1);
+    background.width = static_cast<uint32_t>(width);
+    draw_match_bars(static_cast<int>(was));
+}
+
 int Runtime::match_column_rows() const {
     // The phone layout shows no side column: its sheets place the page's
     // gadgets one by one, so pages keep the rows they were authored for.
     if (match_layout_.phone)
         return kCanvasHeight;
-    const auto scale = match_layout_.scale > 0.0 ? match_layout_.scale : 1.0;
+    const auto scale = match_layout_.column_scale > 0.0 ? match_layout_.column_scale : 1.0;
     const auto rows =
         static_cast<int>(std::floor(static_cast<double>(match_layout_.height) / scale));
     return std::max(kCanvasHeight, rows);
 }
 
 void Runtime::fit_match_build_page() {
-    namespace hud = oa::ui::hud;
-    match_hud_fitted_ = false;
-    match_build_part_count_ = 1;
-    match_hud_fit_rows_ = match_column_rows();
-    if (!match_hud_ || match_hud_->layout.gadgets.empty())
+    match_side_page_bottom_ = 0;
+    if (!match_hud_ || match_hud_->layout.gadgets.empty() ||
+        match_hud_side_page_ == oa::ui::hud::SidePage::other)
         return;
-    auto& gadgets = match_hud_->layout.gadgets;
-    std::vector<hud::PanelGadget> page(gadgets.size());
-    for (std::size_t index = 0; index < gadgets.size(); ++index) {
-        const auto& common = gadgets[index].common;
-        page[index] = {
-            common.name.c_str(),
-            common.x,
-            common.y,
-            common.width,
-            common.height,
-            static_cast<uint8_t>(common.type),
-            static_cast<uint8_t>(common.common_attributes),
-            common.active != 0
-        };
-    }
-    const auto fit = hud::fit_build_page(page, match_hud_fit_rows_, match_build_part_);
-    if (fit.layout != hud::BuildPageLayout::as_authored)
-        apply_build_page_fit(fit, page);
-    // Rows past 480 exist only while a page shown needs them, as one that
-    // fits a tall column as authored does; the side column's blank strip
-    // below stays black, as the area under the panel is.
+    // Every gadget stays where the page's file places it; the page reaches
+    // as low as its lowest drawn gadget.
+    const int bottom = page_bottom_row(match_hud_->layout.gadgets);
+    match_side_page_bottom_ = bottom;
+    // Rows past 480 exist only while a page shown needs them, and then hold
+    // the whole page; the side column's blank strip below a page that ends
+    // within the column stays black, as the area under the panel is.
     auto& background = match_hud_->background;
-    const auto rows = static_cast<uint32_t>(std::min(fit.bottom, match_hud_fit_rows_));
-    if (fit.bottom > kCanvasHeight && background.height < rows) {
+    const auto rows = static_cast<uint32_t>(bottom);
+    if (bottom > kCanvasHeight && background.height < rows) {
         background.rgb.resize(static_cast<std::size_t>(background.width) * rows * 3U, 0);
         if (!background.indices.empty())
             background.indices.resize(static_cast<std::size_t>(background.width) * rows, 0);
@@ -1473,44 +1624,64 @@ void Runtime::fit_match_build_page() {
     }
 }
 
-void Runtime::apply_build_page_fit(
-    const oa::ui::hud::BuildPageFit& fit, std::span<const oa::ui::hud::PanelGadget> page
-) {
-    namespace hud = oa::ui::hud;
-    auto& gadgets = match_hud_->layout.gadgets;
-    match_hud_fitted_ = true;
-    match_build_part_ = fit.part;
-    match_build_part_count_ = fit.part_count;
-    for (std::size_t index = 0; index < gadgets.size(); ++index) {
-        auto& common = gadgets[index].common;
-        common.x = static_cast<int16_t>(page[index].x);
-        common.y = static_cast<int16_t>(page[index].y);
-        if (!page[index].shown)
-            common.active = 0;
-    }
-    // The page split under tabs gets an ORDERS tab beside its BUILD tab, as
-    // the game's own pages have; it opens the general page.
-    if (fit.layout == hud::BuildPageLayout::build_tab && fit.build_tab > 0) {
-        const auto build_index = static_cast<std::size_t>(fit.build_tab);
-        auto orders = gadgets[build_index];
-        orders.common.name = match_side_name_prefix() + "ORDERS";
-        orders.common.x = static_cast<int16_t>(fit.orders_tab_x);
-        orders.common.y = static_cast<int16_t>(fit.orders_tab_y);
-        if (auto* button = std::get_if<oa::ui::gui_layout::ButtonFields>(&orders.fields))
-            button->quick_key = 0;
-        const auto* art = gaf_sequence(match_hud_->sprites, orders.common.name);
-        if (art == nullptr)
-            art = gaf_sequence(match_hud_->shared_sprites, orders.common.name);
-        if (art != nullptr && !art->frames.empty()) {
-            orders.common.width = static_cast<int16_t>(art->frames.front().width);
-            orders.common.height = static_cast<int16_t>(art->frames.front().height);
+oa::ui::gui_layout::Gadget*
+Runtime::place_in_side_panel(std::span<oa::ui::gui_layout::Gadget> gadgets) {
+    oa::ui::gui_layout::Gadget* header = nullptr;
+    for (auto& gadget : gadgets) {
+        if (gadget.common.name == "HEADER") {
+            header = &gadget;
+            break;
         }
-        gadgets.push_back(std::move(orders));
-        match_hud_states_.push_back(
-            build_index < match_hud_states_.size() ? match_hud_states_[build_index]
-                                                   : MatchGadgetState{}
-        );
     }
+    // ARMOPT's type-0 panel is named armopt.GUI, not HEADER. Child xpos/ypos
+    // still live in that (0,128) well, same as ARMGEN.
+    if (header == nullptr) {
+        for (auto& gadget : gadgets) {
+            if (gadget.common.type == oa::ui::gui_layout::GadgetType::panel) {
+                header = &gadget;
+                break;
+            }
+        }
+    }
+    // HEADER is the type-0 panel at screen (0,128). Child xpos/ypos in ARMGEN
+    // and ARMCOMn live in that panel: ARMORDERS ypos=4 is not a screen row.
+    // The 0x7e-pixel radar picture, drawn at Game.radar_offset_x and
+    // radar_offset_y, occupies the well above.
+    if (header == nullptr)
+        return nullptr;
+    const auto origin_x = header->common.x;
+    const auto origin_y = header->common.y;
+    for (auto& gadget : gadgets) {
+        if (&gadget == header || gadget.common.width <= 0 || gadget.common.height <= 0)
+            continue;
+        gadget.common.x = static_cast<int16_t>(gadget.common.x + origin_x);
+        gadget.common.y = static_cast<int16_t>(gadget.common.y + origin_y);
+    }
+    return header;
+}
+
+int32_t
+Runtime::page_bottom_row(std::span<const oa::ui::gui_layout::Gadget> gadgets, bool any_record) {
+    int32_t bottom = 0;
+    for (std::size_t index = 1; index < gadgets.size(); ++index) {
+        const auto& common = gadgets[index].common;
+        if ((any_record || common.active != 0) && common.width > 0 && common.height > 0)
+            bottom = std::max(bottom, common.y + common.height);
+    }
+    return bottom;
+}
+
+oa::ui::hud::SidePageScale Runtime::match_side_page_scale() const {
+    // The phone layout has no side column: its sheets show each of the
+    // page's gadgets as authored, whatever rows the page reaches.
+    if (!match_hud_ || match_hud_->layout.gadgets.empty() ||
+        match_hud_side_page_ == oa::ui::hud::SidePage::other || match_side_page_bottom_ <= 0 ||
+        match_layout_.phone)
+        return {};
+    const auto& panel = match_hud_->layout.gadgets.front().common;
+    return oa::ui::hud::side_page_scale(
+        panel.x, panel.y, match_side_page_bottom_, match_column_rows()
+    );
 }
 
 void Runtime::show_match_orders_page() {
@@ -1852,7 +2023,9 @@ void Runtime::click_end_panel(std::size_t gadget) {
     panel_to_widgets(panel, resources_.layout, widget_gaf_frames_, widget_text_stages_);
     switch (action) {
     case ui::EndMissionAction::open_load_game:
+        // The panel is kept for the dialog's CANCEL to come back to.
         options_parent_ = Screen::campaign_end;
+        leave_end_panel_for_briefing();
         load(Screen::load_game);
         return;
     case ui::EndMissionAction::open_save_game:
@@ -2739,6 +2912,11 @@ void Runtime::escape_match_menu() {
     resume_match_pause();
 }
 
+bool Runtime::match_question_open() const {
+    return match_ && !match_finished_ && match_paused_ &&
+           match_menu_session().ingame_panel == IngamePanel::exit_confirm && !team_panel_open();
+}
+
 bool Runtime::enter_match_menu() {
     if (match_menu_session().ingame_panel != IngamePanel::exit_confirm || team_panel_open())
         return false;
@@ -2751,19 +2929,25 @@ bool Runtime::press_match_panel_key(const SDL_KeyboardEvent& key) {
     if (!match_ || match_finished_ || !match_paused_ || !match_hud_ ||
         match_hud_->layout.gadgets.empty())
         return false;
-    // The in-game menu and the tab menu give the panels the keyboard; the
+    const bool confirming =
+        match_menu_session().ingame_panel == IngamePanel::exit_confirm && !team_panel_open();
+    // The in-game menu and the tab menu give the panels the keyboard. The
     // surrender confirmation a close request opens over the running match
-    // takes only its Enter and Escape.
-    if (!match_panels_keyboard_ && match_hud_panel_ != oa::data::defs::gui_path(kPreferencesLayout))
+    // has no keyboard focus, but takes its quick keys, Y and N in English,
+    // as the confirmation asked from the menu does.
+    const bool keyboard =
+        match_panels_keyboard_ || match_hud_panel_ == oa::data::defs::gui_path(kPreferencesLayout);
+    if (!keyboard && !confirming)
         return false;
     // Keys with Ctrl, Alt or the system key down type no character.
     if ((key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0)
         return false;
     const bool enter = key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER;
     const bool escape = key.key == SDLK_ESCAPE;
-    const bool confirming =
-        match_menu_session().ingame_panel == IngamePanel::exit_confirm && !team_panel_open();
     if (confirming && (enter || escape))
+        return false;
+    // Without the keyboard, Space presses nothing.
+    if (!keyboard && key.key == SDLK_SPACE)
         return false;
     const auto& gadgets = match_hud_->layout.gadgets;
     // Enter, Escape and Space go to the panel's key dispatch first.
@@ -2803,6 +2987,7 @@ bool Runtime::press_match_panel_key(const SDL_KeyboardEvent& key) {
             button->quick_key == 0 ||
             std::tolower(static_cast<unsigned char>(button->quick_key)) != typed)
             continue;
+        answered_key_ = typed;
         activate_match_hud(index);
         return true;
     }
@@ -3252,7 +3437,7 @@ void Runtime::place_preferences_rows(renderer::Surface& hud) {
     constexpr int32_t band_top = oa::ui::display_layout::kSourceBottomBarY;
     const auto bottom = rows.y + rows.height;
     if (rows.width <= 0 || bottom <= band_top || match_layout_.scale <= 0.0 ||
-        hud.width != static_cast<uint32_t>(kCanvasWidth) ||
+        hud.width < static_cast<uint32_t>(kCanvasWidth) ||
         hud.height != static_cast<uint32_t>(kCanvasHeight))
         return;
     const auto scaled = [this](int32_t value) {

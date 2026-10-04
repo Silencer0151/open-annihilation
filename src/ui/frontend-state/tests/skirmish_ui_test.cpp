@@ -446,6 +446,8 @@ struct Prefs final : initialization::PreferencesHost {
 
     std::string application_directory() override { return "root"; }
 
+    std::string own_image_output_directory() override { return {}; }
+
     void select_map_list(int32_t) override {}
 
     void select_map_index(int32_t) override {}

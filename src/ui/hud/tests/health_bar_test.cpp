@@ -6,6 +6,7 @@
 
 #include "oa/ui/hud/health_bar.hpp"
 
+#include <cmath>
 #include <memory>
 
 using namespace oa;
@@ -42,6 +43,92 @@ void trough_and_fill() {
     unit.health = 1800;
     CHECK(unit_health_bar(*game, unit, def, 100, 50, bar));
     CHECK(bar.fill.x2 == 84 + 64);
+}
+
+// At the game's view and zoomed in the bars keep the game's size; zoomed
+// out they shrink by the same share at each step of the zoom, to a third at
+// six times as far out, and stay a third past it.
+void scale_by_zoom() {
+    const auto near = [](float value, float expected) {
+        return std::abs(value - expected) < 1.0e-4F;
+    };
+    for (const float zoom : {1.0F, 1.15F, 2.0F, 4.0F, 100.0F})
+        CHECK(health_bar_scale(zoom) == 1.0F);
+    CHECK(near(health_bar_scale(0.5F), 0.65377F));
+    CHECK(near(health_bar_scale(0.25F), 0.42742F));
+    CHECK(health_bar_scale(1.0F / 6.0F) == 1.0F / 3.0F);
+    CHECK(health_bar_scale(0.1F) == 1.0F / 3.0F);
+    // Each wheel step out shrinks the bars by one share, however far out.
+    const float step = 1.0F / 1.15F;
+    const float first = health_bar_scale(step);
+    for (float zoom = step; zoom * step > 1.0F / 6.0F; zoom *= step)
+        CHECK(near(health_bar_scale(zoom * step) / health_bar_scale(zoom), first));
+    CHECK(health_bar_scale(0.5F) < health_bar_scale(0.75F));
+    CHECK(health_bar_scale(0.25F) < health_bar_scale(0.5F));
+}
+
+// The bars' sizes in whole pixels: at zoom 1 and in a trough 35 by 5 with
+// its centre 10 rows below the unit's; 23 by 3, 7 below, twice as far out;
+// 15 by 3, 4 below, four times out; 13 by 3, 3 below, six times out. The
+// trough is never less than 3 rows, so that its fill is a row at least.
+void size_by_zoom() {
+    const auto is = [](const HealthBarSize& size, int32_t width, int32_t height, int32_t below) {
+        return 2 * size.half_width + 1 == width && 2 * size.half_height + 1 == height &&
+               size.below_unit == below;
+    };
+    for (const float zoom : {1.0F, 2.0F, 4.0F})
+        CHECK(is(health_bar_size(zoom), 35, 5, 10));
+    const HealthBarSize game{};
+    CHECK(is(game, 35, 5, 10));
+    CHECK(is(health_bar_size(0.75F), 29, 5, 8));
+    CHECK(is(health_bar_size(0.5F), 23, 3, 7));
+    CHECK(is(health_bar_size(1.0F / 3.0F), 19, 3, 5));
+    CHECK(is(health_bar_size(0.25F), 15, 3, 4));
+    CHECK(is(health_bar_size(1.0F / 6.0F), 13, 3, 3));
+    CHECK(is(health_bar_size(0.05F), 13, 3, 3));
+    // Smaller at each step out, never larger.
+    HealthBarSize before = health_bar_size(1.0F);
+    for (float zoom = 1.0F; zoom >= 1.0F / 6.0F; zoom /= 1.15F) {
+        const HealthBarSize size = health_bar_size(zoom);
+        CHECK(size.half_width <= before.half_width && size.half_height <= before.half_height);
+        CHECK(size.half_height >= 1);
+        before = size;
+    }
+}
+
+// The bar at a smaller size: the trough about the centre, the fill one pixel
+// inside it and spanning its inside at full health.
+void trough_and_fill_scaled() {
+    const auto game = coloured_game();
+    Unit unit{};
+    UnitDef def{};
+    def.max_damage = 900;
+    unit.health = 900;
+    HealthBar bar{};
+    // Six times as far out: 13 by 3.
+    const HealthBarSize far = health_bar_size(1.0F / 6.0F);
+    CHECK(unit_health_bar(*game, unit, def, 100, 50, bar, far));
+    CHECK(
+        bar.trough.x1 == 94 && bar.trough.y1 == 49 && bar.trough.x2 == 106 && bar.trough.y2 == 51
+    );
+    CHECK(bar.fill.x1 == 95 && bar.fill.y1 == 50 && bar.fill.x2 == 105 && bar.fill.y2 == 50);
+    unit.health = 450;
+    CHECK(unit_health_bar(*game, unit, def, 100, 50, bar, far));
+    CHECK(bar.fill.x2 == 95 + 5);
+    unit.health = 1;
+    CHECK(unit_health_bar(*game, unit, def, 100, 50, bar, far));
+    CHECK(bar.fill.x2 == bar.fill.x1);
+    // Twice as far out: 23 by 3, the fill 21 pixels at full health.
+    unit.health = 900;
+    CHECK(unit_health_bar(*game, unit, def, 100, 50, bar, health_bar_size(0.5F)));
+    CHECK(bar.trough.x1 == 89 && bar.trough.x2 == 111 && bar.trough.y1 == 49);
+    CHECK(bar.fill.x1 == 90 && bar.fill.x2 == 110);
+    // At the game's size the same as the default.
+    HealthBar game_size{};
+    CHECK(unit_health_bar(*game, unit, def, 100, 50, game_size, health_bar_size(2.0F)));
+    CHECK(unit_health_bar(*game, unit, def, 100, 50, bar));
+    CHECK(game_size.trough.x1 == bar.trough.x1 && game_size.trough.y2 == bar.trough.y2);
+    CHECK(game_size.fill.x2 == bar.fill.x2 && game_size.fill.y1 == bar.fill.y1);
 }
 
 // Colour 10 above two thirds of max_damage, 14 above a third, 12 otherwise;
@@ -164,6 +251,9 @@ void panel_damage_follows_hide_damage() {
 
 int main() {
     trough_and_fill();
+    scale_by_zoom();
+    size_by_zoom();
+    trough_and_fill_scaled();
     colour_by_thirds();
     no_bar_without_health();
     health_bars_follow_ownership();

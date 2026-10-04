@@ -5,16 +5,24 @@
 // time: it waits out its delay, plays once, stops at once, and a new stream
 // takes the place of the one playing; stop_all, which silences every
 // effect, the loop and the stream at once; and the effects' voice policy.
+// On a mixer the test runs by hand, a placed start weighs its two sides by
+// the placement's levels.
 #include "audio_test_support.hpp"
 #include "oa/audio/sdl_audio.hpp"
+#include "oa/audio/software_mixer.hpp"
+#include "oa/audio/sound_output.hpp"
+#include "oa/audio/spatial_gain.hpp"
 #include "oa/formats/hpi.hpp"
 #include "oa/test/scratch_directory.hpp"
 
 #include <SDL3/SDL.h>
 
+#include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -39,6 +47,79 @@ void write_tone(const std::filesystem::path& path, uint32_t milliseconds) {
         .write(
             reinterpret_cast<const char*>(riff.data()), static_cast<std::streamsize>(riff.size())
         );
+}
+
+// A sound output whose mixer the test runs by hand.
+class HandMixedOutput final : public oa::audio::SoundOutput {
+  public:
+
+    bool start(std::string&) override { return true; }
+
+    void stop() override {}
+
+    bool started() const override { return true; }
+
+    std::unique_ptr<oa::audio::OutputStream> open_stream(
+        const oa::audio::StreamFormat& format,
+        oa::audio::StreamFeed feed,
+        void* context,
+        std::string& error
+    ) override {
+        return mixer.open_stream(format, feed, context, error);
+    }
+
+    std::string driver_name() const override { return "by hand"; }
+
+    std::string last_error() const override { return ""; }
+
+    // Mixes the next frames.
+    std::vector<int16_t> mix(uint32_t frames) {
+        std::vector<int16_t> out(static_cast<std::size_t>(frames) * 2);
+        mixer.mix(out.data(), frames);
+        return out;
+    }
+
+    oa::audio::SoftwareMixer mixer{oa::audio::MixerLock{}};
+};
+
+// A placed start plays each side at the placement's level: against the same
+// start unplaced, within a step of 16 bits for the rounding of the gains.
+void placed_sides(const std::filesystem::path& root) {
+    HandMixedOutput output;
+    oa::audio::set_sound_output(&output);
+    {
+        const oa::AssetStore assets(root);
+        SdlWavPlayer player(assets);
+        std::string error;
+        constexpr uint32_t frames = 4096;
+        require(player.play_resource("sounds/short.wav", error), "an unplaced start plays");
+        const auto centred = output.mix(frames);
+        player.stop_all();
+        oa::audio::Spatial placed{};
+        placed.mode = oa::audio::SpatialMode::normal;
+        placed.x = 300.0F;
+        placed.z = 200.0F;
+        placed.min_distance = 100.0F;
+        placed.max_distance = 2000.0F;
+        const auto sides = oa::audio::spatial_stereo_gain(placed);
+        require(sides.left < sides.right - 0.1F, "the placement weighs the sides apart");
+        require(
+            player.play_placed("sounds/short.wav", oa::audio::volume_near, placed, error),
+            "a placed start plays"
+        );
+        const auto weighed = output.mix(frames);
+        player.stop_all();
+        bool sounding = false;
+        for (std::size_t i = 0; i < centred.size(); i += 2) {
+            sounding = sounding || centred[i] != 0;
+            const auto left = static_cast<int32_t>(std::lround(centred[i] * sides.left));
+            const auto right = static_cast<int32_t>(std::lround(centred[i + 1] * sides.right));
+            require(std::abs(weighed[i] - left) <= 1, "the left side plays at its level");
+            require(std::abs(weighed[i + 1] - right) <= 1, "the right side plays at its level");
+        }
+        require(sounding, "the start sounds");
+    }
+    oa::audio::set_sound_output(nullptr);
 }
 
 // Waits until `done` holds or `timeout_ms` passes.
@@ -153,6 +234,7 @@ int main() {
         player.stop_all();
         require(player.effect_voices() == 0 && !player.playing(), "stop_all ends them all");
     }
+    placed_sides(root);
     std::filesystem::remove_all(root);
     SDL_Quit();
     return 0;

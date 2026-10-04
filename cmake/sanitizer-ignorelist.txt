@@ -13,8 +13,12 @@
 #
 # The standard library headers are listed too: a misaligned reference handed
 # to them is reported where the caller binds it, unless the caller is listed.
+#
+# Compilers read each path either as a glob or as a regular expression, so
+# a path names a literal '+' as the class [+], which both readers take as
+# that one character.
 [alignment]
 src:*/src/app/*
 src:*/src/sim/match-runtime/*
 src:*/src/sim/unit-spawn/*
-src:*/include/c++/*
+src:*/include/c[+][+]/*

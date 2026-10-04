@@ -71,6 +71,9 @@ template <class Visitor, class Profile> void visit_bindings(Visitor& visitor, Pr
     visitor.hack("air.no-repair-retreat-flag", profile.rules.air.no_repair_retreat_flag.enabled);
     visitor.parameter("air.no-repair-retreat-flag", "flag", profile.rules.air.no_repair_retreat_flag.flag);
     visitor.hack("air.guard-respects-hold-position", profile.rules.air.guard_respects_hold_position.enabled);
+    visitor.hack("air.gunships-hover-to-strafe", profile.rules.air.gunships_hover_to_strafe.enabled);
+    visitor.parameter("air.gunships-hover-to-strafe", "attack-ground", profile.rules.air.gunships_hover_to_strafe.attack_ground);
+    visitor.parameter("air.gunships-hover-to-strafe", "guard-engagements", profile.rules.air.gunships_hover_to_strafe.guard_engagements);
     visitor.hack("weapons.retarget-out-of-range", profile.rules.weapons.retarget_out_of_range.enabled);
     visitor.hack("weapons.high-arc-ballistic", profile.rules.weapons.high_arc_ballistic.enabled);
     visitor.hack("weapons.timed-shell-detonation", profile.rules.weapons.timed_shell_detonation.enabled);

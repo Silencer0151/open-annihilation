@@ -216,6 +216,54 @@ void test_panel_flow() {
     CHECK(!open_share_panel(world, panel, frame));
 }
 
+// SHARE.GUI's give: the local player's selected units go one by one, except
+// commanders, airborne units and units carrying or carried by another.
+void test_give_selected_units() {
+    hud_test::TestWorld w;
+    w.add_player(0, OA_PLAYER_STATUS_LOCAL);
+    w.add_player(1, OA_PLAYER_STATUS_MIRRORED);
+    w.game().local_player_index = 0;
+    w.give_range(0, 1, 7);
+    w.give_range(1, 8, 9);
+    // Type 3 is the commander type.
+    const uint32_t commanders[1] = {1u << 3};
+    w.spawn(1, 3);
+    w.spawn(2, 2);
+    w.spawn(3, 2).flags |= kOccupancyAirborne;
+    w.spawn(4, 2).attach_first_child = oa_unit_ref_from_slot(5);
+    w.spawn(5, 2).attach_parent = oa_unit_ref_from_slot(4);
+    w.spawn(6, 2);
+    w.spawn(7, 2); // not selected
+    w.spawn(8, 2); // the recipient's own
+    for (const uint32_t slot : {1u, 2u, 3u, 4u, 5u, 6u, 8u})
+        w.unit(slot).flags |= OA_UNIT_FLAG_SELECTED;
+
+    struct Gifts {
+        World* world{};
+        std::vector<std::string> log;
+    } gifts{w.world, {}};
+
+    const UnitTransfer transfer{&gifts, [](void* user, Unit& unit, Player& recipient) {
+                                    auto& self = *static_cast<Gifts*>(user);
+                                    self.log.push_back(
+                                        std::to_string(world_unit_slot(self.world, &unit)) + ">" +
+                                        std::to_string(recipient.index)
+                                    );
+                                }};
+    give_selected_units(*w.world, 1, commanders, transfer);
+    CHECK((gifts.log == std::vector<std::string>{"2>1", "6>1"}));
+
+    // Without commander types, a commander goes like any other unit.
+    gifts.log.clear();
+    give_selected_units(*w.world, 1, nullptr, transfer);
+    CHECK((gifts.log == std::vector<std::string>{"1>1", "2>1", "6>1"}));
+
+    // No recipient: nothing goes.
+    gifts.log.clear();
+    give_selected_units(*w.world, OA_PLAYER_COUNT, nullptr, transfer);
+    CHECK(gifts.log.empty());
+}
+
 } // namespace
 
 // sharing.take-requires-live-commander: the chat lines it reads, the
@@ -275,6 +323,7 @@ int main() {
     test_participation();
     test_transfers();
     test_panel_flow();
+    test_give_selected_units();
     test_take_guard();
     return 0;
 }

@@ -28,6 +28,25 @@ macOS and Windows and in the XDG data folder on Linux:
 | Windows | Local AppData / `CorePrime/Open Annihilation` |
 | Linux | `$XDG_DATA_HOME/open-annihilation`, or `$HOME/.local/share/open-annihilation` |
 
+The player's own files, their saved games, screenshots, films and mods, go
+in a folder named `Open Annihilation` (`user_folder_name`) in their
+Documents folder (`documents_directory()`, `default_user_folder()`), where
+they can find them:
+
+| Platform | Documents folder |
+| --- | --- |
+| macOS | the user's Documents directory, as Foundation resolves it (it does not follow `$HOME`) |
+| Windows | the Documents folder (My Documents on Windows XP), wherever it has been redirected, through `SHGetFolderPathW(CSIDL_PERSONAL)` |
+| Linux | the folder `XDG_DOCUMENTS_DIR` names in `user-dirs.dirs` under `$XDG_CONFIG_HOME`, or `$HOME/.config` when that is unset or relative; else `$HOME/Documents` |
+
+On Linux, `xdg_documents_directory()` reads the `user-dirs.dirs` text as
+`xdg-user-dirs` writes it: `XDG_DOCUMENTS_DIR="$HOME/name"` or an absolute
+`"/path"`, a backslash keeping the character after it, the last such line
+counting; any other line, a relative path or another variable is passed
+over. The folder need not exist: the game makes what it needs when it first
+needs it. What the folder holds, the one-time move of saved games into it
+and the keys below are the game's (`src/app/include/oa/app/user_folder.hpp`).
+
 Earlier versions named the macOS folder `com.coreprime.open-annihilation`. When
 the engine resolves the folder and finds only that one, it renames it to
 `net.coreprime.open-annihilation`, once, so the preferences file and the
@@ -66,9 +85,27 @@ and no `|`, so they never collide with the game's `<section>|<name>` keys.
 `open-annihilation.game-directory` holds the Total Annihilation folder chosen
 in the first-start dialog as a UTF-8 path. It is written after that migration,
 once the game starts from the folder.
-`open-annihilation.mod-directory` holds the mod folder the player chose in
-the Open Annihilation settings (Gameplay, Mod) to layer over that folder, as
-an absolute UTF-8 path; absent, the game folder plays as it is. A mod whose profile names a registry root of its own keeps the game's
+`open-annihilation.mod-directory` holds the mod folder the player chose on
+the Open Annihilation settings' Mods page to layer over that folder, as an
+absolute UTF-8 path; absent, the game folder plays as it is.
+`open-annihilation.picked-mod-directory` holds the folder an earlier
+version's Pick Folder... chose, as an absolute UTF-8 path, which the Mods
+page lists while the folder still exists; absent, there is none.
+`open-annihilation.user-folder` holds the folder the player keeps their
+saved games, screenshots, films and mods in, as an absolute UTF-8 path, in
+place of `Open Annihilation` in Documents; absent or relative, the default
+holds, and `--user-folder` sets another for one run, into which no saved
+games are moved. With `--preferences-file` the default is the
+`Open Annihilation` folder beside that file, so that a check never reaches
+the player's Documents folder, and nothing beside that file is moved.
+`open-annihilation.saves-moved` records that the saved games kept beside
+the preferences file by earlier versions (`SAVEGAME`, and
+`mods/<id>/SAVEGAME`) were moved into that folder's `Saves`, as the saved
+games moved and the ones left where they were, `"12 0"`; while it is there
+the move is not made again. `open-annihilation.saves-moved-notice` is `due`
+while the main menu's notice of a move that moved or left a saved game
+waits to be shown, and `told` once it has shown.
+A mod whose profile names a registry root of its own keeps the game's
 `<section>|<name>` settings under `registry:<root>\<section>|<name>` keys
 instead, as the mod keeps them under its own registry key, and its first run
 seeds the values its profile names there.
@@ -113,4 +150,6 @@ Platform references:
 
 - [Apple Application Support directory](https://developer.apple.com/documentation/foundation/url/applicationsupportdirectory)
 - [Windows Known Folder API](https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/nf-shlobj_core-shgetknownfolderpath)
+- [Windows SHGetFolderPathW](https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/nf-shlobj_core-shgetfolderpathw)
 - [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir/0.8/)
+- [xdg-user-dirs](https://www.freedesktop.org/wiki/Software/xdg-user-dirs/)

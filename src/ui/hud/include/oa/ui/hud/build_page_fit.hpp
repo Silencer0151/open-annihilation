@@ -4,80 +4,66 @@
 #pragma once
 
 #include <cstdint>
-#include <limits>
-#include <span>
 
 namespace oa::ui::hud {
 
-/// Side of a square build button, in source pixels.
-inline constexpr int32_t kBuildButtonSize = 64;
-/// Fewest rows of build buttons a page keeps beside its order buttons; a
-/// column with room for fewer splits the page under ORDERS and BUILD tabs.
-inline constexpr int32_t kMinimumSharedRows = 3;
-/// Left edge of the ORDERS tab in its panel, source pixels.
-inline constexpr int32_t kOrdersTabX = 3;
-/// Left edge of the BUILD tab in its panel, source pixels.
-inline constexpr int32_t kBuildTabX = 65;
-/// Part to ask fit_build_page for to get a page's last part.
-inline constexpr int32_t kLastBuildPart = std::numeric_limits<int32_t>::max();
-
-/// One gadget of a loaded side-panel page as fit_build_page reads and moves it.
-///
-/// Gadget 0 is the page's panel; the others are placed in screen source
-/// pixels, the panel's own offset already added.
-struct PanelGadget {
-    const char* name{};          ///< control name
-    int32_t x{};                 ///< left edge, source pixels
-    int32_t y{};                 ///< top edge, source pixels
-    int32_t width{};             ///< 0 for a record that is not drawn
-    int32_t height{};            ///< 0 for a record that is not drawn
-    uint8_t gadget_type{};       ///< kGadgetTypeButton for a button
-    uint8_t common_attributes{}; ///< commonattribs; kCommonUnitButton, kCommonWeaponButton
-    bool shown{};                ///< drawn and under the pointer; fit_build_page clears it to hide
+/// What a page shown in the side column is.
+enum class SidePage : uint8_t {
+    other, ///< not a unit's page, such as the in-game menu: drawn as authored
+    unit,  ///< a unit's build or weapon page, its page 0, or the general page
 };
 
-/// How fit_build_page laid out a page.
-enum class BuildPageLayout : uint8_t {
-    as_authored, ///< the page fits the column, or has no build buttons, and is left as it is
-    shared,      ///< fewer rows of build buttons, with the order buttons moved up under them
-    build_tab,   ///< the build buttons alone under ORDERS and BUILD tabs; orders are on the
-                 ///< general page
+/// How a unit's page is drawn in the side column, in source pixels.
+///
+/// A page that ends within the column is drawn as authored. A taller page is
+/// drawn as authored, then scaled down uniformly about its panel's top left
+/// corner so that its lowest row meets the column's: every control keeps its
+/// place on the page, at that scale, and nothing moves, closes up or hides.
+struct SidePageScale {
+    int32_t left{};          ///< left edge of the page's panel
+    int32_t top{};           ///< top edge of the page's panel
+    int32_t authored_rows{}; ///< rows from `top` to the page's lowest drawn row
+    int32_t shown_rows{};    ///< rows the page takes in the column; `authored_rows` when it fits
+
+    /// Returns whether the page is drawn smaller than authored.
+    [[nodiscard]] constexpr bool scaled() const noexcept {
+        return shown_rows > 0 && shown_rows < authored_rows;
+    }
+
+    /// Returns where a distance from the panel's corner on the page lies in
+    /// the column, rounded down.
+    ///
+    /// @param distance source pixels from `left` or `top` on the page, at least 0
+    /// @return source pixels from `left` or `top` in the column
+    [[nodiscard]] constexpr int32_t to_column(int32_t distance) const noexcept {
+        return scaled() ? static_cast<int32_t>(
+                              static_cast<int64_t>(distance) * shown_rows / authored_rows
+                          )
+                        : distance;
+    }
+
+    /// Returns which distance from the panel's corner on the page a distance
+    /// in the column shows, rounded down.
+    ///
+    /// @param distance source pixels from `left` or `top` in the column, at least 0
+    /// @return source pixels from `left` or `top` on the page
+    [[nodiscard]] constexpr int32_t to_page(int32_t distance) const noexcept {
+        return scaled() ? static_cast<int32_t>(
+                              static_cast<int64_t>(distance) * authored_rows / shown_rows
+                          )
+                        : distance;
+    }
 };
 
-/// The layout fit_build_page chose for a page.
-struct BuildPageFit {
-    BuildPageLayout layout{};
-    int32_t rows{};         ///< rows of build buttons shown; 0 when as_authored
-    int32_t part{};         ///< which part of the page's build buttons is shown, from 0
-    int32_t part_count{};   ///< parts the page's build buttons are split into; 1 when as_authored
-    int32_t bottom{};       ///< lowest row any shown gadget reaches, source pixels (exclusive)
-    int32_t build_tab{};    ///< in build_tab, the gadget that became the BUILD tab; else -1
-    int32_t orders_tab_x{}; ///< in build_tab, where the ORDERS tab goes, source pixels
-    int32_t orders_tab_y{}; ///< in build_tab, where the ORDERS tab goes, source pixels
-};
-
-/// Lays a build page out to fit a side column of `column_rows` source rows.
+/// Returns how a unit's page is drawn in a side column of `column_rows`.
 ///
-/// A page whose shown gadgets all end inside the column, and a page without
-/// square build buttons, are left as they are. Otherwise the page's build
-/// buttons (unit and weapon buttons, and the IGPATCH slots between them)
-/// keep their reading order and columns but are cut into parts of as many
-/// rows as fit; PREV and NEXT step through the parts.
-///
-/// With room for at least kMinimumSharedRows rows beside them, the order
-/// buttons under the grid stay on the page and move up under the rows shown.
-/// With less room, the order buttons are hidden, the BUILD title above the
-/// grid moves to the BUILD tab's place and the caller adds an ORDERS tab at
-/// orders_tab_x and orders_tab_y, so the page splits as the game's own
-/// pages do; the build buttons then get every row down to PREV and NEXT.
-///
-/// @param[in,out] gadgets the loaded page, gadget 0 its panel; positions and
-///                        `shown` are rewritten
+/// @param left left edge of the page's panel, source pixels
+/// @param top top edge of the page's panel, source pixels
+/// @param bottom lowest row any drawn gadget of the page reaches, exclusive
 /// @param column_rows rows of the side column, source pixels from its top
-/// @param part part of the build buttons to show, from 0; clamped to the
-///             last part, so kLastBuildPart asks for the last
-/// @return the layout chosen, with the part shown and the number of parts
-[[nodiscard]] BuildPageFit
-fit_build_page(std::span<PanelGadget> gadgets, int32_t column_rows, int32_t part);
+/// @return the page's scale; unscaled when it ends within the column or has
+///         no rows below `top`
+[[nodiscard]] SidePageScale
+side_page_scale(int32_t left, int32_t top, int32_t bottom, int32_t column_rows) noexcept;
 
 } // namespace oa::ui::hud

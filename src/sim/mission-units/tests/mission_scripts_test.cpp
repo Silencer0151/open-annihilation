@@ -63,21 +63,34 @@ struct Order {
     int32_t b{};
 };
 
+// How many queued orders the fake keeps.
+constexpr int order_capacity = 64;
+
+// One unit's queued orders, in queue order. The entries past them stay empty,
+// so a check that reads past a short queue fails instead of reading another
+// unit's orders.
+struct UnitOrders {
+    Order list[order_capacity]{};
+
+    /// Returns the order at a place in the unit's queue.
+    ///
+    /// @param index the place, from 0
+    /// @return the order, or an empty one past the unit's last
+    const Order& operator[](int index) const { return list[index]; }
+};
+
 struct Fake {
     World* world = nullptr;
-    Order orders[64]{};
+    Order orders[order_capacity]{};
     int count = 0;
     uint32_t next_slot = 1;
 
-    int orders_of(const Unit& unit, const Order** first) const {
+    int orders_of(const Unit& unit, UnitOrders* queue) const {
+        *queue = UnitOrders{};
         int n = 0;
-        *first = nullptr;
         for (int i = 0; i < count; ++i)
-            if (orders[i].unit == &unit) {
-                if (*first == nullptr)
-                    *first = &orders[i];
-                ++n;
-            }
+            if (orders[i].unit == &unit)
+                queue->list[n++] = orders[i];
         return n;
     }
 };
@@ -141,7 +154,7 @@ Hooks hooks_for(Fake& f) {
                        int32_t a,
                        int32_t b) {
         Fake* f = static_cast<Fake*>(c);
-        if (flags != queue_append || f->count >= 64)
+        if (flags != queue_append || f->count >= order_capacity)
             return;
         f->orders[f->count++] = Order{
             kind, &unit, target, position != nullptr, position ? *position : FixedVec3{}, a, b
@@ -213,7 +226,7 @@ void carried_points() {
         entry("CORROY", nullptr, "w 1050, m 1557, a ARMMEX, m 444 2483, w 750,"), // AC06
     };
     CHECK(create_mission_units(*w, schema, 4, hooks_for(f)));
-    const Order* o = nullptr;
+    UnitOrders o;
 
     // Seconds become ticks; the bare unload reuses the move's point.
     CHECK(f.orders_of(w->units[1], &o) == 5);
@@ -257,7 +270,7 @@ void named_orders() {
         entry("CORLAB", nullptr, "w 700,b CORAK,w 300,b CORAK 1"),                         // AC02
     };
     CHECK(create_mission_units(*w, schema, 4, hooks_for(f)));
-    const Order* o = nullptr;
+    UnitOrders o;
 
     // BuildWeapon for weapon slot 0; it does not count as a scripted order,
     // so the silo stays selectable and gets no MakeSelectable.
@@ -293,7 +306,7 @@ void bare_number_is_not_a_wait() {
         entry("CORSY", nullptr, "600,b CORROY 1,w 200,b CORSUB 1")
     };
     CHECK(create_mission_units(*w, schema, 1, hooks_for(f)));
-    const Order* o = nullptr;
+    UnitOrders o;
     CHECK(f.orders_of(w->units[1], &o) == 4);
     CHECK(o[0].kind == building_build_kind && o[0].a == CORROY && o[0].b == 1);
     CHECK(o[1].kind == wait_kind && o[1].a == 200 * 30 && o[1].b == 0);
@@ -313,7 +326,7 @@ void self_orders() {
         entry("CORAK", nullptr, "w 5,d"),
     };
     CHECK(create_mission_units(*w, schema, 2, hooks_for(f)));
-    const Order* o = nullptr;
+    UnitOrders o;
     CHECK(f.orders_of(w->units[1], &o) == 2);
     CHECK(o[0].kind == wait_for_attack_kind && o[0].target == &w->units[1]);
     CHECK(o[1].kind == make_selectable_kind);

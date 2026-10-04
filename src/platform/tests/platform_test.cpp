@@ -44,6 +44,8 @@ void test_allocator() {
     const HeapStats before = heap_stats();
     auto* block = static_cast<uint8_t*>(heap_alloc(24, "test block"));
     check(block != nullptr, "allocation succeeds");
+    if (block == nullptr)
+        return;
     check(heap_block_size(block) == 24, "block size recorded");
     check(std::strcmp(heap_block_tag(block), "test block") == 0, "block tag recorded");
     for (int i = 0; i < 24; ++i) {
@@ -51,6 +53,10 @@ void test_allocator() {
     }
     auto* grown = static_cast<uint8_t*>(heap_resize(block, 64));
     check(grown != nullptr && heap_block_size(grown) == 64, "resize grows");
+    if (grown == nullptr) {
+        heap_free(block);
+        return;
+    }
     check(grown[23] == 23, "resize keeps prefix");
     check(heap_alloc(max_block_size + 1) == nullptr, "oversized request refused");
     check(heap_alloc_zeroed(SIZE_MAX / 2, 4) == nullptr, "overflowing count refused");
@@ -200,6 +206,50 @@ void test_open_file() {
         std::fclose(narrow_file);
     std::error_code removal;
     std::filesystem::remove_all(directory, removal);
+}
+
+void test_longest_path() {
+    using namespace oa::platform;
+#if defined(_WIN32)
+    check(
+        longest_path() == (long_paths_turned_off() ? 259U : 32767U),
+        "Windows opens 259 characters, or 32,767 with long paths turned on"
+    );
+#elif defined(__APPLE__)
+    check(longest_path() == 1023 && !long_paths_turned_off(), "macOS opens 1,023 bytes");
+#elif defined(__linux__)
+    check(longest_path() == 4095 && !long_paths_turned_off(), "Linux opens 4,095 bytes");
+#endif
+    // A file whose path passes the game's own 256-byte fields opens and
+    // reads back, where the system opens paths that long.
+    if (longest_path() < 400)
+        return;
+    const auto root = oa::test::make_scratch_directory("oa-platform-long-path");
+    auto directory = root;
+    while (directory.native().size() < 300)
+        directory /= std::string(60, 'p');
+    std::error_code made;
+    std::filesystem::create_directories(directory, made);
+    check(!made, "a folder more than 300 characters deep is made");
+    const auto path = directory / "deep.txt";
+    std::FILE* out = open_file(path, "wb");
+    check(out != nullptr, "a file more than 300 characters deep opens for writing");
+    if (out != nullptr) {
+        check(std::fwrite("abc", 1, 3, out) == 3, "the deep file takes its bytes");
+        std::fclose(out);
+    }
+    const std::string narrow = path.string();
+    std::FILE* in = open_file(narrow.c_str(), "rb");
+    char contents[4]{};
+    check(
+        in != nullptr && std::fread(contents, 1, 3, in) == 3 &&
+            std::memcmp(contents, "abc", 3) == 0,
+        "the deep file reads back by its narrow path"
+    );
+    if (in != nullptr)
+        std::fclose(in);
+    std::error_code removal;
+    std::filesystem::remove_all(root, removal);
 }
 
 void test_environment_value() {
@@ -500,6 +550,7 @@ int main() {
     test_error_sink();
     test_files();
     test_open_file();
+    test_longest_path();
     test_environment_value();
     test_grouped_decimal();
     test_memory_status();

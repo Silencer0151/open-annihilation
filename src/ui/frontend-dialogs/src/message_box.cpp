@@ -7,14 +7,45 @@
 
 #include "oa/formats/fnt.hpp"
 #include "oa/ui/decoded.hpp"
+#include "oa/ui/gui_input/gadget_panel.hpp"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <exception>
+#include <string_view>
+#include <utility>
 #include <variant>
+#include <vector>
 
 namespace oa::ui::frontend_dialogs {
 
 namespace {
+
+/// Gives a button the quick key its caption takes, as the gadget engine
+/// assigns one when a caption is set (ui::gui_input::caption_quick_key): the
+/// first letter of the caption no other button's key holds.
+///
+/// @param[in,out] gadgets the dialog's records
+/// @param index the button's record
+void assign_caption_quick_key(std::vector<ui::gui_layout::Gadget>& gadgets, std::size_t index) {
+    auto* button = std::get_if<ui::gui_layout::ButtonFields>(&gadgets[index].fields);
+    if (button == nullptr)
+        return;
+    const auto rule = ui::gui_input::caption_quick_key(
+        static_cast<uint32_t>(gadgets[index].common.attributes), button->stages, button->text
+    );
+    if (rule == ui::gui_input::CaptionQuickKey::keep)
+        return;
+    button->quick_key = 0;
+    if (rule == ui::gui_input::CaptionQuickKey::none)
+        return;
+    std::vector<int8_t> taken;
+    for (const auto& other : gadgets)
+        if (const auto* fields = std::get_if<ui::gui_layout::ButtonFields>(&other.fields))
+            taken.push_back(fields->quick_key);
+    button->quick_key = static_cast<int8_t>(ui::gui_input::free_quick_key(button->text, taken));
+}
 
 constexpr const char* kLayout = "msgbox.gui";
 constexpr const char* kLineFont = "COMIX";  // the active FNT font while the frontend runs
@@ -133,17 +164,22 @@ bool open_continue_watching(app::ScreenContext* ctx, void* context, void (*chose
         return false;
     dialog->choice_context = context;
     dialog->choice_callback = chosen;
-    for (auto& gadget : dialog->resources.layout.gadgets) {
+    auto& gadgets = dialog->resources.layout.gadgets;
+    for (const auto& [name, caption] :
+         {std::pair<std::string_view, std::string_view>{"CHOICE1", "Yes"}, {"CHOICE2", "No"}}) {
+        const auto index = dialog_find(*dialog, name);
+        if (index == kNoGadget)
+            continue;
+        auto& gadget = gadgets[static_cast<std::size_t>(index)];
         if (auto* button = std::get_if<ui::gui_layout::ButtonFields>(&gadget.fields)) {
-            if (gadget.common.name == "CHOICE1")
-                button->text = dialog_translate("Yes");
-            else if (gadget.common.name == "CHOICE2")
-                button->text = dialog_translate("No");
+            button->text = dialog_translate(caption);
+            assign_caption_quick_key(gadgets, static_cast<std::size_t>(index));
         }
+    }
+    for (auto& gadget : gadgets)
         if (gadget.common.name == "TITLE")
             if (auto* label = std::get_if<ui::gui_layout::LabelFields>(&gadget.fields))
                 label->text = dialog_translate("You're out!  Continue Watching?");
-    }
     auto* panel = std::get_if<ui::gui_layout::PanelFields>(&dialog_root(*dialog).fields);
     if (panel != nullptr) {
         panel->carriage_return_default = "CHOICE1";

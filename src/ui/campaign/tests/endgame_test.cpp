@@ -378,10 +378,7 @@ struct Screen {
     std::vector<ControlMove> moves;
 };
 
-Screen* g_screen = nullptr;
-
 EndgameHost host_for(Screen& s, FrontendHost& frontend) {
-    g_screen = &s;
     frontend = {};
     frontend.context = &s;
     frontend.disc_present = [](void* c) { return static_cast<Screen*>(c)->disc; };

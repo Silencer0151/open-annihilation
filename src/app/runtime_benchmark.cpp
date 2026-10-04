@@ -194,15 +194,19 @@ void Runtime::start_benchmark_skirmish() {
 }
 
 void Runtime::spawn_combat_armies(std::size_t per_side) {
-    const sim::unit_spawn::Slot* commander = nullptr;
-    for (const auto& slot : match_->world().slots)
-        if (slot.unit != nullptr && slot.record.type_index != 0 &&
-            slot.record.owner_index == match_local_player_) {
-            commander = &slot;
-            break;
-        }
+    // Each player's first unit: the commander the skirmish placed.
+    const auto first_unit = [this](uint8_t player) -> const sim::unit_spawn::Slot* {
+        for (const auto& slot : match_->world().slots)
+            if (slot.unit != nullptr && slot.record.type_index != 0 &&
+                slot.record.owner_index == player)
+                return &slot;
+        return nullptr;
+    };
+    const sim::unit_spawn::Slot* commander = first_unit(match_local_player_);
     if (commander == nullptr)
         throw std::runtime_error("combat benchmark needs the local commander");
+    // The Peewee against the A.K.; a side whose game has no such unit fights
+    // with its player's commander type.
     const std::array<std::string_view, 2> names{"ARMPW", "CORAK"};
     const auto map_w = static_cast<int32_t>(selected_tnt_->tile_width * 32U);
     const auto map_h = static_cast<int32_t>(selected_tnt_->tile_height * 32U);
@@ -211,11 +215,18 @@ void Runtime::spawn_combat_armies(std::size_t per_side) {
     const auto centre_z =
         std::clamp(static_cast<int32_t>(commander->unit->position[2] >> 16), 200, map_h - 200);
     for (uint8_t side = 0; side < 2; ++side) {
-        const auto type = oa::sim::unit_spawn::find_type_index(spawn_type_names_, names[side]);
-        if (type == 0)
-            throw std::runtime_error("combat benchmark lacks " + std::string(names[side]));
         const uint8_t player = side == 0 ? match_local_player_
                                          : static_cast<uint8_t>(match_local_player_ == 0 ? 1 : 0);
+        auto type = oa::sim::unit_spawn::find_type_index(spawn_type_names_, names[side]);
+        if (type == 0) {
+            const auto* player_commander = first_unit(player);
+            if (player_commander == nullptr)
+                throw std::runtime_error(
+                    "combat benchmark lacks " + std::string(names[side]) +
+                    " and a commander of player " + std::to_string(player)
+                );
+            type = player_commander->record.type_index;
+        }
         for (std::size_t index = 0; index < per_side; ++index) {
             const auto x = centre_x + (side == 0 ? -90 : 90) +
                            static_cast<int32_t>(index / 8) * (side == 0 ? -24 : 24);
@@ -235,7 +246,7 @@ void Runtime::spawn_combat_armies(std::size_t per_side) {
             const auto* placed = match_->create(request);
             if (placed == nullptr || placed->unit == nullptr)
                 throw std::runtime_error(
-                    "combat benchmark could not place " + std::string(names[side])
+                    "combat benchmark could not place " + spawn_type_names_.at(type)
                 );
         }
     }
@@ -388,7 +399,7 @@ void Runtime::run_stage_lines(std::span<const StageLine> lines) {
                 {},
                 {},
                 {},
-                settings::Page::path_search,
+                settings::Page::common_tweaks,
                 {},
                 settings::highest_unit_limit,
                 {},
@@ -532,8 +543,7 @@ void Runtime::spawn_busy_combat(int32_t centre_x, int32_t centre_z) {
 
 void Runtime::prepare_headless_match() {
     start_benchmark_skirmish();
-    match_layout_ =
-        oa::ui::display_layout::make_match_layout(options_.match_width, options_.match_height);
+    match_layout_ = lay_out_match(options_.match_width, options_.match_height);
     match_zoom_ = std::clamp(options_.match_zoom, kMinBattlefieldZoom, kMaxBattlefieldZoom);
     match_zoom_target_ = match_zoom_;
     if (options_.combat_units != 0)

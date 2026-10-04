@@ -299,7 +299,8 @@ void snap(GameFilesScreen& screen, std::string_view extra = {}) {
     if (!extra.empty())
         slug += "-" + std::string(extra);
     ++run.pictures;
-    char number[8];
+    // Room for any int the count can hold, its sign included.
+    char number[12];
     std::snprintf(number, sizeof number, "%02d", run.pictures);
     const std::string base = "game-files-" + run.variant + "-" + number + "-" + slug;
     write_picture(run.work / (base + "-window.png"), screen.canvas());
@@ -755,7 +756,7 @@ void notice(GameFilesScreen& screen) {
          }}
     );
     steps.push_back(
-        {"the Language & Text dialog",
+        {"the Language dialog",
          [](GameFilesScreen& s) { return s.language_open(); },
          [](GameFilesScreen& s) {
              snap(s, "language");

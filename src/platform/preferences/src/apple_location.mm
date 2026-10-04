@@ -31,4 +31,16 @@ std::filesystem::path data_directory() {
 std::filesystem::path default_file() {
     return data_directory() / "preferences.conf";
 }
+
+std::filesystem::path documents_directory() {
+    @autoreleasepool {
+        NSArray<NSURL*>* directories =
+            [[NSFileManager defaultManager] URLsForDirectory:NSDocumentDirectory
+                                                   inDomains:NSUserDomainMask];
+        NSURL* directory = [directories firstObject];
+        if (directory == nil)
+            throw std::runtime_error("Documents directory unavailable");
+        return std::filesystem::path([[directory path] fileSystemRepresentation]);
+    }
+}
 } // namespace oa::platform::preferences

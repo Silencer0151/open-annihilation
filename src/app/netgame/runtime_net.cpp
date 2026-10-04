@@ -26,11 +26,13 @@
 #include "oa/app/netgame/extension_api.hpp"
 #include "oa/base/sha256.hpp"
 #include "oa/sim/ai.hpp"
+#include "oa/sim/match_runtime.hpp"
 #include "oa/sim/messages.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
 #include "oa/ui/console/console.hpp"
 #include "oa/ui/console/game_fields.hpp"
 #include "oa/ui/hud/chat_panel.hpp"
+#include "oa/ui/hud/order_panel.hpp"
 #include "oa/ui/hud/player_records.hpp"
 #include "oa/ui/hud/share_panel.hpp"
 #include "oa/ui/hud/shared_views.hpp"
@@ -103,6 +105,9 @@ constexpr int32_t kLoopbackMoveDistance = 64 << 16;
 constexpr int32_t kLoopbackShotDistance = 100 << 16;
 constexpr std::size_t kLoopbackFireFrom = 200;
 constexpr std::size_t kLoopbackFireUntil = 260;
+// The tick the host's player turns its commander's build page with the
+// next-page key.
+constexpr std::size_t kLoopbackPageTurn = 40;
 // Ticks for the client's commander to self-destruct and its defeat countdown
 // to run out: the five-second countdown, then six 30-tick outcome checks.
 constexpr uint32_t kLoopbackDefeatTicks = 900;
@@ -255,7 +260,8 @@ uint32_t units_of_type(const World& world, uint8_t slot, uint16_t type) {
     return count;
 }
 
-/// Finds a player's live commander.
+/// Finds a player's live commander: a unit of the type its side names in
+/// SIDEDATA, as the game's commander rule counts it.
 ///
 /// @param world match world
 /// @param slot player slot
@@ -263,8 +269,8 @@ uint32_t units_of_type(const World& world, uint8_t slot, uint16_t type) {
 uint16_t commander_of(const World& world, uint8_t slot) {
     for (uint32_t index = 1; index < world.unit_slot_count; ++index) {
         const auto& unit = world.units[index];
-        if (unit_live(unit) && unit.owner_index == slot && unit.type_index < world.unit_def_count &&
-            (world.unit_defs[unit.type_index].abilities & OA_UNIT_DEF_ABILITY_COMMANDER) != 0)
+        if (unit_live(unit) && unit.owner_index == slot &&
+            sim::match_runtime::side_commander(world, unit))
             return static_cast<uint16_t>(index);
     }
     return 0;
@@ -313,23 +319,70 @@ uint64_t unit_roster(const World& world) {
     return hash;
 }
 
-/// Counts the shots a player's units fired this tick.
+/// The shots one player's units launch in a match, counted as each is placed.
 ///
+/// A shot is counted when it enters the projectile pool, not looked for in
+/// the pool after the tick: a shot that strikes in the tick it is fired is
+/// gone by then, and whether it does can differ between the machine that
+/// fires it and one that launches it from the 0x0d a tick later.
+struct LaunchedShots {
+    uint8_t owner{};  ///< player slot whose units' shots count
+    uint32_t count{}; ///< shots launched so far
+};
+
+/// Counts a shot a unit's weapon launched, on this machine or from its
+/// owner's 0x0d, when the unit belongs to the counted player
+/// (EventHooks::shot_placed).
+///
+/// A burst's later shots, which every machine makes from the first one, and
+/// meteors are not counted.
+///
+/// @param context the LaunchedShots
 /// @param world match world
-/// @param owner player slot
-/// @return shots made at the world's current tick
-uint32_t shots_fired(const World& world, uint8_t owner) {
-    uint32_t shots = 0;
-    const auto live = std::clamp<int32_t>(world.game.projectile_count, 0, OA_PROJECTILE_CAPACITY);
-    for (int32_t i = 0; i < live; ++i) {
-        const auto& shot = world.projectiles[i];
-        const auto source = oa::oa_unit_slot_from_ref(shot.source);
-        if (shot.created_tick == world.game.tick && source != 0 && source < world.unit_slot_count &&
-            world.units[source].owner_index == owner)
-            ++shots;
-    }
-    return shots;
+/// @param shot the shot placed
+/// @param source how the shot came to be
+void count_launched_shot(
+    void* context,
+    const World& world,
+    const oa::Projectile& shot,
+    sim::match_runtime::ShotSource source,
+    const FixedVec3* /*aim*/,
+    uint16_t /*target_unit*/
+) {
+    auto& shots = *static_cast<LaunchedShots*>(context);
+    const auto unit = oa::oa_unit_slot_from_ref(shot.source);
+    if (source == sim::match_runtime::ShotSource::weapon && unit != 0 &&
+        unit < world.unit_slot_count && world.units[unit].owner_index == shots.owner)
+        ++shots.count;
 }
+
+/// Counts a player's launched shots through a match's event hooks while it
+/// lives, then gives the match back the hooks it had.
+class LaunchedShotCounter {
+  public:
+
+    /// Points the match's event hooks at the count.
+    ///
+    /// @param[in,out] match match whose shots are counted
+    /// @param[in,out] shots count to add to; outlives the counter
+    LaunchedShotCounter(sim::match_runtime::Match& match, LaunchedShots& shots)
+        : counted_(match), saved_hooks_(match.event_hooks) {
+        counted_.event_hooks = {};
+        counted_.event_hooks.context = &shots;
+        counted_.event_hooks.shot_placed = &count_launched_shot;
+    }
+
+    /// Gives the match back the hooks it had.
+    ~LaunchedShotCounter() { counted_.event_hooks = saved_hooks_; }
+
+    LaunchedShotCounter(const LaunchedShotCounter&) = delete;
+    LaunchedShotCounter& operator=(const LaunchedShotCounter&) = delete;
+
+  private:
+
+    sim::match_runtime::Match& counted_;         ///< match whose shots are counted
+    sim::match_runtime::EventHooks saved_hooks_; ///< the hooks the match had
+};
 
 /// Marks the unit types the battle room's verdicts keep and gives them their agreed build limits.
 ///
@@ -1148,8 +1201,12 @@ struct NetworkPlay::NetHost {
         uint32_t copies_compared = 0;
         uint32_t copies_exact = 0;
         uint32_t copies_worst_offset = 0;
-        uint32_t host_shots = 0;
-        uint32_t client_shots = 0;
+        // The computer player's shots: the host's weapons launch them and
+        // share each as a 0x0d, from which the joiner launches its own.
+        LaunchedShots host_shots{host_ai};
+        LaunchedShots client_shots{client_ai};
+        const LaunchedShotCounter host_counter(host_match, host_shots);
+        const LaunchedShotCounter client_counter(client_match, client_shots);
         const auto note_owner = [&] {
             auto& poses = owner_poses[host_world.game.tick % kComputerPoseTicks];
             for (uint16_t slot = 1; slot < host_world.unit_slot_count; ++slot) {
@@ -1159,7 +1216,6 @@ struct NetworkPlay::NetHost {
                         ? OwnerPose{match_pose(host_match, slot), unit.type_index, unit.build_remaining == 0.0F}
                         : OwnerPose{};
             }
-            host_shots += shots_fired(host_world, host_ai);
         };
         // A copy moved from records matches its owner at the tick of the
         // record the joiner last applied from the computer player. A unit
@@ -1169,7 +1225,6 @@ struct NetworkPlay::NetHost {
         // record; it stays within a pixel meanwhile. Units still being built
         // are not compared.
         const auto compare_copies = [&] {
-            client_shots += shots_fired(client_world, client_ai);
             const auto tick = computer_copy.last_sim_tick;
             if (tick <= 0 || static_cast<uint32_t>(tick) > host_world.game.tick ||
                 host_world.game.tick - static_cast<uint32_t>(tick) >= kComputerPoseTicks)
@@ -1216,7 +1271,7 @@ struct NetworkPlay::NetHost {
         const auto score_line = [&] {
             std::cout << "kills " << computer_here.kills << " / " << computer_copy.kills
                       << ", losses " << computer_here.losses << " / " << computer_copy.losses
-                      << ", shots " << host_shots << " / " << client_shots;
+                      << ", shots " << host_shots.count << " / " << client_shots.count;
         };
 
         // The computer player builds its base. Its commander stands on the
@@ -1346,7 +1401,7 @@ struct NetworkPlay::NetHost {
         const auto losses_before = computer_here.losses;
         bool struck = false;
         const auto fought = [&] {
-            return struck && host_shots != 0 && computer_here.kills > kills_before &&
+            return struck && host_shots.count != 0 && computer_here.kills > kills_before &&
                    computer_here.losses - losses_before >= kComputerFightLosses;
         };
         uint32_t fight_ticks = 0;
@@ -1360,7 +1415,7 @@ struct NetworkPlay::NetHost {
         std::cout << "\n";
         require(struck, "the computer player did not strike");
         require(
-            host_shots != 0 && computer_here.kills > kills_before,
+            host_shots.count != 0 && computer_here.kills > kills_before,
             "the computer player's units killed nothing"
         );
         require(
@@ -1396,7 +1451,8 @@ struct NetworkPlay::NetHost {
         std::cout << ", copies compared " << copies_compared << ", exact " << copies_exact
                   << ", farthest off " << copies_worst_offset << " (16.16)\n";
         require(
-            client_shots == host_shots, "the computer player's shots did not all reach the joiner"
+            client_shots.count == host_shots.count,
+            "the computer player's shots did not all reach the joiner"
         );
         require(
             computer_copy.kills == computer_here.kills &&
@@ -2385,6 +2441,28 @@ int NetworkPlay::run_net_loopback_check(std::size_t ticks) {
         std::cout << "net loopback check: the host's " << what << " put back speed " << speed
                   << " and sent nothing; the joiner kept " << joiner_speed_before_put_back << "\n";
     };
+    // The host's player turns its commander's build page with the
+    // next-page key, a choice the host keeps to itself: the joiner's copy of
+    // the commander keeps the page it was created with, and the worlds
+    // agree as they would without it.
+    const CheckHost host_keys = check_host(runtime_);
+    const auto press_host_key = [&](SDL_Keycode code) {
+        SDL_Event event{};
+        event.type = SDL_EVENT_KEY_DOWN;
+        event.key.windowID = host_keys.window_id(host_keys.context);
+        event.key.key = code;
+        event.key.down = true;
+        require(host_keys.dispatch(host_keys.context, &event), "a key ended the host's run");
+    };
+    // The build page a world's copy of the host commander shows; 0 for its
+    // order page.
+    const auto commander_page = [host_commander](const World& world) {
+        const auto flags = world.units[host_commander].flags;
+        return (flags & OA_UNIT_FLAG_BUILD_MENU) != 0 ? oa::ui::hud::build_page(flags) : 0u;
+    };
+    uint32_t host_page_before = 0;
+    uint32_t host_page_turned = 0;
+    uint32_t joiner_page_before = 0;
     uint32_t pauses_before_menu = 0;
     uint32_t client_tick_before_menu = 0;
     uint32_t held_host_tick = 0;
@@ -2397,6 +2475,27 @@ int NetworkPlay::run_net_loopback_check(std::size_t ticks) {
                 host_commander,
                 {unit.position.x, unit.position.y, unit.position.z + kLoopbackMoveDistance},
                 false
+            );
+        }
+        if (tick == kLoopbackPageTurn) {
+            const auto& commander = host_world.units[host_commander];
+            host_page_before = commander_page(host_world);
+            joiner_page_before = commander_page(client_world);
+            // The page after the key: the next one among the type's pages, or
+            // the order page after the last.
+            const auto turned = oa::ui::hud::build_menu_forward(
+                commander.flags, host_world.unit_defs[commander.type_index].gui_page_count, true
+            );
+            const auto expected =
+                (turned & OA_UNIT_FLAG_BUILD_MENU) != 0 ? oa::ui::hud::build_page(turned) : 0u;
+            // Space selects the commander when nothing is selected, and the
+            // commander is all the host's player has.
+            press_host_key(SDLK_SPACE);
+            press_host_key(SDLK_PERIOD);
+            host_page_turned = commander_page(host_world);
+            require(
+                host_page_before != 0 && host_page_turned == expected,
+                "the host's next-page key did not turn its commander's build page"
             );
         }
         if (tick == 60)
@@ -2590,6 +2689,14 @@ int NetworkPlay::run_net_loopback_check(std::size_t ticks) {
               << " records, host commander shots " << host_shots.count << " / "
               << client_shots.count << "\n";
     require(agreed, "world digests differ after settling");
+    require(
+        commander_page(host_world) == host_page_turned &&
+            commander_page(client_world) == joiner_page_before,
+        "the host's turn of its commander's build page reached the joiner"
+    );
+    std::cout << "net loopback check: the host turned its commander's build page from "
+              << host_page_before << " to " << host_page_turned << "; the joiner's copy kept page "
+              << joiner_page_before << " and the worlds agree\n";
     require(
         copy_placed_tick != 0 && copy_placed_tick == first_applied_tick,
         "the client's copy of the host commander did not stand on its start position from its 0x09"
@@ -2857,7 +2964,12 @@ int NetworkPlay::run_net_loopback_check(std::size_t ticks) {
             "the joiner was not credited the metal the host gave"
         );
 
-        // A kbot the host builds is selected alone and given with the map.
+        // A kbot the host builds and the host's commander, every unit the
+        // host's player has, are selected and given with the map through
+        // SHARE.GUI's own path (Runtime::give_selected_units_to). The kbot
+        // goes. The commander stays when its type is in the Commander
+        // category and goes too when it is not: the check says which, and
+        // the tests that run it hold it to the data they give it.
         const auto named = [](const char* field, std::size_t capacity, std::string_view name) {
             const auto held = field_text(field, capacity);
             return held.size() == name.size() &&
@@ -2904,22 +3016,21 @@ int NetworkPlay::run_net_loopback_check(std::size_t ticks) {
         oa::Unit* own = oa::world_player_units(
             &panel_world, &panel_world.game.players[panel_host_slot], &own_count
         );
+        uint32_t host_units = 0;
         for (uint32_t index = 0; index < own_count; ++index)
-            own[index].flags &= ~OA_UNIT_FLAG_SELECTED;
-        panel_world.units[gift].flags |= OA_UNIT_FLAG_SELECTED;
+            if (unit_live(own[index])) {
+                own[index].flags |= OA_UNIT_FLAG_SELECTED;
+                ++host_units;
+            }
+        require(
+            host_units == 2 &&
+                (panel_world.units[host_commander].flags & OA_UNIT_FLAG_SELECTED) != 0,
+            "the host's player has more or fewer units than its commander and the kbot"
+        );
+        const auto commander_type = panel_world.units[host_commander].type_index;
         share_host.user = this;
         share_host.give_units = [](void* user, uint8_t, uint8_t to) {
-            auto& self = *static_cast<NetworkPlay*>(user);
-            const oa::ui::hud::UnitTransfer transfer{
-                &self, [](void* owner, oa::Unit& unit, oa::Player& recipient) {
-                    auto& play = *static_cast<NetworkPlay*>(owner);
-                    play.net_->binding.match->transfer_unit(
-                        static_cast<uint16_t>(oa::world_unit_slot(play.net_->net->world, &unit)),
-                        recipient.index
-                    );
-                }
-            };
-            oa::ui::hud::give_selected_units(*self.net_->net->world, to, nullptr, transfer);
+            static_cast<NetworkPlay*>(user)->runtime_.give_selected_units_to(to);
         };
         share_host.share_map = [](void* user, uint8_t from, uint8_t to) {
             auto& self = *static_cast<NetworkPlay*>(user);
@@ -2927,10 +3038,13 @@ int NetworkPlay::run_net_loopback_check(std::size_t ticks) {
         };
         share_host.send_metal = nullptr;
         share_host.send_energy = nullptr;
-        const auto received = [&](oa::netgame::RecordType type) {
-            return joiner_play.net_->connection.packets->traffic
+        const auto counted = [](NetworkPlay& play, oa::netgame::RecordType type) {
+            return play.net_->connection.packets->traffic
                 .record_count[static_cast<uint8_t>(type)]
                              [static_cast<uint8_t>(oa::netgame::TrafficChannel::received)];
+        };
+        const auto received = [&](oa::netgame::RecordType type) {
+            return counted(joiner_play, type);
         };
         const auto gifts_before = received(oa::netgame::RecordType::unit_transfer);
         const auto maps_before = received(oa::netgame::RecordType::resource_give);
@@ -2947,10 +3061,20 @@ int NetworkPlay::run_net_loopback_check(std::size_t ticks) {
             share_world, share, "OK", share_row, 0, 0, true, true, share_flags, events, share_host
         );
         run_both(8);
+        const auto joiner_host_slot = static_cast<uint8_t>(client_host_slot);
+        // The host's commander as both machines hold it: live under the
+        // host's player, or gone from its slot.
+        const bool commander_kept =
+            unit_live(host_world.units[host_commander]) &&
+            host_world.units[host_commander].owner_index == panel_host_slot &&
+            unit_live(client_world.units[host_commander]) &&
+            client_world.units[host_commander].owner_index == joiner_host_slot;
+        // One 0x14 for each unit that went.
         require(
-            received(oa::netgame::RecordType::unit_transfer) - gifts_before == 1 &&
+            received(oa::netgame::RecordType::unit_transfer) - gifts_before ==
+                    (commander_kept ? 1u : 2u) &&
                 received(oa::netgame::RecordType::resource_give) - maps_before == 1,
-            "the joiner did not receive the unit and the map the host gave"
+            "the joiner did not receive the units and the map the host gave"
         );
         require(
             std::none_of(
@@ -2960,13 +3084,18 @@ int NetworkPlay::run_net_loopback_check(std::size_t ticks) {
             ),
             "the joiner's player did not take the map the host's player gave"
         );
-        uint16_t given = 0;
-        for (uint32_t slot = 1; slot < client_world.unit_slot_count && given == 0; ++slot) {
-            const auto& unit = client_world.units[slot];
-            if (unit.type_index == kbot_type && (unit.flags & OA_UNIT_FLAG_LIVE) != 0 &&
-                unit.owner_index == client_world.game.local_player_index)
-                given = static_cast<uint16_t>(slot);
-        }
+        // A unit of a type the joiner's player owns on the joiner's machine.
+        const auto joiner_owned = [&](uint16_t type) {
+            uint16_t found = 0;
+            for (uint32_t slot = 1; slot < client_world.unit_slot_count && found == 0; ++slot) {
+                const auto& unit = client_world.units[slot];
+                if (unit.type_index == type && unit_live(unit) &&
+                    unit.owner_index == client_world.game.local_player_index)
+                    found = static_cast<uint16_t>(slot);
+            }
+            return found;
+        };
+        const uint16_t given = joiner_owned(kbot_type);
         require(given != 0 && given != gift, "the joiner's player does not own the given unit");
         require(
             (host_world.units[gift].flags & OA_UNIT_FLAG_LIVE) == 0 &&
@@ -2978,6 +3107,41 @@ int NetworkPlay::run_net_loopback_check(std::size_t ticks) {
                 host_world.units[given].owner_index == panel_client_slot,
             "the host does not hold the given unit as the joiner's"
         );
+        if (!commander_kept) {
+            // The commander went too; the joiner's player gives it back
+            // through the same path, and the host's player owns it again.
+            const uint16_t taken = joiner_owned(commander_type);
+            require(
+                taken != 0 && !unit_live(host_world.units[host_commander]) &&
+                    !unit_live(client_world.units[host_commander]) &&
+                    host_world.units[taken].owner_index == panel_client_slot,
+                "the host's commander neither stayed nor went to the joiner on both machines"
+            );
+            uint32_t joiner_count = 0;
+            oa::Unit* joiner_units = oa::world_player_units(
+                &joiner_world, &joiner_world.game.players[joiner_local.index], &joiner_count
+            );
+            for (uint32_t index = 0; index < joiner_count; ++index)
+                joiner_units[index].flags &= ~OA_UNIT_FLAG_SELECTED;
+            joiner_world.units[taken].flags |= OA_UNIT_FLAG_SELECTED;
+            const auto returns_before = counted(*this, oa::netgame::RecordType::unit_transfer);
+            joiner.give_selected_units_to(joiner_host_slot);
+            run_both(8);
+            uint16_t returned = 0;
+            for (uint32_t slot = 1; slot < host_world.unit_slot_count && returned == 0; ++slot) {
+                const auto& unit = host_world.units[slot];
+                if (unit.type_index == commander_type && unit_live(unit) &&
+                    unit.owner_index == panel_host_slot)
+                    returned = static_cast<uint16_t>(slot);
+            }
+            require(
+                counted(*this, oa::netgame::RecordType::unit_transfer) - returns_before == 1 &&
+                    returned != 0 && !unit_live(client_world.units[taken]) &&
+                    unit_live(client_world.units[returned]) &&
+                    client_world.units[returned].owner_index == joiner_host_slot,
+                "the joiner's player did not give the host's commander back"
+            );
+        }
         // The joiner's gift goes again, so its commander is its last unit.
         joiner_play.net_->binding.match->kill_unit(given, 0);
         run_both(8);
@@ -2986,6 +3150,16 @@ int NetworkPlay::run_net_loopback_check(std::size_t ticks) {
                 (client_world.units[given].flags & OA_UNIT_FLAG_LIVE) == 0,
             "the given unit did not die on both machines"
         );
+        bool gifts_agreed = false;
+        for (uint32_t extra = 0; extra < settle_limit && !gifts_agreed; ++extra) {
+            run_both(1);
+            gifts_agreed = world_digest(host_world) == world_digest(client_world);
+        }
+        require(gifts_agreed, "the machines disagree after the host gave its units");
+        std::cout << "net loopback check: the host's player gave every unit it had; the kbot went "
+                     "and its commander "
+                  << (commander_kept ? "stayed" : "went too, then came back from the joiner")
+                  << ", and the machines agree\n";
 
         auto* panel_info =
             oa::world_player_info(&panel_world, &panel_world.game.players[panel_host_slot]);

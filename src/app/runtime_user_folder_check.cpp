@@ -1,0 +1,427 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// --check-user-folder: the player's own folder beside the check's
+// preferences file, the saved games moved into it once, the paths the game
+// names placed in it, the main menu's notice of the move shown once and
+// closed, and the settings' Your files buttons, all through a recorded
+// opener, so that no file manager opens.
+
+#include "engine_settings_menu_host.hpp"
+#include "engine_settings_state.hpp"
+#include "user_folder_state.hpp"
+
+#include "oa/app/game_directory.hpp"
+#include "oa/app/mod_profile_loader.hpp"
+#include "oa/app/runtime.hpp"
+#include "oa/app/user_folder.hpp"
+#include "oa/platform/preferences.hpp"
+#include "oa/ui/engine_settings/dialog.hpp"
+#include "oa/ui/engine_settings/notice.hpp"
+#include "oa/ui/frontend/savegame_dialogs.hpp"
+#include "oa/ui/frontend_renderer/artless.hpp"
+
+#include <SDL3/SDL.h>
+
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <fstream>
+#include <iostream>
+#include <iterator>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <tuple>
+#include <vector>
+
+namespace oa::app {
+
+namespace settings = oa::ui::engine_settings;
+namespace artless = oa::ui::frontend_renderer;
+
+namespace {
+
+/// A point of the main menu's picture over none of its buttons, where the
+/// pointer rests between the check's steps.
+constexpr oa::ui::display_layout::Point kRestingPointer{4, 240};
+
+/// Stops the check with a reason unless a condition holds.
+///
+/// @param condition what must hold
+/// @param what what went wrong otherwise
+void require(bool condition, std::string_view what) {
+    if (!condition)
+        throw std::runtime_error("user folder check: " + std::string(what));
+}
+
+/// Writes a small file, making its folder.
+///
+/// @param file the file
+/// @param text what it holds
+void write_file(const fs::path& file, std::string_view text) {
+    std::error_code error;
+    fs::create_directories(file.parent_path(), error);
+    std::ofstream(file, std::ios::binary) << text;
+}
+
+/// Reads a file whole.
+///
+/// @param file the file
+/// @return what it holds; empty when it cannot be read
+std::string read_file(const fs::path& file) {
+    std::ifstream input(file, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(input), {});
+}
+
+/// Counts the pixels in which two frames of one size differ.
+///
+/// @param first one frame
+/// @param second the other frame
+/// @return the differing pixels; every pixel and one more when the sizes differ
+std::size_t differing_pixels(const renderer::Surface& first, const renderer::Surface& second) {
+    if (first.width != second.width || first.height != second.height ||
+        first.rgb.size() != second.rgb.size())
+        return static_cast<std::size_t>(first.width) * first.height + 1U;
+    std::size_t differing = 0;
+    for (std::size_t at = 0; at + 2 < first.rgb.size(); at += 3)
+        if (first.rgb[at] != second.rgb[at] || first.rgb[at + 1] != second.rgb[at + 1] ||
+            first.rgb[at + 2] != second.rgb[at + 2])
+            ++differing;
+    return differing;
+}
+
+/// Writes one step's snapshot, <stem>-<step>.ppm beside --snapshot, when
+/// one is asked for.
+///
+/// @param snapshot the --snapshot path; empty for none
+/// @param step the step's name
+/// @param frame the frame
+void step_snapshot(
+    const fs::path& snapshot, std::string_view step, const renderer::Surface& frame
+) {
+    if (snapshot.empty())
+        return;
+    write_ppm(
+        snapshot.parent_path() / (snapshot.stem().string() + '-' + std::string(step) + ".ppm"),
+        frame
+    );
+}
+
+/// Shows nothing and tells that the file manager failed, as a system
+/// without one would.
+///
+/// @return the failure
+FolderOpening refuse_folder(void*, const fs::path&) {
+    return FolderOpening{false, std::string(no_file_manager_text), {}};
+}
+
+} // namespace
+
+void Runtime::check_user_folder() {
+    if (sdl_.renderer == nullptr || sdl_.window == nullptr)
+        throw std::runtime_error("user folder check: needs the SDL presenter");
+    // The check moves files, so it never runs over the player's own.
+    if (!options_.preferences_file || options_.user_folder)
+        throw std::runtime_error(
+            "user folder check: needs --preferences-file, and the folder beside it"
+        );
+    namespace platform_preferences = oa::platform::preferences;
+    std::error_code error;
+    const fs::path earlier_root =
+        fs::absolute(preference_path_, error).lexically_normal().parent_path();
+    require(
+        user_folder_ == user_folder_beside(*options_.preferences_file),
+        "the player's folder is not \"Open Annihilation\" beside the preferences file"
+    );
+    // Each run starts from nothing: no record, no folder of its own, and
+    // saved games where earlier versions kept them, one of them named as one
+    // in Saves is.
+    preference_values_.clear();
+    platform_preferences::save(preference_path_, preference_values_);
+    fs::remove_all(user_folder_, error);
+    fs::remove_all(earlier_root / "SAVEGAME", error);
+    fs::remove_all(earlier_root / "mods", error);
+    const fs::path saves = oa::app::saves_folder(user_folder_, {});
+    write_file(earlier_root / "SAVEGAME" / "ALPHA.SAV", "alpha");
+    write_file(earlier_root / "SAVEGAME" / "BETA.SAV", "beta");
+    write_file(earlier_root / "SAVEGAME" / "UNITS.LST", "list");
+    write_file(earlier_root / "mods" / "check-mod" / "SAVEGAME" / "GAMMA.SAV", "gamma");
+    write_file(saves / "alpha.sav", "kept");
+
+    // A start with a named preferences file moves nothing: what lies beside
+    // it stays, and the dialogs find it there.
+    start_user_folder();
+    require(
+        read_file(earlier_root / "SAVEGAME" / "ALPHA.SAV") == "alpha" &&
+            !preference_values_.contains(std::string(saves_moved_preference)) &&
+            save_roots().earlier == earlier_root / "SAVEGAME",
+        "a start with --preferences-file moved the saved games beside it"
+    );
+    // The move, as a start with the player's own file makes it: three saved
+    // games, the one named twice kept under another name, nothing
+    // overwritten, the emptied folders gone, the move recorded and its
+    // notice due.
+    move_saves_once();
+    require(read_file(saves / "alpha.sav") == "kept", "the move overwrote a saved game");
+    require(read_file(saves / "ALPHA (2).SAV") == "alpha", "ALPHA.SAV was not kept beside it");
+    require(read_file(saves / "BETA.SAV") == "beta", "BETA.SAV did not move");
+    require(read_file(saves / "UNITS.LST") == "list", "the restriction list did not move");
+    require(
+        read_file(saves / "check-mod" / "GAMMA.SAV") == "gamma",
+        "a mod's saved game did not move into its own folder"
+    );
+    require(
+        !fs::exists(earlier_root / "SAVEGAME", error) &&
+            !fs::exists(earlier_root / "mods" / "check-mod" / "SAVEGAME", error),
+        "the emptied earlier folders stayed"
+    );
+    const auto recorded = recorded_saves_move(preference_values_);
+    require(recorded && recorded->moved == 3 && recorded->left == 0, "the move is not recorded");
+    require(saves_notice_due_in(preference_values_), "the move's notice is not due");
+    require(
+        platform_preferences::load(preference_path_).contains(std::string(saves_moved_preference)),
+        "the move's record was not written"
+    );
+
+    // Once recorded, the move is not made again: a saved game an earlier
+    // version writes later stays, and the dialogs find it where it is.
+    write_file(earlier_root / "SAVEGAME" / "DELTA.SAV", "delta");
+    move_saves_once();
+    require(
+        read_file(earlier_root / "SAVEGAME" / "DELTA.SAV") == "delta",
+        "a second start moved the saved games again"
+    );
+    const auto roots = save_roots();
+    require(roots.saves == saves, "the saved games are not written to Saves");
+    require(
+        roots.earlier == earlier_root / "SAVEGAME" &&
+            game_file_path("SAVEGAME\\DELTA.SAV", ui::frontend::SavePathUse::read) ==
+                earlier_root / "SAVEGAME" / "DELTA.SAV" &&
+            game_file_path("savegame\\BETA.SAV", ui::frontend::SavePathUse::read) ==
+                saves / "BETA.SAV" &&
+            game_file_path("SAVEGAME\\DELTA.SAV", ui::frontend::SavePathUse::write) ==
+                saves / "DELTA.SAV",
+        "the earlier folder's saved game is not read where it is, or written to Saves"
+    );
+
+    // Captures: the player's own folder is the Image Output Directory, its
+    // screenshots folder Screenshots and its films in Films.
+    const std::string output = own_image_output_directory();
+    require(
+        output == path_to_utf8(user_folder_) && preferences_.image_output_directory == output,
+        "the Image Output Directory is not the player's own folder"
+    );
+    require(
+        game_file_path(output + "\\screenshots\\SHOT0001.pcx", ui::frontend::SavePathUse::write) ==
+                user_folder_ / "Screenshots" / "SHOT0001.pcx" &&
+            game_file_path(output + "\\MOVIE001\\FRAM0001.pcx", ui::frontend::SavePathUse::write) ==
+                user_folder_ / "Films" / "MOVIE001" / "FRAM0001.pcx" &&
+            game_file_path(output + "\\MOVIE*", ui::frontend::SavePathUse::write) ==
+                user_folder_ / "Films" / "MOVIE*",
+        "screenshots and films do not go in Screenshots and Films"
+    );
+    std::cout << "user folder check: 3 saved games moved into " << path_to_utf8(saves)
+              << ", none overwritten, once; screenshots and films go in its Screenshots and "
+                 "Films\n";
+
+    // The notice, over the main menu.
+    const auto previous_tick = fake_frontend_tick_;
+    fake_frontend_tick_ = 1000U;
+    load(Screen::main_menu);
+    require(screen_ == Screen::main_menu, "the main menu did not open");
+    const auto* fonts = engine_settings_fonts();
+    require(fonts != nullptr, "the dialog's fonts did not load");
+    send_check_pointer(SDL_EVENT_MOUSE_MOTION, kRestingPointer, 0);
+    const auto sparks = menu_sparks_;
+    const auto frame = [&] {
+        menu_sparks_ = sparks;
+        return frame_without_cursor();
+    };
+    const auto menu = frame();
+    // A run nobody watches leaves it due.
+    for (int pass = 0; pass < 4; ++pass)
+        tell_saves_moved();
+    require(
+        !saves_notice_shown() && saves_notice_due_in(preference_values_),
+        "a run nobody watches showed the notice"
+    );
+    auto& state = user_folder_state();
+    state.check_shows_notice = true;
+    for (int pass = 0; pass < 4; ++pass)
+        tell_saves_moved();
+    require(saves_notice_shown(), "the notice did not show over the main menu");
+    require(
+        !saves_notice_due_in(preference_values_) &&
+            platform_preferences::load(preference_path_).at(std::string(saves_notice_preference)) ==
+                saves_notice_told,
+        "the notice shown was not recorded told"
+    );
+    const auto& notice = *state.notice;
+    require(
+        notice.title == "SAVED GAMES MOVED" && notice.paragraphs.size() == 3 &&
+            notice.paragraphs[0].text == "3 saved games have moved to:" &&
+            notice.paragraphs[1].path && notice.paragraphs[1].text == path_to_utf8(saves),
+        "the notice does not say that 3 saved games moved to Saves"
+    );
+    // Over the darkened main menu, centred, in the settings dialog's look.
+    const int32_t height = settings::notice_height(notice, fonts);
+    const auto placement = UserFolderState::notice_placement(height);
+    {
+        auto expected = menu;
+        artless::blend_source_rect(
+            expected,
+            {0, 0, 1},
+            {0, 0, static_cast<int32_t>(expected.width), static_cast<int32_t>(expected.height)},
+            settings::backdrop_color,
+            settings::menu_backdrop_opacity
+        );
+        settings::draw_notice(expected, placement, notice, *fonts, engine_settings_icon());
+        const auto shown = frame();
+        step_snapshot(options_.snapshot, "notice", shown);
+        require(
+            differing_pixels(shown, expected) == 0,
+            "the notice is not drawn centred over the darkened main menu"
+        );
+    }
+    // Its buttons: Open folder shows Saves and the notice stays; one that
+    // fails says why in it.
+    const auto parts = settings::notice_layout(notice, fonts);
+    const auto button = [&](int32_t control) {
+        for (const auto& part : parts)
+            if (part.control == control)
+                return oa::ui::display_layout::Point{
+                    placement.x + part.rect.x + part.rect.width / 2,
+                    placement.y + part.rect.y + part.rect.height / 2
+                };
+        throw std::runtime_error("user folder check: the notice has no such button");
+    };
+    const auto click = [&](oa::ui::display_layout::Point at) {
+        send_check_pointer(SDL_EVENT_MOUSE_MOTION, at, 0);
+        send_check_pointer(SDL_EVENT_MOUSE_BUTTON_DOWN, at, SDL_BUTTON_LEFT);
+        send_check_pointer(SDL_EVENT_MOUSE_BUTTON_UP, at, SDL_BUTTON_LEFT);
+    };
+    state.opened.clear();
+    click(button(settings::notice_open_control));
+    require(
+        saves_notice_shown() && state.opened == std::vector<fs::path>{saves},
+        "Open folder did not show Saves, or closed the notice"
+    );
+    const FolderOpenerHooks recording = state.opener;
+    state.opener = FolderOpenerHooks{nullptr, refuse_folder};
+    click(button(settings::notice_open_control));
+    state.opener = recording;
+    require(
+        saves_notice_shown() && state.notice->failure == no_file_manager_text,
+        "the notice does not say why the folder could not be shown"
+    );
+    // Enter closes it, and its release never reaches the main menu.
+    const auto key = [this](SDL_EventType type, SDL_Keycode code) {
+        SDL_Event event{};
+        event.type = type;
+        event.key.windowID = SDL_GetWindowID(sdl_.window);
+        event.key.key = code;
+        event.key.scancode = SDL_GetScancodeFromKey(code, nullptr);
+        event.key.down = type == SDL_EVENT_KEY_DOWN;
+        bool running = true;
+        dispatch_event(event, running);
+        return running;
+    };
+    require(key(SDL_EVENT_KEY_DOWN, SDLK_RETURN), "Enter on the notice ended the run");
+    require(!saves_notice_shown(), "Enter did not close the notice");
+    require(key(SDL_EVENT_KEY_UP, SDLK_RETURN), "Enter's release ended the run");
+    require(screen_ == Screen::main_menu, "Enter on the notice left the main menu");
+    // Told, it shows no more.
+    for (int pass = 0; pass < 4; ++pass)
+        tell_saves_moved();
+    require(!saves_notice_shown() && state.notices_shown == 1, "the notice showed again");
+    std::cout << "user folder check: the notice showed once over the main menu at " << placement.x
+              << ',' << placement.y
+              << ", showed Saves, said why one could not be shown and "
+                 "closed on Enter\n";
+
+    // Your files: the row shows the folder; its buttons show this run's
+    // Saves, Screenshots and the Mods folder, made when missing.
+    open_engine_settings_from_menu();
+    auto* dialog = engine_settings_dialog();
+    require(dialog != nullptr, "the settings dialog did not open");
+    require(dialog->user_folder == path_to_utf8(user_folder_), "Your files shows another folder");
+    dialog->page = settings::Page::common_tweaks;
+    step_snapshot(options_.snapshot, "your-files", frame());
+    state.opened.clear();
+    for (const auto which :
+         {settings::FolderButton::saves,
+          settings::FolderButton::screenshots,
+          settings::FolderButton::mods}) {
+        dialog->folder_to_open = which;
+        require(
+            !take_engine_settings_action(settings::DialogAction::open_folder),
+            "a Your files button closed the dialog"
+        );
+    }
+    const std::vector<fs::path> shown{saves, user_folder_ / "Screenshots", user_folder_ / "Mods"};
+    require(state.opened == shown, "Your files did not show Saves, Screenshots and Mods");
+    require(
+        std::all_of(
+            shown.begin(),
+            shown.end(),
+            [](const fs::path& folder) {
+                std::error_code missing;
+                return fs::is_directory(folder, missing);
+            }
+        ),
+        "Your files did not make the folders it showed"
+    );
+    std::ignore = take_engine_settings_action(settings::DialogAction::cancelled);
+    engine_settings_menu_host().dialog_shown = false;
+
+    // The Mods folder's mods are offered beside the game folder's, a folder
+    // without an oamod.yaml among them, each with what Mods shows of it.
+    write_file(
+        user_folder_ / "Mods" / "Check Mod" / std::string(mod_profile_name),
+        "id: check\nname: Check Mod Title\nversion: \"3.2\"\ndescription: A check's mod.\n"
+    );
+    fs::create_directories(user_folder_ / "Mods" / "Plain Folder");
+    const auto listed = list_mods_in(user_folder_ / "Mods");
+    require(
+        listed.size() == 2 && listed.front().filename() == "Check Mod" &&
+            listed.back().filename() == "Plain Folder",
+        "the Mods folder's mods are not listed"
+    );
+    load_engine_settings();
+    const auto& settings_state = engine_settings_state();
+    const auto details_of = [&settings_state](const fs::path& folder) {
+        const auto& offered = settings_state.mod_folders;
+        const auto found = std::find(offered.begin(), offered.end(), path_to_utf8(folder));
+        require(found != offered.end(), "the Mods page does not offer the Mods folder's mods");
+        const auto index = static_cast<std::size_t>(std::distance(offered.begin(), found));
+        return std::pair{settings_state.mod_names[index], settings_state.mod_details[index]};
+    };
+    const auto [titled, titled_details] = details_of(listed.front());
+    require(
+        titled == "Check Mod Title" && titled_details.version == "3.2" &&
+            titled_details.description == "A check's mod." && titled_details.has_profile,
+        "the Mods page does not show the oamod.yaml's name, version and description"
+    );
+    const auto [plain, plain_details] = details_of(listed.back());
+    require(
+        plain == "Plain Folder" && plain_details.version == "N/A" &&
+            plain_details.description == "No oamod.yaml present" && !plain_details.has_profile,
+        "the Mods page does not show a folder without an oamod.yaml by its name"
+    );
+    fake_frontend_tick_ = previous_tick;
+    send_check_pointer(SDL_EVENT_MOUSE_MOTION, kRestingPointer, 0);
+    std::cout << "user folder check: Your files showed " << path_to_utf8(user_folder_)
+              << " and its Saves, Screenshots and Mods; the Mods page lists Mods' mods\n";
+
+    // Nothing is left behind for the next run.
+    fs::remove_all(user_folder_, error);
+    fs::remove_all(earlier_root / "SAVEGAME", error);
+    fs::remove_all(earlier_root / "mods", error);
+    preference_values_.clear();
+    preferences_dirty_ = true;
+    std::cout << "user folder check: passed\n";
+}
+
+} // namespace oa::app

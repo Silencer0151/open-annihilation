@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 cmake_minimum_required(VERSION 3.24)
-project(open_annihilation VERSION 0.6.2 LANGUAGES C CXX)
+project(open_annihilation VERSION 0.7.0 LANGUAGES C CXX)
 # A target that links one static library both directly and through
 # another library gets it once on its link line, in dependency order, rather
 # than once for each path that reaches it. The linker then has nothing to
@@ -102,9 +102,15 @@ if(OA_SANITIZERS)
     unset(OA_SANITIZERS_C_LINKS CACHE)
     unset(OA_SANITIZERS_CXX_LINKS CACHE)
     list(JOIN oa_sanitizer_flags " " oa_sanitizer_flag_text)
+    set(oa_sanitizer_ignorelist_note "")
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+      string(CONCAT oa_sanitizer_ignorelist_note
+        "; or the compiler rejected cmake/sanitizer-ignorelist.txt, "
+        "which the configure log under CMakeFiles shows")
+    endif()
     message(FATAL_ERROR "OA_SANITIZERS: the C or C++ compiler cannot build and link a program with "
       "${oa_sanitizer_flag_text}; install its AddressSanitizer and UndefinedBehaviorSanitizer "
-      "runtimes, or configure with a compiler that has them")
+      "runtimes, or configure with a compiler that has them${oa_sanitizer_ignorelist_note}")
   endif()
   add_compile_options(${oa_sanitizer_flags})
   add_link_options(${oa_sanitizer_link_flags})
@@ -247,14 +253,17 @@ target_link_libraries(oa-app-game-options PUBLIC oa-ui-frontend-renderer oa-ui-f
 add_library(oa-app-game-directory src/app/game_directory.cpp src/app/demo_installer.cpp)
 add_library(oa::app::game_directory ALIAS oa-app-game-directory)
 target_link_libraries(oa-app-game-directory PUBLIC oa-app-headers oa-base-sha256 oa-platform-preferences
-  oa-app-mod-profile PRIVATE oa-formats-hpi oa-formats-pe oa-options)
+  oa-app-mod-profile PRIVATE oa-formats-hpi oa-formats-pe oa-platform-shims oa-options)
 # oa-game's mod profile: a folder's oamod.yaml found and resolved with the
 # settings it binds, the mod folders a game folder offers, the layout and
-# discovery a profile sets, and the --mod and --print-profile options.
-add_library(oa-app-mod-profile src/app/mod_profile_loader.cpp src/app/mod_folder.cpp)
+# discovery a profile sets, the --mod and --print-profile options, and the
+# Mods page's row for a folder: its title, version and description, and its
+# badge decoded.
+add_library(oa-app-mod-profile src/app/mod_profile_loader.cpp src/app/mod_folder.cpp
+  src/app/mod_summary.cpp)
 add_library(oa::app::mod_profile ALIAS oa-app-mod-profile)
 target_link_libraries(oa-app-mod-profile PUBLIC oa-app-headers oa-data-mod-profile oa-data-defs
-  oa-formats-hpi oa-platform-preferences PRIVATE oa-options)
+  oa-formats-hpi oa-platform-preferences PRIVATE oa-formats-png oa-options)
 # Bringing the player's game files into the game's own storage, with no SDL:
 # the files copied and left out, the name check, the plan, the space it
 # needs, the listing and the copy on worker threads, the state file, the
@@ -265,6 +274,16 @@ add_library(oa-app-game-files src/app/game_files_import.cpp src/app/game_files_s
 add_library(oa::app::game_files ALIAS oa-app-game-files)
 target_link_libraries(oa-app-game-files PUBLIC oa-app-headers oa-app-game-directory oa-app-mod-profile
   oa-base-threads PRIVATE oa-formats-zip oa-platform-preferences oa-options)
+# The player's own folder: where it is, the folders it holds, the one-time
+# move of saved games from beside the preferences file into its Saves, and
+# the main menu's notice of that move; and the warning, in the same look,
+# that a mod's games cannot start until its files are in its folder.
+# The game shows a folder in the system's file manager itself
+# (user_folder_open.cpp).
+add_library(oa-app-user-folder src/app/user_folder.cpp)
+add_library(oa::app::user_folder ALIAS oa-app-user-folder)
+target_link_libraries(oa-app-user-folder PUBLIC oa-app-headers oa-platform-preferences
+  oa-ui-engine-settings PRIVATE oa-options)
 # The renderer records: what the engine has seen of each render driver on
 # this machine, and the sentinel of the stage a start has reached. Their text
 # and rules are pure (renderer_records.hpp); renderer_state.hpp keeps them in
@@ -590,9 +609,23 @@ if(BUILD_TESTING)
   add_executable(oa-app-mod-profile-test src/app/mod_profile_loader_test.cpp)
   target_link_libraries(oa-app-mod-profile-test PRIVATE oa-app-mod-profile oa-test-support oa-options)
   add_test(NAME app-mod-profile COMMAND oa-app-mod-profile-test)
+  # The Mods page's rows over scratch folders: a profile's name, version and
+  # description, a folder without a profile or with a damaged one, and
+  # badges of each colour type, scaled down, damaged or too large.
+  add_executable(oa-app-mod-summary-test src/app/mod_summary_test.cpp)
+  target_link_libraries(oa-app-mod-summary-test PRIVATE oa-app-mod-profile oa-formats-png oa-test-support
+    oa-options)
+  add_test(NAME app-mod-summary COMMAND oa-app-mod-summary-test)
+  # The player's own folder in scratch folders: where it is, the saved
+  # games moved once and nothing overwritten, renames and copies refused,
+  # the record of the move and the notice it gives; and what keeps a mod's
+  # games from starting, and the warning that says so.
+  add_executable(oa-app-user-folder-test src/app/user_folder_test.cpp)
+  target_link_libraries(oa-app-user-folder-test PRIVATE oa-app-user-folder oa-test-support oa-options)
+  add_test(NAME app-user-folder COMMAND oa-app-user-folder-test)
   add_executable(oa-game-directory-test src/app/game_directory_test.cpp)
   target_link_libraries(oa-game-directory-test PRIVATE oa-app-game-directory oa-app-headers oa-formats-hpi
-    oa-platform-preferences oa-test-game-data oa-options)
+    oa-platform-preferences oa-platform-shims oa-test-game-data oa-options)
   add_test(NAME game-directory COMMAND oa-game-directory-test)
   # The installation OA_GAME_DIR names passes the folder dialog's check.
   oa_add_game_data_test(game-directory-install oa-game-directory-test --install)
@@ -776,6 +809,7 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/runtime_reclaim_cursor_check.cpp
   src/app/runtime_pointer_press.cpp src/app/runtime_pointer_check.cpp
   src/app/runtime_dgun_check.cpp src/app/runtime_attack_command_check.cpp
+  src/app/runtime_tracking_zoom_check.cpp
   src/app/runtime_match_panel_keys_check.cpp
   src/app/runtime_turret_draw_check.cpp
   src/app/runtime_selection.cpp src/app/runtime_selection_shortcuts.cpp
@@ -788,11 +822,17 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/runtime_build_page_check.cpp
   src/app/runtime_language_check.cpp
   src/app/runtime_side_column_check.cpp
+  src/app/runtime_match_bars_check.cpp
+  src/app/runtime_unit_pages_check.cpp
   src/app/runtime_kill_board.cpp src/app/runtime_frontend_controls_check.cpp
   src/app/runtime_briefing_narration_check.cpp
   src/app/runtime_build_site_check.cpp src/app/runtime_multiplayer_check.cpp
   src/app/runtime_check_host.cpp src/app/check_host_input.cpp
   src/app/runtime_notices.cpp src/app/runtime_notice_check.cpp src/app/web_link.cpp
+  src/app/runtime_user_folder.cpp src/app/runtime_user_folder_check.cpp
+  src/app/runtime_mod_switch_check.cpp
+  src/app/runtime_mod_warning.cpp src/app/runtime_mod_warning_check.cpp
+  src/app/user_folder_open.cpp
   src/app/runtime_mission_orders.cpp src/app/runtime_showcase.cpp src/app/match_clock.cpp
   src/app/world_scaling.cpp
   src/app/frame_pacing.cpp src/app/frame_stats_panel.cpp src/app/runtime_frame_stats.cpp
@@ -820,6 +860,7 @@ set_property(SOURCE src/app/runtime_director.cpp src/app/runtime_engine_settings
   src/app/main.cpp src/app/game_files_screen.cpp src/app/runtime_game_files.cpp APPEND
   PROPERTY COMPILE_DEFINITIONS "OA_ENGINE_VERSION=\"${PROJECT_VERSION}\"")
 set(oa_game_libraries oa-formats-hpi oa-app-game-options oa-app-game-directory oa-app-mod-profile
+  oa-app-user-folder
   oa-app-view-rules
   oa-app-window-icon
   oa-app-video-capture oa-app-render-host
@@ -876,16 +917,34 @@ if(OA_BUILD_PLATFORM)
     # A Windows program, so a game started from Explorer opens no console
     # window; its output goes to the log folder, or to whatever captures it.
     set_target_properties(oa-game PROPERTIES WIN32_EXECUTABLE ON)
-    # open-annihilation.exe's icon and version information.
+    # open-annihilation.exe's icon and version information, and its manifest,
+    # which lets it open paths longer than 259 characters where Windows has
+    # long paths turned on. Visual Studio's linker merges the manifest into
+    # the one it writes; other toolchains take it as a resource.
     set(OA_WINDOWS_ICON "${CMAKE_CURRENT_SOURCE_DIR}/branding/open-annihilation.ico")
+    set(oa_windows_manifest "${CMAKE_CURRENT_SOURCE_DIR}/src/app/open-annihilation.manifest")
+    if(MSVC)
+      set(OA_WINDOWS_MANIFEST_RESOURCE "")
+      target_sources(oa-game PRIVATE "${oa_windows_manifest}")
+    else()
+      # Resource 1 of type 24: the manifest Windows reads as it starts the
+      # program.
+      set(OA_WINDOWS_MANIFEST_RESOURCE "1 24 \"${oa_windows_manifest}\"")
+    endif()
     configure_file(src/app/open-annihilation.rc.in "${CMAKE_CURRENT_BINARY_DIR}/generated/open-annihilation.rc" @ONLY)
     target_sources(oa-game PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/open-annihilation.rc")
+    set_property(SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/open-annihilation.rc" APPEND PROPERTY
+      OBJECT_DEPENDS "${oa_windows_manifest}")
   endif()
   target_link_libraries(oa-game PRIVATE oa-ui-display-layout oa-ui-gadget-render)
   target_link_libraries(oa-game PRIVATE oa-media-director oa-media-director-planner oa-audio-offline-mix
     oa-formats-oascript oa-formats-zip oa-app-director-output)
   target_link_libraries(oa-game PRIVATE ${oa_game_intro_player} SDL3::SDL3 ${oa_game_libraries}
     oa-ui-frontend-dialogs)
+  if(WIN32)
+    # The shell's open verb shows the player's folders (user_folder_open.cpp).
+    target_link_libraries(oa-game PRIVATE shell32 ole32)
+  endif()
   if(BUILD_TESTING)
     # The native checks run oa-game over the installation OA_GAME_DIR names;
     # without one they are not added.
@@ -960,6 +1019,8 @@ if(OA_BUILD_PLATFORM)
       # standard tier's. Shadows are drawn at their zoom's level: the game's
       # own at zoom 1, half as dark at 0.5 in the standard tier and on the
       # card, lighter at a third and none at a quarter and the Full floor.
+      # Health bars keep the game's 35 by 5 pixels at zoom 1 and in, and
+      # shrink zoomed out to 13 by 3 at the Full floor, alike in every tier.
       # Pictures of one moment at zoom 0.5, 1 and 2.5 in both tiers, and of
       # the shadows at each of those zooms, go to local/reports. Skips under
       # 2 GiB of memory.
@@ -1061,6 +1122,10 @@ if(OA_BUILD_PLATFORM)
       # 1920x1080 windows, its bitmap in that palette, and each previewing the
       # chosen save's radar image and side. A click on the name field and
       # CANCEL save nothing, OK and Return save, and Escape leaves the dialog.
+      # The load dialog's CANCEL and Escape return to Single Player and to the
+      # in-game menu, with saves listed and with none. A press on either
+      # dialog's buttons acts only once released over the button: held, or
+      # released away from it, it does nothing.
       set(oa_loadsave_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/loadsave")
       file(MAKE_DIRECTORY "${oa_loadsave_check_dir}")
       add_test(NAME native-loadsave-screens COMMAND oa-game --game-dir "${OA_GAME_DIR}"
@@ -1122,6 +1187,58 @@ if(OA_BUILD_PLATFORM)
         --preferences-file "${oa_engine_settings_dir}/engine-settings.conf")
       set_tests_properties(native-engine-settings PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_engine_settings_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # The player's own folder beside the check's preferences file: saved
+      # games where earlier versions kept them moved into its Saves once,
+      # one named as a saved game there kept beside it, a mod's into its own
+      # folder; saved games read from the earlier folder while it is there;
+      # screenshots and films placed in Screenshots and Films; the notice of
+      # the move shown once over the main menu in the settings dialog's
+      # look, its Open folder button and Enter; and the settings' Your files
+      # buttons and the Mods folder's mods, through a recorded opener.
+      set(oa_user_folder_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/user-folder")
+      file(MAKE_DIRECTORY "${oa_user_folder_dir}")
+      add_test(NAME native-user-folder COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-user-folder
+        --preferences-file "${oa_user_folder_dir}/user-folder.conf")
+      set_tests_properties(native-user-folder PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_user_folder_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # The settings' Mods page switches the mod ten times, between No Mod
+      # and two test profiles it writes into the player's own Mods folder:
+      # each switch stores the mod and builds the game afresh on the same
+      # window, which plays the mod chosen, listed first; the working set as
+      # the last round's runs reach the main menu stays level with the
+      # round's before. It runs alone, as other checks running beside it
+      # move the point where the allocator's working set levels off.
+      set(oa_mod_switch_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/mod-switch")
+      file(MAKE_DIRECTORY "${oa_mod_switch_dir}")
+      add_test(NAME native-mod-switch COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-mod-switch
+        --preferences-file "${oa_mod_switch_dir}/mod-switch.conf"
+        --user-folder "${oa_mod_switch_dir}/Open Annihilation")
+      set_tests_properties(native-mod-switch PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        RUN_SERIAL TRUE WORKING_DIRECTORY "${oa_mod_switch_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # A folder without a profile whose second side lacks its LOGO: the
+      # Mods page refuses it. A folder without a profile, and a profile,
+      # whose second side's intgaf and font name files no folder holds: the
+      # Mods page switches to each, the main menu warns once of both files
+      # and that its games still start, and a skirmish on that side starts
+      # and plays. A mod folder whose unit files are missing: the main menu
+      # warns once that its games cannot start, and Skirmish's Start warns
+      # again and stays on the setup; a profile whose commander's file the
+      # unit catalog drops, and whose second side's intgaf names a GAF no
+      # folder holds, warns of that commander and that GAF alone; a profile
+      # that plays whole warns of nothing and starts its skirmish.
+      set(oa_mod_warning_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/mod-warning")
+      file(MAKE_DIRECTORY "${oa_mod_warning_dir}")
+      add_test(NAME native-mod-warning COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-mod-warning
+        --preferences-file "${oa_mod_warning_dir}/mod-warning.conf"
+        --user-folder "${oa_mod_warning_dir}/Open Annihilation")
+      set_tests_properties(native-mod-warning PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_mod_warning_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # Each renderer failure the game handles while it runs, forced on the
       # renderer the walk of SDL's render drivers makes, which on the dummy
@@ -1319,8 +1436,7 @@ if(OA_BUILD_PLATFORM)
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # ARMLAB's second page is the ARMDL.GUI download page with the Warrior
       # and Flea its download TDFs name; through SDL input on dummy devices
-      # they queue, come off the middle and end of the queue and build, and a
-      # Nuclear Silo's MAKENUKE queues and drops a missile.
+      # they queue, come off the middle and end of the queue and build.
       set(oa_download_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/download-builds")
       file(MAKE_DIRECTORY "${oa_download_check_dir}")
       add_test(NAME native-download-builds COMMAND oa-game --game-dir "${OA_GAME_DIR}"
@@ -1328,6 +1444,43 @@ if(OA_BUILD_PLATFORM)
         --preferences-file "${oa_download_check_dir}/download-builds.conf")
       set_tests_properties(native-download-builds PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_download_check_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # Every unit whose first weapon stockpiles, selected through SDL input
+      # on dummy devices, opens on its weapon page; the page queues and drops
+      # rounds by one and by five, and a round built with another queued
+      # stays, with its count, through a save and a load.
+      set(oa_stockpile_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/stockpile-builds")
+      file(MAKE_DIRECTORY "${oa_stockpile_check_dir}")
+      add_test(NAME native-stockpile-builds COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-stockpile-builds
+        --preferences-file "${oa_stockpile_check_dir}/stockpile-builds.conf")
+      set_tests_properties(native-stockpile-builds PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_stockpile_check_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # Through SDL input on dummy devices, ORDERS, BUILD and the page buttons
+      # and keys change the page the commander keeps: selecting a lab and the
+      # commander again reopens it, the keys turn through the order page, a
+      # save and a load keep it, a unit with no build pages keeps its general
+      # page, and with two selected the panel shows the general page and
+      # turns no unit's page.
+      set(oa_unit_page_memory_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/unit-page-memory")
+      file(MAKE_DIRECTORY "${oa_unit_page_memory_check_dir}")
+      add_test(NAME native-unit-page-memory COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-unit-page-memory
+        --preferences-file "${oa_unit_page_memory_check_dir}/unit-page-memory.conf")
+      set_tests_properties(native-unit-page-memory PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_unit_page_memory_check_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # A skirmish paused with the Pause key and saved from the in-game menu
+      # loads running, with its pause bit clear; Pause then holds it and
+      # lets it go again, and so does the in-game menu.
+      set(oa_paused_save_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/paused-save")
+      file(MAKE_DIRECTORY "${oa_paused_save_check_dir}")
+      add_test(NAME native-paused-save COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-paused-save
+        --preferences-file "${oa_paused_save_check_dir}/paused-save.conf")
+      set_tests_properties(native-paused-save PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_paused_save_check_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # Units' names and descriptions in each language the game data holds,
       # and in the language the system's preferred locale chooses: through
@@ -1363,6 +1516,34 @@ if(OA_BUILD_PLATFORM)
         --preferences-file "${oa_side_column_check_dir}/side-column.conf")
       set_tests_properties(native-side-column PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_side_column_check_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # The top and bottom bars of a skirmish played on each of two sides, on
+      # windows of 4:3 and wider from 640x480 to 2560x1080: each reaches the
+      # window's right edge with art in every column, and holds the side's
+      # PANELTOP and PANELBOT where the game places them on a screen that
+      # wide.
+      set(oa_match_bars_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/match-bars")
+      file(MAKE_DIRECTORY "${oa_match_bars_check_dir}")
+      add_test(NAME native-match-bars COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-match-bars
+        --preferences-file "${oa_match_bars_check_dir}/match-bars.conf")
+      set_tests_properties(native-match-bars PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_match_bars_check_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # The pages of a builder of one page, one of several, a factory and a
+      # unit that builds nothing, on windows from 640x480 to 2560x1440,
+      # walked with NEXT, PREV, ORDERS and BUILD through SDL input on dummy
+      # devices: the side column keeps the interface's width and scale, every
+      # page is drawn whole as its file places it, and each control the side
+      # column draws, the radar and the battlefield's edge take a click where
+      # they are drawn.
+      set(oa_unit_pages_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/unit-pages")
+      file(MAKE_DIRECTORY "${oa_unit_pages_check_dir}")
+      add_test(NAME native-unit-pages COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-unit-pages whole:ARMMLV,ARMCOM,ARMLAB,ARMPW
+        --preferences-file "${oa_unit_pages_check_dir}/unit-pages.conf")
+      set_tests_properties(native-unit-pages PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_unit_pages_check_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # An ARMCK given PATROL through SDL input past map features with the
       # metal store empty takes RepairPatrol, reclaims one on its way, is
@@ -1464,7 +1645,7 @@ if(OA_BUILD_PLATFORM)
           elseif(variant STREQUAL "phone")
             list(APPEND oa_game_files_extra --resolution 852x393)
           elseif(variant STREQUAL "demo")
-            list(APPEND oa_game_files_extra --demo-installer "${OA_DEMO_INSTALLER}")
+            list(APPEND oa_game_files_extra "--demo-installer=${OA_DEMO_INSTALLER}")
           endif()
           add_test(NAME ${oa_game_files_test} COMMAND ${Python3_EXECUTABLE}
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_game_files.py"
@@ -1613,6 +1794,54 @@ if(OA_BUILD_PLATFORM)
           --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
         set_tests_properties(native-menu-without-movies PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
           SKIP_RETURN_CODE ${OA_GAME_DATA_SKIP_CODE})
+        # A mod folder whose Solar Collector script is not a COB the game
+        # reads: the skirmish loads every unit type, says once that the unit
+        # plays without a script, and plays on.
+        add_test(NAME native-unreadable-unit-script COMMAND ${Python3_EXECUTABLE}
+          "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_unreadable_script.py"
+          --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
+          --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
+        set_tests_properties(native-unreadable-unit-script PROPERTIES
+          TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
+        # A mod folder whose sides name commanders of their own, without the
+        # commander flag, and bar colours of their own, with a third side that
+        # draws CORE's panels: each side's HUD draws the panels its intgaf
+        # names and its own section's bars, the skirmish starts with the
+        # commanders, the death of one ends the game under the commander rule
+        # and only then, the computer player builds with its commander, and
+        # the network loopback and player records checks find them. In a
+        # network game, a player giving every unit gives its commander too,
+        # as its type is in no Commander category, and both machines agree.
+        add_test(NAME native-side-commanders COMMAND ${Python3_EXECUTABLE}
+          "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_side_commanders.py"
+          --native $<TARGET_FILE:oa-game> --oa-tool $<TARGET_FILE:oa-tool>
+          --game-dir "${OA_GAME_DIR}"
+          --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
+        set_tests_properties(native-side-commanders PROPERTIES
+          TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
+        # A mod folder whose sides name interface art and a font of their
+        # own: each side's HUD draws the panels its intgaf names and the
+        # numbers in the font it names, or in COMIX, unmeasured, when it
+        # names none; an intgaf and a font the game data lacks are drawn as
+        # none named; and SIDEDATA and the art it names held only in a
+        # language's folders are drawn in that language alone.
+        add_test(NAME native-side-panels COMMAND ${Python3_EXECUTABLE}
+          "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_side_panels.py"
+          --native $<TARGET_FILE:oa-game> --oa-tool $<TARGET_FILE:oa-tool>
+          --game-dir "${OA_GAME_DIR}"
+          --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
+        set_tests_properties(native-side-panels PROPERTIES
+          TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
+        # The game folder, the preferences file beside the saved games and a
+        # mod folder more than 256 characters deep, and as deep as the system
+        # opens, with a user name of 200 characters: the main menu opens and
+        # a skirmish saves and loads back.
+        add_test(NAME native-long-paths COMMAND ${Python3_EXECUTABLE}
+          "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_long_paths.py"
+          --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
+          --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
+        set_tests_properties(native-long-paths PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+          SKIP_RETURN_CODE ${OA_GAME_DATA_SKIP_CODE})
         # A mod's copied install (OA_MOD_GAME_DIR) and the same files as a
         # mod folder over the game folder load the same unit types through
         # the layout of its profile among OA_MOD_PROFILES_DIR's, and never
@@ -1635,6 +1864,26 @@ if(OA_BUILD_PLATFORM)
             --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
           set_tests_properties(native-mod-net-loopback PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
             SKIP_RETURN_CODE ${OA_GAME_DATA_SKIP_CODE})
+          # Every unit that stockpiles on that install works its weapon page
+          # by its profile, as native-stockpile-builds checks on the game.
+          add_test(NAME native-mod-stockpile-builds COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_mod_stockpile.py"
+            --native $<TARGET_FILE:oa-game>
+            --mod-install "${OA_MOD_GAME_DIR}" --profiles "${OA_MOD_PROFILES_DIR}"
+            --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
+          set_tests_properties(native-mod-stockpile-builds PROPERTIES
+            TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT} SKIP_RETURN_CODE ${OA_GAME_DATA_SKIP_CODE})
+          # The pages of a commander, a lab, a unit that builds nothing and one
+          # that stockpiles on that install fit the side column by its
+          # profile, as native-unit-pages checks on the game, drawn as authored
+          # in a column narrowed as a whole to the profile's tallest page.
+          add_test(NAME native-mod-unit-pages COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_mod_unit_pages.py"
+            --native $<TARGET_FILE:oa-game>
+            --mod-install "${OA_MOD_GAME_DIR}" --profiles "${OA_MOD_PROFILES_DIR}"
+            --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
+          set_tests_properties(native-mod-unit-pages PROPERTIES
+            TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT} SKIP_RETURN_CODE ${OA_GAME_DATA_SKIP_CODE})
         endif()
         # Arm mission 1 (AC01) played with --give-orders is won at the
         # Galactic Gate and goes on through the end screen into AC02; both
@@ -1776,9 +2025,10 @@ if(BUILD_TESTING)
     add_test(NAME mod-registry-sync-selftest COMMAND ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_mod_registry.py --self-test)
     set_tests_properties(mod-registry-sync mod-registry-sync-selftest PROPERTIES TIMEOUT 60)
-    # The standard hack pages and table in docs/mods hold what the OAMOD
-    # registry gives (tools/gen_mod_docs.py), and the tool still keeps prose
-    # and finds changed blocks in a small built-in registry.
+    # The standard hack and script extension pages in docs/mods, their
+    # tables in the README and table 7.2 of the OAMOD standard hold what the
+    # OAMOD registry gives (tools/gen_mod_docs.py), and the tool still keeps
+    # prose and finds changed blocks in a small built-in registry.
     add_test(NAME mod-docs-sync COMMAND ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_mod_docs.py --check)
     add_test(NAME mod-docs-sync-selftest COMMAND ${Python3_EXECUTABLE}

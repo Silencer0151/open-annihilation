@@ -195,6 +195,26 @@ void key_event(
     ctx.input = nullptr;
 }
 
+/// Sends typed text to the overlays, as the system does after a key press types it.
+///
+/// @param registry the overlays
+/// @param ctx the screen context
+/// @param typed the text, UTF-8
+/// @return true when an overlay took the text
+bool text_event(oa::app::ScreenRegistry& registry, oa::app::ScreenContext& ctx, const char* typed) {
+    oa::app::ScreenInput input{};
+    input.kind = oa::app::ScreenInputKind::text;
+    input.text = typed;
+    ctx.input = &input;
+    bool taken = false;
+    for (uint32_t index = 0; index < registry.overlay_count; ++index)
+        if (registry.overlays[index].event != nullptr &&
+            registry.overlays[index].event(&ctx, registry.overlays[index].state) != 0)
+            taken = true;
+    ctx.input = nullptr;
+    return taken;
+}
+
 void pointer_click(
     oa::app::ScreenRegistry& registry, oa::app::ScreenContext& ctx, float x, float y
 ) {
@@ -487,6 +507,106 @@ void test_continue_watching(oa::app::ScreenContext& ctx, Host& host) {
             host.sound == "BigButton" && dialogs::dialog_count() == 0, "watcher sound and close"
         );
     }
+}
+
+/// Answers the German Yes and No as gamedata\translate.tdf gives them.
+///
+/// @param text the text
+/// @return its German, or null for any other text
+const char* german_yes_no(void*, const char* text) {
+    if (std::strcmp(text, "Yes") == 0)
+        return "Ja";
+    if (std::strcmp(text, "No") == 0)
+        return "Nein";
+    return nullptr;
+}
+
+// The watch prompt answers its quick keys in either case, Y for Yes and N
+// for No, and Enter as Yes and Escape as No; a key with Ctrl, Alt or the
+// system key down, or a key no button holds, answers nothing. The character
+// an answering quick key types goes nowhere. In German the keys follow the
+// captions: J for Ja, N for Nein.
+void test_continue_watching_keys(
+    oa::app::ScreenRegistry& registry, oa::app::ScreenContext& ctx, Host& host
+) {
+    constexpr uint32_t kKeyReturn = 0x0d;
+    constexpr uint32_t kKeyEscape = 0x1b;
+    constexpr uint16_t kLeftShift = 0x0001;
+
+    struct Choice {
+        int count{};
+        bool keep{};
+    } choice;
+
+    const auto callback = [](void* context, bool keep) {
+        auto& value = *static_cast<Choice*>(context);
+        ++value.count;
+        value.keep = keep;
+    };
+    const auto answers = [&](uint32_t key, uint16_t modifiers, bool keep, const char* what) {
+        const auto before = choice.count;
+        expect(dialogs::open_continue_watching(&ctx, &choice, callback), "open watcher prompt");
+        key_event(registry, ctx, key, modifiers);
+        expect(
+            choice.count == before + 1 && choice.keep == keep && dialogs::dialog_count() == 0, what
+        );
+        dialogs::close_dialog();
+    };
+    const auto ignores = [&](uint32_t key, uint16_t modifiers, const char* what) {
+        const auto before = choice.count;
+        expect(dialogs::open_continue_watching(&ctx, &choice, callback), "open watcher prompt");
+        key_event(registry, ctx, key, modifiers);
+        expect(
+            choice.count == before &&
+                dialogs::dialog_kind() == dialogs::DialogKind::continue_watching,
+            what
+        );
+        dialogs::close_dialog();
+    };
+    answers('y', 0, true, "'y' answers the watcher prompt Yes");
+    answers('y', kLeftShift, true, "'Y' answers the watcher prompt Yes");
+    answers('n', 0, false, "'n' answers the watcher prompt No");
+    // The 'n' the key types after it goes nowhere, though the prompt is
+    // closed; the next typed text, or text after another key, goes on.
+    expect(text_event(registry, ctx, "n"), "the answer's 'n' goes nowhere");
+    expect(!text_event(registry, ctx, "n"), "the next 'n' goes on to the screen");
+    answers('y', kLeftShift, true, "'Y' answers the watcher prompt Yes again");
+    key_event(registry, ctx, 'y');
+    expect(!text_event(registry, ctx, "y"), "a 'y' typed after another key goes on");
+    answers('y', 0, true, "'y' answers the watcher prompt Yes again");
+    expect(!text_event(registry, ctx, "q"), "another character goes on");
+    answers(kKeyReturn, 0, true, "Enter answers the watcher prompt Yes");
+    expect(!text_event(registry, ctx, "y"), "a 'y' after Enter goes on");
+    answers(kKeyEscape, 0, false, "Escape answers the watcher prompt No");
+    ignores('y', oa::app::kInputModifierCtrl, "Ctrl+Y answers nothing");
+    ignores('n', oa::app::kInputModifierAlt, "Alt+N answers nothing");
+    ignores('n', oa::app::kInputModifierSystem, "Command+N answers nothing");
+    ignores('q', 0, "a key no button holds answers nothing");
+    dialogs::dialogs_bind_host(
+        {&host,
+         dialog_sound,
+         german_yes_no,
+         cd_check_click,
+         nullptr,
+         panel_below,
+         nullptr,
+         nullptr,
+         nullptr}
+    );
+    ignores('y', 0, "'y' answers nothing in German");
+    answers('j', 0, true, "'j' answers the German watcher prompt Ja");
+    answers('n', 0, false, "'n' answers the German watcher prompt Nein");
+    dialogs::dialogs_bind_host(
+        {&host,
+         dialog_sound,
+         nullptr,
+         cd_check_click,
+         nullptr,
+         panel_below,
+         nullptr,
+         nullptr,
+         nullptr}
+    );
 }
 
 // A rectangle of the frame, inclusive.
@@ -869,6 +989,7 @@ int main(int argc, char** argv) {
         test_placement_and_shade(ctx, host);
         test_layer(ctx);
         test_continue_watching(ctx, host);
+        test_continue_watching_keys(registry, ctx, host);
         test_stack_limit(ctx);
     }
 

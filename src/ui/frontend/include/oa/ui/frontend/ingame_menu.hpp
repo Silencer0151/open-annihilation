@@ -143,6 +143,9 @@ inline constexpr std::string_view kLeaveGameTitle = "Surrender this battle and e
 /// Main menu asks "Surrender this battle and return to main menu?" (the
 /// return label instead of "main menu" when it fits); leaving asks
 /// kLeaveGameTitle, or "Exit the Battle" for a spectator. Enter and Escape both answer kExitConfirmDefault.
+/// CHOICE1 and CHOICE2 read "Yes" and "No" in the language shown, and each
+/// takes as its quick key the first letter of its caption that the other's
+/// key does not hold: Y and N in English, J and N in German, as in 3.1c.
 ///
 /// @param[in,out] panel The loaded YESORNO panel.
 /// @param context Exit kind, spectator and return label.
@@ -228,6 +231,9 @@ RestartPath ingame_run_restart(
 ) noexcept;
 
 /// Sets up YESORNO for "You're out!  Continue Watching?".
+///
+/// CHOICE1 and CHOICE2 read "Yes" and "No" in the language shown, with the
+/// quick keys their captions give them, as ingame_enter_exit_confirm() gives them.
 ///
 /// @param[in,out] panel The loaded YESORNO panel.
 void ingame_enter_continue_watching(Panel& panel) noexcept;

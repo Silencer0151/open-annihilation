@@ -21,6 +21,21 @@
 
 namespace oa::ui::gadget_render {
 
+namespace {
+
+/// The characters of each GAF font worked out so far, by its glyph sequence.
+struct KeptCharacters {
+    std::mutex mutex{};
+    std::map<const void*, present::FontCharacters> fonts{};
+};
+
+KeptCharacters& kept_characters() {
+    static KeptCharacters kept;
+    return kept;
+}
+
+} // namespace
+
 namespace detail {
 
 Sprite* art_frame(const GadgetRenderer& renderer, const void* sequence, int32_t index) {
@@ -83,12 +98,7 @@ present::TextFace font_face(const GadgetRenderer& renderer, const void* glyphs) 
 }
 
 present::FontCharacters font_characters(const GadgetRenderer& renderer, const void* glyphs) {
-    struct Kept {
-        std::mutex mutex{};
-        std::map<const void*, present::FontCharacters> fonts{};
-    };
-
-    static Kept kept;
+    auto& kept = kept_characters();
     const std::lock_guard lock(kept.mutex);
     if (const auto found = kept.fonts.find(glyphs); found != kept.fonts.end())
         return found->second;
@@ -345,6 +355,12 @@ void load_gui_font(GadgetRenderer& renderer, GadgetPanel& panel, const char* nam
             glyph->origin_y = static_cast<int16_t>(glyph->origin_y - lift);
     }
     panel.active_gaf_font = file;
+}
+
+void forget_font_characters() {
+    auto& kept = kept_characters();
+    const std::lock_guard lock(kept.mutex);
+    kept.fonts.clear();
 }
 
 } // namespace oa::ui::gadget_render

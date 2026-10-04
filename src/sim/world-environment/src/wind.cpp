@@ -110,7 +110,8 @@ uint32_t shared_wind_seed(const World& world, uint32_t fallback) noexcept {
         const auto* info = world_player_info(&world, &player);
         if (info == nullptr || info->state != host_setup_state)
             continue;
-        return std::bit_cast<int32_t>(player.player_id) > 0 ? player.player_id : fallback;
+        const uint32_t player_id = player.player_id;
+        return std::bit_cast<int32_t>(player_id) > 0 ? player_id : fallback;
     }
     return fallback;
 }

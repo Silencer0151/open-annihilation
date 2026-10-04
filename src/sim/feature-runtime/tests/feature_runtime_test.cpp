@@ -229,6 +229,8 @@ void test_place_and_clear() {
     require(f.plots[f.at(7, 6)].feature_record == 0x0100, "x offset in high byte");
     const auto center = feature_center(f.world, 6, 6, f.defs[3]);
     require(center.x == (2 + 12) << 19 && center.y == 20 << 16, "footprint centre on ground");
+    if (wreck == nullptr)
+        return;
     require(
         wreck->model.position.x == center.x && wreck->model.position.z == center.z,
         "record at centre"
@@ -332,6 +334,8 @@ void test_fire() {
     damage_feature(f.world, host, f.at(8, 8), 8, 8, flamer);
     const auto* burning = feature_record(f.world, f.plots[f.at(8, 8)].feature_record);
     require(burning != nullptr && (burning->state & state_burning) != 0, "flame weapon ignites");
+    if (burning == nullptr)
+        return;
     require(burning->spread_countdown == 3, "countdown is half spark time plus a draw");
     require(
         r.sounds == 1 && r.changes.size() == 1 && r.changes[0].change == FeatureChange::ignited &&
@@ -422,6 +426,8 @@ void test_falling_wreck() {
     };
     auto* wreck = place_feature(f.world, host, f.at(6, 6), 3, &start, nullptr, no_player);
     require(wreck != nullptr, "wreck placed");
+    if (wreck == nullptr)
+        return;
     wreck->model.velocity.y = -0x8000;
     tick_features(f.world, host);
     require(

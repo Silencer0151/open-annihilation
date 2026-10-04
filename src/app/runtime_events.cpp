@@ -33,7 +33,25 @@ SDL_MouseID event_mouse_id(const SDL_Event& event) noexcept {
 
 } // namespace
 
+namespace {
+
+/// Tells whether typed text is the character of the quick key that answered a panel.
+///
+/// @param text the typed text, UTF-8
+/// @param answered the quick key, lowercase, or zero for none
+/// @return true for that one character, in either case
+bool typed_answered_key(const char* text, int32_t answered) {
+    return answered != 0 && text != nullptr && text[0] != '\0' && text[1] == '\0' &&
+           std::tolower(static_cast<unsigned char>(text[0])) == answered;
+}
+
+} // namespace
+
 void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
+    // Each key press forgets the quick key the last one answered a panel
+    // with; press_match_panel_key records the press's own again.
+    if (event.type == SDL_EVENT_KEY_DOWN)
+        answered_key_ = 0;
     if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
         // Closing the window, or the system's quit while there is one, in a
         // running match asks whether to surrender first, as in 3.1c; every
@@ -70,6 +88,16 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
     // comes back.
     if (event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE)
         match_pointer_known_ = false;
+    // The character a quick key types after its press answered a panel over
+    // the match goes nowhere, though the panel is closed by then; while the
+    // surrender confirmation is up, typing reaches neither the chat line nor
+    // a marker's text.
+    if (event.type == SDL_EVENT_TEXT_INPUT &&
+        (typed_answered_key(event.text.text, std::exchange(answered_key_, 0)) ||
+         match_question_open()))
+        return;
+    if (event.type == SDL_EVENT_TEXT_EDITING && match_question_open())
+        return;
     if (whiteboard_text(event))
         return;
     if (event.type == SDL_EVENT_TEXT_INPUT && chat_composing_) {

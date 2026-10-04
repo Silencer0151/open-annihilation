@@ -343,6 +343,14 @@ void test_numbered_pcx() {
     CHECK(files.opened == "MOVIE001\\FRAM0001.pcx");
     CHECK(save_numbered_pcx(display, "", "FRAM", host));
     CHECK(files.opened == "FRAM0001.pcx");
+
+    // A folder deeper than any of the game's path fields is kept whole.
+    std::string deep = "C:";
+    for (int depth = 0; depth < 6; ++depth)
+        deep += "\\" + std::string(99, static_cast<char>('a' + depth));
+    CHECK(save_numbered_pcx(display, deep.c_str(), "SHOT", host));
+    CHECK(files.pattern == deep + "\\SHOT*.pcx");
+    CHECK(files.opened == deep + "\\SHOT0001.pcx");
 }
 
 } // namespace

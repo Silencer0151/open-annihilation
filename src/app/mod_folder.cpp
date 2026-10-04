@@ -169,13 +169,11 @@ resolve_folder_profile(const std::vector<fs::path>& folders, const ModChoice& ch
             result.errors.push_back(error);
             return result;
         }
-        if (!found) {
-            if (!choice.folder.empty())
-                result.errors.push_back(
-                    utf8(choice.folder) + ": the mod folder holds no oamod.yaml"
-                );
+        // A folder without a profile, a mod folder among them, plays by
+        // 3.1c's own rules; a mod folder's files still layer over the game
+        // folder's.
+        if (!found)
             return result;
-        }
         file = *found;
     }
     // The first pass names the settings file and registry root; the second
@@ -224,24 +222,81 @@ folder_profile_source(const std::vector<fs::path>& folders, const ModChoice& cho
 }
 
 std::vector<fs::path> list_mod_folders(const fs::path& game_folder) {
-    std::vector<fs::path> folders;
     const auto mods = entry_named(game_folder, mods_folder_name);
     if (!mods)
-        return folders;
+        return {};
+    return list_mods_in(*mods);
+}
+
+std::vector<fs::path> list_mods_in(const fs::path& mods) {
+    std::vector<fs::path> folders;
     std::error_code error;
-    for (fs::directory_iterator entry{*mods, error}, end; !error && entry != end;
+    for (fs::directory_iterator entry{mods, error}, end; !error && entry != end;
          entry.increment(error)) {
         std::error_code status;
-        if (!entry->is_directory(status))
-            continue;
-        std::string ignored;
-        if (find_mod_profile(entry->path(), ignored))
+        if (entry->is_directory(status))
             folders.push_back(entry->path());
     }
     std::sort(folders.begin(), folders.end(), [](const fs::path& left, const fs::path& right) {
         return lowered(utf8(left.filename())) < lowered(utf8(right.filename()));
     });
     return folders;
+}
+
+PickedFolderCheck check_picked_mod_folder(
+    const fs::path& folder, const fs::path& game_folder, const ModChoice& choice
+) {
+    PickedFolderCheck check{};
+    std::error_code missing;
+    if (!fs::is_directory(folder, missing)) {
+        check.refusal = "That folder cannot be found.";
+        return check;
+    }
+    std::string error;
+    const auto found = find_mod_profile(folder, error);
+    if (!error.empty()) {
+        check.refusal = "That folder's oamod.yaml cannot be read.";
+        check.errors.push_back(error);
+        return check;
+    }
+    const ModChoice played{folder, {}, choice.accept_unimplemented_hacks, choice.preferences};
+    auto resolved = resolve_folder_profile({folder, game_folder}, played);
+    if (!found) {
+        // Played without a profile, by 3.1c's own rules, once the player
+        // agrees; a game folder that is a mod's own install carries none.
+        if (!resolved.errors.empty()) {
+            check.refusal = "That folder cannot be played; the log says why.";
+            check.errors = std::move(resolved.errors);
+            return check;
+        }
+        check.without_profile = true;
+        check.profile_id = folder_overrides_id(folder);
+        return check;
+    }
+    if (!resolved.errors.empty() || !resolved.profile) {
+        check.refusal = "Its oamod.yaml cannot be played; the log says why.";
+        check.errors = std::move(resolved.errors);
+        return check;
+    }
+    check.profile_id = resolved.profile->id;
+    return check;
+}
+
+std::string folder_overrides_id(const fs::path& folder) {
+    std::error_code error;
+    fs::path whole = fs::absolute(folder, error);
+    if (error)
+        whole = folder;
+    std::string id{folder_overrides_prefix};
+    for (const char character : utf8(whole.lexically_normal())) {
+        if (character == '%')
+            id += "%25";
+        else if (character == '|')
+            id += "%7C";
+        else
+            id += character;
+    }
+    return id;
 }
 
 std::vector<mod_profile::SettingValue> read_ini_settings(std::string_view text) {

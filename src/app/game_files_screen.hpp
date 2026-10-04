@@ -61,13 +61,13 @@ struct GameFilesScreenRequest {
     GameFilesScreenCheckHooks check{};          ///< the check's per-pass hooks; empty for players
 };
 
-/// The touch device the check's taps come from, which the screen and the Language & Text
+/// The touch device the check's taps come from, which the screen and the Language
 /// dialog accept as they accept a touch screen's fingers.
 inline constexpr SDL_TouchID game_files_check_touch_id = 0x6766;
 /// The finger the check's taps use.
 inline constexpr SDL_FingerID game_files_check_finger_id = 1;
 
-/// The screen's side of the Language & Text dialog (game_files_dialog.cpp): how its frames
+/// The screen's side of the Language dialog (game_files_dialog.cpp): how its frames
 /// reach the window, and the check's per-pass hook while it is up.
 struct GameFilesDialogHooks {
     void* context{}; ///< passed back to every hook
@@ -79,7 +79,7 @@ struct GameFilesDialogHooks {
     void (*pass)(void* context){};
 };
 
-/// What the Language & Text dialog over the Game files screen needs.
+/// What the Language dialog over the Game files screen needs.
 struct GameFilesLanguageRequest {
     const touch_paint::Canvas* under{};          ///< the screen's frame the dialog lies over
     oa::platform::text_font::FontStack* fonts{}; ///< the bundled fonts the dialog's text uses
@@ -88,7 +88,7 @@ struct GameFilesLanguageRequest {
     GameFilesDialogHooks hooks{};                ///< the screen's side
 };
 
-/// Shows the settings dialog limited to Language & Text over the Game files screen, drawn
+/// Shows the settings dialog limited to Language over the Game files screen, drawn
 /// wholly in the bundled fonts because the game's own are not installed yet, until OK or
 /// Cancel. While it is up the game text hooks draw with the bundled fonts; the hooks in
 /// place before are put back after. OK writes the settings to the preferences file and puts
@@ -163,7 +163,7 @@ class GameFilesScreen {
     [[nodiscard]] const game_files::ScanSnapshot& scan() const noexcept;
     /// Asks the loop to end as a quit (the check's way out).
     void request_quit() noexcept;
-    /// Tells whether the Language & Text dialog is up over the screen; canvas() then holds
+    /// Tells whether the Language dialog is up over the screen; canvas() then holds
     /// the dialog's frame.
     ///
     /// @return true while the dialog is up

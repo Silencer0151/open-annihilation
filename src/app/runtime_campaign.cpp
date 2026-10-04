@@ -1465,6 +1465,9 @@ std::string Runtime::briefing_row(std::size_t row) {
 }
 
 void Runtime::start_campaign_mission() {
+    // A mod that cannot start a game says so, and the briefing stays.
+    if (refuse_incomplete_mod_start())
+        return;
     const auto mission_file = resolve_campaign_mission_file();
     if (mission_file.empty()) {
         status_ = "The requested campaign has no mission file.";
@@ -1504,28 +1507,12 @@ void Runtime::start_campaign_mission() {
 void Runtime::leave_load_dialog() {
     if (save_dialog_open())
         close_save_dialog();
-    else if (options_parent_ == Screen::match && match_)
+    else if (
+        (options_parent_ == Screen::match && match_) || options_parent_ == Screen::campaign_end
+    )
         leave_options_screen();
     else
         load(Screen::single_player);
-}
-
-void Runtime::activate_load_game_gadget() {
-    if (!hovered_ || *hovered_ >= resources_.layout.gadgets.size())
-        return;
-    const auto name = resources_.layout.gadgets[*hovered_].common.name;
-    if (name == "CANCEL" || name == "PREV" || name == "PREVMENU") {
-        leave_load_dialog();
-        return;
-    }
-    if (name == "LOAD" || name == "LOADGAME") {
-        status_ = "No saved games in the preferences directory yet.";
-        return;
-    }
-    if (name == "DELETE") {
-        status_ = "No saved games to delete.";
-        return;
-    }
 }
 
 std::string Runtime::bound_mission_name() {

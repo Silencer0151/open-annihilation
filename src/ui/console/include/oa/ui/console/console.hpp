@@ -14,6 +14,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 namespace oa::ui::console {
 
@@ -120,6 +121,10 @@ struct ConsoleHost {
         int32_t width,
         int32_t height
     ){};
+    /// Returns the folder posters and movie captures go under when it is too
+    /// long for Game.output_directory, which then holds an empty string. Null,
+    /// or a null result, leaves the field's value.
+    const char* (*output_directory)(void* context){};
     uint32_t (*now_ms)(void* context){};
     void (*crash_test)(void* context, CrashTest test){};
     // Adds an extension's commands to console->commands; called once at the
@@ -228,6 +233,17 @@ uint8_t console_submit_chat_line(
 ///
 /// @return The dispatching console, or null outside a dispatch.
 Console* console_active() noexcept;
+
+/// Returns the folder posters and movie captures go under.
+///
+/// Game.output_directory holds the folder when it fits there. When the field
+/// is empty, the folder is the host's output_directory, which may be longer
+/// than the field can hold.
+///
+/// @param game Game block holding the field.
+/// @param host Host asked when the field is empty; may be null.
+/// @return The folder, empty when neither names one.
+std::string output_directory(const Game& game, const ConsoleHost* host);
 
 /// Posts a message from no player through the console's ConsoleHost::post_message; nothing without one.
 ///

@@ -24,11 +24,15 @@ that started first; a sound plays on at most four of its buffers
 (`sample_buffers`) at once, a start taking an idle one, else making one
 while fewer than four exist (the highest free index first), else restarting
 the one that has played furthest, which then holds two voices until it
-stops. Each sound file is read and decoded on its first start and kept,
-with up to 4 MiB of others, the least recently started that no voice plays
-giving way first; a buffer plays on a stream it holds while it plays, and
-up to eight idle streams are kept for the next starts. `effect_voices`
-counts the voices.
+stops. Each sound file is read and decoded on its first start, converted
+once to the mixer's rate (`convert_for_mixer`), and kept, with up to 8 MiB
+of others in that form, the least recently started that no voice
+plays giving way first; a buffer plays on a stream it holds while it plays,
+and up to eight idle streams are kept for the next starts. A placed start
+weighs the stream's sides with `spatial_stereo_gain`'s levels
+(`set_side_gains`) rather than converting its samples. The loop and the
+stream are converted once in the same way. `effect_voices` counts the
+voices.
 
 Besides its effects and its one looping sound, the WAV player keeps one
 stream, as the game keeps one: the briefing's narration and the end screen's
@@ -148,37 +152,64 @@ Every sound the game plays goes through `oa-audio-output`
 (8-bit unsigned, 16- or 32-bit signed, 32-bit float), channel count and
 rate. A stream opens paused; it plays what is `put` to it, or asks its
 `StreamFeed` for more on the output's thread with the stream locked, and has
-its own gain, pause, `clear`, `flush` and the queued and converted byte
-counts. `SdlWavPlayer`, the sound-device sink (`sdl_audio_sink`) and the
-music device (`sdl_music`) play through it, and start and stop it where they
-used to start and stop SDL's audio.
+its own gain, the gains of its two sides, pause, `clear`, `flush` and the
+queued and converted byte counts. `SdlWavPlayer`, the sound-device sink
+(`sdl_audio_sink`) and the music device (`sdl_music`) play through it, and
+start and stop it where they used to start and stop SDL's audio.
 
 Two outputs exist (`oa/audio/sound_output_backends.hpp`):
 
-- SDL's (`sdl_sound_output.cpp`), in every build with SDL: each stream is an
-  SDL audio stream on a logical device of its own, as before, so SDL
-  converts and mixes them and the sound is unchanged. `start` and `stop`
-  are SDL's audio subsystem, counted as `SDL_InitSubSystem` counts.
+- SDL's (`sdl_sound_output.cpp`), in every build with SDL: `SoftwareMixer`
+  mixes the streams into one SDL audio stream of 16-bit stereo at 44100 Hz
+  on the default playback device, which SDL plays as it is where the device
+  takes that format. The device stream opens with the first `start` or
+  stream and closes with the last `stop` once no stream is open; `start`
+  and `stop` are SDL's audio subsystem, counted as `SDL_InitSubSystem`
+  counts.
 - The wave-out mixer (`wave_out_output.cpp`), on Windows: a
   `BufferedOutput` that mixes the streams with `SoftwareMixer` into four
   buffers of 1024 frames (16-bit stereo, 44100 Hz, about 93 ms) on the
   Windows wave-out device of
   [src/platform/sound-device](../platform/sound-device/README.md), refilled
-  in ring order by the device's thread as each one plays out. A build
-  without SDL uses it; a Windows build with SDL uses it when the
-  environment variable `OA_SOUND_OUTPUT` is `waveout`.
+  in ring order by the device's thread as each one plays out. Windows
+  before Vista plays through it unless the environment variable
+  `OA_SOUND_OUTPUT` is `sdl`: SDL's output there wakes its thread every
+  millisecond to ask how far the device has played, which takes a single
+  processor more of its time. Any other Windows plays through it when
+  `OA_SOUND_OUTPUT` is `waveout`, and a build without SDL always
+  (`choose_sound_output`).
 
-`SoftwareMixer` scales each stream's samples to -1..1, plays one channel on
-both sides (more than two play their first two), converts the rate with
-`Resampler`, applies the gain, sums the streams, clamps the sum to -1..1 and
-rounds it to 16 bits by 32767. `BufferedOutput` takes the device through
-its hooks (`oa::platform::sound_device::Hooks`), so its ring is tested on a
-device the test plays by hand.
+`SoftwareMixer` mixes in integer arithmetic, so that sound costs little on a
+processor with slow floating point. It widens each stream's samples to 16
+bits (8-bit unsigned ones around 128 times 256, 32-bit ones without their
+low 16 bits, float ones times 32768, rounded and held to 16 bits), plays one
+channel on both sides (more than two play their first two), converts other
+rates with `PcmResampler` as the samples arrive, multiplies each side by the
+stream's gain times that side's gain (16 fraction bits), sums the streams
+with 8 fraction bits kept, and rounds the sum to 16 bits, held to
+-32768..32767. A stream at 44100 Hz and a gain of one plays its 16-bit
+samples unchanged. `PcmResampler` (`oa/audio/resampler.hpp`) is a
+Kaiser-windowed sinc of 6 zero crossings each side (window 0.1102 * (80 -
+8.7), zeros on the lower rate's frames) with 14-bit taps whose phases each
+sum to one; the input is silent beyond its ends, N frames give
+ceil(N * 44100 / rate), and its 32-bit output keeps a band-limited signal's
+overshoot past full scale. `convert_for_mixer` keeps a converted sound at
+half its level in 16 bits, for that overshoot, and the WAV player plays it
+at twice the gain (`converted_sample_gain`). For the game's 361 sound files,
+SDL's own stream conversion and mixing of the same sounds at the same gains
+gives the same samples to within 4 steps of 16 bits (10 for the one file at
+22254 Hz) and within 4 when eight play at once, under one step root mean
+square; float samples agree within one. `BufferedOutput` takes the device
+through its hooks (`oa::platform::sound_device::Hooks`), so its ring is
+tested on a device the test plays by hand.
 
-Tests: `audio-output` (the formats, gains, pausing, clearing, feeds and rate
-conversion of the mixer; the buffered output's ring, its start count and a
-refused buffer) and on Windows `audio-output-wave-out`, which plays a tone
-on the system's device, or is skipped where there is none.
+Tests: `audio-output` (the integer resampler's limits, lengths, splits,
+accuracy and alignment; the formats, gains, side gains, pausing, clearing,
+feeds and rate conversion of the mixer, and `convert_for_mixer`; the
+buffered output's ring, its start count and a refused buffer),
+`audio-sdl-player` (the WAV player's stream, voices and a placed start's
+two sides) and on Windows `audio-output-wave-out`, which plays a tone on
+the system's device, or is skipped where there is none.
 
 ## Offline mix
 

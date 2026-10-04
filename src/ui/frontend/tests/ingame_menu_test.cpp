@@ -4,6 +4,7 @@
 #include "oa/ui/frontend/ingame_menu.hpp"
 #include "test_support.hpp"
 #include "oa/base/text.hpp"
+#include "oa/data/languages/translation.hpp"
 
 #include <cstdint>
 #include <cstring>
@@ -327,6 +328,46 @@ OA_TEST(restart_reloads_the_bound_mission_or_map) {
     context.session = SessionKind::multiplayer;
     OA_CHECK(ingame_run_restart(context, app, host) == RestartPath::skirmish);
     OA_CHECK(restart.log.front() == "end" && restart.log[1] == "map 4" && !single_player());
+}
+
+/// Answers the German Yes and No as gamedata\translate.tdf gives them.
+///
+/// @param text the text
+/// @return its German, or null for any other text
+const char* german_yes_no(void*, const char* text) {
+    if (std::strcmp(text, "Yes") == 0)
+        return "Ja";
+    if (std::strcmp(text, "No") == 0)
+        return "Nein";
+    return nullptr;
+}
+
+OA_GAME_DATA_TEST(yes_or_no_quick_keys_follow_the_language) {
+    Panel confirm;
+    if (!load_panel(confirm, "yesorno.gui"))
+        return;
+    Calls calls;
+    auto context = make_context(calls, SessionKind::skirmish);
+    context.exit_kind = ExitKind::leave_game;
+    oa::data::languages::set_translation_hooks({nullptr, german_yes_no, nullptr});
+    ingame_enter_exit_confirm(confirm, context);
+    Panel watching;
+    load_panel(watching, "yesorno.gui");
+    ingame_enter_continue_watching(watching);
+    oa::data::languages::set_translation_hooks({});
+    // As in 3.1c, each button takes the first letter of its caption the
+    // other's key does not hold: J for Ja and N for Nein.
+    for (const Panel* panel : {&confirm, &watching}) {
+        OA_CHECK(text_of(*panel, "CHOICE1") == "Ja");
+        OA_CHECK(text_of(*panel, "CHOICE2") == "Nein");
+        OA_CHECK(panel_control(*panel, "CHOICE1")->quick_key == 'J');
+        OA_CHECK(panel_control(*panel, "CHOICE2")->quick_key == 'N');
+    }
+    // With no translation the keys are the English Y and N.
+    ingame_enter_continue_watching(watching);
+    OA_CHECK(text_of(watching, "CHOICE1") == "Yes");
+    OA_CHECK(panel_control(watching, "CHOICE1")->quick_key == 'Y');
+    OA_CHECK(panel_control(watching, "CHOICE2")->quick_key == 'N');
 }
 
 OA_GAME_DATA_TEST(continue_watching_prompt) {

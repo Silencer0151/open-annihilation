@@ -259,6 +259,15 @@ void installed_language_answers_interface_text() {
     languages::set_interface_language(nullptr, languages::english());
 }
 
+/// Copies text into a zero-filled character field, keeping its last byte zero.
+///
+/// @param field the field
+/// @param text the text; the characters that fit are copied
+template <std::size_t Size>
+void copy_text(char (&field)[Size], std::string_view text) {
+    std::memcpy(field, text.data(), std::min(text.size(), Size - 1));
+}
+
 /// Returns a unit type with its own name and description, as a unit file's
 /// Name and Description give them.
 ///
@@ -268,9 +277,9 @@ void installed_language_answers_interface_text() {
 /// @return the type
 oa::UnitDef unit_type(const char* unit_name, const char* name, const char* description) {
     oa::UnitDef def{};
-    std::strncpy(def.unit_name, unit_name, sizeof def.unit_name - 1);
-    std::strncpy(def.name, name, sizeof def.name - 1);
-    std::strncpy(def.description, description, sizeof def.description - 1);
+    copy_text(def.unit_name, unit_name);
+    copy_text(def.name, name);
+    copy_text(def.description, description);
     return def;
 }
 

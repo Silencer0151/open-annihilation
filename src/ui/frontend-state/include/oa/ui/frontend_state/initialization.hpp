@@ -9,6 +9,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <optional>
 #include <string>
@@ -131,7 +132,11 @@ struct Preferences {
     uint16_t game_speed{}, current_game_speed{};
     uint8_t unit_chat{}, unit_chat_text{}, cd_mode{};
     uint32_t fx_volume{}, music_volume{}, skirmish_difficulty{}, skirmish_location{};
-    std::string password, nickname, game_name, image_output_directory;
+    std::string password, nickname, game_name;
+    /// The folder screenshots, posters and movie captures go under, at any
+    /// length the system's paths allow; Game.output_directory holds it only
+    /// when it fits there.
+    std::string image_output_directory;
     // Set when the console changes the value; the next save writes it and clears the flag.
     uint32_t image_output_directory_changed{}; // Game.output_directory_changed
     uint32_t movie_output_rate_changed{};      // Game.capture_rate_changed
@@ -149,6 +154,10 @@ inline constexpr uint16_t music_mode = 1, all_missions = 1;
 inline constexpr uint16_t developer = 2, selection_boxes = 4, tree_death = 8, no_shake = 16,
                           clock = 64;
 } // namespace preference_flags
+
+/// The capacity a string setting is read with when the engine keeps it at any
+/// length, as it keeps a folder's path, rather than in a field of the game's.
+inline constexpr std::size_t any_length = std::numeric_limits<std::size_t>::max();
 
 inline constexpr std::string_view general_section = "Total Annihilation";
 inline constexpr std::string_view skirmish_section = "Total Annihilation\\Skirmish";
@@ -183,7 +192,8 @@ class PreferencesHost {
     ///
     /// @param section Settings section.
     /// @param key Value name.
-    /// @param capacity Field capacity including the terminating zero.
+    /// @param capacity Field capacity including the terminating zero, or
+    ///        any_length for a value the engine keeps at any length.
     /// @return The value, or nothing when absent.
     virtual std::optional<std::string>
     read_string(std::string_view section, std::string_view key, std::size_t capacity) = 0;
@@ -240,6 +250,13 @@ class PreferencesHost {
     ///
     /// @return The directory, without a trailing separator.
     virtual std::string application_directory() = 0;
+
+    /// Returns the Image Output Directory the host gives in place of the
+    /// game's default, the application directory's folder named after the
+    /// user: used while the preferences hold none, or hold that default.
+    ///
+    /// @return The folder; empty to keep the game's default.
+    virtual std::string own_image_output_directory() = 0;
 
     /// Selects the map list.
     ///
@@ -312,7 +329,9 @@ inline constexpr DisplayModeSetting tall_display_mode_setting{1024, 768, true};
 ///
 /// Keeps the game's defaults (writing many of them back when absent) and its
 /// bit-preserving writes; restores the device volumes when RestoreVolume is
-/// set; picks the first skirmish map when none is stored.
+/// set; picks the first skirmish map when none is stored. The Image Output
+/// Directory setting, and its default of the application directory and the
+/// user name, are kept at any length.
 ///
 /// @param[in,out] state Dispatcher state; play_intro_movie is loaded.
 /// @param[out] settings Skirmish slot count, map and slots.

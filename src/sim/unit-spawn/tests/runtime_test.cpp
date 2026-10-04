@@ -4,6 +4,8 @@
 #include "oa/sim/unit_spawn/spawn_runtime.hpp"
 #include <map>
 #include <stdexcept>
+#include <string_view>
+#include <vector>
 #include <iostream>
 #include <cstdint>
 using namespace oa::sim::unit_spawn;
@@ -119,12 +121,64 @@ int main() {
         no_pages.type.gui_page_count == 0 &&
         !(no_pages.type.simulation.flags & OA_UNIT_DEF_FLAG_BUILD_MENU_DEFAULT)
     );
+    // A script file the parser rejects leaves the type loaded without a
+    // script, as an absent one does, and says why.
     reader.files["scripts/ARMCOM.COB"] = {1, 2};
     const auto bad_script = load_runtime_type(definition, bind, reader);
     CHECK(
-        bad_script.load_error.find("invalid unit script scripts/ARMCOM.COB") == 0 &&
-        !bad_script.model && !bad_script.script
+        bad_script.load_error.empty() && bad_script.model && !bad_script.script &&
+        !bad_script.type.cob &&
+        bad_script.type.model == reinterpret_cast<AssetHandle>(bad_script.model.get()) &&
+        bad_script.script_error.code == oa::base::bytes::DecodeCode::truncated &&
+        bad_script.script_path == "scripts/ARMCOM.COB"
     );
+    CHECK(
+        loaded.script_error.code == oa::base::bytes::DecodeCode::none &&
+        plain.script_error.code == oa::base::bytes::DecodeCode::none
+    );
+
+    // A scripts directory of three unit types, loaded one after another as a
+    // match loads its types: one script whose header points its code past the
+    // end of the file, one whose VersionSignature is 6 with the two further
+    // header words before valid tables, and a plain one. The broken script
+    // stops neither its own type nor the others.
+    Reader directory;
+    directory.files["objects3d/body.3DO"] = reader.files.at("objects3d/body.3DO");
+    auto& broken = directory.files["scripts/BROKEN.COB"];
+    broken.resize(44);
+    put32(broken, 0, 4);
+    put32(broken, 12, 3);
+    for (unsigned i = 6; i < 11; ++i)
+        put32(broken, i * 4, 44);
+    auto& extended = directory.files["scripts/EXTENDED.COB"];
+    extended.resize(52);
+    put32(extended, 0, 6);
+    for (unsigned i = 6; i < 12; ++i)
+        put32(extended, i * 4, 52);
+    auto& plain_script = directory.files["scripts/PLAIN.COB"];
+    plain_script.resize(44);
+    put32(plain_script, 0, 4);
+    for (unsigned i = 6; i < 11; ++i)
+        put32(plain_script, i * 4, 44);
+    std::vector<LoadedType> types;
+    for (const char* name : {"BROKEN", "EXTENDED", "PLAIN"}) {
+        definition.unit_name = name;
+        types.push_back(load_runtime_type(definition, bind, directory));
+    }
+    for (const auto& type : types)
+        CHECK(type.load_error.empty() && type.model);
+    CHECK(
+        !types[0].script && !types[0].type.cob && types[0].script_path == "scripts/BROKEN.COB" &&
+        types[0].script_error.code == oa::base::bytes::DecodeCode::out_of_range &&
+        types[0].script_error.message ==
+            std::string_view("COB code section bounds disagree with entry table")
+    );
+    CHECK(
+        types[1].script && types[1].script_error.code == oa::base::bytes::DecodeCode::none &&
+        types[1].script->header.version_signature == 6 &&
+        types[1].type.cob == reinterpret_cast<AssetHandle>(types[1].script.get())
+    );
+    CHECK(types[2].script && types[2].script_error.code == oa::base::bytes::DecodeCode::none);
     std::array<std::string, 3> names = {"", "ARMCOM", "CORCOM"};
     CHECK(find_type_index(names, "armcom") == 1 && find_type_index(names, "missing") == 0);
     std::cout << "unit runtime tests passed\n";

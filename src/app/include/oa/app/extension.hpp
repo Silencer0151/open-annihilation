@@ -74,15 +74,19 @@
 //   the path the engine's own errors take from that call. Mostly that ends
 //   the game: main() prints "open-annihilation: <message>" and exits with
 //   status 1. One kind of path catches it, a match start the frontend falls
-//   back from: a campaign mission's start, wherever it comes from, a saved
-//   game loaded from the load dialog, and the in-game restart. The start is
-//   abandoned where it stopped and the frontend runs on; the status line
-//   shows "campaign start: <message>", "Saved game start: <message>" or
-//   "Restart failed: <message>", which stderr also receives, and a failed
-//   restart returns to the main menu. Other starts (a skirmish from the
-//   menus or a headless run, a saved skirmish a --load run loads) are not
-//   caught. frontend_game, state, match_game, console_host,
-//   team_panel_host and return_label are reached there;
+//   back from: a campaign mission's start, wherever it comes from, a
+//   skirmish started from its setup's Start, a saved game loaded from the
+//   load dialog, and the in-game restart. The start is abandoned where it
+//   stopped and the frontend runs on; the status line shows "campaign
+//   start: <message>", "Skirmish start failed: <message>", "Saved game
+//   start: <message>" or "Restart failed: <message>", which stderr also
+//   receives. A failed skirmish start leaves no match and returns to the
+//   skirmish setup, which shows the message in a message box, or the
+//   warning that the mod's files are missing when they are; a failed
+//   restart returns to the main menu. Other starts (a skirmish a headless
+//   run starts, a saved skirmish a --load run loads) are not caught.
+//   frontend_game, state, match_game, console_host, team_panel_host and
+//   return_label are reached there;
 // - reported: the engine reports the message and carries on as the hook
 //   says, mostly as it does for that call when the hook is null:
 //   simulation_step, player_gone, message_hooks, match_event, draw_loading,

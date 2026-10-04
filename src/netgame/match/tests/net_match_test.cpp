@@ -1946,10 +1946,14 @@ void setup_lobby(
 }
 
 // The match World: a small unit pool and one mobile ground definition.
-void setup_world(Machine& m) {
+// False when the World could not be allocated; the case then stops.
+[[nodiscard]] bool setup_world(Machine& m) {
     m.world = world_create();
     const WorldCapacity capacity{kUnitsPerPlayer * OA_PLAYER_COUNT + 1u, 3, 0};
-    CHECK(m.world != nullptr && world_alloc_tables(m.world, &capacity) != 0);
+    const bool allocated = m.world != nullptr && world_alloc_tables(m.world, &capacity) != 0;
+    CHECK(allocated);
+    if (!allocated)
+        return false;
     for (uint32_t i = 0; i < m.world->unit_slot_count; ++i)
         m.world->units[i].id = static_cast<uint16_t>(i);
     m.world->unit_defs[kCommanderDef].bm_code = 1;
@@ -1959,6 +1963,7 @@ void setup_world(Machine& m) {
     match_assign_unit_ranges(m.world);
     for (auto& player : m.world->game.players)
         player.economy = player.info;
+    return true;
 }
 
 Unit* commander_of(World* world, const Player& player) {
@@ -2173,7 +2178,10 @@ void two_machines_lobby_to_match() {
 
     // Start: the host leaves the battle room and sends 0x08.
     host_info.options |= mp::option::started;
-    setup_world(*host);
+    if (!setup_world(*host)) {
+        g_machines[0] = g_machines[1] = nullptr;
+        return;
+    }
     CHECK(
         launch_host_info(host->world) != nullptr &&
         launch_host_info(host->world)->max_units == kUnitsPerPlayer
@@ -2199,7 +2207,10 @@ void two_machines_lobby_to_match() {
         drain_lobby(*client);
         return client_started();
     }));
-    setup_world(*client);
+    if (!setup_world(*client)) {
+        g_machines[0] = g_machines[1] = nullptr;
+        return;
+    }
     net_match_begin(
         client->match.get(),
         &client->connection,
@@ -2803,11 +2814,17 @@ void client_computer_is_a_session_player() {
     CHECK(received(RecordType::game_start) == 1 && received(RecordType::probe) == 2);
 
     // Barrier, one commander per player simulated on each machine.
-    setup_world(*host);
+    if (!setup_world(*host)) {
+        g_machines[0] = g_machines[1] = nullptr;
+        return;
+    }
     net_match_begin(
         host->match.get(), &host->connection, host->world, sim_for(*host), hooks_for(*host)
     );
-    setup_world(*client);
+    if (!setup_world(*client)) {
+        g_machines[0] = g_machines[1] = nullptr;
+        return;
+    }
     net_match_begin(
         client->match.get(),
         &client->connection,
@@ -3085,6 +3102,8 @@ void vote_tally_rules() {
     VoteBoard board{};
     auto* vote = vote_open(board, 50, vote_flag_manual, 100, 60 * 30);
     CHECK(vote != nullptr);
+    if (vote == nullptr)
+        return;
     CHECK(vote_open(board, 50, vote_flag_manual, 100, 60 * 30) == nullptr);
     VoteElectorate four{4, 0};
     CHECK(vote_needed(*vote, 4) == 3);
@@ -3108,6 +3127,8 @@ void vote_tally_rules() {
     VoteBoard timeouts{};
     auto* timeout = vote_open(timeouts, 60, vote_flag_timeout, 0, 90 * 30);
     CHECK(timeout != nullptr && vote_needed(*timeout, 5) == 2 && vote_needed(*timeout, 1) == 1);
+    if (timeout == nullptr)
+        return;
     CHECK(vote_seconds_left(*timeout, 30 * 46) == 44);
     CHECK(vote_tally(*timeout, {5, 0}, 10) == VoteResult::open);
     CHECK(vote_tally(*timeout, {5, 0}, 90 * 30) == VoteResult::passed);

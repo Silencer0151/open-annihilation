@@ -835,7 +835,7 @@ void check_solid_pass(
 /// to the black pass.
 void solid_passes_merge_their_runs() {
     const Sight sight = mixed_sight();
-    for (const auto [camera_x, camera_z] :
+    for (const auto& [camera_x, camera_z] :
          {std::pair{0, 0}, std::pair{37, 9}, std::pair{150, 100}}) {
         const auto grid = sight.fog(camera_x, camera_z);
         const card::Colour black{0.0F, 0.0F, 0.0F, 0.5F};

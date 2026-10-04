@@ -3,6 +3,7 @@
 
 #include "oa/audio/sdl_audio.hpp"
 
+#include "oa/audio/software_mixer.hpp"
 #include "oa/audio/sound_output.hpp"
 #include "oa/audio/spatial_gain.hpp"
 
@@ -18,6 +19,7 @@
 #include <exception>
 #include <map>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -45,8 +47,9 @@ void refill_loop(void* userdata, OutputStream& stream, int32_t additional) {
     }
 }
 
-/// The most bytes of decoded sound files the player keeps.
-constexpr std::size_t max_cached_sound_bytes = std::size_t{4} << 20;
+/// The most bytes of decoded sound files the player keeps, as 16-bit samples
+/// at the mixer's rate: about a minute and a half of one channel.
+constexpr std::size_t max_cached_sound_bytes = std::size_t{8} << 20;
 /// The most streams the player keeps open for its effects while none plays on them.
 constexpr std::size_t max_idle_streams = 8;
 
@@ -70,10 +73,11 @@ struct SoundBuffer {
     float level{1.0F};     ///< the voice volume relative to the near volume
 };
 
-/// A sound file as SDL decoded it, and its buffers.
+/// A sound file as SDL decoded it, converted once to the mixer's rate
+/// (convert_for_mixer, at half its level), and its buffers.
 struct CachedSound {
-    SDL_AudioSpec spec{};
-    std::vector<uint8_t> pcm;
+    StreamFormat format{}; ///< the samples' format: 16-bit at mixer_output_rate
+    std::vector<int16_t> samples;
     std::array<SoundBuffer, sample_buffers> buffers{};
     uint64_t last_started{}; ///< the count of starts when it last started
 };
@@ -232,33 +236,59 @@ bool load_wav(
     return true;
 }
 
-// Pans a placed voice's samples, first widening them to 16-bit stereo.
-bool place_samples(
-    SDL_AudioSpec& spec, Uint8*& wav, Uint32& length, const oa::audio::Spatial& spatial
+/// Decodes a WAV the asset store holds and converts it to the mixer's rate,
+/// at half its level (convert_for_mixer), so that it plays with no
+/// conversion as it plays.
+///
+/// @param assets the asset store
+/// @param resource the WAV's archive path
+/// @param[out] format the converted samples' format
+/// @param[out] samples the converted samples
+/// @param[out] error why the WAV cannot be played; untouched on success
+/// @return true when the WAV was decoded and converted
+bool load_converted(
+    const oa::AssetStore& assets,
+    std::string_view resource,
+    StreamFormat& format,
+    std::vector<int16_t>& samples,
+    std::string& error
 ) {
-    const SDL_AudioSpec stereo{SDL_AUDIO_S16, 2, spec.freq};
-    Uint8* converted = nullptr;
-    int converted_length = 0;
-    const bool ok = SDL_ConvertAudioSamples(
-        &spec, wav, static_cast<int>(length), &stereo, &converted, &converted_length
-    );
-    SDL_free(wav);
-    wav = converted;
-    if (!ok)
+    SDL_AudioSpec spec{};
+    Uint8* wav = nullptr;
+    Uint32 length = 0;
+    if (!load_wav(assets, resource, spec, wav, length, error))
         return false;
-    const auto gain = oa::audio::spatial_stereo_gain(spatial);
-    auto* samples = reinterpret_cast<Sint16*>(converted);
-    const auto frames = static_cast<std::size_t>(converted_length) / (2 * sizeof(Sint16));
-    for (std::size_t frame = 0; frame < frames; ++frame) {
-        samples[2 * frame] =
-            static_cast<Sint16>(std::lround(static_cast<float>(samples[2 * frame]) * gain.left));
-        samples[2 * frame + 1] = static_cast<Sint16>(
-            std::lround(static_cast<float>(samples[2 * frame + 1]) * gain.right)
-        );
+    StreamFormat decoded{};
+    const bool known = stream_format(spec, decoded, error);
+    const uint32_t channels =
+        known ? convert_for_mixer(decoded, std::span<const uint8_t>(wav, length), samples) : 0;
+    SDL_free(wav);
+    if (!known)
+        return false;
+    if (channels == 0) {
+        error = "unsupported WAV channels or rate";
+        return false;
     }
-    spec = stereo;
-    length = static_cast<Uint32>(converted_length);
+    format = StreamFormat{SampleFormat::s16, static_cast<uint8_t>(channels), mixer_output_rate};
     return true;
+}
+
+/// Returns the gain a converted sound plays at: the effects' output gain,
+/// raised for samples kept at half their level.
+///
+/// @param wave_out_volume the restored WaveOutVolume scalar, 0..0xffff
+/// @param fx_volume the effects volume preference, 0..64
+/// @return the stream gain
+float converted_gain(uint32_t wave_out_volume, uint32_t fx_volume) noexcept {
+    return output_gain(wave_out_volume, fx_volume) * converted_sample_gain;
+}
+
+/// Returns the bytes of a converted sound's samples.
+///
+/// @param samples the samples
+/// @return their byte count
+std::size_t sample_bytes_of(const std::vector<int16_t>& samples) noexcept {
+    return samples.size() * sizeof(int16_t);
 }
 
 } // namespace
@@ -307,11 +337,11 @@ bool SdlWavPlayer::play_placed(
     const std::string key = sound_key(resource);
     auto found = impl.sounds.find(key);
     if (found == impl.sounds.end()) {
-        SDL_AudioSpec spec{};
-        Uint8* wav = nullptr;
-        Uint32 length = 0;
-        if (!load_wav(impl.assets, resource, spec, wav, length, error))
+        StreamFormat format{};
+        std::vector<int16_t> samples;
+        if (!load_converted(impl.assets, resource, format, samples, error))
             return false;
+        const std::size_t length = sample_bytes_of(samples);
         // The least recently started sounds that no buffer plays make room.
         while (impl.cached_bytes + length > max_cached_sound_bytes) {
             auto oldest = impl.sounds.end();
@@ -325,15 +355,14 @@ bool SdlWavPlayer::play_placed(
             }
             if (oldest == impl.sounds.end())
                 break;
-            impl.cached_bytes -= oldest->second.pcm.size();
+            impl.cached_bytes -= sample_bytes_of(oldest->second.samples);
             impl.sounds.erase(oldest);
         }
         CachedSound& sound = impl.sounds[key];
-        sound.spec = spec;
-        sound.pcm.assign(wav, wav + length);
+        sound.format = format;
+        sound.samples = std::move(samples);
         sound.buffers[0].present = true;
         impl.cached_bytes += length;
-        SDL_free(wav);
         found = impl.sounds.find(key);
     }
     CachedSound& sound = found->second;
@@ -375,27 +404,13 @@ bool SdlWavPlayer::play_placed(
         }
     }
 
-    // The start's samples: the sound as decoded, or panned for its placement.
-    SDL_AudioSpec spec = sound.spec;
-    auto length = static_cast<Uint32>(sound.pcm.size());
-    auto* wav = static_cast<Uint8*>(SDL_malloc(std::max<std::size_t>(sound.pcm.size(), 1)));
-    if (wav == nullptr) {
-        error = SDL_GetError();
-        return false;
-    }
-    std::memcpy(wav, sound.pcm.data(), sound.pcm.size());
-    if (spatial.mode == oa::audio::SpatialMode::normal &&
-        !place_samples(spec, wav, length, spatial)) {
-        error = SDL_GetError();
-        return false;
-    }
+    // The start plays the sound as decoded, its sides weighed for its placement.
+    const StreamFormat format = sound.format;
+    const oa::audio::StereoGain sides = spatial.mode == oa::audio::SpatialMode::normal
+                                            ? oa::audio::spatial_stereo_gain(spatial)
+                                            : oa::audio::StereoGain{};
     const float level =
         std::pow(10.0F, static_cast<float>(volume - oa::audio::volume_near) / 2000.0F);
-    StreamFormat format{};
-    if (!stream_format(spec, format, error)) {
-        SDL_free(wav);
-        return false;
-    }
     // A restarted buffer plays its new start on the stream it has; another
     // takes an idle stream of the format, or opens one.
     SoundOutput& output = sound_output();
@@ -417,17 +432,17 @@ bool SdlWavPlayer::play_placed(
         }
         chosen->format = format;
     }
-    if (chosen->stream == nullptr) {
-        SDL_free(wav);
+    if (chosen->stream == nullptr)
         return false;
-    }
-    chosen->put_bytes = static_cast<int32_t>(length);
+    const auto length = static_cast<int32_t>(sample_bytes_of(sound.samples));
+    chosen->put_bytes = length;
     chosen->level = level;
+    // An output that cannot weigh the sides apart plays the start centred.
+    static_cast<void>(chosen->stream->set_side_gains(sides.left, sides.right));
     const bool queued =
-        chosen->stream->set_gain(output_gain(impl.wave_out_volume, impl.fx_volume) * level) &&
-        chosen->stream->put(wav, static_cast<int32_t>(length)) && chosen->stream->flush() &&
+        chosen->stream->set_gain(converted_gain(impl.wave_out_volume, impl.fx_volume) * level) &&
+        chosen->stream->put(sound.samples.data(), length) && chosen->stream->flush() &&
         chosen->stream->resume();
-    SDL_free(wav);
     if (!queued) {
         error = output.last_error();
         chosen->stream.reset();
@@ -442,26 +457,20 @@ bool SdlWavPlayer::play_placed(
 
 bool SdlWavPlayer::start_loop_resource(std::string_view resource, std::string& error) {
     stop_loop();
-    SDL_AudioSpec spec{};
-    Uint8* wav = nullptr;
-    Uint32 length = 0;
-    if (!load_wav(impl_->assets, resource, spec, wav, length, error))
-        return false;
-    impl_->loop_track.pcm.assign(wav, wav + length);
-    impl_->loop_track.offset = 0;
-    SDL_free(wav);
     StreamFormat format{};
-    if (!stream_format(spec, format, error)) {
-        impl_->loop_track.pcm.clear();
+    std::vector<int16_t> samples;
+    if (!load_converted(impl_->assets, resource, format, samples, error))
         return false;
-    }
+    const auto* first = reinterpret_cast<const uint8_t*>(samples.data());
+    impl_->loop_track.pcm.assign(first, first + sample_bytes_of(samples));
+    impl_->loop_track.offset = 0;
     SoundOutput& output = sound_output();
     impl_->looping = output.open_stream(format, refill_loop, &impl_->loop_track, error);
     if (impl_->looping == nullptr) {
         impl_->loop_track.pcm.clear();
         return false;
     }
-    if (!impl_->looping->set_gain(output_gain(impl_->wave_out_volume, impl_->fx_volume)) ||
+    if (!impl_->looping->set_gain(converted_gain(impl_->wave_out_volume, impl_->fx_volume)) ||
         !impl_->looping->resume()) {
         error = output.last_error();
         stop_loop();
@@ -478,34 +487,26 @@ void SdlWavPlayer::stop_loop() noexcept {
 
 bool SdlWavPlayer::play_stream(std::string_view resource, uint32_t delay_ms, std::string& error) {
     stop_stream();
-    SDL_AudioSpec spec{};
-    Uint8* wav = nullptr;
-    Uint32 length = 0;
-    if (!load_wav(impl_->assets, resource, spec, wav, length, error))
-        return false;
     StreamFormat format{};
-    if (!stream_format(spec, format, error)) {
-        SDL_free(wav);
+    std::vector<int16_t> samples;
+    if (!load_converted(impl_->assets, resource, format, samples, error))
         return false;
-    }
     SoundOutput& output = sound_output();
     auto stream = output.open_stream(format, nullptr, nullptr, error);
-    if (stream == nullptr) {
-        SDL_free(wav);
+    if (stream == nullptr)
         return false;
-    }
     // The delay plays as silence ahead of the sound.
     const auto delay_frames = static_cast<std::size_t>(
-        static_cast<uint64_t>(spec.freq) * delay_ms / milliseconds_per_second
+        static_cast<uint64_t>(format.rate) * delay_ms / milliseconds_per_second
     );
     const std::vector<uint8_t> silence(
         delay_frames * frame_bytes(format), silence_byte(format.sample)
     );
     const bool queued =
-        stream->set_gain(output_gain(impl_->wave_out_volume, impl_->fx_volume)) &&
+        stream->set_gain(converted_gain(impl_->wave_out_volume, impl_->fx_volume)) &&
         (silence.empty() || stream->put(silence.data(), static_cast<int32_t>(silence.size()))) &&
-        stream->put(wav, static_cast<int32_t>(length)) && stream->flush() && stream->resume();
-    SDL_free(wav);
+        stream->put(samples.data(), static_cast<int32_t>(sample_bytes_of(samples))) &&
+        stream->flush() && stream->resume();
     if (!queued) {
         error = output.last_error();
         return false;
@@ -545,7 +546,7 @@ bool SdlWavPlayer::playing() const noexcept {
 void SdlWavPlayer::set_volume(uint32_t wave_out_volume, uint32_t fx_volume) noexcept {
     impl_->wave_out_volume = wave_out_volume;
     impl_->fx_volume = fx_volume;
-    const float gain = output_gain(wave_out_volume, fx_volume);
+    const float gain = converted_gain(wave_out_volume, fx_volume);
     for (auto& [key, sound] : impl_->sounds)
         for (auto& buffer : sound.buffers)
             if (buffer.stream != nullptr)

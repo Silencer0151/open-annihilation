@@ -425,7 +425,7 @@ void Runtime::check_match_overlays(
     const CanvasRect bar{
         match_layout_.left,
         match_layout_.bottom_bar_y(),
-        match_layout_.hud_width - match_layout_.left,
+        match_layout_.width - match_layout_.left,
         match_layout_.bottom
     };
     auto before = copy_rect(frame, log);
@@ -599,8 +599,7 @@ void Runtime::check_match_overlays(
 
 void Runtime::check_composed_frame() {
     const auto saved_layout = match_layout_;
-    match_layout_ =
-        oa::ui::display_layout::make_match_layout(kWindowCheckWidth, kWindowCheckHeight);
+    match_layout_ = lay_out_match(kWindowCheckWidth, kWindowCheckHeight);
     check_match_overlays(
         [this](renderer::Surface& frame) {
             render_match_surface();
@@ -1569,6 +1568,7 @@ void Runtime::check_navigation() {
     check_deathmatch_respawn();
     check_dgun_order();
     check_attack_command();
+    check_tracking_zoom();
     check_turret_draws(report_directory);
     check_launch_services();
     exercise_click(skirmish::resource_name(skirmish::Button::select_map));
@@ -1644,6 +1644,7 @@ void Runtime::check_navigation() {
         std::string_view(between.mission.data()) == bound_mission_name() ||
         endgame_world() == nullptr)
         throw std::runtime_error("the ENDMSN save does not name the next mission between missions");
+    check_end_panel_load_cancel();
     load(Screen::new_campaign);
     write_ppm(report_directory / "native-newcamp.ppm", surface_);
     // The installs carry more than two campaign files, so the
@@ -2102,8 +2103,7 @@ Runtime::check_save_dialog(const fs::path& report_directory, const std::string& 
         );
     fs::path written;
     std::error_code error;
-    for (const auto& entry :
-         fs::directory_iterator(save_game_root() / oa::ui::frontend::kSaveDirectory, error))
+    for (const auto& entry : fs::directory_iterator(saves_folder(), error))
         if (tdf_names_equal(entry.path().stem().string(), name))
             written = entry.path();
     oa::ui::frontend::LoadSummary summary;

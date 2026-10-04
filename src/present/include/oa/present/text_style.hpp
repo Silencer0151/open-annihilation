@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// How game text is drawn, as the player's Language & Text settings choose
+// How game text is drawn, as the player's Language settings choose
 // it. The text drawing reads it each frame; it changes only what is drawn,
 // never the simulation, a saved game or what a shared game sends.
 #pragma once

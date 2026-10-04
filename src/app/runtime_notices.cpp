@@ -139,7 +139,7 @@ void Runtime::tell_renderer_records() {
         return;
     }
     if (++run.main_menu_frames < kNoticeMenuFrames || dialogs::dialog_count() != 0 ||
-        engine_settings_dialog() != nullptr)
+        engine_settings_dialog() != nullptr || saves_notice_shown())
         return;
     auto& records = run.host->records();
     // Most frames have nothing to tell, and cost no more than this.

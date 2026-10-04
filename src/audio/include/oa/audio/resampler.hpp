@@ -114,4 +114,101 @@ class Resampler {
     bool primed_{};            ///< the frames before the first input frame are in history_
 };
 
+/// Fraction bits of PcmResampler's kernel taps.
+inline constexpr uint32_t pcm_resampler_tap_bits = 14;
+/// Zero crossings of PcmResampler's kernel on each side of its centre,
+/// counted at the lower of the two rates.
+inline constexpr int32_t pcm_resampler_zero_crossings = 6;
+/// PcmResampler's passband edge, as a fraction of the lower rate's half
+/// sample rate: the kernel's zeros fall on the lower rate's frames.
+inline constexpr double pcm_resampler_cutoff = 1.0;
+/// Shape of PcmResampler's Kaiser window, for about 80 dB of stop-band
+/// leakage: 0.1102 * (80 - 8.7).
+inline constexpr double pcm_resampler_kaiser_beta = 0.1102 * (80.0 - 8.7);
+
+/// Converts interleaved 16-bit samples from one sample rate to another in
+/// integer arithmetic alone, once it is configured, into 32-bit samples at
+/// the same level.
+///
+/// Output frame n is the input's band-limited value at input frame
+/// n * input_rate / output_rate, from a Kaiser-windowed sinc kernel with
+/// pcm_resampler_zero_crossings zero crossings each side of its centre at
+/// the lower rate, a passband to pcm_resampler_cutoff and a window of
+/// pcm_resampler_kaiser_beta; a shorter kernel than Resampler's, so that
+/// converting a sound costs less. Its taps are rounded to
+/// pcm_resampler_tap_bits fraction bits, each phase's taps summing to
+/// exactly one, so that a constant signal passes unchanged. An output
+/// sample is the sum of the taps times the input samples, rounded to
+/// nearest (halves upward); it is not held to 16 bits, so the overshoot
+/// of a band-limited signal past full scale is kept. A ratio whose output
+/// frames fall on more than resampler_max_exact_phases positions between
+/// two input frames takes the nearest of that many evenly spaced positions.
+///
+/// The input is silent before its first frame and after its last, as a
+/// sound that starts and ends is. A whole input of N frames gives
+/// ceil(N * output_rate / input_rate) output frames; the output does not
+/// depend on how the input is split between calls. Equal rates copy the
+/// samples unchanged.
+class PcmResampler {
+  public:
+
+    /// Sets up a conversion and forgets any input already given.
+    ///
+    /// @param input_rate rate of the input, in hertz
+    /// @param output_rate rate of the output, in hertz
+    /// @param channels interleaved channels in each frame
+    /// @return false, leaving the resampler unconfigured, when a rate or the
+    ///         channel count is outside Resampler's limits
+    [[nodiscard]] bool configure(uint32_t input_rate, uint32_t output_rate, uint32_t channels);
+
+    /// Forgets the input given so far, so the next input starts a new signal.
+    void reset() noexcept;
+
+    /// Converts more input, appending every output frame it completes.
+    ///
+    /// @param input interleaved input frames; a trailing partial frame is ignored
+    /// @param[in,out] output receives the completed interleaved output frames
+    void process(std::span<const int16_t> input, std::vector<int32_t>& output);
+
+    /// Ends the input, appending the output frames that the last input frames still owe.
+    ///
+    /// @param[in,out] output receives the remaining interleaved output frames
+    void finish(std::vector<int32_t>& output);
+
+    /// Tells whether the input and output rates are equal, so samples are copied.
+    ///
+    /// @return true for equal rates
+    [[nodiscard]] bool passthrough() const noexcept { return input_rate_ == output_rate_; }
+
+    /// Returns the output frames the input given so far still owes once it ends.
+    ///
+    /// @return the frames finish() would append now
+    [[nodiscard]] uint64_t owed_frames() const noexcept;
+
+  private:
+
+    /// Appends every output frame whose kernel the held input covers.
+    ///
+    /// @param[in,out] output receives the interleaved output frames
+    /// @param finishing true once the input has ended, which stops at the owed frame count
+    void produce(std::vector<int32_t>& output, bool finishing);
+
+    uint32_t input_rate_{};
+    uint32_t output_rate_{};
+    uint32_t channels_{};
+    uint32_t upsample_{};          ///< output_rate over the rates' greatest common divisor
+    uint32_t downsample_{};        ///< input_rate over the rates' greatest common divisor
+    uint32_t taps_{};              ///< kernel taps per phase, an even count
+    uint32_t phases_{};            ///< evenly spaced positions tabled between two input frames
+    bool exact_phases_{};          ///< true when every output position has its own row
+    std::vector<int16_t> table_;   ///< phases_ + 1 rows of taps_ taps; the last is a whole frame on
+    std::vector<int16_t> history_; ///< interleaved input frames from history_start_ on
+    int64_t
+        history_start_{};   ///< input frame of history_'s first frame; negative for lead-in silence
+    int64_t next_input_{};  ///< input frame at or before the next output frame
+    uint32_t next_phase_{}; ///< the next output frame's offset past next_input_, in upsample_ths
+    uint64_t input_frames_{};  ///< input frames given since the last reset
+    uint64_t output_frames_{}; ///< output frames produced since the last reset
+};
+
 } // namespace oa::audio

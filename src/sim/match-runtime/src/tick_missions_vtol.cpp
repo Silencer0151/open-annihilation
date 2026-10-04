@@ -587,6 +587,21 @@ class TickHost::VtolMissions {
         return true;
     }
 
+    // air.gunships-hover-to-strafe: a guarding type that hovers to attack goes
+    // after an enemy its weapons can reach, as a patrolling aircraft does,
+    // instead of circling past it; guarding resumes once that attack ends.
+    bool engage_in_reach() {
+        const auto& rule = match().rules().air.gunships_hover_to_strafe;
+        if (!rule.enabled || !rule.guard_engagements ||
+            !(def_of(s.record).flags & OA_UNIT_DEF_FLAG_HOVER_ATTACK))
+            return false;
+        auto* enemy = match().find_automatic_target(*s.unit);
+        if (!enemy || !match().issue_automatic_attack(*s.unit, *enemy))
+            return false;
+        order.wait_events = 0;
+        return true;
+    }
+
     // Orbit the guarded unit: weapon range plus a margin, or a fixed radius.
     uint32_t orbit(const sim::simulation_state::Unit& guarded) {
         auto& angle = record.extra.tolerance;
@@ -691,7 +706,9 @@ class TickHost::VtolMissions {
     }
 
     /// Runs one step of VTOL_Follow: guards a unit, defending it, repairing
-    /// it or joining its builder orders, and orbiting it otherwise.
+    /// it or joining its builder orders, and orbiting it otherwise; under
+    /// air.gunships-hover-to-strafe a gunship attacks an enemy in reach
+    /// before it orbits.
     ///
     /// @return 1 (next phase), 2 (keep waiting), 3 (retry later: an attack,
     ///     repair or assist was queued), 5 (done: the guarded unit is gone or
@@ -731,6 +748,8 @@ class TickHost::VtolMissions {
                 }
             }
             if (assist_builder(*guarded))
+                return 3;
+            if (engage_in_reach())
                 return 3;
             return orbit(*guarded);
         }

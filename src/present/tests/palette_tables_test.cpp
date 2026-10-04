@@ -94,6 +94,19 @@ void test_tables() {
     CHECK(load_light_table(display) && display.light_table != nullptr);
     CHECK(load_gray_table(display) && display.gray_table != nullptr);
     CHECK(load_blue_table(display) && display.blue_table != nullptr);
+    const auto free_tables = [&display] {
+        free_alpha_table(display);
+        free_shade_table(display);
+        free_light_table(display);
+        free_gray_table(display);
+        free_blue_table(display);
+    };
+    if (display.alpha_table == nullptr || display.shade_table == nullptr ||
+        display.light_table == nullptr || display.gray_table == nullptr ||
+        display.blue_table == nullptr) {
+        free_tables();
+        return;
+    }
     display.alpha_table[alpha_table_size - 1] = 1;
     display.shade_table[shade_table_size - 1] = 1;
     display.light_table[light_table_size - 1] = 1;
@@ -118,11 +131,7 @@ void test_tables() {
     copy_alpha_table(display, cached.data());
     CHECK(std::equal(cached.begin(), cached.end(), display.alpha_table));
 
-    free_alpha_table(display);
-    free_shade_table(display);
-    free_light_table(display);
-    free_gray_table(display);
-    free_blue_table(display);
+    free_tables();
     CHECK(display.alpha_table == nullptr && display.blue_table == nullptr);
     CHECK(build_alpha_table(display, palette) == nullptr);
 }

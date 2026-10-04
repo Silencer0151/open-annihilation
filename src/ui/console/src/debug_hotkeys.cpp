@@ -10,14 +10,18 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <new>
+#include <string>
 
 namespace oa::ui::console {
 namespace {
 
 constexpr uint8_t kDebugOverlayModes = 5;
 constexpr uint8_t kNoAttackerOwner = OA_PLAYER_COUNT;
-constexpr size_t kPathBytes = 0x100;
 constexpr size_t kMovieNumberAt = 5; // digits follow "MOVIE"
+// Room for the number of a MOVIEnnn folder or a numbered file: up to ten
+// digits and a sign.
+constexpr size_t kNumberTextBytes = 12;
 
 const HotkeyHost kNoHost{};
 
@@ -135,7 +139,9 @@ int32_t highest_listed_number(
 ///
 /// Only after the passphrase. A new capture numbers its folder one past the
 /// highest "<output directory>\MOVIE*" folder, creates it, starts the capture
-/// there and captures from the current tick on.
+/// there and captures from the current tick on. Game.capture_path holds the
+/// folder when it fits there, and is left empty otherwise; the host is given
+/// the folder whole.
 ///
 /// @param[in,out] console Console whose Game capture fields change.
 /// @param host Key host that lists folders and starts the capture.
@@ -147,25 +153,30 @@ void toggle_movie_capture(Console* console, const HotkeyHost& host) noexcept {
     game.capture_enabled = 0;
     if (was != 0)
         return;
-    char output[kOutputDirectoryBytes + 1] = {};
-    std::memcpy(output, game_bytes(game, game_offset::output_directory), kOutputDirectoryBytes);
-    // Each path is cut to its buffer; one that cannot be formatted is left empty.
-    char pattern[kPathBytes];
-    if (std::snprintf(pattern, sizeof pattern, "%s\\MOVIE*", output) < 0)
-        pattern[0] = '\0';
-    game.capture_enabled = highest_listed_number(host, pattern, kMovieNumberAt, 0) + 1;
-    if (std::snprintf(
-            game.capture_path,
-            sizeof game.capture_path,
-            "%s\\MOVIE%03i",
-            output,
-            game.capture_enabled
-        ) < 0)
+    // The paths are kept whole, however long the output directory is; with no
+    // memory to spell them, no capture starts.
+    std::string folder;
+    try {
+        const std::string output = output_directory(game, console->host);
+        const std::string pattern = output + "\\MOVIE*";
+        game.capture_enabled = highest_listed_number(host, pattern.c_str(), kMovieNumberAt, 0) + 1;
+        char number[kNumberTextBytes];
+        std::snprintf(number, sizeof number, "%03i", game.capture_enabled);
+        folder = output + "\\MOVIE" + number;
+    } catch (const std::bad_alloc&) {
+        game.capture_enabled = 0;
+        return;
+    }
+    // Game.capture_path holds the folder when it fits; the host is given it
+    // whole either way.
+    if (folder.size() < sizeof game.capture_path)
+        std::memcpy(game.capture_path, folder.c_str(), folder.size() + 1);
+    else
         game.capture_path[0] = '\0';
     if (console->host != nullptr && console->host->create_directories != nullptr)
-        console->host->create_directories(console->host->context, game.capture_path);
+        console->host->create_directories(console->host->context, folder.c_str());
     if (host.begin_movie_capture != nullptr)
-        host.begin_movie_capture(host.context, game.capture_path);
+        host.begin_movie_capture(host.context, folder.c_str());
     game.next_capture_tick = game.tick;
 }
 
@@ -467,22 +478,18 @@ void hotkey_cancel_command(Console* console, const HotkeyHost* host) noexcept {
         host->clear_command_button(host->context);
 }
 
-void next_indexed_file_name(
-    char* out,
-    size_t capacity,
-    const HotkeyHost* host,
-    const char* directory,
-    const char* prefix,
-    const char* extension
-) noexcept {
+std::string next_indexed_file_name(
+    const HotkeyHost* host, const char* directory, const char* prefix, const char* extension
+) {
     const size_t length = std::strlen(directory);
-    const char* separator = length != 0 && directory[length - 1] != '\\' ? "\\" : "";
-    std::snprintf(out, capacity, "%s%s%s*.%s", directory, separator, prefix, extension);
+    const std::string stem = std::string(directory) +
+                             (length != 0 && directory[length - 1] != '\\' ? "\\" : "") + prefix;
+    const std::string pattern = stem + "*." + extension;
     const int32_t highest =
-        host != nullptr ? highest_listed_number(*host, out, std::strlen(prefix), 0) : 0;
-    std::snprintf(
-        out, capacity, "%s%s%s%04i.%s", directory, separator, prefix, highest + 1, extension
-    );
+        host != nullptr ? highest_listed_number(*host, pattern.c_str(), std::strlen(prefix), 0) : 0;
+    char number[kNumberTextBytes];
+    std::snprintf(number, sizeof number, "%04i", highest + 1);
+    return stem + number + "." + extension;
 }
 
 } // namespace oa::ui::console

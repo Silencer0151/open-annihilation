@@ -67,6 +67,13 @@ struct ScreenInput {
     const char* text{}; // UTF-8 for text events, otherwise null
 };
 
+/// ScreenInput::modifiers bits of either Ctrl key.
+constexpr uint16_t kInputModifierCtrl = 0x00c0;
+/// ScreenInput::modifiers bits of either Alt key.
+constexpr uint16_t kInputModifierAlt = 0x0300;
+/// ScreenInput::modifiers bits of either system key (Command, Windows).
+constexpr uint16_t kInputModifierSystem = 0x0c00;
+
 // Application services available to packages. `host` is opaque.
 struct ScreenServices {
     void (*request_screen)(void* host, ScreenId id){};

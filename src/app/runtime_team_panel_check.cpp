@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // The headless checks of the Pause key, the menus' hold on the match clock
-// and the team panels, over the navigation check's skirmish.
+// and the team panels, over the navigation check's skirmish, and of a
+// skirmish saved paused and loaded again.
 #include "oa/app/runtime.hpp"
 #include "oa/data/defs/layout.hpp"
+#include "oa/data/persist/save_sections.hpp"
 #include "oa/sim/match_runtime.hpp"
 #include "oa/ui/console/game_fields.hpp"
 #include "oa/ui/display_layout.hpp"
@@ -177,6 +179,97 @@ void Runtime::check_pause_key() {
               << " ticks a second, none while paused, paused title " << title_changed
               << " pixels, ARMOPT holds the skirmish and a save there keeps the Pause key's "
                  "bit, 'h' and Tab open nothing\n";
+}
+
+void Runtime::check_paused_save() {
+    const auto require = [](bool ok, const std::string& what) {
+        if (!ok)
+            throw std::runtime_error("paused save check: " + what);
+    };
+    namespace console = oa::ui::console;
+    start_benchmark_skirmish();
+    require(!match_paused_ && !match_finished_, "needs a running skirmish");
+    bool running = true;
+    const auto key = [&](SDL_Keycode code, SDL_Scancode scancode) {
+        SDL_Event event{};
+        event.type = SDL_EVENT_KEY_DOWN;
+        event.key.key = code;
+        event.key.scancode = scancode;
+        handle_sdl_event(event, running);
+    };
+    uint32_t clock_ms = 1000;
+    // Game ticks a second of 25 ms frames runs, through the frame's gate and
+    // the clock as idle_tick has them.
+    const auto ticks_in_one_second = [&] {
+        match_timing_.previous_clock =
+            oa::base::game_loop::scaled_clock(clock_ms, match_clock_scale());
+        match_timing_.remainder = 0.0F;
+        const auto before = match_timing_.tick;
+        for (uint32_t frame = 0; frame < kCheckFramesPerSecond; ++frame) {
+            clock_ms += kCheckFrameMs;
+            if (match_clock_steps())
+                advance_match_clock(clock_ms);
+        }
+        return match_timing_.tick - before;
+    };
+    const auto pause_bit = [&] {
+        return (match_->state().game.sim_run_flags & console::kSimRunPaused) != 0;
+    };
+    require(ticks_in_one_second() > 0, "the skirmish does not run");
+
+    // Paused with the Pause key, then saved from the in-game menu, which
+    // writes the pause bit into the save.
+    key(SDLK_PAUSE, SDL_SCANCODE_PAUSE);
+    require(pause_bit(), "Pause did not set the pause bit");
+    key(SDLK_F2, SDL_SCANCODE_F2);
+    require(match_paused_, "F2 did not open the in-game menu");
+    require(
+        (saved_match_timing().flags & console::kSimRunPaused) != 0,
+        "a save made while paused does not store the pause"
+    );
+    const fs::path save = "paused.sav";
+    if (!save_match_game(
+            save,
+            oa::data::persist::command_line_description,
+            oa::data::persist::command_line_game_id
+        ))
+        require(false, "could not save: " + status_);
+    const auto saved_tick = match_timing_.tick;
+
+    // Loaded over the menu, as LOADGAME loads it, the game runs.
+    if (!load_saved_game(save) || !match_)
+        require(false, "could not load the save: " + status_);
+    require(match_timing_.tick == saved_tick, "the load did not restore the saved tick");
+    require(!match_paused_, "the loaded game opened a menu");
+    require(
+        !pause_bit() && (match_timing_.flags & console::kSimRunPaused) == 0,
+        "the loaded game kept the pause bit"
+    );
+    const auto loaded_ticks = ticks_in_one_second();
+    require(loaded_ticks > 0, "the loaded game ran " + std::to_string(loaded_ticks) + " ticks");
+
+    // Pause holds the loaded game and Pause again lets it go.
+    key(SDLK_PAUSE, SDL_SCANCODE_PAUSE);
+    require(pause_bit(), "Pause did not pause the loaded game");
+    const auto paused_ticks = ticks_in_one_second();
+    require(
+        paused_ticks == 0, "the paused loaded game ran " + std::to_string(paused_ticks) + " ticks"
+    );
+    key(SDLK_PAUSE, SDL_SCANCODE_PAUSE);
+    require(!pause_bit(), "Pause again kept the pause bit");
+    const auto resumed_ticks = ticks_in_one_second();
+    require(resumed_ticks > 0, "Pause again did not resume the loaded game");
+
+    // F2 holds it with the in-game menu and F2 again lets it go.
+    key(SDLK_F2, SDL_SCANCODE_F2);
+    require(match_paused_ && ticks_in_one_second() == 0, "the in-game menu did not hold the game");
+    key(SDLK_F2, SDL_SCANCODE_F2);
+    require(
+        !match_paused_ && ticks_in_one_second() > 0, "closing the menu did not resume the game"
+    );
+    std::cout << "paused save check: saved paused at tick " << saved_tick << ", loaded running "
+              << loaded_ticks << " ticks a second, none while paused again, " << resumed_ticks
+              << " after Pause again, and the in-game menu holds it and lets it go\n";
 }
 
 void Runtime::check_team_panels() {
@@ -726,11 +819,25 @@ void Runtime::check_team_panels() {
             "the removal question does not name the player"
         );
         snapshot("native-team-removal.ppm");
-        click("CHOICE1");
+        // The question takes its quick keys, as the gadget engine gives them
+        // from its captions: 'n' answers No and 'y' Yes.
+        key(SDLK_N, SDL_SCANCODE_N);
         require(
             team_panel_open() && match_hud_panel_ == oa::data::defs::gui_path("CONTROL.GUI") &&
                 match_paused_ && match_panels_keyboard_,
-            "Yes did not return to CONTROL.GUI"
+            "'n' did not return to CONTROL.GUI"
+        );
+        require(told.log == std::vector<std::string>{"setup"}, "'n' removed a player");
+        click(row);
+        require(
+            match_hud_panel_ == oa::data::defs::gui_path("YESORNO.GUI"),
+            "a player's row did not ask again to remove it"
+        );
+        key(SDLK_Y, SDL_SCANCODE_Y);
+        require(
+            team_panel_open() && match_hud_panel_ == oa::data::defs::gui_path("CONTROL.GUI") &&
+                match_paused_ && match_panels_keyboard_,
+            "'y' did not return to CONTROL.GUI"
         );
         // It comes back over the panels it was opened over, and no more.
         require(

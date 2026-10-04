@@ -10,6 +10,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <new>
+#include <string>
 
 namespace oa::present {
 namespace {
@@ -307,6 +309,10 @@ PcxStatus save_pcx_surface(
 
 namespace {
 
+// Room for a numbered file's number: at least four digits, and up to ten with
+// a sign.
+constexpr std::size_t numbered_file_number_bytes = 12;
+
 struct HighestFrame {
     std::size_t prefix_length{};
     int32_t highest{};
@@ -333,16 +339,23 @@ bool save_numbered_pcx(
     const char* separator = length != 0 && directory[length - 1] != '\\' ? "\\" : "";
     if (display.use_active_surface == 0 || display.active_surface == nullptr)
         return false;
-    char path[numbered_pcx_path_bytes];
-    std::snprintf(path, sizeof path, "%s%s%s*.pcx", directory, separator, prefix);
-    HighestFrame highest{std::strlen(prefix), 0};
-    if (host.list != nullptr)
-        host.list(host.context, path, keep_highest_frame, &highest);
-    std::snprintf(
-        path, sizeof path, "%s%s%s%04i.pcx", directory, separator, prefix, highest.highest + 1
-    );
+    // The paths are kept whole, however long the directory is; with no memory
+    // to spell them, nothing is saved.
+    std::string path;
+    try {
+        const std::string stem = std::string(directory) + separator + prefix;
+        path = stem + "*.pcx";
+        HighestFrame highest{std::strlen(prefix), 0};
+        if (host.list != nullptr)
+            host.list(host.context, path.c_str(), keep_highest_frame, &highest);
+        char number[numbered_file_number_bytes];
+        std::snprintf(number, sizeof number, "%04i", highest.highest + 1);
+        path = stem + number + ".pcx";
+    } catch (const std::bad_alloc&) {
+        return false;
+    }
     ByteStream stream{};
-    if (host.open == nullptr || !host.open(host.context, path, &stream))
+    if (host.open == nullptr || !host.open(host.context, path.c_str(), &stream))
         return false;
     const PcxStatus status = save_pcx_surface(stream, display, *display.active_surface);
     if (stream.close != nullptr)

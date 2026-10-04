@@ -13,7 +13,7 @@ The screen fills the game's window, inside the parts of the screen the
 device keeps clear (the camera housing, the rounded corners, the home
 indicator). Its header carries the OA badge, "Open Annihilation · Game
 files", the version and, on the first start, an **OA · Aa** button that
-opens the settings limited to **Language & Text**, the one section that
+opens the settings limited to **Language**, the one section that
 needs no game data. On a tablet the ways in are cards side by side; on a
 phone (a screen whose shorter side is under 460 points) they are rows, each
 with its button at the right.

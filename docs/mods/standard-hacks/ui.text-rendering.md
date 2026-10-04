@@ -16,7 +16,7 @@
 Game text can travel and be read as UTF-8, so chat in any language reaches
 the other players, and the message log can be given the accessible chat's
 backdrop: a black box under each line. The first is off and the second on
-by default. How text is drawn is the player's own Language & Text settings,
+by default. How text is drawn is the player's own Language settings,
 whatever the profile says. 3.1c sends and reads chat in its 8-bit code
 page, with no backdrop.
 
@@ -62,8 +62,8 @@ also the player's `ChatBackdrop` view setting, which starts from
 
 ### How game text is drawn
 
-The player's Language & Text settings, in the engine's settings dialog,
-choose how game text is drawn, with or without the hack:
+The player's Language settings, in the engine's settings dialog, choose
+how game text is drawn, with or without the hack:
 
 - **Use modern fonts for game text** (on by default): the text the match
   writes in the game's fonts, and what players type and send, is drawn in

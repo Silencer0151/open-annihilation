@@ -8,9 +8,16 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+#include <exception>
 
 #if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #include <share.h>
+#else
+#include <climits>
 #endif
 
 namespace oa::platform {
@@ -76,8 +83,14 @@ constinit LogLock log_lock;
 
 std::FILE* open_file(const char* path, const char* mode) noexcept {
 #if defined(_WIN32)
-    // fopen's own sharing: other opens may read and write the file.
-    return _fsopen(path, mode, _SH_DENYNO);
+    // The narrow path is read in the code page the system's narrow file calls
+    // use, as std::filesystem::path reads it, and opened by its wide spelling,
+    // which may be longer than 259 characters where long paths are on.
+    try {
+        return open_file(std::filesystem::path(path), mode);
+    } catch (const std::exception&) {
+        return nullptr;
+    }
 #else
     return std::fopen(path, mode);
 #endif
@@ -96,6 +109,35 @@ std::FILE* open_file(const std::filesystem::path& path, const char* mode) noexce
     return _wfsopen(path.c_str(), wide_mode, _SH_DENYNO);
 #else
     return std::fopen(path.c_str(), mode);
+#endif
+}
+
+bool long_paths_turned_off() noexcept {
+#if defined(_WIN32)
+    // Windows 10, version 1607, and later say whether this program may open
+    // long paths: the system's setting and the program's manifest both allow
+    // them. Earlier systems never do.
+    using AreLongPathsEnabled = BOOLEAN(WINAPI*)();
+    const HMODULE system = GetModuleHandleW(L"ntdll.dll");
+    const auto query =
+        system != nullptr
+            ? reinterpret_cast<AreLongPathsEnabled>(
+                  reinterpret_cast<void*>(GetProcAddress(system, "RtlAreLongPathsEnabled"))
+              )
+            : nullptr;
+    return query == nullptr || query() == FALSE;
+#else
+    return false;
+#endif
+}
+
+std::size_t longest_path() noexcept {
+#if defined(_WIN32)
+    // The longest path the system's wide calls take, and the classic limit.
+    constexpr std::size_t extended_path_characters = 32767;
+    return long_paths_turned_off() ? MAX_PATH - 1 : extended_path_characters;
+#else
+    return PATH_MAX - 1;
 #endif
 }
 

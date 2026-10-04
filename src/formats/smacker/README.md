@@ -72,7 +72,8 @@ no samples.
 ## Native playback
 
 `oa-media-intro-player` (see [src/media](../../media/README.md)) shows the
-decoded frames through SDL3 and queues the samples on an SDL audio stream.
+decoded frames through SDL3 and queues the samples on a stream of the sound
+output ([src/audio](../../audio/README.md)).
 The game's height-mode check is kept at presentation time: header flag
 modes `0x2` and `0x4` double the shown movie height, while mode `0x0` keeps
 the decoded height. Frames are placed centred on the 640x480 surface, as the

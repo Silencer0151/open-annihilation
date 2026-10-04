@@ -209,6 +209,18 @@ its side. [touch-controls.md](../touch-controls.md) describes the
 gestures and the layouts for phones and tablets. A keyboard, mouse or
 trackpad connected to the device works as on a computer.
 
+### Saves, screenshots and mods
+
+Your saved games, screenshots, films and mods are kept in the Open
+Annihilation folder in the game's own Documents folder: in Files, On My
+iPhone (or On My iPad) › Open Annihilation › Open Annihilation, beside the
+Total Annihilation folder. The buttons of **Common Tweaks › Your files**
+in the OA settings, and **Open Mods Folder** on the **Mods** page, open the
+Files app at its Saves, Screenshots or Mods folder; the Files app's status
+bar leads back to the game. A mod copied into that Mods folder is offered
+on the Mods page, and choosing it reloads the game for it without leaving
+the app.
+
 ## Managing the game files
 
 Open the **OA** settings from the main menu and choose **Game files**:
@@ -223,7 +235,8 @@ Open the **OA** settings from the main menu and choose **Game files**:
   - **ADD FILES…** adds an expansion, extra maps or a mod from a folder,
     archives (`.hpi`, `.ufo`, `.ccx` and `.gp3` files) or the demo's
     installer. Nothing already there is replaced. A folder holding a mod
-    profile (`oamod.yaml`) becomes a mod you choose under Gameplay › Mod.
+    profile (`oamod.yaml`) becomes a mod you choose on the settings' Mods
+    page.
   - **CHECK AGAIN** runs the game's own check on the files, which also
     notices changes made in the Files app.
   - **REMOVE** next to a part removes it; **REMOVE ALL GAME FILES…** removes

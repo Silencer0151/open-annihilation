@@ -2177,6 +2177,133 @@ void Runtime::check_full_render_tier(
         }
     }
 
+    // Health bars keep the game's size, a trough 35 pixels across and 5
+    // down, at zoom 1 and zoomed in, and shrink as the view zooms out: 29
+    // by 5 at 0.75, 23 by 3 at a half, 15 by 3 at a quarter and 13 by 3 at
+    // the Full tier's floor of a sixth, the same at the same zoom in every
+    // tier. Each bar the frame lays out has that size, and each that no
+    // other bar or the pointer covers shows on the frame: its trough's
+    // corners in its colour and its fill's first pixel in the fill's.
+    // Pictures of each go to the report.
+    {
+        struct BarCase {
+            HardwareAcceleration level{};
+            float zoom{};
+            int32_t width{};
+            int32_t height{};
+        };
+
+        constexpr std::array<BarCase, 13> bar_cases{{
+            {HardwareAcceleration::off, 2.0F, 35, 5},
+            {HardwareAcceleration::off, 1.0F, 35, 5},
+            {HardwareAcceleration::off, 0.75F, 29, 5},
+            {HardwareAcceleration::off, kMinBattlefieldZoom, 23, 3},
+            {HardwareAcceleration::basic, 2.0F, 35, 5},
+            {HardwareAcceleration::basic, 1.0F, 35, 5},
+            {HardwareAcceleration::basic, 0.75F, 29, 5},
+            {HardwareAcceleration::basic, kMinBattlefieldZoom, 23, 3},
+            {HardwareAcceleration::full, 4.0F, 35, 5},
+            {HardwareAcceleration::full, 1.0F, 35, 5},
+            {HardwareAcceleration::full, 0.5F, 23, 3},
+            {HardwareAcceleration::full, 0.25F, 15, 3},
+            {HardwareAcceleration::full, kMinFullBattlefieldZoom, 13, 3},
+        }};
+        const auto level_name = [](HardwareAcceleration level) {
+            return level == HardwareAcceleration::off     ? std::string("off")
+                   : level == HardwareAcceleration::basic ? std::string("basic")
+                                                          : std::string("full");
+        };
+        auto& game = match_->state().game;
+        const uint16_t graphics_flags = game.graphics_flags;
+        game.graphics_flags =
+            static_cast<uint16_t>(graphics_flags | oa::ui::hud::kGraphicsDamageBars);
+        const auto colour = [&](uint8_t index) {
+            const std::size_t at = static_cast<std::size_t>(index) * oa::palette_entry_bytes;
+            return gamma_of({match_palette_[at], match_palette_[at + 1], match_palette_[at + 2]});
+        };
+        for (const BarCase& bar_case : bar_cases) {
+            const std::string where =
+                level_name(bar_case.level) + " at zoom " + zoom_text(bar_case.zoom);
+            set_level(bar_case.level);
+            at_zoom(bar_case.zoom);
+            const auto read =
+                bar_case.level == HardwareAcceleration::full ? full_frame() : presented();
+            write_png(
+                report_directory /
+                    ("native-render-tiers-health-bars-" + level_name(bar_case.level) + "-zoom-" +
+                     zoom_text(bar_case.zoom) + ".png"),
+                read
+            );
+            const auto& bars = drawn_health_bars_;
+            if (bars.empty())
+                fail("the frame " + where + " drew no health bar");
+            const auto field = battlefield();
+            const auto pointer = cursor();
+            const auto overlaps = [](const oa::Rect32& a, const Area& b) {
+                return a.x1 < b.x + b.w && b.x <= a.x2 && a.y1 < b.y + b.h && b.y <= a.y2;
+            };
+            const auto pixel = [&](int32_t x, int32_t y) {
+                const std::size_t at =
+                    (static_cast<std::size_t>(y) * read.width + static_cast<std::size_t>(x)) * 3U;
+                return std::vector<uint8_t>{read.rgb[at], read.rgb[at + 1], read.rgb[at + 2]};
+            };
+            uint32_t shown = 0;
+            for (std::size_t index = 0; index < bars.size(); ++index) {
+                const auto& bar = bars[index];
+                if (bar.trough.x2 - bar.trough.x1 + 1 != bar_case.width ||
+                    bar.trough.y2 - bar.trough.y1 + 1 != bar_case.height ||
+                    bar.fill.y2 - bar.fill.y1 + 1 != bar_case.height - 2)
+                    fail(
+                        "a health bar " + where + " is " +
+                        std::to_string(bar.trough.x2 - bar.trough.x1 + 1) + " by " +
+                        std::to_string(bar.trough.y2 - bar.trough.y1 + 1) + ", not " +
+                        std::to_string(bar_case.width) + " by " + std::to_string(bar_case.height)
+                    );
+                // Where the bar lies on the frame.
+                const oa::Rect32 trough{
+                    bar.trough.x1 + field.x,
+                    bar.trough.y1 + field.y,
+                    bar.trough.x2 + field.x,
+                    bar.trough.y2 + field.y
+                };
+                if (trough.x1 < field.x || trough.y1 < field.y || trough.x2 >= field.x + field.w ||
+                    trough.y2 >= field.y + field.h || overlaps(trough, pointer))
+                    continue;
+                bool covered = false;
+                for (std::size_t other = 0; other < bars.size() && !covered; ++other) {
+                    const auto& by = bars[other].trough;
+                    covered =
+                        other != index &&
+                        overlaps(
+                            bar.trough, Area{by.x1, by.y1, by.x2 - by.x1 + 1, by.y2 - by.y1 + 1}
+                        );
+                }
+                if (covered)
+                    continue;
+                const auto trough_colour = colour(bar.trough_color);
+                for (const auto& [x, y] :
+                     {std::pair{trough.x1, trough.y1},
+                      std::pair{trough.x2, trough.y1},
+                      std::pair{trough.x1, trough.y2},
+                      std::pair{trough.x2, trough.y2}})
+                    if (pixel(x, y) != trough_colour)
+                        fail(
+                            "a health bar's trough " + where + " is not drawn at " +
+                            std::to_string(x) + ", " + std::to_string(y)
+                        );
+                if (pixel(trough.x1 + 1, trough.y1 + 1) != colour(bar.fill_color))
+                    fail("a health bar's fill " + where + " is not drawn");
+                ++shown;
+            }
+            if (shown == 0)
+                fail("no health bar " + where + " showed apart from the others");
+            std::cout << "render tiers check: health bars " << where << ": " << bar_case.width
+                      << " by " << bar_case.height << ", " << bars.size() << " laid out, " << shown
+                      << " held to the frame\n";
+        }
+        game.graphics_flags = graphics_flags;
+    }
+
     // Zoomed out: the card's levels, never the box filter. The terrain
     // beside the card's own draws, where the standard tier shows its
     // terrain too, is held to the standard tier's box filter of the same

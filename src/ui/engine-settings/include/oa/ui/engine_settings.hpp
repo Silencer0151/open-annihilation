@@ -45,8 +45,12 @@ inline constexpr std::string_view frame_stats = "open-annihilation.frame-stats";
 /// "800x600" (EngineSettings::screen_size).
 inline constexpr std::string_view screen_size = "open-annihilation.screen-size";
 /// The mod folder played from the next start, as a UTF-8 path; absent for
-/// none (EngineSettings::mod).
+/// none (EngineSettings::mod_folder).
 inline constexpr std::string_view mod_directory = "open-annihilation.mod-directory";
+/// The folder the player picked with an earlier version's Pick Folder...,
+/// as a UTF-8 path, which the Mods page lists while it is still a folder;
+/// absent for none (EngineSettings::picked_mod_folder).
+inline constexpr std::string_view picked_mod_directory = "open-annihilation.picked-mod-directory";
 /// "off", "basic" or "full" (EngineSettings::hardware_acceleration). A
 /// whole number reads as the On and Off switch the setting was before: 1
 /// or any number above 0 is "full", 0 or below "off".
@@ -362,9 +366,14 @@ struct EngineSettings {
     /// read: the simulation, a saved game and what a shared game sends are
     /// the same in every language.
     std::string language{oa::data::languages::english().tag};
-    /// The mod folder played from the next start: 0 for none, else its place
-    /// among Inputs::mod_folders, counted from 1.
-    uint16_t mod{};
+    /// The mod folder played from the next start, as an absolute UTF-8 path:
+    /// one of Inputs::mod_folders, or a folder the player picked; empty for
+    /// none, the game as 3.1c plays it.
+    std::string mod_folder;
+    /// The folder the player picked with an earlier version's Pick
+    /// Folder..., as an absolute UTF-8 path, which the Mods page lists while
+    /// it is still a folder; empty for none.
+    std::string picked_mod_folder;
     /// Developer Mode: the player's overrides of the standard hacks
     /// (hack_overrides) are laid over the profile the game plays. Off, the
     /// profile plays as it ships, and the overrides are kept.
@@ -463,9 +472,11 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// Hardware acceleration is "off", "basic" or "full"
 /// (hardware_acceleration_from_text), or a whole number as the switch it
 /// was before: Full above 0, else Off; any other value gives the default.
-/// The mod is the stored folder's place among the offered ones; a folder
-/// not offered reads as none. The Language & Text switches (modern fonts,
-/// text outline, shadow and background) and Developer Mode read as every
+/// The mod is the stored folder, and the picked folder the stored one; a
+/// mod folder the game folder does not offer is the picked folder whatever
+/// that key holds, so that the Mods page lists it. The Language switches
+/// (modern fonts, text outline, shadow and background) and Developer Mode
+/// read as every
 /// switch does, and the text size as every number, lowest_text_size to
 /// highest_text_size. The language is stored_language's. The overrides are
 /// read from the key that Inputs::profile_id ends, as
@@ -494,8 +505,9 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// 0, the screen size as "desktop" or "WIDTHxHEIGHT", hardware
 /// acceleration as "off", "basic" or "full", One-finger drag and QUEUE and
 /// ADD as their words (touch_drag_text, touch_latches_text), the hold delay
-/// in milliseconds, the mod as its folder's path,
-/// or erased for none. The overrides, when they differ from `opened`, are
+/// in milliseconds, the mod and the picked folder as their paths, or erased
+/// for none; Restore defaults leaves the picked folder as it is. The
+/// overrides, when they differ from `opened`, are
 /// written under the key `profile_id` ends, as
 /// oa::data::mod_profile::overrides_text writes them, or that key is
 /// erased when none are left; Restore defaults leaves them as they are.
@@ -507,7 +519,6 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// @param chosen the settings the player keeps
 /// @param defaults the defaults (default_settings)
 /// @param restored Restore defaults was pressed while the dialog was open
-/// @param mod_folders the offered mod folders (Inputs::mod_folders)
 /// @param profile_id the id the overrides are kept under (Inputs::profile_id);
 ///     empty writes no overrides
 void write_settings(
@@ -516,7 +527,6 @@ void write_settings(
     const EngineSettings& chosen,
     const EngineSettings& defaults,
     bool restored,
-    std::span<const std::string> mod_folders = {},
     std::string_view profile_id = {}
 );
 
@@ -538,7 +548,7 @@ stored_language(const oa::platform::preferences::Values& values, bool players_ow
 ///
 /// @param settings the settings in effect
 /// @return modern fonts, their outline, shadow, background and size as the
-///     settings' Language & Text section sets them
+///     settings' Language section sets them
 [[nodiscard]] constexpr oa::present::TextStyle text_style(const EngineSettings& settings) noexcept {
     return {
         .modern_fonts = settings.modern_fonts,
@@ -646,11 +656,12 @@ hardware_acceleration_from_text(std::string_view text) noexcept;
 /// Why a setting cannot be changed now.
 enum class Lock : uint8_t {
     none,        ///< it can be changed
-    in_game,     ///< a game is running; it applies from the next game
+    in_game,     ///< a game is running; it can be changed outside a game
     set_by_host, ///< a shared game or a replay decides it
-    /// --max-fps decides the frame rate, or --hardware-acceleration, in any
-    /// of its forms, or --no-hardware-acceleration decides hardware
-    /// acceleration, for this run
+    /// --max-fps decides the frame rate, --hardware-acceleration, in any of
+    /// its forms, or --no-hardware-acceleration decides hardware
+    /// acceleration, or --mod-dir or --base-game decides the mod, for this
+    /// run
     command_line,
     unavailable, ///< nothing in the game could make the setting help this run
     set_by_mod,  ///< the mod allows no other value
@@ -678,6 +689,9 @@ struct GameState {
     /// 3.1c's command line names the language, which then decides it for the
     /// run.
     bool language_from_command_line{};
+    /// --mod-dir or --base-game was given, which decides the mod the run
+    /// plays.
+    bool mod_from_command_line{};
 };
 
 /// What the dialog cannot change, and what its header says of the game.
@@ -694,6 +708,10 @@ struct Locks {
     /// shows Use modern fonts for game text Off.
     Lock text_size{};
     Lock language{}; ///< Language
+    /// Mod: locked command_line, the stored choice stays shown and plays
+    /// from a start without the flag that set it aside; locked in_game, the
+    /// row shows the mod the game plays, and the main menu chooses another.
+    Lock mod{};
 };
 
 /// Returns the locks a game state puts on the settings.
@@ -707,7 +725,9 @@ struct Locks {
 /// cannot wait for the display, else in_game in a shared game or a replay,
 /// where its value holds until the match ends. The language is locked
 /// command_line while 3.1c's command line names one, and never by a game:
-/// it changes only what players read.
+/// it changes only what players read. The mod is locked command_line while
+/// --mod-dir or --base-game decides it, else in_game during any game: it is
+/// chosen from the main menu.
 ///
 /// @param state the game the dialog opens over
 /// @return the locks

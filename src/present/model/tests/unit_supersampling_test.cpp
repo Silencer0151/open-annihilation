@@ -76,7 +76,13 @@ struct Scene {
 
     Scene() {
         const oa::WorldCapacity capacity{4, 2, 0};
-        oa::world_alloc_tables(world, &capacity);
+        // Every case draws this unit, so without its World none can run.
+        if (world == nullptr || oa::world_alloc_tables(world, &capacity) == 0) {
+            std::fprintf(
+                stderr, "%s:%d: the scene's World was not allocated\n", __FILE__, __LINE__
+            );
+            std::exit(EXIT_FAILURE);
+        }
         unit = &world->units[1];
         unit->def = oa::oa_ref_from_index(1);
         unit->position = {100 * unit_fixed, 0, 100 * unit_fixed};

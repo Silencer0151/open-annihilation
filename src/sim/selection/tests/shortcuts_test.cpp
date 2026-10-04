@@ -113,10 +113,10 @@ struct Scene {
             ids[world->game.hot_unit_count++] = id;
     }
 
-    ShortcutSets sets() {
-        ShortcutSets built{};
-        build_shortcut_sets(*world, categories, kTypeBits, built);
-        return built;
+    // Builds the shortcut sets in place: their masks point into their own
+    // words, so a copy would read the words of the sets it was copied from.
+    void build_sets(ShortcutSets& sets) {
+        build_shortcut_sets(*world, categories, kTypeBits, sets);
     }
 
     ShortcutHooks shortcut_hooks() {
@@ -135,7 +135,8 @@ struct Scene {
 
 void sets_and_fallbacks() {
     Scene scene;
-    auto sets = scene.sets();
+    ShortcutSets sets{};
+    scene.build_sets(sets);
     // CTRL_W less the flyer.
     CHECK(data::defs::category_mask_contains(&sets.mobile_combat, kTank));
     CHECK(!data::defs::category_mask_contains(&sets.mobile_combat, kFlyer));
@@ -147,11 +148,11 @@ void sets_and_fallbacks() {
     CHECK(!data::defs::category_mask_contains(&sets.factories, kConstructor));
     // An air base builder is no constructor.
     scene.world->unit_defs[kConstructor].flags |= OA_UNIT_DEF_FLAG_IS_AIRBASE;
-    sets = scene.sets();
+    scene.build_sets(sets);
     CHECK(!data::defs::category_mask_contains(&sets.constructors, kConstructor));
     // A CTRL_B type replaces the fallback, whatever it is.
     data::defs::category_registry_find_or_add(&scene.categories, "CTRL_B")->words[0] |= 1u << kTank;
-    sets = scene.sets();
+    scene.build_sets(sets);
     CHECK(data::defs::category_mask_contains(&sets.constructors, kTank));
     CHECK(!data::defs::category_mask_contains(&sets.constructors, kConstructor));
 }
@@ -191,7 +192,8 @@ void ctrl_s() {
     scene.unit(3, kConstructor, 0).flags |= OA_UNIT_FLAG_SELECTED;
     scene.unit(9, kTank, 1);
     scene.on_screen({1, 2, 3, 9});
-    const auto sets = scene.sets();
+    ShortcutSets sets{};
+    scene.build_sets(sets);
     CHECK(select_mobile_combat_on_screen(*scene.world, scene.lists, sets, hooks) == 1);
     CHECK(scene.selected(1) && !scene.selected(2) && !scene.selected(3) && !scene.selected(9));
 }
@@ -210,7 +212,8 @@ void idle_constructors() {
     scene.missions[2] = 26;
     scene.missions[3] = idle_standby_mission;
     scene.world->game.players[0].unit_count = 3;
-    const auto sets = scene.sets();
+    ShortcutSets sets{};
+    scene.build_sets(sets);
     IdleCycle cycle{};
     Unit* picked = cycle_idle_constructor(*scene.world, sets, cycle, hooks, shortcuts);
     CHECK(picked == &scene.world->units[3] && cycle.constructor == 2 && scene.selected(3));
@@ -242,7 +245,8 @@ void idle_factories() {
     scene.missions[2] = factory_busy_mission;
     scene.missions[4] = 26;
     scene.world->game.players[0].unit_count = 4;
-    const auto sets = scene.sets();
+    ShortcutSets sets{};
+    scene.build_sets(sets);
     IdleCycle cycle{};
     Unit* picked = cycle_idle_factory(*scene.world, sets, cycle, hooks, shortcuts);
     CHECK(picked == &scene.world->units[4] && cycle.factory == 3 && cycle.constructor == 0);
@@ -263,7 +267,8 @@ void drag_filters() {
     auto& unfinished = scene.unit(4, kConstructor, 0);
     unfinished.flags |= OA_UNIT_FLAG_SELECTED;
     unfinished.build_remaining = 0.5F;
-    const auto sets = scene.sets();
+    ShortcutSets sets{};
+    scene.build_sets(sets);
     CHECK(filter_box_selection(*scene.world, sets, DragFilter::none) == 0);
     CHECK(scene.selected(1) && scene.selected(2) && scene.selected(3));
     CHECK(filter_box_selection(*scene.world, sets, DragFilter::constructors) == 1);

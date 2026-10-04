@@ -73,6 +73,17 @@ constexpr std::array<uint8_t, 3> canvas_colour{20, 40, 60};
 /// the most the mean difference may be.
 constexpr int most_difference = 2;
 constexpr double most_mean_difference = 0.5;
+/// The first SDL release whose software renderer samples a texture drawn
+/// through a triangle that is not half of a rectangle at the texel each
+/// pixel's centre lands on, as the reference does. An older one takes the
+/// texel beside it over parts of such a triangle.
+constexpr int triangle_texels_version = SDL_VERSIONNUM(3, 4, 0);
+/// The first SDL release whose software renderer draws a scaled texture
+/// that a scissor cuts with the pixels the whole draw gives inside the
+/// scissor. An older one scales the part of the texture it works out for
+/// the cut, rounded to whole texels, which moves the picture by up to a
+/// texel.
+constexpr int scissored_scaling_version = SDL_VERSIONNUM(3, 4, 0);
 /// Seeds of the pages' texels.
 constexpr uint32_t seed_page = 0x243F6A88U;
 constexpr uint32_t seed_level = 0x85A308D3U;
@@ -320,15 +331,39 @@ Difference compare(const Image& read, const Image& reference) {
     return difference;
 }
 
+/// Tells whether the SDL library the test runs on, which can be older than
+/// the headers it was built with, draws a case as the reference does.
+///
+/// @param version the first SDL release that draws it as the reference does
+/// @return true on that release or a later one
+bool drawn_as_reference_from(int version) {
+    return SDL_GetVersion() >= version;
+}
+
 /// Checks a read-back against a reference, exact or within the tolerance.
 ///
 /// @param what the case, for the report
 /// @param read the read-back
 /// @param reference the reference
 /// @param exact whether every channel must be equal
-void expect_match(const char* what, const Image& read, const Image& reference, bool exact) {
+/// @param held whether the SDL the test runs on draws the case as the
+///     reference does; when it does not, the difference is reported only
+void expect_match(
+    const char* what, const Image& read, const Image& reference, bool exact, bool held
+) {
     const Difference difference = compare(read, reference);
     std::printf("%s: most %d, mean %.3f\n", what, difference.most, difference.mean);
+    if (!held) {
+        const int version = SDL_GetVersion();
+        std::printf(
+            "%s: not held to the reference on SDL %d.%d.%d\n",
+            what,
+            SDL_VERSIONNUM_MAJOR(version),
+            SDL_VERSIONNUM_MINOR(version),
+            SDL_VERSIONNUM_MICRO(version)
+        );
+        return;
+    }
     if (exact)
         OA_CHECK(difference.most == 0);
     OA_CHECK(difference.most <= most_difference);
@@ -915,13 +950,15 @@ struct Fixture {
     /// @param what the case, for the report
     /// @param frame the frame
     /// @param exact whether the read-back must equal the reference
-    void run(const char* what, const card::CardFrame& frame, bool exact) {
+    /// @param held whether the SDL the test runs on draws the frame as the
+    ///     reference does; when it does not, the difference is reported only
+    void run(const char* what, const card::CardFrame& frame, bool exact, bool held = true) {
         const bool ran = executor.execute(frame, nullptr);
         OA_CHECK(ran);
         if (!ran)
             std::fprintf(stderr, "execute: %s\n", executor.error().c_str());
         reference.run(frame);
-        expect_match(what, canvas.read(), reference.final_image, exact);
+        expect_match(what, canvas.read(), reference.final_image, exact, held);
     }
 };
 
@@ -1020,7 +1057,7 @@ void test_opaque_draws_are_exact() {
     );
     draw_since(frame, first, page, card::Blend::none);
     OA_CHECK(card::check_frame(frame).empty());
-    fixture.run("opaque draws", frame, true);
+    fixture.run("opaque draws", frame, true, drawn_as_reference_from(triangle_texels_version));
     // The untextured quad and the untextured triangle share their state
     // and follow on, so they run in one call.
     OA_CHECK(fixture.executor.counts().draw_calls == 3);
@@ -1156,7 +1193,7 @@ void test_blended_draws_match_the_reference() {
     );
     draw_since(frame, first, {}, card::Blend::alpha_premultiplied);
     OA_CHECK(card::check_frame(frame).empty());
-    fixture.run("blended draws", frame, false);
+    fixture.run("blended draws", frame, false, drawn_as_reference_from(triangle_texels_version));
     // The software renderer takes no composed blend mode, so darken and
     // minimum ran as their fallbacks.
     OA_CHECK(!fixture.executor.capabilities().darken_composed);
@@ -1596,7 +1633,9 @@ void test_two_level_reductions_match_the_reference() {
         reduce({16, 12, 40, 30}, {120, 60, 36, 27});
         OA_CHECK(card::check_frame(frame).empty());
         const std::string what = "two-level reductions at factor " + std::to_string(factor);
-        fixture.run(what.c_str(), frame, false);
+        // The reduction under a scissor is a scaled draw the scissor cuts.
+        const bool held = drawn_as_reference_from(scissored_scaling_version);
+        fixture.run(what.c_str(), frame, false, held);
         OA_CHECK(fixture.executor.counts().blend_reductions == 4);
         OA_CHECK(fixture.executor.counts().halvings == 1);
         // The reduction by one half is the box of four texture pixels,
@@ -1627,7 +1666,7 @@ void test_two_level_reductions_match_the_reference() {
         // A second frame halves again and draws the same.
         fixture.canvas.clear();
         fixture.reference.final_image = cleared_canvas();
-        fixture.run(what.c_str(), frame, false);
+        fixture.run(what.c_str(), frame, false, held);
         OA_CHECK(fixture.canvas.read().pixels == read.pixels);
         OA_CHECK(fixture.executor.counts().halvings == 2);
     }

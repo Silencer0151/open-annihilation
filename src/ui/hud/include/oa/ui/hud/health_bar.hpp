@@ -23,6 +23,14 @@ inline constexpr int32_t kHealthBarHalfWidth = 0x11;
 inline constexpr int32_t kHealthBarHalfHeight = 2;
 // Health fills 32 pixels of the inset trough at full health.
 inline constexpr uint32_t kHealthBarFillShift = 5;
+/// Screen rows from a unit's centre down to its bar's centre at the game's
+/// view.
+inline constexpr int32_t kHealthBarBelowUnit = 10;
+/// The furthest the battlefield zooms out: a sixth of the game's view, in
+/// screen pixels per map pixel.
+inline constexpr float kHealthBarFurthestZoom = 1.0F / 6.0F;
+/// The share of the game's size a bar keeps at kHealthBarFurthestZoom.
+inline constexpr float kHealthBarFurthestScale = 1.0F / 3.0F;
 
 /// Game.graphics_flags bit of the DamageBars option.
 inline constexpr uint16_t kGraphicsDamageBars = 0x0001;
@@ -74,12 +82,50 @@ struct HealthBar {
     uint8_t fill_color{};
 };
 
+/// How large a bar is drawn, and how far below its unit, in screen pixels.
+/// The defaults are the game's: a trough 35 pixels across and 5 down, its
+/// centre 10 rows below the unit's.
+struct HealthBarSize {
+    int32_t half_width{kHealthBarHalfWidth};   ///< columns either side of the centre
+    int32_t half_height{kHealthBarHalfHeight}; ///< rows above and below the centre
+    int32_t below_unit{kHealthBarBelowUnit};   ///< rows from the unit's centre to the bar's
+};
+
+/// Gives the share of the game's size the bars are drawn at for a zoom.
+///
+/// At the game's view and zoomed in the bars keep the game's size on
+/// screen. Zoomed out they shrink by the same share at each step of the
+/// zoom, to kHealthBarFurthestScale at kHealthBarFurthestZoom: the share is
+/// the zoom raised to log 3 / log 6, so a view twice as far out draws them
+/// at about 0.65 of the game's size and four times as far out at about
+/// 0.43. Past the furthest zoom the share stays a third.
+///
+/// @param zoom screen pixels per map pixel; 1 is the game's view
+/// @return the share of the game's size, from a third to 1
+[[nodiscard]] float health_bar_scale(float zoom) noexcept;
+
+/// Gives the size of the bars for a zoom, in whole screen pixels.
+///
+/// The game's half width, half height and distance below the unit are each
+/// scaled by health_bar_scale(zoom) and rounded to the nearest pixel, the
+/// half height to at least 1, so that the fill inside the trough is at
+/// least a pixel tall. The trough stays an odd number of pixels each way,
+/// centred on the bar's centre. At zoom 1 and in it is the game's size.
+///
+/// @param zoom screen pixels per map pixel; 1 is the game's view
+/// @return the bar's size: at the furthest zoom out a trough 13 pixels
+///         across and 3 down, 3 rows below the unit
+[[nodiscard]] HealthBarSize health_bar_size(float zoom) noexcept;
+
 /// Lays out the health bar for a unit centred on (x, y).
 ///
-/// The trough spans kHealthBarHalfWidth and kHealthBarHalfHeight around the
+/// The trough spans the size's half width and half height around the
 /// centre in UI colour 0; the fill starts one pixel inside it and is
-/// (health << 5) / max_damage pixels long, in UI colour 10 above two thirds of
-/// max_damage, 14 above one third and 12 otherwise.
+/// health * (2 * half_width - 2) / max_damage pixels past its first, in
+/// UI colour 10 above two thirds of max_damage, 14 above one third and 12
+/// otherwise. At the game's size that is (health << 5) / max_damage, the
+/// fill spanning the trough's inside at full health; the product keeps its
+/// low 32 bits.
 ///
 /// @param game Game block holding the UI colours.
 /// @param unit Unit whose health is shown.
@@ -87,11 +133,18 @@ struct HealthBar {
 /// @param x Centre column in screen pixels.
 /// @param y Centre row in screen pixels.
 /// @param[out] bar Rectangles and colours; written only on success.
+/// @param size the bar's size; the game's by default (health_bar_size)
 /// @return false when the unit has no health left or its type no max_damage.
 /// @quirk The fill is not clamped to the trough, so an overhealed unit's bar
 ///        runs past it.
 [[nodiscard]] bool unit_health_bar(
-    const Game& game, const Unit& unit, const UnitDef& def, int32_t x, int32_t y, HealthBar& bar
+    const Game& game,
+    const Unit& unit,
+    const UnitDef& def,
+    int32_t x,
+    int32_t y,
+    HealthBar& bar,
+    const HealthBarSize& size = {}
 ) noexcept;
 
 } // namespace oa::ui::hud

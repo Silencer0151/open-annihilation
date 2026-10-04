@@ -142,7 +142,7 @@ at its ink.
 ## Game text
 
 [game_text.hpp](include/oa/ui/frontend_renderer/game_text.hpp) draws game
-text as the player's Language & Text settings choose
+text as the player's Language settings choose
 ([oa/present/game_text.hpp](../../present/include/oa/present/game_text.hpp)):
 
 - `gui_font_characters` and `fnt_font_characters` give the characters a GUI

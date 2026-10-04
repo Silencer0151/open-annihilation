@@ -140,6 +140,7 @@ settings::Locks Runtime::engine_settings_locks() const {
     state.vertical_sync_unavailable = report.vertical_sync_unavailable;
     state.language_from_command_line =
         oa::app::command_line::launch_language(options_.launch) != nullptr;
+    state.mod_from_command_line = !options_.mod_dir.empty() || options_.base_game;
     return settings::settings_locks(state);
 }
 

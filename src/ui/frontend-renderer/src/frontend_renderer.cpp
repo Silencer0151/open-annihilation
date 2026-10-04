@@ -596,10 +596,11 @@ void light_rectangle(
         }
 }
 
-// Darkens drawn colours through one row of the shade table, in the palette
-// the table indexes. A colour is read back as the first palette entry that
-// holds it, else the nearest by summed squared channel difference; entries
-// 0x80..0xFF index the row as signed bytes and so read the row before. Each
+// Grays and darkens drawn colours: through the gray table, then one row of
+// the shade table, in the palette the tables index. A colour is read back as
+// the first palette entry that holds it, else the nearest by summed squared
+// channel difference; its gray entry is darkened, and entries 0x80..0xFF
+// index the row as signed bytes and so read the row before. Each
 // colour's darkened colour is kept in a direct-mapped table, so a colour met
 // again, as most of a button's pixels are, is not searched for again while
 // the table keeps it.
@@ -608,11 +609,19 @@ class GrayedShade {
 
     /// Sets the darkening up; it does nothing unless usable().
     ///
-    /// @param palette the palette the shade table indexes
+    /// @param palette the palette the tables index
+    /// @param gray_table the palette's gray table (build_gray_table); a shorter
+    ///        one leaves each entry as it is
     /// @param shade_table the 32x256 shade table
     /// @param row the table row the colours are darkened through, 1 to 31
-    GrayedShade(const PaletteBytes& palette, std::span<const uint8_t> shade_table, std::size_t row)
-        : palette_(palette), shade_table_(shade_table), row_(row), slots_(remembered_slots()) {}
+    GrayedShade(
+        const PaletteBytes& palette,
+        std::span<const uint8_t> gray_table,
+        std::span<const uint8_t> shade_table,
+        std::size_t row
+    )
+        : palette_(palette), gray_table_(gray_table), shade_table_(shade_table), row_(row),
+          slots_(remembered_slots()) {}
 
     /// Tells whether the table is whole and the row within it.
     ///
@@ -649,22 +658,29 @@ class GrayedShade {
         bool filled{};
     };
 
-    /// The colours darkened through the last palette, shade table and row a
+    /// The colours darkened through the last palette, tables and row a
     /// thread darkened through: screens darken through the same ones on every
     /// frame they draw.
     struct Memory {
         bool kept{};
         PaletteBytes palette{};
+        std::vector<uint8_t> gray_table;
         std::vector<uint8_t> shade_table;
         std::size_t row{};
         std::vector<Slot> slots;
     };
 
-    /// Returns the thread's darkened colours for this shade's palette, table
+    /// Returns the thread's darkened colours for this shade's palette, tables
     /// and row, emptied first when they are not the ones it remembers.
     [[nodiscard]] std::vector<Slot>& remembered_slots() {
         thread_local Memory memory;
         if (!memory.kept || memory.row != row_ || memory.palette != palette_ ||
+            !std::equal(
+                memory.gray_table.begin(),
+                memory.gray_table.end(),
+                gray_table_.begin(),
+                gray_table_.end()
+            ) ||
             !std::equal(
                 memory.shade_table.begin(),
                 memory.shade_table.end(),
@@ -673,6 +689,7 @@ class GrayedShade {
             )) {
             memory.kept = true;
             memory.palette = palette_;
+            memory.gray_table.assign(gray_table_.begin(), gray_table_.end());
             memory.shade_table.assign(shade_table_.begin(), shade_table_.end());
             memory.row = row_;
             memory.slots.assign(std::size_t{1} << slot_bits, Slot{});
@@ -680,7 +697,7 @@ class GrayedShade {
         return memory.slots;
     }
 
-    /// Searches the palette for a colour and darkens the entry found.
+    /// Searches the palette for a colour and darkens the entry found's gray.
     [[nodiscard]] std::array<uint8_t, 3> darkened(const uint8_t* rgb) const {
         std::size_t source = 0;
         int32_t nearest = std::numeric_limits<int32_t>::max();
@@ -697,15 +714,36 @@ class GrayedShade {
                 source = index;
             }
         }
-        const auto signed_row = source >= 0x80 ? row_ - 1 : row_;
-        return palette_rgb(palette_, shade_table_[signed_row * palette_color_count + source]);
+        const std::size_t gray =
+            gray_table_.size() >= palette_color_count ? gray_table_[source] : source;
+        const auto signed_row = gray >= 0x80 ? row_ - 1 : row_;
+        return palette_rgb(palette_, shade_table_[signed_row * palette_color_count + gray]);
     }
 
     const PaletteBytes& palette_;
+    std::span<const uint8_t> gray_table_;
     std::span<const uint8_t> shade_table_;
     std::size_t row_{};
     std::vector<Slot>& slots_;
 };
+
+// The gray table of a palette (build_gray_table), kept for the palette a
+// thread built it for last: screens gray through the same one on every frame.
+[[nodiscard]] std::span<const uint8_t> remembered_gray_table(const PaletteBytes& palette) {
+    struct Memory {
+        bool kept{};
+        PaletteBytes palette{};
+        std::vector<uint8_t> table;
+    };
+
+    thread_local Memory memory;
+    if (!memory.kept || memory.palette != palette) {
+        memory.kept = true;
+        memory.palette = palette;
+        memory.table = build_gray_table(palette);
+    }
+    return memory.table;
+}
 
 // Darkens a rectangle's colours through a grayed-out button's shade.
 void shade_rectangle(Surface& surface, const Rectangle& rectangle, GrayedShade& shade) {
@@ -1235,8 +1273,8 @@ void render_screen_into(
                 underline,
                 state != nullptr && state->game_text
             );
-            // A grayed-out button is darkened too, except one that cycles its
-            // frames or plain CHECKBOX art.
+            // A grayed-out button is grayed and darkened too, except one that
+            // cycles its frames or plain CHECKBOX art.
             constexpr uint32_t checkbox_art_attribute = 0x80U;
             const auto attributes = static_cast<uint32_t>(gadget.common.attributes);
             const bool staged = button_fields != nullptr && button_fields->stages != 0;
@@ -1245,8 +1283,17 @@ void render_screen_into(
                 (staged || (attributes & ui::gui_layout::attribute::scroll_step_mask) != 0 ||
                  (attributes & checkbox_art_attribute) == 0);
             if (condition == ButtonCondition::disabled && shaded && shade_palette != nullptr) {
+                // The gray table is PALETTE.PAL's, else the shaded palette's.
                 if (!grayed_shade)
-                    grayed_shade.emplace(*shade_palette, resources.shade_table, grayed_shade_row);
+                    grayed_shade.emplace(
+                        *shade_palette,
+                        remembered_gray_table(
+                            resources.game_palette.has_value() ? *resources.game_palette
+                                                               : *shade_palette
+                        ),
+                        resources.shade_table,
+                        grayed_shade_row
+                    );
                 shade_rectangle(result, gadget_rectangle(resolved_gadget), *grayed_shade);
             }
             continue;

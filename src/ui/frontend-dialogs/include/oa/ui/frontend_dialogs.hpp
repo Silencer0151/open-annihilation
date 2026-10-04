@@ -80,7 +80,10 @@ bool open_message_box(
 
 /// Opens the non-pausing YESORNO.GUI watch confirmation over the current frame.
 ///
-/// Enter accepts (CHOICE1, "Yes") and Escape declines (CHOICE2, "No").
+/// Enter accepts (CHOICE1, "Yes") and Escape declines (CHOICE2, "No"). Each
+/// button also takes its quick key, in either case: the first letter of its
+/// caption in the language shown that the other's key does not hold, Y and N
+/// in English, J and N in German, as in 3.1c.
 ///
 /// @param ctx Screen context supplying the assets and screen size.
 /// @param context Value passed to `chosen`.

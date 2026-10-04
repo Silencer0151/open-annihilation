@@ -59,8 +59,8 @@ using data::match_rules::ScriptFidelity;
 // bounds check measures it.
 constexpr uint32_t unit_record_bytes = 0x118;
 
-// The highest unit id unit.max-id reports: the configured unit limit times
-// 10, or the active limit's when the world records no setting.
+// The highest unit id unit.max-id reports: the unit limit the game
+// recorded times 10, or the active limit's when the world records none.
 uint32_t highest_unit_id(const World* world) {
     const uint32_t limit = world->game.max_units_setting != 0 ? world->game.max_units_setting
                                                               : world->game.units_per_player;

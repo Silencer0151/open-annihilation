@@ -480,8 +480,12 @@ void sync_onoff_control(const PanelControls& controls, const Unit& unit);
 /// otherwise show whether the build menu is up. CLOAK, ONOFF, MOVEORD and
 /// FIREORD are greyed when no selected unit has the ability and otherwise show
 /// the summary. The command buttons are greyed when no selected unit can
-/// carry them out; without transport ability LOAD is cleared, UNLOAD greyed
-/// and BLAST greyed unless a unit can blast, while with it BLAST is cleared.
+/// carry them out; without transport ability LOAD and UNLOAD are greyed and
+/// BLAST greyed unless a unit can blast, while with it BLAST is hidden, so
+/// that a page placing LOAD and BLAST in one spot shows the one the
+/// selection uses. Every other button stays drawn. Each control is the first
+/// whose name holds the order's word, so "MOVE" may find MOVEORD on a page
+/// that lists it first, and MOVE then stays live.
 ///
 /// @param controls Named controls of the loaded panel.
 /// @param state Order panel words holding the selection summary.

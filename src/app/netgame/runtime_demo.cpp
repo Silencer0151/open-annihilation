@@ -213,8 +213,7 @@ int NetworkPlay::run_headless_demo(std::size_t ticks) {
         if (!runtime_.local_player_watches() || runtime_.chat_composing_)
             throw std::runtime_error("demo playback opened the viewer's chat line");
     }
-    runtime_.match_layout_ =
-        oa::ui::display_layout::make_match_layout(options.match_width, options.match_height);
+    runtime_.match_layout_ = runtime_.lay_out_match(options.match_width, options.match_height);
     const auto& world = runtime_.match_->state();
     const auto& playback = demo_->playback;
     std::printf(

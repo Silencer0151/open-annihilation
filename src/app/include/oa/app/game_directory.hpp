@@ -138,6 +138,38 @@ struct GameInstall {
 /// @return one sentence naming what the folder lacks or why the demo could not be used
 [[nodiscard]] std::string describe_archive_problem(const DemoSetup& demo);
 
+/// The characters a file's name adds to the path of the folder it lies in:
+/// a separator and a name of up to eight characters, a dot and three more,
+/// as the game's archives are named.
+inline constexpr std::size_t file_name_room = 13;
+
+/// Says why a folder, or the files in it, may be out of the system's reach:
+/// its path is longer than the system opens, or leaves too little room within
+/// that for the names of the files in it.
+///
+/// @param folder the folder, made absolute to be measured
+/// @param names the characters the names of the files in it add to its path
+///        (file_name_room); 0 measures the folder alone
+/// @param longest the most characters a path the system opens may have
+///        (oa::platform::longest_path())
+/// @param long_paths_turned_off whether the system opens longer paths once
+///        they are turned on in it (oa::platform::long_paths_turned_off())
+/// @return the reason, as a sentence that names the length, the limit and
+///         what to do; empty when the path and the names fit within the limit
+[[nodiscard]] std::string path_length_problem(
+    const fs::path& folder, std::size_t names, std::size_t longest, bool long_paths_turned_off
+);
+
+/// Says why a folder, or the files in it, may be out of this system's reach,
+/// as path_length_problem() does with this system's limits.
+///
+/// @param folder the folder, made absolute to be measured
+/// @param names the characters the names of the files in it add to its path;
+///        0 measures the folder alone
+/// @return the reason, or empty when the path and the names fit within the
+///         limit
+[[nodiscard]] std::string path_length_problem(const fs::path& folder, std::size_t names = 0);
+
 /// Tests whether an inspected folder can run the game.
 ///
 /// @param install inspect_game_install() result

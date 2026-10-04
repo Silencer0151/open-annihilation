@@ -13,8 +13,8 @@ the setting changes:
 1. **3.1c's command line.** A word on its own, as `open-annihilation german`
    writes it, names the language the game data knows it by, as 3.1c reads
    it. The setting then shows "Set on the command line" for the run.
-2. **The setting.** Language, the first control of Language & Text in the
-   OA settings, offers System default and each language the game knows,
+2. **The setting.** Language, the first control of the Language section of
+   the OA settings, offers System default and each language the game knows,
    named in itself: English, Deutsch, Español, Français, Italiano. It is
    kept as `open-annihilation.language`: `system`, or the language's
    BCP-47 tag (`de`).

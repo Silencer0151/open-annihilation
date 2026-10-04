@@ -190,11 +190,23 @@ struct Driver {
         ctx.input = nullptr;
     }
 
-    /// Presses a key on the current screen.
-    void key(uint32_t code) {
+    /// Presses a key on the current screen, with the modifier keys held.
+    void key(uint32_t code, uint16_t modifiers = 0) {
         oa::app::ScreenInput input{};
         input.kind = oa::app::ScreenInputKind::key_down;
         input.key = code;
+        input.modifiers = modifiers;
+        ctx.input = &input;
+        const auto* screen = desc(current);
+        (void)screen->event(&ctx, screen->state);
+        ctx.input = nullptr;
+    }
+
+    /// Sends typed text to the current screen, as the system does after a key press types it.
+    void text(const char* typed) {
+        oa::app::ScreenInput input{};
+        input.kind = oa::app::ScreenInputKind::text;
+        input.text = typed;
         ctx.input = &input;
         const auto* screen = desc(current);
         (void)screen->event(&ctx, screen->state);
@@ -828,6 +840,8 @@ constexpr uint32_t kKeyUp = 0x40000052;
 constexpr uint32_t kKeyDown = 0x40000051;
 constexpr uint32_t kKeyReturn = 0x0d;
 constexpr uint32_t kKeyEscape = 0x1b;
+constexpr uint32_t kKeyN = 'n';
+constexpr uint32_t kKeyY = 'y';
 
 // What the launch link heard during the launch checks.
 struct LaunchRecord {
@@ -840,9 +854,9 @@ LaunchRecord g_launch;
 /// Checks, on the game list after a launch, the exit confirmation a
 /// request to close the window opens, and the return to the main menu.
 ///
-/// The confirmation opens over the screen at its next tick: CHOICE2, Escape
-/// and Enter (CHOICE2 has the focus) close it, CHOICE1 leaves the game
-/// without the disconnect reason. PREVMENU returns to the main menu through
+/// The confirmation opens over the screen at its next tick: CHOICE2, 'n',
+/// Escape and Enter (CHOICE2 has the focus) close it; Ctrl+Y answers
+/// nothing; 'y', as CHOICE1, leaves the game without the disconnect reason. PREVMENU returns to the main menu through
 /// the frontend: application mode 1, then state 2 with the initialize signal
 /// and one frontend pass.
 ///
@@ -855,7 +869,7 @@ void check_launch_exit(Driver& d) {
     link.leave_game = [](void*, bool with_reason) { g_launch.leaves.push_back(with_reason); };
     mp::multiplayer_bind_launch_link(link);
     expect(mp::multiplayer_showing(), "a multiplayer screen shows");
-    for (const uint32_t key : {0U, kKeyEscape, kKeyReturn}) {
+    for (const uint32_t key : {0U, kKeyN, kKeyEscape, kKeyReturn}) {
         expect(mp::multiplayer_request_exit_confirm(), "the exit confirmation is asked for");
         expect(mp::multiplayer_modal_kind() == mp::ModalKind::none, "it waits for the next tick");
         d.frame();
@@ -913,7 +927,18 @@ void check_launch_exit(Driver& d) {
     );
     expect(mp::multiplayer_request_exit_confirm(), "the confirmation is asked for again");
     d.frame();
-    expect(d.click("CHOICE1"), "CHOICE1 clicked");
+    const auto* yes = mp::panel_control(mp::multiplayer_panel(), "CHOICE1");
+    const auto* no = mp::panel_control(mp::multiplayer_panel(), "CHOICE2");
+    expect(
+        yes != nullptr && no != nullptr && yes->quick_key == 'Y' && no->quick_key == 'N',
+        "Yes and No take Y and N"
+    );
+    d.key(kKeyY, oa::app::kInputModifierCtrl);
+    expect(
+        mp::multiplayer_modal_kind() == mp::ModalKind::exit_confirm && g_launch.leaves.empty(),
+        "Ctrl+Y answers nothing"
+    );
+    d.key(kKeyY);
     expect(
         g_launch.leaves == std::vector<bool>({false}) &&
             (mp::multiplayer_game().outcome_flags & mp::kOutcomeLeaving) != 0,
@@ -1226,8 +1251,11 @@ void hear_from(uint32_t player_id) {
 /// it, over a dialog already open, which is back in front once a record
 /// from the player closes TIMEOUT.GUI again. Still silent at the timeout
 /// plus 120 s, the player is rejected once with reason 6 and its slot
-/// opens; REJECT does the same at once. This machine's computer player,
-/// which it never hears from, is never named or rejected.
+/// opens; REJECT does the same at once. The question to reject a player
+/// takes 'n' and Escape as No and 'y' as Yes, and answers nothing with Ctrl
+/// held; the character an answering key types after it never reaches the
+/// chat line MESSAGE, focused again under the question. This machine's computer player, which it never hears from, is
+/// never named or rejected.
 ///
 /// @param d the driver
 /// @return false when the battle room cannot be hosted
@@ -1236,6 +1264,7 @@ bool check_player_timeout(Driver& d) {
     constexpr uint32_t kDropTicks = (30 + 120) * 30;
     constexpr uint32_t kSilent = 0x2345;
     constexpr uint32_t kLate = 0x3456;
+    constexpr uint32_t kAsked = 0x4567;
     mp::multiplayer_reset();
     if (!host_battleroom(d, "Silence", "Host"))
         return false;
@@ -1312,8 +1341,34 @@ bool check_player_timeout(Driver& d) {
             mp::panel_text(*dialog, "TITLE") == "Reject Silent?",
         "YESORNO is back once the player is heard from"
     );
-    expect(d.click("CHOICE2"), "No clicked");
-    expect(mp::multiplayer_modal_kind() == mp::ModalKind::none, "YESORNO closed");
+    const auto rejects_before = rejects_sent();
+    d.key(kKeyN);
+    expect(
+        mp::multiplayer_modal_kind() == mp::ModalKind::none, "'n' answers No and closes YESORNO"
+    );
+    auto& room_panel = mp::multiplayer_panel();
+    // The 'n' the key types after it reaches nothing, though the chat line
+    // MESSAGE has the focus again; the next key's character reaches it.
+    expect(
+        room_panel.focus == mp::panel_find(room_panel, "MESSAGE"), "MESSAGE has the focus again"
+    );
+    d.text("n");
+    expect(mp::panel_text(room_panel, "MESSAGE").empty(), "the answer's 'n' is not typed");
+    d.key(kKeyN);
+    d.text("n");
+    expect(mp::panel_text(room_panel, "MESSAGE") == "n", "the next 'n' is typed");
+    mp::panel_set_text(room_panel, "MESSAGE", "");
+    expect(d.click(("PLAYER" + row).c_str()), "the host clicks the remote player again");
+    d.key(kKeyY, oa::app::kInputModifierCtrl);
+    expect(
+        mp::multiplayer_modal_kind() == mp::ModalKind::confirm && rejects_sent() == rejects_before,
+        "Ctrl+Y answers nothing"
+    );
+    d.key(kKeyEscape);
+    expect(
+        mp::multiplayer_modal_kind() == mp::ModalKind::none && rejects_sent() == rejects_before,
+        "Escape answers No and closes YESORNO"
+    );
 
     // Silent until the timeout plus 120 s: rejected once, with reason 6.
     heard = stepped_tick;
@@ -1367,6 +1422,23 @@ bool check_player_timeout(Driver& d) {
     );
     d.frame();
     expect(rejects_sent() == 1, "and sends nothing more");
+
+    // 'y' answers the question to reject a player Yes, as CHOICE1 does.
+    expect(mp::lobby_add_player(lobby, kAsked, "Asked"), "a third remote player joins");
+    hear_from(kAsked);
+    d.frame();
+    const auto asked_row = std::to_string(mp::slot_for_player_id(lobby, kAsked));
+    expect(d.click(("PLAYER" + asked_row).c_str()), "the host clicks the third player");
+    expect(mp::multiplayer_modal_kind() == mp::ModalKind::confirm, "YESORNO asks to reject it");
+    wire.sent_count = 0;
+    d.key(kKeyY);
+    expect(
+        rejects_sent() == 1 && rejects_sent(kAsked, 1) == 1 &&
+            mp::multiplayer_modal_kind() == mp::ModalKind::none,
+        "'y' rejects the player with reason 1 and closes YESORNO"
+    );
+    d.text("Y");
+    expect(mp::panel_text(room_panel, "MESSAGE").empty(), "the answer's 'Y' is not typed");
 
     // This machine's computer player, never heard from, stays.
     stepped_tick += 10 * kDropTicks;

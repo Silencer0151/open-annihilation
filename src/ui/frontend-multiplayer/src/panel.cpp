@@ -4,9 +4,12 @@
 // Gadget model of the loaded multiplayer panels.
 #include "oa/ui/frontend_multiplayer/panel.hpp"
 
+#include "oa/ui/gui_input/gadget_panel.hpp"
 #include "oa/ui/gui_layout/gui_gadget.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -91,6 +94,7 @@ void panel_load(Panel& panel, std::string_view name, const ui::gui_layout::Layou
             control.stage = static_cast<uint8_t>(button->status);
             control.stages = static_cast<uint8_t>(button->stages);
             control.grayed = button->grayed_out;
+            control.quick_key = button->quick_key;
         } else if (const auto* box = std::get_if<ui::gui_layout::TextBoxFields>(&gadget.fields)) {
             set_control_text(control, box->text);
         } else if (const auto* label = std::get_if<ui::gui_layout::LabelFields>(&gadget.fields)) {
@@ -172,10 +176,30 @@ void panel_set_grayed(Panel& panel, std::string_view name, bool grayed) noexcept
 }
 
 void panel_set_text(Panel& panel, std::string_view name, std::string_view text) noexcept {
-    if (auto* control = panel_control(panel, name)) {
-        set_control_text(*control, text);
-        panel.dirty = true;
-    }
+    auto* control = panel_control(panel, name);
+    if (control == nullptr)
+        return;
+    set_control_text(*control, text);
+    panel.dirty = true;
+    if (control->type != ControlType::button)
+        return;
+    const auto caption = control_text(*control);
+    const auto rule =
+        oa::ui::gui_input::caption_quick_key(control->attributes, control->stages, caption);
+    if (rule == oa::ui::gui_input::CaptionQuickKey::keep)
+        return;
+    control->quick_key = 0;
+    if (rule == oa::ui::gui_input::CaptionQuickKey::none)
+        return;
+    std::array<int8_t, kPanelControls> taken{};
+    const auto count = static_cast<std::size_t>(
+        std::clamp<int32_t>(panel.count, 0, static_cast<int32_t>(kPanelControls))
+    );
+    for (std::size_t index = 0; index < count; ++index)
+        if (panel.controls[index].type == ControlType::button)
+            taken[index] = panel.controls[index].quick_key;
+    control->quick_key =
+        static_cast<int8_t>(oa::ui::gui_input::free_quick_key(caption, {taken.data(), count}));
 }
 
 std::string_view panel_text(const Panel& panel, std::string_view name) noexcept {

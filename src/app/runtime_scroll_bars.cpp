@@ -134,11 +134,17 @@ oa::ui::display_layout::Point Runtime::hud_source_point(float x, float y) const 
     const auto rows = preferences_panel_rows();
     if (rows.width > 0 && rows.height > 0 && canvas_x >= match_layout_.left &&
         match_layout_.scale > 0.0) {
-        // The sub-panel keeps the side column's scale down to its bottom.
+        // The sub-panel keeps the bars' scale down to its bottom, from the
+        // side column's edge.
         const auto unscaled = [this](int value) {
             return static_cast<int>(std::lround(static_cast<double>(value) / match_layout_.scale));
         };
-        const oa::ui::display_layout::Point point{unscaled(canvas_x), unscaled(canvas_y)};
+        const oa::ui::display_layout::Point point{
+            match_layout_.column_narrowed()
+                ? kBattlefieldLeft + unscaled(canvas_x - match_layout_.left)
+                : unscaled(canvas_x),
+            unscaled(canvas_y)
+        };
         if (point.x >= rows.x && point.x < rows.x + rows.width && point.y >= rows.y &&
             point.y < rows.y + rows.height)
             return point;
@@ -157,7 +163,61 @@ oa::ui::display_layout::Point Runtime::hud_source_point(float x, float y) const 
             through(canvas_y, area->y, area->height, root.y, root.height)
         };
     }
+    // The source pixel a strip of the side column draws at a canvas pixel,
+    // as the strip's blit samples it.
+    const auto through = [](int canvas, int start, int length, int source, int source_length) {
+        return source +
+               static_cast<int>(static_cast<int64_t>(canvas - start) * source_length / length);
+    };
+    const auto strips = match_hud_strips();
+    // A page taller than the side column is drawn scaled down under the
+    // rows above its panel: a point on it maps to the page as authored, and
+    // one in the blank strip beside it to no gadget.
+    if (const auto& page = strips[3]; page.w > 0 && page.h > 0 && canvas_x < match_layout_.left &&
+                                      canvas_y >= page.y && canvas_y < page.y + page.h) {
+        if (canvas_x < page.x || canvas_x >= page.x + page.w)
+            return {-1, -1};
+        return {
+            through(canvas_x, page.x, page.w, page.source_x, page.source_w),
+            through(canvas_y, page.y, page.h, page.source_y, page.source_h)
+        };
+    }
+    // A narrowed side column: the source pixel it draws there.
+    if (const auto& column = strips[0];
+        match_layout_.column_narrowed() && column.w > 0 && column.h > 0 && canvas_x >= 0 &&
+        canvas_x < column.x + column.w && canvas_y >= 0 && canvas_y < column.y + column.h)
+        return {
+            through(canvas_x, column.x, column.w, column.source_x, column.source_w),
+            through(canvas_y, column.y, column.h, column.source_y, column.source_h)
+        };
     return oa::ui::display_layout::canvas_to_source(match_layout_, canvas_x, canvas_y);
+}
+
+oa::ui::display_layout::Point Runtime::hud_gadget_centre(std::size_t index) const {
+    const auto& common = match_hud_->layout.gadgets.at(index).common;
+    const int x = common.x + common.width / 2;
+    const int y = common.y + common.height / 2;
+    // On a page drawn scaled down, or in a narrowed side column, the middle
+    // of the canvas pixels that show the centre's source pixel.
+    const auto through = [](int source, int start, int length, int canvas, int canvas_length) {
+        return canvas + static_cast<int>(
+                            (static_cast<int64_t>(source - start) * 2 + 1) * canvas_length /
+                            (static_cast<int64_t>(length) * 2)
+                        );
+    };
+    const auto strips = match_hud_strips();
+    const auto shows = [x, y](const HudStrip& strip) {
+        return strip.w > 0 && strip.h > 0 && x >= strip.source_x &&
+               x < strip.source_x + strip.source_w && y >= strip.source_y &&
+               y < strip.source_y + strip.source_h;
+    };
+    for (const auto* strip : {&strips[3], match_layout_.column_narrowed() ? &strips[0] : nullptr})
+        if (strip != nullptr && shows(*strip))
+            return {
+                through(x, strip->source_x, strip->source_w, strip->x, strip->w),
+                through(y, strip->source_y, strip->source_h, strip->y, strip->h)
+            };
+    return oa::ui::display_layout::source_to_canvas(match_layout_, x, y);
 }
 
 bool Runtime::route_scroll_pointer(const SDL_Event& event, float x, float y) {

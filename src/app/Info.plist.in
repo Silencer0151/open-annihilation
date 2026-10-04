@@ -26,6 +26,8 @@
 	<string>public.app-category.strategy-games</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>${OA_MACOS_MINIMUM_VERSION}</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Open Annihilation keeps your saved games, screenshots, films and mods in the Open Annihilation folder in Documents.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 </dict>

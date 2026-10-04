@@ -51,6 +51,7 @@
 #include "oa/ui/hud/boundary.hpp"
 #include "oa/ui/hud/build_page_fit.hpp"
 #include "oa/ui/hud/camera_scroll.hpp"
+#include "oa/ui/hud/health_bar.hpp"
 #include "oa/ui/hud/kill_board.hpp"
 #include "oa/ui/hud/order_panel.hpp"
 #include "oa/ui/hud/team_panels.hpp"
@@ -109,6 +110,8 @@ struct Panel;
 struct OptionsContext;
 struct LoadSummary;
 struct GameSettingsView;
+struct SaveRoots;
+enum class SavePathUse : uint8_t;
 } // namespace oa::ui::frontend
 
 namespace oa::data::campaign {
@@ -142,6 +145,8 @@ struct MatchConsole;
 struct MatchModels;
 struct WorldDrawList;
 class RendererHost;
+struct FolderOpening;
+struct ModStartGaps;
 
 namespace full {
 struct SpriteStageResult;
@@ -307,6 +312,29 @@ class Runtime final : public menu::Host,
     ///     extension run phase set, or, after the application loop, the one
     ///     ScreenServices::quit asked for
     int run();
+
+    /// Tells whether the run ended to start afresh for another mod: SWITCH
+    /// on the settings' Switch Mod question stored the mod and ended the
+    /// loop. main() then destroys this runtime and its archives, finds the
+    /// game folders again for the stored mod and builds a new runtime on
+    /// the same window and renderer.
+    ///
+    /// @return true once SWITCH ended the run
+    [[nodiscard]] bool soft_restart_requested() const noexcept { return soft_restart_requested_; }
+
+    /// Returns the full-screen state Alt+Enter left, which a runtime built
+    /// after a soft restart takes over.
+    ///
+    /// @return the state
+    [[nodiscard]] const FullScreenSwitch& full_screen_switch() const noexcept {
+        return full_screen_switch_;
+    }
+
+    /// Frees what the runtime made on the renderer it borrows: its streamed
+    /// textures and the match's layers. A runtime that ends for a soft
+    /// restart calls it, so that the next one on the same renderer starts
+    /// from what the start left.
+    void release_renderer_textures();
 
     /// Returns the mod profile the game plays (--mod), which every view of
     /// the rules starts from: the lobby, the HUD, the console, network play
@@ -507,6 +535,16 @@ class Runtime final : public menu::Host,
     /// the setting says so.
     void give_build_tool_orders();
 
+    /// Hands the local player's selected units to another player, as
+    /// SHARE.GUI's OK does with SHARUNIT ticked (ui::hud::give_selected_units):
+    /// each goes as a share gift of the match (Match::share_gift_unit),
+    /// except the types of the Commander category, airborne units and units
+    /// carrying or carried by another, which stay. In a network game each
+    /// unit that goes is one 0x14 to the other machines.
+    ///
+    /// @param recipient player index 0..9
+    void give_selected_units_to(uint8_t recipient);
+
     /// Tells whether the message log's lines get the accessible chat's
     /// backdrop (ui.text-rendering chat-backdrop, as the player set it).
     ///
@@ -526,7 +564,7 @@ class Runtime final : public menu::Host,
     /// @return true once they have opened
     [[nodiscard]] static bool modern_fonts_open();
 
-    /// Returns how game text is drawn now: the Language & Text settings,
+    /// Returns how game text is drawn now: the Language settings,
     /// with modern fonts only while the bundled fonts open, and whether game
     /// text holds UTF-8.
     ///
@@ -540,7 +578,7 @@ class Runtime final : public menu::Host,
     /// @return the game text
     [[nodiscard]] std::string typed_game_text(std::string_view typed) const;
 
-    /// Returns how game text is drawn, as the player's Language & Text
+    /// Returns how game text is drawn, as the player's Language
     /// settings choose it now; the text drawing reads it each frame. It
     /// changes only what is drawn, never the simulation, a saved game or
     /// what a shared game sends.
@@ -615,9 +653,9 @@ class Runtime final : public menu::Host,
 
     /// Leaves the load or save dialog as its CANCEL does, and as Escape does.
     ///
-    /// The save dialog closes to the screen it was opened over. The load
-    /// dialog returns to the in-game menu of the paused match it was opened
-    /// over, else to Single Player.
+    /// Each dialog returns to the screen it was opened over, as in 3.1c: the
+    /// in-game menu of the paused match, the end-of-mission panel, or Single
+    /// Player.
     void leave_load_dialog();
 
     /// Replaces the text of a label on the current screen.
@@ -632,12 +670,50 @@ class Runtime final : public menu::Host,
     /// @return its translation, or the text itself when the language has none
     std::string translate_ui(std::string_view text) override;
 
-    /// Returns the directory that holds SAVEGAME: the one the preferences file
-    /// is in, or with a mod its mods/<id> folder, so that no two mods share
-    /// a list of saved games.
+    /// Returns the folder the relative paths the game names lie under, its
+    /// saved games and captures apart (game_file_path): the one the
+    /// preferences file is in, or with a mod its mods/<id> folder. Earlier
+    /// versions kept each one's saved games in its SAVEGAME folder.
     ///
-    /// @return that directory
+    /// @return that folder
     [[nodiscard]] fs::path save_game_root() const;
+
+    /// Returns the player's own folder for this run: --user-folder, else
+    /// the preferences' open-annihilation.user-folder while it holds an
+    /// absolute path, else "Open Annihilation" in the Documents folder, or
+    /// beside a named --preferences-file (user_folder.hpp). It is made when
+    /// first needed.
+    ///
+    /// @return the folder, absolute; empty before the runtime has started
+    [[nodiscard]] const fs::path& user_folder() const noexcept;
+
+    /// Returns the folder this run's saved games are written to: Saves in
+    /// the player's own folder, or with a mod Saves/<mod id>, so that no two
+    /// mods share a list of saved games.
+    ///
+    /// @return the folder; it need not exist
+    [[nodiscard]] fs::path saves_folder() const;
+
+    /// Returns where the save and load dialogs' paths lie: a path in
+    /// SAVEGAME in saves_folder, or, for reading, in save_game_root's
+    /// SAVEGAME folder, which held saved games before, while that folder is
+    /// there and the saves folder lacks the name; any other relative path
+    /// under save_game_root.
+    ///
+    /// @return the roots
+    [[nodiscard]] oa::ui::frontend::SaveRoots save_roots() const;
+
+    /// Returns the host path of a path the game names, in UTF-8 with '\'
+    /// or '/' between its parts: as savegame_host_path places it over
+    /// save_roots, then, within the player's own folder, its screenshots
+    /// folder, matched without case, is Screenshots and a MOVIE folder lies
+    /// in Films.
+    ///
+    /// @param path the path
+    /// @param use whether it is read or written
+    /// @return the host path
+    [[nodiscard]] fs::path
+    game_file_path(std::string_view path, oa::ui::frontend::SavePathUse use) const;
 
     /// Returns the side names the load and save dialogs show for a save's "Side" index.
     ///
@@ -713,6 +789,15 @@ class Runtime final : public menu::Host,
     ///
     /// @return the marks of the running match; empty before one starts
     [[nodiscard]] oa::ui::hud::Whiteboard& match_whiteboard();
+
+    /// Lays out the match on a canvas: make_match_layout, with the side
+    /// column fitted to the running match's tallest unit page
+    /// (display_layout::fit_side_column, side_column_page_rows()).
+    ///
+    /// @param width canvas width in pixels
+    /// @param height canvas height in pixels
+    /// @return the layout
+    [[nodiscard]] oa::ui::display_layout::MatchLayout lay_out_match(int width, int height);
 
   private:
 
@@ -1111,8 +1196,10 @@ class Runtime final : public menu::Host,
     /// Places two lines of light infantry facing each other beside the local commander, close
     /// enough to engage at once.
     ///
-    /// Throws std::runtime_error without the local commander or the ARMPW and
-    /// CORAK types.
+    /// The local player's line is of ARMPW and the other player's of CORAK; in a
+    /// game without one of them, that line is of its player's commander type.
+    /// Throws std::runtime_error without the local commander, or without a type
+    /// for a line.
     ///
     /// @param per_side units in each line
     void spawn_combat_armies(std::size_t per_side);
@@ -1180,9 +1267,9 @@ class Runtime final : public menu::Host,
     /// Carries out the stage actions that place units by map pixel, gather
     /// them into groups and order the groups (runtime_stage.cpp):
     /// "place PLAYER TYPE X Z [FACING]", "group [NAME]", "move GROUP X Z",
-    /// "patrol GROUP X Z", "attack GROUP TARGETS", and "activate GROUP" and
-    /// "deactivate GROUP", the orders the order panel's ON/OFF button gives
-    /// (give_state_order).
+    /// "patrol GROUP X Z", "attack GROUP TARGETS", "attack-ground GROUP X Z",
+    /// "guard GROUP GUARDED", and "activate GROUP" and "deactivate GROUP",
+    /// the orders the order panel's ON/OFF button gives (give_state_order).
     ///
     /// Throws std::runtime_error naming the line for one that does not
     /// read, a type the game lacks, a player whose slot is not in use, a unit
@@ -1439,8 +1526,12 @@ class Runtime final : public menu::Host,
     /// behind the loading screen, the movement classes and weapons, the terrain
     /// and map features, the unit catalog and definitions, the feature links and
     /// sight tables, applies the session's rules, binds the match's hosts, seats
-    /// the players and places the commanders or the mission's units. Throws
-    /// std::runtime_error when any part cannot be loaded.
+    /// the players and places the commanders or the mission's units. A shared
+    /// game whose mod cannot start one (refuse_incomplete_mod_start) is
+    /// refused before anything is dropped or loaded, its warning due over the
+    /// main menu, where the abandoned launch returns. Throws
+    /// std::runtime_error when the shared game is refused or any part cannot
+    /// be loaded.
     ///
     /// @param bootstrap how the players are placed and seated and which units
     ///     the session allows
@@ -1718,12 +1809,15 @@ class Runtime final : public menu::Host,
     /// @return whether the name named an order the selection can take
     bool arm_match_command(std::string_view name, bool toggle);
 
-    /// Returns whether the primary selected unit can take the order a panel name names (the
-    /// second half of gadget_command_available). [runtime_pointer.cpp, extracted]
+    /// Returns whether the selection can take the order a panel name names, by the rule the
+    /// order panel greys its order buttons by (oa::ui::hud::refresh_order_buttons): a selected
+    /// unit's type has the order's ability; LOAD and UNLOAD need transport ability, and BLAST
+    /// (DGUN) needs a unit that can blast and none that transports, as a page that places LOAD
+    /// and BLAST in one spot shows. [runtime_order_panel.cpp]
     ///
     /// @param name an order panel name, or a gadget name with a side prefix (ARM, COR)
     /// @return true when it can, or when no unit is selected
-    [[nodiscard]] bool order_command_available(std::string_view name) const;
+    [[nodiscard]] bool order_command_available(std::string_view name);
 
     /// Composes the touch layer over a CPU frame (headless snapshots, checks).
     /// [runtime_touch_hud.cpp]
@@ -1860,6 +1954,17 @@ class Runtime final : public menu::Host,
     /// built-in screens are missing.
     void register_screens();
 
+    /// Sets the overlays the extensions registered aside, or puts them back.
+    ///
+    /// Set aside, only the engine's own overlays draw and take input, and
+    /// no extension's overlay stands over the main menu, which then takes
+    /// TA's own layout from its next load. Put back, the overlays and the
+    /// layout are as they were. --check-engine-settings holds the main menu
+    /// to the engine's own drawing so.
+    ///
+    /// @param aside true to set them aside, false to put them back
+    void set_extension_overlays_aside(bool aside);
+
     /// Returns the context screen packages are called with.
     ///
     /// @param input the input event being dispatched; null outside dispatch
@@ -1901,6 +2006,12 @@ class Runtime final : public menu::Host,
     /// it after the extension's pump.
     void finish_quit_request();
     ScreenRegistry screens_{};
+    // The overlays the extensions registered (register_screens).
+    std::vector<OverlayDesc> extension_overlays_;
+    // While set_extension_overlays_aside has them aside, the registry's
+    // overlays and the main menu's overlay as they were; empty otherwise.
+    std::vector<OverlayDesc> overlays_before_aside_;
+    bool main_menu_overlay_before_aside_ = false;
     std::optional<ScreenId> pending_screen_;
     // A package asked for a frontend pass (ScreenServices::run_frontend).
     bool frontend_pass_requested_{};
@@ -1909,10 +2020,87 @@ class Runtime final : public menu::Host,
     bool quit_requested_{};
     std::string quit_reason_{};
 
-    /// Returns the viewed player's side prefix for side-specific art.
+    /// Returns the side the viewed player plays, from its skirmish slot.
     ///
-    /// @return "cor" when the side's commander name starts with C, else "arm"
+    /// @return the side index; 0 when the viewed player has no slot
+    [[nodiscard]] std::size_t match_view_side() const;
+
+    /// Returns the viewed player's side prefix in the form the side tile
+    /// bitmap's name takes (bitmaps/<prefix>guisidetile.pcx).
+    ///
+    /// The prefix follows the side's SIDEDATA nameprefix, never its
+    /// commander's name.
+    ///
+    /// @return "cor" when the side's nameprefix is COR in any case, else "arm"
     std::string match_side_prefix() const;
+
+    /// Returns the GAF that holds the viewed side's panels (PANELTOP,
+    /// PANELSIDE and PANELBOT) and the rest of its HUD chrome: the file in
+    /// anims/ that the side's SIDEDATA intgaf names, from anims-<language>
+    /// when that folder holds it (match_side_file).
+    ///
+    /// @return the GAF's path; empty when the side names none or the game
+    ///     data lacks it, which leaves the HUD without the side's panels
+    std::string match_side_panel_gaf() const;
+
+    /// Returns the font the viewed side's resource numbers, unit panel and
+    /// squad numbers are drawn in: the file in fonts/ that the side's
+    /// SIDEDATA font names, from fonts-<language> when that folder holds it
+    /// (match_side_file).
+    ///
+    /// @return the FNT's path; empty when the side names none or the game
+    ///     data lacks it, whose labels are drawn in COMIX, measured as no
+    ///     width (match_side_names_font_)
+    std::string match_side_font() const;
+
+    /// Returns the path of a file the viewed side's SIDEDATA section names,
+    /// from the folder of the language the game started in when it holds the
+    /// file (side_files_language_).
+    ///
+    /// @param file the side's intgaf or font
+    /// @return the path; empty when the side names none or the game data
+    ///     lacks the file
+    std::string match_side_file(oa::data::defs::SideFile file) const;
+
+    /// Returns the path SIDEDATA.TDF is read from: gamedata-<language> of the
+    /// language the game started in when that folder holds it, else gamedata
+    /// (side_files_language_).
+    ///
+    /// @return the path, '\\'-separated
+    [[nodiscard]] std::string side_data_path() const;
+
+    /// Returns the files the sides' SIDEDATA sections name, their intgaf and
+    /// font, that the game data lacks, looked for in the folder of the
+    /// language the game started in first.
+    ///
+    /// @return the missing files: every side's intgaf before any side's font
+    [[nodiscard]] std::vector<oa::data::defs::SideMissingFile> missing_side_files() const;
+
+    /// Ends the start of the game played without a mod, whose sides'
+    /// interface art and fonts are loaded as it starts, when a file a side
+    /// names is missing, as 3.1c ends naming the first: every side's intgaf
+    /// is loaded before any side's font. A mod, with a profile or without
+    /// one, warns of its missing side files instead (mod_start_gaps), and
+    /// its games show without them.
+    ///
+    /// Throws std::runtime_error naming the first missing file and its side.
+    void require_side_files();
+
+    /// Returns what in SIDEDATA would end the start of a mod folder played
+    /// without a profile over the game folder, as load_side_table reports
+    /// it: a section a side lacks, or no side at all. A file the sides name
+    /// that neither folder holds does not end it. The folders are read as
+    /// that start reads them, with their archives and the base game's
+    /// layout.
+    ///
+    /// @param folder the mod folder
+    /// @param game_folder the game folder
+    /// @param language the language word that start reads the files for;
+    ///     null or empty for none
+    /// @return the report; empty when that start would play
+    [[nodiscard]] std::string side_data_problem_over(
+        const fs::path& folder, const fs::path& game_folder, const char* language
+    ) const;
 
     /// Returns the unit definition of a match unit's type.
     ///
@@ -2104,39 +2292,103 @@ class Runtime final : public menu::Host,
     /// the side's interface GAF, side tile and commongui.gaf supply the art.
     /// The panel takes the keyboard focus its loader gives it
     /// (match_hud_focus_), and is placed at its own position with no panel
-    /// kept under it until open_match_dialog() says otherwise.
+    /// kept under it until open_match_dialog() says otherwise. A unit's page
+    /// is measured for the side column (fit_match_build_page).
     ///
     /// @param layout GUI file of the panel
+    /// @param side_page what the panel is: a unit's page or another panel
     /// @return false when the panel cannot be loaded, which is reported on stderr
-    bool load_match_hud_layout(const std::string& layout);
+    bool load_match_hud_layout(
+        const std::string& layout, oa::ui::hud::SidePage side_page = oa::ui::hud::SidePage::other
+    );
 
     /// Returns the rows of the side column, in source pixels: the window's
-    /// height at the chrome's scale, and never fewer than 480.
+    /// height at the side column's scale, and never fewer than 480.
     ///
     /// @return the rows the side column can show
     [[nodiscard]] int match_column_rows() const;
 
-    /// Lays the loaded build page out to fit the side column.
+    /// Returns the rows the running match's side column holds: down to the
+    /// lowest row any unit page of the game's GUI pages reaches, and never
+    /// fewer than 480.
     ///
-    /// A page that ends inside the column is left as it is. A taller one shows
-    /// part match_build_part_ of its build buttons, with its order buttons
-    /// moved up or split off under an added ORDERS tab (see
-    /// oa::ui::hud::fit_build_page), and the HUD grows past 480 rows when the
-    /// part shown still reaches below them. Records the part shown and the
-    /// number of parts.
+    /// The pages measured are each unit type's build pages (page 0 up to its
+    /// gui_page_count) and each side's general and download pages. A page
+    /// reaches down to its panel's authored height, or to its lowest control
+    /// where that is lower, as its GUI file places them; inactive controls
+    /// count, since the order panel shows those a unit has. The result is
+    /// measured once a match and kept for it.
+    ///
+    /// @return source rows; 480 without a match
+    [[nodiscard]] int side_column_page_rows();
+
+    /// Places a side panel's records where the column shows them: each one
+    /// with a size moves by the corner of the panel it lives in, the record
+    /// named HEADER, or else the first panel record.
+    ///
+    /// @param[in,out] gadgets the panel's records, as its GUI file holds them
+    /// @return the panel record they live in, or null without one
+    static oa::ui::gui_layout::Gadget*
+    place_in_side_panel(std::span<oa::ui::gui_layout::Gadget> gadgets);
+
+    /// Returns the lowest row a page's controls reach: its records past the
+    /// panel that have a size, and that are active unless `any_record`.
+    ///
+    /// @param gadgets the page's records, its panel first
+    /// @param any_record true to count the records the file leaves inactive,
+    ///        such as order buttons the order panel shows for a unit
+    /// @return the row under the lowest, exclusive; 0 without one
+    [[nodiscard]] static int32_t
+    page_bottom_row(std::span<const oa::ui::gui_layout::Gadget> gadgets, bool any_record = false);
+
+    /// Measures the loaded page for the side column.
+    ///
+    /// Every gadget stays where its file places it. A unit's page records the
+    /// lowest row its drawn gadgets reach (match_side_page_bottom_), and the
+    /// HUD grows past 480 rows to hold the whole page when it reaches below
+    /// them; match_side_page_scale() then tells how the column shows it. It
+    /// may run again, as it does once download buttons are linked into the
+    /// page.
     void fit_match_build_page();
 
-    /// Moves and hides the loaded page's gadgets as `fit` laid them out.
+    /// Draws the top and bottom bars' art on the loaded HUD's columns from
+    /// `from_column` to its right edge, as 3.1c draws its bars on a screen
+    /// that wide.
     ///
-    /// Records the part shown and the number of parts, and adds the ORDERS tab
-    /// a page split under tabs needs, beside the gadget that became its BUILD
-    /// tab, with no quick key of its own.
+    /// Each piece is drawn unscaled from its first row, its origin aside.
+    /// The top bar is PANELTOP at column 129 and then PANELBOT at its own
+    /// width after it; the bottom bar is PANELBOT from column 129 at its own
+    /// width, its first 32 rows on the bar's 32; the right edge clips the
+    /// last piece of each. Nothing is stretched, and the art comes from the
+    /// side's panel GAF.
     ///
-    /// @param fit the layout oa::ui::hud::fit_build_page chose
-    /// @param page the loaded page's gadgets as it laid them out, in layout order
-    void apply_build_page_fit(
-        const oa::ui::hud::BuildPageFit& fit, std::span<const oa::ui::hud::PanelGadget> page
-    );
+    /// @param from_column the first column drawn; the columns left of it
+    ///        keep what they hold
+    void draw_match_bars(int from_column);
+
+    /// Widens the loaded HUD to `width` columns for bars that reach past
+    /// the interface's 640 (match_hud_strips), and continues the bars' art
+    /// into the new columns (draw_match_bars). Nothing when the HUD is
+    /// already that wide.
+    ///
+    /// @param width the columns the HUD must hold: 128 and the bars' source
+    ///        columns (oa::ui::display_layout::MatchLayout::bar_columns)
+    void extend_match_bars(int width);
+
+    /// Returns how the side column shows the loaded page.
+    ///
+    /// @return the scale of a unit's page in the column at its current rows
+    ///         (see oa::ui::hud::side_page_scale); unscaled for any other
+    ///         panel, without one, and on the phone layout, which has no
+    ///         side column
+    [[nodiscard]] oa::ui::hud::SidePageScale match_side_page_scale() const;
+
+    /// Returns where a HUD gadget's centre is drawn on the canvas, through
+    /// the side column's scale, or that of a page taller than the column.
+    ///
+    /// @param index the gadget's index in the loaded HUD's layout
+    /// @return the canvas pixel the pointer takes the gadget at
+    [[nodiscard]] oa::ui::display_layout::Point hud_gadget_centre(std::size_t index) const;
 
     /// Opens a match dialog as the match HUD over a panel, as 3.1c's panel
     /// loader stacks a panel over the one below.
@@ -2248,6 +2500,15 @@ class Runtime final : public menu::Host,
     /// default (No), the preferences as theirs (OK), any other menu resumes the match.
     void escape_match_menu();
 
+    /// Tells whether the surrender confirmation is over the match, asked
+    /// from the in-game menu or by a close request.
+    ///
+    /// While it is, it takes the keys ahead of the chat line and a marker's
+    /// text, and typed text reaches neither.
+    ///
+    /// @return true while the confirmation is up
+    [[nodiscard]] bool match_question_open() const;
+
     /// Answers Enter over a paused match: the surrender confirmation takes it as its Enter
     /// default (No).
     ///
@@ -2262,8 +2523,11 @@ class Runtime final : public menu::Host,
     /// when it is active; any other key presses the first active button,
     /// grayed-out ones aside, whose quick key it is in either case. The
     /// surrender confirmation leaves Enter and Escape to enter_match_menu()
-    /// and escape_match_menu(). The preferences a match opens take keys so
-    /// too.
+    /// and escape_match_menu(); asked by a close request over the running
+    /// match, when the panels lack the keyboard, it still takes its quick
+    /// keys, though not Space. The preferences a match opens take keys so
+    /// too. The character a quick key that presses a button types after its
+    /// press is dropped (answered_key_).
     ///
     /// @param key the key pressed
     /// @return true when the panel took the key; false when it goes on to the
@@ -2759,14 +3023,6 @@ class Runtime final : public menu::Host,
     /// @return false when the panel cannot be loaded
     bool load_team_panel(const char* file);
 
-    /// Hands the local player's selected units to another player
-    /// (ui::hud::give_selected_units): Match::transfer_unit for each, keeping
-    /// commanders (the COMMANDER category), airborne units and units carrying
-    /// or carried by another.
-    ///
-    /// @param recipient player index 0..9
-    void give_selected_units_to(uint8_t recipient);
-
     /// Checks the Pause key and the menus in a skirmish.
     ///
     /// Pause sets the pause bit of Game.sim_run_flags, opens no menu, holds
@@ -2775,6 +3031,16 @@ class Runtime final : public menu::Host,
     /// 'h' opens nothing and moves no resources, and Tab opens no team menu.
     /// Throws std::runtime_error at the first failure.
     void check_pause_key();
+
+    /// Checks a skirmish saved while paused and loaded again.
+    ///
+    /// Pause sets the pause bit, F2 opens the in-game menu over it and the
+    /// skirmish is saved there, with the pause bit in its Game.sim_run_flags.
+    /// Loaded, it runs with no menu open and the pause bit clear; Pause then
+    /// holds Game.tick over a second of frames and Pause again resumes it,
+    /// and F2 holds it and F2 again lets it go. Throws std::runtime_error at
+    /// the first failure.
+    void check_paused_save();
 
     /// Checks the services and hooks the screens and the extension reach the
     /// runtime through, on the main menu.
@@ -2897,6 +3163,17 @@ class Runtime final : public menu::Host,
     /// them in effect; the frontend's preferences are loaded first.
     void load_engine_settings();
 
+    /// Lists the mod folders the settings' Mods page offers, each with what
+    /// its oamod.yaml and oamod.png give (read_mod_summary): the game
+    /// folder's mods folder's, the player's own Mods folder's, the folder an
+    /// earlier version's Pick Folder... stored while it is still a folder,
+    /// and the one played, each once.
+    void list_offered_mods();
+
+    /// Ends the run after this frame for main() to start the game afresh
+    /// with the mod the settings stored (soft_restart_requested).
+    void request_soft_restart();
+
     /// Sets up the layers of the profile the game plays for Developer Mode:
     /// reads again what the profile is resolved from (the plain 3.1c
     /// baseline without a mod), the id its overrides are kept under and its
@@ -2993,6 +3270,154 @@ class Runtime final : public menu::Host,
     /// command and the command line (part of --check-engine-settings).
     void check_engine_settings_wiring();
 
+    /// Chooses the player's own folder (user_folder) and, with the player's
+    /// own preferences file, moves the saved games from beside it into its
+    /// Saves once (move_saves_once). With --preferences-file or
+    /// --user-folder nothing is moved: the dialogs list the saved games
+    /// beside the preferences file where they are.
+    void start_user_folder();
+
+    /// Moves the saved games from beside the preferences file into the
+    /// player's own folder's Saves (move_earlier_saves) while the
+    /// preferences record no move, saying what happened on standard error,
+    /// which the log keeps. A move that moved or left a file is recorded in
+    /// the preferences, which are written, and one that moved or left a
+    /// saved game makes the main menu's notice due (tell_saves_moved).
+    void move_saves_once();
+
+    /// The player's own folder's opener and the main menu's notice of the
+    /// move (user_folder_state.hpp, runtime_user_folder.cpp).
+    struct UserFolderState;
+
+    /// Frees the user folder's state.
+    ///
+    /// @param state state to free; null is allowed
+    static void destroy_user_folder_state(UserFolderState* state) noexcept;
+
+    /// Returns the user folder's state, made on first use.
+    ///
+    /// @return the state
+    UserFolderState& user_folder_state();
+
+    /// Shows a folder in the system's file manager, making it first when it
+    /// is missing; a run nobody watches records the request instead. What
+    /// went wrong goes to standard error.
+    ///
+    /// @param folder the folder
+    /// @return what came of it
+    oa::app::FolderOpening open_player_folder(const fs::path& folder);
+
+    /// Registers the main menu's notice of the move, over the settings
+    /// dialog's overlay.
+    void register_saves_notice_overlay();
+
+    /// Tells whether the notice of the saved games' move shows over the
+    /// main menu, which nothing else opens over.
+    ///
+    /// @return true while it shows
+    [[nodiscard]] bool saves_notice_shown() const noexcept;
+
+    /// Shows the notice of the saved games' move over the main menu, once:
+    /// while the preferences say it is due, once the main menu, its own and
+    /// not a screen package's, has shown for a frame and stays, with no
+    /// dialog over it and no settings dialog. Showing it records it told and
+    /// writes the preferences. A run nobody watches shows none and leaves it
+    /// due, unless --check-user-folder asks for it.
+    void tell_saves_moved();
+
+    /// Returns the folder of the mod played: the mod folder laid over the
+    /// game folder, else the folder of the profile --mod names, else the game
+    /// folder whose own profile plays.
+    ///
+    /// @return the folder
+    [[nodiscard]] fs::path played_mod_folder() const;
+
+    /// Tells whether a mod plays: a mod profile, or a mod folder laid over
+    /// the game folder without one.
+    ///
+    /// @return true when a mod plays
+    [[nodiscard]] bool plays_mod() const noexcept;
+
+    /// Finds what the mod played lacks, from the unit definitions its
+    /// folders hold and the sides SIDEDATA names: for a mod with a profile,
+    /// no unit the match's catalog keeps or a side's commander not among
+    /// them, which keep its games from starting; and for any mod, a side's
+    /// interface art or font missing (missing_side_files), which its games
+    /// show without. A unit counts when the catalog keeps it, under the
+    /// Version and Copyright rules a match applies to each definition. Each
+    /// commander is looked for in the file of its own name first, and in
+    /// every definition, by the UnitName it gives, only when one is not
+    /// found so: a mod that plays whole reads no more than its commanders'
+    /// definitions.
+    ///
+    /// @return the gaps; none when no mod plays
+    [[nodiscard]] oa::app::ModStartGaps mod_start_gaps();
+
+    /// Refuses a start of a skirmish, a shared game, a campaign mission or a
+    /// saved game when the mod played cannot start one (mod_start_gaps), its
+    /// units or a commander missing; missing side files alone refuse none:
+    /// its warning shows over the screen the start was asked from, which stays,
+    /// or, over a match, the loading screen or a screen package's frame,
+    /// once the main menu next shows. A shared game's launch reaches it
+    /// through bootstrap_match.
+    ///
+    /// @param later the screen shown is about to go: the warning shows once
+    ///     the main menu next shows
+    /// @return true when the start is refused
+    bool refuse_incomplete_mod_start(bool later = false);
+
+    /// Shows the warning that the mod's files are missing over the screen
+    /// shown, in the look of the settings dialog's notices: the mod's name,
+    /// what is missing, whether its games can start, and its folder, which
+    /// its OPEN MOD FOLDER button shows.
+    ///
+    /// @param gaps what the mod lacks
+    void show_mod_warning(const oa::app::ModStartGaps& gaps);
+
+    /// Shows the main menu's warning that the mod's files are missing, once
+    /// from each start of a mod that lacks any (mod_start_gaps): once the
+    /// main menu, its own and not a screen package's, has shown for a frame
+    /// and stays, with no dialog or notice over it and no settings dialog. A
+    /// run nobody watches leaves it waiting, unless --check-mod-warning asks
+    /// for it.
+    void tell_incomplete_mod();
+
+    /// Starts the skirmish the setup's Start asks for. A start that fails
+    /// leaves no match and returns to the skirmish setup, with the mod's
+    /// warning when the mod cannot start a game, else the failure in a
+    /// message box.
+    ///
+    /// @param event the Start event
+    /// @return true when the match started
+    bool start_skirmish_from_setup(const entry::Event& event);
+
+    /// Checks the warning that the mod played lacks files
+    /// (--check-mod-warning), one turn a run: the first switches to a
+    /// made-up folder without a profile whose second side's interface art
+    /// and font are missing; it and then a profile that lacks the same files
+    /// warn of both once over the main menu and play a skirmish on that
+    /// side; a made-up profile whose unit files are missing warns once over
+    /// the main menu and over a refused Skirmish start that stays on the
+    /// setup; a commander whose unit the catalog drops is found missing and
+    /// one it keeps is not; and a profile that plays whole warns of nothing
+    /// and starts a skirmish. Throws std::runtime_error on a failure.
+    void check_mod_warning();
+
+    /// Checks the player's own folder (--check-user-folder): the saved games
+    /// moved once from beside the preferences file, the notice shown once
+    /// over the main menu, opening Saves and closing on Enter, and the
+    /// settings' Your files buttons, through a recorded opener. Throws
+    /// std::runtime_error on a failure.
+    void check_user_folder();
+
+    /// Takes one turn of --check-mod-switch: checks that the run plays the
+    /// mod its turn expects, the Mods page listing it first, then, until
+    /// ten switches are made, chooses the next mod there and answers SWITCH,
+    /// which ends the run for a soft restart. The first run writes the two
+    /// test profiles into the player's own Mods folder. Throws
+    /// std::runtime_error on a failure.
+    void check_mod_switch();
+
     /// The main menu's OA button and dialog (engine_settings_menu_host.hpp).
     struct EngineSettingsMenuHost;
 
@@ -3046,6 +3471,12 @@ class Runtime final : public menu::Host,
 
     /// Checks the main menu's OA button and dialog (part of --check-engine-settings).
     void check_engine_settings_in_menu();
+
+    /// Checks, while an extension's overlay stands over the main menu, that
+    /// the OA button stands in its top-right corner and that a click on it
+    /// opens the dialog through the extensions' overlays (part of
+    /// --check-engine-settings).
+    void check_engine_settings_under_overlay();
 
     /// Checks the dialog on the main menu through the pointer and the keys:
     /// every section, each setting in effect at once, OK, Cancel and Restore
@@ -3646,11 +4077,14 @@ class Runtime final : public menu::Host,
     /// mission.
     void restart_campaign_mission();
 
-    /// Clicks the hovered gadget of the load-game screen.
+    /// Clicks the hovered gadget of the load-game screen, once a press on it
+    /// is released over it, as the screen's buttons are clicked.
     ///
-    /// CANCEL, PREV and PREVMENU close the save dialog, return to a paused match
-    /// or return to Single Player; LOAD and DELETE only report that there is no
-    /// saved game to act on.
+    /// The bound load or save dialog acts for its record: CANCEL leaves the
+    /// dialog for the screen it was opened over, LOAD starts the selected save,
+    /// and the save dialog's OK saves and its DELETE removes the selected save.
+    /// Without the dialog's records, CANCEL, PREV and PREVMENU leave it, and
+    /// LOAD and DELETE only report that there is no saved game to act on.
     void activate_load_game_gadget();
 
     /// Returns how many build pages the selected unit's type has.
@@ -3667,24 +4101,84 @@ class Runtime final : public menu::Host,
     /// @return true for PREV, NEXT and PREVIOUS actions
     bool is_build_page_nav(std::string_view name) const;
 
+    /// Tests whether PREV and NEXT have anything to step through: more than
+    /// one build page.
+    ///
+    /// @return false for a builder of one page, whose PREV and NEXT are drawn
+    ///         and take no click
+    [[nodiscard]] bool build_page_nav_shown() const;
+
     /// Shows a build page of the selected builder.
     ///
-    /// The page is loaded through the build-orders panel, which falls back to the
-    /// side's download page and links the download buttons; an unfinished
-    /// builder, which has no build page, shows the order page instead. The build
-    /// pages cycle as the game's page flags do; a type with one page behaves as if
-    /// it had a second, missing one.
+    /// The page is loaded through open_match_build_page(). The build pages
+    /// cycle as the game's page flags do; a type with one page behaves as if
+    /// it had a second, missing one. A page another unit showed is no page to
+    /// step from.
     ///
     /// @param page page number from 1; the current page plus or minus one steps
     void show_match_build_page(int page);
 
+    /// Opens a build page of the selected builder as it is.
+    ///
+    /// Unlike show_match_build_page(), the page is no step from the page
+    /// shown. It is loaded through the build-orders panel, which falls back
+    /// to the side's download page and links the download buttons; an
+    /// unfinished builder, which has no build page, shows the order page
+    /// instead. A page that does not load leaves the panel as it was.
+    ///
+    /// @param page page number from 1
+    void open_match_build_page(int page);
+
     /// Shows a page as the digit keys pick it, with the nextbuildmenu sound.
     ///
-    /// Page 0 is the selected unit's order page; only pages below the type's
-    /// first missing page are shown.
+    /// Page 0 is the order page; only pages below the type's first missing
+    /// page are picked. The page picked becomes the one the panel unit shows
+    /// (match_panel_unit()), kept in its Unit.flags as 3.1c keeps it; with
+    /// none or several units selected nothing changes.
     ///
     /// @param page page number
     void show_match_page_by_key(int page);
+
+    /// Returns the unit whose pages the order panel shows.
+    ///
+    /// That is the selected unit while no other local unit is selected with
+    /// it. With several selected the panel shows the general page, whose
+    /// BUILD and ORDERS are greyed, and no unit's page turns, as in 3.1c.
+    ///
+    /// @return the unit, or null with none or several units selected
+    [[nodiscard]] oa::Unit* match_panel_unit();
+
+    /// Returns the build page the order panel opens for the selection.
+    ///
+    /// That is the page the panel unit (match_panel_unit()) keeps in its
+    /// Unit.flags while its build menu bit is set, as 3.1c reads it. A type
+    /// with no build pages opens its order page whatever its flags hold.
+    ///
+    /// @return the build page from 1, or 0 for the order page and for none
+    ///         or several units selected
+    [[nodiscard]] int match_panel_page();
+
+    /// Turns the order panel as ORDERS, BUILD, PREV, NEXT and the page keys do.
+    ///
+    /// What the panel unit (match_panel_unit()) shows is kept in its
+    /// Unit.flags, the build menu bit and the build page, as 3.1c keeps it:
+    /// ORDERS shows the order page and BUILD the unit's build page again.
+    /// PREV and NEXT turn the unit's page among its type's pages, from the
+    /// last to the first and back; from the order page they turn the page
+    /// the unit kept. With `cycle`, as the ',' and '.' keys turn it, the order
+    /// page takes its turn between the last page and the first, so from the
+    /// order page '.' opens the first page and ',' the last. On a page taller
+    /// than the side column the turn steps through its parts first, which the
+    /// unit does not keep, and a page turned back to opens at its last part.
+    /// Selecting the unit again opens what it shows, and a save keeps it.
+    /// Nothing changes with none or several units selected. The choice is the
+    /// local player's own: no other machine hears of it.
+    ///
+    /// @param press the button pressed; any other action does nothing
+    /// @param cycle whether the order page takes a turn among the build pages
+    /// @quirk A type with no build pages turns the page in its flags too, and
+    ///        keeps showing its order page, as in 3.1c.
+    void press_match_panel_page(oa::ui::hud::BuildPanelClick press, bool cycle);
 
     /// Loads the viewed side's side tile for the match chrome and shows the order page.
     void load_match_chrome();
@@ -3960,7 +4454,9 @@ class Runtime final : public menu::Host,
     /// @param palette_index palette colour
     void draw_hud_label(int x, int y, std::string_view text, uint8_t palette_index);
 
-    /// Paints a label ending at a 640x480 source point.
+    /// Paints a label ending at a 640x480 source point, measured in the
+    /// viewed side's font; one that names none gives no width, and the label
+    /// starts there.
     ///
     /// @param x source column of the text's right edge
     /// @param y source row of the glyph tops
@@ -3972,7 +4468,9 @@ class Runtime final : public menu::Host,
     ///
     /// The unit readout labels the name at (UNITNAME.x1 - measure/2,
     /// UNITNAME.y1). SIDEDATA UNITNAME is a degenerate x1==x2 point at the
-    /// segment centre, not a left edge.
+    /// segment centre, not a left edge. The measure is the viewed side's
+    /// font's; one that names none gives no width, and the label starts at
+    /// the centre.
     ///
     /// @param x source column of the text's centre
     /// @param y source row of the glyph tops
@@ -4781,24 +5279,63 @@ class Runtime final : public menu::Host,
 
     /// Checks LOADGAME.GUI in both roles, placed as the game places it.
     ///
-    /// The load dialog centred over Single Player, which it darkens (with no save
-    /// listed, MSGBOX.GUI says so over it); then through the SDL presenter over a
-    /// paused skirmish, the save and load dialogs centred on the screen, each
-    /// darkening only the options panel and showing its bitmap in the match
-    /// palette, with CANCEL, OK, the name field, typed names, Return, Escape and
-    /// a GAMES row reached at their drawn positions. A click on the save
-    /// dialog's name field and CANCEL write no save; Return at the end of a
-    /// name and OK each write one; in the load dialog Escape returns to the
-    /// in-game menu and Return starts the selected save. A save written as the
-    /// game writes one, chosen in the load dialog over Single Player, and the
-    /// saves the match writes, which hold the radar image the match shows and
-    /// the local player's side, are previewed with that image stretched over
-    /// RADAR and the side's name beside Side, in the save dialog and in the load
-    /// dialog over the match. Last, both dialogs open centred over a paused
-    /// match on 640x480, 1280x960 and 1920x1080 windows. Game data with no save
-    /// and load dialog runs check_saved_games_unavailable() instead. Throws
-    /// std::runtime_error on a failure.
+    /// The load dialog centred over Single Player, which it darkens (with no
+    /// save listed, MSGBOX.GUI says so over it); then through the SDL presenter
+    /// over a paused skirmish, the save and load dialogs centred on the screen,
+    /// each darkening only the options panel and showing its bitmap in the
+    /// match palette, with CANCEL, OK, the name field, typed names, Return,
+    /// Escape and a GAMES row reached at their drawn positions. A click on the
+    /// save dialog's name field and CANCEL write no save; Return at the end of
+    /// a name and OK each write one; a press on OK, CANCEL or DELETE writes,
+    /// removes and closes nothing while held or once released away from the
+    /// button (check_press_released_away); in the load dialog Escape returns to
+    /// the in-game menu and Return starts the selected save. A save written as
+    /// the game writes one, chosen in the load dialog over Single Player, and
+    /// the saves the match writes, which hold the radar image the match shows
+    /// and the local player's side, are previewed with that image stretched
+    /// over RADAR and the side's name beside Side, in the save dialog and in
+    /// the load dialog over the match. Over Single Player and over the in-game
+    /// menu, with saves listed and with none (once the message saying so is
+    /// closed), the load dialog's CANCEL and Escape each return to the screen
+    /// it was opened over; each click is a press and a release a frame apart,
+    /// and before CANCEL is clicked a press on it, and with saves one on LOAD,
+    /// does nothing while held or once released away from the button. Last,
+    /// both dialogs open centred over a paused match on 640x480, 1280x960 and
+    /// 1920x1080 windows. Game data with no save and load dialog runs
+    /// check_saved_games_unavailable() instead. Throws std::runtime_error on a
+    /// failure.
     void check_load_save();
+
+    /// Checks that the load dialog ENDMSN.GUI's Load Game opens returns to the
+    /// end-of-mission panel, as in 3.1c.
+    ///
+    /// With saves listed and with none (once the message saying so is closed),
+    /// CANCEL at its drawn position and Escape each leave the dialog for the
+    /// panel, which shows again with the finished game kept and the mission
+    /// chosen before. Each click is a press and a release a frame apart; before
+    /// CANCEL is clicked, a press on it does nothing while held or once
+    /// released away from it (check_press_released_away). Must start on the
+    /// panel of a finished campaign mission that offers Load Game. Throws
+    /// std::runtime_error on a failure.
+    void check_end_panel_load_cancel();
+
+    /// Checks that a press on a button of the screen's panel clicks nothing
+    /// until it is released over the button, as the screen's buttons are
+    /// clicked.
+    ///
+    /// The press at the button's centre is held over three ticked frames, with
+    /// the button drawn pressed. The pointer then leaves for the screen's
+    /// top-left corner, where the button is drawn as it was before the press,
+    /// and is released there. Throws std::runtime_error, naming the button and
+    /// `where`, when the button is hidden or not drawn so, or when `unchanged`
+    /// finds the screen changed after the press or after the release.
+    ///
+    /// @param name the button's record in the screen's panel
+    /// @param unchanged tells whether the screen is still as it was before the press
+    /// @param where the place the failure names, such as "over Single Player"
+    void check_press_released_away(
+        std::string_view name, const std::function<bool()>& unchanged, const std::string& where
+    );
 
     /// Checks, over game data with no save and load dialog such as the Total Annihilation demo
     /// (1997), that every entry to it is grayed out and takes no press: SINGLE.GUI's Load Game,
@@ -5121,6 +5658,14 @@ class Runtime final : public menu::Host,
     ///
     /// @return the word, as "German"; null for English
     [[nodiscard]] const char* game_language() const;
+
+    /// Returns the word game_language gives while a language choice is in
+    /// effect: 3.1c's command line's language when it names one, else the
+    /// choice's, as apply_language picks it.
+    ///
+    /// @param choice the setting's language tag; empty for the system's
+    /// @return the word; empty for none
+    [[nodiscard]] const char* data_word_for(std::string_view choice) const;
 
     /// Returns the language the game shows its text in.
     ///
@@ -5518,15 +6063,26 @@ class Runtime final : public menu::Host,
         int x = 0, y = 0, w = 0, h = 0;
     };
 
-    /// Returns the side column, top bar and bottom bar of the 640x480 HUD layer, scaled to the live
-    /// layout.
+    /// Returns the side column, top bar, bottom bar and scaled page of the
+    /// 640x480 HUD layer, scaled to the live layout.
     ///
-    /// The top and bottom bars hang from the column's right edge. The column
-    /// shows every row of the HUD layer: 480, or more while a build page
-    /// taller than 480 rows is shown (see fit_match_build_page).
+    /// The top and bottom bars hang from the column's right edge and reach
+    /// the window's right edge at the bars' scale: past 640 source columns
+    /// on a window wider than the interface or beside a narrowed column,
+    /// which the layer holds once extend_match_bars has continued their
+    /// art. The column shows every row of the HUD layer: 480, or more while
+    /// a unit's page taller than 480 rows is shown (see
+    /// fit_match_build_page), at the column's scale, which the game's
+    /// tallest unit page may make smaller than the bars' and the column
+    /// narrower (lay_out_match). A page taller
+    /// than the column (match_side_page_scale()), which only a page that
+    /// measure did not count can be, is the fourth strip: the column then
+    /// shows the rows above the page's panel, and the page, drawn as
+    /// authored, is scaled down uniformly under them so that its lowest row
+    /// meets the column's. Otherwise the fourth strip is empty.
     ///
     /// @return each strip's canvas rectangle and source rectangle
-    std::array<HudStrip, 3> match_hud_strips() const;
+    std::array<HudStrip, 4> match_hud_strips() const;
 
     /// Composes the HUD strips and the world layer on the match canvas, black where the chrome
     /// stops short of the window, before the display gamma.
@@ -6399,24 +6955,11 @@ class Runtime final : public menu::Host,
     /// @return the action name
     std::string_view match_hud_action(std::string_view name) const;
 
-    /// Tests whether a unit definition names a weapon other than NoWeapon.
-    ///
-    /// @param definition unit definition
-    /// @return true when weapon1, weapon2 or weapon3 names one
-    bool definition_has_weapon(const oa::data::unit_definitions::UnitDefinition& definition) const;
-
-    /// Tests whether a unit can D-gun: its definition says so or one of its weapons is
-    /// command-fired.
-    ///
-    /// @param definition unit definition
-    /// @return true when it can
-    bool definition_has_dgun(const oa::data::unit_definitions::UnitDefinition& definition) const;
-
     /// Tests whether a HUD gadget's command is open to the selection.
     ///
-    /// Greyed buttons and greyed status gadgets are not; unit buttons are; order
-    /// buttons follow the selected unit's definition (MOVE, ATTACK, BLAST/DGUN,
-    /// PATROL and the rest).
+    /// Greyed buttons and greyed status gadgets are not; every other gadget
+    /// is. The order panel greys the order buttons the selection cannot use
+    /// (oa::ui::hud::refresh_order_buttons).
     ///
     /// @param gadget HUD gadget
     /// @return true when the command is available
@@ -6542,6 +7085,19 @@ class Runtime final : public menu::Host,
     /// @param index gadget index in the match HUD
     /// @return the frame, or nullopt for a gadget without status or art
     [[nodiscard]] std::optional<std::size_t> match_status_frame(std::size_t index) const;
+
+    /// Returns how the match HUD draws one of its buttons.
+    ///
+    /// A greyed button is drawn greyed, never hidden: an order the selection
+    /// cannot give, or a menu choice not open. A build page's PREV and NEXT
+    /// are hidden on a unit of one page, and MISSION outside a campaign
+    /// mission. A button held under the pointer, or whose order is armed, is
+    /// drawn pressed.
+    ///
+    /// @param index gadget index in the match HUD, which must be loaded
+    /// @return the condition
+    [[nodiscard]] oa::ui::frontend_renderer::ButtonCondition
+    match_button_condition(std::size_t index) const;
     // The kills board F4 pins out (runtime_kill_board.cpp).
 
     /// Draws the kills board over the battlefield's top-right corner.
@@ -6756,6 +7312,9 @@ class Runtime final : public menu::Host,
     greyed_picture_frame(const oa::ui::gui_layout::Gadget& gadget) const;
 
     /// Draws the unit and weapon buttons' captions (their queued counts) at each button's corner.
+    ///
+    /// A hidden button, such as a LOAD where the unit has BLAST in its
+    /// place, shows no caption.
     void draw_build_captions();
 
     /// Clicks the loaded build or order page through the build panel click.
@@ -7200,6 +7759,18 @@ class Runtime final : public menu::Host,
     /// std::runtime_error on a failure.
     void check_attack_command();
 
+    /// Checks that zooming keeps a camera tracking a unit.
+    ///
+    /// In a new skirmish the camera tracks the local commander as it walks;
+    /// the wheel, turned at a point away from the centre, zooms in to the
+    /// nearest zoom, out to the farthest and back, and the settings dialog's
+    /// ease zooms in play and under a menu. On every frame the tracking goes
+    /// on and the commander stays at the centre. A unit in the map's corner
+    /// is tracked with the camera held at the map's edges at every zoom. A
+    /// scroll and a click on the minimap still end the tracking. Returns to
+    /// the skirmish menu; throws std::runtime_error on a failure.
+    void check_tracking_zoom();
+
     /// Checks that a turret built during the match draws its current pieces as it turns.
     ///
     /// In a new skirmish from the skirmish menu, an ARMHLT is placed as a
@@ -7307,6 +7878,10 @@ class Runtime final : public menu::Host,
     std::vector<uint16_t> selected_local_ids() const;
 
     /// Follows a unit with the camera, centred on it at once, and names it on the status line.
+    ///
+    /// A zoom under way goes on about the unit. Zooming keeps the follow;
+    /// scrolling, the minimap, mouse-look, the unit's end and the follow
+    /// keys end it.
     ///
     /// @param id unit id
     void begin_match_tracking(uint16_t id);
@@ -7671,13 +8246,16 @@ class Runtime final : public menu::Host,
     /// Runs the film step at the end of each game frame.
     ///
     /// While a capture runs, a frame whose tick has come goes to the next
-    /// FRAMnnnn.pcx of the capture folder and the next is due FilmSpeed frames a
-    /// second later. A frame that cannot be saved stops the capture
+    /// FRAMnnnn.pcx of the capture folder (Game.capture_path, or, when that is
+    /// empty, the folder the capture began in) and the next is due FilmSpeed
+    /// frames a second later. A frame that cannot be saved stops the capture
     /// (stop_film_capture).
     void capture_film_frame();
 
     /// Saves Ctrl+F10's first frame: the HUD is drawn and the frame saved before the capture tick
     /// is set. A frame that cannot be saved stops the capture (stop_film_capture).
+    ///
+    /// The folder is kept for the later frames, whatever its length.
     ///
     /// @param path capture folder
     void begin_film_capture(const char* path);
@@ -8165,6 +8743,20 @@ class Runtime final : public menu::Host,
     /// @param peewee local ARMPW
     /// @param commander local commander
     void check_command_buttons(uint16_t peewee, uint16_t commander);
+
+    /// Checks the order buttons of four units' pages against 3.1c's rules.
+    ///
+    /// Every button the page authors is drawn: lit where the unit can give
+    /// the order, greyed in gray and taking no click where it cannot. Throws
+    /// std::runtime_error on a failure.
+    ///
+    /// @param factory local ARMLAB, on its first build page
+    /// @param commander local commander, on its first build page
+    /// @param non_builder local ARMPW, on the order page
+    /// @param static_weapon local ARMAMD, on its first build page
+    void check_order_button_states(
+        uint16_t factory, uint16_t commander, uint16_t non_builder, uint16_t static_weapon
+    );
     /// Checks that a HUD button under the pointer is drawn as it is without
     /// it: a build button of the commander's build page and ATTACK of the
     /// ARMPW's order page. A press held over ATTACK draws it pressed, the
@@ -8322,7 +8914,7 @@ class Runtime final : public menu::Host,
     /// remnants, and a resumed game after them, from the save.
     void print_saved_features();
 
-    /// Checks download build pages and a missile silo's build page.
+    /// Checks download build pages.
     ///
     /// ARMLAB has ARMLAB1.GUI only, and download/armwar.tdf and armflea.tdf give
     /// it MENU=3 BUTTON=0 and 1, so its second page is ARMDL.GUI with the Warrior
@@ -8330,10 +8922,42 @@ class Runtime final : public menu::Host,
     /// must open that page with both buttons live and drawn from their _gadget
     /// art; Flea, Warrior, Flea queue three orders, a right click on the Warrior
     /// takes the middle order out and one on the Flea the last, and the Flea left
-    /// must come out of the lab. A Nuclear Silo's BUILD page then queues a
-    /// missile with MAKENUKE and a right click takes it off again. Throws
-    /// std::runtime_error on a failure.
+    /// must come out of the lab. Throws std::runtime_error on a failure.
     void check_download_builds();
+
+    /// Checks the weapon page of every unit type whose first weapon stockpiles.
+    ///
+    /// Each type is placed finished for the local player and selected through
+    /// SDL. Its weapon page (<UNIT>1.GUI) must open at once with a live, drawn
+    /// weapon button; a click
+    /// queues one round as BuildWeapon, a shift-click
+    /// five more, which the button counts, a shift right-click takes five off
+    /// and a right click the last; ORDERS, on a page that has the tab, goes
+    /// to the order page and BUILD back. The type with the cheapest round then builds one at full
+    /// resources with another queued, its button showing "1 +1", and a save
+    /// and a load keep the round, the queue and the count. Writes
+    /// local/reports/stockpile-*.ppm. Throws std::runtime_error on a failure.
+    void check_stockpile_builds();
+
+    /// Checks that each unit keeps the page its order panel shows.
+    ///
+    /// The local commander, a Kbot Lab placed beside it and a PeeWee are
+    /// selected through SDL. NEXT, ORDERS and BUILD turn the commander's
+    /// panel, and selecting the lab and then the commander again must open
+    /// the page it was left on: the order page after ORDERS, and the page it
+    /// showed before after BUILD. PREV and NEXT must turn one page at each
+    /// press, from the first page to the last and back. The ',' and '.' keys
+    /// must play nextbuildmenu and take the order page into their turn: back
+    /// from the first page, on from the last, and from the order page to the
+    /// last page and the first. Each step must leave that page in the unit's
+    /// flags. A save and a load keep the commander's build page and the lab's
+    /// order page. The PeeWee, whose type has no build pages, keeps its
+    /// general page after '.', which turns the page in its flags, and after
+    /// its reselection. With the commander and the lab selected the panel
+    /// shows the general page with BUILD and ORDERS greyed, and neither '.'
+    /// nor BUILD turns a unit's page. Writes local/reports/unit-page-memory-*.ppm.
+    /// Throws std::runtime_error on a failure.
+    void check_unit_page_memory();
 
     /// Starts a skirmish in the language options_.check_unit_language names
     /// and checks, through the SDL presenter, that the build menu's bottom
@@ -8354,6 +8978,48 @@ class Runtime final : public menu::Host,
     /// a click on the blank strip under the column must arm no build. Throws
     /// std::runtime_error after the last window when any of these failed.
     void check_side_column();
+
+    /// Checks the top and bottom bars against each side's panel art on
+    /// windows of several shapes.
+    ///
+    /// For each of the first two sides SIDEDATA.TDF lists, a skirmish starts
+    /// with the local player on that side. On windows of 640x480, 1024x768,
+    /// 1280x1024, 1280x720, 1920x1080 and 2560x1080 each bar must run from
+    /// the side column's edge to the window's right edge at the bars' scale,
+    /// every column of each bar must show something other than black, and
+    /// the HUD's bars must hold the side's panel art (the GAF its intgaf
+    /// names) where the game places it on a screen as wide as the bars'
+    /// source columns: PANELTOP from column 129 and PANELBOT at its own
+    /// width after it along the top, PANELBOT from column 129 along the
+    /// bottom, each from its first row. Throws std::runtime_error after the
+    /// last window when any of these failed.
+    void check_match_bars();
+
+    /// Checks the pages of the unit types options_.check_unit_pages names
+    /// against the side column on windows of several sizes.
+    ///
+    /// The option reads MODE:TYPE,TYPE,... A skirmish starts and one unit of
+    /// each type named is made beside the commander. On each window of
+    /// 640x480, 1280x720, 1920x1080 and 2560x1440 each unit is selected: a
+    /// unit without build pages shows the general page, its page 0, where its
+    /// type has one, is loaded as the order panel loads it, and NEXT, clicked
+    /// through SDL, walks its build pages back to the first, which PREV walks
+    /// back again; the unit keeps each page opened in its flags, as the
+    /// player's page turns leave it. ORDERS, where a page has it, opens the
+    /// general page and its BUILD comes back to the page the unit kept. Every
+    /// page must be drawn as its file places it, whole, with no control moved,
+    /// added or hidden; each control the runtime draws must lie inside the
+    /// side column's rows and its 128 columns at the page's scale (a build
+    /// picture may reach one column past them, as some of the game's own are
+    /// one column wider than their slot), and each the pointer can take must
+    /// be under the pointer at the centre it is drawn at and hold a press
+    /// there; a click on any that does not turn the page must leave the page
+    /// as it is. MODE "whole" requires every page to fit the column unscaled;
+    /// "scaled" lets a taller page be scaled down to it. Writes the side
+    /// column of each page on each window to
+    /// local/reports/unit-pages-<size>-<type>-<page>.ppm. Throws
+    /// std::runtime_error after the last window when any of these failed.
+    void check_unit_pages();
 
     /// Checks that a patrolling construction kbot reclaims a feature on its way.
     ///
@@ -8944,6 +9610,21 @@ class Runtime final : public menu::Host,
     ///
     /// @param enter_line runs one console line
     void check_console_poster_command(const std::function<void(const char*)>& enter_line);
+
+    /// Checks the pictures' folder when it is too long for Game.output_directory.
+    ///
+    /// A folder under the save root longer than the field holds is set as the
+    /// Image Output Directory: seeding a match leaves the field empty, and
+    /// Ctrl+F9 and "MakePoster 10 10" write SHOT0001.pcx and BIGSHOT0001.bmp
+    /// there, and a film running in a MOVIE folder within it, which
+    /// Game.capture_path cannot hold, FRAM0001.pcx. The folder, the field and
+    /// the film are put back. Where the
+    /// system opens no path that long, nothing is checked. Throws
+    /// std::runtime_error on a failure.
+    ///
+    /// @param enter_line runs one console line
+    /// @return what was checked, as the end of the poster check's report
+    std::string check_long_output_directory(const std::function<void(const char*)>& enter_line);
     // The 8-bit view of the match frame the poster writes: the palette index
     // of an RGB pixel and the display whose palette the image carries.
 
@@ -9160,7 +9841,8 @@ class Runtime final : public menu::Host,
     ///
     /// A skirmish takes the Summary's map, difficulty, player count and rules,
     /// the saved controllers, a world without commanders, then the saved
-    /// session; a campaign save goes to load_saved_campaign(). A file that is not
+    /// session; a campaign save goes to load_saved_campaign(). The game starts
+    /// running, unpaused, whatever pause it was saved with. A file that is not
     /// a save is shown on the status line.
     ///
     /// @param path savegame file
@@ -9197,7 +9879,9 @@ class Runtime final : public menu::Host,
     ///
     /// The saved clock, the restored alliance rows the match keeps its own copy
     /// of, and a fresh host clock (the saved one belongs to the session that
-    /// wrote it).
+    /// wrote it). The game starts running: the pause bit of
+    /// Game.sim_run_flags is cleared in the match and its clock, whatever the
+    /// save holds there.
     ///
     /// @param restored_players true when the Players section was restored
     void finish_saved_game_start(bool restored_players);
@@ -9392,7 +10076,11 @@ class Runtime final : public menu::Host,
     /// @param id unit id; 0 or an empty slot does nothing
     void center_camera_on_unit(uint16_t id);
 
-    /// Shows the order panel for the selection: a builder's first build page, else the order page.
+    /// Shows the order panel for the selection: the build page the panel
+    /// unit shows (match_panel_page()), which every unit of a type with a
+    /// build page shows from its creation until ORDERS, BUILD or the page
+    /// keys change it, else the order page. With several units selected it
+    /// shows the general page. The page shown keeps the part it shows.
     ///
     /// Nothing while an in-game menu or the outcome is up (match_paused_): the
     /// menu keeps its panel, and resume_match_pause() shows the selection's.
@@ -9460,10 +10148,15 @@ class Runtime final : public menu::Host,
     /// Eases the battlefield zoom toward its target by frame time, keeping the anchor in place.
     ///
     /// The time is the frame's (frame_time_ns_), so a --frame-rate run eases
-    /// on its own clock as a player's frames do.
+    /// on its own clock as a player's frames do. A camera tracking a unit
+    /// keeps the unit at the centre at every scale, as far as the map's
+    /// edges let it, while a menu holds the match too.
     void step_match_zoom();
 
     /// Zooms the battlefield with the mouse wheel about the pointer.
+    ///
+    /// A camera tracking a unit zooms about the unit instead and goes on
+    /// tracking it: the wheel changes only the scale.
     ///
     /// @param wheel_y wheel steps; positive zooms in
     /// @param pointer_x canvas column of the pointer
@@ -9972,6 +10665,13 @@ class Runtime final : public menu::Host,
     ///
     /// @return the directory
     std::string application_directory() override;
+
+    /// Returns the Image Output Directory used in place of the game's
+    /// default: the player's own folder, whose screenshots folder is
+    /// Screenshots and whose MOVIE folders lie in Films (game_file_path).
+    ///
+    /// @return the folder in UTF-8; empty before the folder is chosen
+    std::string own_image_output_directory() override;
 
     /// Selects the map list.
     ///
@@ -10772,6 +11472,9 @@ class Runtime final : public menu::Host,
     std::optional<oa::sim::speed::Range> game_speed_lock_;
     init::PlayerStorage player_storage_{};
     init::Preferences preferences_{};
+    /// The folder the running film capture began in: Ctrl+F10's MOVIEnnn
+    /// folder, kept whole when it is too long for Game.capture_path.
+    std::string film_folder_;
     entry::SkirmishSettings skirmish_settings_{};
     skirmish::UiState skirmish_ui_{};
     TypedKeyHook typed_key_hook_ = TypedKeyHook::none;
@@ -10830,6 +11533,11 @@ class Runtime final : public menu::Host,
     bool match_panels_keyboard_ = false;
     std::vector<MatchGadgetState> match_hud_states_; // one per match_hud_ gadget
     std::optional<oa::formats::fnt::Font> match_small_font_;
+    // The viewed side names a font. One that names none has its HUD labels
+    // drawn in COMIX, the font 3.1c has active while the message log shows
+    // lines (load_match_hud_layout), and its right-aligned and centred labels
+    // placed as though they had no width.
+    bool match_side_names_font_ = true;
     // The fonts start-up loads for the whole run, COMIX and smlfont, kept here
     // in place of Game.common_fonts.
     std::optional<oa::formats::fnt::Font> message_font_;
@@ -11066,13 +11774,17 @@ class Runtime final : public menu::Host,
 
     std::optional<ReclaimCheck> reclaim_check_;
     std::size_t wrecks_drawn_{};
-    int panel_top_width_ = kBattlefieldWidth;
     int32_t configured_map_metal_ = 0;
     std::vector<oa::sim::unit_spawn::Type> spawn_types_;
     std::vector<std::string> spawn_type_names_;
     // Build page button captions by gadget index (the queued counts).
     std::vector<std::string> build_captions_;
     oa::data::defs::SideTable side_table_{};
+    // The language word SIDEDATA.TDF and the interface art and fonts its
+    // sides name are read for, from their language folders first: the
+    // game's as it starts, kept for the run, as 3.1c loads them as it
+    // starts. A language chosen later reads them at the next start.
+    std::string side_files_language_;
 
     // Game.unit_defs: the unit table the FBI loader fills, with the yard maps,
     // build lists, category masks and download menus its records point at,
@@ -11218,6 +11930,9 @@ class Runtime final : public menu::Host,
     // pointer is over it, and only its release over it acts on it.
     std::optional<std::size_t> match_hud_held_;
     bool exit_requested_ = false;
+    // SWITCH on the settings' Switch Mod question ended the run, for main()
+    // to start afresh with the mod it stored (soft_restart_requested).
+    bool soft_restart_requested_ = false;
     // The status run() returns after the application loop (ScreenServices::quit).
     int exit_status_{};
     bool application_active_ = true;
@@ -11341,6 +12056,11 @@ class Runtime final : public menu::Host,
 
     std::optional<UnitInfoPanel> unit_info_panel_{};
     bool chat_composing_ = false;
+    // The quick key, lowercase, that pressed a button of a panel over the
+    // match at the last key press; zero for none. The character it types
+    // after the press is dropped, so it never reaches the chat line or a
+    // marker's text.
+    int32_t answered_key_ = 0;
     std::string chat_buffer_{};
     // The input method's composition, shown after the chat line until the
     // player commits it; empty otherwise. The line and the composition are
@@ -11430,6 +12150,9 @@ class Runtime final : public menu::Host,
     // HUD is drawn into.
     renderer::Surface spare_match_hud_{};
     renderer::Surface match_world_cpu_{};
+    /// The health bars the last match frame drew, in the order drawn, in
+    /// the world layer's pixels (match_world_cpu_), for the checks.
+    std::vector<oa::ui::hud::HealthBar> drawn_health_bars_{};
     SDL_Texture* match_hud_tex_ = nullptr;
     TiledTexture match_world_tex_;
     SDL_Texture* match_cursor_tex_ = nullptr;
@@ -11821,6 +12544,14 @@ class Runtime final : public menu::Host,
     // The main menu's OA button and dialog; null until first used.
     std::unique_ptr<EngineSettingsMenuHost, void (*)(EngineSettingsMenuHost*) noexcept>
         engine_settings_menu_{nullptr, destroy_engine_settings_menu_host};
+    // The player's own folder for this run (start_user_folder); empty
+    // before it is chosen.
+    fs::path user_folder_;
+    // The opener of the player's folders and the main menu's notice of the
+    // move; null until first used.
+    std::unique_ptr<UserFolderState, void (*)(UserFolderState*) noexcept> user_folder_state_{
+        nullptr, destroy_user_folder_state
+    };
     // The in-game menu's OA button and dialog; null until first used.
     std::unique_ptr<EngineSettingsMatchHost, void (*)(EngineSettingsMatchHost*) noexcept>
         engine_settings_match_{nullptr, destroy_engine_settings_match_host};
@@ -11870,14 +12601,25 @@ class Runtime final : public menu::Host,
     // Shift held by a check for control_key_down: SDL's dummy devices hold no key.
     bool shift_held_by_check_ = false;
     int match_build_page_ = 0;
-    // A build page taller than the side column shows its build buttons in
-    // parts that PREV and NEXT step through before the next page. The part
-    // is the player's own view and is kept out of the unit's page flags.
-    int match_build_part_ = 0;           // part of the page shown, from 0
-    int match_build_part_count_ = 1;     // parts the loaded page is split into
-    uint16_t match_build_part_unit_ = 0; // unit match_build_part_ belongs to
-    int match_hud_fit_rows_ = 0;         // column rows the loaded page was laid out for
-    bool match_hud_fitted_ = false;      // the loaded page did not fit as authored
+    uint16_t match_build_page_unit_ = 0; // unit whose page match_build_page_ is
+    // Lowest row the loaded unit's page reaches, source pixels; 0 for another panel.
+    int match_side_page_bottom_ = 0;
+    // The match side_column_page_rows() measured, and its rows.
+    const void* side_column_measured_for_ = nullptr;
+    int side_column_rows_ = 0;
+    // What the loaded panel is to the side column.
+    oa::ui::hud::SidePage match_hud_side_page_ = oa::ui::hud::SidePage::other;
+
+    // Where the loaded panel's file places each of its gadgets, how tall it
+    // is and whether it is active there, in screen source pixels, as loaded.
+    struct AuthoredPlace {
+        int16_t x = 0;
+        int16_t y = 0;
+        int16_t height = 0;
+        int8_t active = 0;
+    };
+
+    std::vector<AuthoredPlace> match_hud_authored_{};
     uint16_t pending_build_type_ = 0;
     // Cursor GAF frames the order overlays draw, rendered once each.
     std::map<const oa::formats::gaf::Frame*, oa::formats::gaf::RenderedFrame>

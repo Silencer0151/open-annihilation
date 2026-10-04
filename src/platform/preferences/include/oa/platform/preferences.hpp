@@ -6,7 +6,9 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <string>
+#include <string_view>
 
 namespace oa::platform::preferences {
 using Values = std::map<std::string, std::string>;
@@ -44,6 +46,42 @@ std::filesystem::path data_directory();
 /// @param application_support the Application Support folder
 /// @return the folder to use; it need not exist
 std::filesystem::path apple_data_directory(const std::filesystem::path& application_support);
+/// The name of the player's own folder, which holds their saved games,
+/// screenshots, films and mods, inside their Documents folder.
+inline constexpr std::string_view user_folder_name = "Open Annihilation";
+/// Returns the player's Documents folder, as the system names it.
+///
+/// On macOS it is the user's Documents directory as Foundation resolves it.
+/// On Windows it is the Documents folder (My Documents on Windows XP),
+/// wherever it has been redirected to. On Linux it is the folder
+/// XDG_DOCUMENTS_DIR names in user-dirs.dirs, read from $XDG_CONFIG_HOME, or
+/// from $HOME/.config when XDG_CONFIG_HOME is unset or relative
+/// (xdg_documents_directory), else $HOME/Documents. Never the installation,
+/// executable, asset directory or current working directory. Throws
+/// std::runtime_error when the folder cannot be resolved.
+///
+/// @return the folder; it need not exist
+std::filesystem::path documents_directory();
+/// Returns the folder XDG_DOCUMENTS_DIR names in the text of a user-dirs.dirs
+/// file.
+///
+/// A line reads XDG_DOCUMENTS_DIR="$HOME/name" for a folder in the home
+/// folder, or XDG_DOCUMENTS_DIR="/path" for an absolute one; a backslash
+/// keeps the character after it, and no other variable is expanded. Spaces
+/// may stand before the name and round the '='. The last such line counts;
+/// a line of another form, or a comment, is passed over.
+///
+/// @param text the file's text
+/// @param home the home folder that $HOME stands for
+/// @return the folder; nullopt when no line names one
+std::optional<std::filesystem::path>
+xdg_documents_directory(std::string_view text, const std::filesystem::path& home);
+/// Returns the player's own folder: user_folder_name inside
+/// documents_directory(). Throws std::runtime_error when the Documents
+/// folder cannot be resolved.
+///
+/// @return the folder; it need not exist
+std::filesystem::path default_user_folder();
 /// Reads a preferences file.
 ///
 /// Its lines may end in LF or CR LF. Throws std::runtime_error for an unreadable, oversized, corrupt or

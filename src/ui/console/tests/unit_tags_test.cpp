@@ -62,10 +62,11 @@ void test_lookup() {
     const auto* self_destruct =
         console::mission_tags_entry(&g_table, console::mission_tags_find(&g_table, "SELFDESTRUCT"));
     CHECK(self_destruct != nullptr);
-    CHECK(
-        (self_destruct->attributes[console::kMissionSecondaryAttribute] &
-         console::kMissionAttributeSecondaryQueue) != 0
-    );
+    if (self_destruct != nullptr)
+        CHECK(
+            (self_destruct->attributes[console::kMissionSecondaryAttribute] &
+             console::kMissionAttributeSecondaryQueue) != 0
+        );
     CHECK(console::mission_tags_entry(&g_table, 200) == nullptr);
 }
 

@@ -11,7 +11,7 @@ is formatted and given its header before it is first committed), less:
     CMakeLists.txt calls project() and takes OA_ENGINE_DIR), which keep
     their own rules;
   - code kept as its authors wrote it, in a directory named as
-    THIRD_PARTY_DIRECTORIES lists;
+    tools/check_style.py's THIRD_PARTY_DIRECTORIES lists;
   - symbolic links, and tracked files missing from the working tree.
 
 When Git cannot list the tree (an unpacked source tree, or a checkout seen
@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # Objective-C sources as the style check reads them, and among them the C
 # ones.
 from check_style import (  # noqa: E402,F401
-    C_SUFFIXES, SOURCE_SUFFIXES, THIRD_PARTY_DIRECTORIES, is_third_party, nested_projects, tracked)
+    C_SUFFIXES, SOURCE_SUFFIXES, is_third_party, nested_projects, tracked)
 # Sources that are fragments of another file, included in the middle of it
 # (a table inside an initializer, a list of macro calls): they have no
 # context of their own to format, and an #include added to one would land

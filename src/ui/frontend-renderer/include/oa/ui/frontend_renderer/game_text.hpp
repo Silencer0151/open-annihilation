@@ -4,7 +4,7 @@
 #pragma once
 
 // Game text in the game's own fonts and in the modern fonts, as the
-// player's Language & Text settings choose (oa/present/game_text.hpp): what
+// player's Language settings choose (oa/present/game_text.hpp): what
 // a GUI or FNT font draws, where its baseline lies and which modern face
 // stands in for it, and a line drawn on the RGB screens.
 
@@ -28,6 +28,11 @@ namespace oa::ui::frontend_renderer {
 /// @param font the GUI font
 /// @return the characters
 [[nodiscard]] present::FontCharacters gui_font_characters(const present::GafSprites& font);
+
+/// Forgets the characters gui_font_characters kept. They are kept by the
+/// address of each font's glyphs, so they go when the fonts do: a font
+/// loaded later may come at the same address with other glyphs.
+void forget_gui_font_characters();
 
 /// Gives the rows from a GUI font's pen down to its baseline: the height of
 /// its 'I', as gadget text hangs the glyphs from the pen.

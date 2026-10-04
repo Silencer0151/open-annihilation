@@ -405,6 +405,22 @@ void sides_load_hud_layout() {
     CHECK(side_index(&table.sides[0]) == 0 && side_index(&table.sides[1]) == 1);
 }
 
+void sides_name_their_panel_gaf() {
+    // SIDE0 names its panel GAF, SIDE1 names none and SIDE2 one longer than
+    // the name's 29 characters.
+    const std::string side = sidedata_fixture(true);
+    const std::string body = side.substr(std::strlen("[SIDE0]{"));
+    const std::string text = "[SIDE0]{intgaf=ARMINT; " + body + "[SIDE1]{" + body +
+                             "[SIDE2]{intgaf=PANELS456789012345678901234567890; " + body;
+    Doc sidedata(text.c_str());
+    SideTable table;
+    CHECK(side_table_load(&sidedata.document, &table, nullptr));
+    CHECK(table.count == 3);
+    CHECK(std::strcmp(table.panel_gaf[0], "ARMINT") == 0);
+    CHECK(table.panel_gaf[1][0] == '\0');
+    CHECK(std::strcmp(table.panel_gaf[2], "PANELS45678901234567890123456") == 0);
+}
+
 void sides_missing_rect_is_reported() {
     const std::string text = sidedata_fixture(false);
     Doc sidedata(text.c_str());
@@ -1237,6 +1253,7 @@ int main() {
     weapon_table_keeps_asset_names();
     weapon_files_skip_loose_when_archive_only();
     sides_load_hud_layout();
+    sides_name_their_panel_gaf();
     sides_missing_rect_is_reported();
     sound_categories_collect_numbered_choices();
     all_sounds_cache_top_level_sections_with_a_sound();

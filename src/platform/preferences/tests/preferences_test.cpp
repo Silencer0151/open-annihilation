@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <optional>
 #include <source_location>
 #include <stdexcept>
 #include <string>
@@ -203,6 +204,83 @@ int main() {
                 ::unsetenv("XDG_DATA_HOME");
         }
 #endif
+        {
+            // XDG_DOCUMENTS_DIR in user-dirs.dirs: $HOME/ relative, absolute,
+            // escaped, the last line winning, and lines of other forms passed
+            // over.
+            namespace preferences = oa::platform::preferences;
+            const std::filesystem::path home{"/home/player"};
+            require(!preferences::xdg_documents_directory("", home));
+            require(
+                preferences::xdg_documents_directory(
+                    "# written by xdg-user-dirs-update\n"
+                    "XDG_DESKTOP_DIR=\"$HOME/Desktop\"\n"
+                    "XDG_DOCUMENTS_DIR=\"$HOME/Dokumente\"\n",
+                    home
+                ) == home / "Dokumente"
+            );
+            require(
+                preferences::xdg_documents_directory(
+                    "  XDG_DOCUMENTS_DIR = \"/data/My \\\"Papers\\\"\"\r\n", home
+                ) == std::filesystem::path("/data/My \"Papers\"")
+            );
+            require(
+                preferences::xdg_documents_directory(
+                    "XDG_DOCUMENTS_DIR=\"$HOME/first\"\nXDG_DOCUMENTS_DIR=\"$HOME/second\"\n", home
+                ) == home / "second"
+            );
+            require(
+                preferences::xdg_documents_directory("XDG_DOCUMENTS_DIR=\"$HOME/\"", home) == home
+            );
+            // A relative path, another variable, a missing quote or '=': none.
+            require(!preferences::xdg_documents_directory(
+                "XDG_DOCUMENTS_DIR=\"Documents\"\nXDG_DOCUMENTS_DIR=\"$XDG/Documents\"\n"
+                "XDG_DOCUMENTS_DIR=\"$HOME/open\nXDG_DOCUMENTS_DIR \"$HOME/x\"\n"
+                "#XDG_DOCUMENTS_DIR=\"$HOME/comment\"\nXDG_DOCUMENTS_DIRS=\"$HOME/y\"\n",
+                home
+            ));
+            // The player's own folder is "Open Annihilation" in an absolute
+            // Documents folder.
+            const auto user = preferences::default_user_folder();
+            require(user.is_absolute());
+            require(user.filename() == "Open Annihilation");
+            require(user.parent_path() == preferences::documents_directory());
+#if !defined(__APPLE__) && !defined(_WIN32)
+            // On Linux, from the user-dirs.dirs under XDG_CONFIG_HOME, else
+            // $HOME/Documents.
+            const auto keep = [](const char* variable) -> std::optional<std::string> {
+                const char* value = std::getenv(variable);
+                return value != nullptr ? std::optional<std::string>(value) : std::nullopt;
+            };
+            const auto put_back = [](const char* variable,
+                                     const std::optional<std::string>& value) {
+                if (value)
+                    ::setenv(variable, value->c_str(), 1);
+                else
+                    ::unsetenv(variable);
+            };
+            const auto kept_home = keep("HOME");
+            const auto kept_config = keep("XDG_CONFIG_HOME");
+            const auto fake_home = temporary / "home";
+            const auto config = temporary / "config";
+            std::filesystem::create_directories(config);
+            ::setenv("HOME", fake_home.c_str(), 1);
+            ::setenv("XDG_CONFIG_HOME", config.c_str(), 1);
+            const bool plain = preferences::documents_directory() == fake_home / "Documents";
+            std::ofstream(config / "user-dirs.dirs") << "XDG_DOCUMENTS_DIR=\"$HOME/Papiers\"\n";
+            const bool named = preferences::documents_directory() == fake_home / "Papiers";
+            ::setenv("XDG_CONFIG_HOME", "relative", 1);
+            std::filesystem::create_directories(fake_home / ".config");
+            std::ofstream(fake_home / ".config" / "user-dirs.dirs")
+                << "XDG_DOCUMENTS_DIR=\"/absolute/docs\"\n";
+            const bool fallback = preferences::documents_directory() == "/absolute/docs";
+            put_back("HOME", kept_home);
+            put_back("XDG_CONFIG_HOME", kept_config);
+            require(plain);
+            require(named);
+            require(fallback);
+#endif
+        }
         {
             // A stand-in for the user's Application Support folder.
             const auto support = temporary / "Application Support";

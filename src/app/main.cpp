@@ -23,12 +23,17 @@
 #include "oa/base/threads.hpp"
 #include "oa/data/defs/layout.hpp"
 #include "oa/media/intro_player.hpp"
+#include "oa/platform/memory_status.hpp"
 #include "oa/platform/log_files.hpp"
 #include "oa/platform/preferences.hpp"
 #include "oa/platform/system.hpp"
 #include "oa/ui/engine_settings.hpp"
+#include "oa/ui/frontend_renderer/game_text.hpp"
+#include "oa/ui/gadget_render.hpp"
 #include <SDL3/SDL.h>
+#include <algorithm>
 #include <cinttypes>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -40,8 +45,10 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <tuple>
 #include <utility>
+#include <vector>
 #include <SDL3/SDL_main.h>
 
 #ifndef OA_ENGINE_VERSION
@@ -407,20 +414,6 @@ class LookupLog {
     std::ofstream out_;
 };
 
-// Sends the game's standard output and standard error to the logs folder in
-// the per-user folder. Without a per-user folder, or when the log cannot be
-// opened, they stay where they were, and standard error says why.
-void start_log() {
-    try {
-        const auto folder = oa::platform::preferences::data_directory() / "logs";
-        if (!oa::platform::log_files::begin(folder))
-            std::cerr << "open-annihilation: cannot open a log in " << folder.string()
-                      << "; the output stays here\n";
-    } catch (const std::exception& error) {
-        std::cerr << "open-annihilation: no log: " << error.what() << '\n';
-    }
-}
-
 /// What the start needs where the platform brings game files in: the
 /// import's folders, the backups setting, what the start's recovery found
 /// and whether the Game files screen may open.
@@ -524,6 +517,263 @@ bool run_game_files_until_resolved(
     return true;
 }
 
+/// The status run_once returns when SWITCH on the settings' Switch Mod
+/// question ended the run: main() starts the game afresh for the mod stored.
+constexpr int kSoftRestartStatus = -1;
+
+/// The switches --check-mod-switch makes.
+constexpr uint32_t kModSwitches = 10;
+
+/// The mods --check-mod-switch takes turns with: No Mod and two test profiles.
+constexpr std::size_t kModSwitchTurns = 3;
+
+/// The growth of the working set --check-mod-switch allows over the last
+/// round of switches, in bytes: what the allocator keeps back. The first
+/// rounds fill the allocator's and the system's caches.
+constexpr uint64_t kModSwitchMemoryNoise = uint64_t{3} * 1024 * 1024;
+
+/// The working set as each run of --check-mod-switch starts on the main
+/// menu, and the verdict on them.
+class ModSwitchMemory {
+  public:
+
+    /// Notes the working set as a run starts on the main menu.
+    ///
+    /// @param run the soft restarts before it
+    void sample(uint32_t run) {
+        oa::platform::MemorySample sample{};
+        if (!oa::platform::sample_process_memory(nullptr, &sample))
+            sample.working_set = 0;
+        if (samples_.size() <= run)
+            samples_.resize(std::size_t{run} + 1);
+        samples_[run] = sample.working_set;
+        std::cout << "mod switch check: run " << run << ", working set "
+                  << sample.working_set / 1024 << " KiB, committed " << sample.mapped / 1024
+                  << " KiB, private resident " << sample.private_resident / 1024 << " KiB\n";
+    }
+
+    /// Compares the runs of the last round of switches with the runs of the
+    /// round before that played the same mods: none may have grown by more
+    /// than kModSwitchMemoryNoise, as a working set that grows with each
+    /// switch would.
+    ///
+    /// @return 0 when the working set stayed level, or the system does not
+    ///     report it; 1 when it grew, or not every switch was made
+    [[nodiscard]] int verdict() const {
+        if (samples_.size() != std::size_t{kModSwitches} + 1) {
+            std::cout << "mod switch check: FAILED, " << samples_.size() << " runs instead of "
+                      << kModSwitches + 1 << '\n';
+            return 1;
+        }
+        if (samples_.front() == 0) {
+            std::cout << "mod switch check: the system reports no working set\n";
+            return 0;
+        }
+        uint64_t worst = 0;
+        for (std::size_t run = samples_.size() - kModSwitchTurns + 1; run < samples_.size();
+             ++run) {
+            const uint64_t before = samples_[run - kModSwitchTurns];
+            worst = std::max(worst, samples_[run] > before ? samples_[run] - before : 0);
+        }
+        const uint64_t overall =
+            samples_.back() > samples_.front() ? samples_.back() - samples_.front() : 0;
+        std::cout << "mod switch check: " << kModSwitches
+                  << " switches; the last round grew the working set at most " << worst / 1024
+                  << " KiB over the round before, and by " << overall / 1024
+                  << " KiB in all since the first run\n";
+        if (worst > kModSwitchMemoryNoise) {
+            std::cout << "mod switch check: FAILED, the working set grows with the switches\n";
+            return 1;
+        }
+        std::cout << "mod switch check: passed\n";
+        return 0;
+    }
+
+  private:
+
+    std::vector<uint64_t> samples_; ///< bytes, one for each run, from the first
+};
+
+/// Runs the game once: finds the game folders and their profile, with the
+/// Game files screen where the platform brings game files in and none is
+/// usable, opens the window the first time, plays the intro movies the
+/// first time, mounts the archives and runs a runtime on them until it ends.
+///
+/// Throws std::runtime_error when the game folder cannot be played.
+///
+/// @param options the parsed command line, with restarts set
+/// @param extension the extensions' combined hooks
+/// @param display the window and its renderer, opened once
+/// @param game_files the import's folders, the preferences and the recovery,
+///     where the platform brings game files in
+/// @param lookup_log --trace-lookups' log; null without it
+/// @param switch_memory --check-mod-switch's working sets
+/// @return the run's exit status, or kSoftRestartStatus when SWITCH ended it
+int run_once(
+    Options options,
+    const Extension& extension,
+    HostDisplay& display,
+    GameFilesStart& game_files,
+    LookupLog* lookup_log,
+    ModSwitchMemory& switch_memory
+) {
+    // A soft restart reads the settings the switch saved: the mod the Game
+    // files screen would play and the backups setting.
+    if (options.restarts > 0 && game_files.installed &&
+        (!options.unattended || options.preferences_file)) {
+        game_files.values =
+            oa::platform::preferences::load(preference_file(options.preferences_file));
+        game_files.backed_up = oa::ui::engine_settings::read_settings(game_files.values, {}, false)
+                                   .game_files_backed_up;
+    }
+    // The game folder's profile, --mod's or the mod folder's or its own,
+    // is resolved while the folder is inspected, before any archive is
+    // mounted, so that one the engine cannot use stops the run with its
+    // errors.
+    GameFilesNeeded needed;
+    auto game_directory = find_game_directory(options, game_files.offered ? &needed : nullptr);
+    // Without a usable folder, the Game files screen brings one in.
+    if (!run_game_files_until_resolved(options, display, game_files, needed, game_directory))
+        return options.check_game_files ? finish_game_files_check(options, 0) : 0;
+    if (!game_directory)
+        return options.check_game_files ? finish_game_files_check(options, 1) : 1;
+    // The game files are kept out of device backups unless the player put
+    // them back in, with or without the screen.
+    if (game_files.installed)
+        game_files::apply_backup_setting(
+            game_files_hooks(), game_files.paths, game_files.backed_up
+        );
+    // A folder that held the demo's installer is played from the folder
+    // its archive was unpacked to, and remembered as chosen.
+    options.game_dir = game_directory->installation;
+    if (game_directory->source == GameDirectorySource::chosen)
+        options.remember_game_dir = game_directory->path;
+    if (!fs::is_directory(options.game_dir))
+        throw std::runtime_error(
+            "game directory does not exist: " + path_to_utf8(options.game_dir) +
+            " (name it with --game-dir PATH)"
+        );
+    options.game_folders = game_directory->folders;
+    if (options.game_folders.empty())
+        options.game_folders = {options.game_dir};
+    options.mod_profile = game_directory->profile;
+    // --archive names the archives and skips the inspection; a --mod
+    // profile still sets the layout the data is read by.
+    if (!options.archives.empty() && !options.mod_file.empty()) {
+        auto resolved = resolve_folder_profile(
+            options.game_folders,
+            {{}, options.mod_file, options.accept_unimplemented_hacks, nullptr}
+        );
+        if (!resolved.errors.empty()) {
+            std::string message = "the mod profile cannot be used:";
+            for (const auto& error : resolved.errors)
+                message += "\n  " + error;
+            throw std::runtime_error(message);
+        }
+        options.mod_profile = std::move(resolved.profile);
+        game_directory->profile_warnings = std::move(resolved.warnings);
+    }
+    if (options.mod_profile) {
+        // Its limits size the game's tables from the start, and its
+        // rules reach every match.
+        report_mod_profile(*options.mod_profile, game_directory->profile_warnings, std::cout);
+    } else if (options.game_folders.size() > 1) {
+        std::cout << "open-annihilation: the mod folder "
+                  << path_to_utf8(options.game_folders.front())
+                  << " holds no oamod.yaml; its files are layered over the game folder, "
+                     "which plays by 3.1c's own rules\n";
+    }
+    // Every later read of game data uses the profile's layout.
+    oa::data::defs::use_data_layout(data_layout_of(options.mod_profile.get()));
+    if (!options.headless_check && !display.initialized)
+        display.initialize(options);
+    // The Game files check's management route runs its pass over the
+    // installed folder before the game starts.
+    if (options.check_game_files && options.game_files_route == GameFilesRoute::manage &&
+        !run_game_files_manage_check(options, display.window, display.renderer_host.renderer()))
+        return finish_game_files_check(options, 1);
+    if (options.restarts == 0)
+        play_intro(options, options.headless_check ? nullptr : &display);
+    // The movies present on the game's renderer.
+    oa::base::float_precision::restore_program_float_control();
+    oa::AssetStore assets(options.game_folders);
+    if (lookup_log != nullptr)
+        assets.observe_lookups(lookup_log->observer());
+    auto archives = options.archives;
+    if (archives.empty())
+        archives = std::move(game_directory->archives);
+    if (archives.empty())
+        throw std::runtime_error("no game archives were selected");
+    for (const auto& candidate : archives) {
+        const auto archive = candidate.is_absolute() ? candidate : options.game_dir / candidate;
+        assets.mount(archive);
+    }
+    if (game_directory->demo.outcome == DemoOutcome::ready)
+        std::cout << "open-annihilation: " << describe_ready(game_directory->demo) << '\n';
+    // A capture starts before the runtime, which starts the menu's
+    // sound, so that its own sound device opens first and sets the mix.
+    std::unique_ptr<VideoCapture> capture;
+    if (!options.capture_video.empty() && options.restarts == 0) {
+        int width = 0;
+        int height = 0;
+        if (!SDL_GetWindowSizeInPixels(display.window, &width, &height))
+            throw std::runtime_error(std::string("SDL window size: ") + SDL_GetError());
+        capture = std::make_unique<VideoCapture>(options.capture_video, width, height);
+    }
+    // The Game files check reads its options again for its verdict, and
+    // --check-mod-switch its own, once the runtime, which takes them, has run.
+    std::optional<Options> checked_options;
+    if (options.check_game_files)
+        checked_options = options;
+    const bool check_mod_switch = options.check_mod_switch;
+    const uint32_t restarts = options.restarts;
+    // The runtime holds hundreds of kilobytes of game state, so it lives
+    // on the heap: the main thread's stack is 1 MiB on Windows.
+    const auto runtime = std::make_unique<Runtime>(
+        std::move(options),
+        assets,
+        extension,
+        display.window,
+        display.renderer_host.renderer(),
+        &display.renderer_host
+    );
+    runtime->take_video_capture(std::move(capture));
+    runtime->take_full_screen_switch(display.full_screen);
+    if (check_mod_switch)
+        switch_memory.sample(restarts);
+    const int status = runtime->run();
+    if (!runtime->soft_restart_requested()) {
+        if (checked_options)
+            return finish_game_files_check(*checked_options, status);
+        return check_mod_switch && status == 0 ? switch_memory.verdict() : status;
+    }
+    // The next runtime takes over the window as Alt+Enter left it, and the
+    // renderer without this runtime's textures; this runtime and its
+    // archives go before the next are made.
+    display.full_screen = runtime->full_screen_switch();
+    runtime->release_renderer_textures();
+    // The characters each game font draws are kept by the address of its
+    // glyphs, and this runtime's fonts go with it: the next mod's fonts may
+    // be loaded at the same addresses.
+    oa::ui::frontend_renderer::forget_gui_font_characters();
+    oa::ui::gadget_render::forget_font_characters();
+    return kSoftRestartStatus;
+}
+
+// Sends the game's standard output and standard error to the logs folder in
+// the per-user folder. Without a per-user folder, or when the log cannot be
+// opened, they stay where they were, and standard error says why.
+void start_log() {
+    try {
+        const auto folder = oa::platform::preferences::data_directory() / "logs";
+        if (!oa::platform::log_files::begin(folder))
+            std::cerr << "open-annihilation: cannot open a log in " << folder.string()
+                      << "; the output stays here\n";
+    } catch (const std::exception& error) {
+        std::cerr << "open-annihilation: no log: " << error.what() << '\n';
+    }
+}
+
 // A fatal error goes to the log, and to the terminal the game was started
 // from; a game started from the desktop has no terminal, so it shows in an
 // error box instead.
@@ -552,17 +802,17 @@ int main(int argc, char** argv) {
         // line is parsed; the runtime gets the table that combines them.
         const ExtensionList extensions(registered_extensions());
         const Extension& extension = extensions.combined();
-        auto options = parse_options(argc, argv, extension);
+        const Options parsed = parse_options(argc, argv, extension);
         // The Game files screen's check installs its scripted platform
         // before anything reads the hooks.
-        if (options.check_game_files)
-            install_game_files_check(options);
+        if (parsed.check_game_files)
+            install_game_files_check(parsed);
         // --print-profile prints the resolved mod profile and stops.
-        if (options.print_profile)
+        if (parsed.print_profile)
             return print_mod_profile(
-                options.mod_file,
-                options.mod_dir.empty() ? options.game_dir : options.mod_dir,
-                options.accept_unimplemented_hacks,
+                parsed.mod_file,
+                parsed.mod_dir.empty() ? parsed.game_dir : parsed.mod_dir,
+                parsed.accept_unimplemented_hacks,
                 std::cout,
                 std::cerr
             );
@@ -570,126 +820,45 @@ int main(int argc, char** argv) {
         // logs folder. Checks, benchmarks and other scripted runs keep their
         // output where it goes, and so does a run whose output another
         // program captures, such as a test or a script.
-        if (!options.headless_check && !options.unattended &&
+        if (!parsed.headless_check && !parsed.unattended &&
             !oa::platform::log_files::output_captured())
             start_log();
         // Where the platform brings game files in, what a stopped import or
         // a change waiting for this start left is taken up before the
         // folder is looked for.
-        GameFilesStart game_files = start_game_files(options);
-        // The window opens where the game opens it, or early for the Game
-        // files screen, and only once.
+        GameFilesStart game_files = start_game_files(parsed);
+        // The window, its renderer and the lookup log last the whole
+        // process: the window opens where the game opens it, or early for
+        // the Game files screen, and only once, and a switch of the mod from
+        // the settings finds the game folders, mounts the archives and
+        // builds the runtime afresh on them (a soft restart).
         HostDisplay display;
-        // The game folder's profile, --mod's or the mod folder's or its own,
-        // is resolved while the folder is inspected, before any archive is
-        // mounted, so that one the engine cannot use stops the run with its
-        // errors.
-        GameFilesNeeded needed;
-        auto game_directory = find_game_directory(options, game_files.offered ? &needed : nullptr);
-        // Without a usable folder, the Game files screen brings one in.
-        if (!run_game_files_until_resolved(options, display, game_files, needed, game_directory))
-            return options.check_game_files ? finish_game_files_check(options, 0) : 0;
-        if (!game_directory)
-            return options.check_game_files ? finish_game_files_check(options, 1) : 1;
-        // The game files are kept out of device backups unless the player
-        // put them back in, with or without the screen.
-        if (game_files.installed)
-            game_files::apply_backup_setting(
-                game_files_hooks(), game_files.paths, game_files.backed_up
-            );
-        // A folder that held the demo's installer is played from the folder
-        // its archive was unpacked to, and remembered as chosen.
-        options.game_dir = game_directory->installation;
-        if (game_directory->source == GameDirectorySource::chosen)
-            options.remember_game_dir = game_directory->path;
-        if (!fs::is_directory(options.game_dir))
-            throw std::runtime_error(
-                "game directory does not exist: " + path_to_utf8(options.game_dir) +
-                " (name it with --game-dir PATH)"
-            );
-        options.game_folders = game_directory->folders;
-        if (options.game_folders.empty())
-            options.game_folders = {options.game_dir};
-        options.mod_profile = game_directory->profile;
-        // --archive names the archives and skips the inspection; a --mod
-        // profile still sets the layout the data is read by.
-        if (!options.archives.empty() && !options.mod_file.empty()) {
-            auto resolved = resolve_folder_profile(
-                options.game_folders,
-                {{}, options.mod_file, options.accept_unimplemented_hacks, nullptr}
-            );
-            if (!resolved.errors.empty()) {
-                std::string message = "the mod profile cannot be used:";
-                for (const auto& error : resolved.errors)
-                    message += "\n  " + error;
-                throw std::runtime_error(message);
-            }
-            options.mod_profile = std::move(resolved.profile);
-            game_directory->profile_warnings = std::move(resolved.warnings);
-        }
-        if (options.mod_profile) {
-            // Its limits size the game's tables from the start, and its
-            // rules reach every match.
-            report_mod_profile(*options.mod_profile, game_directory->profile_warnings, std::cout);
-        }
-        // Every later read of game data uses the profile's layout.
-        oa::data::defs::use_data_layout(data_layout_of(options.mod_profile.get()));
-        if (!options.headless_check && !display.initialized)
-            display.initialize(options);
-        // The Game files check's management route runs its pass over the
-        // installed folder before the game starts.
-        if (options.check_game_files && options.game_files_route == GameFilesRoute::manage &&
-            !run_game_files_manage_check(options, display.window, display.renderer_host.renderer()))
-            return finish_game_files_check(options, 1);
-        play_intro(options, options.headless_check ? nullptr : &display);
-        // The movies present on the game's renderer.
-        oa::base::float_precision::restore_program_float_control();
-        oa::AssetStore assets(options.game_folders);
         std::unique_ptr<LookupLog> lookup_log;
-        if (!options.trace_lookups.empty()) {
-            lookup_log = std::make_unique<LookupLog>(options.trace_lookups);
-            assets.observe_lookups(lookup_log->observer());
+        if (!parsed.trace_lookups.empty())
+            lookup_log = std::make_unique<LookupLog>(parsed.trace_lookups);
+        ModSwitchMemory switch_memory;
+        for (uint32_t restarts = 0;; ++restarts) {
+            auto options = parsed;
+            options.restarts = restarts;
+            // A soft restart returns to the main menu without the movies.
+            if (restarts > 0)
+                options.skip_intro = true;
+            const int status = run_once(
+                std::move(options), extension, display, game_files, lookup_log.get(), switch_memory
+            );
+            if (status != kSoftRestartStatus)
+                return status;
         }
-        auto archives = options.archives;
-        if (archives.empty())
-            archives = std::move(game_directory->archives);
-        if (archives.empty())
-            throw std::runtime_error("no game archives were selected");
-        for (const auto& candidate : archives) {
-            const auto archive = candidate.is_absolute() ? candidate : options.game_dir / candidate;
-            assets.mount(archive);
-        }
-        if (game_directory->demo.outcome == DemoOutcome::ready)
-            std::cout << "open-annihilation: " << describe_ready(game_directory->demo) << '\n';
-        // A capture starts before the runtime, which starts the menu's
-        // sound, so that its own sound device opens first and sets the mix.
-        std::unique_ptr<VideoCapture> capture;
-        if (!options.capture_video.empty()) {
-            int width = 0;
-            int height = 0;
-            if (!SDL_GetWindowSizeInPixels(display.window, &width, &height))
-                throw std::runtime_error(std::string("SDL window size: ") + SDL_GetError());
-            capture = std::make_unique<VideoCapture>(options.capture_video, width, height);
-        }
-        // The Game files check reads its options again for its verdict once
-        // the runtime, which takes them, has run.
-        std::optional<Options> checked_options;
-        if (options.check_game_files)
-            checked_options = options;
-        // The runtime holds hundreds of kilobytes of game state, so it lives
-        // on the heap: the main thread's stack is 1 MiB on Windows.
-        const auto runtime = std::make_unique<Runtime>(
-            std::move(options),
-            assets,
-            extension,
-            display.window,
-            display.renderer_host.renderer(),
-            &display.renderer_host
+    } catch (const fs::filesystem_error& error) {
+        // A path longer than the system opens is reported with its length,
+        // the limit and what to do.
+        const auto reason = error.code() == std::errc::filename_too_long
+                                ? path_length_problem(error.path1())
+                                : std::string();
+        report_fatal(
+            reason.empty() ? std::string(error.what()) : path_to_utf8(error.path1()) + ": " + reason
         );
-        runtime->take_video_capture(std::move(capture));
-        runtime->take_full_screen_switch(display.full_screen);
-        const int status = runtime->run();
-        return checked_options ? finish_game_files_check(*checked_options, status) : status;
+        return 1;
     } catch (const std::exception& error) {
         report_fatal(error.what());
         return 1;

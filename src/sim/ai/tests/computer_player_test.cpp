@@ -853,6 +853,10 @@ void test_sighted_weight() {
     check(computer_players_initialize(&state, host), "initialize");
     auto* knowledge = computer_player_knowledge(&state, 1);
     check(knowledge != nullptr && knowledge->base_weights[ARMLLT] == 40, "structure weight");
+    if (knowledge == nullptr) {
+        computer_players_release(&state);
+        return;
+    }
     knowledge->base_weights[ARMPW] = -5;
     constexpr int32_t x = 500, z = 700;
     const oa::FixedVec3 at{x << 16, 0, z << 16};

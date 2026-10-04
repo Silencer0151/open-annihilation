@@ -179,20 +179,20 @@ struct NumberedFileHost {
     bool (*open)(void* context, const char* path, ByteStream* stream) = nullptr;
 };
 
-inline constexpr std::size_t numbered_pcx_path_bytes = 0x104;
-
 /// Writes the display's active surface as the PCX numbered one past the highest already there.
 ///
 /// Existing <directory><prefix>*.pcx names are listed and the new file is
 /// <directory><prefix>NNNN.pcx, with a backslash added after a directory that
-/// lacks one. The stream is closed afterwards.
+/// lacks one, kept whole however long the directory is. The stream is closed
+/// afterwards.
 ///
 /// @param display display whose active surface and palette are saved
 /// @param directory target directory; may be empty
 /// @param prefix file name prefix
 /// @param host directory listing and file creation boundary
-/// @return false while the display draws to its back buffer, when the file
-///     cannot be opened or the write fails
+/// @return false while the display draws to its back buffer, when there is
+///     no memory to spell the file's path, when the file cannot be opened or
+///     the write fails
 /// @quirk The number is read with atoi right after the prefix, so names whose
 ///     digits do not follow the prefix count as 0.
 bool save_numbered_pcx(

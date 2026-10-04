@@ -108,8 +108,24 @@ std::filesystem::path default_file() {
 std::filesystem::path data_directory() {
     return application_folder();
 }
+
+std::filesystem::path documents_directory() {
+    // The Documents folder, My Documents on Windows XP, where the player or
+    // an administrator has redirected it; the lookup every release since XP
+    // has.
+    std::array<wchar_t, MAX_PATH> directory{};
+    const HRESULT result =
+        SHGetFolderPathW(nullptr, CSIDL_PERSONAL, nullptr, SHGFP_TYPE_CURRENT, directory.data());
+    if (FAILED(result))
+        throw std::runtime_error("Documents directory unavailable");
+    return std::filesystem::path(directory.data());
+}
 #else
 namespace {
+/// The most bytes of user-dirs.dirs read; the file the system writes holds a
+/// few hundred.
+constexpr std::size_t maximum_user_dirs_bytes = 64U * 1024U;
+
 /// Returns the folder an XDG base directory variable names, or `fallback`
 /// under the home directory when the variable is unset or relative.
 std::filesystem::path xdg_folder(const char* variable, const char* fallback, const char* purpose) {
@@ -132,8 +148,85 @@ std::filesystem::path default_file() {
 std::filesystem::path data_directory() {
     return xdg_folder("XDG_DATA_HOME", ".local/share", "game data") / "open-annihilation";
 }
+
+std::filesystem::path documents_directory() {
+    const char* home = std::getenv("HOME");
+    if (home == nullptr || !std::filesystem::path(home).is_absolute())
+        throw std::runtime_error("user home directory unavailable for the Documents folder");
+    const auto user_dirs =
+        xdg_folder("XDG_CONFIG_HOME", ".config", "the Documents folder") / "user-dirs.dirs";
+    std::ifstream input(user_dirs, std::ios::binary);
+    if (input) {
+        std::string text(maximum_user_dirs_bytes, '\0');
+        input.read(text.data(), static_cast<std::streamsize>(text.size()));
+        text.resize(static_cast<std::size_t>(std::max<std::streamsize>(input.gcount(), 0)));
+        if (auto documents = xdg_documents_directory(text, home))
+            return *documents;
+    }
+    return std::filesystem::path(home) / "Documents";
+}
 #endif
 #endif
+
+std::optional<std::filesystem::path>
+xdg_documents_directory(std::string_view text, const std::filesystem::path& home) {
+    constexpr std::string_view name = "XDG_DOCUMENTS_DIR";
+    constexpr std::string_view home_prefix = "$HOME/";
+    std::optional<std::filesystem::path> found;
+    const auto skip_blanks = [](std::string_view& rest) {
+        while (!rest.empty() && (rest.front() == ' ' || rest.front() == '\t'))
+            rest.remove_prefix(1);
+    };
+    std::size_t at = 0;
+    while (at < text.size()) {
+        const auto end = std::min(text.find('\n', at), text.size());
+        std::string_view line = text.substr(at, end - at);
+        at = end + 1;
+        if (!line.empty() && line.back() == '\r')
+            line.remove_suffix(1);
+        skip_blanks(line);
+        if (!line.starts_with(name))
+            continue;
+        line.remove_prefix(name.size());
+        skip_blanks(line);
+        if (!line.starts_with('='))
+            continue;
+        line.remove_prefix(1);
+        skip_blanks(line);
+        if (!line.starts_with('"'))
+            continue;
+        line.remove_prefix(1);
+        bool relative = false;
+        if (line.starts_with(home_prefix)) {
+            line.remove_prefix(home_prefix.size());
+            relative = true;
+        } else if (!line.starts_with('/')) {
+            continue;
+        }
+        std::string value;
+        bool closed = false;
+        for (std::size_t index = 0; index < line.size(); ++index) {
+            if (line[index] == '"') {
+                closed = true;
+                break;
+            }
+            if (line[index] == '\\' && index + 1 < line.size())
+                ++index;
+            value += line[index];
+        }
+        if (!closed)
+            continue;
+        if (!relative)
+            found = std::filesystem::path(value);
+        else
+            found = value.empty() ? home : home / value;
+    }
+    return found;
+}
+
+std::filesystem::path default_user_folder() {
+    return documents_directory() / std::string(user_folder_name);
+}
 
 Values load(const std::filesystem::path& file) {
     if (!std::filesystem::exists(file))

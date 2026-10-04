@@ -9,13 +9,16 @@
 
 #include "oa/ui/engine_settings/dialog.hpp"
 #include "oa/data/mod_profile/overrides.hpp"
+#include "oa/ui/engine_settings/notice.hpp"
 #include "oa/ui/decoded.hpp"
 
 #include "geometry.hpp"
+#include "notice_geometry.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <functional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -294,8 +297,8 @@ struct StandIn {
 /// what the game font draws in its place: the ellipsis as three full stops, and
 /// the mark between a location's folders as a greater-than sign.
 constexpr std::array<StandIn, 2> kStandIns{{
-    {U'\u2026', "\u2026", "..."},
-    {U'\u203a', "\u203a", ">"},
+    {U'\u2026', "\xE2\x80\xA6", "..."},
+    {U'\u203a', "\xE2\x80\xBA", ">"},
 }};
 
 /// Returns a text as a font shows it: where its game font lacks a character
@@ -638,9 +641,7 @@ void draw_list(
         target, placement, {layout::list_rule_column, layout::body_top, 1, body_height}, kRuleColor
     );
     if (dialog.kind == DialogKind::engine)
-        renderer::fill_source_rect(
-            target, placement, layout::list_divider(dialog.touch, dialog.game_files), kRuleColor
-        );
+        renderer::fill_source_rect(target, placement, layout::list_divider(), kRuleColor);
     for (const Page page : dialog_pages(dialog.kind, dialog.touch, dialog.game_files)) {
         const SourceRect item = layout::dialog_list_item(dialog, page);
         const int32_t control = page_control(page);
@@ -896,6 +897,16 @@ renderer::Placement clipped_to(const renderer::Placement& placement, const Sourc
     return clipped;
 }
 
+/// Returns how wide a text is in the regular font, as the dialog draws it.
+///
+/// @param fonts the fonts
+/// @return the measure, in source pixels
+std::function<int32_t(std::string_view)> regular_width(const DialogFonts& fonts) {
+    return [&fonts](std::string_view text) {
+        return dialog_text_width(fonts, DialogFont::regular, text);
+    };
+}
+
 /// Draws a drop-down's field: a well like a switch's with the choice at
 /// its left and the arrow at its right.
 ///
@@ -968,10 +979,10 @@ void draw_choice_list(
     Setting setting,
     const DialogFonts& fonts
 ) {
-    const std::size_t choices = layout::choice_count(setting);
+    const std::size_t choices = layout::choice_count(dialog, setting);
     const SourceRect list = layout::choice_list(field, choices);
     const int32_t shown = layout::shown_choices(choices);
-    const auto chosen = static_cast<int32_t>(layout::choice_index(dialog.chosen, setting));
+    const auto chosen = static_cast<int32_t>(layout::choice_index(dialog, setting));
     renderer::fill_source_rect(target, placement, list, kListColor);
     renderer::draw_outline(target, placement, list, kControlHoverColor);
     for (int32_t place = 0; place < shown; ++place) {
@@ -1012,7 +1023,13 @@ void draw_choice_list(
             target,
             clipped_to(placement, caption),
             regular_of(fonts),
-            layout::choice_text(setting, static_cast<std::size_t>(item), dialog.system_language),
+            layout::shown_choice_text(
+                dialog,
+                setting,
+                static_cast<std::size_t>(item),
+                layout::choice_item_text_room,
+                regular_width(fonts)
+            ),
             caption,
             Align::left,
             text
@@ -1306,6 +1323,286 @@ void draw_developer(
         renderer::draw_outline(target, placement, grown(button, kFocusInset), kAccentColor);
 }
 
+/// Draws Your files' buttons as Cancel looks: the button under the pointer
+/// lit, and held while a press on it is held.
+///
+/// @param[in,out] target the surface
+/// @param placement where the dialog lands, clipped to the view
+/// @param row the row
+/// @param dialog the dialog
+/// @param fonts the fonts
+void draw_folder_buttons(
+    renderer::Surface& target,
+    const renderer::Placement& placement,
+    const layout::Row& row,
+    const Dialog& dialog,
+    const DialogFonts& fonts
+) {
+    const bool over_row = dialog.hovered == row.control;
+    for (std::size_t index = 0; index < folder_button_count; ++index) {
+        const SourceRect button = layout::folder_button(row.control_area, index);
+        const bool hovered = over_row && dialog.folder_hovered == index;
+        const bool held = hovered && dialog.pressed == row.control;
+        if (held || hovered)
+            renderer::fill_source_rect(target, placement, button, held ? kBandColor : kHoverColor);
+        renderer::draw_outline(
+            target, placement, button, hovered ? kControlHoverColor : kControlBorderColor
+        );
+        draw_boxed_text(
+            target,
+            placement,
+            small_of(fonts),
+            layout::folder_button_text(index),
+            button,
+            Align::centre,
+            hovered ? kTextColor : kButtonTextColor
+        );
+    }
+}
+
+/// Draws a mod's badge: its picture, the OA mark for No Mod, or a blank
+/// dashed square when it has none.
+///
+/// @param[in,out] target the surface
+/// @param placement where the dialog lands
+/// @param rect the badge's square
+/// @param shown the mod's row's texts and details; null details for No Mod
+/// @param no_mod the badge is No Mod's
+void draw_badge(
+    renderer::Surface& target,
+    const renderer::Placement& placement,
+    const SourceRect& rect,
+    const layout::ModRowText& shown,
+    bool no_mod
+) {
+    if (no_mod) {
+        renderer::draw_outline(target, placement, rect, kAccentColor);
+        renderer::draw_mark(
+            target,
+            placement,
+            kSmallMark,
+            rect.x + (rect.width - kSmallMarkWidth) / 2,
+            rect.y + (rect.height - kSmallMarkHeight + 1) / 2,
+            kAccentColor
+        );
+        return;
+    }
+    if (shown.details != nullptr && shown.details->badge_width > 0) {
+        const renderer::RgbaPicture picture{
+            shown.details->badge_width, shown.details->badge_height, shown.details->badge_pixels
+        };
+        if (renderer::picture_drawable(picture)) {
+            renderer::draw_picture(target, placement, rect, picture);
+            renderer::draw_outline(target, placement, rect, kControlBorderColor);
+            return;
+        }
+    }
+    // A blank badge: a dashed square.
+    for (int32_t along = 0; along < rect.width; along += 3) {
+        const int32_t dash = std::min(2, rect.width - along);
+        renderer::fill_source_rect(
+            target, placement, {rect.x + along, rect.y, dash, 1}, kControlBorderColor
+        );
+        renderer::fill_source_rect(
+            target,
+            placement,
+            {rect.x + along, rect.y + rect.height - 1, dash, 1},
+            kControlBorderColor
+        );
+    }
+    for (int32_t along = 0; along < rect.height; along += 3) {
+        const int32_t dash = std::min(2, rect.height - along);
+        renderer::fill_source_rect(
+            target, placement, {rect.x, rect.y + along, 1, dash}, kControlBorderColor
+        );
+        renderer::fill_source_rect(
+            target,
+            placement,
+            {rect.x + rect.width - 1, rect.y + along, 1, dash},
+            kControlBorderColor
+        );
+    }
+}
+
+/// Draws Mods: the lock line while it is locked, the list of rows in its
+/// view with its scroll bar, OPEN MODS FOLDER and the lines under it.
+///
+/// @param[in,out] target the surface
+/// @param placement where the dialog lands
+/// @param dialog the dialog
+/// @param open Mods' rows
+/// @param fonts the fonts
+void draw_mods(
+    renderer::Surface& target,
+    const renderer::Placement& placement,
+    const Dialog& dialog,
+    const layout::ScrolledRows& open,
+    const DialogFonts& fonts
+) {
+    const bool locked = dialog.locks.mod != Lock::none;
+    const auto small_width = [&fonts](std::string_view text) {
+        return dialog_text_width(fonts, DialogFont::small, text);
+    };
+    if (locked) {
+        renderer::draw_mark(
+            target,
+            placement,
+            kPadlock,
+            layout::mods_lock_line.x,
+            layout::mods_lock_text.y + (layout::mods_lock_text.height - layout::padlock_height) / 2,
+            kLockColor
+        );
+        const auto lines = layout::wrap_text(
+            layout::shown_text(
+                dialog.locks.mod == Lock::command_line ? layout::mod_from_command_line_text
+                                                       : layout::mod_in_game_text
+            ),
+            layout::mods_lock_text.width,
+            small_width
+        );
+        for (std::size_t line = 0; line < lines.size() && line < 2; ++line) {
+            SourceRect rect = layout::mods_lock_text;
+            rect.y += static_cast<int32_t>(line) * rect.height;
+            draw_boxed_text(
+                target, placement, small_of(fonts), lines[line], rect, Align::left, kLockColor
+            );
+        }
+    }
+    const SourceRect& view = open.area.view;
+    const renderer::Placement in_view = clipped_to(
+        placement,
+        {view.x - layout::focus_inset, view.y, view.width + 2 * layout::focus_inset, view.height}
+    );
+    const auto rows = mod_rows(dialog);
+    for (std::size_t index = 0; index < open.rows.rows.size() && index < rows.size(); ++index) {
+        const layout::Row& row = open.rows.rows[index];
+        const layout::ModRowText shown = layout::mod_row_text(dialog, rows[index]);
+        const bool playing = rows[index].playing;
+        const bool hovered =
+            !locked && (dialog.hovered == row.control || dialog.pressed == row.control);
+        const SourceRect& box = row.control_area;
+        renderer::fill_source_rect(
+            target,
+            in_view,
+            box,
+            playing ? kListSelectedColor : (hovered ? kHoverColor : kListColor)
+        );
+        renderer::draw_outline(
+            target,
+            in_view,
+            box,
+            playing ? kAccentColor : (hovered ? kControlHoverColor : kControlBorderColor)
+        );
+        const SourceRect badge{
+            box.x + layout::mod_row_inset,
+            box.y + (box.height - layout::mod_badge_side) / 2,
+            layout::mod_badge_side,
+            layout::mod_badge_side
+        };
+        draw_badge(target, in_view, badge, shown, rows[index].offered == no_mod_row);
+        // The version at the top right; the title, and PLAYING after it,
+        // in what is left of the line.
+        const int32_t version_width = std::min(small_width(shown.version), row.value.width / 3);
+        const SourceRect version{
+            row.value.x + row.value.width - version_width,
+            row.value.y,
+            version_width,
+            row.value.height
+        };
+        draw_boxed_text(
+            target,
+            in_view,
+            small_of(fonts),
+            layout::cut_text(shown.version, version.width, small_width),
+            version,
+            Align::right,
+            kHintColor
+        );
+        const std::string_view tag = layout::shown_text(layout::playing_text);
+        const int32_t tag_width = playing ? small_width(tag) + 6 : 0;
+        const int32_t title_room = version.x - 6 - row.label.x - tag_width;
+        const std::string title = layout::cut_text(shown.title, title_room, regular_width(fonts));
+        const int32_t title_width = text_width_of(regular_of(fonts), title);
+        draw_boxed_text(
+            target,
+            in_view,
+            regular_of(fonts),
+            title,
+            {row.label.x, row.label.y, title_room, row.label.height},
+            Align::left,
+            kTextColor
+        );
+        if (playing)
+            draw_boxed_text(
+                target,
+                in_view,
+                small_of(fonts),
+                tag,
+                {row.label.x + title_width + 6, row.value.y, tag_width, row.value.height},
+                Align::left,
+                kAccentColor
+            );
+        draw_boxed_text(
+            target,
+            in_view,
+            small_of(fonts),
+            layout::cut_text(shown.description, row.hints[0].width, small_width),
+            row.hints[0],
+            Align::left,
+            shown.has_profile ? kHintColor : kLockColor
+        );
+        if (locked && !playing)
+            renderer::blend_source_rect(target, in_view, box, kPanelColor, kLockedFade);
+        if (dialog.focused == row.control && !locked)
+            renderer::draw_outline(target, in_view, grown(box, kFocusInset), kAccentColor);
+    }
+    if (open.limit > 0)
+        draw_scroll_bar(target, placement, dialog, open);
+    const int32_t control = layout::mods_folder_control(open.rows);
+    const SourceRect& button = layout::mods_folder_button;
+    const bool hovered = !locked && (dialog.hovered == control || dialog.pressed == control);
+    if (hovered)
+        renderer::fill_source_rect(
+            target, placement, button, dialog.pressed == control ? kBandColor : kHoverColor
+        );
+    renderer::draw_outline(
+        target, placement, button, hovered ? kControlHoverColor : kControlBorderColor
+    );
+    draw_boxed_text(
+        target,
+        placement,
+        small_of(fonts),
+        layout::shown_text(layout::open_mods_folder_text),
+        button,
+        Align::centre,
+        hovered ? kTextColor : kButtonTextColor
+    );
+    if (locked)
+        renderer::blend_source_rect(target, placement, button, kPanelColor, kLockedFade);
+    if (dialog.focused == control && !locked)
+        renderer::draw_outline(target, placement, grown(button, kFocusInset), kAccentColor);
+    draw_boxed_text(
+        target,
+        placement,
+        small_of(fonts),
+        layout::shown_text(layout::mods_folders_text[0]),
+        layout::mods_note_first,
+        Align::left,
+        kQuietColor
+    );
+    const bool notice = !dialog.folder_notice.empty();
+    draw_boxed_text(
+        target,
+        placement,
+        small_of(fonts),
+        notice ? std::string_view(dialog.folder_notice)
+               : layout::shown_text(layout::mods_folders_text[1]),
+        layout::mods_note_second,
+        Align::left,
+        notice ? kLockColor : kQuietColor
+    );
+}
+
 /// Draws the open section: its heading, its rows clipped to the view they
 /// scroll in, and its scroll bar while they scroll; on Developer, its list
 /// and the list's footer under its rows.
@@ -1331,6 +1628,10 @@ void draw_section(
         layout::heading_tracking
     );
     const layout::ScrolledRows open = layout::open_rows(dialog);
+    if (layout::mods_page(dialog)) {
+        draw_mods(target, placement, dialog, open, fonts);
+        return;
+    }
     const layout::Rows& rows = open.rows;
     // A row the view cuts shows the part inside it, its text and its focus
     // outline included.
@@ -1355,7 +1656,8 @@ void draw_section(
         // columns.
         const bool host_text = layout::is_button(row.setting) || layout::is_text(row.setting);
         for (std::size_t line = 0; line < row.hint_lines; ++line) {
-            const std::string hint = layout::row_hint(dialog, row.setting, line);
+            // A notice is drawn as a lock's text is.
+            const layout::HintLine hint = layout::row_hint(dialog, row.setting, line);
             const SourceRect& box = row.hints[line];
             draw_boxed_text(
                 target,
@@ -1363,10 +1665,18 @@ void draw_section(
                     ? clipped_to(in_view, {box.x, layout::view.y, box.width, layout::view.height})
                     : in_view,
                 small_of(fonts),
-                hint,
+                layout::shown_hint_text(
+                    dialog,
+                    row.setting,
+                    line,
+                    row.hints[line].width,
+                    [&fonts](std::string_view text) {
+                        return dialog_text_width(fonts, DialogFont::small, text);
+                    }
+                ),
                 row.hints[line],
                 Align::left,
-                kHintColor
+                hint.notice ? kLockColor : kHintColor
             );
         }
         // Where the files are shows text alone: it has no control to draw.
@@ -1380,6 +1690,8 @@ void draw_section(
                 dialog.pressed == row.control && dialog.hovered == row.control,
                 fonts
             );
+        } else if (layout::is_buttons(row.setting)) {
+            draw_folder_buttons(target, in_view, row, dialog, fonts);
         } else if (layout::is_strip(row.setting)) {
             if (row.control_area.width > 0)
                 draw_levels(
@@ -1397,12 +1709,8 @@ void draw_section(
                 target,
                 in_view,
                 row.control_area,
-                layout::stop_of(
-                    dialog.chosen, row.setting, dialog.highest_offered_unit, dialog.mod_names.size()
-                ),
-                layout::stops_of(
-                    dialog.chosen, row.setting, dialog.highest_offered_unit, dialog.mod_names.size()
-                ),
+                layout::stop_of(dialog.chosen, row.setting, dialog.highest_offered_unit),
+                layout::stops_of(dialog.chosen, row.setting, dialog.highest_offered_unit),
                 locked,
                 hovered
             );
@@ -1410,7 +1718,7 @@ void draw_section(
                 target,
                 in_view,
                 regular_of(fonts),
-                layout::value_text(row.setting, dialog.chosen, dialog.mod_names),
+                layout::value_text(row.setting, dialog.chosen),
                 row.value,
                 Align::right,
                 kTextColor
@@ -1420,10 +1728,8 @@ void draw_section(
                 target,
                 in_view,
                 row.control_area,
-                layout::choice_text(
-                    row.setting,
-                    layout::choice_index(dialog.chosen, row.setting),
-                    dialog.system_language
+                layout::field_text(
+                    dialog, row, layout::choice_field_text_room, regular_width(fonts)
                 ),
                 hovered,
                 dialog.open_list == row.control,
@@ -1456,10 +1762,15 @@ void draw_section(
             );
             draw_lock(target, in_view, row.lock_area, row.lock, fonts);
         }
+        // Your files rings the button the keys mark.
+        const SourceRect focus_area =
+            layout::is_buttons(row.setting)
+                ? layout::folder_button(
+                      row.control_area, static_cast<std::size_t>(dialog.folder_marked)
+                  )
+                : row.control_area;
         if (dialog.focused == row.control && !locked)
-            renderer::draw_outline(
-                target, in_view, grown(row.control_area, kFocusInset), kAccentColor
-            );
+            renderer::draw_outline(target, in_view, grown(focus_area, kFocusInset), kAccentColor);
     }
     renderer::fill_source_rect(
         target, in_view, {layout::content_left, rows.bottom, layout::content_width, 1}, kRuleColor
@@ -1574,6 +1885,123 @@ void draw_mark_square(
     );
 }
 
+/// Draws the question a folder without an oamod.yaml raises, over the
+/// dialog: a raised box in the header's face with the folder's path, the
+/// question in amber and white, and No and Yes as Cancel and OK look, the
+/// marked one ringed in green.
+///
+/// @param[in,out] target the surface
+/// @param placement where the dialog lands
+/// @param dialog the dialog
+/// @param fonts the fonts
+void draw_question(
+    renderer::Surface& target,
+    const renderer::Placement& placement,
+    const Dialog& dialog,
+    const DialogFonts& fonts
+) {
+    renderer::fill_source_rect(target, placement, layout::question_box, kBandColor);
+    renderer::draw_outline(target, placement, layout::question_box, kAccentColor);
+    draw_boxed_text(
+        target,
+        placement,
+        small_of(fonts),
+        layout::shown_text(layout::switch_heading_text),
+        layout::question_heading,
+        Align::left,
+        kQuietColor,
+        layout::heading_tracking
+    );
+    const layout::ModRowText offered =
+        layout::mod_row_text(dialog, ModRow{dialog.switch_question, false});
+    draw_badge(
+        target, placement, layout::question_badge, offered, dialog.switch_question == no_mod_row
+    );
+    draw_boxed_text(
+        target,
+        placement,
+        regular_of(fonts),
+        layout::cut_text(offered.title, layout::question_title.width, regular_width(fonts)),
+        layout::question_title,
+        Align::left,
+        kTextColor
+    );
+    const auto small_width = [&fonts](std::string_view text) {
+        return dialog_text_width(fonts, DialogFont::small, text);
+    };
+    draw_boxed_text(
+        target,
+        placement,
+        small_of(fonts),
+        layout::cut_text(offered.version, layout::question_version.width, small_width),
+        layout::question_version,
+        Align::left,
+        kHintColor
+    );
+    const auto lines = layout::question_text_lines(dialog, small_width);
+    // The note's lines, the last ones, are drawn in the lock's colour.
+    const std::size_t note_lines =
+        offered.has_profile
+            ? 0
+            : layout::wrap_text(
+                  layout::switch_no_profile_text, layout::question_first_line.width, small_width
+              )
+                  .size();
+    for (std::size_t line = 0; line < lines.size(); ++line) {
+        SourceRect rect = layout::question_first_line;
+        rect.y += static_cast<int32_t>(line) * rect.height;
+        const bool note = line + note_lines >= lines.size();
+        draw_boxed_text(
+            target,
+            placement,
+            small_of(fonts),
+            lines[line],
+            rect,
+            Align::left,
+            note ? kLockColor : kTextColor
+        );
+    }
+    const std::array<std::pair<int32_t, std::string_view>, 2> buttons{{
+        {question_no_control, layout::no_text},
+        {question_yes_control, layout::yes_text},
+    }};
+    for (const auto& [control, caption] : buttons) {
+        const bool yes = control == question_yes_control;
+        const SourceRect button = yes ? layout::question_yes_button : layout::question_no_button;
+        const bool held = dialog.pressed == control && dialog.hovered == control;
+        const bool hovered = dialog.hovered == control;
+        if (yes) {
+            Rgb face = kAccentColor;
+            if (held)
+                face = kAccentHeldColor;
+            else if (hovered)
+                face = kAccentLightColor;
+            renderer::fill_source_rect(target, placement, button, face);
+            renderer::draw_outline(target, placement, button, kAccentLightColor);
+            draw_boxed_text(
+                target, placement, small_of(fonts), caption, button, Align::centre, kOnAccentColor
+            );
+        } else {
+            if (held || hovered)
+                renderer::fill_source_rect(target, placement, button, kHoverColor);
+            renderer::draw_outline(
+                target, placement, button, hovered ? kControlHoverColor : kControlBorderColor
+            );
+            draw_boxed_text(
+                target,
+                placement,
+                small_of(fonts),
+                caption,
+                button,
+                Align::centre,
+                hovered ? kTextColor : kButtonTextColor
+            );
+        }
+        if (yes != dialog.question_marks_no)
+            renderer::draw_outline(target, placement, grown(button, kFocusInset), kAccentColor);
+    }
+}
+
 /// Returns the characters a GUI font draws: every glyph that is not the
 /// picture of glyph 0, the font's box for a missing character.
 ///
@@ -1643,6 +2071,125 @@ void draw_dialog(
                 row.lock == Lock::none)
                 draw_choice_list(target, placement, dialog, row.control_area, row.setting, fonts);
     }
+    // The question lies over all of it.
+    if (dialog.switch_question != no_question)
+        draw_question(target, placement, dialog, fonts);
+}
+
+void draw_notice(
+    renderer::Surface& target,
+    const renderer::Placement& placement,
+    const Notice& notice,
+    const DialogFonts& fonts,
+    const renderer::RgbaPicture& icon
+) {
+    namespace place = notice_geometry;
+    const auto placed =
+        place::place_notice(notice, regular_width(fonts), [&fonts](std::string_view text) {
+            return dialog_text_width(fonts, DialogFont::small, text);
+        });
+    const SourceRect whole{0, 0, notice_width, placed.height};
+    const int32_t inner = notice_width - 2 * place::edge;
+    renderer::fill_source_rect(target, placement, whole, kPanelColor);
+    // The header: the icon, or the OA mark, and the title.
+    renderer::fill_source_rect(
+        target, placement, {place::edge, place::edge, inner, place::header_height}, kBandColor
+    );
+    renderer::fill_source_rect(
+        target, placement, {place::edge, place::header_rule_row, inner, 1}, kRuleColor
+    );
+    if (renderer::picture_drawable(icon)) {
+        renderer::draw_picture(target, placement, place::icon, icon);
+    } else {
+        const SourceRect square{
+            place::icon.x + (place::icon.width - layout::header_mark_square) / 2,
+            place::icon.y + (place::icon.height - layout::header_mark_square) / 2,
+            layout::header_mark_square,
+            layout::header_mark_square,
+        };
+        renderer::draw_outline(target, placement, square, kAccentColor);
+        renderer::draw_mark(
+            target,
+            placement,
+            kSmallMark,
+            square.x + (square.width - kSmallMarkWidth) / 2,
+            square.y + (square.height - kSmallMarkHeight + 1) / 2,
+            kAccentColor
+        );
+    }
+    draw_boxed_text(
+        target,
+        placement,
+        regular_of(fonts),
+        notice.title,
+        placed.title,
+        Align::left,
+        kTextColor,
+        place::title_tracking
+    );
+    // The text: paths in the regular font, the rest in the small one, the
+    // failure in amber.
+    for (const auto& line : placed.lines)
+        draw_boxed_text(
+            target,
+            placement,
+            line.path ? regular_of(fonts) : small_of(fonts),
+            line.text,
+            line.rect,
+            Align::left,
+            line.failure ? kLockColor : kTextColor
+        );
+    // The footer: the open button as Cancel looks and OK, the marked one
+    // ringed in green.
+    renderer::fill_source_rect(
+        target, placement, {place::edge, placed.footer_rule, inner, 1}, kRuleColor
+    );
+    renderer::fill_source_rect(
+        target,
+        placement,
+        {place::edge, placed.footer_rule + 1, inner, place::footer_height},
+        kBandColor
+    );
+    const std::array<std::pair<int32_t, std::string_view>, 2> buttons{{
+        {notice_open_control, notice.open_caption},
+        {notice_ok_control, layout::ok_text},
+    }};
+    for (const auto& [control, caption] : buttons) {
+        const bool ok = control == notice_ok_control;
+        const SourceRect button = ok ? placed.ok_button : placed.open_button;
+        const bool held = notice.pressed == control && notice.hovered == control;
+        const bool hovered = notice.hovered == control;
+        if (ok) {
+            Rgb face = kAccentColor;
+            if (held)
+                face = kAccentHeldColor;
+            else if (hovered)
+                face = kAccentLightColor;
+            renderer::fill_source_rect(target, placement, button, face);
+            renderer::draw_outline(target, placement, button, kAccentLightColor);
+            draw_boxed_text(
+                target, placement, small_of(fonts), caption, button, Align::centre, kOnAccentColor
+            );
+        } else {
+            if (held || hovered)
+                renderer::fill_source_rect(target, placement, button, kHoverColor);
+            renderer::draw_outline(
+                target, placement, button, hovered ? kControlHoverColor : kControlBorderColor
+            );
+            draw_boxed_text(
+                target,
+                placement,
+                small_of(fonts),
+                caption,
+                button,
+                Align::centre,
+                hovered ? kTextColor : kButtonTextColor
+            );
+        }
+        if (notice.marked == control)
+            renderer::draw_outline(target, placement, grown(button, kFocusInset), kAccentColor);
+    }
+    renderer::draw_bevel(target, placement, whole, kEdgeLightColor, kEdgeDarkColor);
 }
 
 void draw_oa_button(

@@ -39,7 +39,9 @@ struct Files {
 /// Opens a file as a C stream, as fopen does.
 ///
 /// Other streams and programs may open the same file at the same time, for
-/// reading and for writing, on every system.
+/// reading and for writing, on every system. On Windows the file is opened by
+/// its path's wide spelling, so that a path longer than 259 characters opens
+/// where long paths are turned on.
 ///
 /// @param path the file's path, in the encoding the host C library reads
 ///        narrow paths in
@@ -57,6 +59,23 @@ struct Files {
 /// @param mode the mode in fopen's spelling, such as "rb" or "ab"
 /// @return the stream, or null when the file cannot be opened
 [[nodiscard]] std::FILE* open_file(const std::filesystem::path& path, const char* mode) noexcept;
+
+/// Returns the most characters a path may have for the system to open it.
+///
+/// That is 1,023 on macOS and 4,095 on Linux. On Windows it is 259, unless
+/// the system lets this program open longer paths (Windows 10, version 1607,
+/// or later, with long paths turned on), when it is 32,767.
+///
+/// @return the length, counted in the path's own characters: bytes, or
+///         UTF-16 units on Windows
+[[nodiscard]] std::size_t longest_path() noexcept;
+
+/// Reports whether the system opens paths longer than 259 characters only
+/// once long paths are turned on in it, as Windows does.
+///
+/// @return true on Windows while long paths are not turned on, or the system
+///         is older than Windows 10, version 1607
+[[nodiscard]] bool long_paths_turned_off() noexcept;
 
 /// Returns the file boundary backed by the host C library.
 ///

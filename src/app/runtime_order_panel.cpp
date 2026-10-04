@@ -10,6 +10,9 @@
 #include "oa/sim/match_runtime/construction_orders.hpp"
 #include "oa/core/weapon_def.h"
 #include "oa/ui/gui_layout/gui_gadget.hpp"
+#include "oa/ui/gui_layout.hpp"
+#include "oa/ui/display_layout.hpp"
+#include "oa/core/world.h"
 #include "oa/sim/match_runtime.hpp"
 #include "oa/data/mission_types.hpp"
 #include "oa/ui/hud/order_panel.hpp"
@@ -18,6 +21,7 @@
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <iostream>
 #include <optional>
@@ -93,10 +97,27 @@ oa::ui::hud::PanelControls Runtime::order_panel_controls() {
     };
     controls.set_group_value = set_status;
     controls.set_value = set_status;
+    // A greyed button stays drawn, in its greyed art, and takes no click.
     controls.disable = [](void* user, int32_t index) {
-        auto& states = static_cast<Runtime*>(user)->match_hud_states_;
-        if (index >= 0 && static_cast<std::size_t>(index) < states.size())
-            states[static_cast<std::size_t>(index)].grayed = true;
+        auto& self = *static_cast<Runtime*>(user);
+        if (index < 0 || !self.match_hud_)
+            return;
+        const auto at = static_cast<std::size_t>(index);
+        auto& gadgets = self.match_hud_->layout.gadgets;
+        if (at < gadgets.size())
+            if (auto* button = std::get_if<oa::ui::gui_layout::ButtonFields>(&gadgets[at].fields))
+                button->grayed_out = true;
+        if (at < self.match_hud_states_.size())
+            self.match_hud_states_[at].grayed = true;
+    };
+    // A hidden control is neither drawn nor under the pointer.
+    controls.set_active = [](void* user, int32_t index, bool shown) {
+        auto& self = *static_cast<Runtime*>(user);
+        if (index < 0 || !self.match_hud_ ||
+            static_cast<std::size_t>(index) >= self.match_hud_->layout.gadgets.size())
+            return;
+        self.match_hud_->layout.gadgets[static_cast<std::size_t>(index)].common.active =
+            shown ? 1 : 0;
     };
     return controls;
 }
@@ -179,11 +200,42 @@ oa::ui::hud::SelectionSummary Runtime::summarize_order_panel(hud::OrderPanelStat
     return summary;
 }
 
+bool Runtime::order_command_available(std::string_view name) {
+    if (!match_)
+        return true;
+    // The selection's abilities, as the order panel reads them; the panel's
+    // own words are left as they are.
+    auto state = hud::order_panel_load(match_->state().game);
+    const auto summary = summarize_order_panel(state);
+    if (summary.count == 0)
+        return true;
+    const auto open = [&summary](uint16_t bit) { return (summary.order_flags & bit) != 0; };
+    const auto action = match_hud_action(name);
+    if (action == "MOVE")
+        return open(hud::kOrderCanMove);
+    if (action == "STOP")
+        return open(hud::kOrderCanStop);
+    if (action == "ATTACK")
+        return open(hud::kOrderCanAttack);
+    if (action == "DEFEND" || action == "GUARD")
+        return open(hud::kOrderCanGuard);
+    if (action == "PATROL")
+        return open(hud::kOrderCanPatrol);
+    if (action == "RECLAIM")
+        return open(hud::kOrderCanReclaim);
+    if (action == "REPAIR")
+        return open(hud::kOrderCanRepair);
+    if (action == "CAPTURE")
+        return open(hud::kOrderCanCapture);
+    if (action == "LOAD" || action == "UNLOAD")
+        return open(hud::kOrderCanTransport);
+    if (action == "BLAST" || action == "DGUN")
+        return (summary.order_flags2 & hud::kOrder2CanBlast) != 0 && !open(hud::kOrderCanTransport);
+    return true;
+}
+
 std::string Runtime::match_side_name_prefix() const {
-    const auto view = match_view_player();
-    const auto side = static_cast<std::size_t>(
-        view < skirmish_settings_.slots.size() ? skirmish_settings_.slots[view].side : 0
-    );
+    const auto side = match_view_side();
     if (side < side_table_.count) {
         const auto& prefix = side_table_.sides[side].name_prefix;
         return std::string(prefix, strnlen(prefix, sizeof prefix));
@@ -203,6 +255,59 @@ void Runtime::bind_gadget_gaf_art() {
             append_gaf_file(match_hud_->sprites, "anims/" + gadget.common.name + "_gadget.gaf");
 }
 
+int Runtime::side_column_page_rows() {
+    if (!match_)
+        return kCanvasHeight;
+    const oa::World& world = match_->state();
+    if (side_column_measured_for_ == &world)
+        return side_column_rows_;
+    int rows = kCanvasHeight;
+    const auto measure = [&](const char* name) {
+        const auto bytes = assets_.load_file_contents(gui_panel_path(name));
+        if (!bytes)
+            return;
+        auto parsed = oa::ui::gui_layout::parse(*bytes);
+        if (!parsed.ok())
+            return;
+        auto& gadgets = parsed.layout->gadgets;
+        if (gadgets.empty())
+            return;
+        // The page's panel reaches down to its authored height, and its
+        // controls may reach below that.
+        const auto& panel = gadgets.front().common;
+        rows = std::max(rows, panel.y + panel.height);
+        std::ignore = place_in_side_panel(gadgets);
+        rows = std::max(rows, page_bottom_row(gadgets, true));
+    };
+    char name[256];
+    for (uint32_t type = 1; type < world.unit_def_count; ++type) {
+        const auto& definition = world.unit_defs[type];
+        if (definition.unit_name[0] == '\0')
+            continue;
+        for (uint32_t page = 0; page < definition.gui_page_count; ++page) {
+            hud::format_build_page_name(name, sizeof name, definition, page);
+            measure(name);
+        }
+    }
+    for (std::size_t side = 0; side < side_table_.count; ++side) {
+        const auto& field = side_table_.sides[side].name_prefix;
+        const std::string prefix(field, strnlen(field, sizeof field));
+        hud::format_general_page_name(name, sizeof name, prefix.c_str());
+        measure(name);
+        std::snprintf(name, sizeof name, "%sDL", prefix.c_str());
+        measure(name);
+    }
+    side_column_measured_for_ = &world;
+    side_column_rows_ = rows;
+    return rows;
+}
+
+oa::ui::display_layout::MatchLayout Runtime::lay_out_match(int width, int height) {
+    return oa::ui::display_layout::fit_side_column(
+        oa::ui::display_layout::make_match_layout(width, height), side_column_page_rows()
+    );
+}
+
 oa::ui::hud::PanelLoader Runtime::order_panel_loader() {
     hud::PanelLoader loader{};
     loader.user = this;
@@ -210,8 +315,12 @@ oa::ui::hud::PanelLoader Runtime::order_panel_loader() {
     loader.is_loaded = [](void* user, const char* name) {
         return ascii_iequals(static_cast<Runtime*>(user)->match_hud_panel_, gui_panel_path(name));
     };
+    // A unit's page, and the general page, which comes without a unit, are
+    // drawn in the side column as authored, scaled down when taller than it.
     loader.load = [](void* user, const char* name, const oa::Unit*, int32_t) {
-        return static_cast<Runtime*>(user)->load_match_hud_layout(gui_panel_path(name));
+        return static_cast<Runtime*>(user)->load_match_hud_layout(
+            gui_panel_path(name), hud::SidePage::unit
+        );
     };
     loader.downloads = unit_table_.tables.downloads.groups;
     loader.download_count = unit_table_.tables.downloads.count;
@@ -231,7 +340,12 @@ oa::ui::hud::PanelLoader Runtime::order_panel_loader() {
         if (static_cast<std::size_t>(index) < self.match_hud_states_.size())
             self.match_hud_states_[static_cast<std::size_t>(index)].grayed = false;
     };
-    loader.redraw = [](void* user) { static_cast<Runtime*>(user)->bind_gadget_gaf_art(); };
+    // Buttons linked into the page's empty slots take their places in it.
+    loader.redraw = [](void* user) {
+        auto& self = *static_cast<Runtime*>(user);
+        self.bind_gadget_gaf_art();
+        self.fit_match_build_page();
+    };
     loader.exists = [](void* user, const char* name) {
         return static_cast<Runtime*>(user)->assets_.file_size(gui_panel_path(name)) != 0;
     };

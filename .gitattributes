@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The licence texts are checked byte for byte against the ones their
+# projects publish (tools/bootstrap_text_fonts.py), so every checkout keeps
+# them exactly as committed, line endings included, whatever its own
+# line-ending settings.
+/licenses/** -text

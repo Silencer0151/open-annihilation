@@ -9,11 +9,13 @@
 
 #include "wire_rules_binding.hpp"
 
+#include "oa/platform/system.hpp"
+
 #include <cstdio>
-#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -150,8 +152,8 @@ void rules_need_their_channel() {
 ///
 /// @return how many profiles were read
 int reference_profiles() {
-    const char* folder = std::getenv("OA_MOD_PROFILES_DIR");
-    if (folder == nullptr || *folder == '\0' || !fs::is_directory(folder)) {
+    const auto named = oa::platform::environment_value("OA_MOD_PROFILES_DIR");
+    if (!named || named->empty() || !fs::is_directory(*named)) {
         std::printf(
             "netgame-wire-rules: the reference profiles are skipped; "
             "OA_MOD_PROFILES_DIR names no folder\n"
@@ -159,7 +161,7 @@ int reference_profiles() {
         return 0;
     }
     int read = 0;
-    for (const auto& directory : fs::directory_iterator{folder}) {
+    for (const auto& directory : fs::directory_iterator{*named}) {
         const auto file = directory.path() / "oamod.yaml";
         if (!fs::is_regular_file(file))
             continue;

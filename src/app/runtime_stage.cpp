@@ -275,6 +275,37 @@ bool Runtime::run_stage_direction(
         std::printf("stage: attack %s: %zu units on %s\n", group.c_str(), ordered, targets.c_str());
         return true;
     }
+    if (action == "attack-ground") {
+        std::string group;
+        int32_t x = 0;
+        int32_t z = 0;
+        if (!(line >> group >> x >> z))
+            throw std::runtime_error(where + ": attack-ground takes GROUP X Z");
+        const auto point = ground_point(*match_, x, z);
+        std::size_t ordered = 0;
+        for (const auto unit : live_members(group))
+            if (match_->issue_attack_ground(unit, point, false) != nullptr)
+                ++ordered;
+        std::printf("stage: attack-ground %s: %zu units at %d,%d\n", group.c_str(), ordered, x, z);
+        return true;
+    }
+    if (action == "guard") {
+        std::string group;
+        std::string guarded;
+        if (!(line >> group >> guarded))
+            throw std::runtime_error(where + ": guard takes GROUP GUARDED");
+        // The first live unit of the guarded group, by the order it joined.
+        const auto candidates = live_members(guarded);
+        std::size_t ordered = 0;
+        for (const auto unit : live_members(group)) {
+            if (candidates.empty() || candidates.front() == unit)
+                continue;
+            (void)match_->issue_guard(unit, candidates.front(), false);
+            ++ordered;
+        }
+        std::printf("stage: guard %s: %zu units on %s\n", group.c_str(), ordered, guarded.c_str());
+        return true;
+    }
     if (action == "activate" || action == "deactivate") {
         std::string group;
         if (!(line >> group))

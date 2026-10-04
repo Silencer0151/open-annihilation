@@ -5,7 +5,6 @@
 #include "oa/data/persist/squash.hpp"
 
 #include "bank_util.hpp"
-#include "oa/base/text.hpp"
 #include "oa/platform/files.hpp"
 
 #include <cstdarg>
@@ -13,6 +12,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <new>
+#include <string>
 
 namespace oa::data::persist {
 namespace {
@@ -554,6 +555,34 @@ FileSource stdio_file_source() {
                       }};
 }
 
+namespace {
+
+/// Writes the bank's audit listing beside `path`, under its name with the
+/// extension replaced by .cpa, however long the path is; a listing that
+/// cannot be built, named or written is left out.
+///
+/// @param bank bank to list
+/// @param path the bank's file path
+/// @param files file boundary
+void write_audit(const Bank* bank, const char* path, const FileSink* files) {
+    std::string audit_path;
+    try {
+        audit_path = path;
+        const auto dot = audit_path.rfind('.');
+        if (dot != std::string::npos && audit_path.find_first_of("\\/", dot) == std::string::npos)
+            audit_path.erase(dot);
+        audit_path += audit_extension;
+    } catch (const std::bad_alloc&) {
+        return;
+    }
+    ByteImage text{};
+    if (bank_format_audit(bank, &text))
+        files->write_file(files->context, audit_path.c_str(), text.data, text.size);
+    byte_image_free(&text);
+}
+
+} // namespace
+
 bool bank_write_file(
     const Bank* bank,
     const char* path,
@@ -565,20 +594,8 @@ bool bank_write_file(
     if (bank == nullptr || bank->accounts == nullptr || bank->accounts->count == 0 ||
         path == nullptr || files == nullptr)
         return false;
-    if (audit) {
-        char audit_path[260];
-        std::snprintf(audit_path, sizeof(audit_path), "%s", path);
-        char* dot = std::strrchr(audit_path, '.');
-        const char* slash = std::strpbrk(dot != nullptr ? dot : audit_path, "\\/");
-        if (dot != nullptr && slash == nullptr)
-            *dot = '\0';
-        if (std::strlen(audit_path) + sizeof(audit_extension) <= sizeof(audit_path))
-            oa::base::text::append_terminated(audit_path, audit_extension);
-        ByteImage text{};
-        if (bank_format_audit(bank, &text))
-            files->write_file(files->context, audit_path, text.data, text.size);
-        byte_image_free(&text);
-    }
+    if (audit)
+        write_audit(bank, path, files);
     ByteImage image{};
     const bool ok = bank_write_image(bank, description, pack_accounts, &image) &&
                     files->write_file(files->context, path, image.data, image.size);

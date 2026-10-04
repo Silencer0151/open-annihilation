@@ -12,6 +12,7 @@
 #include "oa/ui/frontend_dialogs.hpp"
 #include "oa/ui/frontend/main_menu.hpp"
 #include "oa/ui/campaign/endgame.hpp"
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -20,6 +21,7 @@
 #include <string>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 namespace oa::app {
 
@@ -652,16 +654,47 @@ bool translate_input(
     }
 }
 
+/// Tells whether two overlay descriptions are the same registration.
+///
+/// @param first one description
+/// @param second the other
+/// @return true when every field is equal
+bool same_overlay(const OverlayDesc& first, const OverlayDesc& second) {
+    return first.name == second.name && first.screen == second.screen && first.z == second.z &&
+           first.create == second.create && first.event == second.event &&
+           first.tick == second.tick && first.draw == second.draw && first.state == second.state;
+}
+
+/// Tells whether a list holds an overlay's registration.
+///
+/// @param overlays the list
+/// @param overlay the overlay
+/// @return true when one entry is the same registration
+bool holds_overlay(const std::vector<OverlayDesc>& overlays, const OverlayDesc& overlay) {
+    return std::any_of(overlays.begin(), overlays.end(), [&](const OverlayDesc& other) {
+        return same_overlay(overlay, other);
+    });
+}
+
 } // namespace
 
 void Runtime::register_screens() {
 #define OA_REGISTER(fn) fn(&screens_);
 #include "oa/ui/screen_registry/screens.inc"
 #undef OA_REGISTER
+    const std::vector<OverlayDesc> built_in(
+        screens_.overlays, screens_.overlays + screens_.overlay_count
+    );
     call_hook_or_raise<&Extension::register_screens>(extension_, &screens_);
+    extension_overlays_.clear();
+    for (uint32_t index = 0; index < screens_.overlay_count; ++index)
+        if (!holds_overlay(built_in, screens_.overlays[index]))
+            extension_overlays_.push_back(screens_.overlays[index]);
     // The OA button and the settings dialog, on the main menu and in a match.
     register_engine_settings_overlays();
     register_engine_settings_match_overlay();
+    // The notice of the saved games' move, over the main menu.
+    register_saves_notice_overlay();
     // Without screens of the extension's for them, the multiplayer unit
     // headers and a main-menu overlay's steps have nothing to do. The registry
     // refuses a second handler, so these fill only the steps nobody took.
@@ -693,6 +726,26 @@ void Runtime::register_screens() {
          BuiltinScreens::dialog_hud_strip_width,
          BuiltinScreens::dialog_draws_layer}
     );
+}
+
+void Runtime::set_extension_overlays_aside(bool aside) {
+    if (aside == !overlays_before_aside_.empty())
+        return;
+    if (!aside) {
+        std::copy(overlays_before_aside_.begin(), overlays_before_aside_.end(), screens_.overlays);
+        screens_.overlay_count = static_cast<uint32_t>(overlays_before_aside_.size());
+        overlays_before_aside_.clear();
+        main_menu_overlay_ = main_menu_overlay_before_aside_;
+        return;
+    }
+    overlays_before_aside_.assign(screens_.overlays, screens_.overlays + screens_.overlay_count);
+    main_menu_overlay_before_aside_ = main_menu_overlay_;
+    uint32_t kept = 0;
+    for (const auto& overlay : overlays_before_aside_)
+        if (!holds_overlay(extension_overlays_, overlay))
+            screens_.overlays[kept++] = overlay;
+    screens_.overlay_count = kept;
+    main_menu_overlay_ = false;
 }
 
 ScreenContext Runtime::screen_context(const ScreenInput* input) {

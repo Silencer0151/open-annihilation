@@ -46,7 +46,9 @@ struct ResourceHost {
     bool (*panel_open)(void* context){};
     // Hands the bitmap to the panel on top as its backdrop.
     void (*set_backdrop)(void* context, oa_ref32 bitmap){};
-    // Makes the palette block the display palette (entries 0..255).
+    // Makes the palette block the display palette (entries 0..255). The block
+    // may be freed as soon as the call returns, so the host copies it during
+    // the call.
     void (*apply_palette)(void* context, const uint8_t* palette){};
     // Language variant lookup of the bitmap path.
     const data::campaign::CampaignFiles* files{};
@@ -89,7 +91,9 @@ oa_ref32 load_named_bitmap(const ResourceHost& host, const char* name, uint8_t* 
 /// @param defer Whether to only load and cache, leaving the backdrop alone.
 /// @return 1 when a bitmap or a null name was set, 0 when deferred or nothing loaded.
 /// @quirk A hit on a slot without a bitmap loads again and caches the load a
-///        second time; a load during a match is not cached and never freed.
+///        second time. A load during a match is not cached and its bitmap is
+///        never freed; its palette is freed as the call returns, after it is
+///        applied when that is asked.
 int32_t load_resource_palette(
     ResourceCache* cache,
     Game* game,

@@ -7,7 +7,11 @@
 #include "oa/ui/gui_input.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <cstddef>
+#include <cstdint>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -103,13 +107,64 @@ std::string default_button(const Dialog& dialog, uint32_t key) {
     return {};
 }
 
+/// Finds the button of a yes-or-no prompt whose quick key a key is, in either case.
+///
+/// Only the YESORNO prompts take quick keys: Y and N in English, or the
+/// letters their translated captions give them. A key with Ctrl, Alt or the
+/// system key down types no character and finds none; a grayed-out or
+/// inactive button takes no key.
+///
+/// @param dialog the top dialog
+/// @param input the key press
+/// @return the button's record, or kNoGadget
+int32_t quick_key_button(const Dialog& dialog, const app::ScreenInput& input) {
+    if (dialog.kind != DialogKind::continue_watching ||
+        (input.modifiers &
+         (app::kInputModifierCtrl | app::kInputModifierAlt | app::kInputModifierSystem)) != 0 ||
+        input.key == 0 || input.key >= 0x80)
+        return kNoGadget;
+    const auto typed = std::tolower(static_cast<int>(input.key));
+    const auto& gadgets = dialog.resources.layout.gadgets;
+    for (std::size_t index = 1; index < gadgets.size(); ++index) {
+        const auto* button = std::get_if<ui::gui_layout::ButtonFields>(&gadgets[index].fields);
+        if (button == nullptr || gadgets[index].common.active == 0 || button->grayed_out ||
+            button->quick_key == 0)
+            continue;
+        if (std::tolower(static_cast<unsigned char>(button->quick_key)) == typed)
+            return static_cast<int32_t>(index);
+    }
+    return kNoGadget;
+}
+
+/// Tells whether typed text is the character of the quick key that answered a prompt.
+///
+/// @param text the typed text, UTF-8
+/// @param answered the quick key, lowercase, or zero for none
+/// @return true for that one character, in either case
+bool typed_answered_key(const char* text, int answered) {
+    return answered != 0 && text != nullptr && text[0] != '\0' && text[1] == '\0' &&
+           std::tolower(static_cast<unsigned char>(text[0])) == answered;
+}
+
 } // namespace
 
 int dialog_event(app::ScreenContext* ctx, void*) {
-    auto* dialog = dialog_top();
-    if (dialog == nullptr || ctx == nullptr || ctx->input == nullptr)
+    if (ctx == nullptr || ctx->input == nullptr)
         return 0;
     const auto& input = *ctx->input;
+    // The character a quick key types after its press answered a prompt goes
+    // nowhere, though the prompt is closed by then.
+    auto& answered = dialog_stack().answered_key;
+    if (input.kind == app::ScreenInputKind::key_down)
+        answered = 0;
+    else if (
+        input.kind == app::ScreenInputKind::text &&
+        typed_answered_key(input.text, std::exchange(answered, 0))
+    )
+        return 1;
+    auto* dialog = dialog_top();
+    if (dialog == nullptr)
+        return 0;
     switch (input.kind) {
     case app::ScreenInputKind::pointer_move:
         dialog->hovered = hit_button(*dialog, input.x, input.y);
@@ -139,6 +194,11 @@ int dialog_event(app::ScreenContext* ctx, void*) {
             const auto index = dialog_find(*dialog, name);
             if (index != kNoGadget)
                 activate(ctx, *dialog, index);
+            return 1;
+        }
+        if (const auto index = quick_key_button(*dialog, input); index != kNoGadget) {
+            dialog_stack().answered_key = std::tolower(static_cast<int>(input.key));
+            activate(ctx, *dialog, index);
         }
         return 1;
     }

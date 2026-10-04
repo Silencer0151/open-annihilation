@@ -12,6 +12,7 @@
 #include "oa/sim/messages.hpp"
 #include "oa/sim/selection.hpp"
 #include "oa/ui/console/console.hpp"
+#include "oa/ui/frontend/savegame_dialogs.hpp"
 #include "oa/sim/spatial_state/spatial.hpp"
 
 #include <SDL3/SDL.h>
@@ -41,8 +42,9 @@ constexpr std::string_view rotate_sound = "MORE";
 constexpr std::string_view view_settings_section = "Eye";
 /// The most bytes a stored display-rule text setting holds.
 constexpr std::size_t view_settings_text_capacity = 1024;
-/// The screenshots folder below the player's data folder.
-constexpr const char* screenshot_folder = "screenshots";
+/// The screenshots folder below the Image Output Directory, which in the
+/// player's own folder is its Screenshots folder (Runtime::game_file_path).
+constexpr const char* screenshot_folder = "\\screenshots";
 /// The date that begins a screenshot's name, as the C library's date for
 /// the clock's local time shows it, and its separator.
 constexpr const char* screenshot_date_format = "%02d/%02d/%02d - ";
@@ -693,7 +695,17 @@ void Runtime::capture_named_screenshot() {
                     std::string(player.name, strnlen(player.name, sizeof player.name));
         }
     }
-    const auto folder = save_game_root() / screenshot_folder;
+    // Where Ctrl+F9's screenshots go: the Image Output Directory's
+    // screenshots folder, the match's own when the console changed it.
+    std::string output = preferences_.image_output_directory;
+    if (screen_ == Screen::match && match_) {
+        const oa::ui::console::Console* con = match_console();
+        output = oa::ui::console::output_directory(
+            match_->state().game, con != nullptr ? con->host : nullptr
+        );
+    }
+    const auto folder =
+        game_file_path(output + screenshot_folder, ui::frontend::SavePathUse::write);
     std::error_code error;
     fs::create_directories(folder, error);
     fs::path path;

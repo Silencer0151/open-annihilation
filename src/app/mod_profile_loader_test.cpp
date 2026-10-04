@@ -6,7 +6,7 @@
 // and exit status, a --mod profile's limits block filling the Limits record,
 // a --mod profile the engine cannot use stopping the run with every error, and
 // the player's settings in the mod's INI file reaching the parameters the
-// profile binds.
+// profile binds; and a folder the player picks checked as a mod folder.
 
 #include "oa/app/mod_profile_loader.hpp"
 #include "oa/data/defs/layout.hpp"
@@ -289,22 +289,104 @@ void test_mod_folders(const fs::path& scratch) {
     fs::create_directories(game / "MODS" / "empty");
     write(game / "MODS" / "beta" / "oamod.yaml", base_profile);
     write(game / "MODS" / "Alpha" / "OAMOD.YAML", base_profile);
+    // Every folder is a mod, a folder without an oamod.yaml among them.
     const auto offered = list_mod_folders(game);
-    OA_CHECK(offered.size() == 2);
-    OA_CHECK(offered.size() == 2 && offered[0].filename() == "Alpha");
-    OA_CHECK(offered.size() == 2 && offered[1].filename() == "beta");
+    OA_CHECK(offered.size() == 3);
+    OA_CHECK(offered.size() == 3 && offered[0].filename() == "Alpha");
+    OA_CHECK(offered.size() == 3 && offered[1].filename() == "beta");
+    OA_CHECK(offered.size() == 3 && offered[2].filename() == "empty");
     OA_CHECK(list_mod_folders(scratch / "nothing").empty());
+    // A folder of mods of its own, as the player's Mods folder, lists the
+    // same way; a missing one lists none.
+    const auto own = list_mods_in(game / "MODS");
+    OA_CHECK(own == offered);
+    OA_CHECK(list_mods_in(scratch / "nothing" / "Mods").empty());
 
-    // A mod folder needs its own profile, and a --mod file replaces it.
+    // A mod folder without a profile is no error: it plays with none, by
+    // 3.1c's own rules; a --mod file replaces its missing profile.
     const auto lacking = resolve_folder_profile(
         {game / "MODS" / "empty", game}, {game / "MODS" / "empty", {}, false, nullptr}
     );
-    OA_CHECK(!lacking.errors.empty() && !lacking.profile);
+    OA_CHECK(lacking.errors.empty() && lacking.warnings.empty() && !lacking.profile);
     const auto named = resolve_folder_profile(
         {game / "MODS" / "empty", game},
         {game / "MODS" / "empty", game / "MODS" / "beta" / "oamod.yaml", false, nullptr}
     );
     OA_CHECK(named.errors.empty() && named.profile && named.profile->id == "example");
+}
+
+void test_picked_folder(const fs::path& scratch) {
+    const fs::path game = scratch / "picked-game";
+    fs::create_directories(game);
+    const fs::path mod = scratch / "anywhere" / "my mod";
+    fs::create_directories(mod);
+    write(mod / "OaMod.yaml", base_profile);
+
+    // A folder that holds a profile resolving over the game folder is
+    // played, under its own profile's id.
+    const auto played = check_picked_mod_folder(mod, game, {});
+    OA_CHECK(played.refusal.empty() && played.errors.empty());
+    OA_CHECK(played.profile_id == "example");
+
+    // Each refusal says why in a few words, and the log gets the errors.
+    // A folder without a profile is not refused: it waits for the player to
+    // agree to play it by 3.1c's own rules, its overrides under its own id.
+    const fs::path empty = scratch / "anywhere" / "empty";
+    fs::create_directories(empty);
+    const auto none = check_picked_mod_folder(empty, game, {});
+    OA_CHECK(none.refusal.empty() && none.errors.empty() && none.without_profile);
+    OA_CHECK(none.profile_id == folder_overrides_id(empty));
+    OA_CHECK(!played.without_profile);
+    const auto missing = check_picked_mod_folder(scratch / "nowhere", game, {});
+    OA_CHECK(missing.refusal == "That folder cannot be found.");
+    const fs::path broken = scratch / "anywhere" / "broken";
+    fs::create_directories(broken);
+    write(broken / "oamod.yaml", "oamod: 1\nid: [\n");
+    const auto unusable = check_picked_mod_folder(broken, game, {});
+    OA_CHECK(unusable.refusal == "Its oamod.yaml cannot be played; the log says why.");
+    OA_CHECK(!unusable.errors.empty() && unusable.profile_id.empty());
+    // No profile takes the plain game's id, under which the game without a
+    // mod keeps its overrides: the resolver refuses it.
+    const fs::path base_id = scratch / "anywhere" / "base-id";
+    fs::create_directories(base_id);
+    write(
+        base_id / "oamod.yaml",
+        "oamod: 1\nid: ta-3.1c\nname: Same id\nversion: \"1.0\"\n"
+        "requires: {base: ta-3.1c, catalogue: 1}\n"
+        "author: {name: unknown}\n"
+        "packaging: {revision: 1, date: 2026-10-04, packager: Open Annihilation}\n"
+    );
+    const auto same_id = check_picked_mod_folder(base_id, game, {});
+    OA_CHECK(same_id.refusal == "Its oamod.yaml cannot be played; the log says why.");
+    OA_CHECK(same_id.profile_id.empty());
+    // A game folder that is a mod's own copy carries no mod folder.
+    const fs::path copied = scratch / "copied-game";
+    fs::create_directories(copied);
+    write(copied / "oamod.yaml", base_profile);
+    const auto over_copy = check_picked_mod_folder(mod, copied, {});
+    OA_CHECK(!over_copy.refusal.empty() && !over_copy.errors.empty());
+    const auto empty_over_copy = check_picked_mod_folder(empty, copied, {});
+    OA_CHECK(empty_over_copy.refusal == "That folder cannot be played; the log says why.");
+    OA_CHECK(!empty_over_copy.errors.empty() && !empty_over_copy.without_profile);
+    OA_CHECK(empty_over_copy.profile_id.empty());
+}
+
+void test_folder_overrides_id(const fs::path& scratch) {
+    // The folder's absolute path after the prefix, which no profile's
+    // kebab-case id, nor the plain game's, can be.
+    const fs::path folder = (scratch / "ids" / "plain").lexically_normal();
+    const std::string id = folder_overrides_id(folder);
+    const auto absolute = fs::absolute(folder).u8string();
+    OA_CHECK(
+        id == std::string(folder_overrides_prefix) + std::string(absolute.begin(), absolute.end())
+    );
+    OA_CHECK(id != oa::data::mod_profile::base_game_id);
+    // '%' and '|' are written out, so that no key holds a '|' and no two
+    // folders share an id.
+    const std::string odd = folder_overrides_id(scratch / "ids" / "a|b%7C");
+    OA_CHECK(odd.find('|') == std::string::npos);
+    OA_CHECK(odd.ends_with("a%7Cb%257C"));
+    OA_CHECK(odd != folder_overrides_id(scratch / "ids" / "a%7Cb|"));
 }
 
 } // namespace
@@ -317,6 +399,8 @@ int main() {
     test_settings(scratch);
     test_layout(scratch);
     test_mod_folders(scratch);
+    test_picked_folder(scratch);
+    test_folder_overrides_id(scratch);
     std::error_code ignored;
     fs::remove_all(scratch, ignored);
     return oa::test::check_exit_status();

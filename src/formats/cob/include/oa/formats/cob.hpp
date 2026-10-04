@@ -13,10 +13,12 @@
 
 namespace oa::formats::cob {
 
-// COB header: 11 little-endian 32-bit words, 44 bytes. TA is version 4.
-// Version 6 is TA: Kingdoms and is not accepted here.
+// COB header: 11 little-endian 32-bit words, 44 bytes, whose offsets locate
+// every table. The VersionSignature word is kept and never checked.
+
+/// The VersionSignature the game's own scripts store. Files that store
+/// another value, such as 6 or 7, load by the same header offsets.
 inline constexpr uint32_t version_ta = 4;
-inline constexpr uint32_t version_kingdoms = 6;
 inline constexpr std::size_t header_dwords = 11;
 inline constexpr std::size_t header_bytes = header_dwords * sizeof(uint32_t);
 
@@ -73,19 +75,21 @@ struct ParseLimits {
 
 /// Decodes a COB image into its code, entry, name and piece tables.
 ///
-/// The table offsets are copied into bounded tables; overlapping or
-/// out-of-range sections are rejected.
-/// Only VersionSignature 4 with a sound count of zero is accepted.
+/// The tables are read where the header's offsets put them, whatever the
+/// VersionSignature word holds, as the game reads them. Bytes no offset
+/// points at, such as the two words a version 6 header adds before its
+/// code, are not read. The tables are copied into bounded tables;
+/// overlapping or out-of-range sections are rejected, and so is a non-zero
+/// sound count.
 ///
 /// @param bytes the whole COB file
 /// @param limits allocation and count bounds
 /// @return the program, with a file hash of zero for the caller to record;
 ///         or, at its file offset, truncated for a file shorter than its
 ///         header, limit_exceeded for a file or count over its bound,
-///         unsupported_version for a version other than 4 or a non-zero
-///         sound count, malformed for sections out of order, or
-///         out_of_range for a section, entry point or name outside the
-///         file, its section or the name pool
+///         unsupported_version for a non-zero sound count, malformed for
+///         sections out of order, or out_of_range for a section, entry
+///         point or name outside the file, its section or the name pool
 [[nodiscard]] base::bytes::Decoded<CobProgram>
 parse_cob(std::span<const uint8_t> bytes, const ParseLimits& limits = {});
 

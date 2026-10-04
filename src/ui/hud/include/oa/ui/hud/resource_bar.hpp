@@ -49,8 +49,10 @@ struct SideLayout {
 
 /// Reads the SIDE<index> section of SIDEDATA.TDF text over a side layout.
 ///
-/// Keys the file omits keep their current values; a bar, damage bar or logo
-/// without width and a unit name at row 0 are ignored.
+/// Keys the file omits keep their current values, except metalcolor and
+/// energycolor, which are palette index 0 without their key, as in 3.1c; a
+/// bar, damage bar or logo without width and a unit name at row 0 are
+/// ignored.
 ///
 /// @param sidedata Text of gamedata/SIDEDATA.TDF.
 /// @param side Side index, the digit of the section name.

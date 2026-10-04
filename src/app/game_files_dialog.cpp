@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// The Language & Text settings over the Game files screen, before the game's
+// The Language settings over the Game files screen, before the game's
 // fonts are installed: the settings dialog limited to that section, drawn in
 // the bundled fonts, with the screen's own text hooks while it is up
 // (game_files_screen.hpp). The interface's language is chosen here too for
@@ -53,7 +53,7 @@ constexpr float dialog_margin_points = 16.0F;
 /// drives it, else long enough to idle.
 constexpr int32_t check_wait_ms = 16;
 constexpr int32_t idle_wait_ms = 250;
-/// The size the dialog's text is drawn at, as the Language & Text setting's sizes go: the
+/// The size the dialog's text is drawn at, as the Language setting's sizes go: the
 /// modern fonts at the game fonts' own size stand wider than the game's fonts the dialog is
 /// laid out for, so they are drawn at the setting's default size.
 constexpr int32_t dialog_text_size = oa::present::default_text_size;
@@ -437,7 +437,7 @@ bool run_game_files_language_dialog(const GameFilesLanguageRequest& request) {
     const languages::Language& system =
         languages::preferred_language(oa::platform::locale::preferred_locales());
     settings::Dialog dialog;
-    // Language & Text alone: its Restore defaults restores only that section's settings.
+    // Language alone: its Restore defaults restores only that section's settings.
     settings::open_language_text_dialog(
         dialog, current, defaults, settings::Locks{}, request.version, &system
     );
@@ -610,6 +610,10 @@ bool run_game_files_language_dialog(const GameFilesLanguageRequest& request) {
             case settings::DialogAction::cancelled:
                 return finish(false);
             case settings::DialogAction::manage_game_files:
+            case settings::DialogAction::switch_mod:
+            case settings::DialogAction::open_folder:
+                // The Language dialog lists none of the controls that ask
+                // for these.
                 dirty = true;
                 break;
             }

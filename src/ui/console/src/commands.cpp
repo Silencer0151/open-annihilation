@@ -14,6 +14,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <new>
+#include <string>
 #include <tuple>
 
 namespace oa::ui::console {
@@ -850,16 +852,18 @@ void make_poster(TokenLine* line) {
         y = 0;
     if (y >= g.map_pixel_height - height)
         y = g.map_pixel_height - height;
-    char directory[kPathBytes];
-    char output[kOutputDirectoryBytes + 1] = {};
-    std::memcpy(output, game_bytes(g, game_offset::output_directory), kOutputDirectoryBytes);
-    // The path is cut to the buffer; one that cannot be formatted is left empty.
-    if (std::snprintf(directory, sizeof directory, "%s\\screenshots", output) < 0)
-        directory[0] = '\0';
+    // The folder is kept whole, however long it is; with no memory to spell
+    // it, no poster is made.
+    std::string directory;
+    try {
+        directory = output_directory(g, &host()) + "\\screenshots";
+    } catch (const std::bad_alloc&) {
+        return;
+    }
     if (host().create_directories != nullptr)
-        host().create_directories(host().context, directory);
+        host().create_directories(host().context, directory.c_str());
     if (host().render_poster != nullptr)
-        host().render_poster(host().context, directory, "BIGSHOT", x, y, width, height);
+        host().render_poster(host().context, directory.c_str(), "BIGSHOT", x, y, width, height);
     if (host().now_ms != nullptr)
         g.last_frame_time = host().now_ms(host().context);
 }
@@ -1483,6 +1487,17 @@ uint8_t console_submit_chat_line(
     if ((result & command_class::private_echo) != 0)
         return kChatModeLocalOnly;
     return current_mode;
+}
+
+std::string output_directory(const Game& game, const ConsoleHost* host) {
+    std::string directory(
+        game.output_directory, strnlen(game.output_directory, sizeof game.output_directory)
+    );
+    if (directory.empty() && host != nullptr && host->output_directory != nullptr) {
+        if (const char* folder = host->output_directory(host->context))
+            directory = folder;
+    }
+    return directory;
 }
 
 Console* console_active() noexcept {

@@ -129,10 +129,13 @@ LoadedType load_runtime_type(
     result.script_path = "scripts/" + unit + ".COB";
     if (auto bytes = assets.read(result.script_path)) {
         auto parsed = formats::cob::parse_cob(*bytes);
-        if (!parsed.ok())
-            return refused(
-                result, "invalid unit script " + result.script_path, parsed.error.message
-            );
+        // A script file the parser cannot read leaves the type as an absent
+        // one does: it is built and drawn from its plain model and runs no
+        // script, and loading goes on with the next type.
+        if (!parsed.ok()) {
+            result.script_error = parsed.error;
+            return result;
+        }
         // The loaded file's hash is recorded for the script checks.
         parsed.value->file_hash =
             formats::tdf::buffer_hash(bytes->data(), static_cast<int32_t>(bytes->size()));

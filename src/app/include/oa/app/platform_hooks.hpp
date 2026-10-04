@@ -3,8 +3,9 @@
 
 // What the platform the game runs on provides beyond SDL: haptics, a default
 // game folder, the advice shown without one and the label of its look-again
-// button, and word that the window is open. A platform's extension init
-// fills the hooks; the desktop leaves them null.
+// button, word that the window is open, and its own way of showing a folder
+// in its file manager. A platform's extension init fills the hooks; the
+// desktop leaves them null.
 #pragma once
 
 #include <stdint.h>
@@ -39,6 +40,11 @@ struct PlatformHooks {
     /// "Check again" (UTF-8, static storage). Null, or a null result: the notice has no such
     /// button and the game ends after it, as before.
     const char* (*game_folder_check_again)(void* context){};
+    /// Shows a folder (absolute, UTF-8, one that exists) in the platform's file manager and
+    /// returns true once it has asked for it; false, writing why into `why` (UTF-8), when it
+    /// cannot. Null: the desktop's own way, or none where the build starts no other programs
+    /// (system_folder_opener).
+    bool (*show_folder)(void* context, const char* folder, std::string* why){};
 };
 
 /// Installs the platform's hooks (a copy is kept).

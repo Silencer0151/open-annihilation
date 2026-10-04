@@ -39,6 +39,7 @@
 #include "oa/formats/oamod.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -53,6 +54,10 @@ using match_rules::FixedList;
 using match_rules::FixedText;
 
 #include "oa/data/mod_profile/records.inc"
+
+/// The most characters (Unicode code points) a profile's description holds:
+/// one line of plain text, with no line break or other control character.
+inline constexpr size_t max_description_characters = 120;
 
 /// A registry value a profile seeds for a fresh install, as the game would
 /// find it in its registry.
@@ -82,6 +87,8 @@ struct ModProfile {
     std::string id{};      ///< the mod's stable id, kebab-case
     std::string name{};    ///< the mod's display name
     std::string version{}; ///< the mod's version
+    /// One line about the mod for the Mods page; empty when the profile has none.
+    std::string description{};
     Author author{};
     Packaging packaging{};
     Identity identity{};

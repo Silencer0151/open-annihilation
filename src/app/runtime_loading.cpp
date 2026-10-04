@@ -203,7 +203,7 @@ void Runtime::draw_loading_screen() {
             ui_colors_[percent >= 100 ? kLoadChipDoneColor : kLoadChipBusyColor];
         present::set_text_colors(chip_color, static_cast<int32_t>(present::text_transparent()));
         // The loading screen keeps the game's own fonts whatever the
-        // Language & Text settings say: a character a font lacks is drawn
+        // Language settings say: a character a font lacks is drawn
         // in the modern fonts, as with them off. The label is in the game's
         // language, as gamedata\translate.tdf gives it.
         const char* translated = game_translation(labels[i]);
@@ -264,6 +264,9 @@ void Runtime::teardown_match() {
     offline_services_.set_on_screen_test(nullptr, nullptr);
     effect_boundary_.clock = nullptr;
     match_.reset();
+    // A later match may be built at the same address on other game data:
+    // the side column's pages are measured again for it.
+    side_column_measured_for_ = nullptr;
     game_speed_lock_.reset();
     end_render_tier_match();
     unit_playout_.reset();

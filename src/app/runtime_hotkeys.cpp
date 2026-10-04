@@ -15,6 +15,7 @@
 #include "oa/sim/speed.hpp"
 #include "oa/ui/console/game_fields.hpp"
 #include "oa/ui/hud/chat_panel.hpp"
+#include "oa/ui/hud/order_panel.hpp"
 #include "oa/ui/hud/unit_info.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -41,7 +42,10 @@ namespace oa::app {
 bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
     if (screen_ != Screen::match || !match_ || key.repeat)
         return false;
-    if (whiteboard_key(key) || megamap_key(key))
+    // The surrender confirmation takes the keys ahead of the chat line and
+    // a marker's text, which keep what was typed for after it.
+    const bool question = match_question_open();
+    if ((!question && whiteboard_key(key)) || megamap_key(key))
         return true;
     // F4 pins the kills board out (Game.graphics_flags 0x80).
     if (key.key == SDLK_F4 || key.scancode == SDL_SCANCODE_F4)
@@ -90,7 +94,7 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
         capture_screenshot();
         return true;
     }
-    if (chat_composing_) {
+    if (chat_composing_ && !question) {
         if (key.key == SDLK_ESCAPE) {
             close_chat_line();
             return true;
@@ -211,11 +215,26 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
             adopt_selected_units();
             return true;
         }
-        if (sym == SDLK_Z && selected_match_unit_ != 0) {
-            const auto type = match_->world().slots[selected_match_unit_].unit->type_index;
-            select_units_matching([&](const oa::sim::unit_spawn::Slot& slot) {
-                return slot.unit && slot.unit->type_index == type;
-            });
+        // Ctrl+Z adds to the selection every selectable local unit, anywhere
+        // on the map, whose type is the type of any selected unit, as 3.1c
+        // does. The type set holds the profile's type ids, or every type id
+        // with ui.selection-shortcuts' same-type-bitset-fix.
+        if (sym == SDLK_Z) {
+            auto& world = match_->state();
+            world.game.local_player_index = match_local_player_;
+            const bool every_type =
+                selection_shortcuts_on() && ui_rules().selection_shortcuts.same_type_bitset_fix;
+            oa::sim::selection::select_matching_types(
+                world,
+                selection_hooks(),
+                every_type ? oa::data::limits::highest_type_bits : limits_.unit_types.bitset_bits
+            );
+            adopt_selected_units();
+            int count = 0;
+            for (const auto& slot : match_->world().slots)
+                count += slot.unit != nullptr && slot.owner_index == match_local_player_ &&
+                         (slot.unit->flags & OA_UNIT_FLAG_SELECTED) != 0;
+            status_ = count == 0 ? "No units" : std::to_string(count) + " selected";
             return true;
         }
         return false;
@@ -267,12 +286,16 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
             adjust_game_speed(1);
         return true;
     }
+    // The page keys take the order page into their turn, and sound whether
+    // or not a page turns.
     if (sym == SDLK_COMMA) {
-        show_match_build_page(match_build_page_ - 1);
+        play_match_interface_sound("nextbuildmenu");
+        press_match_panel_page(oa::ui::hud::BuildPanelClick::page_back, true);
         return true;
     }
     if (sym == SDLK_PERIOD) {
-        show_match_build_page(match_build_page_ + 1);
+        play_match_interface_sound("nextbuildmenu");
+        press_match_panel_page(oa::ui::hud::BuildPanelClick::page_forward, true);
         return true;
     }
     if (sym == SDLK_RETURN || key.scancode == SDL_SCANCODE_RETURN) {
@@ -598,8 +621,7 @@ bool Runtime::open_unit_info() {
     loader.user = this;
     loader.load = [](void* user, const char* name, const oa::Unit*, int32_t) {
         auto& self = *static_cast<Runtime*>(user);
-        const auto prefix = self.match_side_prefix();
-        const auto chrome = prefix == "cor" ? "anims/CORINT.GAF" : "anims/ARMINT.GAF";
+        const auto chrome = self.match_side_panel_gaf();
         UnitInfoPanel panel;
         try {
             panel.screen = renderer::load_screen(
@@ -1193,11 +1215,19 @@ void Runtime::apply_match_hud_for_selection() {
         show_match_orders_page();
         return;
     }
-    const auto* definition = definition_for(selected_match_unit_);
-    if (definition != nullptr && definition->builder)
-        show_match_build_page(1);
-    else
+    // The panel opens on the page the unit shows, as 3.1c does: every unit
+    // of a type with a build page shows its first one from its creation, a
+    // missile silo's weapon page as well as a factory's, and ORDERS, BUILD
+    // and the page keys change what it shows. A type with no build pages
+    // shows the general page, and so do several units selected, with BUILD
+    // and ORDERS greyed.
+    const auto page = match_panel_page();
+    if (page == 0) {
         show_match_orders_page();
+        return;
+    }
+    // The unit's page opens as it is, not as a step from the page shown.
+    open_match_build_page(page);
 }
 
 } // namespace oa::app

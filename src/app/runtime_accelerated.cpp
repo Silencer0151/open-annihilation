@@ -558,16 +558,17 @@ void Runtime::draw_accelerated_hud_strips() {
             return;
     } else {
         for (const auto& strip : match_hud_strips())
-            strips.push_back(
-                {{static_cast<float>(strip.source_x),
-                  static_cast<float>(strip.source_y),
-                  static_cast<float>(strip.source_w),
-                  static_cast<float>(strip.source_h)},
-                 {static_cast<float>(strip.x),
-                  static_cast<float>(strip.y),
-                  static_cast<float>(strip.w),
-                  static_cast<float>(strip.h)}}
-            );
+            if (strip.w > 0 && strip.h > 0 && strip.source_w > 0 && strip.source_h > 0)
+                strips.push_back(
+                    {{static_cast<float>(strip.source_x),
+                      static_cast<float>(strip.source_y),
+                      static_cast<float>(strip.source_w),
+                      static_cast<float>(strip.source_h)},
+                     {static_cast<float>(strip.x),
+                      static_cast<float>(strip.y),
+                      static_cast<float>(strip.w),
+                      static_cast<float>(strip.h)}}
+                );
     }
     const double chrome = hud_chrome_scale(match_layout_) * match_display_density();
     const CardScale hud_scale = accelerated_card_scale(

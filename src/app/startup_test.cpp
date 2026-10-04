@@ -299,6 +299,7 @@ void game_files_options() {
         {{"--benchmark", "10"}, "--benchmark"},
         {{"--check-touch-controls"}, "--check-touch-controls"},
         {{"--check-engine-settings"}, "--check-engine-settings"},
+        {{"--check-mod-switch"}, "--check-mod-switch"},
         {{"--check-navigation"}, "--check-navigation"},
         {{"--check-render-tiers"}, "--check-render-tiers"},
         {{"--check-unit-language", "fr"}, "--check-unit-language"},
@@ -785,6 +786,16 @@ int main() {
         "--data-dir takes a UTF-8 path; without it the platform's data folder is used"
     );
     expect(rejection({"--data-dir"}) == "--data-dir requires a value", "--data-dir needs a folder");
+    const char* own_folder = "Mes jeux \xc3\xa0 moi";
+    expect(
+        !parse({}).user_folder &&
+            parse({"--user-folder", own_folder}).user_folder == oa::app::path_from_utf8(own_folder),
+        "--user-folder takes a UTF-8 path; without it the preferences or Documents decide"
+    );
+    expect(
+        rejection({"--user-folder"}) == "--user-folder requires a value",
+        "--user-folder needs a folder"
+    );
     expect(
         rejection({"--choose-game-dir", "--game-dir", "ta"}) ==
             "--choose-game-dir and --game-dir cannot be used together",
@@ -822,6 +833,9 @@ int main() {
         {"--check-frontend-controls"},
         {"--check-scroll-bars"},
         {"--check-engine-settings"},
+        {"--check-user-folder"},
+        {"--check-mod-switch"},
+        {"--check-mod-warning"},
         {"--check-renderer-ladder"},
         {"--check-briefing-narration"},
         {"--check-render-tiers"},

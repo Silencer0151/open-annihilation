@@ -164,19 +164,17 @@ void Runtime::apply_language() {
     if (named != nullptr) {
         // 3.1c's command line names a known language: it decides the run's.
         state.shown = named;
-        state.data_word = named->game_name.data();
         state.words = languages::data_words(*named, {});
     } else if (word != nullptr) {
         // A word no entry knows: the game data's texts in it, as 3.1c reads
         // them, and the engine's own words in English.
         state.shown = &languages::english();
-        state.data_word = word;
         state.words = languages::data_words(languages::english(), word);
     } else {
         state.shown = &languages::chosen_language(state.choice, *state.system);
-        state.data_word = state.shown->game_name.data();
         state.words = languages::data_words(*state.shown, {});
     }
+    state.data_word = data_word_for(state.choice);
     // The game data's translation table and fonts, loaded again only for a
     // new word.
     if (!state.loaded || state.loaded_word != state.data_word) {
@@ -220,6 +218,15 @@ const char* Runtime::game_translation(const char* text) const {
 
 const char* Runtime::translation_hook(void* runtime, const char* text) {
     return static_cast<const Runtime*>(runtime)->game_translation(text);
+}
+
+const char* Runtime::data_word_for(std::string_view choice) const {
+    if (const char* word = oa::app::command_line::launch_language(options_.launch);
+        word != nullptr) {
+        const languages::Language* named = languages::find_by_game_name(word);
+        return named != nullptr ? named->game_name.data() : word;
+    }
+    return languages::chosen_language(choice, system_language()).game_name.data();
 }
 
 const char* Runtime::game_language() const {

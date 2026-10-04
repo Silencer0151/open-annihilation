@@ -293,8 +293,10 @@ uint32_t megamap_rings(
     int32_t coverage = 0;
     for (const UnitWeapon& slot : unit.weapons) {
         const WeaponDef* weapon = world_weapon_def(&world, slot.def);
-        if (weapon != nullptr && (weapon->flags & OA_WEAPON_FLAG_INTERCEPTOR) != 0)
-            coverage = std::max<int32_t>(coverage, weapon->coverage);
+        if (weapon != nullptr && (weapon->flags & OA_WEAPON_FLAG_INTERCEPTOR) != 0) {
+            const int32_t weapon_coverage = weapon->coverage;
+            coverage = std::max(coverage, weapon_coverage);
+        }
     }
     add(coverage, minimums[4], kInterceptorRingColor);
     return count;

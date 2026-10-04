@@ -3,10 +3,13 @@
 
 // Unit naming, GAF sequence helpers and game cursors.
 #include "oa/app/runtime.hpp"
+#include "oa/app/asset_files.hpp"
 #include "oa/sim/gameplay_input/order_cursor.hpp"
 #include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -14,18 +17,55 @@
 
 namespace oa::app {
 
+std::size_t Runtime::match_view_side() const {
+    const auto view = match_view_player();
+    return view < skirmish_settings_.slots.size()
+               ? static_cast<std::size_t>(skirmish_settings_.slots[view].side)
+               : 0;
+}
+
 std::string Runtime::match_side_prefix() const {
-    const auto side = static_cast<std::size_t>(
-        match_view_player() < skirmish_settings_.slots.size()
-            ? skirmish_settings_.slots[match_view_player()].side
-            : 0
-    );
+    const auto side = match_view_side();
     if (side < side_table_.count) {
-        const std::string_view commander = side_table_.sides[side].commander;
-        if (commander.size() >= 3 && (commander[0] == 'C' || commander[0] == 'c'))
+        const auto& field = side_table_.sides[side].name_prefix;
+        const std::string_view prefix(field, strnlen(field, sizeof field));
+        const auto upper = [](char c) {
+            return static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        };
+        if (prefix.size() == 3 && upper(prefix[0]) == 'C' && upper(prefix[1]) == 'O' &&
+            upper(prefix[2]) == 'R')
             return "cor";
     }
     return "arm";
+}
+
+std::string Runtime::match_side_panel_gaf() const {
+    return match_side_file(oa::data::defs::SideFile::panels);
+}
+
+std::string Runtime::match_side_font() const {
+    return match_side_file(oa::data::defs::SideFile::font);
+}
+
+std::string Runtime::match_side_file(oa::data::defs::SideFile file) const {
+    const oa::data::defs::Files files = asset_files(assets_);
+    char path[oa::data::defs::path_capacity];
+    if (!oa::data::defs::side_file_path(
+            &files,
+            side_table_,
+            static_cast<uint32_t>(match_view_side()),
+            file,
+            side_files_language_.c_str(),
+            path,
+            sizeof path
+        ))
+        return {};
+    // A file the game data lacks is drawn as none named; a mod warns of it
+    // (mod_start_gaps), and the game without a mod ends as it starts
+    // (require_side_files).
+    if (path[0] == '\0' || files.exists == nullptr || !files.exists(files.context, path))
+        return {};
+    return path;
 }
 
 const oa::data::unit_definitions::UnitDefinition* Runtime::definition_for(uint16_t unit) const {

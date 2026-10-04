@@ -6,11 +6,12 @@
 
 A headless skirmish is staged with units placed by map pixel and gathered
 into groups, and lines timed for later ticks that place another unit, move
-one group, send one on patrol, set one on the other's nearest units and
-switch a radar tower off and on again with the ON/OFF button's orders. The
-run must report each line as its tick comes, the moved group must stand
-nearer its point than where it was placed, a timed placement must hold the
-unit the trace shows, and the radar must be on, then off, then on. A line
+one group, send one on patrol, set one on the other's nearest units, switch
+a radar tower off and on again with the ON/OFF button's orders, command one
+to attack the ground and set one guarding another. The run must report
+each line as its tick comes, the moved group must stand nearer its point
+than where it was placed, a timed placement must hold the unit the trace
+shows, and the radar must be on, then off, then on. A line
 facing nowhere, an order to a group no unit joined, an "at" without an
 action and an "activate" without a group must stop the run with the file
 and line.
@@ -56,6 +57,8 @@ at 40 place 0 ARMPW 380 1780 east
 at 50 deactivate radar
 at 60 attack late raiders
 at 80 activate radar
+at 90 attack-ground late 600 1700
+at 90 guard scouts guards
 """
 SCRIPT = """oascript: 1
 input:
@@ -126,7 +129,9 @@ def check_play(native, game_dir, workdir):
                 "stage: patrol scouts: 1 units to 560,1840", "stage: tick 40", "stage: group late",
                 "stage: tick 50", "stage: deactivate radar: 1 units", "stage: tick 60",
                 "stage: attack late: 1 units on raiders", "stage: tick 80",
-                "stage: activate radar: 1 units"]
+                "stage: activate radar: 1 units", "stage: tick 90",
+                "stage: attack-ground late: 1 units at 600,1700",
+                "stage: guard scouts: 1 units on guards"]
     at = 0
     for line in expected:
         found = out.find(line + "\n", at)

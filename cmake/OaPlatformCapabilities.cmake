@@ -11,8 +11,10 @@
 include_guard(GLOBAL)
 
 # The game may start other programs: the video capture (--capture-video)
-# and the director's encoder run the ffmpeg program. Off, both refuse with
-# "this build starts no other programs" instead of starting it.
+# and the director's encoder run the ffmpeg program, and a folder is shown
+# in the file manager by open or xdg-open. Off, the first two refuse with
+# "this build starts no other programs" instead of starting it, and a folder
+# is shown only where the platform's show_folder hook shows it.
 option(OA_PROCESS_SPAWNING "The game may start other programs (video capture, the director's encoder)" ON)
 # The game may ask for its game folder with the system's folder dialog. Off,
 # no dialog is offered and the platform's advice says where the folder goes.
@@ -40,7 +42,8 @@ endforeach()
 # targets of this directory, which builds each of these files.
 get_filename_component(oa_capability_app_dir "${CMAKE_CURRENT_LIST_DIR}/../src/app" ABSOLUTE)
 set_property(SOURCE "${oa_capability_app_dir}/video_capture.cpp"
-  "${oa_capability_app_dir}/director_output.cpp" "${oa_capability_app_dir}/startup.cpp" APPEND
+  "${oa_capability_app_dir}/director_output.cpp" "${oa_capability_app_dir}/startup.cpp"
+  "${oa_capability_app_dir}/user_folder_open.cpp" APPEND
   PROPERTY COMPILE_DEFINITIONS "OA_PROCESS_SPAWNING=${oa_OA_PROCESS_SPAWNING_value}")
 set_property(SOURCE "${oa_capability_app_dir}/game_directory_dialog.cpp" APPEND
   PROPERTY COMPILE_DEFINITIONS "OA_NATIVE_FOLDER_DIALOG=${oa_OA_NATIVE_FOLDER_DIALOG_value}")

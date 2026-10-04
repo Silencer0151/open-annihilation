@@ -131,9 +131,10 @@ void rec_dirs(void*, const char* path) {
 void rec_poster(
     void*, const char* dir, const char* prefix, int32_t x, int32_t y, int32_t w, int32_t h
 ) {
-    char text[256];
-    std::snprintf(text, sizeof text, "poster %s %s %d %d %d %d", dir, prefix, x, y, w, h);
-    g_rec.calls.push_back(text);
+    g_rec.calls.push_back(
+        std::string("poster ") + dir + " " + prefix + " " + std::to_string(x) + " " +
+        std::to_string(y) + " " + std::to_string(w) + " " + std::to_string(h)
+    );
 }
 
 uint32_t rec_now(void*) {
@@ -188,6 +189,22 @@ void rec_search_nodes(void*, int32_t nodes) {
 
 void rec_search_weight(void*, int32_t weight) {
     g_rec.calls.push_back("search weight " + std::to_string(weight));
+}
+
+// The folder rec_output_directory gives.
+std::string g_long_output;
+
+const char* rec_output_directory(void*) {
+    return g_long_output.c_str();
+}
+
+/// Returns a folder longer than any of the game's path fields: 600 characters
+/// in folders of 100.
+std::string long_folder() {
+    std::string folder = "c:";
+    for (int depth = 0; depth < 6; ++depth)
+        folder += "\\" + std::string(99, static_cast<char>('a' + depth));
+    return folder;
 }
 
 console::ConsoleHost make_host() {
@@ -695,6 +712,21 @@ void test_film_and_poster() {
     g_rec.calls.clear();
     f.run("MakePoster 10 10"); // clamped up to the view size, centred on it
     CHECK(g_rec.calls[1] == "poster c:\\movies\\screenshots BIGSHOT 100 50 640 480");
+    // An empty Game.output_directory defers to the host's folder, which the
+    // field could not hold.
+    const std::string deep = long_folder();
+    g_long_output = deep;
+    f.host.output_directory = rec_output_directory;
+    CHECK(console::output_directory(f.game(), &f.host) == "c:\\movies");
+    f.game().output_directory[0] = '\0';
+    CHECK(console::output_directory(f.game(), &f.host) == deep);
+    CHECK(console::output_directory(f.game(), nullptr).empty());
+    g_rec.calls.clear();
+    f.run("MakePoster 10 10");
+    CHECK(g_rec.calls.size() == 2);
+    CHECK(g_rec.calls[0] == "mkdir " + deep + "\\screenshots");
+    CHECK(g_rec.calls[1] == "poster " + deep + "\\screenshots BIGSHOT 100 50 640 480");
+    f.host.output_directory = nullptr;
     g_rec.calls.clear();
     f.run("Save test");
     CHECK(g_rec.calls[0] == "mkdir savegame");
@@ -997,6 +1029,25 @@ void test_hotkeys() {
     CHECK((g_keys.calls == std::vector<std::string>{"list out\\MOVIE*", "movie out\\MOVIE012"}));
     console::hotkey_dispatch(&f.con, &keys, console::hotkey::control_f10);
     CHECK(f.game().capture_enabled == 0);
+
+    // A folder too long for Game.output_directory comes from the host, and
+    // the movie folder too long for Game.capture_path is given whole to the
+    // host while the field is left empty.
+    const std::string deep = long_folder();
+    g_long_output = deep;
+    f.host.output_directory = rec_output_directory;
+    f.game().output_directory[0] = '\0';
+    g_keys.calls.clear();
+    g_keys.listing = {"MOVIE002"};
+    console::hotkey_dispatch(&f.con, &keys, console::hotkey::control_f10);
+    CHECK(f.game().capture_enabled == 3);
+    CHECK(f.game().capture_path[0] == '\0');
+    CHECK(
+        (g_keys.calls ==
+         std::vector<std::string>{"list " + deep + "\\MOVIE*", "movie " + deep + "\\MOVIE003"})
+    );
+    console::hotkey_dispatch(&f.con, &keys, console::hotkey::control_f10);
+    f.host.output_directory = nullptr;
 }
 
 // ScrollSpeed keeps the low byte and IFace the whole value, both saving;
@@ -1026,15 +1077,18 @@ void test_indexed_names() {
     const console::HotkeyHost keys = make_key_host();
     g_keys = KeyRecorder{};
     g_keys.listing = {"SHOT0007.PCX", "SHOT0002.PCX"};
-    char name[128];
-    console::next_indexed_file_name(name, sizeof name, &keys, "shots", "SHOT", "PCX");
-    CHECK(std::strcmp(name, "shots\\SHOT0008.PCX") == 0);
+    CHECK(console::next_indexed_file_name(&keys, "shots", "SHOT", "PCX") == "shots\\SHOT0008.PCX");
     CHECK(g_keys.calls.back() == "list shots\\SHOT*.PCX");
     g_keys.listing.clear();
-    console::next_indexed_file_name(name, sizeof name, &keys, "dir\\", "A", "pcx");
-    CHECK(std::strcmp(name, "dir\\A0001.pcx") == 0);
-    console::next_indexed_file_name(name, sizeof name, &keys, "", "A", "pcx");
-    CHECK(std::strcmp(name, "A0001.pcx") == 0);
+    CHECK(console::next_indexed_file_name(&keys, "dir\\", "A", "pcx") == "dir\\A0001.pcx");
+    CHECK(console::next_indexed_file_name(&keys, "", "A", "pcx") == "A0001.pcx");
+    // A directory deeper than any of the game's fields is kept whole.
+    const std::string deep = long_folder();
+    CHECK(
+        console::next_indexed_file_name(&keys, deep.c_str(), "BIGSHOT", "bmp") ==
+        deep + "\\BIGSHOT0001.bmp"
+    );
+    CHECK(g_keys.calls.back() == "list " + deep + "\\BIGSHOT*.bmp");
 }
 
 void key_team_menu(void*) {

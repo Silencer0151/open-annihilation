@@ -187,14 +187,14 @@ std::optional<HardwareAcceleration> stored_acceleration(std::string_view text) {
     return number->value > 0 ? HardwareAcceleration::full : HardwareAcceleration::off;
 }
 
-/// A switch of the Language & Text, the Touch or the Game files section: its
-/// key and the member of EngineSettings it is.
+/// A switch of the Language, the Touch or the Game files section: its key
+/// and the member of EngineSettings it is.
 struct TextSwitch {
     std::string_view key;            ///< its preferences key
     bool EngineSettings::* member{}; ///< its value
 };
 
-/// The Language & Text switches, read and written alike.
+/// The Language switches, read and written alike.
 constexpr std::array<TextSwitch, 4> text_switches{{
     {key::modern_fonts, &EngineSettings::modern_fonts},
     {key::text_outline, &EngineSettings::text_outline},
@@ -203,7 +203,7 @@ constexpr std::array<TextSwitch, 4> text_switches{{
 }};
 
 /// The Touch and Game files sections' switches, read and written as the
-/// Language & Text ones.
+/// Language ones.
 constexpr std::array<TextSwitch, 3> touch_switches{{
     {key::touch_haptics, &EngineSettings::touch_haptics},
     {key::touch_left_handed, &EngineSettings::touch_left_handed},
@@ -363,11 +363,17 @@ EngineSettings read_settings(
     if (const auto number = stored_number(values, key::text_size))
         settings.text_size = clamped(*number, lowest_text_size, highest_text_size);
     settings.language = stored_language(values, inputs.players_own_profile);
+    if (const auto found = values.find(std::string{key::picked_mod_directory});
+        found != values.end())
+        settings.picked_mod_folder = found->second;
     if (const auto found = values.find(std::string{key::mod_directory}); found != values.end()) {
-        const auto offered =
-            std::find(inputs.mod_folders.begin(), inputs.mod_folders.end(), found->second);
-        if (offered != inputs.mod_folders.end())
-            settings.mod = static_cast<uint16_t>(offered - inputs.mod_folders.begin() + 1);
+        settings.mod_folder = found->second;
+        // A folder the game folder does not offer was picked: it is kept as
+        // the picked one, which the Mods page lists.
+        if (!settings.mod_folder.empty() &&
+            std::find(inputs.mod_folders.begin(), inputs.mod_folders.end(), settings.mod_folder) ==
+                inputs.mod_folders.end())
+            settings.picked_mod_folder = settings.mod_folder;
     }
     if (const auto number = stored_number(values, key::developer_mode))
         settings.developer_mode = *number > 0;
@@ -393,14 +399,21 @@ void write_settings(
     const EngineSettings& chosen,
     const EngineSettings& defaults,
     bool restored,
-    std::span<const std::string> mod_folders,
     std::string_view profile_id
 ) {
-    // No mod is stored as no key, never as an empty path.
-    if ((restored && chosen.mod == defaults.mod) || (chosen.mod != opened.mod && chosen.mod == 0))
-        values.erase(std::string{key::mod_directory});
-    else if (chosen.mod != opened.mod && chosen.mod <= mod_folders.size())
-        values[std::string{key::mod_directory}] = mod_folders[chosen.mod - 1U];
+    // No mod, and no picked folder, is stored as no key, never as an empty
+    // path.
+    const auto store_folder = [&values](std::string_view key, const std::string& folder) {
+        if (folder.empty())
+            values.erase(std::string{key});
+        else
+            values[std::string{key}] = folder;
+    };
+    if ((restored && chosen.mod_folder == defaults.mod_folder) ||
+        chosen.mod_folder != opened.mod_folder)
+        store_folder(key::mod_directory, chosen.mod_folder);
+    if (chosen.picked_mod_folder != opened.picked_mod_folder)
+        store_folder(key::picked_mod_directory, chosen.picked_mod_folder);
     store(
         values,
         key::path_search_nodes,
@@ -644,6 +657,11 @@ Locks settings_locks(const GameState& state) noexcept {
                                                                                  : Lock::none;
     // The language changes only what players read, so no game locks it.
     locks.language = state.language_from_command_line ? Lock::command_line : Lock::none;
+    // A game keeps the mod it plays; the main menu chooses another. The
+    // command line's lock says more, so it wins.
+    locks.mod = state.mod_from_command_line ? Lock::command_line
+                : state.in_game             ? Lock::in_game
+                                            : Lock::none;
     return locks;
 }
 

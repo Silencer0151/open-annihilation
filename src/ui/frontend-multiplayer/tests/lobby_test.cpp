@@ -1778,7 +1778,10 @@ void test_machine_groups() {
             "a new machine gets a group"
         );
         expect(answered(kGuest, 2), "the first free group after the host's is 2");
-        expect(loopback.sent_to[loopback.sent_count - 1] == 0, "the answer goes to all players");
+        expect(
+            loopback.sent_count > 0 && loopback.sent_to[loopback.sent_count - 1] == 0,
+            "the answer goes to all players"
+        );
         expect(
             mp::lobby_apply_event(
                 lobby, record_event(kGuest, group_request(1, kGuestComputer, kGuest))
@@ -1896,10 +1899,10 @@ void test_machine_groups() {
         const std::string long_text(80, 'y');
         mp::lobby_say(lobby, mp::local_player(lobby), long_text.c_str());
         const auto said = loopback.sent_count - 1;
-        const uint8_t* said_text = loopback.sent[said] + 1;
+        const uint8_t* said_text = said >= 0 ? loopback.sent[said] + 1 : nullptr;
         expect(
-            loopback.sent_size[said] == 65 && std::memchr(said_text, 0, 64) == nullptr &&
-                said_text[63] == 'y',
+            said_text != nullptr && loopback.sent_size[said] == 65 &&
+                std::memchr(said_text, 0, 64) == nullptr && said_text[63] == 'y',
             "a long line fills the chat record's text"
         );
         oa::netgame::SlotTableRecord table{};
@@ -4148,6 +4151,9 @@ void test_add_player_and_description() {
     request.data[0] = static_cast<uint8_t>(oa::netgame::RecordType::player_value_request);
     request.data[1] = 4;
     expect(mp::lobby_apply_event(lobby, request), "the host answers a colour request");
+    expect(loopback.sent_count > 0, "the colour reply is sent");
+    if (loopback.sent_count == 0)
+        return;
     const auto* reply = loopback.sent[loopback.sent_count - 1];
     expect(
         reply[0] == static_cast<uint8_t>(oa::netgame::RecordType::player_value_reply) &&

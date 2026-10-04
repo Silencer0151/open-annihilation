@@ -395,7 +395,7 @@ void unit_values_map_to_canonical_fields() {
     require(get(us::UnitValue::atan, 0x00010000, 0x00020000) == 0x12, "atan of explicit vector");
     require(
         get(us::UnitValue::hypot, 3, 4) == 7 &&
-            get(us::UnitValue::xz_hypot, 0x00010002) == 0x00030000,
+            get(us::UnitValue::xz_hypot, 0x00010002) == 0x00030000 && hypot_services == 2,
         "hypot services"
     );
     require(

@@ -74,10 +74,9 @@ bool parse_side_layout(std::string_view sidedata, int32_t side, SideLayout& layo
     }
     if (s == nullptr)
         return false;
-    layout.metal_color =
-        static_cast<uint8_t>(oa::formats::tdf::get_int(s, "metalcolor", layout.metal_color));
-    layout.energy_color =
-        static_cast<uint8_t>(oa::formats::tdf::get_int(s, "energycolor", layout.energy_color));
+    // The bars' colours are 0 when the section has no key, as 3.1c reads them.
+    layout.metal_color = static_cast<uint8_t>(oa::formats::tdf::get_int(s, "metalcolor", 0));
+    layout.energy_color = static_cast<uint8_t>(oa::formats::tdf::get_int(s, "energycolor", 0));
     if (const auto bar = tdf_rect(s, "METALBAR"); bar.width > 0)
         layout.metal_bar = bar;
     if (const auto bar = tdf_rect(s, "ENERGYBAR"); bar.width > 0)

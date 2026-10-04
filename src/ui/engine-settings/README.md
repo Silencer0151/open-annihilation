@@ -14,23 +14,25 @@ the locks a running game puts on them (`settings_locks`).
 
 | Section | Setting | Range | Default | Key |
 |---|---|---|---|---|
-| AI & Pathfinding | Pathfinding cycles | 1× to 8× of 1333 path nodes a tick, or of a mod's budget | 1× | `open-annihilation.path-search-nodes` |
-| Controls & Input | Mouse wheel zoom | Off, On | On | `open-annihilation.wheel-zoom` |
+| Mods | Mod | No Mod, or one of the mod folders the game finds | No Mod | `open-annihilation.mod-directory` (the folder's path; absent for No Mod) |
+| | A mod folder chosen outside the folders the game finds, kept as stored | any folder | none | `open-annihilation.picked-mod-directory` (the folder's path; absent for none) |
+| Controls | Mouse wheel zoom | Off, On | On | `open-annihilation.wheel-zoom` |
 | | Escape opens the game menu | Off, On | On on macOS, Off elsewhere and with `--preferences-file` | `open-annihilation.escape-opens-menu` |
 | | Select groups without Alt | Off, On | Off | 3.1c's SwitchAlt |
-| Gameplay | Unit limit | 50 to 1500 per player, steps of 50, or on to a mod's higher maximum | the installation's `totala.ini` UnitLimit, else 250 or a mod's default | `open-annihilation.unit-limit` |
-| | Mod, from the next start | None, or one of the mod folders the game folder offers | None | `open-annihilation.mod-directory` (the folder's path; absent for None) |
-| Graphics | Maximum frame rate | 30 to 120, steps of 5 | 120; 60 on a Raspberry Pi or a light machine with the player's own preferences file | `open-annihilation.max-fps` |
-| | Enhanced anti-aliasing | Off, 2×, 4×, 8×, 16×; a stored level between reads as the one below it, a stored 3 as 2× | Off, a Raspberry Pi and a light machine included | `open-annihilation.anti-aliasing` |
-| | Screen size, from the next start | Desktop, 640×480, 800×600, 1024×768, 1280×1024 | Desktop; 800×600 on a light machine with the player's own preferences file, 640×480 when its desktop is smaller | `open-annihilation.screen-size` (`desktop` or `800x600`) |
-| | Hardware acceleration | Off, Basic, Full | Full with the player's own preferences file on every machine; Off with `--preferences-file` | `open-annihilation.hardware-acceleration` (`off`, `basic` or `full`) |
-| | Vertical sync | Off, On | Off | `open-annihilation.vertical-sync` |
-| Language & Text | Language | System default, English, Deutsch, Español, Français, Italiano | System default with the player's own preferences file; English with `--preferences-file` | `open-annihilation.language` (`system` or a language's tag, as `de`) |
+| Common Tweaks | Your files: the player's own folder and buttons that open its Saves, Screenshots and Mods folders | changes no setting | | `open-annihilation.user-folder`, read at start (`src/app/include/oa/app/user_folder.hpp`) |
+| | Unit limit | 50 to 1500 per player, steps of 50, or on to a mod's higher maximum | the installation's `totala.ini` UnitLimit, else 250 or a mod's default | `open-annihilation.unit-limit` |
+| | Pathfinding cycles | 1× to 8× of 1333 path nodes a tick, or of a mod's budget | 1× | `open-annihilation.path-search-nodes` |
+| Language | Language | System default, English, Deutsch, Español, Français, Italiano | System default with the player's own preferences file; English with `--preferences-file` | `open-annihilation.language` (`system` or a language's tag, as `de`) |
 | | Use modern fonts for game text | Off, On | On with the player's own preferences file; Off with `--preferences-file` | `open-annihilation.modern-fonts` |
 | | Text size, of the modern fonts | 50% to 300% of the game fonts' sizes, steps of 10% | 80% | `open-annihilation.text-size` |
 | | Font outline | Off, On | On | `open-annihilation.text-outline` |
 | | Font shadow | Off, On | On | `open-annihilation.text-shadow` |
 | | Game text background | Off, On | Off | `open-annihilation.text-background` |
+| Graphics | Maximum frame rate | 30 to 120, steps of 5 | 120; 60 on a Raspberry Pi or a light machine with the player's own preferences file | `open-annihilation.max-fps` |
+| | Enhanced anti-aliasing | Off, 2×, 4×, 8×, 16×; a stored level between reads as the one below it, a stored 3 as 2× | Off, a Raspberry Pi and a light machine included | `open-annihilation.anti-aliasing` |
+| | Screen size, from the next start | Desktop, 640×480, 800×600, 1024×768, 1280×1024 | Desktop; 800×600 on a light machine with the player's own preferences file, 640×480 when its desktop is smaller | `open-annihilation.screen-size` (`desktop` or `800x600`) |
+| | Hardware acceleration | Off, Basic, Full | Full with the player's own preferences file on every machine; Off with `--preferences-file` | `open-annihilation.hardware-acceleration` (`off`, `basic` or `full`) |
+| | Vertical sync | Off, On | Off | `open-annihilation.vertical-sync` |
 | Touch, listed only while the game has touch controls | One-finger drag | Automatic (a selection box on a tablet, scrolling on a phone), Box, Scroll | Automatic | `open-annihilation.touch-drag` (`automatic`, `box` or `scroll`) |
 | | Hold delay | 250 to 700 ms, steps of 50; a stored delay is held to the range and put on its nearest step | 350 ms | `open-annihilation.touch-hold-delay` |
 | | QUEUE and ADD | Stay on, One action | Stay on | `open-annihilation.touch-latches` (`stay-on` or `one-action`) |
@@ -39,7 +41,7 @@ the locks a running game puts on them (`settings_locks`).
 | Game files, listed only in the main menu's dialog where the platform brings game files in | Include in device backups | Off, On | Off | `open-annihilation.game-files-backed-up` |
 | Developer | Enable Developer Mode | Off, On | Off | `open-annihilation.developer-mode` |
 | | Show performance statistics | Off, On | Off | `open-annihilation.frame-stats` |
-| | The overrides of the profile's standard hacks, in Developer Mode's list | any hack on or off, with its parameters | none | `open-annihilation.hack-overrides.<id>`, the id of the profile the game plays, `ta-3.1c` without a mod |
+| | The overrides of the profile's standard hacks, in Developer Mode's list | any hack on or off, with its parameters | none | `open-annihilation.hack-overrides.<id>`, the id of the profile the game plays, `ta-3.1c` without a mod, `folder:<path>` for a mod folder without a profile |
 
 The Touch section is the same everywhere, every machine and preferences
 file alike. A stored One-finger drag or QUEUE and ADD that is none of their
@@ -140,7 +142,7 @@ the run, and the row shows "Set on the command line". A new choice shows at
 once in what is drawn each frame; screens and panels already open show it
 once they open again.
 
-The rest of the Language & Text settings say how game text is drawn. Use modern fonts
+The rest of the Language settings say how game text is drawn. Use modern fonts
 for game text draws it in modern fonts, which hold the letters of many
 languages, in place of the game's own 8-bit fonts; Text size scales every
 size those fonts are drawn at together, from half the game fonts' sizes to
@@ -169,10 +171,64 @@ draws the size is in the application's README and on the
 [ui.text-rendering](../../../docs/mods/standard-hacks/ui.text-rendering.md)
 page.
 
+Mods chooses the mod folder the game plays, layered over the game folder
+as `--mod-dir` would play it. It lists one row a mod, in a view of its own
+that scrolls by the wheel, its scroll bar, Page Up, Page Down, Home and End
+while the rows are taller than it, with OPEN MODS FOLDER and the two lines
+naming the folders listed fixed under it. The mod the game plays comes
+first, marked PLAYING (`ModOffer::playing`); then No Mod, when another mod
+plays; then every mod folder the host offers (`ModOffer::names`,
+`ModOffer::folders`), by its title, whatever the case of its letters
+(`mod_rows`). A row shows the mod's badge, its title, its version at the
+right and its description under them (`ModDetails`, read from the folder's
+`oamod.yaml` and the `oamod.png` beside it): a dashed square stands for a
+mod without a badge, and No Mod shows the OA mark, the version "3.1c" and
+"The game's own rules, as 3.1c plays them." A folder without an
+`oamod.yaml` shows its folder's name, "N/A" and "No oamod.yaml present" in
+amber. A title, a version or a description too long for its place is cut
+with "...".
+
+A press on a row other than the one played, or Space on it, asks the
+Switch Mod question over the dialog: the mod's badge, title and version,
+"Switch to <title> now? The game reloads its data for the new mod and
+returns to the main menu. Your other settings are kept.", and, for a
+folder without an `oamod.yaml`, "This folder has no oamod.yaml, so the
+game's own rules apply." in amber, each broken into the lines that fit,
+with CANCEL and SWITCH. Until it is answered the question takes every
+pointer event and key: Y, or Enter or Space on a marked SWITCH, answers
+SWITCH; N, Escape, or Enter or Space on a marked CANCEL, answers CANCEL;
+Left marks CANCEL, Right SWITCH, and Tab and Shift+Tab move the mark,
+SWITCH at first; a press and release on a button answers it. Y and N do
+nothing while no question shows. CANCEL leaves the settings as they were;
+SWITCH sets the Mod to the folder (`EngineSettings::mod_folder`, cleared
+for No Mod) and asks the host to keep the settings, close the dialog and
+reload the game for that mod on the main menu (`DialogAction::switch_mod`).
+OPEN MODS FOLDER asks the host to open the player's own Mods folder in the
+system's file manager (`DialogAction::open_folder` with
+`FolderButton::mods`), as Your files' MODS button does; a folder that
+cannot be opened is said, in amber, in place of the second line under it
+(`set_folder_notice`).
+
+During a game (`Locks::mod`, `Lock::in_game`) Mods is locked: "Locked
+during a game. Choose the mod from the main menu." shows over the list
+beside a padlock, the rows other than the one played are dimmed, no row
+takes a press or the focus, and OPEN MODS FOLDER is disabled. While
+`--mod-dir` or `--base-game` decides the run's mod
+(`GameState::mod_from_command_line`, `Lock::command_line`), it is locked
+the same way, with "The command line chose this run's mod." A stored mod
+folder the game folder does not offer reads as the stored one
+(`EngineSettings::picked_mod_folder`); a file without either key, as
+earlier versions wrote, reads No Mod. Developer Mode keeps its overrides
+under the id of the profile the game plays, and No Mod the plain 3.1c
+baseline's (`ta-3.1c`), which no mod's profile can take. A mod folder
+without a profile keeps its own under `folder:` and its path
+(`folder_overrides_id` in the application), which no profile's kebab-case
+id can be either.
+
 Developer Mode is described [below](#developer-mode).
 
 With every default the game plays as it does without the settings. Pathfinding
-cycles and Unit limit are locked during a game; a shared game or a replay
+cycles, Unit limit and Mod are locked during a game; a shared game or a replay
 always plays at 1× pathfinding and the host's unit limit. Vertical sync is
 locked during a shared game or a replay, its value set before the game kept
 in effect; Hardware acceleration never is, so that it can always be set to
@@ -221,16 +277,17 @@ edge and hairline rules, and one green accent for what is selected:
 - the header: the Open Annihilation icon, 20 by 20 source pixels, "OPEN
   ANNIHILATION SETTINGS" and the version, with "Shared game - still
   running" in amber while a shared game keeps running;
-- the sections down the left (AI & Pathfinding, Controls & Input,
-  Gameplay, Graphics, Language & Text, Touch while the game has touch
-  controls, and Game files where the host lists it), Developer after a
-  line, the open one marked;
+- the sections down the left (Mods, Controls, Common Tweaks, Language,
+  Graphics, Touch while the game has touch controls, and Game files where
+  the host lists it), Developer at the foot after a line, the open one
+  marked;
 - the open section's heading and rows: a label, a hint of one or two lines,
   and an Off/On switch, a level strip (Off, 2x, 4x, 8x, 16x for Enhanced
   anti-aliasing; Off, Basic, Full for Hardware acceleration; Automatic,
   Box, Scroll for One-finger drag; Stay on, One action for QUEUE and ADD),
   a slider with stops and its value under the hint, or a drop-down under
-  the hint: a field showing the choice, with an arrow at its right;
+  the hint (Language): a field showing the choice, with an arrow at its
+  right; Mods shows its list of mods in their place;
 - Restore defaults, Cancel and OK along the bottom.
 
 A section holds any number of rows. They lie in a view under the section's
@@ -241,10 +298,11 @@ the last row's line, are taller than the view scrolls by whole source
 pixels, and shows a scroll bar in the margin right of its rows: a well like
 a switch's, its thumb as tall as the view's share of the section and never
 under 16 pixels. Graphics, with five rows, is taller than its view by 80
-pixels, Language & Text, with the Language drop-down, four switches
-and the Text size slider, by 129, and Touch, with its two strips, the Hold
-delay slider and two switches, by 62; every other section fits and draws as
-if there were no scrolling,
+pixels, Language, with the Language drop-down, four switches and the
+Text size slider, by 129, and Touch, with its two strips, the Hold delay
+slider and two switches, by 62; Controls and Common Tweaks fit, Common
+Tweaks' Your files and two sliders in 210 pixels, and draw as if there were
+no scrolling,
 with no bar. Each section keeps its offset while the
 dialog is open, and every section starts at its top each time it opens. A
 row the view cuts shows the part inside it and takes a press only there;
@@ -276,13 +334,13 @@ The Touch section is listed only while the game has touch controls:
 `Dialog::touch`, which the host gives `open_dialog` and keeps with
 `set_touch_controls` each frame, so that Touch shows from the moment a
 finger turns the touch controls on (`dialog_pages(kind, touch)`). A dialog
-asked to open on Touch without them opens on AI & Pathfinding.
+asked to open on Touch without them opens on its first section, Mods.
 
-The Game files section is listed, between Touch (or Language & Text) and
+The Game files section is listed, between Touch (or Graphics) and
 Developer, only where the host says so (`Dialog::game_files`, given to
 `open_dialog`): the main menu's dialog of a game whose platform brings game
-files in. A dialog asked to open on Game files without it opens on AI &
-Pathfinding. Its three rows:
+files in. A dialog asked to open on Game files without it opens on its
+first section, Mods. Its three rows:
 
 - Installed: what is installed and, under it, the sizes line, both the
   host's texts (`Dialog::game_files_summary`, `game_files_sizes`), with
@@ -304,7 +362,7 @@ Pathfinding. Its three rows:
 The host's texts keep to their lines' columns as they are drawn.
 
 `open_language_text_dialog` opens a dialog of the third kind,
-`DialogKind::language_text`: Language & Text alone, its entry at the top
+`DialogKind::language_text`: Language alone, its entry at the top
 of the list, with Restore defaults, which restores that section's
 settings alone (each locked one kept), Cancel and OK. The Game files
 screen opens it before the game's files are installed: given
@@ -498,14 +556,45 @@ there resets the mod options alone, and the engine's settings keep their
 values. The application keeps the mod options with the player's other view
 settings; this library neither reads nor writes them.
 
+## Your files and the notice
+
+Common Tweaks' first row, Your files (`Setting::user_folder`, `is_buttons`),
+changes no setting. Its first hint line shows the player's own folder
+(`Dialog::user_folder`, which the host sets as the dialog opens) by its
+tail that fits (`shown_hint_text`, `path_tail`); its second says "Saved
+games, screenshots, films and mods.", or in amber why the last folder asked
+for could not be shown (`set_folder_notice`). Three buttons, SAVES,
+SCREENSHOTS and MODS, stand right-aligned on its label line, drawn as
+Cancel is. A click released on the button it pressed, or Space on the
+button the keys mark, asks the host to show that folder
+(`DialogAction::open_folder`, `Dialog::folder_to_open`) and leaves the
+dialog open; Left and Right move the mark along the buttons.
+
+`notice.hpp` is a notice of Open Annihilation's own in the dialog's look,
+which the main menu shows over itself: a raised panel 400 pixels wide, a
+header with the icon (or the OA mark) and a title, its text in white in
+the small font, wrapped between words (`wrap_text`), a folder's path in the
+regular font broken after its separators (`wrap_path`), why its folder
+could not be opened in amber, and a footer with a button that opens the
+folder, drawn as Cancel is, and OK; it grows with its text from 150 to 440
+pixels (`notice_height`, `notice_layout`, `draw_notice`). A click released
+on the button it pressed presses it; a finger's press on neither button
+takes the nearer one within reach, and its release where the finger landed
+presses it (`notice_finger_down`); Enter and Escape close it; Space
+presses the marked button, OK at first; Left, Right, Up, Down, Tab and
+Shift+Tab move the mark (`notice_pointer_*`, `notice_key`).
+
 ## Tests
 
 `ui-engine-settings` covers the defaults, a Raspberry Pi's and a light
 machine's included, the keys read and written, Hardware acceleration's
 words and the numbers its switch once wrote, words that are no number, and
-the locks of a game, the flags and the renderer, and the Language & Text
+the locks of a game, the flags and the renderer, and the Language
 switches and text size: their defaults, 80% among them, a file without
-them, a file with CR LF line ends, the round trip, the size's range and
+them, a file with CR LF line ends, the mod and the picked folder stored as
+their paths, No Mod keeping the picked folder, a mod folder not offered
+read as the picked one, and files without the keys; the round trip, the
+size's range and
 clamping, Restore defaults and the text style they make; the language:
 its defaults, a file without it, the values read, a tag the game does not
 know kept in the file, the round trip, Restore defaults and the command
@@ -522,13 +611,30 @@ panel and none overlapping), its sections, switches and their one table,
 slider stops, both level strips, keys, footer buttons, locks and the faces
 it draws; the OA button's icon at its size in both buttons, at rest, under
 the pointer, held and twice as large, and the mark without it; with the
-installed game, the header's icon in its place and the mark without it; Language & Text's drop-down, four switches and Text size slider,
+installed game, the header's icon in its place and the mark without it;
+the sections' order and names, Developer at the foot under the divider,
+and Common Tweaks holding Your files over the unit limit and pathfinding;
+Language's drop-down, four switches and Text size slider,
 their place in the list, their texts, clicks, drags and keys on them, the
 text style they set, the slider's 26 stops from 50% to 300%, and its lock
 while the modern fonts are Off, lifted as they turn On; the Language
 drop-down's choices, each language named in itself, its field and list,
 the pointer and the keys on them, a press off the list, the command line's
-lock, and lists that scroll or open over their field; the Graphics section's five rows, their places at every offset
+lock, and lists that scroll or open over their field; Mods: the mod
+played first, then No Mod while another plays, then the others by title,
+each row's badge, dashed square or OA mark, title, version and
+description, a folder without an `oamod.yaml` shown by its name with
+"N/A" and "No oamod.yaml present", long texts cut with "...", the list
+scrolled by the wheel, the scroll bar, Page Up, Page Down, Home and End
+under twenty mods while OPEN MODS FOLDER and its lines stay put, the
+Switch Mod question asked by a press or Space, its parts over the dialog,
+CANCEL leaving the settings, SWITCH choosing the mod or clearing it for No
+Mod, the note for a folder without an `oamod.yaml`, the keys Y, N, Enter,
+Escape, Left, Right, Tab and Shift+Tab on it, the rest of the dialog taking
+nothing meanwhile, the locks during a game and by the command line with
+their notes, inert rows and disabled button, and OPEN MODS FOLDER asking
+for the Mods folder;
+the Graphics section's five rows, their places at every offset
 and under every lock, the focus scrolling them into view, both forms of a
 locked row, every status of Hardware acceleration, Full's included, and
 the requests to try the graphics card afresh; on sections of the test's own taller than the
@@ -551,21 +657,28 @@ its entry down, and a finger's press taking the nearest control within
 reach (15 points off a switch takes it, 30 points off nothing, a mouse
 press 15 points off nothing) at several scales, a slider dragged from under
 its track and an open list's nearest item; Game files: listed only with
-its flag, between Touch or Language & Text and Developer, the line and
+its flag, between Touch or Graphics and Developer, the line and
 Developer under it, its entry numbered 7 with Touch 5 and Developer 6, the
 focus walking it, its three rows and their texts, MANAGE… returning
 `manage_game_files` to a click, to Space and to a finger beside it, the
 switch by either half and the keys, Restore defaults and Cancel, where the
 files are taking no press and no focus, and the lines a location breaks
-into; the Language & Text dialog: its one entry at the top, its focus,
+into; the Language dialog: its one entry at the top, its focus,
 Restore defaults restoring its section alone and keeping a locked
 language, and with fonts that hold no glyphs every text drawn and measured
-in scripted modern fonts; and
+in scripted modern fonts; Your files: its place, its buttons under the
+pointer and the keys, its amber line and a long folder's tail; the notice:
+its text wrapped and its path broken at its separators, its parts kept
+apart, its buttons, keys and colours; and
 `ui-engine-settings-dialog-data` its fonts, and every text
 fitting its place in them, a scrolled section's at every offset included,
 Touch's with each way of its strips, every status line in the 309 columns
 of a hint, the Game files section with a host's usual texts and the
-Language & Text dialog, and every row of
+Language dialog, Mods under each lock and with a notice, the Switch Mod
+question for every mod, a long title's among them, and its note for a
+folder without an `oamod.yaml` whole, Your files with a long folder and
+each reason a folder could not be shown, the notice with a long path and a
+failure, and every row of
 Developer Mode's list with every area and hack open and every hack on,
 over the installed game. `native-engine-settings` sends the wheel and the
 scroll keys through the main menu's and the match's dialog, turns Vertical
@@ -575,8 +688,16 @@ waits for the game's end. It also finds Text size locked with the modern
 fonts Off, turns them On and raises the size a stop, which the text style
 reads at once and OK saves, and chooses Deutsch from the Language
 drop-down, which puts German in effect at once, and steps back to English.
-With touch controls on it finds Touch listed between Language & Text and
+With touch controls on it finds Touch listed between Graphics and
 Developer with its rows at their defaults, and a finger's press beside
 Haptics' switch taking it where a mouse press there does nothing; in the
 match, it checks that on a phone the dialog and the OA button fit the
 safe area.
+On Mods it finds No Mod played first and a folder stored by an earlier
+version's Pick Folder... listed by its oamod.yaml's name; a click on that
+row asks the Switch Mod question, which Escape and CANCEL put away with the
+Mod unchanged; --base-game locks the page with its note, and a start that
+plays a folder without a profile keeps the overrides under the folder's own
+id. Over a match it finds Mods locked with its note, the mod played first,
+and neither a press nor a key asking to switch. `native-mod-switch` switches
+the mod ten times through the question, each a soft restart.

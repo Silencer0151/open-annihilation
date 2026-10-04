@@ -86,7 +86,14 @@ def extract_source(archive, source):
     """Unpack archive next to source (its top-level directory) unless present."""
     if not source.exists():
         with tarfile.open(archive, "r:gz") as bundle:
-            bundle.extractall(source.parent, filter="data")
+            # Python releases without extraction filters (before 3.11.4,
+            # 3.10.12 and 3.9.17) unpack every member as the archive gives
+            # it; the archive's SHA-256 is pinned, so its members are the
+            # release's own.
+            if hasattr(tarfile, "data_filter"):
+                bundle.extractall(source.parent, filter="data")
+            else:
+                bundle.extractall(source.parent)
 
 
 def sdl_source(deps, version=VERSION, sha256=None):

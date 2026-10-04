@@ -59,7 +59,8 @@ class SdlWavPlayer {
     /// stops the oldest; a sound plays on at most sample_buffers voices at
     /// once, and a further start of it restarts the one that has played
     /// furthest, which then holds two voices until it stops. Each sound file
-    /// is decoded on its first start and kept, with up to 4 MiB of others.
+    /// is decoded on its first start, converted once to 16 bits at the
+    /// mixer's rate, and kept, with up to 8 MiB of others in that form.
     ///
     /// @param resource Archive path of the WAV file.
     /// @param volume Voice volume in hundredths of a decibel, heard relative to

@@ -60,7 +60,7 @@ struct ButtonPresentation {
     // outline (focus_rings) is lit round it, inside the panel's root.
     bool focused = false;
     // The caption is game text, such as a player's name, which the
-    // Language & Text settings may draw in the modern fonts.
+    // Language settings may draw in the modern fonts.
     bool game_text = false;
 };
 
@@ -71,7 +71,7 @@ struct ListPresentation {
     std::span<const std::string> items;
     std::size_t first_visible = 0;
     std::optional<std::size_t> selected;
-    // The items are game text, such as chat lines, which the Language & Text
+    // The items are game text, such as chat lines, which the Language
     // settings may draw in the modern fonts.
     bool game_text = false;
 };

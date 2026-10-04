@@ -484,8 +484,9 @@ std::filesystem::path write_real_saves(const char* folder) {
 OA_TEST(persist_reader_lists_real_saves) {
     const auto root = write_real_saves("oa-ui-frontend-options-saves");
     SaveDialogContext context;
-    context.files = savegame_host_files(&root);
-    context.reader = savegame_persist_reader(&root);
+    const SaveRoots roots{root, root / "SAVEGAME", {}};
+    context.files = savegame_host_files(&roots);
+    context.reader = savegame_persist_reader(&roots);
     OA_CHECK(savegame_build_list(context) == 1);
     if (context.list.entries.size() == 1)
         OA_CHECK(std::string(context.list.entries[0].description.data()) == "Arm outpost");
@@ -508,7 +509,8 @@ OA_TEST(persist_reader_reads_radar_image) {
     write_real_save(root / "SAVEGAME" / "one-pixel.SAV", true, SIZE_MAX, 1, 1);
     write_real_save(root / "SAVEGAME" / "empty.SAV", true, SIZE_MAX, 0, 0);
     write_real_save(root / "SAVEGAME" / "no-rows.SAV", true, SIZE_MAX, 5, 0);
-    const auto reader = savegame_persist_reader(&root);
+    const SaveRoots roots{root, root / "SAVEGAME", {}};
+    const auto reader = savegame_persist_reader(&roots);
     OA_CHECK(reader.load_radar != nullptr);
     const auto read = [&](const char* path, present::SurfaceBuffer& picture) {
         void* bank = reader.open(reader.context, path);
@@ -548,12 +550,91 @@ OA_TEST(persist_reader_reads_radar_image) {
     std::filesystem::remove_all(root, error);
 }
 
+// The saves folder and an earlier one: the dialogs list both, the saves
+// folder's file winning a name both hold, matched without case; a save is
+// read from the earlier folder only while the saves folder lacks its name,
+// and every file is written to the saves folder.
+OA_TEST(host_files_list_an_earlier_folder_too) {
+    const auto scratch = oa::test::make_scratch_directory("oa-ui-frontend-earlier-saves");
+    const SaveRoots roots{scratch / "root", scratch / "Saves", scratch / "SAVEGAME"};
+    std::filesystem::create_directories(roots.saves);
+    std::filesystem::create_directories(roots.earlier);
+    write_real_save(roots.saves / "outpost.SAV", true);
+    write_real_save(roots.earlier / "OUTPOST.sav", false);
+    write_real_save(roots.earlier / "older.SAV", false);
+    std::ofstream(roots.earlier / "units.LST") << "list";
+    // Paths: the save directory without case, others under the root, an
+    // absolute path where it is.
+    OA_CHECK(
+        savegame_host_path(roots, "SAVEGAME\\outpost.SAV", SavePathUse::read) ==
+        roots.saves / "outpost.SAV"
+    );
+    OA_CHECK(
+        savegame_host_path(roots, "savegame\\older.SAV", SavePathUse::read) ==
+        roots.earlier / "older.SAV"
+    );
+    OA_CHECK(
+        savegame_host_path(roots, "SaveGame/older.SAV", SavePathUse::write) ==
+        roots.saves / "older.SAV"
+    );
+    OA_CHECK(
+        savegame_host_path(roots, "SAVEGAME\\new.SAV", SavePathUse::read) == roots.saves / "new.SAV"
+    );
+    OA_CHECK(savegame_host_path(roots, "SAVEGAME", SavePathUse::read) == roots.saves / "");
+    OA_CHECK(
+        savegame_host_path(roots, "posters\\screenshots", SavePathUse::write) ==
+        roots.root / "posters" / "screenshots"
+    );
+    const auto absolute = scratch / "elsewhere" / "shot.pcx";
+    OA_CHECK(savegame_host_path(roots, absolute.string(), SavePathUse::write) == absolute);
+    // The listing: the saves folder's outpost and the earlier older; the
+    // earlier OUTPOST.sav is hidden by its name.
+    SaveDialogContext context;
+    context.files = savegame_host_files(&roots);
+    context.reader = savegame_persist_reader(&roots);
+    std::vector<std::string> found;
+    context.files.find(
+        context.files.context,
+        "SAVEGAME\\*.SAV",
+        [](void* user, const data::campaign::FindRecord& record) {
+            static_cast<std::vector<std::string>*>(user)->push_back(record.name);
+        },
+        &found
+    );
+    std::sort(found.begin(), found.end());
+    OA_CHECK((found == std::vector<std::string>{"older.SAV", "outpost.SAV"}));
+    std::vector<std::string> lists;
+    context.files.find(
+        context.files.context,
+        "SAVEGAME\\*.LST",
+        [](void* user, const data::campaign::FindRecord& record) {
+            static_cast<std::vector<std::string>*>(user)->push_back(record.name);
+        },
+        &lists
+    );
+    OA_CHECK((lists == std::vector<std::string>{"units.LST"}));
+    // Both saves read, the earlier one from where it is; a list is read
+    // from the earlier folder and written to the saves folder.
+    OA_CHECK(savegame_build_list(context) == 2);
+    std::vector<uint8_t> bytes;
+    OA_CHECK(context.files.read_file(context.files.context, "SAVEGAME\\units.LST", bytes));
+    OA_CHECK(std::string(bytes.begin(), bytes.end()) == "list");
+    OA_CHECK(context.files.write_file(context.files.context, "SAVEGAME\\units.LST", bytes));
+    OA_CHECK(std::filesystem::exists(roots.saves / "units.LST"));
+    // A removal takes the file where it is.
+    OA_CHECK(context.files.remove(context.files.context, "SAVEGAME\\older.SAV"));
+    OA_CHECK(!std::filesystem::exists(roots.earlier / "older.SAV"));
+    std::error_code error;
+    std::filesystem::remove_all(scratch, error);
+}
+
 // The installed LOADGAME.GUI entered over that listing shows the save.
 OA_GAME_DATA_TEST(load_panel_shows_real_saves) {
     const auto root = write_real_saves("oa-ui-frontend-options-saves-data");
     SaveDialogContext context;
-    context.files = savegame_host_files(&root);
-    context.reader = savegame_persist_reader(&root);
+    const SaveRoots roots{root, root / "SAVEGAME", {}};
+    context.files = savegame_host_files(&roots);
+    context.reader = savegame_persist_reader(&roots);
     OA_CHECK(savegame_build_list(context) == 1);
     Panel panel;
     if (auto layout = load_gui("loadgame.gui")) {

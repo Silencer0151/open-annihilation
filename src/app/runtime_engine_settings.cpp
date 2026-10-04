@@ -8,6 +8,8 @@
 #include "oa/app/game_directory.hpp"
 #include "oa/app/game_files_hooks.hpp"
 #include "oa/app/mod_profile_loader.hpp"
+#include "oa/app/mod_summary.hpp"
+#include "oa/app/user_folder.hpp"
 
 #include "oa/app/acceleration_status.hpp"
 #include "oa/app/runtime.hpp"
@@ -20,6 +22,7 @@
 #include "oa/platform/machine.hpp"
 #include "oa/platform/render_probe.hpp"
 #include "oa/sim/ground_orders/search_worker.hpp"
+#include "oa/ui/frontend/savegame_dialogs.hpp"
 #include "oa/ui/touch_hud.hpp"
 
 #include <SDL3/SDL.h>
@@ -38,6 +41,8 @@
 #include <string_view>
 #include <system_error>
 #include <tuple>
+#include <utility>
+#include <vector>
 
 #ifndef OA_ENGINE_VERSION
 #error "OA_ENGINE_VERSION names the engine's version for the dialog's header"
@@ -270,23 +275,28 @@ void Runtime::load_engine_settings() {
     state.raspberry_pi = start.raspberry_pi;
     state.light_machine = start.light_machine;
     state.desktop = start.desktop;
-    // The mods the game folder offers: the game folder is the last of the
-    // folders, below any mod folder layered over it.
-    state.mod_folders.clear();
-    state.mod_names.clear();
-    const auto& game_folder =
-        options_.game_folders.empty() ? options_.game_dir : options_.game_folders.back();
-    for (const auto& folder : list_mod_folders(game_folder)) {
-        state.mod_folders.push_back(path_to_utf8(fs::absolute(folder).lexically_normal()));
-        state.mod_names.push_back(path_to_utf8(folder.filename()));
-    }
+    list_offered_mods();
     state.physical_memory = oa::platform::read_machine_traits().memory;
     // The overrides are read under the profile's id, and laid over it as
     // the settings are put in effect.
     load_profile_layers();
     const bool switch_alt = (preferences_.graphics_flags & init::preference_flags::switch_alt) != 0;
-    const auto read =
+    auto read =
         settings::read_settings(preference_values_, EngineSettingsState::inputs(*this), switch_alt);
+    state.dropped_mod_folder.clear();
+    if (!options_.mod_dir.empty() || options_.base_game) {
+        // --mod-dir and --base-game set the Mod setting aside for the run,
+        // which plays it again only from a start without them.
+        state.playing_mod_folder = read.mod_folder;
+    } else if (!read.mod_folder.empty() && read.mod_folder != state.playing_mod_folder) {
+        // The start dropped a stored mod folder that is gone and plays the
+        // game folder as it is: the setting shows what plays.
+        std::error_code missing;
+        if (!fs::is_directory(path_from_utf8(read.mod_folder), missing)) {
+            state.dropped_mod_folder = std::move(read.mod_folder);
+            read.mod_folder.clear();
+        }
+    }
     apply_engine_settings(read);
     // The layers start afresh: the overrides read are laid over the profile
     // even when the settings in effect held them already.
@@ -294,6 +304,63 @@ void Runtime::load_engine_settings() {
     // The run's unit limit starts at the setting.
     frontend_game().max_units_setting = read.unit_limit;
     show_frame_stats(read.frame_stats);
+}
+
+void Runtime::list_offered_mods() {
+    auto& state = engine_settings_state();
+    // The game folder is the last of the folders, below any mod folder
+    // layered over it.
+    state.mod_folders.clear();
+    state.mod_names.clear();
+    state.mod_details.clear();
+    const auto& game_folder =
+        options_.game_folders.empty() ? options_.game_dir : options_.game_folders.back();
+    std::vector<fs::path> offered = list_mod_folders(game_folder);
+    if (!user_folder_.empty()) {
+        const auto own = list_mods_in(user_folder_ / std::string(user_mods_folder_name));
+        offered.insert(offered.end(), own.begin(), own.end());
+    }
+    if (const auto picked =
+            preference_values_.find(std::string(settings::key::picked_mod_directory));
+        picked != preference_values_.end() && !picked->second.empty()) {
+        std::error_code missing;
+        const fs::path folder = path_from_utf8(picked->second);
+        if (fs::is_directory(folder, missing))
+            offered.push_back(folder);
+    }
+    // The mod folder played is the one layered over the game folder.
+    state.playing_mod_folder =
+        options_.game_folders.size() > 1
+            ? path_to_utf8(fs::absolute(options_.game_folders.front()).lexically_normal())
+            : std::string{};
+    if (options_.game_folders.size() > 1)
+        offered.push_back(options_.game_folders.front());
+    for (const auto& folder : offered) {
+        std::error_code error;
+        const fs::path absolute = fs::absolute(folder, error);
+        const std::string path = path_to_utf8((error ? folder : absolute).lexically_normal());
+        // A folder offered twice, as when the Mods folder is the game
+        // folder's, is listed once.
+        if (std::find(state.mod_folders.begin(), state.mod_folders.end(), path) !=
+            state.mod_folders.end())
+            continue;
+        ModSummary summary = read_mod_summary(folder);
+        settings::ModDetails details;
+        details.version = std::move(summary.version);
+        details.description = std::move(summary.description);
+        details.has_profile = summary.has_profile;
+        details.badge_width = summary.badge.width;
+        details.badge_height = summary.badge.height;
+        details.badge_pixels = std::move(summary.badge.pixels);
+        state.mod_folders.push_back(path);
+        state.mod_names.push_back(std::move(summary.title));
+        state.mod_details.push_back(std::move(details));
+    }
+}
+
+void Runtime::request_soft_restart() {
+    soft_restart_requested_ = true;
+    exit_requested_ = true;
 }
 
 oa::present::TextStyle Runtime::text_style() const {
@@ -413,8 +480,14 @@ void Runtime::load_profile_layers() {
     );
     state.plays_base_rules = !options_.mod_profile;
     state.refused.clear();
-    state.profile_id =
-        options_.mod_profile ? options_.mod_profile->id : std::string(profiles::base_game_id);
+    // A mod folder without a profile keeps its overrides under its own id,
+    // apart from the game's without a mod.
+    if (options_.mod_profile)
+        state.profile_id = options_.mod_profile->id;
+    else if (options_.game_folders.size() > 1)
+        state.profile_id = folder_overrides_id(options_.game_folders.front());
+    else
+        state.profile_id = std::string(profiles::base_game_id);
     state.profile_hacks = profiles::base_hack_states();
     // The plain 3.1c baseline, which a game without a mod lays its
     // overrides over; its sim hash is the one 3.1c's rules give.
@@ -622,13 +695,20 @@ float Runtime::display_refresh_rate() const {
 std::optional<std::string> Runtime::save_engine_settings(
     const settings::EngineSettings& opened, const settings::EngineSettings& chosen, bool restored
 ) {
+    // A mod folder the start dropped is still stored: what is chosen now
+    // replaces it, No Mod included.
+    auto& state = engine_settings_state();
+    settings::EngineSettings stored = opened;
+    if (!state.dropped_mod_folder.empty()) {
+        stored.mod_folder = std::move(state.dropped_mod_folder);
+        state.dropped_mod_folder.clear();
+    }
     settings::write_settings(
         preference_values_,
-        opened,
+        stored,
         chosen,
         settings::default_settings(EngineSettingsState::inputs(*this)),
         restored,
-        engine_settings_state().mod_folders,
         engine_settings_state().profile_id
     );
     // SwitchAlt keeps 3.1c's own key, written only when it changed.
@@ -676,13 +756,20 @@ settings::Dialog& Runtime::open_engine_settings_dialog(settings::DialogKind kind
         state.last_page,
         acceleration_report().status,
         settings::highest_offered_unit_limit(limits_.units_per_player),
-        state.mod_names,
+        settings::ModOffer{
+            state.mod_names,
+            state.mod_folders,
+            state.mod_details,
+            state.playing_mod_folder,
+        },
         state.profile_hacks,
         &system_language(),
         touch_controls_active(),
         game_files
     );
     fill_game_files_rows(dialog);
+    // Your files shows the player's own folder.
+    dialog.user_folder = path_to_utf8(user_folder_);
     // Developer Mode opens as it was left: its open areas and hacks and its filter.
     if (state.last_developer_list) {
         dialog.developer.areas_open = state.last_developer_list->areas_open;
@@ -707,6 +794,28 @@ bool Runtime::take_engine_settings_action(settings::DialogAction action) {
     case settings::DialogAction::none:
     case settings::DialogAction::redraw:
         return false;
+    case settings::DialogAction::open_folder: {
+        // Your files: the folder this run's saved games go in, where
+        // screenshots go, or the player's Mods folder. The dialog stays open.
+        fs::path folder;
+        switch (dialog->folder_to_open) {
+        case settings::FolderButton::saves:
+            folder = saves_folder();
+            break;
+        case settings::FolderButton::screenshots:
+            folder = game_file_path(
+                preferences_.image_output_directory + "\\screenshots",
+                ui::frontend::SavePathUse::write
+            );
+            break;
+        case settings::FolderButton::mods:
+            folder = user_folder_ / std::string(user_mods_folder_name);
+            break;
+        }
+        const FolderOpening opening = open_player_folder(folder);
+        std::ignore = settings::set_folder_notice(*dialog, opening.opened ? "" : opening.reason);
+        return false;
+    }
     case settings::DialogAction::changed:
         if (dialog->kind == settings::DialogKind::mod_options) {
             view_rules::apply_dialog_options(
@@ -717,7 +826,8 @@ bool Runtime::take_engine_settings_action(settings::DialogAction action) {
         take_renderer_retry(*dialog);
         apply_engine_settings(dialog->chosen);
         return false;
-    case settings::DialogAction::accepted: {
+    case settings::DialogAction::accepted:
+    case settings::DialogAction::switch_mod: {
         if (dialog->kind == settings::DialogKind::mod_options) {
             view_rules::apply_dialog_options(
                 dialog->chosen.mod_options, ui_rules(), view_settings_
@@ -726,6 +836,39 @@ bool Runtime::take_engine_settings_action(settings::DialogAction action) {
             state.dialog.reset();
             return true;
         }
+        // A mod folder the next start could not play is refused before
+        // anything is stored: the page says why, and the dialog stays open
+        // with the mod played still chosen.
+        if (action == settings::DialogAction::switch_mod && !dialog->chosen.mod_folder.empty()) {
+            const auto& game_folder =
+                options_.game_folders.empty() ? options_.game_dir : options_.game_folders.back();
+            const fs::path picked = path_from_utf8(dialog->chosen.mod_folder);
+            auto check = check_picked_mod_folder(
+                picked,
+                game_folder,
+                ModChoice{{}, {}, options_.accept_unimplemented_hacks, &preference_values_}
+            );
+            // Without a profile, the start ends on a SIDEDATA it cannot play,
+            // such as one a side's section is missing from, in the language
+            // the dialog leaves chosen.
+            if (check.refusal.empty() && check.without_profile)
+                if (auto problem = side_data_problem_over(
+                        picked, game_folder, data_word_for(dialog->chosen.language)
+                    );
+                    !problem.empty()) {
+                    check.refusal = "That folder cannot be played; the log says why.";
+                    check.errors.push_back(std::move(problem));
+                }
+            for (const auto& line : check.errors)
+                std::cerr << "open-annihilation: the mod chosen: " << line << '\n';
+            if (!check.refusal.empty()) {
+                dialog->chosen.mod_folder = state.current.mod_folder;
+                std::ignore = settings::set_folder_notice(
+                    *dialog, oa::data::languages::interface_text(check.refusal)
+                );
+                return false;
+            }
+        }
         take_renderer_retry(*dialog);
         keep_renderer_records();
         apply_engine_settings(dialog->chosen);
@@ -733,8 +876,16 @@ bool Runtime::take_engine_settings_action(settings::DialogAction action) {
         state.last_page = dialog->page;
         state.last_developer_list = dialog->developer;
         state.dialog.reset();
-        if (failure)
+        if (failure) {
+            // A mod that was not stored would not be the one the restart
+            // plays: the game stays as it is and says so.
             EngineSettingsState::report_failed_save(*this, *failure);
+            return true;
+        }
+        // SWITCH reloads the game for the mod now stored, back on the main
+        // menu: the loop ends after this frame and main() starts afresh.
+        if (action == settings::DialogAction::switch_mod)
+            request_soft_restart();
         return true;
     }
     case settings::DialogAction::cancelled: {
@@ -828,6 +979,10 @@ Runtime::engine_settings_dialog_key(uint32_t key, uint16_t modifiers) noexcept {
         return settings::DialogKey::home;
     case SDLK_END:
         return settings::DialogKey::end;
+    case SDLK_Y:
+        return settings::DialogKey::yes;
+    case SDLK_N:
+        return settings::DialogKey::no;
     default:
         return std::nullopt;
     }

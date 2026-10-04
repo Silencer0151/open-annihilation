@@ -573,9 +573,10 @@ void recorder_offer_base(
             std::snprintf(answer, capacity, "%s", netgame::recorder_base_read_text(outcome));
             return;
         }
-        std::snprintf(
-            answer, capacity, "Fast base initiated from %s .baseoff to disable", line.argument
-        );
+        // A long file name cuts the answer short at the chat line's end.
+        const std::string reply =
+            std::string("Fast base initiated from ") + line.argument + " .baseoff to disable";
+        oa::base::text::copy_terminated({answer, capacity}, reply);
     }
     for (int32_t slot = 0; slot < kSlotCount; ++slot)
         base.available[slot] = slot_player(lobby, slot).in_use != 0;

@@ -216,18 +216,19 @@ SaveDialogResult savegame_on_load_click(Panel& panel, SaveDialogContext& context
 /// @return cancelled, refreshed, or save with the path to write; none otherwise.
 SaveDialogResult savegame_on_save_click(Panel& panel, SaveDialogContext& context);
 
-/// Handles a press of the pointer on a control of the save dialog, as 3.1c's
-/// controls take a press.
+/// Handles the pointer on a control of the save dialog, as 3.1c's controls
+/// take it.
 ///
-/// A press on a button (OK, CANCEL, DELETE) activates it through
-/// savegame_on_save_click. A press on GAMENAME only gives the name field the
+/// A button (OK, CANCEL, DELETE) is activated through savegame_on_save_click;
+/// the caller passes it once a press on it is released over it, as 3.1c's
+/// buttons are clicked. A press on GAMENAME only gives the name field the
 /// keys, so a game is saved only by OK or by Return at the end of the name.
-/// A press on any other control does nothing; a GAMES row is chosen apart
+/// Any other control does nothing; a GAMES row is chosen apart
 /// (savegame_on_games_selected).
 ///
 /// @param[in,out] panel The loaded dialog.
 /// @param[in,out] context Directory services, list, summary reader and host.
-/// @param control index of the pressed record, from 1 to the panel's record count
+/// @param control index of the record under the pointer, from 1 to the panel's record count
 /// @return what savegame_on_save_click returns for a button; none otherwise.
 SaveDialogResult savegame_on_save_press(Panel& panel, SaveDialogContext& context, int32_t control);
 
@@ -364,24 +365,57 @@ SaveDialogResult restrict_on_save_click(Panel& panel, SaveDialogContext& context
 /// @return cancelled, or load with the path to read; none otherwise.
 SaveDialogResult restrict_on_load_click(Panel& panel, SaveDialogContext& context);
 
+/// Where the dialogs' paths lie on the host file system.
+struct SaveRoots {
+    /// The folder a path that does not start with kSaveDirectory is under.
+    std::filesystem::path root;
+    /// The folder that stands for kSaveDirectory: every file is written here.
+    std::filesystem::path saves;
+    /// A folder whose files the dialogs find too, where `saves` holds none
+    /// of the same name, matched without case: one that held saved games
+    /// before and still holds some; empty for none.
+    std::filesystem::path earlier;
+};
+
+/// How a path is used.
+enum class SavePathUse : uint8_t {
+    read,  ///< read or removed: found in SaveRoots::earlier when only it holds the name
+    write, ///< written or made: always under SaveRoots::saves
+};
+
+/// Returns the host path of a path the game names, in UTF-8 with '\' or '/'
+/// between its parts. One that starts with kSaveDirectory, matched without
+/// case, lies in SaveRoots::saves, or for reading in SaveRoots::earlier
+/// when only that folder holds its name; any other relative path lies under
+/// SaveRoots::root; an absolute path stays where it is.
+///
+/// @param roots where the paths lie
+/// @param path the path
+/// @param use what the path is for
+/// @return the host path
+[[nodiscard]] std::filesystem::path
+savegame_host_path(const SaveRoots& roots, std::string_view path, SavePathUse use);
+
 /// Builds the directory services over the host file system.
 ///
 /// Paths use '\' as the game does and are mapped onto the host file system
-/// below `root`; the find walk matches extensions case-insensitively and
-/// reports write times in seconds.
+/// by savegame_host_path; the find walk over the save directory lists the
+/// files of SaveRoots::saves, then those of SaveRoots::earlier whose names
+/// it does not hold, matches extensions case-insensitively and reports write
+/// times in seconds.
 ///
-/// @param root Directory that holds SAVEGAME; must outlive the services.
-/// @return The services, with `root` as their context.
-SaveFiles savegame_host_files(const std::filesystem::path* root);
+/// @param roots where the paths lie; must outlive the services
+/// @return The services, with `roots` as their context.
+SaveFiles savegame_host_files(const SaveRoots* roots);
 
 /// Builds the summary reader over src/data/persist.
 ///
 /// The reader opens only the "Summary" account of a HAPIBANK save and reads
 /// the radar image from its "Radar Image" blob.
 ///
-/// @param root Directory that holds SAVEGAME; must outlive the reader.
-/// @return The reader, with `root` as its context.
-SaveSummaryReader savegame_persist_reader(const std::filesystem::path* root);
+/// @param roots where the paths lie (savegame_host_path); must outlive the reader
+/// @return The reader, with `roots` as its context.
+SaveSummaryReader savegame_persist_reader(const SaveRoots* roots);
 
 /// Releases the name and description lists and the radar picture.
 ///

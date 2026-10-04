@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // The Windows resources of open-annihilation.exe: its icon, which Explorer,
-// the taskbar and the game's windows show, and its version information,
-// which names it Open Annihilation. CMake fills in the icon's path and the
+// the taskbar and the game's windows show, its version information, which
+// names it Open Annihilation, and, where the linker does not write one, its
+// manifest. CMake fills in the icon's path, the manifest's resource and the
 // project's version.
 #include <winver.h>
 
 1 ICON "@OA_WINDOWS_ICON@"
+@OA_WINDOWS_MANIFEST_RESOURCE@
 
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION @open_annihilation_VERSION_MAJOR@, @open_annihilation_VERSION_MINOR@, @open_annihilation_VERSION_PATCH@, 0

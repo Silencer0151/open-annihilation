@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/ui/frontend_renderer.hpp"
+#include "oa/ui/frontend_renderer/scroll_bars.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -58,14 +59,20 @@ uint8_t red_at(const oa::ui::frontend_renderer::Surface& surface, std::size_t x,
 }
 
 // A grayed-out art button shows the frame two past its normal one, or the
-// last frame of a shorter sequence, darkened through shade table row 12.
+// last frame of a shorter sequence, grayed through the palette's gray table
+// and darkened through shade table row 12.
 void test_grayed_art_frame() {
     oa::ui::frontend_renderer::ScreenResources resources;
     resources.background.width = 4;
     resources.background.height = 4;
     resources.background.rgb.assign(4U * 4U * 3U, 99);
+    // A gray ramp, each entry its own gray, but for one red entry.
     for (std::size_t index = 0; index < 256; ++index)
-        resources.gui_palette[index * 4] = static_cast<uint8_t>(index);
+        for (std::size_t channel = 0; channel < 3; ++channel)
+            resources.gui_palette[index * 4 + channel] = static_cast<uint8_t>(index);
+    resources.gui_palette[200 * 4] = 60;
+    resources.gui_palette[200 * 4 + 1] = 0;
+    resources.gui_palette[200 * 4 + 2] = 0;
     // The screen's bitmap carries the palette the shade table indexes.
     resources.background.palette = resources.gui_palette;
     resources.layout.gadgets.push_back(button("ART", 1, 1, 1, 1));
@@ -106,6 +113,11 @@ void test_grayed_art_frame() {
     CHECK(red_at(oa::ui::frontend_renderer::render_screen(resources, {&grayed, 1}), 1, 1) == 50);
     resources.game_palette.reset();
     CHECK(red_at(oa::ui::frontend_renderer::render_screen(resources, {&grayed, 1}), 1, 1) == 12);
+    // A coloured entry is darkened as its gray: (60, 0, 0) as entry 20.
+    resources.background.palette = resources.gui_palette;
+    resources.sprites.sequences.back().frames.back().pixels = {200};
+    resources.shade_table[12U * 256U + 20U] = 77;
+    CHECK(red_at(oa::ui::frontend_renderer::render_screen(resources, {&grayed, 1}), 1, 1) == 77);
 }
 
 // A centred caption underlines its quick key's glyph on the row below the
@@ -256,8 +268,9 @@ void test_caption_placement() {
 
 // Six grayed-out 64x64 art buttons drawn in all 256 colours of a palette
 // whose colours all differ, as a builder's page of empty build slots is:
-// every pixel is darkened to the shade table's colour for its own, and the
-// screen costs at most twice what it costs with the buttons drawn normally.
+// every pixel is darkened to the shade table's colour for its own gray, and
+// the screen costs at most twice what it costs with the buttons drawn
+// normally.
 void test_grayed_art_cost() {
     namespace renderer = oa::ui::frontend_renderer;
     constexpr int screen_width = 640;
@@ -326,11 +339,13 @@ void test_grayed_art_cost() {
     }
 
     const auto shaded = renderer::render_screen(resources, grayed);
+    const auto gray = renderer::build_gray_table(resources.gui_palette);
     bool every_pixel_shaded = true;
     for (int slot = 0; slot < button_count; ++slot)
         for (int y = 0; y < button_side; ++y)
             for (int x = 0; x < button_side; ++x) {
-                const auto source = frame.pixels[static_cast<std::size_t>(y * button_side + x)];
+                const auto source =
+                    gray[frame.pixels[static_cast<std::size_t>(y * button_side + x)]];
                 const std::size_t row = source >= 0x80 ? shade_row - 1 : shade_row;
                 const auto darkened = resources.shade_table[row * 256 + source];
                 const auto at = (static_cast<std::size_t>(20 + y) * screen_width +

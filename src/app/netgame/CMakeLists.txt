@@ -117,7 +117,7 @@ if(BUILD_TESTING)
   # The network rules a profile gives; the reference profiles in the folder
   # OA_MOD_PROFILES_DIR names are read when it is set.
   add_executable(oa-netgame-wire-rules-binding-test tests/wire_rules_test.cpp)
-  target_link_libraries(oa-netgame-wire-rules-binding-test PRIVATE oa-app-netgame-wire-rules)
+  target_link_libraries(oa-netgame-wire-rules-binding-test PRIVATE oa-app-netgame-wire-rules oa-platform-shims)
   add_test(NAME netgame-wire-rules COMMAND oa-netgame-wire-rules-binding-test)
   if(DEFINED OA_MOD_PROFILES_DIR)
     set_tests_properties(netgame-wire-rules PROPERTIES
@@ -145,10 +145,13 @@ endif()
 set(oa_netgame_checks "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
 if(BUILD_TESTING AND TARGET oa-game AND IS_DIRECTORY "${OA_GAME_DIR}")
   file(MAKE_DIRECTORY "${oa_netgame_checks}")
+  # The host's player gives every unit it has; the installation's
+  # commanders are in the Commander category, so its commander stays.
   add_test(NAME native-net-loopback COMMAND oa-game --game-dir "${OA_GAME_DIR}"
     --skip-intro --mute --headless-check --net-loopback-check 300
     --preferences-file "${oa_netgame_checks}/net-loopback.conf")
-  set_tests_properties(native-net-loopback PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
+  set_tests_properties(native-net-loopback PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+    FAIL_REGULAR_EXPRESSION "its commander went too")
   add_test(NAME native-net-loopback-watcher COMMAND oa-game --game-dir "${OA_GAME_DIR}"
     --skip-intro --mute --headless-check --net-loopback-check 300 --net-loopback-watcher
     --preferences-file "${oa_netgame_checks}/net-loopback-watcher.conf")

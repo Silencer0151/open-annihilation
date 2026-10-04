@@ -19,6 +19,10 @@ namespace oa::ui::frontend_multiplayer {
 
 /// Fills YESORNO.GUI asking whether to reject a player ("Reject <name>?").
 ///
+/// CHOICE1 and CHOICE2 read "Yes" and "No" in the language shown, and take
+/// the quick keys their captions give them (panel_set_text): Y and N in
+/// English, J and N in German.
+///
 /// @param[in,out] lobby Lobby state; the slot is remembered for the answer.
 /// @param[in,out] panel The dialog's panel.
 /// @param slot Player slot to reject.
@@ -41,8 +45,9 @@ enum class ExitConfirmAnswer : uint8_t {
 /// Prepares YESORNO as the exit confirmation a request to close the window opens after a
 /// launch.
 ///
-/// CHOICE1 reads "Yes" and CHOICE2 "No"; CHOICE2 takes the focus, so Enter
-/// answers No, as Escape does. The title asks "Surrender this battle and exit
+/// CHOICE1 reads "Yes" and CHOICE2 "No" in the language shown, with the
+/// quick keys their captions give them (panel_set_text): Y and N in English.
+/// CHOICE2 takes the focus, so Enter answers No, as Escape does. The title asks "Surrender this battle and exit
 /// to the system?", or "Exit the Battle" in a game a lobby program launched.
 ///
 /// @param lobby Lobby state and its game block.

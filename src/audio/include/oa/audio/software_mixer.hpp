@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -21,6 +22,15 @@ inline constexpr uint32_t mixer_output_channels = 2;
 inline constexpr uint32_t mixer_convert_frames = 1024;
 /// Most times one mix asks a stream's feed for samples.
 inline constexpr uint32_t mixer_feed_calls = 4;
+/// Fraction bits of the gains a stream's samples are multiplied by.
+inline constexpr uint32_t mixer_gain_bits = 16;
+/// Fraction bits the sum of the streams keeps below a 16-bit sample.
+inline constexpr uint32_t mixer_sum_bits = 8;
+/// The largest gain a side of a stream takes; larger ones are held to it.
+inline constexpr float mixer_max_gain = 16.0F;
+/// The gain that plays convert_for_mixer's samples at their own level: they
+/// are kept at half of it.
+inline constexpr float converted_sample_gain = 2.0F;
 
 /// The lock that keeps the mixing thread and the streams' owners apart.
 struct MixerLock {
@@ -33,14 +43,23 @@ struct MixerLock {
 
 class MixerStream;
 
-/// Mixes streams of any format into 16-bit stereo at mixer_output_rate.
+/// Mixes streams of any format into 16-bit stereo at mixer_output_rate, in
+/// integer arithmetic.
 ///
-/// Each stream's samples are scaled to -1..1 (8-bit unsigned around 128,
-/// integers by 2^-(bits-1)), one channel is played on both sides and more
-/// than two play their first two, the rate is converted by Resampler, and
-/// the streams are multiplied by their gains and summed. The sum is
-/// clamped to -1..1 and rounded to 16 bits by 32767. A paused stream
-/// keeps its samples and adds nothing.
+/// Each stream's samples become 16-bit: 8-bit unsigned ones around 128
+/// times 256, 32-bit ones without their low 16 bits (rounding toward
+/// negative infinity), and float ones, -1..1, times 32768, rounded to
+/// nearest and held to -32768..32767. One channel plays on both sides, and
+/// more than two play their first two. A stream at another rate is
+/// converted by PcmResampler, as its samples arrive, and keeps the
+/// conversion's overshoot past full scale until the sum is held. Each side is
+/// multiplied by the stream's gain times that side's gain, both rounded to
+/// mixer_gain_bits fraction bits, and the streams are summed with
+/// mixer_sum_bits fraction bits kept; the sum is rounded to nearest (halves
+/// upward) and held to -32768..32767. A stream at the output rate and a
+/// gain of one plays its 16-bit samples unchanged. A paused stream keeps
+/// its samples and adds nothing, as does a stream with nothing left to
+/// play.
 class SoftwareMixer {
   public:
 
@@ -87,7 +106,27 @@ class SoftwareMixer {
 
     MixerLock lock_;
     std::vector<MixerStream*> streams_;
-    std::vector<float> sum_; ///< the mix of one call, before rounding
+    std::vector<int32_t> sum_; ///< the mix of one call, with mixer_sum_bits fraction bits
 };
+
+/// Converts samples to mixer_output_rate, as SoftwareMixer converts a
+/// stream's samples, all at once, into 16-bit samples at half their level.
+///
+/// Half the level leaves room for the conversion's overshoot past full
+/// scale; a stream plays them at their own level at converted_sample_gain
+/// times the gain it would give the samples as they were. Each converted
+/// sample is rounded to nearest, halves upward. One channel stays one, and
+/// more than two keep their first two. A sound converted once plays at the
+/// mixer's rate with no conversion as it plays.
+///
+/// @param format the samples' format; 1 to max_stream_channels channels at a
+///        rate the resampler converts
+/// @param bytes the samples, whole frames; a trailing partial frame is ignored
+/// @param[out] samples the converted interleaved samples, at half their level
+/// @return the channels of the converted samples, 1 or 2; 0, with
+///         `samples` empty, when the format is outside those limits
+[[nodiscard]] uint32_t convert_for_mixer(
+    const StreamFormat& format, std::span<const uint8_t> bytes, std::vector<int16_t>& samples
+);
 
 } // namespace oa::audio

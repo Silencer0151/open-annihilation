@@ -9,6 +9,7 @@
 #include "oa/sim/air/host.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 
 namespace air_test {
 
@@ -44,7 +45,8 @@ struct Fixture {
     Fixture() {
         state = world_create();
         WorldCapacity capacity{8, 4, 1};
-        world_alloc_tables(state, &capacity);
+        if (state == nullptr || world_alloc_tables(state, &capacity) == 0)
+            std::abort();
         state->game.sea_level = 5;
         state->game.map_pixel_width = 2048;
         state->game.map_pixel_height = 1024;

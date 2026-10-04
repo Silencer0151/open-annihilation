@@ -324,8 +324,6 @@ void Runtime::check_build_site_pointer(uint16_t builder, uint16_t type) {
 }
 
 void Runtime::check_build_site_edges(uint16_t type) {
-    // Map pixels across a terrain tile and a footprint cell.
-    constexpr uint32_t tile_pixels = 32;
     // Map pixels the pointer stands inside an edge of the battlefield.
     constexpr int pointer_inset = 2;
     const auto [map_width, map_height] = shown_map_size();

@@ -113,17 +113,44 @@ right of the main menu, or under Resume in the in-game menu (F2), and with
 every setting back to its default. A game played alone stays paused while
 they are open; a multiplayer game keeps running.
 
-- **AI & Pathfinding:** Pathfinding cycles, 1× to 8×. More cycles find
-  routes faster but use more CPU.
-- **Controls & Input:** Mouse wheel zoom (on by default). Escape opens the
+The left column lists Mods, Controls, Common Tweaks, Language and Graphics,
+then, under a divider at its foot, Developer. A mod's own options are not
+among them: where its profile turns them on, Ctrl+F2 in a match opens them
+in a dialog of their own
+([ui.options-dialog](docs/mods/standard-hacks/ui.options-dialog.md)).
+
+- **Mods:** the mods you can play, in a list that scrolls with the mouse
+  wheel, its scroll bar and the keyboard. Each row shows the mod's badge, its
+  title, its version at the top right and a line describing it. The mod
+  being played comes first, marked PLAYING, then No Mod when another mod is
+  playing, then every other mod by title. Choosing another mod asks to
+  confirm; **Switch** reloads the game for that mod and returns to the main
+  menu, without closing the window or restarting the game. **Open Mods
+  Folder** opens the Mods folder of your Open Annihilation folder. During a
+  game the page is locked: the mod is chosen from the main menu. See
+  [installing and choosing a mod](docs/mods/README.md#installing-a-mod).
+- **Controls:** Mouse wheel zoom (on by default); a camera
+  tracking a unit (**T**) keeps it at the centre as it zooms. Escape opens the
   game menu (on by default on macOS): the first press cancels an order or
   clears the selection, the next opens the in-game menu. Select groups
   without Alt: a number key selects its group on its own.
-- **Gameplay:** Unit limit, 50 to 1500 units per player, from the next game.
+- **Common Tweaks:** Your files, at the top: the path of your Open
+  Annihilation folder, with buttons that open its Saves, Screenshots and Mods
+  folders. Unit limit, 50 to 1500 units per player, from the next game.
   It starts at the unit limit your Total Annihilation installation sets, or
-  250. A saved game keeps the limit it was saved with. Mod, from the next
-  start: None, the default, or one of the mod folders in the game folder's
-  mods folder.
+  250. A saved game keeps the limit it was saved with. Pathfinding cycles,
+  1× to 8×. More cycles find routes faster but use more CPU.
+- **Language:** Language, a drop-down of System default, English,
+  Deutsch, Español, Français and Italiano: the game's own text and unit
+  names in that language, where its data has them; System default by
+  default, English with `--preferences-file`. Use modern fonts for game
+  text (on by default): modern fonts for in-game text, including
+  internationalization; off, game text keeps the game's own fonts. Text
+  size, 50% to 300% of the game fonts' sizes in steps of 10% (80% by
+  default), sizes the modern fonts and is locked while they are off. Font
+  outline (on by default), Font shadow (on by default) and Game text
+  background, a shaded box behind each line (off by default), shape the
+  modern text.
 - **Graphics:** Maximum frame rate, 30 to 120 frames a second. Enhanced
   anti-aliasing, off or 2× to 16×: units are drawn at a higher resolution
   and scaled down for smoother edges; 8× and 16× need a fast CPU. Screen
@@ -156,17 +183,6 @@ they are open; a multiplayer game keeps running.
   whose graphics device each change would reset. The Graphics
   section is taller than the dialog and scrolls, with the mouse wheel, its
   scroll bar, Page Up, Page Down, Home and End.
-- **Language & Text:** Language, a drop-down of System default, English,
-  Deutsch, Español, Français and Italiano: the game's own text and unit
-  names in that language, where its data has them; System default by
-  default, English with `--preferences-file`. Use modern fonts for game
-  text (on by default): modern fonts for in-game text, including
-  internationalization; off, game text keeps the game's own fonts. Text
-  size, 50% to 300% of the game fonts' sizes in steps of 10% (80% by
-  default), sizes the modern fonts and is locked while they are off. Font
-  outline (on by default), Font shadow (on by default) and Game text
-  background, a shaded box behind each line (off by default), shape the
-  modern text.
 - **Touch**, listed while the game has touch controls (on iPhone and iPad,
   on a touch screen once a finger touches it, or with `--touch-controls`):
   One-finger drag, Automatic (the default: a selection box on a tablet,

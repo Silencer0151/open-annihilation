@@ -25,6 +25,9 @@ struct SettingsHost final : init::PreferencesHost {
     uint32_t override_enabled{};
     std::string nickname, game_name;
     std::optional<std::string> user;
+    std::string application = "root";
+    std::string own_output; // the host's own Image Output Directory; empty for none
+    std::map<std::string, std::size_t> capacities; // each string read's capacity
 
     static std::string key(std::string_view section, std::string_view name) {
         return std::string(section) + ":" + std::string(name);
@@ -44,10 +47,11 @@ struct SettingsHost final : init::PreferencesHost {
     }
 
     std::optional<std::string>
-    read_string(std::string_view s, std::string_view k, std::size_t) override {
+    read_string(std::string_view s, std::string_view k, std::size_t capacity) override {
         calls.push_back("string:" + key(s, k));
+        capacities[key(s, k)] = capacity;
         const auto it = strings.find(key(s, k));
-        if (it == strings.end())
+        if (it == strings.end() || it->second.size() >= capacity)
             return {};
         return it->second;
     }
@@ -75,7 +79,9 @@ struct SettingsHost final : init::PreferencesHost {
 
     std::optional<std::string> user_name() override { return user; }
 
-    std::string application_directory() override { return "root"; }
+    std::string application_directory() override { return application; }
+
+    std::string own_image_output_directory() override { return own_output; }
 
     void select_map_list(int32_t v) override { calls.push_back("map-list:" + std::to_string(v)); }
 
@@ -314,6 +320,58 @@ void preferences() {
         kept.number("DisplaymodeHeight", 200);
         init::load_preferences(state, settings, p, kept);
         require(p.display_width == 320 && p.display_height == 200, "3.1c keeps a small mode");
+    }
+    // The image output directory is kept whole, however deep the game is
+    // installed and however long the user's name: no field of the game's
+    // holds it.
+    {
+        SettingsHost deep;
+        deep.application = "C:";
+        for (int depth = 0; depth < 40; ++depth)
+            deep.application += "\\" + std::string(99, static_cast<char>('a' + depth % 26));
+        deep.user = std::string(300, 'u');
+        init::load_preferences(state, settings, p, deep);
+        require(
+            p.image_output_directory == deep.application + "\\" + *deep.user,
+            "a deep game folder and a long user name make the whole default folder"
+        );
+        require(
+            deep.capacities.at(
+                SettingsHost::key(init::general_section, "Image Output Directory")
+            ) == init::any_length,
+            "the image output directory is read at any length"
+        );
+        SettingsHost stored;
+        const std::string folder = deep.application + "\\shots";
+        stored.strings[SettingsHost::key(init::general_section, "Image Output Directory")] = folder;
+        init::load_preferences(state, settings, p, stored);
+        require(p.image_output_directory == folder, "a stored deep folder is kept whole");
+    }
+    // A host's own folder stands in for the game's default, whether nothing
+    // is stored or the default is; any other stored folder is kept.
+    {
+        const std::string key = SettingsHost::key(init::general_section, "Image Output Directory");
+        SettingsHost own;
+        own.user = "Player";
+        own.own_output = "/home/player/Documents/Open Annihilation";
+        init::load_preferences(state, settings, p, own);
+        require(p.image_output_directory == own.own_output, "the host's folder is the default");
+        own.strings[key] = "root\\Player";
+        init::load_preferences(state, settings, p, own);
+        require(
+            p.image_output_directory == own.own_output,
+            "the game's default stored as a choice gives way to the host's folder"
+        );
+        own.strings[key] = "/home/player/shots";
+        init::load_preferences(state, settings, p, own);
+        require(p.image_output_directory == "/home/player/shots", "a folder chosen is kept");
+        own.user.reset();
+        own.strings[key] = "root\\user_images";
+        init::load_preferences(state, settings, p, own);
+        require(
+            p.image_output_directory == own.own_output,
+            "the default without a user name gives way too"
+        );
     }
     for (auto count : {12U, 0xffffffffU}) {
         SettingsHost bad;

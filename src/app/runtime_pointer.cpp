@@ -59,19 +59,33 @@ void Runtime::update_pointer(float x, float y) {
         const auto hud_point = hud_source_point(x, y);
         // The HUD of a finished match takes no pointer.
         if (!match_finished_ && match_hud_) {
-            const oa::ui::gui_input::MenuObject hud{match_hud_->layout.gadgets, -1};
-            hovered_ = oa::ui::gui_input::hit_test(hud, hud_point.x, hud_point.y);
-            if (hovered_ && *hovered_ < match_hud_->layout.gadgets.size()) {
-                const auto& gadget = match_hud_->layout.gadgets[*hovered_];
+            const auto& gadgets = match_hud_->layout.gadgets;
+            const oa::ui::gui_input::MenuObject hud{gadgets, -1};
+            // A grayed order page status button still takes the click and
+            // ignores it. Build page navigation is never on a paused menu.
+            const auto takes_pointer = [&](const oa::ui::gui_layout::Gadget& gadget) {
                 const auto action = match_hud_action(gadget.common.name);
-                // A grayed order page status button still takes the click and
-                // ignores it. Build page navigation is never on a paused menu.
-                if (match_gadget_state(gadget) == nullptr &&
-                    ((!pause_menu_shown() && is_build_page_nav(gadget.common.name) &&
-                      builder_gui_page_count() <= 1) ||
-                     (action == "MISSION" && !campaign_mission_) ||
-                     !gadget_command_available(gadget)))
-                    hovered_.reset();
+                return match_gadget_state(gadget) != nullptr ||
+                       !((!pause_menu_shown() && is_build_page_nav(gadget.common.name) &&
+                          !build_page_nav_shown()) ||
+                         (action == "MISSION" && !campaign_mission_) ||
+                         !gadget_command_available(gadget));
+            };
+            hovered_ = oa::ui::gui_input::hit_test(hud, hud_point.x, hud_point.y);
+            if (hovered_ && *hovered_ < gadgets.size() && !takes_pointer(gadgets[*hovered_])) {
+                hovered_.reset();
+                // A page may place two buttons in one spot, LOAD and BLAST,
+                // of which a unit has one: the pointer takes the one shown.
+                for (auto index = gadgets.size(); index-- > 1;) {
+                    const auto& gadget = gadgets[index];
+                    const auto rectangle = oa::ui::gui_input::gadget_geometry(gadgets, index);
+                    if (gadget.common.active != 0 &&
+                        gadget.common.type == oa::ui::gui_layout::GadgetType::button && rectangle &&
+                        rectangle->contains(hud_point.x, hud_point.y) && takes_pointer(gadget)) {
+                        hovered_ = index;
+                        break;
+                    }
+                }
             }
         }
         pick_cursor_unit();
@@ -132,6 +146,12 @@ void Runtime::activate() {
             play_menu_sound(menu::Sound::big_button);
             show_missing_content(MissingContent::multiplayer_maps);
         } else if (
+            button_result(menu::MenuHandle{kFrontendMenuHandle}, menu::Button::multiplayer) != 0 &&
+            refuse_incomplete_mod_start()
+        ) {
+            // A mod that cannot start a game says so in place of multiplayer.
+            play_menu_sound(menu::Sound::big_button);
+        } else if (
             button_result(menu::MenuHandle{kFrontendMenuHandle}, menu::Button::multiplayer) != 0
         ) {
             const MultiplayerSelection selection =
@@ -152,10 +172,16 @@ void Runtime::activate() {
         return;
     } else if (screen_ == Screen::single_player)
         entry::handle_single_player_event(state_, event, *this);
-    else if (screen_ == Screen::skirmish) {
-        const bool started = skirmish::handle_event(
-            state_, skirmish_settings_, preferences_, skirmish_ui_, event, *this
-        );
+    else if (
+        screen_ == Screen::skirmish &&
+        button_result(skirmish::MenuHandle{kFrontendMenuHandle}, skirmish::Button::start) != 0 &&
+        refuse_incomplete_mod_start()
+    ) {
+        // A mod that cannot start a game says so, and the setup stays.
+        selected_ = -1;
+        return;
+    } else if (screen_ == Screen::skirmish) {
+        const bool started = start_skirmish_from_setup(event);
         if (started && match_ && !altitude_sight_blocked_)
             enter_match_view();
     } else if (screen_ == Screen::map_selection) {
@@ -472,76 +498,14 @@ std::string_view Runtime::match_hud_action(std::string_view name) const {
     return name;
 }
 
-bool Runtime::definition_has_weapon(
-    const oa::data::unit_definitions::UnitDefinition& definition
-) const {
-    auto named = [](const std::string& name) {
-        if (name.empty())
-            return false;
-        auto fold = name;
-        for (auto& ch : fold)
-            ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-        return fold != "noweapon";
-    };
-    return named(definition.weapon1) || named(definition.weapon2) || named(definition.weapon3);
-}
-
-bool Runtime::definition_has_dgun(
-    const oa::data::unit_definitions::UnitDefinition& definition
-) const {
-    if (definition.can_dgun)
-        return true;
-    const std::array<const std::string*, 3> names{
-        &definition.weapon1, &definition.weapon2, &definition.weapon3
-    };
-    for (const auto* name : names) {
-        if (name->empty())
-            continue;
-        const auto* weapon = weapon_registry_.find(*name);
-        if (weapon && (weapon->flags & oa::sim::combat_state::weapon_commandfire_flag) != 0)
-            return true;
-    }
-    return false;
-}
-
 bool Runtime::gadget_command_available(const oa::ui::gui_layout::Gadget& gadget) const {
+    // The order panel greys the buttons the selection cannot use; every
+    // other button is live.
     if (const auto* button = std::get_if<oa::ui::gui_layout::ButtonFields>(&gadget.fields);
         button != nullptr && button->grayed_out)
         return false;
     if (const auto* state = match_gadget_state(gadget))
         return !state->grayed;
-    const auto type = oa::sim::unit_spawn::find_type_index(spawn_type_names_, gadget.common.name);
-    if (type != 0)
-        return true;
-    return order_command_available(gadget.common.name);
-}
-
-bool Runtime::order_command_available(std::string_view name) const {
-    const auto* definition =
-        selected_match_unit_ != 0 ? definition_for(selected_match_unit_) : nullptr;
-    if (definition == nullptr)
-        return true;
-    const auto action = match_hud_action(name);
-    if (action == "MOVE")
-        return definition->can_move;
-    if (action == "ATTACK")
-        return definition_has_weapon(*definition);
-    if (action == "BLAST" || action == "DGUN")
-        return definition_has_dgun(*definition);
-    if (action == "PATROL")
-        return definition->can_patrol;
-    if (action == "REPAIR")
-        return definition->builder;
-    if (action == "RECLAIM")
-        return definition->can_reclamate;
-    if (action == "CAPTURE")
-        return definition->can_capture;
-    if (action == "LOAD" || action == "UNLOAD")
-        return definition->can_load;
-    if (action == "DEFEND" || action == "GUARD")
-        return definition->can_guard;
-    if (action == "STOP")
-        return definition->can_stop;
     return true;
 }
 

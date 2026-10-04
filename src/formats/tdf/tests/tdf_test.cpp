@@ -55,6 +55,8 @@ void tdf_parses_nested_blocks_and_trims_tokens() {
     CHECK(parsed.ok);
     const Block* unit = parsed.section("unitinfo");
     CHECK(unit != nullptr);
+    if (unit == nullptr)
+        return;
     CHECK(std::strcmp(unit->name, "UNITINFO") == 0);
     CHECK(value_is(unit, "UNITNAME", "ARMCOM"));
     CHECK(value_is(find_child(unit, "sfx"), "select1", "foo"));
@@ -141,6 +143,8 @@ void tdf_empty_text_is_empty_root() {
     Parsed parsed("");
     CHECK(parsed.ok);
     CHECK(parsed.document.root != nullptr && child_count(parsed.document.root) == 0);
+    if (parsed.document.root == nullptr)
+        return;
     CHECK(parsed.document.root->body_hash == 0);
 }
 

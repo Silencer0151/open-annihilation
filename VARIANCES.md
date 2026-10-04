@@ -31,27 +31,37 @@ engine does, and why.
 - **Code:** `oa::app::Runtime::cycle_selected_primary`
   (`src/app/runtime_hotkeys.cpp`).
 
-## Build pages taller than the side column
+## Pages taller than the side column
 
-- **3.1c:** draws a build page's GUI file at the screen's own resolution,
-  one pixel to a pixel. A page taller than the screen, as some mods'
-  twelve-button pages are, runs off its bottom edge. The game's own pages
-  all end within 480 rows.
-- **Open Annihilation:** the side column shows as many rows as the window
-  holds at the interface's scale: 480 on a 4:3 window, 540 at 1920x1080 and
-  more on taller windows. A page that ends within them is drawn exactly as
-  authored, as every page of 3.1c and its add-ons is. A taller page shows
-  its build buttons in parts of as many rows as fit, which PREV and NEXT step
-  through before the next page. With room for three rows beside them its
-  order buttons stay on the page under the rows shown; with less, they move
-  to the general page behind an ORDERS tab beside BUILD, as the game's own
-  pages have them. The part shown is the player's own and does not change
-  the unit's build page.
-- **Why:** every build button of such a page stays in sight and in reach on
-  every window size. A hidden button can no longer take a click in the blank
-  strip under the column.
-- **Code:** `oa::ui::hud::fit_build_page` (`src/ui/hud/src/build_page_fit.cpp`),
-  `oa::app::Runtime::fit_match_build_page` (`src/app/runtime_match_menus.cpp`).
+- **3.1c:** draws a unit's page, its build, weapon or order page or the
+  general page, from its GUI file at the screen's own resolution, one pixel
+  to a pixel. A page taller than the screen, as some mods' pages are, runs
+  off its bottom edge. The game's own pages all end within 480 rows.
+- **Open Annihilation:** the side column is one picture, as 3.1c's screen
+  lays it out: the radar picture in its top 128 rows and each page under it
+  where its GUI file places it, down to the tallest unit page the game's GUI
+  pages hold. Where those rows fit the window at the interface's scale, as
+  every page of 3.1c and its add-ons does, the column is drawn at that scale
+  and keeps its width. Otherwise the whole column, radar, panel art and
+  page, is drawn at the one smaller scale at which the tallest page ends on
+  the window's last row, by the same factor across and down, so that every
+  part keeps its place relative to the others; the column is then exactly as
+  wide as its 128 columns at that scale, and the bars and the battlefield
+  start at its right edge and take the width it gives up: the bars keep
+  their scale and still reach the window's right edge, their art going on
+  past the interface's 640 columns as 3.1c draws it on a wider screen. The
+  scale is chosen once for the game and the window's size, so the column
+  keeps its width whichever unit is selected. The pointer takes each
+  control, the radar and the battlefield where they are drawn.
+- **Why:** every control of such a page stays in sight and in reach on
+  every window size, laid out as the page's author placed it, and no blank
+  strip is left beside it.
+- **Code:** `oa::ui::display_layout::fit_side_column`
+  (`src/ui/display-layout/include/oa/ui/display_layout.hpp`),
+  `oa::app::Runtime::side_column_page_rows` (`src/app/runtime_order_panel.cpp`),
+  `oa::app::Runtime::match_hud_strips` (`src/app/runtime_present.cpp`),
+  `oa::app::Runtime::extend_match_bars` (`src/app/runtime_match_menus.cpp`),
+  `oa::app::Runtime::hud_source_point` (`src/app/runtime_scroll_bars.cpp`).
 
 ## Modern fonts for game text
 
@@ -59,8 +69,8 @@ engine does, and why.
   256 characters each.
 - **Open Annihilation:** draws game text in modern fonts by default, at 80%
   of the game fonts' sizes, a fifth smaller, with a dark outline and a dark
-  shadow and no background. The Language & Text section of the OA settings
-  turns each part on or off: Use modern fonts for game text (On), Text size
+  shadow and no background. The Language section of the OA settings turns
+  each part on or off: Use modern fonts for game text (On), Text size
   (80%, from 50% to 300% in steps of 10%), Font outline (On), Font shadow
   (On) and Game text background (Off), the shaded box behind each line.
   Larger text grows over the battlefield, where the message log breaks long
@@ -114,8 +124,8 @@ engine does, and why.
   game's own registry key names, which the game's installer writes, else
   in English. It never asks the operating system.
 - **Open Annihilation:** a word on the command line still decides, as in
-  3.1c. Without one, the Language setting in the Language & Text section of
-  the OA settings decides, and its default, System default, takes the
+  3.1c. Without one, the Language setting in the Language section of the
+  OA settings decides, and its default, System default, takes the
   first of the operating system's preferred languages, in their order, that
   the game knows: English, German, French, Italian or Spanish, whatever the
   region (`de-AT` is German), else English. The setting offers each of them

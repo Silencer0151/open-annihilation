@@ -362,9 +362,10 @@ struct UnitValueServices {
 ///
 /// - unit.kills-x100: the caller's kills (Unit.veteran_level) times 100;
 /// - unit.min-id: 1, the lowest unit id;
-/// - unit.max-id: the configured unit limit (Game.max_units_setting) times
-///   10, the highest id a full table holds, however many units this game's
-///   limit allows; a world that records no setting reads its active limit
+/// - unit.max-id: the unit limit the game recorded (Game.max_units_setting)
+///   times 10; a skirmish or multiplayer game records the limit it plays at,
+///   so this is the table's last id, and a campaign mission records the
+///   run's unit limit; a world that records no limit reads its active limit
 ///   (Game.units_per_player) instead;
 /// - unit.my-id: the caller's own id (Unit.id);
 /// - unit.owner-of(id): the owner player index (Unit.owner_index) of slot
@@ -398,9 +399,9 @@ struct UnitValueServices {
 ///         health is 0 for a type whose UnitDef.max_damage is zero
 /// @quirk Health is Unit.health * 100 divided by UnitDef.max_damage as unsigned
 ///        32-bit values, as 3.1c computes it, and ignores any unit-id argument.
-/// @quirk unit.max-id follows the configured limit, not the limit of the game
-///        being played, so a game whose host chose a lower limit reads ids past
-///        its table, which read 0.
+/// @quirk unit.max-id follows the recorded limit, which a campaign mission
+///        keeps at the run's unit limit rather than its own, so there it can
+///        name ids past the table, which read 0, or stop short of its last id.
 [[nodiscard]] int32_t unit_script_get_value(
     World* world,
     Unit* unit,

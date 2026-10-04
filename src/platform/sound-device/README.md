@@ -2,8 +2,9 @@
 
 The system's own sound device, for the sound output that mixes the game's
 streams in the engine (`BufferedOutput` in [src/audio](../../audio/README.md)).
-It is used where SDL is not: on Windows XP, or on Windows when the
-environment variable `OA_SOUND_OUTPUT` is `waveout`.
+It is the sound output on Windows before Vista unless the environment
+variable `OA_SOUND_OUTPUT` is `sdl`, on any other Windows when it is
+`waveout`, and in a build without SDL.
 
 `oa/platform/sound_device.hpp` (namespace `oa::platform::sound_device`)
 describes a device as `Hooks`: open it for 16-bit stereo at a rate with a

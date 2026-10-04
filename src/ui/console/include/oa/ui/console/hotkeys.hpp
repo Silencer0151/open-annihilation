@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 namespace oa::ui::console {
 
@@ -141,21 +142,16 @@ void hotkey_cancel_command(Console* console, const HotkeyHost* host) noexcept;
 /// The number is one past the highest already present: the host lists
 /// "<directory>\<prefix>*.<extension>" and each name is read as a decimal
 /// number after the prefix. A directory without a trailing backslash gets one;
-/// an empty directory gets none.
+/// an empty directory gets none. The name is kept whole, however long the
+/// directory is.
 ///
-/// @param[out] out Receives the file name, truncated to `capacity`.
-/// @param capacity Size of `out` in bytes.
 /// @param host Lists the existing files; null counts from 0, giving NNNN = 0001.
 /// @param directory Directory of the files.
 /// @param prefix File name before the number.
 /// @param extension File extension without the dot.
-void next_indexed_file_name(
-    char* out,
-    size_t capacity,
-    const HotkeyHost* host,
-    const char* directory,
-    const char* prefix,
-    const char* extension
-) noexcept;
+/// @return The file name.
+std::string next_indexed_file_name(
+    const HotkeyHost* host, const char* directory, const char* prefix, const char* extension
+);
 
 } // namespace oa::ui::console

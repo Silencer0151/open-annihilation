@@ -78,7 +78,8 @@ std::string_view InterfaceText::text(std::string_view english, const Language& l
     const auto found = texts_.find(english);
     if (found == texts_.end())
         return english;
-    for (const Language* step : fallback_chain(language).view()) {
+    const FallbackChain chain = fallback_chain(language);
+    for (const Language* step : chain.view()) {
         const auto translation = found->second.find(folded_tag(step->tag));
         if (translation != found->second.end())
             return translation->second;

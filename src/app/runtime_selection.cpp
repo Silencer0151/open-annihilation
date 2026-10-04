@@ -411,6 +411,8 @@ std::vector<uint16_t> Runtime::selected_local_ids() const {
 void Runtime::begin_match_tracking(uint16_t id) {
     tracked_match_unit_ = id;
     match_tracking_ = true;
+    // A zoom under way goes on about the unit, not the point it was anchored at.
+    zoom_anchored_ = false;
     if (match_)
         match_->state().game.follow_unit = oa::oa_unit_ref_from_slot(id);
     center_camera_on_unit(id);

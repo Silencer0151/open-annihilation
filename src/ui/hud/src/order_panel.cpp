@@ -44,6 +44,11 @@ void disable(const PanelControls& controls, int32_t index) {
         controls.disable(controls.user, index);
 }
 
+void hide(const PanelControls& controls, int32_t index) {
+    if (index != -1 && controls.set_active != nullptr)
+        controls.set_active(controls.user, index, false);
+}
+
 void apply_order(const HudEvents& events, const char* tag, int32_t value) {
     if (events.apply_standing_order != nullptr)
         events.apply_standing_order(events.user, tag, value);
@@ -350,13 +355,16 @@ void refresh_order_buttons(
     for (const auto& gate : gated)
         if ((orders & gate.bit) == 0)
             disable(controls, find_control(controls, gate.name));
+    // A page may place LOAD and BLAST in one spot, BLAST drawn over LOAD:
+    // without transport ability LOAD takes no click, and with it BLAST is
+    // hidden. "LOAD" finds UNLOAD on a page without LOAD.
     if ((orders & kOrderCanTransport) == 0) {
-        set_value(controls, find_control(controls, "LOAD"), 0);
+        disable(controls, find_control(controls, "LOAD"));
         disable(controls, find_control(controls, "UNLOAD"));
         if ((state.order_flags2 & kOrder2CanBlast) == 0)
             disable(controls, find_control(controls, "BLAST"));
     } else {
-        set_value(controls, find_control(controls, "BLAST"), 0);
+        hide(controls, find_control(controls, "BLAST"));
     }
 }
 

@@ -4,19 +4,20 @@
 #include "oa/audio/sound_output.hpp"
 
 #include "oa/audio/sound_output_backends.hpp"
+#include "oa/platform/machine.hpp"
 #include "oa/platform/system.hpp"
 
 #include <cstdlib>
+#include <optional>
 #include <string_view>
 
 namespace oa::audio {
 namespace {
 
 constexpr uint8_t unsigned_8_silence = 0x80;
-// The environment variable that picks the wave-out mixer in a Windows build
-// that has SDL too, and the value that picks it.
-constexpr const char* output_variable = "OA_SOUND_OUTPUT";
+// The values of sound_output_variable that choose an output.
 constexpr std::string_view wave_out_choice = "waveout";
+constexpr std::string_view sdl_choice = "sdl";
 
 // An output for a build with no sound device: nothing starts.
 class SilentOutput final : public SoundOutput {
@@ -48,9 +49,13 @@ SoundOutput* chosen_output = nullptr;
 SoundOutput* own_output = nullptr;
 
 std::unique_ptr<SoundOutput> make_own_output() {
-    const auto choice = platform::environment_value(output_variable);
+    const auto variable = platform::environment_value(sound_output_variable);
+    const SoundOutputKind first = choose_sound_output(
+        variable ? std::optional<std::string_view>(*variable) : std::nullopt,
+        platform::running_on_windows_before_vista()
+    );
     std::unique_ptr<SoundOutput> output;
-    if (choice && *choice == wave_out_choice)
+    if (first == SoundOutputKind::wave_out)
         output = wave_out_sound_output_create();
     if (output == nullptr)
         output = sdl_sound_output_create();
@@ -62,6 +67,15 @@ std::unique_ptr<SoundOutput> make_own_output() {
 }
 
 } // namespace
+
+SoundOutputKind
+choose_sound_output(std::optional<std::string_view> variable, bool windows_before_vista) noexcept {
+    if (variable && *variable == wave_out_choice)
+        return SoundOutputKind::wave_out;
+    if (variable && *variable == sdl_choice)
+        return SoundOutputKind::sdl;
+    return windows_before_vista ? SoundOutputKind::wave_out : SoundOutputKind::sdl;
+}
 
 uint32_t sample_bytes(SampleFormat sample) noexcept {
     switch (sample) {

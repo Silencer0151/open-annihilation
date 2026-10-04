@@ -6,7 +6,7 @@
 // model, the layout painted and presented, and the controller that carries
 // out what presses ask: the system's picker, the look at a source, the copy,
 // the commit, the management state's removals and additions, and the
-// Language & Text dialog.
+// Language dialog.
 #include "game_files_screen.hpp"
 
 #include "game_files_paint.hpp"
@@ -348,7 +348,7 @@ struct GameFilesScreen::State {
     void take_picker_answer(const std::vector<std::string>& paths, bool movable, const char* error);
 
     GameFilesScreen* check_screen_{}; ///< the check's view of the screen
-    bool language_open{};             ///< the Language & Text dialog is up
+    bool language_open{};             ///< the Language dialog is up
     bool picker_waiting{};            ///< a picker's answer is awaited
 
     std::size_t held_count() const noexcept { return picked_.size(); } ///< sources held
@@ -732,7 +732,7 @@ bool SDLCALL GameFilesScreen::State::lifecycle_watch(void* userdata, SDL_Event* 
 void GameFilesScreen::State::come_back() noexcept {
     if (presenting_)
         return;
-    // Drawing starts again at once, so that the Language & Text dialog's own loop presents
+    // Drawing starts again at once, so that the Language dialog's own loop presents
     // too; the copy's banners wait for the screen's next pass.
     presenting_ = true;
     dirty_ = true;

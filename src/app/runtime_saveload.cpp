@@ -34,6 +34,7 @@
 #include "oa/sim/trace.hpp"
 #include "oa/ui/hud/order_panel.hpp"
 #include "oa/ui/hud/player_records.hpp"
+#include "oa/ui/console/game_fields.hpp"
 #include "oa/ui/frontend/savegame_dialogs.hpp"
 
 #include <algorithm>
@@ -955,7 +956,7 @@ bool Runtime::save_between_missions(
 }
 
 bool Runtime::save_dialog_game(std::string_view dialog_path, const char* description) {
-    const auto path = save_game_root() / save_relative_path(dialog_path);
+    const auto path = game_file_path(dialog_path, ui::frontend::SavePathUse::write);
     const auto game_id = static_cast<int32_t>(std::time(nullptr));
     try {
         if (match_)
@@ -1258,8 +1259,11 @@ void Runtime::restore_saved_orders(
 }
 
 bool Runtime::start_saved_game(std::string_view dialog_path) {
+    // A mod that cannot start a game says so, and the dialog stays.
+    if (refuse_incomplete_mod_start())
+        return false;
     try {
-        return load_saved_game(save_game_root() / save_relative_path(dialog_path));
+        return load_saved_game(game_file_path(dialog_path, ui::frontend::SavePathUse::read));
     } catch (const std::exception& failure) {
         status_ = std::string("Saved game start: ") + failure.what();
         std::cerr << "unsupported operation: " << status_ << '\n';
@@ -1567,6 +1571,14 @@ void Runtime::finish_saved_game_start(bool restored_players) {
     oa::World& world = match_->state();
     if (restored_players)
         load_timing(world.game, match_timing_);
+    // A loaded game starts running, whatever the save holds in the pause bit
+    // of Game.sim_run_flags; the file keeps the bit as it was written. Only
+    // the Pause key lifts that bit, and closing the in-game menu does not,
+    // so a game loaded with it set would stay held after its menu closed.
+    world.game.sim_run_flags =
+        static_cast<uint16_t>(world.game.sim_run_flags & ~oa::ui::console::kSimRunPaused);
+    match_timing_.flags =
+        static_cast<uint16_t>(match_timing_.flags & ~oa::ui::console::kSimRunPaused);
     for (std::size_t i = 0; i < OA_PLAYER_COUNT; ++i) {
         if (skirmish_settings_.slots[i].controller == entry::controller::disabled)
             continue;
@@ -1928,8 +1940,7 @@ void Runtime::run_headless_saveload() {
         if (!options_.stage_file.empty())
             apply_stage();
     }
-    match_layout_ =
-        oa::ui::display_layout::make_match_layout(options_.match_width, options_.match_height);
+    match_layout_ = lay_out_match(options_.match_width, options_.match_height);
     // The headless camera placement applies to a loaded game as to a start.
     if (options_.camera) {
         match_camera_x_ = options_.camera->first;
@@ -1940,9 +1951,7 @@ void Runtime::run_headless_saveload() {
         if (saved || !options_.save_after || match_timing_.tick < *options_.save_after)
             return;
         const fs::path target =
-            options_.save_file.empty()
-                ? save_game_root() / ui::frontend::kSaveDirectory / kHeadlessSaveName
-                : options_.save_file;
+            options_.save_file.empty() ? saves_folder() / kHeadlessSaveName : options_.save_file;
         if (!save_match_game(
                 target, persist::command_line_description, persist::command_line_game_id
             ))

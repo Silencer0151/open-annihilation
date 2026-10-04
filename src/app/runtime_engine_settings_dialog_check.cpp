@@ -16,7 +16,9 @@
 #include "engine_settings_tall_section.hpp"
 
 #include "oa/app/acceleration_status.hpp"
+#include "oa/app/game_directory.hpp"
 #include "oa/app/game_files_hooks.hpp"
+#include "oa/app/mod_profile_loader.hpp"
 #include "oa/app/runtime.hpp"
 #include "oa/data/mod_profile/overrides.hpp"
 #include "oa/platform/preferences.hpp"
@@ -25,11 +27,15 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
+#include <memory>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -56,6 +62,16 @@ constexpr SDL_Keymod kShortcutModifier = SDL_KMOD_CTRL;
 /// A point of the main menu's picture over none of its buttons and outside
 /// the dialog, where the pointer rests between the check's steps.
 constexpr layout::Point kRestingPointer{4, 240};
+
+/// The profile of the mod folder the check picks: one that changes nothing.
+constexpr std::string_view kPickedProfile = "oamod: 1\n"
+                                            "id: picked-check\n"
+                                            "name: Picked folder check\n"
+                                            "version: \"1.0\"\n"
+                                            "requires: {base: ta-3.1c, catalogue: 1}\n"
+                                            "author: {name: unknown}\n"
+                                            "packaging: {revision: 1, date: 2026-10-04, "
+                                            "packager: Open Annihilation}\n";
 
 /// Where the pointer rests while a snapshot is taken: the picture's
 /// bottom-right pixel, so that the cursor draws almost wholly outside it.
@@ -103,16 +119,16 @@ void require(bool ok, std::string_view what) {
 /// @return a short name
 std::string_view page_slug(settings::Page page) {
     switch (page) {
-    case settings::Page::path_search:
-        return "path";
+    case settings::Page::mods:
+        return "mods";
     case settings::Page::controls:
         return "controls";
-    case settings::Page::gameplay:
-        return "gameplay";
+    case settings::Page::common_tweaks:
+        return "tweaks";
     case settings::Page::graphics:
         return "graphics";
-    case settings::Page::language_text:
-        return "text";
+    case settings::Page::language:
+        return "language";
     case settings::Page::touch:
         return "touch";
     case settings::Page::developer:
@@ -131,11 +147,11 @@ std::string_view page_slug(settings::Page page) {
 
 /// The dialog's sections, in the order its list shows them.
 constexpr std::array<settings::Page, 6> kPages{
-    settings::Page::path_search,
+    settings::Page::mods,
     settings::Page::controls,
-    settings::Page::gameplay,
+    settings::Page::common_tweaks,
+    settings::Page::language,
     settings::Page::graphics,
-    settings::Page::language_text,
     settings::Page::developer,
 };
 
@@ -227,7 +243,11 @@ std::string_view label_of(settings::Setting setting) {
     case settings::Setting::language:
         return "Language";
     case settings::Setting::mod:
-        return "Mod";
+        // Mods' rows draw their texts inside the row; the button under them
+        // is what the layout names.
+        return "OPEN MODS FOLDER";
+    case settings::Setting::user_folder:
+        return "Your files";
     default:
         return {};
     }
@@ -255,6 +275,11 @@ find_part(const std::vector<settings::LayoutPart>& parts, int32_t control, std::
             return &part;
     return nullptr;
 }
+
+/// A layout made for the call would be gone before its part is read.
+const settings::LayoutPart* find_part(
+    std::vector<settings::LayoutPart>&& parts, int32_t control, std::string_view text
+) = delete;
 
 /// Tells whether the dialog's layout shows a text.
 ///
@@ -462,13 +487,13 @@ void Runtime::check_engine_settings_dialog() {
 
     // Every section through its entry in the list: its rows, and nothing
     // outside the dialog changes.
-    auto* dialog = open("from the main menu");
+    const auto* menu_dialog = open("from the main menu");
     // The main menu's dialog lists Game files only where the platform brings
     // game files in; this game lists it exactly then.
     const bool game_files = game_files_import_offered(game_files_hooks());
     require(
-        dialog->game_files == game_files &&
-            shows_text(settings::dialog_layout(*dialog), "Game files") == game_files,
+        menu_dialog->game_files == game_files &&
+            shows_text(settings::dialog_layout(*menu_dialog), "Game files") == game_files,
         game_files ? "the main menu's dialog does not list Game files"
                    : "the main menu's dialog lists Game files where no game files are brought in"
     );
@@ -476,7 +501,7 @@ void Runtime::check_engine_settings_dialog() {
     for (const auto page : kPages) {
         const auto name = std::string(page_slug(page));
         click(settings::page_control(page), {}, name + "'s entry in the list");
-        dialog = engine_settings_dialog();
+        auto* dialog = engine_settings_dialog();
         require(dialog->page == page, "a click on " + name + "'s entry did not show it");
         auto parts = settings::dialog_layout(*dialog);
         // A section taller than its view shows the rest of its rows at its end.
@@ -492,6 +517,12 @@ void Runtime::check_engine_settings_dialog() {
                 shows_text(parts, label_of(rows[row])),
                 name + " does not show " + std::string(label_of(rows[row]))
             );
+        // The list of sections names Language, as its row does: only the
+        // open section's own parts count.
+        std::erase_if(parts, [](const settings::LayoutPart& part) {
+            return part.control >= settings::first_page_control &&
+                   part.control < settings::restore_control;
+        });
         for (const auto other : kPages)
             if (other != page)
                 for (const auto setting : settings::page_settings(other))
@@ -584,8 +615,8 @@ void Runtime::check_engine_settings_dialog() {
             std::string(what) + " did not take effect at once"
         );
     };
-    click(settings::page_control(settings::Page::path_search), {}, "AI & Pathfinding's entry");
-    focus(settings::first_row_control, "Pathfinding cycles");
+    click(settings::page_control(settings::Page::common_tweaks), {}, "Common Tweaks' entry");
+    focus(settings::first_row_control + 2, "Pathfinding cycles");
     tap(SDLK_RIGHT);
     chosen.path_search_nodes = kChosenPathNodes;
     expect("Pathfinding cycles at 2x");
@@ -594,7 +625,7 @@ void Runtime::check_engine_settings_dialog() {
         "Pathfinding cycles does not show 2x"
     );
 
-    click(settings::page_control(settings::Page::controls), {}, "Controls & Input's entry");
+    click(settings::page_control(settings::Page::controls), {}, "Controls' entry");
     click(settings::first_row_control, "OFF", "Mouse wheel zoom's Off");
     chosen.wheel_zoom = false;
     expect("Mouse wheel zoom Off");
@@ -612,8 +643,8 @@ void Runtime::check_engine_settings_dialog() {
     click(settings::first_row_control + 2, "ON", "Select groups without Alt's On");
     expect("a second click on On");
 
-    click(settings::page_control(settings::Page::gameplay), {}, "Gameplay's entry");
-    focus(settings::first_row_control, "Unit limit");
+    click(settings::page_control(settings::Page::common_tweaks), {}, "Common Tweaks' entry");
+    focus(settings::first_row_control + 1, "Unit limit");
     tap(SDLK_RIGHT);
     chosen.unit_limit = kChosenUnitLimit;
     expect("Unit limit one stop up");
@@ -645,7 +676,7 @@ void Runtime::check_engine_settings_dialog() {
     // drawn as without the setting. It is locked under 2 GiB, and on SDL's
     // software renderer or the environment's driver unless --force-capable
     // lifts them; a renderer nothing has looked at leaves it unlocked.
-    dialog = engine_settings_dialog();
+    auto* dialog = engine_settings_dialog();
     const auto facts = acceleration_facts();
     const bool memory = enough_memory_for_acceleration(facts.physical_memory);
     require(
@@ -695,10 +726,10 @@ void Runtime::check_engine_settings_dialog() {
         );
     }
 
-    // The text drawing reads the Language & Text section at once. Text size
+    // The text drawing reads the Language section at once. Text size
     // waits for the modern fonts, Off with a named preferences file: locked,
     // it says so; with them On, Right raises it a stop.
-    click(settings::page_control(settings::Page::language_text), {}, "Language & Text's entry");
+    click(settings::page_control(settings::Page::language), {}, "Language's entry");
     require(
         !chosen.modern_fonts &&
             shows_text(settings::dialog_layout(*engine_settings_dialog()), "Needs modern fonts"),
@@ -796,7 +827,7 @@ void Runtime::check_engine_settings_dialog() {
 
     // Cancel (its button) puts back what the dialog opened with and saves nothing.
     click(settings::first_row_control + 1, "OFF", "Show performance statistics' Off");
-    click(settings::page_control(settings::Page::controls), {}, "Controls & Input's entry");
+    click(settings::page_control(settings::Page::controls), {}, "Controls' entry");
     click(settings::first_row_control, "ON", "Mouse wheel zoom's On");
     require(
         !engine_settings().frame_stats && engine_settings().wheel_zoom && !frame_stats_shown_,
@@ -815,7 +846,7 @@ void Runtime::check_engine_settings_dialog() {
 
     // Restore defaults resets every setting at once, Cancel undoes it, and
     // OK after it erases every key it reset.
-    dialog = open("for Restore defaults");
+    open("for Restore defaults");
     click(settings::restore_control, "RESTORE DEFAULTS", "Restore defaults");
     require(
         engine_settings_dialog() != nullptr && engine_settings() == defaults &&
@@ -833,7 +864,7 @@ void Runtime::check_engine_settings_dialog() {
         renderer_waits(sdl_.renderer) == vertical_sync,
         "Escape after Restore defaults did not put Vertical sync back"
     );
-    dialog = open("for Restore defaults and OK");
+    open("for Restore defaults and OK");
     click(settings::restore_control, "RESTORE DEFAULTS", "Restore defaults");
     tap(SDLK_RETURN);
     require(
@@ -882,7 +913,7 @@ void Runtime::check_engine_settings_dialog() {
             }
             return shows_text(parts_now(), text);
         };
-        dialog = open("for Developer Mode");
+        open("for Developer Mode");
         click(settings::page_control(settings::Page::developer), {}, "Developer's entry");
         dialog = engine_settings_dialog();
         require(dialog->page == settings::Page::developer, "Developer did not show");
@@ -947,7 +978,7 @@ void Runtime::check_engine_settings_dialog() {
         );
         // Restore defaults and OK leave no key of the settings behind, and the
         // list opens closed again.
-        dialog = open("after Developer Mode");
+        open("after Developer Mode");
         click(settings::restore_control, "RESTORE DEFAULTS", "Restore defaults");
         tap(SDLK_RETURN);
         require(
@@ -956,10 +987,10 @@ void Runtime::check_engine_settings_dialog() {
             "Restore defaults and OK after Developer Mode left settings in the file"
         );
         engine_settings_state().last_developer_list.reset();
-        engine_settings_state().last_page = settings::Page::path_search;
+        engine_settings_state().last_page = settings::Page::common_tweaks;
     }
 
-    // With touch controls the dialog lists Touch between Language & Text and
+    // With touch controls the dialog lists Touch between Graphics and
     // Developer, with its five rows at their defaults; a finger's press near
     // a switch takes it, and a mouse press there does nothing.
     {
@@ -971,7 +1002,7 @@ void Runtime::check_engine_settings_dialog() {
             ~TouchControlsOn() {
                 runtime.options_.touch_controls = before;
                 runtime.engine_settings_state().finger_pointer = false;
-                runtime.engine_settings_state().last_page = settings::Page::path_search;
+                runtime.engine_settings_state().last_page = settings::Page::common_tweaks;
             }
         } touch_on{*this, options_.touch_controls};
 
@@ -1005,17 +1036,17 @@ void Runtime::check_engine_settings_dialog() {
         dialog = open("with touch controls");
         require(dialog->touch, "the dialog opened with touch controls does not list Touch");
         auto parts = settings::dialog_layout(*dialog);
-        const auto* text_entry =
-            find_part(parts, settings::page_control(settings::Page::language_text), {});
+        const auto* graphics_entry =
+            find_part(parts, settings::page_control(settings::Page::graphics), {});
         const auto* touch_entry =
             find_part(parts, settings::page_control(settings::Page::touch), {});
         const auto* developer_entry =
             find_part(parts, settings::page_control(settings::Page::developer), {});
         require(
-            text_entry != nullptr && touch_entry != nullptr && developer_entry != nullptr &&
-                touch_entry->text == "Touch" && text_entry->rect.y < touch_entry->rect.y &&
+            graphics_entry != nullptr && touch_entry != nullptr && developer_entry != nullptr &&
+                touch_entry->text == "Touch" && graphics_entry->rect.y < touch_entry->rect.y &&
                 touch_entry->rect.y < developer_entry->rect.y,
-            "Touch is not listed between Language & Text and Developer"
+            "Touch is not listed between Graphics and Developer"
         );
         click(settings::page_control(settings::Page::touch), {}, "Touch's entry");
         require(engine_settings_dialog()->page == settings::Page::touch, "Touch did not show");
@@ -1052,6 +1083,193 @@ void Runtime::check_engine_settings_dialog() {
             engine_settings_dialog() == nullptr && engine_settings() == defaults,
             "Escape did not put Haptics back"
         );
+    }
+    // Mods: the mod played first, marked PLAYING, then the mods by title as
+    // their oamod.yaml names them, a folder without one by its name, and a
+    // folder an earlier version's Pick Folder... stored while it is still a
+    // folder. A click on another row asks the Switch Mod question, which
+    // CANCEL puts away with nothing changed. --base-game locks the page and
+    // says so; a stored mod folder that is gone reads as No Mod, played, and
+    // OK replaces it.
+    {
+        auto& state = engine_settings_state();
+        const fs::path base = fs::absolute(preference_path_).parent_path();
+        const fs::path empty_folder = (base / "picked-empty").lexically_normal();
+        const fs::path mod_folder = (base / "picked-mod").lexically_normal();
+        fs::create_directories(empty_folder);
+        fs::create_directories(mod_folder);
+        {
+            std::ofstream profile(mod_folder / "oamod.yaml", std::ios::binary);
+            profile << kPickedProfile;
+        }
+        const std::string picked = path_to_utf8(mod_folder);
+        const std::string empty = path_to_utf8(empty_folder);
+        const std::string mod_key{settings::key::mod_directory};
+        const std::string picked_key{settings::key::picked_mod_directory};
+        preference_values_[picked_key] = picked;
+        list_offered_mods();
+        const auto parts_now = [&] { return settings::dialog_layout(*engine_settings_dialog()); };
+        open("for Mods");
+        click(settings::page_control(settings::Page::mods), {}, "Mods' entry");
+        // Out of a game the main menu chooses the mod: the page is not locked.
+        require(
+            engine_settings_dialog()->locks.mod == settings::Lock::none &&
+                !shows_text(
+                    parts_now(), "Locked during a game. Choose the mod from the main menu."
+                ),
+            "Mods is locked on the main menu"
+        );
+        {
+            const auto listed = parts_now();
+            const auto* listing = engine_settings_dialog();
+            const auto rows = settings::mod_rows(*listing);
+            const auto titled = std::find(
+                listing->mod_names.begin(), listing->mod_names.end(), "Picked folder check"
+            );
+            require(
+                !rows.empty() && rows.front().playing &&
+                    rows.front().offered == settings::no_mod_row &&
+                    titled != listing->mod_names.end() &&
+                    listing->mod_folders[static_cast<std::size_t>(
+                        std::distance(listing->mod_names.begin(), titled)
+                    )] == picked &&
+                    shows_text(listed, "OPEN MODS FOLDER"),
+                "Mods does not list No Mod played first and the stored picked folder by its title"
+            );
+        }
+        const auto row_of = [&](const std::string& folder) {
+            const auto* dialog_now = engine_settings_dialog();
+            const auto rows = settings::mod_rows(*dialog_now);
+            for (std::size_t index = 0; index < rows.size(); ++index)
+                if (rows[index].offered >= 0 &&
+                    dialog_now->mod_folders[static_cast<std::size_t>(rows[index].offered)] ==
+                        folder)
+                    return settings::first_row_control + static_cast<int32_t>(index);
+            return settings::no_control;
+        };
+        const int32_t picked_row = row_of(picked);
+        require(picked_row != settings::no_control, "Mods does not list the stored picked folder");
+        click(picked_row, {}, "the picked folder's row");
+        {
+            const auto asked = parts_now();
+            require(
+                engine_settings_dialog()->switch_question != settings::no_question &&
+                    shows_text(asked, "SWITCH MOD") &&
+                    find_part(asked, settings::question_yes_control, "SWITCH") != nullptr &&
+                    find_part(asked, settings::question_no_control, "CANCEL") != nullptr,
+                "a click on another mod's row did not ask the Switch Mod question"
+            );
+        }
+        if (!options_.snapshot.empty())
+            write_ppm(step_snapshot(options_.snapshot, "menu-dialog-mod-question"), frame());
+        tap(SDLK_ESCAPE);
+        require(
+            engine_settings_dialog() != nullptr &&
+                engine_settings_dialog()->switch_question == settings::no_question &&
+                engine_settings_dialog()->chosen.mod_folder.empty() &&
+                engine_settings().mod_folder.empty(),
+            "Escape on the question did not put it away and keep the Mod as it was"
+        );
+        click(picked_row, {}, "the picked folder's row");
+        click(settings::question_no_control, "CANCEL", "the question's CANCEL");
+        require(
+            engine_settings_dialog()->switch_question == settings::no_question &&
+                engine_settings_dialog()->chosen.mod_folder.empty(),
+            "CANCEL changed the Mod"
+        );
+        click(settings::cancel_control, "CANCEL", "Cancel");
+        // --base-game sets the Mod setting aside for the run: the page keeps
+        // the stored choice under its lock and says so.
+        options_.base_game = true;
+        open("with --base-game");
+        click(settings::page_control(settings::Page::mods), {}, "Mods' entry");
+        {
+            const auto locked_parts = parts_now();
+            require(
+                engine_settings_locks().mod == settings::Lock::command_line &&
+                    shows_text(locked_parts, "The command line chose this run's mod."),
+                "--base-game does not lock Mods and say so"
+            );
+        }
+        if (!options_.snapshot.empty())
+            write_ppm(step_snapshot(options_.snapshot, "menu-dialog-mod-locked"), frame());
+        // A locked row answers to no control: a press on its place and the
+        // keys ask nothing.
+        {
+            auto* locked = engine_settings_dialog();
+            auto unlocked = *locked;
+            unlocked.locks = {};
+            const int32_t control = row_of(picked);
+            for (const auto& part : settings::dialog_layout(unlocked))
+                if (part.control == control) {
+                    const int32_t x = part.rect.x + part.rect.width / 2;
+                    const int32_t y = part.rect.y + part.rect.height / 2;
+                    std::ignore = settings::dialog_pointer_down(*locked, x, y);
+                    std::ignore = settings::dialog_pointer_up(*locked, x, y);
+                }
+            for (const auto key : {SDLK_DOWN, SDLK_SPACE, SDLK_Y})
+                tap(key);
+        }
+        require(
+            engine_settings_dialog() != nullptr &&
+                engine_settings_dialog()->switch_question == settings::no_question,
+            "a locked row asked the Switch Mod question under --base-game"
+        );
+        click(settings::cancel_control, "CANCEL", "Cancel");
+        options_.base_game = false;
+        // A stored mod folder that is gone, which the start dropped: No Mod
+        // shows as played, and OK replaces the stored folder.
+        const std::string gone = path_to_utf8((base / "gone-mod").lexically_normal());
+        preference_values_[mod_key] = gone;
+        oa::platform::preferences::save(preference_path_, preference_values_);
+        load_engine_settings();
+        require(
+            engine_settings().mod_folder.empty() && state.dropped_mod_folder == gone,
+            "a gone mod folder stored did not read as No Mod"
+        );
+        open("over a gone mod folder");
+        click(settings::page_control(settings::Page::mods), {}, "Mods' entry");
+        {
+            const auto rows = settings::mod_rows(*engine_settings_dialog());
+            require(
+                !rows.empty() && rows.front().playing &&
+                    rows.front().offered == settings::no_mod_row,
+                "Mods over a gone mod folder does not show No Mod as played"
+            );
+        }
+        click(settings::ok_control, "OK", "OK");
+        const auto saved_mod = oa::platform::preferences::load(preference_path_);
+        require(
+            !saved_mod.contains(mod_key) && state.dropped_mod_folder.empty(),
+            "OK over a gone mod folder did not erase it"
+        );
+        // A start that plays the folder without a profile layers it over
+        // the game folder with no profile, by 3.1c's own rules, and keeps
+        // Developer Mode's overrides under the folder's own id.
+        {
+            const auto game_folders = options_.game_folders;
+            const fs::path game_folder =
+                game_folders.empty() ? options_.game_dir : game_folders.back();
+            options_.game_folders = {empty_folder, game_folder};
+            load_engine_settings();
+            require(
+                mod_profile() == nullptr && state.profile_id == folder_overrides_id(empty_folder) &&
+                    state.profile_id != oa::data::mod_profile::base_game_id &&
+                    state.playing_mod_folder == empty,
+                "a mod folder without a profile does not play by 3.1c's rules under its own "
+                "overrides' id"
+            );
+            options_.game_folders = game_folders;
+            load_engine_settings();
+        }
+        // The settings as the check found them.
+        preference_values_.erase(picked_key);
+        oa::platform::preferences::save(preference_path_, preference_values_);
+        state.current.picked_mod_folder.clear();
+        state.last_page = settings::Page::common_tweaks;
+        std::error_code ignored;
+        fs::remove_all(empty_folder, ignored);
+        fs::remove_all(mod_folder, ignored);
     }
     rest();
     host.latched_key = 0;
@@ -1221,9 +1439,9 @@ void Runtime::check_engine_settings_window_sizes() {
                 shows_as_picture("with an area open");
                 snapshot("menu-dialog-developer-area-" + size);
                 {
-                    const auto parts = settings::dialog_layout(*engine_settings_dialog());
+                    const auto area_parts = settings::dialog_layout(*engine_settings_dialog());
                     click_part(
-                        find_part(parts, settings::developer_mode_control, "ON"),
+                        find_part(area_parts, settings::developer_mode_control, "ON"),
                         "Enable Developer Mode's On"
                     );
                 }
@@ -1231,8 +1449,8 @@ void Runtime::check_engine_settings_window_sizes() {
                 snapshot("menu-dialog-developer-on-" + size);
                 click_text(kShownHack);
                 {
-                    const auto parts = settings::dialog_layout(*engine_settings_dialog());
-                    click_part(hack_switch(parts, kShownHack, "ON"), "rule hack's switch");
+                    const auto hack_parts = settings::dialog_layout(*engine_settings_dialog());
+                    click_part(hack_switch(hack_parts, kShownHack, "ON"), "rule hack's switch");
                 }
                 shows_as_picture("with a rule hack open and on");
                 snapshot("menu-dialog-developer-hack-" + size);

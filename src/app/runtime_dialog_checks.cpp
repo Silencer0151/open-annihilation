@@ -3,6 +3,7 @@
 
 // Bounded checks of the stacked frontend dialogs: headless over a frontend
 // screen, and over a live match through the SDL presenter.
+#include "oa/app/game_directory.hpp"
 #include "oa/app/runtime.hpp"
 #include "oa/data/defs/layout.hpp"
 #include "oa/ui/decoded.hpp"
@@ -25,6 +26,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <initializer_list>
 #include <iostream>
 #include <optional>
@@ -61,6 +63,8 @@ constexpr std::string_view kConfirmLayout = "YESORNO.GUI";
 constexpr std::string_view kRestartLayout = "RESTART.GUI";
 // PlayerSetupInfo.role bit of the player hosting the game.
 constexpr uint8_t kHostRole = 0x01;
+// Frames a press on a button is held for before it is let go.
+constexpr int kHeldPressFrames = 3;
 
 /// The BackTile frame and the pixel of it a panel's face shows.
 struct FacePixel {
@@ -373,16 +377,17 @@ oa::present::SurfaceBuffer check_radar_picture() {
     return picture;
 }
 
-/// Writes the check save into SAVEGAME: a Summary account of a two-player
-/// skirmish on the Core side with `picture` in its "Radar Image" blob.
+/// Writes the check save into the saves folder: a Summary account of a
+/// two-player skirmish on the Core side with `picture` in its "Radar Image"
+/// blob.
 ///
-/// @param root directory that holds SAVEGAME
+/// @param saves the folder the saved games are written to (Runtime::saves_folder)
 /// @param picture the radar image
-void write_radar_check_save(const fs::path& root, const oa::present::SurfaceBuffer& picture) {
+void write_radar_check_save(const fs::path& saves, const oa::present::SurfaceBuffer& picture) {
     namespace persist = oa::data::persist;
     namespace save_key = persist::save_key;
     std::error_code error;
-    fs::create_directories(root / oa::ui::frontend::kSaveDirectory, error);
+    fs::create_directories(saves, error);
     persist::Bank bank{};
     persist::bank_init(&bank);
     persist::bank_reset(&bank);
@@ -404,7 +409,7 @@ void write_radar_check_save(const fs::path& root, const oa::present::SurfaceBuff
     };
     persist::save_write_image_rows(&rows, &bank);
     const auto sink = persist::stdio_file_sink();
-    const auto path = (root / oa::ui::frontend::kSaveDirectory / kCheckRadarSaveFile).string();
+    const auto path = (saves / kCheckRadarSaveFile).string();
     const bool written = persist::bank_write_file(
         &bank, path.c_str(), persist::savegame_description, true, false, &sink
     );
@@ -462,6 +467,54 @@ std::size_t radar_mismatches(
         }
     return differing;
 }
+
+/// Leaves no saved game for the dialogs to list while it lives: the saves
+/// folder, and the earlier one the dialogs list too, are moved aside, and
+/// put back when it goes.
+class HeldSaves {
+  public:
+
+    /// Moves the folders the dialogs list aside, each that is there.
+    ///
+    /// @param roots where the saved games lie (Runtime::save_roots)
+    explicit HeldSaves(const oa::ui::frontend::SaveRoots& roots) {
+        hold(roots.saves);
+        if (!roots.earlier.empty())
+            hold(roots.earlier);
+    }
+
+    HeldSaves(const HeldSaves&) = delete;
+    HeldSaves& operator=(const HeldSaves&) = delete;
+
+    /// Puts the saves back, in place of any folder written meanwhile.
+    ~HeldSaves() {
+        for (auto folder = held_.rbegin(); folder != held_.rend(); ++folder) {
+            std::error_code error;
+            fs::remove_all(folder->first, error);
+            fs::rename(folder->second, folder->first, error);
+        }
+    }
+
+  private:
+
+    /// Moves a folder aside, beside itself, if it is there.
+    ///
+    /// @param folder the folder
+    void hold(const fs::path& folder) {
+        const fs::path aside = folder.parent_path() / (path_to_utf8(folder.filename()) + ".held");
+        std::error_code error;
+        fs::remove_all(aside, error);
+        if (!fs::exists(folder, error))
+            return;
+        fs::rename(folder, aside, error);
+        if (error)
+            throw std::runtime_error("cannot move the saves aside: " + error.message());
+        held_.emplace_back(folder, aside);
+    }
+
+    /// Each folder moved aside, and where it went.
+    std::vector<std::pair<fs::path, fs::path>> held_;
+};
 
 /// Returns the label the return label probe answers (Extension::return_label).
 ///
@@ -1776,7 +1829,8 @@ void Runtime::check_placed_dialogs(const fs::path& report_directory) {
         // The paused battlefield with nothing over it but the paused title,
         // and the in-game menu in the side column.
         auto paused = composed();
-        const auto& menu_root = match_hud_->layout.gadgets.front().common;
+        // A copy: the panels opened below replace the layout it comes from.
+        const auto menu_root = match_hud_->layout.gadgets.front().common;
         const auto menu = oa::ui::display_layout::source_rect_to_canvas(
             match_layout_, menu_root.x, menu_root.y, menu_root.width, menu_root.height
         );
@@ -2169,7 +2223,16 @@ void Runtime::check_load_save() {
             event.button.x = window_x;
             event.button.y = window_y;
             dispatch_event(event, running);
+            // A player's press and release come at least a frame apart.
+            if (type == SDL_EVENT_MOUSE_BUTTON_DOWN)
+                tick_screen_packages();
         }
+    };
+    const auto press_key = [&](SDL_Keycode code) {
+        SDL_Event key{};
+        key.type = SDL_EVENT_KEY_DOWN;
+        key.key.key = code;
+        dispatch_event(key, running);
     };
     const auto record = [&](std::string_view name) {
         const auto* gadget = widget(name);
@@ -2206,11 +2269,11 @@ void Runtime::check_load_save() {
     };
     // The saves as the dialogs list them, newest first, read back through
     // the save directory and each Summary.
-    const fs::path save_root = save_game_root();
+    const oa::ui::frontend::SaveRoots check_roots = save_roots();
     const auto listed_saves = [&] {
         oa::ui::frontend::SaveDialogContext saves;
-        saves.files = oa::ui::frontend::savegame_host_files(&save_root);
-        saves.reader = oa::ui::frontend::savegame_persist_reader(&save_root);
+        saves.files = oa::ui::frontend::savegame_host_files(&check_roots);
+        saves.reader = oa::ui::frontend::savegame_persist_reader(&check_roots);
         // The list is read from the context; its length is not needed.
         std::ignore = oa::ui::frontend::savegame_build_list(saves);
         return saves;
@@ -2264,12 +2327,82 @@ void Runtime::check_load_save() {
                     std::to_string(differing) + " pixels differ)"
                 );
         };
+    // The files the dialogs list: the saves folder's, and those of the
+    // folder that held saved games before while it is there.
     std::size_t save_files = 0;
-    std::error_code listing;
-    for (const auto& entry :
-         fs::directory_iterator(save_game_root() / oa::ui::frontend::kSaveDirectory, listing))
-        if (entry.is_regular_file())
-            ++save_files;
+    for (const fs::path& listed_folder : {check_roots.saves, check_roots.earlier}) {
+        if (listed_folder.empty())
+            continue;
+        std::error_code listing;
+        for (const auto& entry : fs::directory_iterator(listed_folder, listing))
+            if (entry.is_regular_file())
+                ++save_files;
+    }
+
+    // With no save listed, MSGBOX.GUI says so over the load dialog just
+    // opened; its OK at the drawn position closes it and leaves the dialog up.
+    const auto close_no_saves_message = [&](const std::string& where) {
+        const auto* message = dialogs::dialog_kind() == dialogs::DialogKind::message_box
+                                  ? dialogs::dialog_resources()
+                                  : nullptr;
+        if (message == nullptr || message->layout.gadgets.empty())
+            throw std::runtime_error(
+                "load/save check: no message says there is no save to load " + where
+            );
+        const auto& gadgets = message->layout.gadgets;
+        const auto ok = std::find_if(gadgets.begin(), gadgets.end(), [](const auto& gadget) {
+            return gadget.common.name == "OK";
+        });
+        if (ok == gadgets.end())
+            throw std::runtime_error("load/save check: the no-saves message has no OK");
+        const auto& root = gadgets.front().common;
+        click(
+            root.x + ok->common.x + ok->common.width / 2,
+            root.y + ok->common.y + ok->common.height / 2
+        );
+        if (dialogs::dialog_count() != 0 || screen_ != Screen::load_game)
+            throw std::runtime_error(
+                "load/save check: OK did not close the no-saves message over the dialog " + where
+            );
+    };
+    // CANCEL at its drawn position, then Escape, each leave the load dialog
+    // `open` opens for the screen `returned` finds, with saves listed or,
+    // when `empty`, with none; the dialog does not come back on the next
+    // frame. Before CANCEL is clicked, a press on it, and with saves one on
+    // LOAD, do nothing while held or once released away from the button.
+    const auto check_load_leaves = [&](
+                                       auto&& open, auto&& returned, bool empty, std::string where
+                                   ) {
+        std::optional<HeldSaves> held;
+        if (empty)
+            held.emplace(check_roots);
+        where += empty ? " with no save" : " with saves";
+        const auto in_dialog = [&] {
+            return screen_ == Screen::load_game && !save_dialog_open() &&
+                   dialogs::dialog_count() == 0;
+        };
+        for (const bool by_escape : {false, true}) {
+            open();
+            if (screen_ != Screen::load_game || save_dialog_open())
+                throw std::runtime_error("load/save check: the load dialog did not open " + where);
+            if (empty)
+                close_no_saves_message(where);
+            if (by_escape) {
+                press_key(SDLK_ESCAPE);
+            } else {
+                check_press_released_away("CANCEL", in_dialog, "in the load dialog " + where);
+                if (!empty)
+                    check_press_released_away("LOAD", in_dialog, "in the load dialog " + where);
+                click_record("CANCEL");
+            }
+            tick_screen_packages();
+            if (screen_ == Screen::load_game || dialogs::dialog_count() != 0 || !returned())
+                throw std::runtime_error(
+                    std::string("load/save check: ") + (by_escape ? "Escape" : "CANCEL") +
+                    " did not leave the load dialog " + where
+                );
+        }
+    };
 
     // Single Player's LOAD GAME: centred on the 640x480 frame over SINGLE.GUI.
     exercise_click(menu::resource_name(menu::Button::single_player));
@@ -2321,12 +2454,18 @@ void Runtime::check_load_save() {
         );
     std::cout << "load/save check: load dialog at " << panel.x << ',' << panel.y
               << " over Single Player\n";
+    const auto open_single_load = [&] {
+        exercise_click(entry::resource_name(entry::Button::load_game));
+        tick_screen_packages();
+    };
+    const auto on_single = [&] { return screen_ == Screen::single_player; };
+    check_load_leaves(open_single_load, on_single, true, "over Single Player");
 
     // A save as the game writes one, with a radar image in its Summary: LOAD
     // GAME lists it and, when its row is chosen, shows that image stretched
     // over RADAR and "Core" beside Side.
     const auto radar_picture = check_radar_picture();
-    write_radar_check_save(save_root, radar_picture);
+    write_radar_check_save(check_roots.saves, radar_picture);
     std::optional<std::size_t> radar_row;
     {
         const auto saves = listed_saves();
@@ -2356,6 +2495,7 @@ void Runtime::check_load_save() {
     click_record("CANCEL");
     if (screen_ != Screen::single_player)
         throw std::runtime_error("load/save check: CANCEL did not leave the second load dialog");
+    check_load_leaves(open_single_load, on_single, false, "over Single Player");
 
     // A paused skirmish: the save and load dialogs centred on the match frame.
     exercise_click(entry::resource_name(entry::Button::skirmish));
@@ -2447,17 +2587,10 @@ void Runtime::check_load_save() {
     const auto count_save_files = [&] {
         std::size_t count = 0;
         std::error_code error;
-        for (const auto& entry :
-             fs::directory_iterator(save_root / oa::ui::frontend::kSaveDirectory, error))
+        for (const auto& entry : fs::directory_iterator(check_roots.saves, error))
             if (entry.is_regular_file())
                 ++count;
         return count;
-    };
-    const auto press_key = [&](SDL_Keycode code) {
-        SDL_Event key{};
-        key.type = SDL_EVENT_KEY_DOWN;
-        key.key.key = code;
-        dispatch_event(key, running);
     };
     const auto type_name = [&](const char* name) {
         for (int erase = 0; erase < 32; ++erase)
@@ -2468,16 +2601,26 @@ void Runtime::check_load_save() {
         dispatch_event(text, running);
     };
     // A click on the name field only gives it the keys: it neither saves
-    // under the name it holds nor closes the dialog. CANCEL then leaves
-    // without a save.
+    // under the name it holds nor closes the dialog. A press on OK, CANCEL or
+    // DELETE does nothing while held or once released away from the button.
+    // CANCEL then leaves without a save.
     {
         const auto files = count_save_files();
         std::ignore = open_over_match("SAVEGAME", true);
         type_name(kCheckPressedName);
         click_record("GAMENAME");
-        if (screen_ != Screen::load_game || !save_dialog_open() || count_save_files() != files)
+        const auto in_save_dialog = [&] {
+            return screen_ == Screen::load_game && save_dialog_open() &&
+                   count_save_files() == files && dialogs::dialog_count() == 0;
+        };
+        if (!in_save_dialog())
             throw std::runtime_error(
                 "load/save check: a click on the save dialog's name field saved or closed it"
+            );
+        // The saves written above are listed, so DELETE shows.
+        for (const auto* record_name : {"LOAD", "CANCEL", "DELETE"})
+            check_press_released_away(
+                record_name, in_save_dialog, "in the save dialog over the match"
             );
         click_record("CANCEL");
         if (screen_ != Screen::match || save_dialog_open())
@@ -2491,7 +2634,7 @@ void Runtime::check_load_save() {
     // Each save holds the radar image the match shows as it is saved, and
     // the local player's side.
     const auto check_saved_radar = [&](const char* name, const std::vector<uint8_t>& shown) {
-        const auto reader = oa::ui::frontend::savegame_persist_reader(&save_root);
+        const auto reader = oa::ui::frontend::savegame_persist_reader(&check_roots);
         const auto path = std::string(oa::ui::frontend::kSaveDirectory) + '\\' + name + '.' +
                           std::string(oa::ui::frontend::kSaveExtension);
         void* bank = reader.open(reader.context, path.c_str());
@@ -2593,6 +2736,15 @@ void Runtime::check_load_save() {
         throw std::runtime_error(
             "load/save check: Escape did not return the load dialog to the in-game menu"
         );
+    {
+        const auto open_match_load = [&] { std::ignore = open_over_match("LOADGAME", false); };
+        const auto on_menu = [&] {
+            return screen_ == Screen::match && match_paused_ && match_hud_ &&
+                   match_hud_panel_ == oa::data::defs::gui_path(kInGameMenuLayout);
+        };
+        for (const bool empty : {false, true})
+            check_load_leaves(open_match_load, on_menu, empty, "over the in-game menu");
+    }
     // Return starts the selected save, as OK does.
     {
         std::optional<std::size_t> second_row;
@@ -2605,8 +2757,8 @@ void Runtime::check_load_save() {
         if (!second_row)
             throw std::runtime_error("load/save check: the save written by OK is not listed");
         std::ignore = open_over_match("LOADGAME", false);
-        const auto row = games_row(static_cast<int32_t>(*second_row));
-        click(row.x + 8, row.y + row.height / 2);
+        const auto saved_row = games_row(static_cast<int32_t>(*second_row));
+        click(saved_row.x + 8, saved_row.y + saved_row.height / 2);
         press_key(SDLK_RETURN);
         const auto loaded = std::string("Loaded ") + kCheckSecondSaveName + '.';
         if (screen_ != Screen::match || status_.rfind(loaded, 0) != 0)
@@ -2659,6 +2811,157 @@ void Runtime::check_load_save() {
         std::cout << "load/save check: both dialogs centred at " << (width - header.width) / 2
                   << ',' << (height - header.height) / 2 << " on the " << size << " window\n";
     }
+}
+
+void Runtime::check_end_panel_load_cancel() {
+    namespace dialogs = oa::ui::frontend_dialogs;
+    const auto fail = [](const std::string& what) {
+        throw std::runtime_error("end panel load check: " + what);
+    };
+    if (screen_ != Screen::campaign_end || endgame_world() == nullptr)
+        fail("the check does not start on ENDMSN.GUI with a finished game");
+    const auto* load_game = widget("LoadGame");
+    if (load_game == nullptr || load_game->common.active == 0)
+        fail("ENDMSN.GUI does not offer Load Game");
+    const auto mission = selected_mission_index_;
+    bool running = true;
+    // A press and a release at a point on the screen, a frame apart.
+    const auto click = [&](int32_t x, int32_t y) {
+        float window_x = static_cast<float>(x);
+        float window_y = static_cast<float>(y);
+        // Headless, the events carry the screen's own coordinates.
+        if (sdl_.renderer != nullptr &&
+            !SDL_RenderCoordinatesToWindow(
+                sdl_.renderer, static_cast<float>(x), static_cast<float>(y), &window_x, &window_y
+            ))
+            fail(std::string("SDL_RenderCoordinatesToWindow: ") + SDL_GetError());
+        for (const auto type : {SDL_EVENT_MOUSE_BUTTON_DOWN, SDL_EVENT_MOUSE_BUTTON_UP}) {
+            SDL_Event event{};
+            event.button.type = type;
+            event.button.windowID = sdl_.window != nullptr ? SDL_GetWindowID(sdl_.window) : 0;
+            event.button.button = SDL_BUTTON_LEFT;
+            event.button.down = type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+            event.button.clicks = 1;
+            event.button.x = window_x;
+            event.button.y = window_y;
+            dispatch_event(event, running);
+            if (type == SDL_EVENT_MOUSE_BUTTON_DOWN)
+                tick_screen_packages();
+        }
+    };
+    const auto click_gadget = [&](std::string_view name) {
+        const auto* gadget = widget(name);
+        if (gadget == nullptr)
+            fail("the screen has no " + std::string(name));
+        const auto origin = panel_origin();
+        click(
+            origin.x + gadget->common.x + gadget->common.width / 2,
+            origin.y + gadget->common.y + gadget->common.height / 2
+        );
+    };
+    for (const bool empty : {false, true}) {
+        std::optional<HeldSaves> held;
+        if (empty)
+            held.emplace(save_roots());
+        const std::string saves = empty ? " with no save" : " with saves";
+        for (const bool by_escape : {false, true}) {
+            const std::string way = by_escape ? "Escape" : "CANCEL";
+            // The panel takes the pointer once its stat bars have run.
+            if (!step_end_screen_to_panel().panel)
+                fail("ENDMSN.GUI did not show its panel" + saves);
+            click_gadget("LoadGame");
+            tick_screen_packages();
+            if (screen_ != Screen::load_game || save_dialog_open())
+                fail("Load Game did not open the load dialog" + saves);
+            if (empty) {
+                const auto* message = dialogs::dialog_kind() == dialogs::DialogKind::message_box
+                                          ? dialogs::dialog_resources()
+                                          : nullptr;
+                if (message == nullptr)
+                    fail("no message says there is no save to load");
+                auto context = screen_context();
+                if (!dialogs::dialog_click(&context, "OK") || dialogs::dialog_count() != 0)
+                    fail("OK did not close the no-saves message");
+            } else if (dialogs::dialog_count() != 0) {
+                fail("a message opened over the load dialog" + saves);
+            }
+            if (by_escape) {
+                SDL_Event key{};
+                key.type = SDL_EVENT_KEY_DOWN;
+                key.key.key = SDLK_ESCAPE;
+                dispatch_event(key, running);
+            } else {
+                // A press on CANCEL does nothing while held or once released
+                // away from it; the click follows.
+                check_press_released_away(
+                    "CANCEL",
+                    [&] {
+                        return screen_ == Screen::load_game && !save_dialog_open() &&
+                               dialogs::dialog_count() == 0;
+                    },
+                    "in the load dialog over ENDMSN.GUI" + saves
+                );
+                click_gadget("CANCEL");
+            }
+            tick_screen_packages();
+            if (!step_end_screen_to_panel().panel)
+                fail(way + " did not return the load dialog to ENDMSN.GUI's panel" + saves);
+            load_game = widget("LoadGame");
+            if (screen_ != Screen::campaign_end || endgame_world() == nullptr ||
+                load_game == nullptr || load_game->common.active == 0 ||
+                dialogs::dialog_count() != 0)
+                fail(way + " did not return the load dialog to ENDMSN.GUI" + saves);
+            if (selected_mission_index_ != mission)
+                fail(way + " changed the mission ENDMSN.GUI had chosen" + saves);
+        }
+    }
+    std::cout << "end panel load check: CANCEL and Escape return the load dialog to ENDMSN.GUI, "
+                 "with saves and with none\n";
+}
+
+void Runtime::check_press_released_away(
+    std::string_view name, const std::function<bool()>& unchanged, const std::string& where
+) {
+    const auto fail = [&](const std::string& what) {
+        throw std::runtime_error(std::string(name) + ' ' + what + ' ' + where);
+    };
+    // A frame drawn shows the records the screen's setup left shown.
+    rebuild_surface();
+    const auto* gadget = widget(name);
+    if (gadget == nullptr || gadget->common.active == 0)
+        fail("is not shown");
+    const auto index = static_cast<std::size_t>(gadget - resources_.layout.gadgets.data());
+    const auto origin = panel_origin();
+    const Rect button{
+        origin.x + gadget->common.x,
+        origin.y + gadget->common.y,
+        gadget->common.width,
+        gadget->common.height
+    };
+    const oa::ui::display_layout::Point centre{
+        button.x + button.width / 2, button.y + button.height / 2
+    };
+    constexpr oa::ui::display_layout::Point corner{0, 0};
+    send_check_pointer(SDL_EVENT_MOUSE_MOTION, centre, 0);
+    auto before = frame_without_cursor();
+    send_check_pointer(SDL_EVENT_MOUSE_BUTTON_DOWN, centre, SDL_BUTTON_LEFT);
+    for (int frame = 0; frame < kHeldPressFrames; ++frame)
+        tick_screen_packages();
+    if (!unchanged())
+        fail("acted on its press");
+    auto held = frame_without_cursor();
+    if (differing_pixels(before, held, button) == 0)
+        fail("is not drawn pressed while held");
+    send_check_pointer(SDL_EVENT_MOUSE_MOTION, corner, 0);
+    if (hovered_ == index)
+        fail("is under the screen's corner");
+    auto away = frame_without_cursor();
+    if (differing_pixels(before, away, button) != 0)
+        fail("stays drawn pressed once the pointer leaves it");
+    send_check_pointer(SDL_EVENT_MOUSE_BUTTON_UP, corner, SDL_BUTTON_LEFT);
+    tick_screen_packages();
+    if (!unchanged())
+        fail("acted on a release away from it");
 }
 
 } // namespace oa::app

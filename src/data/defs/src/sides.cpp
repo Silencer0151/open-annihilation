@@ -4,9 +4,11 @@
 #include "oa/data/defs/sides.hpp"
 #include "oa/data/defs/layout.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
 
 namespace oa::data::defs {
 namespace {
@@ -110,9 +112,13 @@ bool side_table_load(
         copy_if_present(block, "name", side->name, sizeof side->name);
         copy_if_present(block, "nameprefix", side->name_prefix, sizeof side->name_prefix);
         copy_if_present(block, "commander", side->commander, sizeof side->commander);
-        char font[font_name_capacity];
-        if (formats::tdf::get_string(block, "font", font, sizeof font, "") && fonts != nullptr &&
-            fonts->font != nullptr)
+        table->has_panel_gaf[index] = formats::tdf::get_string(
+            block, "intgaf", table->panel_gaf[index], sizeof table->panel_gaf[index], ""
+        );
+        char* font = table->font_name[index];
+        table->has_font[index] =
+            formats::tdf::get_string(block, "font", font, side_font_name_capacity, "");
+        if (table->has_font[index] && fonts != nullptr && fonts->font != nullptr)
             side->font = fonts->font(fonts->context, font);
         side->energy_color = static_cast<uint32_t>(formats::tdf::get_int(block, "energycolor", 0));
         side->metal_color = static_cast<uint32_t>(formats::tdf::get_int(block, "metalcolor", 0));
@@ -167,6 +173,72 @@ bool load_side_data(
     const bool ok = side_table_load(&document, table, fonts);
     formats::tdf::document_free(&document);
     return loaded && ok;
+}
+
+bool side_file_path(
+    const Files* files,
+    const SideTable& table,
+    uint32_t side,
+    SideFile file,
+    const char* variant,
+    char* out,
+    std::size_t capacity
+) noexcept {
+    if (capacity != 0)
+        out[0] = '\0';
+    if (side >= table.count || side >= OA_SIDE_COUNT)
+        return false;
+    const bool panels = file == SideFile::panels;
+    if (!(panels ? table.has_panel_gaf[side] : table.has_font[side]))
+        return false;
+    build_variant_path(
+        files,
+        out,
+        capacity,
+        panels ? "anims" : "fonts",
+        panels ? table.panel_gaf[side] : table.font_name[side],
+        panels ? "GAF" : "FNT",
+        variant
+    );
+    return true;
+}
+
+uint32_t side_missing_files(
+    const Files* files,
+    const SideTable& table,
+    const char* variant,
+    std::span<SideMissingFile> missing
+) noexcept {
+    uint32_t count = 0;
+    // Every side's intgaf before any side's font, as 3.1c loads them.
+    for (const SideFile file : {SideFile::panels, SideFile::font})
+        for (uint32_t index = 0; index < table.count && index < OA_SIDE_COUNT; ++index) {
+            char path[path_capacity];
+            if (!side_file_path(files, table, index, file, variant, path, sizeof path))
+                continue;
+            // An empty name names no file there can be.
+            if (path[0] != '\0' && files != nullptr && files->exists != nullptr &&
+                files->exists(files->context, path))
+                continue;
+            if (count < missing.size()) {
+                auto& entry = missing[count];
+                entry.side = index;
+                entry.file = file;
+                // The plain path, which the variant falls back to.
+                if (path[0] == '\0')
+                    std::snprintf(
+                        entry.path,
+                        sizeof entry.path,
+                        "%s",
+                        file == SideFile::panels ? "anims/.GAF" : "fonts/.FNT"
+                    );
+                else
+                    std::snprintf(entry.path, sizeof entry.path, "%s", path);
+                std::replace(entry.path, entry.path + std::strlen(entry.path), '\\', '/');
+            }
+            ++count;
+        }
+    return count;
 }
 
 } // namespace oa::data::defs

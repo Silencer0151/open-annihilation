@@ -225,6 +225,11 @@ struct Options {
     bool accept_unimplemented_hacks = false;
     fs::path snapshot;
     std::optional<fs::path> preferences_file;
+    // The player's own folder, which holds the saved games, screenshots,
+    // films and mods (--user-folder); unset: the preferences' key, else
+    // "Open Annihilation" in the Documents folder, or beside a named
+    // --preferences-file.
+    std::optional<fs::path> user_folder;
     std::optional<std::size_t> frame_limit;
     std::optional<std::size_t> benchmark_frames;
     // Headless in-match run: ticks to simulate, output size, per-side army.
@@ -258,8 +263,9 @@ struct Options {
     // has the last unit placed build rounds for its first weapon, and
     // "console LINE" enters a chat line as the local player. "place PLAYER
     // TYPE X Z [FACING]" places a finished unit at a map pixel, "group NAME"
-    // gathers the units placed after it, "move GROUP X Z", "patrol GROUP X Z"
-    // and "attack GROUP TARGETS" order a group's live units, and "at TICK"
+    // gathers the units placed after it, "move GROUP X Z", "patrol GROUP X Z",
+    // "attack GROUP TARGETS", "attack-ground GROUP X Z" and "guard GROUP
+    // GUARDED" order a group's live units, and "at TICK"
     // before any action runs it before that match tick instead
     // (src/app/README.md).
     fs::path stage_file;
@@ -325,14 +331,39 @@ struct Options {
     // presenter, in two skirmishes one after the other, and checks the
     // select and order lines it says.
     bool check_unit_speech = false;
-    // Opens a download page and a missile silo's page through the SDL
-    // presenter, builds a download unit and queues and removes a missile.
+    // Opens a download page through the SDL presenter and builds a download
+    // unit from it.
     bool check_download_builds = false;
+    // Selects every unit that stockpiles through the SDL presenter, queues
+    // and removes rounds on its weapon page, builds a round and keeps it
+    // through a save and a load.
+    bool check_stockpile_builds = false;
+    // Turns the commander's, a lab's and a PeeWee's order panels through the
+    // SDL presenter and checks each unit keeps its page through reselection
+    // and a save and a load, and that two selected show the general page.
+    bool check_unit_page_memory = false;
     // Walks the commander's build pages on windows of several sizes through
     // the SDL presenter and checks each fits the side column.
     bool check_side_column = false;
+    // Starts a skirmish on each of two sides and checks, on windows of
+    // several shapes, that the top and bottom bars reach the window's right
+    // edge with the side's art where the game places it.
+    bool check_match_bars = false;
+    // Opens the pages of the unit types named, as MODE:TYPE,TYPE,..., on
+    // windows of several sizes through the SDL presenter and checks each is
+    // drawn as its file places it, at the side column's one scale, and each
+    // control lies inside the column and takes a click, as the radar and
+    // the battlefield's edge do: "whole" requires the column to keep the
+    // interface's width and scale, "scaled" requires it narrowed as a whole
+    // so that the game's tallest unit page ends on the window's last row;
+    // empty for no check.
+    std::string check_unit_pages;
     // Presses F4 in a skirmish and checks the kills board at the top right.
     bool check_kill_board = false;
+    // Pauses a skirmish with the Pause key, saves it from the in-game menu,
+    // loads the save and checks the loaded game runs, and that Pause and the
+    // in-game menu still hold it and let it go.
+    bool check_paused_save = false;
     // Starts a skirmish and checks, through the SDL presenter, that the
     // build menu, the bottom bar and the unit panel show units' names and
     // descriptions in the language this BCP-47 tag names, as the unit files
@@ -407,6 +438,24 @@ struct Options {
     // its sections, controls, keys, OK, Cancel and Restore defaults, the
     // preferences it writes, and each setting taking effect.
     bool check_engine_settings = false;
+    // Drives the player's own folder through the SDL presenter: the saved
+    // games moved once from beside the preferences file, the main menu's
+    // notice of the move shown once and closed, and the settings' Your files
+    // buttons opening its folders through a recorded opener.
+    bool check_user_folder = false;
+    // Switches the mod ten times through the settings' Mods page, between
+    // No Mod and two test profiles in the player's own Mods folder, each a
+    // soft restart on the same window, and requires the working set to
+    // stay level.
+    bool check_mod_switch = false;
+    // Switches to a made-up mod whose unit files are missing and to one
+    // that plays whole, each a soft restart, and requires the first's
+    // warning once over the main menu and over a refused Skirmish start,
+    // and none for the second.
+    bool check_mod_warning = false;
+    // The soft restarts the process has made before this run: 0 for the
+    // first; each switch of the mod from the settings adds one.
+    uint32_t restarts = 0;
     // Forces each renderer failure the game handles while it runs, on the
     // renderer the start made, and checks that it goes on presenting: the
     // walk of the render drivers, a present error on a menu, match or

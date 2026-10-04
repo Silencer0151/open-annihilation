@@ -738,22 +738,53 @@ SaveDialogResult restrict_on_load_click(Panel& panel, SaveDialogContext& context
 
 namespace {
 
-std::filesystem::path host_path(const std::filesystem::path& root, const char* path) {
-    std::string relative(path);
-    std::replace(relative.begin(), relative.end(), '\\', '/');
-    return root / relative;
-}
-
 std::string upper(std::string text) {
     for (auto& ch : text)
         ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
     return text;
 }
 
-bool read_host_file(void* context, const char* path, data::persist::ByteImage* out) {
-    std::ifstream file(
-        host_path(*static_cast<const std::filesystem::path*>(context), path), std::ios::binary
+/// Converts UTF-8 text to a path.
+///
+/// @param text the path, UTF-8
+/// @return the path
+std::filesystem::path utf8_path(std::string_view text) {
+    return std::filesystem::path(std::u8string(text.begin(), text.end()));
+}
+
+/// Returns a path's name in UTF-8.
+///
+/// @param path the path
+/// @return its last part's UTF-8 spelling
+std::string utf8_name(const std::filesystem::path& path) {
+    const auto text = path.filename().u8string();
+    return {text.begin(), text.end()};
+}
+
+/// Returns the host path a dialog path names, for reading.
+///
+/// @param context the SaveRoots
+/// @param path the path
+/// @return the host path
+std::filesystem::path host_path(void* context, const char* path) {
+    return savegame_host_path(
+        *static_cast<const SaveRoots*>(context), path == nullptr ? "" : path, SavePathUse::read
     );
+}
+
+/// Returns the host path a dialog path names, for writing.
+///
+/// @param context the SaveRoots
+/// @param path the path
+/// @return the host path
+std::filesystem::path host_write_path(void* context, const char* path) {
+    return savegame_host_path(
+        *static_cast<const SaveRoots*>(context), path == nullptr ? "" : path, SavePathUse::write
+    );
+}
+
+bool read_host_file(void* context, const char* path, data::persist::ByteImage* out) {
+    std::ifstream file(host_path(context, path), std::ios::binary);
     if (!file)
         return false;
     const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)), {});
@@ -762,7 +793,7 @@ bool read_host_file(void* context, const char* path, data::persist::ByteImage* o
 
 /// Reads a save's bank with only its "Summary" account, that account open.
 ///
-/// @param context Root directory (a std::filesystem::path) the path is below.
+/// @param context The SaveRoots the path lies in.
 /// @param path Save path with '\' separators.
 /// @return A heap-allocated data::persist::Bank, or null when the file is missing or not a save.
 void* open_summary_bank(void* context, const char* path) {
@@ -841,13 +872,34 @@ void close_summary_bank(void* /*context*/, void* bank) {
 
 } // namespace
 
-SaveFiles savegame_host_files(const std::filesystem::path* root) {
+std::filesystem::path
+savegame_host_path(const SaveRoots& roots, std::string_view path, SavePathUse use) {
+    std::string relative(path);
+    std::replace(relative.begin(), relative.end(), '\\', '/');
+    const auto slash = relative.find('/');
+    const std::string head = relative.substr(0, slash);
+    if (upper(head) != upper(std::string(kSaveDirectory)))
+        return roots.root / utf8_path(relative);
+    const std::string rest =
+        slash == std::string::npos ? std::string() : relative.substr(slash + 1);
+    const std::filesystem::path written = roots.saves / utf8_path(rest);
+    if (use == SavePathUse::write || roots.earlier.empty() || rest.empty())
+        return written;
+    std::error_code error;
+    if (std::filesystem::exists(written, error))
+        return written;
+    const std::filesystem::path earlier = roots.earlier / utf8_path(rest);
+    return std::filesystem::exists(earlier, error) ? earlier : written;
+}
+
+SaveFiles savegame_host_files(const SaveRoots* roots) {
     SaveFiles files;
-    files.context = const_cast<std::filesystem::path*>(root);
+    files.context = const_cast<SaveRoots*>(roots);
     files.find = [](void* context,
                     const char* pattern,
                     void (*visit)(void*, const data::campaign::FindRecord&),
                     void* user) {
+        const auto& where = *static_cast<const SaveRoots*>(context);
         const std::string_view text(pattern);
         const auto slash = text.rfind('\\');
         const auto directory =
@@ -857,64 +909,66 @@ SaveFiles savegame_host_files(const std::filesystem::path* root) {
         const auto wanted = upper(
             dot == std::string_view::npos ? std::string() : std::string(spec.substr(dot + 1))
         );
-        const auto folder =
-            host_path(*static_cast<const std::filesystem::path*>(context), directory.c_str());
-        std::error_code error;
-        for (const auto& entry : std::filesystem::directory_iterator(folder, error)) {
-            const bool directory_entry = entry.is_directory(error);
-            if (!directory_entry && !entry.is_regular_file(error))
-                continue;
-            auto ext = entry.path().extension().string();
-            if (!ext.empty())
-                ext.erase(0, 1);
-            if (wanted != "*" && upper(ext) != wanted)
-                continue;
-            // The find record's write time: seconds on the system clock.
-            const auto written =
-                std::chrono::system_clock::now() +
-                std::chrono::duration_cast<std::chrono::system_clock::duration>(
-                    entry.last_write_time(error) - std::filesystem::file_time_type::clock::now()
+        // The save directory's files, then those of the earlier folder whose
+        // names it does not hold.
+        std::vector<std::filesystem::path> folders{
+            savegame_host_path(where, directory, SavePathUse::write)
+        };
+        if (upper(directory) == upper(std::string(kSaveDirectory)) && !where.earlier.empty())
+            folders.push_back(where.earlier);
+        std::vector<std::string> listed;
+        for (const auto& folder : folders) {
+            std::error_code error;
+            for (const auto& entry : std::filesystem::directory_iterator(folder, error)) {
+                const bool directory_entry = entry.is_directory(error);
+                if (!directory_entry && !entry.is_regular_file(error))
+                    continue;
+                auto ext = utf8_name(entry.path().extension());
+                if (!ext.empty())
+                    ext.erase(0, 1);
+                if (wanted != "*" && upper(ext) != wanted)
+                    continue;
+                const auto name = utf8_name(entry.path());
+                if (std::find(listed.begin(), listed.end(), upper(name)) != listed.end())
+                    continue;
+                listed.push_back(upper(name));
+                // The find record's write time: seconds on the system clock.
+                const auto written =
+                    std::chrono::system_clock::now() +
+                    std::chrono::duration_cast<std::chrono::system_clock::duration>(
+                        entry.last_write_time(error) - std::filesystem::file_time_type::clock::now()
+                    );
+                const auto seconds =
+                    std::chrono::duration_cast<std::chrono::seconds>(written.time_since_epoch())
+                        .count();
+                const auto size = directory_entry ? 0 : entry.file_size(error);
+                visit(
+                    user,
+                    {directory_entry ? data::campaign::kFindDirectory : 0U,
+                     static_cast<uint32_t>(seconds),
+                     static_cast<uint32_t>(size),
+                     name.c_str()}
                 );
-            const auto seconds =
-                std::chrono::duration_cast<std::chrono::seconds>(written.time_since_epoch())
-                    .count();
-            const auto name = entry.path().filename().string();
-            const auto size = directory_entry ? 0 : entry.file_size(error);
-            visit(
-                user,
-                {directory_entry ? data::campaign::kFindDirectory : 0U,
-                 static_cast<uint32_t>(seconds),
-                 static_cast<uint32_t>(size),
-                 name.c_str()}
-            );
+            }
         }
     };
     files.remove = [](void* context, const char* path) {
         std::error_code error;
-        return std::filesystem::remove(
-            host_path(*static_cast<const std::filesystem::path*>(context), path), error
-        );
+        return std::filesystem::remove(host_path(context, path), error);
     };
     files.make_directory = [](void* context, const char* path) {
         std::error_code error;
-        std::filesystem::create_directories(
-            host_path(*static_cast<const std::filesystem::path*>(context), path), error
-        );
+        std::filesystem::create_directories(host_write_path(context, path), error);
     };
     files.read_file = [](void* context, const char* path, std::vector<uint8_t>& bytes) {
-        std::ifstream file(
-            host_path(*static_cast<const std::filesystem::path*>(context), path), std::ios::binary
-        );
+        std::ifstream file(host_path(context, path), std::ios::binary);
         if (!file)
             return false;
         bytes.assign(std::istreambuf_iterator<char>(file), {});
         return true;
     };
     files.write_file = [](void* context, const char* path, std::span<const uint8_t> bytes) {
-        std::ofstream file(
-            host_path(*static_cast<const std::filesystem::path*>(context), path),
-            std::ios::binary | std::ios::trunc
-        );
+        std::ofstream file(host_write_path(context, path), std::ios::binary | std::ios::trunc);
         file.write(
             reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size())
         );
@@ -923,9 +977,9 @@ SaveFiles savegame_host_files(const std::filesystem::path* root) {
     return files;
 }
 
-SaveSummaryReader savegame_persist_reader(const std::filesystem::path* root) {
+SaveSummaryReader savegame_persist_reader(const SaveRoots* roots) {
     SaveSummaryReader reader;
-    reader.context = const_cast<std::filesystem::path*>(root);
+    reader.context = const_cast<SaveRoots*>(roots);
     reader.open = open_summary_bank;
     reader.get_int = [](void*, void* bank, const char* field, int32_t fallback) {
         return data::persist::bank_get_int(

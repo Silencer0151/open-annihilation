@@ -367,10 +367,25 @@ struct AirGuardRespectsHoldPosition {
     bool operator==(const AirGuardRespectsHoldPosition&) const = default;
 };
 
+/// air.gunships-hover-to-strafe: Aircraft that hover to attack (hoverattack) hover within weapon
+/// range and strafe a ground point or a unit of their own side instead of making passes at it, and
+/// guarding ones attack enemies their weapons can reach instead of only the guarded unit's
+/// attacker.
+struct AirGunshipsHoverToStrafe {
+    bool enabled{}; ///< the profile turns the hack on
+    /// attack-ground; 3.1c: false
+    bool attack_ground{false};
+    /// guard-engagements; 3.1c: false
+    bool guard_engagements{false};
+    /// Compares every field.
+    bool operator==(const AirGunshipsHoverToStrafe&) const = default;
+};
+
 /// The rules of every hack in area air.
 struct AirRules {
     AirNoRepairRetreatFlag no_repair_retreat_flag{};
     AirGuardRespectsHoldPosition guard_respects_hold_position{};
+    AirGunshipsHoverToStrafe gunships_hover_to_strafe{};
     /// Compares every field.
     bool operator==(const AirRules&) const = default;
 };

@@ -370,12 +370,161 @@ void Runtime::check_match_orders() {
     check_order_overlays_over_fog(
         commander, spawn("ARMPW", match_local_player_, scout_east, -scout_north)
     );
+    check_order_button_states(
+        spawn("ARMLAB", match_local_player_, 160, -192),
+        commander,
+        peewee,
+        spawn("ARMAMD", match_local_player_, -192, -192)
+    );
     std::cout
         << "match order check: the commander starts with its FBI fire at will and hold "
            "position; FIRE ORDERS, MOVE ORDERS and ON/OFF frames and orders, grayed "
            "buttons blank, hold and return fire leave the enemy radar, fire at will takes it; "
            "command buttons light, go out and play their allsound.tdf entries; the damage bar "
-           "draws in UI colours 10 and 4 and hides an enemy commander's damage\n";
+           "draws in UI colours 10 and 4 and hides an enemy commander's damage; a factory's, "
+           "a commander's, a non-builder's and a static weapon's order buttons are all drawn, "
+           "greyed in gray where the unit cannot give the order, and a build page's BUILD "
+           "tab is pressed\n";
+}
+
+void Runtime::check_order_button_states(
+    uint16_t factory, uint16_t commander, uint16_t non_builder, uint16_t static_weapon
+) {
+    enum class Shown : uint8_t { lit, greyed, hidden };
+
+    struct Expected {
+        std::string_view action;
+        Shown shown;
+    };
+
+    const auto shown_name = [](Shown shown) {
+        return shown == Shown::lit ? "lit" : shown == Shown::greyed ? "greyed" : "hidden";
+    };
+    // Shows the unit's page (its first build page, or its order page for
+    // page 0) and checks each order button's state, the art of a greyed one
+    // and that it takes no click.
+    const auto check_page =
+        [&](uint16_t id, int page, std::string_view who, std::initializer_list<Expected> expected) {
+            clear_local_selection();
+            adopt_selection(id);
+            selected_match_unit_ = id;
+            apply_match_hud_for_selection();
+            if (page > 0)
+                show_match_build_page(page);
+            reset_match_command();
+            render_match_surface();
+            const auto& gadgets = match_hud_->layout.gadgets;
+            // A build page's BUILD tab is drawn pressed, its ORDERS tab not.
+            for (std::size_t at = 1; page > 0 && at < gadgets.size(); ++at) {
+                const auto tab = match_hud_action(gadgets[at].common.name);
+                if (tab != "BUILD" && tab != "ORDERS")
+                    continue;
+                const bool on_show = tab == "BUILD";
+                require(
+                    match_command_lit(at) == on_show,
+                    std::string(who) + "'s " + std::string(tab) +
+                        (on_show ? " tab is not pressed" : " tab is pressed")
+                );
+            }
+            for (const auto& [action, wanted] : expected) {
+                std::size_t index = 0;
+                for (std::size_t at = 1; at < gadgets.size() && index == 0; ++at)
+                    if (match_hud_action(gadgets[at].common.name) == action)
+                        index = at;
+                require(index != 0, std::string(who) + "'s page has no " + std::string(action));
+                const auto& gadget = gadgets[index];
+                auto seen = Shown::hidden;
+                if (gadget.common.active != 0) {
+                    const auto condition = match_button_condition(index);
+                    if (condition == oa::ui::frontend_renderer::ButtonCondition::disabled)
+                        seen = Shown::greyed;
+                    else if (condition != oa::ui::frontend_renderer::ButtonCondition::hidden)
+                        seen = Shown::lit;
+                }
+                const auto what = std::string(who) + "'s " + std::string(action);
+                require(
+                    seen == wanted, what + " is " + shown_name(seen) + ", not " + shown_name(wanted)
+                );
+                // A hidden button is not under the pointer at all.
+                require(
+                    wanted == Shown::hidden ||
+                        gadget_command_available(gadget) == (wanted == Shown::lit),
+                    what + (wanted == Shown::lit ? " takes no click" : " takes a click")
+                );
+                if (wanted != Shown::greyed)
+                    continue;
+                // Greyed art is gray: through the gray table, then shaded.
+                const auto& common = gadget.common;
+                for (int row = std::max(0, static_cast<int>(common.y));
+                     row <
+                     std::min(common.y + common.height, static_cast<int>(match_hud_cpu_.height));
+                     ++row)
+                    for (int column = std::max(0, static_cast<int>(common.x));
+                         column <
+                         std::min(common.x + common.width, static_cast<int>(match_hud_cpu_.width));
+                         ++column) {
+                        const auto* rgb = match_hud_cpu_.rgb.data() +
+                                          (static_cast<std::size_t>(row) * match_hud_cpu_.width +
+                                           static_cast<std::size_t>(column)) *
+                                              3U;
+                        const auto [low, high] = std::minmax({rgb[0], rgb[1], rgb[2]});
+                        require(high - low <= 4, what + " is greyed in colour, not gray");
+                    }
+                activate_match_hud(index);
+                require(match_command_ == MatchCommand::none, what + " armed an order");
+            }
+        };
+    check_page(
+        factory,
+        1,
+        "ARMLAB",
+        {{"MOVE", Shown::lit},
+         {"STOP", Shown::lit},
+         {"PATROL", Shown::lit},
+         {"DEFEND", Shown::greyed},
+         {"ATTACK", Shown::greyed},
+         {"BLAST", Shown::greyed}}
+    );
+    check_page(
+        commander,
+        1,
+        "ARMCOM",
+        {{"MOVE", Shown::lit},
+         {"STOP", Shown::lit},
+         {"PATROL", Shown::lit},
+         {"DEFEND", Shown::lit},
+         {"ATTACK", Shown::lit},
+         {"BLAST", Shown::lit}}
+    );
+    // ARMGEN.GUI puts LOAD and BLAST in one spot, BLAST drawn over LOAD: for
+    // a unit that carries none both are greyed.
+    check_page(
+        non_builder,
+        0,
+        "ARMPW",
+        {{"MOVE", Shown::lit},
+         {"STOP", Shown::lit},
+         {"PATROL", Shown::lit},
+         {"DEFEND", Shown::lit},
+         {"ATTACK", Shown::lit},
+         {"RECLAIM", Shown::greyed},
+         {"REPAIR", Shown::greyed},
+         {"CAPTURE", Shown::greyed},
+         {"UNLOAD", Shown::greyed},
+         {"LOAD", Shown::greyed},
+         {"BLAST", Shown::greyed}}
+    );
+    check_page(
+        static_weapon,
+        1,
+        "ARMAMD",
+        {{"MOVE", Shown::greyed},
+         {"STOP", Shown::greyed},
+         {"PATROL", Shown::greyed},
+         {"DEFEND", Shown::greyed},
+         {"ATTACK", Shown::greyed},
+         {"BLAST", Shown::greyed}}
+    );
 }
 
 void Runtime::check_command_buttons(uint16_t peewee, uint16_t commander) {
@@ -638,8 +787,13 @@ void Runtime::check_hud_buttons_under_pointer(uint16_t peewee, uint16_t commande
     };
 
     // A build button of the commander's build page under the pointer is drawn
-    // as it is without it.
+    // as it is without it. ORDERS left the commander on its order page,
+    // which it keeps, so BUILD opens its build page again.
     select(commander);
+    const auto build_tab = centre(index_of("BUILD"));
+    send(SDL_EVENT_MOUSE_MOTION, build_tab);
+    send(SDL_EVENT_MOUSE_BUTTON_DOWN, build_tab);
+    send(SDL_EVENT_MOUSE_BUTTON_UP, build_tab);
     std::optional<std::size_t> build;
     for (std::size_t index = 0; index < match_hud_->layout.gadgets.size() && !build; ++index) {
         const auto& gadget = match_hud_->layout.gadgets[index];

@@ -4,7 +4,7 @@
 // The settings' defaults on each platform and preferences file, what they
 // read from the preferences and an installation's totala.ini, what they
 // write back, and the locks a game, the command line and the renderer put
-// on them. The Language & Text switches and text size: their defaults, a
+// on them. The Language switches and text size: their defaults, a
 // file without them, a file with CR LF line ends, the round trip, the text
 // size's range and the text style the drawing reads. Developer Mode's
 // switch and the overrides kept under each profile's id. The Touch
@@ -748,7 +748,7 @@ void the_renderer_settings_lock_by_the_flags_and_the_renderer() {
         }
 }
 
-/// The Language & Text switches' keys, and the text size's.
+/// The Language switches' keys, and the text size's.
 constexpr std::array<std::string_view, 5> text_keys{
     settings::key::modern_fonts,
     settings::key::text_outline,
@@ -793,7 +793,7 @@ void language_and_text_defaults_to_modern_fonts_with_outline_and_shadow() {
 
 void a_file_without_the_text_switches_reads_their_defaults() {
     // A file an earlier version wrote: other settings and the game's own
-    // keys, and none of Language & Text's.
+    // keys, and none of Language's.
     Values earlier;
     earlier[std::string{settings::key::wheel_zoom}] = "0";
     earlier[std::string{settings::key::max_frame_rate}] = "60";
@@ -1032,7 +1032,7 @@ void developer_mode_and_its_overrides_are_kept_under_the_profiles_id() {
         profiles::HackOverride{"repair.rate", false, {}},
     };
     Values values;
-    settings::write_settings(values, defaults, chosen, defaults, false, {}, profiles::base_game_id);
+    settings::write_settings(values, defaults, chosen, defaults, false, profiles::base_game_id);
     const std::string base_key = std::string{settings::key::hack_overrides} + "ta-3.1c";
     CHECK(values.size() == 2);
     CHECK(values.at(std::string{settings::key::developer_mode}) == "1");
@@ -1059,7 +1059,7 @@ void developer_mode_and_its_overrides_are_kept_under_the_profiles_id() {
     restored_choice.hack_overrides = chosen.hack_overrides;
     Values restored = values;
     settings::write_settings(
-        restored, chosen, restored_choice, defaults, true, {}, profiles::base_game_id
+        restored, chosen, restored_choice, defaults, true, profiles::base_game_id
     );
     CHECK(!restored.contains(std::string{settings::key::developer_mode}));
     CHECK(restored.at(base_key) == values.at(base_key));
@@ -1068,10 +1068,10 @@ void developer_mode_and_its_overrides_are_kept_under_the_profiles_id() {
     auto cleared = chosen;
     cleared.hack_overrides.clear();
     Values emptied = values;
-    settings::write_settings(emptied, chosen, cleared, defaults, false, {}, profiles::base_game_id);
+    settings::write_settings(emptied, chosen, cleared, defaults, false, profiles::base_game_id);
     CHECK(!emptied.contains(base_key));
     Values kept = one_key(base_key, "garbage");
-    settings::write_settings(kept, chosen, chosen, defaults, false, {}, profiles::base_game_id);
+    settings::write_settings(kept, chosen, chosen, defaults, false, profiles::base_game_id);
     CHECK(kept.at(base_key) == "garbage");
 
     // A text the profile grammar does not read as a mapping gives none.
@@ -1087,25 +1087,26 @@ void the_mod_is_stored_as_its_folder() {
     settings::Inputs inputs{};
     inputs.mod_folders = folders;
     const settings::EngineSettings defaults{};
-    CHECK(defaults.mod == 0);
+    CHECK(defaults.mod_folder.empty() && defaults.picked_mod_folder.empty());
 
     Values values;
     auto chosen = defaults;
-    chosen.mod = 2;
-    settings::write_settings(values, defaults, chosen, defaults, false, folders);
+    chosen.mod_folder = folders[1];
+    settings::write_settings(values, defaults, chosen, defaults, false);
+    CHECK(values.size() == 1);
     CHECK(values.at(std::string{settings::key::mod_directory}) == "/games/ta/mods/beta");
-    CHECK(settings::read_settings(values, inputs, false).mod == 2);
+    const auto read = settings::read_settings(values, inputs, false);
+    CHECK(read.mod_folder == folders[1] && read.picked_mod_folder.empty());
 
-    // A folder no longer offered reads as none; no mod erases the key.
-    CHECK(settings::read_settings(values, {}, false).mod == 0);
-    settings::write_settings(values, chosen, defaults, defaults, false, folders);
+    // No mod erases the key, never writing an empty path.
+    settings::write_settings(values, chosen, defaults, defaults, false);
     CHECK(!values.contains(std::string{settings::key::mod_directory}));
 
     // Restore defaults forgets the mod.
     values[std::string{settings::key::mod_directory}] = folders[0];
     auto first = defaults;
-    first.mod = 1;
-    settings::write_settings(values, first, defaults, defaults, true, folders);
+    first.mod_folder = folders[0];
+    settings::write_settings(values, first, defaults, defaults, true);
     CHECK(!values.contains(std::string{settings::key::mod_directory}));
 }
 
@@ -1302,6 +1303,103 @@ void the_backups_switch_is_off_by_default_and_round_trips() {
     CHECK(!settings::read_settings(values, players_own_on_linux, false).game_files_backed_up);
 }
 
+void a_picked_folder_is_stored_and_kept() {
+    const std::vector<std::string> folders{"/games/ta/mods/alpha"};
+    settings::Inputs inputs{};
+    inputs.mod_folders = folders;
+    const settings::EngineSettings defaults{};
+    const std::string picked = "/home/player/my mods/Some Mod";
+
+    // A picked folder is the mod and the picked folder, each under its key.
+    Values values;
+    auto chosen = defaults;
+    chosen.mod_folder = picked;
+    chosen.picked_mod_folder = picked;
+    settings::write_settings(values, defaults, chosen, defaults, false);
+    CHECK(values.size() == 2);
+    CHECK(values.at(std::string{settings::key::mod_directory}) == picked);
+    CHECK(values.at(std::string{settings::key::picked_mod_directory}) == picked);
+    auto read = settings::read_settings(values, inputs, false);
+    CHECK(read.mod_folder == picked && read.picked_mod_folder == picked);
+
+    // No Mod keeps the picked folder among the choices.
+    auto none = chosen;
+    none.mod_folder.clear();
+    settings::write_settings(values, chosen, none, defaults, false);
+    CHECK(!values.contains(std::string{settings::key::mod_directory}));
+    CHECK(values.at(std::string{settings::key::picked_mod_directory}) == picked);
+    read = settings::read_settings(values, inputs, false);
+    CHECK(read.mod_folder.empty() && read.picked_mod_folder == picked);
+
+    // An offered mod keeps it too, and Restore defaults leaves it.
+    auto offered = none;
+    offered.mod_folder = folders[0];
+    settings::write_settings(values, none, offered, defaults, false);
+    auto restored = defaults;
+    restored.picked_mod_folder = picked;
+    settings::write_settings(values, offered, restored, defaults, true);
+    CHECK(!values.contains(std::string{settings::key::mod_directory}));
+    CHECK(values.at(std::string{settings::key::picked_mod_directory}) == picked);
+
+    // A mod folder the game folder does not offer reads as the picked one,
+    // as a file a version without Pick Folder... wrote may hold.
+    Values older;
+    older[std::string{settings::key::mod_directory}] = "/old/install/mods/gone";
+    read = settings::read_settings(older, inputs, false);
+    CHECK(read.mod_folder == "/old/install/mods/gone");
+    CHECK(read.picked_mod_folder == "/old/install/mods/gone");
+}
+
+void an_older_preferences_file_reads_no_mod() {
+    // A file a version before the Mod drop-down wrote: no mod key, no
+    // picked folder; every other setting reads as before.
+    Values older;
+    older[std::string{settings::key::unit_limit}] = "500";
+    older[std::string{settings::key::wheel_zoom}] = "0";
+    const auto read = settings::read_settings(older, {}, false);
+    CHECK(read.mod_folder.empty() && read.picked_mod_folder.empty());
+    CHECK(read.unit_limit == 500 && !read.wheel_zoom);
+    // An offered mod an older version chose reads as that mod.
+    const std::vector<std::string> folders{"/games/ta/mods/alpha"};
+    settings::Inputs inputs{};
+    inputs.mod_folders = folders;
+    older[std::string{settings::key::mod_directory}] = folders[0];
+    const auto modded = settings::read_settings(older, inputs, false);
+    CHECK(modded.mod_folder == folders[0] && modded.picked_mod_folder.empty());
+}
+
+void a_folder_without_a_profile_keeps_its_overrides_under_its_own_id() {
+    namespace profiles = oa::data::mod_profile;
+    // The id the game keeps a mod folder without a profile's overrides under:
+    // "folder:" and its path, which no profile's id can be.
+    const std::string folder_id = "folder:/home/player/plain archives/a%7Cb";
+    const std::string folder_key = std::string{settings::key::hack_overrides} + folder_id;
+    const std::string base_key = std::string{settings::key::hack_overrides} + "ta-3.1c";
+    const settings::EngineSettings defaults{};
+    auto chosen = defaults;
+    chosen.developer_mode = true;
+    chosen.hack_overrides = {profiles::HackOverride{"repair.rate", false, {}}};
+
+    // A file an earlier version wrote holds the plain game's overrides
+    // only: the folder reads none of them, and they stay as they were.
+    Values values = one_key(base_key, "{\"ai.attack-wave-size\":{\"units\":40}}");
+    settings::Inputs folder{};
+    folder.profile_id = folder_id;
+    CHECK(settings::read_settings(values, folder, false).hack_overrides.empty());
+    settings::write_settings(values, defaults, chosen, defaults, false, folder_id);
+    CHECK(values.at(folder_key) == "{\"repair.rate\":false}");
+    CHECK(values.at(base_key) == "{\"ai.attack-wave-size\":{\"units\":40}}");
+    const auto read = settings::read_settings(values, folder, false);
+    CHECK(
+        read.hack_overrides.size() == 1 && read.hack_overrides.front() == chosen.hack_overrides[0]
+    );
+    settings::Inputs base{};
+    base.profile_id = profiles::base_game_id;
+    const auto base_read = settings::read_settings(values, base, false);
+    CHECK(base_read.hack_overrides.size() == 1);
+    CHECK(base_read.hack_overrides.front().hack == "ai.attack-wave-size");
+}
+
 int main() {
     defaults_play_as_without_the_settings();
     escape_opens_the_menu_by_default_only_on_macos_with_the_players_own_file();
@@ -1323,6 +1421,9 @@ int main() {
     a_mods_path_budget_scales_the_credit();
     a_game_locks_the_next_game_settings();
     the_mod_is_stored_as_its_folder();
+    a_picked_folder_is_stored_and_kept();
+    an_older_preferences_file_reads_no_mod();
+    a_folder_without_a_profile_keeps_its_overrides_under_its_own_id();
     hardware_acceleration_defaults_to_full_for_the_players_own_file_on_every_machine();
     hardware_acceleration_reads_its_words_and_the_switchs_numbers();
     the_renderer_settings_lock_by_the_flags_and_the_renderer();

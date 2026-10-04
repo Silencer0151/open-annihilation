@@ -223,7 +223,7 @@ void restrict_update_sliders(Lobby& lobby, RestrictPanel& restrict, Panel& panel
         if (control == nullptr)
             continue;
         const auto row = visible_row(restrict, slider);
-        if (row >= restrict.count) {
+        if (row < 0 || row >= restrict.count) {
             control->active = 0;
             continue;
         }

@@ -92,7 +92,8 @@ class OutputStream {
 
     /// Returns how much has been converted for playing and not yet played.
     ///
-    /// @return a byte count, 0 when nothing waits to play
+    /// @return the bytes of the stream's format those samples stand for, 0
+    ///         when nothing waits to play
     [[nodiscard]] virtual int32_t available_bytes() = 0;
 
     /// Drops every sample queued or converted and not yet played.
@@ -103,6 +104,22 @@ class OutputStream {
     /// @param gain the factor; 1 plays the samples as they are
     /// @return false when the gain cannot be set
     virtual bool set_gain(float gain) = 0;
+
+    /// Sets the factors the left and right sides are multiplied by, on top
+    /// of the gain: a stream of one channel plays it on both sides at
+    /// these levels. A stream starts with both at 1.
+    ///
+    /// An output that cannot weigh the sides apart keeps playing both at the
+    /// gain alone and returns false.
+    ///
+    /// @param left the left side's factor; 1 plays it as it is
+    /// @param right the right side's factor; 1 plays it as it is
+    /// @return false when the sides cannot be set
+    virtual bool set_side_gains(float left, float right) {
+        static_cast<void>(left);
+        static_cast<void>(right);
+        return false;
+    }
 
     /// Stops playing, keeping the samples queued.
     ///
@@ -167,11 +184,11 @@ class SoundOutput {
 
 /// Returns the sound output of the process.
 ///
-/// Unless set_sound_output() chose another, it is SDL's where the build has
-/// SDL, and the wave-out mixer otherwise; on Windows XP, which lacks the
-/// sound interface SDL prefers, SDL plays through the older one XP has. On
-/// Windows the environment variable OA_SOUND_OUTPUT set to "waveout" chooses
-/// the wave-out mixer in a build that has SDL too.
+/// Unless set_sound_output() chose another, it is the one
+/// choose_sound_output() (oa/audio/sound_output_backends.hpp) picks: on
+/// Windows before Vista the wave-out mixer, elsewhere SDL's, and the
+/// environment variable OA_SOUND_OUTPUT set to "waveout" or "sdl" chooses
+/// either. An output the build or the system lacks gives way to the other.
 ///
 /// @return the output, which lives until the process ends
 [[nodiscard]] SoundOutput& sound_output();

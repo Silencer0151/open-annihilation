@@ -4,7 +4,7 @@
 // Game text as the player sees it: the game's 8-bit code page read as
 // Unicode and written back, which characters a game font draws with which
 // of its bytes, and lines drawn in the modern fonts at the text size, with
-// the outline, shadow and background the player's Language & Text
+// the outline, shadow and background the player's Language
 // settings choose, broken into rows, laid on 8-bit or RGB pixels and
 // reduced to the palette in use. The fonts themselves are reached through
 // hooks the application installs; nothing here changes the simulation, a
@@ -192,7 +192,7 @@ struct TextMask {
 
 /// How game text is drawn now.
 struct TextSettings {
-    /// The player's Language & Text settings; modern_fonts only while the
+    /// The player's Language settings; modern_fonts only while the
     /// modern fonts can be drawn.
     TextStyle style{false, true, true, false, default_text_size};
     /// Game text may hold UTF-8 (a profile's text rendering, unicode).

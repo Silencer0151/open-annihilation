@@ -119,13 +119,8 @@ Decoded<CobProgram> parse_cob(std::span<const uint8_t> bytes, const ParseLimits&
         disk.code_offset,
         disk.name_pool_offset
     };
-    if (header.version_signature != version_ta) {
-        return DecodeError{
-            DecodeCode::unsupported_version,
-            0,
-            "unsupported COB VersionSignature (TA requires 4; Kingdoms v6 is rejected)"
-        };
-    }
+    // The VersionSignature is not checked: every version is read by the same
+    // header offsets.
     if (header.sound_count != 0U) {
         return DecodeError{
             DecodeCode::unsupported_version,

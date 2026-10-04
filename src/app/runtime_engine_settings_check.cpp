@@ -113,12 +113,69 @@ void Runtime::check_engine_settings() {
     oa::platform::preferences::save(preference_path_, preference_values_);
     init::load_preferences(state_, skirmish_settings_, preferences_, *this);
     load_engine_settings();
+    if (main_menu_overlay_)
+        check_engine_settings_under_overlay();
+    // An extension's overlay may draw over any part of the main menu and take
+    // its input first, so the extensions' overlays are set aside while the
+    // check holds the main menu to the engine's own drawing, and put back
+    // when it ends.
+    set_extension_overlays_aside(true);
+
+    struct PutBack {
+        Runtime& runtime;
+
+        ~PutBack() { runtime.set_extension_overlays_aside(false); }
+    } put_back{*this};
+
     check_engine_settings_in_menu();
     check_engine_settings_dialog();
     check_engine_settings_window_sizes();
     check_engine_settings_in_match();
     check_engine_settings_wiring();
     std::cout << "engine settings check: passed\n";
+}
+
+void Runtime::check_engine_settings_under_overlay() {
+    std::cout << "engine settings check: the main menu under an extension's overlay\n";
+    const auto previous_tick = fake_frontend_tick_;
+    fake_frontend_tick_ = 1000U;
+    load(Screen::main_menu);
+    require(screen_ == Screen::main_menu, "the main menu did not open");
+    require(
+        EngineSettingsMenuHost::button_shown(*this),
+        "the OA button does not show under an extension's overlay"
+    );
+    const auto top = EngineSettingsMenuHost::button_rect(*this);
+    require(
+        top.x == 596 && top.y == 12 && top.width == settings::menu_button_side,
+        "under an extension's overlay the OA button is not at 596,12"
+    );
+    // A click on the button reaches it through the extensions' overlays, and
+    // Escape closes the dialog it opens, which stands over them.
+    const oa::ui::display_layout::Point centre{top.x + top.width / 2, top.y + top.height / 2};
+    send_check_pointer(SDL_EVENT_MOUSE_MOTION, centre, 0);
+    send_check_pointer(SDL_EVENT_MOUSE_BUTTON_DOWN, centre, SDL_BUTTON_LEFT);
+    send_check_pointer(SDL_EVENT_MOUSE_BUTTON_UP, centre, SDL_BUTTON_LEFT);
+    require(
+        engine_settings_dialog() != nullptr && screen_ == Screen::main_menu,
+        "under an extension's overlay a click on the OA button did not open the dialog"
+    );
+    for (const auto type : {SDL_EVENT_KEY_DOWN, SDL_EVENT_KEY_UP}) {
+        SDL_Event event{};
+        event.type = type;
+        event.key.windowID = SDL_GetWindowID(sdl_.window);
+        event.key.key = SDLK_ESCAPE;
+        event.key.scancode = SDL_SCANCODE_ESCAPE;
+        event.key.down = type == SDL_EVENT_KEY_DOWN;
+        bool running = true;
+        dispatch_event(event, running);
+        require(running, "Escape in the dialog ended the run");
+    }
+    require(engine_settings_dialog() == nullptr, "Escape did not close the dialog");
+    send_check_pointer(SDL_EVENT_MOUSE_MOTION, kRestingPointer, 0);
+    fake_frontend_tick_ = previous_tick;
+    std::cout << "engine settings check: under an extension's overlay the OA button at " << top.x
+              << ',' << top.y << " opens the dialog\n";
 }
 
 void Runtime::check_engine_settings_in_menu() {

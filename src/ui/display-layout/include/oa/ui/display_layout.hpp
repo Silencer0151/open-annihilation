@@ -19,9 +19,13 @@ inline constexpr int kSourceBottom = 32;
 inline constexpr int kSourceBattlefieldWidth = kSourceWidth - kSourceLeft;
 inline constexpr int kSourceBattlefieldHeight = kSourceHeight - kSourceTop - kSourceBottom;
 inline constexpr int kSourceBottomBarY = kSourceHeight - kSourceBottom;
+// The screen column where the bars' art begins, one right of the side
+// column's 128: the first piece of each bar is drawn there, unscaled.
+inline constexpr int kSourceBarArtLeft = kSourceLeft + 1;
 // The chrome grows with the window only up to the 1280x1024 layout (twice the
-// game's 640x480 art). Larger windows keep that size and leave the rest of
-// the strips blank instead of stretching the art.
+// game's 640x480 art). Larger windows keep that size, and the bars' art goes
+// on along them as the game draws it on a wider screen instead of being
+// stretched.
 inline constexpr double kMaxChromeScale = 2.0;
 
 /// A point in pixels.
@@ -72,16 +76,25 @@ inline constexpr Point kOutsideSource{-10000, -10000};
 // Chrome stays 4:3-proportioned (scaled by min(w/640, h/480, kMaxChromeScale)).
 // Extra window pixels become battlefield so a 16:9 window is a 16:9 match, not
 // letterboxed 640x480. The side column and top bar hang from the top-left
-// corner; the bottom bar sits on the window's bottom edge.
+// corner; the bottom bar sits on the window's bottom edge. Both bars run from
+// the side column's right edge to the window's right edge at the chrome's
+// scale, their art repeating past the interface's 640 columns as the game
+// draws it on a screen that wide. A side column whose pages reach below the
+// window at the chrome's scale is drawn smaller, and narrower, as a whole
+// (fit_side_column); the bars and the battlefield then start at its right
+// edge.
 struct MatchLayout {
     int width = kSourceWidth;
     int height = kSourceHeight;
-    int left = kSourceLeft;
+    int left = kSourceLeft; ///< the side column's width, where the bars and battlefield start
     int top = kSourceTop;
     int bottom = kSourceBottom;
-    int hud_width = kSourceWidth;
+    int hud_width = kSourceWidth; ///< the interface's 640 columns at the chrome's scale
     int hud_height = kSourceHeight;
-    double scale = 1.0;
+    double scale = 1.0; ///< canvas pixels per source pixel of the bars
+    /// Canvas pixels per source pixel of the side column, across and down:
+    /// `scale`, or less where the column is narrowed (fit_side_column).
+    double column_scale = 1.0;
     /// Placed mode: the battlefield is the whole canvas and the HUD is drawn in placed regions.
     bool phone = false;
     Insets safe{};             ///< canvas pixels to keep clear on each side
@@ -103,6 +116,11 @@ struct MatchLayout {
         return true;
     }
 
+    /// Returns whether the side column is drawn smaller than the bars.
+    [[nodiscard]] bool column_narrowed() const noexcept {
+        return column_scale > 0.0 && column_scale < scale;
+    }
+
     /// Returns the battlefield's left edge in canvas pixels.
     [[nodiscard]] int battlefield_x() const noexcept { return left; }
 
@@ -117,6 +135,27 @@ struct MatchLayout {
 
     /// Returns the bottom bar's top edge in canvas pixels.
     [[nodiscard]] int bottom_bar_y() const noexcept { return height - bottom; }
+
+    /// Returns how many source columns the bars show, from column 128 at the
+    /// side column's right edge to the window's right edge at the bars'
+    /// scale, the last of them cut by that edge: 512 on a 4:3 window beside
+    /// a column at the chrome's scale, more on a wider window or beside a
+    /// narrowed column.
+    [[nodiscard]] int bar_columns() const noexcept {
+        if (scale <= 0.0 || width <= left)
+            return 0;
+        // A hair under a whole column counts as that column.
+        constexpr double kWhole = 1e-9;
+        return static_cast<int>(std::ceil(static_cast<double>(width - left) / scale - kWhole));
+    }
+
+    /// Returns the canvas width of the bars' source columns at the bars'
+    /// scale: the width from the side column's right edge to the window's
+    /// right edge, or a pixel or two more where the window's edge cuts the
+    /// last column.
+    [[nodiscard]] int bar_width() const noexcept {
+        return static_cast<int>(std::lround(bar_columns() * scale));
+    }
 };
 
 /// Lays out the match chrome and battlefield on a window, with the chrome's scale capped.
@@ -156,6 +195,7 @@ make_match_layout(int pixel_width, int pixel_height, double max_chrome_scale) no
     layout.hud_height =
         std::max(top + bottom + 32, static_cast<int>(std::lround(kSourceHeight * scale)));
     layout.scale = scale;
+    layout.column_scale = scale;
     return layout;
 }
 
@@ -166,6 +206,32 @@ make_match_layout(int pixel_width, int pixel_height, double max_chrome_scale) no
 /// @return The layout, with the chrome scaled by min(w/640, h/480, 2).
 [[nodiscard]] inline MatchLayout make_match_layout(int pixel_width, int pixel_height) noexcept {
     return make_match_layout(pixel_width, pixel_height, kMaxChromeScale);
+}
+
+/// Fits a side column of `column_rows` source rows to the window's height.
+///
+/// The side column is one picture, 128 source columns wide: the radar at its
+/// top and the panel and page under it, down to the tallest page it shows.
+/// Where those rows reach below the window at the chrome's scale, the whole
+/// column is drawn at the one smaller scale that puts its last row on the
+/// window's last, across as down, so that every part keeps its place in it;
+/// it is then 128 columns at that scale wide, and the bars and the
+/// battlefield start at its right edge and take the width it gives up: the
+/// bars, at their own scale, still reach the window's right edge, so they
+/// are as many source columns longer as that width holds. Otherwise the
+/// layout is returned as it is.
+///
+/// @param layout a match layout (make_match_layout)
+/// @param column_rows source rows of the side column's tallest page; 480 or
+///        fewer leave any layout as it is
+/// @return the layout with the side column's scale and right edge
+[[nodiscard]] inline MatchLayout fit_side_column(MatchLayout layout, int column_rows) noexcept {
+    if (column_rows <= 0 || layout.left <= 0 || layout.scale <= 0.0 ||
+        std::lround(column_rows * layout.scale) <= layout.height)
+        return layout;
+    layout.column_scale = static_cast<double>(layout.height) / column_rows;
+    layout.left = std::max(1, static_cast<int>(std::lround(kSourceLeft * layout.column_scale)));
+    return layout;
 }
 
 /// Lays out a frame that shows the battlefield alone, with no interface.
@@ -189,6 +255,7 @@ make_battlefield_layout(int pixel_width, int pixel_height) noexcept {
     layout.hud_width = 0;
     layout.hud_height = 0;
     layout.scale = 1.0;
+    layout.column_scale = 1.0;
     return layout;
 }
 
@@ -370,7 +437,9 @@ source_region_edge_at(const MatchLayout& layout, int x, int y) noexcept {
 /// stay inside the source battlefield so a tall window never lands them on a
 /// bar gadget. Pixels in the blank strip areas map outside the source canvas.
 /// In placed mode a pixel maps through the topmost region on it, rounding
-/// down, and a pixel on no region maps to kOutsideSource.
+/// down, and a pixel on no region maps to kOutsideSource. In a narrowed side
+/// column a pixel maps to the source pixel drawn there, and right of it the
+/// bars and battlefield count from its edge.
 ///
 /// @param layout Match layout of the canvas.
 /// @param x Canvas x in pixels.
@@ -400,7 +469,14 @@ source_region_edge_at(const MatchLayout& layout, int x, int y) noexcept {
     const auto unscaled = [scale](int value) {
         return static_cast<int>(std::lround(static_cast<double>(value) / scale));
     };
-    Point point{unscaled(x), unscaled(y)};
+    const bool narrowed = layout.column_narrowed();
+    if (narrowed && x < layout.left) {
+        const auto in_column = [&layout](int value) {
+            return static_cast<int>(std::floor(static_cast<double>(value) / layout.column_scale));
+        };
+        return {in_column(x), in_column(y)};
+    }
+    Point point{narrowed ? kSourceLeft + unscaled(x - layout.left) : unscaled(x), unscaled(y)};
     if (x >= layout.left && y >= layout.bottom_bar_y())
         point.y = kSourceBottomBarY + unscaled(y - layout.bottom_bar_y());
     else if (x >= layout.left && y >= layout.top)
@@ -428,7 +504,9 @@ source_battlefield_to_canvas(const MatchLayout& layout, int x, int y) noexcept {
 /// Maps the game's 640x480 HUD coordinates onto the live match canvas.
 ///
 /// Chrome is uniformly scaled (not stretched across extra 16:9 battlefield);
-/// bottom bar coordinates are offset from the bar's bottom-edge anchor.
+/// bottom bar coordinates are offset from the bar's bottom-edge anchor. A
+/// narrowed side column's points take its scale, and the bars' count from its
+/// right edge.
 /// In placed mode a point maps through the region whose source holds it
 /// (source_region_at), else a point on the source battlefield maps onto the
 /// canvas battlefield at the layout's scale, else a point on a region's far
@@ -450,7 +528,14 @@ source_battlefield_to_canvas(const MatchLayout& layout, int x, int y) noexcept {
     const auto scaled = [&layout](int value) {
         return static_cast<int>(std::lround(static_cast<double>(value) * layout.scale));
     };
-    Point point{scaled(x), scaled(y)};
+    const bool narrowed = layout.column_narrowed();
+    if (narrowed && x < kSourceLeft) {
+        const auto in_column = [&layout](int value) {
+            return static_cast<int>(std::lround(static_cast<double>(value) * layout.column_scale));
+        };
+        return {in_column(x), in_column(y)};
+    }
+    Point point{narrowed ? layout.left + scaled(x - kSourceLeft) : scaled(x), scaled(y)};
     if (x >= kSourceLeft && y >= kSourceBottomBarY)
         point.y = layout.bottom_bar_y() + scaled(y - kSourceBottomBarY);
     return point;
@@ -495,11 +580,18 @@ source_rect_to_canvas(const MatchLayout& layout, int x, int y, int width, int he
             return rect;
         }
     }
-    const auto scaled = [&layout](int value) {
-        return static_cast<int>(std::lround(static_cast<double>(value) * layout.scale));
+    // A narrowed side column's rectangle takes its scale; the bars' count
+    // across from the column's edge.
+    const bool column = layout.column_narrowed() && x < kSourceLeft;
+    const auto factor = column ? layout.column_scale : layout.scale;
+    const auto scaled = [factor](int value) {
+        return static_cast<int>(std::lround(static_cast<double>(value) * factor));
     };
+    const auto across = layout.column_narrowed() && !column ? x - kSourceLeft : x;
     const auto origin = source_to_canvas(layout, x, y);
-    return {origin.x, origin.y, scaled(x + width) - scaled(x), scaled(y + height) - scaled(y)};
+    return {
+        origin.x, origin.y, scaled(across + width) - scaled(across), scaled(y + height) - scaled(y)
+    };
 }
 
 } // namespace oa::ui::display_layout

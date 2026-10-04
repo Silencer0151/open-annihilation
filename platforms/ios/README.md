@@ -54,9 +54,11 @@ installs without launching; `--screenshot <file>` saves a screenshot a few secon
 launch (the screenshot is the simulator's portrait screen, so the landscape game appears turned
 on its side); options the script does not know, and anything after `--`, go to the game.
 
-The game writes its log, preferences and saves in its data container, under
-`Library/Application Support/net.coreprime.open-annihilation`; `xcrun simctl get_app_container
-<UDID> net.coreprime.open-annihilation data` prints where the container is.
+The game writes its log and preferences in its data container, under
+`Library/Application Support/net.coreprime.open-annihilation`, and the player's saves,
+screenshots, films and mods in `Documents/Open Annihilation`, which the Files app shows; `xcrun
+simctl get_app_container <UDID> net.coreprime.open-annihilation data` prints where the container
+is.
 
 ## Build only
 
@@ -132,6 +134,7 @@ Where things are, in the game's data container:
 | Path | What |
 |---|---|
 | `Documents/Total Annihilation` | the game folder, shown in the Files app and the Finder |
+| `Documents/Open Annihilation` | the player's own folder: `Saves`, `Screenshots`, `Films` and `Mods`, shown in the Files app and the Finder; saves an earlier version kept beside the preferences file move here once |
 | `Documents/Total Annihilation (old)` | a folder set aside by a replacement, until removed |
 | `Library/Application Support/net.coreprime.open-annihilation/import/` | the copy being made (`Total Annihilation/`) and its state file |
 | `Library/Application Support/net.coreprime.open-annihilation/demo-1997/` | the demo's unpacked game data |
@@ -218,9 +221,11 @@ capability that any other platform can set the same way:
 are the only iOS code. The first keeps the game's window landscape and never upside down (see
 [Orientation](#orientation)), keeps the home indicator dim (a swipe from the edge only shows it; a
 second swipe goes home) and the status bar hidden, plays the touch controls' haptics, gives the
-game its default folder, the advice shown without one and its **Check again** button, and keeps
-the system's three-finger editing gestures (undo, copy, paste) from taking the fingers of a
-three-finger touch. The second is the Game files screen's side (see [Game files](#game-files)).
+game its default folder, the advice shown without one and its **Check again** button, shows the
+player's folders in the Files app (the settings' Your files and Open Mods Folder buttons, and the
+notice of moved saves, open it at the folder through its `shareddocuments` link, as `open` does on
+the Mac), and keeps the system's three-finger editing gestures (undo, copy, paste) from taking
+the fingers of a three-finger touch. The second is the Game files screen's side (see [Game files](#game-files)).
 The engine offers the Game files screen because these hooks are installed, not because of a build
 option: the desktop installs none.
 
@@ -329,7 +334,8 @@ here: it needs a paid developer team.
 - The Game files screen's later items: a copy that goes on in the background with the system's own
   progress (iOS 26), continuing a copy without choosing the folder again, importing a .zip,
   "Open in Open Annihilation", drag and drop, and VoiceOver for the engine-drawn screens. Changes
-  made in Manage take effect from the next start, since the game cannot restart itself yet.
+  made in Manage take effect from the next start: the game reloads itself without ending for a
+  switch of mod (the settings' Mods page), but that reload does not take them up yet.
 
 - No resume after iOS ends the game in the background: a match played alone pauses with the
   in-game menu when the game leaves the screen, and is lost if iOS then ends the process.

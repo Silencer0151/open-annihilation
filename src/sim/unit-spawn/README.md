@@ -80,6 +80,13 @@ using its copied `Type` in the world. A type that does not load holds a
 fabricated model instances or running VMs; constructor Hosts still perform that
 work.
 
+A unit whose script file is absent has no script: it is built and drawn from
+its plain model, and runs no script. A script file the COB parser cannot
+read, such as one whose header points past its end, is treated the same way:
+the type still loads, with no script, and its `script_error` says why. The
+game writes that once to its log as it loads the unit types, and the other
+types load as before.
+
 The caller supplies availability, per-player limit, resolved default-mission
 index and movement-class footprint, which it takes from the movement classes
 the game data loaded (the unit's runtime metadata); a named class that is

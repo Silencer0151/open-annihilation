@@ -1282,13 +1282,19 @@ void test_error_texts() {
         wr::AreaError::rows_out_of_range,
         wr::AreaError::phase_out_of_range,
     };
-    OA_CHECK(std::strcmp(wr::area_error_text(wr::AreaError::none), "none") == 0);
+    const char* none_text = wr::area_error_text(wr::AreaError::none);
+    OA_CHECK(none_text != nullptr && std::strcmp(none_text, "none") == 0);
     for (std::size_t first = 0; first < std::size(errors); ++first) {
         const char* text = wr::area_error_text(errors[first]);
         OA_CHECK(text != nullptr && text[0] != '\0');
+        if (text == nullptr)
+            continue;
         OA_CHECK(std::strcmp(text, "none") != 0);
-        for (std::size_t second = first + 1U; second < std::size(errors); ++second)
-            OA_CHECK(std::strcmp(text, wr::area_error_text(errors[second])) != 0);
+        for (std::size_t second = first + 1U; second < std::size(errors); ++second) {
+            // A missing text is reported on its own turn as first.
+            const char* other = wr::area_error_text(errors[second]);
+            OA_CHECK(other == nullptr || std::strcmp(text, other) != 0);
+        }
     }
 }
 

@@ -36,9 +36,11 @@ Every document in the repository, by what you want to do.
   stays the same on every platform.
 - [mods/README.md](mods/README.md): mod support: installing a mod in a mod
   folder or as a copied install, choosing it in the settings or with
-  `--mod-dir`, network play and saves under a mod, and the table of every
+  `--mod-dir`, network play and saves under a mod, and the tables of every
   standard hack, each with its own page under
-  [mods/standard-hacks/](mods/standard-hacks).
+  [mods/standard-hacks/](mods/standard-hacks), and of every script
+  extension, each with its own page under
+  [mods/script-extensions/](mods/script-extensions).
 - [mods/oamod-standard.md](mods/oamod-standard.md): the OAMOD standard, the
   format of a mod profile (`oamod.yaml`) and its rules: parameters,
   presets, settings, limits, script extensions, data keys, hashes and

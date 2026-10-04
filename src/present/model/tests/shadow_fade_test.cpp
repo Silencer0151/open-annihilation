@@ -12,6 +12,7 @@
 #include "oa/present/blit.hpp"
 #include "oa/present/display.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>

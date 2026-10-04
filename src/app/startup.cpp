@@ -256,6 +256,9 @@ void check_game_files_options(Options& options) {
         {options.check_frontend_controls, "--check-frontend-controls"},
         {options.check_scroll_bars, "--check-scroll-bars"},
         {options.check_engine_settings, "--check-engine-settings"},
+        {options.check_user_folder, "--check-user-folder"},
+        {options.check_mod_switch, "--check-mod-switch"},
+        {options.check_mod_warning, "--check-mod-warning"},
         {options.check_renderer_ladder, "--check-renderer-ladder"},
         {options.check_briefing_narration, "--check-briefing-narration"},
         {options.check_match_layers, "--check-match-layers"},
@@ -264,8 +267,13 @@ void check_game_files_options(Options& options) {
         {options.check_factory_orders, "--check-factory-orders"},
         {options.check_unit_speech, "--check-unit-speech"},
         {options.check_download_builds, "--check-download-builds"},
+        {options.check_stockpile_builds, "--check-stockpile-builds"},
+        {options.check_unit_page_memory, "--check-unit-page-memory"},
         {options.check_side_column, "--check-side-column"},
+        {options.check_match_bars, "--check-match-bars"},
+        {!options.check_unit_pages.empty(), "--check-unit-pages"},
         {options.check_kill_board, "--check-kill-board"},
+        {options.check_paused_save, "--check-paused-save"},
         {!options.check_unit_language.empty(), "--check-unit-language"},
         {options.check_patrol_reclaim, "--check-patrol-reclaim"},
         {options.check_reclaim_cursor, "--check-reclaim-cursor"},
@@ -440,8 +448,13 @@ void check_director_options(Options& options) {
         {options.check_factory_orders, "--check-factory-orders"},
         {options.check_unit_speech, "--check-unit-speech"},
         {options.check_download_builds, "--check-download-builds"},
+        {options.check_stockpile_builds, "--check-stockpile-builds"},
+        {options.check_unit_page_memory, "--check-unit-page-memory"},
         {options.check_side_column, "--check-side-column"},
+        {options.check_match_bars, "--check-match-bars"},
+        {!options.check_unit_pages.empty(), "--check-unit-pages"},
         {options.check_kill_board, "--check-kill-board"},
+        {options.check_paused_save, "--check-paused-save"},
         {!options.check_unit_language.empty(), "--check-unit-language"},
         {options.check_patrol_reclaim, "--check-patrol-reclaim"},
         {options.check_reclaim_cursor, "--check-reclaim-cursor"},
@@ -453,6 +466,9 @@ void check_director_options(Options& options) {
         {options.check_interpolation, "--check-interpolation"},
         {options.check_unit_playout, "--check-unit-playout"},
         {options.check_engine_settings, "--check-engine-settings"},
+        {options.check_user_folder, "--check-user-folder"},
+        {options.check_mod_switch, "--check-mod-switch"},
+        {options.check_mod_warning, "--check-mod-warning"},
         {options.check_renderer_ladder, "--check-renderer-ladder"},
     };
     for (const auto& [given, name] : refused)
@@ -582,6 +598,8 @@ namespace {
             result.preferences_file = fs::path(value(argument));
         else if (argument == "--data-dir")
             result.data_dir = path_from_utf8(value(argument));
+        else if (argument == "--user-folder")
+            result.user_folder = path_from_utf8(value(argument));
         else if (argument == "--frames")
             result.frame_limit = parse_count(value(argument));
         else if (argument == "--benchmark")
@@ -695,6 +713,12 @@ namespace {
             result.check_scroll_bars = true;
         else if (argument == "--check-engine-settings")
             result.check_engine_settings = true;
+        else if (argument == "--check-user-folder")
+            result.check_user_folder = true;
+        else if (argument == "--check-mod-switch")
+            result.check_mod_switch = true;
+        else if (argument == "--check-mod-warning")
+            result.check_mod_warning = true;
         else if (argument == "--check-renderer-ladder")
             result.check_renderer_ladder = true;
         else if (argument == "--render-fault")
@@ -713,10 +737,20 @@ namespace {
             result.check_unit_speech = true;
         else if (argument == "--check-download-builds")
             result.check_download_builds = true;
+        else if (argument == "--check-stockpile-builds")
+            result.check_stockpile_builds = true;
+        else if (argument == "--check-unit-page-memory")
+            result.check_unit_page_memory = true;
         else if (argument == "--check-side-column")
             result.check_side_column = true;
+        else if (argument == "--check-match-bars")
+            result.check_match_bars = true;
+        else if (argument == "--check-unit-pages")
+            result.check_unit_pages = value(argument);
         else if (argument == "--check-kill-board")
             result.check_kill_board = true;
+        else if (argument == "--check-paused-save")
+            result.check_paused_save = true;
         else if (argument == "--check-unit-language")
             result.check_unit_language = value(argument);
         else if (argument == "--check-patrol-reclaim")
@@ -793,11 +827,15 @@ namespace {
                    "[--accept-unimplemented-hacks] "
                    "[--skip-intro] [--frames N] [--headless-check] "
                    "[--snapshot PATH.ppm] [--preferences-file PATH] [--data-dir PATH] "
+                   "[--user-folder PATH] "
                    "[--mute] "
                    "[--check-navigation] [--check-match-dialogs] [--check-match-layers] "
                    "[--check-render-tiers [--force-capable] [--native-density]] "
                    "[--check-match-orders] [--check-factory-orders] [--check-unit-speech] "
-                   "[--check-download-builds] [--check-side-column] [--check-kill-board] "
+                   "[--check-download-builds] [--check-stockpile-builds] "
+                   "[--check-unit-page-memory] [--check-side-column] [--check-match-bars] "
+                   "[--check-unit-pages whole|scaled:TYPE,...] "
+                   "[--check-kill-board] "
                    "[--check-unit-language TAG] "
                    "[--check-patrol-reclaim] [--check-reclaim-cursor] "
                    "[--check-pointer-interfaces] [--check-touch-controls] "
@@ -805,6 +843,7 @@ namespace {
                    "[--check-multiplayer-menu] "
                    "[--check-load-save] [--check-frontend-controls] "
                    "[--check-scroll-bars] [--check-engine-settings [--force-capable]] "
+                   "[--check-user-folder] [--check-mod-switch] [--check-mod-warning] "
                    "[--check-renderer-ladder [--render-fault POINT[@FRAME]]] "
                    "[--check-briefing-narration] [--check-director-view] "
                    "[--check-director-render] [--check-interpolation] "
@@ -954,13 +993,16 @@ namespace {
     result.fixed_clock =
         result.headless_check || result.check_match_layers || result.check_render_tiers ||
         result.check_match_dialogs || result.check_load_save || result.check_frontend_controls ||
-        result.check_scroll_bars || result.check_engine_settings || result.check_renderer_ladder ||
+        result.check_scroll_bars || result.check_engine_settings || result.check_user_folder ||
+        result.check_mod_switch || result.check_mod_warning || result.check_renderer_ladder ||
         result.check_match_orders || result.check_factory_orders || result.check_unit_speech ||
-        result.check_download_builds || result.check_side_column || result.check_kill_board ||
+        result.check_download_builds || result.check_stockpile_builds ||
+        result.check_unit_page_memory || result.check_side_column || result.check_match_bars ||
+        !result.check_unit_pages.empty() || result.check_kill_board ||
         !result.check_unit_language.empty() || result.check_patrol_reclaim ||
         result.check_reclaim_cursor || result.check_pointer_interfaces ||
         result.check_touch_controls || result.check_director_view || result.check_director_render ||
-        result.check_interpolation || result.check_unit_playout;
+        result.check_interpolation || result.check_unit_playout || result.check_paused_save;
     // A capture and a showcase need the application's own loop and window,
     // which checks and benchmarks do not run.
     const bool check_run = result.fixed_clock || result.check_navigation ||

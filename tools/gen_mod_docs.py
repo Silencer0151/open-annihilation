@@ -2,9 +2,9 @@
 # SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Generate the facts and schemas of the standard hack pages from the registry.
+"""Generate the facts and tables of the standard hack and script extension pages from the registry.
 
-Reads src/data/mod-profile/registry/hack-registry.yaml and keeps two kinds of
+Reads src/data/mod-profile/registry/hack-registry.yaml and keeps this
 Markdown in step with it:
 
   docs/mods/standard-hacks/<hack id>.md
@@ -19,24 +19,46 @@ Markdown in step with it:
       scope and the data key that overrides it, the presets, the constraints,
       the data keys that need the hack on, and a YAML block with every
       parameter at its default.
+  docs/mods/script-extensions/<extension id>.md
+      one page per script extension, headed by its title. A missing page is
+      created as a skeleton: the title, the facts block, the headings
+      Description, Syntax, Usage, Configuration example, Details and Related
+      with a placeholder each for the prose, and the related block under
+      Related. The facts block gives the extension's id, the profile block
+      that mounts it, its usual index, its argument, what it returns, its
+      scope, the machines that run it, whether every machine reads the same
+      answer, and how the profile's fidelity changes it; the related block
+      links the standard and every other extension's page.
   docs/mods/README.md
       the standard hacks table: one row per hack, grouped by area, with its
       title linking to its page, its id, one sentence on what it does, its
       scope and its status. Areas and the hacks within each follow their
-      titles alphabetically, as Developer Mode lists them. A missing file is
-      created holding a title and the table.
+      titles alphabetically, as Developer Mode lists them. Then the script
+      extensions table: one row per extension, in the order of their usual
+      indices, with its title linking to its page, its id, its usual index,
+      its argument and what it returns. A missing file is created holding a
+      title and both tables.
+  docs/mods/oamod-standard.md
+      the table of every script extension in section 7.2: its id linking to
+      its page, its usual index, its argument and what it returns. A missing
+      file is created holding a title and the table.
 
 The titles of the hacks and their areas are the registry's (title and
-area-titles). Besides a page's heading, only the text between a
-'<!-- BEGIN GENERATED: name -->' line and its '<!-- END GENERATED: name -->'
-line is written; everything else on a page is prose and stays as it is. A page
-or README that has lost a block's markers or its heading is an error, as is a
-hack with no sentence in SENTENCES (the registry's summaries are notes for the
-engine's developers; the table says in one sentence what each hack does for a
-player). A page in docs/mods/standard-hacks that names no hack is reported as
-stale.
+area-titles); the titles of the script extensions and what each returns are
+SCRIPT_EXTENSIONS', since the registry gives an extension no title. Besides a
+page's heading, only the text between a '<!-- BEGIN GENERATED: name -->' line
+and its '<!-- END GENERATED: name -->' line is written; everything else on a
+page is prose and stays as it is. A page, README or standard that has lost a
+block's markers or its heading is an error, as is a hack with no sentence in
+SENTENCES (the registry's summaries are notes for the engine's developers; the
+table says in one sentence what each hack does for a player), a script
+extension with no entry in SCRIPT_EXTENSIONS, an entry there that names no
+script extension in the registry, and a set extension, which the pages and
+tables do not describe yet. A page in docs/mods/standard-hacks that
+names no hack, or in docs/mods/script-extensions that names no script
+extension, is reported as stale.
 
-  gen_mod_docs.py              write the pages and the table
+  gen_mod_docs.py              write the pages and the tables
   gen_mod_docs.py --check      write nothing; exit 1 when a block or page differs or is stale
   gen_mod_docs.py --self-test  check the tool itself on a small registry
 """
@@ -54,6 +76,8 @@ ROOT = Path(__file__).resolve().parents[1]
 REGISTRY = ROOT / "src/data/mod-profile/registry/hack-registry.yaml"
 DOCS = ROOT / "docs/mods"
 PAGES = "standard-hacks"
+EXT_PAGES = "script-extensions"
+STANDARD = "oamod-standard.md"
 
 # What each hack does, in one sentence, for the standard hacks table.
 SENTENCES = {
@@ -102,6 +126,8 @@ SENTENCES = {
         "Aircraft with a chosen unit flag never break off to find a repair pad when damaged.",
     "air.guard-respects-hold-position":
         "Guarding aircraft engage an attacker only when their move order is not Hold Position.",
+    "air.gunships-hover-to-strafe":
+        "Gunships hover in range and strafe a point on the ground, and guarding gunships attack enemies in reach.",
     "weapons.retarget-out-of-range":
         "A weapon drops a target that leaves its range and acquires a new one.",
     "weapons.high-arc-ballistic":
@@ -246,6 +272,87 @@ SENTENCES = {
         "Exports live unit state and the battle room's state for other programs.",
 }
 
+# What each script extension gives a unit script: the title of its page,
+# whether it takes a unit id as its argument, what it returns, how the
+# profile's fidelity changes it, and whether every machine of a network game
+# reads the same answer.
+SCRIPT_EXTENSIONS = {
+    "unit.kills-x100": {
+        "title": "Kill Count Times 100",
+        "takes-unit-id": False,
+        "returns": "The calling unit's kill count times 100 (a count, not a veterancy level).",
+        "fidelity": "Not affected: it reads only the calling unit.",
+        "same-on-every-machine": "Yes, once a death has reached every machine: each machine counts the kill as it "
+                                 "learns of the death, so for a moment the count can differ between machines.",
+    },
+    "unit.min-id": {
+        "title": "Lowest Unit Id",
+        "takes-unit-id": False,
+        "returns": "1, the lowest id a unit can have.",
+        "fidelity": "Not affected: it is always 1.",
+        "same-on-every-machine": "Yes.",
+    },
+    "unit.max-id": {
+        "title": "Highest Unit Id",
+        "takes-unit-id": False,
+        "returns": "The unit limit the game recorded, times 10. A skirmish or multiplayer game records its own "
+                   "limit, so this is the last id of the unit table; a campaign mission records the player's "
+                   "Unit limit setting.",
+        "fidelity": "Not affected. `unit.is-local`, and under `exact` also `unit.owner-of` and "
+                    "`unit.allied-with`, answer 0 when the low 16 bits of their argument name an id past it.",
+        "same-on-every-machine": "Yes: every machine of a multiplayer game records the host's unit limit.",
+    },
+    "unit.my-id": {
+        "title": "Own Unit Id",
+        "takes-unit-id": False,
+        "returns": "The calling unit's own id.",
+        "fidelity": "Not affected: it reads only the calling unit.",
+        "same-on-every-machine": "Yes: every machine gives a unit the same id.",
+    },
+    "unit.owner-of": {
+        "title": "Owner of a Unit",
+        "takes-unit-id": True,
+        "returns": "The number of the player that owns that unit's slot, 0 for the first player to 9 for the "
+                   "tenth. Under `exact`, id 0 answers 255, and in a multiplayer game an id in the range of a "
+                   "player place nobody took answers 10.",
+        "fidelity": "`exact`: any id up to `unit.max-id` answers from its slot, whether or not a unit lives "
+                    "there. `safe`: 0 unless a live unit has the id.",
+        "same-on-every-machine": "Under `exact`, yes: an id's player never changes. Under `safe`, a unit of "
+                                 "another machine's player answers from when its creation reaches this machine, "
+                                 "a moment after its owner's machine, until its death does.",
+    },
+    "unit.build-percent-left-of": {
+        "title": "Build Percent Left of a Unit",
+        "takes-unit-id": True,
+        "returns": "That unit's `BUILD_PERCENT_LEFT`: 0 when it is finished, else 1 to 100.",
+        "fidelity": "`exact`: the whole 32-bit argument chooses the record, whether or not a unit lives there. "
+                    "`safe`: 0 unless the argument is the id of a live unit.",
+        "same-on-every-machine": "Not always: a unit's progress reaches the machines that do not play its owner "
+                                 "a moment later, carried to within 1/255, so there the value can lag the "
+                                 "owner's machine and, near a step, differ from it by one. That the unit is "
+                                 "finished reaches every machine.",
+    },
+    "unit.allied-with": {
+        "title": "Allied With a Unit's Owner",
+        "takes-unit-id": True,
+        "returns": "1 when the calling unit's owner has allied the owner of that unit's slot, else 0. Alliance "
+                   "is one-way: the target's owner need not have allied back.",
+        "fidelity": "`exact`: any id up to `unit.max-id` answers from its slot, whether or not a unit lives "
+                    "there. `safe`: 0 unless a live unit has the id.",
+        "same-on-every-machine": "Yes, once an alliance change has reached every machine: it takes effect at "
+                                 "once on the machine of the player who makes it, and a moment later on the "
+                                 "others. Under `safe`, another machine's units also answer from when their "
+                                 "creation reaches this machine.",
+    },
+    "unit.is-local": {
+        "title": "Unit Played on This Machine",
+        "takes-unit-id": True,
+        "returns": "1 when the owner of that unit's slot is a human or computer player on this machine, else 0.",
+        "fidelity": "Not affected: it reads every id as under `exact`.",
+        "same-on-every-machine": "No, on purpose: each machine answers 1 only for the players it plays itself.",
+    },
+}
+
 # The machines that run a hack, by the registry's ownership classes.
 OWNERS = {
     "all-machines": "every machine in the game",
@@ -257,6 +364,10 @@ OWNERS = {
 SCOPES = {
     "sim": "sim: part of the profile hash; every machine must agree",
     "view": "view: local display only; each player may differ",
+}
+EXT_SCOPES = {
+    "sim": "sim: part of the profile's sim hash; every machine must mount it at the same index",
+    "view": "view: not hashed; each player may mount it differently",
 }
 ADJUSTABLE = {
     "fixed": "only the profile sets it",
@@ -369,6 +480,16 @@ def overridden_by(spec, entries):
 
 def hacks(reg):
     return {k: e for k, e in reg["entries"].items() if e.get("kind") == "hack"}
+
+
+def extensions(reg):
+    """The script extensions, in the order of their usual indices; one without an index comes last."""
+    found = [(k, e) for k, e in reg["entries"].items() if e.get("kind") == "script-ext"]
+
+    def order(item):
+        index = item[1].get("default-index")
+        return (0, index, item[0]) if isinstance(index, int) else (1, 0, item[0])
+    return dict(sorted(found, key=order))
 
 
 def title_order(title):
@@ -548,8 +669,105 @@ def table(reg, sentences):
     return "\n".join(out)
 
 
+# ---------------------------------------------------------------------------------------------- script extensions
+def argument_cell(text):
+    """An extension's argument, as the tables give it."""
+    return "unit id" if text["takes-unit-id"] else "—"
+
+
+def ext_facts(eid, e, text):
+    argument = ("A unit id: the first argument of `get`." if text["takes-unit-id"] else
+                "None. Arguments written after the index are ignored.")
+    rows = [
+        ("Extension id", code(eid)),
+        ("Mounted under", f"`script-extensions` → `{e['direction']}`"),
+        ("Usual index", f"{e['default-index']}: the list form mounts it there"),
+        ("Argument", argument),
+        ("Returns", text["returns"]),
+        ("Scope", EXT_SCOPES[e["scope"]]),
+        ("Runs on", runs_on(e["ownership"])),
+        ("Same answer on every machine", text["same-on-every-machine"]),
+        ("Fidelity", text["fidelity"]),
+    ]
+    return "| Fact | Value |\n| --- | --- |\n" + "".join(f"| {k} | {v} |\n" for k, v in rows)
+
+
+def ext_related(eid, reg, texts):
+    out = ["- [The OAMOD standard, section 7](../oamod-standard.md#7-script-extensions): mounting, fidelity "
+           "and the table of every extension.",
+           "- [Every script extension](../README.md#every-script-extension), in the mod support overview."]
+    for other, e in extensions(reg).items():
+        if other != eid:
+            out.append(f"- [{texts[other]['title']}]({other}.md): {code(other)}, usually at "
+                       f"{e['default-index']}.")
+    return "\n".join(out)
+
+
+def ext_skeleton(title):
+    return "\n".join([
+        f"# {title}", "",
+        block("facts", ""), "",
+        "## Description", "", "<!-- WRITE: what a unit script reads, and what 3.1c reads at the index -->", "",
+        "## Syntax", "", "<!-- WRITE: the #define and the get call, in BOS -->", "",
+        "## Usage", "", "<!-- WRITE: one or two short BOS examples -->", "",
+        "## Configuration example", "", "<!-- WRITE: the script-extensions block that mounts it -->", "",
+        "## Details", "", "<!-- WRITE: exact and safe fidelity, edge cases and network play -->", "",
+        "## Related", "",
+        block("related", ""), "",
+    ])
+
+
+def ext_table(reg, texts):
+    out = ["| Extension | Id | Usual index | Argument | Returns |", "| --- | --- | --- | --- | --- |"]
+    for eid, e in extensions(reg).items():
+        t = texts[eid]
+        out.append(f"| [{t['title']}]({EXT_PAGES}/{eid}.md) | {code(eid)} | {e['default-index']} "
+                   f"| {argument_cell(t)} | {t['returns']} |")
+    return "\n".join(out)
+
+
+def standard_table(reg, texts):
+    out = ["| Id | Usual index | Argument | Returns |", "| --- | --- | --- | --- |"]
+    for eid, e in extensions(reg).items():
+        t = texts[eid]
+        out.append(f"| [{code(eid)}]({EXT_PAGES}/{eid}.md) | {e['default-index']} | {argument_cell(t)} "
+                   f"| {t['returns']} |")
+    return "\n".join(out)
+
+
 # ---------------------------------------------------------------------------------------------- files
-def expected(reg, docs, sentences):
+def extension_problems(reg, texts):
+    """What keeps the script extension pages from being written, as messages."""
+    problems = []
+    found = extensions(reg)
+    titles = {}
+    for eid, e in found.items():
+        t = texts.get(eid)
+        if t is None:
+            problems.append(f"registry {eid}: no entry in SCRIPT_EXTENSIONS")
+            continue
+        if not isinstance(e.get("default-index"), int) or e.get("direction") not in ("get", "set"):
+            problems.append(f"registry {eid}: needs a direction and a default-index")
+        elif e["direction"] != "get":
+            problems.append(f"registry {eid}: a set extension, and this tool describes get extensions only")
+        if e.get("scope") not in EXT_SCOPES:
+            problems.append(f"registry {eid}: scope must be sim or view")
+        for key in ("title", "returns", "fidelity", "same-on-every-machine"):
+            if not isinstance(t.get(key), str) or not t[key].strip():
+                problems.append(f"SCRIPT_EXTENSIONS {eid}: no {key}")
+        if not isinstance(t.get("takes-unit-id"), bool):
+            problems.append(f"SCRIPT_EXTENSIONS {eid}: takes-unit-id must be true or false")
+        title = str(t.get("title", "")).lower()
+        if title and title in titles:
+            problems.append(f"SCRIPT_EXTENSIONS {eid}: title {t['title']!r} is also {titles[title]}'s")
+        titles[title] = eid
+    for eid in texts:
+        if eid not in found:
+            problems.append(f"SCRIPT_EXTENSIONS {eid}: names no script extension in the registry")
+    return problems
+
+
+def expected(reg, docs, sentences, texts):
     """Every generated file's path and expected text, from its current text; raises DocsError."""
     entries = reg["entries"]
     problems = []
@@ -560,6 +778,7 @@ def expected(reg, docs, sentences):
             problems.append(f"registry {eid}: no title")
         if eid not in sentences:
             problems.append(f"registry {eid}: no sentence in SENTENCES")
+    problems += extension_problems(reg, texts)
     if problems:
         raise DocsError("\n".join(problems))
     files = {}
@@ -570,25 +789,38 @@ def expected(reg, docs, sentences):
         text = replace_block(text, "facts", facts(eid, e, reg), path)
         text = replace_block(text, "schema", schema(eid, e, entries), path)
         files[path] = text
+    for eid, e in extensions(reg).items():
+        title = texts[eid]["title"]
+        path = docs / EXT_PAGES / f"{eid}.md"
+        text = path.read_text(encoding="utf-8") if path.exists() else ext_skeleton(title)
+        text = titled(text, title, path)
+        text = replace_block(text, "facts", ext_facts(eid, e, texts[eid]), path)
+        text = replace_block(text, "related", ext_related(eid, reg, texts), path)
+        files[path] = text
     readme = docs / "README.md"
     text = readme.read_text(encoding="utf-8") if readme.exists() else \
-        "# Mods\n\n" + block("hacks table", "") + "\n"
+        "# Mods\n\n" + block("hacks table", "") + "\n\n" + block("script extensions table", "") + "\n"
+    text = replace_block(text, "script extensions table", ext_table(reg, texts), readme)
     files[readme] = replace_block(text, "hacks table", table(reg, sentences), readme)
+    standard = docs / STANDARD
+    text = standard.read_text(encoding="utf-8") if standard.exists() else \
+        "# The OAMOD standard\n\n" + block("script extensions table", "") + "\n"
+    files[standard] = replace_block(text, "script extensions table", standard_table(reg, texts), standard)
     return files
 
 
 def stale_pages(reg, docs):
-    folder = docs / PAGES
-    if not folder.is_dir():
-        return []
-    ids = set(hacks(reg))
-    return sorted(p for p in folder.glob("*.md") if p.stem not in ids and p.name != "README.md")
+    stale = []
+    for folder, ids in ((docs / PAGES, set(hacks(reg))), (docs / EXT_PAGES, set(extensions(reg)))):
+        if folder.is_dir():
+            stale += [p for p in folder.glob("*.md") if p.stem not in ids and p.name != "README.md"]
+    return sorted(stale)
 
 
-def sync(reg, docs, sentences, check, root):
+def sync(reg, docs, sentences, texts, check, root):
     """Writes (or with check, compares) every generated file; returns the exit status."""
     try:
-        files = expected(reg, docs, sentences)
+        files = expected(reg, docs, sentences, texts)
     except DocsError as e:
         print(f"gen_mod_docs: {e}", file=sys.stderr)
         return 2
@@ -609,7 +841,8 @@ def sync(reg, docs, sentences, check, root):
                 path.write_text(text, encoding="utf-8")
     stale = stale_pages(reg, docs)
     for p in stale:
-        print(f"gen_mod_docs: {rel(p)} names no hack in the registry", file=sys.stderr)
+        what = "hack" if p.parent.name == PAGES else "script extension"
+        print(f"gen_mod_docs: {rel(p)} names no {what} in the registry", file=sys.stderr)
     if check:
         if differ:
             print("gen_mod_docs: these pages differ from the registry; run tools/gen_mod_docs.py:",
@@ -648,8 +881,18 @@ def self_test():
                                   "adjustable": "fixed", "scope": "sim"},
                        "rows": {"type": "list<decimal>", "length": 2, "baseline": [0.5, 1.0], "default": [1.5, 2.0],
                                 "adjustable": "fixed", "scope": "sim"}}},
+        "unit.owner": {"kind": "script-ext", "area": "script", "summary": "s", "ownership": "all-machines",
+                       "scope": "sim", "direction": "get", "default-index": 41},
+        "unit.first": {"kind": "script-ext", "area": "script", "summary": "s", "ownership": "all-machines",
+                       "scope": "sim", "direction": "get", "default-index": 40},
     }}
     sentences = {"units.example": "Does an example.", "ui.plain": "Draws.", "setup.named": "Names."}
+    texts = {
+        "unit.owner": {"title": "Owner", "takes-unit-id": True, "returns": "The owner.", "fidelity": "Both.",
+                       "same-on-every-machine": "No, on purpose."},
+        "unit.first": {"title": "First", "takes-unit-id": False, "returns": "1.", "fidelity": "Not affected.",
+                       "same-on-every-machine": "Yes."},
+    }
 
     for v, text in ((True, "true"), (5, "5"), (0.5, "0.5"), ([1, 2], "[1, 2]"), ("none", "none"),
                     ("AI:%s", '"AI:%s"'), ("", '""'), (".tad", '".tad"'), ("true", '"true"'), ("1.0", '"1.0"')):
@@ -671,34 +914,70 @@ def self_test():
 
     with tempfile.TemporaryDirectory() as tmp:
         docs = Path(tmp) / "docs"
-        quiet = open(Path(tmp) / "log", "w")
+        quiet = open(Path(tmp) / "log", "w", encoding="utf-8")
         saved = sys.stdout, sys.stderr
         sys.stdout = sys.stderr = quiet
+
+        def run(check, sentences_used=sentences, texts_used=texts, reg_used=reg):
+            return sync(reg_used, docs, sentences_used, texts_used, check, Path(tmp))
+
+        def with_extension(eid, **fields):
+            entries = dict(reg["entries"], **{eid: dict(reg["entries"][eid], **fields)})
+            return dict(reg, entries=entries)
+
         try:
-            first_check = sync(reg, docs, sentences, True, Path(tmp))
-            written = sync(reg, docs, sentences, False, Path(tmp))
-            clean = sync(reg, docs, sentences, True, Path(tmp))
+            first_check = run(True)
+            written = run(False)
+            clean = run(True)
             page_path = docs / PAGES / "units.example.md"
-            prose = page_path.read_text().replace("<!-- WRITE: brief description -->", "It does an example.")
-            page_path.write_text(prose)
-            kept = sync(reg, docs, sentences, True, Path(tmp))
-            page_path.write_text(prose.replace("| Parameters | 1 |", "| Parameters | 2 |"))
-            edited = sync(reg, docs, sentences, True, Path(tmp))
-            page_path.write_text(prose.replace("# Example", "# units.example"))
-            heading = sync(reg, docs, sentences, True, Path(tmp))
-            sync(reg, docs, sentences, False, Path(tmp))
-            restored = page_path.read_text() == prose
+            prose = page_path.read_text(encoding="utf-8").replace("<!-- WRITE: brief description -->", "It does an example.")
+            page_path.write_text(prose, encoding="utf-8")
+            kept = run(True)
+            page_path.write_text(prose.replace("| Parameters | 1 |", "| Parameters | 2 |"), encoding="utf-8")
+            edited = run(True)
+            page_path.write_text(prose.replace("# Example", "# units.example"), encoding="utf-8")
+            heading = run(True)
+            run(False)
+            restored = page_path.read_text(encoding="utf-8") == prose
             titled_first = prose.startswith("# Example\n")
-            (docs / PAGES / "units.gone.md").write_text("# units.gone\n")
-            stale = sync(reg, docs, sentences, True, Path(tmp))
+            (docs / PAGES / "units.gone.md").write_text("# units.gone\n", encoding="utf-8")
+            stale = run(True)
             (docs / PAGES / "units.gone.md").unlink()
-            page_path.write_text(prose.replace(end("schema"), ""))
-            broken = sync(reg, docs, sentences, True, Path(tmp))
-            page_path.write_text(prose.replace("# Example\n", "Example\n"))
-            headless = sync(reg, docs, sentences, True, Path(tmp))
-            page_path.write_text(prose)
-            unnamed = sync(reg, docs, {"units.example": "x", "ui.plain": "y"}, True, Path(tmp))
-            readme = (docs / "README.md").read_text()
+            page_path.write_text(prose.replace(end("schema"), ""), encoding="utf-8")
+            broken = run(True)
+            page_path.write_text(prose.replace("# Example\n", "Example\n"), encoding="utf-8")
+            headless = run(True)
+            page_path.write_text(prose, encoding="utf-8")
+            unnamed = run(True, {"units.example": "x", "ui.plain": "y"})
+
+            ext_path = docs / EXT_PAGES / "unit.owner.md"
+            ext_page = ext_path.read_text(encoding="utf-8")
+            ext_prose = ext_page.replace("<!-- WRITE: one or two short BOS examples -->", "owner = get 41(id);")
+            ext_path.write_text(ext_prose, encoding="utf-8")
+            ext_kept = run(True)
+            ext_path.write_text(ext_prose.replace("[First](unit.first.md)", "[First](unit.gone.md)"), encoding="utf-8")
+            ext_link = run(True)
+            ext_path.write_text(ext_prose.replace("| Usual index | 41", "| Usual index | 42"), encoding="utf-8")
+            ext_edited = run(True)
+            run(False)
+            ext_restored = ext_path.read_text(encoding="utf-8") == ext_prose
+            (docs / EXT_PAGES / "unit.gone.md").write_text("# unit.gone\n", encoding="utf-8")
+            ext_stale = run(True)
+            (docs / EXT_PAGES / "unit.gone.md").unlink()
+            ext_untitled = run(True, texts_used={"unit.owner": texts["unit.owner"]})
+            ext_unknown = run(True, texts_used=dict(texts, **{"unit.nothing": texts["unit.first"]}))
+            unindexed = with_extension("unit.owner")
+            del unindexed["entries"]["unit.owner"]["default-index"]
+            ext_unindexed = run(True, reg_used=unindexed)
+            ext_set = run(True, reg_used=with_extension("unit.owner", direction="set"))
+            standard_path = docs / STANDARD
+            standard = standard_path.read_text(encoding="utf-8")
+            standard_path.write_text(standard.replace("(script-extensions/unit.first.md)", "(unit.first.md)"), encoding="utf-8")
+            standard_link = run(True)
+            standard_path.write_text(standard.replace(end("script extensions table"), ""), encoding="utf-8")
+            standard_broken = run(True)
+            standard_path.write_text(standard, encoding="utf-8")
+            readme = (docs / "README.md").read_text(encoding="utf-8")
         finally:
             sys.stdout, sys.stderr = saved
             quiet.close()
@@ -709,19 +988,45 @@ def self_test():
                                  ("a check of a page without a heading", headless, 2),
                                  ("a check with a stale page", stale, 1),
                                  ("a check with a lost marker", broken, 2),
-                                 ("a check with a hack without a sentence", unnamed, 2)):
+                                 ("a check with a hack without a sentence", unnamed, 2),
+                                 ("a check after an extension page's prose", ext_kept, 0),
+                                 ("a check after an extension page's related link changed", ext_link, 1),
+                                 ("a check after an extension page's facts changed", ext_edited, 1),
+                                 ("a check with a stale extension page", ext_stale, 1),
+                                 ("a check with an extension without an entry", ext_untitled, 2),
+                                 ("a check with an entry that names no extension", ext_unknown, 2),
+                                 ("a check with an extension without a usual index", ext_unindexed, 2),
+                                 ("a check with a set extension", ext_set, 2),
+                                 ("a check after the standard's table changed", standard_link, 1),
+                                 ("a check with a lost marker in the standard", standard_broken, 2)):
             if got != want:
                 failures.append(f"{label} returned {got}, expected {want}")
         if not restored:
             failures.append("writing did not keep the prose and restore the generated block and heading")
+        if not ext_restored:
+            failures.append("writing did not keep an extension page's prose and restore its blocks")
         if not titled_first:
             failures.append("a new page is not headed by the hack's title")
+        for needle in ("# Owner\n", "| Extension id | `unit.owner` |", "| Usual index | 41: the list form",
+                       "| Argument | A unit id", "| Returns | The owner. |", "| Same answer on every machine | "
+                       "No, on purpose. |", "| Fidelity | Both. |", "## Syntax", "## Usage", "- [First](unit.first.md)",
+                       "../oamod-standard.md#7-script-extensions"):
+            if needle not in ext_page:
+                failures.append(f"a new extension page lacks {needle!r}")
+        if "(unit.owner.md)" in ext_page:
+            failures.append("an extension page links itself under Related")
         for needle in ("# Mods", "### Units", "### Game Setup", "### Interface",
-                       "| [Plain](standard-hacks/ui.plain.md) | `ui.plain` | Draws. | view | not yet implemented |"):
+                       "| [Plain](standard-hacks/ui.plain.md) | `ui.plain` | Draws. | view | not yet implemented |",
+                       "| [Owner](script-extensions/unit.owner.md) | `unit.owner` | 41 | unit id | The owner. |",
+                       "| [First](script-extensions/unit.first.md) | `unit.first` | 40 | — | 1. |"):
             if needle not in readme:
                 failures.append(f"the README lacks {needle!r}")
         if not readme.index("### Game Setup") < readme.index("### Interface") < readme.index("### Units"):
             failures.append("the table does not follow the areas' titles alphabetically")
+        if not readme.index("`unit.first`") < readme.index("`unit.owner`"):
+            failures.append("the extensions table does not follow the usual indices")
+        if "| [`unit.owner`](script-extensions/unit.owner.md) | 41 | unit id | The owner. |" not in standard:
+            failures.append("the standard's table lacks unit.owner's row")
 
     for f in failures:
         print("FAIL", f)
@@ -741,7 +1046,7 @@ def main(argv=None):
     except oamod_yaml.OamodYamlError as e:
         print(f"gen_mod_docs: {e}", file=sys.stderr)
         return 2
-    return sync(reg, DOCS, SENTENCES, args.check, ROOT)
+    return sync(reg, DOCS, SENTENCES, SCRIPT_EXTENSIONS, args.check, ROOT)
 
 
 if __name__ == "__main__":

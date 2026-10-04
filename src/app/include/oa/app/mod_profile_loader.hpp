@@ -89,7 +89,9 @@ folder_profile_source(const std::vector<std::filesystem::path>& folders, const M
 ///
 /// The profile is the --mod file when one is chosen, else the mod folder's
 /// own oamod.yaml, else the game folder's (a copied install). A game folder
-/// that holds its own oamod.yaml cannot carry a mod folder. The profile is
+/// that holds its own oamod.yaml cannot carry a mod folder. A mod folder
+/// without an oamod.yaml is no error: its files still layer over the game
+/// folder's, and with no profile the game plays by 3.1c's own rules. The profile is
 /// resolved once to learn its settings file and registry root, then again
 /// with the settings it binds: the INI of that name from the first folder
 /// that holds it, read only, and the preferences' registry section, which
@@ -116,13 +118,72 @@ resolve_folder_profile(const std::vector<std::filesystem::path>& folders, const 
     const platform::preferences::Values* preferences
 );
 
-/// Lists the mod folders a game folder offers: the folders below its mods
-/// folder that hold an oamod.yaml, in name order.
+/// Lists the mod folders a game folder offers: every folder below its mods
+/// folder, with an oamod.yaml or without one, in name order.
 ///
 /// @param game_folder the game folder
 /// @return each mod folder's path
 [[nodiscard]] std::vector<std::filesystem::path>
 list_mod_folders(const std::filesystem::path& game_folder);
+
+/// Lists the mod folders a folder of mods holds, such as the player's own
+/// Mods folder: every folder in it, with an oamod.yaml or without one, in
+/// name order, matched without case.
+///
+/// @param mods the folder of mods; one that is missing holds none
+/// @return each mod folder's path
+[[nodiscard]] std::vector<std::filesystem::path> list_mods_in(const std::filesystem::path& mods);
+
+/// Why a folder the player picked cannot be played as a mod folder.
+struct PickedFolderCheck {
+    /// Why not, in a few words the settings dialog shows; empty when it can be.
+    std::string refusal{};
+    /// Each error the profile's resolution gave, one a line, for the log.
+    std::vector<std::string> errors{};
+    /// The folder holds no oamod.yaml: it can be played only without a
+    /// profile, by 3.1c's own rules, which the player is asked to agree to.
+    bool without_profile{};
+    /// The id Developer Mode's overrides are kept under: the profile's, or
+    /// for a folder without one folder_overrides_id's; empty when it is
+    /// refused.
+    std::string profile_id{};
+};
+
+/// What folder_overrides_id's ids start with. No profile's id holds a ':'.
+inline constexpr std::string_view folder_overrides_prefix = "folder:";
+
+/// Returns the id a mod folder without a profile keeps Developer Mode's
+/// overrides under in place of a profile's: folder_overrides_prefix, then
+/// the folder's absolute path in UTF-8, each '%' written "%25" and each '|'
+/// "%7C", so that no two folders share an id and no preference key holds a
+/// '|'. A profile's id is kebab-case, so no profile, and not the plain 3.1c
+/// baseline, takes one.
+///
+/// @param folder the mod folder
+/// @return its id
+[[nodiscard]] std::string folder_overrides_id(const std::filesystem::path& folder);
+
+/// Checks a folder the player picked as a mod folder over a game folder,
+/// as the next start will play it: it is a folder, and its oamod.yaml's
+/// profile resolves over the game folder with the settings it binds
+/// (resolve_folder_profile). Its profile's id, which no profile shares
+/// with the plain 3.1c baseline's (a profile's id is kebab-case, and
+/// ta-3.1c is not), keeps its overrides of the standard hacks apart from
+/// the game's without a mod. A folder without an oamod.yaml is not refused
+/// unless the game folder cannot carry a mod folder: it is marked to be
+/// played without a profile once the player agrees, its overrides kept
+/// under folder_overrides_id.
+///
+/// @param folder the folder picked
+/// @param game_folder the game folder it lies over
+/// @param choice whether hacks not implemented yet are accepted, and the
+///        player's preferences; its folder and profile file are not looked at
+/// @return why it cannot be played, or its profile's id
+[[nodiscard]] PickedFolderCheck check_picked_mod_folder(
+    const std::filesystem::path& folder,
+    const std::filesystem::path& game_folder,
+    const ModChoice& choice
+);
 
 /// Reads the values of an INI file as Section/Key settings.
 ///

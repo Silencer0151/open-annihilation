@@ -272,12 +272,14 @@ TeamPanelResult control_panel_click(
 );
 
 /// Fills YESORNO.GUI to ask whether to remove a player: CHOICE1 "Yes",
-/// CHOICE2 "No" and TITLE "Reject <name>?", its verb translated.
+/// CHOICE2 "No" and TITLE "Reject <name>?", the captions and the verb
+/// translated. The captions are set CHOICE1 first, so that a host giving
+/// each button the quick key its caption takes gives Y and N in English.
 ///
 /// @param world players
 /// @param player player index 0..9 the question names; OA_PLAYER_COUNT or more names nobody
 /// @param controls named controls of the loaded question
-/// @param translate UI text lookup for the verb; may be null
+/// @param translate UI text lookup for the captions and the verb; may be null
 /// @param translate_context context passed to `translate`
 void open_removal_question(
     const World& world,

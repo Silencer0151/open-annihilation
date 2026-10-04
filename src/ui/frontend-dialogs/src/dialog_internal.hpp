@@ -109,6 +109,10 @@ struct DialogArt {
 struct DialogStack {
     Dialog dialogs[kDialogStackDepth];
     std::size_t count = 0;
+    // The quick key, lowercase, that answered a prompt at the last key press;
+    // zero for none. The character it types is dropped, so it never reaches
+    // the screen under the prompt.
+    int answered_key = 0;
     DialogHost host{};
     std::unique_ptr<DialogArt> art;
     ui::gadget_render::GadgetRenderer renderer;

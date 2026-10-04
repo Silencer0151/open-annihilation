@@ -15,6 +15,7 @@
 #include <cctype>
 #include <map>
 #include <set>
+#include <string>
 #include <utility>
 
 namespace oa::data::mod_profile {
@@ -71,11 +72,12 @@ using registry::ValueSpec;
 using registry::ValueType;
 
 /// The top-level keys a profile may hold.
-constexpr std::array<std::string_view, 16> top_keys{
+constexpr std::array<std::string_view, 17> top_keys{
     "oamod",
     "id",
     "name",
     "version",
+    "description",
     "requires",
     "author",
     "packaging",
@@ -91,8 +93,8 @@ constexpr std::array<std::string_view, 16> top_keys{
 };
 /// The top-level keys whose values the effective profile carries as written.
 /// None of them enters the sim hash except oamod.
-constexpr std::array<std::string_view, 7> meta_keys{
-    "oamod", "id", "name", "version", "requires", "author", "packaging"
+constexpr std::array<std::string_view, 8> meta_keys{
+    "oamod", "id", "name", "version", "description", "requires", "author", "packaging"
 };
 /// The keys of the author block; name is required.
 constexpr std::array<std::string_view, 2> author_keys{"name", "email"};
@@ -201,6 +203,67 @@ bool calendar_date(std::string_view text) {
     const bool leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
     const int days = month == 2 && leap ? 29 : month_days[static_cast<size_t>(month - 1)];
     return day <= days;
+}
+
+/// The first code point that is not a C0 control character.
+constexpr char32_t first_printable = 0x20;
+/// The delete character, and the C1 control characters U+0080 to U+009F.
+constexpr char32_t delete_character = 0x7F;
+constexpr char32_t last_c1_control = 0x9F;
+/// The line separator and the paragraph separator.
+constexpr char32_t line_separator = 0x2028;
+constexpr char32_t paragraph_separator = 0x2029;
+/// The payload bits of a UTF-8 continuation byte, and of the lead bytes.
+constexpr char32_t continuation_bits = 0x3F;
+constexpr char32_t two_byte_lead_bits = 0x1F;
+constexpr char32_t three_byte_lead_bits = 0x0F;
+constexpr char32_t four_byte_lead_bits = 0x07;
+/// The lead-byte thresholds of two, three and four byte sequences.
+constexpr unsigned char first_lead = 0xC0;
+constexpr unsigned char first_three_byte_lead = 0xE0;
+constexpr unsigned char first_four_byte_lead = 0xF0;
+/// The payload bits each continuation byte adds.
+constexpr unsigned continuation_shift = 6;
+
+/// Decodes UTF-8 into its code points.
+///
+/// @param text valid UTF-8, as the profile reader accepts it
+/// @return its code points
+std::u32string code_points(std::string_view text) {
+    std::u32string characters;
+    size_t at = 0;
+    while (at < text.size()) {
+        const auto lead = static_cast<unsigned char>(text[at]);
+        char32_t code_point = lead;
+        size_t length = 1;
+        if (lead >= first_four_byte_lead) {
+            code_point = lead & four_byte_lead_bits;
+            length = 4;
+        } else if (lead >= first_three_byte_lead) {
+            code_point = lead & three_byte_lead_bits;
+            length = 3;
+        } else if (lead >= first_lead) {
+            code_point = lead & two_byte_lead_bits;
+            length = 2;
+        }
+        for (size_t index = 1; index < length && at + index < text.size(); ++index)
+            code_point = (code_point << continuation_shift) |
+                         (static_cast<unsigned char>(text[at + index]) & continuation_bits);
+        at += length;
+        characters.push_back(code_point);
+    }
+    return characters;
+}
+
+/// Tells whether a character breaks a line of plain text: a control
+/// character (C0, delete or C1), a line separator or a paragraph separator.
+///
+/// @param character the code point
+/// @return true when a one-line text may not hold it
+bool breaks_line(char32_t character) {
+    return character < first_printable ||
+           (character >= delete_character && character <= last_c1_control) ||
+           character == line_separator || character == paragraph_separator;
 }
 
 /// Lower-cases ASCII letters.
@@ -363,6 +426,7 @@ class Resolver {
             if (!kebab_case(id->text))
                 error(id->position, "id", "id must be kebab-case");
         }
+        check_description(root);
         check_requires(root);
         check_author(root);
         check_packaging(root);
@@ -391,6 +455,32 @@ class Resolver {
     static const Node* block_of(const Node& root, std::string_view block) {
         const Node* value = formats::oamod::find_entry(root, block);
         return value != nullptr && value->kind == NodeKind::mapping ? value : nullptr;
+    }
+
+    /// Checks the profile's description, when it has one: a string of one
+    /// line of plain text, at most max_description_characters characters.
+    void check_description(const Node& root) {
+        const Node* description = formats::oamod::find_entry(root, "description");
+        if (description == nullptr)
+            return;
+        if (description->kind != NodeKind::string) {
+            error(description->position, "description", "description must be a string");
+            return;
+        }
+        const std::u32string characters = code_points(description->text);
+        if (std::any_of(characters.begin(), characters.end(), breaks_line))
+            error(
+                description->position,
+                "description",
+                "description must be one line, without line breaks or control characters"
+            );
+        if (characters.size() > max_description_characters)
+            error(
+                description->position,
+                "description",
+                "description must be at most " + std::to_string(max_description_characters) +
+                    " characters (it has " + std::to_string(characters.size()) + ")"
+            );
     }
 
     void check_requires(const Node& root) {
@@ -1637,6 +1727,9 @@ class Resolver {
             );
         resolution.profile.packaging.date = text_of(packaging, "date");
         resolution.profile.packaging.packager = text_of(packaging, "packager");
+        if (const Value* description = find_member(effective, "description");
+            description != nullptr)
+            resolution.profile.description = description->text;
         resolution.profile.registry_seeds = seeds_;
         fill_records(effective, resolution.profile);
         // The registry's ranges and constraints keep every limit in the range

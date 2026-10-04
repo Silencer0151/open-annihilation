@@ -8,8 +8,10 @@
 // With --install it checks that the installation OA_GAME_DIR names is usable.
 #include "oa/app/game_directory.hpp"
 #include "oa/formats/hpi.hpp"
+#include "oa/platform/files.hpp"
 #include "oa/platform/preferences.hpp"
 #include "oa/test/game_data.hpp"
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <fstream>
@@ -1142,6 +1144,106 @@ void check_installs(const fs::path& temporary) {
 
     const auto missing = inspect_game_install(temporary / "missing");
     expect(!missing.folder && !usable(missing), "a missing folder is not usable");
+    expect(missing.problem.empty(), "a missing folder within the path limit is only missing");
+
+    // An install deeper than any of the game's path fields is usable, where
+    // the system opens paths that long.
+    auto deep = temporary;
+    while (deep.native().size() < 300)
+        deep /= std::string(60, 'd');
+    if (!oa::platform::long_paths_turned_off()) {
+        fs::create_directories(deep);
+        write_file(
+            deep / "TOTALA1.HPI",
+            archive_of(
+                {"guis/mainmenu.gui",
+                 "palettes/palette.pal",
+                 "gamedata/sidedata.tdf",
+                 "gamedata/sound.tdf"}
+            )
+        );
+        const auto deep_install = inspect_game_install(deep);
+        expect(
+            usable(deep_install) && deep_install.archives.size() == 1,
+            "an install more than 300 characters deep is usable"
+        );
+    }
+    // A folder longer than the system opens says so, and what to do.
+    auto too_long = temporary;
+    while (too_long.native().size() <= oa::platform::longest_path())
+        too_long /= std::string(200, 'x');
+    const auto unreachable = inspect_game_install(too_long);
+    expect(
+        !usable(unreachable) && contains(unreachable.problem, "characters long"),
+        "a folder longer than the system opens is reported as too long"
+    );
+    // A folder within the limit whose files' paths go past it says so too.
+    const auto longest = oa::platform::longest_path();
+    if (longest <= 4095) {
+        // Folders of at most 200 characters, to a path two characters short
+        // of the limit once links in it are followed, as the system counts.
+        auto crowded = fs::weakly_canonical(temporary) / "crowded";
+        const std::size_t length = longest - 2;
+        while (crowded.native().size() < length)
+            crowded /=
+                std::string(std::min<std::size_t>(200, length - crowded.native().size() - 1), 'c');
+        std::error_code made;
+        fs::create_directories(crowded, made);
+        if (!made) {
+            const auto no_room = inspect_game_install(crowded);
+            expect(
+                !usable(no_room) && contains(no_room.problem, "the names of the files in it"),
+                "a folder too long for its files' names is reported as too long"
+            );
+        } else {
+            // Windows makes no folder that deep until long paths are on.
+            expect(
+                oa::platform::long_paths_turned_off(),
+                "a folder two characters short of the limit is made"
+            );
+        }
+    }
+    // Exact lengths: a path of the limit's length opens, one more does not;
+    // the files' names count when they are measured.
+    const auto root = temporary.root_path();
+    const auto exact = [&root](std::size_t length) {
+        return root / std::string(length - root.native().size(), 'e');
+    };
+    expect(path_length_problem(exact(259), 0, 259, true).empty(), "259 characters open on Windows");
+    expect(!path_length_problem(exact(260), 0, 259, true).empty(), "260 characters do not");
+    expect(
+        path_length_problem(exact(259 - file_name_room), file_name_room, 259, true).empty(),
+        "a folder that leaves room for an 8.3 name opens its files"
+    );
+    const auto crowded_reason =
+        path_length_problem(exact(260 - file_name_room), file_name_room, 259, true);
+    expect(
+        contains(crowded_reason, std::to_string(260 - file_name_room) + " characters long") &&
+            contains(crowded_reason, "the names of the files in it"),
+        "a folder one character too long for an 8.3 name names its length"
+    );
+    expect(path_length_problem(exact(1023), 0, 1023, false).empty(), "1,023 bytes open on macOS");
+    expect(!path_length_problem(exact(1024), 0, 1023, false).empty(), "1,024 bytes do not");
+    expect(path_length_problem(exact(4095), 0, 4095, false).empty(), "4,095 bytes open on Linux");
+    expect(!path_length_problem(exact(4096), 0, 4095, false).empty(), "4,096 bytes do not");
+    const auto short_folder = root / "Games" / "Total Annihilation";
+    expect(
+        path_length_problem(short_folder, file_name_room, 259, true).empty(),
+        "a folder within the limit has no length problem"
+    );
+    const auto windows_folder = exact(300);
+    const auto windows_reason = path_length_problem(windows_folder, 0, 259, true);
+    expect(
+        contains(windows_reason, "at most 259 characters") &&
+            contains(windows_reason, "Turn on long paths in Windows"),
+        "Windows without long paths names the limit and the switch"
+    );
+    const auto other_reason = path_length_problem(windows_folder, 0, 259, false);
+    expect(
+        contains(other_reason, "at most 259 characters") &&
+            !contains(other_reason, "Turn on long paths") && contains(other_reason, "shorter path"),
+        "a system without the switch asks for a shorter path"
+    );
 
     expect(dialog_location({}).empty(), "no start folder leaves the dialog's choice");
     const auto separator = static_cast<char>(fs::path::preferred_separator);
@@ -1293,6 +1395,39 @@ void check_mod_folders(const fs::path& temporary) {
     expect(
         !usable(over_copy) && !over_copy.profile_errors.empty(),
         "a copied install cannot carry a mod folder"
+    );
+
+    // A mod folder without a profile layers over the base folder all the
+    // same, its archives mounted first; with no profile the game plays by
+    // 3.1c's own rules.
+    const auto plain_mod = temporary / "plain-mod";
+    fs::create_directories(plain_mod);
+    write_file(plain_mod / "extra.ufo", archive_of({"units/extra.fbi"}));
+    const auto plain_layered =
+        inspect_game_install(base, {}, demo_1997, {plain_mod, {}, false, nullptr});
+    expect(usable(plain_layered), "a mod folder without a profile over a base folder is usable");
+    expect(!plain_layered.profile, "a mod folder without a profile plays 3.1c's own rules");
+    expect(
+        plain_layered.profile_errors.empty() && plain_layered.profile_warnings.empty(),
+        "a mod folder without a profile is no error"
+    );
+    expect(
+        plain_layered.folders == std::vector<fs::path>{plain_mod, base},
+        "the mod folder without a profile layers first"
+    );
+    std::vector<std::string> plain_names;
+    for (const auto& archive : plain_layered.archives)
+        plain_names.push_back(archive.filename().string());
+    expect(
+        std::find(plain_names.begin(), plain_names.end(), "extra.ufo") != plain_names.end() &&
+            std::find(plain_names.begin(), plain_names.end(), "rev31.gp3") != plain_names.end(),
+        "the mod folder's archives mount beside the base folder's, rev31.gp3 kept"
+    );
+    const auto plain_over_copy =
+        inspect_game_install(copied, {}, demo_1997, {plain_mod, {}, false, nullptr});
+    expect(
+        !usable(plain_over_copy) && !plain_over_copy.profile_errors.empty(),
+        "a copied install carries no mod folder, with a profile or without"
     );
 
     oa::platform::preferences::Values values;

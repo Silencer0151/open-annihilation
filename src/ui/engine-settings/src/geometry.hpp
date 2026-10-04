@@ -13,6 +13,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -173,6 +174,46 @@ inline constexpr SourceRect ok_button{content_right - 52, button_top, 52, button
 /// Cancel, left of OK.
 inline constexpr SourceRect cancel_button{ok_button.x - 5 - 52, button_top, 52, button_height};
 
+/// The Switch Mod question (Dialog::switch_question): a box over the middle
+/// of the dialog's body.
+inline constexpr SourceRect question_box{
+    (dialog_width - 300) / 2, body_top + (footer_rule_row - body_top - 150) / 2, 300, 150
+};
+/// The question's heading, along its top.
+inline constexpr SourceRect question_heading{
+    question_box.x + padding, question_box.y + 8, question_box.width - 2 * padding, 12
+};
+/// The badge of the mod the question offers, under the heading.
+inline constexpr SourceRect question_badge{question_heading.x, question_heading.y + 16, 20, 20};
+/// The mod's title, right of its badge.
+inline constexpr SourceRect question_title{
+    question_badge.x + question_badge.width + 6,
+    question_badge.y - 2,
+    question_heading.width - question_badge.width - 6,
+    16
+};
+/// The mod's version, under its title.
+inline constexpr SourceRect question_version{
+    question_title.x, question_title.y + 14, question_title.width, 12
+};
+/// The question's first text line, under the badge; the others follow it.
+inline constexpr SourceRect question_first_line{
+    question_heading.x, question_badge.y + question_badge.height + 6, question_heading.width, 12
+};
+/// The most lines the question's text takes, its note's among them.
+inline constexpr std::size_t question_lines = 5;
+/// SWITCH, at the question's bottom right.
+inline constexpr SourceRect question_yes_button{
+    question_box.x + question_box.width - padding - 52,
+    question_box.y + question_box.height - 8 - button_height,
+    52,
+    button_height
+};
+/// CANCEL, left of SWITCH.
+inline constexpr SourceRect question_no_button{
+    question_yes_button.x - 5 - 52, question_yes_button.y, 52, button_height
+};
+
 using oa::ui::engine_settings::page_count;
 
 /// The view the open section's rows scroll in, under its heading: from the
@@ -282,6 +323,62 @@ inline constexpr ScrollArea developer_scroll{
     developer_view.height - 3 * hint_line_height,
 };
 
+// Mods: the list of the mods, one row each, in a view of its own under the
+// heading, under a lock line while the page is locked; under the list, OPEN
+// MODS FOLDER and two lines naming the folders listed, which stay put. Only
+// the list scrolls.
+
+/// The lines under the list naming the folders it lists: the first.
+inline constexpr SourceRect mods_note_first{
+    content_left, footer_rule_row - 4 - 2 * hint_line_height, content_width, hint_line_height
+};
+/// The second of those lines.
+inline constexpr SourceRect mods_note_second{
+    content_left, mods_note_first.y + hint_line_height, content_width, hint_line_height
+};
+/// OPEN MODS FOLDER, over those lines.
+inline constexpr SourceRect mods_folder_button{
+    content_left, mods_note_first.y - 4 - button_height, 104, button_height
+};
+/// The two lines over the list that say why the page is locked, the
+/// padlock at the first's left.
+inline constexpr SourceRect mods_lock_line{
+    content_left, first_row_top, content_width, 2 * hint_line_height
+};
+/// The first of those lines' text, right of the padlock; the second lies
+/// under it.
+inline constexpr SourceRect mods_lock_text{
+    mods_lock_line.x + padlock_width + padlock_gap,
+    mods_lock_line.y,
+    mods_lock_line.width - padlock_width - padlock_gap,
+    hint_line_height
+};
+/// A mod row's height, its border included.
+inline constexpr int32_t mod_row_height = 28;
+/// The rows between two mod rows.
+inline constexpr int32_t mod_row_gap = 3;
+/// A mod row's badge's side, in source pixels.
+inline constexpr int32_t mod_badge_side = 20;
+/// The columns between a mod row's edge and its badge, and between the
+/// badge and the text.
+inline constexpr int32_t mod_row_inset = 4;
+
+/// Returns where Mods' list scrolls: under the heading, or under the lock
+/// line while the page is locked, down to OPEN MODS FOLDER.
+///
+/// @param locked the page is locked
+/// @return the view, the scroll bar's well and hit area, and Page Up's step
+[[nodiscard]] constexpr ScrollArea mods_scroll(bool locked) noexcept {
+    const int32_t top = locked ? mods_lock_line.y + mods_lock_line.height + 2 : first_row_top;
+    const SourceRect list_view{content_left, top, content_width, mods_folder_button.y - 6 - top};
+    return {
+        list_view,
+        {scroll_well.x, list_view.y, scroll_well.width, list_view.height},
+        {scroll_hit.x, list_view.y, scroll_hit.width, list_view.height},
+        list_view.height - (mod_row_height + mod_row_gap),
+    };
+}
+
 /// An area's or a hack's header in the list: its height.
 inline constexpr int32_t list_header_height = 20;
 /// A line of text under a hack (its summary, its scope, a note): its height.
@@ -333,6 +430,12 @@ inline constexpr int32_t most_shown_choices = 8;
 /// The columns between an open list item's left edge and its text, right of
 /// the marker the chosen item shows.
 inline constexpr int32_t choice_item_text_inset = 12;
+/// The columns a drop-down field gives its choice's text.
+inline constexpr int32_t choice_field_text_room =
+    choice_width - choice_text_inset - choice_arrow_room;
+/// The columns an open list's item gives its text.
+inline constexpr int32_t choice_item_text_room =
+    choice_width - 2 - choice_item_text_inset - list_text_margin;
 
 /// What a slider offers: its stops' count.
 struct Slider {
@@ -440,6 +543,74 @@ struct ScrolledRows {
     int32_t content_height{}; ///< rows from the first row's line to the end gap under the last
 };
 
+/// Tells whether Mods shows: its rows are the dialog's own, not a check's.
+///
+/// @param dialog the dialog
+/// @return true on Mods
+[[nodiscard]] bool mods_page(const Dialog& dialog) noexcept;
+
+/// Returns OPEN MODS FOLDER's control: the one after the last mod row's.
+///
+/// @param rows Mods' rows
+/// @return its control
+[[nodiscard]] int32_t mods_folder_control(const Rows& rows) noexcept;
+
+/// Returns Mods' rows placed in its list at a scroll offset: one for each of
+/// mod_rows, whose control_area is the whole row, label its title, value
+/// its version and hints[0] its description.
+///
+/// @param dialog the dialog
+/// @param scroll the offset
+/// @return the rows
+[[nodiscard]] Rows place_mod_rows(const Dialog& dialog, int32_t scroll);
+
+/// Returns a mod row's title, version, description and badge.
+struct ModRowText {
+    std::string title;           ///< the title
+    std::string version;         ///< the version
+    std::string description;     ///< the description
+    bool has_profile{true};      ///< the folder holds an oamod.yaml
+    const ModDetails* details{}; ///< what the host read of it; null for No Mod or none
+};
+
+/// Returns what a row of Mods shows.
+///
+/// @param dialog the dialog
+/// @param row the row
+/// @return its texts
+[[nodiscard]] ModRowText mod_row_text(const Dialog& dialog, const ModRow& row);
+
+/// Cuts a text to a width, ending it with "..." when it is cut.
+///
+/// @param text the text, in UTF-8
+/// @param width the room, in source pixels
+/// @param text_width a text's width in the font it is drawn in
+/// @return the text, or as much of it as fits before "..."
+[[nodiscard]] std::string cut_text(
+    std::string_view text, int32_t width, const std::function<int32_t(std::string_view)>& text_width
+);
+
+/// Breaks a text into lines of a width, at its spaces.
+///
+/// @param text the text, in UTF-8
+/// @param width the room, in source pixels
+/// @param text_width a text's width in the font it is drawn in
+/// @return the lines; a word wider than the room is cut with "..."
+[[nodiscard]] std::vector<std::string> wrap_text(
+    std::string_view text, int32_t width, const std::function<int32_t(std::string_view)>& text_width
+);
+
+/// Returns the Switch Mod question's text lines: its question, then, for a
+/// folder without an oamod.yaml, its note, each broken into the lines that
+/// fit; a question too long for the lines the note leaves it ends in "...".
+///
+/// @param dialog the dialog, its question showing
+/// @param text_width a small text's width
+/// @return at most question_lines lines; the note's are the last, when there is one
+[[nodiscard]] std::vector<std::string> question_text_lines(
+    const Dialog& dialog, const std::function<int32_t(std::string_view)>& text_width
+);
+
 /// Returns how a setting is changed.
 ///
 /// @param setting the setting
@@ -451,11 +622,9 @@ struct ScrolledRows {
 /// @param setting a slider setting
 /// @param highest_offered_unit the unit limit slider's highest value, in
 ///     units per player
-/// @param offered_mods the mod folders the mod slider offers besides none
 /// @return its stops
-[[nodiscard]] Slider slider_of(
-    Setting setting, uint16_t highest_offered_unit = highest_unit_limit, size_t offered_mods = 0
-) noexcept;
+[[nodiscard]] Slider
+slider_of(Setting setting, uint16_t highest_offered_unit = highest_unit_limit) noexcept;
 
 /// Returns the stops a slider setting offers for the settings shown: a
 /// snap radius runs from 0 to the mod's most (at least two stops), the
@@ -465,13 +634,11 @@ struct ScrolledRows {
 /// @param setting a slider setting
 /// @param highest_offered_unit the unit limit slider's highest value, in
 ///     units per player
-/// @param offered_mods the mod folders the mod slider offers besides none
 /// @return the stops, 2 or more
 [[nodiscard]] int32_t stops_of(
     const EngineSettings& settings,
     Setting setting,
-    uint16_t highest_offered_unit = highest_unit_limit,
-    size_t offered_mods = 0
+    uint16_t highest_offered_unit = highest_unit_limit
 ) noexcept;
 
 /// Returns the stop nearest a setting's value.
@@ -480,13 +647,11 @@ struct ScrolledRows {
 /// @param setting a slider setting
 /// @param highest_offered_unit the unit limit slider's highest value, in
 ///     units per player
-/// @param offered_mods the mod folders the mod slider offers besides none
 /// @return 0 for the lowest value to stops - 1 for the highest
 [[nodiscard]] int32_t stop_of(
     const EngineSettings& settings,
     Setting setting,
-    uint16_t highest_offered_unit = highest_unit_limit,
-    size_t offered_mods = 0
+    uint16_t highest_offered_unit = highest_unit_limit
 ) noexcept;
 
 /// Sets a slider setting to a stop's value.
@@ -496,13 +661,11 @@ struct ScrolledRows {
 /// @param stop the stop, clamped to the slider's
 /// @param highest_offered_unit the unit limit slider's highest value, in
 ///     units per player
-/// @param offered_mods the mod folders the mod slider offers besides none
 void set_stop(
     EngineSettings& settings,
     Setting setting,
     int32_t stop,
-    uint16_t highest_offered_unit = highest_unit_limit,
-    size_t offered_mods = 0
+    uint16_t highest_offered_unit = highest_unit_limit
 ) noexcept;
 
 /// Tells whether a setting is a strip of levels: Enhanced anti-aliasing,
@@ -544,7 +707,7 @@ void set_strip_level(EngineSettings& settings, Setting setting, std::size_t leve
 /// and opens a list of the choices.
 ///
 /// @param setting the setting
-/// @return true for Language
+/// @return true for Language and Mod
 [[nodiscard]] bool is_choice(Setting setting) noexcept;
 
 /// Returns the languages the Language drop-down offers after System
@@ -555,34 +718,71 @@ void set_strip_level(EngineSettings& settings, Setting setting, std::size_t leve
 
 /// Returns how many choices a drop-down offers.
 ///
+/// @param dialog the dialog
 /// @param setting a drop-down setting
-/// @return 1 and the offered languages for Language; 0 for any other setting
-[[nodiscard]] std::size_t choice_count(Setting setting);
+/// @return for Language, 1 and the offered languages; 0 for any other
+///     setting
+[[nodiscard]] std::size_t choice_count(const Dialog& dialog, Setting setting);
 
 /// Returns a drop-down's choice as the drop-down names it: Language's first
 /// is System default with the operating system's language named in itself,
 /// "System default (Deutsch)", and the others each language named in itself.
 ///
+/// @param dialog the dialog, whose mods and system language the choices name
 /// @param setting a drop-down setting
 /// @param index the choice, from 0
-/// @param system the language the operating system chooses; null for English
 /// @return the text, in UTF-8; empty past the last choice
-[[nodiscard]] std::string
-choice_text(Setting setting, std::size_t index, const oa::data::languages::Language* system);
+[[nodiscard]] std::string choice_text(const Dialog& dialog, Setting setting, std::size_t index);
+
+/// Returns a drop-down's choice as it shows in a room: choice_text, but a
+/// picked folder's path as its tail that fits (path_tail).
+///
+/// @param dialog the dialog
+/// @param setting a drop-down setting
+/// @param index the choice, from 0
+/// @param width the room, in source pixels
+/// @param text_width a text's width in the font it is drawn in
+/// @return the text, in UTF-8
+[[nodiscard]] std::string shown_choice_text(
+    const Dialog& dialog,
+    Setting setting,
+    std::size_t index,
+    int32_t width,
+    const std::function<int32_t(std::string_view)>& text_width
+);
+
+/// Returns what a drop-down's closed field shows: its choice, as
+/// shown_choice_text gives it; but on the Mod row a game locks
+/// (Lock::in_game), the mod the game plays (Dialog::playing_mod_folder):
+/// No Mod, an offered mod's name, or another folder's path as its tail that
+/// fits (path_tail).
+///
+/// @param dialog the dialog
+/// @param row the drop-down's row
+/// @param width the room, in source pixels
+/// @param text_width a text's width in the font it is drawn in
+/// @return the text, in UTF-8
+[[nodiscard]] std::string field_text(
+    const Dialog& dialog,
+    const Row& row,
+    int32_t width,
+    const std::function<int32_t(std::string_view)>& text_width
+);
 
 /// Returns the choice a drop-down shows.
 ///
-/// @param settings the settings
+/// @param dialog the dialog, whose chosen settings count
 /// @param setting a drop-down setting
-/// @return the choice, from 0; 0, System default, for a language not offered
-[[nodiscard]] std::size_t choice_index(const EngineSettings& settings, Setting setting);
+/// @return the choice, from 0; 0, System default or No Mod, for a value not
+///     offered
+[[nodiscard]] std::size_t choice_index(const Dialog& dialog, Setting setting);
 
 /// Sets a drop-down setting to a choice.
 ///
-/// @param[in,out] settings the settings
+/// @param[in,out] dialog the dialog, whose chosen settings change
 /// @param setting a drop-down setting; any other is left alone
 /// @param index the choice, clamped to the drop-down's
-void set_choice(EngineSettings& settings, Setting setting, std::size_t index);
+void set_choice(Dialog& dialog, Setting setting, std::size_t index);
 
 /// Returns where a drop-down's open list lies: under its field, its left
 /// edge with the field's, as wide as the field and as tall as the items it
@@ -625,8 +825,65 @@ void set_choice(EngineSettings& settings, Setting setting, std::size_t index);
 ///
 /// @param setting the setting
 /// @return true for a switch, false for a slider, a level strip, a
-///     drop-down, a button or a text row
+///     drop-down, a button, a text row or a row of buttons
 [[nodiscard]] bool is_switch(Setting setting) noexcept;
+
+/// Tells whether a setting is a row of buttons that each open a folder: Your
+/// files, whose buttons stand on its label line, right-aligned, and change
+/// no setting.
+///
+/// @param setting the setting
+/// @return true for Your files
+[[nodiscard]] bool is_buttons(Setting setting) noexcept;
+
+/// The columns between two of Your files' buttons.
+inline constexpr int32_t folder_button_gap = 4;
+/// Each of Your files' buttons' width, left to right: room for its caption
+/// with clear columns each side.
+inline constexpr std::array<int32_t, folder_button_count> folder_button_widths{46, 82, 44};
+/// The width of Your files' buttons together, with the gaps between them.
+inline constexpr int32_t folder_buttons_width = folder_button_widths[0] + folder_button_widths[1] +
+                                                folder_button_widths[2] + 2 * folder_button_gap;
+
+/// Returns one of Your files' buttons within the row's control area.
+///
+/// @param area the row's control area: the buttons together
+/// @param index the button, from 0 at the left
+/// @return its rectangle
+[[nodiscard]] SourceRect folder_button(const SourceRect& area, std::size_t index) noexcept;
+
+/// Returns the button of Your files under a point.
+///
+/// @param area the row's control area
+/// @param x the point's column
+/// @param y the point's row
+/// @return the button, from 0 at the left; folder_button_count for none,
+///     as between two buttons
+[[nodiscard]] std::size_t folder_button_at(const SourceRect& area, int32_t x, int32_t y) noexcept;
+
+/// Returns the caption of one of Your files' buttons.
+///
+/// @param index the button, from 0 at the left
+/// @return "SAVES", "SCREENSHOTS" or "MODS"; empty past the last
+[[nodiscard]] std::string_view folder_button_text(std::size_t index) noexcept;
+
+/// Returns a line of a row's hint as it is drawn in a width: row_hint's
+/// text, but Your files' first line, the player's own folder, as its tail
+/// that fits (path_tail).
+///
+/// @param dialog the dialog
+/// @param setting the row's setting
+/// @param line the line, from 0
+/// @param width the room, in source pixels
+/// @param text_width a text's width in the small font
+/// @return the text, in UTF-8
+[[nodiscard]] std::string shown_hint_text(
+    const Dialog& dialog,
+    Setting setting,
+    std::size_t line,
+    int32_t width,
+    const std::function<int32_t(std::string_view)>& text_width
+);
 
 /// Tells whether a switch setting is On. Every switch is read and set
 /// through one table from the setting to its value, so a new switch is
@@ -842,13 +1099,10 @@ scroll_thumb(int32_t scroll, int32_t limit, int32_t content_height) noexcept;
 /// @return its rectangle
 [[nodiscard]] SourceRect list_item(Page page, bool touch = false, bool game_files = false) noexcept;
 
-/// Returns the line before the Developer section in the list, under the
-/// entries the engine's settings list above Developer.
+/// Returns the line before the Developer section in the list.
 ///
-/// @param touch the dialog lists Touch (Dialog::touch)
-/// @param game_files the dialog lists Game files (Dialog::game_files)
 /// @return its rectangle, one row high
-[[nodiscard]] SourceRect list_divider(bool touch = false, bool game_files = false) noexcept;
+[[nodiscard]] SourceRect list_divider() noexcept;
 
 /// MANAGE…'s caption.
 inline constexpr std::string_view manage_text = "MANAGE…";
@@ -926,6 +1180,14 @@ level_at(const SourceRect& area, const Strip& strip, int32_t column) noexcept;
 /// @return the label
 [[nodiscard]] std::string_view label_of(Setting setting) noexcept;
 
+/// A line of the text under a row, and whether it is drawn as a notice.
+struct HintLine {
+    std::string text; ///< the line; empty past the last
+    /// Drawn in the notice colour, as locks are: what the player must know
+    /// of the choice shown.
+    bool notice{};
+};
+
 /// Returns a hint's line, as the source writes it: Include in device
 /// backups' first line holds {device}, which row_hint fills, and the Game
 /// files section's other rows have none of their own (row_hint gives the
@@ -960,16 +1222,18 @@ status_line(const AccelerationStatus& acceleration, std::size_t line) noexcept;
 [[nodiscard]] std::size_t hint_line_count(Setting setting) noexcept;
 
 /// Returns a line of the text under a row as the dialog shows it: the
-/// hint's (hint_line), or for the Game files rows the host's texts: the
+/// hint's (hint_line); for the Game files rows the host's texts: the
 /// summary and its sizes line, the backups hint with the device's name
 /// (Dialog::game_files_device, "device" without one), and where the files
-/// are, broken into lines between words (break_lines).
+/// are, broken into lines between words (break_lines); and for Your files
+/// the player's own folder, then why the last folder asked for could not be
+/// opened, as a notice.
 ///
 /// @param dialog the dialog
 /// @param setting the row's setting
 /// @param line the line, from 0
 /// @return the line; empty past the last
-[[nodiscard]] std::string row_hint(const Dialog& dialog, Setting setting, std::size_t line);
+[[nodiscard]] HintLine row_hint(const Dialog& dialog, Setting setting, std::size_t line);
 
 /// Returns a setting's label as the dialog shows it (label_of).
 ///
@@ -991,7 +1255,7 @@ break_lines(std::string_view text, std::size_t characters, std::size_t most_line
 
 /// Returns a section's entry in the list of a dialog of any kind: as
 /// list_item places it for the engine's settings and a mod's options, at
-/// the top for a Language & Text dialog's one section.
+/// the top for a Language dialog's one section.
 ///
 /// @param dialog the dialog
 /// @param page the section
@@ -1002,12 +1266,8 @@ break_lines(std::string_view text, std::size_t characters, std::size_t most_line
 ///
 /// @param setting a slider setting
 /// @param settings the settings shown
-/// @param mod_names the names of the offered mod folders, which the Mod
-///     setting shows
 /// @return the text
-[[nodiscard]] std::string value_text(
-    Setting setting, const EngineSettings& settings, std::span<const std::string> mod_names = {}
-);
+[[nodiscard]] std::string value_text(Setting setting, const EngineSettings& settings);
 
 /// Returns a lock's text.
 ///
@@ -1025,6 +1285,52 @@ break_lines(std::string_view text, std::size_t characters, std::size_t most_line
 inline constexpr std::string_view title_text = "OPEN ANNIHILATION";
 /// The title's last word, drawn muted.
 inline constexpr std::string_view title_suffix_text = "SETTINGS";
+/// Mods' row of no mod.
+inline constexpr std::string_view no_mod_text = "No Mod";
+/// No Mod's version.
+inline constexpr std::string_view no_mod_version_text = "3.1c";
+/// No Mod's description.
+inline constexpr std::string_view no_mod_description_text =
+    "The game's own rules, as 3.1c plays them.";
+/// What a mod row's version says when the folder has no oamod.yaml.
+inline constexpr std::string_view no_profile_version_text = "N/A";
+/// What a mod row's description says when the folder has no oamod.yaml.
+inline constexpr std::string_view no_profile_description_text = "No oamod.yaml present";
+/// The tag beside the title of the mod played.
+inline constexpr std::string_view playing_text = "PLAYING";
+/// The button under Mods' list.
+inline constexpr std::string_view open_mods_folder_text = "OPEN MODS FOLDER";
+/// The lines under Mods' list, naming the folders it lists.
+inline constexpr std::array<std::string_view, 2> mods_folders_text{
+    "Lists the mods in the game folder's mods folder and",
+    "in Documents/Open Annihilation/Mods.",
+};
+/// What a shortened path or text ends or starts with.
+inline constexpr std::string_view path_ellipsis = "...";
+/// The Switch Mod question's heading.
+inline constexpr std::string_view switch_heading_text = "SWITCH MOD";
+/// What the Switch Mod question asks, round the mod's title.
+inline constexpr std::string_view switch_ask_before_text = "Switch to ";
+/// What follows the mod's title in the question.
+inline constexpr std::string_view switch_ask_after_text =
+    " now? The game reloads its data for the new mod and returns to the main menu. Your "
+    "other settings are kept.";
+/// The question's note for a folder without an oamod.yaml.
+inline constexpr std::string_view switch_no_profile_text =
+    "This folder has no oamod.yaml, so the game's own rules apply.";
+/// The question's SWITCH caption.
+inline constexpr std::string_view yes_text = "SWITCH";
+/// The question's CANCEL caption.
+inline constexpr std::string_view no_text = "CANCEL";
+/// What Mods says during a game, which keeps the mod it plays.
+inline constexpr std::string_view mod_in_game_text =
+    "Locked during a game. Choose the mod from the main menu.";
+/// Your files' second hint line while no folder failed to open.
+inline constexpr std::string_view user_folder_hint_text =
+    "Saved games, screenshots, films and mods.";
+/// What Mods says when the command line chose this run's mod.
+inline constexpr std::string_view mod_from_command_line_text =
+    "The command line chose this run's mod.";
 /// What the header says while a shared game keeps running.
 inline constexpr std::string_view shared_game_text = "Shared game - still running";
 /// Restore defaults' caption.

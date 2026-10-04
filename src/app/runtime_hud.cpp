@@ -57,7 +57,29 @@ bool Runtime::is_build_page_nav(std::string_view name) const {
     return action == "PREV" || action == "NEXT" || action == "PREVIOUS";
 }
 
+bool Runtime::build_page_nav_shown() const {
+    return builder_gui_page_count() > 1;
+}
+
 void Runtime::show_match_build_page(int page) {
+    namespace hud = oa::ui::hud;
+    // The page another unit showed is none to step from.
+    const int shown = match_build_page_unit_ == selected_match_unit_ ? match_build_page_ : 0;
+    // The build pages cycle as the game's page flags do; a type with one
+    // page behaves as if it had a second, missing one.
+    const auto page_count = static_cast<uint8_t>(std::max(2, builder_gui_page_count() + 1));
+    const auto current = static_cast<uint32_t>(std::clamp(shown, 0, 7));
+    auto flags = hud::kUnitFlagBuildMenu | (current << hud::kUnitBuildPageShift);
+    if (page == shown + 1)
+        flags = hud::build_menu_forward(flags, page_count, false);
+    else if (page == shown - 1)
+        flags = hud::build_menu_back(flags, page_count, false);
+    else
+        flags = hud::build_menu_select(flags, page_count, static_cast<uint32_t>(std::max(page, 0)));
+    open_match_build_page(static_cast<int>(hud::build_page(flags)));
+}
+
+void Runtime::open_match_build_page(int page) {
     namespace hud = oa::ui::hud;
     auto* unit = match_ && selected_match_unit_ != 0
                      ? oa::world_unit_at(&match_->state(), selected_match_unit_)
@@ -72,46 +94,16 @@ void Runtime::show_match_build_page(int page) {
         show_match_orders_page();
         return;
     }
-    // A page too tall for the side column shows its build buttons in parts;
-    // PREV and NEXT step through them before turning the page, and going
-    // back to a page opens its last part.
-    if (match_build_part_unit_ != unit->id) {
-        match_build_part_ = 0;
-        match_build_part_unit_ = unit->id;
-    }
-    const auto previous_part = match_build_part_;
-    if (match_build_page_ > 0 && page == match_build_page_ + 1 &&
-        match_build_part_ + 1 < match_build_part_count_) {
-        ++match_build_part_;
-        page = match_build_page_;
-    } else if (match_build_page_ > 0 && page == match_build_page_ - 1 && match_build_part_ > 0) {
-        --match_build_part_;
-        page = match_build_page_;
-    } else if (page == match_build_page_ - 1) {
-        match_build_part_ = hud::kLastBuildPart;
-    } else if (page != match_build_page_) {
-        match_build_part_ = 0;
-    }
-    // The build pages cycle as the game's page flags do; a type with one
-    // page behaves as if it had a second, missing one.
-    const auto page_count = static_cast<uint8_t>(std::max(2, builder_gui_page_count() + 1));
-    const auto current = static_cast<uint32_t>(std::clamp(match_build_page_, 0, 7));
-    auto flags = hud::kUnitFlagBuildMenu | (current << hud::kUnitBuildPageShift);
-    if (page == match_build_page_ + 1)
-        flags = hud::build_menu_forward(flags, page_count, false);
-    else if (page == match_build_page_ - 1)
-        flags = hud::build_menu_back(flags, page_count, false);
-    else
-        flags = hud::build_menu_select(flags, page_count, static_cast<uint32_t>(std::max(page, 0)));
-    page = std::max(1, static_cast<int>(hud::build_page(flags)));
+    page = std::max(1, page);
     char name[64];
     hud::format_build_page_name(name, sizeof name, *def, static_cast<uint32_t>(page));
     auto& game = match_->state().game;
     auto state = hud::order_panel_load(game);
     summarize_order_panel(state);
     state.unit_id = 0;
-    const auto previous_page = match_build_page_;
-    match_build_page_ = page;
+    // A page that does not load leaves the panel as it was.
+    const auto previous_page = std::exchange(match_build_page_, page);
+    const auto previous_page_unit = std::exchange(match_build_page_unit_, unit->id);
     const auto prefix = match_side_name_prefix();
     hud::load_build_page(
         state, *unit, *def, name, page, prefix.c_str(), order_panel_controls(), order_panel_loader()
@@ -122,24 +114,85 @@ void Runtime::show_match_build_page(int page) {
         render_match_surface();
     } else {
         match_build_page_ = previous_page;
-        match_build_part_ = previous_part;
+        match_build_page_unit_ = previous_page_unit;
         show_unsupported("Build GUI " + std::string(name) + " is not available.");
     }
 }
 
 void Runtime::show_match_page_by_key(int page) {
-    if (!match_ || selected_match_unit_ == 0)
+    auto* unit = match_panel_unit();
+    if (unit == nullptr || page < 0)
         return;
     const auto& world = match_->state();
-    const auto* unit = oa::world_unit_at(&world, selected_match_unit_);
-    if (unit == nullptr || unit->type_index == 0 || unit->type_index >= world.unit_def_count ||
-        page >= static_cast<int>(world.unit_defs[unit->type_index].gui_page_count))
+    if (unit->type_index == 0 || unit->type_index >= world.unit_def_count)
         return;
+    const auto page_count = world.unit_defs[unit->type_index].gui_page_count;
+    if (page >= static_cast<int>(page_count))
+        return;
+    // The unit keeps the page picked, or the order page for 0.
+    unit->flags =
+        oa::ui::hud::build_menu_select(unit->flags, page_count, static_cast<uint32_t>(page));
+    apply_match_hud_for_selection();
+    play_match_interface_sound("nextbuildmenu");
+}
+
+oa::Unit* Runtime::match_panel_unit() {
+    if (!match_ || selected_match_unit_ == 0)
+        return nullptr;
+    int selected = 0;
+    for (const auto& slot : match_->world().slots)
+        if (slot.unit_index != 0 && slot.unit != nullptr &&
+            slot.owner_index == match_local_player_ &&
+            (slot.unit->flags & OA_UNIT_FLAG_SELECTED) != 0)
+            ++selected;
+    return selected > 1 ? nullptr : oa::world_unit_at(&match_->state(), selected_match_unit_);
+}
+
+int Runtime::match_panel_page() {
+    const auto* unit = match_panel_unit();
+    if (unit == nullptr || (unit->flags & oa::ui::hud::kUnitFlagBuildMenu) == 0)
+        return 0;
+    const auto& world = match_->state();
+    if (unit->type_index == 0 || unit->type_index >= world.unit_def_count ||
+        world.unit_defs[unit->type_index].gui_page_count == 0)
+        return 0;
+    return static_cast<int>(oa::ui::hud::build_page(unit->flags));
+}
+
+void Runtime::press_match_panel_page(oa::ui::hud::BuildPanelClick press, bool cycle) {
+    namespace hud = oa::ui::hud;
+    auto* unit = match_panel_unit();
+    if (unit == nullptr)
+        return;
+    const auto& world = match_->state();
+    if (unit->type_index == 0 || unit->type_index >= world.unit_def_count)
+        return;
+    switch (press) {
+    case hud::BuildPanelClick::orders:
+        unit->flags &= ~hud::kUnitFlagBuildMenu;
+        apply_match_hud_for_selection();
+        return;
+    case hud::BuildPanelClick::build:
+        unit->flags |= hud::kUnitFlagBuildMenu;
+        apply_match_hud_for_selection();
+        return;
+    case hud::BuildPanelClick::page_back:
+    case hud::BuildPanelClick::page_forward:
+        break;
+    default:
+        return;
+    }
+    const bool forward = press == hud::BuildPanelClick::page_forward;
+    // The unit's page turns among its type's pages, and with `cycle` the
+    // order page takes its turn between the last page and the first.
+    const auto page_count = world.unit_defs[unit->type_index].gui_page_count;
+    unit->flags = forward ? hud::build_menu_forward(unit->flags, page_count, cycle)
+                          : hud::build_menu_back(unit->flags, page_count, cycle);
+    const auto page = match_panel_page();
     if (page == 0)
         show_match_orders_page();
     else
-        show_match_build_page(page);
-    play_match_interface_sound("nextbuildmenu");
+        open_match_build_page(page);
 }
 
 void Runtime::load_match_chrome() {
@@ -414,16 +467,12 @@ void Runtime::paint_font_text(
 void Runtime::load_side_hud() {
     side_hud_ = {};
     try {
-        const auto data = assets_
-                              .read(
-                                  oa::data::defs::data_path(
-                                      oa::data::defs::DataDirectory::gamedata, "sidedata.tdf"
-                                  )
-                              )
-                              .bytes;
+        // The SIDEDATA the side table was read from.
+        const auto data = assets_.read(side_data_path()).bytes;
         const std::string_view text(reinterpret_cast<const char*>(data.data()), data.size());
         oa::ui::hud::SideLayout layout;
-        if (!oa::ui::hud::parse_side_layout(text, match_side_prefix() == "cor" ? 1 : 0, layout))
+        // The viewed player's own SIDEn section.
+        if (!oa::ui::hud::parse_side_layout(text, static_cast<int32_t>(match_view_side()), layout))
             return;
         const auto rect = [](const oa::ui::hud::Rect& r) {
             return HudRect{r.x, r.y, r.width, r.height};
@@ -581,7 +630,8 @@ void Runtime::draw_match_label_right(int x, int y, std::string_view text, uint8_
     const oa::formats::fnt::Font* font = match_label_font();
     if (font == nullptr)
         return;
-    const auto width = match_text_width(*font, text, 1);
+    // Measured in the side's font; a side that names none gives no width.
+    const auto width = match_side_names_font_ ? match_text_width(*font, text, 1) : 0;
     const auto point = hud_canvas(x, y);
     draw_match_label(point.x - width, point.y, text, palette_index);
 }
@@ -590,7 +640,8 @@ void Runtime::draw_hud_label_centered(int x, int y, std::string_view text, uint8
     const oa::formats::fnt::Font* font = match_label_font();
     if (font == nullptr)
         return;
-    const auto width = match_text_width(*font, text, 1);
+    // Measured in the side's font; a side that names none gives no width.
+    const auto width = match_side_names_font_ ? match_text_width(*font, text, 1) : 0;
     draw_hud_label(x - width / 2, y, text, palette_index);
 }
 

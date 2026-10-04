@@ -28,6 +28,7 @@ constexpr uint32_t page_bits(uint32_t page) {
 struct FakeControls {
     std::vector<std::string> names;
     std::vector<std::string> disabled;
+    std::vector<std::string> hidden;
     std::vector<std::pair<std::string, int32_t>> group_values;
     std::vector<std::pair<std::string, int32_t>> values;
 
@@ -54,7 +55,24 @@ struct FakeControls {
         self.disabled.push_back(self.names[static_cast<std::size_t>(index)]);
     }
 
-    PanelControls controls() { return {this, find, set_group, set, disable, nullptr}; }
+    static void set_active(void* user, int32_t index, bool shown) {
+        auto& self = *static_cast<FakeControls*>(user);
+        if (!shown)
+            self.hidden.push_back(self.names[static_cast<std::size_t>(index)]);
+    }
+
+    PanelControls controls() {
+        PanelControls table{this, find, set_group, set, disable, nullptr};
+        table.set_active = set_active;
+        return table;
+    }
+
+    bool is_hidden(const char* name) const {
+        for (const auto& entry : hidden)
+            if (entry == name)
+                return true;
+        return false;
+    }
 
     bool is_disabled(const char* name) const {
         for (const auto& entry : disabled)
@@ -293,6 +311,25 @@ void test_order_buttons() {
     CHECK(!fake.is_disabled("MOVE") && !fake.is_disabled("ATTACK"));
     CHECK(fake.is_disabled("STOP") && fake.is_disabled("PATROL") && fake.is_disabled("CAPTURE"));
     CHECK(fake.is_disabled("UNLOAD") && fake.is_disabled("BLAST"));
+    // Without transport ability LOAD is greyed and every button stays drawn.
+    CHECK(fake.is_disabled("LOAD") && fake.hidden.empty());
+
+    // A transport keeps LOAD and UNLOAD and hides BLAST.
+    FakeControls transport;
+    transport.names = fake.names;
+    OrderPanelState carrying = state;
+    carrying.order_flags = static_cast<uint16_t>(carrying.order_flags | kOrderCanTransport);
+    refresh_order_buttons(transport.controls(), carrying, &unit, &def);
+    CHECK(transport.hidden.size() == 1 && transport.is_hidden("BLAST"));
+    CHECK(!transport.is_disabled("LOAD") && !transport.is_disabled("UNLOAD"));
+
+    // A unit that can blast keeps BLAST live.
+    FakeControls blaster;
+    blaster.names = fake.names;
+    OrderPanelState blasting = state;
+    blasting.order_flags2 = kOrder2CanBlast;
+    refresh_order_buttons(blaster.controls(), blasting, &unit, &def);
+    CHECK(!blaster.is_disabled("BLAST") && !blaster.is_hidden("BLAST"));
 
     FakeControls none;
     none.names = fake.names;

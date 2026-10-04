@@ -53,6 +53,15 @@ the 3.1 update: the folder that holds `totala1.hpi`.
 - **The free demo:** to try Open Annihilation without the full game, see
   [Playing the demo](../../README.md#playing-the-demo).
 
+Windows opens paths of up to 259 characters unless long paths are turned
+on, which Windows 10, version 1607, and later allow: the **Enable Win32 long
+paths** policy (under Computer Configuration, Administrative Templates,
+System, Filesystem), or the registry value `LongPathsEnabled` set to 1 under
+`HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem`. A Total
+Annihilation folder whose path, with the names of the files in it, is longer
+than that needs long paths turned on, or a folder with a shorter path; the
+game says so if it cannot open the folder.
+
 ## 5. Start the game
 
 1. Double-click `open-annihilation.exe` in the folder from step 3.
@@ -90,24 +99,69 @@ game, TCP ports 2300 to 2400 and UDP ports 2350 to 2400.
 - On a computer with a single processor, no SSE2 or less than 512 MB of
   memory, the game starts at 800×600, at up to 60 frames a second and
   without enhanced anti-aliasing. These can all be changed in the settings.
-- If you hear no sound, start the game with the engine's own sound output.
-  In a Command Prompt in the game's folder:
+- On Windows XP the game plays its sound through its own wave-out output,
+  which leaves a single processor more time for the game than SDL's. If you
+  hear no sound, start the game with SDL's sound output instead. In a
+  Command Prompt in the game's folder:
 
   ```bat
-  set OA_SOUND_OUTPUT=waveout
+  set OA_SOUND_OUTPUT=sdl
   open-annihilation.exe
   ```
 
+  On a newer Windows that plays no sound, `set OA_SOUND_OUTPUT=waveout`
+  chooses the game's own output in the same way.
+
 ## Where it keeps its files
 
-Your settings, the log files (in `logs`) and the unpacked demo are in
-`%LOCALAPPDATA%\CorePrime\Open Annihilation`. On Windows XP the folder is
+Your saved games, screenshots, films and mods are in the **Open
+Annihilation** folder in your Documents folder (**My Documents** on Windows
+XP), wherever Windows keeps it, OneDrive or a folder your organisation has
+moved it to included:
+
+| Folder | What it holds |
+| --- | --- |
+| `Saves` | saved games; a mod's in `Saves/<mod id>` |
+| `Screenshots` | screenshots (Ctrl+F9) and posters (`MakePoster`) |
+| `Films` | films (Ctrl+F10), a `MOVIEnnn` folder each |
+| `Mods` | mods you add, each in a folder of its own, which the settings' Mods page lists besides the game folder's `mods` folder ([mods](../mods/README.md#installing-a-mod)) |
+
+The game makes each folder the first time it needs it. In the settings (the
+**OA** button on the main menu), **Common Tweaks** shows the folder under
+**Your files**, whose buttons open Saves, Screenshots and Mods in Explorer.
+
+Your settings, the log files (in `logs`) and the unpacked demo stay in
+`%LOCALAPPDATA%\CorePrime\Open Annihilation`. On Windows XP that folder is
 `Local Settings\Application Data\CorePrime\Open Annihilation` in your user
 folder.
+
+**Saved games from earlier versions.** Versions before 0.7 kept saved games
+in a `SAVEGAME` folder in `%LOCALAPPDATA%\CorePrime\Open Annihilation`, and
+a mod's in `mods/<mod id>/SAVEGAME` there. The first start of a later
+version moves them into `Saves`, once, and the main menu then says how many
+moved and where, with a button that opens the folder. Nothing is
+overwritten: a saved game whose name `Saves` holds already is moved as `NAME
+(2).SAV`, keeping both. One that cannot be moved stays where it is, and the
+game still lists it there. The log says what moved and what did not. An
+earlier version started afterwards no longer sees the saved games that
+moved.
+
+**Putting the folder elsewhere.** Start the game with `--user-folder PATH`,
+or add the key `open-annihilation.user-folder` with an absolute path to the
+preferences file, and that folder takes the place of the Open Annihilation
+folder in Documents. Saved games from earlier versions move only into the
+folder the key or Documents names: a start with `--user-folder` leaves them
+where they are and lists them there. With `--preferences-file`, the folder
+is the **Open Annihilation** folder beside that file instead, and saved
+games beside that file are not moved either: the game lists them where they
+are. An Image Output Directory set in the game, with the console's `Film`
+command, still takes the screenshots and films.
 
 ## Updating and removing
 
 - **To update:** unzip the newer package and use its folder. Your settings
   are kept.
 - **To remove:** delete the game's folder. To remove your settings and logs
-  too, delete the folder above.
+  too, delete the Local AppData folder above; your saved games,
+  screenshots, films and mods are in the Open Annihilation folder in
+  Documents.

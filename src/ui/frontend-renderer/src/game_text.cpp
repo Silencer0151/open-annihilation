@@ -78,6 +78,12 @@ present::FontCharacters gui_font_characters(const present::GafSprites& font) {
     return kept.fonts.emplace(key, std::move(characters)).first->second;
 }
 
+void forget_gui_font_characters() {
+    auto& kept = kept_characters();
+    const std::lock_guard lock(kept.mutex);
+    kept.fonts.clear();
+}
+
 int32_t gui_font_baseline(const present::GafSprites& font) {
     const oa::Sprite* tall = font.sequences.empty()
                                  ? nullptr

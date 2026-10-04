@@ -29,10 +29,6 @@ constexpr std::size_t mebibyte = std::size_t{1024} * 1024;
 /// The block the test writes to see committed memory grow, in bytes.
 constexpr std::size_t written_block_size = 32 * mebibyte;
 
-/// The least growth of committed memory accepted after writing the block:
-/// half of it, since the process may give back other memory meanwhile.
-constexpr uint64_t least_committed_growth = written_block_size / 2;
-
 /// Distance between the bytes written, in bytes: no wider than a page.
 constexpr std::size_t write_stride = 4096;
 
@@ -124,7 +120,10 @@ int main() {
     if (before.hard_faults_known && after.hard_faults_known)
         OA_CHECK(after.hard_faults >= before.hard_faults);
 #if defined(__APPLE__) || defined(__linux__)
-    // Committed memory counts private pages as they are written.
+    // Committed memory counts private pages as they are written. Half the
+    // block is the least growth accepted, since the process may give back
+    // other memory meanwhile.
+    constexpr uint64_t least_committed_growth = written_block_size / 2;
     if (before.committed_known && after.committed_known)
         OA_CHECK(after.committed >= before.committed + least_committed_growth);
 #endif

@@ -367,6 +367,14 @@ Runtime::settle_view_offset(uint32_t camera_x, uint32_t camera_y, bool between) 
 void Runtime::EngineSettingsState::ease_zoom_about_centre(Runtime& runtime, float target) {
     if (!runtime.match_ || !runtime.selected_tnt_)
         return;
+    // A camera tracking a unit eases about the unit, which stays at the
+    // centre (step_match_zoom), and goes on tracking it.
+    if (runtime.match_tracking_ && runtime.match_unit_present(runtime.tracked_match_unit_)) {
+        runtime.zoom_anchored_ = false;
+        runtime.match_zoom_target_ =
+            std::clamp(target, runtime.least_match_zoom(), kMaxBattlefieldZoom);
+        return;
+    }
     // The point at the battlefield's centre stays there while the zoom eases.
     const auto& layout = runtime.match_layout_;
     const int centre_x = layout.battlefield_width() / 2;
@@ -414,7 +422,7 @@ float Runtime::least_match_zoom() const noexcept {
 
 void Runtime::step_match_zoom() {
     // Each frame of a match: a match that turns out to be shared or a replay
-    // goes back to the base path credit (the AI & Pathfinding setting).
+    // goes back to the base path credit (Common Tweaks' pathfinding setting).
     EngineSettingsState::hold_path_credit(*this, current_extension_state());
     // The director sets the zoom of every frame itself, off the wall clock.
     if (director_mode())
@@ -425,10 +433,17 @@ void Runtime::step_match_zoom() {
     const float least = least_match_zoom();
     if (match_zoom_target_ < least)
         match_zoom_target_ = least;
-    if (match_zoom_ < least) {
+    const bool floored = match_zoom_ < least;
+    if (floored) {
         match_zoom_ = least;
         camera_moved_ = true;
     }
+    // A camera tracking a unit keeps the unit at the centre at every scale,
+    // as far as the map's edges let it, while a menu holds the match too.
+    const auto centre_tracked_unit = [this] {
+        if (match_tracking_ && match_unit_present(tracked_match_unit_))
+            center_camera_on_unit(tracked_match_unit_);
+    };
     // Seconds since the zoom last eased, from the frames' times; the first
     // frame takes a frame at the full rate, and a long gap counts as
     // kLongestZoomStep.
@@ -443,17 +458,21 @@ void Runtime::step_match_zoom() {
     zoom_clock_ = frame_time_ns_;
     zoom_clock_valid_ = true;
     if (std::abs(match_zoom_ - match_zoom_target_) < 1.0e-4F) {
+        const bool changed = match_zoom_ != match_zoom_target_;
         match_zoom_ = match_zoom_target_;
         if (zoom_anchored_) {
             apply_zoom_anchor();
             zoom_anchored_ = false;
             camera_moved_ = true;
         }
+        if (changed || floored)
+            centre_tracked_unit();
         return;
     }
     const auto t = 1.0F - std::exp(-kZoomLerpHz * dt);
     match_zoom_ += (match_zoom_target_ - match_zoom_) * t;
     apply_zoom_anchor();
+    centre_tracked_unit();
     camera_moved_ = true;
 }
 
@@ -466,6 +485,18 @@ void Runtime::handle_match_zoom(float wheel_y, float pointer_x, float pointer_y)
         px >= match_layout_.left + match_layout_.battlefield_width() ||
         py >= match_layout_.top + match_layout_.battlefield_height())
         return;
+    // A camera tracking a unit zooms about the unit, which stays at the
+    // centre (step_match_zoom), and goes on tracking it; the wheel changes
+    // only the scale.
+    if (match_tracking_ && match_unit_present(tracked_match_unit_)) {
+        zoom_anchored_ = false;
+        match_zoom_target_ = std::clamp(
+            match_zoom_target_ * std::pow(kZoomWheelFactor, wheel_y),
+            least_match_zoom(),
+            kMaxBattlefieldZoom
+        );
+        return;
+    }
     const auto viewport = live_viewport(
         static_cast<uint32_t>(std::max(0, match_camera_x_)),
         static_cast<uint32_t>(std::max(0, match_camera_z_))

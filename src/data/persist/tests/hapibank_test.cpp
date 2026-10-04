@@ -12,6 +12,7 @@
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <system_error>
 #include <vector>
 
 using namespace oa::data::persist;
@@ -323,6 +324,19 @@ void file_round_trip() {
     const FileSink sink = stdio_file_sink();
     CHECK(bank_write_file(b.get(), path.c_str(), savegame_description, true, true, &sink));
     CHECK(std::filesystem::exists(dir / "game.cpa"));
+    // A path longer than any of the game's own path fields keeps its audit
+    // listing beside it, under the whole name, where the system makes a
+    // folder that deep (Windows does once long paths are on).
+    auto deep = dir;
+    while (deep.native().size() < 300)
+        deep /= std::string(60, 'd');
+    std::error_code made;
+    std::filesystem::create_directories(deep, made);
+    if (!made) {
+        const auto deep_path = (deep / "deep.sav").string();
+        CHECK(bank_write_file(b.get(), deep_path.c_str(), savegame_description, true, true, &sink));
+        CHECK(std::filesystem::exists(deep / "deep.cpa"));
+    }
     ScopedBank back;
     const FileSource source = stdio_file_source();
     BankError error{};

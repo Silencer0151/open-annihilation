@@ -178,6 +178,16 @@ class TickHost::AirAttackMissions {
     ///     queued), 5 (done: an abort event, the unit target gone or past the
     ///     leash; VTOL_SeekAttack follows when allowed) or 7 (invalid).
     uint32_t air_to_ground(uint32_t events);
+    /// Runs one step of AirToGround for a gunship under
+    /// air.gunships-hover-to-strafe: it closes to half the distance, flies to
+    /// weapon range of the point and hovers there facing it, strafing from
+    /// side to side and firing at it until the order ends.
+    ///
+    /// @param events Events raised on the order since its last step.
+    /// @return 1 (next phase), 2 (keep waiting), 0 (restart: a landing was
+    ///     queued), 5 (done: an abort event, the unit target gone or past the
+    ///     leash; VTOL_SeekAttack follows when allowed) or 7 (invalid).
+    uint32_t hover_over_ground(uint32_t events);
     /// Runs one step of AirToGroundHover: gunships close to half the distance,
     /// hover at weapon range, then strafe from side to side.
     ///
@@ -242,6 +252,14 @@ class TickHost::AirAttackMissions {
         const auto health = static_cast<uint32_t>(static_cast<int32_t>(unit.health));
         return health < (def().max_damage >> 2) * 3 &&
                !never_retreats_to_repair(host.match.rules(), def().abilities);
+    }
+
+    // air.gunships-hover-to-strafe: a type that hovers to attack hovers over
+    // the point of its AirToGround as well.
+    bool hovers_over_ground() const {
+        const auto& rule = host.match.rules().air.gunships_hover_to_strafe;
+        return rule.enabled && rule.attack_ground &&
+               (def().flags & OA_UNIT_DEF_FLAG_HOVER_ATTACK) != 0;
     }
 
     bool leash_exceeded() const {
@@ -737,6 +755,8 @@ uint32_t TickHost::AirAttackMissions::air_to_air(uint32_t events) {
 }
 
 uint32_t TickHost::AirAttackMissions::air_to_ground(uint32_t events) {
+    if (hovers_over_ground())
+        return hover_over_ground(events);
     auto& attack = record.attack;
     const auto range = primary_range();
     if (seek_after_target_lost(events, air_strike_abort_events))
@@ -806,6 +826,81 @@ uint32_t TickHost::AirAttackMissions::air_to_ground(uint32_t events) {
     default:
         return result_fail;
     }
+}
+
+uint32_t TickHost::AirAttackMissions::hover_over_ground(uint32_t events) {
+    auto& attack = record.attack;
+    if (seek_after_target_lost(events, air_strike_abort_events))
+        return result_done;
+    // The point follows a target unit; a ground attack keeps the point given.
+    if (attack.target)
+        store_destination(target_position());
+    if (return_to_map())
+        return result_stay;
+    if (leash_exceeded())
+        return result_done;
+    const auto range = primary_range();
+    const auto destination = attack.destination;
+    auto& side = attack.weapon_slot; // alternates the strafe side
+    switch (order.phase) {
+    case 0:
+        if (!can_fly())
+            return result_fail;
+        adapter.announce("Attacking");
+        host.take_off(s, order);
+        return result_next;
+    case 1: {
+        adapter.reset_weapons();
+        const auto from = here();
+        const auto distance =
+            horizontal_distance(destination[0] - from[0], destination[2] - from[2]);
+        const auto toward = bearing(from, destination);
+        const auto half = distance / 2;
+        const auto angle =
+            static_cast<uint16_t>(host.random(2 * eighth_turn) + toward - eighth_turn);
+        point_goal(forward(from, angle, half), loiter_arrival);
+        order.wait_events = wait_attack;
+        return result_next;
+    }
+    case 2:
+        adapter.release_weapon_targets(0);
+        if (attack.target)
+            adapter.assign_target(*attack.target, 0);
+        else
+            adapter.assign_ground(destination, 0);
+        point_goal(destination, range);
+        side = 0;
+        order.wait_events = wait_attack;
+        return result_next;
+    default:
+        break;
+    }
+    // From weapon range on, each step strafes to the other side of the
+    // point, two thirds of the range from it, facing it.
+    const auto toward = bearing(here(), destination);
+    uint16_t angle;
+    if (side != 0) {
+        angle = static_cast<uint16_t>(toward + eighth_turn);
+        side = 0;
+    } else {
+        angle = static_cast<uint16_t>(toward - eighth_turn);
+        side = 1;
+    }
+    const auto strafe = signed_bits(static_cast<uint32_t>(range * 2 / 3) << 16);
+    const auto spot = backward(destination, angle, strafe);
+    if (attack.target)
+        facing_goal(spot, hover_arrival);
+    else {
+        auto goal = sim::air::air_goal_at_point(&order.raised_events, &unit, fixed_point(spot));
+        sim::air::air_goal_set_arrival_radius(&goal, hover_arrival);
+        sim::air::air_goal_set_altitude(&goal, host.air_host(), def().cruise_alt);
+        sim::air::air_goal_set_bearing(&goal, bearing(spot, destination));
+        install_goal(goal);
+    }
+    order.wait_events = wait_attack;
+    if (health_low() && seek_repair_pad())
+        return result_restart;
+    return result_stay;
 }
 
 uint32_t TickHost::AirAttackMissions::air_to_ground_hover(uint32_t events) {

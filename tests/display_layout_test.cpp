@@ -223,6 +223,9 @@ int main() {
     CHECK(original.left == 128 && original.top == 32 && original.bottom == 32);
     CHECK(original.battlefield_width() == 512 && original.battlefield_height() == 416);
     CHECK(original.bottom_bar_y() == kSourceBottomBarY);
+    CHECK(original.bar_columns() == 512);
+    // The bars' art begins one column right of the side column's 128.
+    CHECK(kSourceBarArtLeft == 129);
     const auto ident = canvas_to_source(original, 200, 100);
     CHECK(ident.x == 200 && ident.y == 100);
     const auto ident_bar = canvas_to_source(original, 200, 450);
@@ -234,6 +237,7 @@ int main() {
     const auto xga = make_match_layout(1024, 768);
     CHECK(xga.left == 205 && xga.top == 51 && xga.bottom == 51);
     CHECK(xga.hud_width == 1024 && xga.hud_height == 768);
+    CHECK(xga.bar_columns() == 512);
 
     // 1280x1024 is the largest chrome: twice the 640x480 art, bottom bar on
     // the window's bottom edge, 64 blank rows under the side column.
@@ -243,8 +247,10 @@ int main() {
     CHECK(sxga.hud_width == 1280 && sxga.hud_height == 960);
     CHECK(sxga.battlefield_width() == 1024 && sxga.battlefield_height() == 896);
     CHECK(sxga.bottom_bar_y() == 960);
+    CHECK(sxga.bar_columns() == 512);
 
-    // Larger windows keep the 1280x1024 chrome and gain battlefield.
+    // Larger windows keep the 1280x1024 chrome and gain battlefield; the
+    // bars reach their right edge at the chrome's scale.
     const auto wide = make_match_layout(1920, 1080);
     CHECK(wide.width == 1920 && wide.height == 1080);
     CHECK(wide.scale == 2.0);
@@ -252,8 +258,16 @@ int main() {
     CHECK(wide.hud_width == 1280 && wide.hud_height == 960);
     CHECK(wide.battlefield_width() == 1664 && wide.battlefield_height() == 952);
     CHECK(wide.bottom_bar_y() == 1016);
+    CHECK(wide.bar_columns() == 832);
     const auto qhd = make_match_layout(2560, 1440);
     CHECK(qhd.scale == 2.0 && qhd.left == 256 && qhd.hud_width == 1280 && qhd.hud_height == 960);
+    CHECK(qhd.bar_columns() == 1152);
+    // A window wider than 4:3 below the largest chrome: 1088 / 1.5 = 725.3
+    // columns, the last cut by the window's right edge.
+    const auto hd = make_match_layout(1280, 720);
+    CHECK(hd.bar_columns() == 726 && hd.bar_width() == 1089);
+    // Between the scales the bars keep the 640x480 interface's 512 columns.
+    CHECK(xga.bar_width() == 819 && make_match_layout(800, 600).bar_columns() == 512);
 
     // Top-anchored chrome maps uniformly.
     const auto left = canvas_to_source(wide, 0, 0);
@@ -282,7 +296,8 @@ int main() {
     const auto column_rect = source_rect_to_canvas(wide, 0, 128, 128, 352);
     CHECK(column_rect.y == 256 && column_rect.height == 704);
 
-    // Blank areas and the battlefield never reach a bar gadget.
+    // The bars past the interface's 640 columns, the blank areas and the
+    // battlefield never reach a bar gadget.
     const auto blank_right = canvas_to_source(wide, 1500, 10);
     CHECK(blank_right.x >= kSourceWidth);
     const auto blank_column = canvas_to_source(wide, 100, 1000);
@@ -312,6 +327,10 @@ int main() {
         CHECK(layout.left >= 1 && layout.top >= 1 && layout.bottom >= 1);
         CHECK(layout.battlefield_width() >= 32 && layout.battlefield_height() >= 32);
         CHECK(layout.hud_width <= layout.width && layout.hud_height <= layout.height);
+        // The bars reach the window's right edge, and their last column
+        // starts inside it.
+        CHECK(layout.left + layout.bar_width() >= layout.width);
+        CHECK(layout.left + (layout.bar_columns() - 1) * layout.scale < layout.width);
         const auto origin = source_to_canvas(layout, kSourceLeft, kSourceTop);
         CHECK(origin.x == layout.left && origin.y == layout.top);
         const auto bar = source_to_canvas(layout, kSourceLeft, kSourceBottomBarY);

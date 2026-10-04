@@ -1,15 +1,16 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// The software mixer and the buffered output on a device the test plays by
-// hand; with --wave-out on Windows, the wave-out mixer on the system's
-// device.
+// The integer resampler, the software mixer and the buffered output on a
+// device the test plays by hand; with --wave-out on Windows, the wave-out
+// mixer on the system's device.
 
 #include "oa/audio/buffered_output.hpp"
 #include "oa/audio/software_mixer.hpp"
 #include "oa/audio/sound_output.hpp"
 #include "oa/audio/sound_output_backends.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -17,7 +18,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <limits>
 #include <mutex>
+#include <numbers>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -69,11 +74,146 @@ std::vector<int16_t> mix(SoftwareMixer& mixer, uint32_t frames) {
     return out;
 }
 
+void output_choice() {
+    // Windows before Vista plays through the wave-out mixer first, every
+    // other system through SDL's; the environment variable chooses either.
+    CHECK(choose_sound_output(std::nullopt, false) == SoundOutputKind::sdl);
+    CHECK(choose_sound_output(std::nullopt, true) == SoundOutputKind::wave_out);
+    CHECK(choose_sound_output("waveout", false) == SoundOutputKind::wave_out);
+    CHECK(choose_sound_output("sdl", true) == SoundOutputKind::sdl);
+    CHECK(choose_sound_output("other", true) == SoundOutputKind::wave_out);
+    CHECK(choose_sound_output("", false) == SoundOutputKind::sdl);
+    CHECK(std::string_view(sound_output_variable) == "OA_SOUND_OUTPUT");
+}
+
 void formats() {
     CHECK(sample_bytes(SampleFormat::u8) == 1 && sample_bytes(SampleFormat::s16) == 2);
     CHECK(sample_bytes(SampleFormat::s32) == 4 && sample_bytes(SampleFormat::f32) == 4);
     CHECK(frame_bytes(StreamFormat{SampleFormat::s16, 2, 44100}) == 4);
     CHECK(silence_byte(SampleFormat::u8) == 0x80 && silence_byte(SampleFormat::s16) == 0);
+}
+
+// A tone of amplitude 8192 at a frequency, sampled at a frame of a rate.
+double tone(double frequency, double frame, double rate) {
+    constexpr double amplitude = 8192.0;
+    return amplitude * std::sin(2.0 * std::numbers::pi * frequency * frame / rate);
+}
+
+void pcm_resampler_limits() {
+    PcmResampler resampler;
+    CHECK(!resampler.configure(resampler_min_rate - 1, 44100, 2));
+    CHECK(!resampler.configure(44100, resampler_max_rate + 1, 2));
+    CHECK(!resampler.configure(44100, 48000, 0));
+    CHECK(!resampler.configure(44100, 48000, resampler_max_channels + 1));
+    // Equal rates copy, owing nothing.
+    CHECK(resampler.configure(44100, 44100, 2) && resampler.passthrough());
+    const std::vector<int16_t> input{16384, -32768, 7, 32767};
+    std::vector<int32_t> output;
+    resampler.process(input, output);
+    CHECK(resampler.owed_frames() == 0);
+    resampler.finish(output);
+    CHECK(output == std::vector<int32_t>(input.begin(), input.end()));
+}
+
+void pcm_resampler_lengths_and_chunks() {
+    // ceil(frames * out / in) frames, whatever the split of the input; the
+    // frames still owed shrink to none as the input ends.
+    const uint32_t rates[][2] = {
+        {11025, 44100},
+        {22050, 44100},
+        {22254, 44100},
+        {48000, 44100},
+        {8000, 44100},
+        {96000, 44100},
+        {44101, 44100},
+    };
+    for (const auto& rate : rates) {
+        for (const uint32_t frames : {1U, 5U, 999U, 4096U}) {
+            std::vector<int16_t> input(frames * 2);
+            for (std::size_t i = 0; i < input.size(); ++i)
+                input[i] = static_cast<int16_t>(20000.0 * std::sin(0.01 * static_cast<double>(i)));
+            PcmResampler whole;
+            CHECK(whole.configure(rate[0], rate[1], 2));
+            std::vector<int32_t> once;
+            whole.process(input, once);
+            const uint64_t owed = (uint64_t{frames} * rate[1] + rate[0] - 1) / rate[0];
+            CHECK(once.size() / 2 + whole.owed_frames() == owed);
+            whole.finish(once);
+            CHECK(once.size() == owed * 2 && whole.owed_frames() == 0);
+            PcmResampler pieces;
+            CHECK(pieces.configure(rate[0], rate[1], 2));
+            std::vector<int32_t> split;
+            std::size_t at = 0;
+            for (std::size_t step = 1; at < frames; step = step * 3 + 1) {
+                const std::size_t take = std::min<std::size_t>(step, frames - at);
+                pieces.process(std::span<const int16_t>(input).subspan(at * 2, take * 2), split);
+                at += take;
+            }
+            pieces.finish(split);
+            CHECK(split == once);
+        }
+    }
+}
+
+void pcm_resampler_quality() {
+    // A constant passes unchanged away from the ends, where the silence
+    // around the input comes in.
+    PcmResampler resampler;
+    CHECK(resampler.configure(11025, 44100, 1));
+    for (const int16_t level : {int16_t{8192}, int16_t{-32768}, int16_t{32767}}) {
+        resampler.reset();
+        const std::vector<int16_t> constant(500, level);
+        std::vector<int32_t> output;
+        resampler.process(constant, output);
+        resampler.finish(output);
+        CHECK(output.size() == 2000);
+        for (std::size_t frame = 64; frame + 64 < output.size(); ++frame)
+            CHECK(output[frame] == level);
+    }
+
+    // A tone well inside the band comes out within the error of 16-bit
+    // samples and 14-bit taps, from every rate the game's sounds take.
+    for (const uint32_t rate : {11025U, 22050U, 22254U, 32000U, 48000U}) {
+        std::vector<int16_t> input(rate / 2);
+        for (std::size_t i = 0; i < input.size(); ++i)
+            input[i] =
+                static_cast<int16_t>(std::lround(tone(1000.0, static_cast<double>(i), rate)));
+        CHECK(resampler.configure(rate, 44100, 1));
+        std::vector<int32_t> output;
+        resampler.process(input, output);
+        resampler.finish(output);
+        double signal = 0.0;
+        double error = 0.0;
+        for (std::size_t frame = 64; frame + 64 < output.size(); ++frame) {
+            const double want = tone(1000.0, static_cast<double>(frame), 44100.0);
+            signal += want * want;
+            error += (output[frame] - want) * (output[frame] - want);
+        }
+        CHECK(10.0 * std::log10(signal / error) > 70.0);
+    }
+
+    // No delay: an impulse at the first frame peaks at the first output
+    // frame, the kernel's centre.
+    CHECK(resampler.configure(11025, 44100, 1));
+    std::vector<int16_t> impulse(64, 0);
+    impulse[0] = 16384;
+    std::vector<int32_t> output;
+    resampler.process(impulse, output);
+    resampler.finish(output);
+    CHECK(output.size() == 256 && output[0] > 15000);
+    for (std::size_t frame = 1; frame < output.size(); ++frame)
+        CHECK(std::abs(output[frame]) < output[0]);
+
+    // The overshoot of a band-limited full-scale square wave is kept past
+    // 16 bits.
+    std::vector<int16_t> square(400);
+    for (std::size_t i = 0; i < square.size(); ++i)
+        square[i] = (i / 8) % 2 == 0 ? int16_t{32767} : int16_t{-32768};
+    output.clear();
+    resampler.process(square, output);
+    resampler.finish(output);
+    CHECK(*std::max_element(output.begin(), output.end()) > 32767);
+    CHECK(*std::min_element(output.begin(), output.end()) < -32768);
 }
 
 void conversion_and_gain() {
@@ -91,17 +231,17 @@ void conversion_and_gain() {
     for (const int16_t sample : mix(mixer, 4))
         CHECK(sample == 0);
 
-    // Mono plays on both sides; -1..1 is rounded by 32767.
+    // Mono plays on both sides; at a gain of one, the samples are unchanged.
     CHECK(mono->resume());
     auto out = mix(mixer, 4);
-    const std::vector<int16_t> both{16384, 16384, -16384, -16384, 32766, 32766, -32767, -32767};
+    const std::vector<int16_t> both{16384, 16384, -16384, -16384, 32767, 32767, -32768, -32768};
     CHECK(out == both);
     CHECK(mono->queued_bytes() == 0 && mono->available_bytes() == 0);
     // Nothing left: silence, not the last samples again.
     for (const int16_t sample : mix(mixer, 4))
         CHECK(sample == 0);
 
-    // Each format scales to -1..1; the gain multiplies.
+    // Each format becomes 16-bit; the gain multiplies.
     struct Case {
         SampleFormat sample;
         std::vector<uint8_t> frame; // one stereo frame
@@ -118,7 +258,7 @@ void conversion_and_gain() {
         {SampleFormat::u8, {0xc0, 0x40}, 16384, -16384},
         {SampleFormat::s16, {0x00, 0x20, 0x00, 0xe0}, 8192, -8192},
         {SampleFormat::s32, {0, 0, 0, 0x40, 0, 0, 0, 0xc0}, 16384, -16384},
-        {SampleFormat::f32, float_frame, 8192, -32767}, // -1.5 clamps to -1
+        {SampleFormat::f32, float_frame, 8192, -32768}, // -1.5 is held to -32768
     };
     for (const auto& c : cases) {
         auto stream = mixer.open_stream({c.sample, 2, 44100}, nullptr, nullptr, error);
@@ -134,6 +274,26 @@ void conversion_and_gain() {
     CHECK(stereo->set_gain(0.5F) && stereo->put(pair.data(), 4) && stereo->resume());
     out = mix(mixer, 1);
     CHECK(out[0] == 8192 && out[1] == 8192);
+
+    // The sides take gains of their own on top of the stream's: one
+    // channel plays on both at those levels, and two each at its own.
+    CHECK(mono->put(samples.data(), 4) && mono->set_side_gains(0.5F, 0.25F));
+    out = mix(mixer, 2);
+    CHECK(out == std::vector<int16_t>({8192, 4096, -8192, -4096}));
+    CHECK(stereo->set_side_gains(0.25F, 2.0F) && stereo->put(pair.data(), 4));
+    out = mix(mixer, 1);
+    CHECK(out[0] == 2048 && out[1] == 16384); // at the stream's gain of 0.5
+    CHECK(stereo->set_side_gains(1.0F, 1.0F));
+    // A float that is not a number is silence.
+    const float not_a_number = std::numeric_limits<float>::quiet_NaN();
+    std::vector<uint8_t> nan_frame(8);
+    std::memcpy(nan_frame.data(), &not_a_number, 4);
+    std::memcpy(nan_frame.data() + 4, &not_a_number, 4);
+    auto floats = mixer.open_stream({SampleFormat::f32, 2, 44100}, nullptr, nullptr, error);
+    CHECK(floats->put(nan_frame.data(), 8) && floats->resume());
+    out = mix(mixer, 1);
+    CHECK(out[0] == 0 && out[1] == 0);
+    floats.reset();
 
     // Two streams add up, clamped.
     auto other = mixer.open_stream({SampleFormat::s16, 2, 44100}, nullptr, nullptr, error);
@@ -187,30 +347,61 @@ void feeds() {
     for (int round = 0; round < 5; ++round) {
         const auto out = mix(mixer, 300);
         for (std::size_t frame = 0; frame < 300; ++frame) {
-            const auto want = static_cast<int16_t>(std::lround(expected * (32767.0F / 32768.0F)));
-            CHECK(out[2 * frame] == want && out[2 * frame + 1] == want);
+            CHECK(out[2 * frame] == expected && out[2 * frame + 1] == expected);
             ++expected;
         }
     }
     CHECK(counter.calls >= 1 && counter.last_wanted > 0 && counter.locked_during_feed);
 
     // A resampled stream: a flushed input of n frames at 22050 Hz plays as
-    // 2n frames at 44100, then stops.
+    // 2n frames at 44100, then stops; it reports frames to play until the
+    // last has played.
     auto slow = mixer.open_stream({SampleFormat::s16, 2, 22050}, nullptr, nullptr, error);
     stream.reset();
     std::vector<int16_t> constant(2 * 1000, 8192);
     const auto bytes = bytes_of(constant);
     CHECK(slow->put(bytes.data(), static_cast<int32_t>(bytes.size())) && slow->flush());
     CHECK(slow->resume());
-    std::size_t sounding = 0;
-    for (int round = 0; round < 10; ++round)
-        for (const int16_t sample : mix(mixer, 512))
-            if (sample != 0) {
-                CHECK(std::abs(sample - 8192) < 4);
-                ++sounding;
-            }
-    CHECK(sounding == 2000 * 2);
+    std::vector<int16_t> played;
+    for (int round = 0; round < 4; ++round) {
+        CHECK(slow->queued_bytes() > 0 || slow->available_bytes() > 0);
+        const auto out = mix(mixer, 500);
+        played.insert(played.end(), out.begin(), out.end());
+    }
     CHECK(slow->queued_bytes() == 0 && slow->available_bytes() == 0);
+    CHECK(played.size() == 2000 * 2);
+    for (std::size_t sample = 2 * 64; sample + 2 * 64 < played.size(); ++sample)
+        CHECK(played[sample] == 8192);
+    for (const int16_t sample : mix(mixer, 512))
+        CHECK(sample == 0);
+}
+
+void conversion_for_the_mixer() {
+    // One channel stays one, at four times the frames from 11025 Hz and at
+    // half its level.
+    std::vector<int16_t> samples;
+    const std::vector<uint8_t> eight(1000, 0xc0);
+    CHECK(convert_for_mixer({SampleFormat::u8, 1, 11025}, eight, samples) == 1);
+    CHECK(samples.size() == 4000);
+    for (std::size_t frame = 64; frame + 64 < samples.size(); ++frame)
+        CHECK(samples[frame] == 8192);
+    // At the mixer's rate the samples are only halved, rounding halves
+    // upward; more than two channels keep their first two.
+    const auto wide = bytes_of(std::vector<int16_t>{2, 4, 6, 9, -3, 12});
+    CHECK(convert_for_mixer({SampleFormat::s16, 3, 44100}, wide, samples) == 2);
+    CHECK(samples == std::vector<int16_t>({1, 2, 5, -1}));
+    // Played at converted_sample_gain, they come back at their own level.
+    SoftwareMixer mixer(test_lock());
+    std::string error;
+    auto stream = mixer.open_stream({SampleFormat::s16, 1, 44100}, nullptr, nullptr, error);
+    const auto half = bytes_of(std::vector<int16_t>{8192, -4096});
+    CHECK(stream->set_gain(converted_sample_gain) && stream->put(half.data(), 4));
+    CHECK(stream->resume());
+    CHECK(mix(mixer, 2) == std::vector<int16_t>({16384, 16384, -8192, -8192}));
+    stream.reset();
+    // A format the mixer does not take converts nothing.
+    CHECK(convert_for_mixer({SampleFormat::s16, 1, 10}, wide, samples) == 0 && samples.empty());
+    CHECK(convert_for_mixer({SampleFormat::s16, 0, 44100}, wide, samples) == 0 && samples.empty());
 }
 
 // A device the test plays by hand: queued buffers stay busy until played.
@@ -321,8 +512,7 @@ void buffered_output() {
     CHECK(device.order.size() == 6 && device.order[4] == 0 && device.order[5] == 1);
     for (std::size_t i = 0; i < ramp.size(); ++i) {
         const auto& buffer = device.written[4 + i / (2 * output_buffer_frames)];
-        const auto want = static_cast<int16_t>(std::lround(ramp[i] * (32767.0F / 32768.0F)));
-        CHECK(buffer[i % (2 * output_buffer_frames)] == want);
+        CHECK(buffer[i % (2 * output_buffer_frames)] == ramp[i]);
     }
     device.play_one();
     CHECK(device.order.back() == 2);
@@ -390,9 +580,14 @@ int main(int argc, char** argv) {
         return skipped;
 #endif
     }
+    output_choice();
     formats();
+    pcm_resampler_limits();
+    pcm_resampler_lengths_and_chunks();
+    pcm_resampler_quality();
     conversion_and_gain();
     feeds();
+    conversion_for_the_mixer();
     buffered_output();
     std::puts("sound output: ok");
     return 0;

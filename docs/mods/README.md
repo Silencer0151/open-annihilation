@@ -13,41 +13,132 @@ mod is installed: a folder without a profile plays exactly as 3.1c.
 - [The standard hacks](#the-standard-hacks) below explains what a hack is,
   and [every standard hack](#every-standard-hack) lists each behaviour a
   profile can turn on, with a page of its own.
+- [Every script extension](#every-script-extension) lists the values a
+  profile can give a mod's unit scripts, each with a page of its own that
+  shows how a script reads it.
 - [Developer Mode](#developer-mode) changes a profile's hacks from the
   settings' Developer section, without editing the profile.
 
 ## Installing a mod
 
-A mod plays in one of two ways, which give the same game.
+1. Put the mod's folder in the **Mods** folder of your own Open Annihilation
+   folder, `Documents/Open Annihilation/Mods` (where that is on each system:
+   "Where it keeps its files" in the
+   [installation guides](../installation/macos.md#where-it-keeps-its-files)),
+   or in the game folder's `mods` folder.
+2. Open the settings (the **OA** button on the main menu), choose the mod on
+   **Mods**, and confirm with **Switch**. The game reloads its data for the
+   mod and returns to the main menu playing it.
 
-**Mod folder.** Put the mod's files, `oamod.yaml` among them, in a folder of
-their own inside the game folder's `mods` folder:
+The Mods page's **Open Mods Folder** and the **Your files** row under
+**Common Tweaks** open the Mods folder in the file manager, making it the
+first time.
+
+**Mod folder.** A mod folder holds the mod's files, `oamod.yaml` among them:
 
 ```text
+Documents/Open Annihilation/
+  Mods/
+    <mod name>/
+      oamod.yaml
+      oamod.png             the mod's badge, if it has one
+      ...                   the mod's own archives and files
+
 <game folder>/
   totala1.hpi  ...          the plain 3.1c installation
   mods/
-    <mod name>/
-      oamod.yaml
-      ...                   the mod's own archives and files
+    <mod name>/             a mod folder can sit here as well
 ```
 
 The mod folder is layered over the game folder: a file in the mod folder
 takes the place of the game folder's file of the same path, as copying it
-over would. One plain 3.1c installation then serves every mod. A game
-folder that holds its own `oamod.yaml` cannot carry a mod folder.
+over would. One plain 3.1c installation then serves every mod, and the game
+folder is left as it is. A game folder that holds its own `oamod.yaml`
+cannot carry a mod folder.
 
 **Copied install.** Copy the mod's files into a copy of the game folder, so
 that `oamod.yaml` sits in that folder's root. The game folder then plays
 that mod and nothing else.
 
+A mod folder does not need an `oamod.yaml`. One without it is layered over
+the game folder all the same, its archives and files over the game's, but
+with no profile the game plays by 3.1c's own rules: no standard hack, no
+renamed directories, 3.1c's limits. Each start that plays such a folder
+says so on standard output. This suits a folder of extra units or maps
+made for 3.1c itself.
+
+A profile can give a one-line `description`, and a mod folder can hold an
+`oamod.png` badge beside its `oamod.yaml`; the Mods page shows both.
+[The OAMOD standard](oamod-standard.md) describes them.
+
 ### Choosing a mod
 
-Open Annihilation's settings (the **OA** button on the main menu) list
-under **Gameplay**, **Mod**, every folder in the game folder's `mods` folder
-that holds a profile, and **None** for 3.1c. One profile plays per run, so
-the choice applies from the next start. A remembered mod folder that has
-gone is dropped with a notice.
+Open Annihilation's settings (the **OA** button on the main menu) choose
+the mod on **Mods**, the first page. Its list scrolls with the mouse wheel,
+its scroll bar and the keyboard. Each row shows the mod's badge (its
+`oamod.png`, or a blank placeholder), then, from its `oamod.yaml`, its
+title, its version at the top right and a line describing it. No Mod shows
+the Open Annihilation mark. A folder without an `oamod.yaml` shows the
+folder's name, "N/A" and "No oamod.yaml present". Text too long for its row
+is cut short with an ellipsis.
+
+The list holds, in this order:
+
+- the mod being played, marked PLAYING;
+- **No Mod**, 3.1c as it is, when it is not the one being played;
+- every other mod, by title: each folder in the game folder's `mods`
+  folder and in your own Mods folder, and the folder an earlier version's
+  Pick Folder... chose, while it still exists.
+
+To play a mod folder kept elsewhere, put it in the Mods folder. Under the
+list, **Open Mods Folder** opens your Mods folder in the system's file
+manager, and a line says which folders the list holds.
+
+Choosing a row other than the mod being played opens **Switch Mod**: the
+mod's badge, title and version, and "Switch to *title* now? The game
+reloads its data for the new mod and returns to the main menu. Your other
+settings are kept." A folder without an `oamod.yaml` adds "This folder has
+no oamod.yaml, so the game's own rules apply."
+
+- **Cancel** (Escape) leaves everything as it was.
+- **Switch** (Enter) keeps the settings' other changes, as **OK** does,
+  remembers the new mod, and reloads the game for it in place, without
+  closing the window or restarting the game. The main menu then shows,
+  playing the new mod. The folder chosen is played as `--mod-dir` would play
+  it, and so are later starts.
+
+A mod folder that holds the mod's `oamod.yaml` but not all of its game files
+can still be switched to, and its menus play. When the units its profile
+reads are missing, or a side's commander is not among them, the main menu
+warns once from each start: **Mod Files Missing** names the mod and what is
+missing, for example "The ARM commander (ARMCOM) isn't in this mod's
+units", and says that its games can't start until the mod's files are
+added to the folder it shows. **Open Mod Folder** opens that folder, and
+**OK** (Enter or Escape) closes the warning. Starting a skirmish, a
+multiplayer game, a campaign mission or a saved game with that mod shows
+the same warning and stays on the screen it was started from.
+
+When a file a side's SIDEDATA section names, its interface art (`intgaf`)
+or its font, is missing from a mod folder, with an `oamod.yaml` or
+without, the same warning shows once from each start and names each file,
+for example "The CORE side's anims/CORINT.GAF isn't in this mod's files;
+games show without it", and says that its games still start. They start
+and play: a side without its interface art has no panels, as a side that
+names none, and a side without its font draws its resource numbers and
+unit panel as a side that names none. The game played without a mod still
+ends as it starts when such a file is missing, naming the first.
+
+A folder whose `oamod.yaml` cannot be played over the game folder is
+refused, the page saying why, and the mod stays as it was; so is any folder
+over a game folder that is a mod's copied install, and a folder without an
+`oamod.yaml` whose SIDEDATA the game's own rules cannot start with, such as
+one that lacks a section a side needs; the log says why. A remembered mod folder that has gone
+is dropped with a notice, and No Mod is played. While `--mod-dir` or
+`--base-game` decides the run's mod, the Mods page is locked "Set on the
+command line" and keeps the stored choice, which a start without them
+plays. During a game the page is locked too: "Locked during a
+game. Choose the mod from the main menu." The other rows are dimmed and do
+nothing, and **Open Mods Folder** is disabled.
 
 The command line chooses a mod for one run:
 
@@ -71,8 +162,8 @@ standard has the details.
 A profile is a strict subset of YAML, written for people to read and edit.
 Its blocks are:
 
-- `oamod`, `id`, `name` and `version`: the format version and the mod's
-  id, name and version;
+- `oamod`, `id`, `name`, `version` and the optional `description`: the
+  format version and the mod's id, name, version and one line about it;
 - `author` and `packaging`: who made the mod (`unknown` when nobody is
   known, with an optional e-mail address), and who packaged it, on which
   day and in which revision; both are required;
@@ -81,7 +172,10 @@ Its blocks are:
 - `layout`: the archives the engine mounts, and the directories and file
   names it reads;
 - `limits`: engine limits such as the number of units per player;
-- `script-extensions`: extra values the mod's unit scripts read and set;
+- `script-extensions`: extra values the mod's unit scripts read and set,
+  each described on its own page under
+  [script-extensions/](script-extensions/) (see
+  [every script extension](#every-script-extension));
 - `data-keys`: extra keys in the mod's unit and weapon files;
 - `hacks`: the standard hacks, each with its parameters;
 - `settings`: the parameters a player adjusts through the mod's INI file
@@ -175,10 +269,13 @@ covers network compatibility.
 ## Saves and settings
 
 Game folders are never written to. With a profile, saved games go to
-`mods/<id>` in the player's own data folder, so each mod keeps its own list
-of saved games. A save made under a profile records the profile's id,
-version and hashes, and loads only under a profile with the same sim hash.
-A save without a profile record loads under any profile.
+`Saves/<id>` in the player's own Open Annihilation folder, so each mod keeps
+its own list of saved games. Versions before 0.7 kept them in
+`mods/<id>/SAVEGAME` beside the preferences file; the first start of a
+later version moves them there once, with the saved games of 3.1c. A save
+made under a profile records the profile's id, version and hashes, and
+loads only under a profile with the same sim hash. A save without a profile
+record loads under any profile.
 
 A mod's INI file is read, never written. Settings the mod keeps in the
 registry are kept in the engine's own preferences, under the profile's
@@ -186,12 +283,12 @@ registry root, and a mod's first run fills in the values its profile seeds.
 
 ## Developer Mode
 
-Developer Mode, in the **Developer** section of Open Annihilation's
-settings (the **OA** button), changes the standard hacks of the profile the
-game plays without editing its `oamod.yaml`, which is never written. It is
-for trying a hack, or a hack's values, before writing them into a profile.
-With no mod it changes the plain 3.1c baseline, so it can turn hacks on
-over 3.1c itself.
+Developer Mode, in the **Developer** section at the foot of Open
+Annihilation's settings (the **OA** button), changes the standard hacks of
+the profile the game plays without editing its `oamod.yaml`, which is never
+written. It is for trying a hack, or a hack's values, before writing them
+into a profile. With no mod it changes the plain 3.1c baseline, so it can
+turn hacks on over 3.1c itself.
 
 **Enable Developer Mode** heads the Developer section, Off by default, over
 the section's **Show performance statistics**, which Developer Mode leaves
@@ -218,7 +315,8 @@ values** clears every change.
 
 The changes are kept with the other Open Annihilation settings, in the
 player's preferences, under the id of the profile the game plays (with no
-mod, under `ta-3.1c`), so each mod keeps its own. Each is checked as the
+mod, under `ta-3.1c`; for a mod folder without a profile, under `folder:`
+and the folder's path), so each mod keeps its own. Each is checked as the
 same value written in a profile would be; one that no longer fits, such as
 one kept from an earlier version, is left out with a warning on standard
 error. They become part of the effective profile, so a sim hack changed
@@ -251,19 +349,29 @@ registry and the resolver.
   registry and writes the tables and rule records the engine compiles from
   it. The `mod-registry-sync` test fails while a generated file differs
   from what the registry gives.
-- [tools/gen_mod_docs.py](../../tools/gen_mod_docs.py) writes the table
-  below, and the heading (the hack's title) and the facts and schema
-  blocks of every hack page, and creates a skeleton page for a new hack.
-  Besides the heading, it writes only between a block's `BEGIN GENERATED`
-  and `END GENERATED` comment lines; the prose outside them is kept. The
+- [tools/gen_mod_docs.py](../../tools/gen_mod_docs.py) writes the tables
+  below and the standard's table of script extensions, the heading (the
+  hack's title) and the facts and schema blocks of every hack page, and the
+  heading and the facts and related blocks of every script extension page.
+  It creates a skeleton page for a new hack or extension. Besides the
+  heading, it writes only between a block's `BEGIN GENERATED` and
+  `END GENERATED` comment lines; the prose outside them is kept. The
   `mod-docs-sync` test fails while a heading or a block differs from what
-  the registry gives, or while a page names no hack.
+  the registry gives, or while a page names no hack or extension.
 
 To add or change a hack, change the registry, run both tools, then write or
 update the page's Description, Configuration example and Details.
 A screenshot goes in `standard-hacks/images/`, named after the hack, as a
 small PNG cropped to the feature, with alt text and a one-line caption on
 the page.
+
+To add or change a script extension, change the registry and the
+extension's entry in the tool's `SCRIPT_EXTENSIONS` (its title, whether it
+takes a unit id, what it returns, how fidelity changes it and whether every
+machine reads the same answer), run both tools, then write or update the
+page's Description, Syntax, Usage, Configuration example and Details.
+Every BOS example on a page must do what its page says, and warn where a
+use would break network play.
 
 ## Every standard hack
 
@@ -294,6 +402,7 @@ and the hacks within each follow their titles alphabetically. Scope is
 | Hack | Id | What it does | Scope | Status |
 | --- | --- | --- | --- | --- |
 | [Guard Respects Hold Position](standard-hacks/air.guard-respects-hold-position.md) | `air.guard-respects-hold-position` | Guarding aircraft engage an attacker only when their move order is not Hold Position. | sim | implemented |
+| [Gunships Hover to Strafe](standard-hacks/air.gunships-hover-to-strafe.md) | `air.gunships-hover-to-strafe` | Gunships hover in range and strafe a point on the ground, and guarding gunships attack enemies in reach. | sim | implemented |
 | [No Repair Retreat](standard-hacks/air.no-repair-retreat-flag.md) | `air.no-repair-retreat-flag` | Aircraft with a chosen unit flag never break off to find a repair pad when damaged. | sim | implemented |
 
 ### Console
@@ -442,3 +551,25 @@ and the hacks within each follow their titles alphabetically. Scope is
 | [Timed Shell Detonation](standard-hacks/weapons.timed-shell-detonation.md) | `weapons.timed-shell-detonation` | A ballistic shell whose timer runs out explodes, unless its weapon opts out, instead of fizzling. | sim | implemented |
 | [Vertical Launch Before Turret](standard-hacks/weapons.vlaunch-before-turret.md) | `weapons.vlaunch-before-turret` | A weapon that is both vertical-launch and turreted fires as a vertical-launch weapon. | sim | implemented |
 <!-- END GENERATED: hacks table -->
+
+## Every script extension
+
+The table is generated from the registry, in the order of the extensions'
+usual indices. Each page shows the `#define` and `get` a BOS script writes,
+short examples, the `oamod.yaml` lines that mount it, and how `exact` and
+`safe` fidelity answer for empty slots and unusual ids.
+[Section 7](oamod-standard.md#7-script-extensions) of the standard covers
+mounting and fidelity.
+
+<!-- BEGIN GENERATED: script extensions table -->
+| Extension | Id | Usual index | Argument | Returns |
+| --- | --- | --- | --- | --- |
+| [Kill Count Times 100](script-extensions/unit.kills-x100.md) | `unit.kills-x100` | 32 | — | The calling unit's kill count times 100 (a count, not a veterancy level). |
+| [Lowest Unit Id](script-extensions/unit.min-id.md) | `unit.min-id` | 69 | — | 1, the lowest id a unit can have. |
+| [Highest Unit Id](script-extensions/unit.max-id.md) | `unit.max-id` | 70 | — | The unit limit the game recorded, times 10. A skirmish or multiplayer game records its own limit, so this is the last id of the unit table; a campaign mission records the player's Unit limit setting. |
+| [Own Unit Id](script-extensions/unit.my-id.md) | `unit.my-id` | 71 | — | The calling unit's own id. |
+| [Owner of a Unit](script-extensions/unit.owner-of.md) | `unit.owner-of` | 72 | unit id | The number of the player that owns that unit's slot, 0 for the first player to 9 for the tenth. Under `exact`, id 0 answers 255, and in a multiplayer game an id in the range of a player place nobody took answers 10. |
+| [Build Percent Left of a Unit](script-extensions/unit.build-percent-left-of.md) | `unit.build-percent-left-of` | 73 | unit id | That unit's `BUILD_PERCENT_LEFT`: 0 when it is finished, else 1 to 100. |
+| [Allied With a Unit's Owner](script-extensions/unit.allied-with.md) | `unit.allied-with` | 74 | unit id | 1 when the calling unit's owner has allied the owner of that unit's slot, else 0. Alliance is one-way: the target's owner need not have allied back. |
+| [Unit Played on This Machine](script-extensions/unit.is-local.md) | `unit.is-local` | 75 | unit id | 1 when the owner of that unit's slot is a human or computer player on this machine, else 0. |
+<!-- END GENERATED: script extensions table -->

@@ -224,7 +224,7 @@ int Runtime::EngineSettingsMenuHost::dialog_event(ScreenContext* context, void*)
 void Runtime::EngineSettingsMenuHost::take_action(
     Runtime& runtime, settings::DialogAction action, uint32_t key_down
 ) {
-    if (action == settings::DialogAction::accepted)
+    if (action == settings::DialogAction::accepted || action == settings::DialogAction::switch_mod)
         runtime.play_ui_sound(kOpenSound, 0);
     else if (action == settings::DialogAction::cancelled)
         runtime.play_ui_sound(kCancelSound, 0);
@@ -306,7 +306,7 @@ void Runtime::open_engine_settings_from_menu() {
     // second time.
     if (screen_ != Screen::main_menu || frame_owned_by_package() ||
         oa::ui::frontend_dialogs::dialog_count() != 0 || engine_settings_dialog() != nullptr ||
-        engine_settings_fonts() == nullptr)
+        saves_notice_shown() || engine_settings_fonts() == nullptr)
         return;
     // The dialog is drawn and fed from engine_settings_dialog().
     open_engine_settings_dialog();

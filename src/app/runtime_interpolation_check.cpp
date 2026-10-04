@@ -222,8 +222,7 @@ void Runtime::check_interpolation() {
     // The headless skirmish with the fight --combat sets up.
     const auto start_fight = [this] {
         start_benchmark_skirmish();
-        match_layout_ =
-            oa::ui::display_layout::make_match_layout(options_.match_width, options_.match_height);
+        match_layout_ = lay_out_match(options_.match_width, options_.match_height);
         match_zoom_ = std::clamp(options_.match_zoom, kMinBattlefieldZoom, kMaxBattlefieldZoom);
         match_zoom_target_ = match_zoom_;
         spawn_combat_armies(kCheckArmy);

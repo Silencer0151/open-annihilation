@@ -9,17 +9,19 @@
 // game's view inside a portrait screen), and installs the platform's hooks
 // (oa/app/platform_hooks.hpp): the touch controls' haptics, the game folder in the app's
 // Documents folder (or the copy built into the bundle), the advice shown without one and the
-// label of the button that looks again, and, once the window is open, the end of the system's
-// three-finger editing gestures, which would otherwise take the fingers of a three-finger
-// touch on the battlefield, and the window handed to the Game files screen's picker. It also
-// installs the Game files screen's hooks (ios_game_files.mm). Nothing here may throw into the
-// game.
+// label of the button that looks again, the player's folders shown in the Files app, and, once
+// the window is open, the end of the system's three-finger editing gestures, which would
+// otherwise take the fingers of a three-finger touch on the battlefield, and the window handed
+// to the Game files screen's picker. It also installs the Game files screen's hooks
+// (ios_game_files.mm). Nothing here may throw into the game.
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
 #include <SDL3/SDL.h>
 
+#include <cstring>
+#include <iostream>
 #include <string>
 
 #include "ios_game_files.hpp"
@@ -172,6 +174,76 @@ const char* missing_game_folder_advice(void*) noexcept {
 /// @return the label, in static storage
 const char* game_folder_check_again(void*) noexcept {
     return kCheckAgain;
+}
+
+/// The scheme under which the Files app opens a folder of an app's shared Documents folder: the
+/// folder's file URL with this scheme in place of "file".
+NSString* const kFilesAppScheme = @"shareddocuments";
+
+/// Asks the Files app to open a folder; runs on the main thread. A refusal, which the system
+/// reports after the hook has returned, goes to the log.
+///
+/// @param url the folder's shareddocuments URL
+void open_in_files_app(NSURL* url) {
+    [UIApplication.sharedApplication openURL:url
+        options:@{}
+        completionHandler:^(BOOL opened) {
+            if (!opened)
+                std::cerr << "open-annihilation: the Files app did not open "
+                          << (url.absoluteString.UTF8String != nullptr
+                                  ? url.absoluteString.UTF8String
+                                  : "a folder")
+                          << '\n';
+        }];
+}
+
+/// The show-folder hook: opens the Files app at a folder of the app's Documents folder, which
+/// the Files app shows as On My iPhone or On My iPad › Open Annihilation (Info.plist's
+/// UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace), through its shareddocuments
+/// URL. The game leaves the screen for the Files app, whose status bar offers the way back to
+/// the game.
+///
+/// @param folder the folder, absolute, UTF-8
+/// @param why receives why the folder cannot be shown
+/// @return true once the Files app was asked to open it
+bool show_folder(void*, const char* folder, std::string* why) noexcept {
+    @try {
+        @autoreleasepool {
+            NSString* path = folder != nullptr
+                                 ? [NSFileManager.defaultManager
+                                       stringWithFileSystemRepresentation:folder
+                                                                   length:std::strlen(folder)]
+                                 : nil;
+            NSURLComponents* components =
+                path != nil ? [NSURLComponents componentsWithURL:[NSURL fileURLWithPath:path
+                                                                            isDirectory:YES]
+                                         resolvingAgainstBaseURL:NO]
+                            : nil;
+            components.scheme = kFilesAppScheme;
+            NSURL* url = components.URL;
+            if (url == nil) {
+                if (why != nullptr)
+                    *why = std::string("no Files app link can be made for ") +
+                           (folder != nullptr ? folder : "the folder");
+                return false;
+            }
+            if ([NSThread isMainThread]) {
+                open_in_files_app(url);
+            } else {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    @try {
+                        open_in_files_app(url);
+                    } @catch (...) {
+                    }
+                });
+            }
+            return true;
+        }
+    } @catch (...) {
+        if (why != nullptr)
+            *why = "the Files app could not be asked to open the folder";
+    }
+    return false;
 }
 
 /// Makes every object of responder's class answer UIEditingInteractionConfigurationNone when
@@ -441,6 +513,7 @@ void oa_extension_init_ios_platform(oa::app::Extension* table) {
     hooks.missing_game_folder_advice = missing_game_folder_advice;
     hooks.window_ready = window_ready;
     hooks.game_folder_check_again = game_folder_check_again;
+    hooks.show_folder = show_folder;
     oa::app::set_platform_hooks(hooks);
     install_ios_game_files_hooks();
 }

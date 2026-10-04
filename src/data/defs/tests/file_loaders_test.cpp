@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <span>
 #include <string>
 
 namespace {
@@ -216,6 +217,84 @@ void test_load_side_data() {
     CHECK(table.count == 0 && table.error[0] == '\0');
 }
 
+/// Checks each side's intgaf and font names, their paths and the files missing from the game data.
+void test_side_files() {
+    // SIDE0 and SIDE1 name their panels and font, SIDE2 neither, SIDE3 an
+    // empty font.
+    const auto with_keys = [](std::string section, const std::string& keys) {
+        section.insert(section.find('{') + 1, keys);
+        return section;
+    };
+    const auto without_font = [](std::string section) {
+        const auto at = section.find("font=");
+        section.erase(at, section.find(';', at) + 2 - at);
+        return section;
+    };
+    const std::string sidedata =
+        with_keys(side_section(0, "ARM", nullptr), "intgaf=ARMPANEL; ") +
+        with_keys(side_section(1, "CORE", nullptr), "intgaf=COREPANEL; ") +
+        without_font(side_section(2, "THIRD", nullptr)) +
+        with_keys(without_font(side_section(3, "FOURTH", nullptr)), "font=; ");
+    MemoryFiles files;
+    files.files.push_back({"gamedata/sidedata.tdf", sidedata});
+    files.files.push_back({"anims/ARMPANEL.GAF", "GAF"});
+    files.files.push_back({"anims/COREPANEL.GAF", "GAF"});
+    files.files.push_back({"fonts/ARMFONT.FNT", "FNT"});
+    files.files.push_back({"fonts/COREFONT.FNT", "FNT"});
+    const Files view = files.view();
+    SideTable table{};
+
+    CHECK(load_side_data(&view, &table, nullptr, nullptr));
+    CHECK(table.count == 4);
+    CHECK(table.has_panel_gaf[0] && table.has_panel_gaf[1] && !table.has_panel_gaf[2]);
+    CHECK(table.has_font[0] && table.has_font[1] && !table.has_font[2] && table.has_font[3]);
+    CHECK(std::strcmp(table.panel_gaf[1], "COREPANEL") == 0);
+    CHECK(std::strcmp(table.font_name[1], "COREFONT") == 0 && table.font_name[3][0] == '\0');
+    char path[path_capacity];
+    CHECK(side_file_path(&view, table, 0, SideFile::panels, variant, path, sizeof path));
+    CHECK(std::strcmp(path, "anims\\ARMPANEL.GAF") == 0);
+    CHECK(side_file_path(&view, table, 1, SideFile::font, nullptr, path, sizeof path));
+    CHECK(std::strcmp(path, "fonts\\COREFONT.FNT") == 0);
+    // A side that names no file has no path; past the last side, neither.
+    CHECK(!side_file_path(&view, table, 2, SideFile::font, nullptr, path, sizeof path));
+    CHECK(path[0] == '\0');
+    CHECK(!side_file_path(&view, table, 4, SideFile::panels, nullptr, path, sizeof path));
+    // An empty font name is named, but no file there can be.
+    SideMissingFile missing[side_missing_file_capacity];
+    CHECK(side_missing_files(&view, table, nullptr, missing) == 1);
+    CHECK(missing[0].side == 3 && missing[0].file == SideFile::font);
+    CHECK(std::strcmp(missing[0].path, "fonts/.FNT") == 0);
+
+    // The variant directory comes first; a file only it holds is not missing
+    // while the variant is played.
+    files.files.erase(files.files.begin() + 1);
+    files.files.push_back({"anims-v1/ARMPANEL.GAF", "GAF"});
+    CHECK(side_file_path(&view, table, 0, SideFile::panels, variant, path, sizeof path));
+    CHECK(std::strcmp(path, "anims-v1\\ARMPANEL.GAF") == 0);
+    CHECK(side_missing_files(&view, table, variant, missing) == 1);
+    // Every side's intgaf comes before any side's font: SIDE1's panels, then
+    // SIDE0's font, then SIDE3's.
+    files.files.erase(files.files.begin() + 2); // fonts/ARMFONT.FNT
+    files.files.erase(files.files.begin() + 1); // anims/COREPANEL.GAF
+    CHECK(side_missing_files(&view, table, variant, missing) == 3);
+    CHECK(missing[0].side == 1 && missing[0].file == SideFile::panels);
+    CHECK(std::strcmp(missing[0].path, "anims/COREPANEL.GAF") == 0);
+    CHECK(missing[1].side == 0 && missing[1].file == SideFile::font);
+    CHECK(std::strcmp(missing[1].path, "fonts/ARMFONT.FNT") == 0);
+    CHECK(missing[2].side == 3 && missing[2].file == SideFile::font);
+    // Without the variant, the plain file is missing too and listed by its
+    // plain path, with the other panels.
+    CHECK(side_missing_files(&view, table, nullptr, missing) == 4);
+    CHECK(missing[0].side == 0 && missing[0].file == SideFile::panels);
+    CHECK(std::strcmp(missing[0].path, "anims/ARMPANEL.GAF") == 0);
+    CHECK(missing[1].side == 1 && missing[1].file == SideFile::panels);
+    CHECK(missing[2].side == 0 && missing[2].file == SideFile::font);
+    CHECK(missing[3].side == 3);
+    // A list too short for them all still counts them.
+    CHECK(side_missing_files(&view, table, nullptr, std::span(missing, 1)) == 4);
+    CHECK(std::strcmp(missing[0].path, "anims/ARMPANEL.GAF") == 0);
+}
+
 /// Checks translation loading and its language switch.
 void test_load_locale_table() {
     MemoryFiles files;
@@ -350,6 +429,7 @@ int main() {
     test_load_move_classes();
     test_load_sound_categories();
     test_load_side_data();
+    test_side_files();
     test_load_locale_table();
     test_category_registry_mask();
     test_category_mask_width();

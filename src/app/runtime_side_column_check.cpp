@@ -116,14 +116,23 @@ void Runtime::check_side_column() {
         show_match_build_page(1);
         render_match_surface();
 
-        // The side column shows source rows [0, drawn_rows) of the HUD.
+        // The side column shows source rows [0, drawn_rows) of the HUD, or
+        // the rows above a page taller than it and the page scaled under them.
         const auto strips = match_hud_strips();
-        const int drawn_rows = strips[0].source_h;
-        const int drawn_height = strips[0].h;
+        const int drawn_height = strips[3].h > 0 ? strips[3].y + strips[3].h : strips[0].h;
         std::set<std::string> reachable;
         std::vector<std::string> first_page;
         for (int step = 0; step < kMaxPageSteps; ++step) {
             const auto& gadgets = match_hud_->layout.gadgets;
+            const auto scale = match_side_page_scale();
+            const int drawn_rows =
+                scale.scaled() ? scale.top + scale.shown_rows : match_hud_strips()[0].source_h;
+            // The row of the column a page's row is drawn on.
+            const auto column_row = [&](int row) {
+                return scale.scaled() && row > scale.top
+                           ? scale.top + scale.to_column(row - scale.top)
+                           : row;
+            };
             std::vector<std::string> shown;
             for (std::size_t index = 1; index < gadgets.size(); ++index) {
                 const auto& common = gadgets[index].common;
@@ -131,7 +140,7 @@ void Runtime::check_side_column() {
                     continue;
                 if ((static_cast<uint8_t>(common.common_attributes) & hud::kCommonUnitButton) != 0)
                     on_pages.insert(common.name);
-                if (common.y + common.height > drawn_rows)
+                if (column_row(common.y + common.height) > drawn_rows)
                     failures.push_back(
                         size + " page " + std::to_string(step) + ": " + common.name +
                         " ends at row " + std::to_string(common.y + common.height) +

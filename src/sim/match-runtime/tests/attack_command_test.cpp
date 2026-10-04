@@ -7,10 +7,14 @@
 // commanded on the move brake where the command finds them and fire from
 // there, and commanded from rest at a unit out of reach close until it is in
 // range; gunships hover facing their target and, once it is destroyed, stay
-// in the air circling the command's point until they find the next unit.
+// in the air circling the command's point until they find the next unit. A
+// guarding gunship goes after the enemy that hits the unit it guards, and
+// under air.gunships-hover-to-strafe it hovers over a point on the ground and
+// goes after enemies within its reach while it guards.
 #include "combat_fixture.hpp"
 #include "installed_units.hpp"
 #include "oa/base/game_math.hpp"
+#include "oa/data/mission_types.hpp"
 #include "oa/sim/ai.hpp"
 
 #include <algorithm>
@@ -26,6 +30,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 #include "oa/test/match_services.hpp"
 
 using namespace combat_fixture;
@@ -240,12 +245,14 @@ struct Land {
 
     // Land of `columns` by `rows` 16-unit cells, with open sea, its floor at
     // height 0, west of column `shore`, and the map's gravity; 0 sets none.
+    // `rules` are the match's rules; the defaults are 3.1c's.
     explicit Land(
         test::InstalledUnits& loaded,
         int32_t columns = land_columns,
         int32_t rows = land_rows,
         int32_t shore = 0,
-        int32_t gravity = 0
+        int32_t gravity = 0,
+        const data::match_rules::MatchRules& rules = {}
     )
         : units(loaded), ground(columns, rows, land_sea_level, shore, shore, 0, 0, land_height) {
         scenario.gravity = gravity;
@@ -273,6 +280,7 @@ struct Land {
             0.0F,
             units.features.defs
         };
+        input.rules = rules;
         match = std::make_unique<sim::match_runtime::Match>(input, services);
         match->configure_strategic_environment({0, 0.5F, 0});
         for (uint8_t player = 0; player < 2; ++player) {
@@ -674,8 +682,12 @@ constexpr int32_t ground_run_pulled_out_ranges = 2;
 // gunship takes AirToGround at the point: it flies at the point with its
 // first weapon aimed there and fires within range of it, pulls out past it
 // and fires again on its next run, in the air throughout.
-void installed_gunship_attacks_the_ground(test::InstalledUnits& units, std::string_view name) {
-    Land land(units, coast_cells, coast_cells);
+void installed_gunship_attacks_the_ground(
+    test::InstalledUnits& units,
+    std::string_view name,
+    const data::match_rules::MatchRules& rules = {}
+) {
+    Land land(units, coast_cells, coast_cells, 0, 0, rules);
     const sim::ground_orders::Point at{
         coast_target_x * fixed_one, land_height * fixed_one, coast_target_z * fixed_one
     };
@@ -811,8 +823,12 @@ void installed_bomber_destroys_a_ground_unit(test::InstalledUnits& units, std::s
 // Commanded at a point on the ground, an installed bomber takes AirStrike at
 // the point, aims its bombs there and they come down on it: a unit standing
 // on the point is damaged though the command named no unit.
-void installed_bomber_bombs_a_ground_point(test::InstalledUnits& units, std::string_view name) {
-    Land land(units, coast_cells, coast_cells, 0, bomber_gravity);
+void installed_bomber_bombs_a_ground_point(
+    test::InstalledUnits& units,
+    std::string_view name,
+    const data::match_rules::MatchRules& rules = {}
+) {
+    Land land(units, coast_cells, coast_cells, 0, bomber_gravity, rules);
     auto& standing = land.target(coast_target_x, coast_target_z);
     const auto full = standing.record.health;
     const sim::ground_orders::Point at{
@@ -912,6 +928,277 @@ void installed_fighter_destroys_an_aircraft(
         );
 }
 
+// ---------------------------------------------------------------------------
+// Gunships guarding a unit, and air.gunships-hover-to-strafe.
+
+// The mission of an aircraft guarding a unit.
+const uint8_t follow_order = data::mission_types::index_for_name("VTOL_Follow");
+constexpr uint8_t hover_attack_order = sim::match_runtime::air_to_ground_hover_kind;
+// Where the guarded unit stands, and where its guard starts: west of it.
+constexpr int32_t guarded_x = coast_target_x;
+constexpr int32_t guarded_z = coast_target_z;
+constexpr int32_t guard_start = 200;
+// Ticks the guard has to take up its circle around the guarded unit.
+constexpr uint32_t guard_settle_ticks = 300;
+// Where an enemy starts, east of the guarded unit beyond the guard's circle,
+// and where it walks past to, west and a little south of it.
+constexpr int32_t enemy_start = 700;
+constexpr int32_t enemy_walk_to = -700;
+constexpr int32_t enemy_walk_aside = 100;
+// Ticks an enemy that ignores the guarded unit is watched walking past it.
+constexpr uint32_t walk_past_ticks = 900;
+// Ticks a guard has to destroy an enemy once it has taken the attack, and
+// to take up guarding again once the enemy is destroyed.
+constexpr uint32_t guard_attack_ticks = 1500;
+constexpr uint32_t guard_return_ticks = 600;
+// Shots a gunship fires at the least while it destroys an enemy: the
+// heaviest gun here destroys one in two.
+constexpr int32_t gunship_least_shots = 2;
+
+data::match_rules::MatchRules hover_to_strafe(bool attack_ground, bool guard_engagements) {
+    data::match_rules::MatchRules rules;
+    auto& rule = rules.air.gunships_hover_to_strafe;
+    rule.enabled = true;
+    rule.attack_ground = attack_ground;
+    rule.guard_engagements = guard_engagements;
+    return rules;
+}
+
+// The unit a unit's head order aims at, 0 for none.
+uint16_t head_target(Land& land, const sim::unit_spawn::Slot& slot) {
+    sim::match_runtime::Match::OrderRecordView record;
+    if (land.match->queue_records(slot.unit_index, false, &record, 1) != 1)
+        return 0;
+    return record.target;
+}
+
+// A guarded unit that neither moves nor fires, an installed gunship guarding
+// it in its circle, and an enemy east of it that holds its fire and walks
+// past the guarded unit.
+struct GuardScene {
+    Land land;
+    sim::unit_spawn::Slot* guarded{};
+    sim::unit_spawn::Slot* gunship{};
+    sim::unit_spawn::Slot* enemy{};
+
+    GuardScene(
+        test::InstalledUnits& units,
+        std::string_view name,
+        const data::match_rules::MatchRules& rules = {}
+    )
+        : land(units, coast_cells, coast_cells, 0, 0, rules) {
+        guarded = &land.spawn(0, "ARMSTUMP", guarded_x, guarded_z);
+        land.run(2);
+        guarded->record.flags &= ~(OA_UNIT_FLAG_MOVE_ORDER_MASK | OA_UNIT_FLAG_FIRE_ORDER_MASK);
+        gunship = &land.spawn(0, name, guarded_x - guard_start, guarded_z);
+        land.run(2);
+        (void)land.match->issue_guard(gunship->unit_index, guarded->unit_index, false);
+        land.run(guard_settle_ticks);
+        enemy = &land.spawn(1, "CORAK", guarded_x + enemy_start, guarded_z);
+        land.run(2);
+        enemy->record.flags &= ~OA_UNIT_FLAG_FIRE_ORDER_MASK;
+        (void)land.match->issue_ground_move(
+            enemy->unit_index, point(guarded_x + enemy_walk_to, guarded_z + enemy_walk_aside), false
+        );
+    }
+};
+
+// Runs until the gunship has destroyed the enemy, and fails unless it fired
+// at least gunship_least_shots shots, each from within its weapon's range of
+// the enemy, while its head order was AirToGroundHover on it.
+void gunship_destroys_in_range(GuardScene& scene, std::string_view name, std::string_view what) {
+    auto& land = scene.land;
+    auto& gunship = *scene.gunship;
+    auto& enemy = *scene.enemy;
+    const auto range = weapon_range(land, gunship);
+    ShotWatch shots{gunship, gunship.record.weapons[0].reload};
+    int32_t fired = 0;
+    double farthest_shot = 0.0;
+    bool kept_order = true;
+    land.run(guard_attack_ticks, [&] {
+        if (enemy.record.health == 0)
+            return true;
+        kept_order = kept_order && head_is(gunship, hover_attack_order);
+        if (shots.fired()) {
+            ++fired;
+            farthest_shot = std::max(farthest_shot, distance(gunship, enemy));
+        }
+        return false;
+    });
+    if (enemy.record.health != 0 || !kept_order || fired < gunship_least_shots ||
+        farthest_shot > range)
+        throw std::runtime_error(
+            std::string(name) + " " + std::string(what) + " fired " + std::to_string(fired) +
+            " shots, the farthest from " + std::to_string(farthest_shot) + " at range " +
+            std::to_string(range) + (kept_order ? "" : ", leaving its attack,") +
+            " and left the enemy with " + std::to_string(enemy.record.health) + " health"
+        );
+}
+
+// Runs until the gunship guards again, and fails unless it does.
+void gunship_guards_again(GuardScene& scene, std::string_view name) {
+    auto& gunship = *scene.gunship;
+    scene.land.run(guard_return_ticks, [&] { return head_is(gunship, follow_order); });
+    if (!head_is(gunship, follow_order) || scene.guarded->record.health == 0)
+        throw std::runtime_error(std::string(name) + " did not go back to guarding");
+}
+
+// An installed gunship guarding a unit circles it and starts no attack of
+// its own on an enemy walking past, as in 3.1c: its fixed gun fires only when
+// its heading brings the enemy into its arc. Once the enemy hits the guarded
+// unit, the gunship takes AirToGroundHover on it, hovers within its weapon's
+// range firing until the enemy is destroyed, and then guards again.
+void installed_gunship_guards_as_the_game_does(test::InstalledUnits& units, std::string_view name) {
+    GuardScene scene(units, name);
+    auto& land = scene.land;
+    auto& gunship = *scene.gunship;
+    auto& enemy = *scene.enemy;
+    bool guarded_throughout = true;
+    land.run(walk_past_ticks, [&] {
+        guarded_throughout = guarded_throughout && head_is(gunship, follow_order);
+        return false;
+    });
+    if (!guarded_throughout)
+        throw std::runtime_error(std::string(name) + " left its guard for an enemy walking past");
+    enemy.record.flags |= OA_UNIT_FLAG_FIRE_ORDER_MASK;
+    CHECK(land.match->issue_attack_command(
+        enemy.unit_index, scene.guarded->unit_index, false, nullptr
+    ));
+    land.run(walk_past_ticks, [&] { return head_is(gunship, hover_attack_order); });
+    if (!head_is(gunship, hover_attack_order) || head_target(land, gunship) != enemy.unit_index)
+        throw std::runtime_error(
+            std::string(name) + " did not hover to attack the enemy that hit the guarded unit"
+        );
+    gunship_destroys_in_range(scene, name, "defending");
+    gunship_guards_again(scene, name);
+}
+
+// Under air.gunships-hover-to-strafe with its guard engagements, an installed
+// gunship guarding a unit goes after an enemy walking past within its reach,
+// though the enemy never hits the guarded unit: it hovers within its weapon's
+// range firing until the enemy is destroyed, and then guards again.
+void installed_gunship_guard_engages_in_reach(test::InstalledUnits& units, std::string_view name) {
+    GuardScene scene(units, name, hover_to_strafe(false, true));
+    auto& land = scene.land;
+    auto& gunship = *scene.gunship;
+    land.run(walk_past_ticks, [&] { return head_is(gunship, hover_attack_order); });
+    if (!head_is(gunship, hover_attack_order) ||
+        head_target(land, gunship) != scene.enemy->unit_index)
+        throw std::runtime_error(std::string(name) + " let an enemy within its reach walk past");
+    gunship_destroys_in_range(scene, name, "guarding");
+    gunship_guards_again(scene, name);
+}
+
+// Ticks a gunship hovering over a point on the ground is watched.
+constexpr uint32_t ground_hover_watch_ticks = 900;
+// Share of the shots its reload allows that a gunship hovering over a point
+// fires at the least while watched.
+constexpr double ground_hover_least_share = 0.5;
+
+// Ticks the first weapon of a unit takes to reload.
+int32_t reload_ticks(Land& land, const sim::unit_spawn::Slot& slot) {
+    const auto* weapon = oa::world_weapon_def(&land.match->state(), slot.record.weapons[0].def);
+    CHECK(weapon != nullptr && weapon->reload_time > 0);
+    return weapon->reload_time;
+}
+
+// Under air.gunships-hover-to-strafe with its attack on the ground, an
+// installed gunship commanded at a point on open ground keeps AirToGround
+// but, once it is within its weapon's range of the point, stays there
+// strafing from side to side facing the point, firing at it throughout, in
+// the air, rather than pulling out and making runs.
+void installed_gunship_hovers_over_the_ground(test::InstalledUnits& units, std::string_view name) {
+    Land land(units, coast_cells, coast_cells, 0, 0, hover_to_strafe(true, false));
+    const sim::ground_orders::Point at{
+        coast_target_x * fixed_one, land_height * fixed_one, coast_target_z * fixed_one
+    };
+    auto& gunship = land.spawn(0, name, coast_target_x, coast_target_z - distant_start);
+    land.run(2);
+    const auto range = weapon_range(land, gunship);
+    (void)land.match->issue_attack_ground(gunship.unit_index, at, false);
+    if (!head_is(gunship, air_to_ground_order))
+        throw std::runtime_error(std::string(name) + " did not take the attack on the ground");
+    land.run(approach_ticks, [&] { return distance_to(gunship, at) <= range; });
+    CHECK(distance_to(gunship, at) <= range);
+    ShotWatch shots{gunship, gunship.record.weapons[0].reload};
+    const auto cruise = land.units.definitions[gunship.record.type_index].cruise_altitude;
+    int32_t lowest = cruise;
+    double farthest = 0.0;
+    int32_t fired = 0;
+    bool aimed = true;
+    bool kept_order = true;
+    land.run(ground_hover_watch_ticks, [&] {
+        farthest = std::max(farthest, distance_to(gunship, at));
+        lowest = std::min(lowest, height_above_surface(land, gunship));
+        const auto& aim = gunship.record.weapons[0];
+        aimed = aimed && aim.target_a == coast_target_x && aim.target_b == coast_target_z;
+        kept_order = kept_order && head_is(gunship, air_to_ground_order);
+        if (shots.fired())
+            ++fired;
+        return false;
+    });
+    const auto least = static_cast<int32_t>(
+        ground_hover_least_share * ground_hover_watch_ticks / reload_ticks(land, gunship)
+    );
+    if (farthest > range || fired < least || lowest < cruise / 2 || !aimed || !kept_order)
+        throw std::runtime_error(
+            std::string(name) + " hovering over the point strayed " + std::to_string(farthest) +
+            " from it at range " + std::to_string(range) + ", fired " + std::to_string(fired) +
+            " shots, came down to " + std::to_string(lowest) + " above the land" +
+            (aimed ? "" : ", aimed elsewhere") + (kept_order ? "" : ", left its attack")
+        );
+}
+
+// One gunship commanded at a point on the ground and another guarding a unit
+// while an enemy walks past: every watched unit's position, health, reload
+// and head order on every tick.
+std::vector<int64_t> gunship_scene_record(
+    test::InstalledUnits& units, std::string_view name, const data::match_rules::MatchRules& rules
+) {
+    GuardScene scene(units, name, rules);
+    auto& land = scene.land;
+    auto& raider = land.spawn(0, name, guarded_x - enemy_start, guarded_z - distant_start);
+    land.run(2);
+    (void)land.match->issue_attack_ground(
+        raider.unit_index, point(guarded_x - enemy_start, guarded_z), false
+    );
+    std::vector<int64_t> record;
+    const std::array<const sim::unit_spawn::Slot*, 4> watched{
+        scene.guarded, scene.gunship, scene.enemy, &raider
+    };
+    land.run(walk_past_ticks + guard_attack_ticks, [&] {
+        for (const auto* slot : watched) {
+            record.push_back(slot->record.position.x);
+            record.push_back(slot->record.position.y);
+            record.push_back(slot->record.position.z);
+            record.push_back(slot->record.health);
+            record.push_back(slot->record.weapons[0].reload);
+            record.push_back(slot->unit->primary ? slot->unit->primary->kind : 0);
+        }
+        return false;
+    });
+    return record;
+}
+
+// air.gunships-hover-to-strafe off, or on with neither of its parameters,
+// plays a match exactly as 3.1c does; on, it plays differently.
+void installed_gunships_unchanged_without_the_rule(
+    test::InstalledUnits& units, std::string_view name
+) {
+    const auto baseline = gunship_scene_record(units, name, {});
+    auto off = hover_to_strafe(true, true);
+    off.air.gunships_hover_to_strafe.enabled = false;
+    if (gunship_scene_record(units, name, off) != baseline ||
+        gunship_scene_record(units, name, hover_to_strafe(false, false)) != baseline)
+        throw std::runtime_error(
+            std::string(name) + " played differently with air.gunships-hover-to-strafe off"
+        );
+    if (gunship_scene_record(units, name, hover_to_strafe(true, true)) == baseline)
+        throw std::runtime_error(
+            std::string(name) + " played the same with air.gunships-hover-to-strafe on"
+        );
+}
+
 void installed_attack_commands(const AssetStore& store) {
     test::InstalledUnits units(store, {"CORAK",    "ARMPW",    "ARMZEUS",  "CORPYRO",  "ARMHAM",
                                        "CORTHUD",  "ARMROCK",  "CORSTORM", "ARMFLASH", "CORGATOR",
@@ -951,6 +1238,18 @@ void installed_attack_commands(const AssetStore& store) {
         installed_bomber_bombs_a_ground_point(units, name);
     }
     installed_damaged_bomber_goes_to_a_pad(units, "ARMTHUND", "ARMASP");
+    // Gunships guarding a unit defend it as in 3.1c, and under
+    // air.gunships-hover-to-strafe go after enemies in reach and hover over a
+    // point on the ground; bombers and fighters still make passes under it,
+    // and with the rule off nothing changes.
+    for (const auto* name : {"ARMBRAWL", "CORAPE"}) {
+        installed_gunship_guards_as_the_game_does(units, name);
+        installed_gunship_guard_engages_in_reach(units, name);
+        installed_gunship_hovers_over_the_ground(units, name);
+        installed_gunships_unchanged_without_the_rule(units, name);
+    }
+    installed_gunship_attacks_the_ground(units, "ARMFIG", hover_to_strafe(true, true));
+    installed_bomber_bombs_a_ground_point(units, "ARMTHUND", hover_to_strafe(true, true));
     installed_fighter_destroys_an_aircraft(units, "ARMFIG", "CORFINK");
     installed_fighter_destroys_an_aircraft(units, "CORVENG", "CORFINK");
     // Bombers, fighters, gunships and a vehicle commanded at the ground.

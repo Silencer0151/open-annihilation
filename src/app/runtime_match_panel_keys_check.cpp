@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 
 namespace oa::app {
 
@@ -33,6 +34,14 @@ void Runtime::check_match_panel_keys() {
         event.key.down = true;
         dispatch_event(event, running);
         require(running, "a key ended the run");
+    };
+    // Typed text follows its key press, as the system sends it.
+    const auto type = [&](const char* typed) {
+        SDL_Event event{};
+        event.type = SDL_EVENT_TEXT_INPUT;
+        event.text.text = typed;
+        dispatch_event(event, running);
+        require(running, "typed text ended the run");
     };
     const auto showing = [&](std::string_view layout) {
         return screen_ == Screen::match && match_paused_ && match_hud_ &&
@@ -128,9 +137,69 @@ void Runtime::check_match_panel_keys() {
         throw;
     }
     extension_ = saved_extension;
+
+    // The surrender confirmation a close request opens over the running
+    // match gives its panel no keyboard focus, yet takes its quick keys in
+    // either case: 'n' answers No, as Escape and Enter do. A key with Ctrl
+    // down answers nothing, nor does Space. 'Y' answers Yes, which leaves the
+    // match and ends the run; this game ends here.
+    const auto confirm = oa::data::defs::gui_path("YESORNO.GUI");
+    for (const auto& [code, scancode, name] :
+         {std::tuple{SDLK_N, SDL_SCANCODE_N, "'n'"},
+          std::tuple{SDLK_ESCAPE, SDL_SCANCODE_ESCAPE, "Escape"},
+          std::tuple{SDLK_RETURN, SDL_SCANCODE_RETURN, "Enter"}}) {
+        request_match_close();
+        require(
+            showing(confirm) && !match_panels_keyboard_,
+            "the close request did not ask to surrender"
+        );
+        press(code, scancode, SDL_KMOD_NONE);
+        require(
+            !match_paused_ && !exit_requested_ && match_,
+            std::string(name) + " did not answer the close request as No"
+        );
+    }
+
+    // Over an open chat line the confirmation takes the keys first, and the
+    // line keeps what was typed for after it: text typed while it is up
+    // reaches no line, nor does the 'n' that answers it, and Escape and
+    // Enter answer it No and leave the line open.
+    open_chat_line();
+    require(chat_composing_, "the chat line did not open");
+    type("a");
+    for (const auto& [code, scancode, name] :
+         {std::tuple{SDLK_N, SDL_SCANCODE_N, "'n'"},
+          std::tuple{SDLK_ESCAPE, SDL_SCANCODE_ESCAPE, "Escape"},
+          std::tuple{SDLK_RETURN, SDL_SCANCODE_RETURN, "Enter"}}) {
+        request_match_close();
+        require(showing(confirm), "the close request over the chat line did not ask to surrender");
+        type("q");
+        require(chat_buffer_ == "a", "text typed under the confirmation reached the chat line");
+        press(code, scancode, SDL_KMOD_NONE);
+        if (code == SDLK_N)
+            type("n");
+        require(
+            !match_paused_ && !exit_requested_ && match_ && chat_composing_ && chat_buffer_ == "a",
+            std::string(name) + " did not answer the close request over the chat line as No, or "
+                                "reached the line"
+        );
+    }
+    press(SDLK_N, SDL_SCANCODE_N, SDL_KMOD_NONE);
+    type("n");
+    require(chat_buffer_ == "an", "the chat line did not take typing after the confirmation");
+    close_chat_line();
+
+    request_match_close();
+    press(SDLK_Y, SDL_SCANCODE_Y, SDL_KMOD_LCTRL);
+    require(showing(confirm) && !exit_requested_, "Ctrl+Y answered the close request");
+    press(SDLK_SPACE, SDL_SCANCODE_SPACE, SDL_KMOD_NONE);
+    require(showing(confirm) && !exit_requested_, "Space answered the close request");
+    press(SDLK_Y, SDL_SCANCODE_Y, SDL_KMOD_LSHIFT);
+    require(exit_requested_ && !match_, "'Y' did not answer the close request as Yes");
+    exit_requested_ = false;
     std::cout << "match panel key check: quick keys, Enter, Space and Escape on ARMOPT.GUI, "
-                 "EXITMENU.GUI, RESTART.GUI, YESORNO.GUI, PREFS.GUI, TABMENU.GUI, ALLIES.GUI "
-                 "and SHARE.GUI\n";
+                 "EXITMENU.GUI, RESTART.GUI, YESORNO.GUI (asked from the menu and by a close "
+                 "request), PREFS.GUI, TABMENU.GUI, ALLIES.GUI and SHARE.GUI\n";
 }
 
 } // namespace oa::app

@@ -82,10 +82,13 @@ is held.
 
 #### `same-type-bitset-fix`
 
-This parameter asks that selecting every unit of the selected types keeps
-working with more than 512 unit types. The engine's type sets are always
-sized for every unit type the game loaded, so it behaves the same whether
-the parameter is `true` or `false`.
+This parameter makes Ctrl+Z, which adds every unit of the selected types
+anywhere on the map, work with every unit type. Without it Ctrl+Z gathers
+the selected types in a set of `limits.unit-types`' `bitset-bits` type ids
+(512 in 3.1c), and a unit whose type id is past that set is neither matched
+nor added; 3.1c itself fails there. With it, and the hack on, the set holds
+every type id. The double-click's type set holds as many types as the
+category masks.
 
 3.1c has none of these shortcuts and steps a build queue by 5 with Shift.
 
@@ -104,8 +107,9 @@ This is a view rule: it changes only what this machine shows and how its own inp
 
 ### Implementation notes
 
-- The engine reads `UiRules::selection_shortcuts` (field `enabled`);
-  `same_type_bitset_fix` is resolved but not read.
+- The engine reads `UiRules::selection_shortcuts` (fields `enabled` and
+  `same_type_bitset_fix`); `src/app/runtime_hotkeys.cpp` reads the latter
+  for Ctrl+Z.
 - `src/sim/selection/include/oa/sim/selection/shortcuts.hpp` holds the
   sets, the selections, the idle cycles, the drag filters and the queue
   step.

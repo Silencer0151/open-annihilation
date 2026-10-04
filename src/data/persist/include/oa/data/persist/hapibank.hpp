@@ -351,7 +351,8 @@ FileSource stdio_file_source();
 /// Writes a bank to a file.
 ///
 /// With `audit`, the audit listing is written first beside it (same name with
-/// its extension replaced by .cpa); a failed audit write is ignored.
+/// its extension replaced by .cpa, however long the path); a failed audit
+/// write is ignored.
 ///
 /// @param bank bank to write; must hold at least one account
 /// @param path file path

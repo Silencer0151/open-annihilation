@@ -746,14 +746,67 @@ void test_author_and_packaging() {
     ));
 }
 
+void test_description() {
+    // A description is kept as written, in the records and the effective
+    // profile; it changes the full hash and never the sim hash.
+    const ResolveResult with =
+        resolve(profile_text("described", "description: A made-up mod for the tests.\n"));
+    const ResolveResult without = resolve(profile_text("described"));
+    OA_CHECK(with.resolution.has_value() && without.resolution.has_value());
+    if (!with.resolution || !without.resolution)
+        return;
+    OA_CHECK(with.resolution->profile.description == "A made-up mod for the tests.");
+    OA_CHECK(text_of(at(*with.resolution, {"description"})) == "\"A made-up mod for the tests.\"");
+    OA_CHECK(without.resolution->profile.description.empty());
+    OA_CHECK(text_of(at(*without.resolution, {"description"})) == "absent");
+    OA_CHECK(with.resolution->profile.sim_hash == without.resolution->profile.sim_hash);
+    OA_CHECK(with.resolution->profile.full_hash != without.resolution->profile.full_hash);
+
+    // The limit counts characters, not bytes: 120 two-byte characters fit, 121 do not.
+    std::string longest;
+    for (size_t index = 0; index < max_description_characters; ++index)
+        longest += "\xC3\xA9";
+    const ResolveResult fits = resolve(profile_text("described", "description: " + longest + "\n"));
+    OA_CHECK(fits.resolution.has_value() && fits.resolution->profile.description == longest);
+    OA_CHECK(refused_with(
+        profile_text("described", "description: " + longest + "x\n"),
+        "description: description must be at most 120 characters (it has 121)"
+    ));
+    OA_CHECK(resolve(profile_text("described", "description: \"\"\n")).resolution.has_value());
+
+    // One line of plain text: no line break, tab, other control character
+    // or line separator, however it is escaped.
+    for (const std::string_view escaped :
+         {"one\\ntwo",
+          "one\\rtwo",
+          "one\\ttwo",
+          "bell\\a",
+          "next\\x85line",
+          "line\\u2028separator",
+          "para\\u2029graph",
+          "delete\\x7f"})
+        OA_CHECK(refused_with(
+            profile_text("described", "description: \"" + std::string{escaped} + "\"\n"),
+            "description: description must be one line, without line breaks or control "
+            "characters"
+        ));
+
+    // Not a string.
+    for (const std::string_view value : {"12", "true", "~", "[a, b]", "{a: b}"})
+        OA_CHECK(refused_with(
+            profile_text("described", "description: " + std::string{value} + "\n"),
+            "description: description must be a string"
+        ));
+}
+
 /// The hashes the reference resolver gives each reference profile: sim, then full.
 constexpr std::pair<std::string_view, std::string_view> reference_hashes[] = {
     {"f7a558e891e845b270f26fc5faf59cf39b5911733d5f3e51778ffc435749449f",
-     "5c9921fc978e16b78e124cb9c5833077f0f632cff8a53bee4e1fb7cb78d2f29b"},
+     "d941f67a3b4ac21752fbba47dce35d4f6cd989f36a6dd6311ebf723a5c7e533e"},
     {"237a8fa4ba09d0951d7bfcd1b2a5aafb84bba9861758024eeab443b5ba6296d7",
-     "a85526d8eca0478248075a919237e948fc355145ed1a802f54eb8c4a55440600"},
+     "7fbd7aba1e6ce27a9818f42762b5f917e24029bdef263c1aebebdd5f241a88a4"},
     {"7bd577f653cf4ca28223b9e9631346374446278b9bca92d4d06c87d494c2ec02",
-     "89089cda1b673194de5d1f5d82f19c8f7b60e3b454fbbaee68d22665b077987b"},
+     "f9a43dfae42cfab8ecbf405145b895d02f86c44ee80766dae90db10c897e9d33"},
 };
 
 /// Resolves every reference profile and checks it against its pinned hashes.
@@ -1108,5 +1161,6 @@ int main(int argc, char** argv) {
     test_author_and_packaging();
     test_overrides();
     test_override_text_and_states();
+    test_description();
     return oa::test::check_exit_status();
 }

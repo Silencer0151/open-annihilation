@@ -70,7 +70,46 @@ the `oa-game` target builds; tests start it through `$<TARGET_FILE:oa-game>`.
 Every native check names its preferences file with `--preferences-file`, so
 that it never reads or writes the player's own, nor the renderer records
 the game keeps beside it, which with a named file live in memory for the
-run. With a named file, each
+run. With a named file the player's own folder, which holds the saved
+games, screenshots, films and mods, is the `Open Annihilation` folder beside
+that file too, so that no check writes into the Documents folder; on macOS
+the Documents folder does not follow `$HOME`, so a temporary `HOME` does not
+keep a run without a named file out of it. `native-user-folder`
+(`--check-user-folder`) checks that folder: saved games where earlier
+versions kept them left alone by a start with a named file, then moved into
+its `Saves` once as a start with the player's own file moves them, one
+named as a saved game
+already there kept beside it, a mod's into its own folder, the earlier
+folder still read while it holds one, screenshots and films placed in
+`Screenshots` and `Films`, the main menu's notice of the move shown once in
+the settings dialog's look and closed, its Open folder button and the
+settings' Your files buttons through a recorded opener, and the `Mods`
+folder's mods listed on the Mods page. With `--snapshot` it writes the
+notice and the Your files row beside the snapshot. `native-mod-switch`
+(`--check-mod-switch`) writes two test profiles into that folder's `Mods`
+and switches the mod ten times through the Mods page's Switch Mod question,
+each a soft restart on the same window: each run plays the mod chosen,
+listed first, and the working set as the last round's runs reach the main
+menu stays level with the round's before; it runs alone.
+`native-mod-warning` (`--check-mod-warning`) writes made-up profiles into
+that folder's `Mods`: one whose second side's interface art and font are
+missing, one whose unit files are missing, one whose commander's file the
+catalog refuses and one that plays whole; and two folders without a
+profile: one whose SIDEDATA names the same missing art and font, and one
+that lacks a side's LOGO, which the Mods page refuses. It switches to each
+of the others through the Mods page, in one run: the folder and the
+profile whose side files are missing each warn of both files once over the
+main menu and say that their games still start, and a skirmish on that
+side starts from Skirmish's Start and plays 300 ticks; the profile whose
+unit files are missing warns once over the main menu, shows its folder
+through the recorded opener, warns again over Skirmish's Start and stays
+on the setup, and a start past the warning comes back to the setup without
+ending the run, where a finger's tap just under OK closes the warning; a
+commander's file whose Copyright line the catalog refuses still counts as
+missing while one it keeps does not; and the profile that plays whole warns
+of nothing and starts its skirmish. With `--snapshot` it writes the
+warnings over the main menu, the side files' skirmishes and the skirmish
+setup at 1280x720 beside the snapshot. With a named file, each
 Open Annihilation setting's default is the game's own behaviour on every
 platform, and the installation's `totala.ini` is not read for the unit
 limit, so a check plays the same on every machine. A check that depends on a
@@ -245,9 +284,9 @@ hashes. The other mod-profile tests (`formats-oamod`, `data-match-rules`,
 `mod-registry-sync` fails while the tables and records
 `tools/gen_mod_registry.py` writes from the hack registry differ from the
 files in the tree, and `mod-docs-sync` while a generated block of the
-[standard hack pages](../mods/README.md) or their table differs from what
-`tools/gen_mod_docs.py` writes, or a page names no hack; running the script
-brings each back in step.
+[standard hack and script extension pages](../mods/README.md) or their
+tables differs from what `tools/gen_mod_docs.py` writes, or a page names no
+hack or extension; running the script brings each back in step.
 
 `OA_MOD_GAME_DIR` names a mod's copied install: an `OA_GAME_DIR`
 installation with the mod's files copied over it. With it and
@@ -264,7 +303,31 @@ cannot link to the install's files. With the same two settings,
 `--net-loopback-check` on the copied install with that profile: host and
 joiner must end with equal worlds under the profile's network and recorder
 rules, and every recording the two machines made must play back with
-`--play-demo`. The layering and layout rules
+`--play-demo`. `native-mod-stockpile-builds`
+(`tools/check_native_mod_stockpile.py`) runs `--check-stockpile-builds` on
+the copied install with that profile, as `native-stockpile-builds` does on
+`OA_GAME_DIR`: every unit whose first weapon stockpiles must open on its
+weapon page when selected, queue and drop rounds, and keep a round it built
+and its queue through a save and a load. `native-mod-unit-pages`
+(`tools/check_native_mod_unit_pages.py`) runs `--check-unit-pages scaled`
+on the copied install with that profile for a commander, a lab, a unit that
+builds nothing and one that stockpiles, as `native-unit-pages` runs
+`--check-unit-pages whole` on `OA_GAME_DIR` for a builder of one page, one
+of several, a factory and a unit that builds nothing: on windows of
+640x480, 1280x720, 1920x1080 and 2560x1440 the side column must be drawn
+at one scale and be as wide as its 128 columns at it, narrowed so that the
+profile's tallest unit page ends on the window's last row where it is
+taller than the window at the interface's scale; the bars and the
+battlefield must start at its edge, and the bars, at the interface's
+scale, must reach the window's right edge with their art; the game's own
+pages must leave the column at the interface's width and scale. Each of
+their pages is opened and must be drawn whole as its file places it, at the
+column's scale and no other, and each control the side column draws must lie inside it and take a
+click there; the radar must be drawn in the column at its scale and scroll
+the view, and a press on the battlefield's first column must reach the
+battlefield and one on the column's last must not. The whole window on
+each type's first build page at 1920x1080 and 1280x720 is written to
+`local/reports` as a PNG. The layering and layout rules
 themselves are covered without game data by `hpi-layering`, `defs-layout`
 and `game-directory`.
 
@@ -299,7 +362,14 @@ installation and skip without it. Over the installation `OA_GAME_DIR`
 names, these run the game headless:
 
 - `native-net-loopback` (`--net-loopback-check N`) hosts and joins a match
-  in one process over 127.0.0.1 and compares both worlds after N ticks;
+  in one process over 127.0.0.1 and compares both worlds after N ticks.
+  On the way the host's player turns its commander's build page, which
+  stays on the host: the joiner's copy of the commander keeps its page and
+  the worlds still agree. Then it gives every unit it has through
+  SHARE.GUI: the kbot goes, one 0x14 to the joiner, and the commander,
+  whose type is in the Commander category, stays on both machines;
+  `native-side-commanders` gives a commander outside that category, which
+  goes too;
   `native-net-loopback-watcher` has the joiner watch, and
   `native-net-loopback-computer` and `native-net-loopback-computer-watcher`
   have the host seat a computer player that builds, is given a squad and
@@ -510,7 +580,7 @@ hooks that offer the screen to players. These tests need no game data:
   looks again until a folder can be played; `game-options` checks
   `--check-game-files`, its companions and `--no-game-files-screen`;
   `ui-engine-settings-dialog` checks the settings dialog's Game files
-  section, listed only where the host says, and the Language & Text dialog
+  section, listed only where the host says, and the Language dialog
   the screen opens, drawn in the modern fonts before the game's own are
   installed.
 
@@ -612,10 +682,10 @@ opens the screen, so every other check, digest and recording is unchanged.
   [src/platform/xp-runtime](../../src/platform/xp-runtime/README.md). Check an
   executable's imports against a Windows XP installation's own system DLLs
   before running it there: Windows XP refuses to start a program that imports
-  anything they do not export. On XP, which lacks the sound interface SDL
-  prefers, SDL plays sound through the older one XP has;
-  `OA_SOUND_OUTPUT=waveout` in the environment plays it through the
-  engine's own wave-out output instead.
+  anything they do not export. On XP the game plays sound through the
+  engine's own wave-out output, which takes a single processor less of its
+  time than SDL's there; `OA_SOUND_OUTPUT=sdl` in the environment plays
+  it through SDL, which on XP uses the older sound interface XP has.
 - **32-bit x86:** a 32-bit x86 build needs no SSE2: floats are computed
   with SSE (`OA_X86_FLOAT=sse`, the default; `fpu` computes them on the
   older floating-point unit, which changes the simulation's results) and

@@ -45,6 +45,11 @@
 
 namespace oa::app {
 
+static_assert(
+    kMinFullBattlefieldZoom == oa::ui::hud::kHealthBarFurthestZoom,
+    "the health bars reach their smallest at the furthest zoom out"
+);
+
 namespace {
 
 namespace model_render = oa::present::model;
@@ -668,6 +673,29 @@ Runtime::greyed_picture_frame(const oa::ui::gui_layout::Gadget& gadget) const {
     return std::min(static_cast<std::size_t>(std::max<int16_t>(button->status, 0)) + 2U, last);
 }
 
+renderer::ButtonCondition Runtime::match_button_condition(std::size_t index) const {
+    const auto& gadget = match_hud_->layout.gadgets[index];
+    if (greyed_picture_frame(gadget))
+        return renderer::ButtonCondition::disabled;
+    // The order page's status buttons draw a grayed state instead of hiding.
+    const bool status = match_status_frame(index).has_value();
+    const auto* button = std::get_if<oa::ui::gui_layout::ButtonFields>(&gadget.fields);
+    // A grayed-out button, such as SAVEGAME when the game cannot save or an
+    // order the selection cannot give, shows grayed rather than hidden.
+    if (!status && button != nullptr && button->grayed_out)
+        return renderer::ButtonCondition::disabled;
+    // A page's PREV and NEXT are drawn as it authors them, also for a
+    // builder of one page, where they take no click.
+    if (!status && match_hud_action(gadget.common.name) == "MISSION" && !campaign_mission_)
+        return renderer::ButtonCondition::hidden;
+    // The pointer over a button leaves it as it is: a button shows pressed
+    // while a press on it is held with the pointer still over it, or while
+    // its order is lit.
+    if ((match_hud_held_ == index && hovered_ == index) || match_command_lit(index))
+        return renderer::ButtonCondition::pressed;
+    return renderer::ButtonCondition::normal;
+}
+
 void Runtime::render_match_surface() {
     if (!match_ || !selected_tnt_)
         throw std::logic_error("match renderer requires an initialized offline match");
@@ -770,6 +798,9 @@ void Runtime::render_match_surface() {
         hud.height = 0;
         hud.rgb.clear();
     } else if (match_hud_) {
+        // The bars reach the window's right edge: past 640 columns on a
+        // window wider than the interface, or beside a narrowed side column.
+        extend_match_bars(kBattlefieldLeft + match_layout_.bar_columns());
         std::vector<renderer::ButtonPresentation> buttons;
         for (std::size_t index = 0; index < match_hud_->layout.gadgets.size(); ++index) {
             if (const auto frame = greyed_picture_frame(match_hud_->layout.gadgets[index])) {
@@ -784,33 +815,7 @@ void Runtime::render_match_surface() {
             }
             // The order page's status buttons draw a grayed state instead of hiding.
             const auto status_frame = match_status_frame(index);
-            auto condition = renderer::ButtonCondition::normal;
-            const auto* grayed_button = std::get_if<oa::ui::gui_layout::ButtonFields>(
-                &match_hud_->layout.gadgets[index].fields
-            );
-            if (!status_frame && grayed_button != nullptr && grayed_button->grayed_out)
-                // A grayed-out menu button, such as SAVEGAME when the game
-                // cannot save, shows grayed rather than hidden.
-                condition = renderer::ButtonCondition::disabled;
-            else if (
-                // Build page navigation is on a unit's build pages, never on
-                // a paused menu (PREFS.GUI's OK is PREV).
-                !status_frame &&
-                ((!pause_menu_shown() &&
-                  is_build_page_nav(match_hud_->layout.gadgets[index].common.name) &&
-                  builder_gui_page_count() <= 1) ||
-                 (match_hud_action(match_hud_->layout.gadgets[index].common.name) == "MISSION" &&
-                  !campaign_mission_) ||
-                 !gadget_command_available(match_hud_->layout.gadgets[index]))
-            )
-                condition = renderer::ButtonCondition::hidden;
-            else if (
-                // The pointer over a button leaves it as it is: a button shows
-                // pressed while a press on it is held with the pointer still
-                // over it, or while its order is lit.
-                (match_hud_held_ == index && hovered_ == index) || match_command_lit(index)
-            )
-                condition = renderer::ButtonCondition::pressed;
+            const auto condition = match_button_condition(index);
             // A multi-stage button (RESTART.GUI's Difficulty) shows its stage.
             const auto& gadget = match_hud_->layout.gadgets[index];
             std::optional<std::size_t> stage;
@@ -1865,6 +1870,7 @@ void Runtime::render_match_surface() {
     match_world_cpu_ = {world_surface.width, world_surface.height, std::move(world_surface.rgb)};
     // Without the interface the frame is the world alone: no panel, bar,
     // label, message, board or overlay is painted over it.
+    drawn_health_bars_.clear();
     if (bare) {
         overlay_target_ = nullptr;
         hud_source_space_ = false;
@@ -1885,6 +1891,9 @@ void Runtime::render_match_surface() {
     if (selected_match_unit_ == 0 && !match_paused_)
         fill_source_rect(0, 128, 128, 352, 10);
     paint_on(PaintLayer::battlefield);
+    // The bars shrink as the view zooms out, and keep the game's size at
+    // zoom 1 and in.
+    const auto bar_size = oa::ui::hud::health_bar_size(match_zoom());
     for (const auto& slot : match_->world().slots) {
         if (slot.unit_index == 0 || slot.unit == nullptr || slot.record.type_index == 0 ||
             slot.unit->type == nullptr)
@@ -1909,13 +1918,14 @@ void Runtime::render_match_surface() {
                                   )
                                 : project_match_point(painted, slot.unit->position);
         const int bar_x = screen.x;
-        const int bar_y = screen.y + 10;
+        const int bar_y = screen.y + bar_size.below_unit;
         if (const auto& world = match_->state();
             oa::ui::hud::draws_health_bar(world, slot.record)) {
             const auto* def = oa::world_unit_def_of(&world, &slot.record);
             oa::ui::hud::HealthBar bar{};
-            if (def != nullptr &&
-                oa::ui::hud::unit_health_bar(world.game, slot.record, *def, bar_x, bar_y, bar)) {
+            if (def != nullptr && oa::ui::hud::unit_health_bar(
+                                      world.game, slot.record, *def, bar_x, bar_y, bar, bar_size
+                                  )) {
                 const auto fill = [this](const oa::Rect32& rect, uint8_t color) {
                     fill_hud_rect(
                         rect.x1, rect.y1, rect.x2 - rect.x1 + 1, rect.y2 - rect.y1 + 1, color
@@ -1923,18 +1933,25 @@ void Runtime::render_match_surface() {
                 };
                 fill(bar.trough, bar.trough_color);
                 fill(bar.fill, bar.fill_color);
+                drawn_health_bars_.push_back(bar);
             }
         }
         // The squad digit of the viewpoint player's own unit in a squad,
-        // below its bar. The digits under and over the bar keep the game
-        // font's size at most, so that they stay clear of the bar.
+        // two rows below its bar, and the self-destruct count above it. The
+        // digits under and over the bar keep the game font's size at most,
+        // so that they stay clear of the bar.
         const PanelText unit_labels(*this);
         if (oa::ui::hud::draws_squad_digit(match_->state(), slot.record))
             draw_match_label(
-                bar_x - 4, bar_y + 4, std::string(1, oa::ui::hud::squad_digit(slot.record)), 255
+                bar_x - 4,
+                bar_y + bar_size.half_height + 2,
+                std::string(1, oa::ui::hud::squad_digit(slot.record)),
+                255
             );
         if (const auto count = match_->self_destruct_remaining(slot.unit_index); count != 0)
-            draw_match_label(bar_x - 4, bar_y - 12, std::to_string(count), 1);
+            draw_match_label(
+                bar_x - 4, bar_y - bar_size.half_height - 10, std::to_string(count), 1
+            );
     }
     // ui.megamap draws over the battlefield in its place.
     draw_megamap();

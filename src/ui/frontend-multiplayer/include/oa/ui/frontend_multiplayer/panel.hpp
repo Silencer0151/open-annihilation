@@ -58,6 +58,9 @@ struct Control {
     uint8_t stages = 0;  // staged-button caption count
     int16_t value = 0;   // group value
     bool grayed = false; // per-type grayed state
+    /// A button's quick key: the GUI's quickkey, then the letter its caption
+    /// takes when panel_set_text sets one; 0 for none.
+    int8_t quick_key{};
     /// A hot surface takes clicks only while this is set; loaded from the GUI's hotornot.
     bool hot{};
     /// Light-table level a button's art is drawn at, 1..31; 0 draws it unlit.
@@ -211,6 +214,12 @@ void panel_set_active(Panel& panel, std::string_view name, bool active) noexcept
 void panel_set_grayed(Panel& panel, std::string_view name, bool grayed) noexcept;
 
 /// Replaces the text of a named control and marks the panel dirty.
+///
+/// A button then takes the quick key its new caption gives it, as the gadget
+/// engine assigns one (ui::gui_input::caption_quick_key): none for a button
+/// with stages, the key it had with the no_quick_key attribute or an empty
+/// caption, else the first caption letter no other button's key takes
+/// (ui::gui_input::free_quick_key).
 ///
 /// @param[in,out] panel Panel holding the control; a missing control is ignored.
 /// @param name Control name or link.

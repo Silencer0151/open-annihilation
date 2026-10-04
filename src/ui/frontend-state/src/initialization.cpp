@@ -352,15 +352,20 @@ void load_preferences(
                                                             : string("Nickname", 17);
     const auto game_name = h.game_name_override();
     p.game_name = game_name.empty() ? string("Game Name", 17) : game_name.substr(0, 16);
-    const auto output = h.read_string(general_section, "Image Output Directory", 256);
-    if (output)
-        p.image_output_directory = checked(*output, 256);
-    else {
-        const auto user = h.user_name();
-        p.image_output_directory = checked(
-            h.application_directory() + "\\" + (user && !user->empty() ? *user : "user_images"), 256
-        );
-    }
+    // The engine keeps the folder whole, however deep the game is installed
+    // and however long the user's name.
+    const auto output = h.read_string(general_section, "Image Output Directory", any_length);
+    const auto user = h.user_name();
+    const std::string game_default =
+        h.application_directory() + "\\" + (user && !user->empty() ? *user : "user_images");
+    // A host's own folder stands in for the game's default, and for the
+    // default stored as a choice.
+    const std::string own_default = h.own_image_output_directory();
+    if (output && (own_default.empty() || *output != game_default))
+        p.image_output_directory = checked(*output, any_length);
+    else
+        p.image_output_directory =
+            checked(own_default.empty() ? game_default : own_default, any_length);
     p.movie_output_rate = number("Movie Output Rate", 10);
     p.text_lines = number("textlines", 10);
     p.text_scroll = number("textscroll", 10);

@@ -1599,8 +1599,9 @@ struct TouchCheckAccess {
             return runtime.hovered_match_unit_ == id;
         };
         bool tried = false;
-        for (const auto& way :
-             std::array<std::pair<float, float>, 4>{{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}}) {
+        for (const auto& way : std::array<std::pair<float, float>, 4>{
+                 {{1.0F, 0.0F}, {-1.0F, 0.0F}, {0.0F, 1.0F}, {0.0F, -1.0F}}
+             }) {
             float centre_edge = 0.0F;
             while (centre_edge < 200.0F * ppp &&
                    picks(centre.x + way.first * centre_edge, centre.y + way.second * centre_edge))

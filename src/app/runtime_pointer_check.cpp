@@ -514,30 +514,31 @@ void Runtime::check_pointer_picks() {
             fail_pick("lacks " + std::string(name));
         return type;
     };
-    const auto spawn = [&](std::string_view name, uint8_t owner, int32_t x, int32_t z) {
-        oa::sim::unit_spawn::Request request;
-        request.player = owner;
-        request.type = type_of(name);
-        request.finished = true;
-        request.state = kGroundOccupancyState;
-        x = std::clamp(x, kEdgeMargin, map_width - kEdgeMargin);
-        z = std::clamp(z, kEdgeMargin, map_height - kEdgeMargin);
-        request.position = {
-            static_cast<uint32_t>(x) << 16,
-            static_cast<uint32_t>(
-                match_->map_height(static_cast<uint32_t>(x) << 16, static_cast<uint32_t>(z) << 16)
-            ) << 16,
-            static_cast<uint32_t>(z) << 16
+    const auto spawn =
+        [&](std::string_view name, uint8_t owner, int32_t x, int32_t z, bool finished = true) {
+            oa::sim::unit_spawn::Request request;
+            request.player = owner;
+            request.type = type_of(name);
+            request.finished = finished;
+            request.state = kGroundOccupancyState;
+            x = std::clamp(x, kEdgeMargin, map_width - kEdgeMargin);
+            z = std::clamp(z, kEdgeMargin, map_height - kEdgeMargin);
+            request.position = {
+                static_cast<uint32_t>(x) << 16,
+                static_cast<uint32_t>(match_->map_height(
+                    static_cast<uint32_t>(x) << 16, static_cast<uint32_t>(z) << 16
+                )) << 16,
+                static_cast<uint32_t>(z) << 16
+            };
+            auto* slot = match_->create(request);
+            if (slot == nullptr || slot->unit == nullptr)
+                fail_pick("could not spawn " + std::string(name));
+            slot->unit->object_present = true;
+            // Held fire, so the units the check places do not fight while it
+            // steps the match.
+            slot->record.flags &= ~OA_UNIT_FLAG_FIRE_ORDER_MASK;
+            return slot->unit_index;
         };
-        auto* slot = match_->create(request);
-        if (slot == nullptr || slot->unit == nullptr)
-            fail_pick("could not spawn " + std::string(name));
-        slot->unit->object_present = true;
-        // Held fire, so the units the check places do not fight while it
-        // steps the match.
-        slot->record.flags &= ~OA_UNIT_FLAG_FIRE_ORDER_MASK;
-        return slot->unit_index;
-    };
     const auto map_x = [&](uint16_t id) {
         return static_cast<int32_t>(slots[id].unit->position[0] >> 16);
     };
@@ -1312,10 +1313,76 @@ void Runtime::check_pointer_picks() {
     );
     match_->stop_orders(atlas);
     clear_panels();
+
+    // Ctrl+Z adds every selectable local unit, anywhere on the map, of any
+    // type among the selected units: the 40 Samsons and 40 Bulldogs in two
+    // groups at the corners of the map's far side, but not a Stumpy, an
+    // enemy's Samson or an unfinished Samson. It drops the armed command.
+    constexpr int32_t kGroupColumns = 5;
+    constexpr int32_t kGroupRows = 4;
+    constexpr int32_t kGroupSpacing = 40;
+    const auto side_x = commander_x < map_width / 2 ? map_width : 0;
+    const auto side_z = commander_z < map_height / 2 ? map_height : 0;
+    const std::array<std::pair<int32_t, int32_t>, 2> corners{
+        std::pair{side_x, map_height - side_z}, std::pair{side_x, side_z}
+    };
+    std::vector<uint16_t> samsons;
+    std::vector<uint16_t> bulldogs;
+    for (const auto& [corner_x, corner_z] : corners) {
+        const int32_t step_x = corner_x == 0 ? kGroupSpacing : -kGroupSpacing;
+        const int32_t step_z = corner_z < map_height / 2 ? kGroupSpacing : -kGroupSpacing;
+        const int32_t from_x = std::clamp(corner_x, kEdgeMargin, map_width - kEdgeMargin);
+        const int32_t from_z = std::clamp(corner_z, kEdgeMargin, map_height - kEdgeMargin);
+        for (int32_t row = 0; row < kGroupRows; ++row)
+            for (int32_t column = 0; column < kGroupColumns; ++column) {
+                const int32_t x = from_x + column * step_x;
+                const int32_t z = from_z + row * 2 * step_z;
+                samsons.push_back(spawn("ARMSAM", local, x, z));
+                bulldogs.push_back(spawn("ARMBULL", local, x, z + step_z));
+            }
+    }
+    const auto group_size = static_cast<std::size_t>(kGroupColumns * kGroupRows);
+    const auto other_type = spawn("ARMSTUMP", local, map_x(samsons[1]), map_z(samsons[1]));
+    const auto enemy_samson =
+        spawn("ARMSAM", enemy_player, map_x(samsons.back()), map_z(samsons.back()));
+    const auto unfinished_samson =
+        spawn("ARMSAM", local, map_x(bulldogs.back()), map_z(bulldogs.back()), false);
+    centre_on(samsons.front());
+    require_pick(
+        !listed(samsons.back()) && !listed(bulldogs.back()),
+        "the second group of Samsons and Bulldogs is on screen"
+    );
+    adopt_selection(samsons.front());
+    adopt_selection(bulldogs.front());
+    selected_match_unit_ = samsons.front();
+    match_command_ = MatchCommand::patrol;
+    key(SDLK_Z, SDL_SCANCODE_Z, SDL_KMOD_LCTRL);
+    for (std::size_t i = 0; i < samsons.size(); ++i) {
+        const std::string where = i < group_size ? "on screen" : "off screen";
+        require_pick(selected(samsons[i]), "Ctrl+Z left a Samson " + where + " unselected");
+        require_pick(selected(bulldogs[i]), "Ctrl+Z left a Bulldog " + where + " unselected");
+    }
+    require_pick(!selected(other_type), "Ctrl+Z selected a Stumpy");
+    require_pick(!selected(enemy_samson), "Ctrl+Z selected an enemy's Samson");
+    require_pick(!selected(unfinished_samson), "Ctrl+Z selected an unfinished Samson");
+    require_pick(!selected(commander), "Ctrl+Z selected the commander");
+    require_pick(match_command_ == MatchCommand::none, "Ctrl+Z kept the armed command");
+    // With only the Stumpy selected, Ctrl+Z adds no Samson.
+    clear_panels();
+    adopt_selection(other_type);
+    selected_match_unit_ = other_type;
+    key(SDLK_Z, SDL_SCANCODE_Z, SDL_KMOD_LCTRL);
+    require_pick(
+        selected(other_type) && !selected(samsons.front()) && !selected(bulldogs.back()),
+        "Ctrl+Z with a Stumpy selected changed the selection"
+    );
+    clear_panels();
+    centre_on(commander);
     std::cout << "pointer pick check: on-screen list (sight, cloak, box at the edge), turned root "
                  "box, smaller unit and tie, still pointer, under-attack only off screen, unit "
                  "panel status, target, build button and unidentified blip, F1 panel and its "
-                 "picture, 'n', Ctrl+S, click visits, Escape, LOAD/UNLOAD and pad landing\n";
+                 "picture, 'n', Ctrl+S, click visits, Escape, LOAD/UNLOAD, pad landing and "
+                 "Ctrl+Z over 40 Samsons and 40 Bulldogs in two far groups\n";
 }
 
 } // namespace oa::app

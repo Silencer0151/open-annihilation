@@ -134,6 +134,32 @@ void test_gui_font() {
     );
 }
 
+// The characters a GUI font draws are kept by the address of its glyphs.
+// Once they are forgotten, as a switch of mod forgets them, a font loaded at
+// the same address is read afresh.
+void test_forget_gui_font_characters() {
+    namespace draw = oa::ui::frontend_renderer;
+    constexpr char32_t e_acute = 0x00E9;
+    constexpr uint8_t dos_e_acute = 0x82;
+    constexpr uint16_t glyph_count = 256;
+    TestFont font;
+    build_font(font);
+    font.gaf.slots.resize(glyph_count);
+    font.gaf.sequences.front().frames = font.gaf.slots.data();
+    font.gaf.sequences.front().frame_count = glyph_count;
+    font.gaf.slots[dos_e_acute].frame = &font.gaf.sprites[2];
+    require(
+        draw::gui_font_characters(font.gaf).byte_for(e_acute) == dos_e_acute,
+        "gui font characters: the DOS code page's letter is drawn by its glyph"
+    );
+    font.gaf.slots[dos_e_acute].frame = nullptr;
+    draw::forget_gui_font_characters();
+    require(
+        !draw::gui_font_characters(font.gaf).byte_for(e_acute),
+        "gui font characters: once forgotten, a font at the same address is read afresh"
+    );
+}
+
 void test_gadget_text() {
     namespace draw = oa::ui::frontend_renderer;
     TestFont font;
@@ -390,5 +416,6 @@ int main() {
     test_gadget_text();
     test_gadget_text_game_runs();
     test_gui_font();
+    test_forget_gui_font_characters();
     return failures == 0 ? 0 : 1;
 }

@@ -471,6 +471,11 @@ void Runtime::bind_match_speech() {
 }
 
 void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
+    // A shared game whose mod cannot start one is refused before anything is
+    // dropped or loaded; its warning shows once the main menu does, where
+    // the abandoned launch returns.
+    if (bootstrap.multiplayer && refuse_incomplete_mod_start(true))
+        throw std::runtime_error("the mod's files are missing, so its games cannot start");
     // A new Start attempt owns a new world.  Do not let a failed bootstrap
     // expose commanders, timing state, or a renderable match from an older
     // map selection, nor the last game's end screen.
@@ -747,6 +752,12 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         auto loaded = oa::sim::unit_spawn::load_runtime_type(definition, bindings, *this);
         if (!loaded.load_error.empty())
             throw std::runtime_error(loaded.load_error);
+        // A script file that cannot be read stops neither its type nor the
+        // load: the unit plays without a script, as one whose file is absent.
+        if (loaded.script_error.code != oa::base::bytes::DecodeCode::none)
+            std::cerr << "open-annihilation: invalid unit script " << loaded.script_path << ": "
+                      << loaded.script_error.message << "; " << loaded.unit_name
+                      << " plays without a script\n";
         loaded_commander_types_.push_back(std::move(loaded));
         // After the FBI: the model's height, the GUI page count and
         // the page-zero bit; the COB stays with the runtime type.
@@ -1359,11 +1370,8 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         // Mission start rebuilds the sight grids once every commander stands.
         reset_match_sight(true);
     }
-    // A campaign's use-only file may leave either commander out.
-    const auto armcom = oa::sim::unit_spawn::find_type_index(spawn_type_names_, "ARMCOM");
-    const auto corcom = oa::sim::unit_spawn::find_type_index(spawn_type_names_, "CORCOM");
-    if (!campaign_mission_ && (armcom == 0 || corcom == 0))
-        throw std::runtime_error("unit catalog lacks required commanders");
+    // No commander is required by name: each player's is the one SIDEDATA
+    // names for its side (commander_type_for_side).
     set_load_progress(4, 100);
     set_load_progress(5, 100);
     if (!options_.trace_digest.empty() &&

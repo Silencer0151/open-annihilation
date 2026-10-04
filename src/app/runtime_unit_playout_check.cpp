@@ -177,8 +177,7 @@ StepSummary summarise(const std::vector<int32_t>& places, double even) {
 void Runtime::check_unit_playout() {
     const auto start_skirmish = [this] {
         start_benchmark_skirmish();
-        match_layout_ =
-            oa::ui::display_layout::make_match_layout(options_.match_width, options_.match_height);
+        match_layout_ = lay_out_match(options_.match_width, options_.match_height);
         match_zoom_ = std::clamp(options_.match_zoom, kMinBattlefieldZoom, kMaxBattlefieldZoom);
         match_zoom_target_ = match_zoom_;
     };

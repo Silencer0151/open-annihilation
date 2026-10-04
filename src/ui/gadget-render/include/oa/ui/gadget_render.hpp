@@ -201,6 +201,12 @@ int32_t draw_wrapped_text(
 /// @param slot Font slot, 0..2.
 void load_gui_font(GadgetRenderer& renderer, GadgetPanel& panel, const char* name, int32_t slot);
 
+/// Forgets the characters each GAF font draws, which text drawn with game
+/// text hooks works out once per font and keeps by the address of its glyph
+/// sequence. They go when the fonts do: a font loaded later may come at the
+/// same address with other glyphs.
+void forget_font_characters();
+
 /// Loads the GAF every panel falls back to for its art (GadgetPanel::list_skin)
 /// from the GAF directory.
 ///

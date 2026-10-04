@@ -299,23 +299,12 @@ struct GameTextAnswers {
     std::vector<uint8_t> palette{};
 };
 
-void test_text_game_runs(render::GadgetRenderer& renderer, TestFile& font) {
-    TestPanel test;
-    make_panel(test, renderer, 12, 24);
-    GadgetPanel& panel = *test.panel;
-    panel.active_gaf_font = &font;
-    GameTextAnswers answers;
-    answers.settings.style = {false, false, false, false, present::default_text_size};
-    answers.settings.utf8 = true;
-    // Entry 4 is hattfont12's colour, which the modern runs are drawn in.
-    answers.palette.assign(8 * 4, 0);
-    answers.palette[4 * 4] = 195;
-    answers.palette[4 * 4 + 1] = 195;
-    answers.palette[4 * 4 + 2] = 155;
+// Game-text hooks that answer from `answers` and draw each character as a
+// solid block 3 pixels wide, 2 rows above the baseline.
+present::GameTextHooks solid_text_hooks(GameTextAnswers& answers) {
     present::GameTextHooks hooks{};
     hooks.context = &answers;
     hooks.settings = [](void* context) { return static_cast<GameTextAnswers*>(context)->settings; };
-    // Each character a solid block 3 pixels wide, 2 rows above the baseline.
     hooks.draw = [](
                      void*, std::string_view text, present::TextFace, int32_t, int32_t
                  ) -> std::shared_ptr<const present::TextMask> {
@@ -335,7 +324,23 @@ void test_text_game_runs(render::GadgetRenderer& renderer, TestFile& font) {
     hooks.palette = [](void* context) -> std::span<const uint8_t> {
         return static_cast<GameTextAnswers*>(context)->palette;
     };
-    present::set_game_text_hooks(hooks);
+    return hooks;
+}
+
+void test_text_game_runs(render::GadgetRenderer& renderer, TestFile& font) {
+    TestPanel test;
+    make_panel(test, renderer, 12, 24);
+    GadgetPanel& panel = *test.panel;
+    panel.active_gaf_font = &font;
+    GameTextAnswers answers;
+    answers.settings.style = {false, false, false, false, present::default_text_size};
+    answers.settings.utf8 = true;
+    // Entry 4 is hattfont12's colour, which the modern runs are drawn in.
+    answers.palette.assign(8 * 4, 0);
+    answers.palette[4 * 4] = 195;
+    answers.palette[4 * 4 + 1] = 195;
+    answers.palette[4 * 4 + 2] = 155;
+    present::set_game_text_hooks(solid_text_hooks(answers));
     const std::string sun = "\xE6\x97\xA5";
     const std::string text = "A" + sun + "B";
     require(
@@ -364,6 +369,38 @@ void test_text_game_runs(render::GadgetRenderer& renderer, TestFile& font) {
     require(
         render::text_width(renderer, panel, text.c_str()) == 5, "without hooks the run is glyphless"
     );
+}
+
+// The characters each GAF font draws are kept by the address of its glyphs.
+// Once they are forgotten, as a switch of mod forgets them, a font loaded at
+// the same address is read afresh: a letter its glyphs no longer hold is
+// drawn in the modern fonts.
+void test_forget_font_characters(render::GadgetRenderer& renderer) {
+    constexpr uint8_t dos_e_acute = 0x82;
+    TestFile font = make_font(5, 6);
+    auto& glyphs = font.sequences.front().frames;
+    glyphs.resize(256);
+    glyphs[dos_e_acute] = solid(2, 3, 7);
+    TestPanel test;
+    make_panel(test, renderer, 12, 24);
+    test.panel->active_gaf_font = &font;
+    GameTextAnswers answers;
+    answers.settings.style = {false, false, false, false, present::default_text_size};
+    answers.settings.utf8 = true;
+    present::set_game_text_hooks(solid_text_hooks(answers));
+    const char* e_acute = "\xC3\xA9";
+    require(
+        render::text_width(renderer, *test.panel, e_acute) == 2,
+        "the font's glyph draws the e acute"
+    );
+    glyphs[dos_e_acute].reset();
+    render::forget_font_characters();
+    require(
+        render::text_width(renderer, *test.panel, e_acute) == 3,
+        "once forgotten, a font at the same address is read afresh"
+    );
+    present::set_game_text_hooks({});
+    render::forget_font_characters();
 }
 
 void test_shade_level(TestDisplay&) {
@@ -914,6 +951,7 @@ int main() {
 
     test_text(renderer, font);
     test_text_game_runs(renderer, font);
+    test_forget_font_characters(renderer);
     test_shade_level(display);
     test_button(renderer, font);
     test_button_art(renderer, font);

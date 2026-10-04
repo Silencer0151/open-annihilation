@@ -687,10 +687,9 @@ void Runtime::destroy_full_presentation(FullPresentation* full) noexcept {
 void Runtime::FullPresentation::ensure_sprite_palette(
     const oa::PaletteBytes& palette_bytes, float gamma
 ) {
-    auto& pages = sprite_pages;
     const oa::Palette palette = oa::present::palette_from_bytes(palette_bytes);
-    pages.set_palette(palette, gamma);
-    if (pages.has_gray_table() && gray_generation == pages.palette_generation())
+    sprite_pages.set_palette(palette, gamma);
+    if (sprite_pages.has_gray_table() && gray_generation == sprite_pages.palette_generation())
         return;
     // The fog grays a pixel by its brightness: the entry nearest the grey
     // of its colour's mean channel, so a frame's greyed cell takes that
@@ -704,18 +703,18 @@ void Runtime::FullPresentation::ensure_sprite_palette(
             static_cast<std::size_t>((static_cast<unsigned>(entry.r) + entry.g + entry.b) / 3U);
         gray[index] = levels[level];
     }
-    pages.set_gray_table(gray);
-    gray_generation = pages.palette_generation();
+    sprite_pages.set_gray_table(gray);
+    gray_generation = sprite_pages.palette_generation();
 }
 
 card::PageHandle Runtime::FullPresentation::card_page(uint32_t page) {
-    const auto pages = sprite_pages.pages();
-    if (page >= pages.size())
+    const auto held = sprite_pages.pages();
+    if (page >= held.size())
         return {};
     if (card_pages.size() <= page)
         card_pages.resize(std::size_t{page} + 1);
     FullCardPage& slot = card_pages[page];
-    const uint32_t size = pages[page].size;
+    const uint32_t size = held[page].size;
     if (slot.handle != card::PageHandle{} && slot.size == size && executor.page_alive(slot.handle))
         return slot.handle;
     if (slot.handle != card::PageHandle{})
@@ -740,8 +739,7 @@ card::PageHandle Runtime::FullPresentation::card_page_hook(void* context, uint32
 }
 
 void Runtime::FullPresentation::upload_sprite_pages() {
-    auto& pages = sprite_pages;
-    const auto held = pages.pages();
+    const auto held = sprite_pages.pages();
     for (uint32_t index = 0; index < card_pages.size() && index < held.size(); ++index) {
         FullCardPage& slot = card_pages[index];
         if (slot.handle == card::PageHandle{})
@@ -767,7 +765,7 @@ void Runtime::FullPresentation::upload_sprite_pages() {
         }
         if (!uploaded)
             throw FullCardError("a sprite page could not be filled: " + executor.error());
-        pages.clear_dirty(index);
+        sprite_pages.clear_dirty(index);
         slot.revision = page.revision;
     }
 }

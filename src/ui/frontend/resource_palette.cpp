@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 
 namespace oa::ui::frontend {
 namespace {
@@ -62,6 +63,9 @@ int32_t load_resource_palette(
     bool defer
 ) {
     uint8_t* palette = nullptr;
+    // A palette loaded during a match stays out of the cache; it is released on
+    // return, so apply_palette reads it only during the call.
+    std::unique_ptr<uint8_t, void (*)(void*)> uncached_palette(nullptr, std::free);
     oa_ref32 surface = 0;
     if (redraw && host.draw_current_frame != nullptr)
         host.draw_current_frame(host.context);
@@ -95,6 +99,8 @@ int32_t load_resource_palette(
                 cache->slots[0].surface = surface;
                 cache->slots[0].palette = palette;
                 copy_name(cache->slots[0].name, kResourceNameBytes, name);
+            } else {
+                uncached_palette.reset(palette);
             }
         }
     }

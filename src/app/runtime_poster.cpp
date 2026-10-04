@@ -12,6 +12,7 @@
 #include "oa/sim/messages.hpp"
 #include "oa/ui/console/game_fields.hpp"
 #include "oa/ui/console/hotkeys.hpp"
+#include "oa/ui/frontend/savegame_dialogs.hpp"
 #include "oa/ui/hud/game_fields.hpp"
 #include "oa/platform/files.hpp"
 
@@ -22,6 +23,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <memory>
 #include <new>
 #include <stdexcept>
 #include <string>
@@ -36,7 +38,6 @@ namespace console = oa::ui::console;
 namespace present = oa::present;
 
 constexpr const char* kPosterExtension = "bmp";
-constexpr std::size_t kPosterPathBytes = 0x104;
 constexpr uint8_t kSightFlags =
     console::visibility_flag::mapping | console::visibility_flag::line_of_sight;
 
@@ -61,8 +62,12 @@ present::ByteStream file_stream(std::FILE* file) {
 
 constexpr const char* kScreenshotPrefix = "SHOT";
 constexpr const char* kFilmFramePrefix = "FRAM";
-constexpr const char* kScreenshotFolder = "%s\\screenshots";
+constexpr const char* kScreenshotFolder = "\\screenshots"; // after the output directory
 constexpr int32_t kFilmTicksPerSecond = 30;
+// The poster check's long output folder: folders of this many characters,
+// until it is this much longer than Game.output_directory holds.
+constexpr std::size_t kLongFolderNameLength = 60;
+constexpr std::size_t kLongFolderExtra = 40;
 
 // Nearest palette entry by summed channel difference, the first on ties.
 uint8_t nearest_index(const oa::PaletteBytes& palette, uint8_t r, uint8_t g, uint8_t b) {
@@ -138,7 +143,8 @@ bool Runtime::save_numbered_frame(const char* directory, const char* prefix) {
         };
     files.open = [](void* context, const char* path, present::ByteStream* stream) {
         std::FILE* file = oa::platform::open_file(
-            static_cast<Runtime*>(context)->save_game_root() / save_relative_path(path), "wb"
+            static_cast<Runtime*>(context)->game_file_path(path, ui::frontend::SavePathUse::write),
+            "wb"
         );
         if (file == nullptr)
             return false;
@@ -152,17 +158,17 @@ void Runtime::capture_screenshot() {
     if (!match_)
         return;
     oa::Game& game = match_->state().game;
-    char output[sizeof game.output_directory + 1] = {};
-    std::memcpy(output, game.output_directory, sizeof game.output_directory);
+    // The folder is kept whole, however long it is.
+    const console::Console* con = match_console();
+    const std::string output =
+        console::output_directory(game, con != nullptr ? con->host : nullptr);
+    const std::string folder = output + kScreenshotFolder;
     std::error_code error;
-    fs::create_directories(save_game_root() / save_relative_path(output), error);
-    char folder[present::numbered_pcx_path_bytes];
-    // The path is cut to the buffer; one that cannot be formatted is left empty.
-    if (std::snprintf(folder, sizeof folder, kScreenshotFolder, output) < 0)
-        folder[0] = '\0';
-    fs::create_directories(save_game_root() / save_relative_path(folder), error);
-    status_ = save_numbered_frame(folder, kScreenshotPrefix) ? std::string("Saved screenshot")
-                                                             : std::string("screenshot not saved");
+    fs::create_directories(game_file_path(output, ui::frontend::SavePathUse::write), error);
+    fs::create_directories(game_file_path(folder, ui::frontend::SavePathUse::write), error);
+    status_ = save_numbered_frame(folder.c_str(), kScreenshotPrefix)
+                  ? std::string("Saved screenshot")
+                  : std::string("screenshot not saved");
     match_timing_.previous_clock =
         oa::base::game_loop::scaled_clock(clock_milliseconds(), match_clock_scale());
 }
@@ -173,10 +179,14 @@ void Runtime::capture_film_frame() {
     oa::Game& game = match_->state().game;
     if (game.capture_enabled <= 0 || game.next_capture_tick > game.tick || game.capture_rate <= 0)
         return;
-    char path[sizeof game.capture_path + 1] = {};
-    std::memcpy(path, game.capture_path, sizeof game.capture_path);
-    if (!save_numbered_frame(path, kFilmFramePrefix)) {
-        stop_film_capture(path);
+    // Game.capture_path holds the folder when it fits; a longer one is the
+    // folder the capture began in.
+    const std::string field(
+        game.capture_path, strnlen(game.capture_path, sizeof game.capture_path)
+    );
+    const std::string& path = field.empty() ? film_folder_ : field;
+    if (!save_numbered_frame(path.c_str(), kFilmFramePrefix)) {
+        stop_film_capture(path.c_str());
         return;
     }
     game.next_capture_tick += static_cast<uint32_t>(kFilmTicksPerSecond / game.capture_rate);
@@ -185,6 +195,7 @@ void Runtime::capture_film_frame() {
 }
 
 void Runtime::begin_film_capture(const char* path) {
+    film_folder_ = path;
     render();
     if (!save_numbered_frame(path, kFilmFramePrefix))
         stop_film_capture(path);
@@ -243,15 +254,16 @@ void Runtime::render_poster(
 ) {
     if (!match_)
         return;
-    char name[kPosterPathBytes];
     console::HotkeyHost files{};
     files.context = this;
     files.list_files =
         [](void* context, const char* pattern, void (*visit)(void*, const char*), void* user) {
             static_cast<Runtime*>(context)->list_save_files(pattern, visit, user);
         };
-    console::next_indexed_file_name(name, sizeof name, &files, directory, prefix, kPosterExtension);
-    std::FILE* file = oa::platform::open_file(save_game_root() / save_relative_path(name), "wb");
+    const std::string name =
+        console::next_indexed_file_name(&files, directory, prefix, kPosterExtension);
+    std::FILE* file =
+        oa::platform::open_file(game_file_path(name, ui::frontend::SavePathUse::write), "wb");
     present::ByteStream stream = file_stream(file);
     present::BmpStripWriter writer;
     present::bmp_strip_writer_init(writer);
@@ -380,10 +392,10 @@ void Runtime::check_console_poster_command(const std::function<void(const char*)
         std::ifstream in(path, std::ios::binary);
         return std::vector<uint8_t>(std::istreambuf_iterator<char>(in), {});
     };
-    const auto le32 = [](const std::vector<uint8_t>& bytes, std::size_t at) {
+    const auto le32 = [](const std::vector<uint8_t>& contents, std::size_t at) {
         return static_cast<int32_t>(
-            bytes[at] | bytes[at + 1] << 8 | bytes[at + 2] << 16 |
-            static_cast<uint32_t>(bytes[at + 3]) << 24
+            contents[at] | contents[at + 1] << 8 | contents[at + 2] << 16 |
+            static_cast<uint32_t>(contents[at + 3]) << 24
         );
     };
     const auto bytes = read(folder / "BIGSHOT0001.bmp");
@@ -468,8 +480,8 @@ void Runtime::check_console_poster_command(const std::function<void(const char*)
     capture_screenshot();
     capture_screenshot();
     const auto shot = read(folder / "SHOT0002.pcx");
-    const auto le16 = [](const std::vector<uint8_t>& bytes, std::size_t at) {
-        return static_cast<int32_t>(bytes[at] | (bytes[at + 1] << 8));
+    const auto le16 = [](const std::vector<uint8_t>& contents, std::size_t at) {
+        return static_cast<int32_t>(contents[at] | (contents[at + 1] << 8));
     };
     require(
         fs::exists(folder / "SHOT0001.pcx") && shot.size() > 128 && shot[0] == 0x0a &&
@@ -492,6 +504,7 @@ void Runtime::check_console_poster_command(const std::function<void(const char*)
     );
     game.capture_enabled = 0;
     game.capture_path[0] = '\0';
+    const std::string deep_written = check_long_output_directory(enter_line);
     // Film's change is undone before any save takes it.
     std::snprintf(game.output_directory, sizeof game.output_directory, "%s", kept_output.c_str());
     game.output_directory_changed = 0U;
@@ -501,7 +514,62 @@ void Runtime::check_console_poster_command(const std::function<void(const char*)
     fs::remove_all(save_game_root() / "posters", error);
     std::cout << "console poster check: MakePoster writes the map as BIGSHOTnnnn.bmp strip by "
                  "strip, each later strip a row higher and the bottom row black, and puts the "
-                 "view back; Ctrl+F9 writes SHOT0001/0002.pcx and the film FRAM0001.pcx\n";
+                 "view back; Ctrl+F9 writes SHOT0001/0002.pcx and the film FRAM0001.pcx"
+              << deep_written << '\n';
+}
+
+std::string
+Runtime::check_long_output_directory(const std::function<void(const char*)>& enter_line) {
+    const auto require = [](bool ok, const std::string& what) {
+        if (!ok)
+            throw std::runtime_error("console poster check: " + what);
+    };
+    oa::Game& game = match_->state().game;
+    // A folder under the save root, longer than Game.output_directory holds.
+    std::string relative = "posters";
+    while (relative.size() < sizeof game.output_directory + kLongFolderExtra)
+        relative += "\\" + std::string(kLongFolderNameLength, 'p');
+    const auto folder = save_game_root() / save_relative_path(relative);
+    // Only where the system opens the deepest picture's path.
+    if ((folder / "screenshots" / "BIGSHOT0001.bmp").native().size() > oa::platform::longest_path())
+        return "; the system opens no path long enough for the deep folder";
+    const auto kept_preferences = preferences_.image_output_directory;
+    preferences_.image_output_directory = relative;
+    // Seeding a match leaves Game.output_directory empty for a folder this long.
+    const auto seeded = std::make_unique<oa::Game>(game);
+    seed_match_options(*seeded);
+    require(seeded->output_directory[0] == '\0', "a long folder was put in Game.output_directory");
+    game.output_directory[0] = '\0';
+    capture_screenshot();
+    enter_line("+MakePoster 10 10");
+    const auto film = relative + "\\MOVIE001";
+    std::error_code error;
+    fs::create_directories(save_game_root() / save_relative_path(film), error);
+    // A film whose folder Game.capture_path cannot hold runs in the folder
+    // it began in, as Ctrl+F10 starts it (begin_film_capture).
+    game.capture_path[0] = '\0';
+    film_folder_ = film;
+    game.capture_enabled = 1;
+    game.capture_rate = 10;
+    game.next_capture_tick = game.tick;
+    capture_film_frame();
+    const auto shots = folder / "screenshots";
+    const auto frames = save_game_root() / save_relative_path(film);
+    const bool written = fs::is_regular_file(shots / "SHOT0001.pcx", error) &&
+                         fs::is_regular_file(shots / "BIGSHOT0001.bmp", error) &&
+                         fs::is_regular_file(frames / "FRAM0001.pcx", error);
+    game.capture_enabled = 0;
+    film_folder_.clear();
+    preferences_.image_output_directory = kept_preferences;
+    require(
+        written,
+        "Ctrl+F9, MakePoster and the film did not write SHOT0001.pcx, BIGSHOT0001.bmp and "
+        "FRAM0001.pcx into a folder " +
+            std::to_string(relative.size()) + " characters long"
+    );
+    return "; and into a folder " + std::to_string(relative.size()) +
+           " characters long, too long for Game.output_directory, SHOT0001.pcx, "
+           "BIGSHOT0001.bmp and FRAM0001.pcx";
 }
 
 } // namespace oa::app

@@ -70,7 +70,8 @@ std::vector<std::string> data_words(const Language& language, std::string_view w
         words.emplace_back(word);
         return words;
     }
-    for (const Language* step : fallback_chain(language).view())
+    const FallbackChain chain = fallback_chain(language);
+    for (const Language* step : chain.view())
         if (!step->game_name.empty() && (step != &english() || &language == &english()))
             words.emplace_back(step->game_name);
     return words;

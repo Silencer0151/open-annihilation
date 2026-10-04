@@ -15,6 +15,7 @@
 #include <charconv>
 #include <cstdio>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -33,12 +34,13 @@ void Runtime::seed_match_options(oa::Game& game) const {
     game.sound_flags = preferences_.sound_flags;
     // The capture directory and rate (Film, FilmSpeed, MakePoster) with their
     // change flags clear; take_match_options moves pending changes out first.
-    std::snprintf(
-        game.output_directory,
-        sizeof game.output_directory,
-        "%s",
-        preferences_.image_output_directory.c_str()
-    );
+    // A directory too long for the field leaves it empty, and the console's
+    // host gives the whole directory (console::output_directory).
+    const auto& directory = preferences_.image_output_directory;
+    if (directory.size() < sizeof game.output_directory)
+        std::memcpy(game.output_directory, directory.c_str(), directory.size() + 1);
+    else
+        game.output_directory[0] = '\0';
     game.capture_rate = static_cast<int32_t>(preferences_.movie_output_rate);
 }
 

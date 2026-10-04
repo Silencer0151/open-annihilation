@@ -39,12 +39,17 @@ struct RuntimeBindings {
 };
 
 // A loaded unit type. One that did not load holds a load_error, its names and
-// the paths it reached, and no type fields, model or script.
+// the paths it reached, and no type fields, model or script. A type whose
+// script file is not a COB the parser reads loads without a script, as one
+// whose script file is absent, and its script_error says why.
 struct LoadedType {
     Type type{};
     std::shared_ptr<const formats::objects3d::Model> model;
     std::shared_ptr<const formats::cob::CobProgram> script;
     std::string unit_name, model_path, script_path, load_error; // load_error: empty once loaded
+    /// Why the parser rejected the file at script_path; code none when the
+    /// script loaded or its file is absent.
+    base::bytes::DecodeError script_error{};
 };
 
 /// Loads a unit type's runtime fields, model and script from the game data.
@@ -58,9 +63,10 @@ struct LoadedType {
 /// @param assets game file reader
 /// @return the type and shared ownership of its parsed assets; keep it alive while the
 ///         type is in use. Without resolved weapon presence, without a footprint for
-///         a movement class, for an unbounded asset name, a missing or invalid model,
-///         an invalid script or more than 4096 GUI pages, the type did not load and
-///         its load_error says why
+///         a movement class, for an unbounded asset name, a missing or invalid model
+///         or more than 4096 GUI pages, the type did not load and its load_error
+///         says why. A script file the COB parser rejects leaves the type loaded
+///         without a script, with script_error holding the parser's error
 LoadedType load_runtime_type(
     const data::unit_definitions::UnitDefinition& definition,
     const RuntimeBindings& bindings,

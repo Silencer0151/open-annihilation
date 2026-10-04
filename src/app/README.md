@@ -368,7 +368,12 @@ logs it.
   the draws under the first differing pixel listed and a picture of them
   when it does not; a Full frame leaves what the match reads back
   (`match_draw_read_back`) as the standard tier's frame of the same moment
-  does; at zoom 0.5 with the
+  does; with damage bars on, every health bar the frame lays out
+  (`drawn_health_bars_`) has its zoom's size in the Off, Basic and Full
+  tiers alike (`health_bar_size`: 35 by 5 pixels at zoom 1 and in, 29 by
+  5 at 0.75, 23 by 3 at 0.5, 15 by 3 at a quarter and 13 by 3 at a sixth)
+  and each no other bar covers shows its trough and fill on the frame,
+  with pictures of each; at zoom 0.5 with the
   camera on an even map pixel the terrain under a transparent overlay,
   where the standard tier shows terrain too, equals that tier's box filter
   exactly, and at 0.75 the blend of the two levels, the card's own filter,
@@ -771,11 +776,17 @@ logs it.
   both open centred on the screen, at every window size and interface
   scale (the save dialog's centring is in [VARIANCES.md](../../VARIANCES.md));
   at the end of a mission the save dialog keeps its place from the GUI
-  file, as in 3.1c (`enter_load_game`, `runtime_load_game.cpp`). The save
-  dialog saves only through OK and Return at the end of the name; a click
-  on the name field gives it the keys (`savegame_on_save_press`). In the
-  load dialog Return is OK and Escape is CANCEL, as in the save dialog:
-  Escape leaves either dialog as its CANCEL does (`leave_load_dialog`).
+  file, as in 3.1c (`enter_load_game`, `runtime_load_game.cpp`). The
+  dialogs' buttons are clicked as the frontend's own are: a press holds the
+  button, drawn pressed while the pointer stays over it, and only a release
+  over it acts; a release away from it does nothing
+  (`activate_load_game_gadget`). The save dialog saves only through OK and
+  Return at the end of the name; a click on the name field gives it the
+  keys (`savegame_on_save_press`). In the load dialog Return is OK and
+  Escape is CANCEL, as in the save dialog: Escape leaves either dialog as
+  its CANCEL does (`leave_load_dialog`), for the screen it was opened over,
+  as in 3.1c: Single Player, the in-game menu or the end-of-mission panel,
+  with saves listed or none.
 - `runtime_scroll_bars.cpp`: the scroll bars of the frontend screen's panel
   and of the match HUD's panel (`renderer::LayoutScrolls`), bound as each
   panel's first draw binds them, drawn over it, driven by the pointer and
@@ -954,7 +965,7 @@ logs it.
   `Down`), both reaching an open dialog or menu first, as the player's do,
   and `settings SECTION` opens the settings dialog beside the
   in-game menu at the section its list names so, such as
-  `settings Language & Text`;
+  `settings Language`;
   `native-stage` checks it. A save/load run ends by
   reporting the live units by type, the veterans by veterancy level, the
   stockpiled rounds, the buildings by facing and each player's health.
@@ -966,7 +977,10 @@ logs it.
   by `unit` or `place`, into a group, and `group` alone stops gathering;
   `move GROUP X Z` and `patrol GROUP X Z` give a group's live units that
   order to map pixel X, Z, `attack GROUP TARGETS` sets each of them on
-  the nearest live unit of another group, and `activate GROUP` and
+  the nearest live unit of another group, `attack-ground GROUP X Z`
+  commands them to attack the ground at map pixel X, Z, `guard GROUP
+  GUARDED` sets them guarding the first live unit of another group, and
+  `activate GROUP` and
   `deactivate GROUP` switch them on and off with the order panel's ON/OFF
   button's orders (`give_state_order`, which the button gives each
   selected unit), as a player's orders do; a type that cannot be switched
@@ -1169,7 +1183,12 @@ logs it.
   section of nine rows, `engine_settings_tall_section.hpp`, shown in place
   of the open section's rows; the wheel events are the check host's
   (`check_host_input.hpp`). With `--snapshot`, the check writes each of
-  those frames beside the named file.
+  those frames beside the named file. While an extension's overlay stands
+  over the main menu, the check first clicks the OA button in the menu's
+  top-right corner through that overlay and closes the dialog it opens;
+  then it sets the extensions' overlays aside
+  (`Runtime::set_extension_overlays_aside`) until it ends, so that every
+  frame it compares is the engine's own drawing over TA's own layout.
   `native-engine-settings-determinism`
   (`tools/check_native_engine_settings.py`) checks that every setting at its
   default plays the game as it plays without any, and that the settings that
@@ -1570,12 +1589,68 @@ the game's window ([docs/game-files.md](../../docs/game-files.md)).
 - `game_files_screen.cpp` runs the screen's loop and controller over the
   model of [src/ui/game-files](../ui/game-files/README.md);
   `game_files_paint.cpp` paints its layout with the touch controls' painter
-  and the bundled fonts; `game_files_dialog.cpp` hosts the Language & Text
+  and the bundled fonts; `game_files_dialog.cpp` hosts the Language
   settings over it.
 - `game_files_check.cpp` is `--check-game-files`: scripted hooks, the route
   driven by taps and keys, pictures of each step and the verdict line.
 - `runtime_game_files.cpp` fills Settings › Game files and opens the
   screen's management state from its MANAGE… button over the main menu.
+
+## The player's own folder
+
+`user_folder.cpp` (`oa-app-user-folder`, `user_folder.hpp`) keeps the
+player's saved games, screenshots, films and mods in one folder they can
+find: `--user-folder`, else the preferences' `open-annihilation.user-folder`,
+else `Open Annihilation` in their Documents folder
+(`oa::platform::preferences::default_user_folder`), or beside a named
+`--preferences-file`, so that a check never reaches the Documents folder
+(`choose_user_folder`, `user_folder_beside`). It holds `Saves`, with
+`Saves/<mod id>` for each mod's, `Screenshots`, `Films` and `Mods`, each
+made when first needed. `runtime_user_folder.cpp` puts it in effect:
+
+- **Paths:** `Runtime::game_file_path` places each path the game names: a
+  `SAVEGAME` path in `Runtime::saves_folder`, or for reading in the
+  `SAVEGAME` folder beside the preferences file while that folder holds the
+  name and Saves does not (`savegame_host_path`, `SaveRoots`); any other
+  relative path under `save_game_root`, as before; and within the player's
+  own folder, which is the Image Output Directory by default
+  (`own_image_output_directory`), the `screenshots` folder is `Screenshots`
+  and a `MOVIEnnn` folder lies in `Films`. A stored Image Output Directory
+  that is the game's default, the game folder's folder named after the
+  user, gives way to it; any other one the player chose wins.
+- **The move:** the first start with the player's own preferences file
+  that finds no `open-annihilation.saves-moved` record moves the saved
+  games earlier versions kept beside that file, `SAVEGAME` and each
+  `mods/<id>/SAVEGAME`, into `Saves` and `Saves/<id>` (`move_saves_once`,
+  `move_earlier_saves`); with `--preferences-file` or `--user-folder`
+  nothing moves, so that a folder named for one start never takes them
+  from the next. Nothing is overwritten: a name Saves holds, matched
+  without case, is kept, and the file moved takes a free one,
+  `NAME (2).SAV` (`free_file_name`). A file is renamed, else
+  copied and the original removed once the copy is whole, else left where
+  it is, where the dialogs and the console still find it. Each step is said
+  on standard error, which the log keeps. A move that moved or left a file
+  is recorded, and one that moved or left a saved game makes the notice
+  due (`record_saves_move`).
+- **The notice:** `tell_saves_moved` shows it over the darkened main menu
+  once, as the renderer records' notice is shown: in the settings dialog's
+  look (`oa/ui/engine_settings/notice.hpp`), with the count, the Saves
+  path wrapped at its separators, and that screenshots, films and mods now
+  go in the same folder; **Open folder** shows Saves and **OK**, Enter and
+  Escape close it (`UserFolderState`). Showing it records it `told`. A run
+  nobody watches leaves it due.
+- **Opening folders:** the settings' Your files buttons and the notice show
+  a folder through `system_folder_opener` (`user_folder_open.cpp`): the
+  platform's own `PlatformHooks::show_folder` where it has one (the Files
+  app on iOS, through its `shareddocuments` link); else `open` on macOS,
+  the shell's open verb on Windows, `xdg-open` on Linux, or the desktop
+  portal through `gdbus` where `xdg-open` is missing. A build that starts
+  no other programs (`OA_PROCESS_SPAWNING` off) and has no such hook shows
+  none and says no file manager is there. A run nobody watches records the
+  requests instead (`recorded_folder_opener`).
+
+`--check-user-folder` (`native-user-folder`, `runtime_user_folder_check.cpp`)
+checks all of it beside its preferences file.
 
 ## Mod profile and mod folders
 
@@ -1598,11 +1673,86 @@ A mod plays in one of two ways, which give the same game:
   layered over a plain game folder: `--mod-dir PATH`, or the folder the
   preferences remember (`open-annihilation.mod-directory`); `--base-game`
   plays without the remembered one, and one that is gone is dropped with a
-  notice. `list_mod_folders` lists the folders of the game folder's `mods`
-  folder that hold a profile, which the Open Annihilation settings offer
-  (Gameplay, Mod); the choice applies from the next start, since one profile
-  plays per run. A game folder holding its own `oamod.yaml` cannot carry a
-  mod folder.
+  notice (the settings then show No Mod, and their next save stores the
+  choice over it: `EngineSettingsState::dropped_mod_folder`). Either flag
+  locks the Mod setting for the run (`GameState::mod_from_command_line`),
+  and a match locks it while it runs. A game folder holding its own
+  `oamod.yaml` cannot carry a mod folder. A mod folder without an
+  `oamod.yaml` layers over the game folder with no profile, by 3.1c's own
+  rules, which the start says on standard output.
+
+The settings' **Mods** page (`runtime_engine_settings.cpp`) lists the mod
+folders of the game folder's `mods` folder (`list_mod_folders`), of the
+player's own `Documents/Open Annihilation/Mods` (`list_mods_in`), the folder
+an earlier version's Pick Folder... stored
+(`open-annihilation.picked-mod-directory`) while it is still a folder, and
+the one played; a folder listed twice shows once. `read_mod_summary`
+(`mod_summary.hpp`) reads each row from the folder alone, without resolving
+its profile: its `oamod.yaml`'s name, version and description, and its
+`oamod.png` badge, decoded by the engine's PNG reader
+(`oa/formats/png.hpp`); a folder without an `oamod.yaml` shows its folder
+name, "N/A" and "No oamod.yaml present". OPEN MODS FOLDER opens
+`Documents/Open Annihilation/Mods` with the Your files buttons' opener.
+
+Choosing another row asks Switch Mod. SWITCH (`DialogAction::switch_mod`)
+first checks the folder as the next start will play it
+(`check_picked_mod_folder`): one it could not play is refused, the line under
+the list says why, and the dialog stays open. Otherwise it puts the dialog's
+settings in effect and saves them as OK does, the new Mod among them, then
+asks for a soft restart (`Runtime::soft_restart_requested`); a save that
+fails leaves the game as it is and says so. The runtime's loop ends after
+that frame. `main()` (`run_once`) frees the textures the runtime made on the
+renderer (`Runtime::release_renderer_textures`), destroys the Runtime and the
+mounted archives, runs the game-folder search again, which reads the newly
+stored mod and resolves its profile, sets the data layout again, mounts the
+archives again and builds a new Runtime on the same window and renderer, with
+the full-screen state Alt+Enter left and the intro movies skipped
+(`Options::restarts`), which opens on the main menu playing the new mod. The
+player never exits the game. `--check-mod-switch` (`native-mod-switch`,
+`runtime_mod_switch_check.cpp`) switches ten times between No Mod and two
+test profiles through that same path, on the dummy video driver's window,
+and requires the working set as the last round's runs reach the main menu
+to stay within 3 MiB of the round's before that played the same mods.
+
+A mod folder whose profile plays but whose game files are missing is never
+refused (`runtime_mod_warning.cpp`). `Runtime::mod_start_gaps` finds what
+keeps its games from starting: no unit in its folders that the match's
+unit catalog keeps, under the Version and Copyright rules a match applies,
+or a side SIDEDATA names whose commander is not among them (a side that
+names none is passed over), looked for in the file of the commander's own
+name and, when not found so, by the UnitName each definition gives
+(`find_mod_start_gaps`, `user_folder.cpp`). It also finds, for any mod
+(`Runtime::plays_mod`), with a profile or without one, each file a side's
+section names, its intgaf or font, that the mod's folders lack
+(`Runtime::missing_side_files`): the warning names them, and its games
+start and play without them, a side without its intgaf's GAF drawn without
+panels and one without its font in COMIX, unmeasured, as sides that name
+none (`Runtime::match_side_file`). The game played without a mod ends its
+start instead when such a file is missing, naming the first: every side's
+intgaf before any side's font (`Runtime::require_side_files`). The Mods
+page refuses a folder without a profile whose start would end on a side's
+missing section or no side at all, before anything is stored
+(`Runtime::side_data_problem_over`). SIDEDATA and the files its sides name
+are looked for in the language folders of the language the game starts in
+first (`gamedata-German`, `anims-German`, `fonts-German`), once for the
+run; a language chosen later reads them at the next start. The main menu
+shows the warning (`mod_files_missing_notice`) once from each start of a
+mod that lacks any of these (`Runtime::tell_incomplete_mod`), as the notice of the saved games' move, in
+the settings dialog's look, its OPEN MOD FOLDER button showing the mod's
+folder through the same opener. Every start of a game asks
+`Runtime::refuse_incomplete_mod_start` first, which refuses it only for
+missing units or a missing commander: Skirmish's Start, the main
+menu's MULTI, a campaign mission and a saved game, and a shared game's
+launch through `Runtime::bootstrap_match`, which network play's launch
+calls, so network play names no new private name of `Runtime`.
+A refused start shows the warning over the screen it was asked from, which
+stays, or, from a match, the loading screen or a screen package's frame,
+over the main menu when it next shows. A skirmish start that fails all the
+same (`Runtime::start_skirmish_from_setup`) leaves no match and sets the
+skirmish setup up again, with the warning or the failure in a message box,
+in place of ending the program. `--check-mod-warning`
+(`native-mod-warning`, `runtime_mod_warning_check.cpp`) checks the warning
+and the refused start through the Mods page's Switch Mod question.
 
 `inspect_game_install` resolves the profile (`resolve_folder_profile`) before
 any archive is mounted: `--mod`'s file, else the mod folder's, else the game
@@ -1640,7 +1790,8 @@ runtime then:
   `registry:<root>\<section>|<name>` keys, unless the root is the base
   game's; a first run seeds the profile's registry seeds where no value of
   that name, matched without case, exists (`seed_registry`);
-- keeps saved games in `mods/<id>` below the preferences folder;
+- keeps saved games in `Saves/<id>` in the player's own folder
+  (`Runtime::saves_folder`);
 - reads the movies, the music folder and the disc archives through the
   folders, the mod folder first; a profile whose `cd-check` is false always
   finds its disc.
@@ -1667,7 +1818,8 @@ lays the player's overrides of the standard hacks
 it reads again what the profile is resolved from, the mod's file and the
 settings it binds (`folder_profile_source`), or without a mod the plain
 3.1c baseline (`base_game_profile_text`); the id the overrides are kept
-under, the profile's or `ta-3.1c`; and the profile's hacks as the dialog
+under, the profile's, `ta-3.1c`, or for a mod folder without a profile
+`folder:` and its path (`folder_overrides_id`); and the profile's hacks as the dialog
 shows them. Each time Developer Mode or the overrides change,
 `apply_hack_overrides` resolves the profile again with them as its last
 layer, reporting on standard error, once, each override the resolver left
@@ -1726,7 +1878,8 @@ into the records and decisions of the modules that carry them out, and
   stored width or height to it as they are read (`display_mode_setting`).
   Ctrl+F9 and Print Screen, on release and on every screen before the
   screen sees them (`handle_view_rule_key`), save the frame as an 8-bit
-  PCX in the `screenshots` folder of the player's data folder, named by
+  PCX in the Image Output Directory's `screenshots` folder, the player's
+  own folder's `Screenshots` by default (`Runtime::game_file_path`), named by
   the date, the map and the players, or SHOT outside a match, with the
   first unused number from 0 (`screenshot_file_name`,
   `capture_named_screenshot`). The graphics-driver warning `dx-warning`
@@ -1818,7 +1971,7 @@ into the records and decisions of the modules that carry them out, and
   the input method's composition after its text until it is committed, and
   Backspace in the chat line and on the whiteboard takes the whole last
   character.
-- **Game text** (the Language & Text settings, `text_style`): the match's
+- **Game text** (the Language settings, `text_style`): the match's
   text, what players type and send and their names are drawn as
   `oa/present/game_text.hpp` lays them out (`runtime_game_text.cpp`): with
   Use modern fonts for game text, in the bundled fonts through FreeType

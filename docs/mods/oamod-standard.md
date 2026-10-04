@@ -28,7 +28,8 @@ The standard hacks themselves are listed in the
   - [4.1 Copied install and mod folder](#41-copied-install-and-mod-folder) ·
     [4.2 Choosing a mod](#42-choosing-a-mod) ·
     [4.3 Command-line options](#43-command-line-options) ·
-    [4.4 Saves and settings](#44-saves-and-settings)
+    [4.4 Saves and settings](#44-saves-and-settings) ·
+    [4.5 The badge](#45-the-badge)
 - [5. Parameters, defaults and presets](#5-parameters-defaults-and-presets)
   - [5.1 What the registry declares](#51-what-the-registry-declares) ·
     [5.2 Ways to write a limit or hack](#52-ways-to-write-a-limit-or-hack) ·
@@ -150,6 +151,7 @@ optional.
 | `id` | The mod's stable id: lower-case words of `a`-`z` and `0`-`9` joined by single hyphens | `id: example-mod` |
 | `name` | The mod's display name, a string | `name: Example Mod` |
 | `version` | The mod's version, a string | `version: "2.1"` |
+| `description` | One line about the mod, a string of at most 120 characters with no line break or other control character. The Mods page of the Open Annihilation settings shows it under the mod's name and version. | `description: "Larger armies and renamed data directories."` |
 | `requires` | The base game and registry catalogue the profile is written for: `base` must be `ta-3.1c` and `catalogue` must be `1` | `requires: {base: ta-3.1c, catalogue: 1}` |
 | `author` | Who made the mod: `name`, and optionally `email` | `author: {name: A. Modder}` |
 | `packaging` | Who packaged the profile and the mod's files, when, and how often since: `revision`, `date` and `packager` | `packaging: {revision: 1, date: 2026-10-04, packager: P. Packer}` |
@@ -289,6 +291,9 @@ on:
 - a missing `author` or `packaging` block, a missing `author.name`,
   `packaging.revision`, `packaging.date` or `packaging.packager`, a
   malformed e-mail address, or a date that is not a calendar day;
+- a `description` that is not a string, holds a line break, a line or
+  paragraph separator or another control character, or is longer than 120
+  characters (counted as Unicode characters, not bytes);
 - a script index mounted twice, outside 0 to 65,535, or inside 3.1c's own
   range 1 to 20; an extension mounted at two indices; an extension of the
   other direction;
@@ -335,7 +340,9 @@ The engine reads the profile before it mounts any archive:
 
 - **Present:** the profile is read, validated and applied. A profile that
   fails validation stops the game from starting and names every error.
-- **Absent:** the folder plays 3.1c.
+- **Absent:** the folder plays 3.1c. A mod folder without a profile is
+  still layered over the game folder, as below, and the game plays its
+  files by 3.1c's own rules.
 
 A mod folder over a game folder gives exactly the files a copied install of
 the same files would give:
@@ -359,11 +366,18 @@ One profile plays per run. The profile comes from, in order:
    the one the preferences remember;
 3. else the game folder's own `oamod.yaml`, for a copied install.
 
-The game's settings (Gameplay, Mod) list the folders inside the game
-folder's `mods` folder that hold a profile. A choice made there is
-remembered and applies from the next start. A remembered mod folder that is
-gone is dropped with a notice. There is no detection of installed mods and
-no built-in list of mods.
+The **Mods** page of the Open Annihilation settings lists the mod folders
+in the game folder's `mods` folder and in the player's own
+`Documents/Open Annihilation/Mods` folder, the mod being played first. Each
+row shows the mod's badge ([4.5](#45-the-badge)), and from its `oamod.yaml`
+its `name`, its `version` and its `description`; a folder without an
+`oamod.yaml` shows the folder's name, "N/A" and "No oamod.yaml present".
+Choosing another mod there, once the player confirms it, reloads the game's
+data for that mod and returns to the main menu without restarting the game,
+and the choice is remembered for later starts. A remembered mod folder that
+is gone is dropped with a notice. There is no detection of installed mods
+and no built-in list of mods. The [mod support overview](README.md#choosing-a-mod)
+describes the page.
 
 ### 4.3 Command-line options
 
@@ -382,18 +396,41 @@ Every run that plays a profile names it and its sim hash.
 
 Game folders are never written to.
 
-- **Saved games** go to the player's own data folder, and with a profile to
-  `mods/<id>` below it, so different mods never share a list of saved
-  games. A save made under a profile records the profile's id, version,
-  catalogue and hashes, and loads only under a profile with the same sim
-  hash; otherwise the status line names both. A save without a profile
-  record loads under any profile.
+- **Saved games** go to `Saves` in the player's own folder,
+  `Documents/Open Annihilation/Saves` ("Where it keeps its files" in the
+  [installation guides](../installation/macos.md#where-it-keeps-its-files)),
+  and with a profile to `Saves/<id>`, so different mods never share a list
+  of saved games. The saved games versions before 0.7 kept beside the
+  preferences file are moved there once, on the first start. A save made
+  under a profile records the profile's id, version, catalogue and hashes,
+  and loads only under a profile with the same sim hash; otherwise the
+  status line names both. A save without a profile record loads under any
+  profile.
 - **The mod's INI file** (`identity.settings-file`) is read, never written,
   from the first folder that holds it, the mod folder first.
 - **Registry settings** are kept in the engine's own preferences, under the
   profile's registry root, unless that root is 3.1c's own. On a mod's first
   run, the profile's registry seeds are written there wherever no value of
   that name, matched without case, exists yet.
+
+### 4.5 The badge
+
+A mod folder can hold a badge: a PNG image named `oamod.png`, matched
+without case, beside its `oamod.yaml`. The Mods page shows it, about 40
+pixels across, at the left of the mod's row.
+
+- Make it square, 64 by 64 pixels. A badge larger than that is scaled down
+  to fit within 64 by 64 as it is read, keeping its proportions.
+- Any standard PNG colour type and bit depth is read: grey, grey with
+  alpha, RGB, RGB with alpha and palette images, interlaced or not. An
+  alpha channel is kept; transparency given by a `tRNS` chunk is not, so a
+  palette badge is drawn opaque.
+- The badge is optional. When it is missing, cannot be read, is not a PNG,
+  is larger than 256 by 256 pixels or is over 256 KiB, the row shows a blank
+  dashed placeholder in its place, and the mod plays all the same.
+
+The badge is not part of the profile: it never changes the profile's hashes
+and is never checked when the mod is played.
 
 ## 5. Parameters, defaults and presets
 
@@ -646,7 +683,9 @@ There is no weapon-id limit: every profile keeps 3.1c's 256 weapon ids.
 A script extension is a unit-script value 3.1c lacks, implemented once and
 mounted at whatever `get` index a mod's compiled scripts use. Indices 1 to
 20 are 3.1c's own and cannot be mounted. An index holds one extension, and
-an extension is mounted at one index.
+an extension is mounted at one index. Each extension has a page under
+[script-extensions/](script-extensions/) with its syntax in a unit script,
+examples of its use and its edge cases.
 
 ### 7.1 Mounting
 
@@ -677,19 +716,24 @@ nothing.
 
 ### 7.2 Well-known extensions
 
+Each id links to the extension's page.
+
+<!-- BEGIN GENERATED: script extensions table -->
 | Id | Usual index | Argument | Returns |
 | --- | --- | --- | --- |
-| `unit.kills-x100` | 32 | — | The caller's kill count times 100 (a count, not a level) |
-| `unit.min-id` | 69 | — | 1 |
-| `unit.max-id` | 70 | — | The player's configured unit limit times 10. It follows the unit limit in the player's settings, not the one the host chose for this game, and the game's limit when no setting is recorded. |
-| `unit.my-id` | 71 | — | The caller's unit id |
-| `unit.owner-of` | 72 | unit id | The owner index of that unit's slot |
-| `unit.build-percent-left-of` | 73 | unit id | That unit's `BUILD_PERCENT_LEFT`: 0 when finished, else 1 to 100 |
-| `unit.allied-with` | 74 | unit id | 1 when the caller's owner has allied the target's owner, else 0. Alliance is one-way: the target's owner need not have allied back. |
-| `unit.is-local` | 75 | unit id | 1 when the unit's owner is a human or computer player on this machine, else 0 |
+| [`unit.kills-x100`](script-extensions/unit.kills-x100.md) | 32 | — | The calling unit's kill count times 100 (a count, not a veterancy level). |
+| [`unit.min-id`](script-extensions/unit.min-id.md) | 69 | — | 1, the lowest id a unit can have. |
+| [`unit.max-id`](script-extensions/unit.max-id.md) | 70 | — | The unit limit the game recorded, times 10. A skirmish or multiplayer game records its own limit, so this is the last id of the unit table; a campaign mission records the player's Unit limit setting. |
+| [`unit.my-id`](script-extensions/unit.my-id.md) | 71 | — | The calling unit's own id. |
+| [`unit.owner-of`](script-extensions/unit.owner-of.md) | 72 | unit id | The number of the player that owns that unit's slot, 0 for the first player to 9 for the tenth. Under `exact`, id 0 answers 255, and in a multiplayer game an id in the range of a player place nobody took answers 10. |
+| [`unit.build-percent-left-of`](script-extensions/unit.build-percent-left-of.md) | 73 | unit id | That unit's `BUILD_PERCENT_LEFT`: 0 when it is finished, else 1 to 100. |
+| [`unit.allied-with`](script-extensions/unit.allied-with.md) | 74 | unit id | 1 when the calling unit's owner has allied the owner of that unit's slot, else 0. Alliance is one-way: the target's owner need not have allied back. |
+| [`unit.is-local`](script-extensions/unit.is-local.md) | 75 | unit id | 1 when the owner of that unit's slot is a human or computer player on this machine, else 0. |
+<!-- END GENERATED: script extensions table -->
 
 A unit id names its slot by its low 16 bits, except for
-`unit.build-percent-left-of` under `exact` fidelity, below.
+`unit.build-percent-left-of`, which reads its whole argument under either
+fidelity, below.
 
 Two 3.1c behaviours stay as they are and need no extension: `get HEALTH`
 ignores any unit-id argument and returns the caller's own health, and the
@@ -716,8 +760,18 @@ a `safe` machine never share a game.
 `unit.is-local` differs between machines by design: a script uses it to run
 something, such as a muzzle flash, only on the owner's machine. A script
 that decides anything every machine must agree on from it breaks the game.
-The other extensions read state every machine shares, and agree everywhere
-as long as unit slots are given out the same way (see
+
+The other extensions read state that reaches every machine, though in a
+multiplayer game not always at the same moment. Each machine simulates its
+own players' units, so on this machine another machine's units are created,
+built, credited with kills and destroyed a moment after they are on their
+owner's; an alliance change takes effect first on the machine of the player
+who makes it. Until the news arrives, `unit.kills-x100`,
+`unit.build-percent-left-of`, `unit.allied-with` and, under `safe` fidelity,
+`unit.owner-of` can answer differently on two machines. `unit.min-id`,
+`unit.max-id`, `unit.my-id` and, under `exact`, `unit.owner-of` answer alike
+on every machine. Each extension's page says how it behaves in network play.
+All of them rely on every machine giving out unit slots the same way (see
 [`units.id-reuse-delay`](standard-hacks/units.id-reuse-delay.md)).
 
 ## 8. Data keys and engine conformance
@@ -766,10 +820,10 @@ part of playing 3.1c:
 
 | Area | Behaviour |
 | --- | --- |
-| Unit scripts | `set ARMORED` turns on `DamageModifier`; a negative `EnergyUse` is paid out while the unit is activated; a script can attach and drop any unit, and attaching to piece −1 hides the passenger; scripts may scan every unit slot with no limit on instructions per tick; `MoveRate` calls reach ground units. |
+| Unit scripts | `set ARMORED` turns on `DamageModifier`; a negative `EnergyUse` is paid out while the unit is activated; a script can attach and drop any unit, and attaching to piece −1 hides the passenger; scripts may scan every unit slot in one tick without sleeping; `MoveRate` calls reach ground units. |
 | Deaths and wrecks | `setSFXoccupy` codes reach `Killed`; corpse types up to 25; wrecks that turn into further wrecks over several steps. |
 | AI and builds | Build orders named `MAKENUKE` and `MAKEANTI` become stockpile orders; manual fire of the third weapon works with an empty second weapon. |
-| Sides | Side art and the interface come from SIDEDATA's `nameprefix`; commanders and build lists come from SIDEDATA, never from fixed unit names. |
+| Sides | A side's HUD panels come from the GAF its SIDEDATA `intgaf` names, its resource numbers and unit panel are drawn in the font its `font` names, and its resource bars come from its own `SIDEn` section; the rest of its interface, such as its general build pages, follows its `nameprefix`. Commanders and build lists come from SIDEDATA, never from fixed unit names. |
 | Transports | A script may drop every passenger at once; a blocked drop cell is handled as 3.1c handles it. |
 | Loading | Missing weapons, sounds, fonts and sprite sequences; unknown unit names in AI profiles; misspelled SIDEDATA sections; duplicate unit and feature names; a missing semicolon; brackets inside weapon names; non-square footprints of mobile units; maps without a terrain file. Each loads as 3.1c loads it. |
 | Files | An empty file wins its path and contributes nothing, hiding the file beneath it. |
@@ -825,8 +879,8 @@ does not show the others yet.
 
 Resolution gives the **effective profile**: every value the profile sets,
 resolved in the order of [5.3](#53-resolution-order). It holds `oamod`,
-`id`, `name`, `version`, `requires`, `author` and `packaging` as written;
-every identity, layout,
+`id`, `name`, `version`, `description`, `requires`, `author` and
+`packaging` as written; every identity, layout,
 string and media value, written or at its baseline; every limit, with each
 parameter; every hack that is on, with each parameter; the script
 extensions with their fidelity; the data-key bindings; and the settings
@@ -842,8 +896,9 @@ change it, so two profiles that mean the same thing hash the same.
   part: `oamod`, the catalogue number, the sim-scope identity and layout
   values, every limit and every hack whose entry is sim scope with its
   sim-scope parameters, the script extensions and their fidelity, and the
-  sim-scope data keys. It leaves out `id`, `name`, `version`, `requires`,
-  `author`, `packaging`, the settings block, strings, media, the visual
+  sim-scope data keys. It leaves out `id`, `name`, `version`,
+  `description`, `requires`, `author`, `packaging`, the settings block,
+  strings, media, the visual
   hacks and every view value.
 
 The sim hash names the ruleset. Two profiles with the same sim hash play the
@@ -954,9 +1009,10 @@ limits) and [src/app](../../src/app/README.md#mod-profile-and-mod-folders)
    ([12.3](#123-wire-behaviour-a-profile-selects)).
 7. **Display rules.** The visual hacks change only what this machine draws
    and plays and how its input works, never what another machine is told.
-8. **The front end** shows the profile's display version on the main menu,
-   keeps the game's settings under its registry root, seeds its registry
-   values on a first run, and keeps its saves in `mods/<id>`
+8. **The front end** shows the profile's display version on the main menu
+   and its name, version, description and badge on the Mods page of the
+   settings, keeps the game's settings under its registry root, seeds its registry
+   values on a first run, and keeps its saves in `Saves/<id>`
    ([4.4](#44-saves-and-settings)).
 
 ## 14. A fuller example
@@ -972,6 +1028,7 @@ oamod: 1
 id: example-mod
 name: Example Mod
 version: "2.1"
+description: "A larger unit limit, renamed data directories and veterancy by thresholds."
 requires: {base: ta-3.1c, catalogue: 1}
 author: {name: Example Team, email: team@example.com}
 packaging: {revision: 2, date: 2026-10-04, packager: P. Packer}

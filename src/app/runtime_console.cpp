@@ -10,6 +10,7 @@
 #include "oa/app/hook_call.hpp"
 #include "oa/app/match_console.hpp"
 #include "oa/app/asset_files.hpp"
+#include "oa/app/game_directory.hpp"
 #include "oa/base/text.hpp"
 #include "oa/formats/cob.hpp"
 
@@ -25,6 +26,7 @@
 #include "oa/ui/console/console.hpp"
 #include "oa/ui/console/game_fields.hpp"
 #include "oa/ui/console/hotkeys.hpp"
+#include "oa/ui/frontend/savegame_dialogs.hpp"
 #include "oa/ui/hud/chat_panel.hpp"
 #include "oa/ui/hud/game_clock.hpp"
 #include "oa/ui/hud/status_panel.hpp"
@@ -47,6 +49,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 #include <tuple>
 
 namespace oa::app {
@@ -265,35 +268,37 @@ console::Console* Runtime::match_console() {
             return runtime_of(context)->console_read_text_file(path, length);
         };
         host.free_text_file = [](void*, char* text) { std::free(text); };
-        // Files 3.1c writes in the game directory go to the save root.
+        // Files 3.1c writes in the game directory go to the save root, saved
+        // games and captures to the player's own folder.
         host.create_directories = [](void* context, const char* path) {
             std::error_code error;
             fs::create_directories(
-                runtime_of(context)->save_game_root() / save_relative_path(path), error
+                runtime_of(context)->game_file_path(path, ui::frontend::SavePathUse::write), error
             );
         };
         // Creates or truncates the file.
         host.touch_file = [](void* context, const char* path) {
-            const auto target = runtime_of(context)->save_game_root() / save_relative_path(path);
+            const auto target =
+                runtime_of(context)->game_file_path(path, ui::frontend::SavePathUse::write);
             std::ofstream(target, std::ios::binary | std::ios::trunc).flush();
         };
-        host.save_game = [](void* context,
-                            const char* path,
-                            const char* description,
-                            int32_t game_id) {
-            auto* runtime = runtime_of(context);
-            // The status line holds why a save failed; it goes to the log,
-            // as the save dialog's failures do.
-            try {
-                if (!runtime->save_match_game(
-                        runtime->save_game_root() / save_relative_path(path), description, game_id
-                    ))
+        host.save_game =
+            [](void* context, const char* path, const char* description, int32_t game_id) {
+                auto* runtime = runtime_of(context);
+                // The status line holds why a save failed; it goes to the log,
+                // as the save dialog's failures do.
+                try {
+                    if (!runtime->save_match_game(
+                            runtime->game_file_path(path, ui::frontend::SavePathUse::write),
+                            description,
+                            game_id
+                        ))
+                        std::cerr << "open-annihilation: " << runtime->status_ << '\n';
+                } catch (const std::exception& failure) {
+                    runtime->status_ = std::string("Save: ") + failure.what();
                     std::cerr << "open-annihilation: " << runtime->status_ << '\n';
-            } catch (const std::exception& failure) {
-                runtime->status_ = std::string("Save: ") + failure.what();
-                std::cerr << "open-annihilation: " << runtime->status_ << '\n';
-            }
-        };
+                }
+            };
         host.now_ms = [](void* context) -> uint32_t {
             return runtime_of(context)->clock_milliseconds();
         };
@@ -338,6 +343,10 @@ console::Console* Runtime::match_console() {
                                 int32_t width,
                                 int32_t height) {
             runtime_of(context)->render_poster(directory, prefix, x, y, width, height);
+        };
+        // The posters' folder when it is too long for Game.output_directory.
+        host.output_directory = [](void* context) -> const char* {
+            return runtime_of(context)->preferences_.image_output_directory.c_str();
         };
         // Not bound: build snapping, which only changes its own state.
         // "Contour" keeps its spacing from game to game, as in 3.1c.
@@ -663,8 +672,8 @@ bool Runtime::refuse_take_line(const char* text) {
 void Runtime::list_save_files(
     const char* pattern, void (*visit)(void* user, const char* name), void* user
 ) const {
-    const auto path = save_game_root() / save_relative_path(pattern);
-    const auto wildcard = path.filename().string();
+    const auto path = game_file_path(pattern, ui::frontend::SavePathUse::write);
+    const auto wildcard = path_to_utf8(path.filename());
     const auto star = wildcard.find('*');
     const auto prefix = wildcard.substr(0, star);
     const auto suffix = star == std::string::npos ? std::string() : wildcard.substr(star + 1);
@@ -672,13 +681,21 @@ void Runtime::list_save_files(
         return std::toupper(static_cast<unsigned char>(a)) ==
                std::toupper(static_cast<unsigned char>(b));
     };
-    std::error_code error;
-    for (const auto& entry : fs::directory_iterator(path.parent_path(), error)) {
-        const auto name = entry.path().filename().string();
-        if (name.size() >= prefix.size() + suffix.size() &&
-            std::equal(prefix.begin(), prefix.end(), name.begin(), same) &&
-            std::equal(suffix.rbegin(), suffix.rend(), name.rbegin(), same))
-            visit(user, name.c_str());
+    // The saved games' folder, then the folder that held them before, whose
+    // names are taken too.
+    std::vector<fs::path> folders{path.parent_path()};
+    const auto earlier = save_roots().earlier;
+    if (!earlier.empty() && path.parent_path() == saves_folder())
+        folders.push_back(earlier);
+    for (const auto& folder : folders) {
+        std::error_code error;
+        for (const auto& entry : fs::directory_iterator(folder, error)) {
+            const auto name = path_to_utf8(entry.path().filename());
+            if (name.size() >= prefix.size() + suffix.size() &&
+                std::equal(prefix.begin(), prefix.end(), name.begin(), same) &&
+                std::equal(suffix.rbegin(), suffix.rend(), name.rbegin(), same))
+                visit(user, name.c_str());
+        }
     }
 }
 
@@ -833,9 +850,9 @@ void Runtime::draw_console_clock() {
     hud::format_game_time(
         game,
         [](void* context, const char* line) -> const char* {
-            auto& label = *static_cast<Label*>(context);
-            label.text = label.runtime->translate_ui(line);
-            return label.text.c_str();
+            auto& translated = *static_cast<Label*>(context);
+            translated.text = translated.runtime->translate_ui(line);
+            return translated.text.c_str();
         },
         &label,
         text,
@@ -964,8 +981,8 @@ void Runtime::check_console_commands() {
         call_hook_or_raise<&Extension::check_console>(
             extension_,
             *this,
-            [](void* user, const char* line) {
-                (*static_cast<std::function<void(const char*)>*>(user))(line);
+            [](void* user, const char* text) {
+                (*static_cast<std::function<void(const char*)>*>(user))(text);
             },
             &line_entry
         );

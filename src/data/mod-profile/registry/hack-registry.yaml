@@ -706,6 +706,19 @@ entries:
     ownership: owner-only
     scope: sim
     params: {}
+  air.gunships-hover-to-strafe:
+    kind: hack
+    title: Gunships Hover to Strafe
+    implemented: true
+    area: air
+    summary: "Aircraft that hover to attack (hoverattack) hover within weapon range and strafe a ground point or a unit of their own side instead of making passes at it, and guarding ones attack enemies their weapons can reach instead of only the guarded unit's attacker."
+    ownership: owner-only
+    scope: sim
+    params:
+      attack-ground: {type: bool, baseline: false, default: true, adjustable: fixed, scope: sim}
+      guard-engagements: {type: bool, baseline: false, default: true, adjustable: fixed, scope: sim}
+    presets:
+      baseline: {attack-ground: false, guard-engagements: false}
   weapons.retarget-out-of-range:
     kind: hack
     title: Retarget Out of Range

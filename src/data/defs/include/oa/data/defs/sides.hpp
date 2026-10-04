@@ -10,16 +10,48 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 namespace oa::data::defs {
 
 inline constexpr std::size_t side_error_capacity = 256;
+// Bytes of a side's panel GAF name, its terminating NUL included.
+inline constexpr std::size_t side_panel_gaf_capacity = 0x1e;
+// Bytes of a side's font name, its terminating NUL included.
+inline constexpr std::size_t side_font_name_capacity = 0x100;
 
 struct SideTable {
     Side sides[OA_SIDE_COUNT];
     uint32_t count{};
     char error[side_error_capacity]{}; // set when a required rectangle is missing
+    // Each side's intgaf: the GAF in anims/ that holds its PANELTOP,
+    // PANELSIDE and PANELBOT.
+    char panel_gaf[OA_SIDE_COUNT][side_panel_gaf_capacity]{};
+    // Each side's font: the FNT in fonts/ that its resource numbers and unit
+    // panel are drawn in.
+    char font_name[OA_SIDE_COUNT][side_font_name_capacity]{};
+    // Whether each side's section has an intgaf key, and a font key: a side
+    // without one has no panels, or no font of its own, and one with it
+    // needs the file it names, an empty name included.
+    bool has_panel_gaf[OA_SIDE_COUNT]{};
+    bool has_font[OA_SIDE_COUNT]{};
 };
+
+// A file a side's SIDEDATA section names.
+enum class SideFile : uint8_t {
+    panels, // its intgaf, anims/<intgaf>.GAF
+    font,   // its font, fonts/<font>.FNT
+};
+
+// A file a side names that the game data lacks.
+struct SideMissingFile {
+    uint32_t side{};            // index of the side that names it
+    SideFile file{};            // which of its files
+    char path[path_capacity]{}; // the file, such as "anims/NAME.GAF"
+};
+
+// The most files the sides can name: an intgaf and a font each.
+inline constexpr std::size_t side_missing_file_capacity = 2 * OA_SIDE_COUNT;
 
 // Resolves a font name to a handle stored in Side.font; may be null.
 struct SideFontResolver {
@@ -57,9 +89,12 @@ bool side_load_rect(
 
 /// Loads SIDE0, SIDE1, ... until one is missing or the table is full.
 ///
-/// Each side reads name, nameprefix, commander, font (through `fonts`),
-/// energycolor, metalcolor, its HUD rectangles in the game's read order and
-/// RELOAD1..RELOAD3. The table is zeroed first and every visited slot gets its index.
+/// Each side reads name, nameprefix, commander, intgaf (into panel_gaf, up to
+/// 29 characters), font (into font_name, and through `fonts`), energycolor,
+/// metalcolor, its HUD rectangles in the game's read order and
+/// RELOAD1..RELOAD3; has_panel_gaf and has_font tell which of the two keys
+/// its section has. The table is zeroed first and every visited slot gets its
+/// index.
 ///
 /// @param[in,out] sidedata parsed SIDEDATA.TDF; its cursor is moved
 /// @param[out] table table to fill
@@ -82,6 +117,48 @@ bool side_table_load(
 /// @return true when the file loaded and every side was complete
 bool load_side_data(
     const Files* files, SideTable* table, const char* variant, const SideFontResolver* fonts
+) noexcept;
+
+/// Builds the path of a file a side's section names: anims/<intgaf>.GAF or
+/// fonts/<font>.FNT, from the variant directory when it holds the file, as
+/// build_variant_path chooses.
+///
+/// @param files file boundary used for the variant's existence check
+/// @param table loaded side table
+/// @param side index of the side
+/// @param file which of its files
+/// @param variant game-data variant suffix; null or empty for none
+/// @param[out] out destination buffer; "" when the side names no such file,
+///     or names an empty one
+/// @param capacity size of `out` in bytes
+/// @return true when the side's section names the file
+bool side_file_path(
+    const Files* files,
+    const SideTable& table,
+    uint32_t side,
+    SideFile file,
+    const char* variant,
+    char* out,
+    std::size_t capacity
+) noexcept;
+
+/// Lists the files loaded sides name that the game data lacks: a side's
+/// intgaf when anims/<intgaf>.GAF is missing from both the variant and the
+/// plain directory, and its font when fonts/<font>.FNT is.
+///
+/// @param files file boundary; null finds every named file missing
+/// @param table loaded side table
+/// @param variant game-data variant suffix; null or empty for none
+/// @param[out] missing receives the missing files, every side's intgaf
+///     before any side's font, each kind by side, as far as it holds them,
+///     each path with '/' separators; side_missing_file_capacity entries
+///     hold every one
+/// @return how many files are missing
+uint32_t side_missing_files(
+    const Files* files,
+    const SideTable& table,
+    const char* variant,
+    std::span<SideMissingFile> missing
 ) noexcept;
 
 } // namespace oa::data::defs

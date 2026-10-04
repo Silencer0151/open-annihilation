@@ -80,6 +80,10 @@ void Runtime::apply_output_mode() {
         match_layout_ = make_window_match_layout(
             width, height, window_width, window_height, window_safe_insets()
         );
+        // The side column narrows to the game's tallest unit page; a phone
+        // layout has none.
+        match_layout_ =
+            oa::ui::display_layout::fit_side_column(match_layout_, side_column_page_rows());
         // On a phone the HUD's pieces are placed for this canvas.
         refresh_placed_hud_regions();
         // On a screen of another size the pointer's place is known again
@@ -108,22 +112,6 @@ void Runtime::apply_output_mode() {
             }
         } catch (const PresentError& error) {
             note_present_error(error.what(), false);
-        }
-        // A build page laid out for a column of another height, or one that
-        // no longer fits, is laid out again for this one.
-        if (match_hud_ && match_build_page_ > 0 && selected_match_unit_ != 0 &&
-            match_column_rows() != match_hud_fit_rows_) {
-            const auto& gadgets = match_hud_->layout.gadgets;
-            const bool overflows = std::any_of(
-                gadgets.begin() + (gadgets.empty() ? 0 : 1),
-                gadgets.end(),
-                [&](const auto& gadget) {
-                    return gadget.common.active != 0 && gadget.common.height > 0 &&
-                           gadget.common.y + gadget.common.height > match_column_rows();
-                }
-            );
-            if (match_hud_fitted_ || overflows)
-                show_match_build_page(match_build_page_);
         }
     } else {
         // The load and save dialogs and the in-game briefing keep the size of the
@@ -430,37 +418,83 @@ void Runtime::destroy_match_layer_textures() {
     match_cursor_tex_w_ = match_cursor_tex_h_ = 0;
 }
 
-std::array<Runtime::HudStrip, 3> Runtime::match_hud_strips() const {
+void Runtime::release_renderer_textures() {
+    destroy_match_layer_textures();
+    if (indexed_output_.texture != nullptr)
+        SDL_DestroyTexture(indexed_output_.texture);
+    indexed_output_.texture = nullptr;
+    indexed_output_.width = 0;
+    indexed_output_.height = 0;
+    frontend_texture_.reset();
+}
+
+std::array<Runtime::HudStrip, 4> Runtime::match_hud_strips() const {
     const int left = match_layout_.left;
-    const int bar_w = match_layout_.hud_width - left;
-    // A build page laid out past 480 rows grows the HUD; the side column then
-    // shows those rows too, at the chrome's scale.
+    // The bars run from the column's edge to the window's right edge at
+    // their scale, over as many source columns as that width holds, the
+    // last cut by the window's edge: past 640 on the layer on a window
+    // wider than the interface, where extend_match_bars continues their
+    // art (no more than the layer holds).
+    int bar_w = match_layout_.bar_width();
+    int bar_columns = match_layout_.bar_columns();
+    if (const auto held = static_cast<int>(match_hud_cpu_.width) - kBattlefieldLeft;
+        bar_columns > held) {
+        bar_columns = std::max(0, held);
+        bar_w = static_cast<int>(std::lround(bar_columns * match_layout_.scale));
+    }
+    // The side column is drawn at its own scale, the chrome's unless the
+    // game's tallest unit page narrows it (display_layout::fit_side_column):
+    // its 128 columns then fill its width exactly.
+    const double column_scale =
+        match_layout_.column_narrowed() ? match_layout_.column_scale : match_layout_.scale;
+    const auto canvas = [column_scale](int source) {
+        return static_cast<int>(std::lround(source * column_scale));
+    };
+    // A unit's page past 480 rows grows the HUD; the side column then shows
+    // those rows too, at the column's scale.
     int column_rows = kCanvasHeight;
-    int column_height = match_layout_.hud_height;
-    if (const auto rows = static_cast<int>(match_hud_cpu_.height); rows > kCanvasHeight) {
+    int column_height =
+        match_layout_.column_narrowed() ? canvas(kCanvasHeight) : match_layout_.hud_height;
+    const auto rows = static_cast<int>(match_hud_cpu_.height);
+    if (rows > kCanvasHeight) {
         column_rows = rows;
-        column_height = std::min(
-            match_layout_.height, static_cast<int>(std::lround(rows * match_layout_.scale))
-        );
+        column_height = std::min(match_layout_.height, canvas(rows));
+    }
+    // A page taller than the column, which only a page the game's tallest
+    // did not count can be: the column shows the rows above its panel, and
+    // the page, whole, is scaled down under them to the column's last row.
+    HudStrip page{};
+    if (const auto scale = match_side_page_scale();
+        scale.scaled() && scale.top + scale.authored_rows <= rows) {
+        const int top = canvas(scale.top);
+        const int bottom = canvas(scale.top + scale.shown_rows);
+        const int page_left = canvas(scale.left);
+        const int page_columns = kBattlefieldLeft - scale.left;
+        column_rows = scale.top;
+        column_height = top;
+        page = {
+            scale.left,
+            scale.top,
+            page_columns,
+            scale.authored_rows,
+            page_left,
+            top,
+            canvas(scale.left + scale.to_column(page_columns)) - page_left,
+            std::min(match_layout_.height, bottom) - top
+        };
     }
     return {{
         {0, 0, kBattlefieldLeft, column_rows, 0, 0, left, column_height},
-        {kBattlefieldLeft,
-         0,
-         kBattlefieldWidth,
-         kBattlefieldTop,
-         left,
-         0,
-         bar_w,
-         match_layout_.top},
+        {kBattlefieldLeft, 0, bar_columns, kBattlefieldTop, left, 0, bar_w, match_layout_.top},
         {kBattlefieldLeft,
          kCanvasHeight - kBattlefieldBottom,
-         kBattlefieldWidth,
+         bar_columns,
          kBattlefieldBottom,
          left,
          match_layout_.bottom_bar_y(),
          bar_w,
          match_layout_.bottom},
+        page,
     }};
 }
 
@@ -475,18 +509,19 @@ void Runtime::compose_match_layers(renderer::Surface& frame) {
     const bool placed = oa::ui::display_layout::placed_mode(match_layout_);
     if (!placed)
         for (const auto& strip : match_hud_strips())
-            scale_blit(
-                frame,
-                match_hud_cpu_,
-                strip.x,
-                strip.y,
-                strip.w,
-                strip.h,
-                strip.source_x,
-                strip.source_y,
-                strip.source_w,
-                strip.source_h
-            );
+            if (strip.w > 0 && strip.h > 0 && strip.source_w > 0 && strip.source_h > 0)
+                scale_blit(
+                    frame,
+                    match_hud_cpu_,
+                    strip.x,
+                    strip.y,
+                    strip.w,
+                    strip.h,
+                    strip.source_x,
+                    strip.source_y,
+                    strip.source_w,
+                    strip.source_h
+                );
     blit_rect(
         frame,
         match_world_cpu_,
@@ -618,13 +653,15 @@ void Runtime::present_match_layers() {
     const auto present_start = std::chrono::steady_clock::now();
     phase_times_.upload += elapsed_since(upload_start);
     // The clear is the blank fill for strip area beyond the chrome's largest
-    // (1280x1024) size: right of the bars and under the side column.
+    // (1280x1024) size: under the side column.
     if (!SDL_SetRenderDrawColor(sdl_.renderer, 0, 0, 0, 255) || !SDL_RenderClear(sdl_.renderer))
         throw_present_error("SDL_RenderClear");
     // In placed mode the HUD's pieces are drawn after the world
     // (finish_match_layers).
     if (!oa::ui::display_layout::placed_mode(match_layout_))
         for (const auto& strip : match_hud_strips()) {
+            if (strip.w <= 0 || strip.h <= 0 || strip.source_w <= 0 || strip.source_h <= 0)
+                continue;
             const SDL_FRect source{
                 static_cast<float>(strip.source_x),
                 static_cast<float>(strip.source_y),

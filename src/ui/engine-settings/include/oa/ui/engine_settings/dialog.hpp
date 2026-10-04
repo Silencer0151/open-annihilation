@@ -20,6 +20,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -47,16 +48,16 @@ inline constexpr uint32_t ingame_backdrop_opacity = 128;
 /// settings, then the mod options' (ui.options-dialog), which a dialog of
 /// each kind lists alone.
 enum class Page : uint8_t {
-    path_search,   ///< AI & Pathfinding
-    controls,      ///< Controls & Input
-    gameplay,      ///< Gameplay: the unit limit and the mod
+    mods,          ///< Mods: the mods the game can play, the one played first
+    controls,      ///< Controls
+    common_tweaks, ///< Common Tweaks: the player's own folder, the unit limit and pathfinding
+    language,      ///< Language: the language and how game text is drawn
     graphics,      ///< Graphics
-    language_text, ///< Language & Text: how game text is drawn
     /// Touch: how the touch controls answer a finger; listed only while the
     /// game has touch controls (Dialog::touch)
     touch,
-    /// Developer, after a divider: its rows over Developer Mode's list of
-    /// the standard hacks
+    /// Developer, at the foot of the list under a divider: its rows over
+    /// Developer Mode's list of the standard hacks
     developer,
     /// Game files: what is installed, the backups switch and where the
     /// files are; listed, between Touch and Developer, only where the
@@ -82,8 +83,8 @@ enum class DialogKind : uint8_t {
     /// only while the game has touch controls
     engine,
     mod_options, ///< a mod's options: the last five sections
-    /// Language & Text alone, as the Game files screen opens it before the
-    /// game's files are installed
+    /// Language alone, as the Game files screen opens it before the game's
+    /// files are installed
     language_text,
 };
 
@@ -91,12 +92,12 @@ enum class DialogKind : uint8_t {
 ///
 /// @param kind the dialog's kind
 /// @param touch the game has touch controls (Dialog::touch), so that the
-///     engine's settings list Touch between Language & Text and Developer
+///     engine's settings list Touch between Graphics and Developer
 /// @param game_files the dialog lists Game files (Dialog::game_files),
 ///     between Touch and Developer
 /// @return six sections for the engine's settings, seven with Touch or
 ///     Game files, eight with both; five for a mod's options and one for
-///     Language & Text alone, whatever the other two say
+///     Language alone, whatever the other two say
 [[nodiscard]] std::span<const Page>
 dialog_pages(DialogKind kind, bool touch = false, bool game_files = false) noexcept;
 
@@ -130,7 +131,9 @@ enum class Setting : uint8_t {
     touch_latches,     ///< QUEUE and ADD: a strip of Stay on and One action
     touch_haptics,     ///< Haptics: a switch
     touch_left_handed, ///< Left-handed layout: a switch
-    mod,               ///< Mod: a slider of none and the offered mod folders
+    /// Mods: the list of the mods the game can play, one row each, which
+    /// switches the game to the one chosen once the player confirms it
+    mod,
     snap_override_key, ///< the mod's snap override key: a slider of option_keys
     autoclick_key,     ///< the mod's autoclick key: a slider of option_keys
     rotate_build_key,  ///< the mod's rotate key: a slider of option_keys
@@ -150,6 +153,10 @@ enum class Setting : uint8_t {
     game_files_summary,
     game_files_backed_up, ///< Include in device backups: a switch, with its hint
     game_files_location,  ///< Where the files are: a text row
+    /// Your files: where the player's own folder is, and buttons that open
+    /// its Saves, Screenshots and Mods folders in the system's file manager;
+    /// it changes no setting
+    user_folder,
 };
 
 /// Returns the settings a section shows, top to bottom.
@@ -170,6 +177,12 @@ enum class Setting : uint8_t {
 
 /// No control: what Dialog::hovered, pressed and focused hold when they name none.
 inline constexpr int32_t no_control = -1;
+/// The Switch Mod question's SWITCH button, while the question shows
+/// (Dialog::switch_question). The question's buttons count down from
+/// no_control, where no section, row or button of the dialog takes a number.
+inline constexpr int32_t question_yes_control = no_control - 1;
+/// The question's CANCEL button, while the question shows.
+inline constexpr int32_t question_no_control = no_control - 2;
 /// The first section's entry in the list; each section's entry is its
 /// place among its kind of dialog's sections with Touch (page_control),
 /// whether or not the dialog lists Touch.
@@ -240,7 +253,19 @@ enum class DialogKey : uint8_t {
     page_down, ///< scrolls the open section down by most of its view
     home,      ///< scrolls the open section to its top
     end,       ///< scrolls the open section to its end
+    yes,       ///< Y: answers the Switch Mod question SWITCH; nothing while it does not show
+    no,        ///< N: answers the Switch Mod question CANCEL; nothing while it does not show
 };
+
+/// The buttons of the Your files row, left to right: each opens a folder of
+/// the player's own folder.
+enum class FolderButton : uint8_t {
+    saves,       ///< the Saves folder
+    screenshots, ///< the Screenshots folder
+    mods,        ///< the Mods folder
+};
+/// The number of buttons the Your files row has.
+inline constexpr std::size_t folder_button_count = 3;
 
 /// What Hardware acceleration's status says: whether the graphics card
 /// scales the frames, and why not when it does not. The states keep the
@@ -350,6 +375,15 @@ enum class DialogAction : uint8_t {
     /// MANAGE… was pressed: the host opens the Game files screen and keeps
     /// the dialog open
     manage_game_files,
+    /// SWITCH on the Switch Mod question: keep Dialog::chosen in effect,
+    /// its Mod setting now the mod chosen, save it, close the dialog, and
+    /// reload the game for that mod, back on the main menu
+    switch_mod,
+    /// A button of Your files, or Mods' OPEN MODS FOLDER: open the folder
+    /// Dialog::folder_to_open names in the system's file manager, making it
+    /// first when it is missing; the dialog stays open. A folder that cannot
+    /// be opened is told to the dialog with set_folder_notice.
+    open_folder,
 };
 
 /// How the OA button looks.
@@ -414,6 +448,40 @@ struct HackArea {
 /// @return each area, alphabetically by its title in English
 [[nodiscard]] std::span<const HackArea> developer_areas();
 
+struct Dialog;
+
+/// What Mods shows of a mod folder besides its title: read from its
+/// oamod.yaml and the oamod.png beside it.
+struct ModDetails {
+    std::string version;     ///< shown at the row's top right; "N/A" without an oamod.yaml
+    std::string description; ///< the row's second line
+    /// The folder holds an oamod.yaml; without one its files layer over the
+    /// game folder's and the game plays by 3.1c's own rules.
+    bool has_profile{true};
+    uint32_t badge_width{};            ///< the badge's columns; 0 shows the blank placeholder
+    uint32_t badge_height{};           ///< the badge's rows
+    std::vector<uint8_t> badge_pixels; ///< RGBA, top row first
+};
+
+/// One row of Mods, in the order Mods lists them: the mod played, then No
+/// Mod when it is not the one played, then every other mod by title.
+struct ModRow {
+    /// The mod folder's place among Dialog::mod_folders; no_mod_row for No Mod.
+    int32_t offered{};
+    bool playing{}; ///< the game plays it now
+};
+
+/// ModRow::offered for No Mod.
+inline constexpr int32_t no_mod_row = -1;
+/// Dialog::switch_question while no question shows.
+inline constexpr int32_t no_question = -2;
+
+/// Returns Mods' rows in the order it lists them.
+///
+/// @param dialog the dialog
+/// @return one row for No Mod and one for each offered mod folder
+[[nodiscard]] std::vector<ModRow> mod_rows(const Dialog& dialog);
+
 /// One open dialog. A host reads opened, chosen, defaults, restored, page
 /// and forget_renderer_failures, sets acceleration, and reads and may keep
 /// developer between openings; section_hooks is set only by tests and
@@ -425,7 +493,7 @@ struct Dialog {
     Locks locks{};                     ///< what cannot be changed now
     AccelerationStatus acceleration{}; ///< Hardware acceleration's status
     std::string version;               ///< the header's version text
-    Page page{Page::path_search};      ///< the section shown
+    Page page{Page::mods};             ///< the section shown
     bool restored{};                   ///< Restore defaults was pressed
     /// The times the player asked, since the dialog opened, for the graphics
     /// card to be tried afresh: each press of Restore defaults, and each
@@ -462,6 +530,37 @@ struct Dialog {
     uint16_t highest_offered_unit{highest_unit_limit};
     /// The names of the offered mod folders, in the order of Inputs::mod_folders.
     std::vector<std::string> mod_names;
+    /// The offered mod folders' paths, in the same order (Inputs::mod_folders).
+    std::vector<std::string> mod_folders;
+    /// What Mods shows of each offered mod folder, in the same order; a
+    /// folder without one shows its name alone.
+    std::vector<ModDetails> mod_details;
+    /// The mod folder the game plays now, as an absolute UTF-8 path; empty
+    /// for none. Mods lists it first, marked PLAYING.
+    std::string playing_mod_folder;
+    /// The mod the Switch Mod question offers to switch to, as
+    /// ModRow::offered names it (no_mod_row for No Mod); no_question while
+    /// no question shows. The question lies over the dialog and takes every
+    /// pointer event and key.
+    int32_t switch_question{no_question};
+    /// The question's button the keys mark, which Enter and Space press:
+    /// CANCEL when set, else SWITCH.
+    bool question_marks_no{};
+    /// The player's own folder, as an absolute UTF-8 path, which the Your
+    /// files row shows; the host sets it once the dialog has opened. Empty
+    /// shows no path.
+    std::string user_folder;
+    /// The Your files button the keys mark, which Space presses: Saves at
+    /// first.
+    FolderButton folder_marked{FolderButton::saves};
+    /// The Your files button under the pointer, or a held press is on;
+    /// folder_button_count for none.
+    std::size_t folder_hovered{folder_button_count};
+    /// The folder the last DialogAction::open_folder asks for.
+    FolderButton folder_to_open{FolderButton::saves};
+    /// Why the last folder asked for could not be opened, which the Your
+    /// files row's second hint line shows in amber; empty for none.
+    std::string folder_notice;
     /// Which settings it shows.
     DialogKind kind{DialogKind::engine};
     /// The game has touch controls, so that the engine's settings list
@@ -528,16 +627,24 @@ struct LayoutPart {
     int32_t control{no_control}; ///< the control it is; no_control for a text
 };
 
+/// The fonts the dialog and the OA button draw their texts in.
+struct DialogFonts;
+
 /// Returns the parts the dialog draws now: the header's texts, the list's
 /// entries, the open section's heading, labels, hints, locks, controls and
 /// values, the scroll bar while the section scrolls, and the footer's
 /// buttons. No two overlap, and each lies inside the dialog's edge. Of the
 /// open section's rows only the parts that lie wholly in its view are
-/// listed; a part the view cuts is drawn but not listed.
+/// listed; a part the view cuts is drawn but not listed. The player's own
+/// folder's path shows as its tail that fits its place (path_tail): measured in the
+/// fonts when they are given, else at estimated_character_width a
+/// character.
 ///
 /// @param dialog the dialog
+/// @param fonts the fonts the dialog is drawn in; null to estimate widths
 /// @return the parts
-[[nodiscard]] std::vector<LayoutPart> dialog_layout(const Dialog& dialog);
+[[nodiscard]] std::vector<LayoutPart>
+dialog_layout(const Dialog& dialog, const DialogFonts* fonts = nullptr);
 
 /// The fonts the dialog and the OA button draw their texts in.
 struct DialogFonts {
@@ -571,6 +678,19 @@ dialog_text_width(const DialogFonts& fonts, DialogFont font, std::string_view te
 /// @return the fonts
 [[nodiscard]] DialogFonts load_dialog_fonts(oa::AssetStore& assets);
 
+/// What Mods lists besides No Mod.
+struct ModOffer {
+    /// The offered mod folders' titles, as Mods shows them.
+    std::span<const std::string> names{};
+    /// Their paths, in the same order, as Inputs::mod_folders holds them.
+    std::span<const std::string> folders{};
+    /// What Mods shows of each, in the same order; missing ones show the
+    /// title alone.
+    std::span<const ModDetails> details{};
+    /// The mod folder the game plays now; empty for none.
+    std::string_view playing{};
+};
+
 /// Opens the dialog over settings in effect.
 ///
 /// @param[out] dialog the dialog; whatever it held is replaced
@@ -582,8 +702,7 @@ dialog_text_width(const DialogFonts& fonts, DialogFont font, std::string_view te
 /// @param acceleration Hardware acceleration's status
 /// @param highest_offered_unit the unit limit slider's highest stop, in units
 ///     per player (highest_offered_unit_limit)
-/// @param mod_names the names of the offered mod folders, in the order of
-///     Inputs::mod_folders
+/// @param mods the mods Mods lists besides No Mod
 /// @param profile_hacks every standard hack as the profile the game plays
 ///     resolves it, in the registry's order (DeveloperList::profile); empty
 ///     gives every one off, as 3.1c plays it
@@ -604,7 +723,7 @@ void open_dialog(
     Page page,
     const AccelerationStatus& acceleration = {},
     uint16_t highest_offered_unit = highest_unit_limit,
-    std::span<const std::string> mod_names = {},
+    const ModOffer& mods = {},
     std::span<const oa::data::mod_profile::HackState> profile_hacks = {},
     const oa::data::languages::Language* system_language = nullptr,
     bool touch = false,
@@ -629,7 +748,7 @@ void open_mod_options_dialog(
     Page page = Page::mod_keys
 );
 
-/// Opens the dialog over the Language & Text section alone
+/// Opens the dialog over the Language section alone
 /// (DialogKind::language_text), as the Game files screen opens it before
 /// the game's files are installed: it lists that one section and keeps
 /// Restore defaults, which restores only that section's settings, Cancel
@@ -652,6 +771,35 @@ void open_language_text_dialog(
     std::string_view version,
     const oa::data::languages::Language* system_language = nullptr
 );
+
+/// Tells the dialog why the folder its last DialogAction::open_folder asked
+/// for could not be opened, or that it was; the Your files row's second hint
+/// line, or the line under Mods' list, shows the reason in amber until
+/// another folder opens.
+///
+/// @param[in,out] dialog the dialog
+/// @param reason why it could not be opened, in a few words; empty when it
+///     opened
+/// @return DialogAction::redraw when the line changed, else DialogAction::none
+[[nodiscard]] DialogAction set_folder_notice(Dialog& dialog, std::string_view reason);
+
+/// Shortens a folder's path to a tail that fits a width: the whole path when
+/// it fits; else "..." and the most of its last components, each whole, that
+/// fit after it, with the separator before them; else "..." and as much of
+/// the end of its last component as fits. A separator at the path's end is
+/// dropped first.
+///
+/// @param path the path, in UTF-8; '/' and '\\' separate its components
+/// @param width the room, in source pixels
+/// @param text_width a text's width in the font it is drawn in
+/// @return the text to show, in UTF-8; "..." alone when nothing more fits
+[[nodiscard]] std::string path_tail(
+    std::string_view path, int32_t width, const std::function<int32_t(std::string_view)>& text_width
+);
+
+/// The width dialog_layout counts each character of the player's own
+/// folder's path at without the fonts, in source pixels.
+inline constexpr int32_t estimated_character_width = 7;
 
 /// Gives the dialog Hardware acceleration's status as it is now; a host
 /// calls it each frame while the dialog is open.
@@ -678,7 +826,8 @@ set_acceleration_status(Dialog& dialog, const AccelerationStatus& acceleration) 
 /// follows its row only, wherever the pointer goes, and the open section
 /// scrolls with the thumb. Over an open drop-down list it marks the item
 /// under it. While a finger's press is held, the point is moved as the
-/// press was (dialog_finger_down).
+/// press was (dialog_finger_down). While a question shows, it hovers the
+/// question's buttons only.
 ///
 /// @param[in,out] dialog the dialog
 /// @param x the pointer's column, in source pixels from the dialog's left edge
@@ -694,7 +843,9 @@ set_acceleration_status(Dialog& dialog, const AccelerationStatus& acceleration) 
 /// thumb's middle jumps to the pointer, the section scrolls with it and the
 /// drag starts there. While a drop-down list is open, a press on one of its
 /// items holds the item, and a press anywhere else, its field included,
-/// closes the list and does nothing more.
+/// closes the list and does nothing more. While a question shows, a press
+/// on one of its buttons holds the button, and a press anywhere else does
+/// nothing.
 ///
 /// @param[in,out] dialog the dialog
 /// @param x the pointer's column, in source pixels from the dialog's left edge
@@ -705,7 +856,8 @@ set_acceleration_status(Dialog& dialog, const AccelerationStatus& acceleration) 
 /// Presses with a finger: as dialog_pointer_down, but a press with no
 /// control under it takes the nearest control whose pressable part lies
 /// within `reach` of it, pressed at that part's point nearest the finger;
-/// while a drop-down list is open, the nearest of its items. The press's
+/// while a drop-down list is open, the nearest of its items, and while the
+/// Switch Mod question shows, the nearer of its buttons. The press's
 /// moves and its release are then moved as far as the press was
 /// (Dialog::finger_shift_x and finger_shift_y), so that a release where the
 /// finger landed acts on the control it took. With nothing within reach it
@@ -723,7 +875,8 @@ set_acceleration_status(Dialog& dialog, const AccelerationStatus& acceleration) 
 /// acts on it; over a drop-down's field, it opens the field's list, marking
 /// the item chosen. A release over the list item the press held chooses the
 /// item and closes the list. A finger's release is moved as its press was
-/// (dialog_finger_down).
+/// (dialog_finger_down). A release over the question's button the press
+/// held answers the question.
 ///
 /// @param[in,out] dialog the dialog
 /// @param x the pointer's column, in source pixels from the dialog's left edge
@@ -743,7 +896,11 @@ set_acceleration_status(Dialog& dialog, const AccelerationStatus& acceleration) 
 /// marked item and close the list; Escape closes it unchanged; Tab and
 /// Shift+Tab close it and move the focus. In Developer Mode's list, Space
 /// opens or closes an area or a hack, and Left and Right close and open an
-/// area or turn a hack off and on.
+/// area or turn a hack off and on. While a question shows, the keys answer
+/// it: Y, or Enter or Space while SWITCH is marked, answers SWITCH; N,
+/// Escape, or Enter or Space while CANCEL is marked, answers CANCEL; Left,
+/// Right, Tab and Shift+Tab move the mark. Y and N do nothing else. On
+/// Mods, Space on a row other than the one played asks the question.
 ///
 /// @param[in,out] dialog the dialog
 /// @param key the key's meaning
@@ -757,7 +914,7 @@ set_acceleration_status(Dialog& dialog, const AccelerationStatus& acceleration) 
 /// another section shows. A turn outside the dialog, or while a press is
 /// held, does nothing. While a drop-down list is open, a turn over it
 /// scrolls a list that holds more items than it shows, an item a notch,
-/// and the section stays.
+/// and the section stays. While a question shows, a turn does nothing.
 ///
 /// @param[in,out] dialog the dialog
 /// @param x the pointer's column, in source pixels from the dialog's left edge

@@ -173,6 +173,10 @@ Runtime::Runtime(
     register_screens();
     call_hook_or_raise<&Extension::ready>(extension_, *this);
     load_preference_file();
+    // The player's own folder, and the one-time move of the saved games into
+    // it, before the frontend's preferences read the Image Output Directory
+    // that defaults to it.
+    start_user_folder();
     // Stored after the one-time legacy import, which runs only while no
     // preferences file exists. An unwritable preferences file only costs the
     // next start the dialog.
@@ -187,11 +191,14 @@ Runtime::Runtime(
     }
     load_logo_textures();
     discover_first_map();
-    load_side_table();
     // The language the game shows its text in, which loads the translation
     // table and the fonts: 3.1c's command line, else the setting, else the
     // operating system's.
     start_language();
+    // SIDEDATA, and the sides' interface art and fonts it names, from the
+    // language's folders first.
+    load_side_table();
+    require_side_files();
     init::reset_player_slots(state_, player_storage_, false);
     init::load_preferences(
         state_,
@@ -350,6 +357,21 @@ int Runtime::run() {
         flush_preferences();
         return 0;
     }
+    if (options_.check_user_folder) {
+        check_user_folder();
+        flush_preferences();
+        return 0;
+    }
+    if (options_.check_mod_switch) {
+        check_mod_switch();
+        flush_preferences();
+        return 0;
+    }
+    if (options_.check_mod_warning) {
+        check_mod_warning();
+        flush_preferences();
+        return 0;
+    }
     if (options_.check_renderer_ladder) {
         const int status = check_renderer_ladder();
         flush_preferences();
@@ -390,8 +412,28 @@ int Runtime::run() {
         flush_preferences();
         return 0;
     }
+    if (options_.check_stockpile_builds) {
+        check_stockpile_builds();
+        flush_preferences();
+        return 0;
+    }
+    if (options_.check_unit_page_memory) {
+        check_unit_page_memory();
+        flush_preferences();
+        return 0;
+    }
     if (options_.check_side_column) {
         check_side_column();
+        flush_preferences();
+        return 0;
+    }
+    if (options_.check_match_bars) {
+        check_match_bars();
+        flush_preferences();
+        return 0;
+    }
+    if (!options_.check_unit_pages.empty()) {
+        check_unit_pages();
         flush_preferences();
         return 0;
     }
@@ -402,6 +444,11 @@ int Runtime::run() {
     }
     if (options_.check_kill_board) {
         check_kill_board();
+        flush_preferences();
+        return 0;
+    }
+    if (options_.check_paused_save) {
+        check_paused_save();
         flush_preferences();
         return 0;
     }
@@ -501,6 +548,10 @@ void Runtime::dispatch_event(SDL_Event& event, bool& running) {
     // reach no screen; the touch controls take fingers and the presses on
     // their controls.
     remap_command_key(event);
+    // Each key press, whichever screen takes it, forgets the quick key the
+    // last one answered a panel with; the press records its own again.
+    if (event.type == SDL_EVENT_KEY_DOWN)
+        answered_key_ = 0;
     if (take_lifecycle_event(event))
         return;
     if (take_touch_event(event, running)) {
@@ -575,8 +626,12 @@ void Runtime::idle_tick() {
     frame_draws_.units_drawn = 0;
     frame_draws_.units_between_ticks = 0;
     frame_draws_.probe_drawn = false;
-    // A new renderer record is told of once the main menu shows.
+    // A new renderer record is told of once the main menu shows, the saved
+    // games' move once that notice is closed, and a mod that cannot start a
+    // game once both are.
     tell_renderer_records();
+    tell_saves_moved();
+    tell_incomplete_mod();
     render();
     presentation_alpha_ = 1.0F;
     capture_film_frame();

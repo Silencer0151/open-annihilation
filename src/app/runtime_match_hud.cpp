@@ -82,7 +82,8 @@ void Runtime::draw_build_captions() {
         oa::ui::hud::kCommonUnitButton | oa::ui::hud::kCommonWeaponButton;
     for (std::size_t index = 0; index < build_captions_.size(); ++index) {
         const auto& gadget = match_hud_->layout.gadgets[index];
-        if (build_captions_[index].empty() ||
+        // A hidden button shows no count.
+        if (build_captions_[index].empty() || gadget.common.active == 0 ||
             (static_cast<uint8_t>(gadget.common.common_attributes) & build_button_attributes) == 0)
             continue;
         draw_hud_label(gadget.common.x + 4, gadget.common.y + 4, build_captions_[index], 255);
@@ -118,18 +119,13 @@ void Runtime::activate_match_hud(std::size_t index, bool left_button) {
     );
     switch (click.action) {
     case hud::BuildPanelClick::page_back:
-        play_match_interface_sound("nextbuildmenu");
-        show_match_build_page(match_build_page_ - 1);
-        break;
     case hud::BuildPanelClick::page_forward:
         play_match_interface_sound("nextbuildmenu");
-        show_match_build_page(match_build_page_ + 1);
+        press_match_panel_page(click.action, false);
         break;
     case hud::BuildPanelClick::orders:
-        show_match_orders_page();
-        break;
     case hud::BuildPanelClick::build:
-        show_match_build_page(1);
+        press_match_panel_page(click.action, false);
         break;
     case hud::BuildPanelClick::place:
         match_command_ = MatchCommand::build;
@@ -330,7 +326,12 @@ bool Runtime::match_command_lit(std::size_t index) const {
         return false;
     const auto& gadget = match_hud_->layout.gadgets[index];
     const auto attributes = static_cast<uint32_t>(gadget.common.attributes);
-    return is_button(gadget) && (attributes & oa::ui::gui_layout::attribute::toggle) != 0 &&
+    // A toggle shows lit while its order is armed, and a holding button,
+    // such as the ORDERS or BUILD tab of the page on show, shows pressed
+    // while its status is set.
+    return is_button(gadget) &&
+           (attributes & (oa::ui::gui_layout::attribute::toggle |
+                          oa::ui::gui_layout::attribute::text_list)) != 0 &&
            (attributes & oa::ui::gui_layout::attribute::cycle_frames) == 0 &&
            match_hud_states_[index].status != 0;
 }

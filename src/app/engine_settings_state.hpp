@@ -36,11 +36,23 @@ struct Runtime::EngineSettingsState {
     bool light_machine{};
     /// The desktop's size, as read once at start; zero by zero when unknown.
     oa::ui::engine_settings::ScreenSize desktop{};
-    /// The mod folders the game folder offers (list_mod_folders), as the
-    /// preferences keep a chosen one, read once at start.
+    /// The mod folders Mods lists, as absolute UTF-8 paths, read once at
+    /// start: the game folder's mods folder's (list_mod_folders), the
+    /// player's own Mods folder's, the folder an earlier Pick Folder...
+    /// stored while it is still a folder, and the one played.
     std::vector<std::string> mod_folders;
-    /// Their folders' names, in the same order, as the dialog shows them.
+    /// Their titles, in the same order, as Mods shows them (read_mod_summary).
     std::vector<std::string> mod_names;
+    /// Their versions, descriptions and badges, in the same order.
+    std::vector<oa::ui::engine_settings::ModDetails> mod_details;
+    /// The mod folder the game plays, as the preferences keep one; empty
+    /// for none. With --mod-dir or --base-game, the Mod setting as read at
+    /// start, which the flags set aside for the run.
+    std::string playing_mod_folder;
+    /// The Mod setting as stored when the start dropped its folder for
+    /// being gone; empty when none was. The dialog shows No Mod in its
+    /// place, and the settings' next save stores the choice over it.
+    std::string dropped_mod_folder;
     /// The machine's physical memory in bytes, as read once at start; 0 when
     /// the system does not say.
     uint64_t physical_memory{};
@@ -53,7 +65,7 @@ struct Runtime::EngineSettingsState {
     RendererHost* records_host{};
     std::optional<oa::ui::engine_settings::Dialog> dialog; ///< the open dialog
     /// The section the dialog showed when it last closed; it opens there.
-    oa::ui::engine_settings::Page last_page{oa::ui::engine_settings::Page::path_search};
+    oa::ui::engine_settings::Page last_page{oa::ui::engine_settings::Page::common_tweaks};
     std::optional<oa::ui::engine_settings::DialogFonts> fonts; ///< loaded on first use
     bool fonts_missing{}; ///< loading the fonts failed; they are not tried again
     /// The icon the header and the OA buttons draw: the window icon's
@@ -204,7 +216,8 @@ struct Runtime::EngineSettingsState {
     static void hold_path_credit(Runtime& runtime, uint32_t extension_bits);
 
     /// Eases the battlefield's zoom to a scale about the battlefield's centre
-    /// (runtime_camera.cpp).
+    /// (runtime_camera.cpp); a camera tracking a unit eases about the unit
+    /// and goes on tracking it.
     ///
     /// @param runtime the runtime
     /// @param target the scale to ease to

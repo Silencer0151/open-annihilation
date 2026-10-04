@@ -146,7 +146,7 @@ void Runtime::enter_director_mode(
     namespace layout = oa::ui::display_layout;
     const auto width = static_cast<int>(presentation.width);
     const auto height = static_cast<int>(presentation.height);
-    match_layout_ = presentation.show_interface ? layout::make_match_layout(width, height)
+    match_layout_ = presentation.show_interface ? lay_out_match(width, height)
                                                 : layout::make_battlefield_layout(width, height);
     zoom_anchored_ = false;
     match_tracking_ = false;
@@ -378,7 +378,7 @@ void Runtime::draw_director_frame(std::span<uint8_t> rgb) {
     if (presentation.show_interface) {
         // The interface around a battlefield of the normal layout, drawn from
         // the whole map pixel at the view's corner.
-        match_layout_ = layout::make_match_layout(width, height);
+        match_layout_ = lay_out_match(width, height);
         set_director_view(view);
         refresh_filtered_terrain();
         render_match_surface();
@@ -507,8 +507,7 @@ void Runtime::check_director_view() {
     // returns the map-image point the fight is centred on.
     const auto start_fight = [this] {
         start_benchmark_skirmish();
-        match_layout_ =
-            oa::ui::display_layout::make_match_layout(options_.match_width, options_.match_height);
+        match_layout_ = lay_out_match(options_.match_width, options_.match_height);
         match_zoom_ = std::clamp(options_.match_zoom, kMinBattlefieldZoom, kMaxBattlefieldZoom);
         match_zoom_target_ = match_zoom_;
         spawn_combat_armies(kCheckArmy);
