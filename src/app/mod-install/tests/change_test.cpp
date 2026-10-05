@@ -508,7 +508,8 @@ void test_files(const Scratch& scratch) {
         OA_CHECK(read(outside / "kept.txt") == "kept");
 }
 
-/// Makes a folder link, or says why the test skips it.
+/// Makes a folder link, or says why the test skips it. Some systems report
+/// a link made and make none; that skips it too.
 ///
 /// @param to what it links to
 /// @param made_link the link
@@ -516,6 +517,8 @@ void test_files(const Scratch& scratch) {
 bool make_folder_link(const fs::path& to, const fs::path& made_link) {
     std::error_code error;
     fs::create_directory_symlink(to, made_link, error);
+    if (!error && !install::is_link_or_junction(made_link))
+        error = std::make_error_code(std::errc::no_such_file_or_directory);
     if (error)
         std::fprintf(
             stderr, "skipped: this system made no folder link: %s\n", error.message().c_str()
@@ -546,7 +549,8 @@ void test_linked_backup(const Scratch& scratch) {
     // A roll back never puts a link in the target's place.
     const fs::path other = mods / "other-mod";
     make_mod(other, 1);
-    OA_CHECK(make_folder_link(outside, other / ".backup"));
+    if (!make_folder_link(outside, other / ".backup"))
+        return;
     const auto rolled = install::commit_change(mods, "other-mod", Change::roll_back);
     OA_CHECK(!rolled.changed && rolled.refusal == Refusal::changed);
     discard_all(rolled.discards);
@@ -554,7 +558,8 @@ void test_linked_backup(const Scratch& scratch) {
     OA_CHECK(outside_whole());
     // A discard folder that is itself a link, as recovery finds it.
     const fs::path discard = mods / ".oamod-discard-other-mod-1";
-    OA_CHECK(make_folder_link(outside, discard));
+    if (!make_folder_link(outside, discard))
+        return;
     const auto recovery = install::recover_changes(mods);
     OA_CHECK(recovery.discards.size() == 1);
     discard_all(recovery.discards);
