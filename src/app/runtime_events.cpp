@@ -152,6 +152,12 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
         step_campaign_list(event.key.key == SDLK_DOWN);
         return;
     }
+    // Up and Down move the selection of SELMAP.GUI's map list while it holds
+    // the focus, as its loader gives it; from a button they move the focus.
+    if (event.type == SDL_EVENT_KEY_DOWN && screen_ == Screen::map_selection &&
+        (event.key.key == SDLK_UP || event.key.key == SDLK_DOWN) && frontend_has_keyboard() &&
+        step_map_list(event.key.key == SDLK_DOWN))
+        return;
     // The frontend screen's panel takes the GUI keyboard: Tab and Shift+Tab
     // move the focus to the next and the previous record, and the arrow keys
     // move it on from a button.

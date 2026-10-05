@@ -62,6 +62,21 @@ void Runtime::preview_map_index(std::size_t index) {
     rebuild_surface();
 }
 
+bool Runtime::step_map_list(bool forward) {
+    const auto focus = frontend_focus();
+    if (focus < 0 || bound_map_names_.empty() ||
+        !tdf_names_equal(
+            resources_.layout.gadgets[static_cast<std::size_t>(focus)].common.name, "MAPNAMES"
+        ))
+        return false;
+    if (const auto row = step_frontend_list_row("MAPNAMES", forward);
+        row && *row < bound_map_names_.size())
+        modal_map_index_ = static_cast<int16_t>(*row);
+    map_modal::preview_selection(map_modal_, *this);
+    rebuild_surface();
+    return true;
+}
+
 void Runtime::select_map_row_at(float canvas_y) {
     const auto* list = widget("MAPNAMES");
     if (list == nullptr)

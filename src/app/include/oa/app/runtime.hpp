@@ -1095,6 +1095,22 @@ class Runtime final : public menu::Host,
     /// @param canvas_y pointer row in canvas pixels; above the list does nothing
     void select_map_row_at(float canvas_y);
 
+    /// Moves the selection of SELMAP.GUI's map list one row and previews the
+    /// map, as the Up and Down keys do while the list holds the keyboard
+    /// focus.
+    ///
+    /// The selection moves as on any list (step_frontend_list_row): a row
+    /// toward the list's start or end, the list scrolling a row when it
+    /// passes the page's edge and its scroll bar's knob following; it stops
+    /// at either end. The map then shown is previewed after every step, even
+    /// one at either end, and is not chosen: the skirmish keeps its map until
+    /// Select Map.
+    ///
+    /// @param forward true to move toward the list's end
+    /// @return false when the list does not hold the focus, leaving the key
+    ///     to move the focus
+    bool step_map_list(bool forward);
+
     /// Closes the map selection modal, when open, and sets the skirmish screen up again.
     void close_map_modal();
 
@@ -5790,7 +5806,11 @@ class Runtime final : public menu::Host,
     /// effects volume the knob stands for. SELMAP.GUI's list shows its scroll
     /// bar when the maps overflow it, with the knob 3.1c sizes, and its knob
     /// scrolls the list; so does NEWGAME.GUI's Missions list for any mission,
-    /// bound once its setup has placed and filled it. Over a skirmish in a 1920x1080 window and a 1280x960
+    /// bound once its setup has placed and filled it. SELMAP.GUI's list,
+    /// focused as it opens, steps a row with Down and Up, previewing each map
+    /// without choosing it and scrolling a row past the page's edge with the
+    /// knob following, and Down moves the focus on from Select Map. Over a
+    /// skirmish in a 1920x1080 window and a 1280x960
     /// one the preferences' SPEEDS sub-panel draws GAME's knob, the knob sets
     /// the game speed, and the sub-panel's last rows show over the battlefield
     /// where the bottom bar sits apart from the chrome (its own picture under

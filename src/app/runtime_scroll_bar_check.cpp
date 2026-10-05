@@ -390,6 +390,84 @@ void Runtime::check_scroll_bars() {
             "SLIDER's knob is not drawn where it stands"
         );
         write_ppm(report_directory / "native-scroll-bars-selmap.ppm", frame);
+        // MAPNAMES holds the focus as SELMAP.GUI opens. Down moves the
+        // selection a row and previews its map without choosing it, and
+        // past the page's last row scrolls the list a row, the knob
+        // following; Up moves back on the page. From Select Map, which Tab
+        // focuses, Down moves the focus on instead.
+        bool running = true;
+        const auto press_key = [&](SDL_Keycode key, SDL_Scancode scancode, SDL_Keymod mod) {
+            SDL_Event event{};
+            event.type = SDL_EVENT_KEY_DOWN;
+            event.key.key = key;
+            event.key.scancode = scancode;
+            event.key.mod = mod;
+            event.key.down = true;
+            dispatch_event(event, running);
+        };
+        const auto focused = [this] {
+            const auto focus = frontend_focus();
+            return focus < 0
+                       ? std::string()
+                       : resources_.layout.gadgets[static_cast<std::size_t>(focus)].common.name;
+        };
+        const auto summary = [this] {
+            const auto* size = widget("SIZE");
+            const auto* fields = size != nullptr
+                                     ? std::get_if<oa::ui::gui_layout::LabelFields>(&size->fields)
+                                     : nullptr;
+            return fields != nullptr ? fields->text : std::string();
+        };
+        require(
+            tdf_names_equal(focused(), "MAPNAMES"), "SELMAP.GUI did not open with MAPNAMES focused"
+        );
+        const auto chosen = skirmish_settings_.map_name;
+        const auto start = static_cast<std::size_t>(std::max<int16_t>(0, modal_map_index_));
+        const auto start_first = map_first_visible();
+        const auto rows = static_cast<std::size_t>(kMapRows);
+        require(
+            start >= start_first && start < start_first + rows &&
+                start_first + rows < static_cast<std::size_t>(maps),
+            "SELMAP.GUI did not open on a page before the last with the saved map on it"
+        );
+        const auto to_edge = start_first + rows - start;
+        for (std::size_t step = 1; step <= to_edge; ++step) {
+            press_key(SDLK_DOWN, SDL_SCANCODE_DOWN, SDL_KMOD_NONE);
+            const auto first = step < to_edge ? start_first : start_first + 1U;
+            require(
+                static_cast<std::size_t>(modal_map_index_) == start + step &&
+                    map_first_visible() == first,
+                "Down " + std::to_string(step) + " did not select map " +
+                    std::to_string(start + step) + " with map " + std::to_string(first) +
+                    " shown first"
+            );
+        }
+        require(
+            knob_of("SLIDER") == static_cast<int16_t>(
+                                     (start_first + 1U) * static_cast<std::size_t>(map_bar.range) /
+                                     static_cast<std::size_t>(maps - kMapRows)
+                                 ),
+            "the knob did not follow the list Down scrolled"
+        );
+        const auto keyed = summary();
+        preview_map_index(static_cast<std::size_t>(modal_map_index_));
+        require(
+            summary() == keyed && skirmish_settings_.map_name == chosen,
+            "Down did not preview the selected map without choosing it"
+        );
+        press_key(SDLK_UP, SDL_SCANCODE_UP, SDL_KMOD_NONE);
+        require(
+            static_cast<std::size_t>(modal_map_index_) == start + to_edge - 1U &&
+                map_first_visible() == start_first + 1U,
+            "Up did not move the selection back on the page"
+        );
+        const auto stepped = modal_map_index_;
+        press_key(SDLK_TAB, SDL_SCANCODE_TAB, SDL_KMOD_NONE);
+        press_key(SDLK_DOWN, SDL_SCANCODE_DOWN, SDL_KMOD_NONE);
+        require(
+            tdf_names_equal(focused(), "PREVMENU") && modal_map_index_ == stepped,
+            "Down from Select Map did not move the focus to Cancel"
+        );
         drag_check_knob("SLIDER", kMapBarLength);
         const auto last_page = static_cast<std::size_t>(maps - kMapRows);
         require(
@@ -420,7 +498,7 @@ void Runtime::check_scroll_bars() {
     }
     close_map_modal();
     std::cout << "scroll bar check: SELMAP.GUI's list of " << maps
-              << " maps scrolls with its knob\n";
+              << " maps scrolls with its knob and steps with Up and Down\n";
 
     // NEWGAME.GUI for any mission, drawn once its setup has placed and filled
     // its lists: the Missions list shows 3 of the campaign's missions and

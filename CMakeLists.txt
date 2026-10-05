@@ -1272,7 +1272,10 @@ if(OA_BUILD_PLATFORM)
       # its knob and arrows, a press beside the knob steps it one position, a
       # drag moves it pixel for pixel, an arrow steps and repeats, and the
       # preferences' sub-panel shows whole over the battlefield in a window
-      # taller than the chrome. The mission list also steps with Up and
+      # taller than the chrome. The map list, focused as SELMAP.GUI opens,
+      # steps with Down and Up, previewing each map and scrolling a row past
+      # the page's edge with its knob following, and Down moves the focus on
+      # from Select Map. The mission list also steps with Up and
       # starts a double-clicked mission, and a click on Any Mission's Campaign
       # list takes the focus, so Up and Down step it and refill the missions.
       set(oa_scroll_bars_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/scroll-bars")
