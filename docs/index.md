@@ -4,8 +4,8 @@ Every document in the repository, by what you want to do.
 
 ## Installing and playing
 
-- [README.md](../README.md): what Open Annihilation is, its settings,
-  multiplayer and playing the free demo.
+- [README.md](../README.md): what Open Annihilation is, multiplayer and
+  playing the free demo.
 - Installation guides, step by step: downloading the release, getting the
   game data from your copy of Total Annihilation, and starting the game.
   - [macOS](installation/macos.md)
@@ -16,6 +16,12 @@ Every document in the repository, by what you want to do.
     game, the Steam Input layouts and artwork installed by hand, the
     controls, the first start, the Deck's settings and the logs
   - [iPhone and iPad](installation/ios.md), built on your own Mac
+- [settings.md](settings.md): Open Annihilation's own settings, with a
+  picture of each section: opening them, OK, Cancel and Restore defaults,
+  and what every setting in Mods, Controls, Common Tweaks, Language,
+  Graphics, Touch, Controller, Game files and Developer does, its default,
+  when it takes effect and when to change it; the command-line options
+  that set them for one run, and where they are kept.
 - [VARIANCES.md](../VARIANCES.md): where the engine always differs from
   3.1c, on purpose.
 - [touch-controls.md](touch-controls.md): playing with fingers on an iPad,

@@ -85,7 +85,7 @@ open-annihilation.exe --choose-game-dir
 
 Open Annihilation's own settings open from the **OA** button at the bottom
 right of the main menu, or with **Ctrl+,**. See
-[Settings](../../README.md#settings).
+[Settings](../settings.md).
 
 Each start makes this copy of the game the opener of `.oamod` files for
 your Windows account, with the game's icon on them: double-click one to

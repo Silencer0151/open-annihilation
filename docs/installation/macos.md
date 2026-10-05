@@ -71,7 +71,7 @@ open -a "Open Annihilation" --args --choose-game-dir
 
 Open Annihilation's own settings open from the **OA** button at the bottom
 right of the main menu, or with **Cmd+,**. See
-[Settings](../../README.md#settings).
+[Settings](../settings.md).
 
 Double-click a `.oamod` file to install the mod it holds in Open
 Annihilation ([mods](../mods/README.md#installing-a-oamod-file)).

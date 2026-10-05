@@ -34,7 +34,9 @@ the [Code of Conduct](CODE_OF_CONDUCT.md).
   it is decoded, or the results of the simulation needs an issue first, so
   that the reason can be agreed before the work is done.
 - Game data never enters the repository: no archives, maps, sounds, movies or
-  captures of them. Tests read the player's installation (see
+  captures of them, apart from the documentation's small screenshots
+  ([conventions](docs/development/conventions.md#application-extensions-and-runsh)).
+  Tests read the player's installation (see
   [Build and test](#build-and-test)).
 - For anything larger than a small fix, open an issue describing the problem
   and the approach, so that nobody's work is wasted.

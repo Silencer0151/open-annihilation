@@ -123,7 +123,7 @@ permission: run `chmod +x open-annihilation` once.
 
 Open Annihilation's own settings open from the **OA** button at the bottom
 right of the main menu, or with **Ctrl+,**. See
-[Settings](../../README.md#settings).
+[Settings](../settings.md).
 
 Each start on a desktop makes this copy of the game the opener of `.oamod`
 files for your account, with the game's icon on them: open one from the
