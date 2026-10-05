@@ -384,6 +384,66 @@ class LaunchedShotCounter {
     sim::match_runtime::EventHooks saved_hooks_; ///< the hooks the match had
 };
 
+/// The joiner's copies of one player's units that a pad has carried since
+/// their last full record.
+///
+/// A unit on its factory's pad turns with the pad. The joiner spins its
+/// copy of the pad from the factory's records, at the ticks its record
+/// pacing applies them; the copy of the unit takes its pad's turn at each
+/// of its owner's 0x2c, and leaves the pad when the 0x0a arrives, which
+/// comes from the first player on the owner's machine rather than from the
+/// owner. So the copy leaves its pad some turn steps off its owner, more
+/// when records arrive late, and on a route that turns it about it may turn
+/// the other way. Only its next full record puts it back on its owner's
+/// path, as in 3.1c.
+struct CarriedCopies {
+    const World* world{};         ///< the joiner's world
+    std::vector<uint8_t> carried; ///< by unit slot: nonzero while waiting for a full record
+    uint32_t placed{};            ///< copies a full record placed after a pad carried them
+};
+
+/// Takes a copy's carried mark away when a full record places it
+/// (FullRecordProbe::placed).
+///
+/// @param context the CarriedCopies
+/// @param unit the unit placed
+void note_placed_copy(
+    void* context, const Unit& unit, const FixedVec3& /*before*/, const FixedVec3& /*to*/
+) {
+    auto& copies = *static_cast<CarriedCopies*>(context);
+    const auto slot = world_unit_slot(copies.world, &unit);
+    if (slot < copies.carried.size() && copies.carried[slot] != 0) {
+        copies.carried[slot] = 0;
+        ++copies.placed;
+    }
+}
+
+/// Watches the full records a binding applies while it lives, then gives
+/// the binding back the probe it had.
+class PlacedCopyWatch {
+  public:
+
+    /// Points the binding's full record probe at the copies.
+    ///
+    /// @param[in,out] binding binding whose full records are watched
+    /// @param[in,out] copies carried copies to update; outlives the watch
+    PlacedCopyWatch(nm::MatchBinding& binding, CarriedCopies& copies)
+        : watched_(binding), saved_probe_(binding.full_record_probe) {
+        watched_.full_record_probe = {&copies, &note_placed_copy};
+    }
+
+    /// Gives the binding back the probe it had.
+    ~PlacedCopyWatch() { watched_.full_record_probe = saved_probe_; }
+
+    PlacedCopyWatch(const PlacedCopyWatch&) = delete;
+    PlacedCopyWatch& operator=(const PlacedCopyWatch&) = delete;
+
+  private:
+
+    nm::MatchBinding& watched_;       ///< binding whose full records are watched
+    nm::FullRecordProbe saved_probe_; ///< the probe the binding had
+};
+
 /// Marks the unit types the battle room's verdicts keep and gives them their agreed build limits.
 ///
 /// @param context the battle room's mp::UnitSync
@@ -1138,7 +1198,8 @@ struct NetworkPlay::NetHost {
     ///
     /// Throughout, the joiner's copy of every finished unit the computer
     /// player moves stays within a pixel of where its owner had it at the
-    /// tick of the last 0x2c the joiner applied from the computer player;
+    /// tick of the last 0x2c the joiner applied from the computer player,
+    /// once a full record has placed it if a pad carried it (CarriedCopies);
     /// after each part of the match both machines hold the same units, the
     /// computer player's shots reach the joiner one for one, and the joiner
     /// counts the computer player's kills and losses as the host does.
@@ -1202,6 +1263,8 @@ struct NetworkPlay::NetHost {
         uint32_t copies_compared = 0;
         uint32_t copies_exact = 0;
         uint32_t copies_worst_offset = 0;
+        CarriedCopies carried{&client_world, std::vector<uint8_t>(client_world.unit_slot_count)};
+        const PlacedCopyWatch placed_watch(joiner.net_->binding, carried);
         // The computer player's shots: the host's weapons launch them and
         // share each as a 0x0d, from which the joiner launches its own.
         LaunchedShots host_shots{host_ai};
@@ -1219,13 +1282,16 @@ struct NetworkPlay::NetHost {
             }
         };
         // A copy moved from records matches its owner at the tick of the
-        // record the joiner last applied from the computer player. A unit
-        // still on its factory's pad turns with the factory's script, which
-        // runs a record later on the joiner, so a copy that leaves the pad
-        // may head a turn step behind its owner until the unit's next full
-        // record; it stays within a pixel meanwhile. Units still being built
-        // are not compared.
+        // record the joiner last applied from the computer player. A copy
+        // a pad has carried leaves it off its owner's path until its next
+        // full record (CarriedCopies), so it is not compared until then;
+        // nor are units still being built.
         const auto compare_copies = [&] {
+            for (uint16_t slot = 1; slot < client_world.unit_slot_count; ++slot) {
+                const auto& unit = client_world.units[slot];
+                const bool waiting = carried.carried[slot] != 0 || unit.attach_parent != 0;
+                carried.carried[slot] = unit_live(unit) && unit.owner_index == client_ai && waiting;
+            }
             const auto tick = computer_copy.last_sim_tick;
             if (tick <= 0 || static_cast<uint32_t>(tick) > host_world.game.tick ||
                 host_world.game.tick - static_cast<uint32_t>(tick) >= kComputerPoseTicks)
@@ -1236,7 +1302,8 @@ struct NetworkPlay::NetHost {
                 const auto& owner = poses[slot];
                 if (!unit_live(unit) || unit.owner_index != client_ai ||
                     unit.build_remaining != 0.0F || owner.type != unit.type_index ||
-                    !owner.finished || client_match.ground_runtime(slot) == nullptr)
+                    !owner.finished || client_match.ground_runtime(slot) == nullptr ||
+                    carried.carried[slot] != 0)
                     continue;
                 const auto copy = match_pose(client_match, slot);
                 ++copies_compared;
@@ -1450,7 +1517,8 @@ struct NetworkPlay::NetHost {
                   << ", ";
         score_line();
         std::cout << ", copies compared " << copies_compared << ", exact " << copies_exact
-                  << ", farthest off " << copies_worst_offset << " (16.16)\n";
+                  << ", farthest off " << copies_worst_offset << " (16.16), placed off pads "
+                  << carried.placed << "\n";
         require(
             client_shots.count == host_shots.count,
             "the computer player's shots did not all reach the joiner"
