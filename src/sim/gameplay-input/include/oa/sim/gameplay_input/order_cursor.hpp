@@ -64,10 +64,9 @@ inline constexpr int32_t interface_right_click = 1;
 // Services owned by other systems. A null predicate answers "no".
 struct OrderCursorHooks {
     void* context{};
-    // Line of sight of `player` to a map position.
-    bool (*position_visible)(
-        void* context, const World& world, const Player& player, const FixedVec3& position
-    ){};
+    // Whether the player watching the match has mapped a map position:
+    // ground explored once counts, in sight or under the fog.
+    bool (*position_mapped)(void* context, const World& world, const FixedVec3& position){};
     // The feature standing on the map position, or null (feature_at_position
     // on a match's plots).
     const FeatureDef* (*feature_at)(void* context, const World& world, const FixedVec3& position){};
@@ -236,6 +235,8 @@ can_load_unit(const World& world, const Unit& actor, const Unit& target) noexcep
 /// Returns the cursor one actor shows for a command over a target unit and map position.
 ///
 /// The default order re-enters as ATTACK or RECLAIM by context, at most twice.
+/// A reclaimable feature counts on ground the player watching has mapped,
+/// in sight or under the fog, and not on ground never mapped.
 /// Rules of hooks.rules that change it: orders.reclaim-command-any-unit makes
 /// the Reclaim command show the reclaim cursor over every unit;
 /// air.no-repair-retreat-flag keeps the Move command's pad cursor from the
@@ -246,7 +247,7 @@ can_load_unit(const World& world, const Unit& actor, const Unit& target) noexcep
 /// @param actor selected unit
 /// @param target unit under the pointer, or null
 /// @param position map position under the pointer, 16.16 world coordinates
-/// @param hooks visibility, feature and range services
+/// @param hooks mapping, feature and range services
 /// @return the cursor; lower values take precedence across a selection
 /// @quirk Under orders.reclaim-command-any-unit the Reclaim command shows the
 ///        reclaim cursor over any unit for any actor, even one that cannot
@@ -277,7 +278,7 @@ uint32_t collect_selected_units(const World& world, const Unit** out, uint32_t c
 ///
 /// @param world world the units live in; Game.cursor_unit_id names the unit under the pointer
 /// @param command armed command
-/// @param hooks visibility, feature and range services
+/// @param hooks mapping, feature and range services
 /// @return the cursor
 [[nodiscard]] OrderCursor selection_order_cursor(
     const World& world, OrderCommand command, const OrderCursorHooks& hooks
@@ -288,7 +289,7 @@ uint32_t collect_selected_units(const World& world, const Unit** out, uint32_t c
 /// The caller has already stored the unit under the pointer in Game.cursor_unit_id.
 ///
 /// @param world world, with the pointer state in its Game record
-/// @param hooks visibility, feature and range services
+/// @param hooks mapping, feature and range services
 /// @param[out] cursor receives the cursor: normal off the map, else the selection's
 /// @return false when build placement owns the pointer, leaving `cursor` untouched
 [[nodiscard]] bool
@@ -340,6 +341,8 @@ enum class UnitOrder : uint8_t {
 /// Resolves the order one actor takes for a command over a target unit and map position.
 ///
 /// The default order re-enters as ATTACK, RECLAIM or REPAIR by context.
+/// A reclaimable feature counts on ground the player watching has mapped,
+/// in sight or under the fog, and not on ground never mapped.
 /// Rules of hooks.rules that change it: orders.resurrector-reclaims-features
 /// makes the Reclaim command reclaim a feature that a resurrector would
 /// otherwise resurrect; air.no-repair-retreat-flag keeps the Move command's
@@ -350,7 +353,7 @@ enum class UnitOrder : uint8_t {
 /// @param actor selected unit
 /// @param target unit under the pointer, or null; a target that is not live yields no order
 /// @param position map position under the pointer, or null
-/// @param hooks visibility, feature and range services
+/// @param hooks mapping, feature and range services
 /// @return the order, or UnitOrder::none
 /// @quirk air.no-repair-retreat-flag changes the Move command only: the
 ///        default order of the right-click interface and the Unload command
@@ -472,7 +475,7 @@ struct SelectionOrder {
 ///
 /// @param world world, with the pointer state in its Game record
 /// @param command armed command
-/// @param hooks visibility, feature and range services
+/// @param hooks mapping, feature and range services
 /// @param[out] out receives the units that get an order, with the order and its point
 /// @param capacity room in `out`
 /// @return the number written

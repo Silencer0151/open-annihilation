@@ -27,7 +27,7 @@ void check(bool ok, const char* what) {
 struct Fixture {
     World* world = world_create();
     FeatureDef reclaimable{};
-    bool visible = true;
+    bool mapped = true;
     bool feature_here = false;
     bool in_range = true;
 
@@ -72,8 +72,8 @@ struct Fixture {
     OrderCursorHooks hooks() {
         return {
             this,
-            [](void* c, const World&, const Player&, const FixedVec3&) {
-                return static_cast<Fixture*>(c)->visible;
+            [](void* c, const World&, const FixedVec3&) {
+                return static_cast<Fixture*>(c)->mapped;
             },
             [](void* c, const World&, const FixedVec3&) -> const FeatureDef* {
                 auto* self = static_cast<Fixture*>(c);
@@ -158,14 +158,15 @@ void test_default_order() {
     check(
         order_cursor(*f.world, OrderCommand::default_order, tank, nullptr, at, hooks) ==
             OrderCursor::reclaim,
-        "constructor over a visible reclaimable feature reclaims"
+        "constructor over a reclaimable feature on mapped ground reclaims"
     );
-    f.visible = false;
+    f.mapped = false;
     check(
         order_cursor(*f.world, OrderCommand::default_order, tank, nullptr, at, hooks) ==
             OrderCursor::move,
-        "unseen feature is not offered"
+        "a feature on ground never mapped is not offered"
     );
+    f.mapped = true;
 
     // The other interface only highlights.
     int32_t other = interface_right_click;
@@ -674,8 +675,14 @@ void test_unit_orders() {
     );
     check(
         order(reclaim, builder, &damaged) == UnitOrder::reclaim,
-        "a visible feature wins over the unit"
+        "a feature on mapped ground wins over the unit"
     );
+    f.mapped = false;
+    check(
+        order(reclaim, builder, nullptr) == UnitOrder::none,
+        "a feature on ground never mapped is not reclaimed"
+    );
+    f.mapped = true;
     f.feature_here = false;
     check(order(reclaim, builder, &damaged) == UnitOrder::reclaim_unit, "reclaim a unit");
     check(order(reclaim, builder, nullptr) == UnitOrder::none, "nothing to reclaim");
@@ -1109,7 +1116,7 @@ void test_feature_cursor_across_footprint() {
     FeatureMap m;
     OrderCursorHooks hooks{
         nullptr,
-        [](void*, const World&, const Player&, const FixedVec3&) { return true; },
+        [](void*, const World&, const FixedVec3&) { return true; },
         [](void*, const World& world, const FixedVec3& position) {
             return feature_at_position(world, position);
         },

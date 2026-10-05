@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // The cursor a selected commander shows over the map's vegetation, another
-// reclaimable feature and a wreck, driven through synthetic SDL pointer motion.
+// reclaimable feature and a wreck, driven through synthetic SDL pointer motion,
+// and its clicks on trees out of sight, on mapped ground and on ground never
+// mapped.
 #include "oa/app/runtime.hpp"
 #include "oa/core/map_plot.h"
 #include "oa/sim/gameplay_input/order_cursor.hpp"
@@ -10,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
@@ -37,6 +40,15 @@ constexpr uint16_t kNoFeature = 0xffff;
 // The ground Reclaim order's kind (VTOL_Reclaim is 58).
 constexpr uint8_t kReclaimKind = 32;
 constexpr std::string_view kWreckName = "armsolar_dead";
+// Map pixels a sight cell spans, and the most a sight cell sits north of the
+// ground it covers: half the tallest ground.
+constexpr int32_t kSightCellPixels = 32;
+constexpr int32_t kHalfTallestGround = 128;
+// Map cells mapped or unmapped around a tree under the fog, the cells between
+// the two trees, and the ticks the commander has to reclaim the mapped one.
+constexpr int32_t kFogMarginCells = 2;
+constexpr int32_t kFogTreesApartCells = 24;
+constexpr int kFogReclaimTicks = 3000;
 
 [[noreturn]] void fail(const std::string& what) {
     throw std::runtime_error("reclaim cursor check: " + what);
@@ -324,6 +336,182 @@ void Runtime::check_reclaim_cursor() {
               << " pointer positions over their footprints show Reclaim, " << move_samples
               << " over open ground Move; a RECLAIM click on " << feature_name(*hovered.front().def)
               << " gave the commander Reclaim\n";
+
+    // Under the fog, as 3.1c does: a tree out of sight on mapped ground
+    // shows Reclaim and a click on it gives the commander a Reclaim, which it
+    // carries out; a tree on ground never mapped shows Move and a click on it
+    // gives a Move.
+    if ((slots[commander].unit->flags & OA_UNIT_FLAG_SELECTED) == 0)
+        fail("lost the commander's selection");
+    if (world.game.interface_type != input::interface_left_click)
+        fail("needs the left-click interface");
+    match_->stop_orders(commander);
+    match_command_ = MatchCommand::none;
+    const auto& spatial = match_->spatial();
+    const auto map_width = static_cast<int32_t>(spatial.terrain_width);
+    const auto map_height = static_cast<int32_t>(spatial.terrain_height);
+    const auto footprint_unseen = [&](int32_t x, int32_t z, const oa::FeatureDef& def) {
+        for (int32_t row = -1; row <= def.footprint_z; ++row)
+            for (int32_t column = -1; column <= def.footprint_x; ++column)
+                if (x + column >= 0 && z + row >= 0 && x + column < map_width &&
+                    z + row < map_height && visible_cell(x + column, z + row))
+                    return false;
+        return true;
+    };
+    // The nearest vegetation out of sight, far enough from `away`, that the
+    // view can centre on.
+    const auto edge_x = visible_map_width() / (2 * OA_MAP_CELL_PIXELS) + 1;
+    const auto edge_z = visible_map_height() / (2 * OA_MAP_CELL_PIXELS) + 1;
+    const auto unseen_tree = [&](const Hovered* away) -> std::optional<Hovered> {
+        for (int32_t ring = 0; ring < std::max(map_width, map_height); ++ring)
+            for (int32_t dz = -ring; dz <= ring; ++dz)
+                for (int32_t dx = -ring; dx <= ring; ++dx) {
+                    if (dx != -ring && dx != ring && dz != -ring && dz != ring)
+                        continue;
+                    const auto x = commander_x + dx;
+                    const auto z = commander_z + dz;
+                    const auto word = origin_word(x, z);
+                    if (word >= world.feature_def_count)
+                        continue;
+                    const auto& def = world.feature_defs[word];
+                    if ((def.flags & OA_FEATURE_FLAG_RECLAIMABLE) == 0 ||
+                        (def.flags & OA_FEATURE_FLAG_FLAMABLE) == 0 || x < edge_x || z < edge_z ||
+                        x + def.footprint_x > map_width - edge_x ||
+                        z + def.footprint_z > map_height - edge_z)
+                        continue;
+                    if (away != nullptr &&
+                        std::max(std::abs(x - away->cell_x), std::abs(z - away->cell_z)) <
+                            kFogTreesApartCells)
+                        continue;
+                    if (footprint_unseen(x, z, def))
+                        return Hovered{x, z, &def};
+                }
+        return std::nullopt;
+    };
+    // Marks the sight cells around a tree mapped by the player watching, or
+    // never mapped.
+    auto& sight = match_->sight_mutable();
+    const auto viewer_bit = static_cast<uint16_t>(1U << sight.viewpoint_player);
+    const auto map_around = [&](const Hovered& tree, bool mapped) {
+        const auto& def = *tree.def;
+        const auto first_x =
+            std::max(0, (tree.cell_x - kFogMarginCells) * OA_MAP_CELL_PIXELS / kSightCellPixels);
+        const auto last_x = std::min(
+            sight.width - 1,
+            (tree.cell_x + def.footprint_x + kFogMarginCells) * OA_MAP_CELL_PIXELS /
+                kSightCellPixels
+        );
+        const auto first_z = std::max(
+            0,
+            ((tree.cell_z - kFogMarginCells) * OA_MAP_CELL_PIXELS - kHalfTallestGround) /
+                kSightCellPixels
+        );
+        const auto last_z = std::min(
+            sight.height - 1,
+            (tree.cell_z + def.footprint_z + kFogMarginCells) * OA_MAP_CELL_PIXELS /
+                kSightCellPixels
+        );
+        for (auto z = first_z; z <= last_z; ++z)
+            for (auto x = first_x; x <= last_x; ++x) {
+                auto& bits = sight.player_bits[static_cast<std::size_t>(z * sight.width + x)];
+                bits = mapped ? static_cast<uint16_t>(bits | viewer_bit)
+                              : static_cast<uint16_t>(bits & ~viewer_bit);
+            }
+    };
+    // Points at the middle of a tree's footprint, checks the cursor and
+    // clicks: a Reclaim of the tree on mapped ground, a Move elsewhere.
+    const auto click_unseen_tree = [&](const Hovered& tree, bool mapped) {
+        const auto& def = *tree.def;
+        const auto where = feature_name(def) + " at " + std::to_string(tree.cell_x) + "," +
+                           std::to_string(tree.cell_z);
+        const auto centre_x = static_cast<uint32_t>(
+            tree.cell_x * OA_MAP_CELL_PIXELS + def.footprint_x * OA_MAP_CELL_PIXELS / 2
+        );
+        const auto centre_z = static_cast<uint32_t>(
+            tree.cell_z * OA_MAP_CELL_PIXELS + def.footprint_z * OA_MAP_CELL_PIXELS / 2
+        );
+        match_camera_x_ = static_cast<int32_t>(centre_x) - visible_map_width() / 2;
+        match_camera_z_ = static_cast<int32_t>(centre_z) - visible_map_height() / 2;
+        render_match_surface();
+        const auto height = std::max(
+            match_->map_height(centre_x << 16U, centre_z << 16U),
+            static_cast<int32_t>(world.game.sea_level)
+        );
+        const auto screen = project_match_point(
+            viewport(), {centre_x << 16U, static_cast<uint32_t>(height) << 16U, centre_z << 16U}
+        );
+        const auto x = static_cast<float>(screen.x);
+        const auto y = static_cast<float>(screen.y);
+        send(SDL_EVENT_MOUSE_MOTION, 0, x, y);
+        const auto ground = match_world_point(x, y);
+        if (hovered_ || hovered_match_unit_ != 0 || !ground)
+            fail("the pointer found no open ground over " + where);
+        const auto column = ((*ground)[0] >> 20) - tree.cell_x;
+        const auto row = ((*ground)[2] >> 20) - tree.cell_z;
+        if (column < 0 || row < 0 || column >= def.footprint_x || row >= def.footprint_z)
+            fail("the pointer missed the footprint of " + where);
+        const std::array<uint32_t, 3> point{
+            static_cast<uint32_t>((*ground)[0]),
+            static_cast<uint32_t>((*ground)[1]),
+            static_cast<uint32_t>((*ground)[2])
+        };
+        if (match_->point_visible(match_local_player_, point) ||
+            match_->point_mapped(point) != mapped)
+            fail(
+                where + " is not out of sight on " +
+                (mapped ? "mapped ground" : "ground never mapped")
+            );
+        const auto cursor = static_cast<input::OrderCursor>(pick_match_cursor());
+        const auto shows = mapped ? input::OrderCursor::reclaim : input::OrderCursor::move;
+        if (cursor != shows)
+            fail(
+                where + " under the fog shows cursor " + std::to_string(static_cast<int>(cursor)) +
+                ", not " + std::to_string(static_cast<int>(shows))
+            );
+        click(x, y);
+        std::vector<oa::sim::match_runtime::Match::QueuedCommandView> queue;
+        match_->visit_primary_queue(commander, [&](const auto& order) { queue.push_back(order); });
+        const auto kind = mapped ? kReclaimKind : oa::sim::ground_orders::move_ground_kind;
+        if (queue.empty() || queue.front().kind != kind)
+            fail("a click on " + where + " under the fog gave no " + (mapped ? "Reclaim" : "Move"));
+        if (mapped && ((queue.front().destination[0] >> 20) - tree.cell_x < 0 ||
+                       (queue.front().destination[2] >> 20) - tree.cell_z < 0 ||
+                       (queue.front().destination[0] >> 20) - tree.cell_x >= def.footprint_x ||
+                       (queue.front().destination[2] >> 20) - tree.cell_z >= def.footprint_z))
+            fail("the Reclaim of " + where + " is aimed off its footprint");
+    };
+
+    const auto fogged = unseen_tree(nullptr);
+    if (!fogged)
+        fail("found no vegetation out of the commander's sight");
+    const auto unmapped = unseen_tree(&*fogged);
+    if (!unmapped)
+        fail("found no second vegetation out of the commander's sight");
+    map_around(*fogged, true);
+    map_around(*unmapped, false);
+    click_unseen_tree(*unmapped, false);
+    std::cout << "reclaim cursor check: " << feature_name(*unmapped->def) << " at cell "
+              << unmapped->cell_x << "," << unmapped->cell_z
+              << " on ground never mapped shows Move, and a click there gives a Move\n";
+    match_->stop_orders(commander);
+    click_unseen_tree(*fogged, true);
+    const auto fogged_word = origin_word(fogged->cell_x, fogged->cell_z);
+    int reclaimed_tick = 0;
+    for (int tick = 1; tick <= kFogReclaimTicks && reclaimed_tick == 0; ++tick) {
+        step_match_simulation();
+        if (origin_word(fogged->cell_x, fogged->cell_z) != fogged_word)
+            reclaimed_tick = tick;
+    }
+    if (reclaimed_tick == 0)
+        fail(
+            "the commander did not reclaim " + feature_name(*fogged->def) + " within " +
+            std::to_string(kFogReclaimTicks) + " ticks"
+        );
+    std::cout << "reclaim cursor check: " << feature_name(*fogged->def) << " at cell "
+              << fogged->cell_x << "," << fogged->cell_z
+              << " out of sight on mapped ground shows Reclaim, a click there gives a Reclaim, "
+                 "and the commander reclaimed it by tick "
+              << reclaimed_tick << "\n";
 }
 
 } // namespace oa::app

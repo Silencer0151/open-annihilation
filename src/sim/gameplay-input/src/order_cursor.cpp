@@ -59,12 +59,11 @@ int32_t map_cell(int32_t fixed) noexcept {
     return fixed >> 20;
 }
 
-bool reclaimable_feature_visible(
-    const World& world, const Unit& actor, const FixedVec3& position, const OrderCursorHooks& hooks
+// A reclaimable feature on mapped ground, in sight or under the fog.
+bool reclaimable_feature_mapped(
+    const World& world, const FixedVec3& position, const OrderCursorHooks& hooks
 ) noexcept {
-    const Player* owner = world_unit_owner(&world, &actor);
-    if (owner == nullptr || hooks.position_visible == nullptr ||
-        !hooks.position_visible(hooks.context, world, *owner, position))
+    if (hooks.position_mapped == nullptr || !hooks.position_mapped(hooks.context, world, position))
         return false;
     if (hooks.feature_at == nullptr)
         return false;
@@ -271,10 +270,10 @@ OrderCursor order_cursor(
                 if (allied)
                     return OrderCursor::friendly;
                 if ((abilities & OA_UNIT_DEF_ABILITY_CAN_RESURRECT) != 0 &&
-                    reclaimable_feature_visible(world, actor, position, hooks))
+                    reclaimable_feature_mapped(world, position, hooks))
                     return OrderCursor::friendly;
                 if ((abilities & OA_UNIT_DEF_ABILITY_CAN_RECLAMATE) != 0 &&
-                    reclaimable_feature_visible(world, actor, position, hooks))
+                    reclaimable_feature_mapped(world, position, hooks))
                     return OrderCursor::friendly;
                 return OrderCursor::normal;
             }
@@ -294,10 +293,10 @@ OrderCursor order_cursor(
                     return OrderCursor::select;
             }
             if ((abilities & OA_UNIT_DEF_ABILITY_CAN_RESURRECT) != 0 &&
-                reclaimable_feature_visible(world, actor, position, hooks))
+                reclaimable_feature_mapped(world, position, hooks))
                 return OrderCursor::resurrect;
             if ((abilities & OA_UNIT_DEF_ABILITY_CAN_RECLAMATE) != 0 &&
-                reclaimable_feature_visible(world, actor, position, hooks))
+                reclaimable_feature_mapped(world, position, hooks))
                 return OrderCursor::reclaim;
             return (abilities & OA_UNIT_DEF_ABILITY_CAN_MOVE) != 0 ? OrderCursor::move
                                                                    : OrderCursor::normal;
@@ -305,7 +304,7 @@ OrderCursor order_cursor(
             if ((abilities & OA_UNIT_DEF_ABILITY_CAN_MOVE) == 0)
                 return OrderCursor::normal;
             if ((abilities & OA_UNIT_DEF_ABILITY_CAN_RESURRECT) != 0 &&
-                reclaimable_feature_visible(world, actor, position, hooks))
+                reclaimable_feature_mapped(world, position, hooks))
                 return OrderCursor::resurrect;
             if (target != nullptr && has_movement_object(world, actor, hooks)) {
                 if ((abilities & OA_UNIT_DEF_ABILITY_CAN_CAPTURE) == 0) {
@@ -385,7 +384,7 @@ OrderCursor order_cursor(
             return OrderCursor::teleport;
         case OrderCommand::reclaim:
             if ((abilities & OA_UNIT_DEF_ABILITY_CAN_RECLAMATE) != 0 &&
-                reclaimable_feature_visible(world, actor, position, hooks))
+                reclaimable_feature_mapped(world, position, hooks))
                 return OrderCursor::reclaim;
             // With reclaim-command-any-unit the cursor over a unit is always
             // reclaim, so hovering it no longer tells which units refuse.
@@ -512,7 +511,7 @@ UnitOrder unit_order(
                                  : by_air(UnitOrder::repair_unit, UnitOrder::vtol_repair_unit);
     };
     const auto feature_here = [&] {
-        return position != nullptr && reclaimable_feature_visible(world, actor, *position, hooks);
+        return position != nullptr && reclaimable_feature_mapped(world, *position, hooks);
     };
     const auto kamikaze = [&] {
         return (def->flags & OA_UNIT_DEF_FLAG_KAMIKAZE) != 0 ? UnitOrder::attack_kamikaze

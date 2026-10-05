@@ -1697,7 +1697,9 @@ if(OA_BUILD_PLATFORM)
       # The selected commander's pointer moved over several kinds of tree,
       # another reclaimable feature and a wreck through SDL input shows
       # Reclaim wherever its ground point is on their footprints and Move on
-      # the open ground around them.
+      # the open ground around them. Under the fog a tree on mapped ground
+      # shows Reclaim and a click there gives a Reclaim, which the commander
+      # carries out; a tree on ground never mapped shows Move and takes a Move.
       set(oa_reclaim_cursor_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/reclaim-cursor")
       file(MAKE_DIRECTORY "${oa_reclaim_cursor_dir}")
       add_test(NAME native-reclaim-cursor COMMAND oa-game --game-dir "${OA_GAME_DIR}"

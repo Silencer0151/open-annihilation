@@ -451,10 +451,10 @@ void Runtime::pick_cursor_unit(bool refresh_view) {
 oa::sim::gameplay_input::OrderCursorHooks Runtime::order_cursor_hooks() {
     oa::sim::gameplay_input::OrderCursorHooks hooks{
         this,
-        [](void* context, const World&, const Player& player, const FixedVec3& position) {
+        // A feature counts on mapped ground under the fog too, as 3.1c does.
+        [](void* context, const World&, const FixedVec3& position) {
             const auto* self = static_cast<Runtime*>(context);
-            return self->match_->point_visible(
-                player.index,
+            return self->match_->point_mapped(
                 {static_cast<uint32_t>(position.x),
                  static_cast<uint32_t>(position.y),
                  static_cast<uint32_t>(position.z)}
