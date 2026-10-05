@@ -58,6 +58,22 @@ std::string utf8(const fs::path& path) {
     return {text.begin(), text.end()};
 }
 
+/// Returns a path as it stands inside a quoted string of Steam's and Heroic's files: UTF-8, each
+/// backslash and quote escaped, as both programs write them. A Windows path's backslashes
+/// would otherwise read as escapes (\u, \n, \t) or break the string.
+///
+/// @param path the path
+/// @return its escaped UTF-8 spelling
+std::string quoted_text(const fs::path& path) {
+    std::string text;
+    for (const char character : utf8(path)) {
+        if (character == '\\' || character == '"')
+            text += '\\';
+        text += character;
+    }
+    return text;
+}
+
 /// Returns a Steam manifest of an app.
 ///
 /// @param app the app number
@@ -226,6 +242,11 @@ void check_heroic_list() {
         paths.size() == 2 &&
         utf8(paths[1]) == "/home/deck/Games/Heroic/Caf\xc3\xa9 \xf0\x9f\x98\x80"
     );
+    // A Windows path, its backslashes escaped as Heroic writes them.
+    const auto windows = installs::heroic_install_paths(
+        "{\"installed\": [{\"install_path\": \"C:\\\\Games\\\\Total Annihilation\"}]}"
+    );
+    OA_CHECK(windows.size() == 1 && windows[0] == fs::path("C:\\Games\\Total Annihilation"));
     // The list "installed" must be the top object's.
     OA_CHECK(
         installs::heroic_install_paths("{\"other\": {\"installed\": [{\"install_path\": \"/x\"}]}}")
@@ -278,14 +299,14 @@ void check_search(const fs::path& temporary) {
     const fs::path sd_game = sd_card / "steamapps" / "common" / "Total Annihilation";
     write_file(
         steam / "steamapps" / "libraryfolders.vdf",
-        "\"libraryfolders\"\n{\n\t\"0\"\n\t{\n\t\t\"path\"\t\t\"" + utf8(steam) +
-            "\"\n\t}\n\t\"1\"\n\t{\n\t\t\"path\"\t\t\"" + utf8(sd_card) +
+        "\"libraryfolders\"\n{\n\t\"0\"\n\t{\n\t\t\"path\"\t\t\"" + quoted_text(steam) +
+            "\"\n\t}\n\t\"1\"\n\t{\n\t\t\"path\"\t\t\"" + quoted_text(sd_card) +
             "\"\n\t}\n"
             "\t\"2\"\n\t{\n\t\t\"path\"\t\t\"" +
-            utf8(sd_card) +
+            quoted_text(sd_card) +
             "\"\n\t}\n"
             "\t\"3\"\n\t{\n\t\t\"path\"\t\t\"" +
-            utf8(temporary / "unplugged") + "\"\n\t}\n}\n"
+            quoted_text(temporary / "unplugged") + "\"\n\t}\n}\n"
     );
     write_file(
         steam / "steamapps" / manifest_file(installs::total_annihilation_steam_app),
@@ -308,8 +329,8 @@ void check_search(const fs::path& temporary) {
     make_game_folder(temporary / "guessed" / "steamapps" / "common" / "Total Annihilation");
     write_file(
         steam / "config" / "libraryfolders.vdf",
-        "\"libraryfolders\" { \"0\" { \"path\" \"" + utf8(sneaky) + "\" } \"1\" { \"path\" \"" +
-            utf8(temporary / "guessed") + "\" } }"
+        "\"libraryfolders\" { \"0\" { \"path\" \"" + quoted_text(sneaky) +
+            "\" } \"1\" { \"path\" \"" + quoted_text(temporary / "guessed") + "\" } }"
     );
     // ~/.steam/steam is a link to the same Steam folder: its libraries are searched once.
     std::error_code link_error;
@@ -333,16 +354,16 @@ void check_search(const fs::path& temporary) {
     write_file(other_game / "game.exe", "MZ");
     write_file(
         home / ".config" / "heroic" / "gog_store" / "installed.json",
-        "{\"installed\": [{\"install_path\": \"" + utf8(other_game) + "\"}, {\"install_path\": \"" +
-            utf8(heroic_game) + "\"}]}"
+        "{\"installed\": [{\"install_path\": \"" + quoted_text(other_game) +
+            "\"}, {\"install_path\": \"" + quoted_text(heroic_game) + "\"}]}"
     );
     const fs::path flatpak_heroic_game = home / "Games" / "Heroic Flatpak" / "Total Annihilation";
     make_game_folder(flatpak_heroic_game);
     write_file(
         home / ".var" / "app" / "com.heroicgameslauncher.hgl" / "config" / "heroic" / "gog_store" /
             "installed.json",
-        "{\"installed\": [{\"install_path\": \"" + utf8(flatpak_heroic_game) +
-            "\"}, {\"install_path\": \"" + utf8(native_game) +
+        "{\"installed\": [{\"install_path\": \"" + quoted_text(flatpak_heroic_game) +
+            "\"}, {\"install_path\": \"" + quoted_text(native_game) +
             "\"}, {\"install_path\": \"relative\"}"
     );
 

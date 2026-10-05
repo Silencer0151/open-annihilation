@@ -1511,8 +1511,8 @@ void pad_looks_never_move_controls() {
             other.pad.force_active = true;
             other.pad.groups_layer = true;
             other.pad.over_build_button = true;
-            other.pad.radial_aim = 3;
-            other.pad.build_aim = 2;
+            other.pad.radial_aim = uint8_t{3};
+            other.pad.build_aim = uint8_t{2};
             other.pad.aim_dot = {400, 300};
             other.pad.ring_by_pad = true;
             other.pad.hold_progress = 0.5f;

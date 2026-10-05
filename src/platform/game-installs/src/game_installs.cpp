@@ -380,11 +380,24 @@ roots_with(const fs::path& home, const fs::path& data_home, const fs::path& conf
 /// @return its value; empty when unset or empty
 fs::path environment_path(const char* name) {
 #if defined(_WIN32)
-    std::wstring wide;
+    // The value in UTF-16, so that a folder named outside the narrow code page reads whole.
+    std::wstring wide_name;
     for (const char* at = name; *at != '\0'; ++at)
-        wide += static_cast<wchar_t>(*at);
-    const wchar_t* value = _wgetenv(wide.c_str());
-    return value == nullptr ? fs::path{} : fs::path(value);
+        wide_name += static_cast<wchar_t>(*at);
+    // Asked with no room, Windows gives the room the value needs with its terminating null; the
+    // value can grow between the calls, so it is asked again until it fits.
+    std::wstring value;
+    DWORD room = GetEnvironmentVariableW(wide_name.c_str(), nullptr, 0);
+    while (room != 0) {
+        value.resize(room);
+        const DWORD copied = GetEnvironmentVariableW(wide_name.c_str(), value.data(), room);
+        if (copied < room) {
+            value.resize(copied);
+            return fs::path(value);
+        }
+        room = copied;
+    }
+    return fs::path{};
 #else
     const char* value = std::getenv(name);
     return value == nullptr ? fs::path{} : path_of(value);

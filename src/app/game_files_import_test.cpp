@@ -1434,6 +1434,10 @@ void links_in_the_game_folder(const fs::path& scratch) {
     fs::remove_all(paths.game_folder / "Music");
     std::error_code error;
     fs::create_directory_symlink(elsewhere, paths.game_folder / "Music", error);
+    // Some systems report a link made and make none.
+    std::error_code status_error;
+    if (!error && !fs::is_symlink(fs::symlink_status(paths.game_folder / "Music", status_error)))
+        error = std::make_error_code(std::errc::no_such_file_or_directory);
     if (error) {
         std::printf("skipped the link case: %s\n", error.message().c_str());
         return;

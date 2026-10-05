@@ -168,6 +168,10 @@ void test_links_are_not_followed(const fs::path& temporary, const Synthetic& syn
     write_bytes(elsewhere / "TADemo.hpi", synthetic.archive);
     std::error_code error;
     fs::create_directory_symlink(elsewhere, data / "demo-test", error);
+    // Some systems report a link made and make none.
+    std::error_code status_error;
+    if (!error && !fs::is_symlink(fs::symlink_status(data / "demo-test", status_error)))
+        error = std::make_error_code(std::errc::no_such_file_or_directory);
     if (error) {
         std::printf("skipped the link case: %s\n", error.message().c_str());
         return;
@@ -180,6 +184,9 @@ void test_links_are_not_followed(const fs::path& temporary, const Synthetic& syn
     fs::remove(data / "demo-test");
     fs::create_directories(data / "demo-test");
     fs::create_symlink(elsewhere / "TADemo.hpi", data / "demo-test" / "TADemo.hpi", error);
+    if (!error &&
+        !fs::is_symlink(fs::symlink_status(data / "demo-test" / "TADemo.hpi", status_error)))
+        error = std::make_error_code(std::errc::no_such_file_or_directory);
     if (error) {
         std::printf("skipped the archive link case: %s\n", error.message().c_str());
         return;

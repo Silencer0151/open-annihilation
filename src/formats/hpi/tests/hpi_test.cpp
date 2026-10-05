@@ -829,6 +829,16 @@ void asset_store_loose_links() {
         fs::create_directory_symlink(game, game / "Units" / "loop", error);
     if (!error)
         fs::create_directory_symlink(game / "Units", game / "units2", error);
+    // Some systems report a link made and make none.
+    std::error_code status_error;
+    for (const auto& link :
+         {game / "Units" / "Alias Name.fbi",
+          game / "Units" / "out.fbi",
+          game / "maps",
+          game / "Units" / "loop",
+          game / "units2"})
+        if (!error && !fs::is_symlink(fs::symlink_status(link, status_error)))
+            error = std::make_error_code(std::errc::no_such_file_or_directory);
     if (error) {
         std::cout << "skipped the loose link cases: " << error.message() << '\n';
         return;
