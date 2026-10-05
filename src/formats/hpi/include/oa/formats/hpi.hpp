@@ -149,7 +149,9 @@ enum class SquashStatus : uint8_t {
 ///        updated only when the stream ends cleanly, so a corrupt or overlong
 ///        stream leaves the caller's value in place
 /// @param input compressed bytes
-/// @return the zlib status
+/// @return Z_OK when the stream reached its end and was released cleanly;
+///         otherwise the zlib error, Z_BUF_ERROR for a stream that stopped
+///         before its end
 int uncompress_legacy(
     std::span<uint8_t> output, uint32_t* length, std::span<const uint8_t> input
 ) noexcept;
@@ -158,7 +160,8 @@ int uncompress_legacy(
 ///
 /// Checks the marker, a type below four and the 32-bit byte-sum checksum,
 /// descrambles the payload when flagged, then decodes LZ77 or zlib. Stored
-/// (0) and type-3 chunks never decode.
+/// (0) and type-3 chunks never decode. A zlib stream must reach its end and
+/// produce exactly the header's unpacked size.
 ///
 /// @param[out] output decoded bytes, at most one 64 KiB block
 /// @param[in,out] block the whole chunk, header first; its payload is

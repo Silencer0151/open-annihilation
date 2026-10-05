@@ -87,10 +87,10 @@ SquashStatus squash_pack(
 /// @param block_bytes number of bytes available at `block`
 /// @return ok; bad_header without a header or magic; bad_type for types of 4
 ///     and above; bad_checksum when the checksum differs or the payload runs
-///     past the block; bad_unpack_size when `out` is too small or the decoded
-///     length differs from the header's
-/// @quirk Stored and type-3 blocks never unpack, and the zlib result code is
-///     ignored: only the produced length is checked.
+///     past the block; bad_unpack_size when `out` is too small, the decoded
+///     length differs from the header's, or a zlib stream does not reach its
+///     end
+/// @quirk Stored and type-3 blocks never unpack.
 SquashStatus
 squash_unpack(uint8_t* out, std::size_t out_capacity, uint8_t* block, std::size_t block_bytes);
 

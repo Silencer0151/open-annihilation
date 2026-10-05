@@ -537,11 +537,13 @@ void test_hpi_malformed_inputs() {
     );
     TemporaryFile zlib_file(bad_zlib);
     oa::HpiArchive invalid_zlib = opened(zlib_file.path());
-    // zlib 1.0.4 leaves the expected length in place on a failed inflate, so
-    // the chunk passes its size check and decodes as zero bytes.
+    // A chunk whose zlib stream cannot be decoded fails the read, whatever
+    // its checksum.
+    const auto undecodable = invalid_zlib.read("z.bin");
     require(
-        invalid_zlib.read("z.bin").value == std::vector<uint8_t>(9, 0),
-        "an undecodable zlib chunk with a valid checksum must read as its expected length"
+        !undecodable.ok() &&
+            std::string_view(undecodable.error.message) == "SQUASHERR_BADUNPACKSIZE",
+        "an undecodable zlib chunk with a valid checksum must fail its read"
     );
 
     auto oversized_chunk = make_archive(false);

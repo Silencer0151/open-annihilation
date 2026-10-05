@@ -43,7 +43,9 @@ followed by the chunks. Each chunk has a packed 19-byte `SQSH` header:
 The checksum is checked before reversing the optional per-byte transform
 `decoded[i] = (stored[i] - i) ^ i`. The transformed bytes are then stored,
 LZ77-decoded, or zlib-decoded according to the chunk header. The chunk table,
-header, checksum, and final file record must all agree on their sizes.
+header, checksum, and final file record must all agree on their sizes, and a
+zlib stream must reach its end, with its check value intact, at exactly the
+decoded size.
 
 Parsing is allocation-bounded: directories are limited to 256 MiB and one
 million file-or-directory entries, individual stored chunks to 1 MiB,

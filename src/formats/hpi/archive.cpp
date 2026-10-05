@@ -105,7 +105,9 @@ int uncompress_legacy(
     status = inflate(&stream, Z_FINISH);
     if (status != Z_STREAM_END) {
         inflateEnd(&stream);
-        return status;
+        // A stream that has not reached its end is never a success, even
+        // where inflate reports progress.
+        return status == Z_OK ? Z_BUF_ERROR : status;
     }
     *length = static_cast<uint32_t>(stream.total_out);
     return inflateEnd(&stream);
@@ -139,8 +141,12 @@ unsquash_archive_block(std::span<uint8_t> output, std::span<uint8_t> block) noex
             return SquashStatus::bad_unpack_size;
         produced = static_cast<uint32_t>(decoded.written);
     } else if (type == kSquashZlib) {
-        produced = unpacked;
-        (void)uncompress_legacy(output, &produced, payload);
+        // The stream must end cleanly; `inflated` holds the most it may write
+        // until then, and the count it wrote after.
+        uint32_t inflated = unpacked;
+        if (uncompress_legacy(output, &inflated, payload) != Z_OK)
+            return SquashStatus::bad_unpack_size;
+        produced = inflated;
     } else {
         return SquashStatus::bad_unpack_size;
     }

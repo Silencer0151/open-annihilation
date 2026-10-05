@@ -151,6 +151,21 @@ void unpack_errors() {
     block[squash_field::type] = 0;
     CHECK(unpack(block, out) == SquashStatus::bad_unpack_size);
 
+    // A zlib stream whose last four bytes are cut off fills the buffer and
+    // still has not ended.
+    block = pack(input, SquashType::zlib, false);
+    CHECK(unpack(block, out) == SquashStatus::ok);
+    uint32_t packed = 0;
+    std::memcpy(&packed, block.data() + squash_field::packed_size, 4);
+    packed -= 4;
+    block.resize(squash_header_bytes + packed);
+    uint32_t sum = 0;
+    for (std::size_t i = squash_header_bytes; i < block.size(); ++i)
+        sum += block[i];
+    std::memcpy(block.data() + squash_field::packed_size, &packed, 4);
+    std::memcpy(block.data() + squash_field::checksum, &sum, 4);
+    CHECK(unpack(block, out) == SquashStatus::bad_unpack_size);
+
     CHECK(
         std::strcmp(squash_status_name(SquashStatus::bad_checksum), "SQUASHERR_BADCHECKSUM") == 0
     );

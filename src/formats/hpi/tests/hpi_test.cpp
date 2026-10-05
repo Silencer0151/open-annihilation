@@ -279,35 +279,68 @@ void sqsh_version_byte_ignored() {
     check(archive.read("a").value == text("versioned"), "SQSH version byte is not checked");
 }
 
-void sqsh_zlib_error_keeps_expected_length() {
+// A zlib chunk reads only when its stream reaches its end, check value
+// included, at exactly the chunk's unpacked size.
+void sqsh_zlib_stream_must_end_cleanly() {
     TempDir dir;
-    auto bytes = archive_of(
+    const auto pristine = archive_of(
         {{"a", text("adler tail"), oa::formats::hpi::CompressionZLib}}, {0, false, "1997"}
     );
-    const std::size_t chunk = first_chunk(bytes);
-    const uint32_t packed = get32(bytes, chunk + 7);
+    const std::size_t chunk = first_chunk(pristine);
+    const uint32_t packed = get32(pristine, chunk + 7);
+    const auto resum = [&](Bytes& bytes, uint32_t payload) {
+        put32(bytes, chunk + 7, payload);
+        put32(
+            bytes,
+            chunk + 15,
+            oa::formats::sqsh::chunk_checksum(std::span(bytes).subspan(chunk + 19, payload))
+        );
+    };
+    oa::HpiArchive whole = opened(dir.write("whole.hpi", pristine));
+    check(whole.read("a").value == text("adler tail"), "a clean zlib stream reads");
+
+    auto bytes = pristine;
     bytes[chunk + 19 + packed - 1] ^= 0x5A;
-    put32(
-        bytes,
-        chunk + 15,
-        oa::formats::sqsh::chunk_checksum(std::span(bytes).subspan(chunk + 19, packed))
-    );
-    oa::HpiArchive archive = opened(dir.write("adler.hpi", bytes));
-    check(
-        archive.read("a").value == text("adler tail"),
-        "bad adler32 still yields the expected length"
-    );
+    resum(bytes, packed);
+    oa::HpiArchive adler = opened(dir.write("adler.hpi", bytes));
+    check(read_fails(adler, "a", "SQUASHERR_BADUNPACKSIZE"), "a bad adler32 fails the chunk");
+
+    // The stream's last four bytes cut off: every byte is written, and the
+    // stream still has not ended.
+    bytes = pristine;
+    resum(bytes, packed - 4);
+    oa::HpiArchive cut = opened(dir.write("cut.hpi", bytes));
+    check(read_fails(cut, "a", "SQUASHERR_BADUNPACKSIZE"), "a stream cut short fails");
+
+    bytes = pristine;
     bytes[chunk + 19] ^= 0xFF;
-    put32(
-        bytes,
-        chunk + 15,
-        oa::formats::sqsh::chunk_checksum(std::span(bytes).subspan(chunk + 19, packed))
-    );
+    resum(bytes, packed);
     oa::HpiArchive broken = opened(dir.write("broken.hpi", bytes));
-    check(broken.read("a").value == Bytes(10, 0), "undecodable zlib is accepted as a zero block");
+    check(read_fails(broken, "a", "SQUASHERR_BADUNPACKSIZE"), "undecodable zlib fails");
+
+    // A header that says one byte more than the stream holds, and one less.
+    for (const uint32_t claimed :
+         {get32(pristine, chunk + 11) + 1, get32(pristine, chunk + 11) - 1}) {
+        bytes = pristine;
+        put32(bytes, chunk + 11, claimed);
+        oa::HpiArchive mismatched = opened(dir.write("mismatched.hpi", bytes));
+        check(read_fails(mismatched, "a", "SQUASHERR_BADUNPACKSIZE"), "a size mismatch fails");
+    }
+
+    bytes = pristine;
     bytes[chunk + 15] ^= 1;
     oa::HpiArchive sum = opened(dir.write("sum.hpi", bytes));
     check(read_fails(sum, "a", "SQUASHERR_BADCHECKSUM"), "checksum is enforced");
+
+    uint32_t length = 10;
+    Bytes output(10);
+    check(
+        oa::uncompress_legacy(
+            output, &length, std::span(pristine).subspan(chunk + 19, packed - 4)
+        ) != Z_OK &&
+            length == 10,
+        "a stream without its end is not a success and keeps the expected length"
+    );
 }
 
 void sqsh_chunk_table_locates_blocks() {
@@ -843,7 +876,7 @@ int main(int argc, char** argv) {
         hpi_any_nonzero_compression_is_chunked();
         sqsh_stored_type_is_fatal();
         sqsh_version_byte_ignored();
-        sqsh_zlib_error_keeps_expected_length();
+        sqsh_zlib_stream_must_end_cleanly();
         sqsh_chunk_table_locates_blocks();
         hpi_negative_directory_count_is_empty();
         hpi_rejects_cycles();

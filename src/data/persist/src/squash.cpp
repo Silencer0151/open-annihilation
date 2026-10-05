@@ -138,9 +138,10 @@ squash_unpack(uint8_t* out, std::size_t out_capacity, uint8_t* block, std::size_
         std::memcpy(out, decoded.value->data(), decoded.value->size());
         produced = decoded.value->size();
     } else if (type == static_cast<uint8_t>(SquashType::zlib)) {
-        // The zlib result code is ignored; only the produced length is checked.
+        // The stream must end cleanly as well as fill the unpacked size.
         uLongf length = unpacked;
-        uncompress(out, &length, payload, packed);
+        if (uncompress(out, &length, payload, packed) != Z_OK)
+            return SquashStatus::bad_unpack_size;
         produced = length;
     } else {
         // Stored and type-3 blocks never unpack.
