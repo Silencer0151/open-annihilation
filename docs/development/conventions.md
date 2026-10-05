@@ -725,8 +725,9 @@ frozen members.
 
 Game data never enters the repository: no archives, maps, sounds, movies,
 or captures of them, apart from the small screenshots that show the
-standard hacks on their pages, in `docs/mods/standard-hacks/images/`, and
-the sections of the settings, in `docs/images/settings/`.
+standard hacks on their pages, in `docs/mods/standard-hacks/images/`, the
+sections of the settings, in `docs/images/settings/`, and the trailer's
+picture at the top of the README, `docs/images/trailer.jpg`.
 
 ## Checks
 

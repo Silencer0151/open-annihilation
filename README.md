@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://youtu.be/fQ2czvDkSSs"><img alt="Watch the Open Annihilation trailer on YouTube" src="https://img.youtube.com/vi/fQ2czvDkSSs/maxresdefault.jpg" width="760"></a>
+  <a href="https://youtu.be/fQ2czvDkSSs"><img alt="Watch the Open Annihilation trailer on YouTube" src="docs/images/trailer.jpg" width="760"></a>
 </p>
 
 <p align="center"><b>Runs on</b></p>
