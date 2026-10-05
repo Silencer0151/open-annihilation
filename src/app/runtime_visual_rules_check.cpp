@@ -34,6 +34,7 @@
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -217,9 +218,23 @@ void Runtime::check_visual_rule_overlays(
         if (unit == 0)
             fail("the local player has no unit left");
     }
-    // Whole ticks, and the cursor in the blank corner right of the bottom
-    // bar, so that two frames of one moment draw the same battlefield.
+    // Whole ticks, the interface's clock held and the cursor in the blank
+    // corner right of the bottom bar, so that two frames of one moment draw
+    // the same battlefield. The cursor steps through its sequence by that
+    // clock, however long a frame takes to draw, and where the pointer
+    // places the build preview the presented frame shows the cursor over
+    // the battlefield. The clock runs again when the check ends, however it
+    // ends.
     set_presentation_alpha(1.0F);
+
+    struct HeldClock {
+        Runtime& runtime;
+        std::optional<uint32_t> kept{};
+
+        ~HeldClock() { runtime.fake_frontend_tick_ = kept; }
+    } held_clock{*this, fake_frontend_tick_};
+
+    fake_frontend_tick_ = frontend_tick();
     const auto rest_pointer = [&]() {
         update_pointer(
             static_cast<float>(match_layout_.width - 1),
