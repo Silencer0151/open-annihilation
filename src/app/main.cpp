@@ -611,37 +611,47 @@ constexpr uint32_t kModSwitches = 10;
 /// The mods --check-mod-switch takes turns with: No Mod and two test profiles.
 constexpr std::size_t kModSwitchTurns = 3;
 
-/// The growth of the working set --check-mod-switch allows over the last
-/// round of switches, in bytes: what the allocator keeps back. The first
-/// rounds fill the allocator's and the system's caches.
-constexpr uint64_t kModSwitchMemoryNoise = uint64_t{3} * 1024 * 1024;
+/// The growth of the host heap's bytes in use --check-mod-switch allows
+/// between two runs that play the same mod, in bytes. Runs that play the
+/// same mod hold the same blocks, to within the length of a few strings, so
+/// a leak of 11 KiB or more a switch exceeds it over the six switches or
+/// more between the runs compared.
+constexpr uint64_t kModSwitchHeapNoise = uint64_t{64} * 1024;
 
-/// The working set as each run of --check-mod-switch starts on the main
-/// menu, and the verdict on them.
+/// What the host heap holds as each run of --check-mod-switch starts on the
+/// main menu, and the verdict on them.
 class ModSwitchMemory {
   public:
 
-    /// Notes the working set as a run starts on the main menu.
+    /// Notes the host heap's use as a run starts on the main menu, with the
+    /// working set beside it.
     ///
     /// @param run the soft restarts before it
     void sample(uint32_t run) {
+        oa::platform::HostHeapUse heap{};
+        if (!oa::platform::sample_host_heap_use(&heap))
+            heap_known_ = false;
         oa::platform::MemorySample sample{};
         if (!oa::platform::sample_process_memory(nullptr, &sample))
             sample.working_set = 0;
         if (samples_.size() <= run)
             samples_.resize(std::size_t{run} + 1);
-        samples_[run] = sample.working_set;
-        std::cout << "mod switch check: run " << run << ", working set "
-                  << sample.working_set / 1024 << " KiB, committed " << sample.mapped / 1024
-                  << " KiB, private resident " << sample.private_resident / 1024 << " KiB\n";
+        samples_[run] = heap.bytes;
+        std::cout << "mod switch check: run " << run << ", heap in use " << heap.bytes / 1024
+                  << " KiB in " << heap.blocks << " blocks, working set "
+                  << sample.working_set / 1024 << " KiB\n";
     }
 
-    /// Compares the runs of the last round of switches with the runs of the
-    /// round before that played the same mods: none may have grown by more
-    /// than kModSwitchMemoryNoise, as a working set that grows with each
-    /// switch would.
+    /// Compares each run of the last round of switches with the first run
+    /// after the first start that played the same mod: none may hold more
+    /// than kModSwitchHeapNoise more on the host heap, as a run would that
+    /// kept what an earlier run allocated. The first start is left out: it
+    /// holds blocks of its own, which the first switch frees. The
+    /// working set is not compared, since it counts the free memory the
+    /// allocator keeps, which grows over the switches by an amount that
+    /// changes from one start of the check to the next.
     ///
-    /// @return 0 when the working set stayed level, or the system does not
+    /// @return 0 when the heap's use stayed level, or the system does not
     ///     report it; 1 when it grew, or not every switch was made
     [[nodiscard]] int verdict() const {
         if (samples_.size() != std::size_t{kModSwitches} + 1) {
@@ -649,24 +659,20 @@ class ModSwitchMemory {
                       << kModSwitches + 1 << '\n';
             return 1;
         }
-        if (samples_.front() == 0) {
-            std::cout << "mod switch check: the system reports no working set\n";
+        if (!heap_known_) {
+            std::cout << "mod switch check: the system reports no heap in use\n";
             return 0;
         }
         uint64_t worst = 0;
-        for (std::size_t run = samples_.size() - kModSwitchTurns + 1; run < samples_.size();
-             ++run) {
-            const uint64_t before = samples_[run - kModSwitchTurns];
-            worst = std::max(worst, samples_[run] > before ? samples_[run] - before : 0);
+        for (std::size_t run = samples_.size() - kModSwitchTurns; run < samples_.size(); ++run) {
+            const uint64_t first = samples_[1 + (run - 1) % kModSwitchTurns];
+            worst = std::max(worst, samples_[run] > first ? samples_[run] - first : 0);
         }
-        const uint64_t overall =
-            samples_.back() > samples_.front() ? samples_.back() - samples_.front() : 0;
         std::cout << "mod switch check: " << kModSwitches
-                  << " switches; the last round grew the working set at most " << worst / 1024
-                  << " KiB over the round before, and by " << overall / 1024
-                  << " KiB in all since the first run\n";
-        if (worst > kModSwitchMemoryNoise) {
-            std::cout << "mod switch check: FAILED, the working set grows with the switches\n";
+                  << " switches; the last round holds at most " << worst / 1024
+                  << " KiB more on the heap than the first round after the first start\n";
+        if (worst > kModSwitchHeapNoise) {
+            std::cout << "mod switch check: FAILED, the heap's use grows with the switches\n";
             return 1;
         }
         std::cout << "mod switch check: passed\n";
@@ -675,7 +681,8 @@ class ModSwitchMemory {
 
   private:
 
-    std::vector<uint64_t> samples_; ///< bytes, one for each run, from the first
+    std::vector<uint64_t> samples_; ///< heap bytes in use, one for each run, from the first
+    bool heap_known_{true};         ///< every run's sample reported the heap's use
 };
 
 /// Runs the game once: finds the game folders and their profile, with the

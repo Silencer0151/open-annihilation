@@ -50,6 +50,30 @@ using MemorySampler = bool (*)(void* context, MemorySample* out);
 /// @return false when the host cannot report any counters
 bool sample_process_memory(void* context, MemorySample* out) noexcept;
 
+/// What this process's live allocations hold on the host's heap.
+struct HostHeapUse {
+    uint64_t bytes{}; ///< bytes allocated and not yet freed
+    /// blocks allocated and not yet freed; 0 where the host does not count them
+    uint64_t blocks{};
+};
+
+/// Samples what this process's live allocations hold on the host's heap: the
+/// blocks malloc and operator new have handed out and not had back. It leaves
+/// out the free memory the allocator keeps for later allocations, which the
+/// working set counts and which grows and shrinks with the order and timing of
+/// past allocations, so a count that grows means memory that was never given
+/// back.
+///
+/// Every heap of the process is counted on Windows, every malloc zone on macOS
+/// and iOS, and every arena of the GNU C library on Linux; under the address
+/// sanitizer, its own allocator's count. Every call reads the heap afresh,
+/// allocates nothing and keeps no state. On Windows it calls nothing newer
+/// than Windows XP SP3.
+///
+/// @param[out] out the sample; zero when the host reports nothing
+/// @return false when the host does not report its heap's use
+bool sample_host_heap_use(HostHeapUse* out) noexcept;
+
 /// The system's own judgment of how short memory is, where it gives one.
 enum class MemoryPressure : uint8_t {
     unknown, ///< the system gives no judgment

@@ -13,6 +13,7 @@
 
 #include <atomic>
 #include <csignal>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -371,6 +372,48 @@ void test_memory_status() {
         check(host.working_set != 0, "host reports a working set");
 }
 
+// The blocks test_host_heap_use allocates, and the bytes of each: small
+// enough that the allocator keeps the memory they free for later blocks.
+constexpr std::size_t heap_use_block_count = 128;
+constexpr std::size_t heap_use_block_bytes = std::size_t{32} * 1024;
+
+// Where test_host_heap_use keeps its blocks, through which the compiler cannot
+// drop the allocations.
+char* heap_use_blocks[heap_use_block_count]{};
+
+void test_host_heap_use() {
+    using namespace oa::platform;
+    HostHeapUse before{};
+    if (!sample_host_heap_use(&before)) {
+        check(before.bytes == 0 && before.blocks == 0, "no heap use is reported as zero");
+        std::puts("platform shims: the host reports no heap use; its checks are skipped");
+        return;
+    }
+    check(before.bytes != 0, "the heap holds this program's blocks");
+    // Blocks allocated and filled are counted until they are freed; the free
+    // memory the allocator keeps afterwards is not.
+    constexpr std::size_t all_bytes = heap_use_block_count * heap_use_block_bytes;
+    for (auto*& block : heap_use_blocks) {
+        block = new char[heap_use_block_bytes];
+        std::memset(block, 1, heap_use_block_bytes);
+    }
+    HostHeapUse held{};
+    check(sample_host_heap_use(&held), "the heap's use is reported again");
+    check(held.bytes >= before.bytes + all_bytes, "live blocks are counted");
+    check(
+        held.blocks == 0 || held.blocks >= before.blocks + heap_use_block_count,
+        "live blocks are counted one by one"
+    );
+    for (auto*& block : heap_use_blocks) {
+        delete[] block;
+        block = nullptr;
+    }
+    HostHeapUse after{};
+    check(sample_host_heap_use(&after), "the heap's use is reported a third time");
+    check(after.bytes + all_bytes <= held.bytes, "freed blocks are no longer counted");
+    check(sample_host_heap_use(nullptr) == false, "no sample without somewhere to put it");
+}
+
 // A process status text as Linux writes it, cut to the lines around the
 // fields the memory guard reads.
 constexpr std::string_view sample_proc_status = "Name:\tgame\n"
@@ -554,6 +597,7 @@ int main() {
     test_environment_value();
     test_grouped_decimal();
     test_memory_status();
+    test_host_heap_use();
     test_proc_memory_fields();
     test_app_loop();
     test_error_log();

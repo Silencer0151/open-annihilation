@@ -19,12 +19,28 @@
 #else
 #include <atomic>
 #endif
+#include <malloc/malloc.h>
 #include <mach/mach.h>
 #include <mach/task_info.h>
 #include <sys/resource.h>
 #include <unistd.h>
 #elif defined(__linux__)
+#include <malloc.h>
 #include <unistd.h>
+#endif
+
+// Under the address sanitizer, malloc is the sanitizer's own, which counts
+// what it holds.
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define OA_HEAP_USE_FROM_SANITIZER 1
+#endif
+#endif
+#if defined(__SANITIZE_ADDRESS__) && !defined(OA_HEAP_USE_FROM_SANITIZER)
+#define OA_HEAP_USE_FROM_SANITIZER 1
+#endif
+#ifdef OA_HEAP_USE_FROM_SANITIZER
+#include <sanitizer/allocator_interface.h>
 #endif
 
 namespace oa::platform {
@@ -32,6 +48,10 @@ namespace {
 
 // Bytes of the kB the Linux status file counts in.
 [[maybe_unused]] constexpr uint64_t kibibyte = 1024;
+
+// The most heaps of the process sample_host_heap_use walks on Windows; a
+// process with more reports no heap use rather than part of it.
+[[maybe_unused]] constexpr unsigned long max_walked_heaps = 256;
 
 // Widest grouped 64-bit value: 20 digits and 6 commas.
 constexpr size_t grouped_capacity = 27;
@@ -215,6 +235,61 @@ bool sample_process_memory(void*, MemorySample* out) noexcept {
             }
         std::fclose(status);
     }
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool sample_host_heap_use(HostHeapUse* out) noexcept {
+    if (out == nullptr)
+        return false;
+    *out = {};
+#if defined(OA_HEAP_USE_FROM_SANITIZER)
+    out->bytes = __sanitizer_get_current_allocated_bytes();
+    return true;
+#elif defined(_WIN32)
+    // The heap malloc and operator new allocate from is one of the process's
+    // heaps; each is locked while it is walked, so that no other thread
+    // changes it meanwhile.
+    HANDLE heaps[max_walked_heaps];
+    const DWORD heap_count = GetProcessHeaps(max_walked_heaps, heaps);
+    if (heap_count == 0 || heap_count > max_walked_heaps)
+        return false;
+    bool walked = true;
+    for (DWORD index = 0; index < heap_count && walked; ++index) {
+        if (!HeapLock(heaps[index]))
+            continue;
+        PROCESS_HEAP_ENTRY entry{};
+        while (HeapWalk(heaps[index], &entry))
+            if ((entry.wFlags & PROCESS_HEAP_ENTRY_BUSY) != 0) {
+                out->bytes += entry.cbData;
+                ++out->blocks;
+            }
+        // A walk ends at the heap's last entry, or stops short on an error.
+        walked = GetLastError() == ERROR_NO_MORE_ITEMS;
+        HeapUnlock(heaps[index]);
+    }
+    if (!walked)
+        *out = {};
+    return walked;
+#elif defined(__APPLE__)
+    malloc_statistics_t statistics{};
+    malloc_zone_statistics(nullptr, &statistics);
+    out->bytes = statistics.size_in_use;
+    out->blocks = statistics.blocks_in_use;
+    return true;
+#elif defined(__GLIBC__)
+    // The bytes of the arenas' chunks in use and of the blocks mapped on
+    // their own.
+#if __GLIBC_PREREQ(2, 33)
+    const struct mallinfo2 info = mallinfo2();
+    out->bytes = uint64_t{info.uordblks} + uint64_t{info.hblkhd};
+#else
+    const struct mallinfo info = mallinfo();
+    out->bytes = uint64_t{static_cast<unsigned int>(info.uordblks)} +
+                 uint64_t{static_cast<unsigned int>(info.hblkhd)};
+#endif
     return true;
 #else
     return false;

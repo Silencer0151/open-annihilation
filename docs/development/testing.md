@@ -92,8 +92,9 @@ notice and the Your files row beside the snapshot. `native-mod-switch`
 (`--check-mod-switch`) writes two test profiles into that folder's `Mods`
 and switches the mod ten times through the Mods page's Switch Mod question,
 each a soft restart on the same window: each run plays the mod chosen,
-listed first, and the working set as the last round's runs reach the main
-menu stays level with the round's before; it runs alone.
+listed first, and what the heap holds in live allocations as the last
+round's runs reach the main menu stays level with the first round's after
+the first start.
 `native-mod-install` (`--check-mod-install`) installs made-up mod packages
 (`.oamod`) it writes beside that folder, in five runs on one window: the
 first refuses the command line's missing package, installs a package the

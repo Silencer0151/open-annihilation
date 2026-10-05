@@ -1311,10 +1311,9 @@ if(OA_BUILD_PLATFORM)
       # The settings' Mods page switches the mod ten times, between No Mod
       # and two test profiles it writes into the player's own Mods folder:
       # each switch stores the mod and builds the game afresh on the same
-      # window, which plays the mod chosen, listed first; the working set as
-      # the last round's runs reach the main menu stays level with the
-      # round's before. It runs alone, as other checks running beside it
-      # move the point where the allocator's working set levels off.
+      # window, which plays the mod chosen, listed first; what the heap holds
+      # as the last round's runs reach the main menu stays level with the
+      # first round's after the first start.
       set(oa_mod_switch_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/mod-switch")
       file(MAKE_DIRECTORY "${oa_mod_switch_dir}")
       add_test(NAME native-mod-switch COMMAND oa-game --game-dir "${OA_GAME_DIR}"
@@ -1322,7 +1321,7 @@ if(OA_BUILD_PLATFORM)
         --preferences-file "${oa_mod_switch_dir}/mod-switch.conf"
         --user-folder "${oa_mod_switch_dir}/Open Annihilation")
       set_tests_properties(native-mod-switch PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
-        RUN_SERIAL TRUE WORKING_DIRECTORY "${oa_mod_switch_dir}"
+        WORKING_DIRECTORY "${oa_mod_switch_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # Made-up mod packages installed through the game: a missing file
       # refused, a package the Finder made installed with no question from a
