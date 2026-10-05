@@ -389,24 +389,93 @@ enum class ClickAction : uint8_t {
 [[nodiscard]] ClickAction
 click_action(const World& world, OrderCommand command, OrderCursor cursor) noexcept;
 
+/// The centre a group order measures each unit's place from: the sums of the
+/// whole map pixels of the units it counts.
+struct GroupCentre {
+    int32_t sum_x{};  ///< the units' x, each as the signed high half of its 16.16 value
+    int32_t sum_z{};  ///< the units' z, likewise
+    uint32_t units{}; ///< the units counted
+};
+
+/// The square map pixels a group's reach grows by with each unit it counts:
+/// a group of N keeps its shape within sqrt(3000 * N) map pixels of its
+/// centre, and a unit further out goes to the ordered point itself.
+inline constexpr uint32_t group_spread_per_unit = 3000;
+
+/// Counts a unit in a group's centre.
+///
+/// Each of x and z adds the whole map pixels of the unit's 16.16 position,
+/// as a signed 16-bit value; the sums wrap at 32 bits.
+///
+/// @param[in,out] centre the centre being measured
+/// @param unit unit of the group
+void add_to_group_centre(GroupCentre& centre, const Unit& unit) noexcept;
+
+/// Measures the centre of the local player's selection, as a group order
+/// from the pointer measures it.
+///
+/// Counts every selected unit of the local player in slot order, the ones no
+/// order will reach included, except `target`.
+///
+/// @param world world, for the local player and its units
+/// @param target unit the order names, which is not counted; null for none
+/// @return the centre; no units when nothing is selected
+[[nodiscard]] GroupCentre selection_centre(const World& world, const Unit* target) noexcept;
+
+/// Tells whether an order keeps its unit's place in its group: the moves
+/// and patrols of mobile units (Move_Ground, VTOL_Move and the Patrol,
+/// VTOL_Patrol, RepairPatrol and VTOL_RepairPatrol orders).
+///
+/// @param order the order a unit of the group takes
+/// @return true when the unit is sent to its own point near the ordered one
+[[nodiscard]] bool order_keeps_group_shape(UnitOrder order) noexcept;
+
+/// Returns the point a group order sends one unit of the group to.
+///
+/// The group's centre is the average of its units' whole map pixels,
+/// truncated toward zero, as a 16.16 point. A unit within
+/// sqrt(group_spread_per_unit * units) map pixels of that centre goes to the
+/// ordered point moved by its own displacement from the centre, its
+/// fraction of a pixel kept; one further away goes to the ordered point
+/// itself. The distance is measured by the whole parts of the squares of
+/// the 16.16 displacements; displacements and sums wrap at 32 bits, and
+/// the height is the ordered point's.
+///
+/// @param centre the group's centre; with no units the ordered point is returned
+/// @param actor unit of the group
+/// @param point ordered 16.16 point
+/// @return the unit's 16.16 destination
+/// @quirk Every unit beyond the reach is sent to the ordered point itself, so
+///        the outlying units of a spread-out group all head for the one point
+///        and crowd there.
+[[nodiscard]] FixedVec3
+group_order_point(const GroupCentre& centre, const Unit& actor, const FixedVec3& point) noexcept;
+
 struct SelectionOrder {
     const Unit* actor{};
     UnitOrder order{};
+    /// Where the order sends the unit: the pointer position, moved by the
+    /// unit's place in the selection for an order that keeps the group's
+    /// shape (group_order_point).
+    FixedVec3 position{};
 };
 
 /// Resolves a click's order for each selected local unit.
 ///
 /// Each is resolved against the unit under the pointer (for the commands that bind
-/// it) and the pointer position; the pointer unit never acts on itself.
+/// it) and the pointer position; the pointer unit never acts on itself. The
+/// selection's centre (selection_centre) is measured before any unit's order is
+/// resolved, and a move or patrol sends each unit to its own point by it
+/// (group_order_point), so the group keeps its shape around the pointer.
 ///
 /// @param world world, with the pointer state in its Game record
 /// @param command armed command
 /// @param hooks visibility, feature and range services
-/// @param[out] out receives the units that get an order, with the order
+/// @param[out] out receives the units that get an order, with the order and its point
 /// @param capacity room in `out`
 /// @return the number written
-/// @quirk The game also offsets positioned orders by each unit's displacement from the
-///        selection's centre; that formation offset is left to the caller.
+/// @quirk A selected unit that no order reaches, a building among them, still
+///        counts in the centre the others' places are measured from.
 uint32_t selection_orders(
     const World& world,
     OrderCommand command,

@@ -1824,6 +1824,15 @@ if(OA_BUILD_PLATFORM)
           --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
           --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
         set_tests_properties(native-stage-render PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
+        # A block of fighters and a row of kbots, each moved to one point as
+        # a group, keep their shape: the fighters land each on its own site
+        # around the point, the row's middle kbots reach their own points and
+        # its ends, out of the group's reach, go to the point.
+        add_test(NAME native-group-orders COMMAND ${Python3_EXECUTABLE}
+          "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_group_orders.py"
+          --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
+          --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
+        set_tests_properties(native-group-orders PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
         # The Open Annihilation settings leave the game as it plays without
         # them: the seeded skirmish, drawn, writes the same trace stream and
         # last frame with every key at its default as with no preferences;

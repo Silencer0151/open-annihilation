@@ -9,6 +9,7 @@
 #include <cstring>
 #include <initializer_list>
 #include <limits>
+#include <utility>
 
 using namespace oa;
 using namespace oa::sim::gameplay_input;
@@ -781,6 +782,209 @@ void test_selection_orders() {
     );
 }
 
+// A 16.16 value of whole map pixels and a fraction of 1/65536 pixels.
+constexpr int32_t pixels(int32_t whole, int32_t fraction = 0) {
+    return whole * 0x10000 + fraction;
+}
+
+// A unit at a point, for the group order's arithmetic alone.
+Unit unit_at(int32_t x, int32_t z) {
+    Unit unit{};
+    unit.position = {x, 0, z};
+    return unit;
+}
+
+GroupCentre centre_of(std::initializer_list<const Unit*> units) {
+    GroupCentre centre{};
+    for (const Unit* unit : units)
+        add_to_group_centre(centre, *unit);
+    return centre;
+}
+
+bool is_at(const FixedVec3& point, int32_t x, int32_t y, int32_t z) {
+    return point.x == x && point.y == y && point.z == z;
+}
+
+void test_group_order_point() {
+    const FixedVec3 point{pixels(500), pixels(40), pixels(700)};
+    // Three units whose whole pixels average 110.67 across and down: the
+    // centre is 110, 110, and each keeps its displacement from it, the
+    // fraction of a pixel included, at the ordered point's height.
+    const Unit a = unit_at(pixels(100, 0x8000), pixels(100));
+    const Unit b = unit_at(pixels(132), pixels(100));
+    const Unit c = unit_at(pixels(100), pixels(132, 0x4000));
+    GroupCentre centre = centre_of({&a, &b, &c});
+    check(centre.units == 3 && centre.sum_x == 332 && centre.sum_z == 332, "the centre's sums");
+    check(
+        is_at(group_order_point(centre, a, point), pixels(490, 0x8000), pixels(40), pixels(690)) &&
+            is_at(group_order_point(centre, b, point), pixels(522), pixels(40), pixels(690)) &&
+            is_at(
+                group_order_point(centre, c, point), pixels(490), pixels(40), pixels(722, 0x4000)
+            ),
+        "a compact group keeps its shape around the point"
+    );
+
+    // Three of a group make a reach of 9000 square pixels: 90 and 30 pixels
+    // from the centre (8100 + 900) is inside, 90 and 31 (8100 + 961) is not.
+    const Unit edge = unit_at(pixels(1090), pixels(1030));
+    const Unit inner = unit_at(pixels(955), pixels(985));
+    centre = centre_of({&edge, &inner, &inner});
+    check(
+        is_at(group_order_point(centre, edge, point), pixels(590), pixels(40), pixels(730)),
+        "a unit exactly at the reach keeps its place"
+    );
+    const Unit beyond = unit_at(pixels(1090), pixels(1031));
+    centre = centre_of({&beyond, &inner, &inner});
+    check(
+        is_at(group_order_point(centre, beyond, point), point.x, point.y, point.z) &&
+            is_at(group_order_point(centre, inner, point), pixels(455), pixels(40), pixels(685)),
+        "a unit one pixel past the reach goes to the point; the others keep their places"
+    );
+
+    // Units far apart all go to the point: two 400 pixels apart are each 200
+    // from their centre, past the 77 pixels two of them reach.
+    const Unit west = unit_at(pixels(1000), pixels(1000));
+    const Unit east = unit_at(pixels(1400), pixels(1000));
+    centre = centre_of({&west, &east});
+    check(
+        is_at(group_order_point(centre, west, point), point.x, point.y, point.z) &&
+            is_at(group_order_point(centre, east, point), point.x, point.y, point.z),
+        "a spread-out group all goes to the point"
+    );
+
+    // The average whole pixel is truncated toward zero: -5 / 2 is -2, so the
+    // unit at -3 lands one pixel left of the point and the one at -2 on it.
+    const Unit left = unit_at(pixels(-3), pixels(0));
+    const Unit right = unit_at(pixels(-2), pixels(0));
+    centre = centre_of({&left, &right});
+    check(
+        centre.sum_x == -5 &&
+            is_at(group_order_point(centre, left, point), pixels(499), pixels(40), pixels(700)) &&
+            is_at(group_order_point(centre, right, point), pixels(500), pixels(40), pixels(700)),
+        "the centre is truncated toward zero"
+    );
+    // A unit's whole pixel is the signed high half of its 16.16 value: -1.5
+    // counts as -2, half a pixel left of the unit.
+    const Unit half = unit_at(-0x18000, pixels(0));
+    centre = centre_of({&half});
+    check(
+        centre.sum_x == -2 &&
+            is_at(
+                group_order_point(centre, half, point), pixels(500, 0x8000), pixels(40), pixels(700)
+            ),
+        "a negative position counts by its signed high half"
+    );
+    check(
+        is_at(group_order_point(GroupCentre{}, half, point), point.x, point.y, point.z),
+        "an empty group sends a unit to the point"
+    );
+
+    using enum UnitOrder;
+    for (const UnitOrder order :
+         {move_ground, vtol_move, patrol, vtol_patrol, repair_patrol, vtol_repair_patrol})
+        check(order_keeps_group_shape(order), "moves and patrols keep the group's shape");
+    for (const UnitOrder order :
+         {none,
+          qmove,
+          qpatrol,
+          attack_chase,
+          suppress,
+          air_to_ground,
+          ground_unload,
+          vtol_unload,
+          vtol_landing,
+          follow_ground,
+          vtol_follow,
+          reclaim,
+          help_build,
+          attack_special})
+        check(!order_keeps_group_shape(order), "other orders go to the point itself");
+}
+
+void test_selection_group_orders() {
+    Fixture f;
+    const auto hooks = f.hooks();
+    // Two tanks, a solar collector, an aircraft and a factory of the local
+    // player, selected; a selected tank further off and an unselected one.
+    f.world->game.players[0].last_unit = world_unit_ref(f.world, &f.world->units[10]);
+    f.world->game.players[1].first_unit = world_unit_ref(f.world, &f.world->units[11]);
+    f.world->game.players[1].last_unit = world_unit_ref(f.world, &f.world->units[14]);
+    Unit& tank = f.unit(1, 0, 1);
+    Unit& second = f.unit(2, 0, 1);
+    Unit& solar = f.unit(3, 0, 2);
+    Unit& flyer = f.unit(4, 0, 3);
+    Unit& outlier = f.unit(5, 0, 1);
+    Unit& idle = f.unit(6, 0, 1);
+    Unit& factory = f.unit(7, 0, 4);
+    f.def(1).abilities = OA_UNIT_DEF_ABILITY_CAN_MOVE | OA_UNIT_DEF_ABILITY_CAN_PATROL;
+    f.def(3).abilities = OA_UNIT_DEF_ABILITY_CAN_MOVE | OA_UNIT_DEF_ABILITY_CAN_PATROL;
+    f.def(3).flags = OA_UNIT_DEF_FLAG_CAN_FLY;
+    f.def(4).abilities = OA_UNIT_DEF_ABILITY_CAN_MOVE | OA_UNIT_DEF_ABILITY_CAN_PATROL;
+    solar.movement = 0;
+    factory.movement = 0;
+    const std::initializer_list<std::pair<Unit*, std::pair<int32_t, int32_t>>> places = {
+        {&tank, {100, 100}},
+        {&second, {132, 100}},
+        {&solar, {100, 132}},
+        {&flyer, {132, 132}},
+        {&outlier, {500, 100}},
+        {&idle, {2000, 2000}},
+        {&factory, {116, 116}},
+    };
+    for (const auto& [unit, xz] : places) {
+        unit->position = {pixels(xz.first), pixels(10), pixels(xz.second)};
+        unit->flags |= OA_UNIT_FLAG_LIVE | (unit == &idle ? 0U : OA_UNIT_FLAG_SELECTED);
+    }
+    const FixedVec3 point{pixels(500), pixels(20), pixels(500)};
+    set_pointer_flags(f.world->game, pointer_over_view);
+    set_pointer_position(f.world->game, point);
+    // The outlying tank is the unit under the pointer: neither counted nor
+    // ordered. The centre of the other five, the solar collector among them,
+    // is 116, 116.
+    f.world->game.cursor_unit_id = outlier.id;
+    check(selection_centre(*f.world, &outlier).units == 5, "the selection's centre counts five");
+    SelectionOrder orders[8];
+    uint32_t count = selection_orders(*f.world, OrderCommand::move, hooks, orders, 8);
+    check(
+        count == 4 && orders[0].actor == &tank && orders[0].order == UnitOrder::move_ground &&
+            is_at(orders[0].position, pixels(484), pixels(20), pixels(484)) &&
+            orders[1].actor == &second &&
+            is_at(orders[1].position, pixels(516), pixels(20), pixels(484)) &&
+            orders[2].actor == &flyer && orders[2].order == UnitOrder::vtol_move &&
+            is_at(orders[2].position, pixels(516), pixels(20), pixels(516)) &&
+            orders[3].actor == &factory && orders[3].order == UnitOrder::qmove &&
+            is_at(orders[3].position, point.x, point.y, point.z),
+        "a move keeps the group's shape, measured with the collector that takes no move; "
+        "the factory's move goes to the point"
+    );
+    count = selection_orders(*f.world, OrderCommand::patrol, hooks, orders, 8);
+    check(
+        count == 4 && orders[0].order == UnitOrder::patrol &&
+            is_at(orders[0].position, pixels(484), pixels(20), pixels(484)) &&
+            orders[1].order == UnitOrder::patrol && orders[2].order == UnitOrder::vtol_patrol &&
+            is_at(orders[2].position, pixels(516), pixels(20), pixels(516)) &&
+            orders[3].order == UnitOrder::qpatrol &&
+            is_at(orders[3].position, point.x, point.y, point.z),
+        "a patrol keeps the shape; the factory's patrol goes to the point"
+    );
+    count = selection_orders(*f.world, OrderCommand::stop, hooks, orders, 8);
+    check(
+        count == 6 && orders[4].actor == &outlier &&
+            is_at(orders[0].position, point.x, point.y, point.z),
+        "a stop binds no unit and moves no point"
+    );
+    // With nothing under the pointer the outlying tank counts: the centre of six
+    // is 180, 113, and the outlying tank, 320 pixels from it, goes to the point.
+    f.world->game.cursor_unit_id = 0;
+    count = selection_orders(*f.world, OrderCommand::move, hooks, orders, 8);
+    check(
+        count == 5 && is_at(orders[0].position, pixels(420), pixels(20), pixels(487)) &&
+            is_at(orders[2].position, pixels(452), pixels(20), pixels(519)) &&
+            orders[3].actor == &outlier && is_at(orders[3].position, point.x, point.y, point.z),
+        "a unit far from the selection's centre goes to the point"
+    );
+}
+
 // An 8x8-cell map carrying a 1x1 tree at cell (2, 3), a 2x2 rock with its
 // origin at (4, 4), a scar at (1, 1) and a 3x2 wreck at (0, 6), with the
 // continuation cells the feature placement writes (rows back in the low byte
@@ -1315,6 +1519,8 @@ int main() {
     test_selection_cursor();
     test_unit_orders();
     test_selection_orders();
+    test_group_order_point();
+    test_selection_group_orders();
     test_feature_at_position();
     test_feature_cursor_across_footprint();
     test_pointer_area();

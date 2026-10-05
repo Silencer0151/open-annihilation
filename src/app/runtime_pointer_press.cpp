@@ -28,6 +28,11 @@ oa::FixedVec3 fixed_point(const oa::sim::ground_orders::Point& point) {
     return {point[0], point[1], point[2]};
 }
 
+/// Returns a 16.16 point as the order issuers take it.
+oa::sim::ground_orders::Point order_point(const oa::FixedVec3& point) {
+    return {point.x, point.y, point.z};
+}
+
 } // namespace
 
 void Runtime::record_pointer_event(const SDL_Event& event) {
@@ -271,7 +276,13 @@ std::string_view Runtime::issue_selection_orders(
     for (uint32_t index = 0; index < count; ++index) {
         const auto source = orders[index].actor->id;
         const auto order = orders[index].order;
-        if (cancels_queued_order(source, order, bound, ground, queue))
+        // The unit's own point: a move or patrol keeps its place in the
+        // group around the ground under the pointer, and a queued order is
+        // taken back at that point.
+        std::optional<oa::sim::ground_orders::Point> destination;
+        if (ground)
+            destination = order_point(orders[index].position);
+        if (cancels_queued_order(source, order, bound, destination, queue))
             continue;
         try {
             switch (order) {
@@ -373,8 +384,8 @@ std::string_view Runtime::issue_selection_orders(
             case input::UnitOrder::move_ground:
             case input::UnitOrder::vtol_move:
             case input::UnitOrder::qmove:
-                if (ground && match_->takes_move_order(source)) {
-                    match_->issue_ground_move(source, *ground, queue);
+                if (destination && match_->takes_move_order(source)) {
+                    match_->issue_ground_move(source, *destination, queue);
                     if (issued.empty())
                         issued = "Move";
                 }
@@ -427,6 +438,44 @@ bool Runtime::cancels_queued_command(
         world, command, *actor, aimed, ground ? &position : nullptr, order_cursor_hooks()
     );
     return cancels_queued_order(source, order, target, ground, queue);
+}
+
+uint16_t Runtime::group_order_bound_unit(input::OrderCommand command, uint16_t target) {
+    if (!match_ || target == 0 || !input::command_binds_cursor_unit(static_cast<uint8_t>(command)))
+        return 0;
+    const auto& slots = match_->world().slots;
+    return target < slots.size() && slots[target].unit != nullptr ? target : uint16_t{0};
+}
+
+input::GroupCentre Runtime::local_selection_centre(uint16_t bound) {
+    if (!match_)
+        return {};
+    auto& world = match_->state();
+    world.game.local_player_index = match_local_player_;
+    const auto* unit = bound != 0 ? oa::world_unit_at(&world, bound) : nullptr;
+    return input::selection_centre(world, unit);
+}
+
+oa::sim::ground_orders::Point Runtime::group_order_destination(
+    const input::GroupCentre& centre,
+    input::OrderCommand command,
+    uint16_t source,
+    uint16_t target,
+    const oa::sim::ground_orders::Point& point
+) {
+    if (!match_)
+        return point;
+    const auto& world = match_->state();
+    const auto* actor = oa::world_unit_at(&world, source);
+    if (actor == nullptr)
+        return point;
+    const auto* aimed = target != 0 ? oa::world_unit_at(&world, target) : nullptr;
+    const auto position = fixed_point(point);
+    const auto order =
+        input::unit_order(world, command, *actor, aimed, &position, order_cursor_hooks());
+    if (!input::order_keeps_group_shape(order))
+        return point;
+    return order_point(input::group_order_point(centre, *actor, position));
 }
 
 } // namespace oa::app

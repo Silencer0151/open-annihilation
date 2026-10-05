@@ -228,14 +228,26 @@ bool Runtime::run_stage_direction(
         if (!(line >> group >> x >> z))
             throw std::runtime_error(where + ": " + action + " takes GROUP X Z");
         const auto point = ground_point(*match_, x, z);
+        // The group is ordered as a selection of its live units is: each
+        // keeps its place around the point, measured from the centre of all
+        // of them.
+        const auto members = live_members(group);
+        oa::sim::gameplay_input::GroupCentre centre{};
+        const auto& world = match_->state();
+        for (const auto unit : members)
+            if (const auto* member = oa::world_unit_at(&world, unit); member != nullptr)
+                oa::sim::gameplay_input::add_to_group_centre(centre, *member);
+        const auto command = action == "move" ? oa::sim::gameplay_input::OrderCommand::move
+                                              : oa::sim::gameplay_input::OrderCommand::patrol;
         std::size_t ordered = 0;
-        for (const auto unit : live_members(group)) {
+        for (const auto unit : members) {
             if (!match_->takes_move_order(unit))
                 continue;
+            const auto at = group_order_destination(centre, command, unit, 0, point);
             if (action == "move")
-                match_->issue_ground_move(unit, point, false);
+                match_->issue_ground_move(unit, at, false);
             else
-                match_->issue_patrol(unit, point, false);
+                match_->issue_patrol(unit, at, false);
             ++ordered;
         }
         std::printf(

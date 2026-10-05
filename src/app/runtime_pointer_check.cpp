@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // The screen's edges scrolling the camera, the two interface types' pointer
-// buttons, the queued-order cancel and the factory queue's right click, then
+// buttons, the queued-order cancel, a group's orders in its shape and the
+// factory queue's right click, then
 // the on-screen unit list, the pointer's pick and what they drive, and the
 // commander placement, through synthetic SDL input.
 #include "oa/app/runtime.hpp"
@@ -19,6 +20,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <initializer_list>
 #include <iostream>
 #include <optional>
 #include <stdexcept>
@@ -406,7 +408,164 @@ void Runtime::check_pointer_interfaces() {
         moves_to(peewee, {*radar_point}),
         "right-click interface: a right press on the radar did not move the Peewee there"
     );
+
+    // A group keeps its shape: three kbots and a fighter near one another
+    // are each sent to their own point around the ordered one, their
+    // displacement from the centre of the selection's whole map pixels
+    // (the far kbot's among them), and the far kbot, out of their reach, to
+    // the ordered point itself.
+    clear_local_selection();
+    const std::array<uint16_t, 5> group{
+        spawn("ARMPW", 64, 96),
+        spawn("ARMPW", 96, 96),
+        spawn("ARMPW", 64, 128),
+        spawn("ARMFIG", 96, 128),
+        spawn("ARMPW", 64, 480),
+    };
+    const auto outlier = group.back();
+    int32_t sum_x = 0;
+    int32_t sum_z = 0;
+    for (const auto id : group) {
+        match_->stop_orders(id);
+        adopt_selection(id);
+        sum_x += static_cast<int32_t>(slots[id].unit->position[0]) >> 16;
+        sum_z += static_cast<int32_t>(slots[id].unit->position[2]) >> 16;
+    }
+    selected_match_unit_ = group.front();
+    const auto centre_x = sum_x / static_cast<int32_t>(group.size()) * 0x10000;
+    const auto centre_z = sum_z / static_cast<int32_t>(group.size()) * 0x10000;
+    // Each unit's queue: one entry per point, of the kind its type takes.
+    const auto group_queues = [&](std::initializer_list<oa::sim::ground_orders::Point> points,
+                                  uint8_t ground_order,
+                                  uint8_t air_order) {
+        for (const auto id : group) {
+            const auto queue = queue_of(id);
+            if (queue.size() != points.size())
+                return false;
+            const std::array<uint32_t, 3> position = slots[id].unit->position;
+            const auto x = static_cast<int32_t>(position[0]);
+            const auto z = static_cast<int32_t>(position[2]);
+            std::size_t index = 0;
+            for (const auto& point : points) {
+                const auto& entry = queue[index++];
+                const oa::sim::ground_orders::Point own =
+                    id == outlier ? point
+                                  : oa::sim::ground_orders::Point{
+                                        x + point[0] - centre_x, point[1], point[2] + z - centre_z
+                                    };
+                if (entry.kind != (id == group[3] ? air_order : ground_order) ||
+                    entry.destination != own)
+                    return false;
+            }
+        }
+        return true;
+    };
+    const auto ground_kind = oa::sim::ground_orders::move_ground_kind;
+    const auto air_kind = oa::sim::ground_orders::vtol_move_kind;
+    centre_on(group.front());
+    std::tie(px, py) = screen_of(group.front());
+    const auto e = open_ground(px + kPointOffset, py);
+    const auto f = open_ground(px + kPointOffset, py + kPointOffset);
+    click(SDL_BUTTON_RIGHT, px + kPointOffset, py);
+    require(
+        group_queues({e}, ground_kind, air_kind),
+        "right-click interface: a right press did not move the group in its shape"
+    );
+    click(SDL_BUTTON_RIGHT, px + kPointOffset, py + kPointOffset, SDL_KMOD_LSHIFT);
+    require(
+        group_queues({e, f}, ground_kind, air_kind),
+        "right-click interface: a shift right press did not queue the group's moves in its shape"
+    );
+    click(
+        SDL_BUTTON_RIGHT,
+        px + kPointOffset + kCancelNudge,
+        py + kPointOffset + kCancelNudge,
+        SDL_KMOD_LSHIFT
+    );
+    require(
+        group_queues({e}, ground_kind, air_kind),
+        "right-click interface: a shift right press did not take each unit's queued move back at "
+        "its own point"
+    );
     set_interface(input::interface_left_click);
+    // The point each command's issuer took: the far kbot's own.
+    const auto ordered_point = [&] {
+        const auto queue = queue_of(outlier);
+        require(queue.size() == 1, "the far kbot was given no order");
+        return queue.front().destination;
+    };
+    match_command_ = MatchCommand::move;
+    click(SDL_BUTTON_LEFT, px + kPointOffset, py + kPointOffset);
+    require(
+        match_command_ == MatchCommand::none &&
+            group_queues({ordered_point()}, ground_kind, air_kind),
+        "left-click interface: an armed MOVE did not move the group in its shape"
+    );
+    match_command_ = MatchCommand::patrol;
+    click(SDL_BUTTON_LEFT, px + kPointOffset, py);
+    require(
+        group_queues({ordered_point()}, orders::patrol_kind, orders::vtol_patrol_kind),
+        "left-click interface: an armed PATROL did not send the group in its shape"
+    );
+    click(SDL_BUTTON_LEFT, lx, ly);
+    require(
+        ordered_point() == radar_world_point(lx, ly) &&
+            group_queues({ordered_point()}, ground_kind, air_kind),
+        "left-click interface: a left click on the radar did not move the group in its shape"
+    );
+
+    // An armed PATROL clicked on one unit of a 2x2 block names that unit: it
+    // is not counted in the centre and takes no order, and the other three
+    // patrol each to its own point around the ground under the pointer,
+    // their places measured from the centre of the three.
+    clear_local_selection();
+    const std::array<uint16_t, 4> block{group[0], group[1], group[2], group[3]};
+    const auto clicked = block.front();
+    int32_t rest_x = 0;
+    int32_t rest_z = 0;
+    for (const auto id : block) {
+        match_->stop_orders(id);
+        adopt_selection(id);
+        if (id == clicked)
+            continue;
+        rest_x += static_cast<int32_t>(slots[id].unit->position[0]) >> 16;
+        rest_z += static_cast<int32_t>(slots[id].unit->position[2]) >> 16;
+    }
+    selected_match_unit_ = clicked;
+    const auto rest = static_cast<int32_t>(block.size() - 1);
+    const auto rest_centre_x = rest_x / rest * 0x10000;
+    const auto rest_centre_z = rest_z / rest * 0x10000;
+    centre_on(clicked);
+    std::tie(px, py) = screen_of(clicked);
+    update_pointer(px, py);
+    const auto under = match_world_point(px, py);
+    require(
+        hovered_match_unit_ == clicked && under.has_value(),
+        "found the kbot clicked on, or the ground under it, not under the pointer"
+    );
+    match_command_ = MatchCommand::patrol;
+    click(SDL_BUTTON_LEFT, px, py);
+    std::size_t patrols = 0;
+    for (const auto id : block) {
+        if (id == clicked)
+            continue;
+        const auto queue = queue_of(id);
+        const std::array<uint32_t, 3> position = slots[id].unit->position;
+        const oa::sim::ground_orders::Point own{
+            static_cast<int32_t>(position[0]) + (*under)[0] - rest_centre_x,
+            (*under)[1],
+            (*under)[2] + static_cast<int32_t>(position[2]) - rest_centre_z
+        };
+        const auto kind = id == group[3] ? orders::vtol_patrol_kind : orders::patrol_kind;
+        if (queue.size() == 1 && queue.front().kind == kind && queue.front().destination == own)
+            ++patrols;
+    }
+    require(
+        queue_of(clicked).empty() && patrols == block.size() - 1,
+        "left-click interface: an armed PATROL clicked on a kbot of a block did not leave it out "
+        "and send the other three in their shape"
+    );
+    clear_local_selection();
 
     // A right click on a factory's build button takes that type off its queue.
     const auto lab = oa::sim::unit_spawn::find_type_index(spawn_type_names_, "ARMLAB");
@@ -466,6 +625,8 @@ void Runtime::check_pointer_interfaces() {
                  "left-click interface clicks, shift cancels, right "
                  "press deselect/cancel/radar scroll/mouse look and build-site cancel; "
                  "right-click interface deselect, default orders, guard, cancels and radar; "
+                 "a group's moves, patrol and cancels in its shape, and a patrol clicked on "
+                 "one of a block left it out; "
                  "factory right click took ARMPW off ahead of ARMCK\n";
     check_pointer_picks();
     check_commander_placement();

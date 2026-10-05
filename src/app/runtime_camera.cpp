@@ -129,9 +129,18 @@ bool Runtime::issue_map_orders(
         if (match_command_ == MatchCommand::patrol) {
             if (!world)
                 return false;
+            // Each unit patrols to its own point, keeping its place in the
+            // selection around the map point. The unit under the pointer is
+            // not counted in the centre and takes no order.
+            const auto bound = group_order_bound_unit(input::OrderCommand::patrol, target);
+            const auto centre = local_selection_centre(bound);
             for_each_selected([&](uint16_t id) {
-                if (!cancels_queued_command(id, input::OrderCommand::patrol, 0, world, queueing()))
-                    match_->issue_patrol(id, *world, queueing());
+                if (id == bound)
+                    return;
+                const auto at =
+                    group_order_destination(centre, input::OrderCommand::patrol, id, 0, *world);
+                if (!cancels_queued_command(id, input::OrderCommand::patrol, 0, at, queueing()))
+                    match_->issue_patrol(id, at, queueing());
             });
             finish_issued_command();
             status_ = "Patrol";
@@ -222,10 +231,18 @@ bool Runtime::issue_map_orders(
         if (!world)
             return false;
         if (match_command_ == MatchCommand::move || match_command_ == MatchCommand::none) {
+            // Each unit moves to its own point, keeping its place in the
+            // selection around the map point. The unit under the pointer is
+            // not counted in the centre and takes no order.
+            const auto bound = group_order_bound_unit(armed, target);
+            const auto centre = local_selection_centre(bound);
             for_each_selected([&](uint16_t id) {
-                if (!cancels_queued_command(id, armed, 0, world, queueing()) &&
+                if (id == bound)
+                    return;
+                const auto at = group_order_destination(centre, armed, id, 0, *world);
+                if (!cancels_queued_command(id, armed, 0, at, queueing()) &&
                     match_->takes_move_order(id))
-                    match_->issue_ground_move(id, *world, queueing());
+                    match_->issue_ground_move(id, at, queueing());
             });
             finish_issued_command();
             status_ = "Move";
@@ -686,12 +703,18 @@ void Runtime::issue_match_move(float x, float y, bool queue) {
     );
     const oa::sim::ground_orders::Point point{target.x, target.y, target.z};
     try {
+        // Each unit moves to its own point, keeping its place in the
+        // selection around the ground under the pointer. The unit under the
+        // pointer is not counted in the centre and takes no order.
+        const auto command = oa::sim::gameplay_input::OrderCommand::move;
+        const auto bound = group_order_bound_unit(command, hovered_match_unit_);
+        const auto centre = local_selection_centre(bound);
         for_each_selected([&](uint16_t id) {
-            if (!cancels_queued_command(
-                    id, oa::sim::gameplay_input::OrderCommand::move, 0, point, queue
-                ) &&
-                match_->takes_move_order(id))
-                match_->issue_ground_move(id, point, queue);
+            if (id == bound)
+                return;
+            const auto at = group_order_destination(centre, command, id, 0, point);
+            if (!cancels_queued_command(id, command, 0, at, queue) && match_->takes_move_order(id))
+                match_->issue_ground_move(id, at, queue);
         });
     } catch (const std::exception& error) {
         status_ = std::string("move command: ") + error.what();
@@ -722,11 +745,18 @@ void Runtime::issue_match_patrol(float x, float y, bool queue) {
     );
     const oa::sim::ground_orders::Point point{target.x, target.y, target.z};
     try {
+        // Each unit patrols to its own point, keeping its place in the
+        // selection around the ground under the pointer. The unit under the
+        // pointer is not counted in the centre and takes no order.
+        const auto command = oa::sim::gameplay_input::OrderCommand::patrol;
+        const auto bound = group_order_bound_unit(command, hovered_match_unit_);
+        const auto centre = local_selection_centre(bound);
         for_each_selected([&](uint16_t id) {
-            if (!cancels_queued_command(
-                    id, oa::sim::gameplay_input::OrderCommand::patrol, 0, point, queue
-                ))
-                match_->issue_patrol(id, point, queue);
+            if (id == bound)
+                return;
+            const auto at = group_order_destination(centre, command, id, 0, point);
+            if (!cancels_queued_command(id, command, 0, at, queue))
+                match_->issue_patrol(id, at, queue);
         });
         status_ = "Patrol";
     } catch (const std::exception& error) {

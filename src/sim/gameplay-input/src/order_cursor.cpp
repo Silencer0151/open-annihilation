@@ -790,6 +790,72 @@ ClickAction click_action(const World& world, OrderCommand command, OrderCursor c
     return ClickAction::issue_command;
 }
 
+void add_to_group_centre(GroupCentre& centre, const Unit& unit) noexcept {
+    const auto add = [](int32_t sum, int32_t value) {
+        return static_cast<int32_t>(
+            static_cast<uint32_t>(sum) + static_cast<uint32_t>(int32_t{high_word(value)})
+        );
+    };
+    centre.sum_x = add(centre.sum_x, unit.position.x);
+    centre.sum_z = add(centre.sum_z, unit.position.z);
+    ++centre.units;
+}
+
+GroupCentre selection_centre(const World& world, const Unit* target) noexcept {
+    GroupCentre centre{};
+    const Player* local = world_player(&world, world.game.local_player_index);
+    if (local == nullptr)
+        return centre;
+    const Unit* first = world_unit(&world, local->first_unit);
+    const Unit* last = world_unit(&world, local->last_unit);
+    for (const Unit* unit = first; unit != nullptr && last != nullptr && unit <= last; ++unit)
+        if ((unit->flags & OA_UNIT_FLAG_SELECTED) != 0 && unit != target)
+            add_to_group_centre(centre, *unit);
+    return centre;
+}
+
+bool order_keeps_group_shape(UnitOrder order) noexcept {
+    switch (order) {
+    case UnitOrder::move_ground:
+    case UnitOrder::vtol_move:
+    case UnitOrder::patrol:
+    case UnitOrder::vtol_patrol:
+    case UnitOrder::repair_patrol:
+    case UnitOrder::vtol_repair_patrol:
+        return true;
+    default:
+        return false;
+    }
+}
+
+FixedVec3
+group_order_point(const GroupCentre& centre, const Unit& actor, const FixedVec3& point) noexcept {
+    if (centre.units == 0)
+        return point;
+    // The average whole pixel, truncated toward zero, as a 16.16 value.
+    const auto units = static_cast<int32_t>(centre.units);
+    const auto centre_x = static_cast<uint32_t>(centre.sum_x / units) << 16U;
+    const auto centre_z = static_cast<uint32_t>(centre.sum_z / units) << 16U;
+    const auto x = static_cast<uint32_t>(actor.position.x);
+    const auto z = static_cast<uint32_t>(actor.position.z);
+    // The whole part of a 16.16 displacement's square, in square map pixels.
+    const auto square = [](uint32_t displacement) {
+        const int64_t signed_displacement = static_cast<int32_t>(displacement);
+        return static_cast<uint32_t>(
+            static_cast<uint64_t>(signed_displacement * signed_displacement) >> 32U
+        );
+    };
+    const auto distance = static_cast<int32_t>(square(z - centre_z) + square(x - centre_x));
+    const auto spread = static_cast<int32_t>(centre.units * group_spread_per_unit);
+    if (distance > spread)
+        return point;
+    return {
+        static_cast<int32_t>(x + static_cast<uint32_t>(point.x) - centre_x),
+        point.y,
+        static_cast<int32_t>(static_cast<uint32_t>(point.z) + z - centre_z)
+    };
+}
+
 uint32_t selection_orders(
     const World& world,
     OrderCommand command,
@@ -804,6 +870,7 @@ uint32_t selection_orders(
     const Player* local = world_player(&world, world.game.local_player_index);
     if (local == nullptr)
         return 0;
+    const GroupCentre centre = selection_centre(world, pointer_unit);
     const Unit* first = world_unit(&world, local->first_unit);
     const Unit* last = world_unit(&world, local->last_unit);
     uint32_t count = 0;
@@ -815,7 +882,9 @@ uint32_t selection_orders(
             continue;
         if (count == capacity)
             break;
-        out[count++] = {unit, order};
+        const FixedVec3 destination =
+            order_keeps_group_shape(order) ? group_order_point(centre, *unit, position) : position;
+        out[count++] = {unit, order, destination};
     }
     return count;
 }

@@ -1308,6 +1308,8 @@ class Runtime final : public menu::Host,
     /// "patrol GROUP X Z", "attack GROUP TARGETS", "attack-ground GROUP X Z",
     /// "guard GROUP GUARDED", and "activate GROUP" and "deactivate GROUP",
     /// the orders the order panel's ON/OFF button gives (give_state_order).
+    /// A move or patrol is given as to a selection of the group's live units:
+    /// each keeps its place around the point (group_order_destination).
     ///
     /// Throws std::runtime_error naming the line for one that does not
     /// read, a type the game lacks, a player whose slot is not in use, a unit
@@ -7799,8 +7801,10 @@ class Runtime final : public menu::Host,
     /// (Game.cursor_unit_id, put back to the pointer's own pick afterwards) and
     /// the ground under it (Game.cursor_position), each given through the
     /// match's issuers; an aircraft sent onto an allied air pad lands on it
-    /// (VTOL_Landing). A queued one that matches an order already queued
-    /// removes that order instead.
+    /// (VTOL_Landing). A move sends each unit to its own point, keeping its
+    /// place in the selection around the ground (gameplay_input::selection_orders).
+    /// A queued one that matches an order already queued removes that order
+    /// instead.
     ///
     /// @param command pointer command
     /// @param target unit under the pointer, or 0
@@ -7818,14 +7822,15 @@ class Runtime final : public menu::Host,
     ///
     /// While shift is held, the queued order of the kind `order` names for
     /// `source` whose target is `target` (any when 0) and whose point lies within
-    /// 16 pixels of the ground under the pointer is removed instead of a new one
-    /// being queued. The engine's unit-target orders keep the target's position
-    /// as their point, which the test then measures.
+    /// 16 pixels of the point the new order would take, the unit's own point in a
+    /// group's move or patrol, is removed instead of a new one being queued. The
+    /// engine's unit-target orders keep the target's position as their point,
+    /// which the test then measures.
     ///
     /// @param source ordered unit
     /// @param order unit order the pointer gives
     /// @param target order's target unit, 0 for any
-    /// @param ground 16.16 ground point under the pointer, if any
+    /// @param ground 16.16 point the new order takes, if any
     /// @param queue true while shift is held; false cancels nothing
     /// @return true when a queued order was removed
     bool cancels_queued_order(
@@ -7853,6 +7858,46 @@ class Runtime final : public menu::Host,
         bool queue
     );
 
+    /// Returns the unit under the pointer that a group order names.
+    ///
+    /// Every command but UNLOAD, STOP and build names the unit under the
+    /// pointer; the group order leaves that unit out of the selection's centre
+    /// and gives it no order.
+    ///
+    /// @param command command given
+    /// @param target unit under the pointer, 0 for none
+    /// @return `target` when it is live and `command` names it; otherwise 0
+    uint16_t group_order_bound_unit(oa::sim::gameplay_input::OrderCommand command, uint16_t target);
+
+    /// Measures the centre of the local player's selection for a group order
+    /// (gameplay_input::selection_centre), before any of its units is ordered.
+    ///
+    /// @param bound unit the order names (group_order_bound_unit), which is not
+    ///        counted; 0 for none
+    /// @return the centre; no units when nothing else is selected
+    oa::sim::gameplay_input::GroupCentre local_selection_centre(uint16_t bound);
+
+    /// Returns the point a group order sends one of its units to.
+    ///
+    /// The order `command` resolves to for the unit over the target and the
+    /// point decides: a move or patrol keeps the unit's place in the group
+    /// around the point (gameplay_input::group_order_point); any other order
+    /// takes the point itself.
+    ///
+    /// @param centre the group's centre, measured before any of its units was ordered
+    /// @param command command given
+    /// @param source ordered unit
+    /// @param target unit the order names, 0 for none
+    /// @param point ordered 16.16 point
+    /// @return the unit's 16.16 destination
+    oa::sim::ground_orders::Point group_order_destination(
+        const oa::sim::gameplay_input::GroupCentre& centre,
+        oa::sim::gameplay_input::OrderCommand command,
+        uint16_t source,
+        uint16_t target,
+        const oa::sim::ground_orders::Point& point
+    );
+
     /// Checks both interface types (Game.interface_type) through SDL input on a skirmish.
     ///
     /// Left-click interface: a left click on open ground moves the selection, a
@@ -7862,11 +7907,15 @@ class Runtime final : public menu::Host,
     /// click on a queued build site takes the MobileBuild back. Right-click
     /// interface: a left click on open ground deselects, the right press gives
     /// the default order (move, guard on an own unit) with the same shift cancel,
-    /// the left button scrolls with the radar. A right click on a factory build
-    /// button takes that unit type off the queue even when another type was
-    /// queued after it. The screen's edges scroll first (check_edge_scroll),
-    /// and the on-screen list and the pick follow (check_pointer_picks).
-    /// Throws std::runtime_error on a failure.
+    /// the left button scrolls with the radar. A group sent by the right press,
+    /// shift right presses, an armed MOVE or PATROL and a radar click keeps its
+    /// shape around the point, a unit far from it going to the point itself; an
+    /// armed PATROL clicked on one unit of a block gives that unit no order and
+    /// measures the others' places from the centre of the rest. A right click on
+    /// a factory build button takes that unit type off the queue even when
+    /// another type was queued after it. The screen's edges scroll first
+    /// (check_edge_scroll), and the on-screen list and the pick follow
+    /// (check_pointer_picks). Throws std::runtime_error on a failure.
     void check_pointer_interfaces();
 
     /// Checks the screen's edges scrolling the camera through SDL input, on
@@ -10342,8 +10391,11 @@ class Runtime final : public menu::Host,
     /// Gives the selection the armed command at a radar position.
     ///
     /// Patrol and build take the map point; attack and D-gun take the enemy blip
-    /// or the ground; move (and no command) takes the map point. A failure is
-    /// shown on the status line.
+    /// or the ground; move (and no command) takes the map point. A move or
+    /// patrol sends each unit to its own point, keeping its place in the
+    /// selection around the map point; a selected unit whose blip is under the
+    /// pointer is left out of the selection's centre and given no order. A
+    /// failure is shown on the status line.
     ///
     /// @param x canvas column
     /// @param y canvas row
@@ -10490,8 +10542,11 @@ class Runtime final : public menu::Host,
     /// Moves the selection to the ground under a canvas point, or gives the radar's orders over the
     /// radar.
     ///
-    /// A matching queued move is taken off instead; units that take no move
-    /// order are skipped. A failure is shown on the status line.
+    /// Each unit moves to its own point, keeping its place in the selection
+    /// around the ground (group_order_destination); a selected unit under the
+    /// pointer is left out of the selection's centre and given no order. A
+    /// matching queued move is taken off instead; units that take no move order
+    /// are skipped. A failure is shown on the status line.
     ///
     /// @param x canvas column
     /// @param y canvas row
@@ -10500,7 +10555,10 @@ class Runtime final : public menu::Host,
 
     /// Sends the selection to patrol to the ground under a canvas point.
     ///
-    /// A matching queued patrol is taken off instead. A failure is shown on the
+    /// Each unit patrols to its own point, keeping its place in the selection
+    /// around the ground (group_order_destination); a selected unit under the
+    /// pointer is left out of the selection's centre and given no order. A
+    /// matching queued patrol is taken off instead. A failure is shown on the
     /// status line.
     ///
     /// @param x canvas column

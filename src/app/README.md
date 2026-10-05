@@ -980,16 +980,17 @@ logs it.
   the default); `group NAME` gathers the units the stage places after it,
   by `unit` or `place`, into a group, and `group` alone stops gathering;
   `move GROUP X Z` and `patrol GROUP X Z` give a group's live units that
-  order to map pixel X, Z, `attack GROUP TARGETS` sets each of them on
-  the nearest live unit of another group, `attack-ground GROUP X Z`
-  commands them to attack the ground at map pixel X, Z, `guard GROUP
-  GUARDED` sets them guarding the first live unit of another group, and
-  `activate GROUP` and
-  `deactivate GROUP` switch them on and off with the order panel's ON/OFF
-  button's orders (`give_state_order`, which the button gives each
-  selected unit), as a player's orders do; a type that cannot be switched
-  on and off stays as it is. `at
-  TICK` before any action keeps its line for that match tick, and the line
+  order to map pixel X, Z as a player's order gives a selection of them
+  (each unit near the group's centre keeps its place around the point, and
+  one far from it goes to the point itself); `attack GROUP TARGETS` sets
+  each of them on the nearest live unit of another group, `attack-ground
+  GROUP X Z` commands them to attack the ground at map pixel X, Z, `guard
+  GROUP GUARDED` sets them guarding the first live unit of another group,
+  and `activate GROUP` and `deactivate GROUP` switch them on and off with
+  the order panel's ON/OFF button's orders (`give_state_order`, which the
+  button gives each selected unit), as a player's orders do; a type that
+  cannot be switched on and off stays as it is. `at TICK` before any
+  action keeps its line for that match tick, and the line
   runs before the tick does (`run_due_stage_lines`, from every step of the
   match), the lines of a tick in the order the file gives them; each tick
   that runs lines prints `stage: tick TICK` before their own lines. A
@@ -997,7 +998,8 @@ logs it.
   headless skirmish the stage sets up and plays out
   ([docs/director.md](../../docs/director.md)). `native-stage-render` checks
   the timed lines, the orders, the lines a stage refuses and two renders of
-  a stage.
+  a stage; `native-group-orders` checks that a block of fighters and a row
+  of kbots moved as groups keep their shape where they land and stop.
 - `xrgb_conversion.hpp`, `xrgb_conversion.cpp`: each frame's RGB layers
   converted into the window's 32-bit pixels (0xffRRGGBB) as they are
   uploaded, through the display gamma's table when the gamma is not 1, in
