@@ -2242,12 +2242,21 @@ if(BUILD_TESTING)
     # apply (tools/sdl-patches/README.md). It downloads nothing.
     add_test(NAME sdl-bootstrap-selftest COMMAND ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/tools/bootstrap_sdl.py --self-test)
+    # The macOS and iOS bootstraps reuse an installed SDL only when it
+    # records this run's settings, its patches among them, so an SDL built
+    # before a patch was added or changed is built again. They build and
+    # download nothing.
+    add_test(NAME macos-deps-bootstrap-selftest COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tools/bootstrap_macos_deps.py --self-test)
+    add_test(NAME ios-deps-bootstrap-selftest COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/platforms/ios/tools/bootstrap_ios_deps.py --self-test)
     # tools/bootstrap_text_fonts.py's pins, the licence texts they must
     # match and the characters the cut CJK font keeps. It downloads nothing.
     add_test(NAME text-fonts-bootstrap-selftest COMMAND ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/tools/bootstrap_text_fonts.py --self-test)
     set_tests_properties(fixed-width-rewrite-selftest format-check-selftest licensing-check-selftest
-      sdl-bootstrap-selftest text-fonts-bootstrap-selftest PROPERTIES TIMEOUT 60)
+      sdl-bootstrap-selftest macos-deps-bootstrap-selftest ios-deps-bootstrap-selftest
+      text-fonts-bootstrap-selftest PROPERTIES TIMEOUT 60)
   endif()
 endif()
 

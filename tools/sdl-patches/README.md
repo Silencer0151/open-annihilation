@@ -38,6 +38,12 @@ accepts, is built as SDL published it.
   is removed and unpacked again from the release's archive, whose pinned
   SHA-256 is checked as always, before the patches are applied. A build
   therefore never mixes patched and unpatched files.
+- The macOS and iOS bootstraps record the same list, each patch by its
+  SHA-256 and name, in the `build-settings.json` of the SDL they install,
+  and reuse an installed SDL only when its list is the release's: one built
+  before a patch was added or changed is built again from the patched
+  source. `--self-test` of each (the `macos-deps-bootstrap-selftest` and
+  `ios-deps-bootstrap-selftest` tests) checks which installs are reused.
 - `python3 tools/bootstrap_sdl.py --self-test` (the `sdl-bootstrap-selftest`
   test) checks that every patch reads as a unified diff, names files of the
   release only and applies to a tree made from its own lines, that a

@@ -36,9 +36,12 @@ expanded and checked, and the notary service's logs.
    `local/deps/macos-11.0` (the first run downloads their archives and
    checks each against its SHA-256). Each library's folder records in
    `build-settings.json` the version, archive checksum, deployment target,
-   architectures and options it was built with, and a library is built
-   again whenever these differ from the pins and options of the tools, so
-   the notices never name a version the application does not hold.
+   architectures and options it was built with, and SDL's also the patches
+   of `tools/sdl-patches` it was built with, each by its SHA-256. A library
+   is built again whenever these differ from the pins, patches and options
+   of the tools, so the notices never name a version the application does
+   not hold, and an SDL built before a patch was added or changed is never
+   linked.
    `tools/bootstrap_text_fonts.py --fonts-only` puts the text fonts in
    `local/deps/text-fonts`, and the build copies them into the bundle's
    `Contents/Resources/fonts`. The

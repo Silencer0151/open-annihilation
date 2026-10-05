@@ -17,17 +17,30 @@ tools/bootstrap_text_fonts.py names, from the same verified archives in
 Build trees live beside each root (<root>-build). Each prefix records in
 build-settings.json what its library was built from and how: the version,
 the archive's SHA-256, the system image and its version, the deployment
-target, the architecture and the options. A library whose prefix is complete
-and records the settings of this run is not built again; any other is built
-afresh. Nothing outside the archive cache, the roots and their build trees
+target, the architecture and the options, and for SDL the patches applied
+to it (tools/sdl-patches), each by its SHA-256 and name. A library whose
+prefix is complete and records the settings of this run is not built again;
+any other is built afresh, so an SDL built before its release had patches,
+or with a patch that has changed since, is built again from the patched
+source. Nothing outside the archive cache, the roots and their build trees
 is modified.
+
+--self-test checks, in a scratch folder, which SDL prefixes a run reuses
+and which it builds again, and that SDL's settings name the patches of
+tools/sdl-patches. It builds and downloads nothing, needs no Xcode tools
+and runs on any system. Exit status: 0 when the libraries are ready (or
+the self-test passed); 1 when the self-test fails.
 """
 import argparse
+import contextlib
+import hashlib
+import io
 import json
 import pathlib
 import shutil
 import subprocess
 import sys
+import tempfile
 
 ENGINE_ROOT = pathlib.Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ENGINE_ROOT / "tools"))
@@ -52,6 +65,16 @@ SDL_OPTIONS = [
     f"-DCMAKE_PROJECT_INCLUDE={(ENGINE_ROOT / 'tools' / 'sdl_build_options.cmake').as_posix()}",
 ]
 SDL_INSTALLED = "lib/cmake/SDL3/SDL3Config.cmake"
+# The files a complete SDL prefix holds.
+SDL_FILES = (SDL_INSTALLED, "lib/libSDL3.a")
+# The system image version the self-test records its made-up prefixes for,
+# and its made-up patch, at the bytes an older prefix was built with and at
+# the bytes it has now, written as bytes so that no platform changes their
+# line endings.
+SELF_TEST_SDK_VERSION = "26.0"
+SELF_TEST_PATCH = f"0001-change{bootstrap_sdl.PATCH_SUFFIX}"
+SELF_TEST_OLDER_PATCH = "the change as it was\n"
+SELF_TEST_PATCH_TEXT = "the change as it is now\n"
 
 
 def sdk_version(sdk):
@@ -61,11 +84,41 @@ def sdk_version(sdk):
     return result.stdout.strip()
 
 
-def settings(version, sha256, sdk, options):
-    """Returns what a library's prefix records it was built from and how."""
-    return {"version": version, "sha256": sha256, "sdk": sdk, "sdk_version": sdk_version(sdk),
+def settings(version, sha256, sdk, image_version, options):
+    """Returns what a library's prefix records it was built from and how.
+
+    @param version the library's release
+    @param sha256 the SHA-256 of its archive
+    @param sdk the system image it is built for
+    @param image_version that system image's version, as sdk_version gives it
+    @param options its CMake options
+    @return the settings
+    """
+    return {"version": version, "sha256": sha256, "sdk": sdk, "sdk_version": image_version,
             "deployment_target": DEPLOYMENT_TARGET, "architecture": ARCHITECTURE,
             "options": options}
+
+
+def sdl_patches(patches=bootstrap_sdl.PATCHES):
+    """Lists the patches applied to the pinned SDL as its prefix records them.
+
+    @param patches the folder that holds a folder of patches per release
+    @return each patch's SHA-256 and name, in the order they apply; empty for a release without patches
+    """
+    return (bootstrap_sdl.patch_stamp(bootstrap_sdl.VERSION, patches) or "").splitlines()
+
+
+def sdl_settings(sdk, image_version, patches=bootstrap_sdl.PATCHES):
+    """Returns what SDL's prefix records it was built from and how, its patches among them.
+
+    @param sdk the system image it is built for
+    @param image_version that system image's version
+    @param patches the folder that holds a folder of patches per release
+    @return the settings
+    """
+    wanted = settings(bootstrap_sdl.VERSION, bootstrap_sdl.SHA256, sdk, image_version, SDL_OPTIONS)
+    wanted["patches"] = sdl_patches(patches)
+    return wanted
 
 
 def is_current(install, files, wanted):
@@ -118,24 +171,92 @@ def bootstrap(deps, sdk, jobs):
     """Builds what is not current of SDL and FreeType for sdk; returns the prefix root."""
     root = deps / f"ios-{sdk}"
     builds = deps / f"ios-{sdk}-build"
+    image_version = sdk_version(sdk)
     sdl_install = root / "sdl"
-    sdl_settings = settings(bootstrap_sdl.VERSION, bootstrap_sdl.SHA256, sdk, SDL_OPTIONS)
-    if not is_current(sdl_install, [SDL_INSTALLED, "lib/libSDL3.a"], sdl_settings):
+    sdl_wanted = sdl_settings(sdk, image_version)
+    if not is_current(sdl_install, SDL_FILES, sdl_wanted):
         build_for_ios(bootstrap_sdl.sdl_source(deps), builds / "sdl", sdl_install, sdk, jobs,
                       SDL_OPTIONS)
-        record(sdl_install, sdl_settings)
+        record(sdl_install, sdl_wanted)
     freetype_install = root / "freetype"
     freetype_settings = settings(bootstrap_text_fonts.FREETYPE_VERSION,
-                                 bootstrap_text_fonts.FREETYPE_SHA256, sdk,
+                                 bootstrap_text_fonts.FREETYPE_SHA256, sdk, image_version,
                                  bootstrap_text_fonts.FREETYPE_OPTIONS)
     if not is_current(freetype_install, [bootstrap_text_fonts.FREETYPE_INSTALLED], freetype_settings):
         build_for_ios(bootstrap_text_fonts.freetype_source(deps), builds / "freetype",
                       freetype_install, sdk, jobs, bootstrap_text_fonts.FREETYPE_OPTIONS)
         record(freetype_install, freetype_settings)
     print(f"SDL {bootstrap_sdl.VERSION} and FreeType {bootstrap_text_fonts.FREETYPE_VERSION} "
-          f"for {sdk} {sdl_settings['sdk_version']}, {ARCHITECTURE}, iOS {DEPLOYMENT_TARGET} and later: "
+          f"for {sdk} {image_version}, {ARCHITECTURE}, iOS {DEPLOYMENT_TARGET} and later: "
           f"{root}")
     return root
+
+
+def self_test():
+    """Checks which SDL prefixes a run reuses, in a scratch folder; returns the exit status.
+
+    @return 0 when every check passes, else 1
+    """
+    failures = []
+    sdk = SDKS[0]
+    with tempfile.TemporaryDirectory() as scratch:
+        root = pathlib.Path(scratch)
+        patches = root / "sdl-patches"
+        (patches / bootstrap_sdl.VERSION).mkdir(parents=True)
+        patch = patches / bootstrap_sdl.VERSION / SELF_TEST_PATCH
+        patch.write_bytes(SELF_TEST_OLDER_PATCH.encode())
+        older = sdl_settings(sdk, SELF_TEST_SDK_VERSION, patches)
+        patch.write_bytes(SELF_TEST_PATCH_TEXT.encode())
+        wanted = sdl_settings(sdk, SELF_TEST_SDK_VERSION, patches)
+        named = [f"{hashlib.sha256(SELF_TEST_PATCH_TEXT.encode()).hexdigest()}  {SELF_TEST_PATCH}"]
+        if wanted.get("patches") != named:
+            failures.append(f"SDL's settings name the patches {wanted.get('patches')}, not {named}")
+        if sdl_patches(root / "no-patches") != []:
+            failures.append("a release without patches is recorded with some")
+        unpatched = {key: value for key, value in wanted.items() if key != "patches"}
+        # What an SDL prefix may hold, and whether this run reuses it.
+        cases = (
+            ("this run's settings", True, wanted, True),
+            ("the settings of a build from before its release had patches", True, unpatched, False),
+            ("the settings of a build with no patches", True, {**wanted, "patches": []}, False),
+            ("the settings of a build with a patch that has changed since", True, older, False),
+            ("this run's settings for another system image version", True,
+             {**wanted, "sdk_version": "1.0"}, False),
+            ("no settings", True, None, False),
+            ("settings that cannot be read", True, "{", False),
+            ("this run's settings but no library", False, wanted, False),
+        )
+        for what, complete, recorded, reused in cases:
+            install = root / "sdl"
+            shutil.rmtree(install, ignore_errors=True)
+            install.mkdir()
+            for name in SDL_FILES if complete else SDL_FILES[:1]:
+                (install / name).parent.mkdir(parents=True, exist_ok=True)
+                (install / name).write_text("", encoding="utf-8")
+            if isinstance(recorded, str):
+                (install / SETTINGS_FILE).write_text(recorded, encoding="utf-8")
+            elif recorded is not None:
+                record(install, recorded)
+            with contextlib.redirect_stdout(io.StringIO()):
+                got = is_current(install, SDL_FILES, wanted)
+            if got != reused:
+                failures.append(f"a prefix with {what} is {'reused' if got else 'built again'}, "
+                                f"not {'reused' if reused else 'built again'}")
+    # The engine's own patches of the pinned release, as tools/sdl-patches holds them.
+    folder = bootstrap_sdl.PATCHES / bootstrap_sdl.VERSION
+    own = sorted(folder.glob(f"*{bootstrap_sdl.PATCH_SUFFIX}")) if folder.is_dir() else []
+    expected = [f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}" for path in own]
+    recorded = sdl_settings(sdk, SELF_TEST_SDK_VERSION).get("patches")
+    if recorded != expected:
+        failures.append(f"SDL {bootstrap_sdl.VERSION}'s settings name the patches {recorded}, not {expected}")
+    for failure in failures:
+        print(f"bootstrap_ios_deps self-test: {failure}")
+    if failures:
+        return 1
+    print(f"bootstrap_ios_deps self-test: {len(cases)} SDL prefixes reused or built again as expected; "
+          f"SDL {bootstrap_sdl.VERSION}'s settings name the {len(expected)} "
+          f"patch{'' if len(expected) == 1 else 'es'} of tools/sdl-patches/{bootstrap_sdl.VERSION}")
+    return 0
 
 
 def main(argv=None):
@@ -148,7 +269,11 @@ def main(argv=None):
                              "(default: local/deps)")
     parser.add_argument("--jobs", type=int, default=DEFAULT_JOBS,
                         help=f"parallel build jobs (default: {DEFAULT_JOBS})")
+    parser.add_argument("--self-test", action="store_true",
+                        help="check which SDL prefixes a run builds again, in a scratch folder, and exit")
     args = parser.parse_args(argv)
+    if args.self_test:
+        return self_test()
     if sys.platform != "darwin":
         parser.error("the iOS libraries are built on macOS with the Xcode tools")
     if args.jobs < 1:

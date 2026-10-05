@@ -23,7 +23,10 @@ trackpad works as on the desktop, and the Apple Pencil works as a mouse that hov
 SDL 3.4 and FreeType are built for iOS by [tools/bootstrap_ios_deps.py](tools/bootstrap_ios_deps.py),
 from the same pinned releases the desktop build uses, into `local/deps/ios-iphonesimulator` and
 `local/deps/ios-iphoneos`. The build scripts run it for you; it builds nothing that is already
-current. The desktop build keeps accepting SDL 3.2; only this build asks for 3.4.
+current. Each library's folder records what it was built with, SDL's patches from
+[tools/sdl-patches](../../tools/sdl-patches/) among them, and a library whose record differs, such
+as an SDL built before a patch was added or changed, is built again. The desktop build keeps
+accepting SDL 3.2; only this build asks for 3.4.
 
 ## Run it in the simulator
 
