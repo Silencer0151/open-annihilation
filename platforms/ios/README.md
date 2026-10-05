@@ -239,7 +239,13 @@ files) is copied inside a coordinated read under the access its URL grants, whic
 first. SDL then sends the copy's path; the engine reads it through `take_opened_file`, which
 answers with why when the copy failed, installs it into `Documents/Open Annihilation/Mods`, and
 gives it back through `release_opened_file`, which removes the copy. Each start removes the
-copies an earlier run left. Not yet tried on a device or in the simulator: only built.
+copies an earlier run left. Tried in the iPhone and iPad simulators with packages opened through
+the system from the Files app's own storage (On My iPhone, On My iPad), which the game copies:
+opened while the game ran, a package was brought in and installed in the Mods folder; one that
+started the game was installed at the main menu once the intro had played; one whose `oamod.yaml`
+has errors was refused with them, and the Mods folder stayed as it was; each copy was still there
+while the outcome's message showed, and was gone at the next start. Not yet tried on a device, nor
+with a file the system hands over in an Inbox folder or one in iCloud Drive.
 The engine offers the Game files screen because these hooks are installed, not because of a build
 option: the desktop installs none.
 
