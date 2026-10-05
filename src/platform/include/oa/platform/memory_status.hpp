@@ -62,7 +62,10 @@ struct HostHeapUse {
 /// out the free memory the allocator keeps for later allocations, which the
 /// working set counts and which grows and shrinks with the order and timing of
 /// past allocations, so a count that grows means memory that was never given
-/// back.
+/// back. On Linux it also counts the freed blocks each thread's cache keeps
+/// for its next allocations, which the GNU C library counts as in use: the
+/// cache fills over many allocations, and the tunable
+/// glibc.malloc.tcache_count=0 turns it off.
 ///
 /// Every heap of the process is counted on Windows, every malloc zone on macOS
 /// and iOS, and every arena of the GNU C library on Linux; under the address
