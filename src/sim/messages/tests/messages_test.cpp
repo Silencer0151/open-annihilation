@@ -237,6 +237,107 @@ int main() {
         v->game.chat_mode = OA_CHAT_MODE_EVERYONE;
     }
 
+    // The alliance lines and the missing-map line go in English and show in
+    // the language shown, the head and the names as they came: German,
+    // Chinese, and English, which has no translation.
+    {
+        struct Phrases {
+            const char* allied;
+            const char* broke;
+            const char* missing;
+        };
+
+        static const Phrases german{
+            "Verb\xc3\xbcndet mit", "k\xc3\xbcndigt Allianz mit", "hat diese Karte nicht"
+        };
+        static const Phrases chinese{
+            "\xe7\xbb\x93\xe7\x9b\x9f",
+            "\xe8\xa7\xa3\xe9\x99\xa4\xe7\xbb\x93\xe7\x9b\x9f",
+            "\xe6\xb2\xa1\xe6\x9c\x89\xe6\xad\xa4\xe5\x9c\xb0\xe5\x9b\xbe"
+        };
+        const auto translate = [](void* context, const char* text) -> const char* {
+            const auto& phrases = *static_cast<const Phrases*>(context);
+            if (std::strcmp(text, phrase_allied_with) == 0)
+                return phrases.allied;
+            if (std::strcmp(text, phrase_broke_alliance_with) == 0)
+                return phrases.broke;
+            if (std::strcmp(text, phrase_missing_map) == 0)
+                return phrases.missing;
+            return nullptr;
+        };
+        const auto shown = [&](const char* line, const Phrases* phrases, size_t size = 0x100) {
+            char out[0x100];
+            std::memset(out, 'x', sizeof out);
+            format_shown_chat_line(
+                out,
+                size,
+                line,
+                phrases != nullptr ? +translate : nullptr,
+                const_cast<Phrases*>(phrases)
+            );
+            return std::string(out);
+        };
+        for (const Phrases* phrases : {&german, &chinese}) {
+            CHECK(
+                shown("<Hans>  allied with Mary", phrases) ==
+                std::string("<Hans>  ") + phrases->allied + " Mary"
+            );
+            CHECK(
+                shown("<Hans>  broke alliance with Li Wei", phrases) ==
+                std::string("<Hans>  ") + phrases->broke + " Li Wei"
+            );
+            CHECK(
+                shown("<Hans> does not have this map", phrases) ==
+                std::string("<Hans> ") + phrases->missing
+            );
+            // A line to chosen players keeps its head.
+            CHECK(
+                shown("<Hans->Mary>  allied with Mary", phrases) ==
+                std::string("<Hans->Mary>  ") + phrases->allied + " Mary"
+            );
+            // Other lines show as they came: other words, one space before
+            // the phrase, no name, more after the map line, no head.
+            for (const char* line :
+                 {"<Hans> gg",
+                  "<Hans> allied with Mary",
+                  "<Hans>  allied with",
+                  "<Hans>  allied withMary",
+                  "<Hans> does not have this map yet",
+                  " allied with Mary",
+                  "Hans>  allied with Mary",
+                  ""})
+                CHECK(shown(line, phrases) == line);
+        }
+        CHECK(shown("<Hans>  allied with Mary", nullptr) == "<Hans>  allied with Mary");
+        CHECK(shown("<Hans> does not have this map", nullptr) == "<Hans> does not have this map");
+        // A line that does not fit is cut between whole characters: the
+        // second hanzi of the Chinese phrase would be split.
+        CHECK(shown("<Hans>  allied with Mary", &chinese, 13) == "<Hans>  \xe7\xbb\x93");
+        CHECK(shown("<Hans>  allied with Mary", &german, 6) == "<Hans");
+        {
+            char untouched[2] = {'x', 'y'};
+            format_shown_chat_line(untouched, 0, "<Hans> gg", +translate, nullptr);
+            CHECK(untouched[0] == 'x' && untouched[1] == 'y');
+        }
+        // The speaker's log shows the line so, while the other players get
+        // it in English.
+        static std::string shared_line;
+        Hooks said{};
+        said.context = const_cast<Phrases*>(&german);
+        said.translate = translate;
+        said.share_chat = [](void*, const char* line) { shared_line = line; };
+        std::memcpy(p.second_name, "Hans", 5);
+        v->game.chat_mode = OA_CHAT_MODE_EVERYONE;
+        const auto head = v->game.chat_head;
+        post_chat(*v, p, " allied with Mary", kind_player_chat, nullptr, said);
+        CHECK(shared_line == "<Hans>  allied with Mary");
+        CHECK(
+            std::string(message_line(v->game, head)->text) ==
+            std::string("<Hans>  ") + german.allied + " Mary"
+        );
+        std::memcpy(p.second_name, "Steve", 6);
+    }
+
     // Expiry: the oldest line goes once it has been up for TextScroll + 1
     // seconds, one line per call.
     World* e = world_create();

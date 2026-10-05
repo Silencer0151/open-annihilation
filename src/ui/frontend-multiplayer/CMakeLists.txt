@@ -20,7 +20,7 @@ target_link_libraries(oa-ui-frontend-multiplayer
   PRIVATE oa-platform-shims oa-base-text oa-base-bytes oa-ui-frontend-renderer oa-ui-decoded oa-formats-hpi oa-data-defs-assets oa-formats-tnt oa-data-unit-definitions
     oa-formats-tdf
     oa-data-campaign-assets oa-data-defs oa-data-languages oa-netgame-sync oa-present oa-present-model
-    oa-base-game-loop oa-sim-mission-units)
+    oa-base-game-loop oa-sim-messages oa-sim-mission-units)
 
 if(BUILD_TESTING)
   add_executable(oa-ui-frontend-multiplayer-lobby-test tests/lobby_test.cpp)

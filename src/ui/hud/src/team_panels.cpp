@@ -7,6 +7,7 @@
 
 #include "oa/core/player.h"
 #include "oa/core/player_setup.h"
+#include "oa/sim/messages.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -394,9 +395,7 @@ TeamPanelResult allies_panel_click(
     const char* name,
     const PanelControls& controls,
     const HudEvents& events,
-    const TeamPanelHost& host,
-    TranslateText translate,
-    void* translate_context
+    const TeamPanelHost& host
 ) {
     TeamPanelResult result;
     if (name == nullptr) {
@@ -416,9 +415,10 @@ TeamPanelResult allies_panel_click(
         set_alliance(world, world.game.local_player_index, slot, allied, false, host);
         char other[kPlayerNameBytes + 1]{};
         std::memcpy(other, player.name, kPlayerNameBytes);
-        const char* phrase = translated(
-            translate, translate_context, allied != 0 ? "allied with" : "broke alliance with"
-        );
+        // Said in English, as English 3.1c sends it; each machine shows it in
+        // its own language.
+        const char* phrase = allied != 0 ? oa::sim::messages::phrase_allied_with
+                                         : oa::sim::messages::phrase_broke_alliance_with;
         std::snprintf(result.announcement, sizeof result.announcement, " %s %s", phrase, other);
         update_ally_indicators(world, controls);
         return result;

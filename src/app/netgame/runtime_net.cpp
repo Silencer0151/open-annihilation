@@ -3071,7 +3071,7 @@ int NetworkPlay::run_net_loopback_check(std::size_t ticks) {
         };
         for (const uint8_t allied : {uint8_t{1}, uint8_t{0}}) {
             const auto result = oa::ui::hud::allies_panel_click(
-                panel_world, ally_control, no_controls, events, panels, nullptr, nullptr
+                panel_world, ally_control, no_controls, events, panels
             );
             require(result.announcement[0] != '\0', "ALLIES.GUI had no line to say");
             oa::sim::messages::post_chat(

@@ -12,6 +12,7 @@
 #include "oa/netgame/unicode_chat.hpp"
 #include "oa/ui/frontend_multiplayer/dialogs.hpp"
 #include "oa/ui/frontend_multiplayer/team_rules.hpp"
+#include "oa/sim/messages.hpp"
 #include "oa/sim/mission_units/map_units.hpp"
 #include "oa/base/text.hpp"
 
@@ -620,6 +621,27 @@ std::vector<std::string> say_unicode(
         send_chat_forms(lobby, from, utf8, code_page);
     }
     return parts;
+}
+
+/// Posts a chat line a player said, or another machine sent, as this machine shows it.
+///
+/// The alliance lines and "does not have this map" go between machines in
+/// English and show in the language shown
+/// (oa::sim::messages::format_shown_chat_line), a deliberate difference
+/// from 3.1c; any other line is posted as it came.
+///
+/// @param[in,out] lobby Lobby state.
+/// @param line The chat line, "<Name> text".
+void post_shown_chat(Lobby& lobby, const char* line) noexcept {
+    char shown[sim::messages::most_chat_line_bytes];
+    sim::messages::format_shown_chat_line(
+        shown,
+        sizeof shown,
+        std::string_view(line, ::strnlen(line, sizeof shown)),
+        lobby.services.translate,
+        lobby.services.context
+    );
+    lobby_post_chat(lobby, shown);
 }
 
 /// Sends a plain chat line from the local player to everyone and shows it here.
@@ -1571,8 +1593,9 @@ void lobby_update_status(Lobby& lobby, Panel& panel) noexcept {
             if (!lobby_has_host_map(lobby)) {
                 map_label->color = ((now(lobby) / 30) & 1U) != 0 ? kWarningColor : 0;
                 if (changed) {
-                    // Said in the language shown, as 3.1c says it.
-                    lobby_say(lobby, me, lobby_translated(lobby, "does not have this map"));
+                    // Said in English, as English 3.1c sends it; each machine
+                    // shows it in its own language.
+                    lobby_say(lobby, me, sim::messages::phrase_missing_map);
                     info_of(lobby, me).options &= static_cast<uint16_t>(~option::ready);
                     set_group(panel, "READY%d", local, 0);
                     lobby_send_player_info(lobby);
@@ -2052,13 +2075,15 @@ LobbyAction handle_panel_event(Lobby& lobby, Panel& panel) noexcept {
                 }
                 const bool quiet = value == 0 && lobby_player_allied_back(me)[slot] * 2U != 3U;
                 play(lobby, quiet ? "Multi" : "Ally");
-                // Said in the language shown, as 3.1c says it.
+                // Said in English, as English 3.1c sends it; each machine
+                // shows it in its own language.
                 char line[96];
                 std::snprintf(
                     line,
                     sizeof(line),
                     " %s %s",
-                    lobby_translated(lobby, value == 0 ? "broke alliance with" : "allied with"),
+                    value == 0 ? sim::messages::phrase_broke_alliance_with
+                               : sim::messages::phrase_allied_with,
                     std::string(text_view(player.name, sizeof(player.name))).c_str()
                 );
                 lobby_say(lobby, me, line);
@@ -2969,7 +2994,7 @@ void lobby_say(Lobby& lobby, const Player& speaker, const char* text) noexcept {
         );
         flush(lobby);
         for (const auto& part : parts)
-            lobby_post_chat(lobby, part.c_str());
+            post_shown_chat(lobby, part.c_str());
     } else {
         // The record carries the line's first 64 bytes, the rest zero, with
         // no terminator when the line fills it; a UTF-8 character the 64th
@@ -2983,7 +3008,7 @@ void lobby_say(Lobby& lobby, const Player& speaker, const char* text) noexcept {
         if (netgame::encode_record(record, wire, sizeof(wire), &written) == netgame::WireError::ok)
             send(lobby, speaker.player_id, kBroadcastId, wire, written);
         flush(lobby);
-        lobby_post_chat(lobby, line.c_str());
+        post_shown_chat(lobby, line.c_str());
     }
     recorder_chat_line(lobby, slot_for_player_id(lobby, speaker.player_id), line.c_str());
 }
@@ -3374,9 +3399,9 @@ bool lobby_apply_event(Lobby& lobby, const LobbyEvent& event) noexcept {
         // A line from a machine that sends UTF-8 is read strictly as UTF-8.
         const auto sender = slot_for_player_id(lobby, event.player_id);
         if (lobby.unicode_chat && slot_reads_unicode_chat(lobby, sender))
-            lobby_post_chat(lobby, netgame::chat_strict_utf8(line).c_str());
+            post_shown_chat(lobby, netgame::chat_strict_utf8(line).c_str());
         else
-            lobby_post_chat(lobby, line);
+            post_shown_chat(lobby, line);
         recorder_chat_line(lobby, sender, line);
         return true;
     }

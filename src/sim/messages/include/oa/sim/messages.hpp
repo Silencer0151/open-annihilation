@@ -54,6 +54,16 @@ inline constexpr const char* kill_lead_message = "%s has taken the lead with %d 
 inline constexpr const char* side_name_arm = "Arm";
 inline constexpr const char* side_name_core = "Core";
 
+/// The phrase of the line a player says on allying with another,
+/// " allied with <name>".
+inline constexpr const char* phrase_allied_with = "allied with";
+/// The phrase of the line a player says on breaking an alliance,
+/// " broke alliance with <name>".
+inline constexpr const char* phrase_broke_alliance_with = "broke alliance with";
+/// The whole text of the line the battle room says for a player who lacks
+/// the host's map.
+inline constexpr const char* phrase_missing_map = "does not have this map";
+
 // Game.message_filter every session starts with: kinds 1, 4 and 8, and every
 // kind while ScreenChat is on.
 inline constexpr int32_t filter_session_start = 3;
@@ -245,20 +255,49 @@ void format_kill_lead(
 /// @param hooks text, translation, sound and panel services
 void post_kill_lead(World& world, const Player& leader, int16_t score, const Hooks& hooks);
 
+/// Writes a chat line as this machine shows it.
+///
+/// The alliance lines and the battle room's missing-map line go between
+/// machines in English, as English 3.1c sends them, and each machine shows
+/// their phrase in its own language: in a line "<head> text", where the
+/// head ends at the line's first "> ", a text that is a space,
+/// phrase_allied_with or phrase_broke_alliance_with, a space and a name, or
+/// that is phrase_missing_map and nothing more, shows the phrase through
+/// `translate`, and the head and the name as they came. A typed line in the
+/// same words shows so too. Any other line, and one whose phrase `translate`
+/// gives no translation for, is copied as it came. This is a deliberate
+/// difference from 3.1c, which sends the phrase in the sender's language.
+///
+/// @param[out] out the line to show, always terminated; cut between whole
+///        UTF-8 characters to `size` - 1 bytes
+/// @param size bytes of `out`; 0 writes nothing
+/// @param line the chat line, as said or received
+/// @param translate gives a phrase in the language shown, or null for none;
+///        null shows every line as it came
+/// @param context passed to `translate`
+void format_shown_chat_line(
+    char* out,
+    size_t size,
+    std::string_view line,
+    const char* (*translate)(void* context, const char* text),
+    void* context
+) noexcept;
+
 /// Formats a chat line, hands it to the other players and adds it to the log.
 ///
 /// The line is "<name->target> text", cut between whole UTF-8 characters to the 199
 /// bytes 3.1c's line holds, or to the bytes Hooks::shared_chat_line_bytes gives. It is
 /// not shared in the local-only chat mode, and is recorded in a multiplayer game unless
 /// sent to chosen players or allies. The log shows the lines a shared line went out as
-/// (Hooks::shared_chat_line), else the line.
+/// (Hooks::shared_chat_line), else the line, each as format_shown_chat_line shows it
+/// through Hooks::translate.
 ///
 /// @param[in,out] world message log and chat mode
 /// @param speaker player speaking
 /// @param text chat text
 /// @param kind line kind
 /// @param target recipient name, or null for everyone
-/// @param hooks sharing, recording, sound and panel services
+/// @param hooks sharing, recording, translation, sound and panel services
 void post_chat(
     World& world,
     const Player& speaker,

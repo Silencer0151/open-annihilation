@@ -7,6 +7,7 @@
 #include "oa/netgame/unicode_chat.hpp"
 #include "oa/base/text.hpp"
 #include "oa/data/languages/interface_text.hpp"
+#include "oa/sim/messages.hpp"
 #include "oa/sim/speed.hpp"
 #include "oa/ui/frontend_multiplayer/team_rules.hpp"
 
@@ -3619,10 +3620,18 @@ std::string net_match_chat_text(const NetMatch* m, const Player& from, std::stri
         announces_unicode_chat(
             reinterpret_cast<const uint8_t*>(&m->world->player_info[from.index])
         );
-    if (!sender_utf8)
-        return std::string(bytes);
-    auto line = chat_strict_utf8(bytes);
-    return m->unicode_chat ? line : chat_code_page(line);
+    std::string line(bytes);
+    if (sender_utf8) {
+        line = chat_strict_utf8(bytes);
+        if (!m->unicode_chat)
+            line = chat_code_page(line);
+    }
+    // The alliance lines arrive in English and show in the language shown.
+    char shown[oa::sim::messages::most_chat_line_bytes];
+    oa::sim::messages::format_shown_chat_line(
+        shown, sizeof shown, line, m->hooks.translate_game_text, m->hooks.context
+    );
+    return shown;
 }
 
 void net_match_give(NetMatch* m, uint8_t from, uint8_t to, bool metal, float amount) noexcept {

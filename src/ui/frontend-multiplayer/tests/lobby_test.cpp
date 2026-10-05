@@ -341,34 +341,107 @@ void test_teams_and_alliances(const oa::ui::gui_layout::Layout& lounge) {
     );
     (void)f.press("ALLY1");
     expect(me.alliance[1] == 0, "ally toggles off");
-    // In another language the line says the alliance as the language shown
-    // says it, and goes to the others so, as in 3.1c.
-    f.lobby.services.translate = [](void*, const char* text) -> const char* {
-        return std::string_view(text) == "allied with" ? "Verbuendet mit" : nullptr;
+
+    // In another language the line goes to the others in English, as
+    // English 3.1c sends it, and shows here in the language shown; a line
+    // from another machine shows so too, the names as they came.
+    struct Phrases {
+        const char* language;
+        const char* allied;
+        const char* broke;
+        const char* missing;
     };
-    (void)f.press("ALLY1");
-    expect(me.alliance[1] == 1, "ally toggles on again");
-    {
+
+    static const Phrases german{
+        "German", "Verb\xc3\xbcndet mit", "k\xc3\xbcndigt Allianz mit", "hat diese Karte nicht"
+    };
+    static const Phrases chinese{
+        "Chinese",
+        "\xe7\xbb\x93\xe7\x9b\x9f",
+        "\xe8\xa7\xa3\xe9\x99\xa4\xe7\xbb\x93\xe7\x9b\x9f",
+        "\xe6\xb2\xa1\xe6\x9c\x89\xe6\xad\xa4\xe5\x9c\xb0\xe5\x9b\xbe"
+    };
+    f.lobby.services.translate = [](void* context, const char* text) -> const char* {
+        const auto& phrases = *static_cast<const Phrases*>(context);
+        const std::string_view english(text);
+        return english == "allied with"              ? phrases.allied
+               : english == "broke alliance with"    ? phrases.broke
+               : english == "does not have this map" ? phrases.missing
+                                                     : nullptr;
+    };
+    const auto last_shown = [&f] {
         const auto head = mp::lobby_chat_head(*f.game);
-        const std::string shown =
-            mp::lobby_chat_line(*f.game, static_cast<std::size_t>(head + mp::kChatLines - 1));
-        expect(shown.find("Verbuendet mit Guest") != std::string::npos, "alliance said in German");
-        bool said = false;
+        return std::string(
+            mp::lobby_chat_line(*f.game, static_cast<std::size_t>(head + mp::kChatLines - 1))
+        );
+    };
+    const auto last_sent = [&f] {
+        std::string text;
         for (int32_t index = 0; index < f.loopback.sent_count; ++index) {
             const auto* record = f.loopback.sent[index];
-            if (record[0] != static_cast<uint8_t>(oa::netgame::RecordType::chat))
-                continue;
-            const std::string_view text(
-                reinterpret_cast<const char*>(record + 1),
-                ::strnlen(reinterpret_cast<const char*>(record + 1), mp::kLobbyRecordBytes - 1)
-            );
-            said = said || text.find("Verbuendet mit Guest") != std::string_view::npos;
+            if (record[0] == static_cast<uint8_t>(oa::netgame::RecordType::chat))
+                text.assign(
+                    reinterpret_cast<const char*>(record + 1),
+                    ::strnlen(reinterpret_cast<const char*>(record + 1), mp::kLobbyRecordBytes - 1)
+                );
         }
-        expect(said, "the German alliance line goes to the others");
+        return text;
+    };
+    const auto hear = [&f](const char* line) {
+        oa::netgame::ChatRecord record{};
+        std::memcpy(record.text, line, std::min(std::strlen(line), sizeof record.text));
+        mp::LobbyEvent event{};
+        event.kind = mp::LobbyEventKind::record;
+        event.player_id = 0x200;
+        std::size_t written = 0;
+        (void)oa::netgame::encode_record(record, event.data, sizeof(event.data), &written);
+        event.size = static_cast<uint16_t>(written);
+        expect(mp::lobby_apply_event(f.lobby, event), "a chat line applies");
+    };
+    for (const Phrases* phrases : {&german, &chinese}) {
+        const std::string language = phrases->language;
+        f.lobby.services.context = const_cast<Phrases*>(phrases);
+        (void)f.press("ALLY1");
+        expect(me.alliance[1] == 1, "ally toggles on again");
+        expect(
+            last_sent() == "<Host>  allied with Guest",
+            (language + ": the alliance line goes in English").c_str()
+        );
+        expect(
+            last_shown() == std::string("<Host>  ") + phrases->allied + " Guest",
+            (language + ": the alliance line shows in the language shown").c_str()
+        );
+        (void)f.press("ALLY1");
+        expect(me.alliance[1] == 0, "ally toggles off again");
+        expect(
+            last_sent() == "<Host>  broke alliance with Guest",
+            (language + ": the broken alliance goes in English").c_str()
+        );
+        expect(
+            last_shown() == std::string("<Host>  ") + phrases->broke + " Guest",
+            (language + ": the broken alliance shows in the language shown").c_str()
+        );
+        hear("<Guest>  allied with Host");
+        expect(
+            last_shown() == std::string("<Guest>  ") + phrases->allied + " Host",
+            (language + ": a received alliance line shows in the language shown").c_str()
+        );
+        hear("<Guest> does not have this map");
+        expect(
+            last_shown() == std::string("<Guest> ") + phrases->missing,
+            (language + ": a received missing-map line shows in the language shown").c_str()
+        );
+        hear("<Guest> allied with them yesterday");
+        expect(
+            last_shown() == "<Guest> allied with them yesterday",
+            (language + ": other chat shows as it came").c_str()
+        );
     }
+    // English has no translation and shows what it receives.
     f.lobby.services.translate = nullptr;
-    (void)f.press("ALLY1");
-    expect(me.alliance[1] == 0, "ally toggles off again");
+    f.lobby.services.context = nullptr;
+    hear("<Guest>  broke alliance with Host");
+    expect(last_shown() == "<Guest>  broke alliance with Host", "English shows the English");
 
     expect(f.press("TEAMICONS0"), "TEAMICONS0 clickable");
     expect(mp::lobby_player_team(me) == 0, "no team -> team 0 wraps from 5");
@@ -1521,13 +1594,36 @@ void test_browsing_behind_a_dialog(const oa::ui::gui_layout::Layout& lounge) {
         "back in front, the battle room finds nothing to report"
     );
 
-    // With the battle room in front, the same preview is reported as a missing map.
+    // With the battle room in front, the same preview is reported as a missing map:
+    // on a German machine in English, as English 3.1c sends it, and shown here in German.
+    f.lobby.services.translate = [](void*, const char* text) -> const char* {
+        return std::string_view(text) == "does not have this map" ? "hat diese Karte nicht"
+                                                                  : nullptr;
+    };
     (void)select_map(nullptr, "Acid Pools");
     (void)mp::lobby_tick(f.lobby, f.panel);
     expect(
         f.sent_of(oa::netgame::RecordType::chat) > 0 && (mine.options & mp::option::ready) == 0,
         "in front, the battle room reports a map the host lacks and clears its ready mark"
     );
+    std::string said;
+    for (int32_t index = 0; index < f.loopback.sent_count; ++index) {
+        const auto* record = f.loopback.sent[index];
+        if (record[0] == static_cast<uint8_t>(oa::netgame::RecordType::chat))
+            said.assign(
+                reinterpret_cast<const char*>(record + 1),
+                ::strnlen(reinterpret_cast<const char*>(record + 1), mp::kLobbyRecordBytes - 1)
+            );
+    }
+    expect(said == "<Host> does not have this map", "the missing map goes in English");
+    const auto head = mp::lobby_chat_head(*f.game);
+    expect(
+        std::string_view(
+            mp::lobby_chat_line(*f.game, static_cast<std::size_t>(head + mp::kChatLines - 1))
+        ) == "<Host> hat diese Karte nicht",
+        "the missing map shows in the language shown"
+    );
+    f.lobby.services.translate = nullptr;
     map_name = committed;
 }
 

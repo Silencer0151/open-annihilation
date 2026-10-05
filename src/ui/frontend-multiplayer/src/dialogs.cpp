@@ -8,6 +8,7 @@
 #include "oa/formats/tnt.hpp"
 #include "oa/present/model/mesh_raster.hpp"
 #include "oa/present/surface.hpp"
+#include "oa/sim/messages.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -649,13 +650,15 @@ bool allies_handle_event(Lobby& lobby, Panel& panel) noexcept {
         const auto value = static_cast<uint8_t>(me.alliance[slot] ^ 1U);
         me.alliance[slot] = value;
         lobby_set_alliance(lobby, me, player, value, false);
-        // Said in the language shown, as 3.1c says it.
+        // Said in English, as English 3.1c sends it; each machine shows it in
+        // its own language.
         char line[96];
         std::snprintf(
             line,
             sizeof(line),
             " %s %s",
-            lobby_translated(lobby, value == 0 ? "broke alliance with" : "allied with"),
+            value == 0 ? sim::messages::phrase_broke_alliance_with
+                       : sim::messages::phrase_allied_with,
             name_of(player).c_str()
         );
         lobby_say(lobby, me, line);

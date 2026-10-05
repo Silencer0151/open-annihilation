@@ -73,12 +73,17 @@ keeps its own name in its definition and in saves, a mission is saved under
 its own name, and the rules (units, weapons, maps, missions, the computer
 players' scripts) are read from their own folders, never from a language's,
 though 3.1c looks there too. Players in different languages play together.
-The only lines a machine sends in the language shown are those 3.1c says
-in it too: the alliance lines, "allied with" or "broke alliance with" and
-a name, and the battle room's "does not have this map". The notices about
-another machine (a speed it set, a player's disconnection, a modified
-program) are built on each machine in its own language, as 3.1c builds
-them.
+The alliance lines, "allied with" or "broke alliance with" and a name,
+which the battle room's ALLY buttons and the ALLIES panel say, and the
+battle room's "does not have this map" go between machines in English, as
+English 3.1c sends them, and each machine shows the phrase in its own
+language, the names as they came; a recorded game keeps the English and
+shows it in the viewer's language. This is a deliberate difference from
+3.1c, which sends them in the sender's language: a 3.1c player in the room
+reads them in English, and a line a player types in the same words shows
+translated too. The notices about another machine (a speed it set, a
+player's disconnection, a modified program) are built on each machine in
+its own language, as 3.1c builds them.
 
 ## Language packs
 
@@ -163,9 +168,8 @@ For a text in a language, the game tries, in order:
 
 An absent or empty value falls through to the next, so the player never
 sees a blank. Packs change only what players read: they are in no mod
-profile's hash and change nothing a shared game sends but the alliance
-and missing-map lines above, and 3.1c's German, French, Italian and
-Spanish show exactly as 3.1c shows them.
+profile's hash and change nothing a shared game sends, and 3.1c's German,
+French, Italian and Spanish show exactly as 3.1c shows them.
 
 `python3 tools/language_pack_check.py PACK --game-dir GAME --oa-tool OA_TOOL`
 checks a pack: its manifest and tables read, and it tells which of the
@@ -245,10 +249,9 @@ mod profile that sets
   to all of them; when they differ, one copy goes to each machine. A
   record all in ASCII reads the same in both forms and goes once, so a
   line all in ASCII that fits one record goes as it would with the
-  setting off. The line the ALLIES panel and the battle room's ALLY
-  buttons say, "allied with" or "broke alliance with" and a name, and the
-  battle room's "does not have this map", are in the language shown, as
-  3.1c says them, and go in these forms too.
+  setting off. The alliance lines and the battle room's "does not have
+  this map" go in English with the name as typed (see
+  [What is shown in it](#what-is-shown-in-it)), and in these forms too.
 - **Long lines.** A line longer than one record goes as up to four
   records, each the speaker's `<Name> ` and a part of the line, cut
   between whole characters, at a space when one lies within the part's

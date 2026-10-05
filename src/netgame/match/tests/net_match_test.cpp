@@ -3263,6 +3263,62 @@ void unicode_chat_keeps_commands_and_the_plain_wire() {
     }
 }
 
+// The alliance lines and the missing-map line go in English, as English
+// 3.1c sends them, and the receiver shows the phrase in its own language,
+// the names as they came, while its recording keeps the English: a German
+// machine, a Chinese one with Unicode chat on, and an English one, which
+// has no translation.
+void alliance_lines_show_in_the_language_shown() {
+    start_case("alliance_lines_show_in_the_language_shown");
+    constexpr uint32_t kA = 7, kB = 9;
+    const Seat a_view[4] = {{kA, OA_PLAYER_STATUS_LOCAL, 1}, {kB, OA_PLAYER_STATUS_MIRRORED, 2}};
+    const Seat b_view[4] = {{kA, OA_PLAYER_STATUS_MIRRORED, 1}, {kB, OA_PLAYER_STATUS_LOCAL, 2}};
+    using Translations = std::map<std::string, std::string>;
+    const Translations german{
+        {"allied with", "Verb\xc3\xbcndet mit"},
+        {"broke alliance with", "k\xc3\xbcndigt Allianz mit"},
+        {"does not have this map", "hat diese Karte nicht"},
+    };
+    const Translations chinese{
+        {"allied with", "\xe7\xbb\x93\xe7\x9b\x9f"},
+        {"broke alliance with", "\xe8\xa7\xa3\xe9\x99\xa4\xe7\xbb\x93\xe7\x9b\x9f"},
+        {"does not have this map", "\xe6\xb2\xa1\xe6\x9c\x89\xe6\xad\xa4\xe5\x9c\xb0\xe5\x9b\xbe"},
+    };
+    const Translations english{};
+    for (const Translations* translations : {&german, &chinese, &english}) {
+        SeatedMachine a(a_view, 0);
+        SeatedMachine b(b_view, 1);
+        join(a, b);
+        b.translations = *translations;
+        b.match->unicode_chat = translations == &chinese;
+        const auto in_language = [&](const std::string& english_phrase) {
+            const auto found = translations->find(english_phrase);
+            return found != translations->end() ? found->second : english_phrase;
+        };
+        const std::string lines[] = {
+            "<Hans>  allied with Li",
+            "<Hans>  broke alliance with Li",
+            "<Hans> does not have this map"
+        };
+        const std::string shown[] = {
+            "<Hans>  " + in_language("allied with") + " Li",
+            "<Hans>  " + in_language("broke alliance with") + " Li",
+            "<Hans> " + in_language("does not have this map"),
+        };
+        for (std::size_t index = 0; index < std::size(lines); ++index) {
+            a.forget_sent();
+            b.chats.clear();
+            b.seen_chat.clear();
+            net_match_say(a.match.get(), lines[index].c_str());
+            const auto sent = chat_sent(a);
+            CHECK(sent.size() == 1 && sent[0].second == lines[index]);
+            (void)net_match_pump(b.match.get());
+            CHECK(b.chats.size() == 1 && b.chats[0] == shown[index]);
+            CHECK(b.seen_chat.size() == 1 && b.seen_chat[0] == lines[index]);
+        }
+    }
+}
+
 // Two machines on the same program and data challenge each other at tick
 // 180, answer with two records back to back and agree, so the tick-600
 // report names nobody; a machine whose data differs is reported, and its
@@ -4583,6 +4639,7 @@ int main() {
     unicode_chat_in_a_mixed_room();
     unicode_chat_reads_malformed_lines_safely();
     unicode_chat_keeps_commands_and_the_plain_wire();
+    alliance_lines_show_in_the_language_shown();
     integrity_check_answers_and_reports();
     integrity_report_request_is_answered();
     vote_tally_rules();

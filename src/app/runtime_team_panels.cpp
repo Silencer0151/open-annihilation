@@ -809,12 +809,6 @@ void Runtime::click_team_panel(std::string_view clicked) {
         const auto stage = controls.value(controls.user, index);
         controls.set_value(controls.user, index, stage == 0 ? 1 : 0);
     }
-    const auto translate = [](void* context, const char* text) -> const char* {
-        auto& runtime = *static_cast<Runtime*>(context);
-        auto& translated = team_session().translated;
-        translated = runtime.translate_ui(text);
-        return translated.c_str();
-    };
     switch (session.panel) {
     case TeamPanel::none:
         return;
@@ -922,9 +916,8 @@ void Runtime::click_team_panel(std::string_view clicked) {
         return;
     }
     case TeamPanel::allies: {
-        const auto result = hud::allies_panel_click(
-            world, name.c_str(), controls, events, team_panel_host_, translate, this
-        );
+        const auto result =
+            hud::allies_panel_click(world, name.c_str(), controls, events, team_panel_host_);
         // The simulation's alliances follow the players' alliance rows.
         for (uint8_t player = 0; player < OA_PLAYER_COUNT; ++player)
             match_->follow_player_alliances(player);

@@ -4,14 +4,17 @@
 // The in-game team panels of a multiplayer game over a synthetic World: the
 // tab menu's buttons, ALLIES.GUI's rows, alliances and allied victory,
 // CONTROL.GUI's watching and removals, the removal question, what each
-// tells the other players' machines through TeamPanelHost, and when a
-// tournament game withholds CONTROL.
+// tells the other players' machines through TeamPanelHost, the ALLIES
+// panel's line, sent in English and shown in the language shown, and when
+// a tournament game withholds CONTROL.
 #include "check.hpp"
 #include "fixtures.hpp"
 
 #include "oa/ui/hud/chat_panel.hpp"
 #include "oa/ui/hud/ingame_menu.hpp"
 #include "oa/ui/hud/team_panels.hpp"
+
+#include "oa/sim/messages.hpp"
 
 #include <cstdint>
 #include <cstring>
@@ -318,13 +321,7 @@ void test_allies_clicks() {
     open_allies_panel(*game.world.world, panel.controls());
     CHECK(!panel.grayed["VICTORY"]);
     auto result = allies_panel_click(
-        *game.world.world,
-        "LIVEALLY2",
-        panel.controls(),
-        sounds.events(),
-        machines.host(),
-        nullptr,
-        nullptr
+        *game.world.world, "LIVEALLY2", panel.controls(), sounds.events(), machines.host()
     );
     CHECK(result.click == TeamPanelClick::none);
     CHECK(std::string(result.announcement) == " allied with Player 2");
@@ -333,41 +330,20 @@ void test_allies_clicks() {
     CHECK(panel.values["LIVEALLY2"] == 1);
     // Breaking the alliance with the computer player tells nobody.
     game.world.player(0).alliance[1] = 1;
-    const auto translate = [](void*, const char* text) -> const char* {
-        return std::strcmp(text, "broke alliance with") == 0 ? "left" : nullptr;
-    };
     result = allies_panel_click(
-        *game.world.world,
-        "LIVEALLY1",
-        panel.controls(),
-        sounds.events(),
-        machines.host(),
-        translate,
-        nullptr
+        *game.world.world, "LIVEALLY1", panel.controls(), sounds.events(), machines.host()
     );
-    CHECK(std::string(result.announcement) == " left Player 1");
+    CHECK(std::string(result.announcement) == " broke alliance with Player 1");
     CHECK(game.world.player(0).alliance[1] == 0 && game.world.player(1).alliance[0] == 0);
     CHECK(machines.log.size() == 1);
     // VICTORY only sounds; OK stores it and tells the others once it changed.
     result = allies_panel_click(
-        *game.world.world,
-        "VICTORY",
-        panel.controls(),
-        sounds.events(),
-        machines.host(),
-        nullptr,
-        nullptr
+        *game.world.world, "VICTORY", panel.controls(), sounds.events(), machines.host()
     );
     CHECK(result.click == TeamPanelClick::none && result.announcement[0] == '\0');
     panel.values["VICTORY"] = 1;
     result = allies_panel_click(
-        *game.world.world,
-        "OK",
-        panel.controls(),
-        sounds.events(),
-        machines.host(),
-        nullptr,
-        nullptr
+        *game.world.world, "OK", panel.controls(), sounds.events(), machines.host()
     );
     CHECK(result.click == TeamPanelClick::closed);
     CHECK((game.info(0).status & OA_SETUP_STATUS_ALLIED_VICTORY) != 0);
@@ -376,13 +352,7 @@ void test_allies_clicks() {
     open_allies_panel(*game.world.world, panel.controls());
     CHECK(panel.values["VICTORY"] == 1);
     (void)allies_panel_click(
-        *game.world.world,
-        "OK",
-        panel.controls(),
-        sounds.events(),
-        machines.host(),
-        nullptr,
-        nullptr
+        *game.world.world, "OK", panel.controls(), sounds.events(), machines.host()
     );
     CHECK(machines.log.size() == 2);
     CHECK(sounds.played.size() == 5);
@@ -395,16 +365,73 @@ void test_allies_clicks() {
     CHECK(watched.grayed["VICTORY"]);
     // Closing drops the open flag.
     result = allies_panel_click(
-        *game.world.world,
-        nullptr,
-        watched.controls(),
-        sounds.events(),
-        machines.host(),
-        nullptr,
-        nullptr
+        *game.world.world, nullptr, watched.controls(), sounds.events(), machines.host()
     );
     CHECK(result.click == TeamPanelClick::closed);
     CHECK((game.world.game().frame_flags & kFrameAlliesPanelOpen) == 0);
+}
+
+/// The words one language shows for the alliance phrases.
+struct AlliancePhrases {
+    const char* allied{};
+    const char* broke{};
+};
+
+/// The ALLIES panel's line goes to the other machines in English whatever the
+/// language shown, as English 3.1c sends it, and the speaker's log shows its
+/// phrase in the language shown, the names as they came: here a German and
+/// a Chinese player Hans.
+void test_alliance_line_languages() {
+    static const AlliancePhrases* shown = nullptr;
+    static std::string sent;
+    const AlliancePhrases german{"Verb\xc3\xbcndet mit", "k\xc3\xbcndigt Allianz mit"};
+    const AlliancePhrases chinese{
+        "\xe7\xbb\x93\xe7\x9b\x9f", "\xe8\xa7\xa3\xe9\x99\xa4\xe7\xbb\x93\xe7\x9b\x9f"
+    };
+    for (const AlliancePhrases* language : {&german, &chinese}) {
+        Game4 game;
+        Machines machines;
+        hud_test::Sounds sounds;
+        hud_test::FakePanel panel(allies_controls());
+        World& world = *game.world.world;
+        std::memcpy(game.world.player(0).second_name, "Hans", sizeof "Hans");
+        world.game.text_lines = 10;
+        world.game.chat_mode = OA_CHAT_MODE_EVERYONE;
+        shown = language;
+        sent.clear();
+        oa::sim::messages::Hooks hooks{};
+        hooks.translate = [](void*, const char* text) -> const char* {
+            if (std::strcmp(text, oa::sim::messages::phrase_allied_with) == 0)
+                return shown->allied;
+            if (std::strcmp(text, oa::sim::messages::phrase_broke_alliance_with) == 0)
+                return shown->broke;
+            return nullptr;
+        };
+        hooks.share_chat = [](void*, const char* line) { sent = line; };
+        open_allies_panel(world, panel.controls());
+        // Says what a click on the player's toggle announces, as the runtime
+        // does, and gives the line the log shows.
+        const auto say = [&](const char* control) {
+            const auto result = allies_panel_click(
+                world, control, panel.controls(), sounds.events(), machines.host()
+            );
+            oa::sim::messages::post_chat(
+                world,
+                game.world.player(0),
+                result.announcement,
+                oa::sim::messages::kind_player_chat,
+                nullptr,
+                hooks
+            );
+            return std::string(
+                oa::sim::messages::message_line(world.game, world.game.chat_head - 1U)->text
+            );
+        };
+        CHECK(say("LIVEALLY2") == std::string("<Hans>  ") + language->allied + " Player 2");
+        CHECK(sent == "<Hans>  allied with Player 2");
+        CHECK(say("LIVEALLY2") == std::string("<Hans>  ") + language->broke + " Player 2");
+        CHECK(sent == "<Hans>  broke alliance with Player 2");
+    }
 }
 
 void test_control_panel() {
@@ -484,6 +511,7 @@ int main() {
     test_tab_menu();
     test_allies_rows();
     test_allies_clicks();
+    test_alliance_line_languages();
     test_control_panel();
     test_removal_question();
     return 0;

@@ -746,14 +746,17 @@ void net_match_set_speed(NetMatch* match, int32_t speed, bool broadcast) noexcep
 ///        empty line.
 void net_match_say(NetMatch* match, const char* text) noexcept;
 
-/// Gives a received chat line as this machine holds game text.
+/// Gives a received chat line as this machine shows it, in the form it holds game text.
 ///
 /// A line from a player whose setup block says UTF-8 chat is read strictly
 /// as UTF-8 (oa::netgame::chat_strict_utf8) while NetMatch::unicode_chat is
 /// on, and, from a recording (NetMatch::recorded_chat), written in the code
 /// page while it is off. Every other line is kept as it came, to be read in
 /// the code page, or as well-formed UTF-8 where it is that, while game text
-/// may hold UTF-8.
+/// may hold UTF-8. The alliance lines, which go between machines in
+/// English, show their phrase through NetMatchHooks::translate_game_text
+/// (oa::sim::messages::format_shown_chat_line), a deliberate difference
+/// from 3.1c; the line is cut to 255 bytes.
 ///
 /// @param match The match the line reached.
 /// @param from The player it came from.

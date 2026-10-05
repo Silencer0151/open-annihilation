@@ -207,28 +207,27 @@ void open_allies_panel(World& world, const PanelControls& controls);
 ///
 /// LIVEALLYs of a live player plays "Options", flips the local player's
 /// alliance with player s through set_alliance (one side) and returns the
-/// line " allied with <name>" or " broke alliance with <name>", its phrase
-/// translated, for the local player to say. VICTORY plays "Options". OK
-/// plays "Options", stores VICTORY's value as the local player's allied
-/// victory and calls host.setup_changed when it changed, and closes the
-/// panel. A null name closes it and drops kFrameAlliesPanelOpen.
+/// line " allied with <name>" or " broke alliance with <name>" for the local
+/// player to say. The line is in English whatever the language shown, as
+/// English 3.1c sends it: each machine shows its phrase in its own language
+/// (oa::sim::messages::format_shown_chat_line), a deliberate difference
+/// from 3.1c. VICTORY plays "Options". OK plays "Options", stores VICTORY's
+/// value as the local player's allied victory and calls host.setup_changed
+/// when it changed, and closes the panel. A null name closes it and drops
+/// kFrameAlliesPanelOpen.
 ///
 /// @param[in,out] world players, alliance tables and setup blocks
 /// @param name clicked control name (exact match); null when the panel closes
 /// @param controls named controls of the loaded panel
 /// @param events receives the button sound
 /// @param host tells the other players' machines
-/// @param translate UI text lookup for the phrase; may be null
-/// @param translate_context context passed to `translate`
 /// @return what the runtime does next, with the line to say
 TeamPanelResult allies_panel_click(
     World& world,
     const char* name,
     const PanelControls& controls,
     const HudEvents& events,
-    const TeamPanelHost& host,
-    TranslateText translate,
-    void* translate_context
+    const TeamPanelHost& host
 );
 
 /// Sets CONTROL.GUI's WATCHING value to whether watching is allowed and

@@ -6,6 +6,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
 #include <span>
 #include <string_view>
 
@@ -23,7 +24,69 @@ void chat_name(const Player& player, char out[player_chat_name_bytes + 1]) {
     out[player_chat_name_bytes] = '\0';
 }
 
+/// Tells whether a chat line's text is an alliance line: a space, the
+/// phrase, a space and the other player's name.
+///
+/// @param text the line's text, after its head
+/// @param phrase the alliance phrase
+/// @return true when the text says the phrase so
+bool says_alliance(std::string_view text, std::string_view phrase) noexcept {
+    return text.size() > phrase.size() + 1 && text[0] == ' ' &&
+           text.substr(1, phrase.size()) == phrase && text[phrase.size() + 1] == ' ';
+}
+
 } // namespace
+
+void format_shown_chat_line(
+    char* out,
+    size_t size,
+    std::string_view line,
+    const char* (*translate)(void* context, const char* text),
+    void* context
+) noexcept {
+    if (size == 0)
+        return;
+    const size_t close = !line.empty() && line[0] == '<' ? line.find("> ") : line.npos;
+    std::string_view head = line;
+    std::string_view rest{};
+    const char* phrase = nullptr;
+    bool alliance = false;
+    if (close != line.npos) {
+        const std::string_view text = line.substr(close + 2);
+        for (const char* said : {phrase_allied_with, phrase_broke_alliance_with})
+            if (says_alliance(text, said)) {
+                phrase = said;
+                rest = text.substr(1 + std::strlen(said));
+                alliance = true;
+            }
+        if (text == phrase_missing_map)
+            phrase = phrase_missing_map;
+    }
+    const char* translated =
+        phrase != nullptr && translate != nullptr ? translate(context, phrase) : nullptr;
+    if (translated != nullptr)
+        head = line.substr(0, close + 2);
+    // Each part keeps what still fits, less a UTF-8 character the cut would
+    // split, and nothing follows a part that was cut.
+    size_t used = 0;
+    bool cut = false;
+    const auto put = [&](std::string_view part) {
+        if (cut)
+            return;
+        const size_t kept = oa::base::text::whole_characters(part, size - 1 - used);
+        std::memcpy(out + used, part.data(), kept);
+        used += kept;
+        cut = kept < part.size();
+    };
+    put(head);
+    if (translated != nullptr) {
+        if (alliance)
+            put(" ");
+        put(translated);
+        put(rest);
+    }
+    out[used] = '\0';
+}
 
 int32_t line_capacity(const Game& game) noexcept {
     return game.text_lines;
@@ -291,14 +354,19 @@ void post_chat(
         mode != chat_mode_local_only && hooks.record_chat != nullptr)
         hooks.record_chat(hooks.context, line);
     // The speaker's log shows the line as the other players' logs do.
+    char shown[most_chat_line_bytes];
     std::size_t parts = 0;
     if (shared && hooks.shared_chat_line != nullptr)
         for (const char* part = nullptr;
              (part = hooks.shared_chat_line(hooks.context, line, parts)) != nullptr;
-             ++parts)
-            post_message(world, part, kind, 0, sender_none, hooks);
-    if (parts == 0)
-        post_message(world, line, kind, 0, sender_none, hooks);
+             ++parts) {
+            format_shown_chat_line(shown, sizeof shown, part, hooks.translate, hooks.context);
+            post_message(world, shown, kind, 0, sender_none, hooks);
+        }
+    if (parts == 0) {
+        format_shown_chat_line(shown, sizeof shown, line, hooks.translate, hooks.context);
+        post_message(world, shown, kind, 0, sender_none, hooks);
+    }
 }
 
 } // namespace oa::sim::messages

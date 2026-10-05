@@ -1374,6 +1374,41 @@ void recorded_unicode_chat_plays_back() {
     }
 }
 
+// A recorded alliance line keeps the English it went out in and reads in
+// the viewer's language, the names as they were.
+void recorded_alliance_line_reads_in_the_language_shown() {
+    const std::string line = "<player1>  allied with player2";
+    auto recording = make_recording(kUnitsPerPlayer, 1);
+    recording.add(1, 33, chat_payload(line.c_str()));
+    const auto release = [](DemoSession* session) {
+        demo_session_end(session);
+        delete session;
+    };
+    std::unique_ptr<DemoSession, decltype(release)> session(new DemoSession(), release);
+    std::string error;
+    CHECK(demo_load(&session->playback, recording.bytes(), &error));
+    session->playback.ten_player_replay = TenPlayerReplay::watcher_view;
+    session->translate_game_text = [](void*, const char* english) -> const char* {
+        return std::string_view(english) == "allied with" ? "Verb\xc3\xbcndet mit" : nullptr;
+    };
+    Machine replay;
+    replay.build(1);
+    std::array<uint8_t, OA_PLAYER_COUNT> watcher_allies{};
+    watcher_allies[1] = 1;
+    replay.match->configure_outcomes(1, watcher_allies, false);
+    CHECK(demo_session_begin(session.get(), replay.match.get(), &error));
+    if (session->match == nullptr)
+        return;
+    for (int t = 0; t < 10; ++t)
+        demo_session_frame(session.get());
+    CHECK(
+        std::count(
+            session->lines.begin(), session->lines.end(), "<player1>  Verb\xc3\xbcndet mit player2"
+        ) == 1
+    );
+    CHECK(std::count(session->lines.begin(), session->lines.end(), line) == 0);
+}
+
 // A recorded speed change reads as the viewer's language says it: the
 // session's translation reaches the match, which builds the line from the
 // game's own words.
@@ -1459,6 +1494,7 @@ int main() {
     ten_players_watch_without_a_slot();
     slotless_viewer_watches_the_recording();
     recorded_unicode_chat_plays_back();
+    recorded_alliance_line_reads_in_the_language_shown();
     recorded_speed_reads_in_the_language_shown();
     economy_records_give_income_figures();
     if (failures != 0) {
