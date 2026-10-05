@@ -7986,9 +7986,10 @@ class Runtime final : public menu::Host,
     /// Handles the right button pressed on the game screen, off the panel's gadgets.
     ///
     /// The frame's pointer pass runs first; the press then cancels the armed
-    /// command, starts mouse look, drops the selection, starts a radar scroll or
-    /// gives the default order to the unit (a radar blip over the radar) and
-    /// ground under the pointer.
+    /// command, starts mouse look, drops the selection, moves the view to the
+    /// point under it on the radar (starting a radar scroll in the left-click
+    /// interface) or gives the default order to the unit and ground under the
+    /// pointer.
     ///
     /// @param x canvas column
     /// @param y canvas row

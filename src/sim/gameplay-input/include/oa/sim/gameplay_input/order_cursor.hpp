@@ -150,13 +150,15 @@ enum class RightPress : uint8_t {
     mouse_look,      // control held over the view, left-click interface
     clear_selection, // over the view, left-click interface
     radar_scroll,    // over the radar, left-click interface: the camera follows it
-    default_order,   // right-click interface: the default order at the pointer
+    radar_jump,      // over the radar, right-click interface: the camera goes there
+    default_order,   // over the view, right-click interface: the default order there
 };
 
 /// Decides what a right button press on the game screen does.
 ///
 /// Uses the armed command, the interface type, the pointer area and the event's key
-/// word; a radar scroll's flag is set here.
+/// word; a radar scroll's flag is set here. With no command armed, a press over the
+/// radar moves the view in either interface and gives no order, whatever is selected.
 ///
 /// @param[in,out] game pointer state; gains pointer_radar_scroll for a radar scroll
 /// @return the action to take

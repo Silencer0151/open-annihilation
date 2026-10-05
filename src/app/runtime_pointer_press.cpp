@@ -187,13 +187,19 @@ void Runtime::handle_match_right_press(float x, float y) {
         apply_match_hud_for_selection();
         return;
     case input::RightPress::radar_scroll:
+        // The view goes to the point at once, then follows the pointer until
+        // the button comes up.
         select_game_cursor(static_cast<uint8_t>(input::OrderCursor::normal));
+        center_camera_on_radar_point(x, y);
+        return;
+    case input::RightPress::radar_jump:
+        center_camera_on_radar_point(x, y);
         return;
     case input::RightPress::default_order:
         break;
     }
     // The selection's orders resolve from the default order, the unit under
-    // the pointer (a radar blip over the radar) and the ground under it.
+    // the pointer and the ground under it.
     const auto target = hovered_match_unit_;
     const auto ground = match_world_point(x, y);
     if (target == 0 && !ground)

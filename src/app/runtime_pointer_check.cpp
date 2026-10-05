@@ -206,6 +206,19 @@ void Runtime::check_pointer_interfaces() {
             static_cast<float>(radar_picture_.y + radar_picture_.height / 2)
         };
     };
+    // The view a press on the radar moves to: the map pixel under the point
+    // in the middle of the visible battlefield.
+    const auto radar_view = [&](float x, float y) {
+        return std::pair{
+            (static_cast<int32_t>(x) - radar_picture_.x) * radar_map_w_ / radar_picture_.width -
+                visible_map_width() / 2,
+            (static_cast<int32_t>(y) - radar_picture_.y) * radar_map_h_ / radar_picture_.height -
+                visible_map_height() / 2
+        };
+    };
+    const auto viewing = [&](std::pair<int32_t, int32_t> view) {
+        return match_camera_x_ == view.first && match_camera_z_ == view.second;
+    };
 
     // Left-click interface.
     set_interface(input::interface_left_click);
@@ -242,10 +255,13 @@ void Runtime::check_pointer_interfaces() {
     );
 
     const auto [rx, ry] = radar_centre();
+    require(!viewing(radar_view(rx, ry)), "the view already showed the radar's middle");
     press(SDL_BUTTON_RIGHT, rx, ry);
     require(
-        (input::pointer_flags(world.game) & input::pointer_radar_scroll) != 0,
-        "left-click interface: a right press over the radar did not scroll with it"
+        (input::pointer_flags(world.game) & input::pointer_radar_scroll) != 0 &&
+            viewing(radar_view(rx, ry)) && selected(peewee) && moves_to(peewee, {a}),
+        "left-click interface: a right press over the radar did not move the view there and "
+        "scroll with it"
     );
     move_to(rx, ry);
     const auto scrolled_x = match_camera_x_;
@@ -401,12 +417,13 @@ void Runtime::check_pointer_interfaces() {
             queue_of(peewee).empty(),
         "the left release did not end the radar scroll alone"
     );
-    const auto radar_point = radar_world_point(lx, ly);
-    require(radar_point.has_value(), "found no map point under the radar");
+    // A right click on the radar moves the view there and gives the selected
+    // Peewee no order.
+    require(!viewing(radar_view(lx, ly)), "the view already showed the radar's middle");
     click(SDL_BUTTON_RIGHT, lx, ly);
     require(
-        moves_to(peewee, {*radar_point}),
-        "right-click interface: a right press on the radar did not move the Peewee there"
+        viewing(radar_view(lx, ly)) && selected(peewee) && queue_of(peewee).empty(),
+        "right-click interface: a right click on the radar did not move the view there alone"
     );
 
     // A group keeps its shape: three kbots and a fighter near one another

@@ -190,3 +190,18 @@ engine does, and why.
   screen. This is permanent; there is no setting for it.
 - **Code:** `oa::present::model::advance_build_pulse`
   (`src/present/model/src/model_draw.cpp`).
+
+## A right click on the radar moves the view
+
+- **3.1c:** in the right-click interface, a right click on the radar gives
+  the selected units the default order at that point of the map, as a right
+  click on the battlefield does; with nothing selected it does nothing.
+- **Open Annihilation:** a right click on the radar moves the view to that
+  point and gives no order, whatever is selected, in both interface types.
+  An armed order is still given on the radar with a left click.
+- **Why:** the radar moves the view without the selection being dropped
+  first. This is permanent; there is no setting for it.
+- **Code:** `oa::sim::gameplay_input::right_press`
+  (`src/sim/gameplay-input/src/order_cursor.cpp`),
+  `oa::app::Runtime::handle_match_right_press`
+  (`src/app/runtime_pointer_press.cpp`).

@@ -127,8 +127,14 @@ RightPress right_press(Game& game) noexcept {
     if (pointer_command(game) != OrderCommand::default_order)
         return RightPress::cancel_command;
     const uint8_t flags = pointer_flags(game);
-    if (interface_type(game) != interface_left_click)
-        return (flags & pointer_over_map) != 0 ? RightPress::default_order : RightPress::none;
+    if (interface_type(game) != interface_left_click) {
+        if ((flags & pointer_over_map) == 0)
+            return RightPress::none;
+        // Over the radar the view goes to the point instead of the default
+        // order 3.1c gives there.
+        return (flags & pointer_over_radar) != 0 ? RightPress::radar_jump
+                                                 : RightPress::default_order;
+    }
     if ((flags & pointer_over_view) != 0)
         return (game.pointer_state[2] & pointer_key_control) != 0 ? RightPress::mouse_look
                                                                   : RightPress::clear_selection;

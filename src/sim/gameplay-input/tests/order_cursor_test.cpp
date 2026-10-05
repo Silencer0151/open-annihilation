@@ -1279,18 +1279,22 @@ void test_right_press() {
         "the left-click interface does not read the map bit"
     );
     set_interface(game, interface_right_click);
-    for (const uint8_t area : {view, radar})
-        check(
-            press(OrderCommand::default_order, area, pointer_key_right | pointer_key_control) ==
-                RightPress::default_order,
-            "right-click interface: a right press over the map gives the default order"
-        );
-    check(pointer_flags(game) == radar, "the order sets no scroll flag");
     check(
-        press(OrderCommand::default_order, pointer_over_view, pointer_key_right) ==
-            RightPress::none,
-        "the right-click interface reads only the map bit"
+        press(OrderCommand::default_order, view, pointer_key_right | pointer_key_control) ==
+            RightPress::default_order,
+        "right-click interface: a right press over the view gives the default order"
     );
+    for (const uint32_t keys : {pointer_key_right, pointer_key_right | pointer_key_shift})
+        check(
+            press(OrderCommand::default_order, radar, keys) == RightPress::radar_jump,
+            "right-click interface: a right press over the radar moves the view, not an order"
+        );
+    check(pointer_flags(game) == radar, "the jump sets no scroll flag");
+    for (const uint8_t area : {pointer_over_view, pointer_over_radar})
+        check(
+            press(OrderCommand::default_order, area, pointer_key_right) == RightPress::none,
+            "the right-click interface needs the map bit"
+        );
     set_interface(game, 2);
     check(
         press(OrderCommand::default_order, view, pointer_key_right) == RightPress::default_order,
