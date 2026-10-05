@@ -394,6 +394,9 @@ void Runtime::apply_engine_settings(const settings::EngineSettings& chosen) {
     // Turning the wheel zoom off brings the battlefield back to its own scale.
     if (before.wheel_zoom && !chosen.wheel_zoom && match_)
         EngineSettingsState::ease_zoom_about_centre(*this, kDefaultBattlefieldZoom);
+    // ui.megamap acts only while the wheel zoom is off.
+    if (before.wheel_zoom != chosen.wheel_zoom && match_)
+        megamap_wheel_zoom_changed();
     // SwitchAlt, where the keys read it: the match's options and the
     // frontend's preferences, which the match's options go back into.
     const auto with_switch_alt = [&](uint16_t flags) {

@@ -16,6 +16,7 @@
 // lifecycle and the platform's services), touch-check (this check's own
 // setup).
 #include "oa/app/runtime.hpp"
+#include "engine_settings_state.hpp"
 #include "touch_state.hpp"
 #include "oa/data/defs/layout.hpp"
 #include "oa/present/world_renderer.hpp"
@@ -3114,10 +3115,13 @@ struct TouchCheckAccess {
             Lane::check,
             "the running game did not close the placing"
         );
-        if (!runtime.megamap_on()) {
+        if (!runtime.ui_rules().megamap.enabled) {
             run.notes.push_back("18d: ui.megamap is off, so its placement was not checked");
             return;
         }
+        // The megamap acts only with the Mouse wheel zoom setting off.
+        auto& wheel_zoom = runtime.engine_settings_state().current.wheel_zoom;
+        const bool saved_wheel_zoom = std::exchange(wheel_zoom, false);
         runtime.set_megamap_open(true);
         renderer::Surface megamap;
         compose(runtime, megamap);
@@ -3137,6 +3141,7 @@ struct TouchCheckAccess {
             left_button(SDL_EVENT_MOUSE_BUTTON_UP, middle), middle.x, middle.y
         );
         runtime.set_megamap_open(false);
+        wheel_zoom = saved_wheel_zoom;
         require(
             map_inside,
             Lane::fullbleed,

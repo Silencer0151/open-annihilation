@@ -9,13 +9,15 @@
 // whiteboard's pointer finding the map pixel drawn under it; a marker's
 // label in the modern fonts over the battlefield the graphics card draws,
 // its shadow, outline and letter edges the card's; the building being placed drawn over its
-// site at the scene's draw scale, or by the card; the megamap presented as
-// the processor composes it; text in the modern fonts with the chat's
-// backdrop presented as composed, what of it lies beside the backdrop the
-// card's in the Full tier; and a named screenshot keeping the standard tier's
-// picture.
+// site at the scene's draw scale, or by the card; the megamap opening only
+// with the Mouse wheel zoom setting off and closing when it is turned on;
+// the megamap presented as the processor composes it; text in the modern
+// fonts with the chat's backdrop presented as composed, what of it lies
+// beside the backdrop the card's in the Full tier; and a named screenshot
+// keeping the standard tier's picture.
 #include "oa/app/runtime.hpp"
 
+#include "engine_settings_state.hpp"
 #include "full_presentation.hpp"
 #include "oa/present/game_text.hpp"
 #include "oa/sim/messages.hpp"
@@ -716,6 +718,43 @@ void Runtime::check_visual_rule_overlays(
                   << tiers_name() << '\n';
     }
 
+    // ui.megamap acts only with the Mouse wheel zoom setting off: with it
+    // on, Tab and the wheel rolled toward the player open no megamap; with
+    // it off, Tab opens it; turning the setting on in the match, as the
+    // settings dialog does, closes it. The setting stays off for the
+    // megamap's presentation below.
+    const bool wheel_zoom = engine_settings().wheel_zoom;
+    // The setting changed with the battlefield's zoom left as it is.
+    const auto set_wheel_zoom = [&](bool on) {
+        engine_settings_state().current.wheel_zoom = on;
+        megamap_wheel_zoom_changed();
+    };
+    if (rules.megamap.enabled) {
+        SDL_KeyboardEvent tab{};
+        tab.type = SDL_EVENT_KEY_DOWN;
+        tab.key = SDLK_TAB;
+        tab.scancode = SDL_SCANCODE_TAB;
+        tab.down = true;
+        const auto middle_x =
+            static_cast<float>(match_layout_.left + match_layout_.battlefield_width() / 2);
+        const auto middle_y =
+            static_cast<float>(match_layout_.top + match_layout_.battlefield_height() / 2);
+        set_wheel_zoom(true);
+        if (megamap_key(tab) || megamap_wheel(-1.0F, middle_x, middle_y) || megamap_open_)
+            fail("the megamap opened with the Mouse wheel zoom setting on");
+        set_wheel_zoom(false);
+        if (!megamap_key(tab) || !megamap_shown())
+            fail("Tab did not open the megamap with the Mouse wheel zoom setting off");
+        auto chosen = engine_settings();
+        chosen.wheel_zoom = true;
+        apply_engine_settings(chosen);
+        if (megamap_open_ || megamap_shown())
+            fail("turning the Mouse wheel zoom setting on did not close the megamap");
+        set_wheel_zoom(false);
+        std::cout << "render tiers check: visual rules: the megamap opens only with the Mouse "
+                     "wheel zoom setting off, and turning the setting on closes it\n";
+    }
+
     // ui.megamap: open over the battlefield, it is presented exactly as the
     // processor composes it, whatever zoom the battlefield under it has.
     if (rules.megamap.enabled && !accelerated.empty()) {
@@ -763,6 +802,8 @@ void Runtime::check_visual_rule_overlays(
                   << (checks(HardwareAcceleration::full) ? ", and at the full tier's floor" : "")
                   << '\n';
     }
+    if (rules.megamap.enabled)
+        set_wheel_zoom(wheel_zoom);
 
     // ui.text-rendering: a chat line in the modern fonts, over its
     // backdrop, is presented as the processor composes it, at each zoom; in

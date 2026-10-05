@@ -2168,10 +2168,12 @@ tidal line and the shared camera rectangles, and switches a watcher's view;
 `runtime_whiteboard.cpp` takes the whiteboard's pointer, keys and text and
 makes and applies its batches (`take_whiteboard_batch`,
 `receive_whiteboard_batch`); `runtime_megamap.cpp` opens, draws and clicks
-the megamap and redraws the enhanced minimap; `runtime_selection_shortcuts.cpp`
-takes the double-click, Ctrl+S/B/F and the drag filters. What other
-machines report about their players' views (`shared_views_`) is left to
-network play to carry; a game played alone reports and receives nothing.
+the megamap and redraws the enhanced minimap, while the Mouse wheel zoom
+setting is off (`megamap_on`, `megamap_wheel_zoom_changed`);
+`runtime_selection_shortcuts.cpp` takes the double-click, Ctrl+S/B/F and
+the drag filters. What other machines report about their players' views
+(`shared_views_`) is left to network play to carry; a game played alone
+reports and receives nothing.
 Network play carries the whiteboard's batches: each frame `net_frame` sends
 the batches drawn here (`net_match_send_whiteboard`), and the match hands a
 batch an allied player's recorder sent to `receive_whiteboard_batch`
@@ -2209,7 +2211,8 @@ magnification of the scene it hides; in the Full tier it covers the
 canvas. `native-render-tiers-visual-rules` runs the render tiers check
 under a profile that turns the visual rules on and checks these overlays
 in the standard and accelerated tiers, and in the Full tier after its own
-cases (`check_visual_rule_overlays`).
+cases (`check_visual_rule_overlays`), with the megamap opening only while
+the Mouse wheel zoom setting is off and closing when it is turned on.
 
 ## Extensions
 

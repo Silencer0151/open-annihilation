@@ -1092,7 +1092,9 @@ if(OA_BUILD_PLATFORM)
       # standard and Basic tiers, at zoom 0.5, 1 and 2.5 and with the view
       # between map pixels, the pointer finding the map pixel drawn under
       # it, the build preview drawn over its site at the scene's draw scale,
-      # the open megamap presented as the processor composes it, a chat line
+      # the megamap opening only with the Mouse wheel zoom setting off and
+      # closing when it is turned on, the open megamap presented as the
+      # processor composes it, a chat line
       # in the system's fonts presented as composed at each zoom, and a
       # named screenshot keeping the standard tier's battlefield; then in
       # the Full tier the dot and the line of sites down to its zoom floor of

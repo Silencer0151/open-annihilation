@@ -59,6 +59,11 @@ the locks a running game puts on them (`settings_locks`).
 | | Show performance statistics | Off, On | Off | `open-annihilation.frame-stats` |
 | | The overrides of the profile's standard hacks, in Developer Mode's list | any hack on or off, with its parameters | none | `open-annihilation.hack-overrides.<id>`, the id of the profile the game plays, `ta-3.1c` without a mod, `folder:<path>` for a mod folder without a profile |
 
+Mouse wheel zoom, while on, also leaves a profile's megamap off for the
+player: the wheel zooms the battlefield in its place
+([ui.megamap](../../../docs/mods/standard-hacks/ui.megamap.md)). Turning it
+on during a match closes an open megamap.
+
 The Touch section is the same everywhere, every machine and preferences
 file alike. A stored One-finger drag or QUEUE and ADD that is none of their
 words, like any value that is no whole number for the others, reads as the

@@ -13,7 +13,7 @@
 
 ## Description
 
-Adds a full-screen strategic map: Tab or the mouse wheel replaces the battlefield with the whole map, drawn with unit category icons, sensor rings and the main view's rectangle, and the player can select units and give orders on it. It can also redraw the minimap at a finer quality. 3.1c has only the minimap.
+Adds a full-screen strategic map: Tab or the mouse wheel replaces the battlefield with the whole map, drawn with unit category icons, sensor rings and the main view's rectangle, and the player can select units and give orders on it. It can also redraw the minimap at a finer quality. 3.1c has only the minimap. The hack acts only while the player's Mouse wheel zoom setting is off: with the setting on, as it is by default, the wheel's zoom takes the megamap's place.
 
 ![Megamap open on Painted Desert, showing the whole map: blue Arm and red Core unit icons meeting on the central plateau, cyan feature marks, a faint green radar ring around the selected radar tower and a yellow rectangle for the main view.](images/ui.megamap-battle.png)
 
@@ -48,6 +48,17 @@ hacks:
 Tab opens and closes the megamap, playing the interface's open and close
 sounds. Rolling the wheel toward the player opens it; rolling it away closes
 it and centres the battlefield view on the map point under the pointer.
+
+#### With Mouse wheel zoom on
+
+The settings' Mouse wheel zoom (Controls, on by default) zooms the
+battlefield with the wheel, which makes the megamap redundant. While it is
+on, the hack is off for this player, as if the profile left it out: Tab and
+the wheel do what they do without it, the wheel zooming the battlefield, no
+megamap opens and the minimap keeps the game's own picture. Turning the
+setting on during a match closes an open megamap, without its sound, and
+puts the game's minimap picture back; turning it off brings the megamap and
+the enhanced minimap back.
 
 #### What it shows
 
@@ -121,7 +132,9 @@ interceptor rings of 512 pixels or more.
 
 This is a view rule: it changes only what this machine shows and how its own input works, never what another machine is told. It is not part of the match hash, so players in one game may have it on, off or set differently without breaking the game.
 
-Orders given on the megamap travel as any other order does.
+Orders given on the megamap travel as any other order does. Each player's
+own Mouse wheel zoom setting decides whether the hack acts for them; the
+match hash and every machine's simulation stay as they are.
 
 ### Related hacks
 
@@ -146,9 +159,17 @@ Orders given on the megamap travel as any other order does.
   hold the layout and its two-way mapping, the terrain downscale, the
   feature colours, the icon file reader, the icon choice and recolouring,
   and the rings.
+- `Runtime::megamap_on` holds the hack off while the Mouse wheel zoom
+  setting is on; `megamap_wheel_zoom_changed` closes the megamap and puts
+  the minimap's picture back when the setting changes in a match.
 - Test: `ui-hud-megamap` (`src/ui/hud/tests/megamap_test.cpp`) covers the
   layout, the terrain downscale, the feature colours, the icon file, the
   icon choice and the ring minimums.
+- Test: `native-render-tiers-visual-rules`
+  (`src/app/runtime_visual_rules_check.cpp`) checks that with Mouse wheel
+  zoom on, Tab and the wheel open no megamap; that with it off, Tab opens
+  it; and that turning the setting on closes it; then that the open
+  megamap is presented as the processor composes it.
 
 ## Full configuration schema
 

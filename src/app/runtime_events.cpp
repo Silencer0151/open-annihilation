@@ -207,15 +207,12 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
         press_frontend_quick_key(event.key))
         return;
     if (event.type == SDL_EVENT_MOUSE_WHEEL && screen_ == Screen::match) {
-        // ui.megamap takes the wheel first.
+        // ui.megamap takes the wheel, which acts only with the Mouse wheel
+        // zoom setting off (megamap_on).
         if (megamap_on()) {
             if (sdl_.renderer != nullptr && !convert_event_to_frame(sdl_.renderer, event))
                 return;
-            if (megamap_wheel(event.wheel.y, event.wheel.mouse_x, event.wheel.mouse_y))
-                return;
-            if (!engine_settings().wheel_zoom)
-                return;
-            handle_match_zoom(event.wheel.y, event.wheel.mouse_x, event.wheel.mouse_y);
+            std::ignore = megamap_wheel(event.wheel.y, event.wheel.mouse_x, event.wheel.mouse_y);
             return;
         }
         // With the Mouse wheel zoom setting off the wheel does nothing here.

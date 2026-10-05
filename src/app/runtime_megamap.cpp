@@ -6,8 +6,10 @@
 // category icons of the units the minimap shows, the selection's sensor
 // rings and the main view's rectangle; its clicks select and give orders at
 // the map point they stand for. The enhanced minimap redraws the radar's
-// picture at its own size.
+// picture at its own size. The Mouse wheel zoom setting, while on, leaves
+// the hack off for this player.
 
+#include "engine_settings_state.hpp"
 #include "oa/app/runtime.hpp"
 #include "oa/present/world_renderer/world_radar.hpp"
 #include "oa/sim/selection/shortcuts.hpp"
@@ -84,7 +86,9 @@ void add_type(const oa::data::defs::CategoryMask& mask, uint16_t type_id) {
 } // namespace
 
 bool Runtime::megamap_on() const {
-    return match_ && ui_rules().megamap.enabled;
+    // Settings not yet read hold their defaults, the wheel zoom on.
+    const bool wheel_zoom = !engine_settings_ || engine_settings_->current.wheel_zoom;
+    return match_ && ui_rules().megamap.enabled && !wheel_zoom;
 }
 
 bool Runtime::megamap_shown() const {
@@ -609,6 +613,19 @@ bool Runtime::megamap_pointer(const SDL_Event& event, float x, float y) {
     return true;
 }
 
+void Runtime::megamap_wheel_zoom_changed() {
+    // Closed without its sound: the setting closes it, not the player's key.
+    if (!megamap_on()) {
+        megamap_open_ = false;
+        megamap_.pressed = false;
+    }
+    const auto& rules = ui_rules().megamap;
+    if (!rules.enabled || !rules.enhanced_minimap || radar_state_.surfaces.picture == nullptr)
+        return;
+    enhance_radar_picture();
+    radar_state_.reset_sight = true;
+}
+
 void Runtime::enhance_radar_picture() {
     if (!match_ || !selected_tnt_ || !ui_rules().megamap.enabled ||
         !ui_rules().megamap.enhanced_minimap)
@@ -618,6 +635,18 @@ void Runtime::enhance_radar_picture() {
     if (picture == nullptr || picture->pixels == nullptr || game.map_pixel_width <= 0 ||
         game.map_pixel_height <= 0)
         return;
+    // The game's own picture, kept as the radar drew it, comes back while the
+    // hack is off for this player.
+    auto& kept = radar_state_.game_picture;
+    const auto size =
+        static_cast<std::size_t>(picture->pitch) * static_cast<std::size_t>(picture->height);
+    if (kept.empty())
+        kept.assign(picture->pixels, picture->pixels + size);
+    if (!megamap_on()) {
+        if (kept.size() == size)
+            std::copy(kept.begin(), kept.end(), picture->pixels);
+        return;
+    }
     const auto& map = *selected_tnt_;
     hud::TerrainSource source{};
     int32_t source_w = game.map_pixel_width, source_h = game.map_pixel_height;

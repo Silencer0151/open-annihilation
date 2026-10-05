@@ -61,6 +61,7 @@ void Runtime::RadarState::release() {
     well = nullptr;
     built_for = nullptr;
     hot_unit_count = 0;
+    game_picture.clear();
 }
 
 Runtime::RadarState::~RadarState() {
