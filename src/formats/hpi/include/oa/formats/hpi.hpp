@@ -118,8 +118,19 @@ inline constexpr std::size_t TrailerYearBytes = 4;
 // Decoded bytes per chunk of a compressed entry, and the per-read block cache.
 inline constexpr uint32_t BlockBytes = 0x10000;
 /// Largest file, in bytes, read whole from an archive or a loose folder; a
-/// larger one is refused before anything is allocated.
-inline constexpr uint64_t EntryByteLimit = 1ULL << 30;
+/// larger one is refused before anything is allocated. The largest file of
+/// the game and of the mods it was measured against is 238.5 MB, an effects
+/// animation.
+inline constexpr uint64_t EntryByteLimit = 512ULL << 20;
+
+/// Returns whether a file of `size` bytes may be read whole.
+///
+/// @param size the file's size in bytes
+/// @return true when it is at most EntryByteLimit
+[[nodiscard]] constexpr bool entry_size_allowed(uint64_t size) noexcept {
+    return size <= EntryByteLimit;
+}
+
 // Plain *.HPI archives mounted from the game directory before the scan stops.
 inline constexpr int PlainArchiveMountLimit = 10;
 
@@ -337,15 +348,18 @@ class HpiArchive {
     /// Reads the whole decoded content of a file node.
     ///
     /// The size the entry claims is checked before its buffer is allocated:
-    /// it is at most EntryByteLimit, a stored entry lies wholly inside the
-    /// archive, and a compressed one has room for each chunk's size-table
-    /// slot and header.
+    /// it is at most EntryByteLimit (entry_size_allowed), a stored entry
+    /// lies wholly inside the archive, and a compressed one has room for each
+    /// chunk's size-table slot and header. A compressed entry's buffer is
+    /// filled one decoded chunk at a time, so a chunk that fails stops the
+    /// read before the rest of the claimed size is used.
     ///
     /// @param index file node index
     /// @return the decoded bytes; or out_of_range for a directory or bad
-    ///         index, limit_exceeded for an entry over EntryByteLimit,
-    ///         truncated, at its archive offset, for an entry the archive
-    ///         cannot hold or that reads short, or read_node_range's error
+    ///         index, limit_exceeded for an entry over EntryByteLimit or one
+    ///         whose buffer cannot be allocated, truncated, at its archive
+    ///         offset, for an entry the archive cannot hold or that reads
+    ///         short, or read_node_range's error
     [[nodiscard]] base::bytes::Decoded<std::vector<uint8_t>> read_node(uint32_t index) const;
     /// Copies a range of a file node's decoded bytes.
     ///
@@ -622,13 +636,15 @@ class AssetStore {
     /// Loads a whole resource by reading it through a handle, so it holds what a handle read gives.
     ///
     /// @param resource '\\'- or '/'-separated path
-    /// @return the bytes, or nullopt when the resource is absent, empty or yields no bytes
+    /// @return the bytes, or nullopt when the resource is absent, empty,
+    ///         larger than EntryByteLimit or yields no bytes
     /// @quirk A short read keeps the full length; the unread tail is zero.
     [[nodiscard]] std::optional<std::vector<uint8_t>>
     load_file_contents(std::string_view resource) const;
     /// Loads a whole resource in ten equal reads plus the remainder, reporting progress.
     ///
-    /// Throws std::runtime_error when the resource is absent.
+    /// Throws std::runtime_error when the resource is absent or larger than
+    /// EntryByteLimit, before anything is allocated.
     ///
     /// @param resource '\\'- or '/'-separated path
     /// @param progress called after each of the ten reads with 9, 18, ... 90; may be null

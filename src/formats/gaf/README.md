@@ -53,9 +53,12 @@ version values.
 
 The reader caps input at 256 MiB, sequences at 4,096, frames per sequence at
 4,096, all recursively reached frame records at 131,072, depth at 32, a single
-decoded frame at 64 MiB of indices, and all decoded buffers a parse keeps at
+decoded frame at 4096 by 4096 pixels, and all decoded buffers a parse keeps at
 256 MiB; a checked parse keeps none, so its frames may decode past that. It checks
-all offsets, row lengths, run widths, pointer cycles and model sizes.
+all offsets, row lengths, run widths, pointer cycles and model sizes, and a
+frame's size, raw pixels or row lengths before it allocates the frame's
+buffers. A caller may also name the widest and tallest frame it takes, as the
+GUI font reader does for its 128-pixel glyphs.
 
 The parsed and rendered coverage masks are needed to draw as the game does: raw
 frames skip pixels equal to the frame's transparency key, while compressed

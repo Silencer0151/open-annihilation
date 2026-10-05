@@ -113,7 +113,7 @@ std::string full_path_key(const std::filesystem::path& path) {
 
 std::vector<uint8_t> read_loose(const std::filesystem::path& path) {
     const auto size = std::filesystem::file_size(path);
-    if (size > formats::hpi::EntryByteLimit)
+    if (!formats::hpi::entry_size_allowed(size))
         fail("loose asset exceeds entry size limit");
     std::ifstream stream(path, std::ios::binary);
     if (!stream)
@@ -691,7 +691,8 @@ AssetStore::load_file_contents(std::string_view resource) const {
         return std::nullopt;
     std::optional<std::vector<uint8_t>> result;
     const uint32_t size = length(file);
-    if (static_cast<int32_t>(size) > 0 && seek(file, 0) != -1) {
+    if (static_cast<int32_t>(size) > 0 && formats::hpi::entry_size_allowed(size) &&
+        seek(file, 0) != -1) {
         std::vector<uint8_t> bytes(size);
         if (read(file, bytes) > 0)
             result = std::move(bytes);
@@ -709,8 +710,12 @@ std::vector<uint8_t> AssetStore::load_with_progress(
     if (file == nullptr)
         fail("cannot open " + std::string(resource));
     const uint32_t size = length(file);
+    if (!formats::hpi::entry_size_allowed(size)) {
+        close(file);
+        fail(std::string(resource) + " exceeds the entry size limit");
+    }
     std::vector<uint8_t> bytes(size);
-    const auto slice = static_cast<size_t>(static_cast<int32_t>(size) / kPasses);
+    const std::size_t slice = size / static_cast<uint32_t>(kPasses);
     size_t loaded = 0;
     for (int pass = 1; pass <= kPasses; ++pass) {
         const int32_t count = read(file, std::span(bytes).subspan(loaded, slice));

@@ -21,7 +21,7 @@ namespace {
 using detail::load_le32;
 using detail::store_le32;
 
-constexpr uint32_t max_image_bytes = 1u << 30;
+constexpr uint32_t max_image_bytes = bank_image_byte_limit;
 constexpr uint32_t packed_flag = 1;
 constexpr int32_t blob_id_marker = -1; // name slot of an id-addressed blob entry
 constexpr char audit_extension[] = ".cpa";
@@ -118,9 +118,12 @@ bool appendf(ByteImage* out, const char* format, ...) {
 /// @param[in,out] position offset of the record; advanced past it on success
 /// @param pool unpacked string pool
 /// @param only_account when not null, the only account read
+/// @param[in,out] blob_bytes blob bytes the read has copied so far
 /// @param[out] error receives a message on failure; may be null
 /// @return false when the record is truncated, out of range, fails to unpack
-///     or has a malformed entry table
+///     or has a malformed entry table, its blobs among them: together they
+///     may hold no more than the record's data, and a read's blobs no more
+///     than max_image_bytes
 bool read_account(
     Bank* bank,
     const uint8_t* image,
@@ -128,6 +131,7 @@ bool read_account(
     uint32_t& position,
     const ByteImage& pool,
     const char* only_account,
+    uint64_t& blob_bytes,
     BankError* error
 ) {
     const uint32_t start = position;
@@ -214,10 +218,15 @@ bool read_account(
         const char* value = pool_string(pool, load_le32(entry + 4));
         ok = field != nullptr && value != nullptr && bank_set_text(bank, field, value);
     }
+    // A writer stores each blob's bytes once, so an account's blobs hold no
+    // more than its data; blobs named over the same bytes again stop there.
+    uint64_t account_blob_bytes = 0;
     for (int32_t i = 0; ok && i < blob_count; ++i, entry += blob_entry_bytes) {
         const auto name_offset = static_cast<int32_t>(load_le32(entry));
         const uint32_t data_offset = load_le32(entry + 8);
         const uint32_t data_bytes = load_le32(entry + 12);
+        account_blob_bytes += data_bytes;
+        blob_bytes += data_bytes;
         if (name_offset < 0) {
             bank_open_blob_id(bank, static_cast<int32_t>(load_le32(entry + 4)));
         } else {
@@ -229,7 +238,8 @@ bool read_account(
         // Blob offsets are file positions of the unpacked record.
         const uint64_t relative = static_cast<uint64_t>(data_offset) - start - account_header_bytes;
         ok = ok && data_offset >= start + account_header_bytes &&
-             relative + data_bytes <= payload_bytes &&
+             relative + data_bytes <= payload_bytes && account_blob_bytes <= payload_bytes &&
+             blob_bytes <= max_image_bytes &&
              bank_blob_write(bank, payload + relative, data_bytes) == data_bytes;
         bank_blob_seek(bank, 0);
     }
@@ -518,8 +528,10 @@ bool bank_read_image(
         return false;
     }
     bool ok = bank_reset(bank);
+    uint64_t blob_bytes = 0;
     while (ok && position < pool_offset)
-        ok = read_account(bank, image, pool_offset, position, pool, only_account, error);
+        ok =
+            read_account(bank, image, pool_offset, position, pool, only_account, blob_bytes, error);
     byte_image_free(&pool);
     return ok;
 }

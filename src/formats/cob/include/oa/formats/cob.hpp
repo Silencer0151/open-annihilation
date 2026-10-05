@@ -71,6 +71,10 @@ struct ParseLimits {
     uint32_t max_code_words = 1U << 20;
     uint32_t max_static_variables = 65536;
     std::size_t max_name_bytes = 4096;
+    /// Script and piece name bytes one file copies in all, a name named by
+    /// several entries counting each time; the most a file of the game or
+    /// the mods it was measured against copies is 1,627.
+    std::size_t max_total_name_bytes = 64U * 1024U;
 };
 
 /// Decodes a COB image into its code, entry, name and piece tables.
@@ -80,13 +84,15 @@ struct ParseLimits {
 /// points at, such as the two words a version 6 header adds before its
 /// code, are not read. The tables are copied into bounded tables;
 /// overlapping or out-of-range sections are rejected, and so is a non-zero
-/// sound count.
+/// sound count. Each script and piece copies its name, so the names copied
+/// in all are bounded too.
 ///
 /// @param bytes the whole COB file
 /// @param limits allocation and count bounds
 /// @return the program, with a file hash of zero for the caller to record;
 ///         or, at its file offset, truncated for a file shorter than its
-///         header, limit_exceeded for a file or count over its bound,
+///         header, limit_exceeded for a file, count or name total over its
+///         bound,
 ///         unsupported_version for a non-zero sound count, malformed for
 ///         sections out of order, or out_of_range for a section, entry
 ///         point or name outside the file, its section or the name pool

@@ -168,6 +168,26 @@ int main() {
             !oa::formats::cob::parse_cob(bytes, low_static_limit).ok(),
             "static-variable bound was not enforced"
         );
+        // Names copied in all: the scripts' "start" and "stop" fill a
+        // ten-byte budget to nine, and the piece's name passes it, even
+        // where it names a pool string a script already took.
+        auto low_name_total = oa::formats::cob::ParseLimits{};
+        low_name_total.max_total_name_bytes = 10;
+        auto shared_name = bytes;
+        put32(shared_name, 72, 76);
+        for (const auto* file : {&bytes, &shared_name}) {
+            const auto over = oa::formats::cob::parse_cob(*file, low_name_total);
+            require(
+                !over.ok() && over.error.code == oa::base::bytes::DecodeCode::limit_exceeded &&
+                    over.error.offset == 72,
+                "the total name byte bound was not enforced"
+            );
+        }
+        low_name_total.max_total_name_bytes = 13;
+        require(
+            oa::formats::cob::parse_cob(bytes, low_name_total).ok(),
+            "names that fit the total name byte bound were refused"
+        );
         std::cout << "COB parser tests passed\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

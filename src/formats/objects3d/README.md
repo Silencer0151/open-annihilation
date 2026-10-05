@@ -40,7 +40,10 @@ bits of each as the shadow bitmap's size and origin.
 
 A model holds at most 65,536 objects. The loader and the height walk follow
 sibling and child links with explicit stacks rather than recursion, so a
-long sibling list or a deep child chain cannot exhaust the call stack.
+long sibling list or a deep child chain cannot exhaust the call stack. Each
+primitive copies its own vertex indices and texture name, even where records
+share them, so a model copies at most 1,048,576 vertex indices and 1 MiB of
+names in all.
 
 The 52-byte object, 32-byte primitive, unsigned 16-bit vertex indices, Y-up
 axis, 16.16 units and source visibility rule match the published 3DO format

@@ -320,6 +320,42 @@ void malformed_and_bounded_inputs() {
     );
 }
 
+// A frame's size is refused before anything of it is decoded: past 4096 by
+// 4096 pixels, or past the side a caller allows; a frame whose rows are not
+// in the file fails before its buffers are made.
+void frame_bounds_come_before_decoding() {
+    auto wide = one_frame_file();
+    frame_header(wide, 64, 4097, 4096, 0, 0, 0, true, 0, 0, 88);
+    const auto wide_result = gaf::parse(wide);
+    require(
+        !wide_result.ok() && wide_result.error->code == gaf::ErrorCode::pixel_limit,
+        "a frame over 4096 by 4096 pixels was accepted"
+    );
+
+    auto glyph = one_frame_file();
+    glyph.resize(88 + 129);
+    frame_header(glyph, 64, 129, 1, 0, 0, 0, false, 0, 0, 88);
+    const auto glyph_result = gaf::parse(glyph, gaf::PixelData::decoded, 128);
+    require(
+        !glyph_result.ok() && glyph_result.error->code == gaf::ErrorCode::side_limit &&
+            glyph_result.error->offset == 64,
+        "a frame wider than the caller allows was accepted"
+    );
+    frame_header(glyph, 64, 128, 1, 0, 0, 0, false, 0, 0, 88);
+    require(
+        gaf::parse(glyph, gaf::PixelData::decoded, 128).ok(), "a frame within the side was refused"
+    );
+
+    // 4096 rows need 8192 bytes of row lengths; the file holds 168.
+    auto rowless = one_frame_file();
+    frame_header(rowless, 64, 4096, 4096, 0, 0, 0, true, 0, 0, 88);
+    const auto rowless_result = gaf::parse(rowless);
+    require(
+        !rowless_result.ok() && rowless_result.error->code == gaf::ErrorCode::truncated,
+        "a frame whose rows lie past the file was accepted"
+    );
+}
+
 // Nine 4096 x 4096 frames decode to 288 MiB of pixels and coverage, past
 // what a parse may keep; a checked parse keeps none of them and loads the file.
 void checked_parse_keeps_no_decoded_total() {
@@ -354,6 +390,7 @@ int main() {
         compressed_literal_transparency_index_is_still_written();
         frame_at_rejects_out_of_range_indices();
         malformed_and_bounded_inputs();
+        frame_bounds_come_before_decoding();
         checked_parse_keeps_no_decoded_total();
     } catch (const std::exception& error) {
         std::cerr << "sprite-format test failure: " << error.what() << '\n';

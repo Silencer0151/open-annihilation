@@ -31,6 +31,11 @@ constexpr uint64_t kVertexIndexBytes = sizeof(uint16_t);
 constexpr uint32_t kMaxObjects = 65'536;
 constexpr uint32_t kMaxElementsPerObject = 1'000'000;
 constexpr uint32_t kMaxStringBytes = 4'096;
+// Copies a whole model may make, however its records share arrays and
+// names: the largest model of the game and the mods it was measured against
+// copies 17,573 vertex indices and 32,417 name bytes.
+constexpr uint64_t kMaxModelVertexIndices = 1u << 20;
+constexpr uint64_t kMaxModelNameBytes = 1u << 20;
 
 struct ObjectRecord {
     int32_t version_signature{};
@@ -253,8 +258,8 @@ class Parser {
         object.offset_from_parent = {h.x_from_parent, h.y_from_parent, h.z_from_parent};
         object.parent = parent;
         const auto name_at = as_offset(h.offset_to_object_name);
-        if (name_at != 0)
-            object.name = read_name(r, name_at);
+        if (name_at != 0 && !copy_name(name_at, object.name))
+            return kNoObject;
 
         const auto vertex_count = static_cast<uint32_t>(h.number_of_vertexes);
         const auto vertices_at = as_offset(h.offset_to_vertex_array);
@@ -287,14 +292,23 @@ class Parser {
             const auto indices_at = as_offset(raw.offset_to_vertex_index_array);
             if (!check_array(r, indices_at, n, kVertexIndexBytes))
                 return kNoObject;
+            if (n > kMaxModelVertexIndices - vertex_indices_copied_) {
+                r.fail(
+                    DecodeCode::limit_exceeded,
+                    p + offsetof(PrimitiveRecord, number_of_vertex_indexes),
+                    "3DO vertex indices exceed the model's safety limit"
+                );
+                return kNoObject;
+            }
+            vertex_indices_copied_ += n;
             Primitive primitive;
             primitive.color_index = raw.color_index;
             primitive.word_after_texture_name = raw.word_after_texture_name;
             primitive.word_before_is_colored = raw.word_before_is_colored;
             primitive.is_colored = raw.is_colored;
             const auto texture_at = as_offset(raw.offset_to_texture_name);
-            if (texture_at != 0)
-                primitive.texture_name = read_name(r, texture_at);
+            if (texture_at != 0 && !copy_name(texture_at, primitive.texture_name))
+                return kNoObject;
             primitive.vertex_indices.reserve(n);
             for (uint32_t j = 0; j < n; ++j) {
                 const auto index_at = static_cast<uint64_t>(indices_at) + j * kVertexIndexBytes;
@@ -316,8 +330,30 @@ class Parser {
         uint32_t child_at{};
     };
 
+    /// Copies the name at `at` into `name`, counting its bytes against the
+    /// model's name budget.
+    ///
+    /// @param at file offset of the name
+    /// @param[out] name the name, when it reads and fits the budget
+    /// @return false when the name is bad or the model's names pass
+    ///         kMaxModelNameBytes; the reader holds the error
+    [[nodiscard]] bool copy_name(uint32_t at, std::string& name) {
+        std::string read = read_name(r, at);
+        if (!r.ok())
+            return false;
+        if (read.size() > kMaxModelNameBytes - name_bytes_copied_) {
+            r.fail(DecodeCode::limit_exceeded, at, "3DO names exceed the model's safety limit");
+            return false;
+        }
+        name_bytes_copied_ += read.size();
+        name = std::move(read);
+        return true;
+    }
+
     ByteReader r;
     Model model;
+    uint64_t vertex_indices_copied_{}; ///< vertex indices the model has copied
+    uint64_t name_bytes_copied_{};     ///< name bytes the model has copied
     std::unordered_map<uint32_t, uint32_t> offset_to_index;
     std::vector<uint32_t> reached_from_; ///< per object, the object whose link named it
     std::vector<ObjectLinks> links_;     ///< per object, its links

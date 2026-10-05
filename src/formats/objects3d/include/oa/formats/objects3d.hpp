@@ -72,14 +72,17 @@ struct Model {
 /// primitive words after the texture name offset are kept as read and not
 /// interpreted. A model holds at most 65,536 objects, and its links are
 /// followed without recursion, so neither a long sibling list nor a deep
-/// child chain can exhaust the stack.
+/// child chain can exhaust the stack. Every primitive copies its own vertex
+/// indices and texture name, even where records share them, so a model
+/// copies at most 1,048,576 vertex indices and 1 MiB of names in all.
 ///
 /// @param bytes the whole file
 /// @return the objects in preorder, root first, with stored (not negated)
 ///         coordinates; or the first error at its file offset: a truncated
 ///         record, array or name, an out-of-range vertex index, a name over
-///         4,095 bytes, more than 65,536 objects, an object reached twice or
-///         a cycle
+///         4,095 bytes, more than 65,536 objects, more vertex indices or
+///         name bytes than a model may copy, an object reached twice or a
+///         cycle
 [[nodiscard]] base::bytes::Decoded<Model> load_3do(std::span<const std::byte> bytes);
 
 /// Returns a model's height, the value of UnitDef.model_height.

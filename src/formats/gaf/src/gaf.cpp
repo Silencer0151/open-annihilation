@@ -104,7 +104,8 @@ read_frame_info(std::span<const uint8_t> bytes, std::size_t at) noexcept {
 class Parser {
   public:
 
-    Parser(std::span<const uint8_t> bytes, PixelData pixels) : bytes_(bytes), pixels_(pixels) {}
+    Parser(std::span<const uint8_t> bytes, PixelData pixels, uint16_t largest_side = UINT16_MAX)
+        : bytes_(bytes), pixels_(pixels), largest_side_(largest_side) {}
 
     /// Parses the whole file into an archive, or returns the first error.
     [[nodiscard]] ParseResult run() {
@@ -147,6 +148,7 @@ class Parser {
 
     std::span<const uint8_t> bytes_;
     PixelData pixels_ = PixelData::decoded;
+    uint16_t largest_side_ = UINT16_MAX; // widest and tallest frame or layer accepted
     // A checked frame's pixels and coverage are decoded here and not kept.
     std::vector<uint8_t> checked_pixels_;
     std::vector<uint8_t> checked_coverage_;
@@ -277,6 +279,10 @@ class Parser {
         output.duration = duration;
         const auto data_at = static_cast<std::size_t>(info.data_offset);
 
+        if (output.width > largest_side_ || output.height > largest_side_)
+            return set_error(
+                ErrorCode::side_limit, at, "GAF frame is wider or taller than allowed"
+            );
         const auto pixel_count =
             static_cast<std::size_t>(output.width) * static_cast<std::size_t>(output.height);
         if (pixel_count > limit::pixels_per_frame)
@@ -303,6 +309,17 @@ class Parser {
             return true;
         }
 
+        // The frame's raw pixels, or every row's length and bytes, must be
+        // in the file before its buffers are made.
+        if (pixel_count != 0) {
+            if (!output.compressed) {
+                if (!fits(data_at, pixel_count, bytes_.size()))
+                    return set_error(ErrorCode::truncated, data_at, "truncated raw GAF pixels");
+            } else if (!compressed_rows_present(data_at, output.height)) {
+                return false;
+            }
+        }
+
         // Only kept pixels count towards the decoded total: a checked frame
         // reuses the parser's own buffers.
         constexpr std::size_t decoded_bytes_per_pixel = 2;
@@ -326,8 +343,6 @@ class Parser {
         uint8_t* const pixels = kept_pixels.data();
         uint8_t* const coverage = kept_coverage.data();
         if (!output.compressed) {
-            if (!fits(data_at, pixel_count, bytes_.size()))
-                return set_error(ErrorCode::truncated, data_at, "truncated raw GAF pixels");
             const uint8_t transparent = output.transparency_index;
             std::memcpy(pixels, bytes_.data() + data_at, pixel_count);
             for (std::size_t index = 0; index < pixel_count; ++index)
@@ -335,6 +350,28 @@ class Parser {
             return true;
         }
         return decode_compressed(data_at, output, pixels, coverage);
+    }
+
+    /// Checks that `height` rows of row-compressed pixels, each a length
+    /// word and that many bytes, lie in the file from `at`.
+    ///
+    /// @param at file offset of the first row's length word
+    /// @param height count of rows
+    /// @return true when every row lies in the file; else the error is set
+    [[nodiscard]] bool compressed_rows_present(std::size_t at, std::size_t height) {
+        std::size_t row_at = at;
+        for (std::size_t y = 0; y < height; ++y) {
+            if (!fits(row_at, row_length_bytes, bytes_.size()))
+                return set_error(
+                    ErrorCode::truncated, row_at, "truncated compressed GAF row length"
+                );
+            const auto encoded_bytes = static_cast<std::size_t>(load_le16(bytes_.data() + row_at));
+            row_at += row_length_bytes;
+            if (!fits(row_at, encoded_bytes, bytes_.size()))
+                return set_error(ErrorCode::truncated, row_at, "truncated compressed GAF row data");
+            row_at += encoded_bytes;
+        }
+        return true;
     }
 
     /// Decodes the row-compressed pixels at `at` of `output`, a frame of
@@ -484,8 +521,8 @@ class Parser {
 
 } // namespace
 
-ParseResult parse(std::span<const uint8_t> bytes, PixelData pixels) {
-    return Parser(bytes, pixels).run();
+ParseResult parse(std::span<const uint8_t> bytes, PixelData pixels, uint16_t largest_side) {
+    return Parser(bytes, pixels, largest_side).run();
 }
 
 SequenceResult parse_sequence(std::span<const uint8_t> bytes, std::size_t index) {

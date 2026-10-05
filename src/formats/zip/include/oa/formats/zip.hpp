@@ -125,7 +125,8 @@ find_entry(const CentralDirectory& directory, std::string_view name) noexcept;
 /// Reads one entry's data.
 ///
 /// Checks the local header against the entry, inflates deflated data and
-/// checks the size and CRC-32.
+/// checks the size and CRC-32. An entry whose buffer cannot be allocated
+/// fails as entry_too_large.
 ///
 /// @param archive the whole archive `entry` was read from
 /// @param entry the entry

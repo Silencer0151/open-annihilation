@@ -122,6 +122,47 @@ std::vector<std::byte> chain_model(std::size_t count, bool nested) {
     return d;
 }
 
+/// Builds one object whose `primitives` primitives all name one array of
+/// `indices` vertex indices and one texture name of `name_bytes` letters.
+///
+/// @param primitives count of primitives
+/// @param indices vertex indices in the shared array, each naming vertex 0
+/// @param name_bytes letters of the shared texture name; 0 for none
+/// @return the file
+std::vector<std::byte>
+aliased_primitives(std::size_t primitives, std::size_t indices, std::size_t name_bytes) {
+    constexpr std::size_t record = 52;
+    constexpr std::size_t vertex_at = record;
+    constexpr std::size_t indices_at = vertex_at + 12;
+    const std::size_t name_at = indices_at + indices * 2;
+    const std::size_t primitives_at = name_at + name_bytes + 1;
+    std::vector<std::byte> d(primitives_at + primitives * 32);
+    header(
+        d,
+        0,
+        1,
+        static_cast<int32_t>(primitives),
+        -1,
+        0,
+        0,
+        0,
+        0,
+        static_cast<int32_t>(vertex_at),
+        static_cast<int32_t>(primitives_at),
+        0,
+        0
+    );
+    if (name_bytes != 0)
+        put_string(d, name_at, std::string(name_bytes, 'a'));
+    for (std::size_t i = 0; i < primitives; ++i) {
+        const auto at = primitives_at + i * 32;
+        put32(d, at + 4, static_cast<int32_t>(indices));
+        put32(d, at + 12, static_cast<int32_t>(indices_at));
+        put32(d, at + 16, name_bytes != 0 ? static_cast<int32_t>(name_at) : 0);
+    }
+    return d;
+}
+
 void require(bool value, const char* message) {
     if (!value)
         throw std::runtime_error(message);
@@ -252,6 +293,25 @@ int main() {
             DecodeCode::limit_exceeded,
             65'536 * 52,
             "a child chain over the object limit accepted"
+        );
+        // Primitives that share one index array or one texture name each
+        // copy it, up to 1,048,576 indices and 1 MiB of names a model.
+        require(
+            load(aliased_primitives(1024, 1024, 0)).objects[0].primitives.size() == 1024,
+            "a model copying exactly the most vertex indices was refused"
+        );
+        const std::size_t aliased_at = 52 + 12 + 1024 * 2 + 1;
+        rejects(
+            aliased_primitives(1025, 1024, 0),
+            DecodeCode::limit_exceeded,
+            aliased_at + 1024 * 32 + 4,
+            "primitives sharing one index array past the model's budget accepted"
+        );
+        rejects(
+            aliased_primitives(1025, 0, 1024),
+            DecodeCode::limit_exceeded,
+            52 + 12,
+            "primitives sharing one texture name past the model's budget accepted"
         );
         auto shared = chain_model(3, true);
         put32(shared, 44, 104);

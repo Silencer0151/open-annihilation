@@ -92,7 +92,18 @@ Decoded<Font> parse_gaf(std::span<const uint8_t> b) {
             limit::input_bytes,
             "GAF font exceeds the 4 MiB safety limit"
         };
-    const auto parsed = formats::gaf::parse(b);
+    // A glyph's size is refused before any of its pixels are decoded.
+    const auto parsed = formats::gaf::parse(
+        b,
+        formats::gaf::PixelData::decoded,
+        std::max<uint16_t>(limit::glyph_width, limit::glyph_height)
+    );
+    if (!parsed.ok() && parsed.error && parsed.error->code == formats::gaf::ErrorCode::side_limit)
+        return DecodeError{
+            DecodeCode::out_of_range,
+            parsed.error->offset,
+            "GAF font glyph dimensions exceed 128 pixels"
+        };
     if (!parsed.ok())
         return DecodeError{
             DecodeCode::malformed,

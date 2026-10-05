@@ -6,6 +6,7 @@
 // entries.
 
 #include <algorithm>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -317,7 +318,14 @@ bool read_entry(
         !locate_data(archive, entry, data_offset, error))
         return false;
     const std::span<const uint8_t> data = archive.subspan(data_offset, entry.compressed_bytes);
-    std::vector<uint8_t> read(entry.bytes);
+    // A deflated entry may claim up to max_inflate_ratio times its data; a
+    // claim the machine cannot give a buffer for is refused, not fatal.
+    std::vector<uint8_t> read;
+    try {
+        read.resize(entry.bytes);
+    } catch (const std::bad_alloc&) {
+        return fail(error, ZipStatus::entry_too_large, entry.local_header_offset, entry.name);
+    }
     if (entry.method == Method::stored) {
         std::copy(data.begin(), data.end(), read.begin());
     } else {

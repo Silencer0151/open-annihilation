@@ -91,9 +91,9 @@ void Runtime::ensure_loading_screen() {
     } catch (const std::exception& error) {
         std::cerr << "loadgame2bg unavailable: " << error.what() << '\n';
     }
-    const auto load_gaf = [this](const char* path, oa::present::GafSprites& gaf, auto load) {
+    const auto load_gaf = [this](const char* path, oa::present::GafSprites& gaf) {
         try {
-            const auto status = load(assets_.read(path).bytes, gaf);
+            const auto status = oa::present::relocate_gaf(assets_.read(path).bytes, gaf);
             if (status != oa::present::GafStatus::ok) {
                 gaf = {};
                 std::cerr << path << " unavailable: " << oa::present::gaf_status_text(status)
@@ -104,7 +104,7 @@ void Runtime::ensure_loading_screen() {
         }
     };
     ensure_gui_font();
-    load_gaf("anims/commongui.gaf", loading_gui_, oa::present::relocate_gaf);
+    load_gaf("anims/commongui.gaf", loading_gui_);
     loading_lightbar_ =
         oa::present::gaf_frame(oa::present::find_gaf_sequence(loading_gui_, "LIGHTBAR"), 0);
 }

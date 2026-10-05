@@ -804,6 +804,28 @@ void resource_file_semantics() {
     );
 }
 
+/// A file over the entry limit is refused before its buffer is made, by
+/// every way the store reads a whole file; one at the limit's size is not.
+void asset_store_refuses_files_over_the_entry_limit() {
+    TempDir dir;
+    const auto over = dir.write("game/over.bin", text("x"));
+    std::error_code error;
+    fs::resize_file(over, oa::formats::hpi::EntryByteLimit + 1, error);
+    if (error) {
+        std::cout << "skipped the entry limit case: " << error.message() << '\n';
+        return;
+    }
+    oa::AssetStore store(dir.path() / "game");
+    check(!store.load_file_contents("over.bin").has_value(), "load_file_contents over the limit");
+    check(
+        throws([&] { (void)store.load_with_progress("over.bin", nullptr, nullptr); }, "limit"),
+        "load_with_progress over the limit"
+    );
+    check(throws([&] { (void)store.read("over.bin"); }, "limit"), "read over the limit");
+    check(store.file_size("over.bin") == oa::formats::hpi::EntryByteLimit + 1, "its size is known");
+    fs::remove(over, error);
+}
+
 /// Loose lookups answer from folder listings taken once, until a rescan, and
 /// list on every lookup once the listings would exceed the store's limit.
 void asset_store_loose_listings() {
@@ -885,6 +907,7 @@ int main(int argc, char** argv) {
         asset_store_discover_order_and_hpi_limit();
         asset_store_discover_pins_install_layout();
         asset_store_loose_listings();
+        asset_store_refuses_files_over_the_entry_limit();
         resource_file_semantics();
     } catch (const std::exception& error) {
         std::cerr << "unexpected exception: " << error.what() << '\n';

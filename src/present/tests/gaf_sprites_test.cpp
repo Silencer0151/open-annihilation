@@ -199,6 +199,24 @@ void test_sample_records() {
     CHECK(moved.sequences[1].frames[0].frame->data == &moved.children[0]);
 }
 
+// A file handed over is kept where it is, not copied, and frames point into
+// it; one that fails its checks is left with the caller.
+void test_file_taken_over() {
+    auto bytes = sample_gaf();
+    const uint8_t* const held = bytes.data();
+    GafSprites gaf;
+    CHECK(oa::present::relocate_gaf(std::move(bytes), gaf) == GafStatus::ok);
+    CHECK(gaf.bytes.data() == held);
+    const Sprite* raw = oa::present::gaf_frame(&gaf.sequences[0], 0);
+    CHECK(
+        raw != nullptr && static_cast<const uint8_t*>(raw->data) >= held &&
+        static_cast<const uint8_t*>(raw->data) < held + gaf.bytes.size()
+    );
+    std::vector<uint8_t> refused(8, 0);
+    CHECK(oa::present::relocate_gaf(std::move(refused), gaf) == GafStatus::short_header);
+    CHECK(refused.size() == 8);
+}
+
 void test_sequence_count_word() {
     auto bytes = sample_gaf();
     GafSprites gaf;
@@ -422,6 +440,7 @@ int main(int argc, char** argv) {
         test_radar_logos(assets);
     } else {
         test_sample_records();
+        test_file_taken_over();
         test_sequence_count_word();
         test_rejected_files();
     }

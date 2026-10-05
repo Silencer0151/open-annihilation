@@ -182,6 +182,15 @@ Decoded<CobProgram> parse_cob(std::span<const uint8_t> bytes, const ParseLimits&
             static_cast<std::size_t>(i) * sizeof(uint32_t)
         ));
     }
+    // Entries that share a pool string each copy it, so the copies are
+    // counted against max_total_name_bytes.
+    std::size_t name_bytes = 0;
+    const auto within_name_budget = [&](const std::string& name) {
+        if (name.size() > limits.max_total_name_bytes - name_bytes)
+            return false;
+        name_bytes += name.size();
+        return true;
+    };
     result.entry_points.reserve(header.script_count);
     result.scripts.reserve(header.script_count);
     for (uint32_t i = 0; i < header.script_count; ++i) {
@@ -202,6 +211,11 @@ Decoded<CobProgram> parse_cob(std::span<const uint8_t> bytes, const ParseLimits&
                 DecodeCode::out_of_range, name_at, "COB script name is outside bounded name pool"
             };
         }
+        if (!within_name_budget(script.name)) {
+            return DecodeError{
+                DecodeCode::limit_exceeded, name_at, "COB names exceed the name byte limit"
+            };
+        }
         script.entry_word = entry;
         result.entry_points.push_back(entry);
         result.scripts.push_back(std::move(script));
@@ -215,6 +229,11 @@ Decoded<CobProgram> parse_cob(std::span<const uint8_t> bytes, const ParseLimits&
         if (!read_name(bytes, name_offset, header.name_pool_offset, limits, name)) {
             return DecodeError{
                 DecodeCode::out_of_range, name_at, "COB piece name is outside bounded name pool"
+            };
+        }
+        if (!within_name_budget(name)) {
+            return DecodeError{
+                DecodeCode::limit_exceeded, name_at, "COB names exceed the name byte limit"
             };
         }
         result.piece_names.push_back(std::move(name));

@@ -7,6 +7,7 @@
 
 #include "oa/formats/fnt.hpp"
 #include "oa/test/scratch_directory.hpp"
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
@@ -40,6 +41,11 @@ void report_failure(int line, const char* what) {
 void put16(std::vector<uint8_t>& b, std::size_t o, uint16_t v) {
     b[o] = static_cast<uint8_t>(v);
     b[o + 1] = static_cast<uint8_t>(v >> 8U);
+}
+
+void put32(std::vector<uint8_t>& b, std::size_t o, uint32_t v) {
+    put16(b, o, static_cast<uint16_t>(v));
+    put16(b, o + 2, static_cast<uint16_t>(v >> 16U));
 }
 
 std::vector<uint8_t> fnt_with_width(uint8_t width) {
@@ -168,10 +174,34 @@ void test_parse_fnt() {
     ));
 }
 
+/// Builds a GAF font of one sequence holding one raw glyph frame.
+///
+/// @param width the glyph's width in pixels
+/// @return the file
+std::vector<uint8_t> one_glyph_gaf(uint16_t width) {
+    constexpr std::size_t frame_at = 64;
+    constexpr std::size_t pixels_at = frame_at + 24;
+    std::vector<uint8_t> b(pixels_at + width, 1);
+    std::fill(b.begin(), b.begin() + static_cast<std::ptrdiff_t>(pixels_at), uint8_t{0});
+    put32(b, 0, 0x00010100U);
+    put32(b, 4, 1);
+    put32(b, 12, 16);
+    put16(b, 16, 1);
+    put32(b, 56, static_cast<uint32_t>(frame_at));
+    put16(b, frame_at, width);
+    put16(b, frame_at + 2, 1);
+    put32(b, frame_at + 16, static_cast<uint32_t>(pixels_at));
+    return b;
+}
+
 void test_parse_gaf() {
     const auto parsed = oa::formats::fnt::parse_gaf(std::vector<uint8_t>{1, 2, 3, 4});
     CHECK(!parsed.ok() && parsed.error.code == DecodeCode::malformed);
     CHECK(!oa::formats::fnt::parse_gaf({}).ok());
+    // A glyph over 128 pixels is refused before it is decoded.
+    CHECK(oa::formats::fnt::parse_gaf(one_glyph_gaf(128)).ok());
+    const auto wide = oa::formats::fnt::parse_gaf(one_glyph_gaf(129));
+    CHECK(!wide.ok() && wide.error.code == DecodeCode::out_of_range && wide.error.offset == 64);
 }
 
 void test_named_fonts() {

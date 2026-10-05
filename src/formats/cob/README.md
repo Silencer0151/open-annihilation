@@ -23,7 +23,9 @@ then loads the unit without a script
 
 The section ordering and count limits are bounded parser policy; they prevent
 overlapping tables and excessive allocations, and their diagnostics are the
-parser's own. The header's sixth word, tentatively the sound count, is
+parser's own. Each script and piece copies its name, even where entries share
+one pool string, so the names one file copies are bounded in all
+(`ParseLimits::max_total_name_bytes`, 64 KiB). The header's sixth word, tentatively the sound count, is
 retained and checked against the value the game's files store (`0`). The
 format component does not depend on `script-vm`: the parsed `code` and
 `entry_points` are the inputs for the integration layer to construct

@@ -61,8 +61,9 @@ struct Font {
 ///
 /// @param bytes the whole GAF file
 /// @return the font; or an input over the size limit, an unparsable GAF (its
-///         own error code in detail), no sequence, more than 256 frames, or a
-///         glyph that cannot be rendered or is over 128 pixels (the glyph
+///         own error code in detail), no sequence, more than 256 frames, a
+///         frame or layer over 128 pixels, refused before it is decoded, or
+///         a glyph that cannot be rendered or is over 128 pixels (the glyph
 ///         number in detail)
 [[nodiscard]] base::bytes::Decoded<Font> parse_gaf(std::span<const uint8_t> bytes);
 /// Reads and parses an FNT font from the game's assets.

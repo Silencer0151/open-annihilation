@@ -256,6 +256,44 @@ void round_trip(bool pack) {
     CHECK(first.bytes() == second.bytes());
 }
 
+// Two blob entries that each lie inside their account but name its bytes
+// twice over hold more than the account: the read fails.
+void overlapping_blobs_are_refused() {
+    ScopedBank b;
+    bank_open_account(b.get(), "A");
+    bank_set_int(b.get(), "x", 5);
+    bank_open_blob_id(b.get(), 3);
+    bank_blob_write(b.get(), "\x11\x22", 2);
+    bank_open_blob_id(b.get(), 4);
+    bank_blob_write(b.get(), "\x33\x44", 2);
+    ScopedImage image;
+    CHECK(bank_write_image(b.get(), savegame_description, false, &image.image));
+    auto bytes = image.bytes();
+    BankError error{};
+    ScopedBank whole;
+    CHECK(bank_read_image(
+        whole.get(), bytes.data(), static_cast<uint32_t>(bytes.size()), nullptr, nullptr, &error
+    ));
+    const uint32_t entries = bank_header_bytes + account_header_bytes;
+    const uint32_t data_bytes =
+        load_le32(bytes.data() + bank_header_bytes + account_header::size) - account_header_bytes;
+    for (uint32_t blob = 0; blob < 2; ++blob) {
+        const uint32_t at = entries + int_entry_bytes + blob * blob_entry_bytes;
+        oa::base::bytes::store_le32(bytes.data() + at + 8, entries);
+        oa::base::bytes::store_le32(bytes.data() + at + 12, data_bytes);
+    }
+    ScopedBank overlapping;
+    CHECK(!bank_read_image(
+        overlapping.get(),
+        bytes.data(),
+        static_cast<uint32_t>(bytes.size()),
+        nullptr,
+        nullptr,
+        &error
+    ));
+    CHECK(std::strstr(error.message, "malformed entry table") != nullptr);
+}
+
 void read_filters_and_errors() {
     ScopedBank b;
     fill_rich(b.get());
@@ -359,6 +397,7 @@ int main() {
     round_trip(false);
     round_trip(true);
     read_filters_and_errors();
+    overlapping_blobs_are_refused();
     audit_text();
     file_round_trip();
     return oa::data::persist::test::finish("persist-hapibank");

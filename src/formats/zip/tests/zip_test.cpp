@@ -22,6 +22,52 @@
 #include "oa/formats/zip.hpp"
 #include "tool_archives.hpp"
 
+#include <cstdlib>
+
+// The address sanitizer keeps its own allocator, which this program's must
+// not replace.
+#if defined(__SANITIZE_ADDRESS__)
+#define OA_ZIP_TEST_OWN_ALLOCATOR 0
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define OA_ZIP_TEST_OWN_ALLOCATOR 0
+#endif
+#endif
+#ifndef OA_ZIP_TEST_OWN_ALLOCATOR
+#define OA_ZIP_TEST_OWN_ALLOCATOR 1
+#endif
+
+#if OA_ZIP_TEST_OWN_ALLOCATOR
+/// The largest allocation this program makes: a larger one fails, as on a
+/// machine without the memory for it.
+constexpr std::size_t refused_allocation_bytes = std::size_t{256} << 20;
+
+/// Allocates as the standard allocator does, up to refused_allocation_bytes.
+///
+/// @param size bytes wanted
+/// @return the block
+void* operator new(std::size_t size) {
+    if (size <= refused_allocation_bytes)
+        if (void* block = std::malloc(size == 0 ? 1 : size))
+            return block;
+    throw std::bad_alloc();
+}
+
+/// Frees a block operator new gave.
+///
+/// @param block the block; null does nothing
+void operator delete(void* block) noexcept {
+    std::free(block);
+}
+
+/// Frees a block operator new gave.
+///
+/// @param block the block; null does nothing
+void operator delete(void* block, std::size_t) noexcept {
+    std::free(block);
+}
+#endif
+
 namespace {
 
 using namespace oa::formats::zip;
@@ -874,6 +920,15 @@ void test_entry_data() {
         entry.bytes = 0;
         entry.crc32 = 0;
         CHECK(first_entry_status(build_archive({entry})) == ZipStatus::size_mismatch);
+
+#if OA_ZIP_TEST_OWN_ALLOCATOR
+        // A deflated entry claiming more than its buffer can be given, with
+        // data enough for the claim: refused, not fatal.
+        entry = deflated_entry("claimed", bytes_of("z"));
+        entry.bytes = static_cast<uint32_t>(refused_allocation_bytes + 1);
+        entry.data.assign(entry.bytes / 1032 + 1, 0);
+        CHECK(first_entry_status(build_archive({entry})) == ZipStatus::entry_too_large);
+#endif
     }
 
     // An entry given to read_entry that the directory would not hold.

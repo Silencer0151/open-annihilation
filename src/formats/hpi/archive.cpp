@@ -14,6 +14,7 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <new>
 #include <unordered_set>
 
 namespace oa {
@@ -466,7 +467,26 @@ struct HpiArchive::Impl {
             decrypt_at(output.first(got), key, at);
             return static_cast<uint32_t>(got);
         }
+        std::size_t copied = 0;
+        return decode_blocks(node, position, wanted, [&](const uint8_t* bytes, std::size_t count) {
+            std::memcpy(output.data() + copied, bytes, count);
+            copied += count;
+        });
+    }
 
+    /// Decodes the chunks of a compressed file node that hold `wanted`
+    /// bytes from `position`, handing each chunk's part to `take` in order.
+    ///
+    /// @param node the file node; compressed
+    /// @param position first decoded byte wanted
+    /// @param wanted count of bytes wanted; within the entry
+    /// @param take called with each part's bytes and count
+    /// @return the count handed on; or the error, at its archive offset, of
+    ///         a chunk or size table that cannot be read or decoded
+    template <class Take>
+    [[nodiscard]] Decoded<uint32_t> decode_blocks(
+        const ArchiveNode& node, uint32_t position, std::size_t wanted, Take&& take
+    ) const {
         const uint32_t chunks =
             node.size / formats::hpi::BlockBytes + (node.size % formats::hpi::BlockBytes != 0);
         std::vector<uint8_t> table(static_cast<std::size_t>(chunks) * 4U);
@@ -524,11 +544,11 @@ struct HpiArchive::Impl {
                 loaded = block_index;
             }
             const uint32_t offset = cursor % formats::hpi::BlockBytes;
-            const std::size_t take =
+            const std::size_t count =
                 std::min<std::size_t>(formats::hpi::BlockBytes - offset, wanted - copied);
-            std::memcpy(output.data() + copied, decoded.data() + offset, take);
-            copied += take;
-            cursor += static_cast<uint32_t>(take);
+            take(decoded.data() + offset, count);
+            copied += count;
+            cursor += static_cast<uint32_t>(count);
         }
         return static_cast<uint32_t>(copied);
     }
@@ -605,7 +625,7 @@ Decoded<std::vector<uint8_t>> HpiArchive::read_node(uint32_t index) const {
     // The size an entry claims is checked against the archive before any
     // buffer is allocated: stored bytes must lie inside it, and every chunk
     // of a compressed entry needs at least its size-table slot and header.
-    if (node.size > formats::hpi::EntryByteLimit)
+    if (!formats::hpi::entry_size_allowed(node.size))
         return DecodeError{
             DecodeCode::limit_exceeded, node.data_offset, "HPI entry exceeds the entry size limit"
         };
@@ -619,11 +639,32 @@ Decoded<std::vector<uint8_t>> HpiArchive::read_node(uint32_t index) const {
         return DecodeError{
             DecodeCode::truncated, node.data_offset, "HPI entry lies past the end of the archive"
         };
-    std::vector<uint8_t> bytes(node.size);
-    const auto read = impl_->read_range(index, 0, bytes);
+    std::vector<uint8_t> bytes;
+    Decoded<uint32_t> read = 0u;
+    try {
+        if (node.compression == 0) {
+            // The archive holds every stored byte, so the buffer is no
+            // larger than what it gives.
+            bytes.resize(node.size);
+            read = impl_->read_range(index, 0, bytes);
+        } else {
+            // Room is set aside for the claimed size, and only the chunks
+            // that decode fill it.
+            bytes.reserve(node.size);
+            read = impl_->decode_blocks(
+                node, 0, node.size, [&](const uint8_t* decoded, std::size_t count) {
+                    bytes.insert(bytes.end(), decoded, decoded + count);
+                }
+            );
+        }
+    } catch (const std::bad_alloc&) {
+        return DecodeError{
+            DecodeCode::limit_exceeded, node.data_offset, "HPI entry is larger than memory allows"
+        };
+    }
     if (!read.ok())
         return read.error;
-    if (*read.value != bytes.size())
+    if (*read.value != node.size)
         return DecodeError{
             DecodeCode::truncated,
             static_cast<uint64_t>(node.data_offset) + *read.value,

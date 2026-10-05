@@ -99,7 +99,9 @@ inline constexpr std::size_t sequences = 4096;
 inline constexpr std::size_t frames_per_sequence = 4096;
 inline constexpr std::size_t total_frame_records = 131072;
 inline constexpr std::size_t nesting_depth = 32;
-inline constexpr std::size_t pixels_per_frame = 64U * 1024U * 1024U;
+/// Pixels of one frame or layer: 4096 by 4096. The largest frame of the game
+/// and the mods it was measured against is 3240 by 3240.
+inline constexpr std::size_t pixels_per_frame = 4096U * 4096U;
 inline constexpr std::size_t total_decoded_bytes = 256U * 1024U * 1024U;
 } // namespace limit
 
@@ -152,6 +154,7 @@ enum class ErrorCode {
     pixel_limit,
     malformed_compression,
     unsupported_special_render,
+    side_limit, ///< a frame or layer wider or taller than the caller allows
 };
 
 struct Error {
@@ -214,14 +217,21 @@ struct RenderResult {
 /// counts are uint16 and byte 10 of a frame is its layer count. Pixel data
 /// is decoded with a coverage mask; special-render blending is deferred to
 /// the renderer. Every offset, row, run, pointer cycle and size is checked
-/// against the limit namespace.
+/// against the limit namespace, and a frame's size against the limits and
+/// its raw pixels or row lengths against the file before its buffers are
+/// allocated.
 ///
 /// @param bytes the whole file
 /// @param pixels whether each simple frame keeps its decoded pixels and
 ///     coverage; either way a file parses, or fails with the same error
+/// @param largest_side widest and tallest frame or layer accepted, in
+///     pixels; a larger one fails with side_limit before it is decoded
 /// @return the archive, or the first error and its byte offset
-[[nodiscard]] ParseResult
-parse(std::span<const uint8_t> bytes, PixelData pixels = PixelData::decoded);
+[[nodiscard]] ParseResult parse(
+    std::span<const uint8_t> bytes,
+    PixelData pixels = PixelData::decoded,
+    uint16_t largest_side = UINT16_MAX
+);
 
 /// Parses one sequence of a file, with every frame's pixels and coverage
 /// decoded, as `parse` parses it.

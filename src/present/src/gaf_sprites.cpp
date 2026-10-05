@@ -4,6 +4,7 @@
 #include "oa/present/gaf_sprites.hpp"
 
 #include <algorithm>
+#include <utility>
 #include <cstring>
 
 namespace oa::present {
@@ -262,7 +263,17 @@ const char* gaf_status_text(GafStatus status) noexcept {
     return "unknown GAF status";
 }
 
-GafStatus relocate_gaf(std::span<const uint8_t> file, GafSprites& gaf) {
+namespace {
+
+/// Relocates a GAF, placing the file's bytes in `gaf` once they have passed
+/// every check.
+///
+/// @param file GAF file bytes
+/// @param[out] gaf relocated records; reset first
+/// @param keep puts the file's bytes into gaf.bytes
+/// @return ok, or the first check that failed
+template <class Keep>
+GafStatus relocate(std::span<const uint8_t> file, GafSprites& gaf, Keep&& keep) {
     gaf = GafSprites{};
     if (file.size() > gaf_max_bytes) {
         return GafStatus::too_large;
@@ -284,7 +295,7 @@ GafStatus relocate_gaf(std::span<const uint8_t> file, GafSprites& gaf) {
     gaf.version = u32_at(file, 0);
     gaf.sequence_count = u32_at(file, header_sequence_count);
     gaf.reserved_after_sequence_count = u32_at(file, header_reserved_after_sequence_count);
-    gaf.bytes.assign(file.begin(), file.end());
+    keep(gaf.bytes);
     gaf.sequences.resize(check.sequences);
     gaf.slots.resize(check.slots);
     gaf.sprites.resize(check.headers);
@@ -294,6 +305,18 @@ GafStatus relocate_gaf(std::span<const uint8_t> file, GafSprites& gaf) {
     fill.gaf = &gaf;
     status = walk(fill);
     return status;
+}
+
+} // namespace
+
+GafStatus relocate_gaf(std::span<const uint8_t> file, GafSprites& gaf) {
+    return relocate(file, gaf, [&](std::vector<uint8_t>& bytes) {
+        bytes.assign(file.begin(), file.end());
+    });
+}
+
+GafStatus relocate_gaf(std::vector<uint8_t>&& file, GafSprites& gaf) {
+    return relocate(file, gaf, [&](std::vector<uint8_t>& bytes) { bytes = std::move(file); });
 }
 
 Sprite* gaf_frame(const GafSequence* sequence, int32_t index) noexcept {

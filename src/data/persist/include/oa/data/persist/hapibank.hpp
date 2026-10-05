@@ -67,7 +67,7 @@ void byte_image_free(ByteImage* image);
 ///
 /// @param[in,out] image buffer to fill; its size is 0 when the call fails
 /// @param data bytes to copy; may be null when `size` is 0
-/// @param size number of bytes; at most 1 GiB
+/// @param size number of bytes; at most bank_image_byte_limit
 /// @return false when the buffer cannot grow
 bool byte_image_assign(ByteImage* image, const uint8_t* data, uint32_t size);
 
@@ -226,6 +226,12 @@ uint32_t bank_blob_read(Bank* bank, void* out, uint32_t bytes);
 ///     cannot grow
 uint32_t bank_blob_write(Bank* bank, const void* data, uint32_t bytes);
 
+/// Largest bank image read or written, in bytes: the file, an account's
+/// unpacked data, the unpacked name pool, and the blob bytes one read copies
+/// in all. A save of the most units the engine plays, 65,530, stays under
+/// 260 MB.
+inline constexpr uint32_t bank_image_byte_limit = 512u << 20;
+
 // On-disk layout.
 inline constexpr char bank_magic[8] = {'H', 'A', 'P', 'I', 'B', 'A', 'N', 'K'};
 inline constexpr uint32_t bank_header_bytes = 0x22;
@@ -343,7 +349,7 @@ struct FileSource {
 /// @return the sink; it needs no context
 FileSink stdio_file_sink();
 
-/// Returns a file source that reads whole files (up to 1 GiB) through C stdio.
+/// Returns a file source that reads whole files (up to bank_image_byte_limit) through C stdio.
 ///
 /// @return the source; it needs no context
 FileSource stdio_file_source();

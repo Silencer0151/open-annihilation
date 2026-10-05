@@ -23,7 +23,7 @@ inline constexpr size_t gaf_sequence_size = 0x28; // frame slots follow the reco
 inline constexpr size_t gaf_frame_slot_size = 8;
 inline constexpr size_t gaf_frame_header_size = 0x18;
 // Loader bounds; the game's largest GAF is 5.5 MB with 5183 headers, and a
-// mod's effects file can pass 80 MB. The byte bound is the GAF reader's
+// mod's effects file can pass 230 MB. The byte bound is the GAF reader's
 // input bound (oa::formats::gaf::limit::input_bytes).
 inline constexpr size_t gaf_max_bytes = 256 * 1024 * 1024;
 inline constexpr size_t gaf_max_headers = 256 * 1024;
@@ -91,6 +91,15 @@ enum class GafStatus : uint8_t {
 /// @param[out] gaf relocated records; reset first and left partly built on failure
 /// @return ok, or the first check that failed
 [[nodiscard]] GafStatus relocate_gaf(std::span<const uint8_t> file, GafSprites& gaf);
+
+/// Relocates a loaded GAF as the overload over a span does, taking over the
+/// file's bytes instead of copying them, so that a large file is held once.
+///
+/// @param file GAF file bytes; moved into `gaf` once every offset has passed
+///     its check, and left as it was when one fails
+/// @param[out] gaf relocated records; reset first and left partly built on failure
+/// @return ok, or the first check that failed
+[[nodiscard]] GafStatus relocate_gaf(std::vector<uint8_t>&& file, GafSprites& gaf);
 
 /// Returns one frame of a sequence.
 ///

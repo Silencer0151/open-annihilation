@@ -297,8 +297,8 @@ constexpr std::size_t record_size_field = 4;
 /// Size a damaged record may claim: 4 GiB less one byte.
 constexpr uint32_t largest_claimed_size = 0xFFFF'FFFFu;
 /// A compressed size under the entry limit whose chunks cannot fit in a
-/// small archive: 16,368 chunks need at least 376,464 bytes.
-constexpr uint32_t unfitting_compressed_size = 0x3FF0'0000u;
+/// small archive: 8,176 chunks need at least 188,048 bytes.
+constexpr uint32_t unfitting_compressed_size = 0x1FF0'0000u;
 /// A stored entry larger than any buffer a file stream keeps.
 constexpr std::size_t large_stored_entry = 4 << 20;
 
@@ -347,13 +347,40 @@ void test_claimed_sizes(const TempDir& scratch) {
     Bytes range(rest + 1);
     CHECK(past_end_archive.read_node_range(*readme, 0, range).value == rest);
 
-    // A compressed entry whose chunks cannot all fit is refused too.
-    Bytes unfitting = original;
-    put32(unfitting, chunked_record + record_size_field, unfitting_compressed_size);
+    // A compressed entry one byte over the entry limit is refused by it.
+    Bytes over_limit = original;
+    put32(
+        over_limit,
+        chunked_record + record_size_field,
+        static_cast<uint32_t>(oa::formats::hpi::EntryByteLimit + 1)
+    );
+    const oa::HpiArchive over_limit_archive = opened(scratch.write("over-limit.hpi", over_limit));
+    CHECK(fails_with(
+        over_limit_archive, *lz77, oa::base::bytes::DecodeCode::limit_exceeded, "entry size limit"
+    ));
+
+    // A compressed entry of a small archive whose chunks cannot all fit is
+    // refused too.
+    const std::vector<oa::HpiWriteFile> small_files{
+        {"small.bin", pattern_bytes(100), static_cast<uint8_t>(oa::formats::hpi::CompressionLZ77)}
+    };
+    Bytes unfitting = oa::write_hpi(small_files);
+    const oa::HpiArchive small = opened(scratch.write("small.hpi", unfitting));
+    const auto small_entry = small.lookup("small.bin");
+    CHECK(small_entry.has_value() && unfitting.size() < std::size_t{188'048});
+    if (!small_entry) {
+        return;
+    }
+    const std::size_t small_record = file_record_at(unfitting, small.nodes()[*small_entry]);
+    CHECK(small_record < unfitting.size());
+    if (small_record >= unfitting.size()) {
+        return;
+    }
+    put32(unfitting, small_record + record_size_field, unfitting_compressed_size);
     const oa::HpiArchive unfitting_archive = opened(scratch.write("unfitting.hpi", unfitting));
     CHECK(fails_with(
         unfitting_archive,
-        *lz77,
+        *small_entry,
         oa::base::bytes::DecodeCode::truncated,
         "past the end of the archive"
     ));
