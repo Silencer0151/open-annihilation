@@ -9,6 +9,10 @@
   <a href="https://discord.gg/GWgWTQKuv"><img alt="Discord" src="https://img.shields.io/badge/Discord-join%20us-5865F2?style=flat-square&logo=discord&logoColor=white"></a>
 </p>
 
+<p align="center">
+  <a href="https://youtu.be/fQ2czvDkSSs"><img alt="Watch the Open Annihilation trailer on YouTube" src="https://img.youtube.com/vi/fQ2czvDkSSs/maxresdefault.jpg" width="760"></a>
+</p>
+
 <p align="center"><b>Runs on</b></p>
 
 <p align="center">
