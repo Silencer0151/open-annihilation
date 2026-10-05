@@ -181,18 +181,27 @@ Runtime::explosion_sequence(std::string_view archive, std::string_view entry) {
     const auto index = static_cast<std::size_t>(listed - loaded.archive.sequences.data());
     if (const auto found = loaded.decoded.find(index); found != loaded.decoded.end())
         return &found->second;
-    // The file passed its check when it loaded, so its sequence decodes; the
-    // file is read again for it and its bytes are let go once it has decoded.
+    if (loaded.failed.count(index) != 0)
+        return nullptr;
+    // The file passed its check when it loaded, so its sequence decodes
+    // unless its pixels and coverage take more than a decoded sequence may
+    // keep; the file is read again for it and its bytes are let go once it
+    // has decoded. A sequence that fails is remembered, so that later
+    // explosions neither read the file again nor report it again.
+    std::string reason;
     try {
         const auto file = assets_.read(loaded.path).bytes;
         auto decoded = oa::formats::gaf::parse_sequence(file, index);
-        if (!decoded.ok())
-            return nullptr;
-        return &loaded.decoded.emplace(index, std::move(*decoded.sequence)).first->second;
+        if (decoded.ok())
+            return &loaded.decoded.emplace(index, std::move(*decoded.sequence)).first->second;
+        reason = decoded.error ? decoded.error->message : "the sequence did not decode";
     } catch (const std::exception& error) {
-        std::cerr << "match HUD GAF '" << loaded.path << "' unavailable: " << error.what() << '\n';
-        return nullptr;
+        reason = error.what();
     }
+    loaded.failed.insert(index);
+    std::cerr << "explosion GAF '" << loaded.path << "' sequence '" << listed->name
+              << "' is not drawn: " << reason << '\n';
+    return nullptr;
 }
 
 void Runtime::append_gaf_file(oa::formats::gaf::Archive& destination, std::string_view path) {

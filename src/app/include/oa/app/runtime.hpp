@@ -2278,12 +2278,15 @@ class Runtime final : public menu::Host,
     /// read and checked on first use (load_explosion_gaf), and each of its
     /// sequences is decoded from a fresh read of the file the first time it
     /// is asked for, then kept with the file's sequence list for later
-    /// matches. A missing file has no sequences; 3.1c
-    /// stops with a fatal error there.
+    /// matches. A sequence that cannot be read or decoded is reported on
+    /// stderr once and is null from then on, without the file being read
+    /// again. A missing file has no sequences; 3.1c stops with a fatal error
+    /// there.
     ///
     /// @param archive animation file name without extension, any case
     /// @param entry sequence name
-    /// @return the decoded sequence, or null when the file or entry is missing
+    /// @return the decoded sequence, or null when the file or entry is
+    ///     missing or the sequence cannot be decoded
     const oa::formats::gaf::Sequence*
     explosion_sequence(std::string_view archive, std::string_view entry);
 
@@ -12043,6 +12046,9 @@ class Runtime final : public menu::Host,
         std::string path;
         oa::formats::gaf::Archive archive;
         std::map<std::size_t, oa::formats::gaf::Sequence> decoded;
+        /// The places of the sequences that could not be read or decoded;
+        /// each was reported once and is not read again.
+        std::set<std::size_t> failed;
     };
 
     // The explosion animation files read so far, by name with letters
