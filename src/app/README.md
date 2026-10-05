@@ -1699,14 +1699,14 @@ the game's window ([docs/game-files.md](../../docs/game-files.md)).
 ## The player's own folder
 
 `user_folder.cpp` (`oa-app-user-folder`, `user_folder.hpp`) keeps the
-player's saved games, screenshots, films and mods in one folder they can
-find: `--user-folder`, else the preferences' `open-annihilation.user-folder`,
+player's saved games, screenshots, films, recordings and mods in one folder
+they can find: `--user-folder`, else the preferences' `open-annihilation.user-folder`,
 else `Open Annihilation` in their Documents folder
 (`oa::platform::preferences::default_user_folder`), or beside a named
 `--preferences-file`, so that a check never reaches the Documents folder
 (`choose_user_folder`, `user_folder_beside`). It holds `Saves`,
-`Screenshots` and `Films`, each with a folder for each mod, named after its
-id, and `default` for games without a mod's profile, 3.1c's and a mod
+`Screenshots`, `Films` and `Recordings`, each with a folder for each mod,
+named after its id, and `default` for games without a mod's profile, 3.1c's and a mod
 folder's without an `oamod.yaml` (`mod_subfolder_name`; a mod whose id is
 `default` takes `default (mod)`, which no kebab-case id can be), and
 `Mods`, each made when first needed. `runtime_user_folder.cpp` puts it in
@@ -1724,7 +1724,9 @@ effect:
   `MOVIEnnn` folder lies in its folder in `Films` (`place_capture_path`).
   A relative path whose `..` parts would leave its folder, such as a saved
   game's name taken from a downloaded save's description, has no place,
-  and nothing is written for it. A stored Image Output Directory that is
+  and nothing is written for it. A network game's recording goes in the
+  mod's folder in `Recordings`, unless `--net-record` names the file,
+  which is written as it is given (`recording_file`). A stored Image Output Directory that is
   the game's default, the game folder's folder named after the user, gives
   way to it; any other one the player chose wins, used as it is.
 - **The moves:** the first start with the player's own preferences file
@@ -1744,7 +1746,13 @@ effect:
   it is, where the dialogs and the console still find it. Each step is said
   on standard error, which the log keeps. A move that moved or left a file
   is recorded, and one that moved or left a saved game makes its notice
-  due (`record_saves_move`, `record_loose_saves_move`).
+  due (`record_saves_move`, `record_loose_saves_move`). In the same way,
+  one that finds no `open-annihilation.recordings-moved` record moves the
+  recordings earlier versions kept beside that file, `demos` and each
+  `mods/<id>/demos`, every file a recording whatever its extension, into
+  `Recordings/default` and `Recordings/<id>`
+  (`move_recordings_once`, `move_earlier_recordings`,
+  `record_recordings_move`); no notice follows it.
 - **The notice:** `tell_saves_moved` shows it over the darkened main menu
   once, as the renderer records' notice is shown: in the settings dialog's
   look (`oa/ui/engine_settings/notice.hpp`), with the count of the moves
@@ -1911,8 +1919,10 @@ runtime then:
   game's; a first run seeds the profile's registry seeds where no value of
   that name, matched without case, exists (`seed_registry`);
 - keeps saved games in `Saves/<id>` in the player's own folder
-  (`Runtime::saves_folder`), and screenshots and films in
-  `Screenshots/<id>` and `Films/<id>` (`Runtime::game_file_path`);
+  (`Runtime::saves_folder`), screenshots and films in
+  `Screenshots/<id>` and `Films/<id>` (`Runtime::game_file_path`), and
+  the recordings of network games in `Recordings/<id>`
+  (`recording_file`);
 - reads the movies, the music folder and the disc archives through the
   folders, the mod folder first; a profile whose `cd-check` is false always
   finds its disc.

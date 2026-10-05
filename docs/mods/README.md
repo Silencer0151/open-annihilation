@@ -115,9 +115,9 @@ game's data, back on the main menu, once the files are swapped.
 What a replace or a reinstall does not carry over: anything you changed or
 added inside the mod's folder, such as its INI file. After a replace, the
 `.backup` folder keeps it until the next replace. Versions installed
-alongside each other share `Saves/<id>`, `Screenshots/<id>`, `Films/<id>`
-and the settings kept under the mod's registry root, since they share an
-id; a saved game loads only under the same sim hash.
+alongside each other share `Saves/<id>`, `Screenshots/<id>`, `Films/<id>`,
+`Recordings/<id>` and the settings kept under the mod's registry root,
+since they share an id; a saved game loads only under the same sim hash.
 
 **Making a .oamod file.** Zip the mod's folder, the one that holds
 `oamod.yaml`, or the files in it, and rename the `.zip` file to `.oamod`:
@@ -341,13 +341,15 @@ covers network compatibility.
 ## Saves and settings
 
 Game folders are never written to. With a profile, saved games go to
-`Saves/<id>` in the player's own Open Annihilation folder, and screenshots
-and films to `Screenshots/<id>` and `Films/<id>`, so each mod keeps its own
-list of saved games; without one, as for a mod folder without an
-`oamod.yaml`, they go to the `default` folders, and a mod whose id is
-`default` uses `default (mod)`. Versions before 0.7 kept them in
-`mods/<id>/SAVEGAME` beside the preferences file; the first start of a
-later version moves them there once, with the saved games of 3.1c. A save
+`Saves/<id>` in the player's own Open Annihilation folder, screenshots and
+films to `Screenshots/<id>` and `Films/<id>`, and the recordings of network
+games to `Recordings/<id>`, so each mod keeps its own list of saved games;
+without one, as for a mod folder without an `oamod.yaml`, they go to the
+`default` folders, and a mod whose id is `default` uses `default (mod)`.
+Versions before 0.7 kept saved games in `mods/<id>/SAVEGAME` beside the
+preferences file, and earlier versions kept recordings in
+`mods/<id>/demos` there; the first start of a later version moves them
+there once, with those of 3.1c. A save
 made under a profile records the profile's id, version and hashes, and
 loads only under a profile with the same sim hash. A save without a profile
 record loads under any profile.

@@ -11,8 +11,9 @@ headless on that install and profile: a host and a joiner over 127.0.0.1 go
 from the battle room through a match to its end, by the profile's version
 bytes, private channel, integrity check, votes, recorder and commander start
 sync. The run must end with status 0 and both worlds' digests equal. When the
-profile presents the recorder, each machine records the game, and every
-recording the run wrote must then play back headless.
+profile presents the recorder, each machine records the game into the mod's
+folder in Recordings, in the player's own folder beside the preferences file,
+and every recording the run wrote must then play back headless.
 
 Without a matching profile the check prints one line and exits with 77,
 which ctest reports as skipped.
@@ -55,8 +56,8 @@ def main():
         if not folder.is_dir():
             print(f"mod loopback check: {folder} is not a folder; skipped")
             return layout.SKIP
-    profile, _ = layout.matching_profile(arguments.native, arguments.profiles,
-                                         arguments.mod_install)
+    profile, effective = layout.matching_profile(arguments.native, arguments.profiles,
+                                                 arguments.mod_install)
     if profile is None:
         print(f"mod loopback check: no profile in {arguments.profiles} names a revision archive "
               f"{arguments.mod_install} holds; skipped")
@@ -76,7 +77,16 @@ def main():
         return 1
     print(f"mod loopback check: host and joiner agree by the profile's rules, "
           f"digest {digests.group(1)}")
+    # The mod's folder in Recordings: its id, or "default (mod)" for the id
+    # that names the folder of games without a mod.
+    mod_id = effective.get("id", "")
+    recordings = (workdir / "Open Annihilation" / "Recordings" /
+                  ("default (mod)" if mod_id == "default" else mod_id))
     for index, recording in enumerate(RECORDED.findall(output)):
+        if Path(recording.strip()).parent != recordings:
+            print(f"mod loopback check: the recording {recording.strip()} is not in "
+                  f"{recordings}", file=sys.stderr)
+            return 1
         status, replay = run(
             arguments.native,
             [*common, "--play-demo", recording.strip(), "--match-ticks", str(arguments.ticks),
@@ -86,7 +96,8 @@ def main():
             print(f"mod loopback check: the recording {recording.strip()} did not play back "
                   f"(status {status}); see {workdir / f'replay-{index}.txt'}", file=sys.stderr)
             return 1
-        print(f"mod loopback check: the recording {Path(recording.strip()).name} plays back")
+        print(f"mod loopback check: the recording {Path(recording.strip()).name} in {recordings} "
+              f"plays back")
     return 0
 
 

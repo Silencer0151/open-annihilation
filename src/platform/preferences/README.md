@@ -28,8 +28,8 @@ macOS and Windows and in the XDG data folder on Linux:
 | Windows | Local AppData / `CorePrime/Open Annihilation` |
 | Linux | `$XDG_DATA_HOME/open-annihilation`, or `$HOME/.local/share/open-annihilation` |
 
-The player's own files, their saved games, screenshots, films and mods, go
-in a folder named `Open Annihilation` (`user_folder_name`) in their
+The player's own files, their saved games, screenshots, films, recordings
+and mods, go in a folder named `Open Annihilation` (`user_folder_name`) in their
 Documents folder (`documents_directory()`, `default_user_folder()`), where
 they can find them:
 
@@ -94,10 +94,11 @@ page lists while the folder still exists. It is kept only while
 `open-annihilation.mod-directory` names the same folder: once another mod
 or No Mod is chosen, it is erased. Absent, there is none.
 `open-annihilation.user-folder` holds the folder the player keeps their
-saved games, screenshots, films and mods in, as an absolute UTF-8 path, in
-place of `Open Annihilation` in Documents; absent or relative, the default
-holds, and `--user-folder` sets another for one run, into which no saved
-games are moved. With `--preferences-file` the default is the
+saved games, screenshots, films, recordings and mods in, as an absolute
+UTF-8 path, in place of `Open Annihilation` in Documents; absent or
+relative, the default holds, and `--user-folder` sets another for one run,
+into which no saved games or recordings are moved. With
+`--preferences-file` the default is the
 `Open Annihilation` folder beside that file, so that a check never reaches
 the player's Documents folder, and nothing beside that file is moved.
 `open-annihilation.saves-moved` records that the saved games kept beside
@@ -110,6 +111,10 @@ waits to be shown, and `told` once it has shown.
 `open-annihilation.loose-saves-moved` and
 `open-annihilation.loose-saves-moved-notice` do the same for the move of
 3.1c's saved games loose in `Saves` into `Saves/default`.
+`open-annihilation.recordings-moved` records, in the same way, that the
+recordings kept beside the preferences file by earlier versions (`demos`,
+and `mods/<id>/demos`) were moved into that folder's `Recordings`; no
+notice follows that move.
 A mod whose profile names a registry root of its own keeps the game's
 `<section>|<name>` settings under `registry:<root>\<section>|<name>` keys
 instead, as the mod keeps them under its own registry key, and its first run

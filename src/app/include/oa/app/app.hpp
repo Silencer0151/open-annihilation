@@ -230,9 +230,9 @@ struct Options {
     fs::path snapshot;
     std::optional<fs::path> preferences_file;
     // The player's own folder, which holds the saved games, screenshots,
-    // films and mods (--user-folder); unset: the preferences' key, else
-    // "Open Annihilation" in the Documents folder, or beside a named
-    // --preferences-file.
+    // films, recordings and mods (--user-folder); unset: the preferences'
+    // key, else "Open Annihilation" in the Documents folder, or beside a
+    // named --preferences-file.
     std::optional<fs::path> user_folder;
     std::optional<std::size_t> frame_limit;
     std::optional<std::size_t> benchmark_frames;

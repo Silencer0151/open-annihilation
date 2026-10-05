@@ -288,11 +288,11 @@ add_library(oa::app::game_files ALIAS oa-app-game-files)
 target_link_libraries(oa-app-game-files PUBLIC oa-app-headers oa-app-game-directory oa-app-mod-profile
   oa-base-threads PRIVATE oa-formats-zip oa-platform-preferences oa-options)
 # The player's own folder: where it is, the folders it holds, a folder for
-# each mod in Saves, Screenshots and Films, the one-time moves of saved
-# games from beside the preferences file and loose in Saves into those
-# folders, and the main menu's notice of those moves; and the warning, in
-# the same look, that a mod's games cannot start until its files are in its
-# folder.
+# each mod in Saves, Screenshots, Films and Recordings, the one-time moves
+# of saved games from beside the preferences file and loose in Saves, and of
+# recordings from beside the preferences file, into those folders, and the
+# main menu's notice of the saved games' moves; and the warning, in the same
+# look, that a mod's games cannot start until its files are in its folder.
 # The game shows a folder in the system's file manager itself
 # (user_folder_open.cpp).
 add_library(oa-app-user-folder src/app/user_folder.cpp)

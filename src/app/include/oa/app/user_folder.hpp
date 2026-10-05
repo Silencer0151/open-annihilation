@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // The player's own folder, "Open Annihilation" in their Documents folder:
-// where it is, the folders it holds (Saves, Screenshots and Films, each with a
-// folder for each mod, and Mods), the one-time moves of saved games from where
-// earlier versions kept them, beside the preferences file and loose in Saves,
-// and the main menu's notice of those moves; and the warning, in the same
+// where it is, the folders it holds (Saves, Screenshots, Films and Recordings,
+// each with a folder for each mod, and Mods), the one-time moves of saved
+// games from where earlier versions kept them, beside the preferences file and
+// loose in Saves, and of recordings from beside the preferences file, and the
+// main menu's notice of the saved games' moves; and the warning, in the same
 // look, that a mod's games cannot start until its files are in its folder.
 // Nothing here reads the clock or SDL; the runtime does the rest.
 #pragma once
@@ -33,13 +34,16 @@ inline constexpr std::string_view screenshots_folder_name = "Screenshots";
 /// The folder of the player's own folder film captures go in while no
 /// Image Output Directory is set, in a folder for each mod.
 inline constexpr std::string_view films_folder_name = "Films";
-/// The folder of Saves, Screenshots and Films that holds the files of games
-/// played without a mod's profile: 3.1c's, and a mod folder's that holds no
-/// oamod.yaml.
+/// The folder of the player's own folder the recordings of network games go
+/// in, in a folder for each mod, unless --net-record names the file.
+inline constexpr std::string_view recordings_folder_name = "Recordings";
+/// The folder of Saves, Screenshots, Films and Recordings that holds the
+/// files of games played without a mod's profile: 3.1c's, and a mod
+/// folder's that holds no oamod.yaml.
 inline constexpr std::string_view no_mod_folder_name = "default";
-/// The folder of Saves, Screenshots and Films that holds the files of a mod
-/// whose id is no_mod_folder_name, a name no id can take, since an id is
-/// kebab-case.
+/// The folder of Saves, Screenshots, Films and Recordings that holds the
+/// files of a mod whose id is no_mod_folder_name, a name no id can take,
+/// since an id is kebab-case.
 inline constexpr std::string_view default_id_folder_name = "default (mod)";
 /// The folder of the player's own folder whose mod folders the Mod setting
 /// offers besides the game folder's mods folder.
@@ -48,13 +52,18 @@ inline constexpr std::string_view user_mods_folder_name = "Mods";
 /// The folder below the preferences file's folder, and below each mods/<id>
 /// folder there, that held saved games before they moved to Saves.
 inline constexpr std::string_view earlier_saves_folder_name = "SAVEGAME";
+/// The folder below the preferences file's folder, and below each mods/<id>
+/// folder there, that held recordings before they moved to Recordings.
+inline constexpr std::string_view earlier_recordings_folder_name = "demos";
 /// The folder below the preferences file's folder that held each mod's
-/// earlier save folder, in a folder named after the mod's id.
+/// earlier save and recordings folders, in a folder named after the mod's
+/// id.
 inline constexpr std::string_view earlier_mods_folder_name = "mods";
 /// The extension of a saved game, matched without case.
 inline constexpr std::string_view saved_game_extension = ".SAV";
-/// What the name of a file being copied into Saves ends with until the copy
-/// is whole; a copy cut short keeps it, and no dialog lists it.
+/// What the name of a file being copied into Saves or Recordings ends with
+/// until the copy is whole; a copy cut short keeps it, and no dialog lists
+/// it.
 inline constexpr std::string_view partial_copy_suffix = ".moving";
 
 /// The preference that moves the player's own folder, as an absolute UTF-8
@@ -83,6 +92,12 @@ inline constexpr std::string_view loose_saves_moved_preference =
 /// preferences file.
 inline constexpr std::string_view loose_saves_notice_preference =
     "open-annihilation.loose-saves-moved-notice";
+/// The preference that records that the recordings kept beside the
+/// preferences file were moved into Recordings, so that the move never runs
+/// again: the recordings moved and the ones left where they were, as
+/// saves_moved_preference holds them. No notice follows it.
+inline constexpr std::string_view recordings_moved_preference =
+    "open-annihilation.recordings-moved";
 
 /// The folder a run with --preferences-file keeps as the player's own,
 /// beside that file, unless --user-folder or the file's own key names one,
@@ -129,8 +144,9 @@ user_folder_beside(const std::filesystem::path& preferences_file);
     std::string& note
 );
 
-/// Returns the name of the folder of Saves, Screenshots and Films that holds
-/// the files of games played with a mod, or without one.
+/// Returns the name of the folder of Saves, Screenshots, Films and
+/// Recordings that holds the files of games played with a mod, or without
+/// one.
 ///
 /// @param mod_id the id of the mod's profile; empty without one
 /// @return the id; no_mod_folder_name without one, and
@@ -162,6 +178,33 @@ screenshots_folder(const std::filesystem::path& user_folder, std::string_view mo
 /// @return Films/<mod_subfolder_name(mod_id)>
 [[nodiscard]] std::filesystem::path
 films_folder(const std::filesystem::path& user_folder, std::string_view mod_id);
+
+/// Returns the folder the recordings of a game's or a mod's network games
+/// are written to, unless --net-record names the file.
+///
+/// @param user_folder the player's own folder
+/// @param mod_id the id of the mod's profile; empty without one
+/// @return Recordings/<mod_subfolder_name(mod_id)>: Recordings/default
+///     without a mod
+[[nodiscard]] std::filesystem::path
+recordings_folder(const std::filesystem::path& user_folder, std::string_view mod_id);
+
+/// Returns the file a network game's recording is written to: the file
+/// --net-record names, as it is given, else the file of that name in the
+/// folder of the mod played in Recordings (recordings_folder).
+///
+/// @param net_record the --net-record file; empty when none is given
+/// @param user_folder the player's own folder
+/// @param mod_id the id of the mod's profile; empty without one
+/// @param name the recording's file name: .record's, or the date, time and
+///        map's, with the recorder's extension
+/// @return the file
+[[nodiscard]] std::filesystem::path recording_file(
+    const std::filesystem::path& net_record,
+    const std::filesystem::path& user_folder,
+    std::string_view mod_id,
+    const std::filesystem::path& name
+);
 
 /// Places a path in the player's own folder, which stands for the Image
 /// Output Directory while none is set: its screenshots folder, SCREENSHOTS
@@ -285,6 +328,35 @@ void move_saves_folder(
 [[nodiscard]] SavesMove
 move_loose_saves(const std::filesystem::path& user_folder, const FileMoveHooks& hooks = {});
 
+/// What the move of the recordings did. Every file of an earlier recordings
+/// folder counts as a recording, whatever its extension, since a mod's
+/// profile names its own.
+struct RecordingsMove {
+    std::size_t moved{};   ///< recordings now in a Recordings folder
+    std::size_t renamed{}; ///< of those, the ones kept under another name, theirs taken
+    std::size_t left{};    ///< recordings that could not move and stay where they were
+    /// What happened, a line each, for standard error and the log.
+    std::vector<std::string> lines;
+};
+
+/// Moves the recordings from where earlier versions kept them, beside the
+/// preferences file: <root>/demos into recordings_folder(user_folder, ""),
+/// and <root>/mods/<id>/demos into recordings_folder(user_folder, id) for
+/// each mod, as move_saves_folder moves saved games: never overwriting one,
+/// a name taken kept for the file there and the file moved given a free
+/// one, and one that cannot move left where it is. The names are matched
+/// without case.
+///
+/// @param earlier_root the folder that held them: the preferences file's
+/// @param user_folder the player's own folder
+/// @param hooks stand-ins for the file system's rename and copy
+/// @return what the move did
+[[nodiscard]] RecordingsMove move_earlier_recordings(
+    const std::filesystem::path& earlier_root,
+    const std::filesystem::path& user_folder,
+    const FileMoveHooks& hooks = {}
+);
+
 /// Records a move in the preferences: saves_moved_preference, and the notice
 /// due when it moved or left a saved game.
 ///
@@ -300,10 +372,17 @@ void record_saves_move(platform::preferences::Values& values, const SavesMove& m
 /// @param move what the move did
 void record_loose_saves_move(platform::preferences::Values& values, const SavesMove& move);
 
-/// The counts a recorded move keeps for its notice.
+/// Records the move of the recordings (move_earlier_recordings) in the
+/// preferences: recordings_moved_preference.
+///
+/// @param[in,out] values the preferences
+/// @param move what the move did
+void record_recordings_move(platform::preferences::Values& values, const RecordingsMove& move);
+
+/// The counts a recorded move keeps.
 struct RecordedMove {
-    std::size_t moved{}; ///< saved games moved
-    std::size_t left{};  ///< saved games left where they were
+    std::size_t moved{}; ///< saved games, or recordings, moved
+    std::size_t left{};  ///< saved games, or recordings, left where they were
 };
 
 /// Reads what the recorded move from beside the preferences file moved and
@@ -323,6 +402,14 @@ recorded_saves_move(const platform::preferences::Values& values);
 ///         cannot be read
 [[nodiscard]] std::optional<RecordedMove>
 recorded_loose_saves_move(const platform::preferences::Values& values);
+
+/// Reads what the recorded move of the recordings moved and left.
+///
+/// @param values the preferences
+/// @return the counts; nullopt when no move is recorded, or its value
+///         cannot be read
+[[nodiscard]] std::optional<RecordedMove>
+recorded_recordings_move(const platform::preferences::Values& values);
 
 /// Tells whether the main menu's notice of a move waits to be shown.
 ///

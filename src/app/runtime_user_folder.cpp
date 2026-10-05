@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// The player's own folder: chosen at start, the saved games moved into it
-// once, the paths the game names placed in it, in the folders of the mod
-// played, its folders shown in the system's file manager, and the main
-// menu's notice of the moves, drawn over the darkened main menu in the
-// settings dialog's look; the mod's warning (runtime_mod_warning.cpp) is
-// drawn and driven as the same notice.
+// The player's own folder: chosen at start, the saved games and recordings
+// moved into it once, the paths the game names placed in it, in the folders
+// of the mod played, its folders shown in the system's file manager, and the
+// main menu's notice of the saved games' moves, drawn over the darkened main
+// menu in the settings dialog's look; the mod's warning
+// (runtime_mod_warning.cpp) is drawn and driven as the same notice.
 
 #include "engine_settings_state.hpp"
 #include "user_folder_state.hpp"
@@ -104,17 +104,20 @@ void Runtime::start_user_folder() {
     );
     if (!note.empty())
         std::cerr << "open-annihilation: no Documents folder (" << note
-                  << "); saved games, screenshots, films and mods go in "
+                  << "); saved games, screenshots, films, recordings and mods go in "
                   << path_to_utf8(user_folder_) << '\n';
-    // Only the player's own preferences file had the saved games the game
-    // kept beside it; a named file's folder may hold anything, which stays.
-    // They, and those loose in Saves, move only within the folder every
-    // start uses: a folder named for one start would take them from every
-    // later one, or its recorded move would stand for every other folder's,
-    // and the dialogs list them where they are instead.
+    // Only the player's own preferences file had the saved games and
+    // recordings the game kept beside it; a named file's folder may hold
+    // anything, which stays. They, and the saved games loose in Saves, move
+    // only within the folder every start uses: a folder named for one start
+    // would take them from every later one, or its recorded move would stand
+    // for every other folder's, and the dialogs list the saved games where
+    // they are instead.
     const bool one_start_folder = options_.user_folder && !options_.user_folder->empty();
-    if (!options_.preferences_file && !one_start_folder)
+    if (!options_.preferences_file && !one_start_folder) {
         move_saves_once();
+        move_recordings_once();
+    }
 }
 
 void Runtime::move_saves_once() {
@@ -147,6 +150,35 @@ void Runtime::move_saves_once() {
         flush_preferences();
     } catch (const std::exception& failure) {
         std::cerr << "open-annihilation: the move of the saved games is not recorded: "
+                  << failure.what() << '\n';
+    }
+}
+
+void Runtime::move_recordings_once() {
+    // Made once; a recorded move is not made again.
+    if (preference_values_.contains(std::string(recordings_moved_preference)))
+        return;
+    std::error_code error;
+    const fs::path preference_folder =
+        fs::absolute(preference_path_, error).lexically_normal().parent_path();
+    if (error)
+        return;
+    const RecordingsMove move = move_earlier_recordings(preference_folder, user_folder_);
+    for (const auto& line : move.lines)
+        std::cerr << "open-annihilation: " << line << '\n';
+    if (move.moved == 0 && move.left == 0)
+        return;
+    std::cerr << "open-annihilation: " << move.moved
+              << (move.moved == 1 ? " recording" : " recordings") << " moved to "
+              << path_to_utf8(user_folder_ / std::string(recordings_folder_name))
+              << (move.left != 0 ? ", " + std::to_string(move.left) + " left where they were" : "")
+              << '\n';
+    record_recordings_move(preference_values_, move);
+    preferences_dirty_ = true;
+    try {
+        flush_preferences();
+    } catch (const std::exception& failure) {
+        std::cerr << "open-annihilation: the move of the recordings is not recorded: "
                   << failure.what() << '\n';
     }
 }

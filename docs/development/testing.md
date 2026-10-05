@@ -71,16 +71,17 @@ Every native check names its preferences file with `--preferences-file`, so
 that it never reads or writes the player's own, nor the renderer records
 the game keeps beside it, which with a named file live in memory for the
 run. With a named file the player's own folder, which holds the saved
-games, screenshots, films and mods, is the `Open Annihilation` folder beside
-that file too, so that no check writes into the Documents folder; on macOS
-the Documents folder does not follow `$HOME`, so a temporary `HOME` does not
-keep a run without a named file out of it. `native-user-folder`
-(`--check-user-folder`) checks that folder: saved games where earlier
-versions kept them, beside the preferences file and loose in `Saves`, left
-alone by a start with a named file, then moved into its `Saves/default`
-once as a start with the player's own file moves them, one named as a saved
-game already there kept beside it, a mod's into its own folder, the earlier
-folders still read while they hold one, a save, a screenshot and a film
+games, screenshots, films, recordings and mods, is the `Open Annihilation`
+folder beside that file too, so that no check writes into the Documents
+folder; on macOS the Documents folder does not follow `$HOME`, so a
+temporary `HOME` does not keep a run without a named file out of it. `native-user-folder`
+(`--check-user-folder`) checks that folder: saved games and recordings
+where earlier versions kept them, beside the preferences file and loose in
+`Saves`, left alone by a start with a named file, then moved into its
+`Saves/default` and `Recordings/default` once as a start with the player's
+own file moves them, one named as a saved game already there kept beside
+it, a mod's into its own folder, the earlier folders still read while they
+hold one, a save, a screenshot and a film
 placed in the `default` folders of `Saves`, `Screenshots` and `Films`
 without a mod and in a made-up mod's own with one, the main menu's notice
 of the moves shown once in the settings dialog's look and closed, its Open
@@ -325,8 +326,9 @@ cannot link to the install's files. With the same two settings,
 `native-mod-net-loopback` (`tools/check_native_mod_loopback.py`) runs
 `--net-loopback-check` on the copied install with that profile: host and
 joiner must end with equal worlds under the profile's network and recorder
-rules, and every recording the two machines made must play back with
-`--play-demo`. `native-mod-stockpile-builds`
+rules, and every recording the two machines made must lie in the mod's
+folder in `Recordings` and play back with `--play-demo`.
+`native-mod-stockpile-builds`
 (`tools/check_native_mod_stockpile.py`) runs `--check-stockpile-builds` on
 the copied install with that profile, as `native-stockpile-builds` does on
 `OA_GAME_DIR`: every unit whose first weapon stockpiles must open on its

@@ -689,10 +689,10 @@ class Runtime final : public menu::Host,
     /// @return the folder, absolute; empty before the runtime has started
     [[nodiscard]] const fs::path& user_folder() const noexcept;
 
-    /// Returns the id of the mod whose folders in Saves, Screenshots and
-    /// Films this run's files go in: its profile's; empty for 3.1c and for a
-    /// mod folder without a profile, whose files go with 3.1c's in default
-    /// (user_folder.hpp).
+    /// Returns the id of the mod whose folders in Saves, Screenshots, Films
+    /// and Recordings this run's files go in: its profile's; empty for 3.1c
+    /// and for a mod folder without a profile, whose files go with 3.1c's in
+    /// default (user_folder.hpp).
     ///
     /// @return the id; empty without a profile
     [[nodiscard]] std::string_view files_mod_id() const noexcept;
@@ -3441,8 +3441,10 @@ class Runtime final : public menu::Host,
     /// Chooses the player's own folder (user_folder) and, with the player's
     /// own preferences file, moves the saved games from beside it, and those
     /// of 3.1c loose in Saves, into their folders in Saves once
-    /// (move_saves_once). With --preferences-file or --user-folder nothing
-    /// is moved: the dialogs list the saved games where they are.
+    /// (move_saves_once), and the recordings from beside it into their
+    /// folders in Recordings once (move_recordings_once). With
+    /// --preferences-file or --user-folder nothing is moved: the dialogs
+    /// list the saved games where they are, and the recordings stay.
     void start_user_folder();
 
     /// Moves the saved games from beside the preferences file into the
@@ -3454,6 +3456,13 @@ class Runtime final : public menu::Host,
     /// which are written, and one that moved or left a saved game makes the
     /// main menu's notice due (tell_saves_moved).
     void move_saves_once();
+
+    /// Moves the recordings from beside the preferences file into the
+    /// player's own folder's Recordings (move_earlier_recordings) while the
+    /// preferences record no such move, saying what happened on standard
+    /// error, which the log keeps. A move that moved or left a recording is
+    /// recorded in the preferences, which are written; no notice follows.
+    void move_recordings_once();
 
     /// The player's own folder's opener and the main menu's notice of the
     /// move (user_folder_state.hpp, runtime_user_folder.cpp).

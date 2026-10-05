@@ -123,16 +123,17 @@ game, TCP ports 2300 to 2400 and UDP ports 2350 to 2400.
 
 ## Where it keeps its files
 
-Your saved games, screenshots, films and mods are in the **Open
-Annihilation** folder in your Documents folder (**My Documents** on Windows
-XP), wherever Windows keeps it, OneDrive or a folder your organisation has
-moved it to included:
+Your saved games, screenshots, films, recordings and mods are in the
+**Open Annihilation** folder in your Documents folder (**My Documents** on
+Windows XP), wherever Windows keeps it, OneDrive or a folder your
+organisation has moved it to included:
 
 | Folder | What it holds |
 | --- | --- |
 | `Saves` | saved games, a mod's in `Saves/<mod id>` and those without a mod in `Saves/default` |
 | `Screenshots` | screenshots (Ctrl+F9) and posters (`MakePoster`), in a folder for each mod as in `Saves` |
 | `Films` | films (Ctrl+F10), a `MOVIEnnn` folder each, in a folder for each mod as in `Saves` |
+| `Recordings` | recordings of network games, which `--play-demo` plays back, in a folder for each mod as in `Saves` |
 | `Mods` | mods you add, each in a folder of its own, which the settings' Mods page lists besides the game folder's `mods` folder ([mods](../mods/README.md#installing-a-mod)) |
 
 The game makes each folder the first time it needs it. In the settings (the
@@ -154,17 +155,20 @@ Nothing is overwritten: a saved game whose name that folder holds already
 is moved as `NAME (2).SAV`, keeping both. One that cannot be moved stays where it is, and the
 game still lists it there. The log says what moved and what did not. An
 earlier version started afterwards no longer sees the saved games that
-moved.
+moved. Recordings, which earlier versions kept in a `demos` folder there,
+and a mod's in `mods/<mod id>/demos`, move into `Recordings/default` and
+`Recordings/<mod id>` in the same way, once, without a message on the main
+menu.
 
 **Putting the folder elsewhere.** Start the game with `--user-folder PATH`,
 or add the key `open-annihilation.user-folder` with an absolute path to the
 preferences file, and that folder takes the place of the Open Annihilation
-folder in Documents. Saved games from earlier versions move only into the
-folder the key or Documents names: a start with `--user-folder` leaves them
-where they are and lists them there. With `--preferences-file`, the folder
-is the **Open Annihilation** folder beside that file instead, and saved
-games beside that file are not moved either: the game lists them where they
-are. An Image Output Directory set in the game, with the console's `Film`
+folder in Documents. Saved games and recordings from earlier versions move
+only into the folder the key or Documents names: a start with
+`--user-folder` leaves them where they are and lists the saved games there.
+With `--preferences-file`, the folder is the **Open Annihilation** folder
+beside that file instead, and saved games and recordings beside that file
+are not moved either: the game lists the saved games where they are. An Image Output Directory set in the game, with the console's `Film`
 command, still takes the screenshots and films.
 
 ## Updating and removing
@@ -173,8 +177,8 @@ command, still takes the screenshots and films.
   are kept.
 - **To remove:** delete the game's folder. To remove your settings and logs
   too, delete the Local AppData folder above; your saved games,
-  screenshots, films and mods are in the Open Annihilation folder in
-  Documents. To make Windows forget the game as the opener of `.oamod`
+  screenshots, films, recordings and mods are in the Open Annihilation
+  folder in Documents. To make Windows forget the game as the opener of `.oamod`
   files, delete the keys `HKEY_CURRENT_USER\Software\Classes\.oamod` and
   `HKEY_CURRENT_USER\Software\Classes\OpenAnnihilation.Mod` with the
   Registry Editor.

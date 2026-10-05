@@ -3,10 +3,11 @@
 
 // --check-user-folder: the player's own folder beside the check's
 // preferences file, the saved games moved into it once, those loose in Saves
-// into Saves/default once, the paths the game names placed in it, a save, a
-// screenshot and a film in the folders of the mod played, the main menu's
-// notice of the moves shown once and closed, and the settings' Your files
-// buttons, all through a recorded opener, so that no file manager opens.
+// into Saves/default once, the recordings into Recordings once, the paths
+// the game names placed in it, a save, a screenshot and a film in the folders
+// of the mod played, the main menu's notice of the moves shown once and
+// closed, and the settings' Your files buttons, all through a recorded
+// opener, so that no file manager opens.
 
 #include "engine_settings_menu_host.hpp"
 #include "engine_settings_state.hpp"
@@ -138,13 +139,14 @@ void Runtime::check_user_folder() {
         "the player's folder is not \"Open Annihilation\" beside the preferences file"
     );
     // Each run starts from nothing: no record, no folder of its own, and
-    // saved games where earlier versions kept them, beside the preferences
-    // file and loose in Saves, two of them named as ones in Saves/default
-    // are.
+    // saved games and recordings where earlier versions kept them, beside
+    // the preferences file and loose in Saves, two saved games named as ones
+    // in Saves/default are.
     preference_values_.clear();
     platform_preferences::save(preference_path_, preference_values_);
     fs::remove_all(user_folder_, error);
     fs::remove_all(earlier_root / "SAVEGAME", error);
+    fs::remove_all(earlier_root / "demos", error);
     fs::remove_all(earlier_root / "mods", error);
     const fs::path saves = oa::app::saves_folder(user_folder_, {});
     const fs::path loose = user_folder_ / "Saves";
@@ -156,6 +158,8 @@ void Runtime::check_user_folder() {
     write_file(saves / "alpha.sav", "kept");
     write_file(loose / "LOOSE.SAV", "loose");
     write_file(loose / "BETA.SAV", "loose beta");
+    write_file(earlier_root / "demos" / "OLD GAME.tad", "old game");
+    write_file(earlier_root / "mods" / "check-mod" / "demos" / "MOD GAME.tad", "mod game");
 
     // A start with a named preferences file moves nothing: what lies beside
     // it and in Saves stays, and the dialogs find it there.
@@ -163,10 +167,13 @@ void Runtime::check_user_folder() {
     require(
         read_file(earlier_root / "SAVEGAME" / "ALPHA.SAV") == "alpha" &&
             read_file(loose / "LOOSE.SAV") == "loose" &&
+            read_file(earlier_root / "demos" / "OLD GAME.tad") == "old game" &&
             !preference_values_.contains(std::string(saves_moved_preference)) &&
             !preference_values_.contains(std::string(loose_saves_moved_preference)) &&
+            !preference_values_.contains(std::string(recordings_moved_preference)) &&
             save_roots().earlier == std::vector<fs::path>{loose, earlier_root / "SAVEGAME"},
-        "a start with --preferences-file moved the saved games beside it or in Saves"
+        "a start with --preferences-file moved the saved games or recordings beside it or in "
+        "Saves"
     );
     // The moves, as a start with the player's own file makes them: three
     // saved games from beside the preferences file and two loose in Saves,
@@ -210,15 +217,37 @@ void Runtime::check_user_folder() {
         "the moves' records were not written"
     );
 
-    // Once recorded, the moves are not made again: saved games an earlier
-    // version writes later stay, and the dialogs find them where they are.
+    // The recordings, as a start with the player's own file moves them: the
+    // game's into Recordings/default and the mod's into its own folder.
+    move_recordings_once();
+    const fs::path recordings = user_folder_ / "Recordings";
+    require(
+        read_file(recordings / "default" / "OLD GAME.tad") == "old game" &&
+            read_file(recordings / "check-mod" / "MOD GAME.tad") == "mod game" &&
+            !fs::exists(earlier_root / "demos", error),
+        "the recordings did not move into Recordings/default and Recordings/check-mod"
+    );
+    const auto recordings_recorded = recorded_recordings_move(preference_values_);
+    require(
+        recordings_recorded && recordings_recorded->moved == 2 &&
+            platform_preferences::load(preference_path_)
+                .contains(std::string(recordings_moved_preference)),
+        "the move of the recordings is not recorded"
+    );
+
+    // Once recorded, the moves are not made again: saved games and
+    // recordings an earlier version writes later stay, and the dialogs find
+    // the saved games where they are.
     write_file(earlier_root / "SAVEGAME" / "DELTA.SAV", "delta");
     write_file(loose / "EPSILON.SAV", "epsilon");
+    write_file(earlier_root / "demos" / "LATER.tad", "later");
     move_saves_once();
+    move_recordings_once();
     require(
         read_file(earlier_root / "SAVEGAME" / "DELTA.SAV") == "delta" &&
-            read_file(loose / "EPSILON.SAV") == "epsilon",
-        "a second start moved the saved games again"
+            read_file(loose / "EPSILON.SAV") == "epsilon" &&
+            read_file(earlier_root / "demos" / "LATER.tad") == "later",
+        "a second start moved the saved games or recordings again"
     );
     const auto roots = save_roots();
     require(roots.saves == saves, "the saved games are not written to Saves/default");
@@ -253,7 +282,8 @@ void Runtime::check_user_folder() {
         "screenshots and films do not go in Screenshots/default and Films/default"
     );
     std::cout << "user folder check: 3 saved games moved into " << path_to_utf8(saves)
-              << " and 2 loose in Saves after them, none overwritten, once; screenshots and "
+              << " and 2 loose in Saves after them, none overwritten, once; 2 recordings moved "
+                 "into Recordings/default and Recordings/check-mod, once; screenshots and "
                  "films go in Screenshots/default and Films/default\n";
 
     // The notice, over the main menu.
@@ -511,6 +541,7 @@ void Runtime::check_user_folder() {
     // Nothing is left behind for the next run.
     fs::remove_all(user_folder_, error);
     fs::remove_all(earlier_root / "SAVEGAME", error);
+    fs::remove_all(earlier_root / "demos", error);
     fs::remove_all(earlier_root / "mods", error);
     preference_values_.clear();
     preferences_dirty_ = true;

@@ -161,10 +161,14 @@ Each of these takes effect at once.
 ![The Common Tweaks section: Your files showing /Users/player/Documents/Open Annihilation with its SAVES, SCREENSHOTS and MODS buttons, Unit limit at 250 per player and Pathfinding cycles at 1x.](images/settings/common-tweaks.png)
 
 - **Your files** is not a setting: it shows where your saved games,
-  screenshots, films and mods go, the Open Annihilation folder in your
-  Documents folder unless you moved it. **SAVES**, **SCREENSHOTS** and
-  **MODS** open those folders in the system's file manager. The
-  installation guides say how to move the folder
+  screenshots, films, recordings and mods go, the Open Annihilation folder
+  in your Documents folder unless you moved it. **SAVES**, **SCREENSHOTS**
+  and **MODS** open those folders in the system's file manager. Films and
+  the recordings of network games are in its `Films` and `Recordings`
+  folders, which have no button. `Saves`, `Screenshots`, `Films` and
+  `Recordings` each hold a folder for each mod, named after its id, and
+  `default` for games without a mod. The installation guides say what each
+  folder holds and how to move the folder
   ([macOS](installation/macos.md#where-it-keeps-its-files),
   [Windows](installation/windows.md#where-it-keeps-its-files),
   [Linux](installation/linux.md#where-it-keeps-its-files)).

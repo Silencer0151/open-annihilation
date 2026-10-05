@@ -13,6 +13,7 @@
 #include "network_play.hpp"
 #include "oa/app/check_host.hpp"
 #include "oa/app/game_directory.hpp"
+#include "oa/app/user_folder.hpp"
 #include "net_options.hpp"
 #include "net_state.hpp"
 #include "traffic_overlay.hpp"
@@ -1013,25 +1014,24 @@ struct NetworkPlay::NetHost {
         setup.unit_checks.insert(
             setup.unit_checks.end(), state.unit_verdicts.begin(), state.unit_verdicts.end()
         );
-        if (!forced.empty()) {
-            state.recording_path = forced;
-        } else if (!asked.empty()) {
+        std::string file_name;
+        if (!asked.empty()) {
             // .record names the file; it takes the recorder's manual extension.
             const std::string extension =
                 profile != nullptr ? profile->recorder.ta_demo_recorder.manual_extension : ".tad";
-            state.recording_path =
-                runtime.save_game_root() / "demos" /
-                path_from_utf8(oa::session::demo::recording_file_name("", asked, extension));
+            file_name = oa::session::demo::recording_file_name("", asked, extension);
         } else {
             const std::string extension =
                 profile != nullptr ? profile->recorder.ta_demo_recorder.auto_extension : ".tad";
-            state.recording_path = runtime.save_game_root() / "demos" /
-                                   path_from_utf8(
-                                       oa::session::demo::recording_file_name(
-                                           local_time_text("%Y-%m-%d %H%M"), map, extension
-                                       )
-                                   );
+            file_name = oa::session::demo::recording_file_name(
+                local_time_text("%Y-%m-%d %H%M"), map, extension
+            );
         }
+        // --net-record's file as it is given, else the mod's folder in
+        // Recordings.
+        state.recording_path = recording_file(
+            forced, runtime.user_folder(), runtime.files_mod_id(), path_from_utf8(file_name)
+        );
         oa::session::demo::recording_begin(&state.recording, std::move(setup));
     }
 

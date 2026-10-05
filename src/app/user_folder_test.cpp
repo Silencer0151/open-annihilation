@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // The player's own folder in scratch folders: where it is, the folders each
-// mod's files go in, the saved games moved from where earlier versions kept
-// them, names kept apart, renames and copies that fail, the records of the
-// moves and the notice they give.
+// mod's files go in, where a network game's recording is written, the saved
+// games and recordings moved from where earlier versions kept them, names
+// kept apart, renames and copies that fail, the records of the moves and the
+// notice they give.
 
 #include "oa/app/user_folder.hpp"
 
@@ -27,6 +28,7 @@ namespace fs = std::filesystem;
 using oa::app::FileMoveHooks;
 using oa::app::MovesTold;
 using oa::app::RecordedMove;
+using oa::app::RecordingsMove;
 using oa::app::SavesMove;
 
 /// Writes a small file, making its folder.
@@ -156,6 +158,60 @@ void each_mod_has_its_own_folders(const fs::path& scratch) {
         oa::app::place_capture_path(user / "Saves" / "A.SAV", user, {}) == user / "Saves" / "A.SAV"
     );
     OA_CHECK(oa::app::place_capture_path(shot, {}, {}) == shot);
+}
+
+void recordings_go_in_the_folder_of_the_mod_played() {
+    const fs::path user = fs::current_path().root_path() / "player" / "Open Annihilation";
+    const fs::path name = "2026-10-05 1432 Coast To Coast.tad";
+    // Without a mod, in Recordings/default; with one, in its id's folder.
+    OA_CHECK(oa::app::recording_file({}, user, {}, name) == user / "Recordings" / "default" / name);
+    OA_CHECK(
+        oa::app::recording_file({}, user, "my-mod", "duel.tad") ==
+        user / "Recordings" / "my-mod" / "duel.tad"
+    );
+    // A file --net-record names is written as it is given, mod or not.
+    const fs::path named = fs::path("games") / "match.tad";
+    OA_CHECK(oa::app::recording_file(named, user, "my-mod", name) == named);
+    // --user-folder takes the place of the player's own folder.
+    const fs::path option = fs::current_path().root_path() / "elsewhere";
+    const fs::path chosen =
+        oa::app::choose_user_folder(option, oa::platform::preferences::Values{}, user);
+    OA_CHECK(
+        oa::app::recording_file({}, chosen, {}, name) == option / "Recordings" / "default" / name
+    );
+}
+
+void the_recordings_move_once_and_overwrite_nothing(const fs::path& scratch) {
+    const fs::path root = scratch / "recordings" / "preferences";
+    const fs::path user = scratch / "recordings" / "Open Annihilation";
+    const fs::path recordings = user / "Recordings" / "default";
+    write(root / "demos" / "ONE.tad", "one");
+    write(root / "demos" / "two.tad", "two");
+    write(root / "mods" / "my-mod" / "demos" / "THREE.rec", "three");
+    write(root / "mods" / "my-mod" / "SAVEGAME" / "KEPT.SAV", "kept");
+    // A recording of the same name, in another case, is there already.
+    write(recordings / "one.tad", "newer one");
+    const RecordingsMove move = oa::app::move_earlier_recordings(root, user);
+    OA_CHECK(move.moved == 3 && move.renamed == 1 && move.left == 0);
+    OA_CHECK(read(recordings / "one.tad") == "newer one");
+    OA_CHECK(read(recordings / "ONE (2).tad") == "one");
+    OA_CHECK(read(recordings / "two.tad") == "two");
+    OA_CHECK(read(user / "Recordings" / "my-mod" / "THREE.rec") == "three");
+    // The emptied folders go; the saved games stay for their own move.
+    OA_CHECK(!fs::exists(root / "demos") && !fs::exists(root / "mods" / "my-mod" / "demos"));
+    OA_CHECK(read(root / "mods" / "my-mod" / "SAVEGAME" / "KEPT.SAV") == "kept");
+    OA_CHECK(!fs::exists(user / "Saves"));
+    // Recorded, as saves_moved_preference records a move, with no notice.
+    oa::platform::preferences::Values values;
+    OA_CHECK(!oa::app::recorded_recordings_move(values));
+    oa::app::record_recordings_move(values, move);
+    OA_CHECK(values.at(std::string(oa::app::recordings_moved_preference)) == "3 0");
+    const auto recorded = oa::app::recorded_recordings_move(values);
+    OA_CHECK(recorded && recorded->moved == 3 && recorded->left == 0);
+    OA_CHECK(!oa::app::saves_notice_due_in(values));
+    // Again, there is nothing left to move.
+    const RecordingsMove again = oa::app::move_earlier_recordings(root, user);
+    OA_CHECK(again.moved == 0 && again.left == 0 && again.lines.empty());
 }
 
 void free_names_keep_both_files() {
@@ -503,9 +559,11 @@ int main() {
     const fs::path scratch = oa::test::make_scratch_directory("oa-user-folder");
     the_folder_is_chosen_in_order();
     each_mod_has_its_own_folders(scratch);
+    recordings_go_in_the_folder_of_the_mod_played();
     free_names_keep_both_files();
     the_saved_games_move_once_and_overwrite_nothing(scratch);
     the_saved_games_loose_in_saves_move_into_default(scratch);
+    the_recordings_move_once_and_overwrite_nothing(scratch);
     a_refused_rename_copies_and_a_refused_copy_leaves_the_file(scratch);
     the_move_is_recorded_and_its_notice_waits();
     the_notice_says_what_moved_and_where();

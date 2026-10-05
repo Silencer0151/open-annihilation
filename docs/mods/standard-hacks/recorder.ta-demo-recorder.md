@@ -39,7 +39,7 @@ hacks:
 
 - A recording the player names with the `.record` chat command is written under that name plus `manual-extension`.
 - Otherwise the file is named after the local date, time and map, plus `auto-extension`.
-- Files go into the `demos` folder under the save-game folder. `compress-files` compresses the recorded packets.
+- Files go into the mod's folder in `Recordings` in the player's own Open Annihilation folder, `Recordings/<mod id>`, unless `--net-record FILE` names the file. `compress-files` compresses the recorded packets.
 
 **Recorder traffic.**
 

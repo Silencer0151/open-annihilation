@@ -55,7 +55,8 @@ struct NetOptions {
     // --play-demo recording, which it replays through the replay hooks.
     bool check_recording_hook = false;
     // Record the next network game to this file, whatever the rules; empty
-    // records only under the recorder's rules, to the demos folder.
+    // records only under the recorder's rules, to the mod's folder in the
+    // player's own folder's Recordings (recording_file, user_folder.hpp).
     fs::path net_record;
     // Present the replay version bytes (identity.replay-network-version), as a
     // game that joins a replayer's session to watch a recording does.

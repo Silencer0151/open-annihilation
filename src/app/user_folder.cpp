@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // The player's own folder: where it is, the folders each mod's files go in,
-// the moves of saved games from where earlier versions kept them, and the
-// notice of those moves; and the warning that a mod's games cannot start
-// until its files are in its folder.
+// the moves of saved games and recordings from where earlier versions kept
+// them, and the notice of the saved games' moves; and the warning that a
+// mod's games cannot start until its files are in its folder.
 
 #include "oa/app/user_folder.hpp"
 
@@ -18,6 +18,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 namespace oa::app {
@@ -220,6 +221,22 @@ fs::path films_folder(const fs::path& user_folder, std::string_view mod_id) {
     return user_folder / std::string(films_folder_name) / from_utf8(mod_subfolder_name(mod_id));
 }
 
+fs::path recordings_folder(const fs::path& user_folder, std::string_view mod_id) {
+    return user_folder / std::string(recordings_folder_name) /
+           from_utf8(mod_subfolder_name(mod_id));
+}
+
+fs::path recording_file(
+    const fs::path& net_record,
+    const fs::path& user_folder,
+    std::string_view mod_id,
+    const fs::path& name
+) {
+    if (!net_record.empty())
+        return net_record;
+    return recordings_folder(user_folder, mod_id) / name;
+}
+
 fs::path
 place_capture_path(const fs::path& path, const fs::path& user_folder, std::string_view mod_id) {
     if (user_folder.empty())
@@ -281,8 +298,53 @@ std::string free_file_name(const std::string& name, const std::vector<std::strin
     }
 }
 
-void move_saves_folder(
-    const fs::path& earlier, const fs::path& saves, SavesMove& move, const FileMoveHooks& hooks
+namespace {
+
+/// The files a move counts, and the words it says what happened in.
+struct MovedFiles {
+    /// Tells whether a file counts, rather than moving with them.
+    bool (*counts)(const fs::path& file){};
+    /// What the files that count are called: "the saved games".
+    std::string_view them;
+    /// What follows "they stay there" when none of them can move.
+    std::string_view left_them;
+    /// What follows "it stays there" when one of them cannot move.
+    std::string_view left_it;
+};
+
+/// Saved games, which the dialogs still list where they stay; other files,
+/// such as restriction lists, move with them.
+constexpr MovedFiles saved_games_moved{
+    [](const fs::path& file) {
+        return capitals(to_utf8(file.extension())) == saved_game_extension;
+    },
+    "the saved games",
+    ", and the game lists them where they are",
+    ", and the game lists it where it is"
+};
+
+/// Recordings: every file of an earlier recordings folder, whatever its
+/// extension.
+constexpr MovedFiles recordings_moved{
+    [](const fs::path&) { return true; }, "the recordings", "", ""
+};
+
+/// Moves the files of an earlier folder into another, as move_saves_folder
+/// describes, counting those of a kind and saying what happened in its
+/// words.
+///
+/// @param earlier the earlier folder
+/// @param into the folder they move to; made when missing
+/// @param[in,out] move what the move did, added to: the files of the kind
+///        in moved, renamed and left, the others in other_files
+/// @param hooks stand-ins for the file system's rename and copy
+/// @param kind which files count, and their words
+void move_folder_files(
+    const fs::path& earlier,
+    const fs::path& into,
+    SavesMove& move,
+    const FileMoveHooks& hooks,
+    const MovedFiles& kind
 ) {
     std::error_code error;
     if (!fs::is_directory(earlier, error))
@@ -297,17 +359,14 @@ void move_saves_folder(
             files.push_back(entry->path());
     }
     std::sort(files.begin(), files.end());
-    const auto is_saved_game = [](const fs::path& file) {
-        return capitals(to_utf8(file.extension())) == saved_game_extension;
-    };
     const auto leave_all = [&](const std::string& why) {
-        std::size_t games = 0;
+        std::size_t counted = 0;
         for (const auto& file : files)
-            games += is_saved_game(file) ? 1 : 0;
-        move.left += games;
+            counted += kind.counts(file) ? 1 : 0;
+        move.left += counted;
         move.lines.push_back(
-            "cannot move the saved games in " + to_utf8(earlier) + " to " + to_utf8(saves) + ": " +
-            why + "; they stay there, and the game lists them where they are"
+            "cannot move " + std::string(kind.them) + " in " + to_utf8(earlier) + " to " +
+            to_utf8(into) + ": " + why + "; they stay there" + std::string(kind.left_them)
         );
     };
     if (files.empty()) {
@@ -316,16 +375,16 @@ void move_saves_folder(
         fs::remove(earlier, ignored);
         return;
     }
-    fs::create_directories(saves, error);
-    if (error || !fs::is_directory(saves, error)) {
+    fs::create_directories(into, error);
+    if (error || !fs::is_directory(into, error)) {
         leave_all(error ? error.message() : std::string("it is not a folder"));
         return;
     }
-    // The names the Saves folder holds, which nothing moved overwrites, in
-    // capitals and as they are spelt.
+    // The names the folder moved into holds, which nothing moved
+    // overwrites, in capitals and as they are spelt.
     std::vector<std::string> taken;
     std::vector<std::string> spelt;
-    for (fs::directory_iterator entry{saves, error}, end; !error && entry != end;
+    for (fs::directory_iterator entry{into, error}, end; !error && entry != end;
          entry.increment(error)) {
         spelt.push_back(to_utf8(entry->path().filename()));
         taken.push_back(capitals(spelt.back()));
@@ -340,13 +399,13 @@ void move_saves_folder(
         std::string given = free_file_name(name, taken);
         // A name made since the folder was listed is taken too.
         std::error_code exists_error;
-        while (fs::exists(saves / from_utf8(given), exists_error)) {
+        while (fs::exists(into / from_utf8(given), exists_error)) {
             taken.push_back(capitals(given));
             spelt.push_back(given);
             given = free_file_name(name, taken);
         }
-        const fs::path target = saves / from_utf8(given);
-        const bool game = is_saved_game(file);
+        const fs::path target = into / from_utf8(given);
+        const bool counted = kind.counts(file);
         std::error_code failure;
         if (hooks.rename != nullptr)
             hooks.rename(hooks.context, file, target, failure);
@@ -355,9 +414,9 @@ void move_saves_folder(
         if (failure) {
             // Across volumes, or where a rename is refused: a copy under a
             // name of its own, renamed into place once it is whole, so that
-            // a copy cut short never stands as a saved game; the original
+            // a copy cut short never stands as a whole file; the original
             // is removed after.
-            const fs::path partial = saves / from_utf8(given + std::string(partial_copy_suffix));
+            const fs::path partial = into / from_utf8(given + std::string(partial_copy_suffix));
             std::error_code copied;
             if (hooks.copy != nullptr)
                 hooks.copy(hooks.context, file, partial, copied);
@@ -375,12 +434,12 @@ void move_saves_folder(
                 std::error_code ignored;
                 if (fs::exists(partial, ignored))
                     fs::remove(partial, ignored);
-                if (game)
+                if (counted)
                     ++move.left;
                 move.lines.push_back(
                     "cannot move " + to_utf8(file) + " to " + to_utf8(target) + ": " +
-                    failure.message() + "; nor copy it: " + copied.message() +
-                    "; it stays there, and the game lists it where it is"
+                    failure.message() + "; nor copy it: " + copied.message() + "; it stays there" +
+                    std::string(kind.left_it)
                 );
                 continue;
             }
@@ -395,43 +454,43 @@ void move_saves_folder(
         taken.push_back(capitals(given));
         spelt.push_back(given);
         ++moved_here;
-        if (game)
+        if (counted)
             ++move.moved;
         else
             ++move.other_files;
         if (given != name) {
-            if (game)
+            if (counted)
                 ++move.renamed;
-            // The name it would have taken, as the Saves folder spells it.
+            // The name it would have taken, as the folder moved into spells it.
             const auto there = std::find(taken.begin(), taken.end(), capitals(name));
             const std::string holder = there != taken.end()
                                            ? spelt[static_cast<std::size_t>(there - taken.begin())]
                                            : name;
             move.lines.push_back(
                 "kept " + to_utf8(file) + " as " + to_utf8(target) + ", since " +
-                to_utf8(saves / from_utf8(holder)) + " was there already"
+                to_utf8(into / from_utf8(holder)) + " was there already"
             );
         }
     }
     if (moved_here != 0)
         move.lines.push_back(
             "moved " + std::to_string(moved_here) + (moved_here == 1 ? " file" : " files") +
-            " from " + to_utf8(earlier) + " to " + to_utf8(saves)
+            " from " + to_utf8(earlier) + " to " + to_utf8(into)
         );
     std::error_code ignored;
     fs::remove(earlier, ignored); // only once it is empty
 }
 
-SavesMove move_earlier_saves(
-    const fs::path& earlier_root, const fs::path& user_folder, const FileMoveHooks& hooks
-) {
-    SavesMove move;
-    if (const auto earlier = entry_without_case(earlier_root, earlier_saves_folder_name))
-        move_saves_folder(*earlier, saves_folder(user_folder, {}), move, hooks);
+/// Returns the folders, one for each mod, of the folder beside the
+/// preferences file that held each mod's earlier folders, in name order.
+///
+/// @param earlier_root the preferences file's folder
+/// @return the mods/<id> folders; none when there is no mods folder
+std::vector<fs::path> earlier_mod_folders(const fs::path& earlier_root) {
+    std::vector<fs::path> mod_folders;
     const auto mods = entry_without_case(earlier_root, earlier_mods_folder_name);
     if (!mods)
-        return move;
-    std::vector<fs::path> mod_folders;
+        return mod_folders;
     std::error_code error;
     for (fs::directory_iterator entry{*mods, error}, end; !error && entry != end;
          entry.increment(error)) {
@@ -440,7 +499,24 @@ SavesMove move_earlier_saves(
             mod_folders.push_back(entry->path());
     }
     std::sort(mod_folders.begin(), mod_folders.end());
-    for (const auto& mod : mod_folders)
+    return mod_folders;
+}
+
+} // namespace
+
+void move_saves_folder(
+    const fs::path& earlier, const fs::path& saves, SavesMove& move, const FileMoveHooks& hooks
+) {
+    move_folder_files(earlier, saves, move, hooks, saved_games_moved);
+}
+
+SavesMove move_earlier_saves(
+    const fs::path& earlier_root, const fs::path& user_folder, const FileMoveHooks& hooks
+) {
+    SavesMove move;
+    if (const auto earlier = entry_without_case(earlier_root, earlier_saves_folder_name))
+        move_saves_folder(*earlier, saves_folder(user_folder, {}), move, hooks);
+    for (const auto& mod : earlier_mod_folders(earlier_root))
         if (const auto earlier = entry_without_case(mod, earlier_saves_folder_name))
             move_saves_folder(
                 *earlier, saves_folder(user_folder, to_utf8(mod.filename())), move, hooks
@@ -458,6 +534,26 @@ SavesMove move_loose_saves(const fs::path& user_folder, const FileMoveHooks& hoo
     return move;
 }
 
+RecordingsMove move_earlier_recordings(
+    const fs::path& earlier_root, const fs::path& user_folder, const FileMoveHooks& hooks
+) {
+    SavesMove files;
+    if (const auto earlier = entry_without_case(earlier_root, earlier_recordings_folder_name))
+        move_folder_files(
+            *earlier, recordings_folder(user_folder, {}), files, hooks, recordings_moved
+        );
+    for (const auto& mod : earlier_mod_folders(earlier_root))
+        if (const auto earlier = entry_without_case(mod, earlier_recordings_folder_name))
+            move_folder_files(
+                *earlier,
+                recordings_folder(user_folder, to_utf8(mod.filename())),
+                files,
+                hooks,
+                recordings_moved
+            );
+    return RecordingsMove{files.moved, files.renamed, files.left, std::move(files.lines)};
+}
+
 void record_saves_move(platform::preferences::Values& values, const SavesMove& move) {
     record_move(values, move, saves_moved_preference, saves_notice_preference);
 }
@@ -466,12 +562,21 @@ void record_loose_saves_move(platform::preferences::Values& values, const SavesM
     record_move(values, move, loose_saves_moved_preference, loose_saves_notice_preference);
 }
 
+void record_recordings_move(platform::preferences::Values& values, const RecordingsMove& move) {
+    values[std::string(recordings_moved_preference)] =
+        std::to_string(move.moved) + " " + std::to_string(move.left);
+}
+
 std::optional<RecordedMove> recorded_saves_move(const platform::preferences::Values& values) {
     return read_move(values, saves_moved_preference);
 }
 
 std::optional<RecordedMove> recorded_loose_saves_move(const platform::preferences::Values& values) {
     return read_move(values, loose_saves_moved_preference);
+}
+
+std::optional<RecordedMove> recorded_recordings_move(const platform::preferences::Values& values) {
+    return read_move(values, recordings_moved_preference);
 }
 
 bool saves_notice_due_in(const platform::preferences::Values& values) {

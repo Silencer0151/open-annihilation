@@ -47,7 +47,7 @@ std::filesystem::path data_directory();
 /// @return the folder to use; it need not exist
 std::filesystem::path apple_data_directory(const std::filesystem::path& application_support);
 /// The name of the player's own folder, which holds their saved games,
-/// screenshots, films and mods, inside their Documents folder.
+/// screenshots, films, recordings and mods, inside their Documents folder.
 inline constexpr std::string_view user_folder_name = "Open Annihilation";
 /// Returns the player's Documents folder, as the system names it.
 ///

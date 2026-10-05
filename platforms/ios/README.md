@@ -56,9 +56,9 @@ on its side); options the script does not know, and anything after `--`, go to t
 
 The game writes its log and preferences in its data container, under
 `Library/Application Support/net.coreprime.open-annihilation`, and the player's saves,
-screenshots, films and mods in `Documents/Open Annihilation`, which the Files app shows; `xcrun
-simctl get_app_container <UDID> net.coreprime.open-annihilation data` prints where the container
-is.
+screenshots, films, recordings and mods in `Documents/Open Annihilation`, which the Files app
+shows; `xcrun simctl get_app_container <UDID> net.coreprime.open-annihilation data` prints where
+the container is.
 
 ## Build only
 
@@ -134,7 +134,7 @@ Where things are, in the game's data container:
 | Path | What |
 |---|---|
 | `Documents/Total Annihilation` | the game folder, shown in the Files app and the Finder |
-| `Documents/Open Annihilation` | the player's own folder: `Saves`, `Screenshots`, `Films` and `Mods`, shown in the Files app and the Finder; saves an earlier version kept beside the preferences file move here once |
+| `Documents/Open Annihilation` | the player's own folder: `Saves`, `Screenshots`, `Films`, `Recordings` and `Mods`, shown in the Files app and the Finder; saves and recordings an earlier version kept beside the preferences file move here once |
 | `Documents/Total Annihilation (old)` | a folder set aside by a replacement, until removed |
 | `Library/Application Support/net.coreprime.open-annihilation/import/` | the copy being made (`Total Annihilation/`) and its state file |
 | `Library/Application Support/net.coreprime.open-annihilation/demo-1997/` | the demo's unpacked game data |

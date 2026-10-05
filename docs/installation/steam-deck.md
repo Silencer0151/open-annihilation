@@ -347,8 +347,8 @@ uses or whether Steam Input is off, and what happened.
 
 The Deck keeps the game's files where any Linux computer does
 ([Where it keeps its files](linux.md#where-it-keeps-its-files)): your saved
-games, screenshots, films and mods in the **Open Annihilation** folder in
-Documents, your settings in `~/.config/open-annihilation`, and the logs and
+games, screenshots, films, recordings and mods in the **Open Annihilation**
+folder in Documents, your settings in `~/.config/open-annihilation`, and the logs and
 the unpacked demo in `~/.local/share/open-annihilation`.
 
 ## Updating and removing
@@ -366,7 +366,7 @@ the unpacked demo in `~/.local/share/open-annihilation`.
   the game's folder. To remove the templates too, delete
   `open-annihilation.vdf` and `open-annihilation-keyboard-mouse.vdf` from
   `~/.steam/steam/controller_base/templates`. Your settings, logs, saved
-  games, screenshots, films and mods are in the folders above.
+  games, screenshots, films, recordings and mods are in the folders above.
 
 ## For the maintainer: publishing the community layout
 

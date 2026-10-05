@@ -211,10 +211,12 @@ trackpad connected to the device works as on a computer.
 
 ### Saves, screenshots and mods
 
-Your saved games, screenshots, films and mods are kept in the Open
-Annihilation folder in the game's own Documents folder: in Files, On My
-iPhone (or On My iPad) › Open Annihilation › Open Annihilation, beside the
-Total Annihilation folder. The buttons of **Common Tweaks › Your files**
+Your saved games, screenshots, films, recordings and mods are kept in the
+Open Annihilation folder in the game's own Documents folder: in Files, On
+My iPhone (or On My iPad) › Open Annihilation › Open Annihilation, beside
+the Total Annihilation folder. Each of its Saves, Screenshots, Films and
+Recordings folders holds a folder for each mod, and `default` for games
+without one. The buttons of **Common Tweaks › Your files**
 in the OA settings, and **Open Mods Folder** on the **Mods** page, open the
 Files app at its Saves, Screenshots or Mods folder; the Files app's status
 bar leads back to the game. A mod copied into that Mods folder is offered
