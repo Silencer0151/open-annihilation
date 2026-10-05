@@ -896,9 +896,8 @@ class Runtime final : public menu::Host,
     ///
     /// A focus gain or loss sets the flag. Any other event while inactive sets it
     /// again when the window has input focus, since the loading pump and the input
-    /// drain discard events, a focus gain among them. With the game's cursors
-    /// loaded, the system's pointer shows while the flag is clear and hides
-    /// when it is set again.
+    /// drain discard events, a focus gain among them. The system's pointer then
+    /// shows or hides as system_pointer_wanted says (apply_system_pointer).
     ///
     /// @param event event just received
     void note_window_activation(const SDL_Event& event);
@@ -909,6 +908,29 @@ class Runtime final : public menu::Host,
     ///     the window, or with no window; false where the system's pointer
     ///     shows instead
     [[nodiscard]] bool pointer_shows_cursor() const;
+
+    /// Tests whether the system's pointer is to show over the game's window.
+    ///
+    /// It shows where the game draws no cursor of its own: without the game's
+    /// cursors, while the application is inactive, and while a screen that
+    /// the system's pointer drives is open over the game (the Game files
+    /// screen). Everywhere else, in play and in the game's own menus, dialogs
+    /// and message boxes, the game draws its cursor and the system's pointer
+    /// is hidden.
+    ///
+    /// @return true where the system's pointer is to show
+    [[nodiscard]] bool system_pointer_wanted() const;
+
+    /// Shows or hides the system's pointer as system_pointer_wanted says.
+    ///
+    /// Every event, every frame of the loop and every change of screen apply
+    /// it, so that a pointer shown or hidden anywhere else follows the rule
+    /// again by the next frame. Without a window it does nothing.
+    ///
+    /// @param redraw true to have the window system hide a hidden pointer
+    ///     again even where SDL already holds it hidden, as on a change of
+    ///     screen
+    void apply_system_pointer(bool redraw);
 
     /// Tests whether the loop keeps ticking while the window is inactive.
     ///
@@ -2497,7 +2519,8 @@ class Runtime final : public menu::Host,
     /// Loads CURSORS.GAF and PALETTE.PAL for the software cursor and starts the normal cursor, as
     /// session start does.
     ///
-    /// Without cursors the platform cursor stays in use.
+    /// Without cursors the platform cursor stays in use; with them the system's
+    /// pointer is hidden wherever the game draws its own (apply_system_pointer).
     void load_game_cursors();
 
     /// Returns the GAF sequence of a cursor table entry.
@@ -8139,6 +8162,9 @@ class Runtime final : public menu::Host,
 
     /// Checks both interface types (Game.interface_type) through SDL input on a skirmish.
     ///
+    /// First, one pointer shows at a time: the system's without the focus, the
+    /// game's with it, over the in-game menu, the settings and the save page
+    /// and back in play, also after something else showed the system's.
     /// Left-click interface: a left click on open ground moves the selection, a
     /// shift click queues and a shift click at a queued point takes it back; a
     /// right press deselects, cancels an armed command, scrolls with the radar
@@ -12539,6 +12565,9 @@ class Runtime final : public menu::Host,
     // The status run() returns after the application loop (ScreenServices::quit).
     int exit_status_{};
     bool application_active_ = true;
+    // The Game files screen, which the system's pointer drives, is open over
+    // the game (system_pointer_wanted).
+    bool system_pointer_screen_open_ = false;
     uint32_t last_stream_sweep_ms_ = 0;
     oa::platform::MemoryStatusReport memory_report_{};
     bool match_paused_ = false;

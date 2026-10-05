@@ -116,6 +116,70 @@ void Runtime::check_pointer_interfaces() {
                    : "two pointers, or none, without the focus"
         );
     }
+    // The system's pointer shows only where the game draws no cursor of its
+    // own. Through the in-game menu, the settings and the save page over it
+    // and back to play, with the focus lost and found on the way and the
+    // pointer shown by something else, each step leaves it as that says.
+    const auto system_pointer = [&](bool shown, std::string_view where) {
+        require(
+            SDL_CursorVisible() == shown && system_pointer_wanted() == shown,
+            (shown ? "no system pointer " : "the system's pointer shows ") + std::string(where)
+        );
+    };
+    const auto tap = [&](SDL_Keycode code) {
+        SDL_Event event{};
+        event.key.windowID = SDL_GetWindowID(sdl_.window);
+        event.key.key = code;
+        event.key.scancode = SDL_GetScancodeFromKey(code, nullptr);
+        for (const bool down : {true, false}) {
+            event.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+            event.key.down = down;
+            dispatch_event(event, running);
+        }
+    };
+    const auto set_focus = [&](bool gained) {
+        SDL_Event focus{};
+        focus.type = gained ? SDL_EVENT_WINDOW_FOCUS_GAINED : SDL_EVENT_WINDOW_FOCUS_LOST;
+        focus.window.windowID = SDL_GetWindowID(sdl_.window);
+        dispatch_event(focus, running);
+    };
+    system_pointer(false, "in play");
+    tap(SDLK_F2);
+    require(match_paused_, "F2 did not open the in-game menu");
+    system_pointer(false, "over the in-game menu");
+    set_focus(false);
+    system_pointer(true, "without the focus over the in-game menu");
+    set_focus(true);
+    system_pointer(false, "with the focus back over the in-game menu");
+    SDL_Event settings_request{};
+    settings_request.type = engine_settings_menu_event_;
+    dispatch_event(settings_request, running);
+    require(engine_settings_dialog() != nullptr, "the settings did not open over the menu");
+    system_pointer(false, "over the settings");
+    tap(SDLK_ESCAPE);
+    require(
+        engine_settings_dialog() == nullptr && match_paused_,
+        "Escape did not close the settings back to the in-game menu"
+    );
+    system_pointer(false, "back from the settings");
+    activate_pause_gadget("SAVEGAME");
+    require(screen_ == Screen::load_game, "SAVEGAME did not open the save page");
+    system_pointer(false, "over the save page");
+    // Shown while the page is open, it is hidden again by the time it closes.
+    SDL_ShowCursor();
+    tap(SDLK_ESCAPE);
+    require(
+        screen_ == Screen::match && match_paused_,
+        "Escape did not leave the save page for the in-game menu"
+    );
+    system_pointer(false, "back from the save page");
+    tap(SDLK_ESCAPE);
+    require(!match_paused_, "Escape did not close the in-game menu");
+    system_pointer(false, "back in play");
+    // Shown in play, it is hidden again by the next frame of the loop.
+    SDL_ShowCursor();
+    run_frame(running);
+    system_pointer(false, "a frame after something else showed it in play");
     const auto send = [&](SDL_EventType type, uint8_t button, float x, float y, SDL_Keymod mods) {
         float window_x = 0.0F;
         float window_y = 0.0F;
@@ -638,8 +702,9 @@ void Runtime::check_pointer_interfaces() {
             match_->queued_build_count(factory, builder) == 1,
         "a right click on ARMPW did not take it off the queue ahead of ARMCK"
     );
-    std::cout << "pointer interface check: one pointer with and without the focus; "
-                 "left-click interface clicks, shift cancels, right "
+    std::cout << "pointer interface check: one pointer with and without the focus, over "
+                 "the in-game menu, the settings and the save page and after something else "
+                 "showed the system's; left-click interface clicks, shift cancels, right "
                  "press deselect/cancel/radar scroll/mouse look and build-site cancel; "
                  "right-click interface deselect, default orders, guard, cancels and radar; "
                  "a group's moves, patrol and cancels in its shape, and a patrol clicked on "

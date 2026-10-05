@@ -1066,9 +1066,16 @@ logs it.
   Alt+Enter (the movies, a match loading and the game), and the window's own
   state settles it after the game drops pending input. The game lets the
   pointer go (`release_pointer`) before it shows an error or information
-  box, before breaking into a debugger and on exit. A window that leaves
-  full screen, by Alt+Enter, by the window system's own control or before a
-  debugger break, comes back onto the display it was full screen on
+  box, before breaking into a debugger and on exit. The system's pointer is
+  hidden wherever the game draws its own cursor, in play and in the game's
+  menus, dialogs and message boxes; it shows only without the game's
+  cursors, while the game is inactive and over the Game files screen
+  (`system_pointer_wanted`). Every event, every frame of the loop and every
+  change of screen apply that rule again (`apply_system_pointer`), so a
+  pointer shown anywhere else is hidden again by the next frame. A window
+  that leaves full screen, by Alt+Enter, by the window system's own control
+  or before a debugger break, comes back onto the display it was full
+  screen on
   (`window_on_display`, `bring_window_on_display`): each side of its frame
   (the title bar and borders included where the window system reports them,
   as Windows and X11 do) that lies outside the display's usable area

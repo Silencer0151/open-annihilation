@@ -360,6 +360,9 @@ void Runtime::load_game_cursors() {
         std::cerr << "CURSORS.GAF unavailable: " << error.what() << '\n';
         cursors_loaded_ = false;
     }
+    // The game's cursors take the system pointer's place wherever the game
+    // draws them.
+    apply_system_pointer(false);
     // Without the game's palette the match keeps the one it had.
     try {
         const auto palette_data = assets_.read("palettes/palette.pal").bytes;

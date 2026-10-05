@@ -553,6 +553,9 @@ void Runtime::run_frame(bool& running) {
     SDL_Event event{};
     while (SDL_PollEvent(&event))
         dispatch_event(event, running);
+    // Whatever showed or hid the system's pointer since the last frame, the
+    // rule holds again before this frame is drawn.
+    apply_system_pointer(false);
     idle_tick();
     const auto now_ms = static_cast<uint32_t>(SDL_GetTicks());
     if (oa::platform::finished_stream_sweep_due(now_ms, last_stream_sweep_ms_)) {
@@ -1028,6 +1031,9 @@ void Runtime::load(Screen screen) {
     if (desc->assets.layout != nullptr)
         frontend_focus_ = frontend_panel_focus(resources_.layout);
     apply_output_mode();
+    // Each new screen has the window system hide the pointer again where
+    // the game draws its own.
+    apply_system_pointer(true);
     rebuild_surface();
 }
 

@@ -249,8 +249,6 @@ void Runtime::initialize_sdl() {
     }
     apply_output_mode();
     load_game_cursors();
-    if (cursors_loaded_)
-        SDL_HideCursor();
     install_engine_settings_menu_item();
     // A renderer made here starts without Vertical sync, as every renderer does.
     apply_vertical_sync();

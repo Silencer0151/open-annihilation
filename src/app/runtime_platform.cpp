@@ -8,6 +8,7 @@
 #include <SDL3/SDL.h>
 #include <cstdint>
 #include <cstdio>
+#include <tuple>
 
 namespace oa::app {
 namespace {
@@ -64,7 +65,6 @@ bool Runtime::control_key_down(gui_input::ControlKey key) const {
 }
 
 void Runtime::note_window_activation(const SDL_Event& event) {
-    const bool was_active = application_active_;
     if (event.type == SDL_EVENT_WINDOW_FOCUS_GAINED)
         application_active_ = true;
     else if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST)
@@ -78,17 +78,33 @@ void Runtime::note_window_activation(const SDL_Event& event) {
         application_active_ = true;
     // An inactive application draws no cursor of its own (pointer_shows_cursor),
     // so the system's pointer shows over its window until it is active again.
-    if (cursors_loaded_ && application_active_ != was_active) {
-        if (application_active_)
-            SDL_HideCursor();
-        else
-            SDL_ShowCursor();
-    }
+    // Every event applies the rule, not only a change of focus, so that a
+    // pointer another part of the system showed is hidden again.
+    apply_system_pointer(false);
 }
 
 bool Runtime::pointer_shows_cursor() const {
     return application_active_ && (sdl_.window == nullptr ||
                                    (SDL_GetWindowFlags(sdl_.window) & SDL_WINDOW_MOUSE_FOCUS) != 0);
+}
+
+bool Runtime::system_pointer_wanted() const {
+    return !cursors_loaded_ || !application_active_ || system_pointer_screen_open_;
+}
+
+void Runtime::apply_system_pointer(bool redraw) {
+    if (sdl_.window == nullptr)
+        return;
+    const bool wanted = system_pointer_wanted();
+    if (SDL_CursorVisible() != wanted) {
+        if (wanted)
+            SDL_ShowCursor();
+        else
+            SDL_HideCursor();
+    } else if (redraw && !wanted) {
+        // A null cursor has SDL set the current one again, hidden as it is.
+        std::ignore = SDL_SetCursor(nullptr);
+    }
 }
 
 bool Runtime::keeps_running_inactive() const {

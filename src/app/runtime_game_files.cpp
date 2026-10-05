@@ -178,6 +178,20 @@ void Runtime::open_game_files_manage() {
     int width_before = 0;
     int height_before = 0;
     std::ignore = SDL_GetWindowSize(sdl_.window, &width_before, &height_before);
+    // The screen is driven by the system's pointer, which shows while it is
+    // open and is hidden again however it closes.
+    system_pointer_screen_open_ = true;
+    apply_system_pointer(false);
+
+    struct SystemPointerScreenClose {
+        Runtime* runtime{};
+
+        ~SystemPointerScreenClose() {
+            runtime->system_pointer_screen_open_ = false;
+            runtime->apply_system_pointer(false);
+        }
+    } system_pointer_screen_close{this};
+
     // The screen runs its own loop on the game's window; the game waits
     // under it until it closes.
     const GameFilesEnd end = run_game_files_screen(request);
