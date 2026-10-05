@@ -28,8 +28,9 @@ byte-order mark draw nothing and take no room (`is_invisible`).
 
 `tools/bootstrap_text_fonts.py` fetches the fonts and FreeType, pinned by
 SHA-256, into `local/deps`, and cuts Noto Sans CJK SC Bold down to the
-characters of the common Chinese, Japanese and Korean character sets (its
-help lists them). The build copies the fonts into the `fonts` folder beside
+characters of the common Chinese, Japanese and Korean character sets, the
+Table of General Standard Chinese Characters among them (its help lists
+them). The build copies the fonts into the `fonts` folder beside
 the game (`cmake/OaTextFonts.cmake`), which `bundled_font_directory` finds at
 run time: the bundle's `Contents/Resources/fonts` on macOS, the fonts folder
 beside the executable elsewhere. Their licences are in the repository's
@@ -57,6 +58,10 @@ beside the executable elsewhere. Their licences are in the repository's
 - `related_pixel_size` gives the size Noto Sans CJK and Noto Emoji are drawn
   at beside the DejaVu faces: 12 px beside 14 px, so ideographs stand a row
   or two taller than DejaVu's capitals, as the game's outlined capitals do.
+  `Style::least_cjk_pixel_size` holds Noto Sans CJK to a least size, and
+  the line's rows grow to hold it: the application draws ideographs at
+  12 px at the least while a Chinese, Japanese or Korean language is shown,
+  since smaller ones fill in.
 - `decode_utf8` decodes text, refusing what is not UTF-8.
 
 The sizes that match the game's fonts: DejaVu Sans Bold at 14 px, mono,
@@ -75,7 +80,8 @@ sizes and never under 7 px, mono at every size.
   module's own file stream, so a folder whose path is not in the Windows code
   page opens too.
 - Each glyph is drawn once per font, size, weight and rendering and kept, up
-  to `FontStack::kept_glyphs`; the store starts again only between lines.
+  to `FontStack::kept_glyphs`; past it, the glyphs used longest ago are
+  forgotten, and only between lines.
 - One thread at a time uses a stack. The drawing is the view's alone: it
   reads no game state and writes none.
 
@@ -87,8 +93,11 @@ spacing (`refuses_what_it_cannot_draw`), the fallback chain
 (`falls_back_through_the_chain`), the sizes that match the game's fonts:
 DejaVu Sans Bold at 14 px gives an H of 10 rows and an x of 8, DejaVu Sans at
 11 px an x of 6, and ideographs at 12 px stand 11 or 12 rows
-(`matches_the_game_fonts_sizes`), and mono, anti-aliased and spaced lines and
-the glyph store (`draws_mono_and_antialiased`). `platform-text-font-pixels`
+(`matches_the_game_fonts_sizes`), mono, anti-aliased and spaced lines and
+the glyph store (`draws_mono_and_antialiased`), a store that stays within
+its bound and forgets the glyph used longest ago (`keeps_the_glyphs_used_last`),
+and ideographs held to a least size while Latin letters keep theirs
+(`holds_ideographs_to_a_least_size`). `platform-text-font-pixels`
 runs the same program with `--pixels`: "Ab", a Chinese character and an emoji
 in bold at 14 px, mono, pixel for pixel as FreeType 2.14.3 draws them; it
 skips with another FreeType. `--show TEXT` prints a line as it is drawn.
@@ -96,7 +105,7 @@ skips with another FreeType. `--show TEXT` prints a line as it is drawn.
 ## Limitations
 
 - No shaping, kerning or bidirectional text, and no colour emoji.
-- The cut CJK font holds about 14,000 characters; rarer ones draw the
+- The cut CJK font holds about 15,300 characters; rarer ones draw the
   missing-glyph box unless the bootstrap ships the whole face
   (`--full-cjk`).
 - The CJK font is the Simplified Chinese face, so Japanese and Traditional

@@ -52,10 +52,13 @@ PlaybackResult IntroPlayer::play(const PlaybackOptions&) {
         playback.error = "intro player is not initialized";
         return playback;
     }
+    // The name in UTF-8: one outside the system's code page has no narrow
+    // spelling on Windows.
+    const auto name = implementation_->path.filename().u8string();
     std::fprintf(
         stderr,
         "this build plays no movies; skipping %s\n",
-        implementation_->path.filename().string().c_str()
+        std::string(name.begin(), name.end()).c_str()
     );
     playback.skipped = true;
     return playback;

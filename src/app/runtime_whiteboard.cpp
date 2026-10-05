@@ -8,6 +8,7 @@
 #include "oa/app/runtime.hpp"
 #include "oa/formats/fnt.hpp"
 #include "oa/present/game_text.hpp"
+#include "oa/present/typed_text.hpp"
 #include "oa/sim/messages.hpp"
 #include "oa/ui/hud/shared_views.hpp"
 #include "oa/ui/hud/whiteboard.hpp"
@@ -225,10 +226,25 @@ bool Runtime::whiteboard_text(const SDL_Event& event) {
     if (event.type != SDL_EVENT_TEXT_INPUT || !input.editing)
         return false;
     // Characters that would take the marker's game text past its limit are
-    // not taken.
-    const std::string typed = input.edit_text + event.text.text;
-    if (typed_game_text(typed).size() <= kMarkerTextLimit)
-        input.edit_text = typed;
+    // not taken, the first such one and the rest after it.
+    const std::string taken =
+        oa::present::typed_characters(event.text.text, oa::present::TypedCharacters::text);
+    std::string typed = input.edit_text;
+    for (std::size_t at = 0; at < taken.size();) {
+        // One character more each time.
+        std::string with = typed;
+        const oa::present::TypedLimits limits{
+            with.size() + taken.size(), oa::present::character_count(with) + 1
+        };
+        const auto added = oa::present::take_typed_text(
+            with, std::string_view(taken).substr(at), oa::present::TypedCharacters::text, limits
+        );
+        if (added == 0 || typed_game_text(with).size() > kMarkerTextLimit)
+            break;
+        typed = std::move(with);
+        at += added;
+    }
+    input.edit_text = std::move(typed);
     return true;
 }
 
@@ -286,7 +302,8 @@ void Runtime::draw_whiteboard(const oa::present::world_renderer::BattlefieldView
         );
         const bool edited = input.editing && input.editing_marker && input.edit_x == marker.x &&
                             input.edit_y == marker.y;
-        const auto text = edited ? typed_game_text(input.edit_text) : marker.text;
+        const auto text =
+            edited ? typed_game_text(input.edit_text + text_composition_) : marker.text;
         if (!text.empty())
             draw_match_label(at.x + half + 2, at.y - half, text, marker.color);
     }
@@ -295,7 +312,7 @@ void Runtime::draw_whiteboard(const oa::present::world_renderer::BattlefieldView
         draw_match_label(
             at.x,
             at.y,
-            typed_game_text(input.edit_text) + "_",
+            typed_game_text(input.edit_text + text_composition_) + "_",
             hud::player_dot_color(match_->state(), match_local_player_)
         );
     }

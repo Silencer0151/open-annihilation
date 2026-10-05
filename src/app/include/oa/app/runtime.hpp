@@ -26,6 +26,7 @@
 #include "oa/data/defs/sides.hpp"
 #include "oa/data/defs/unit_catalog.hpp"
 #include "oa/data/languages.hpp"
+#include "oa/data/languages/language_pack.hpp"
 #include "oa/data/limits.hpp"
 #include "oa/sim/gameplay_input/input.hpp"
 #include "oa/sim/gameplay_input/order_cursor.hpp"
@@ -41,6 +42,7 @@
 #include "oa/present/gaf_sprites.hpp"
 #include "oa/present/surface.hpp"
 #include "oa/present/game_text.hpp"
+#include "oa/present/picture_captions.hpp"
 #include "oa/present/unit_playout.hpp"
 #include "oa/present/model/unit_supersampling.hpp"
 #include "oa/present/world_renderer/scene_filter.hpp"
@@ -553,10 +555,12 @@ class Runtime final : public menu::Host,
     /// @return true when they do
     [[nodiscard]] bool chat_backdrop_shown() const;
 
-    /// Tells whether game text may hold UTF-8 (ui.text-rendering unicode):
-    /// typed text is sent as UTF-8, and well-formed UTF-8 in game text is
-    /// read as its characters. Without it, game text is the game's 8-bit
-    /// code page.
+    /// Tells whether game text may hold UTF-8: well-formed UTF-8 in game
+    /// text is read as its characters, and typed text is kept in UTF-8.
+    /// It is on while the language shown draws in the modern fonts, while
+    /// Unicode chat is on (unicode_chat_on), and when the mod profile asks
+    /// for it (ui.text-rendering unicode). Without it, game text is the
+    /// game's 8-bit code page.
     ///
     /// @return true when it may
     [[nodiscard]] bool game_text_utf8() const;
@@ -565,6 +569,54 @@ class Runtime final : public menu::Host,
     ///
     /// @return true once they have opened
     [[nodiscard]] static bool modern_fonts_open();
+
+    /// Tells whether the language shown draws its text in the modern fonts,
+    /// which are then on whatever the setting (Simplified Chinese).
+    ///
+    /// @return true while such a language is shown
+    [[nodiscard]] bool language_needs_modern_fonts() const;
+
+    /// Returns the manifest of the language pack that asks for multiplayer
+    /// chat in UTF-8 while its language is shown (unicode: true): the
+    /// setting is then on, and locked, whatever the player chose.
+    ///
+    /// @return the manifest; null when no pack of the language shown asks
+    [[nodiscard]] const oa::data::languages::PackManifest* language_unicode_chat() const;
+
+    /// Tells whether multiplayer chat is sent and read as UTF-8: the
+    /// Language section's Enable Unicode Multiplayer Chat, a language shown
+    /// whose text is UTF-8 or whose pack asks for it
+    /// (oa::data::languages::turns_unicode_chat_on), or the mod profile's
+    /// ui.text-rendering unicode. It changes only how chat lines
+    /// are written, never the simulation or a saved game.
+    ///
+    /// @return true while it is on
+    [[nodiscard]] bool unicode_chat_on() const;
+
+    /// Returns the captions drawn over the player's own pictures in the
+    /// language shown (pictures.tdf of its language packs, a mod's first,
+    /// then the player's, then the engine's; oa/data/languages/language_pack.hpp).
+    /// A picture without a caption, or one a pack turns off, is drawn as it
+    /// is.
+    ///
+    /// @return the captions, valid until the language changes
+    [[nodiscard]] const oa::data::languages::PictureCaptions& language_pictures() const;
+
+    /// Returns the folders of the language packs of the language shown, in
+    /// the order its text is looked up in them: a mod's, the player's, the
+    /// engine's, then the same for each of its fallbacks.
+    ///
+    /// @return the folders; empty when no pack holds the language
+    [[nodiscard]] std::vector<std::filesystem::path> language_pack_folders() const;
+
+    /// Readies the modern fonts for the language shown now, as the first
+    /// line drawn after the language changes does by itself: forgets the
+    /// lines drawn before, draws ideographs at 12 px at the least while a
+    /// Chinese, Japanese or Korean language is shown, and then draws its
+    /// most common characters into the glyph store at the text size, so
+    /// that the first screen in it draws few new glyphs. Call it where the
+    /// language is chosen, or while a loading screen shows.
+    void warm_game_text();
 
     /// Returns how game text is drawn now: the Language settings,
     /// with modern fonts only while the bundled fonts open, and whether game
@@ -2075,8 +2127,23 @@ class Runtime final : public menu::Host,
     /// @param field the field in canvas pixels; none gives no place
     void start_text_input(std::optional<oa::ui::display_layout::Rect> field);
 
-    /// Stops text input. [runtime_text_input.cpp]
+    /// Stops text input, and drops the input method's composition. [runtime_text_input.cpp]
     void stop_text_input();
+
+    /// Follows the input method's composition (text_composition_) before any screen sees an
+    /// event: SDL_EVENT_TEXT_EDITING sets it and committed text ends it. While it is open the
+    /// keys are the input method's, so that no key press edits a field, presses a hotkey or
+    /// reaches a screen; Escape still closes the field. [runtime_text_input.cpp]
+    ///
+    /// @param event event just received
+    /// @return true for a key press the composition takes, which no screen may see
+    bool take_composition_event(const SDL_Event& event);
+
+    /// Shows the input method's composition at the end of the save dialog's name, in place of
+    /// the one shown before; committed text replaces it. [runtime_match_menus.cpp]
+    ///
+    /// @param composition UTF-8; empty takes the shown one away
+    void compose_save_name(std::string_view composition);
 
     /// Shows, once, the main menu's notice of where the game folder was found
     /// (Options::found_install_notice). [runtime_found_install.cpp]
@@ -2330,6 +2397,40 @@ class Runtime final : public menu::Host,
     /// @param[in,out] destination archive the sequences go to
     /// @param path GAF file path
     void append_gaf_file(oa::formats::gaf::Archive& destination, std::string_view path);
+
+    /// The captions the shown language's packs draw over the player's own
+    /// pictures, the fonts that draw them and the lines drawn so far
+    /// (runtime_picture_captions.cpp).
+    struct PictureCaptionState;
+
+    /// Frees the picture captions' state.
+    ///
+    /// @param state state to free; null is allowed
+    static void destroy_picture_caption_state(PictureCaptionState* state) noexcept;
+
+    /// Draws the shown language's captions over the sequences of a GAF
+    /// file as it is loaded, each sequence its pictures.tdf names, in the
+    /// game palette's colours. Nothing changes while no pack names a
+    /// picture, when the bundled fonts do not open, or for a GAF read from
+    /// one of the game data's folders for the shown language
+    /// (anims-<word>), whose art already shows its words.
+    ///
+    /// @param file the GAF's path, as it was read
+    /// @param[in,out] archive the decoded sequences
+    /// @param first_sequence the first of `archive`'s sequences that came
+    ///        from `file`
+    void caption_gaf_pictures(
+        std::string_view file, oa::formats::gaf::Archive& archive, std::size_t first_sequence = 0
+    );
+
+    /// Draws the shown language's captions over a bitmap as it is loaded,
+    /// when its pictures.tdf names it. A bitmap read from one of the game
+    /// data's language folders (bitmaps-<word>) already shows its words in
+    /// that language, and is left as it is.
+    ///
+    /// @param file the bitmap's path, as it was read
+    /// @param[in,out] image the decoded bitmap: its indices and RGB
+    void caption_bitmap(std::string_view file, Image& image);
 
     /// Blits the covered pixels of a rendered GAF frame into an RGB image through a palette,
     /// clipped to the image.
@@ -4533,11 +4634,20 @@ class Runtime final : public menu::Host,
     struct PanelText {
         Runtime* runtime{};
         TextPlace kept{};
+        std::optional<int> kept_top_row{};
 
         /// Makes the runtime paint panel text.
         ///
         /// @param owner the runtime
         explicit PanelText(Runtime& owner) noexcept;
+        /// Makes the runtime paint the text of a panel whose top is a row
+        /// no letter may rise above: a line in the modern fonts whose
+        /// letters would, as ideographs beside the game's fonts may, is
+        /// lowered until they do not (paint_text).
+        ///
+        /// @param owner the runtime
+        /// @param top_row the panel's first row, in paint rows
+        PanelText(Runtime& owner, int top_row) noexcept;
         /// Gives back the place the runtime painted text in before.
         ~PanelText();
         PanelText(const PanelText&) = delete;
@@ -5822,13 +5932,23 @@ class Runtime final : public menu::Host,
     /// Checks the save dialog SAVEGAME opens from the pause menu or ENDMSN.
     ///
     /// The typed name and Return write the save and return to the screen it was
-    /// opened over. Throws std::runtime_error on a failure.
+    /// opened over; the save is then found in the saves folder and read back.
+    /// With `compose`, a Latin-1 letter and a hanzi typed while the game's
+    /// text is in its code page are not taken and change nothing drawn;
+    /// then, with Unicode chat on, as a language written in UTF-8 has it,
+    /// two hanzi follow the name through an input method's composition, as
+    /// the event path receives it: the keys pressed while it is open edit
+    /// nothing and save nothing, Backspace takes a third hanzi away whole,
+    /// and the modern fonts draw the hanzi while they are open. Throws
+    /// std::runtime_error on a failure.
     ///
     /// @param report_directory directory the frames are written to
-    /// @param name save name to type
+    /// @param name save name to type, ASCII
+    /// @param compose add the composed hanzi to the name
     /// @return the Summary the save holds
-    oa::ui::frontend::LoadSummary
-    check_save_dialog(const fs::path& report_directory, const std::string& name);
+    oa::ui::frontend::LoadSummary check_save_dialog(
+        const fs::path& report_directory, const std::string& name, bool compose = false
+    );
 
     /// Enters the match view once a match is built.
     ///
@@ -5880,7 +6000,7 @@ class Runtime final : public menu::Host,
     void read_interface_catalogue();
 
     /// Takes the setting's choice of language and puts it in effect when it
-    /// changed.
+    /// changed, readying the modern fonts for it (warm_game_text).
     ///
     /// @param choice oa::data::languages::system_choice or a tag
     void set_language_choice(std::string_view choice);
@@ -5931,6 +6051,14 @@ class Runtime final : public menu::Host,
     ///
     /// @return the language; English before start_language
     [[nodiscard]] const oa::data::languages::Language& system_language() const;
+
+    /// Returns the tags of the languages that turn multiplayer chat in
+    /// UTF-8 on (oa::data::languages::turns_unicode_chat_on): those whose
+    /// text is UTF-8 and those whose packs ask (unicode: true), which the
+    /// settings dialog locks on.
+    ///
+    /// @return the tags, each once
+    [[nodiscard]] std::vector<std::string> unicode_chat_language_tags() const;
 
     /// Returns the sink the unit loaders hand each unit's names and
     /// descriptions in other languages to, which fills the language's table.
@@ -8745,8 +8873,32 @@ class Runtime final : public menu::Host,
     ///
     /// @param scale screen pixels to a game pixel
     /// @param width the room, in screen pixels
+    /// @param[out] composition where the input method's composition, as much
+    ///     of it as the line shows, is underlined, from the line's pen and
+    ///     baseline; none without one; null asks for none
     /// @return the line; none while the game's fonts draw it
-    [[nodiscard]] std::optional<oa::present::TextLayers> chat_line_layers(int scale, int width);
+    [[nodiscard]] std::optional<oa::present::TextLayers> chat_line_layers(
+        int scale, int width, std::optional<oa::present::TextUnderline>* composition = nullptr
+    );
+
+    /// Underlines the input method's composition in a chat line the game's
+    /// fonts draw: under its characters, on the line's last row, in the
+    /// line's colour.
+    ///
+    /// @param font the font the line is drawn in
+    /// @param x the paint column the line's text starts at
+    /// @param y the paint row of the line's pen
+    /// @param before the typed text the line shows before the composition
+    /// @param composition the composition the line shows; empty underlines nothing
+    /// @param scale pixel repeat
+    void underline_typed_composition(
+        const oa::formats::fnt::Font& font,
+        int x,
+        int y,
+        std::string_view before,
+        std::string_view composition,
+        int scale
+    );
 
     /// Draws the chat line over the battlefield while it is taller than the
     /// TALK field and two rows above and below it, and every line while the
@@ -11308,11 +11460,12 @@ class Runtime final : public menu::Host,
     /// @return the region; zeros without a TextRegion
     [[nodiscard]] oa::ui::campaign::BriefingRegion briefing_region();
 
-    /// Sets a button's or label's text.
+    /// Sets a button's or label's text, in the language shown, as 3.1c's
+    /// gadget text setter translates every text it sets.
     ///
     /// @param menu panel holding the gadget
     /// @param name gadget name; a missing gadget is ignored
-    /// @param text new text
+    /// @param text new text, before translation
     /// @param length text-box length; unused here
     void set_text(
         skirmish::MenuHandle menu, std::string_view name, std::string_view text, int32_t length
@@ -11517,7 +11670,9 @@ class Runtime final : public menu::Host,
     /// @return the counts text; empty without a selected map
     std::string permitted_player_counts_text() override;
 
-    /// Returns the selected map's description, the map object's summary text.
+    /// Returns the selected map's description, the map object's summary text:
+    /// lowered and looked up in gamedata\translate.tdf, as 3.1c reads a map's
+    /// description, else as the map writes it.
     ///
     /// @return the description; empty without a selected map
     std::string map_description() override;
@@ -12508,6 +12663,11 @@ class Runtime final : public menu::Host,
     // player commits it; empty otherwise. The line and the composition are
     // the typed text, UTF-8, sent as typed_game_text gives it.
     std::string chat_composition_{};
+    // The input method's composition while text input is on, UTF-8: what
+    // the last SDL_EVENT_TEXT_EDITING held, until text is committed or text
+    // input stops. While it is not empty the keys are the input method's
+    // (take_composition_event).
+    std::string text_composition_{};
     std::shared_ptr<MatchConsole> console_;
     // What the team panels tell the other players' machines, filled by the
     // extension (Extension::team_panel_host) as each match starts.
@@ -12983,6 +13143,9 @@ class Runtime final : public menu::Host,
     std::unique_ptr<LanguageState, void (*)(LanguageState*) noexcept> language_{
         nullptr, destroy_language_state
     };
+    // The captions drawn over the player's own pictures; null until first used.
+    std::unique_ptr<PictureCaptionState, void (*)(PictureCaptionState*) noexcept>
+        picture_caption_state_{nullptr, destroy_picture_caption_state};
     // The main menu's OA button and dialog; null until first used.
     std::unique_ptr<EngineSettingsMenuHost, void (*)(EngineSettingsMenuHost*) noexcept>
         engine_settings_menu_{nullptr, destroy_engine_settings_menu_host};
@@ -13029,6 +13192,9 @@ class Runtime final : public menu::Host,
     // Where the game text painted now lies; a PanelText in scope makes it a
     // panel's.
     TextPlace text_place_{TextPlace::battlefield};
+    // The paint row a panel's text keeps below, which a PanelText in scope
+    // may set; none lets it lie where its pen puts it.
+    std::optional<int> panel_top_row_{};
     CapturedFrame captured_frame_{};
     IndexedOutput indexed_output_{};
     oa::present::SurfaceBuffer loading_background_{}; // Loadgame2bg.pcx

@@ -3,6 +3,7 @@
 
 // The profile's display rules (the ui.* hacks) where the runtime carries
 // them out: the screenshot keys and their named files.
+#include "oa/app/game_directory.hpp"
 #include "oa/app/runtime.hpp"
 #include "oa/app/view_rules.hpp"
 #include "match_models.hpp"
@@ -739,7 +740,7 @@ void Runtime::capture_named_screenshot() {
     };
     const auto saved = present::save_pcx_surface(stream, capture, *capture.active_surface);
     const bool closed = std::fclose(file) == 0;
-    status_ = saved == present::PcxStatus::ok && closed ? path.filename().string()
+    status_ = saved == present::PcxStatus::ok && closed ? path_to_utf8(path.filename())
                                                         : std::string("error writing screenshot");
 }
 

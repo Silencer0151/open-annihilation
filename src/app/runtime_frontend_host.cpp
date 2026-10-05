@@ -322,7 +322,7 @@ std::optional<std::string> Runtime::user_name() {
 }
 
 std::string Runtime::application_directory() {
-    return options_.game_dir.string();
+    return path_to_utf8(options_.game_dir);
 }
 
 void Runtime::select_map_list(int32_t selector_value) {
@@ -519,7 +519,7 @@ std::optional<fs::path> Runtime::game_path(std::string_view relative) const {
             std::error_code error;
             for (fs::directory_iterator entry{at, error}, last; !error && entry != last;
                  entry.increment(error))
-                if (lowered(entry->path().filename().string()) == part) {
+                if (lowered(path_to_utf8(entry->path().filename())) == part) {
                     at = entry->path();
                     found = true;
                     break;
@@ -653,6 +653,7 @@ int32_t Runtime::load_named_background(const char* name, bool redraw, bool apply
         } catch (const std::exception&) {
             return 0;
         }
+        runtime.caption_bitmap(path, *image);
         if (image->palette)
             std::memcpy(palette, image->palette->data(), oa::ui::frontend::kResourcePaletteBytes);
         auto& bitmaps = runtime.named_backgrounds_.bitmaps;

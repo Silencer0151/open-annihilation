@@ -64,7 +64,8 @@ inline constexpr char error_log_file_name[] = "ErrorLog.txt";
 
 /// Appends text to ErrorLog.txt.
 ///
-/// @param directory path ending in a separator; null or empty for the working directory
+/// @param directory path ending in a separator, UTF-8 as SDL gives the
+///        application's folder; null or empty for the working directory
 /// @param text NUL-terminated text appended as is
 /// @return false when the log cannot be opened
 bool append_error_log(const char* directory, const char* text) noexcept;

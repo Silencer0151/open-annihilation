@@ -5,6 +5,7 @@
 // NEWGAME lists and the MSNBRIEF panel to the frontend runtime.
 #include "oa/app/runtime.hpp"
 #include "oa/data/defs/layout.hpp"
+#include "oa/base/text/line_break.hpp"
 #include "oa/data/languages/translation.hpp"
 #include "oa/ui/decoded.hpp"
 #include "oa/app/asset_files.hpp"
@@ -18,6 +19,7 @@
 #include "oa/present/world_renderer/world_camera.hpp"
 #include "oa/ui/campaign/campaign.hpp"
 #include "oa/ui/campaign/single_player.hpp"
+#include "oa/ui/frontend_renderer/game_text.hpp"
 #include "oa/ui/gui_input/gadget_panel.hpp"
 #include "oa/ui/gui_layout/gui_gadget.hpp"
 #include "oa/ui/hud/player_records.hpp"
@@ -197,9 +199,11 @@ void package_message(void*, const char* text) {
     campaign_runtime().events.message = text;
 }
 
+// Measures a briefing's text as draw_briefing_overlays draws it: in its FNT
+// font, and in the modern fonts what the Language settings give them.
 int32_t measure_font(void* context, const char* text) {
-    return static_cast<int32_t>(
-        oa::formats::fnt::measure_text(*static_cast<const oa::formats::fnt::Font*>(context), text)
+    return oa::ui::frontend_renderer::measure_fnt_game_text(
+        *static_cast<const oa::formats::fnt::Font*>(context), text, true
     );
 }
 
@@ -1031,11 +1035,30 @@ void Runtime::stop_briefing_audio() {
 
 campaign::BriefingRegion Runtime::briefing_region() {
     const auto* text_region = widget("TextRegion");
+    const auto& font = briefing_text_font();
+    auto line_height = static_cast<int32_t>(oa::formats::fnt::line_height(font));
+    // A briefing in Chinese, Japanese or Korean, drawn in the modern fonts,
+    // spaces its rows to hold the ideographs, which may stand taller than
+    // the font's letters.
+    const char* text = missions::campaign_briefing_text(&campaign_runtime().file);
+    if (const auto settings = oa::present::game_text_settings();
+        settings.style.modern_fonts && text != nullptr && oa::base::text::has_wide_script(text))
+        if (const auto layers = oa::present::modern_text(
+                "\xE4\xB8\xAD",
+                oa::ui::frontend_renderer::fnt_font_face(font),
+                1,
+                std::min(
+                    oa::present::held_text_size(settings.style.size),
+                    oa::present::game_font_text_size
+                ),
+                false
+            ))
+            line_height = std::max(line_height, layers->height);
     return {
         text_region != nullptr ? text_region->common.x : 0,
         text_region != nullptr ? text_region->common.y : 0,
         text_region != nullptr ? text_region->common.height : 0,
-        static_cast<int32_t>(oa::formats::fnt::line_height(briefing_text_font()))
+        line_height
     };
 }
 
@@ -1380,10 +1403,56 @@ void Runtime::draw_briefing_overlays() {
     // Every text has its own place, so where a pen stops is not needed.
     const auto& font = briefing_text_font();
     const bool fnt_font = briefing_text_font_.has_value();
+    namespace renderer = oa::ui::frontend_renderer;
+    auto canvas = oa::present::rgb_canvas(
+        surface_.rgb,
+        static_cast<int32_t>(surface_.width),
+        static_cast<int32_t>(surface_.height),
+        pal
+    );
+    // A text in a font, unless the Language settings give some of it to
+    // the modern fonts, such as a Chinese briefing: those runs are laid on
+    // the screen at once in the colour, on the font's baseline, and the
+    // font's runs wait for copy_glyphs.
+    const auto draw_text = [&](const oa::formats::fnt::Font& text_font,
+                               std::string_view text,
+                               int32_t x,
+                               int32_t y,
+                               uint8_t colour) {
+        if (!renderer::needs_text_runs(text, true)) {
+            std::ignore = oa::formats::fnt::raster_text(target, text_font, text, x, y);
+            return;
+        }
+        const auto entry = static_cast<std::size_t>(colour) * 4U;
+        const std::array<uint8_t, 3> rgb =
+            entry + 2 < pal.size()
+                ? std::array<uint8_t, 3>{pal[entry], pal[entry + 1], pal[entry + 2]}
+                : std::array<uint8_t, 3>{255, 255, 255};
+        const auto face = renderer::fnt_font_face(text_font);
+        int32_t pen = x;
+        for (const auto& run :
+             renderer::split_game_text(text, renderer::fnt_font_characters(text_font), true)) {
+            if (run.modern)
+                if (const auto layers = oa::present::modern_text(
+                        run.text, face, 1, renderer::screen_text_size(run)
+                    )) {
+                    oa::present::lay_text(
+                        canvas, *layers, pen, y + renderer::fnt_font_baseline(text_font), rgb
+                    );
+                    pen += layers->advance;
+                    continue;
+                }
+            const std::string bytes =
+                run.modern ? oa::present::encode_game_text(run.text, false) : run.text;
+            std::ignore = oa::formats::fnt::raster_text(target, text_font, bytes, pen, y);
+            pen += static_cast<int32_t>(oa::formats::fnt::measure_text(text_font, bytes));
+        }
+    };
+    const auto draw_line = [&](std::string_view text, int32_t x, int32_t y, uint8_t colour) {
+        draw_text(font, text, x, y, colour);
+    };
     for (uint32_t i = 0; i < page.row_count; ++i)
-        std::ignore = oa::formats::fnt::raster_text(
-            target, font, page.rows[i].text, page.rows[i].x, page.rows[i].y
-        );
+        draw_line(page.rows[i].text, page.rows[i].x, page.rows[i].y, colours[kBriefingRowColour]);
     copy_glyphs(colours[kBriefingRowColour], fnt_font);
     // The highlighted words are drawn over their rows, all in the flash
     // colour while it shows.
@@ -1398,8 +1467,11 @@ void Runtime::draw_briefing_overlays() {
             const auto& highlight = page.highlights[i];
             if (!flash && highlight.color != slot)
                 continue;
-            std::ignore = oa::formats::fnt::raster_text(
-                target, font, highlight.text, highlight.x, highlight.y
+            draw_line(
+                highlight.text,
+                highlight.x,
+                highlight.y,
+                flash ? kHighlightFlashColour : colours[static_cast<std::size_t>(slot)]
             );
             drawn = true;
         }
@@ -1410,15 +1482,18 @@ void Runtime::draw_briefing_overlays() {
         if (flash)
             break;
     }
-    // MORE... or BACK TO START on the MOREBAR, placed by its alignment as
-    // measured in the GUI label font.
+    // MORE... or BACK TO START on the MOREBAR, in the language shown as 3.1c
+    // translates it, placed by its alignment as measured in the GUI label
+    // font.
     const auto* more = widget("MOREBAR");
-    const std::string_view caption = oa::ui::campaign::more_label_text(page.more);
+    const char* english = oa::ui::campaign::more_label_text(page.more);
+    const char* translated = english[0] != '\0' ? game_translation(english) : nullptr;
+    const std::string_view caption = translated != nullptr ? translated : english;
     if (more == nullptr || caption.empty())
         return;
     const auto& label_font =
         resources_.label_font.glyphs['I'] ? resources_.label_font : resources_.font;
-    const auto width = static_cast<int32_t>(oa::formats::fnt::measure_text(label_font, caption));
+    const auto width = renderer::measure_fnt_game_text(label_font, caption, true);
     const auto attributes = static_cast<uint32_t>(more->common.attributes);
     int32_t x = more->common.x;
     if ((attributes & oa::ui::gui_layout::attribute::right_aligned) != 0)
@@ -1426,13 +1501,16 @@ void Runtime::draw_briefing_overlays() {
     else if ((attributes & oa::ui::gui_layout::attribute::centered) != 0)
         x += more->common.width / 2 - width / 2;
     // The caption is placed from its measured width; where the pen stops is
-    // not needed.
-    std::ignore = oa::formats::fnt::raster_text(
-        target,
-        briefing_more_font_ ? *briefing_more_font_ : resources_.font,
+    // not needed. Letters the modern fonts draw taller than the bar's font,
+    // such as ideographs, are lowered to rise no higher than the bar, clear
+    // of the page's last row.
+    const auto& more_font = briefing_more_font_ ? *briefing_more_font_ : resources_.font;
+    draw_text(
+        more_font,
         caption,
         x,
-        more->common.y
+        more->common.y + renderer::fnt_game_text_rise(more_font, caption, true),
+        colours[kBriefingMoreColour]
     );
     copy_glyphs(colours[kBriefingMoreColour], briefing_more_font_.has_value());
 }

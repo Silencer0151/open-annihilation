@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Simplified Chinese: the engine's own pack (docs/languages.md).
+oalang: 1
+tag: zh-Hans
+name: 简体中文
+english-name: Chinese (Simplified)
+word: Chinese
+version: "1"
+locales: [zh-Hans, zh-CN, zh-SG, zh-MY, zh]
+fallbacks: []
+text: {needs: modern-fonts}
+unicode: true

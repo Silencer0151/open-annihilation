@@ -61,6 +61,17 @@ void forget_gui_font_characters();
 /// @return the rows; the line height less two without an 'H'
 [[nodiscard]] int32_t fnt_font_baseline(const formats::fnt::Font& font);
 
+/// Gives the palette entry a font's letters are drawn in, which the modern
+/// fonts draw its text in too: the lightest of the entries its 'H' is drawn
+/// in through a palette. A GUI font's letters are shaded and outlined in
+/// darker entries than their face; an FNT font draws every letter in
+/// formats::fnt::foreground_index.
+///
+/// @param font the font
+/// @param palette the palette the font is drawn through
+/// @return the entry; formats::fnt::foreground_index for a font without an 'H'
+[[nodiscard]] uint8_t fnt_font_ink(const formats::fnt::Font& font, const PaletteBytes& palette);
+
 /// Gives the modern face an FNT font stands for: the message face for a
 /// font whose 'H' stands 9 rows or more, as COMIX.FNT's does, the label
 /// face for the smaller ones, such as CONSOLE.FNT and SMLFONT.FNT.
@@ -151,6 +162,34 @@ int32_t draw_fnt_game_text(
     bool game_text
 );
 
+/// Draws the input method's composition at the end of a line of FNT-font
+/// game text: wholly in the modern fonts, as the characters it composes
+/// are drawn, the Latin letters of its spelling among them, and underlined
+/// in its colour on the line's lowest rows (present::modern_text_underline).
+/// Where the modern fonts cannot draw it the font draws it, underlined on
+/// its line's last row. As much of it as fits left of the clip's right edge
+/// is drawn.
+///
+/// @param[in,out] surface the screen
+/// @param font the FNT font the line is drawn in
+/// @param composition the composition, as game text
+/// @param x the pen column
+/// @param y the pen row raster_text takes
+/// @param color the text's colour
+/// @param palette the screen's palette
+/// @param clip the pixels that may change
+/// @return the pen column after the composition
+int32_t draw_fnt_composition(
+    Surface& surface,
+    const formats::fnt::Font& font,
+    std::string_view composition,
+    int32_t x,
+    int32_t y,
+    std::array<uint8_t, 3> color,
+    const PaletteBytes& palette,
+    const TextClip& clip
+);
+
 /// Measures FNT-font game text as draw_fnt_game_text draws it.
 ///
 /// @param font the FNT font
@@ -159,5 +198,17 @@ int32_t draw_fnt_game_text(
 /// @return the width in pixels
 [[nodiscard]] int32_t
 measure_fnt_game_text(const formats::fnt::Font& font, std::string_view text, bool game_text);
+
+/// Gives the rows FNT-font game text, as draw_fnt_game_text draws it, rises
+/// above the pen row: the modern fonts' letters, such as ideographs, may
+/// stand taller over the font's baseline than the font's own letters, and
+/// their outline with them.
+///
+/// @param font the FNT font
+/// @param text the game text
+/// @param game_text the text is game text
+/// @return the rows; 0 when nothing is drawn above the pen row
+[[nodiscard]] int32_t
+fnt_game_text_rise(const formats::fnt::Font& font, std::string_view text, bool game_text);
 
 } // namespace oa::ui::frontend_renderer

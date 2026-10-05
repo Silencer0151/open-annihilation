@@ -972,6 +972,10 @@ int32_t update_panel(GadgetPanel& panel);
 ///
 /// Breaks after spaces or hyphens once a line reaches the width; lines end
 /// with CR LF. A width too small to hold one "d" gives one character per line.
+/// Text with Chinese, Japanese or Korean characters breaks before a line
+/// reaches the width, at a space or between two of those characters, never
+/// starting a line with a closing mark or ending one with an opening mark
+/// (oa::base::text::first_row).
 ///
 /// @param[in,out] panel GUI context; its font selection is used for measuring.
 /// @param text Text to wrap.

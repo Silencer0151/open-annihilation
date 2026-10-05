@@ -88,6 +88,13 @@ void multiplayer_bind_lobby_buttons(uint8_t buttons) noexcept;
 ///        for none.
 void multiplayer_bind_wire_rules(const netgame::WireRules& rules, const char* program) noexcept;
 
+/// Binds whether this machine sends and reads chat as UTF-8 (Lobby::unicode_chat).
+///
+/// The binding survives multiplayer_reset; until one is bound it is off.
+///
+/// @param on Unicode chat is on.
+void multiplayer_bind_unicode_chat(bool on) noexcept;
+
 /// Binds the launch the connection screens, the battle room and the session read.
 ///
 /// The binding survives multiplayer_reset.
@@ -227,11 +234,26 @@ void multiplayer_bind_start(StartHandler handler, void* context) noexcept;
 /// @return False when the control is missing.
 bool multiplayer_click(app::ScreenContext* ctx, const char* name, uint8_t button = 1) noexcept;
 
-/// Types printable ASCII text into the focused text box, up to its length limit.
+/// Types text into the focused text box, up to its length limit.
+///
+/// The battle room's chat line (MESSAGE) takes every character but the
+/// control characters, whole, as game text: UTF-8 where game text holds it,
+/// else the game's code page with '?' for a character it lacks. The other
+/// boxes take printable ASCII.
 ///
 /// @param ctx Screen context of the running frontend.
-/// @param text NUL-terminated text; null types nothing.
+/// @param text NUL-terminated UTF-8; null types nothing.
 void multiplayer_type(app::ScreenContext* ctx, const char* text) noexcept;
+
+/// Shows the input method's composition at the end of the battle room's
+/// focused chat line, in place of the one shown before; typed text replaces
+/// it.
+///
+/// @param composition NUL-terminated UTF-8; empty or null takes the shown
+///     one away.
+/// @return false when none of these screens shows, or the focused box is
+///     not the chat line
+bool multiplayer_compose(const char* composition) noexcept;
 
 /// Starts a new frontend session: drops lobby, connection and dialog state and resets the loopback network.
 ///

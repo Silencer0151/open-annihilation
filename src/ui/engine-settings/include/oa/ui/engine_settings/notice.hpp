@@ -87,7 +87,10 @@ enum class NoticeAction : uint8_t {
 notice_layout(const Notice& notice, const DialogFonts* fonts = nullptr);
 
 /// Returns a text broken between words into lines no wider than a width; a
-/// word wider than a line is broken between its characters.
+/// word wider than a line is broken between its characters. A text with
+/// Chinese, Japanese or Korean characters also breaks between them, and
+/// never starts a line with a closing mark or ends one with an opening mark
+/// (oa::base::text::first_row).
 ///
 /// @param text the text, UTF-8
 /// @param width the room, in source pixels

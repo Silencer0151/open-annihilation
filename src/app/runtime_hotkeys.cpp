@@ -919,7 +919,11 @@ std::optional<Runtime::HudRect> Runtime::chat_text_box() {
     return std::nullopt;
 }
 
-std::optional<oa::present::TextLayers> Runtime::chat_line_layers(int scale, int width) {
+std::optional<oa::present::TextLayers> Runtime::chat_line_layers(
+    int scale, int width, std::optional<oa::present::TextUnderline>* composition
+) {
+    if (composition != nullptr)
+        composition->reset();
     const oa::formats::fnt::Font* font = match_label_font();
     if (font == nullptr)
         return std::nullopt;
@@ -933,9 +937,40 @@ std::optional<oa::present::TextLayers> Runtime::chat_line_layers(int scale, int 
     const auto face = renderer::fnt_font_face(*font);
     const int32_t room = width - 2 * oa::present::text_border(scale, run.size);
     const std::size_t from = oa::present::modern_text_tail(run.text, face, scale, run.size, room);
-    return oa::present::modern_text(
-        std::string_view(run.text).substr(from), face, scale, run.size, false
-    );
+    const std::string_view shown = std::string_view(run.text).substr(from);
+    // The composition follows the typed text in the line, as much of it as
+    // the line shows.
+    if (composition != nullptr && !chat_composition_.empty()) {
+        const bool utf8 = game_text_utf8();
+        const std::size_t typed =
+            oa::present::decode_game_text(typed_game_text(chat_buffer_), utf8).size();
+        const std::size_t composed =
+            typed + oa::present::decode_game_text(typed_game_text(chat_composition_), utf8).size();
+        if (composed > from)
+            *composition = oa::present::modern_text_underline(
+                shown, face, scale, run.size, std::max(typed, from) - from, composed - from
+            );
+    }
+    return oa::present::modern_text(shown, face, scale, run.size, false);
+}
+
+void Runtime::underline_typed_composition(
+    const oa::formats::fnt::Font& font,
+    int x,
+    int y,
+    std::string_view before,
+    std::string_view composition,
+    int scale
+) {
+    if (composition.empty())
+        return;
+    // On the line's last row, under the composition's characters.
+    const int left = x + match_text_width(font, typed_game_text(before), scale);
+    const int width = match_text_width(font, typed_game_text(composition), scale);
+    const int row = y + (static_cast<int>(oa::formats::fnt::line_height(font)) - 1 -
+                         oa::formats::fnt::row_lift(font)) *
+                            scale;
+    fill_hud_rect(left, row, width, scale, kChatTextColor);
 }
 
 void Runtime::draw_chat_entry() {
@@ -963,14 +998,25 @@ void Runtime::draw_chat_entry() {
             // centred on the box while the box and the rows above and
             // below it hold it; a taller line rises over the battlefield
             // (draw_risen_chat_line).
-            if (const auto layers = chat_line_layers(1, common.width - 2 * kChatTextInset)) {
-                if (layers->height <= common.height + 2 * kChatTextInset)
+            // The input method's composition is underlined.
+            std::optional<oa::present::TextUnderline> composition;
+            if (const auto layers =
+                    chat_line_layers(1, common.width - 2 * kChatTextInset, &composition)) {
+                if (layers->height <= common.height + 2 * kChatTextInset) {
+                    const int baseline =
+                        y + (common.height - layers->height) / 2 + layers->baseline;
                     std::ignore = paint_modern_text(
-                        *layers,
-                        x + kChatTextInset,
-                        y + (common.height - layers->height) / 2 + layers->baseline,
-                        palette_rgb(kChatTextColor)
+                        *layers, x + kChatTextInset, baseline, palette_rgb(kChatTextColor)
                     );
+                    if (composition)
+                        fill_hud_rect(
+                            x + kChatTextInset + composition->left,
+                            baseline + composition->row,
+                            composition->width,
+                            composition->thickness,
+                            kChatTextColor
+                        );
+                }
                 continue;
             }
             const oa::formats::fnt::Font* font = match_label_font();
@@ -982,6 +1028,15 @@ void Runtime::draw_chat_entry() {
                 typed_game_text(chat_buffer_ + chat_composition_) + "_",
                 kChatTextColor
             );
+            if (font != nullptr)
+                underline_typed_composition(
+                    *font,
+                    x + kChatTextInset,
+                    y + (common.height - text_h) / 2,
+                    chat_buffer_,
+                    chat_composition_,
+                    1
+                );
             continue;
         }
         // CONSOLE is the TALK.GAF picture of the same name.
@@ -1027,7 +1082,8 @@ void Runtime::draw_risen_chat_line() {
         );
         pen = std::clamp(field.x, left + inset, right);
     }
-    const auto layers = chat_line_layers(scale, right - pen - inset);
+    std::optional<oa::present::TextUnderline> composition;
+    const auto layers = chat_line_layers(scale, right - pen - inset, &composition);
     if (right <= left)
         return;
     const int bottom = area.y + area.height;
@@ -1035,9 +1091,18 @@ void Runtime::draw_risen_chat_line() {
         const int top = std::max(bottom - layers->height - 2 * inset, area.y);
         const auto at = canvas_paint(left, top);
         fill_hud_rect(at.x, at.y, right - left, bottom - top, view_rules::chat_backdrop_color);
-        std::ignore = paint_modern_text(
-            *layers, at.x + pen - left, at.y + inset + layers->baseline, palette_rgb(kChatTextColor)
-        );
+        const int baseline = at.y + inset + layers->baseline;
+        std::ignore =
+            paint_modern_text(*layers, at.x + pen - left, baseline, palette_rgb(kChatTextColor));
+        // The input method's composition is underlined.
+        if (composition)
+            fill_hud_rect(
+                at.x + pen - left + composition->left,
+                baseline + composition->row,
+                composition->width,
+                composition->thickness,
+                kChatTextColor
+            );
         return;
     }
     // The game's fonts draw the line: with the touch controls on it stands
@@ -1060,6 +1125,18 @@ void Runtime::draw_risen_chat_line() {
     const auto at = canvas_paint(left, top);
     fill_hud_rect(at.x, at.y, right - left, bottom - top, view_rules::chat_backdrop_color);
     draw_match_text(font, at.x + pen - left, at.y + inset, line, kChatTextColor, scale);
+    // The input method's composition, as much of it as the line shows, is
+    // underlined.
+    const std::size_t composed = std::max(chat_buffer_.size(), from);
+    if (!chat_composition_.empty() && composed < typed.size())
+        underline_typed_composition(
+            *font,
+            at.x + pen - left,
+            at.y + inset,
+            std::string_view(typed).substr(from, composed - from),
+            std::string_view(typed).substr(composed),
+            scale
+        );
 }
 
 namespace {

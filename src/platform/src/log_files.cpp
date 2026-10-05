@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cstdio>
+#include <string>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -52,6 +53,16 @@ std::chrono::sys_days utc_day(sys_seconds time) {
     return std::chrono::floor<std::chrono::days>(time);
 }
 
+/// Returns a path's name in UTF-8: a name outside the system's code page
+/// has no narrow spelling on Windows.
+///
+/// @param path the path
+/// @return its last part, UTF-8
+std::string file_name_text(const fs::path& path) {
+    const auto text = path.filename().u8string();
+    return {text.begin(), text.end()};
+}
+
 // Reads the whole of `text` as a decimal number.
 std::optional<int32_t> number(std::string_view text) {
     int32_t value = 0;
@@ -74,7 +85,7 @@ std::vector<LogEntry> list_logs(const fs::path& folder) {
     for (fs::directory_iterator it(folder, error), end; !error && it != end; it.increment(error)) {
         if (!it->is_regular_file(error))
             continue;
-        if (const auto begun = begun_at(it->path().filename().string()))
+        if (const auto begun = begun_at(file_name_text(it->path())))
             logs.push_back({it->path(), *begun});
     }
     std::sort(logs.begin(), logs.end(), [](const LogEntry& a, const LogEntry& b) {
@@ -292,7 +303,7 @@ bool begin(const fs::path& folder, const Limits& limits) {
     current.folder = folder;
     current.limits = limits;
     current.current = path;
-    current.begun = begun_at(path.filename().string()).value_or(now);
+    current.begun = begun_at(file_name_text(path)).value_or(now);
     current.last_check = std::chrono::steady_clock::now();
     current.active = true;
     prune(folder, now, limits, path);

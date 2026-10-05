@@ -62,4 +62,20 @@ const char* installed_word() {
     return hooks.word != nullptr ? hooks.word(hooks.context) : nullptr;
 }
 
+const char*
+installed_mission_text(const char* mission_file, const char* key, const char* data_text) {
+    const TranslationHooks& hooks = installed();
+    if (hooks.mission_text == nullptr || mission_file == nullptr || key == nullptr)
+        return data_text;
+    return hooks.mission_text(hooks.context, mission_file, key, data_text);
+}
+
+std::string_view installed_language_file(const char* path, bool before_data) {
+    const TranslationHooks& hooks = installed();
+    const std::string* bytes = hooks.language_file != nullptr && path != nullptr
+                                   ? hooks.language_file(hooks.context, path, before_data)
+                                   : nullptr;
+    return bytes != nullptr ? std::string_view(bytes->data(), bytes->size()) : std::string_view{};
+}
+
 } // namespace oa::data::languages

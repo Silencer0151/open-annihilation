@@ -14,7 +14,9 @@ reclamate sequence and a fourth is cleared away, so the save holds them while
 they play. Run B starts from the save without stepping and must print the
 same tick, unit count, digest, orders and saved features. Run C resumes the
 save for RESUME_TICKS ticks to show the loaded match keeps simulating and
-keeps those orders, the transports still carrying their units.
+keeps those orders, the transports still carrying their units. The save is
+named in Chinese (SAVE_NAME), so that it is written and loaded by a name
+outside any 8-bit code page.
 
 The digest covers each unit's record, economy, weapons, COB script state,
 movement state and saved orders, the map's metal, placing-player and sight
@@ -76,6 +78,8 @@ RUNNER = shlex.split(os.environ.get("OA_TEST_RUNNER", ""))
 RUN_TIMEOUT_SECONDS = 900
 
 SAVE_TICK = 150
+# Run A's save: two hanzi, U+5B58 U+6863.
+SAVE_NAME = "\u5b58\u6863.sav"
 RESUME_TICKS = 30
 COMBAT_UNITS = 6
 DIGEST = re.compile(r"^saveload: tick (\d+) units (\d+) digest ([0-9a-f]{16})$", re.M)
@@ -454,7 +458,7 @@ def main():
     scratch_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="native-saveload-", dir=scratch_root) as temporary:
         profile = Path(temporary) / "preferences.conf"
-        save = Path(temporary) / "savegame" / "tick.sav"
+        save = Path(temporary) / "savegame" / SAVE_NAME
         saved = run(native, game_dir, profile, temporary, "--combat", str(COMBAT_UNITS),
                     "--give-orders", "--match-ticks", str(SAVE_TICK), "--save-after", str(SAVE_TICK),
                     "--save-file", str(save))

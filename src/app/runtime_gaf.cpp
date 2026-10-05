@@ -290,8 +290,10 @@ void Runtime::append_gaf_file(oa::formats::gaf::Archive& destination, std::strin
                       << '\n';
             return;
         }
+        const std::size_t first_sequence = destination.sequences.size();
         for (auto& sequence : parsed.archive->sequences)
             destination.sequences.push_back(std::move(sequence));
+        caption_gaf_pictures(path, destination, first_sequence);
     } catch (const std::exception& error) {
         missing_gaf_paths_.insert(key);
         const std::string_view what = error.what();

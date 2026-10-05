@@ -4,6 +4,7 @@
 // SDL output textures, viewport sizing and frame presentation.
 #include "mod_install_watch.hpp"
 #include "oa/app/runtime.hpp"
+#include "oa/app/game_directory.hpp"
 #include "graphics_report.hpp"
 #include "pad_state.hpp"
 #include "render_host.hpp"
@@ -1018,14 +1019,14 @@ void Runtime::present_front_end() {
 void write_ppm(const fs::path& path, const renderer::Surface& surface) {
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
     if (!output)
-        throw std::runtime_error("cannot create snapshot: " + path.string());
+        throw std::runtime_error("cannot create snapshot: " + path_to_utf8(path));
     output << "P6\n" << surface.width << ' ' << surface.height << "\n255\n";
     output.write(
         reinterpret_cast<const char*>(surface.rgb.data()),
         static_cast<std::streamsize>(surface.rgb.size())
     );
     if (!output)
-        throw std::runtime_error("cannot finish snapshot: " + path.string());
+        throw std::runtime_error("cannot finish snapshot: " + path_to_utf8(path));
 }
 
 } // namespace oa::app

@@ -1071,6 +1071,12 @@ int main() {
         parse({"--render-script", "game.oascript", "--mute", "--preferences-file", "p.conf"}).mute,
         "a render can be silent"
     );
+    // A file named in Chinese (U+5B58 U+6863) is read by its UTF-8 name.
+    expect(
+        parse({"--preferences-file", "\xe5\xad\x98\xe6\xa1\xa3.conf"})
+                .preferences_file->u8string() == u8"\u5b58\u6863.conf",
+        "--preferences-file reads UTF-8"
+    );
     for (const auto* chunks : {"3-2", "-1", "a-b", "1-", "4294967296", "1-2-3", ""})
         expect(
             rejection({"--render-script", "game.oascript", "--chunks", chunks}).find("--chunks") ==

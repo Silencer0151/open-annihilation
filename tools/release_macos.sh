@@ -290,7 +290,7 @@ if [[ "$release_build" == 1 ]]; then
     binary="$app/Contents/MacOS/$app_executable"
     [[ "$(ls -A "$app/Contents/MacOS")" == "$app_executable" ]] || fail "Contents/MacOS holds more than $app_executable"
     resources="$(ls -A "$app/Contents/Resources" | LC_ALL=C sort | tr '\n' ' ')"
-    expected="$(printf '%s\n' ATTRIBUTIONS.md LICENSE fonts licenses "$(plist_value "$app" CFBundleIconFile)" \
+    expected="$(printf '%s\n' ATTRIBUTIONS.md LICENSE fonts languages licenses "$(plist_value "$app" CFBundleIconFile)" \
         | LC_ALL=C sort | tr '\n' ' ')"
     [[ "$resources" == "$expected" ]] || fail "unexpected files in Contents/Resources: $resources"
     # The text fonts, and nothing else, as the bootstrap made them.

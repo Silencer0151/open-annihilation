@@ -6,9 +6,12 @@
 // locales, and put in effect there and each time the setting changes. The
 // game data's own texts follow it through 3.1c's keys (Translate.tdf, the
 // units' <Language>Name and <Language>Description, the language folders);
-// the engine's own words through the interface catalogue. Nothing here
-// reaches the simulation, a saved game or what a shared game sends.
+// the engine's own words through the interface catalogue. Language packs
+// add to both (oa/data/languages/language_pack.hpp): a mod's before the
+// game data, the player's and the engine's after it. Nothing here reaches
+// the simulation, a saved game or what a shared game sends.
 
+#include "language_packs.hpp"
 #include "language_state.hpp"
 #include "oa/app/game_directory.hpp"
 #include "oa/app/runtime.hpp"
@@ -39,8 +42,9 @@ namespace {
 namespace languages = oa::data::languages;
 
 /// The folder beside the game's other files that holds interface catalogue
-/// files (oa/data/languages/interface_text.hpp), each a TDF file.
-constexpr std::string_view kCatalogueFolder = "languages";
+/// files (oa/data/languages/interface_text.hpp), each a TDF file, and the
+/// engine's language packs.
+constexpr std::string_view kCatalogueFolder = engine_languages_folder;
 
 /// A catalogue file's extension, matched without regard to case.
 constexpr std::string_view kCatalogueExtension = ".tdf";
@@ -58,11 +62,33 @@ bool catalogue_file(std::string_view name) {
     });
 }
 
+/// Returns the word a pack's texts are looked up by: the registry's word
+/// for a language it knows by the pack's tag, else the manifest's.
+///
+/// @param manifest the pack's manifest
+/// @return the word
+std::string_view pack_word(const languages::PackManifest& manifest) {
+    const languages::Language* known = languages::find_by_tag(manifest.tag);
+    return known != nullptr && !known->game_name.empty() ? known->game_name
+                                                         : std::string_view(manifest.word);
+}
+
+/// Tells whether two words are the same, ignoring the case of ASCII letters.
+///
+/// @param left a word
+/// @param right a word
+/// @return true when they match
+bool same_word(std::string_view left, std::string_view right) {
+    const languages::UnitTexts::NoCaseLess less{};
+    return !less(left, right) && !less(right, left);
+}
+
 } // namespace
 
 void Runtime::destroy_language_state(LanguageState* state) noexcept {
     // The interface's lookups must not outlive the tables they read.
     if (state != nullptr) {
+        languages::set_unit_pack_layers({});
         languages::set_unit_texts(nullptr, {});
         languages::set_unit_text_sink(nullptr);
         languages::set_interface_language(nullptr, languages::english());
@@ -107,12 +133,71 @@ void Runtime::start_language() {
     languages::set_unit_text_sink(&state.sink);
     // Every screen and panel the game loads translates its texts, and looks
     // in its language's folders, through these.
-    languages::set_translation_hooks(
-        {this, translation_hook, [](void* runtime) {
-             return static_cast<const Runtime*>(runtime)->game_language();
-         }}
-    );
+    languages::TranslationHooks hooks{};
+    hooks.context = this;
+    hooks.translate = translation_hook;
+    hooks.word = [](void* runtime) {
+        return static_cast<const Runtime*>(runtime)->game_language();
+    };
+    hooks.mission_text = [](void* runtime,
+                            const char* mission_file,
+                            const char* key,
+                            const char* data_text) -> const char* {
+        const auto& owner = *static_cast<const Runtime*>(runtime);
+        if (!owner.language_)
+            return data_text;
+        return languages::layered_mission_text(
+            owner.language_->layers, owner.language_->words, mission_file, key, data_text
+        );
+    };
+    hooks.language_file =
+        [](void* runtime, const char* path, bool before_data) -> const std::string* {
+        auto& owner = *static_cast<Runtime*>(runtime);
+        if (!owner.language_)
+            return nullptr;
+        auto& language = *owner.language_;
+        // A mod's packs before the game data, the player's and then the
+        // engine's after it; each answers its own word's folders only.
+        const auto before = {&language.mod_packs};
+        const auto after = {&language.player_packs, &language.engine_packs};
+        for (const auto* packs : before_data ? before : after)
+            for (const auto& loaded : *packs) {
+                const fs::path file = language_pack_file(*loaded, path);
+                if (file.empty())
+                    continue;
+                std::string failure;
+                if (auto bytes = read_pack_file(file, failure)) {
+                    language.language_file = std::move(*bytes);
+                    return &language.language_file;
+                }
+                std::cerr << "open-annihilation: " << path_to_utf8(file)
+                          << " was not read: " << failure << '\n';
+            }
+        return nullptr;
+    };
+    languages::set_translation_hooks(hooks);
     read_interface_catalogue();
+    // The language packs: the engine's, then the player's, then the mod's,
+    // so that each one's words in the interface catalogue replace those
+    // before it.
+    if (const char* base = SDL_GetBasePath(); base != nullptr)
+        read_language_packs(
+            path_from_utf8(base) / path_from_utf8(kCatalogueFolder),
+            state.engine_packs,
+            &state.catalogue
+        );
+    if (!user_folder().empty())
+        read_language_packs(
+            user_folder() / path_from_utf8(player_languages_folder),
+            state.player_packs,
+            &state.catalogue
+        );
+    if (plays_mod())
+        read_language_packs(
+            played_mod_folder() / path_from_utf8(languages::mod_languages_folder),
+            state.mod_packs,
+            &state.catalogue
+        );
     state.choice = oa::ui::engine_settings::stored_language(
         preference_values_, !options_.preferences_file.has_value()
     );
@@ -153,6 +238,9 @@ void Runtime::set_language_choice(std::string_view choice) {
         return;
     state.choice = std::string(choice);
     apply_language();
+    // The modern fonts draw the new language's commonest characters ahead
+    // of its first screen.
+    warm_game_text();
 }
 
 void Runtime::apply_language() {
@@ -197,23 +285,104 @@ void Runtime::apply_language() {
             ));
         }
     }
+    // The packs of each word: a mod's before the game data, the player's
+    // and the engine's after it.
+    state.layers.clear();
+    state.unicode_manifest = nullptr;
+    for (const std::string& layer_word : state.words) {
+        languages::PackLayer layer;
+        layer.word = layer_word;
+        const auto add =
+            [&layer_word](const auto& packs, std::vector<const languages::LanguagePack*>& into) {
+                for (const auto& loaded : packs)
+                    if (same_word(pack_word(loaded->pack.manifest()), layer_word))
+                        into.push_back(&loaded->pack);
+            };
+        add(state.mod_packs, layer.before_data);
+        add(state.player_packs, layer.after_data);
+        add(state.engine_packs, layer.after_data);
+        if (layer.before_data.empty() && layer.after_data.empty())
+            continue;
+        // The language shown asks for chat in UTF-8 when one of its own
+        // packs says so.
+        if (state.unicode_manifest == nullptr && layer_word == state.words.front())
+            for (const auto* packs : {&layer.before_data, &layer.after_data})
+                for (const languages::LanguagePack* pack : *packs)
+                    if (state.unicode_manifest == nullptr && pack->manifest().unicode)
+                        state.unicode_manifest = &pack->manifest();
+        state.layers.push_back(std::move(layer));
+    }
+    state.pictures = languages::layered_pictures(state.layers, state.words);
     languages::set_unit_texts(&state.unit_texts, state.words);
+    languages::set_unit_pack_layers(state.layers);
     languages::set_interface_language(&state.catalogue, *state.shown);
 }
 
 const char* Runtime::game_translation(const char* text) const {
     if (text == nullptr)
         return nullptr;
-    const char* translated = oa::data::defs::locale_translate(&translations_.table, text);
-    if (translated != text)
-        return translated;
-    if (language_)
-        for (const auto& table : language_->fallback_tables) {
-            translated = oa::data::defs::locale_translate(&table->table, text);
-            if (translated != text)
-                return translated;
+    // The game data's own translation in the word at an index of the
+    // language's words: its own table, then its fallbacks' tables.
+    const auto data = [this, text](std::size_t index) -> const char* {
+        const oa::data::defs::LocaleTable* table = nullptr;
+        if (index == 0)
+            table = &translations_.table;
+        else if (language_ && index - 1 < language_->fallback_tables.size())
+            table = &language_->fallback_tables[index - 1]->table;
+        if (table == nullptr)
+            return nullptr;
+        const char* translated = oa::data::defs::locale_translate(table, text);
+        return translated != text ? translated : nullptr;
+    };
+    if (!language_ || language_->words.empty())
+        return data(0);
+    return languages::layered_translation(language_->layers, language_->words, text, data);
+}
+
+const oa::data::languages::PictureCaptions& Runtime::language_pictures() const {
+    static const languages::PictureCaptions none{};
+    return language_ ? language_->pictures : none;
+}
+
+std::vector<std::filesystem::path> Runtime::language_pack_folders() const {
+    std::vector<fs::path> folders;
+    if (!language_)
+        return folders;
+    // Each word's packs in the order its text is looked up in them.
+    for (const std::string& word : language_->words)
+        for (const auto* packs :
+             {&language_->mod_packs, &language_->player_packs, &language_->engine_packs})
+            for (const auto& loaded : *packs)
+                if (same_word(pack_word(loaded->pack.manifest()), word))
+                    folders.push_back(loaded->folder);
+    return folders;
+}
+
+const oa::data::languages::PackManifest* Runtime::language_unicode_chat() const {
+    return language_ ? language_->unicode_manifest : nullptr;
+}
+
+std::vector<std::string> Runtime::unicode_chat_language_tags() const {
+    std::vector<std::string> tags;
+    for (const languages::Language& known : languages::known_languages())
+        if (languages::turns_unicode_chat_on(known, false))
+            tags.emplace_back(known.tag);
+    if (!language_)
+        return tags;
+    for (const auto* packs :
+         {&language_->mod_packs, &language_->player_packs, &language_->engine_packs})
+        for (const auto& loaded : *packs) {
+            const languages::PackManifest& manifest = loaded->pack.manifest();
+            const languages::Language* known = languages::find_by_tag(manifest.tag);
+            const std::string tag = known != nullptr ? std::string(known->tag) : manifest.tag;
+            if (manifest.unicode && std::find(tags.begin(), tags.end(), tag) == tags.end())
+                tags.push_back(tag);
         }
-    return nullptr;
+    return tags;
+}
+
+bool Runtime::language_needs_modern_fonts() const {
+    return shown_language().needs == languages::TextNeeds::modern_fonts;
 }
 
 const char* Runtime::translation_hook(void* runtime, const char* text) {

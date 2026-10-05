@@ -3,6 +3,8 @@
 
 #include "oa/data/languages/unit_texts.hpp"
 
+#include "oa/data/languages/language_pack.hpp"
+
 #include <algorithm>
 #include <cstring>
 #include <string>
@@ -54,7 +56,51 @@ struct Installed {
     const UnitTexts* texts{};                   ///< null for the types' own texts
     std::vector<std::string> words{};           ///< the words tried, in order
     const oa::data::defs::UnitTextSink* sink{}; ///< null for none
+    std::span<const PackLayer> layers{};        ///< the language packs, by word
 };
+
+/// Which of a unit type's texts a lookup reads.
+enum class UnitField : uint8_t {
+    name,        ///< its name
+    description, ///< its description
+};
+
+/// Returns a unit type's text as the interface shows it: for each word in
+/// order, a mod's packs, the game data in that word, then the player's and
+/// the engine's packs; else the type's own.
+///
+/// @param state the installation
+/// @param field the text
+/// @param unit_name the unit's name (UnitDef.unit_name)
+/// @param own the type's own text, in English
+/// @return the text
+std::string_view layered_text(
+    const Installed& state, UnitField field, std::string_view unit_name, std::string_view own
+) {
+    const auto from_pack = [&](const LanguagePack* pack) {
+        return field == UnitField::name ? pack->unit_name(unit_name, own)
+                                        : pack->unit_description(unit_name, own);
+    };
+    for (const std::string& word : state.words) {
+        const PackLayer* layer = layer_of(state.layers, word);
+        if (layer != nullptr)
+            for (const LanguagePack* pack : layer->before_data)
+                if (const std::string* text = from_pack(pack))
+                    return *text;
+        if (state.texts != nullptr) {
+            const std::string* text = field == UnitField::name
+                                          ? state.texts->name_in(unit_name, word)
+                                          : state.texts->description_in(unit_name, word);
+            if (text != nullptr)
+                return *text;
+        }
+        if (layer != nullptr)
+            for (const LanguagePack* pack : layer->after_data)
+                if (const std::string* text = from_pack(pack))
+                    return *text;
+    }
+    return own;
+}
 
 /// The one installation the interface reads.
 Installed& installed() {
@@ -136,6 +182,23 @@ UnitTexts::description(const UnitDef& def, std::span<const std::string> words) c
     return field_text(def.description);
 }
 
+const std::string* UnitTexts::name_in(std::string_view unit_name, std::string_view word) const {
+    const auto found = units_.find(unit_name);
+    if (found == units_.end())
+        return nullptr;
+    const auto text = found->second.names.find(word);
+    return text != found->second.names.end() ? &text->second : nullptr;
+}
+
+const std::string*
+UnitTexts::description_in(std::string_view unit_name, std::string_view word) const {
+    const auto found = units_.find(unit_name);
+    if (found == units_.end())
+        return nullptr;
+    const auto text = found->second.descriptions.find(word);
+    return text != found->second.descriptions.end() ? &text->second : nullptr;
+}
+
 bool UnitTexts::NoCaseLess::operator()(
     std::string_view left, std::string_view right
 ) const noexcept {
@@ -156,25 +219,31 @@ void set_unit_texts(const UnitTexts* texts, std::span<const std::string> words) 
     state.words.assign(words.begin(), words.end());
 }
 
+void set_unit_pack_layers(std::span<const PackLayer> layers) noexcept {
+    installed().layers = layers;
+}
+
 std::string_view unit_display_name(const UnitDef& def) {
     const Installed& state = installed();
-    if (state.texts == nullptr)
+    if (state.texts == nullptr && state.layers.empty())
         return field_text(def.name);
-    return state.texts->name(def, state.words);
+    return layered_text(state, UnitField::name, field_text(def.unit_name), field_text(def.name));
 }
 
 std::string_view unit_display_description(const UnitDef& def) {
     const Installed& state = installed();
-    if (state.texts == nullptr)
+    if (state.texts == nullptr && state.layers.empty())
         return field_text(def.description);
-    return state.texts->description(def, state.words);
+    return layered_text(
+        state, UnitField::description, field_text(def.unit_name), field_text(def.description)
+    );
 }
 
 std::string_view unit_display_name(std::string_view unit_name, std::string_view own) {
     const Installed& state = installed();
-    if (state.texts == nullptr)
+    if (state.texts == nullptr && state.layers.empty())
         return own;
-    return state.texts->name(unit_name, own, state.words);
+    return layered_text(state, UnitField::name, unit_name, own);
 }
 
 void set_unit_text_sink(const oa::data::defs::UnitTextSink* sink) noexcept {

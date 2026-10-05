@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 using namespace oa;
 using namespace oa::sim::messages;
@@ -187,6 +188,54 @@ int main() {
     post_chat(*v, p, "hi", 2, "Bob", h);
     CHECK(std::strcmp(message_line(v->game, 10)->text, "<Steve->Bob> hi") == 0);
     CHECK(r.shared == 2 && r.recorded == 1);
+    // A line longer than the formatter holds is cut between whole UTF-8
+    // characters: "<Steve> " and 63 hanzi of 80, not a part of the 64th.
+    {
+        static std::string shared;
+        Hooks cut = h;
+        cut.share_chat = [](void*, const char* line) { shared = line; };
+        std::string hanzi;
+        for (int i = 0; i < 80; ++i)
+            hanzi += "\xe4\xbd\xa0"; // U+4F60
+        v->game.chat_mode = OA_CHAT_MODE_EVERYONE;
+        post_chat(*v, p, hanzi.c_str(), 2, nullptr, cut);
+        CHECK(shared == "<Steve> " + hanzi.substr(0, 63 * 3));
+        // A line that may go out as several records holds what the hooks
+        // ask, up to 255 bytes: "<Steve> " and 82 hanzi; 0 asks for none.
+        cut.shared_chat_line_bytes = [](void*) -> std::size_t { return 0x100; };
+        hanzi += hanzi;
+        post_chat(*v, p, hanzi.c_str(), 2, nullptr, cut);
+        CHECK(shared == "<Steve> " + hanzi.substr(0, 82 * 3));
+        cut.shared_chat_line_bytes = [](void*) -> std::size_t { return 0x1000; };
+        post_chat(*v, p, hanzi.c_str(), 2, nullptr, cut);
+        CHECK(shared == "<Steve> " + hanzi.substr(0, 82 * 3));
+        cut.shared_chat_line_bytes = [](void*) -> std::size_t { return 0; };
+        post_chat(*v, p, hanzi.c_str(), 2, nullptr, cut);
+        CHECK(shared == "<Steve> " + hanzi.substr(0, 63 * 3));
+    }
+    // A shared line that went out as two records shows as those two lines.
+    {
+        Hooks split = h;
+        split.shared_chat_line = [](void*, const char* line, std::size_t index) -> const char* {
+            static const char* const parts[] = {"<Steve> first half", "<Steve> second half"};
+            return std::strcmp(line, "<Steve> first half second half") == 0 && index < 2
+                       ? parts[index]
+                       : nullptr;
+        };
+        const auto head = v->game.chat_head;
+        post_chat(*v, p, "first half second half", 2, nullptr, split);
+        CHECK(std::strcmp(message_line(v->game, head)->text, "<Steve> first half") == 0);
+        CHECK(std::strcmp(message_line(v->game, head + 1)->text, "<Steve> second half") == 0);
+        CHECK(v->game.chat_head == head + 2);
+        // Kept on this machine only, it shows as typed.
+        v->game.chat_mode = chat_mode_local_only;
+        post_chat(*v, p, "first half second half", 2, nullptr, split);
+        CHECK(
+            std::strcmp(message_line(v->game, head + 2)->text, "<Steve> first half second half") ==
+            0
+        );
+        v->game.chat_mode = OA_CHAT_MODE_EVERYONE;
+    }
 
     // Expiry: the oldest line goes once it has been up for TextScroll + 1
     // seconds, one line per call.

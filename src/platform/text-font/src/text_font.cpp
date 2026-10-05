@@ -19,6 +19,7 @@
 #include <share.h>
 #endif
 #include <cstdlib>
+#include <list>
 #include <unordered_map>
 #include <utility>
 
@@ -100,6 +101,12 @@ struct Glyph {
     std::vector<uint8_t> alpha{};
 };
 
+/// A glyph in the store, with its place in the order of use.
+struct KeptGlyph {
+    Glyph glyph{};
+    std::list<uint64_t>::iterator place{};
+};
+
 /// One character laid out: its glyph, font and pen.
 struct Laid {
     Placement placement{};
@@ -118,7 +125,11 @@ struct FontStack::Fonts {
     std::array<int32_t, face_count> sizes{};
     /// the weight Noto Emoji's axis was last set to
     std::optional<Weight> emoji_weight{};
-    std::unordered_map<uint64_t, Glyph> glyphs{};
+    std::unordered_map<uint64_t, KeptGlyph> glyphs{};
+    /// the keys of the kept glyphs, the one used last first
+    std::list<uint64_t> order{};
+    /// glyphs drawn since the stack opened
+    std::size_t drawn_count{};
 
     Fonts() = default;
     Fonts(const Fonts&) = delete;
@@ -177,8 +188,10 @@ struct FontStack::Fonts {
                              (static_cast<uint64_t>(which) << 2) |
                              (static_cast<uint64_t>(style.rendering) << 1) |
                              (emoji ? static_cast<uint64_t>(style.weight) : 0U);
-        if (const auto found = glyphs.find(key); found != glyphs.end())
-            return &found->second;
+        if (const auto found = glyphs.find(key); found != glyphs.end()) {
+            order.splice(order.begin(), order, found->second.place);
+            return &found->second.glyph;
+        }
         if (emoji)
             set_emoji_weight(style.weight);
         if (!set_size(which, pixel_size))
@@ -213,15 +226,21 @@ struct FontStack::Fonts {
                 drawn.alpha[static_cast<std::size_t>(row * drawn.width + column)] = covered;
             }
         }
-        return &glyphs.emplace(key, std::move(drawn)).first->second;
+        ++drawn_count;
+        order.push_front(key);
+        auto& kept = glyphs.emplace(key, KeptGlyph{std::move(drawn), order.begin()}).first->second;
+        return &kept.glyph;
     }
 
-    /// Starts the store again when a line of a number of characters could
-    /// take it past kept_glyphs. Only this empties the store, so the glyphs
-    /// one line draws stay in it while the line is drawn.
+    /// Makes room for a line of a number of characters: while the line could
+    /// take the store past kept_glyphs, forgets the glyph used longest ago.
+    /// Only this forgets glyphs, so the glyphs one line draws stay in the
+    /// store while the line is drawn.
     void make_room(std::size_t characters) {
-        if (glyphs.size() + characters > kept_glyphs)
-            glyphs.clear();
+        while (!order.empty() && glyphs.size() + characters > kept_glyphs) {
+            glyphs.erase(order.back());
+            order.pop_back();
+        }
     }
 
     /// Finds the face and glyph that draw a character, the chain's first
@@ -345,14 +364,16 @@ namespace {
 /// Tells whether a style is one the stack draws.
 bool in_range(const Style& style) noexcept {
     return style.pixel_size >= 1 && style.pixel_size <= max_pixel_size &&
-           style.letter_spacing >= 0 && style.letter_spacing <= max_letter_spacing;
+           style.letter_spacing >= 0 && style.letter_spacing <= max_letter_spacing &&
+           style.least_cjk_pixel_size >= 0 && style.least_cjk_pixel_size <= max_pixel_size;
 }
 
 /// Gives the pixel size a face is drawn at in a style.
 int32_t face_pixel_size(Face which, const Style& style) noexcept {
-    return which == Face::dejavu_sans_bold || which == Face::dejavu_sans
-               ? style.pixel_size
-               : related_pixel_size(style.pixel_size);
+    if (which == Face::dejavu_sans_bold || which == Face::dejavu_sans)
+        return style.pixel_size;
+    const int32_t related = related_pixel_size(style.pixel_size);
+    return which == Face::noto_sans_cjk ? std::max(related, style.least_cjk_pixel_size) : related;
 }
 
 } // namespace
@@ -457,6 +478,10 @@ std::optional<Coverage> FontStack::draw(std::string_view text, const Style& styl
 
 std::size_t FontStack::cached_glyphs() const noexcept {
     return fonts_->glyphs.size();
+}
+
+std::size_t FontStack::drawn_glyphs() const noexcept {
+    return fonts_->drawn_count;
 }
 
 } // namespace oa::platform::text_font

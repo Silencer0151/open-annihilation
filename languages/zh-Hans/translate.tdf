@@ -1,0 +1,4111 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+//
+// Simplified Chinese for 3.1c's translate.tdf texts, keyed by 3.1c's
+// English exactly (case and spaces included), in 3.1c's own order.
+
+// Ingame and Panel Messages
+
+[KILLS]
+	{
+	Chinese=击杀;
+	}
+[Kills]
+	{
+	Chinese=击杀;
+	}
+[Kill]
+	{
+	Chinese=击杀;
+	}
+[kill]
+	{
+	Chinese=击杀;
+	}
+[LOSSES]
+	{
+	Chinese=损失;
+	}
+[Losses]
+	{
+	Chinese=损失;
+	}
+[kills]
+	{
+	Chinese=击杀;
+	}
+[Veteran]
+	{
+	Chinese=老兵;
+	}
+[Newbie]
+	{
+	Chinese=新兵;
+	}
+[PAUSED]
+	{
+	Chinese=游戏暂停;
+	}
+
+// Loading screen
+
+[Map]
+	{
+	Chinese=地图;
+	}
+[Map:]
+	{
+	Chinese=地图：;
+	}
+[Terrain]
+	{
+	Chinese=地形;
+	}
+[Textures]
+	{
+	Chinese=纹理;
+	}
+[Units]
+	{
+	Chinese=单位;
+	}
+[Features]
+	{
+	Chinese=地物;
+	}
+[FEATURES]
+	{
+	Chinese=地物;
+	}
+[MoveInfo]
+	{
+	Chinese=移动信息;
+	}
+[Explosions]
+	{
+	Chinese=爆炸效果;
+	}
+[Synchronization complete]
+	{
+	Chinese=同步完成;
+	}
+[player ready]
+	{
+	Chinese=名玩家就绪;
+	}
+[players ready]
+	{
+	Chinese=名玩家就绪;
+	}
+[Waiting for other players]
+	{
+	Chinese=等待其他玩家;
+	}
+[Synchronizing]
+	{
+	Chinese=正在同步;
+	}
+[Waiting for the Creator]
+	{
+	Chinese=等待创建者;
+	}
+[3D Data]
+	{
+	Chinese=3D数据;
+	}
+[Animation]
+	{
+	Chinese=动画;
+	}
+[Animations]
+	{
+	Chinese=动画;
+	}
+
+// Sides
+
+[Arm]
+	{
+	Chinese=ARM;
+	}
+[Core]
+	{
+	Chinese=CORE;
+	}
+[Arm Campaign]
+	{
+	Chinese=ARM战役;
+	}
+[arm campaign]
+	{
+	Chinese=ARM战役;
+	}
+[Core Campaign]
+	{
+	Chinese=CORE战役;
+	}
+
+// Menus
+
+[No Narration]
+	{
+	Chinese=无旁白;
+	}
+[Narration]
+	{
+	Chinese=旁白;
+	}
+[Start]
+	{
+	Chinese=开始;
+	}
+[Select]
+	{
+	Chinese=选择;
+	}
+[Previous Menu]
+	{
+	Chinese=返回上一页;
+	}
+[Next]
+	{
+	Chinese=下一页;
+	}
+[Previous]
+	{
+	Chinese=上一页;
+	}
+[SOUND]
+	{
+	Chinese=声音;
+	}
+[INTERFACE]
+	{
+	Chinese=界面;
+	}
+[VISUALS]
+	{
+	Chinese=图像;
+	}
+[MUSIC]
+	{
+	Chinese=音乐;
+	}
+[Set Difficulty]
+	{
+	Chinese=设置难度;
+	}
+[Skirmish]
+	{
+	Chinese=遭遇战;
+	}
+[Skirmish (%d players)]
+	{
+	Chinese=遭遇战（%d 名玩家）;
+	}
+[New Campaign]
+	{
+	Chinese=新战役;
+	}
+[NEW CAMPAIGN]
+	{
+	Chinese=新战役;
+	}
+[Start Campaign]
+	{
+	Chinese=开始战役;
+	}
+[Select Campaign]
+	{
+	Chinese=选择战役;
+	}
+[SELECT CAMPAIGN:]
+	{
+	Chinese=选择战役：;
+	}
+[Select Any Mission]
+	{
+	Chinese=选择任意任务;
+	}
+[Select Mission]
+	{
+	Chinese=选择任务;
+	}
+[Start Mission]
+	{
+	Chinese=开始任务;
+	}
+[Undo Changes]
+	{
+	Chinese=撤销更改;
+	}
+[Restore Defaults]
+	{
+	Chinese=恢复默认设置;
+	}
+[Restore Default]
+	{
+	Chinese=恢复默认设置;
+	}
+[Exit to Menu]
+	{
+	Chinese=返回主菜单;
+	}
+[Exit Game]
+	{
+	Chinese=退出游戏;
+	}
+[Please Select Map]
+	{
+	Chinese=请选择地图;
+	}
+[Load Map]
+	{
+	Chinese=载入地图;
+	}
+[Select Side]
+	{
+	Chinese=选择阵营;
+	}
+
+// Generic gameplay stuff
+
+[Player]
+	{
+	Chinese=玩家;
+	}
+[Players]
+	{
+	Chinese=玩家;
+	}
+[Players:]
+	{
+	Chinese=玩家：;
+	}
+[Allies]
+	{
+	Chinese=结盟;
+	}
+[ALLIES]
+	{
+	Chinese=结盟;
+	}
+[Ally]
+	{
+	Chinese=盟友;
+	}
+[Side]
+	{
+	Chinese=阵营;
+	}
+[Metal]
+	{
+	Chinese=金属;
+	}
+[METAL]
+	{
+	Chinese=金属;
+	}
+[Energy]
+	{
+	Chinese=能量;
+	}
+[ENERGY]
+	{
+	Chinese=能量;
+	}
+[Color]
+	{
+	Chinese=颜色;
+	}
+[Yes]
+	{
+	Chinese=是;
+	}
+[No]
+	{
+	Chinese=否;
+	}
+[OK]
+	{
+	Chinese=确定;
+	}
+[Ok]
+	{
+	Chinese=确定;
+	}
+[Cancel]
+	{
+	Chinese=取消;
+	}
+[CANCEL]
+	{
+	Chinese=取消;
+	}
+
+// Victory/Defeat Screen
+
+[Energy Produced]
+	{
+	Chinese=能量产出;
+	}
+[Metal Produced]
+	{
+	Chinese=金属产出;
+	}
+[Energy Wasted]
+	{
+	Chinese=能量浪费;
+	}
+[Metal Wasted]
+	{
+	Chinese=金属浪费;
+	}
+
+// Options menu
+
+[Options Menu]
+	{
+	Chinese=选项菜单;
+	}
+[GAME OPTIONS]
+	{
+	Chinese=游戏选项;
+	}
+[Resume]
+	{
+	Chinese=继续游戏;
+	}
+[Save Game]
+	{
+	Chinese=保存游戏;
+	}
+[Load Game]
+	{
+	Chinese=载入游戏;
+	}
+[Preferences]
+	{
+	Chinese=偏好设置;
+	}
+[End Mission]
+	{
+	Chinese=结束任务;
+	}
+[Help]
+	{
+	Chinese=帮助;
+	}
+[Briefing]
+	{
+	Chinese=任务简报;
+	}
+[Mission Objective]
+	{
+	Chinese=任务目标;
+	}
+
+// Player settings
+
+[UNUSED]
+	{
+	Chinese=未使用;
+	}
+[unused]
+	{
+	Chinese=未使用;
+	}
+[AI]
+	{
+	Chinese=电脑;
+	}
+[BLOCKED]
+	{
+	Chinese=已关闭;
+	}
+[No Limit]
+	{
+	Chinese=无限制;
+	}
+
+// CD controls
+
+[CD Player]
+	{
+	Chinese=CD播放器;
+	}
+[No Music]
+	{
+	Chinese=无音乐;
+	}
+[Repeat Track]
+	{
+	Chinese=单曲循环;
+	}
+[Repeat Track #]
+	{
+	Chinese=重复曲目 #;
+	}
+[Repeat]
+	{
+	Chinese=重复;
+	}
+[Random Tracks]
+	{
+	Chinese=随机播放;
+	}
+[Specify Tracks]
+	{
+	Chinese=指定曲目;
+	}
+[Play All Tracks]
+	{
+	Chinese=播放全部曲目;
+	}
+[Play All]
+	{
+	Chinese=全部播放;
+	}
+[Track]
+	{
+	Chinese=曲目;
+	}
+[Custom]
+	{
+	Chinese=自定义;
+	}
+[No Action]
+	{
+	Chinese=无战斗;
+	}
+[Battle]
+	{
+	Chinese=战斗;
+	}
+[Defeat]
+	{
+	Chinese=全军覆没;
+	}
+[Unused]
+	{
+	Chinese=未使用;
+	}
+[NO DISC]
+	{
+	Chinese=无光盘;
+	}
+
+// Speeds
+
+[Normal]
+	{
+	Chinese=正常;
+	}
+[Slow]
+	{
+	Chinese=慢;
+	}
+[Slower]
+	{
+	Chinese=较慢;
+	}
+[Fast]
+	{
+	Chinese=快;
+	}
+[Faster]
+	{
+	Chinese=较快;
+	}
+[Game Speed]
+	{
+	Chinese=游戏速度;
+	}
+[Mouse Speed]
+	{
+	Chinese=鼠标速度;
+	}
+[Screen Scroll]
+	{
+	Chinese=屏幕滚动;
+	}
+[Screen Text Delay]
+	{
+	Chinese=屏幕文字延时;
+	}
+[Interface]
+	{
+	Chinese=界面;
+	}
+[Unit Chat]
+	{
+	Chinese=单位对话;
+	}
+[Text Lines]
+	{
+	Chinese=文字行数;
+	}
+[Game]
+	{
+	Chinese=游戏;
+	}
+[Mouse]
+	{
+	Chinese=鼠标;
+	}
+[Screen]
+	{
+	Chinese=屏幕;
+	}
+[Text Delay (secs)]
+	{
+	Chinese=文字延时（秒）;
+	}
+[Button Interface]
+	{
+	Chinese=按钮界面;
+	}
+[Control]
+	{
+	Chinese=控制;
+	}
+
+// Gamespeed
+
+[Quick]
+	{
+	Chinese=快速;
+	}
+[Sluggish]
+	{
+	Chinese=迟缓;
+	}
+[Rapid Fire]
+	{
+	Chinese=极速;
+	}
+
+// Chat settings
+
+[No Chat]
+	{
+	Chinese=无报告;
+	}
+[Only important info]
+	{
+	Chinese=仅重要信息;
+	}
+[Medium chat]
+	{
+	Chinese=中等报告;
+	}
+[Detailed chat]
+	{
+	Chinese=详细报告;
+	}
+[High chat level]
+	{
+	Chinese=高报告等级;
+	}
+[All info chatted]
+	{
+	Chinese=报告全部信息;
+	}
+[ENEMIES]
+	{
+	Chinese=敌方;
+	}
+[Enemies]
+	{
+	Chinese=敌方;
+	}
+[All]
+	{
+	Chinese=全部;
+	}
+[ALL]
+	{
+	Chinese=全部;
+	}
+[TALK TO:]
+	{
+	Chinese=发送给：;
+	}
+[Unit Sounds]
+	{
+	Chinese=单位音效;
+	}
+[UNIT SOUNDS]
+	{
+	Chinese=单位音效;
+	}
+
+// Sound settings
+
+[On]
+	{
+	Chinese=打开;
+	}
+[Off]
+	{
+	Chinese=关闭;
+	}
+[Mono]
+	{
+	Chinese=单声道;
+	}
+[Stereo]
+	{
+	Chinese=立体声;
+	}
+[3d]
+	{
+	Chinese=3D;
+	}
+[Sound Effects Volume]
+	{
+	Chinese=音效音量;
+	}
+[Music Volume]
+	{
+	Chinese=音乐音量;
+	}
+[Sound Volume]
+	{
+	Chinese=音量;
+	}
+[Sound Mode]
+	{
+	Chinese=声音模式;
+	}
+[No Chatting]
+	{
+	Chinese=无报告;
+	}
+[TEST]
+	{
+	Chinese=测试;
+	}
+[Sound Test]
+	{
+	Chinese=声音测试;
+	}
+[SOUND TEST]
+	{
+	Chinese=声音测试;
+	}
+[Building Sounds]
+	{
+	Chinese=建造音效;
+	}
+[Building]
+	{
+	Chinese=建造;
+	}
+[Unit Speech]
+	{
+	Chinese=单位语音;
+	}
+[Unit Chat Level]
+	{
+	Chinese=单位报告等级;
+	}
+[Unit Text Acks]
+	{
+	Chinese=单位文字应答;
+	}
+[Chat Level Info]
+	{
+	Chinese=报告等级说明;
+	}
+[Unit Acknowledgement]
+	{
+	Chinese=单位应答;
+	}
+// Not in 3.1c's table: the Unit Speech and Unit Chat Level buttons'
+// stages, whole. A button's whole caption is translated before each of its
+// stages, and [Full] alone is a game the game list shows full.
+[Off|Medium|Full]
+	{
+	Chinese=关闭|中等|全部;
+	}
+
+// Difficulty settings
+
+[Difficulty]
+	{
+	Chinese=难度;
+	}
+[Difficulty:]
+	{
+	Chinese=难度：;
+	}
+[Easy]
+	{
+	Chinese=简单;
+	}
+[Medium]
+	{
+	Chinese=中等;
+	}
+[Hard]
+	{
+	Chinese=困难;
+	}
+[Mapped]
+	{
+	Chinese=已探明;
+	}
+[Unmapped]
+	{
+	Chinese=未探明;
+	}
+
+// Starting resource levels
+
+[Low]
+	{
+	Chinese=低;
+	}
+[High]
+	{
+	Chinese=高;
+	}
+
+// Interface menu
+
+[Left]
+	{
+	Chinese=左;
+	}
+[Right]
+	{
+	Chinese=右;
+	}
+[Left Click]
+	{
+	Chinese=左键点击;
+	}
+[Right Click]
+	{
+	Chinese=右键点击;
+	}
+
+// Visuals menu
+
+[Shading]
+	{
+	Chinese=光影;
+	}
+[Antialias]
+	{
+	Chinese=抗锯齿;
+	}
+[Anti-aliasing]
+	{
+	Chinese=抗锯齿;
+	}
+[Map Mode]
+	{
+	Chinese=地图模式;
+	}
+[Gamma]
+	{
+	Chinese=伽马;
+	}
+[Gamma Correction]
+	{
+	Chinese=伽马校正;
+	}
+[Line Of Sight]
+	{
+	Chinese=视野;
+	}
+[Object rendering]
+	{
+	Chinese=物体渲染;
+	}
+[Screen Size]
+	{
+	Chinese=屏幕大小;
+	}
+[Size]
+	{
+	Chinese=大小;
+	}
+[Shadows]
+	{
+	Chinese=阴影;
+	}
+[Building Shadows]
+	{
+	Chinese=建筑阴影;
+	}
+[Vehicle Shadows]
+	{
+	Chinese=战车阴影;
+	}
+[True]
+	{
+	Chinese=真实;
+	}
+[Set]
+	{
+	Chinese=设定;
+	}
+
+// Video mode menu
+
+[Select Videomode]
+	{
+	Chinese=选择显示模式;
+	}
+[Select Mode]
+	{
+	Chinese=选择模式;
+	}
+
+// Save / Load game menus
+
+[Name Of Game to Load]
+	{
+	Chinese=要载入的游戏名称;
+	}
+[Name Of Game to Save]
+	{
+	Chinese=要保存的游戏名称;
+	}
+[Reset List]
+	{
+	Chinese=重置列表;
+	}
+[Delete Game]
+	{
+	Chinese=删除游戏;
+	}
+[Delete List]
+	{
+	Chinese=删除列表;
+	}
+[Cancel Save]
+	{
+	Chinese=取消保存;
+	}
+[Game type:]
+	{
+	Chinese=游戏类型：;
+	}
+[Mission/Map:]
+	{
+	Chinese=任务/地图：;
+	}
+[Time elapsed:]
+	{
+	Chinese=已用时间：;
+	}
+[Side:]
+	{
+	Chinese=阵营：;
+	}
+[Campaign:]
+	{
+	Chinese=战役：;
+	}
+[There are no saved games to choose from]
+	{
+	Chinese=没有可选择的存档;
+	}
+[Mission:]
+	{
+	Chinese=任务：;
+	}
+[Time saved:]
+	{
+	Chinese=保存时间：;
+	}
+
+// Multiplayer connection messages
+
+[The creator has left the game]
+	{
+	Chinese=创建者已离开游戏;
+	}
+[Reject Now]
+	{
+	Chinese=立即拒绝;
+	}
+[will be rejected in %d seconds]
+	{
+	Chinese=将在 %d 秒后被拒绝;
+	}
+[You do not have a compatible version for this game.]
+	{
+	Chinese=你没有与此游戏兼容的版本;
+	}
+[is not responding]
+	{
+	Chinese=没有响应;
+	}
+[Timed out while connecting to DirectPlay lobby!]
+	{
+	Chinese=连接DirectPlay大厅超时！;
+	}
+[Please insert the Installation CD (Disc 1) and select%s"%s" again.]
+	{
+	Chinese=请插入安装光盘（光盘1），然后%s再次选择“%s”;
+	}
+[Please insert the Campaign CD (Disc 2) and try again]
+	{
+	Chinese=请插入战役光盘（光盘2）后重试;
+	}
+[Please insert the Multiplayer CD (Disc 1) and try again]
+	{
+	Chinese=请插入多人游戏光盘（光盘1）后重试;
+	}
+[Fault while trying to excecute button action.]
+	{
+	Chinese=执行按钮动作时出错;
+	}
+[The "%s" service failed or took %stoo long. Please see the readmee%sfile for more information.]
+	{
+	Chinese=“%s”服务失败或%s耗时过长。详情请参阅%s说明文件。;
+	}
+[Unable to connect to DirectPlay lobby.]
+	{
+	Chinese=无法连接DirectPlay大厅;
+	}
+[Unable to browse to URL: %s]
+	{
+	Chinese=无法打开网址：%s;
+	}
+[Unable to invoke DLL: %s]
+	{
+	Chinese=无法调用DLL：%s;
+	}
+[Unable to execute command: %s]
+	{
+	Chinese=无法执行命令：%s;
+	}
+[Could not match weapon type "%s" for synchronization!]
+	{
+	Chinese=无法匹配用于同步的武器类型“%s”！;
+	}
+[Updating...]
+	{
+	Chinese=正在更新……;
+	}
+[You must enter a game name]
+	{
+	Chinese=必须输入游戏名称;
+	}
+[You must enter your name]
+	{
+	Chinese=必须输入你的名字;
+	}
+[You were rejected from the game]
+	{
+	Chinese=你已被拒绝加入此游戏;
+	}
+[The %s service failed or took%stoo long. Please see the readme%sfile for more information.]
+	{
+	Chinese=%s服务失败或%s耗时过长。详情请参阅%s说明文件。;
+	}
+[Direct Connections]
+	{
+	Chinese=直接连接;
+	}
+[Internet Access]
+	{
+	Chinese=互联网接入;
+	}
+[There are no multiplayer games to choose from]
+	{
+	Chinese=没有可选择的多人游戏;
+	}
+[Player has left the game]
+	{
+	Chinese=玩家已离开游戏;
+	}
+[Player is joining the game]
+	{
+	Chinese=玩家正在加入游戏;
+	}
+[Player has disconnected]
+	{
+	Chinese=玩家已断开连接;
+	}
+[Player %s has disconnected]
+	{
+	Chinese=玩家 %s 已断开连接;
+	}
+[You did not have the correct password]
+	{
+	Chinese=密码不正确;
+	}
+[10 seconds]
+	{
+	Chinese=10秒;
+	}
+[Please Select Provider]
+	{
+	Chinese=请选择连接方式;
+	}
+[Select Provider]
+	{
+	Chinese=选择连接方式;
+	}
+
+// Multiplayer interface
+
+[Allied Victory]
+	{
+	Chinese=联盟胜利;
+	}
+[Chosen Units]
+	{
+	Chinese=已选单位;
+	}
+[More Info]
+	{
+	Chinese=更多信息;
+	}
+[Enter Game Name]
+	{
+	Chinese=输入游戏名称;
+	}
+[Enter Your Name]
+	{
+	Chinese=输入你的名字;
+	}
+[Create New Game]
+	{
+	Chinese=创建新游戏;
+	}
+[Password To Join]
+	{
+	Chinese=加入密码;
+	}
+[Closed]
+	{
+	Chinese=关闭;
+	}
+[The game is closed]
+	{
+	Chinese=游戏已关闭;
+	}
+[The game is full]
+	{
+	Chinese=游戏已满;
+	}
+[In Game]
+	{
+	Chinese=游戏中;
+	}
+[Lounge]
+	{
+	Chinese=大厅;
+	}
+[Playing]
+	{
+	Chinese=进行中;
+	}
+[Full]
+	{
+	Chinese=已满;
+	}
+[Reject Player:]
+	{
+	Chinese=拒绝玩家：;
+	}
+[Reject Player]
+	{
+	Chinese=拒绝玩家;
+	}
+[Reject Player?]
+	{
+	Chinese=拒绝该玩家？;
+	}
+[Reject %s?]
+	{
+	Chinese=拒绝 %s？;
+	}
+[Reject]
+	{
+	Chinese=拒绝;
+	}
+[Not Selected]
+	{
+	Chinese=未选择;
+	}
+[NOT SELECTED]
+	{
+	Chinese=未选择;
+	}
+[Join]
+	{
+	Chinese=加入;
+	}
+[New]
+	{
+	Chinese=新建;
+	}
+[Name of Game]
+	{
+	Chinese=游戏名称;
+	}
+[Plyrs]
+	{
+	Chinese=玩家;
+	}
+[Status]
+	{
+	Chinese=状态;
+	}
+[Watch]
+	{
+	Chinese=观战;
+	}
+[Update]
+	{
+	Chinese=刷新;
+	}
+[LOS]
+	{
+	Chinese=视野;
+	}
+[Cmdr]
+	{
+	Chinese=指挥官;
+	}
+[Ping]
+	{
+	Chinese=延迟;
+	}
+[Name]
+	{
+	Chinese=名称;
+	}
+[Your Name]
+	{
+	Chinese=你的名字;
+	}
+[Game Password]
+	{
+	Chinese=游戏密码;
+	}
+
+// Lounge options
+
+[Messages]
+	{
+	Chinese=消息;
+	}
+[Mem.]
+	{
+	Chinese=内存;
+	}
+[Ready?]
+	{
+	Chinese=就绪？;
+	}
+[Start Game]
+	{
+	Chinese=开始游戏;
+	}
+[Select Map]
+	{
+	Chinese=选择地图;
+	}
+[Resolution]
+	{
+	Chinese=分辨率;
+	}
+[Cmndr Ends Game]
+	{
+	Chinese=指挥官阵亡结束;
+	}
+[LOS Mode]
+	{
+	Chinese=视野模式;
+	}
+[Cheat Codes]
+	{
+	Chinese=作弊码;
+	}
+[Cheat Codes:]
+	{
+	Chinese=作弊码：;
+	}
+[Disallowed]
+	{
+	Chinese=禁止;
+	}
+[Allowed]
+	{
+	Chinese=允许;
+	}
+[Watching]
+	{
+	Chinese=观战;
+	}
+[Watching:]
+	{
+	Chinese=观战：;
+	}
+[Watching OK]
+	{
+	Chinese=允许观战;
+	}
+[No Watching]
+	{
+	Chinese=禁止观战;
+	}
+[Game Open]
+	{
+	Chinese=游戏开放;
+	}
+[Game Closed]
+	{
+	Chinese=游戏关闭;
+	}
+[Game Status]
+	{
+	Chinese=游戏状态;
+	}
+[Watching Allowed]
+	{
+	Chinese=允许观战;
+	}
+[Map Name]
+	{
+	Chinese=地图名称;
+	}
+[Max Units]
+	{
+	Chinese=单位上限;
+	}
+[Max Units:]
+	{
+	Chinese=单位上限：;
+	}
+[Game Is Open]
+	{
+	Chinese=游戏开放;
+	}
+[Build Restrictions]
+	{
+	Chinese=建造限制;
+	}
+
+// Skirmish menu
+
+[Start Skirmish]
+	{
+	Chinese=开始遭遇战;
+	}
+[Location]
+	{
+	Chinese=位置;
+	}
+[Dead Commander]
+	{
+	Chinese=指挥官阵亡;
+	}
+[Commander]
+	{
+	Chinese=指挥官;
+	}
+
+// Restrictions menu
+
+[Max Per Player]
+	{
+	Chinese=每名玩家上限;
+	}
+[Unit Build Restrictions]
+	{
+	Chinese=单位建造限制;
+	}
+[Load List]
+	{
+	Chinese=载入列表;
+	}
+[Save List]
+	{
+	Chinese=保存列表;
+	}
+[Name of list to save]
+	{
+	Chinese=要保存的列表名;
+	}
+[Show Picture]
+	{
+	Chinese=显示图片;
+	}
+
+// Gameplay options
+
+[Fixed]
+	{
+	Chinese=固定;
+	}
+[Random]
+	{
+	Chinese=随机;
+	}
+[Specific]
+	{
+	Chinese=指定;
+	}
+[Fixed Locations]
+	{
+	Chinese=固定位置;
+	}
+[Random Locations]
+	{
+	Chinese=随机位置;
+	}
+[Game Ends]
+	{
+	Chinese=游戏结束;
+	}
+[Game ends]
+	{
+	Chinese=游戏结束;
+	}
+[Deathmatch]
+	{
+	Chinese=死亡竞赛;
+	}
+[Continues]
+	{
+	Chinese=继续;
+	}
+[Game Continues]
+	{
+	Chinese=游戏继续;
+	}
+[Mapping Mode]
+	{
+	Chinese=地图模式;
+	}
+[Mapping Mode:]
+	{
+	Chinese=地图模式：;
+	}
+[Blank Map]
+	{
+	Chinese=空白地图;
+	}
+[Full Map]
+	{
+	Chinese=全图显示;
+	}
+[LOS Off]
+	{
+	Chinese=关闭视野;
+	}
+[Permanent]
+	{
+	Chinese=永久;
+	}
+[True LOS]
+	{
+	Chinese=真实视野;
+	}
+[Circular]
+	{
+	Chinese=圆形;
+	}
+[Starting Locations:]
+	{
+	Chinese=起始位置：;
+	}
+[Start Location]
+	{
+	Chinese=起始位置;
+	}
+[Commander Death]
+	{
+	Chinese=指挥官阵亡;
+	}
+[Commander Death:]
+	{
+	Chinese=指挥官阵亡：;
+	}
+[Mapping]
+	{
+	Chinese=地图;
+	}
+[Line of Sight]
+	{
+	Chinese=视野;
+	}
+[Line of Sight:]
+	{
+	Chinese=视野：;
+	}
+[Computer Opponent]
+	{
+	Chinese=电脑对手;
+	}
+[Computer]
+	{
+	Chinese=电脑;
+	}
+[AI Opponent]
+	{
+	Chinese=电脑对手;
+	}
+[Opponent]
+	{
+	Chinese=对手;
+	}
+[Exit the Battle]
+	{
+	Chinese=退出战斗;
+	}
+[Page 1]
+	{
+	Chinese=第1页;
+	}
+[Page 2]
+	{
+	Chinese=第2页;
+	}
+[Page 3]
+	{
+	Chinese=第3页;
+	}
+
+// Briefing messages
+
+[BACK TO START]
+	{
+	Chinese=回到开头;
+	}
+[MORE...]
+	{
+	Chinese=更多……;
+	}
+
+// Game over screen
+
+[Victory or Failure]
+	{
+	Chinese=胜利或失败;
+	}
+[Main Menu]
+	{
+	Chinese=主菜单;
+	}
+[Game Statistics]
+	{
+	Chinese=游戏统计;
+	}
+[Statistics]
+	{
+	Chinese=统计;
+	}
+[Next Mission]
+	{
+	Chinese=下一任务;
+	}
+[Adjust Difficulty]
+	{
+	Chinese=调整难度;
+	}
+[Adjust skirmish difficulty.]
+	{
+	Chinese=调整遭遇战难度;
+	}
+[You]
+	{
+	Chinese=你;
+	}
+[AI Player]
+	{
+	Chinese=电脑玩家;
+	}
+[Score]
+	{
+	Chinese=得分;
+	}
+[Victory]
+	{
+	Chinese=胜利;
+	}
+[Failure]
+	{
+	Chinese=失败;
+	}
+
+// Game commands
+
+[Total Units]
+	{
+	Chinese=单位总数;
+	}
+[Stop Building]
+	{
+	Chinese=停止建造;
+	}
+[Options]
+	{
+	Chinese=选项;
+	}
+[Share]
+	{
+	Chinese=共享;
+	}
+
+// Share options
+
+[TRANSFER RESOURCES]
+	{
+	Chinese=转移资源;
+	}
+[Selected Units]
+	{
+	Chinese=选中的单位;
+	}
+[Select Player]
+	{
+	Chinese=选择玩家;
+	}
+[Map Info]
+	{
+	Chinese=地图信息;
+	}
+
+// Unit status messages
+
+[five]
+	{
+	Chinese=五;
+	}
+[four]
+	{
+	Chinese=四;
+	}
+[three]
+	{
+	Chinese=三;
+	}
+[two]
+	{
+	Chinese=二;
+	}
+[one]
+	{
+	Chinese=一;
+	}
+[zero]
+	{
+	Chinese=零;
+	}
+[Building complete]
+	{
+	Chinese=建造完成;
+	}
+[Capture failed]
+	{
+	Chinese=俘获失败;
+	}
+[Construction failed: target area was blocked]
+	{
+	Chinese=建造失败：目标区域被阻挡;
+	}
+[Construction stopped]
+	{
+	Chinese=建造已停止;
+	}
+[Construction terminated]
+	{
+	Chinese=建造已终止;
+	}
+[Target area was blocked]
+	{
+	Chinese=目标区域被阻挡;
+	}
+[Construction terminated by hostile action]
+	{
+	Chinese=建造因敌方行动而终止;
+	}
+[How can I fix units when they keep blowing up?]
+	{
+	Chinese=它们总是爆炸，叫我怎么修？;
+	}
+[I can't get there]
+	{
+	Chinese=我到不了那里;
+	}
+[I can't reach the construction site]
+	{
+	Chinese=我无法到达建造地点;
+	}
+[Landing aborted]
+	{
+	Chinese=降落中止;
+	}
+[Landing aborted: all pads are occupied]
+	{
+	Chinese=降落中止：所有停机坪已被占用;
+	}
+[Landing aborted: no pads available]
+	{
+	Chinese=降落中止：没有可用的停机坪;
+	}
+[Landing failed]
+	{
+	Chinese=降落失败;
+	}
+[Loading unit]
+	{
+	Chinese=正在装载单位;
+	}
+[Preparing for transport]
+	{
+	Chinese=准备运输;
+	}
+[Reclamate failed]
+	{
+	Chinese=回收失败;
+	}
+[Reclamating]
+	{
+	Chinese=正在回收;
+	}
+[Reclamation failed]
+	{
+	Chinese=回收失败;
+	}
+[Repair aborted.]
+	{
+	Chinese=修理中止;
+	}
+[Repair mission failed]
+	{
+	Chinese=修理任务失败;
+	}
+[Repairs unsuccessful.]
+	{
+	Chinese=修理未成功;
+	}
+[Self destruct terminated]
+	{
+	Chinese=自毁已取消;
+	}
+[Starting construction]
+	{
+	Chinese=开始建造;
+	}
+[That unit cannot be captured]
+	{
+	Chinese=该单位无法俘获;
+	}
+[That unit cannot be reclamated]
+	{
+	Chinese=该单位无法回收;
+	}
+[That unit cannot be reclaimed]
+	{
+	Chinese=该单位无法回收;
+	}
+[That unit is a cloud of vapor and cannot be captured]
+	{
+	Chinese=该单位已化为一团蒸汽，无法俘获;
+	}
+[That unit is a cloud of vapor and cannot be reclamated]
+	{
+	Chinese=该单位已化为一团蒸汽，无法回收;
+	}
+[Transport mission failed]
+	{
+	Chinese=运输任务失败;
+	}
+[End Transport]
+	{
+	Chinese=结束运输;
+	}
+[Unable to create any more units]
+	{
+	Chinese=无法再建造更多单位;
+	}
+[Unable to unload unit]
+	{
+	Chinese=无法卸载单位;
+	}
+[Unit is too heavy to transport]
+	{
+	Chinese=单位太重，无法运输;
+	}
+[Unit is too large to transport]
+	{
+	Chinese=单位太大，无法运输;
+	}
+[Unit repaired]
+	{
+	Chinese=单位修理完毕;
+	}
+[Unloading]
+	{
+	Chinese=正在卸载;
+	}
+[Unloading process is proceeding non-optimally]
+	{
+	Chinese=卸载过程不太顺利;
+	}
+[Waiting for construction area to clear]
+	{
+	Chinese=等待建造区域清空;
+	}
+[Waiting for target area to clear]
+	{
+	Chinese=等待目标区域清空;
+	}
+[Waiting for construction pad to clear]
+	{
+	Chinese=等待建造平台清空;
+	}
+
+// Miscellaneous
+
+[Warning!\n\nUnable to register %1 for DirectPlay.]
+	{
+	Chinese=警告！\n\n无法为DirectPlay注册 %1。;
+	}
+[Unidentified object]
+	{
+	Chinese=不明物体;
+	}
+[Game Time]
+	{
+	Chinese=游戏时间;
+	}
+[Human]
+	{
+	Chinese=人类;
+	}
+[Human Player]
+	{
+	Chinese=人类玩家;
+	}
+[Open]
+	{
+	Chinese=开放;
+	}
+[Error]
+	{
+	Chinese=错误;
+	}
+[There are too many players enabled for this map]
+	{
+	Chinese=此地图启用的玩家过多;
+	}
+[There must be at least one human player and one AI opponent]
+	{
+	Chinese=至少需要一名人类玩家和一名电脑对手;
+	}
+[There must be at least one player and one computer opponent]
+	{
+	Chinese=至少需要一名玩家和一名电脑对手;
+	}
+[You have lost connection with the game]
+	{
+	Chinese=你已与游戏断开连接;
+	}
+[Lost connection with game]
+	{
+	Chinese=与游戏的连接已断开;
+	}
+[You need a unit you don't have for this game]
+	{
+	Chinese=此游戏需要一个你没有的单位;
+	}
+[You need a newer version of the game to enter]
+	{
+	Chinese=你需要更新版本的游戏才能加入;
+	}
+[No watching is allowed for this game]
+	{
+	Chinese=此游戏不允许观战;
+	}
+[Out of memory! Your hard disk may be full.]
+	{
+	Chinese=内存不足！你的硬盘可能已满。;
+	}
+
+// Unit speech
+
+[Under Attack]
+	{
+	Chinese=遭到攻击;
+	}
+[Arrived]
+	{
+	Chinese=已到达;
+	}
+[Cannot Comply]
+	{
+	Chinese=无法执行;
+	}
+[Nanolathe Complete]
+	{
+	Chinese=纳米建造完成;
+	}
+[Cloaked]
+	{
+	Chinese=隐形;
+	}
+[Visible]
+	{
+	Chinese=可见;
+	}
+
+// Mission states
+
+[Acknowledged]
+	{
+	Chinese=收到;
+	}
+[Activate]
+	{
+	Chinese=激活;
+	}
+[Airstrike]
+	{
+	Chinese=空袭;
+	}
+[Annihilating]
+	{
+	Chinese=歼灭中;
+	}
+[Attacking]
+	{
+	Chinese=攻击中;
+	}
+[Being transported]
+	{
+	Chinese=运输中;
+	}
+[Capturing]
+	{
+	Chinese=俘获中;
+	}
+[Cloaking]
+	{
+	Chinese=隐形中;
+	}
+[Deactivate]
+	{
+	Chinese=停用;
+	}
+[Decloaking]
+	{
+	Chinese=解除隐形;
+	}
+[Defending]
+	{
+	Chinese=防御中;
+	}
+[Diving]
+	{
+	Chinese=下潜中;
+	}
+[Engaging target]
+	{
+	Chinese=交战中;
+	}
+[Evading]
+	{
+	Chinese=规避中;
+	}
+[Following]
+	{
+	Chinese=跟随中;
+	}
+[Guarding]
+	{
+	Chinese=护卫中;
+	}
+[Landing]
+	{
+	Chinese=降落中;
+	}
+[Loading]
+	{
+	Chinese=装载中;
+	}
+[Moving]
+	{
+	Chinese=移动中;
+	}
+[Nanolathing]
+	{
+	Chinese=纳米建造中;
+	}
+[Paralyzed]
+	{
+	Chinese=瘫痪;
+	}
+[Parking]
+	{
+	Chinese=停驻;
+	}
+[Patrolling]
+	{
+	Chinese=巡逻中;
+	}
+[Patrolling for damaged units]
+	{
+	Chinese=巡逻搜寻受损单位;
+	}
+[Ready]
+	{
+	Chinese=就绪;
+	}
+[Ready with orders]
+	{
+	Chinese=命令就绪;
+	}
+[Reclaiming]
+	{
+	Chinese=回收中;
+	}
+[Repairing]
+	{
+	Chinese=修理中;
+	}
+[Repair patrol]
+	{
+	Chinese=修理巡逻;
+	}
+[Seeking to attack]
+	{
+	Chinese=寻找攻击目标;
+	}
+[Seeking to defend]
+	{
+	Chinese=寻找防御目标;
+	}
+[Seeking to land]
+	{
+	Chinese=寻找降落点;
+	}
+[Seeking to guard]
+	{
+	Chinese=寻找护卫目标;
+	}
+[SELF DESTRUCT ENGAGED]
+	{
+	Chinese=自毁程序启动;
+	}
+[Standby]
+	{
+	Chinese=待命;
+	}
+[Stopping]
+	{
+	Chinese=停止中;
+	}
+[Suppressing fire]
+	{
+	Chinese=压制射击;
+	}
+[Surfacing]
+	{
+	Chinese=上浮中;
+	}
+[Teleporting]
+	{
+	Chinese=传送中;
+	}
+[Under construction]
+	{
+	Chinese=建造中;
+	}
+[Under repair]
+	{
+	Chinese=接受修理;
+	}
+[Unit is available]
+	{
+	Chinese=单位可用;
+	}
+[Waiting]
+	{
+	Chinese=等待中;
+	}
+[Waiting for attack]
+	{
+	Chinese=等待攻击;
+	}
+
+// Feature descriptions
+
+[Description]
+	{
+	Chinese=说明;
+	}
+[Plant]
+	{
+	Chinese=植物;
+	}
+[Burnt Plant]
+	{
+	Chinese=烧焦的植物;
+	}
+[Fortification Wall]
+	{
+	Chinese=防御墙;
+	}
+[Hole]
+	{
+	Chinese=坑洞;
+	}
+[Crater]
+	{
+	Chinese=弹坑;
+	}
+[Foliage]
+	{
+	Chinese=草木;
+	}
+[Rock]
+	{
+	Chinese=岩石;
+	}
+[rock]
+	{
+	Chinese=岩石;
+	}
+[Rubble]
+	{
+	Chinese=碎石;
+	}
+[Thermal Vent]
+	{
+	Chinese=地热喷口;
+	}
+[Ventilation Engine]
+	{
+	Chinese=通风机;
+	}
+[Wreckage]
+	{
+	Chinese=残骸;
+	}
+[Burnt Foliage]
+	{
+	Chinese=烧焦的草木;
+	}
+[Burnt Tree]
+	{
+	Chinese=烧焦的树;
+	}
+[Tree]
+	{
+	Chinese=树;
+	}
+[Ice Chunks]
+	{
+	Chinese=冰块;
+	}
+[Damaged Terrain]
+	{
+	Chinese=受损地形;
+	}
+[Damaged Surface]
+	{
+	Chinese=受损地表;
+	}
+[DragonsTeeth]
+	{
+	Chinese=龙牙;
+	}
+[Dragons Teeth - NS]
+	{
+	Chinese=水面龙牙;
+	}
+[DragonsTeeth - NS]
+	{
+	Chinese=水面龙牙;
+	}
+[Metal Deposit]
+	{
+	Chinese=金属矿藏;
+	}
+[Node]
+	{
+	Chinese=节点;
+	}
+[Spire]
+	{
+	Chinese=尖塔;
+	}
+[Glyph]
+	{
+	Chinese=符文;
+	}
+[Ruin]
+	{
+	Chinese=废墟;
+	}
+[Seismic Monitor]
+	{
+	Chinese=地震监测器;
+	}
+[Pipe]
+	{
+	Chinese=管道;
+	}
+[Communications Uplink]
+	{
+	Chinese=通信上行站;
+	}
+[Comm Uplink]
+	{
+	Chinese=通信上行站;
+	}
+[Communication Tower]
+	{
+	Chinese=通信塔;
+	}
+[Regulator Complex]
+	{
+	Chinese=调节器建筑群;
+	}
+[Thermal Regulator]
+	{
+	Chinese=热能调节器;
+	}
+[Transmitter]
+	{
+	Chinese=发射机;
+	}
+[Pressure Release Valve]
+	{
+	Chinese=泄压阀;
+	}
+[Pressure Valve]
+	{
+	Chinese=压力阀;
+	}
+
+// Multiplayer online interface messages
+
+[Invalid TCP/IP Address]
+	{
+	Chinese=无效的TCP/IP地址;
+	}
+[Enter TCP address (leave blank to search)]
+	{
+	Chinese=输入TCP地址（留空则搜索）;
+	}
+[Phone Numbers]
+	{
+	Chinese=电话号码;
+	}
+[Number]
+	{
+	Chinese=号码;
+	}
+[Modem]
+	{
+	Chinese=调制解调器;
+	}
+[Port]
+	{
+	Chinese=端口;
+	}
+[Answer]
+	{
+	Chinese=应答;
+	}
+[Dial]
+	{
+	Chinese=拨号;
+	}
+[Host]
+	{
+	Chinese=主持;
+	}
+[Play]
+	{
+	Chinese=开始游戏;
+	}
+[Unit Download]
+	{
+	Chinese=单位下载;
+	}
+
+// In game pop-up messages
+
+[Game Name]
+	{
+	Chinese=游戏名称;
+	}
+[Map game will play on]
+	{
+	Chinese=本局使用的地图;
+	}
+[Does dead commander end game?]
+	{
+	Chinese=指挥官阵亡是否结束游戏？;
+	}
+[Average latency (big is bad)]
+	{
+	Chinese=平均延迟（越大越差）;
+	}
+[Type of Line of Sight]
+	{
+	Chinese=视野类型;
+	}
+[Tells if you start with map]
+	{
+	Chinese=是否开局即有地图;
+	}
+[Starting Metal:]
+	{
+	Chinese=初始金属：;
+	}
+[Starting Energy:]
+	{
+	Chinese=初始能量：;
+	}
+[Starting metal amount]
+	{
+	Chinese=初始金属数量;
+	}
+[Starting energy amount]
+	{
+	Chinese=初始能量数量;
+	}
+[Click to edit energy value.]
+	{
+	Chinese=点击编辑能量值;
+	}
+[Click to set energy value.]
+	{
+	Chinese=点击设定能量值;
+	}
+[Click to edit metal value.]
+	{
+	Chinese=点击编辑金属值;
+	}
+[Click to set metal value.]
+	{
+	Chinese=点击设定金属值;
+	}
+[Left click to increase metal. Right click to decrease metal.]
+	{
+	Chinese=左键增加金属，右键减少金属;
+	}
+[Left click to increase energy. Right click to decrease energy.]
+	{
+	Chinese=左键增加能量，右键减少能量;
+	}
+[Click to select an allegiance symbol.]
+	{
+	Chinese=点击选择结盟标志;
+	}
+[Players in game / Max players]
+	{
+	Chinese=当前玩家数 / 最大玩家数;
+	}
+[Tells if game is in play]
+	{
+	Chinese=显示游戏是否正在进行;
+	}
+[Game ends when commander is destroyed.]
+	{
+	Chinese=指挥官被消灭时游戏结束;
+	}
+[Game continues after Commander is destroyed.]
+	{
+	Chinese=指挥官被消灭后游戏继续;
+	}
+[Commanders are placed at pre-determined locations.]
+	{
+	Chinese=指挥官放置在预定位置;
+	}
+[Commanders are randomly placed on the battle field.]
+	{
+	Chinese=指挥官随机放置在战场上;
+	}
+[Terrain is blacked out until explored.]
+	{
+	Chinese=地形在探索之前不可见;
+	}
+[Terrain is visible.]
+	{
+	Chinese=地形可见;
+	}
+[Terrain elevations affect a unit's view.]
+	{
+	Chinese=地形高度影响单位视野;
+	}
+[Terrain elevations do not affect a unit's view.]
+	{
+	Chinese=地形高度不影响单位视野;
+	}
+[All mapped terrain is visible.]
+	{
+	Chinese=所有已探明的地形均可见;
+	}
+[Exit Mission]
+	{
+	Chinese=退出任务;
+	}
+[Exit Skirmish]
+	{
+	Chinese=退出遭遇战;
+	}
+[Exit Battle]
+	{
+	Chinese=退出战斗;
+	}
+[Restart Mission]
+	{
+	Chinese=重新开始任务;
+	}
+[Restart Skirmish]
+	{
+	Chinese=重新开始遭遇战;
+	}
+[Restart]
+	{
+	Chinese=重新开始;
+	}
+[Close Windows CD Player?]
+	{
+	Chinese=关闭CD播放器？;
+	}
+[CD Music]
+	{
+	Chinese=CD音乐;
+	}
+[Surrender this battle and return to main menu?]
+	{
+	Chinese=放弃本场战斗并返回主菜单？;
+	}
+[Surrender this battle and exit to Windows?]
+	{
+	Chinese=放弃本场战斗并退出游戏？;
+	}
+
+// Title Screen
+
+[SINGLE]
+	{
+	Chinese=单人游戏;
+	}
+[Single]
+	{
+	Chinese=单人游戏;
+	}
+[MULTI]
+	{
+	Chinese=多人游戏;
+	}
+[INTRO]
+	{
+	Chinese=开场动画;
+	}
+[EXIT]
+	{
+	Chinese=退出;
+	}
+[Exit]
+	{
+	Chinese=退出;
+	}
+
+// In-Game Help Screen
+
+[Keyboard Commands]
+	{
+	Chinese=键盘命令;
+	}
+[SPACEBAR]
+	{
+	Chinese=空格键;
+	}
+[Activate the game status bar]
+	{
+	Chinese=打开游戏状态栏;
+	}
+[Bring up the multiplayer scorecard]
+	{
+	Chinese=显示多人游戏记分表;
+	}
+[Select all factories]
+	{
+	Chinese=选择所有工厂;
+	}
+[Multiplayer options]
+	{
+	Chinese=多人游戏选项;
+	}
+[Cancels the current command]
+	{
+	Chinese=取消当前命令;
+	}
+[Assign the currently selected units to a squad]
+	{
+	Chinese=将选中的单位编为一队;
+	}
+[Select squad]
+	{
+	Chinese=选择编队;
+	}
+[Toggles fire orders]
+	{
+	Chinese=切换开火命令;
+	}
+[Toggles selected unit's cloaking capabilities]
+	{
+	Chinese=切换选中单位的隐形;
+	}
+[Toggles move orders]
+	{
+	Chinese=切换移动命令;
+	}
+[Select the Build menu for the current unit]
+	{
+	Chinese=选择当前单位的建造菜单;
+	}
+[Select the Orders menu for the current unit]
+	{
+	Chinese=选择当前单位的命令菜单;
+	}
+[Select the menu for the current unit]
+	{
+	Chinese=选择当前单位的菜单;
+	}
+[, (comma)]
+	{
+	Chinese=,（逗号）;
+	}
+[Select the previous menu for that unit]
+	{
+	Chinese=选择该单位的上一页菜单;
+	}
+[. (period)]
+	{
+	Chinese=.（句号）;
+	}
+[Select the next menu for that unit]
+	{
+	Chinese=选择该单位的下一页菜单;
+	}
+[~ (tilde)]
+	{
+	Chinese=~（波浪号）;
+	}
+[Toggle damage bars on the units]
+	{
+	Chinese=切换单位损伤条的显示;
+	}
+[Pause the game]
+	{
+	Chinese=暂停游戏;
+	}
+[Display information on selected unit]
+	{
+	Chinese=显示选中单位的信息;
+	}
+[Display the Options menu]
+	{
+	Chinese=显示选项菜单;
+	}
+[Selects the unit that last reported]
+	{
+	Chinese=选择最后报告的单位;
+	}
+[Screen capture]
+	{
+	Chinese=屏幕截图;
+	}
+[Clear all chat messages]
+	{
+	Chinese=清除所有聊天信息;
+	}
+[Select all units]
+	{
+	Chinese=选择所有单位;
+	}
+[Select all construction units except the Commander]
+	{
+	Chinese=选择除指挥官外的所有工程单位;
+	}
+[Select the Commander]
+	{
+	Chinese=选择指挥官;
+	}
+[Destruct selected unit(s)]
+	{
+	Chinese=选中单位自毁;
+	}
+[Select all units currently on the screen]
+	{
+	Chinese=选择当前屏幕中的所有单位;
+	}
+[Select all aircraft]
+	{
+	Chinese=选择所有飞机;
+	}
+[Select all units of same type]
+	{
+	Chinese=选择同类型的所有单位;
+	}
+[Applies a map bookmark at cursor location]
+	{
+	Chinese=在光标位置设置地图书签;
+	}
+[Centers the screen on a map bookmark]
+	{
+	Chinese=将画面移到地图书签处;
+	}
+[Give an attack order]
+	{
+	Chinese=下达攻击命令;
+	}
+[Give a guard order]
+	{
+	Chinese=下达护卫命令;
+	}
+[Give a move order]
+	{
+	Chinese=下达移动命令;
+	}
+[Give a patrol order]
+	{
+	Chinese=下达巡逻命令;
+	}
+[Give a stop order (cancel previous orders)]
+	{
+	Chinese=下达停止命令（取消之前的命令）;
+	}
+[Use the Disintegrator Gun]
+	{
+	Chinese=使用D枪;
+	}
+[Give a capture order]
+	{
+	Chinese=下达俘获命令;
+	}
+[Give a repair order]
+	{
+	Chinese=下达修理命令;
+	}
+[Give a reclaim order]
+	{
+	Chinese=下达回收命令;
+	}
+[Share resources with another player]
+	{
+	Chinese=与其他玩家共享资源;
+	}
+[Scroll to the next unit off screen]
+	{
+	Chinese=移到屏幕外的下一个单位;
+	}
+[Track the selected unit]
+	{
+	Chinese=跟踪选中的单位;
+	}
+[Reduce the game speed]
+	{
+	Chinese=减慢游戏速度;
+	}
+[Increase the game speed]
+	{
+	Chinese=加快游戏速度;
+	}
+[Hold down to queue up multiple commands]
+	{
+	Chinese=按住可连续下达多个命令;
+	}
+[ENTER]
+	{
+	Chinese=回车键;
+	}
+[Activate the message bar]
+	{
+	Chinese=打开消息栏;
+	}
+[Turn Rate]
+	{
+	Chinese=转向速度;
+	}
+
+// Multiplayer map names and descriptions
+
+[painted desert]
+	{
+	Chinese=彩绘沙漠;
+	}
+[18 x 18  battle in the many mesas area.]
+	{
+	Chinese=18 x 18  在众多台地区域作战;
+	}
+[caldera's rim]
+	{
+	Chinese=火山口边缘;
+	}
+[29 x 29  sunken volcanic crater in center of map]
+	{
+	Chinese=29 x 29  地图中央是一座塌陷的火山口;
+	}
+[coast to coast]
+	{
+	Chinese=海岸对海岸;
+	}
+[7 x 4  water between two coasts. weak tides.]
+	{
+	Chinese=7 x 4  两岸之间是水域，潮汐微弱;
+	}
+[dark side]
+	{
+	Chinese=暗面;
+	}
+[6 x 5  lunar map with plenty of metal]
+	{
+	Chinese=6 x 5  金属丰富的月面地图;
+	}
+[etorrep glacier]
+	{
+	Chinese=埃托雷普冰川;
+	}
+[5 x 8  strong winds coming from ocean.]
+	{
+	Chinese=5 x 8  强风从海上吹来;
+	}
+[fox holes]
+	{
+	Chinese=散兵坑;
+	}
+[7 x 7  strong winds. more metal on high ground.]
+	{
+	Chinese=7 x 7  强风，高地金属更多;
+	}
+[full moon]
+	{
+	Chinese=满月;
+	}
+[8 x 8  fighting on the naryb highlands. no wind.]
+	{
+	Chinese=8 x 8  在纳里布高地作战，无风;
+	}
+[gods of war]
+	{
+	Chinese=战神;
+	}
+[9 x 8  asymmetric water map.]
+	{
+	Chinese=9 x 8  不对称的水域地图;
+	}
+[great divide]
+	{
+	Chinese=大分水岭;
+	}
+[5 x 8  fight through a mountain pass.]
+	{
+	Chinese=5 x 8  杀出一条穿越山口的道路;
+	}
+[hundred isles]
+	{
+	Chinese=百岛;
+	}
+[12 x 12  fighting on over a hundred small islands]
+	{
+	Chinese=12 x 12  在一百多座小岛上作战;
+	}
+[kill the middle]
+	{
+	Chinese=中央杀戮;
+	}
+[13 x 13  powerful player in middle of map on island.]
+	{
+	Chinese=13 x 13  地图中央的岛上有一名强大的玩家;
+	}
+[king of the hill]
+	{
+	Chinese=山丘之王;
+	}
+[16 x 16  fight for a metal rich mountain. strong wind.]
+	{
+	Chinese=16 x 16  争夺一座金属丰富的山，强风;
+	}
+[lava & two hills]
+	{
+	Chinese=熔岩与双丘;
+	}
+[9 x 8  two giant hills & a river of lava between them]
+	{
+	Chinese=9 x 8  两座巨大的山丘，中间隔着熔岩河;
+	}
+[lava highground]
+	{
+	Chinese=熔岩高地;
+	}
+[8 x 8  fight over narrow ramps.]
+	{
+	Chinese=8 x 8  争夺狭窄的坡道;
+	}
+[lava mania]
+	{
+	Chinese=熔岩狂潮;
+	}
+[8 x 8  strong winds.]
+	{
+	Chinese=8 x 8  强风;
+	}
+[lava run]
+	{
+	Chinese=熔岩奔流;
+	}
+[13 x 4  lava strip down center. high winds.]
+	{
+	Chinese=13 x 4  中央是熔岩带，强风;
+	}
+[greenhaven]
+	{
+	Chinese=绿色港湾;
+	}
+[16 x 16  large map with many hills to hide behind.]
+	{
+	Chinese=16 x 16  大地图，有许多可藏身的山丘;
+	}
+[metal heck]
+	{
+	Chinese=金属地狱;
+	}
+[8 x 8  fight in the metal cross region.]
+	{
+	Chinese=8 x 8  在金属十字区域作战;
+	}
+[red hot lava]
+	{
+	Chinese=炽热熔岩;
+	}
+[11 x 9  many hills and lava pools. plenty of metal]
+	{
+	Chinese=11 x 9  众多山丘与熔岩池，金属丰富;
+	}
+[red planet]
+	{
+	Chinese=红色星球;
+	}
+[9 x 9   many small hills and pools]
+	{
+	Chinese=9 x 9  众多小山丘与水池;
+	}
+[red triangle]
+	{
+	Chinese=红色三角;
+	}
+[16 x 16  powerful tides and strong winds.]
+	{
+	Chinese=16 x 16  强潮汐与强风;
+	}
+[ring atoll]
+	{
+	Chinese=环礁;
+	}
+[21 x 21  powerful tides. ground units can use shallow water.]
+	{
+	Chinese=21 x 21  强潮汐，地面单位可涉过浅水;
+	}
+[rock alley]
+	{
+	Chinese=岩石小道;
+	}
+[9 x 21  fight in mountian valley.]
+	{
+	Chinese=9 x 21  在山谷中作战;
+	}
+[sherwood]
+	{
+	Chinese=舍伍德;
+	}
+[6 x 6  fighting around 3 large hills]
+	{
+	Chinese=6 x 6  围绕3座大山丘作战;
+	}
+[shore to shore]
+	{
+	Chinese=岸对岸;
+	}
+[29 x 4  two coasts with large ocean between them.]
+	{
+	Chinese=29 x 4  两岸之间隔着大洋;
+	}
+[the desert triad]
+	{
+	Chinese=沙漠三台地;
+	}
+[6 x 6  fighting on 3 mesas.]
+	{
+	Chinese=6 x 6  在3座台地上作战;
+	}
+[two continents]
+	{
+	Chinese=两块大陆;
+	}
+[22 x 25  metal in the middle of the map.]
+	{
+	Chinese=22 x 25  金属位于地图中央;
+	}
+[yerrot mountains]
+	{
+	Chinese=耶罗特山脉;
+	}
+[27 x 23  mountain range with lots of metal.]
+	{
+	Chinese=27 x 23  金属丰富的山脉;
+	}
+[pincushion]
+	{
+	Chinese=针垫;
+	}
+[13 x 13  a fight amongst lava spires]
+	{
+	Chinese=13 x 13  在熔岩尖塔之间作战;
+	}
+[over crude water]
+	{
+	Chinese=原油之上;
+	}
+[25 x 25  a maze of metal bridges.]
+	{
+	Chinese=25 x 25  金属桥梁组成的迷宫;
+	}
+[seven islands]
+	{
+	Chinese=七岛;
+	}
+[40 x 40  huge sea battle on core prime]
+	{
+	Chinese=40 x 40  CORE主星上的大规模海战;
+	}
+[ashap plateau]
+	{
+	Chinese=阿沙普高原;
+	}
+[9 x 9  metal on rough lower level]
+	{
+	Chinese=9 x 9  金属位于崎岖的低地;
+	}
+[the cold place]
+	{
+	Chinese=寒冷之地;
+	}
+[15 x 11  fighting on a flat tundra with very strong winds.]
+	{
+	Chinese=15 x 11  在狂风呼啸的平坦冻原上作战;
+	}
+[evad river confluence]
+	{
+	Chinese=埃瓦德河汇流处;
+	}
+[11 x 10 map.  intermittent winds]
+	{
+	Chinese=11 x 10  风力时有时无;
+	}
+[lava alley]
+	{
+	Chinese=熔岩小道;
+	}
+[18 x 18  fighting in narrow valleys.]
+	{
+	Chinese=18 x 18  在狭窄的山谷中作战;
+	}
+[the pass]
+	{
+	Chinese=山口;
+	}
+[7 x 4  fight to control a winding mountian pass.]
+	{
+	Chinese=7 x 4  争夺一条蜿蜒的山口;
+	}
+[anteer strait]
+	{
+	Chinese=安蒂尔海峡;
+	}
+[18 x 18  fight in an iceburg filled ocean. strong tides.]
+	{
+	Chinese=18 x 18  在冰山密布的海洋中作战，潮汐强劲;
+	}
+[metal isles]
+	{
+	Chinese=金属群岛;
+	}
+[23 X 21  4 Symmetrical Metal Islands, good for sea battles]
+	{
+	Chinese=23 X 21  4座对称的金属岛屿，适合海战;
+	}
+
+// Expansion Pack map names and descriptions
+
+[acid foursome]
+	{
+	Chinese=酸池四方;
+	}
+[13 X 13  Open plains and small lakes.]
+	{
+	Chinese=13 X 13  开阔的平原与小湖泊;
+	}
+[acid pools]
+	{
+	Chinese=酸池;
+	}
+[32 X 23  Masses of land with narrow passages.]
+	{
+	Chinese=32 X 23  大片陆地，通道狭窄;
+	}
+[acid trip]
+	{
+	Chinese=酸蚀之旅;
+	}
+[15 X 39  Watch out for the acid or you'll melt away.]
+	{
+	Chinese=15 X 39  小心酸液，否则你会被熔化;
+	}
+[assault on suburbia]
+	{
+	Chinese=突袭郊区;
+	}
+[16 X 16 Crush 'em.]
+	{
+	Chinese=16 X 16  碾碎他们;
+	}
+[biggie biggs]
+	{
+	Chinese=大比格斯;
+	}
+[36 X 16  Dance from island to island crushing your opponents.]
+	{
+	Chinese=36 X 16  在岛屿间辗转，碾碎你的对手;
+	}
+[block wars]
+	{
+	Chinese=街区之战;
+	}
+[20 X 20  Battling through the Core Prime suburbs.]
+	{
+	Chinese=20 X 20  在CORE主星的郊区作战;
+	}
+[brain coral]
+	{
+	Chinese=脑珊瑚;
+	}
+[20 X 20  Hydrous map with brain coral spiral.]
+	{
+	Chinese=20 X 20  水域地图，有脑珊瑚状的螺旋;
+	}
+[25 X 24  Keep your Kbots on the trails.]
+	{
+	Chinese=25 X 24  让你的机甲沿着小路走;
+	}
+[checker ponds]
+	{
+	Chinese=棋盘池塘;
+	}
+[13 X 13  Be wary of the many corrosive puddles.]
+	{
+	Chinese=13 X 13  小心众多腐蚀性水坑;
+	}
+[cluster freak]
+	{
+	Chinese=狂乱星团;
+	}
+[10 X 10  High winds with lots of metal in the middle.]
+	{
+	Chinese=10 X 10  强风，中央金属丰富;
+	}
+[comet catcher]
+	{
+	Chinese=捕彗者;
+	}
+[12 X 15  Low gravity livens up this desolate landscape.]
+	{
+	Chinese=12 X 15  低重力让这片荒凉之地充满生机;
+	}
+[core prime industrial area]
+	{
+	Chinese=CORE主星工业区;
+	}
+[21 X 21  Abandoned Core industrial area.]
+	{
+	Chinese=21 X 21  废弃的CORE工业区;
+	}
+[crater islands]
+	{
+	Chinese=环形山群岛;
+	}
+[10 X 8  Fight your way across these shallow waters.]
+	{
+	Chinese=10 X 8  杀出一条穿越这片浅水的道路;
+	}
+[crystal cracked]
+	{
+	Chinese=裂晶;
+	}
+[20 X 20 Two land masses split by an inland filled sea.]
+	{
+	Chinese=20 X 20  两块陆地被一片内海分隔;
+	}
+[crystal isles]
+	{
+	Chinese=水晶群岛;
+	}
+[20 X 20 Crystal World ocean, dotted with reefs and islands.]
+	{
+	Chinese=20 X 20  水晶世界的海洋，遍布礁石与岛屿;
+	}
+[crystal maze]
+	{
+	Chinese=水晶迷宫;
+	}
+[10 X 10 Free-for-all in a maze of mountains.]
+	{
+	Chinese=10 X 10  在群山迷宫中混战;
+	}
+[crystal treasure island]
+	{
+	Chinese=水晶宝岛;
+	}
+[12 X 13  Crystal map with metal-rich islands in the center.]
+	{
+	Chinese=12 X 13  水晶地图，中央岛屿金属丰富;
+	}
+[dire straits]
+	{
+	Chinese=险峡;
+	}
+[15 X 17 Natural fortification to hide between.]
+	{
+	Chinese=15 X 17  可藏身其间的天然屏障;
+	}
+[east indeez]
+	{
+	Chinese=东印迪群岛;
+	}
+[28 X 19 Lots of islands, lots of water!]
+	{
+	Chinese=28 X 19  岛屿众多，水域广阔！;
+	}
+[eastside westside]
+	{
+	Chinese=东区西区;
+	}
+[19 X 19  Find a park or reclaim large structures for metal.]
+	{
+	Chinese=19 X 19  寻找公园，或回收大型建筑获取金属;
+	}
+[14 X 14, Battle for the Evad River Delta]
+	{
+	Chinese=14 X 14  争夺埃瓦德河三角洲;
+	}
+[expanded confluence]
+	{
+	Chinese=扩展汇流处;
+	}
+[22 X 22 More room to rumble on this old favorite.]
+	{
+	Chinese=22 X 22  这张经典地图有了更大的交战空间;
+	}
+[flooded glaciers]
+	{
+	Chinese=淹没的冰川;
+	}
+[12 X 10 Icy ocean battle.]
+	{
+	Chinese=12 X 10  冰海之战;
+	}
+[gasbag forests]
+	{
+	Chinese=气囊森林;
+	}
+[19 X 19  Large fields of gasplants block your path.]
+	{
+	Chinese=19 X 19  大片气囊植物挡住去路;
+	}
+[gasplant plain]
+	{
+	Chinese=气囊植物平原;
+	}
+[10 X 8  Large plain for close encounters. Lots of geothermal.]
+	{
+	Chinese=10 X 8  适合近战的大平原，地热丰富;
+	}
+[higher ground]
+	{
+	Chinese=制高点;
+	}
+[8 X 16  You take the high road and I'll take the low road.]
+	{
+	Chinese=8 X 16  你走高处，我走低处;
+	}
+[ice house]
+	{
+	Chinese=冰屋;
+	}
+[16 X 16  Large ice mountains hinder big guns.]
+	{
+	Chinese=16 X 16  巨大的冰山阻碍重炮;
+	}
+[ice scream]
+	{
+	Chinese=冰之尖叫;
+	}
+[15 X 39  Screaming won't be all you do on this forbidding world.]
+	{
+	Chinese=15 X 39  在这个险恶的世界里，你要做的不止是尖叫;
+	}
+[icy bergs]
+	{
+	Chinese=冰山;
+	}
+[28 X 28  Landless. Lots of sunken ships.]
+	{
+	Chinese=28 X 28  没有陆地，到处是沉船;
+	}
+[john's pass]
+	{
+	Chinese=约翰山口;
+	}
+[10 X 15  Follow the river up the middle, if you dare!]
+	{
+	Chinese=10 X 15  敢的话，就沿中间的河逆流而上！;
+	}
+[lake shore]
+	{
+	Chinese=湖岸;
+	}
+[13 X 7  Large lake with islands in the middle.]
+	{
+	Chinese=13 X 7  大湖，中间有岛屿;
+	}
+[luschaven]
+	{
+	Chinese=卢什港;
+	}
+[17 X 16 Battle for control of dry land.]
+	{
+	Chinese=17 X 16  争夺陆地的控制权;
+	}
+[lusch puppy]
+	{
+	Chinese=卢什幼犬;
+	}
+[11 X 7  Small map divided by grand mountains.]
+	{
+	Chinese=11 X 7  小地图，被巍峨的山脉分隔;
+	}
+[moon quartet]
+	{
+	Chinese=月之四重奏;
+	}
+[20 X 20 Great map for team play.  Light side vs. dark side.]
+	{
+	Chinese=20 X 20  适合团队作战的好地图，亮面对暗面;
+	}
+[mounds of mars]
+	{
+	Chinese=火星丘陵;
+	}
+[8 X 17  For more than two players, play teams, North vs. South.]
+	{
+	Chinese=8 X 17  两名以上玩家时组队对战，南北对抗;
+	}
+[ooooweeee]
+	{
+	Chinese=呜哇哇;
+	}
+[19 X 19  Nine islands of love and understanding.  Let's hug.]
+	{
+	Chinese=19 X 19  九座充满爱与理解的岛屿，来抱一下吧;
+	}
+[pillopeens]
+	{
+	Chinese=皮洛平斯;
+	}
+[17 X 27 Island-hopping map.]
+	{
+	Chinese=17 X 27  跳岛作战地图;
+	}
+[plains and passes]
+	{
+	Chinese=平原与山口;
+	}
+[20 X 20  Large map with lots of metal.]
+	{
+	Chinese=20 X 20  金属丰富的大地图;
+	}
+[polar range]
+	{
+	Chinese=极地山脉;
+	}
+[20 X 20  Large polar ice cap map. A bleak and forbidding world.]
+	{
+	Chinese=20 X 20  大型极地冰盖地图，荒凉而险恶;
+	}
+[polyp fields]
+	{
+	Chinese=水螅原野;
+	}
+[27 X 22  Large geometric polyps litter this battlefield.]
+	{
+	Chinese=27 X 22  巨大的几何状水螅遍布战场;
+	}
+[red river]
+	{
+	Chinese=红河;
+	}
+[21 X 30  Large river separates two land masses.]
+	{
+	Chinese=21 X 30  大河分隔两块陆地;
+	}
+[red river north]
+	{
+	Chinese=红河北段;
+	}
+[21 X 14  Smaller segment of Red River.]
+	{
+	Chinese=21 X 14  红河地图中较小的一段;
+	}
+[ror shock]
+	{
+	Chinese=罗夏墨迹;
+	}
+[26 X 26 Ocean Battles are a must for this fine map.  Big surprise in center!]
+	{
+	Chinese=26 X 26  这张好地图上必有海战，中央有大惊喜！;
+	}
+[sail away]
+	{
+	Chinese=扬帆远航;
+	}
+[12 X 20 High winds sweep these islands.]
+	{
+	Chinese=12 X 20  强风席卷这些岛屿;
+	}
+[sector 410b]
+	{
+	Chinese=410b区;
+	}
+[25 X 22  Large mountains with narrow passes.]
+	{
+	Chinese=25 X 22  巍峨的山脉与狭窄的山口;
+	}
+[show down]
+	{
+	Chinese=摊牌;
+	}
+[11 X 5  Meet in the middle.]
+	{
+	Chinese=11 X 5  在中间相会;
+	}
+[slate gordon]
+	{
+	Chinese=板岩戈登;
+	}
+[23 X 15 Great map for east/west rivalries.  Earthquakes.]
+	{
+	Chinese=23 X 15  东西对抗的好地图，有地震;
+	}
+[slated fate]
+	{
+	Chinese=注定的命运;
+	}
+[7 x 12 Search for metal in crevices.]
+	{
+	Chinese=7 x 12  在岩缝中寻找金属;
+	}
+[steel jungle]
+	{
+	Chinese=钢铁丛林;
+	}
+[20 x 10  Wake up and smell the coffee with the Morning War Show.]
+	{
+	Chinese=20 x 10  伴着晨间战争秀醒来，闻闻咖啡香;
+	}
+[surface meltdown]
+	{
+	Chinese=地表熔毁;
+	}
+[15 X 17  Bumps, bumps, and more bumps.]
+	{
+	Chinese=15 X 17  起伏，起伏，还是起伏;
+	}
+[temblorian mist]
+	{
+	Chinese=坦布洛迷雾;
+	}
+[12 X 15  Make your way around the edges or fly across the center.]
+	{
+	Chinese=12 X 15  绕边缘前进，或飞越中央;
+	}
+[the barrier reef]
+	{
+	Chinese=堡礁;
+	}
+[19 X 19  Body of water separates two land masses.  Great underwater starts!]
+	{
+	Chinese=19 X 19  水域分隔两块陆地，非常适合水下开局！;
+	}
+[the bayou]
+	{
+	Chinese=河口沼泽;
+	}
+[20 X 20  Strong currents rush through this Bayou.]
+	{
+	Chinese=20 X 20  强劲的水流冲过这片沼泽;
+	}
+[town & country]
+	{
+	Chinese=城镇与乡村;
+	}
+[17 X 17  Urban vs. rural.]
+	{
+	Chinese=17 X 17  城市对乡村;
+	}
+[trout farm]
+	{
+	Chinese=鳟鱼养殖场;
+	}
+[15 X 15  Watch out for the sinkhole in the middle.]
+	{
+	Chinese=15 X 15  小心中间的天坑;
+	}
+
+// Download Maps
+
+[cloudious prime]
+	{
+	Chinese=云海主星;
+	}
+[20 X 20  Island in the clouds with giant canyon.  Absurd wind.]
+	{
+	Chinese=20 X 20  云中之岛，有巨大的峡谷，风力极强;
+	}
+
+// Battle Tactics Maps
+
+[aqua verdigris]
+	{
+	Chinese=碧水铜绿;
+	}
+[12 x 12  Fighting around rings of Dragon's Teeth.]
+	{
+	Chinese=12 x 12  围绕一圈圈龙牙作战;
+	}
+[brilliant cut lake]
+	{
+	Chinese=钻石湖;
+	}
+[15 X 15  Fighting around a large lake.]
+	{
+	Chinese=15 X 15  围绕一座大湖作战;
+	}
+[canal crossing]
+	{
+	Chinese=运河渡口;
+	}
+[16 X 17  Four land masses separated by canals.]
+	{
+	Chinese=16 X 17  四块陆地被运河分隔;
+	}
+[metal gridlock]
+	{
+	Chinese=金属僵局;
+	}
+[20 X 20  Five squares interlock to create defensive forts.]
+	{
+	Chinese=20 X 20  五个方块互锁，构成防御堡垒;
+	}
+[wretched ridges]
+	{
+	Chinese=险恶山脊;
+	}
+[12 X 12  High ridges protect defensive areas.  Light forest.]
+	{
+	Chinese=12 X 12  高耸的山脊保护着防御区域，林木稀疏;
+	}
+[coremageddon]
+	{
+	Chinese=CORE末日;
+	}
+[13 X 20  Set up ambushes in this Core Prime maze.]
+	{
+	Chinese=13 X 20  在这座CORE主星迷宫中设下埋伏;
+	}
+
+// Possible Error Messages
+
+[The requested campaign file, %s, does not exist.]
+	{
+	Chinese=请求的战役文件 %s 不存在;
+	}
+[Error -- Unnamed Mission]
+	{
+	Chinese=错误：未命名任务;
+	}
+[The requested mission file, %s, does not exist.]
+	{
+	Chinese=请求的任务文件 %s 不存在;
+	}
+[No GlobalHeader block in mission file!]
+	{
+	Chinese=任务文件中没有GlobalHeader块！;
+	}
+[No description available]
+	{
+	Chinese=暂无说明;
+	}
+[No suitable schema type in mission file!]
+	{
+	Chinese=任务文件中没有合适的方案类型！;
+	}
+[Very bad news!  No MSG!]
+	{
+	Chinese=大事不妙！没有MSG！;
+	}
+[Hey, hoser!  The default meteor shower data was bogus!]
+	{
+	Chinese=嘿，笨蛋！默认的流星雨数据有误！;
+	}
+[Could not open movie file, please check filename in INI.]
+	{
+	Chinese=无法打开影片文件，请检查INI中的文件名;
+	}
+[Could not setup Direct Draw to play movie.]
+	{
+	Chinese=无法设置Direct Draw来播放影片;
+	}
+[Unsupported pixel format.]
+	{
+	Chinese=不支持的像素格式;
+	}
+[Smacker Error]
+	{
+	Chinese=Smacker错误;
+	}
+[Summary]
+	{
+	Chinese=概要;
+	}
+[getbuilt]
+	{
+	Chinese=正在被建造;
+	}
+[TransportDrop]
+	{
+	Chinese=运输卸载;
+	}
+[QueryTransport]
+	{
+	Chinese=请求运输;
+	}
+[EndTransport]
+	{
+	Chinese=结束运输;
+	}
+[QueryLandingPad]
+	{
+	Chinese=请求停机坪;
+	}
+[Invalid logo setting]
+	{
+	Chinese=无效的标志设置;
+	}
+[Unable to start the thread!]
+	{
+	Chinese=无法启动线程！;
+	}
+[Please insert the Total Annihilation CD and try again]
+	{
+	Chinese=请插入横扫千军光盘后重试;
+	}
+[Please insert the Play CD and try again]
+	{
+	Chinese=请插入游戏光盘后重试;
+	}
+[The Play CD was not found]
+	{
+	Chinese=未找到游戏光盘;
+	}
+[Please insert the Play CD]
+	{
+	Chinese=请插入游戏光盘;
+	}
+[Click to continue.]
+	{
+	Chinese=点击继续;
+	}
+[Done]
+	{
+	Chinese=完成;
+	}
+[Record "%s" missing from feature files]
+	{
+	Chinese=地物文件中缺少记录“%s”;
+	}
+[An error occurred trying to use this service]
+	{
+	Chinese=使用此服务时出错;
+	}
+[expecting int]
+	{
+	Chinese=应为整数;
+	}
+[parse error reading AI profile %s\n%s\nlast string =]
+	{
+	Chinese=读取AI配置文件%s时解析出错\n%s\n最后的字符串 =;
+	}
+[None]
+	{
+	Chinese=无;
+	}
+[Incompatible units found.  They will be ignored.  Please download the latest version of the game.]
+	{
+	Chinese=发现不兼容的单位。这些单位将被忽略。请下载最新版本的游戏。;
+	}
+[Can't load MOVEINFO.TDF]
+	{
+	Chinese=无法载入MOVEINFO.TDF;
+	}
+[Can't load GAMEDATA.TDF]
+	{
+	Chinese=无法载入GAMEDATA.TDF;
+	}
+[Connecting  (ESC to abort)]
+	{
+	Chinese=正在连接（按ESC中止）;
+	}
+[Lock]
+	{
+	Chinese=锁定;
+	}
+[Blk]
+	{
+	Chinese=黑;
+	}
+[Gray]
+	{
+	Chinese=灰;
+	}
+[Connecting... press ESC to abort]
+	{
+	Chinese=正在连接……按ESC中止;
+	}
+[Unable to find any modems]
+	{
+	Chinese=未找到任何调制解调器;
+	}
+[allied with]
+	{
+	Chinese=结盟;
+	}
+[broke alliance with]
+	{
+	Chinese=解除结盟;
+	}
+[There are not enough game CDs present to play]
+	{
+	Chinese=游戏光盘数量不足，无法进行游戏;
+	}
+[You must select a map before starting]
+	{
+	Chinese=开始前必须选择地图;
+	}
+[\nYou must select a map before starting\n\n]
+	{
+	Chinese=\n开始前必须选择地图\n\n;
+	}
+[n/a]
+	{
+	Chinese=无;
+	}
+[N/A]
+	{
+	Chinese=无;
+	}
+[View Map]
+	{
+	Chinese=查看地图;
+	}
+[Could not find the multiplayer map!!]
+	{
+	Chinese=找不到多人游戏地图！！;
+	}
+[does not have this map]
+	{
+	Chinese=没有此地图;
+	}
+[There are no saved lists to choose from]
+	{
+	Chinese=没有可选择的已存列表;
+	}
+[has left the scene]
+	{
+	Chinese=已离开战场;
+	}
+[has been shown the door]
+	{
+	Chinese=被扫地出门了;
+	}
+[has gone to a better place]
+	{
+	Chinese=去了一个更好的地方;
+	}
+[has bowed out]
+	{
+	Chinese=已黯然退场;
+	}
+[has terminated]
+	{
+	Chinese=已被终结;
+	}
+[has been eradicated]
+	{
+	Chinese=已被根除;
+	}
+[has been liquidated]
+	{
+	Chinese=已被清算;
+	}
+[has been obliterated]
+	{
+	Chinese=已被彻底摧毁;
+	}
+[forces have been obliterated]
+	{
+	Chinese=的部队已被彻底摧毁;
+	}
+[vermin have been exterminated]
+	{
+	Chinese=的爪牙已被剿灭;
+	}
+[forces have gone to a better place]
+	{
+	Chinese=的部队去了一个更好的地方;
+	}
+[dropping a player due to TIMEOUT_SECS]
+	{
+	Chinese=因超时（TIMEOUT_SECS）移除一名玩家;
+	}
+[%s is joining the game...]
+	{
+	Chinese=%s 正在加入游戏……;
+	}
+[player dropped by DPSYS_]
+	{
+	Chinese=玩家已被移除：DPSYS_;
+	}
+[player '%s' set to startpos %d\n]
+	{
+	Chinese=玩家“%s”的起始位置设为 %d\n;
+	}
+[You're out!  Continue Watching?]
+	{
+	Chinese=你出局了！继续观战？;
+	}
+[Weapon]
+	{
+	Chinese=武器;
+	}
+[Please insert a Total Annihilation CD and try again]
+	{
+	Chinese=请插入一张横扫千军光盘后重试;
+	}
+[Wind Speed]
+	{
+	Chinese=风速;
+	}
+[Gravity]
+	{
+	Chinese=重力;
+	}
+[Tidal Strength]
+	{
+	Chinese=潮汐强度;
+	}
+[There are no skirmish maps to choose from]
+	{
+	Chinese=没有可选择的遭遇战地图;
+	}
+[There are no multiplayer maps to choose from]
+	{
+	Chinese=没有可选择的多人游戏地图;
+	}
+[The terrain for the selected map does not exist.]
+	{
+	Chinese=所选地图的地形不存在;
+	}
+[All players may not be in the same allied group.]
+	{
+	Chinese=所有玩家不能都在同一个结盟组中;
+	}
+[Error:  Sound system initialization failed.]
+	{
+	Chinese=错误：声音系统初始化失败;
+	}
+[%s has taken the lead with %d kills]
+	{
+	Chinese=%s 以 %d 次击杀取得领先;
+	}
+[has taken the lead with %d kills]
+	{
+	Chinese=以 %d 次击杀取得领先;
+	}
+[has taken the lead with]
+	{
+	Chinese=取得领先：;
+	}
+[Player number %d invalid for unit %s]
+	{
+	Chinese=玩家编号 %d 对单位 %s 无效;
+	}
+[Cost]
+	{
+	Chinese=造价;
+	}
+[Build Time]
+	{
+	Chinese=建造时间;
+	}
+[Max Velocity]
+	{
+	Chinese=最大速度;
+	}
+[Acceleration]
+	{
+	Chinese=加速度;
+	}
+[Weapons]
+	{
+	Chinese=武器;
+	}
+[Speed]
+	{
+	Chinese=速度;
+	}
+[Game Speed Normal]
+	{
+	Chinese=游戏速度正常;
+	}
+[Invalid savegame file]
+	{
+	Chinese=无效的存档文件;
+	}
+[Unable to start the loading thread!]
+	{
+	Chinese=无法启动载入线程！;
+	}
+[DirectPlay registration failed.]
+	{
+	Chinese=DirectPlay注册失败;
+	}
+[Demo Version]
+	{
+	Chinese=演示版;
+	}
+[Settings]
+	{
+	Chinese=设置;
+	}
+
+// Added for v2.0
+
+[Can't add another player when game is closed.]
+	{
+	Chinese=游戏已关闭，无法再添加玩家;
+	}
+[Direct Play failed to add new player.\n\nRecommended you go to previous screen and re-create the game session.\n]
+	{
+	Chinese=Direct Play添加新玩家失败。\n\n建议返回上一界面并重新创建游戏。\n;
+	}
+[Direct Play failed to add new player.\n\nRecommended you go to previous screen and re-join the game session.\n]
+	{
+	Chinese=Direct Play添加新玩家失败。\n\n建议返回上一界面并重新加入游戏。\n;
+	}
+[Square]
+	{
+	Chinese=方形;
+	}
+[Circle]
+	{
+	Chinese=圆形;
+	}
+[Triangle]
+	{
+	Chinese=三角形;
+	}
+[Star]
+	{
+	Chinese=星形;
+	}
+[Moon]
+	{
+	Chinese=月形;
+	}
+[has joined the]
+	{
+	Chinese=已加入;
+	}
+[has left the]
+	{
+	Chinese=已离开;
+	}
+[anemone]
+	{
+	Chinese=海葵;
+	}
+[coral]
+	{
+	Chinese=珊瑚;
+	}
+[seaweed]
+	{
+	Chinese=海草;
+	}
+[kelp]
+	{
+	Chinese=海带;
+	}
+[You are placed in watch mode because you are hosting AI players which are still alive.  If you exit, they will be terminated.]
+	{
+	Chinese=由于你主持的电脑玩家仍然存活，你已进入观战模式。如果你退出，它们将被终止。;
+	}
+[Unable to initialize scores reporting.]
+	{
+	Chinese=无法初始化成绩报告;
+	}
+[No sound driver is available for use.\n]
+	{
+	Chinese=没有可用的声音驱动程序\n;
+	}
+[Debug:  You must be in full-screen mode to play a movie.]
+	{
+	Chinese=调试：必须在全屏模式下才能播放影片;
+	}
+[Old TED format no longer supported!]
+	{
+	Chinese=不再支持旧的TED格式！;
+	}
+[Can not start game with all players on the same team.]
+	{
+	Chinese=所有玩家在同一队伍时无法开始游戏;
+	}
+
+// Features
+
+[Transit Node]
+	{
+	Chinese=交通枢纽;
+	}
+[Microwave Relay]
+	{
+	Chinese=微波中继站;
+	}
+[Climatic Optimizer]
+	{
+	Chinese=气候优化器;
+	}
+[Truck]
+	{
+	Chinese=卡车;
+	}
+[Manhole]
+	{
+	Chinese=检修井;
+	}
+[Public Art]
+	{
+	Chinese=公共艺术品;
+	}
+[Car]
+	{
+	Chinese=汽车;
+	}
+[Willy Gates Bldg]
+	{
+	Chinese=威利盖茨大楼;
+	}
+[Barrier]
+	{
+	Chinese=屏障;
+	}
+[barrier]
+	{
+	Chinese=屏障;
+	}
+[Oolok Tree]
+	{
+	Chinese=奥洛克树;
+	}
+[Gasbag]
+	{
+	Chinese=气囊植物;
+	}
+[Bridge]
+	{
+	Chinese=桥梁;
+	}
+[Ruined Bridge]
+	{
+	Chinese=断桥;
+	}
+[Factory]
+	{
+	Chinese=工厂;
+	}
+[Cheese Factory]
+	{
+	Chinese=奶酪工厂;
+	}
+[Public Hygiene Pod]
+	{
+	Chinese=公共卫生舱;
+	}
+[Monorail Track]
+	{
+	Chinese=单轨轨道;
+	}
+[Streetlight]
+	{
+	Chinese=路灯;
+	}
+
+// Chat messages
+
+[OK.  Will share metal if above %d]
+	{
+	Chinese=好的，金属超过 %d 时将共享;
+	}
+[OK.  Will share energy if above %d]
+	{
+	Chinese=好的，能量超过 %d 时将共享;
+	}
+
+// Not in 3.1c's table: GUI captions that 3.1c's own translate.tdf does not key
+
+[Begin Mission]
+	{
+	Chinese=开始任务;
+	}
+[Choose where you would like your scores reported to:]
+	{
+	Chinese=选择成绩的上报位置：;
+	}
+[CREDITS]
+	{
+	Chinese=制作人员;
+	}
+[has not responded for %d seconds]
+	{
+	Chinese=已有 %d 秒没有响应;
+	}
+[Have a nice day]
+	{
+	Chinese=祝你愉快;
+	}
+[Mission Brief]
+	{
+	Chinese=任务简报;
+	}
+[Name Of List To Save]
+	{
+	Chinese=要保存的列表名称;
+	}
+[Pevious Menu]
+	{
+	Chinese=返回上一页;
+	}
+[Select Player:]
+	{
+	Chinese=选择玩家：;
+	}
+[Synching]
+	{
+	Chinese=同步中;
+	}
+[Watching Allowe]
+	{
+	Chinese=允许观战;
+	}
+
+// Not in 3.1c's table: Map names and descriptions
+
+[luschinfloggen]
+	{
+	Chinese=卢什因弗洛根;
+	}
+[8 X 10  Find your way through the shallows into the enemy base.]
+	{
+	Chinese=8 X 10  穿过浅滩，杀入敌方基地;
+	}
+
+// Not in 3.1c's table: Planet names, as the maps give them
+
+[Green planet]
+	{
+	Chinese=绿色星球;
+	}
+[Lava]
+	{
+	Chinese=熔岩;
+	}
+[Red Planet]
+	{
+	Chinese=红色星球;
+	}
+[Lush]
+	{
+	Chinese=葱郁;
+	}
+[Ice]
+	{
+	Chinese=冰雪;
+	}
+[Archipelago]
+	{
+	Chinese=群岛;
+	}
+[Slate]
+	{
+	Chinese=板岩;
+	}
+[Lunar]
+	{
+	Chinese=月球;
+	}
+[Water World]
+	{
+	Chinese=水世界;
+	}
+[Acid]
+	{
+	Chinese=酸性;
+	}
+[Crystal]
+	{
+	Chinese=水晶;
+	}
+[Wet Desert]
+	{
+	Chinese=湿润沙漠;
+	}
+[Desert]
+	{
+	Chinese=沙漠;
+	}
+[Urban]
+	{
+	Chinese=城市;
+	}

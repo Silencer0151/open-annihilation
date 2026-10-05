@@ -12,6 +12,7 @@
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <vector>
 
@@ -383,6 +384,25 @@ void file_round_trip() {
     CHECK(!bank_read_file(
         back.get(), (dir / "missing.sav").string().c_str(), nullptr, nullptr, &source, &error
     ));
+    // A save named in Chinese, its path given in UTF-8: written, found under
+    // that name and read back whatever the system's code page.
+    const std::string_view hanzi = "\xE5\xAD\x98\xE6\xA1\xA3"; // U+5B58 U+6863
+    const auto utf8 = [](std::string_view text) {
+        return std::filesystem::path(std::u8string(text.begin(), text.end()));
+    };
+    const auto folder = dir.u8string();
+    const std::string named =
+        std::string(folder.begin(), folder.end()) + "/" + std::string(hanzi) + ".sav";
+    CHECK(bank_write_file(b.get(), named.c_str(), savegame_description, true, true, &sink));
+    CHECK(std::filesystem::exists(utf8(named)));
+    CHECK(std::filesystem::exists(dir / utf8(std::string(hanzi) + ".cpa")));
+    ScopedBank named_back;
+    CHECK(bank_read_file(
+        named_back.get(), named.c_str(), savegame_description, nullptr, &source, &error
+    ));
+    CHECK(same_banks(b.get(), named_back.get()));
+    // Bytes that are not UTF-8 name no file.
+    CHECK(!bank_read_file(back.get(), "\xFF\xFE.sav", nullptr, nullptr, &source, &error));
     std::filesystem::remove_all(dir);
 }
 

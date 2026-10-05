@@ -88,27 +88,22 @@ Control* control_at(Panel& panel, const char* pattern, int32_t index) noexcept {
     return panel_control(panel, name);
 }
 
-/// Translates interface text through LobbyServices::translate.
-///
-/// @param lobby lobby whose services translate
-/// @param text text to translate
-/// @return its translation, or the text itself without one
-const char* translated(const Lobby& lobby, const char* text) noexcept {
+} // namespace
+
+const char* lobby_translated(const Lobby& lobby, const char* text) noexcept {
     const char* translation = lobby.services.translate != nullptr
                                   ? lobby.services.translate(lobby.services.context, text)
                                   : nullptr;
     return translation != nullptr ? translation : text;
 }
 
-} // namespace
-
 // ---------------------------------------------------------------------------
 // YESORNO
 
 void confirm_open(Lobby& lobby, Panel& panel, uint8_t slot) noexcept {
     lobby.confirm_slot = slot;
-    panel_set_text(panel, "CHOICE1", translated(lobby, "Yes"));
-    panel_set_text(panel, "CHOICE2", translated(lobby, "No"));
+    panel_set_text(panel, "CHOICE1", lobby_translated(lobby, "Yes"));
+    panel_set_text(panel, "CHOICE2", lobby_translated(lobby, "No"));
     char title[100];
     std::snprintf(
         title, sizeof(title), "%s %s?", "Reject", name_of(slot_player(lobby, slot)).c_str()
@@ -134,8 +129,8 @@ bool confirm_handle_event(Lobby& lobby, Panel& panel) noexcept {
 }
 
 void exit_confirm_open(Lobby& lobby, Panel& panel) noexcept {
-    panel_set_text(panel, "CHOICE1", translated(lobby, "Yes"));
-    panel_set_text(panel, "CHOICE2", translated(lobby, "No"));
+    panel_set_text(panel, "CHOICE1", lobby_translated(lobby, "Yes"));
+    panel_set_text(panel, "CHOICE2", lobby_translated(lobby, "No"));
     const bool lobby_launch =
         lobby.game != nullptr && (lobby.game->gui_flags & kGuiFlagLobbyLaunch) != 0;
     panel_set_text(
@@ -326,7 +321,7 @@ void map_summary_update(Lobby& lobby, Panel& panel) noexcept {
             "%.*s  %s: %.*s",
             static_cast<int>(::strnlen(map->memory, sizeof(map->memory))),
             map->memory,
-            translated(lobby, "Players"),
+            lobby_translated(lobby, "Players"),
             static_cast<int>(::strnlen(map->num_players, sizeof(map->num_players))),
             map->num_players
         );

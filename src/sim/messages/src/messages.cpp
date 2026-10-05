@@ -6,6 +6,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <span>
 #include <string_view>
 
 namespace oa::sim::messages {
@@ -13,6 +14,8 @@ namespace {
 
 inline constexpr size_t player_chat_name_bytes = sizeof(Player::second_name);
 inline constexpr size_t formatted_bytes = 200;
+// Bytes past a cut that show whether a UTF-8 character spans it.
+inline constexpr size_t chat_lookahead_bytes = 4;
 
 // Bounded copy of Player.second_name, the name chat lines carry.
 void chat_name(const Player& player, char out[player_chat_name_bytes + 1]) {
@@ -256,24 +259,46 @@ void post_chat(
 ) {
     char name[player_chat_name_bytes + 1];
     chat_name(speaker, name);
-    char line[formatted_bytes];
+    // The line keeps what fits, less a UTF-8 character the cut would split:
+    // the bytes past the cut show whether one spans it. A line that may go
+    // out as several records holds what they carry.
+    size_t line_bytes = formatted_bytes;
+    if (hooks.shared_chat_line_bytes != nullptr)
+        if (const size_t asked = hooks.shared_chat_line_bytes(hooks.context); asked != 0)
+            line_bytes = asked < most_chat_line_bytes ? asked : most_chat_line_bytes;
+    char whole[most_chat_line_bytes + chat_lookahead_bytes];
     std::snprintf(
-        line,
-        sizeof line,
+        whole,
+        line_bytes + chat_lookahead_bytes,
         "<%s%s%s> %s",
         name,
         target != nullptr ? "->" : "",
         target != nullptr ? target : "",
-        text
+        text != nullptr ? text : ""
     );
-    if (world.game.chat_mode != chat_mode_local_only && hooks.share_chat != nullptr)
+    const std::string_view formatted(whole);
+    char line[most_chat_line_bytes];
+    oa::base::text::copy_terminated(
+        std::span<char>(line, line_bytes),
+        formatted.substr(0, oa::base::text::whole_characters(formatted, line_bytes - 1))
+    );
+    const bool shared = world.game.chat_mode != chat_mode_local_only && hooks.share_chat != nullptr;
+    if (shared)
         hooks.share_chat(hooks.context, line);
     const uint8_t mode = world.game.chat_mode;
     if (hooks.game_kind != nullptr && hooks.game_kind(hooks.context) == game_kind_multiplayer &&
         mode != OA_CHAT_MODE_CHOSEN && mode != OA_CHAT_MODE_ALLIES &&
         mode != chat_mode_local_only && hooks.record_chat != nullptr)
         hooks.record_chat(hooks.context, line);
-    post_message(world, line, kind, 0, sender_none, hooks);
+    // The speaker's log shows the line as the other players' logs do.
+    std::size_t parts = 0;
+    if (shared && hooks.shared_chat_line != nullptr)
+        for (const char* part = nullptr;
+             (part = hooks.shared_chat_line(hooks.context, line, parts)) != nullptr;
+             ++parts)
+            post_message(world, part, kind, 0, sender_none, hooks);
+    if (parts == 0)
+        post_message(world, line, kind, 0, sender_none, hooks);
 }
 
 } // namespace oa::sim::messages

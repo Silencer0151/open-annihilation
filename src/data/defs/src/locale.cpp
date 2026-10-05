@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <string_view>
 
 namespace oa::data::defs {
 namespace {
@@ -106,8 +107,14 @@ bool parse_entries(LocaleTable* table, formats::tdf::Document* document) noexcep
         char source[locale_text_capacity];
         oa::base::text::copy_padded(source, section->name, sizeof source - 1);
         source[sizeof source - 1] = '\0';
-        char translation[locale_text_capacity];
-        formats::tdf::get_string(section, table->language, translation, sizeof translation, "");
+        // A translation too long for its buffer is cut between whole UTF-8
+        // characters, so that a language whose text is UTF-8 never shows
+        // half a character.
+        char translation[locale_text_capacity]{};
+        const char* value = formats::tdf::find_value(section, table->language);
+        const std::string_view text = value != nullptr ? value : "";
+        const std::size_t kept = oa::base::text::whole_characters(text, sizeof translation - 1);
+        std::memcpy(translation, text.data(), kept);
         if (translation[0] != '\0' && !set_translation(table, source, translation))
             return false;
     }

@@ -9,6 +9,7 @@
 #include "oa/netgame/private_channel.hpp"
 #include "oa/netgame/records.hpp"
 #include "oa/netgame/recorder_messages.hpp"
+#include "oa/netgame/unicode_chat.hpp"
 #include "oa/ui/frontend_multiplayer/dialogs.hpp"
 #include "oa/ui/frontend_multiplayer/team_rules.hpp"
 #include "oa/sim/mission_units/map_units.hpp"
@@ -22,6 +23,7 @@
 #include <cstring>
 #include <iterator>
 #include <string>
+#include <vector>
 
 namespace oa::ui::frontend_multiplayer {
 
@@ -509,17 +511,133 @@ constexpr uint8_t kRecorderOptionsProtocol = 5;
 // A chat line keeps a NUL in its last byte.
 constexpr std::size_t kChatLineChars = sizeof(netgame::ChatRecord::text) - 1;
 
+// Bytes past a cut that show whether a UTF-8 character spans it.
+constexpr std::size_t kChatLookahead = 4;
+// The most bytes of a line Unicode chat reads: more than four records hold.
+constexpr std::size_t kChatReadBytes = 512;
+
+/// Gives how much of a line fits a limit without cutting a character.
+///
+/// @param line The line, zero-terminated.
+/// @param limit The most bytes kept.
+/// @return The bytes kept.
+std::size_t chat_bytes_within(const char* line, std::size_t limit) noexcept {
+    return base::text::whole_characters(
+        std::string_view(line, ::strnlen(line, limit + kChatLookahead)), limit
+    );
+}
+
+/// Tells whether a slot's machine reads chat as UTF-8: its block says so.
+///
+/// @param lobby Lobby state.
+/// @param slot The slot.
+/// @return True when it does.
+bool slot_reads_unicode_chat(Lobby& lobby, int32_t slot) noexcept {
+    const auto* info = slot >= 0 ? slot_info(lobby, slot) : nullptr;
+    return info != nullptr &&
+           netgame::announces_unicode_chat(reinterpret_cast<const uint8_t*>(info));
+}
+
+/// Sends one chat record to everyone in the form each machine reads: once
+/// when all read the same form, else one copy per machine.
+///
+/// @param lobby Lobby state.
+/// @param from Sending player id.
+/// @param utf8 The record in UTF-8.
+/// @param code_page The record in the code page.
+void send_chat_forms(
+    Lobby& lobby,
+    uint32_t from,
+    const netgame::ChatRecord& utf8,
+    const netgame::ChatRecord& code_page
+) noexcept {
+    uint8_t wide[80];
+    uint8_t narrow[80];
+    std::size_t wide_size = 0;
+    std::size_t narrow_size = 0;
+    if (netgame::encode_record(utf8, wide, sizeof(wide), &wide_size) != netgame::WireError::ok ||
+        netgame::encode_record(code_page, narrow, sizeof(narrow), &narrow_size) !=
+            netgame::WireError::ok)
+        return;
+    const auto reads = [&](uint32_t id) {
+        return slot_reads_unicode_chat(lobby, slot_for_player_id(lobby, id));
+    };
+    uint32_t ids[kSlotCount];
+    int32_t count = 0;
+    const bool shared = lobby.game->shared_machines != 0;
+    if (shared) {
+        count = machine_broadcast_targets(*lobby.game, ids);
+    } else {
+        for (int32_t slot = 0; slot < kSlotCount; ++slot)
+            if (occupied_by(slot_player(lobby, slot), kSlotRemote))
+                ids[count++] = slot_player(lobby, slot).player_id;
+    }
+    int32_t readers = 0;
+    for (int32_t i = 0; i < count; ++i)
+        readers += reads(ids[i]) ? 1 : 0;
+    if (readers == 0 || readers == count) {
+        if (readers == 0)
+            send(lobby, from, kBroadcastId, narrow, narrow_size);
+        else
+            send(lobby, from, kBroadcastId, wide, wide_size);
+        return;
+    }
+    for (int32_t i = 0; i < count; ++i) {
+        if (reads(ids[i]))
+            send(lobby, from, ids[i], wide, wide_size);
+        else
+            send(lobby, from, ids[i], narrow, narrow_size);
+    }
+    // A refused joiner holds no slot, so no machine's target names it.
+    if (shared && lobby.refused_joiner != 0)
+        send(lobby, from, lobby.refused_joiner, narrow, narrow_size);
+}
+
+/// Sends a chat line to everyone while Unicode chat is on (Lobby::unicode_chat):
+/// read as UTF-8, cut into records, each in the form each machine reads.
+///
+/// @param lobby Lobby state.
+/// @param from Sending player id.
+/// @param text The line, as this machine holds game text.
+/// @param record_bytes The bytes one record keeps of the line.
+/// @param split A line that is no command goes as up to netgame::chat_line_parts records.
+/// @return The parts sent, in UTF-8.
+std::vector<std::string> say_unicode(
+    Lobby& lobby, uint32_t from, const char* text, std::size_t record_bytes, bool split
+) noexcept {
+    const auto line = netgame::chat_utf8(std::string_view(text, ::strnlen(text, kChatReadBytes)));
+    std::vector<std::string> parts;
+    if (split && !netgame::chat_command(line))
+        parts = netgame::chat_parts(line, record_bytes, netgame::chat_line_parts);
+    else
+        parts.push_back(line.substr(0, base::text::whole_characters(line, record_bytes)));
+    for (const auto& part : parts) {
+        netgame::ChatRecord utf8{};
+        std::memcpy(utf8.text, part.data(), std::min(part.size(), sizeof(utf8.text)));
+        const auto narrow = netgame::chat_code_page(part);
+        netgame::ChatRecord code_page{};
+        std::memcpy(code_page.text, narrow.data(), std::min(narrow.size(), sizeof(code_page.text)));
+        send_chat_forms(lobby, from, utf8, code_page);
+    }
+    return parts;
+}
+
 /// Sends a plain chat line from the local player to everyone and shows it here.
 ///
 /// @param lobby Lobby state.
-/// @param line The line; cut at 63 characters.
+/// @param line The line; cut at 63 bytes, between whole characters.
 void recorder_say(Lobby& lobby, const char* line) noexcept {
-    netgame::ChatRecord record{};
-    std::memcpy(record.text, line, ::strnlen(line, kChatLineChars));
-    uint8_t wire[80];
-    std::size_t written = 0;
-    if (netgame::encode_record(record, wire, sizeof(wire), &written) == netgame::WireError::ok)
-        send(lobby, local_player(lobby).player_id, kBroadcastId, wire, written);
+    const auto from = local_player(lobby).player_id;
+    if (lobby.unicode_chat) {
+        (void)say_unicode(lobby, from, line, kChatLineChars, false);
+    } else {
+        netgame::ChatRecord record{};
+        std::memcpy(record.text, line, chat_bytes_within(line, kChatLineChars));
+        uint8_t wire[80];
+        std::size_t written = 0;
+        if (netgame::encode_record(record, wire, sizeof(wire), &written) == netgame::WireError::ok)
+            send(lobby, from, kBroadcastId, wire, written);
+    }
     flush(lobby);
     lobby_post_chat(lobby, line);
 }
@@ -643,7 +761,12 @@ bool recorder_chat_line(Lobby& lobby, int32_t sender_slot, const char* text) noe
     case netgame::RecorderCommand::record:
         // The local player's .record names the game's recording.
         if (from_here && line.argument[0] != '\0') {
-            std::snprintf(session.record_name, sizeof session.record_name, "%s", line.argument);
+            base::text::copy_terminated(
+                session.record_name,
+                std::string_view(
+                    line.argument, chat_bytes_within(line.argument, sizeof session.record_name - 1)
+                )
+            );
             std::snprintf(answer, sizeof answer, "Recording to %s", session.record_name);
         }
         break;
@@ -1504,7 +1627,12 @@ void lobby_update_status(Lobby& lobby, Panel& panel) noexcept {
             panel_set_active(panel, name, false);
             panel_set_grayed(panel, name, false);
             format(name, "PLAYER%d", slot);
-            panel_set_text(panel, name, player.status == kSlotBlocked ? "[BLOCKED]" : "UNUSED");
+            // In the language shown, as 3.1c's text setter translates it:
+            // BLOCKED translated inside its brackets first.
+            std::string unused = "UNUSED";
+            if (player.status == kSlotBlocked)
+                unused = std::string("[") + lobby_translated(lobby, "BLOCKED") + "]";
+            panel_set_text(panel, name, lobby_translated(lobby, unused.c_str()));
             panel_set_grayed(panel, name, my_ready != 0);
             for (const char* pattern :
                  {"LOGO%d", "SIDE%d", "TEAMICONS%d", "RES%d", "PING%d", "MEM%d"})
@@ -1665,7 +1793,7 @@ void lobby_enter_battleroom(Lobby& lobby, Panel& panel) noexcept {
     if (!host_seat || lobby_launch_locked(lobby)) {
         if (auto* map = panel_control(panel, "MAP")) {
             map->attributes = 2;
-            set_control_text(*map, "View Map");
+            set_control_text(*map, lobby_translated(lobby, "View Map"));
         }
     }
     if (!host || lobby_options_locked(lobby))
@@ -2404,6 +2532,7 @@ void lobby_send_player_info(Lobby& lobby) noexcept {
         record.info_tail
             [netgame::player_info_recorder_protocol_offset - netgame::player_info_tail_offset] =
             lobby.wire_rules.recorder_protocol;
+        netgame::announce_unicode_chat(record, lobby.unicode_chat);
         uint8_t wire[kLobbyRecordBytes];
         std::size_t written = 0;
         if (netgame::encode_record(record, wire, sizeof(wire), &written) == netgame::WireError::ok)
@@ -2827,32 +2956,34 @@ void lobby_post_chat(Lobby& lobby, const char* line) noexcept {
 }
 
 void lobby_say(Lobby& lobby, const Player& speaker, const char* text) noexcept {
-    char line[200];
-    std::snprintf(
-        line,
-        sizeof(line),
-        "<%s> %s",
-        std::string(text_view(speaker.name, sizeof(speaker.name))).c_str(),
-        text
-    );
-    // The record carries the line's first 64 bytes, the rest zero, with no
-    // terminator when the line fills it; a UTF-8 character the 64th byte
-    // would split is left out whole.
-    netgame::ChatRecord record{};
-    std::memcpy(
-        record.text,
-        line,
-        base::text::whole_characters(
-            std::string_view(line, ::strnlen(line, sizeof(line))), sizeof(record.text)
-        )
-    );
-    uint8_t wire[80];
-    std::size_t written = 0;
-    if (netgame::encode_record(record, wire, sizeof(wire), &written) == netgame::WireError::ok)
-        send(lobby, speaker.player_id, kBroadcastId, wire, written);
-    flush(lobby);
-    lobby_post_chat(lobby, line);
-    recorder_chat_line(lobby, slot_for_player_id(lobby, speaker.player_id), line);
+    std::string line = "<";
+    line += text_view(speaker.name, sizeof(speaker.name));
+    line += "> ";
+    line += text;
+    if (lobby.unicode_chat) {
+        // Each part shows here as it shows on the other machines.
+        const auto parts = say_unicode(
+            lobby, speaker.player_id, line.c_str(), sizeof(netgame::ChatRecord::text), true
+        );
+        flush(lobby);
+        for (const auto& part : parts)
+            lobby_post_chat(lobby, part.c_str());
+    } else {
+        // The record carries the line's first 64 bytes, the rest zero, with
+        // no terminator when the line fills it; a UTF-8 character the 64th
+        // byte would split is left out whole.
+        netgame::ChatRecord record{};
+        std::memcpy(
+            record.text, line.data(), base::text::whole_characters(line, sizeof(record.text))
+        );
+        uint8_t wire[80];
+        std::size_t written = 0;
+        if (netgame::encode_record(record, wire, sizeof(wire), &written) == netgame::WireError::ok)
+            send(lobby, speaker.player_id, kBroadcastId, wire, written);
+        flush(lobby);
+        lobby_post_chat(lobby, line.c_str());
+    }
+    recorder_chat_line(lobby, slot_for_player_id(lobby, speaker.player_id), line.c_str());
 }
 
 void lobby_session_description(Lobby& lobby, char* name, uint8_t* user) noexcept {
@@ -3238,8 +3369,13 @@ bool lobby_apply_event(Lobby& lobby, const LobbyEvent& event) noexcept {
         char line[sizeof(record.text) + 1];
         std::memcpy(line, record.text, sizeof(record.text));
         line[sizeof(record.text)] = '\0';
-        lobby_post_chat(lobby, line);
-        recorder_chat_line(lobby, slot_for_player_id(lobby, event.player_id), line);
+        // A line from a machine that sends UTF-8 is read strictly as UTF-8.
+        const auto sender = slot_for_player_id(lobby, event.player_id);
+        if (lobby.unicode_chat && slot_reads_unicode_chat(lobby, sender))
+            lobby_post_chat(lobby, netgame::chat_strict_utf8(line).c_str());
+        else
+            lobby_post_chat(lobby, line);
+        recorder_chat_line(lobby, sender, line);
         return true;
     }
     case netgame::RecordType::player_info: {

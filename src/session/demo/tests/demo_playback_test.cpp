@@ -16,6 +16,7 @@
 #include "oa/netgame/match/launch.hpp"
 #include "oa/netgame/records.hpp"
 #include "oa/netgame/network.hpp"
+#include "oa/netgame/unicode_chat.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1332,6 +1333,47 @@ void slotless_viewer_watches_the_recording() {
     CHECK(std::count(session->lines.begin(), session->lines.end(), "player1: hello") == 1);
 }
 
+// A recording keeps a line in UTF-8 when its speaker's block says UTF-8
+// chat: a viewer with Unicode chat on is shown it as it is, one with it
+// off in the code page, '?' for each hanzi.
+void recorded_unicode_chat_plays_back() {
+    // U+4F60 U+597D in UTF-8.
+    const std::string line = "player1: \xe4\xbd\xa0\xe5\xa5\xbd";
+    for (const bool viewer_utf8 : {true, false}) {
+        auto recording = make_recording(kUnitsPerPlayer, 1);
+        PlayerSetupInfo info{};
+        info.player_id = recorded_id(0);
+        info.side = 0;
+        info.color = recorded_color(0);
+        info.role = 1;
+        info.options = recorded_host_options;
+        mark_unicode_chat(reinterpret_cast<uint8_t*>(&info), true);
+        recording.status_datagrams[0] = status_datagram(info);
+        recording.add(1, 33, chat_payload(line.c_str()));
+        const auto release = [](DemoSession* session) {
+            demo_session_end(session);
+            delete session;
+        };
+        std::unique_ptr<DemoSession, decltype(release)> session(new DemoSession(), release);
+        std::string error;
+        CHECK(demo_load(&session->playback, recording.bytes(), &error));
+        session->playback.ten_player_replay = TenPlayerReplay::watcher_view;
+        session->unicode_chat = viewer_utf8;
+        Machine replay;
+        replay.build(1);
+        std::array<uint8_t, OA_PLAYER_COUNT> watcher_allies{};
+        watcher_allies[1] = 1;
+        replay.match->configure_outcomes(1, watcher_allies, false);
+        CHECK(demo_session_begin(session.get(), replay.match.get(), &error));
+        if (session->match == nullptr)
+            return;
+        for (int t = 0; t < 10; ++t)
+            demo_session_frame(session.get());
+        const std::string shown = viewer_utf8 ? line : "player1: ??";
+        CHECK(std::count(session->lines.begin(), session->lines.end(), shown) == 1);
+    }
+}
+
 // Economy records give a player simulated elsewhere the production and use
 // per settlement its running totals imply, from the second record on.
 void economy_records_give_income_figures() {
@@ -1380,6 +1422,7 @@ int main() {
     live_recording_round_trips(true);
     ten_players_watch_without_a_slot();
     slotless_viewer_watches_the_recording();
+    recorded_unicode_chat_plays_back();
     economy_records_give_income_figures();
     if (failures != 0) {
         std::fprintf(stderr, "%d failure(s)\n", failures);

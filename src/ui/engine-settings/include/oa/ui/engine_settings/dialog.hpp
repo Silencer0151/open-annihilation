@@ -135,6 +135,7 @@ enum class Setting : uint8_t {
     text_outline,    ///< Font outline: a switch
     text_shadow,     ///< Font shadow: a switch
     text_background, ///< Game text background: a switch
+    unicode_chat,    ///< Enable Unicode Multiplayer Chat: a switch
     text_size,       ///< Text size: a slider, locked while modern fonts are off
     /// One-finger drag: a strip of Automatic, Box and Scroll
     touch_drag,
@@ -665,6 +666,11 @@ struct Dialog {
     /// The language the operating system's preferred locales choose, which
     /// the Language drop-down's System default names; null names English.
     const oa::data::languages::Language* system_language{};
+    /// The tags of the languages whose packs ask for multiplayer chat in
+    /// UTF-8 (unicode: true): while the language chosen is one, Enable
+    /// Unicode Multiplayer Chat shows On, locked. A host sets it as the
+    /// dialog opens.
+    std::vector<std::string> unicode_chat_languages{};
     /// The row whose drop-down list is open: its control; no_control while
     /// no list is open. An open list takes every pointer event and key.
     int32_t open_list{no_control};

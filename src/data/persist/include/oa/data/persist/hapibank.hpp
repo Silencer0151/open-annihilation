@@ -346,10 +346,17 @@ struct FileSource {
 
 /// Returns a file sink that writes whole files through C stdio.
 ///
+/// The sink reads its paths as UTF-8 and opens each by its wide spelling on
+/// Windows, so that a name outside the system's code page, such as a save
+/// named in Chinese or a user folder under such a name, is written whatever
+/// the code page. A path that is not UTF-8 opens nothing.
+///
 /// @return the sink; it needs no context
 FileSink stdio_file_sink();
 
 /// Returns a file source that reads whole files (up to bank_image_byte_limit) through C stdio.
+///
+/// The source reads its paths as UTF-8, as stdio_file_sink does.
 ///
 /// @return the source; it needs no context
 FileSource stdio_file_source();

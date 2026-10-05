@@ -4,8 +4,13 @@
 // Mission briefing text layout.
 #include "oa/ui/campaign/briefing_text.hpp"
 
+#include "oa/base/text/line_break.hpp"
+
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <string>
+#include <string_view>
 
 namespace oa::ui::campaign {
 namespace {
@@ -24,6 +29,122 @@ HighlightColor highlight_color(char code) {
     return HighlightColor::red;
 }
 
+/// Tells whether a highlight marker opens its span: the markers before it
+/// are even in number.
+///
+/// @param markers the markers before it
+/// @return true when it opens a span
+bool opens_span(std::size_t markers) {
+    return markers % 2 == 0;
+}
+
+/// Wraps a briefing with Chinese, Japanese or Korean characters, which are
+/// written without spaces: a row breaks at a space or between two of those
+/// characters where the line breaker allows (oa::base::text::first_row),
+/// before it reaches the width, but never between a span's opening marker
+/// and its colour code and the word after them, nor before its closing
+/// marker. A break at spaces drops them; each break is CR LF, and the
+/// text's own line breaks stay.
+///
+/// @param text the briefing
+/// @param width the row width, in pixels
+/// @param measure measures a row
+/// @param context passed to measure
+/// @return the wrapped briefing
+std::string
+wrap_wide_text(std::string_view text, int32_t width, MeasureText measure, void* context) {
+    std::string out;
+    std::string line;
+    const auto fits = [&](std::string_view start) {
+        line.assign(start);
+        return measure(context, line.c_str()) < width;
+    };
+    std::size_t markers = 0;
+    for (;;) {
+        const auto newline = text.find('\n');
+        std::string_view rest = text.substr(0, newline);
+        // A CR before the line break stays with it.
+        const bool carriage = !rest.empty() && rest.back() == '\r';
+        if (carriage)
+            rest.remove_suffix(1);
+        while (!rest.empty()) {
+            const auto row = oa::base::text::first_row(rest, fits);
+            std::size_t end = row.bytes;
+            std::size_t next = row.next;
+            if (end == next && next < rest.size()) {
+                // A break between two characters moves back while it would
+                // part a marker from the words it marks.
+                const auto markers_before = [&](std::size_t at) {
+                    return markers + static_cast<std::size_t>(std::count(
+                                         rest.begin(),
+                                         rest.begin() + static_cast<std::ptrdiff_t>(at),
+                                         kSpanMarker
+                                     ));
+                };
+                std::size_t moved = end;
+                for (;;) {
+                    // After an opening marker and its colour code: before them.
+                    if (moved >= 2 && rest[moved - 2] == kSpanMarker &&
+                        opens_span(markers_before(moved - 2))) {
+                        moved -= 2;
+                        continue;
+                    }
+                    // Before a closing marker: one character earlier.
+                    if (moved > 0 && rest[moved] == kSpanMarker &&
+                        !opens_span(markers_before(moved))) {
+                        --moved;
+                        while (moved > 0 &&
+                               (static_cast<unsigned char>(rest[moved]) & 0xC0U) == 0x80U)
+                            --moved;
+                        continue;
+                    }
+                    break;
+                }
+                if (moved > 0)
+                    end = next = moved;
+            }
+            out.append(rest.substr(0, end));
+            markers += static_cast<std::size_t>(std::count(
+                rest.begin(), rest.begin() + static_cast<std::ptrdiff_t>(next), kSpanMarker
+            ));
+            rest.remove_prefix(next);
+            if (!rest.empty())
+                out += "\r\n";
+        }
+        if (carriage)
+            out += '\r';
+        if (newline == std::string_view::npos)
+            return out;
+        out += '\n';
+        text.remove_prefix(newline + 1);
+    }
+}
+
+/// Copies a byte of a row's text into a buffer while the whole character it
+/// belongs to fits, so that no character is cut in part.
+///
+/// @param p the byte, within its text
+/// @param[out] out the buffer
+/// @param[in,out] length the bytes in it
+/// @param[in,out] full set once a character did not fit; nothing more is
+///        copied after it
+void put_whole(const char* p, char* out, std::size_t& length, bool& full) {
+    if (full)
+        return;
+    if ((static_cast<unsigned char>(*p) & 0xC0U) != 0x80U) {
+        std::size_t available = 0;
+        while (available < 4 && !at_end(p[available]))
+            ++available;
+        const auto read = oa::base::text::break_character(std::string_view(p, available));
+        if (length + std::max<std::size_t>(read.bytes, 1) > kRowTextBytes - 1) {
+            full = true;
+            return;
+        }
+    }
+    if (length < kRowTextBytes - 1)
+        out[length++] = *p;
+}
+
 } // namespace
 
 std::size_t wrap_text(
@@ -37,6 +158,16 @@ std::size_t wrap_text(
     if (capacity == 0)
         return 0;
     std::memset(out, 0, capacity);
+    std::size_t length = 0;
+    while (!at_end(text[length]))
+        ++length;
+    if (const std::string_view whole(text, length); oa::base::text::has_wide_script(whole)) {
+        const std::string wrapped = wrap_wide_text(whole, width, measure, context);
+        const std::size_t room = capacity > 3 ? capacity - 3 : 0;
+        const std::size_t n = oa::base::text::whole_character_bytes(wrapped, room);
+        std::memcpy(out, wrapped.data(), n);
+        return n;
+    }
     const char* src = text;
     std::size_t n = 0;
     std::size_t line_start = 0;
@@ -166,6 +297,7 @@ void briefing_next_page(
         out.y = y;
         y += line_height;
         std::size_t length = 0;
+        bool full = false;
         char c = *p;
         while (c != '\n') {
             if (at_end(c))
@@ -184,17 +316,16 @@ void briefing_next_page(
                         highlight.x = measure(context, out.text) + x;
                         highlight.y = out.y;
                         highlight.color = color;
-                        for (std::size_t i = 0;
-                             i < kRowTextBytes - 1 && !at_end(p[i]) && p[i] != kSpanMarker;
-                             ++i)
-                            highlight.text[i] = p[i];
+                        std::size_t kept = 0;
+                        bool kept_full = false;
+                        for (std::size_t i = 0; !at_end(p[i]) && p[i] != kSpanMarker; ++i)
+                            put_whole(p + i, highlight.text, kept, kept_full);
                     }
                 }
                 if (at_end(*p))
                     break;
             }
-            if (length < kRowTextBytes - 1)
-                out.text[length++] = *p;
+            put_whole(p, out.text, length, full);
             ++p;
             c = *p;
         }

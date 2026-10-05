@@ -136,6 +136,11 @@ organisation has moved it to included:
 | `Recordings` | recordings of network games, which `--play-demo` plays back, in a folder for each mod as in `Saves` |
 | `Mods` | mods you add, each in a folder of its own, which the settings' Mods page lists besides the game folder's `mods` folder ([mods](../mods/README.md#installing-a-mod)) |
 
+A saved game or a recording may be named in any script, Chinese among
+them, and the Documents folder may lie under a user name in any script:
+both work whatever the system's language for non-Unicode programs, on
+Windows XP too ([typing.md](../typing.md#saved-games-and-recordings-named-in-any-script)).
+
 The game makes each folder the first time it needs it. In the settings (the
 **OA** button on the main menu), **Common Tweaks** shows the folder under
 **Your files**, whose buttons open Saves, Screenshots and Mods in Explorer.

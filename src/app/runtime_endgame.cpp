@@ -4,6 +4,7 @@
 // End-of-game screen over the finished match's Game block. The extension
 // hears the match events it reports.
 #include "oa/app/runtime.hpp"
+#include "oa/app/game_directory.hpp"
 #include "oa/app/hook_call.hpp"
 #include "oa/ui/decoded.hpp"
 
@@ -480,14 +481,14 @@ bool Runtime::holds_movies() const {
     std::error_code error;
     for (const auto& root : assets_.loose_roots())
         for (const auto& folder : fs::directory_iterator(root, error)) {
-            std::string name = folder.path().filename().string();
+            std::string name = path_to_utf8(folder.path().filename());
             std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });
             if (name != "data" || !folder.is_directory(error))
                 continue;
             for (const auto& file : fs::directory_iterator(folder.path(), error)) {
-                std::string extension = file.path().extension().string();
+                std::string extension = path_to_utf8(file.path().extension());
                 std::transform(
                     extension.begin(), extension.end(), extension.begin(), [](unsigned char c) {
                         return static_cast<char>(std::tolower(c));

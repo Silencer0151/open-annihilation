@@ -4,6 +4,7 @@
 // In-game options panel, exit menu, confirmations, restart and settings sheet.
 #include "oa/ui/frontend/ingame_menu.hpp"
 
+#include "oa/base/text/line_break.hpp"
 #include "oa/data/match_rules/difficulty_names.hpp"
 #include "oa/ui/campaign/frontend_host.hpp"
 #include "oa/ui/campaign/single_player.hpp"
@@ -274,7 +275,14 @@ IngameAction ingame_on_exit_confirm_click(Panel& panel, IngameContext& context) 
 
 void ingame_enter_restart(Panel& panel, IngameContext& context, std::string_view mission) noexcept {
     char name[0x100] = {};
-    std::snprintf(name, sizeof name, "%.*s", static_cast<int>(mission.size()), mission.data());
+    // The name's whole characters that fit.
+    std::snprintf(
+        name,
+        sizeof name,
+        "%.*s",
+        static_cast<int>(oa::base::text::whole_character_bytes(mission, sizeof name - 1)),
+        mission.data()
+    );
     char wrapped[0x200] = {};
     const auto* field = panel_control(panel, "MISSIONNAME");
     const int32_t width = field != nullptr ? field->width : 0;

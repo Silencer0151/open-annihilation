@@ -6,6 +6,7 @@
 // Game Settings sheet's Cheat Codes row, and what each cheat does to the
 // running match in a campaign and a skirmish.
 #include "oa/app/runtime.hpp"
+#include "oa/app/game_directory.hpp"
 #include "match_fault.hpp"
 
 #include "oa/audio/unit_announcements.hpp"
@@ -450,7 +451,7 @@ std::string Runtime::check_console_cheat_effects(
             game.output_directory, sizeof game.output_directory, "%s", kept_output.c_str()
         );
         require(written, "+makeposter wrote no picture");
-        done.push_back("+makeposter wrote " + poster.filename().string());
+        done.push_back("+makeposter wrote " + path_to_utf8(poster.filename()));
     }
 
     require(

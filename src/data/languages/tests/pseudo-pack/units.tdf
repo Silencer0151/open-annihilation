@@ -1,0 +1,18 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// A unit whose English matches, and one whose English has changed since
+// its text was written.
+[ARMCOM]
+	{
+	name=［测Commander试］;
+	name-from=Commander;
+	description=［测Commander试］;
+	description-from=Commander;
+	}
+[ARMSOLAR]
+	{
+	name=［测Solar Collector试］;
+	name-from=Solar Panel;
+	description=［测Produces Energy试］;
+	}

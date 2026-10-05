@@ -135,6 +135,7 @@ void NetworkPlay::start_demo_playback() {
             "demo playback needs the recording's unit definitions: " + table_line
         );
     demo_unit_table_differs_ = !check.identical;
+    session->unicode_chat = unicode_chat();
     if (!demo::demo_session_begin(session.get(), runtime_.match_.get(), &error))
         throw std::runtime_error("demo playback: " + error);
     // Mission start rebuilds the sight grids once the players are seated.

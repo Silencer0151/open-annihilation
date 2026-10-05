@@ -10,6 +10,7 @@
 
 #include "geometry.hpp"
 
+#include "oa/base/text/line_break.hpp"
 #include "oa/data/mod_profile/overrides.hpp"
 #include "oa/data/mod_profile/registry.hpp"
 #include "oa/formats/oamod.hpp"
@@ -38,6 +39,14 @@ using mod_profile::ValueKind;
 using registry::ValueType;
 
 namespace {
+
+/// Returns a list's item label, its number in its place.
+///
+/// @param number the item's number, from 1
+/// @return the label
+std::string item_text(std::size_t number) {
+    return geometry::filled("Item {n}", {{"n", std::to_string(number)}});
+}
 
 /// The first printable ASCII character.
 constexpr unsigned char first_printable = 0x20;
@@ -1132,8 +1141,7 @@ void place_hack(
                 top += row.height;
             }
             for (std::size_t item = 0; item < value.items.size(); ++item) {
-                ListRow& row =
-                    place_slider(list, item_left, "Item " + std::to_string(item + 1), top, control);
+                ListRow& row = place_slider(list, item_left, item_text(item + 1), top, control);
                 own(row, number, static_cast<int32_t>(item));
                 fill_slider(row);
                 top += row.height;
@@ -1219,7 +1227,10 @@ List place_list(const Dialog& dialog, int32_t scroll) {
         header.value = {
             content_right - area_count_width, top + 2, area_count_width, label_line_height
         };
-        header.shown = std::to_string(on) + " of " + std::to_string(group.hacks.size()) + " on";
+        header.shown = geometry::filled(
+            "{on} of {total} on",
+            {{"on", std::to_string(on)}, {"total", std::to_string(group.hacks.size())}}
+        );
         header.control_area = {content_left, top, content_width, list_header_height};
         header.open = is_open(dialog.developer.areas_open, area);
         top += header.height;
@@ -1299,7 +1310,15 @@ std::string ascii_text(std::string_view text) {
             at += fold->from.size();
             continue;
         }
-        // Any other character is one question mark, whatever its length.
+        // Chinese, Japanese and Korean characters stay, drawn in the modern
+        // fonts; any other character is one question mark, whatever its
+        // length.
+        if (const auto read = oa::base::text::break_character(text.substr(at));
+            read.bytes > 1 && oa::base::text::is_wide_script(read.character)) {
+            written += text.substr(at, read.bytes);
+            at += read.bytes;
+            continue;
+        }
         written += '?';
         at += byte >= four_byte_lead    ? 4
               : byte >= three_byte_lead ? 3
@@ -1365,7 +1384,10 @@ std::string list_value_text(const Value& value, std::string_view unit) {
 }
 
 std::string active_only_text(std::size_t active, std::size_t total) {
-    return "Show Active Only (" + std::to_string(active) + "/" + std::to_string(total) + ")";
+    return filled(
+        "Show Active Only ({active}/{total})",
+        {{"active", std::to_string(active)}, {"total", std::to_string(total)}}
+    );
 }
 
 } // namespace geometry

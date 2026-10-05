@@ -27,6 +27,16 @@
 namespace oa::media {
 namespace {
 
+/// Returns a path's UTF-8 spelling: a name outside the system's code page
+/// has no narrow spelling on Windows.
+///
+/// @param path the path
+/// @return its UTF-8 spelling
+std::string utf8_text(const std::filesystem::path& path) {
+    const auto text = path.u8string();
+    return {text.begin(), text.end()};
+}
+
 namespace smacker = formats::smacker;
 
 // Movies are drawn at x=0 and y=(480-height)/2 of the frontend's 640x480
@@ -93,14 +103,14 @@ bool write_snapshot(
     }
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
     if (!output) {
-        error = "cannot create snapshot: " + path.string();
+        error = "cannot create snapshot: " + utf8_text(path);
         return false;
     }
     output << "P6\n" << width << ' ' << height << "\n255\n";
     for (int row = 0; row < height; ++row)
         output.write(reinterpret_cast<const char*>(pixels + row * pitch), width * 3);
     if (!output) {
-        error = "cannot write snapshot: " + path.string();
+        error = "cannot write snapshot: " + utf8_text(path);
         return false;
     }
     return true;
@@ -234,7 +244,7 @@ OpenPlayerResult IntroPlayer::open(const std::filesystem::path& path, const Play
     }
     implementation->file.open(path, std::ios::binary);
     if (!implementation->file)
-        return failure("cannot open intro movie: " + path.string());
+        return failure("cannot open intro movie: " + utf8_text(path));
     implementation->reader = std::move(container.reader);
     IntroPlayer player(std::move(implementation));
     return OpenPlayerResult{std::optional<IntroPlayer>(std::move(player)), {}};

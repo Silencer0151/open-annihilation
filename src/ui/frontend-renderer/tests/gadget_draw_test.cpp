@@ -11,12 +11,14 @@
 #include "oa/present/game_text.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <iostream>
 #include <memory>
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -363,6 +365,125 @@ void test_gadget_text_game_runs() {
     oa::present::set_game_text_hooks({});
 }
 
+/// A line of characters 3 pixels wide, each 2 rows above the baseline,
+/// over a line one row deeper that the letters leave clear.
+std::shared_ptr<const oa::present::TextMask> letters_over_a_clear_row(std::string_view text) {
+    auto mask = std::make_shared<oa::present::TextMask>();
+    int32_t pen = 0;
+    for (std::size_t at = 0; at < text.size();) {
+        const auto sequence = oa::present::utf8_sequence(text.substr(at));
+        at += sequence.bytes != 0 ? sequence.bytes : 1;
+        pen += 3;
+        mask->character_ends.push_back(pen);
+    }
+    mask->width = pen;
+    mask->height = 3;
+    mask->baseline = 2;
+    mask->advance = pen;
+    mask->alpha.assign(static_cast<std::size_t>(pen) * 3U, 0);
+    std::fill(mask->alpha.begin(), mask->alpha.begin() + pen * 2, uint8_t{255});
+    return mask;
+}
+
+// The input method's composition after a line is drawn wholly in the modern
+// fonts, its spelling's Latin letters among them, and underlined in its
+// colour on the line's lowest row; as much of it as fits the clip is drawn.
+void test_composition_is_underlined() {
+    namespace draw = oa::ui::frontend_renderer;
+    GameTextAnswers answers;
+    answers.settings.style = {false, false, false, false, oa::present::default_text_size};
+    answers.settings.utf8 = true;
+    oa::present::GameTextHooks hooks{};
+    hooks.context = &answers;
+    hooks.settings = [](void* context) { return static_cast<GameTextAnswers*>(context)->settings; };
+    hooks.draw = [](void*, std::string_view text, oa::present::TextFace, int32_t, int32_t)
+        -> std::shared_ptr<const oa::present::TextMask> { return letters_over_a_clear_row(text); };
+    oa::present::set_game_text_hooks(hooks);
+    const std::array<uint8_t, 3> ink{200, 100, 50};
+    oa::PaletteBytes palette{};
+    std::copy(ink.begin(), ink.end(), palette.begin() + 4);
+    // A font with no glyphs: its baseline is the pen row.
+    const oa::formats::fnt::Font font{};
+    draw::Surface surface;
+    surface.width = 20;
+    surface.height = 6;
+    const auto pixel = [&surface](int32_t x, int32_t y) {
+        const auto at = (static_cast<std::size_t>(y) * surface.width + x) * 3U;
+        return std::array<uint8_t, 3>{surface.rgb[at], surface.rgb[at + 1], surface.rgb[at + 2]};
+    };
+    surface.rgb.assign(20U * 6U * 3U, 0);
+    const int32_t pen =
+        draw::draw_fnt_composition(surface, font, "ab", 2, 3, ink, palette, {0, 0, 19, 5});
+    require(pen == 8, "composition: the pen moves past it");
+    require(pixel(2, 1) == ink && pixel(7, 2) == ink, "composition: its letters are drawn");
+    require(
+        pixel(2, 3) == ink && pixel(7, 3) == ink && pixel(1, 3) != ink && pixel(8, 3) != ink,
+        "composition: it is underlined under its letters on the line's lowest row"
+    );
+    surface.rgb.assign(20U * 6U * 3U, 0);
+    require(
+        draw::draw_fnt_composition(surface, font, "ab", 2, 3, ink, palette, {0, 0, 5, 5}) == 5,
+        "composition: as much as fits is drawn"
+    );
+    require(pixel(4, 3) == ink && pixel(5, 3) != ink, "composition: its underline keeps to it");
+    oa::present::set_game_text_hooks({});
+}
+
+// Modern letters that stand taller over the baseline than an FNT font's own
+// rise above the pen row by the rows they stand taller, and lowered by
+// those rows they keep below it; text the font draws itself does not rise.
+void test_fnt_game_text_rise() {
+    namespace draw = oa::ui::frontend_renderer;
+    GameTextAnswers answers;
+    answers.settings.style = {false, false, false, false, oa::present::default_text_size};
+    answers.settings.utf8 = true;
+    oa::present::GameTextHooks hooks{};
+    hooks.context = &answers;
+    hooks.settings = [](void* context) { return static_cast<GameTextAnswers*>(context)->settings; };
+    hooks.draw = [](void*, std::string_view text, oa::present::TextFace, int32_t, int32_t)
+        -> std::shared_ptr<const oa::present::TextMask> { return letters_over_a_clear_row(text); };
+    oa::present::set_game_text_hooks(hooks);
+    const std::array<uint8_t, 3> ink{200, 100, 50};
+    oa::PaletteBytes palette{};
+    std::copy(ink.begin(), ink.end(), palette.begin() + 4);
+    // A font with no glyphs: its baseline is the pen row.
+    const oa::formats::fnt::Font font{};
+    const std::string_view hanzi = "\xE4\xB8\xAD";
+    require(draw::fnt_game_text_rise(font, hanzi, true) == 2, "rise: the letters stand 2 rows");
+    require(draw::fnt_game_text_rise(font, "ab", false) == 0, "rise: the font's own text");
+    require(draw::fnt_game_text_rise(font, "", true) == 0, "rise: no text");
+    draw::Surface surface;
+    surface.width = 6;
+    surface.height = 6;
+    surface.rgb.assign(6U * 6U * 3U, 0);
+    const auto row_inked = [&surface, &ink](int32_t y) {
+        for (int32_t x = 0; x < 6; ++x) {
+            const auto at = (static_cast<std::size_t>(y) * surface.width + x) * 3U;
+            if (std::array<uint8_t, 3>{surface.rgb[at], surface.rgb[at + 1], surface.rgb[at + 2]} ==
+                ink)
+                return true;
+        }
+        return false;
+    };
+    const int32_t pen_row = 1;
+    std::ignore = draw::draw_fnt_game_text(
+        surface,
+        font,
+        hanzi,
+        1,
+        pen_row + draw::fnt_game_text_rise(font, hanzi, true),
+        ink,
+        palette,
+        {0, 0, 5, 5},
+        true
+    );
+    require(
+        !row_inked(pen_row - 1) && row_inked(pen_row) && row_inked(pen_row + 1),
+        "rise: lowered by it, the letters keep below the pen row from it down"
+    );
+    oa::present::set_game_text_hooks({});
+}
+
 } // namespace
 
 int main() {
@@ -415,6 +536,8 @@ int main() {
     }
     test_gadget_text();
     test_gadget_text_game_runs();
+    test_composition_is_underlined();
+    test_fnt_game_text_rise();
     test_gui_font();
     test_forget_gui_font_characters();
     return failures == 0 ? 0 : 1;

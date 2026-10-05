@@ -8,6 +8,7 @@
 
 #include "oa/core/game_state.h"
 #include "oa/base/text.hpp"
+#include "oa/data/languages/translation.hpp"
 
 #include <cctype>
 #include <cstdint>
@@ -15,6 +16,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <span>
+#include <string_view>
 
 namespace oa::data::campaign {
 namespace {
@@ -46,6 +48,20 @@ void copy_bounded(char* out, std::size_t capacity, const char* text) noexcept {
         ++length;
     std::memcpy(out, text, length);
     std::memset(out + length, 0, capacity - length);
+}
+
+/// Copies a text as copy_bounded does, cutting it between whole UTF-8
+/// characters (oa::base::text::whole_characters).
+///
+/// @param[out] out the field
+/// @param capacity its bytes, its NUL included
+/// @param text the text
+void copy_whole_characters(char* out, std::size_t capacity, std::string_view text) noexcept {
+    if (capacity == 0)
+        return;
+    const std::size_t kept = oa::base::text::whole_characters(text, capacity - 1);
+    std::memcpy(out, text.data(), kept);
+    std::memset(out + kept, 0, capacity - kept);
 }
 
 bool prefix_nocase(const char* text, const char* prefix, std::size_t length) noexcept {
@@ -180,16 +196,47 @@ void resolve_path(
     set_path(file, files, slot, path);
 }
 
-/// Frees the old briefing text and reads the file the briefing path names.
+/// Frees the old briefing text and reads the briefing: a mod's language
+/// pack's in the language, else the game data's in the language, else the
+/// player's or the engine's pack's in it, else the file the briefing path
+/// names (oa/data/languages/translation.hpp).
 ///
 /// @param[in,out] file campaign object
 /// @param files file services
-void load_briefing_text(CampaignFile* file, const CampaignFiles* files) {
+/// @param name the briefing's name, as the mission names it
+void load_briefing_text(CampaignFile* file, const CampaignFiles* files, const char* name) {
     std::free(file->briefing_text);
     file->briefing_text = nullptr;
     const char* path = campaign_path(file, CampaignPath::briefing);
     if (path == nullptr)
         return;
+    char language_path[kCampaignPathBytes]{};
+    if (files != nullptr && files->language != nullptr && files->language[0] != '\0' &&
+        name != nullptr && name[0] != '\0') {
+        // A path too long for the buffer names no language's briefing.
+        const int written = std::snprintf(
+            language_path, sizeof language_path, "%s-%s/%s", kBriefsDirectory, files->language, name
+        );
+        if (written > 0 && static_cast<std::size_t>(written) < sizeof language_path)
+            replace_extension(language_path, sizeof language_path, "TXT");
+        else
+            language_path[0] = '\0';
+    }
+    std::string_view pack_text{};
+    if (language_path[0] != '\0') {
+        pack_text = oa::data::languages::installed_language_file(language_path, true);
+        if (pack_text.data() == nullptr && std::strcmp(path, language_path) != 0)
+            pack_text = oa::data::languages::installed_language_file(language_path, false);
+    }
+    if (pack_text.data() != nullptr) {
+        auto* text = static_cast<char*>(std::malloc(pack_text.size() + 1));
+        if (text == nullptr)
+            return;
+        std::memcpy(text, pack_text.data(), pack_text.size());
+        text[pack_text.size()] = '\0';
+        file->briefing_text = text;
+        return;
+    }
     const int32_t size = file_size(files, path);
     if (size <= 0 || static_cast<uint32_t>(size) > oa::formats::tdf::max_input_bytes ||
         files->read == nullptr)
@@ -495,14 +542,30 @@ bool campaign_mission_title(
     if (capacity == 0 || file->campaign_name[0] == '\0' ||
         !select_mission_section(&file->campaign, index))
         return false;
-    (void)language_string(
-        oa::formats::tdf::cursor(&file->campaign),
-        language,
-        "missionname",
-        out,
-        capacity,
-        kUnnamedMission
-    );
+    const oa::formats::tdf::Block* mission = oa::formats::tdf::cursor(&file->campaign);
+    // The game data's own name in the language, then the language packs'
+    // around it (oa/data/languages/translation.hpp).
+    char own[kCampaignNameBytes]{};
+    char prefixed[0x100];
+    const bool has_own =
+        language != nullptr && language[0] != '\0' &&
+        std::snprintf(prefixed, sizeof prefixed, "%smissionname", language) <
+            static_cast<int>(sizeof prefixed) &&
+        oa::formats::tdf::get_string(mission, prefixed, own, sizeof own, nullptr) && own[0] != '\0';
+    char mission_file[kCampaignPathBytes]{};
+    if (language != nullptr && language[0] != '\0' &&
+        oa::formats::tdf::get_string(
+            mission, "missionfile", mission_file, sizeof mission_file, ""
+        ) &&
+        mission_file[0] != '\0')
+        if (const char* text = oa::data::languages::installed_mission_text(
+                mission_file, "missionname", has_own ? own : nullptr
+            );
+            text != nullptr && text[0] != '\0') {
+            copy_whole_characters(out, capacity, text);
+            return true;
+        }
+    (void)language_string(mission, language, "missionname", out, capacity, kUnnamedMission);
     return true;
 }
 
@@ -688,7 +751,7 @@ bool campaign_load_mission_info(CampaignFile* file, const CampaignEnv* env, cons
     char value[kCampaignPathBytes];
     language_string(header, language, "brief", value, sizeof(value), "");
     resolve_path(file, files, CampaignPath::briefing, kBriefsDirectory, value, "TXT");
-    load_briefing_text(file, files);
+    load_briefing_text(file, files, value);
     language_string(header, language, "narration", value, sizeof(value), "");
     resolve_path(file, files, CampaignPath::narration, kBriefsDirectory, value, "WAV");
     language_string(header, language, "missionhint", value, sizeof(value), "");

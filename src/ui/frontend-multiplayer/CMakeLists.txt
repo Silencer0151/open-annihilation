@@ -18,6 +18,7 @@ target_link_libraries(oa-ui-frontend-multiplayer
   PUBLIC oa-core-types oa-ui-gui-layout oa-ui-gui-input oa-netgame oa-ui-screen-registry oa-options
     oa-data-campaign oa-data-match-rules
   PRIVATE oa-platform-shims oa-base-text oa-base-bytes oa-ui-frontend-renderer oa-ui-decoded oa-formats-hpi oa-data-defs-assets oa-formats-tnt oa-data-unit-definitions
+    oa-formats-tdf
     oa-data-campaign-assets oa-data-defs oa-data-languages oa-netgame-sync oa-present oa-present-model
     oa-base-game-loop oa-sim-mission-units)
 

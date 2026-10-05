@@ -380,7 +380,11 @@ void draw_button_text(
     if (fields == nullptr || fields->text.empty())
         return;
     auto text = staged_caption(fields->text, selected_stage);
-    if (text.data() == fields->text.data())
+    const bool fitted = text.data() == fields->text.data();
+    const auto translated = translated_stage_caption(*fields, selected_stage);
+    if (translated)
+        text = *translated;
+    if (fitted)
         text = fitted_caption(selected_font, text, record_width - caption_margin, game_text);
     if (text.empty())
         return;
@@ -408,7 +412,8 @@ void draw_button_text(
     const int y =
         gadget.common.y + (rectangle_span_y - static_cast<int>(text_height)) / 2 + depressed_offset;
     // Game text, or text with characters past ASCII, goes through the game
-    // text's runs; its caption has no quick key underlined.
+    // text's runs, the modern fonts' letters in the font's own colour; its
+    // caption has no quick key underlined.
     if (needs_text_runs(text, game_text)) {
         std::ignore = draw_fnt_game_text(
             surface,
@@ -416,7 +421,7 @@ void draw_button_text(
             text,
             x,
             y,
-            palette_rgb(active_palette, formats::fnt::foreground_index),
+            palette_rgb(active_palette, fnt_font_ink(selected_font, active_palette)),
             active_palette,
             {0,
              0,
@@ -529,8 +534,10 @@ void draw_clipped_text(
     if (text.empty() || clip.left > clip.right || clip.top > clip.bottom)
         return;
     if (needs_text_runs(text, game_text)) {
-        const uint8_t index = light_row != nullptr ? light_row[formats::fnt::foreground_index]
-                                                   : formats::fnt::foreground_index;
+        // The modern fonts' letters take the font's own colour, lit as its
+        // glyphs are.
+        const uint8_t ink = fnt_font_ink(selected_font, active_palette);
+        const uint8_t index = light_row != nullptr ? light_row[ink] : ink;
         std::ignore = draw_fnt_game_text(
             surface,
             selected_font,
@@ -1020,6 +1027,13 @@ std::string_view staged_caption(std::string_view text, std::size_t stage) noexce
         text.remove_prefix(separator + 1);
     }
     return text.substr(0, text.find('|'));
+}
+
+std::optional<std::string>
+translated_stage_caption(const ui::gui_layout::ButtonFields& button, std::size_t stage) {
+    if (button.stages == 0)
+        return std::nullopt;
+    return data::languages::translation_of(staged_caption(button.text, stage));
 }
 
 void bind_screen_buttons(ScreenResources& resources, std::size_t first) {

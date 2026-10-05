@@ -427,9 +427,21 @@ int32_t draw_face_text(
             pen = renderer::draw_text(target, placement, font.font, run.text, pen, pen_row, color);
             continue;
         }
-        const auto layers = present::modern_text(run.text, font.face, scale, run.size, false);
+        auto layers = present::modern_text(run.text, font.face, scale, run.size, false);
         if (!layers || placement.scale < 1)
             continue;
+        // Letters no lighter than their outline, as on the accent's light
+        // face, are drawn bare: the outline and the shadow would only
+        // thicken them into a blot there.
+        if (std::equal(
+                color.begin(),
+                color.end(),
+                present::text_outline_color.begin(),
+                [](uint8_t letter, uint8_t outline) { return letter <= outline; }
+            )) {
+            std::fill(layers->outline.begin(), layers->outline.end(), uint8_t{0});
+            std::fill(layers->shadow.begin(), layers->shadow.end(), uint8_t{0});
+        }
         auto canvas = present::rgb_canvas(
             target.rgb, static_cast<int32_t>(target.width), static_cast<int32_t>(target.height), {}
         );
@@ -1781,7 +1793,7 @@ void draw_section(
                 target,
                 in_view,
                 row.control_area,
-                layout::switch_on(dialog.chosen, row.setting),
+                layout::switch_on(dialog.chosen, row.setting) || row.lock == Lock::set_by_language,
                 hovered,
                 locked,
                 fonts

@@ -15,6 +15,10 @@
 namespace oa::sim::messages {
 
 inline constexpr uint32_t text_bytes = 0x40;
+/// The most bytes a formatted chat line ("<Name> text") holds, its end
+/// included, where the hooks let it grow past the 200 of 3.1c's
+/// (Hooks::shared_chat_line_bytes).
+inline constexpr size_t most_chat_line_bytes = 0x100;
 // Sender value for lines that come from no player (no arrival sound).
 inline constexpr uint8_t sender_none = 10;
 // Line kinds (low nibble of the last byte of a line).
@@ -103,6 +107,16 @@ struct Hooks {
     /// kill_lead_message, shown whatever the language; null, or a null
     /// return, takes kill_lead_message through `translate`.
     const char* (*kill_lead_text)(void* context){};
+    /// Gives the lines a chat line share_chat just shared went out as, when
+    /// it went out as more than one (Unicode multiplayer chat cuts a long
+    /// line into "<Name> part" records): the line at `index`, or null past
+    /// the last. Null, or null at index 0, shows the line as one.
+    const char* (*shared_chat_line)(void* context, const char* line, std::size_t index){};
+    /// Gives the bytes a formatted chat line holds, its end included, where
+    /// it may go out as more than one record (Unicode multiplayer chat cuts
+    /// a long line into up to four "<Name> part" records): at most
+    /// most_chat_line_bytes. Null, or 0, keeps 3.1c's 200.
+    std::size_t (*shared_chat_line_bytes)(void* context){};
 };
 
 /// Returns the number of lines the ring keeps (Game.text_lines).
@@ -233,8 +247,11 @@ void post_kill_lead(World& world, const Player& leader, int16_t score, const Hoo
 
 /// Formats a chat line, hands it to the other players and adds it to the log.
 ///
-/// The line is "<name->target> text". It is not shared in the local-only chat mode, and
-/// is recorded in a multiplayer game unless sent to chosen players or allies.
+/// The line is "<name->target> text", cut between whole UTF-8 characters to the 199
+/// bytes 3.1c's line holds, or to the bytes Hooks::shared_chat_line_bytes gives. It is
+/// not shared in the local-only chat mode, and is recorded in a multiplayer game unless
+/// sent to chosen players or allies. The log shows the lines a shared line went out as
+/// (Hooks::shared_chat_line), else the line.
 ///
 /// @param[in,out] world message log and chat mode
 /// @param speaker player speaking

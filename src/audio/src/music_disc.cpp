@@ -17,6 +17,16 @@ constexpr const char* track_extensions[] = {".mp3", ".ogg", ".wav", ".flac"};
 constexpr uint32_t fnv_offset = 2166136261U;
 constexpr uint32_t fnv_prime = 16777619U;
 
+/// Returns a path's UTF-8 spelling: a name outside the system's code page
+/// has no narrow spelling on Windows.
+///
+/// @param path the path
+/// @return its UTF-8 spelling
+std::string utf8_text(const std::filesystem::path& path) {
+    const auto text = path.u8string();
+    return {text.begin(), text.end()};
+}
+
 std::string lower(std::string text) {
     std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) {
         return static_cast<char>(std::tolower(c));
@@ -26,11 +36,11 @@ std::string lower(std::string text) {
 
 // Parses "<n>.<ext>" with a supported extension; 0 when not a track file.
 int32_t track_number(const std::filesystem::path& file) {
-    const std::string extension = lower(file.extension().string());
+    const std::string extension = lower(utf8_text(file.extension()));
     if (std::find(std::begin(track_extensions), std::end(track_extensions), extension) ==
         std::end(track_extensions))
         return 0;
-    const std::string stem = file.stem().string();
+    const std::string stem = utf8_text(file.stem());
     if (stem.empty() || stem.size() > 2)
         return 0;
     int32_t number = 0;
@@ -69,7 +79,7 @@ std::vector<std::filesystem::path> mp3_files(const std::filesystem::path& direct
     std::error_code error;
     for (std::filesystem::directory_iterator it(directory, error), end; !error && it != end;
          it.increment(error))
-        if (it->is_regular_file(error) && lower(it->path().extension().string()) == ".mp3")
+        if (it->is_regular_file(error) && lower(utf8_text(it->path().extension())) == ".mp3")
             files.push_back(it->path());
     return files;
 }
@@ -88,7 +98,7 @@ std::filesystem::path music_disc_directory(const std::filesystem::path& game_dir
     std::error_code error;
     for (std::filesystem::directory_iterator it(game_dir, error), end; !error && it != end;
          it.increment(error)) {
-        if (lower(it->path().filename().string()) == music_directory_name &&
+        if (lower(utf8_text(it->path().filename())) == music_directory_name &&
             it->is_directory(error))
             return it->path();
     }
@@ -109,7 +119,7 @@ MusicDisc music_disc_scan(const std::filesystem::path& directory) {
             continue;
         auto& slot = found[static_cast<std::size_t>(number)];
         // Prefer the first extension in the list when several exist.
-        if (slot.empty() || lower(it->path().extension().string()) == track_extensions[0])
+        if (slot.empty() || lower(utf8_text(it->path().extension())) == track_extensions[0])
             slot = it->path();
     }
     int32_t last = music_disc_first_audio_track - 1;
@@ -131,7 +141,7 @@ MusicDisc music_disc_scan_numbered(const std::filesystem::path& directory) {
         // Only the number's own spelling: 01.mp3 is not track 1.
         const int32_t number = track_number(file.filename());
         if (number >= 1 && number <= music_disc_max_tracks &&
-            file.stem().string() == std::to_string(number))
+            utf8_text(file.stem()) == std::to_string(number))
             found[static_cast<std::size_t>(number)] = file;
     }
     int32_t last = 0;
@@ -152,9 +162,9 @@ MusicDisc music_disc_scan_folder(const std::filesystem::path& directory) {
     disc.directory = directory;
     auto files = mp3_files(directory);
     std::sort(files.begin(), files.end(), [](const auto& a, const auto& b) {
-        const auto left = upper(a.filename().string());
-        const auto right = upper(b.filename().string());
-        return left != right ? left < right : a.filename().string() < b.filename().string();
+        const auto left = upper(utf8_text(a.filename()));
+        const auto right = upper(utf8_text(b.filename()));
+        return left != right ? left < right : utf8_text(a.filename()) < utf8_text(b.filename());
     });
     const auto playable =
         static_cast<std::size_t>(music_disc_max_tracks - music_disc_first_audio_track + 1);

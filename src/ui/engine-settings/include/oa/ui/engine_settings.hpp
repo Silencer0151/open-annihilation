@@ -71,6 +71,8 @@ inline constexpr std::string_view text_outline = "open-annihilation.text-outline
 inline constexpr std::string_view text_shadow = "open-annihilation.text-shadow";
 /// 1 or 0 (EngineSettings::text_background).
 inline constexpr std::string_view text_background = "open-annihilation.text-background";
+/// 1 or 0 (EngineSettings::unicode_chat).
+inline constexpr std::string_view unicode_chat = "open-annihilation.unicode-chat";
 /// Percent of the game fonts' sizes, decimal (EngineSettings::text_size).
 inline constexpr std::string_view text_size = "open-annihilation.text-size";
 /// "system" for the operating system's choice, or a language's BCP-47 tag,
@@ -469,6 +471,13 @@ struct EngineSettings {
     bool text_outline{true}; ///< modern text has a dark outline round each letter
     bool text_shadow{true};  ///< modern text casts a dark shadow
     bool text_background{};  ///< each line of modern text is drawn on a shaded box
+    /// Multiplayer chat is sent and read as UTF-8, in any language, to the
+    /// players' machines that read it, and as the code page with '?' for
+    /// the letters it lacks to the others. Off by default; a language pack
+    /// that asks for it turns it on while its language is shown. It changes
+    /// only how chat lines are written, never the simulation or a saved
+    /// game, so players with different settings play together.
+    bool unicode_chat{};
     /// The size of game text in the modern fonts, in percent of the game
     /// fonts' sizes, lowest_text_size to highest_text_size; the game's own
     /// fonts keep their sizes.
@@ -845,6 +854,9 @@ enum class Lock : uint8_t {
     /// The platform opens every window at the display's own pixel density,
     /// so the setting is always on.
     always_on,
+    /// The language shown needs it: its text draws in the modern fonts, or
+    /// its pack asks for multiplayer chat in UTF-8. The setting shows On.
+    set_by_language,
 };
 
 /// The game the dialog opens over.
@@ -891,6 +903,12 @@ struct Locks {
     /// shows Use modern fonts for game text Off.
     Lock text_size{};
     Lock language{}; ///< Language
+    /// Use modern fonts for game text: the dialog itself locks it
+    /// set_by_language while the language it shows draws in them.
+    Lock modern_fonts{};
+    /// Enable Unicode Multiplayer Chat: the dialog itself locks it
+    /// set_by_language while a pack of the language it shows asks for it.
+    Lock unicode_chat{};
     /// Mod: locked command_line, the stored choice stays shown and plays
     /// from a start without the flag that set it aside; locked in_game, the
     /// row shows the mod the game plays, and the main menu chooses another.

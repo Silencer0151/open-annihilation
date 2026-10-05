@@ -7,6 +7,7 @@
 // (game_files_screen.hpp). The interface's language is chosen here too for
 // the screen, from the preferences file, before the Runtime starts.
 #include "game_files_screen.hpp"
+#include "language_packs.hpp"
 
 #include "oa/data/languages.hpp"
 #include "oa/data/languages/interface_text.hpp"
@@ -42,7 +43,7 @@ namespace renderer = oa::ui::frontend_renderer;
 namespace text_font = oa::platform::text_font;
 
 /// The folder beside the game's other files that holds interface catalogue files.
-constexpr std::string_view catalogue_folder = "languages";
+constexpr std::string_view catalogue_folder = engine_languages_folder;
 /// A catalogue file's extension, matched without regard to case.
 constexpr std::string_view catalogue_extension = ".tdf";
 /// The most drawn lines the dialog's text hooks keep before they start again.
@@ -91,7 +92,8 @@ languages::InterfaceText& screen_catalogue() {
     });
 }
 
-/// Reads the catalogue files beside the game once.
+/// Reads the catalogue files beside the game once, and the engine's
+/// language packs' interface.tdf after them.
 void read_screen_catalogue() {
     static bool read = false;
     if (read)
@@ -121,6 +123,11 @@ void read_screen_catalogue() {
             std::cerr << "open-annihilation: the interface catalogue " << path_to_utf8(file)
                       << " was not read" << (failure.empty() ? "" : ": ") << failure << '\n';
     }
+    // The engine's language packs' own words, read after the files beside
+    // them; the screen shows before any game data is found, so its words
+    // come from the packs alone, and their other tables are let go.
+    std::vector<std::unique_ptr<LoadedLanguagePack>> packs;
+    read_language_packs(folder, packs, &screen_catalogue());
 }
 
 /// Loads the preferences file, empty when it is missing or cannot be read.

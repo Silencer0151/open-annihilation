@@ -38,6 +38,10 @@ Every document in the repository, by what you want to do.
   Total Annihilation files onto an iPhone or an iPad: its three routes,
   stopping and continuing a copy, Settings › Game files and managing the
   files, and the `--check-game-files` check.
+- [typing.md](typing.md): typing in any script, Chinese among them, in
+  the chat lines, a saved game's name and the whiteboard: input methods,
+  commands, saves and recordings named in any script, the iPhone and iPad
+  keyboard and the Steam Deck's.
 - [languages.md](languages.md): the language the game shows its text in:
   how it is chosen (3.1c's command line, the Language setting, the
   operating system), what the game data translates in German, French,

@@ -36,6 +36,17 @@ class MusicDecoder::Source {
 };
 
 namespace {
+
+/// Returns a path's UTF-8 spelling: a name outside the system's code page
+/// has no narrow spelling on Windows.
+///
+/// @param path the path
+/// @return its UTF-8 spelling
+std::string utf8_text(const std::filesystem::path& path) {
+    const auto text = path.u8string();
+    return {text.begin(), text.end()};
+}
+
 using base::bytes::load_le16;
 using base::bytes::load_le32;
 
@@ -613,13 +624,13 @@ bool MusicDecoder::open(const std::filesystem::path& path, std::string& error) {
     // system allows opens.
     File file(platform::open_file(path, "rb"));
     if (file.get() == nullptr) {
-        error = "cannot open " + path.string();
+        error = "cannot open " + utf8_text(path);
         return false;
     }
     std::array<uint8_t, signature_bytes> signature{};
     const std::size_t got = std::fread(signature.data(), 1, signature.size(), file.get());
     if (std::fseek(file.get(), 0, SEEK_SET) != 0) {
-        error = "cannot read " + path.string();
+        error = "cannot read " + utf8_text(path);
         return false;
     }
     std::string reason;
@@ -640,11 +651,11 @@ bool MusicDecoder::open(const std::filesystem::path& path, std::string& error) {
         break;
     }
     if (source == nullptr) {
-        error = reason + ": " + path.string();
+        error = reason + ": " + utf8_text(path);
         return false;
     }
     if (!resampler_.configure(source->rate, music_output_rate, music_output_channels)) {
-        error = "cannot convert the sample rate of " + path.string();
+        error = "cannot convert the sample rate of " + utf8_text(path);
         return false;
     }
     source_ = std::move(source);

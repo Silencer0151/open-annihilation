@@ -199,8 +199,8 @@ The Language section says which language the game's text is shown in and
 how that text is drawn. None of these changes the game itself, so no game
 locks them, and players in different languages play together.
 
-- **Language**: System default, English, Deutsch, Español, Français or
-  Italiano, each named in itself. System default, the default, follows your
+- **Language**: System default, English, Deutsch, Español, Français,
+  Italiano or 简体中文 (Simplified Chinese), each named in itself. System default, the default, follows your
   operating system's preferred languages, and the list says which it chose,
   as "System default (English)". The game's own text and unit names show
   in that language wherever the game data has them; whatever it leaves
@@ -208,11 +208,14 @@ locks them, and players in different languages play together.
   every frame, and in screens and panels as they open again. Choose a
   language to play in one other than your system's. 3.1c's own command
   line, such as `open-annihilation german`, decides it for the run.
-  [Languages](languages.md) says what the game data translates.
+  [Languages](languages.md) says what the game data and the language packs
+  translate.
 - **Use modern fonts for game text**, On by default. The game's text is
   drawn in modern fonts, which hold the letters of many languages and stay
   sharp at any size, in place of the game's own 8-bit fonts. Turn it off
-  for the game's original look.
+  for the game's original look. Simplified Chinese is drawn only in them:
+  choosing it turns the switch On, and it stays On, locked, "Set by the
+  language", while Simplified Chinese is chosen.
 - **Text size**, 50% to 300% of the game fonts' sizes in steps of 10%, 80%
   by default. It sizes the modern fonts, so it is locked while they are
   off: the game's own fonts have fixed sizes. Raise it on a large or dense
@@ -222,6 +225,17 @@ locks them, and players in different languages play together.
 - **Font shadow**, On by default: a dark shadow under the modern text.
 - **Game text background**, Off by default: a shaded box behind each line
   of game text.
+- **Enable Unicode Multiplayer Chat**, Off by default. Chat lines in a
+  shared game are written in UTF-8, so that players can chat in any
+  language: the machines of players who have it on read them as written,
+  and the others get each letter their code page lacks as `?`. Lines that
+  start with `+` or `.` stay commands, as in 3.1c. A language written
+  outside the code page, as Simplified Chinese is, or whose pack asks for
+  it, turns it On, locked, "Set by the language", while that language is
+  chosen, and so does a mod profile
+  that sets [ui.text-rendering](mods/standard-hacks/ui.text-rendering.md)
+  `unicode`. It changes no game, so players with it on and off play
+  together.
 
 The last three keep text readable over a busy battlefield. Turn on Game
 text background where the text still gets lost; turn the outline and

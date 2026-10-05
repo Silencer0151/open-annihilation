@@ -587,6 +587,9 @@ void Runtime::dispatch_event(SDL_Event& event, bool& running) {
     // The renderer's own events reach no screen.
     if (take_render_event(event))
         return;
+    // While an input method composes, the keys it uses are its own.
+    if (take_composition_event(event))
+        return;
     // Alt+Enter switches between full screen and a window on every screen,
     // before the screen or a screen package sees the key; its repeats reach
     // no screen either, so a held Alt+Enter never opens the chat line or
@@ -999,6 +1002,9 @@ void Runtime::load(Screen screen) {
             layout, "", desc->assets.palette, desc->assets.sprites, desc->assets.shared_sprites
         };
         resources_ = renderer::load_screen(assets_, names);
+        // The panel's pictures in the shown language.
+        caption_gaf_pictures(names.sprites, resources_.sprites);
+        caption_gaf_pictures(names.shared_sprites, resources_.shared_sprites);
         // A panel's first draw binds its scroll bars: at once for a panel
         // drawn as it loads, after its setup for NEWGAME.GUI, which loads
         // undrawn and is set up first.

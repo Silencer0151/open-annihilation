@@ -90,7 +90,7 @@ if(TARGET oa-game)
       oa-app-netgame-wire-rules
       oa-app-netgame-launch-binding oa-ui-frontend-multiplayer oa-netgame-match-runtime oa-session-demo
       oa-netgame-console oa-netgame-messages
-    PRIVATE oa::extension-sdk oa-app-view-rules)
+    PRIVATE oa::extension-sdk oa-app-view-rules oa-base-text oa-present)
   # Network play's API for the extensions built on it: an extension library
   # that links it links network play's extension too, so the engine lists
   # that extension after network play's.
@@ -156,6 +156,15 @@ if(BUILD_TESTING AND TARGET oa-game AND IS_DIRECTORY "${OA_GAME_DIR}")
     --skip-intro --mute --headless-check --net-loopback-check 300 --net-loopback-watcher
     --preferences-file "${oa_netgame_checks}/net-loopback-watcher.conf")
   set_tests_properties(native-net-loopback-watcher PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
+  # With Simplified Chinese shown, whose pack turns Unicode chat on, each
+  # machine's setup block says it reads chat in UTF-8.
+  add_test(NAME native-net-loopback-unicode-chat COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+    --skip-intro --mute --headless-check --net-loopback-check 300
+    --preferences-file "${oa_netgame_checks}/net-loopback-unicode-chat.conf" Chinese)
+  set_tests_properties(native-net-loopback-unicode-chat PROPERTIES
+    TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+    PASS_REGULAR_EXPRESSION "Unicode chat on, setup blocks saying UTF-8 [1-9][0-9]* / [1-9]"
+    FAIL_REGULAR_EXPRESSION "its commander went too|check failed|FAILED")
   # Under a profile that presents the recorder and turns ui.whiteboard on
   # over the installed game, the host's whiteboard marks reach the joiner
   # while the host allies it, with the marker echoed to its log, and not

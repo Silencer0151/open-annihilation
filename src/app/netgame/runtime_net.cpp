@@ -14,6 +14,7 @@
 #include "oa/app/check_host.hpp"
 #include "oa/app/game_directory.hpp"
 #include "oa/app/user_folder.hpp"
+#include "demo_state.hpp"
 #include "net_options.hpp"
 #include "net_state.hpp"
 #include "traffic_overlay.hpp"
@@ -24,8 +25,11 @@
 #include "oa/netgame/match/net_match.hpp"
 #include "oa/netgame/match/session_lobby.hpp"
 #include "oa/netgame/records.hpp"
+#include "oa/netgame/unicode_chat.hpp"
 #include "oa/app/netgame/extension_api.hpp"
 #include "oa/base/sha256.hpp"
+#include "oa/base/text.hpp"
+#include "oa/present/game_text.hpp"
 #include "oa/sim/ai.hpp"
 #include "oa/sim/match_runtime.hpp"
 #include "oa/sim/messages.hpp"
@@ -840,8 +844,9 @@ struct NetworkPlay::NetHost {
                 state.net.get(), &profile->rules, runtime.map_places_neutral_units()
             );
         // The battle room's recorder session goes on in the match, its speed
-        // lock with it.
+        // lock with it, and the machine's chat with it.
         state.net->recorder = lobby.recorder;
+        state.net->unicode_chat = play.unicode_chat();
         uint8_t slowest = 0;
         uint8_t fastest = 0;
         const bool locked = nm::net_match_speed_range(state.net.get(), &slowest, &fastest);
@@ -1006,7 +1011,11 @@ struct NetworkPlay::NetHost {
         const bool recorder =
             state.net->rules.recorder_protocol != oa::netgame::recorder_protocol_plain;
         const auto& forced = net_options().net_record;
-        const std::string asked = state.net->recorder.record_name;
+        // .record's name is game text, which the file's name holds as the
+        // characters it stands for.
+        const std::string asked = oa::present::decode_game_text(
+            state.net->recorder.record_name, runtime.game_text_utf8()
+        );
         if (!recorder && forced.empty())
             return;
         auto& world = *state.net->world;
@@ -1027,6 +1036,14 @@ struct NetworkPlay::NetHost {
             entry.player_id = player.player_id;
             entry.name = std::string(field_text(player.name, sizeof player.name));
             entry.info = world.player_info[slot];
+            // The recording keeps a player's lines in UTF-8 when this
+            // machine sent or heard them so (net_match_say).
+            const bool here = player.status != OA_PLAYER_STATUS_MIRRORED;
+            auto* block = reinterpret_cast<uint8_t*>(&entry.info);
+            oa::netgame::mark_unicode_chat(
+                block,
+                state.net->unicode_chat && (here || oa::netgame::announces_unicode_chat(block))
+            );
             entry.team = player.team;
             setup.players.push_back(std::move(entry));
         };
@@ -1100,8 +1117,8 @@ struct NetworkPlay::NetHost {
         // An automatic recording never replaces another: the second of one
         // minute takes " (2)", and so on.
         if (net_options().net_record.empty()) {
-            const auto stem = state.recording_path.stem().string();
-            const auto extension = state.recording_path.extension().string();
+            const auto stem = path_to_utf8(state.recording_path.stem());
+            const auto extension = path_to_utf8(state.recording_path.extension());
             for (int copy = 2; std::filesystem::exists(state.recording_path, error); ++copy)
                 state.recording_path.replace_filename(
                     path_from_utf8(stem + " (" + std::to_string(copy) + ")" + extension)
@@ -1730,6 +1747,21 @@ void NetworkPlay::follow_profile_rules() {
     bind_profile_rules();
 }
 
+bool NetworkPlay::unicode_chat() const {
+    return runtime_.unicode_chat_on();
+}
+
+void NetworkPlay::follow_unicode_chat() {
+    const bool on = unicode_chat();
+    mp::multiplayer_bind_unicode_chat(on);
+    if (net_ && net_->net)
+        net_->net->unicode_chat = on;
+    if (demo_) {
+        demo_->unicode_chat = on;
+        demo_->net.unicode_chat = on;
+    }
+}
+
 // Per frame: the load barrier while loading; in the match a pause set
 // elsewhere announced, a speed set elsewhere taken into the speed
 // preferences and the match clock, the paused-frame pump while the pause bit
@@ -1963,27 +1995,40 @@ void NetworkPlay::net_send_chat(const char* line) {
     nm::net_match_say(net_->net.get(), line);
 }
 
+const char* NetworkPlay::shared_chat_line(const char* line, std::size_t index) const {
+    if (!net_ || !net_->active || net_->loading || line == nullptr)
+        return nullptr;
+    const auto& parts = net_->net->said_parts;
+    // The parts are of this line: its first part starts it.
+    if (index >= parts.size() || std::string_view(line).rfind(parts.front(), 0) != 0)
+        return nullptr;
+    return parts[index].c_str();
+}
+
+std::size_t NetworkPlay::shared_chat_line_bytes() const {
+    if (!net_ || !net_->active || net_->loading || !net_->net->unicode_chat)
+        return 0;
+    return oa::netgame::chat_line_parts * oa::netgame::chat_record_text_bytes;
+}
+
 void NetworkPlay::net_say(std::string_view text) {
     if (!net_ || !net_->active || net_->loading || !runtime_.match_ || text.empty())
         return;
     const auto& local = runtime_.match_->state().game.players[net_->local_slot];
-    const auto name = field_text(local.name, sizeof local.name);
-    char line[sizeof(oa::netgame::ChatRecord::text)];
-    std::snprintf(
-        line,
-        sizeof line,
-        "<%.*s> %.*s",
-        static_cast<int>(name.size()),
-        name.data(),
-        static_cast<int>(text.size()),
-        text.data()
-    );
-    nm::net_match_say(net_->net.get(), line);
+    std::string line = "<";
+    line += field_text(local.name, sizeof local.name);
+    line += "> ";
+    line += text;
+    // Without Unicode chat one record carries the line, cut between whole
+    // characters; with it the match cuts the line into its records.
+    if (!net_->net->unicode_chat)
+        line.resize(oa::base::text::whole_characters(line, sizeof(oa::netgame::ChatRecord::text)));
+    nm::net_match_say(net_->net.get(), line.c_str());
     // The chat formatter also reports lines that reach everyone.
     const uint8_t mode = runtime_.match_->state().game.chat_mode;
     if (mode != OA_CHAT_MODE_CHOSEN && mode != OA_CHAT_MODE_ALLIES &&
         mode != oa::sim::messages::chat_mode_local_only)
-        report_chat_line(line);
+        report_chat_line(line.c_str());
 }
 
 int NetworkPlay::run_net_loopback_check(std::size_t ticks) {
@@ -2040,6 +2085,7 @@ int NetworkPlay::run_net_loopback_check(std::size_t ticks) {
         mp::lobby_reset(*side->lobby, *side->game);
         side->lobby->net = side->net;
         side->lobby->wire_rules = runtime_wire_rules(side->play->runtime_);
+        side->lobby->unicode_chat = side->play->unicode_chat();
         side->lobby->local_version_major = side->lobby->wire_rules.version_major;
         side->lobby->local_version_minor = side->lobby->wire_rules.version_minor;
         nm::net_connection_set_rules(&side->play->net_->connection, side->lobby->wire_rules);
@@ -2428,6 +2474,25 @@ int NetworkPlay::run_net_loopback_check(std::size_t ticks) {
     require(
         client_world.game.players[client_host_slot].load_progress == nm::load_progress_complete,
         "the host's load progress did not reach 100 at the joiner"
+    );
+    // The setup blocks each machine holds say UTF-8 chat only while Unicode
+    // chat is on; with it off they stay as 3.1c sends them.
+    const auto utf8_blocks = [](const World& world) {
+        int32_t count = 0;
+        for (const auto& player : world.game.players)
+            if (const auto* info =
+                    player.in_use != 0 ? world_player_info(&world, &player) : nullptr;
+                info != nullptr &&
+                oa::netgame::announces_unicode_chat(reinterpret_cast<const uint8_t*>(info)))
+                ++count;
+        return count;
+    };
+    std::cout << "net loopback check: Unicode chat " << (unicode_chat() ? "on" : "off")
+              << ", setup blocks saying UTF-8 " << utf8_blocks(host_world) << " / "
+              << utf8_blocks(client_world) << '\n';
+    require(
+        unicode_chat() || (utf8_blocks(host_world) == 0 && utf8_blocks(client_world) == 0),
+        "a setup block said UTF-8 chat with Unicode chat off"
     );
     std::vector<UnitPose> host_poses;
     uint32_t copy_compared = 0;

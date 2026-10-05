@@ -209,6 +209,11 @@ its side. [touch-controls.md](../touch-controls.md) describes the
 gestures and the layouts for phones and tablets. A keyboard, mouse or
 trackpad connected to the device works as on a computer.
 
+The system keyboard types into the chat line, a saved game's name and the
+whiteboard in any script it offers. It sends finished text only: the
+characters you choose in its candidate bar, in Chinese for example, show
+in the field once chosen ([typing.md](../typing.md#iphone-and-ipad)).
+
 ### Saves, screenshots and mods
 
 Your saved games, screenshots, films, recordings and mods are kept in the

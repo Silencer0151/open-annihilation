@@ -212,10 +212,13 @@ Noto Sans CJK SC Bold 2.004, from the `NotoSansCJK-Bold.ttc` collection of
 (SHA-256 `faa5f3656a78b2e2d450d27fe8382c778bc2b6bb5ea29c986664a6a435056ceb`),
 draws Chinese, Japanese and Korean. The packages hold the Simplified Chinese
 face of the collection, cut down by `tools/bootstrap_text_fonts.py` to the
-characters of GB 2312, of Big5's symbols and common hanzi, of JIS X 0208 and
-of KS X 1001 without its hanja, with the CJK punctuation, kana, bopomofo,
-Hangul jamo and full-width forms, and without its layout tables; nothing
-else in it is changed. © 2014-2021 Adobe (http://www.adobe.com/). It is
+characters of GB 2312, of the Table of General Standard Chinese Characters,
+of Big5's symbols and common hanzi, of JIS X 0208 and of KS X 1001 without
+its hanja, with the CJK punctuation, kana, bopomofo, Hangul jamo and
+full-width forms, and without its layout tables; nothing else in it is
+changed. The bootstrap reads which characters the table holds from the
+Unihan archive of Unicode 16.0 at build time; no package holds the
+archive or anything from it. © 2014-2021 Adobe (http://www.adobe.com/). It is
 licensed under the SIL Open Font License, Version 1.1; the text is in
 [`licenses/NotoSansCJK-OFL.txt`](licenses/NotoSansCJK-OFL.txt).
 

@@ -199,11 +199,12 @@ struct TextSwitch {
 };
 
 /// The Language switches, read and written alike.
-constexpr std::array<TextSwitch, 4> text_switches{{
+constexpr std::array<TextSwitch, 5> text_switches{{
     {key::modern_fonts, &EngineSettings::modern_fonts},
     {key::text_outline, &EngineSettings::text_outline},
     {key::text_shadow, &EngineSettings::text_shadow},
     {key::text_background, &EngineSettings::text_background},
+    {key::unicode_chat, &EngineSettings::unicode_chat},
 }};
 
 /// The Touch and Game files sections' switches, read and written as the

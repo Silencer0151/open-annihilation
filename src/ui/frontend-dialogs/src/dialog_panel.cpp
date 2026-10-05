@@ -4,6 +4,7 @@
 // Panel stack, record helpers and frame composition shared by the dialogs.
 #include "dialog_internal.hpp"
 
+#include "oa/base/text/line_break.hpp"
 #include "oa/formats/fnt.hpp"
 
 #include <algorithm>
@@ -370,7 +371,8 @@ int32_t dialog_add_label(
     gadget.common.foreground_color = kLabelColor;
     gadget.common.active = 1;
     ui::gui_layout::LabelFields fields;
-    fields.source_text = std::string(text.substr(0, kLabelTextBytes));
+    fields.source_text =
+        std::string(text.substr(0, oa::base::text::whole_character_bytes(text, kLabelTextBytes)));
     fields.text = fields.source_text;
     gadget.fields = std::move(fields);
     gadgets.push_back(std::move(gadget));

@@ -359,12 +359,12 @@ void play_intro_file(
     const Options& options, const fs::path& path, bool snapshot, HostDisplay* host
 ) {
     if (!fs::exists(path)) {
-        std::cerr << "intro missing: " << path << '\n';
+        std::cerr << "intro missing: " << path_to_utf8(path) << '\n';
         return;
     }
     auto opened = oa::media::IntroPlayer::open(path);
     if (!opened) {
-        std::cerr << "intro skip " << path.filename().string() << ": " << opened.error << '\n';
+        std::cerr << "intro skip " << path_to_utf8(path.filename()) << ": " << opened.error << '\n';
         return;
     }
     oa::media::PlaybackOptions playback;
@@ -394,10 +394,10 @@ void play_intro_file(
     if (host != nullptr)
         host->renderer_host.service();
     if (!result.ok()) {
-        std::cerr << "intro " << path.filename().string() << ": " << result.error << '\n';
+        std::cerr << "intro " << path_to_utf8(path.filename()) << ": " << result.error << '\n';
         return;
     }
-    std::cout << "intro " << path.filename().string() << ": decoded " << result.decoded_frames
+    std::cout << "intro " << path_to_utf8(path.filename()) << ": decoded " << result.decoded_frames
               << " frame(s)" << (result.skipped ? ", skipped\n" : "\n");
 }
 
@@ -872,7 +872,7 @@ void start_log() {
     try {
         const auto folder = oa::platform::preferences::data_directory() / "logs";
         if (!oa::platform::log_files::begin(folder))
-            std::cerr << "open-annihilation: cannot open a log in " << folder.string()
+            std::cerr << "open-annihilation: cannot open a log in " << path_to_utf8(folder)
                       << "; the output stays here\n";
     } catch (const std::exception& error) {
         std::cerr << "open-annihilation: no log: " << error.what() << '\n';

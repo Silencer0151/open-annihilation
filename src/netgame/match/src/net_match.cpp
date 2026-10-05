@@ -4,6 +4,7 @@
 #include "oa/netgame/match/net_match.hpp"
 
 #include "oa/netgame/player_slots.hpp"
+#include "oa/netgame/unicode_chat.hpp"
 #include "oa/base/text.hpp"
 #include "oa/ui/frontend_multiplayer/team_rules.hpp"
 
@@ -11,6 +12,8 @@
 #include <bit>
 #include <cstdio>
 #include <cstring>
+#include <span>
+#include <string>
 
 namespace oa::netgame::match {
 namespace {
@@ -760,14 +763,145 @@ constexpr std::size_t notice_bytes = 96;
 // A watch asked for while seated starts this long after the command.
 constexpr uint32_t fake_watch_delay_ticks = 5 * time_ticks_per_second;
 
+// Bytes past a cut that show whether a UTF-8 character spans it.
+constexpr std::size_t chat_lookahead = 4;
+
+/// Gives how much of a line fits a limit without cutting a character.
+///
+/// @param line The line, zero-terminated.
+/// @param limit The most bytes kept.
+/// @return The bytes kept.
+std::size_t chat_bytes_within(const char* line, std::size_t limit) {
+    return oa::base::text::whole_characters(
+        std::string_view(line, ::strnlen(line, limit + chat_lookahead)), limit
+    );
+}
+
+// The most bytes of a line Unicode chat reads: more than four records hold.
+constexpr std::size_t chat_line_read_bytes = 512;
+
+/// Tells whether a player's machine reads chat as UTF-8: its setup block says so.
+///
+/// @param world Match world.
+/// @param p The player.
+/// @return True when it does.
+bool reads_unicode_chat(const World* world, const Player& p) {
+    return p.index < OA_PLAYER_COUNT &&
+           announces_unicode_chat(reinterpret_cast<const uint8_t*>(&world->player_info[p.index]));
+}
+
+/// Sends one chat record to a destination in the form each machine there
+/// reads; a broadcast reaching machines of both kinds goes as one copy per
+/// machine. Every copy goes with NetMatch::sending_copies set.
+///
+/// @param[in,out] m Running match.
+/// @param from Sending player id.
+/// @param to Destination id, or broadcast_destination_id.
+/// @param utf8 The record in UTF-8.
+/// @param code_page The record in the code page.
+void send_chat_forms(
+    NetMatch* m, uint32_t from, uint32_t to, const ChatRecord& utf8, const ChatRecord& code_page
+) {
+    auto* world = m->world;
+    const auto reads = [&](uint32_t id) {
+        const auto* p = player_of(world, id);
+        return p != nullptr && reads_unicode_chat(world, *p);
+    };
+    m->sending_copies = true;
+    if (to != broadcast_destination_id) {
+        send_record(m, from, to, reads(to) ? utf8 : code_page);
+        m->sending_copies = false;
+        return;
+    }
+    uint32_t ids[OA_PLAYER_COUNT];
+    int32_t count = 0;
+    if (world->game.shared_machines != 0) {
+        count = ui::frontend_multiplayer::machine_broadcast_targets(world->game, ids);
+    } else {
+        for (const auto& p : world->game.players)
+            if (is_remote(p) && p.reject_reason == 0)
+                ids[count++] = p.player_id;
+    }
+    int32_t readers = 0;
+    for (int32_t i = 0; i < count; ++i)
+        readers += reads(ids[i]) ? 1 : 0;
+    if (readers == 0 || readers == count) {
+        send_record(m, from, broadcast_destination_id, readers == 0 ? code_page : utf8);
+    } else {
+        for (int32_t i = 0; i < count; ++i) {
+            m->sending_copies = true;
+            send_record(m, from, ids[i], reads(ids[i]) ? utf8 : code_page);
+        }
+    }
+    m->sending_copies = false;
+}
+
+/// Sends a chat line while Unicode chat is on: read as UTF-8, cut into
+/// records, each record in the form each machine reads. A recording keeps
+/// one UTF-8 copy of each record.
+///
+/// @param[in,out] m Running match.
+/// @param from Sending player id.
+/// @param to Destination ids, broadcast_destination_id among them for everyone.
+/// @param text The line, as this machine holds game text.
+/// @param record_bytes The bytes one record keeps of the line.
+/// @param split A line that is no command goes as up to chat_line_parts records.
+/// @return The parts sent, in UTF-8.
+std::vector<std::string> say_unicode(
+    NetMatch* m,
+    uint32_t from,
+    std::span<const uint32_t> to,
+    const char* text,
+    std::size_t record_bytes,
+    bool split
+) {
+    const auto line = chat_utf8(std::string_view(text, ::strnlen(text, chat_line_read_bytes)));
+    std::vector<std::string> parts;
+    if (split && !chat_command(line))
+        parts = chat_parts(line, record_bytes, chat_line_parts);
+    else
+        parts.push_back(line.substr(0, oa::base::text::whole_characters(line, record_bytes)));
+    const auto* self = player_of(m->world, from);
+    const bool recorded = m->hooks.record_seen != nullptr && !to.empty() && self != nullptr &&
+                          is_local(*self) && self->reject_reason == 0 &&
+                          (m->world->game.session_flags & kNetFlagLive) != 0;
+    for (const auto& part : parts) {
+        ChatRecord utf8{};
+        std::memcpy(utf8.text, part.data(), std::min(part.size(), sizeof utf8.text));
+        const auto narrow = chat_code_page(part);
+        ChatRecord code_page{};
+        std::memcpy(code_page.text, narrow.data(), std::min(narrow.size(), sizeof code_page.text));
+        if (std::memcmp(utf8.text, code_page.text, sizeof utf8.text) == 0) {
+            for (const auto id : to)
+                send_record(m, from, id, utf8);
+            continue;
+        }
+        if (recorded) {
+            uint8_t bytes[record_length_table[static_cast<uint8_t>(RecordType::chat)]];
+            std::size_t written = 0;
+            if (encode_record(utf8, bytes, sizeof bytes, &written) == WireError::ok)
+                m->hooks.record_seen(m->hooks.context, from, bytes, written);
+        }
+        for (const auto id : to)
+            send_chat_forms(m, from, id, utf8, code_page);
+    }
+    return parts;
+}
+
 /// Broadcasts a plain chat line from the first local player.
 ///
 /// @param[in,out] m Running match.
-/// @param line The line; cut at 63 characters.
+/// @param line The line; cut at 63 bytes, between whole characters.
 void say_to_all(NetMatch* m, const char* line) {
+    const auto from = first_local_player_id(m->world->game);
+    if (m->unicode_chat) {
+        const uint32_t everyone = broadcast_destination_id;
+        (void)say_unicode(m, from, {&everyone, 1}, line, chat_line_chars, false);
+        return;
+    }
     ChatRecord r{};
-    std::memcpy(r.text, line, ::strnlen(line, chat_line_chars));
-    send_record(m, first_local_player_id(m->world->game), broadcast_destination_id, r);
+    std::memcpy(r.text, line, chat_bytes_within(line, chat_line_chars));
+    send_record(m, from, broadcast_destination_id, r);
 }
 
 /// Sends a private message from the first local player.
@@ -1891,8 +2025,12 @@ void recorder_chat_line(NetMatch* m, const Player& from, const char* text) {
         break;
     case RecorderCommand::record:
         if (is_local(from) && line.argument[0] != '\0')
-            std::snprintf(
-                m->recorder.record_name, sizeof m->recorder.record_name, "%s", line.argument
+            oa::base::text::copy_terminated(
+                m->recorder.record_name,
+                std::string_view(
+                    line.argument,
+                    chat_bytes_within(line.argument, sizeof m->recorder.record_name - 1)
+                )
             );
         break;
     default:
@@ -2050,7 +2188,8 @@ bool dispatch_record(NetMatch* m, Player& from, Player& to, const Packet& packet
                 data + 1,
                 size - 1 < sizeof(ChatRecord::text) ? size - 1 : sizeof(ChatRecord::text)
             );
-            m->hooks.chat(m->hooks.context, from.index, text);
+            const auto shown = net_match_chat_text(m, from, text);
+            m->hooks.chat(m->hooks.context, from.index, shown.c_str());
             recorder_chat_line(m, from, text);
         }
         break;
@@ -2900,6 +3039,7 @@ void net_match_send_player_status(NetMatch* m, bool machine_groups) noexcept {
         // A recorder stamps its protocol on battle-room blocks only.
         status.info_tail[player_info_recorder_protocol_offset - player_info_tail_offset] =
             recorder_protocol_plain;
+        announce_unicode_chat(status, m->unicode_chat);
         send_record(m, p.player_id, broadcast_destination_id, status);
         PlayerTeamRecord team{};
         team.player_id = p.player_id;
@@ -3355,24 +3495,19 @@ void net_match_set_speed(NetMatch* m, int32_t speed, bool broadcast) noexcept {
 }
 
 void net_match_say(NetMatch* m, const char* text) noexcept {
-    // The text's first 64 bytes, the rest zero: a line of 64 characters or
-    // more fills the field with no terminator, as 3.1c's record carries it.
-    // A UTF-8 character the 64th byte would split is left out whole.
-    ChatRecord r{};
-    if (text != nullptr) {
-        constexpr std::size_t lookahead = 4;
-        const std::string_view line(text, ::strnlen(text, sizeof r.text + lookahead));
-        std::memcpy(r.text, text, oa::base::text::whole_characters(line, sizeof r.text));
-    }
+    m->said_parts.clear();
     auto& game = m->world->game;
     const auto from = first_local_player_id(game);
     const uint8_t mode = game.chat_mode;
-    if (r.text[0] == '+' || mode == OA_CHAT_MODE_EVERYONE) {
-        send_record(m, from, broadcast_destination_id, r);
+    // Where the chat mode sends the line.
+    uint32_t to[OA_PLAYER_COUNT];
+    std::size_t destinations = 0;
+    if ((text != nullptr && text[0] == '+') || mode == OA_CHAT_MODE_EVERYONE) {
+        to[destinations++] = broadcast_destination_id;
     } else if (mode == OA_CHAT_MODE_CHOSEN) {
         for (std::size_t slot = 0; slot < OA_PLAYER_COUNT; ++slot)
             if (game.chat_targets[slot] != 0 && game.players[slot].player_id != 0)
-                send_record(m, from, game.players[slot].player_id, r);
+                to[destinations++] = game.players[slot].player_id;
     } else {
         const auto& self = game.players[game.local_player_index];
         for (std::size_t slot = 0; slot < OA_PLAYER_COUNT; ++slot) {
@@ -3382,12 +3517,39 @@ void net_match_say(NetMatch* m, const char* text) noexcept {
             const bool allied = self.alliance[slot] != 0;
             if ((mode == OA_CHAT_MODE_ALLIES && allied) ||
                 (mode == OA_CHAT_MODE_ENEMIES && !allied))
-                send_record(m, from, p.player_id, r);
+                to[destinations++] = p.player_id;
         }
+    }
+    if (text == nullptr || !m->unicode_chat) {
+        // The text's first 64 bytes, the rest zero: a line of 64 characters
+        // or more fills the field with no terminator, as 3.1c's record
+        // carries it. A UTF-8 character the 64th byte would split is left
+        // out whole.
+        ChatRecord r{};
+        if (text != nullptr)
+            std::memcpy(r.text, text, chat_bytes_within(text, sizeof r.text));
+        for (std::size_t i = 0; i < destinations; ++i)
+            send_record(m, from, to[i], r);
+    } else {
+        auto parts = say_unicode(m, from, {to, destinations}, text, sizeof(ChatRecord::text), true);
+        if (parts.size() > 1)
+            m->said_parts = std::move(parts);
     }
     // The recorder answers a command after the line that typed it.
     if (const auto* self = player_of(m->world, from); self != nullptr && text != nullptr)
         recorder_chat_line(m, *self, text);
+}
+
+std::string net_match_chat_text(const NetMatch* m, const Player& from, std::string_view bytes) {
+    const bool sender_utf8 =
+        (m->unicode_chat || m->recorded_chat) && from.index < OA_PLAYER_COUNT &&
+        announces_unicode_chat(
+            reinterpret_cast<const uint8_t*>(&m->world->player_info[from.index])
+        );
+    if (!sender_utf8)
+        return std::string(bytes);
+    auto line = chat_strict_utf8(bytes);
+    return m->unicode_chat ? line : chat_code_page(line);
 }
 
 void net_match_give(NetMatch* m, uint8_t from, uint8_t to, bool metal, float amount) noexcept {

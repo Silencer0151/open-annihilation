@@ -29,6 +29,7 @@
 #include <cstring>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -37,6 +38,25 @@
 #include <vector>
 
 namespace oa::app {
+
+namespace {
+
+/// Gives the rows a line's letters rise above its baseline.
+///
+/// @param layers the line
+/// @return the rows from the first a letter covers down to the baseline; 0
+///         for a line with no letter above its baseline
+int letter_rows_above_baseline(const oa::present::TextLayers& layers) {
+    const auto width = static_cast<std::size_t>(std::max(layers.width, 0));
+    for (int32_t row = 0; row < layers.baseline && row < layers.height; ++row)
+        for (std::size_t column = 0; column < width; ++column)
+            if (const auto at = static_cast<std::size_t>(row) * width + column;
+                at < layers.fill.size() && layers.fill[at] != 0)
+                return layers.baseline - row;
+    return 0;
+}
+
+} // namespace
 
 int Runtime::builder_gui_page_count() const {
     if (!match_ || selected_match_unit_ == 0)
@@ -366,23 +386,39 @@ void Runtime::paint_text(
     // and the size the text takes here.
     const int32_t font_baseline = renderer::fnt_font_baseline(font);
     const auto face = renderer::fnt_font_face(font);
+    const auto runs = renderer::split_game_text(text, renderer::fnt_font_characters(font), true);
+    std::vector<std::optional<oa::present::TextLayers>> laid(runs.size());
+    // In a panel that keeps its text below a row (PanelText), a line whose
+    // letters would rise above it, as ideographs beside the game's fonts
+    // may, is lowered until they do not.
+    int drop = 0;
+    for (std::size_t index = 0; index < runs.size(); ++index) {
+        if (!runs[index].modern)
+            continue;
+        const int32_t size = painted_text_size(runs[index]);
+        laid[index] =
+            oa::present::modern_text(runs[index].text, face, scale, size, allow_background);
+        if (laid[index] && text_place_ == TextPlace::panel && panel_top_row_)
+            drop = std::max(
+                drop,
+                *panel_top_row_ - (y + painted_baseline(font_baseline, size) * scale -
+                                   letter_rows_above_baseline(*laid[index]))
+            );
+    }
     int pen = x;
-    for (const auto& run :
-         renderer::split_game_text(text, renderer::fnt_font_characters(font), true)) {
-        if (run.modern) {
-            const int32_t size = painted_text_size(run);
-            if (const auto layers =
-                    oa::present::modern_text(run.text, face, scale, size, allow_background)) {
-                const int baseline = y + painted_baseline(font_baseline, size) * scale;
-                pen += paint_modern_text(*layers, pen, baseline, color);
-                continue;
-            }
+    for (std::size_t index = 0; index < runs.size(); ++index) {
+        const auto& run = runs[index];
+        if (const auto& layers = laid[index]) {
+            const int baseline =
+                y + drop + painted_baseline(font_baseline, painted_text_size(run)) * scale;
+            pen += paint_modern_text(*layers, pen, baseline, color);
+            continue;
         }
         // A run the modern fonts cannot draw shows in the font, as the code
         // page holds it.
         const std::string bytes =
             run.modern ? oa::present::encode_game_text(run.text, false) : run.text;
-        paint_font_text(font, pen, y, bytes, color, scale);
+        paint_font_text(font, pen, y + drop, bytes, color, scale);
         pen += static_cast<int>(oa::formats::fnt::measure_text(font, bytes)) * scale;
     }
 }
@@ -934,6 +970,9 @@ void Runtime::draw_unit_panel() {
         hud::unit_panel_snapshot(world, cursor, debug_keys, match_session_kind(), overlay, hooks);
     if (panel.unit == 0)
         return;
+    // The status line stands one row under the bottom bar's top: its text
+    // keeps within the bar.
+    const PanelText in_bar(*this, hud_canvas(0, oa::ui::display_layout::kSourceBottomBarY).y);
     draw_hud_label_centered(side_hud_.unit_name.x, side_hud_.unit_name.y, panel.name, text_color);
     if (panel.unidentified)
         return;

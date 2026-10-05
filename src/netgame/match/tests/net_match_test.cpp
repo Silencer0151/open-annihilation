@@ -15,6 +15,7 @@
 #include "oa/netgame/match/session_lobby.hpp"
 #include "oa/netgame/network.hpp"
 #include "oa/netgame/private_channel.hpp"
+#include "oa/netgame/unicode_chat.hpp"
 #include "oa/netgame/unit_state.hpp"
 #include "oa/ui/frontend_multiplayer/connect.hpp"
 #include "oa/base/text.hpp"
@@ -29,6 +30,7 @@
 #include <initializer_list>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace oa;
@@ -895,6 +897,8 @@ struct SeatedMachine {
     std::vector<std::string> notices; // lines the notice hook showed
     // What the record_seen hook saw, sender id and type byte.
     std::vector<std::pair<uint32_t, uint8_t>> seen;
+    // The text of each chat record the record_seen hook saw.
+    std::vector<std::string> seen_chat;
     // What the speed_lock_changed hook heard: locked, slowest, fastest.
     std::vector<std::array<int32_t, 3>> speed_locks;
     // Whiteboard batches the whiteboard_marks hook showed, by sender slot.
@@ -920,8 +924,13 @@ struct SeatedMachine {
         hooks.notice = [](void* c, const char* text) {
             static_cast<SeatedMachine*>(c)->notices.emplace_back(text);
         };
-        hooks.record_seen = [](void* c, uint32_t sender, const uint8_t* record, std::size_t) {
-            static_cast<SeatedMachine*>(c)->seen.emplace_back(sender, record[0]);
+        hooks.record_seen = [](void* c, uint32_t sender, const uint8_t* record, std::size_t size) {
+            auto* self = static_cast<SeatedMachine*>(c);
+            self->seen.emplace_back(sender, record[0]);
+            if (record[0] == static_cast<uint8_t>(RecordType::chat) && size > 1) {
+                const auto* text = reinterpret_cast<const char*>(record + 1);
+                self->seen_chat.emplace_back(text, ::strnlen(text, size - 1));
+            }
         };
         hooks.destroy_player_units = [](void* c, World*, uint8_t slot) {
             static_cast<SeatedMachine*>(c)->destroyed.push_back(slot);
@@ -3007,6 +3016,216 @@ void private_lines_stay_hidden() {
     }
 }
 
+// ---- Unicode chat ----
+
+// Chinese as UTF-8: U+4F60 U+597D, the full-width comma, U+4E16 U+754C
+// and the ideographic full stop.
+constexpr const char* kHanziLine = "\xe4\xbd\xa0\xe5\xa5\xbd\xef\xbc\x8c\xe4\xb8\x96\xe7\x95\x8c"
+                                   "\xe3\x80\x82";
+
+// The chat records a machine sent since it last forgot: each one's
+// addressee and text.
+std::vector<std::pair<uint32_t, std::string>> chat_sent(SeatedMachine& m) {
+    std::vector<std::pair<uint32_t, std::string>> out;
+    for (const auto& record : m.sent(RecordType::chat)) {
+        const auto* text = reinterpret_cast<const char*>(record.bytes.data() + 1);
+        out.emplace_back(record.to, std::string(text, ::strnlen(text, record.bytes.size() - 1)));
+    }
+    return out;
+}
+
+// A chat record from raw text bytes, the rest of its 64 bytes zero.
+Bytes chat_record_bytes(std::string_view text) {
+    Bytes bytes(1 + sizeof(ChatRecord::text), 0);
+    bytes[0] = static_cast<uint8_t>(RecordType::chat);
+    std::memcpy(bytes.data() + 1, text.data(), std::min(text.size(), sizeof(ChatRecord::text)));
+    return bytes;
+}
+
+// Tells whether a machine's copy of a player's setup block says UTF-8 chat.
+bool block_says_utf8(SeatedMachine& m, uint8_t slot) {
+    return announces_unicode_chat(reinterpret_cast<const uint8_t*>(&m.info(slot)));
+}
+
+// Two machines with Unicode chat on, both Chinese: each says so in the
+// setup block it sends (its chat signature and flags) and learns it of the
+// other. A Chinese line longer than a record goes as four records, each
+// "<Name> " and whole characters, arrives intact, and the recording sees
+// each record once.
+void unicode_chat_between_two_readers() {
+    start_case("unicode_chat_between_two_readers");
+    constexpr uint32_t kA = 7, kB = 9;
+    const Seat a_view[4] = {{kA, OA_PLAYER_STATUS_LOCAL, 1}, {kB, OA_PLAYER_STATUS_MIRRORED, 2}};
+    const Seat b_view[4] = {{kA, OA_PLAYER_STATUS_MIRRORED, 1}, {kB, OA_PLAYER_STATUS_LOCAL, 2}};
+    SeatedMachine a(a_view, 0);
+    SeatedMachine b(b_view, 1);
+    join(a, b);
+    a.match->unicode_chat = true;
+    b.match->unicode_chat = true;
+    net_match_send_player_status(a.match.get(), false);
+    net_match_send_player_status(b.match.get(), false);
+    const auto blocks = a.sent(RecordType::player_info);
+    CHECK(!blocks.empty());
+    if (!blocks.empty()) {
+        const auto& block = blocks[0].bytes;
+        CHECK(block.size() == 1 + player_info_block_bytes);
+        const auto* chat = block.data() + 1 + player_info_chat_signature_offset;
+        CHECK(chat[0] == 'U' && chat[1] == '8' && chat[2] == chat_flag_utf8);
+    }
+    packet_layer_flush(b.connection.packets, 0, true);
+    (void)net_match_pump(a.match.get());
+    (void)net_match_pump(b.match.get());
+    CHECK(block_says_utf8(a, 1) && block_says_utf8(b, 0));
+
+    a.forget_sent();
+    a.seen_chat.clear();
+    std::string line = "<Alpha> ";
+    for (int i = 0; i < 10; ++i)
+        line += kHanziLine;
+    net_match_say(a.match.get(), line.c_str());
+    const auto sent = chat_sent(a);
+    CHECK(sent.size() == chat_line_parts);
+    std::string joined;
+    std::vector<std::string> texts;
+    for (const auto& [to, text] : sent) {
+        CHECK(to == broadcast_destination_id);
+        CHECK(text.rfind("<Alpha> ", 0) == 0 && chat_strict_utf8(text) == text);
+        joined += text.substr(8);
+        texts.push_back(text);
+    }
+    CHECK(joined == line.substr(8));
+    CHECK(a.seen_chat == texts);
+    CHECK(a.match->said_parts == texts);
+    (void)net_match_pump(b.match.get());
+    CHECK(b.chats == texts);
+    CHECK(b.match->record_errors == 0 && b.match->records_refused == 0);
+}
+
+// A room of two Chinese machines with Unicode chat on and an English one
+// with it off: the English machine gets each line in the code page, '?'
+// for each hanzi, the Chinese one in UTF-8, one copy each, and the
+// recording sees the UTF-8 line once. The English machine shows what
+// reaches it, a stray UTF-8 line too, as bytes, and its own lines go out
+// as they always have.
+void unicode_chat_in_a_mixed_room() {
+    start_case("unicode_chat_in_a_mixed_room");
+    constexpr uint32_t kA = 7, kB = 9, kC = 10;
+    const Seat a_view[4] = {
+        {kA, OA_PLAYER_STATUS_LOCAL, 1},
+        {kB, OA_PLAYER_STATUS_MIRRORED, 2},
+        {kC, OA_PLAYER_STATUS_MIRRORED, 3}
+    };
+    const Seat c_view[4] = {
+        {kA, OA_PLAYER_STATUS_MIRRORED, 1},
+        {kB, OA_PLAYER_STATUS_MIRRORED, 2},
+        {kC, OA_PLAYER_STATUS_LOCAL, 3}
+    };
+    SeatedMachine a(a_view, 0);
+    SeatedMachine c(c_view, 2);
+    a.match->unicode_chat = true;
+    mark_unicode_chat(reinterpret_cast<uint8_t*>(&a.info(1)), true);
+    mark_unicode_chat(reinterpret_cast<uint8_t*>(&c.info(0)), true);
+    const std::string line = std::string("<Alpha> ") + kHanziLine;
+    net_match_say(a.match.get(), line.c_str());
+    const auto sent = chat_sent(a);
+    CHECK(sent.size() == 2);
+    if (sent.size() == 2) {
+        CHECK(sent[0].first == kB && sent[0].second == line);
+        CHECK(sent[1].first == kC && sent[1].second == "<Alpha> ??????");
+    }
+    CHECK((a.seen_chat == std::vector<std::string>{line}));
+
+    // What reaches the English machine, from a sender with the setting off.
+    SeatedMachine plain(a_view, 0);
+    join(plain, c);
+    deliver_bytes(plain, c, kA, chat_record_bytes("<Alpha> ??????"));
+    deliver_bytes(plain, c, kA, chat_record_bytes(line));
+    CHECK((c.chats == std::vector<std::string>{"<Alpha> ??????", line}));
+    c.forget_sent();
+    net_match_say(c.match.get(), "<Charlie> Zo\xe9");
+    const auto from_c = chat_sent(c);
+    CHECK(from_c.size() == 1 && from_c[0].first == broadcast_destination_id);
+    CHECK(from_c.size() == 1 && from_c[0].second == "<Charlie> Zo\xe9");
+    CHECK(c.match->record_errors == 0);
+}
+
+// A peer that says it sends UTF-8 is read strictly: overlong forms,
+// surrogates, bytes past U+10FFFF, stray continuations and a character cut
+// at the record's end become '?', never bytes of the line. A line from a
+// peer without the flag is shown as it came.
+void unicode_chat_reads_malformed_lines_safely() {
+    start_case("unicode_chat_reads_malformed_lines_safely");
+    constexpr uint32_t kA = 7, kB = 9;
+    const Seat a_view[4] = {{kA, OA_PLAYER_STATUS_LOCAL, 1}, {kB, OA_PLAYER_STATUS_MIRRORED, 2}};
+    const Seat b_view[4] = {{kA, OA_PLAYER_STATUS_MIRRORED, 1}, {kB, OA_PLAYER_STATUS_LOCAL, 2}};
+    SeatedMachine a(a_view, 0);
+    SeatedMachine b(b_view, 1);
+    join(a, b);
+    b.match->unicode_chat = true;
+    mark_unicode_chat(reinterpret_cast<uint8_t*>(&b.info(0)), true);
+    deliver_bytes(
+        a, b, kA, chat_record_bytes("<A> \xc0\xaf \xed\xa0\x80 \xf4\x90\x80\x80 \x80\xff")
+    );
+    // 64 bytes with no terminator, a hanzi cut by the record's end.
+    std::string full(62, 'x');
+    full += "\xe4\xbd\xa0";
+    deliver_bytes(a, b, kA, chat_record_bytes(full));
+    CHECK(b.chats.size() == 2);
+    if (b.chats.size() == 2) {
+        CHECK(b.chats[0] == "<A> ?? ??? ???? ??");
+        CHECK(b.chats[1] == std::string(62, 'x') + "??");
+    }
+    mark_unicode_chat(reinterpret_cast<uint8_t*>(&b.info(0)), false);
+    deliver_bytes(a, b, kA, chat_record_bytes("<A> \xc0\xaf"));
+    CHECK(b.chats.size() == 3 && b.chats.back() == "<A> \xc0\xaf");
+    CHECK(b.match->record_errors == 0);
+}
+
+// With Unicode chat on, a command ('+' or '.' first, after the speaker's
+// name or without one) goes as one record, as typed, even past 64 bytes.
+// With it off a line goes exactly as before: its first 64 bytes cut between
+// whole characters, the rest zero, and the setup block's chat bytes stay
+// zero.
+void unicode_chat_keeps_commands_and_the_plain_wire() {
+    start_case("unicode_chat_keeps_commands_and_the_plain_wire");
+    constexpr uint32_t kA = 7, kB = 9;
+    const Seat a_view[4] = {{kA, OA_PLAYER_STATUS_LOCAL, 1}, {kB, OA_PLAYER_STATUS_MIRRORED, 2}};
+    SeatedMachine on(a_view, 0);
+    SeatedMachine off(a_view, 0);
+    on.match->unicode_chat = true;
+    mark_unicode_chat(reinterpret_cast<uint8_t*>(&on.info(1)), true);
+    const std::string record_command = "<Alpha> .record " + std::string(60, 'n');
+    for (const std::string& command : {std::string("+SetShareMetal 5"), record_command}) {
+        on.forget_sent();
+        off.forget_sent();
+        net_match_say(on.match.get(), command.c_str());
+        net_match_say(off.match.get(), command.c_str());
+        const auto sent_on = on.sent(RecordType::chat);
+        const auto sent_off = off.sent(RecordType::chat);
+        CHECK(sent_on.size() == 1 && sent_off.size() == 1);
+        if (sent_on.size() == 1 && sent_off.size() == 1)
+            CHECK(sent_on[0].bytes == sent_off[0].bytes && sent_on[0].to == sent_off[0].to);
+        CHECK(on.match->said_parts.empty() && off.match->said_parts.empty());
+    }
+
+    // Off: 62 ASCII bytes and a hanzi the 64th byte would cut.
+    off.forget_sent();
+    std::string line(62, 'x');
+    line += kHanziLine;
+    net_match_say(off.match.get(), line.c_str());
+    const Bytes expected = chat_record_bytes(std::string(62, 'x'));
+    const auto sent = off.sent(RecordType::chat);
+    CHECK(sent.size() == 1 && sent[0].bytes == expected);
+    off.forget_sent();
+    net_match_send_player_status(off.match.get(), false);
+    const auto blocks = off.sent(RecordType::player_info);
+    CHECK(!blocks.empty());
+    for (const auto& block : blocks) {
+        const auto* chat = block.bytes.data() + 1 + player_info_chat_signature_offset;
+        CHECK(chat[0] == 0 && chat[1] == 0 && chat[2] == 0);
+    }
+}
+
 // Two machines on the same program and data challenge each other at tick
 // 180, answer with two records back to back and agree, so the tick-600
 // report names nobody; a machine whose data differs is reported, and its
@@ -3303,12 +3522,8 @@ void recorder_records_reach_the_match() {
         camera_seen = camera_seen || (sender == kA && type == 0xfc);
     CHECK(camera_seen);
 
-    a.info(0).reserved_after_map_hash
-        [netgame::player_info_recorder_protocol_offset - netgame::player_info_map_hash_offset - 4] =
-        recorder_protocol_current;
-    b.info(0).reserved_after_map_hash
-        [netgame::player_info_recorder_protocol_offset - netgame::player_info_map_hash_offset - 4] =
-        recorder_protocol_current;
+    a.info(0).recorder_protocol = recorder_protocol_current;
+    b.info(0).recorder_protocol = recorder_protocol_current;
     a.forget_sent();
     net_match_send_player_status(a.match.get(), false);
     const auto blocks = a.sent(RecordType::player_info);
@@ -4209,6 +4424,10 @@ int main() {
     client_computer_is_a_session_player();
     address_picks_the_enumeration_target();
     private_lines_stay_hidden();
+    unicode_chat_between_two_readers();
+    unicode_chat_in_a_mixed_room();
+    unicode_chat_reads_malformed_lines_safely();
+    unicode_chat_keeps_commands_and_the_plain_wire();
     integrity_check_answers_and_reports();
     integrity_report_request_is_answered();
     vote_tally_rules();

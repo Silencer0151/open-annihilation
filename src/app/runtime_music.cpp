@@ -4,6 +4,7 @@
 // CD music: numbered music files play as the game disc; the CD player,
 // session and mood run on them from the menus through a match.
 #include "oa/app/runtime.hpp"
+#include "oa/app/game_directory.hpp"
 #include "oa/app/view_rules.hpp"
 #include "oa/audio/music_session.hpp"
 #include "oa/audio/sdl_music.hpp"
@@ -113,7 +114,8 @@ void Runtime::music_start() {
         }
     const auto disc = scan(audio::music_disc_directory(music_folder));
     if (!audio::music_disc_present(disc))
-        std::cerr << "music: no tracks in " << disc.directory.string() << "; CD music is silent\n";
+        std::cerr << "music: no tracks in " << path_to_utf8(disc.directory)
+                  << "; CD music is silent\n";
     else if (!audio::sdl_music_decoder_available())
         std::cerr << "music: this build cannot decode music files\n";
     host.device = audio::sdl_music_device_create(disc);

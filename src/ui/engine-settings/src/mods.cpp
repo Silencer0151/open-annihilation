@@ -7,6 +7,8 @@
 #include "oa/ui/engine_settings/dialog.hpp"
 
 #include "geometry.hpp"
+#include "oa/base/text/line_break.hpp"
+#include "oa/data/languages/interface_text.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -39,42 +41,6 @@ std::string folded(std::string_view text) {
         if (character >= 'A' && character <= 'Z')
             character = static_cast<char>(character - 'A' + 'a');
     return lowered;
-}
-
-/// Returns a text the dialog shows, looked up in the language shown, with
-/// its places ({name}) filled; the values are not looked up.
-///
-/// @param english the text, in English
-/// @param places each place's name and value
-/// @return the text
-std::string filled(
-    std::string_view english,
-    std::initializer_list<std::pair<std::string_view, std::string_view>> places
-) {
-    const std::string pattern(geometry::shown_text(english));
-    std::string text;
-    std::size_t at = 0;
-    while (at < pattern.size()) {
-        const std::size_t open = pattern.find('{', at);
-        const std::size_t close = open == std::string::npos ? open : pattern.find('}', open);
-        if (close == std::string::npos) {
-            text.append(pattern, at, std::string::npos);
-            break;
-        }
-        text.append(pattern, at, open - at);
-        const std::string_view name(pattern.data() + open + 1, close - open - 1);
-        bool found = false;
-        for (const auto& [place, value] : places)
-            if (place == name) {
-                text += value;
-                found = true;
-                break;
-            }
-        if (!found)
-            text.append(pattern, open, close - open + 1);
-        at = close + 1;
-    }
-    return text;
 }
 
 /// Returns the details of the row the question asks about.
@@ -116,6 +82,36 @@ std::vector<ModRow> mod_rows(const Dialog& dialog) {
 }
 
 namespace geometry {
+
+std::string filled(
+    std::string_view english,
+    std::initializer_list<std::pair<std::string_view, std::string_view>> places
+) {
+    const std::string pattern(geometry::shown_text(english));
+    std::string text;
+    std::size_t at = 0;
+    while (at < pattern.size()) {
+        const std::size_t open = pattern.find('{', at);
+        const std::size_t close = open == std::string::npos ? open : pattern.find('}', open);
+        if (close == std::string::npos) {
+            text.append(pattern, at, std::string::npos);
+            break;
+        }
+        text.append(pattern, at, open - at);
+        const std::string_view name(pattern.data() + open + 1, close - open - 1);
+        bool found = false;
+        for (const auto& [place, value] : places)
+            if (place == name) {
+                text += value;
+                found = true;
+                break;
+            }
+        if (!found)
+            text.append(pattern, open, close - open + 1);
+        at = close + 1;
+    }
+    return text;
+}
 
 bool mods_page(const Dialog& dialog) noexcept {
     // A check's own section takes the place of the list.
@@ -191,6 +187,12 @@ Rows place_mod_rows(const Dialog& dialog, int32_t scroll) {
     const auto rows = mod_rows(dialog);
     const Lock lock = dialog.locks.mod;
     int32_t top = area.view.y;
+    // While the dialog's words are drawn in the modern fonts a row is
+    // taller, and its description lower.
+    const bool tall = oa::data::languages::interface_language().needs !=
+                      oa::data::languages::TextNeeds::game_fonts;
+    const int32_t height = mod_row_height + (tall ? tall_mod_row_growth : 0);
+    const int32_t description_top = mod_description_top + (tall ? tall_mod_description_drop : 0);
     placed.rows.reserve(rows.size());
     for (std::size_t index = 0; index < rows.size(); ++index) {
         Row& row = placed.rows.emplace_back();
@@ -199,13 +201,13 @@ Rows place_mod_rows(const Dialog& dialog, int32_t scroll) {
         // A locked page keeps the mod played: every row is inert.
         row.lock = lock;
         row.top = top;
-        row.height = mod_row_height + mod_row_gap;
-        row.control_area = {content_left, top, content_width, mod_row_height};
+        row.height = height + mod_row_gap;
+        row.control_area = {content_left, top, content_width, height};
         const int32_t text_left = content_left + mod_row_inset + mod_badge_side + mod_row_inset;
         const int32_t text_width = content_right - mod_row_inset - text_left;
         row.label = {text_left, top + 1, text_width, label_line_height};
         row.value = {text_left, top + 3, text_width, hint_line_height};
-        row.hints[0] = {text_left, top + 15, text_width, hint_line_height};
+        row.hints[0] = {text_left, top + description_top, text_width, hint_line_height};
         row.hint_lines = 1;
         top += row.height;
     }
@@ -262,6 +264,21 @@ std::vector<std::string> wrap_text(
     std::string_view text, int32_t width, const std::function<int32_t(std::string_view)>& text_width
 ) {
     std::vector<std::string> lines;
+    if (oa::base::text::has_wide_script(text)) {
+        // Chinese, Japanese and Korean are written without spaces: a line
+        // also breaks between their characters, as the line breaker allows.
+        const auto fits = [&](std::string_view start) { return text_width(start) <= width; };
+        for (;;) {
+            while (!text.empty() && text.front() == ' ')
+                text.remove_prefix(1);
+            if (text.empty())
+                break;
+            const auto row = oa::base::text::first_row(text, fits);
+            lines.emplace_back(text.substr(0, row.bytes));
+            text.remove_prefix(row.next);
+        }
+        return lines;
+    }
     std::string line;
     std::size_t at = 0;
     while (at < text.size()) {
@@ -314,8 +331,7 @@ std::vector<std::string> question_text_lines(
         }
         return lines;
     }
-    const std::string asked =
-        std::string(switch_ask_before_text) + offered.title + std::string(switch_ask_after_text);
+    const std::string asked = filled(switch_ask_text, {{"title", offered.title}});
     std::vector<std::string> lines = wrap_text(asked, question_first_line.width, text_width);
     std::vector<std::string> note;
     if (!offered.has_profile)

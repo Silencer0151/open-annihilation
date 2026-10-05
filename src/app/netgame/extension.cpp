@@ -13,6 +13,7 @@
 // program through them. An extension built on network play reaches it
 // through oa/app/netgame/extension_api.hpp, whose hooks this extension calls.
 #include "oa/app/runtime.hpp"
+#include "oa/app/game_directory.hpp"
 #include "battle_lines.hpp"
 #include "close_handlers.hpp"
 #include "demo_state.hpp"
@@ -283,7 +284,7 @@ std::vector<uint8_t> truncated_recording_header() {
 std::vector<uint8_t> read_file(const fs::path& path) {
     std::ifstream in(path, std::ios::binary);
     if (!in)
-        throw std::runtime_error("cannot open " + path.string());
+        throw std::runtime_error("cannot open " + path_to_utf8(path));
     return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
 }
 
@@ -770,7 +771,7 @@ struct RuntimeExtension {
         const auto& options = net_options();
         if (options.play_demo.empty())
             return 0;
-        const auto name = options.play_demo.filename().string();
+        const auto name = path_to_utf8(options.play_demo.filename());
         const auto bytes = read_file(options.play_demo);
         if (!open(name.c_str(), bytes, !options.demo_ignore_unit_table, replay, info))
             throw std::runtime_error("recording hook check: " + name + " was declined");
@@ -870,8 +871,9 @@ struct RuntimeExtension {
     /// @param runtime The running app.
     /// @param stage pump follows the game into its close handler (and runs
     ///              --check-host-not-found's part of the frame), binds the
-    ///              profile's rules again once Developer Mode changes them,
-    ///              then runs the network match's frame; after_pump applies
+    ///              profile's rules again once Developer Mode changes them
+    ///              and Unicode chat as it is now, then runs the network
+    ///              match's frame; after_pump applies
     ///              the demo's recorded speed.
     static void frame(void* /*context*/, Runtime& runtime, FrameStage stage) {
         if (stage == FrameStage::pump) {
@@ -881,6 +883,7 @@ struct RuntimeExtension {
             // The rules Developer Mode lays over the profile reach the
             // multiplayer screens and the session.
             NetworkPlay::of(runtime).follow_profile_rules();
+            NetworkPlay::of(runtime).follow_unicode_chat();
             NetworkPlay::of(runtime).net_frame();
         } else {
             NetworkPlay::of(runtime).demo_frame();
@@ -990,6 +993,13 @@ struct RuntimeExtension {
     message_hooks(void* /*context*/, Runtime& /*runtime*/, oa::sim::messages::Hooks& hooks) {
         hooks.share_chat = [](void* context, const char* chat) {
             NetworkPlay::of(*static_cast<Runtime*>(context)).net_send_chat(chat);
+        };
+        hooks.shared_chat_line =
+            [](void* context, const char* chat, std::size_t index) -> const char* {
+            return NetworkPlay::of(*static_cast<Runtime*>(context)).shared_chat_line(chat, index);
+        };
+        hooks.shared_chat_line_bytes = [](void* context) -> std::size_t {
+            return NetworkPlay::of(*static_cast<Runtime*>(context)).shared_chat_line_bytes();
         };
         hooks.record_chat = [](void* context, const char* chat) {
             NetworkPlay::of(*static_cast<Runtime*>(context)).report_chat_line(chat);

@@ -20,10 +20,14 @@ the one licenses/ holds, and builds:
       the fonts the build copies beside the game: DejaVu Sans Bold and
       DejaVu Sans 2.37, Noto Sans CJK SC Bold and Noto Emoji
 
-Noto Sans CJK SC Bold is cut down to the characters of GB 2312, of Big5's
-symbols and common hanzi, of JIS X 0208, of KS X 1001 without its hanja, and
-of the CJK punctuation, kana, bopomofo, Hangul jamo and full-width forms:
-about 14,000 characters in 3.4 MB instead of 16 MB. The cut is made with the
+Noto Sans CJK SC Bold is cut down to the characters of GB 2312, of the
+Table of General Standard Chinese Characters (the 8,105 hanzi of 2013), of
+Big5's symbols and common hanzi, of JIS X 0208, of KS X 1001 without its
+hanja, and of the CJK punctuation, kana, bopomofo, Hangul jamo and
+full-width forms: about 15,300 characters in 3.9 MB instead of 16 MB. The
+table's characters are those the Unicode Character Database's Unihan files
+mark with a kTGH position; the archive is read at build time only and
+nothing of it ships. The cut is made with the
 fontTools that tools/text-fonts/requirements.txt pins, installed in a
 virtual environment of its own (local/deps/fonttools-venv), and must give
 the pinned SHA-256. --full-cjk ships the whole face instead.
@@ -87,7 +91,17 @@ DOWNLOADS = {
                            "https://raw.githubusercontent.com/google/fonts/b979dba422e445492b0eb9951ac52ee0b4d648c3/"
                            "ofl/notoemoji/OFL.txt",
                            "500bb1ccf43df7bbb522112f9133a52b16e1c35e809632f5d8609b179152de5b"),
+    # The Unihan files of Unicode 16.0, whose kTGH field lists the Table of
+    # General Standard Chinese Characters; read to choose the CJK cut's
+    # characters, never shipped.
+    "unihan": ("Unihan-16.0.0.zip",
+               "https://www.unicode.org/Public/16.0.0/ucd/Unihan.zip",
+               "b8f000df69de7828d21326a2ffea462b04bc7560022989f7cc704f10521ef3e0"),
 }
+# The member of the Unihan archive that holds the kTGH field.
+UNIHAN_GENERAL_STANDARD_FILE = "Unihan_OtherMappings.txt"
+# How many characters the Table of General Standard Chinese Characters holds.
+GENERAL_STANDARD_CHARACTERS = 8105
 # The fonts the game ships, in the order the engine falls back through them
 # (oa::platform::text_font::Face).
 FONT_FILES = ("DejaVuSans-Bold.ttf", "DejaVuSans.ttf", "NotoSansCJKsc-Bold.otf", "NotoEmoji.ttf")
@@ -96,9 +110,9 @@ FONT_FILES = ("DejaVuSans-Bold.ttf", "DejaVuSans.ttf", "NotoSansCJKsc-Bold.otf",
 CJK_FACE_INDEX = 2
 CJK_FACE_NAME = "Noto Sans CJK SC Bold"
 # The SHA-256 of the cut-down CJK face the pinned fontTools makes.
-CJK_SUBSET_SHA256 = "f1be515921b68d29f50da45f22fbd184e76e5de1d15b4f1cb584887de86df48b"
+CJK_SUBSET_SHA256 = "1bff16d425a0bc5048fddb7d33d2a59e08647d4a29380a348ccaabcbd89a29f2"
 # How many characters the cut keeps: those of CJK_CHARACTERS the face holds.
-CJK_SUBSET_CHARACTERS = 14005
+CJK_SUBSET_CHARACTERS = 15309
 # Each licence text in licenses/ and the file of a download, or a member of
 # an archive, that must hold the same text.
 LICENCES = {
@@ -111,15 +125,34 @@ FONTTOOLS_REQUIREMENTS = ROOT / "tools" / "text-fonts" / "requirements.txt"
 SETTINGS_FILE = "build-settings.json"
 
 
-def cjk_characters():
+def general_standard_characters(unihan):
+    """The code points of the Table of General Standard Chinese Characters.
+
+    They are the characters the Unihan archive's kTGH field gives a
+    position in the table of 2013; the archive must list all 8,105.
+    """
+    found = set()
+    with zipfile.ZipFile(unihan) as archive:
+        for line in archive.read(UNIHAN_GENERAL_STANDARD_FILE).decode("utf-8").splitlines():
+            fields = line.split("\t")
+            if len(fields) == 3 and fields[1] == "kTGH" and fields[0].startswith("U+"):
+                found.add(int(fields[0][2:], 16))
+    if len(found) != GENERAL_STANDARD_CHARACTERS:
+        raise RuntimeError(f"{unihan} lists {len(found)} general standard characters, "
+                           f"not {GENERAL_STANDARD_CHARACTERS}")
+    return found
+
+
+def cjk_characters(general_standard=()):
     """The characters the cut-down CJK font keeps, as a sorted list of code points.
 
     The two-byte characters of GB 2312, of Big5's symbols and level-1 hanzi
     (lead bytes 0xA1-0xC6), of JIS X 0208 (EUC-JP rows 1-84), and of KS X
     1001's symbol and Hangul rows (lead bytes 0xA1-0xAC and 0xB0-0xC8, the
-    hanja left out), as Python's codecs map them, and the blocks of CJK
+    hanja left out), as Python's codecs map them, the blocks of CJK
     punctuation, kana, bopomofo, Hangul compatibility jamo and half- and
-    full-width forms.
+    full-width forms, and the code points of general_standard, the Table of
+    General Standard Chinese Characters (general_standard_characters).
     """
     def two_byte(codec, leads, trails):
         found = set()
@@ -140,6 +173,7 @@ def cjk_characters():
     characters |= two_byte("euc_kr", [*range(0xA1, 0xAD), *range(0xB0, 0xC9)], range(0xA1, 0xFF))
     for first, last in ((0x3000, 0x30FF), (0x3100, 0x312F), (0x3130, 0x318F), (0xFF00, 0xFFEF)):
         characters |= set(range(first, last + 1))
+    characters |= set(general_standard)
     return sorted(characters)
 
 
@@ -223,8 +257,9 @@ def fonttools_python(deps):
     return python
 
 
-def cut_cjk_face(collection, face, out, full):
-    """Writes one face of the CJK collection to out: whole when full, else cut to cjk_characters().
+def cut_cjk_face(collection, unihan, face, out, full):
+    """Writes one face of the CJK collection to out: whole when full, else cut to cjk_characters(),
+    the general standard characters of the Unihan archive among them.
 
     Runs in the fontTools environment (--cut-cjk-face). Layout tables are
     dropped, since the engine shapes nothing, and the hinting kept; the
@@ -243,7 +278,7 @@ def cut_cjk_face(collection, face, out, full):
         options.notdef_outline = True
         options.recalc_timestamp = False
         held = font.getBestCmap()
-        kept = [c for c in cjk_characters() if c in held]
+        kept = [c for c in cjk_characters(general_standard_characters(unihan)) if c in held]
         if len(kept) != CJK_SUBSET_CHARACTERS:
             raise RuntimeError(f"the face holds {len(kept)} of the characters, not {CJK_SUBSET_CHARACTERS}")
         subsetter = subset.Subsetter(options)
@@ -269,7 +304,7 @@ def make_fonts(deps, full_cjk):
     cjk = fonts / "NotoSansCJKsc-Bold.otf"
     print(f"Writing {cjk.name} ({'the whole face' if full_cjk else 'cut to the common characters'})", flush=True)
     command = [str(fonttools_python(deps)), str(pathlib.Path(__file__).resolve()), "--cut-cjk-face",
-               str(fetch(deps, "noto-cjk")), str(cjk)]
+               str(fetch(deps, "noto-cjk")), str(fetch(deps, "unihan")), str(cjk)]
     if full_cjk:
         command.append("--full-cjk")
     subprocess.run(command, check=True)
@@ -307,7 +342,7 @@ def self_test():
     if failures:
         return 1
     print(f"bootstrap_text_fonts self-test: {len(pins)} pins, {len(LICENCES)} licences and "
-          f"{len(characters)} CJK characters as expected")
+          f"{len(characters)} CJK characters besides the general standard table, as expected")
     return 0
 
 
@@ -321,12 +356,13 @@ def main(argv=None):
     parser.add_argument("--fonts-only", action="store_true",
                         help="make the fonts and build no FreeType (for builds that bring their own)")
     parser.add_argument("--self-test", action="store_true", help="check the pins and the character set, and exit")
-    parser.add_argument("--cut-cjk-face", nargs=2, metavar=("COLLECTION", "OUT"), help=argparse.SUPPRESS)
+    parser.add_argument("--cut-cjk-face", nargs=3, metavar=("COLLECTION", "UNIHAN", "OUT"), help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.self_test:
         return self_test()
     if args.cut_cjk_face:
-        cut_cjk_face(args.cut_cjk_face[0], CJK_FACE_INDEX, args.cut_cjk_face[1], args.full_cjk)
+        cut_cjk_face(args.cut_cjk_face[0], args.cut_cjk_face[1], CJK_FACE_INDEX, args.cut_cjk_face[2],
+                     args.full_cjk)
         return 0
     deps = args.deps.resolve()
     deps.mkdir(parents=True, exist_ok=True)

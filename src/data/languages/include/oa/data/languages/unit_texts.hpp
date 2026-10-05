@@ -83,6 +83,22 @@ class UnitTexts {
         std::string_view unit_name, std::string_view own, std::span<const std::string> words
     ) const;
 
+    /// Returns a unit type's name in one language its file gives.
+    ///
+    /// @param unit_name the unit's name (UnitDef.unit_name), any case
+    /// @param word the language's word in the game data, any case
+    /// @return the name; null when its file gives none in the language
+    [[nodiscard]] const std::string*
+    name_in(std::string_view unit_name, std::string_view word) const;
+
+    /// Returns a unit type's description in one language its file gives.
+    ///
+    /// @param unit_name the unit's name (UnitDef.unit_name), any case
+    /// @param word the language's word in the game data, any case
+    /// @return the description; null when its file gives none in the language
+    [[nodiscard]] const std::string*
+    description_in(std::string_view unit_name, std::string_view word) const;
+
     /// Returns how many unit types the table holds texts for.
     ///
     /// @return the count

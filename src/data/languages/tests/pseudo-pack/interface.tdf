@@ -1,0 +1,8 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// One of the engine's own words, with a place filled in.
+[Version {version}]
+	{
+	en-XA=［测Version {version}试］;
+	}

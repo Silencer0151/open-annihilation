@@ -6,6 +6,7 @@
 #include "net_options.hpp"
 
 #include "oa/app/app.hpp"
+#include "oa/app/game_directory.hpp"
 #include "oa/core/game_state.h"
 
 #include <charconv>
@@ -70,13 +71,13 @@ bool take_option(void* context, const char* name, const OptionValues& values, ui
     } else if (argument == "--dplay-port")
         result.dplay_port = parse_port(value());
     else if (argument == "--play-demo")
-        result.play_demo = fs::path(value());
+        result.play_demo = path_from_utf8(value());
     else if (argument == "--check-recording-hook") {
         result.check_recording_hook = true;
         effects |=
             option_effect::headless_check | option_effect::unattended | option_effect::skip_intro;
     } else if (argument == "--net-record")
-        result.net_record = fs::path(value());
+        result.net_record = path_from_utf8(value());
     else if (argument == "--replay-viewer")
         result.replay_viewer = true;
     else if (argument == "--demo-unit-table") {

@@ -2,13 +2,16 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/ui/frontend_renderer.hpp"
+#include "oa/ui/frontend_renderer/game_text.hpp"
 #include "oa/ui/frontend_renderer/scroll_bars.hpp"
+#include "oa/data/languages/translation.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -560,9 +563,82 @@ void test_shade_panel_below() {
     CHECK(surface.rgb == kept);
 }
 
+/// Translates the German words of 3.1c's translate.tdf the tests need.
+///
+/// @param text the English text
+/// @return its German, or null
+const char* german(void*, const char* text) {
+    const std::string_view english(text);
+    if (english == "Easy")
+        return "Leicht";
+    if (english == "Medium")
+        return "Mittel";
+    return nullptr;
+}
+
+// A button with stages shows each stage's caption translated on its own, as
+// 3.1c translates them after the whole caption; a button without stages
+// keeps its caption as the GUI file's reading translated it.
+void check_translated_stage_captions() {
+    using oa::ui::frontend_renderer::translated_stage_caption;
+    oa::data::languages::TranslationHooks hooks;
+    hooks.translate = german;
+    oa::data::languages::set_translation_hooks(hooks);
+    oa::ui::gui_layout::ButtonFields staged;
+    staged.text = "Easy|Medium|Hard";
+    staged.stages = 3;
+    CHECK(translated_stage_caption(staged, 0) == "Leicht");
+    CHECK(translated_stage_caption(staged, 1) == "Mittel");
+    CHECK(!translated_stage_caption(staged, 2));
+    oa::ui::gui_layout::ButtonFields plain;
+    plain.text = "Medium";
+    CHECK(!translated_stage_caption(plain, 0));
+    oa::data::languages::set_translation_hooks({});
+    CHECK(!translated_stage_caption(staged, 1));
+}
+
+// The modern fonts draw a font's text in its letters' colour: the lightest
+// entry its 'H' is drawn in, which for a GUI font is its letters' face and
+// not their shading or outline, whatever the entry at foreground_index
+// holds in a screen's palette, and for an FNT font foreground_index.
+void test_font_ink() {
+    namespace renderer = oa::ui::frontend_renderer;
+    constexpr uint8_t face = 0x42;
+    constexpr uint8_t shade = 0x44;
+    constexpr uint8_t outline = 0x5d;
+    oa::PaletteBytes palette{};
+    const auto set = [&palette](uint8_t index, uint8_t red, uint8_t green, uint8_t blue) {
+        palette[index * 4U] = red;
+        palette[index * 4U + 1] = green;
+        palette[index * 4U + 2] = blue;
+    };
+    set(face, 195, 195, 155);
+    set(shade, 147, 147, 111);
+    set(outline, 43, 43, 43);
+    set(oa::formats::fnt::foreground_index, 0, 255, 0);
+    oa::formats::fnt::Glyph letter;
+    letter.width = 4;
+    letter.height = 1;
+    letter.pixels = {outline, shade, face, outline};
+    letter.coverage.assign(4, 1);
+    oa::formats::fnt::Font gui;
+    gui.glyphs['H'] = letter;
+    CHECK(renderer::fnt_font_ink(gui, palette) == face);
+    letter.pixels.assign(4, oa::formats::fnt::foreground_index);
+    oa::formats::fnt::Font fnt;
+    fnt.glyphs['H'] = letter;
+    CHECK(renderer::fnt_font_ink(fnt, palette) == oa::formats::fnt::foreground_index);
+    CHECK(
+        renderer::fnt_font_ink(oa::formats::fnt::Font{}, palette) ==
+        oa::formats::fnt::foreground_index
+    );
+}
+
 } // namespace
 
 int main() {
+    check_translated_stage_captions();
+    test_font_ink();
     using oa::ui::frontend_renderer::staged_caption;
     CHECK(staged_caption("Easy|Medium|Hard", 0) == "Easy");
     CHECK(staged_caption("Easy|Medium|Hard", 1) == "Medium");

@@ -14,9 +14,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace oa::ui::engine_settings::geometry {
@@ -385,6 +387,14 @@ inline constexpr SourceRect mods_lock_text{
 };
 /// A mod row's height, its border included.
 inline constexpr int32_t mod_row_height = 28;
+/// The rows from a mod row's top to its description line's.
+inline constexpr int32_t mod_description_top = 15;
+/// The rows a mod row grows by while the dialog's words are drawn in the
+/// modern fonts, whose ideographs stand taller than the game's fonts, and
+/// the rows its description moves down then: its title and its description
+/// each keep clear of the other and of its border.
+inline constexpr int32_t tall_mod_row_growth = 6;
+inline constexpr int32_t tall_mod_description_drop = 4;
 /// The rows between two mod rows.
 inline constexpr int32_t mod_row_gap = 3;
 /// A mod row's badge's side, in source pixels.
@@ -516,6 +526,18 @@ struct Row {
 /// @param english the word, in English as the source writes it
 /// @return the text to show
 [[nodiscard]] std::string_view shown_text(std::string_view english);
+
+/// Returns a text the dialog shows, looked up whole in the language shown
+/// (shown_text), with its places ({name}) filled; the values are not looked
+/// up, and a place no value names stays as it is written.
+///
+/// @param english the text, in English
+/// @param places each place's name and value
+/// @return the text
+[[nodiscard]] std::string filled(
+    std::string_view english,
+    std::initializer_list<std::pair<std::string_view, std::string_view>> places
+);
 
 /// The open section's rows, placed.
 struct Rows {
@@ -684,7 +706,10 @@ struct ModRowText {
     std::string_view text, int32_t width, const std::function<int32_t(std::string_view)>& text_width
 );
 
-/// Breaks a text into lines of a width, at its spaces.
+/// Breaks a text into lines of a width, at its spaces. A text with
+/// Chinese, Japanese or Korean characters also breaks between them, and
+/// never starts a line with a closing mark or ends one with an opening mark
+/// (oa::base::text::first_row).
 ///
 /// @param text the text, in UTF-8
 /// @param width the room, in source pixels
@@ -1155,10 +1180,12 @@ void scroll_list(List& list, int32_t by) noexcept;
 
 /// Returns a text in the characters the game's fonts hold: a degree sign,
 /// a middle dot, a multiplication sign and a plus-minus sign as " degrees",
-/// "*", "x" and "+/-", any other character outside printable ASCII as "?".
+/// "*", "x" and "+/-", Chinese, Japanese and Korean characters as they are,
+/// for the modern fonts to draw, and any other character outside printable
+/// ASCII as "?".
 ///
 /// @param text the text, UTF-8
-/// @return the text in printable ASCII
+/// @return the text in printable ASCII and those characters
 [[nodiscard]] std::string ascii_text(std::string_view text);
 
 /// Returns a value as a list's slider shows it: a number with its unit,
@@ -1456,12 +1483,10 @@ inline constexpr std::array<std::string_view, 2> mods_folders_text{
 inline constexpr std::string_view path_ellipsis = "...";
 /// The Switch Mod question's heading.
 inline constexpr std::string_view switch_heading_text = "SWITCH MOD";
-/// What the Switch Mod question asks, round the mod's title.
-inline constexpr std::string_view switch_ask_before_text = "Switch to ";
-/// What follows the mod's title in the question.
-inline constexpr std::string_view switch_ask_after_text =
-    " now? The game reloads its data for the new mod and returns to the main menu. Your "
-    "other settings are kept.";
+/// What the Switch Mod question asks, with the mod's title in its place.
+inline constexpr std::string_view switch_ask_text =
+    "Switch to {title} now? The game reloads its data for the new mod and returns to the main "
+    "menu. Your other settings are kept.";
 /// The question's note for a folder without an oamod.yaml.
 inline constexpr std::string_view switch_no_profile_text =
     "This folder has no oamod.yaml, so the game's own rules apply.";

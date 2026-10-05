@@ -116,7 +116,11 @@ struct PlayerSetupInfo {
     uint8_t version_major{};
     uint8_t version_minor{};
     uint32_t map_hash{};
-    uint8_t reserved_after_map_hash[0x0c]{}; // copied with the block; never read
+    uint8_t reserved_after_map_hash[0x07]{}; // copied with the block; never read
+    uint8_t recorder_protocol{};             // the sender's recorder version, 0 for none
+    uint8_t chat_signature[2]{};             // 'U', '8' when chat_flags holds the sender's chat
+    uint8_t chat_flags{};                    // netgame::chat_flag_utf8, read after chat_signature
+    uint8_t reserved_after_chat_flags{};     // copied with the block; never read
 };
 
 #pragma pack(pop)
@@ -143,6 +147,10 @@ OA_ASSERT_OFFSET(PlayerSetupInfo, version_major, 0xa7);
 OA_ASSERT_OFFSET(PlayerSetupInfo, version_minor, 0xa8);
 OA_ASSERT_OFFSET(PlayerSetupInfo, map_hash, 0xa9);
 OA_ASSERT_OFFSET(PlayerSetupInfo, reserved_after_map_hash, 0xad);
+OA_ASSERT_OFFSET(PlayerSetupInfo, recorder_protocol, 0xb4);
+OA_ASSERT_OFFSET(PlayerSetupInfo, chat_signature, 0xb5);
+OA_ASSERT_OFFSET(PlayerSetupInfo, chat_flags, 0xb7);
+OA_ASSERT_OFFSET(PlayerSetupInfo, reserved_after_chat_flags, 0xb8);
 
 // One unit-content record keyed by FBI hash.
 struct UnitSyncRecord {
@@ -356,6 +364,11 @@ struct Lobby {
     netgame::WireRules wire_rules{};
     /// The recorder's session, which the match takes over at the start.
     netgame::RecorderSession recorder{};
+    /// This machine sends and reads chat as UTF-8: the blocks it sends say
+    /// so (netgame::announce_unicode_chat) and each machine gets a line in
+    /// the form it reads (lobby_say). Not one of the game's rules: players
+    /// with it on and off play together.
+    bool unicode_chat{};
 };
 
 // ---------------------------------------------------------------------------
@@ -876,6 +889,15 @@ void lobby_leave_battleroom(Lobby& lobby) noexcept;
 // ---------------------------------------------------------------------------
 // Records the lobby sends and receives
 
+/// Translates interface text through LobbyServices::translate, as 3.1c's
+/// gadget text setter translates the texts it sets.
+///
+/// @param lobby lobby whose services translate
+/// @param text text to translate
+/// @return its translation, valid until the next call, or the text itself
+///     without one
+[[nodiscard]] const char* lobby_translated(const Lobby& lobby, const char* text) noexcept;
+
 /// Sends every local and computer slot's lobby block (0x20) and team (0x24) to all players, then the
 /// machine-group requests.
 ///
@@ -980,9 +1002,13 @@ void lobby_reject(Lobby& lobby, uint32_t player_id, uint8_t reason) noexcept;
 
 /// Broadcasts a chat line "<name> text" as 0x05 from the speaker, flushes it and posts it locally.
 ///
+/// With Lobby::unicode_chat on the line goes as net_match_say sends one:
+/// read as UTF-8, up to four records unless it is a command, and to each
+/// machine in the form it reads.
+///
 /// @param[in,out] lobby Lobby state.
 /// @param speaker Player speaking.
-/// @param text Line text.
+/// @param text Line text, as this machine holds game text.
 void lobby_say(Lobby& lobby, const Player& speaker, const char* text) noexcept;
 
 /// Appends a line to the chat ring, dropping the oldest when full.

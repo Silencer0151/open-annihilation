@@ -7,7 +7,8 @@ add_library(oa-data-campaign src/campaign_file.cpp src/map_catalog.cpp src/direc
 add_library(oa::data::campaign ALIAS oa-data-campaign)
 target_include_directories(oa-data-campaign PUBLIC include)
 target_compile_features(oa-data-campaign PUBLIC cxx_std_20)
-target_link_libraries(oa-data-campaign PUBLIC oa-formats-tdf oa-core-types oa-data-match-rules oa-options PRIVATE oa-base-text oa-data-defs)
+target_link_libraries(oa-data-campaign PUBLIC oa-formats-tdf oa-core-types oa-data-match-rules oa-options PRIVATE oa-base-text oa-data-defs
+  oa-data-languages)
 add_library(oa-data-campaign-assets src/campaign_assets.cpp)
 add_library(oa::data::campaign_assets ALIAS oa-data-campaign-assets)
 target_link_libraries(oa-data-campaign-assets PUBLIC oa-data-campaign PRIVATE oa-data-languages oa-formats-hpi)

@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+# SPDX-License-Identifier: GPL-3.0-only
+
+# A pseudo-language for the tests: each text bracketed and padded with
+# hanzi, so that a text the packs reach is told from the English at a
+# glance. It is never shipped.
+oalang: 1
+tag: en-XA
+name: "［测Pseudo试］"
+english-name: Pseudo
+word: Pseudo
+version: "1"
+locales: [en-XA]
+fallbacks: []
+text: {needs: modern-fonts}
+unicode: true

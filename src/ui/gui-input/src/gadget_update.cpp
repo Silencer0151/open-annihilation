@@ -2,9 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "gadget_internal.hpp"
+#include "oa/base/text/line_break.hpp"
 
 #include <algorithm>
 #include <cstdint>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace oa::ui::gui_input {
@@ -333,6 +336,51 @@ int32_t update_panel(GadgetPanel& panel) {
     return 1;
 }
 
+namespace {
+
+/// Wraps text with Chinese, Japanese or Korean characters, which are
+/// written without spaces: a line breaks at a space or between two of
+/// those characters where the line breaker allows (oa::base::text), before
+/// it reaches the width. A break at spaces drops them; each break is CR LF,
+/// and the text's own line breaks stay.
+///
+/// @param text the text
+/// @param width the line width, in pixels
+/// @param measure a NUL-ended line's width, in pixels
+/// @return the wrapped text
+template <class Measure>
+std::string wrap_wide_text(std::string_view text, int32_t width, const Measure& measure) {
+    std::string out;
+    std::string line;
+    const auto fits = [&](std::string_view start) {
+        line.assign(start);
+        return measure(line.c_str()) < width;
+    };
+    for (;;) {
+        const auto newline = text.find('\n');
+        std::string_view rest = text.substr(0, newline);
+        // A CR before the line break stays with it.
+        const bool carriage = !rest.empty() && rest.back() == '\r';
+        if (carriage)
+            rest.remove_suffix(1);
+        while (!rest.empty()) {
+            const auto row = oa::base::text::first_row(rest, fits);
+            out.append(rest.substr(0, row.bytes));
+            rest.remove_prefix(row.next);
+            if (!rest.empty())
+                out += "\r\n";
+        }
+        if (carriage)
+            out += '\r';
+        if (newline == std::string_view::npos)
+            return out;
+        out += '\n';
+        text.remove_prefix(newline + 1);
+    }
+}
+
+} // namespace
+
 std::string
 wrap_text(GadgetPanel& panel, std::string_view text, int32_t width, int32_t font_record) {
     const auto measure = [&](const char* value) {
@@ -343,6 +391,9 @@ wrap_text(GadgetPanel& panel, std::string_view text, int32_t width, int32_t font
     };
     if (font_record != -1)
         apply_gadget_font(panel, font_record);
+    if (const auto ended = text.substr(0, std::min(text.find('\0'), text.find('\xFF')));
+        oa::base::text::has_wide_script(ended))
+        return wrap_wide_text(ended, width, measure);
     const auto glyph = std::max(measure("d"), 1);
     const auto length = static_cast<int32_t>(text.size());
     const auto per_line = std::max(width / glyph, 1);

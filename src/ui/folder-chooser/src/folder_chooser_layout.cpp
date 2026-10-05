@@ -1121,9 +1121,13 @@ Column browse_column(const Context& context, Tally& tally, int x, int room) {
     y += add_button_row(context, tally, column.top, x, y, room, places, {}) +
          context.px(metrics.block_gap);
     if (!model.folder_verdict.empty()) {
-        const std::string text = model.folder_usable
-                                     ? tr("This folder can be played: ") + model.folder_verdict
-                                     : model.folder_verdict;
+        // The sentence is translated whole, with the verdict in its place.
+        std::string text = model.folder_verdict;
+        if (model.folder_usable) {
+            text = tr("This folder can be played: {folder}");
+            if (const auto at = text.find("{folder}"); at != std::string::npos)
+                text.replace(at, std::string_view("{folder}").size(), model.folder_verdict);
+        }
         y += add_banner(
                  context,
                  column.top,

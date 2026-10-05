@@ -5,6 +5,7 @@
 #include "dialog_internal.hpp"
 #include "oa/data/defs/layout.hpp"
 
+#include "oa/base/text/line_break.hpp"
 #include "oa/formats/fnt.hpp"
 #include "oa/ui/decoded.hpp"
 #include "oa/ui/gui_input/gadget_panel.hpp"
@@ -93,8 +94,8 @@ bool open_message_box(
         return false;
     }
     auto wrapped = dialog_wrap(*dialog, dialog_translate(text), width);
-    if (wrapped.size() > kMessageBytes)
-        wrapped.resize(kMessageBytes);
+    // Cut between whole characters.
+    wrapped.resize(oa::base::text::whole_character_bytes(wrapped, kMessageBytes));
     const auto line_step = static_cast<int16_t>(kLineGap + font_height);
     const auto first_label = gadgets.size();
     int16_t y = kFirstLineY;

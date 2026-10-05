@@ -12,6 +12,7 @@
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <system_error>
 #ifdef _WIN32
@@ -52,8 +53,18 @@ void validate(const Values& values) {
             throw std::runtime_error("game preference exceeds size limit");
 }
 
+/// Returns a path in UTF-8, for messages: a user folder named outside the
+/// system's code page has no narrow spelling on Windows.
+///
+/// @param path the path
+/// @return its UTF-8 spelling
+std::string path_text(const std::filesystem::path& path) {
+    const auto text = path.u8string();
+    return {text.begin(), text.end()};
+}
+
 std::runtime_error io_error(const char* operation, const std::filesystem::path& file) {
-    return std::runtime_error(std::string(operation) + ": " + file.string());
+    return std::runtime_error(std::string(operation) + ": " + path_text(file));
 }
 
 /// The engine's folder in Application Support, named after the project's domain.
@@ -77,7 +88,7 @@ std::filesystem::path apple_data_directory(const std::filesystem::path& applicat
     std::error_code ignored;
     if (!error || std::filesystem::exists(folder, ignored))
         return folder;
-    std::cerr << "cannot rename " << earlier.string() << " to " << folder.string() << ": "
+    std::cerr << "cannot rename " << path_text(earlier) << " to " << path_text(folder) << ": "
               << error.message() << "; using it under its earlier name\n";
     return earlier;
 }

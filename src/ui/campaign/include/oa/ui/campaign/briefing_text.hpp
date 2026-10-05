@@ -35,6 +35,11 @@ using MeasureText = int32_t (*)(void* context, const char* text);
 /// reach `width`; breaks are found only at a following space, hyphen or
 /// newline and are written as CR LF, the CR replacing the separator (so a
 /// hyphen at a break is lost). A word longer than the line is left unbroken.
+/// A text with Chinese, Japanese or Korean characters, which are written
+/// without spaces, also breaks between them, before a row reaches `width`,
+/// never starting a row with a closing mark or ending one with an opening
+/// mark (oa::base::text::first_row), and never parting a highlight's markers
+/// from the words they mark; its output holds whole characters only.
 ///
 /// @param text Source text, ended by NUL or kTextEnd.
 /// @param width Line width in pixels.

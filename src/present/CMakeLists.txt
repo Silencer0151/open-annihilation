@@ -27,6 +27,8 @@ if(BUILD_TESTING)
   endforeach()
   target_link_libraries(oa-present-gaf-sprites-test PRIVATE oa-formats-gaf)
   target_link_libraries(oa-present-game-text-test PRIVATE oa-test-support)
+  target_link_libraries(oa-present-typed-text-test PRIVATE oa-test-support)
+  target_link_libraries(oa-present-picture-captions-test PRIVATE oa-test-support)
   # The installed game's GAF files (compared with the GAF reader), palette
   # tables and PCX images.
   foreach(test_case IN ITEMS gaf-sprites palette-tables pcx)

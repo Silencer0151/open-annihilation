@@ -12,6 +12,7 @@
 // window's size or its density changes, and only its painted rows are
 // uploaded.
 #include "oa/app/runtime.hpp"
+#include "oa/data/languages/interface_text.hpp"
 #include "pad_glyphs.hpp"
 #include "render_run.hpp"
 #include "touch_paint.hpp"
@@ -1060,9 +1061,14 @@ void paint_group_chip(
     const float number_points = wide ? 17.0F : 15.0F;
     const std::string number = std::to_string(group);
     std::string count = std::to_string(units);
-    if (wide)
-        count = units == 1 ? context.translate("1 UNIT")
-                           : std::to_string(units) + " " + context.translate("UNITS");
+    if (wide && units == 1) {
+        count = context.translate("1 UNIT");
+    } else if (wide) {
+        // The phrase is translated whole, with the count in its place.
+        count = context.translate("{n} UNITS");
+        if (const auto at = count.find("{n}"); at != std::string::npos)
+            count.replace(at, std::string_view("{n}").size(), std::to_string(units));
+    }
     const float cap = cap_share * static_cast<float>(font_px(context, number_points));
     const float sub_cap = cap_share * static_cast<float>(font_px(context, sub_label_points + 1.0F));
     const float gap = px(context, 5.0F);
@@ -2135,8 +2141,13 @@ bool TouchDrawAccess::refresh_layer(Runtime& runtime) {
     }
     paint::Painter painter(layer.canvas);
     painter.clear_box(layer.bounds);
+    // A text 3.1c's tables translate, else one of the HUD's own words in the
+    // interface catalogue.
     const Translate translate = [&runtime](std::string_view text) {
-        return runtime.translate_ui(text);
+        std::string translated = runtime.translate_ui(text);
+        if (translated == text)
+            translated = std::string(oa::data::languages::interface_text(text));
+        return translated;
     };
     const float scale_x = static_cast<float>(look.layer_width) / static_cast<float>(look.width);
     const float scale_y = static_cast<float>(look.layer_height) / static_cast<float>(look.height);

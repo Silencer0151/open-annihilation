@@ -612,7 +612,7 @@ namespace {
         else if (argument == "--choose-game-dir")
             result.choose_game_dir = true;
         else if (argument == "--archive")
-            result.archives.emplace_back(value(argument));
+            result.archives.push_back(path_from_utf8(value(argument)));
         else if (argument == "--mod")
             result.mod_file = path_from_utf8(value(argument));
         else if (argument == "--mod-dir")
@@ -624,9 +624,9 @@ namespace {
         else if (argument == "--accept-unimplemented-hacks")
             result.accept_unimplemented_hacks = true;
         else if (argument == "--snapshot")
-            result.snapshot = value(argument);
+            result.snapshot = path_from_utf8(value(argument));
         else if (argument == "--preferences-file")
-            result.preferences_file = fs::path(value(argument));
+            result.preferences_file = path_from_utf8(value(argument));
         else if (argument == "--data-dir")
             result.data_dir = path_from_utf8(value(argument));
         else if (argument == "--user-folder")
@@ -690,13 +690,13 @@ namespace {
         else if (argument == "--busy-combat")
             result.busy_combat = true;
         else if (argument == "--stage")
-            result.stage_file = value(argument);
+            result.stage_file = path_from_utf8(value(argument));
         else if (argument == "--save-after")
             result.save_after = parse_count(value(argument));
         else if (argument == "--save-file")
-            result.save_file = value(argument);
+            result.save_file = path_from_utf8(value(argument));
         else if (argument == "--load")
-            result.load_file = value(argument);
+            result.load_file = path_from_utf8(value(argument));
         else if (argument == "--give-orders")
             result.give_orders = true;
         else if (argument == "--zoom") {
@@ -843,9 +843,9 @@ namespace {
         else if (argument == "--debug-order-lines")
             result.debug_order_lines = true;
         else if (argument == "--trace-digest")
-            result.trace_digest = value(argument);
+            result.trace_digest = path_from_utf8(value(argument));
         else if (argument == "--trace-units")
-            result.trace_units = value(argument);
+            result.trace_units = path_from_utf8(value(argument));
         else if (argument == "--seed")
             result.seed = parse_seed(value(argument));
         else if (argument == "--draw-threads")

@@ -6,6 +6,7 @@
 #include "oa/app/runtime.hpp"
 #include "network_play.hpp"
 #include "oa/app/check_host.hpp"
+#include "oa/app/game_directory.hpp"
 #include "net_state.hpp"
 
 #include "oa/ui/frontend_renderer/gadget_draw.hpp"
@@ -51,7 +52,7 @@ bool NetworkPlay::select_map_named(std::string_view name) {
         );
         if (!parsed.ok() || !same(parsed.metadata->mission_name, name))
             continue;
-        return runtime_.select_map(fs::path(path).stem().string()) != 0;
+        return runtime_.select_map(path_to_utf8(path_from_utf8(path).stem())) != 0;
     }
     return false;
 }

@@ -246,6 +246,8 @@ std::string_view label_of(settings::Setting setting) {
         return "Font shadow";
     case settings::Setting::text_background:
         return "Game text background";
+    case settings::Setting::unicode_chat:
+        return "Enable Unicode Multiplayer Chat";
     case settings::Setting::text_size:
         return "Text size";
     case settings::Setting::language:

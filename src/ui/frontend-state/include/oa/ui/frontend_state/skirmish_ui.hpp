@@ -144,11 +144,12 @@ class Host : public game_entry::SkirmishHost {
     /// @return The translation, or the text itself.
     virtual std::string translate_ui(std::string_view text) = 0;
 
-    /// Sets a gadget's text.
+    /// Sets a gadget's text, in the language shown, as 3.1c's gadget text
+    /// setter translates every text it sets.
     ///
     /// @param menu Panel holding the gadget.
     /// @param widget Gadget name.
-    /// @param text New text.
+    /// @param text New text, before translation.
     /// @param length Text-box length; 0 keeps the current one.
     virtual void
     set_text(MenuHandle menu, std::string_view widget, std::string_view text, int32_t length) = 0;

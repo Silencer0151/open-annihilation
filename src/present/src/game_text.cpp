@@ -3,6 +3,7 @@
 
 #include "oa/present/game_text.hpp"
 
+#include "oa/base/text/line_break.hpp"
 #include "oa/present/blit.hpp"
 
 #include <algorithm>
@@ -440,7 +441,6 @@ struct DrawnCharacter {
     std::size_t offset{}; ///< its first byte
     std::size_t bytes{};  ///< its bytes
     int32_t end{};        ///< the pen's column after it, from the line's start
-    bool space{};         ///< it is a space, where a row may break
 };
 
 /// Draws a line once and lists its characters with the pen after each.
@@ -467,7 +467,7 @@ drawn_characters(std::string_view text, TextFace face, int32_t scale, int32_t si
         // A character the mask has no pen for takes no room.
         if (characters.size() < mask->character_ends.size())
             pen = mask->character_ends[characters.size()];
-        characters.push_back({at, length, pen, text[at] == ' '});
+        characters.push_back({at, length, pen});
         at += length;
     }
     return characters;
@@ -513,6 +513,41 @@ modern_text_tail(std::string_view text, TextFace face, int32_t scale, int32_t si
     return characters.back().offset;
 }
 
+std::optional<TextUnderline> modern_text_underline(
+    std::string_view text,
+    TextFace face,
+    int32_t scale,
+    int32_t size,
+    std::size_t from,
+    std::size_t to
+) {
+    if (installed_hooks.draw == nullptr || text.empty() || from >= to)
+        return std::nullopt;
+    scale = std::max(scale, 1);
+    const auto mask =
+        installed_hooks.draw(installed_hooks.context, text, face, scale, held_text_size(size));
+    if (!mask)
+        return std::nullopt;
+    // The stretch runs from the pen after the last character before it to
+    // the pen after its own last character.
+    int32_t left = 0;
+    std::optional<int32_t> right;
+    for (const DrawnCharacter& character : drawn_characters(text, face, scale, size)) {
+        if (character.offset + character.bytes <= from)
+            left = character.end;
+        else if (character.offset < to)
+            right = character.end;
+    }
+    if (!right || *right <= left)
+        return std::nullopt;
+    TextUnderline underline;
+    underline.left = left;
+    underline.width = *right - left;
+    underline.thickness = text_border(scale, size);
+    underline.row = mask->height - mask->baseline - underline.thickness;
+    return underline;
+}
+
 std::vector<TextRowSpan>
 modern_text_rows(std::string_view text, TextFace face, int32_t scale, int32_t size, int32_t width) {
     std::vector<TextRowSpan> rows;
@@ -524,37 +559,31 @@ modern_text_rows(std::string_view text, TextFace face, int32_t scale, int32_t si
         return rows;
     }
     const int32_t room = width - border_reach(scale, size);
-    const auto row_of = [&](std::size_t first, std::size_t end) {
-        // The spaces a row was broken at stay out of it.
-        while (end > first + 1 && characters[end - 1].space)
-            --end;
-        const std::size_t offset = characters[first].offset;
-        return TextRowSpan{offset, characters[end - 1].offset + characters[end - 1].bytes - offset};
-    };
-    std::size_t first = 0;
-    while (first < characters.size()) {
-        const int32_t start = first == 0 ? 0 : characters[first - 1].end;
-        std::size_t index = first;
-        std::size_t last_space = characters.size();
-        for (; index < characters.size(); ++index) {
-            if (index > first && characters[index].end - start > room)
-                break;
-            if (characters[index].space)
-                last_space = index;
-        }
-        if (index == characters.size()) {
-            rows.push_back(row_of(first, index));
-            break;
-        }
-        // The row breaks at a space that does not fit, else at its last
-        // space, else, in a word wider than the row, before the character
-        // that does not fit.
-        const bool at_space = !characters[index].space && last_space > first && last_space < index;
-        const std::size_t end = at_space ? last_space : index;
-        rows.push_back(row_of(first, end));
-        first = end;
-        while (first < characters.size() && characters[first].space)
-            ++first;
+    std::size_t offset = 0;
+    while (offset < text.size()) {
+        // The row's first character, and the pen where the row starts.
+        const auto first = std::lower_bound(
+            characters.begin(),
+            characters.end(),
+            offset,
+            [](const DrawnCharacter& character, std::size_t at) { return character.offset < at; }
+        );
+        const int32_t start = first == characters.begin() ? 0 : std::prev(first)->end;
+        const auto row =
+            oa::base::text::first_row(text.substr(offset), [&](std::string_view start_of_row) {
+                const std::size_t ends = offset + start_of_row.size();
+                const auto last = std::lower_bound(
+                    first,
+                    characters.end(),
+                    ends,
+                    [](const DrawnCharacter& character, std::size_t at) {
+                        return character.offset + character.bytes < at;
+                    }
+                );
+                return last == characters.end() || last->end - start <= room;
+            });
+        rows.push_back({offset, row.bytes});
+        offset += row.next;
     }
     return rows;
 }

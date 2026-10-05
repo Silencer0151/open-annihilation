@@ -511,8 +511,14 @@ void test_app_loop() {
 
 void test_error_log() {
     using namespace oa::platform;
-    const auto directory = oa::test::make_scratch_directory("oa-platform-error-log");
-    const std::string prefix = (directory / "").string();
+    const auto scratch = oa::test::make_scratch_directory("oa-platform-error-log");
+    // The folder is named in Chinese (U+7528 U+6237) and given in UTF-8, as
+    // SDL gives the application's folder.
+    const std::string_view hanzi = "\xE7\x94\xA8\xE6\x88\xB7";
+    const auto directory = scratch / std::u8string(hanzi.begin(), hanzi.end());
+    std::filesystem::create_directories(directory);
+    const auto folder = (directory / "").u8string();
+    const std::string prefix(folder.begin(), folder.end());
     check(append_error_log(prefix.c_str(), out_of_memory_message), "first report");
     check(append_error_log(prefix.c_str(), out_of_memory_message), "second report appends");
     std::FILE* log = open_file(directory / error_log_file_name, "rb");
@@ -529,9 +535,9 @@ void test_error_log() {
             ) == 0,
         "log holds both reports"
     );
-    const std::string missing = (directory / "missing" / "").string();
+    const std::string missing = (scratch / "missing" / "").string();
     check(!append_error_log(missing.c_str(), "x"), "missing folder fails");
-    std::filesystem::remove_all(directory);
+    std::filesystem::remove_all(scratch);
     check(error_log_directory("/games/oa/") == "/games/oa/", "beside the executable");
     check(
         error_log_directory("/Applications/open-annihilation.app/Contents/Resources/") ==

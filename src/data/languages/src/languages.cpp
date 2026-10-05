@@ -74,6 +74,10 @@ bool drawable(const Language& language) noexcept {
     return language.needs == TextNeeds::game_fonts || language.needs == TextNeeds::modern_fonts;
 }
 
+bool turns_unicode_chat_on(const Language& language, bool pack_asks) noexcept {
+    return pack_asks || language.needs == TextNeeds::modern_fonts;
+}
+
 const Language* find_by_tag(std::string_view tag) noexcept {
     for (const Language& language : kLanguages)
         if (same_tag(language.tag, tag))
@@ -143,6 +147,10 @@ const Language* match_locale(std::string_view locale) {
         return nullptr;
     const Language* best = nullptr;
     std::size_t best_length = 0;
+    // A longer match among the languages not offered chooses none.
+    for (const std::string_view pattern : kUnofferedLocales)
+        if (pattern.size() > best_length && leads(tag, pattern))
+            best_length = pattern.size();
     for (const Language& language : kLanguages) {
         if (!drawable(language))
             continue;

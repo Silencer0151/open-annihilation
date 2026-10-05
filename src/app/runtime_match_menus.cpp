@@ -14,9 +14,12 @@
 #include "oa/ui/frontend/savegame_dialogs.hpp"
 #include "oa/formats/fnt.hpp"
 #include "oa/present/blit.hpp"
+#include "oa/present/game_text.hpp"
 #include "oa/present/model/mesh_raster.hpp"
 #include "oa/present/surface.hpp"
+#include "oa/present/typed_text.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
+#include "oa/ui/frontend_renderer/game_text.hpp"
 #include "oa/ui/hud/build_page_fit.hpp"
 #include "oa/ui/gui_input/gadget_panel.hpp"
 #include "oa/ui/gui_input.hpp"
@@ -25,6 +28,7 @@
 #include "oa/ui/console/game_fields.hpp"
 #include "oa/present/world_renderer/world_camera.hpp"
 #include "oa/app/runtime.hpp"
+#include "oa/base/text/line_break.hpp"
 #include "oa/ui/hud/resource_bar.hpp"
 #include "oa/app/view_rules.hpp"
 #include "engine_settings_state.hpp"
@@ -34,6 +38,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <iostream>
 #include <iterator>
@@ -472,6 +477,9 @@ struct LoadGameOverlay {
     std::vector<std::string> side_names;      // shown for a save's "Side" index
     std::vector<std::string_view> side_views; // saves.side_names, over side_names
     ScreenContext* context = nullptr;         // valid during a hook
+    // The input method's composition shown at the end of GAMENAME, as much
+    // of it as fits; it is no part of the name a save is written under.
+    std::string composition;
 };
 
 LoadGameOverlay& load_overlay() {
@@ -481,6 +489,7 @@ LoadGameOverlay& load_overlay() {
 
 void load_overlay_bind(ScreenContext* ctx, LoadGameOverlay& overlay) {
     overlay.bound = true;
+    overlay.composition.clear();
     try {
         auto parsed = oa::ui::gui_layout::parse(
             ctx->assets->read(oa::data::defs::gui_path("loadgame.gui")).bytes,
@@ -604,10 +613,68 @@ int save_overlay_result(
     }
 }
 
+/// The save dialog's name field and the most it holds.
+struct SaveNameField {
+    ui::Control* control{};
+    oa::present::TypedLimits limits{};
+};
+
+/// Finds the save dialog's name field, GAMENAME.
+///
+/// The name is held in whole characters, no more than the field's own
+/// count, and in no more bytes than the field and the GAMES list's text
+/// hold, so that the list shows the whole name.
+///
+/// @param overlay the bound save dialog
+/// @return the field; none when the dialog has no GAMENAME
+std::optional<SaveNameField> save_name_field(LoadGameOverlay& overlay) {
+    const auto index = ui::panel_find(overlay.panel, "GAMENAME");
+    if (index < 0)
+        return std::nullopt;
+    auto& control = overlay.panel.controls[static_cast<std::size_t>(index)];
+    SaveNameField field{&control, {}};
+    field.limits.bytes = std::min(control.text.size(), ui::kSaveDescriptionBytes) - 1;
+    if (const auto* box = std::get_if<oa::ui::gui_layout::TextBoxFields>(
+            &overlay.layout.gadgets[static_cast<std::size_t>(index)].fields
+        );
+        box != nullptr && box->max_characters > 0)
+        field.limits.characters = static_cast<std::size_t>(box->max_characters);
+    return field;
+}
+
+/// Gives the characters the save dialog's name takes.
+///
+/// The dialog shows the name as game text, and the save's file is named by
+/// it in UTF-8. While the game's text is UTF-8 the name takes any script;
+/// otherwise it takes printable ASCII, which reads the same in the game's
+/// code page and in UTF-8.
+///
+/// @return the characters the name takes
+oa::present::TypedCharacters save_name_characters() {
+    return oa::present::game_text_settings().utf8 ? oa::present::TypedCharacters::file_name
+                                                  : oa::present::TypedCharacters::ascii_file_name;
+}
+
+/// Takes the input method's composition away from the end of the name.
+///
+/// @param[in,out] overlay the bound save dialog
+/// @param[in,out] text the name field's text
+void drop_save_composition(LoadGameOverlay& overlay, std::string& text) {
+    if (!overlay.composition.empty() && text.ends_with(overlay.composition))
+        text.resize(text.size() - overlay.composition.size());
+    overlay.composition.clear();
+}
+
 // The save dialog's click on a control: a button acts once released over,
 // and a press on the name field only keeps the keys, as
-// savegame_on_save_press says.
+// savegame_on_save_press says. The input method's composition is no part of
+// the name the click saves under.
 int save_overlay_press(ScreenContext* ctx, LoadGameOverlay& overlay, int32_t hit) {
+    if (const auto field = save_name_field(overlay); field && !overlay.composition.empty()) {
+        std::string text(ui::control_text(*field->control));
+        drop_save_composition(overlay, text);
+        ui::set_control_text(*field->control, text);
+    }
     overlay.context = ctx;
     const auto result = ui::savegame_on_save_press(overlay.panel, overlay.saves, hit);
     overlay.context = nullptr;
@@ -623,31 +690,27 @@ int save_overlay_enter(ScreenContext* ctx, LoadGameOverlay& overlay, int32_t nam
     return save_overlay_result(ctx, overlay, result);
 }
 
-// Typing edits GAMENAME up to its length; Return saves under it and Escape
-// leaves the dialog.
+// Typing edits GAMENAME up to its length, in whole characters of the
+// scripts save_name_characters gives; the characters no file's name may
+// hold are not taken. Backspace takes the last character away, Return saves
+// under the name and Escape leaves the dialog.
 int save_overlay_key(ScreenContext* ctx, LoadGameOverlay& overlay, const ScreenInput& input) {
-    const auto index = ui::panel_find(overlay.panel, "GAMENAME");
-    if (index < 0)
+    const auto field = save_name_field(overlay);
+    if (!field)
         return 1;
-    auto& control = overlay.panel.controls[static_cast<std::size_t>(index)];
+    const auto index = ui::panel_find(overlay.panel, "GAMENAME");
+    auto& control = *field->control;
     std::string text(ui::control_text(control));
-    std::size_t limit = control.text.size() - 1;
-    if (const auto* box = std::get_if<oa::ui::gui_layout::TextBoxFields>(
-            &overlay.layout.gadgets[static_cast<std::size_t>(index)].fields
-        );
-        box != nullptr && box->max_characters > 0)
-        limit = std::min(limit, static_cast<std::size_t>(box->max_characters));
     if (input.kind == ScreenInputKind::text && input.text != nullptr) {
-        for (const char* at = input.text; *at != '\0' && text.size() < limit; ++at)
-            if (static_cast<unsigned char>(*at) >= 0x20 && static_cast<unsigned char>(*at) < 0x7f)
-                text.push_back(*at);
+        drop_save_composition(overlay, text);
+        std::ignore =
+            oa::present::take_typed_text(text, input.text, save_name_characters(), field->limits);
         ui::set_control_text(control, text);
         return 1;
     }
     if (input.kind != ScreenInputKind::key_down)
         return 1;
-    if (input.key == SDLK_BACKSPACE && !text.empty()) {
-        text.pop_back();
+    if (input.key == SDLK_BACKSPACE && oa::present::erase_last_character(text)) {
         ui::set_control_text(control, text);
     } else if (input.key == SDLK_RETURN || input.key == SDLK_KP_ENTER) {
         return save_overlay_enter(ctx, overlay, index);
@@ -777,21 +840,53 @@ int load_overlay_event(ScreenContext* ctx, void*) {
     return overlay.save_role ? save_overlay_press(ctx, overlay, hit) : 0;
 }
 
+/// Draws the save dialog's name in the dialog's font.
+///
+/// While the game's text is UTF-8 the name may hold characters the font
+/// lacks, such as hanzi, and the modern fonts draw those, and an input
+/// method's composition among them, in hattfont12's letter colour up to the
+/// field's right edge. Otherwise the font draws the name's bytes alone.
+///
+/// @param[in,out] ctx screen being drawn; its surface takes the name
+/// @param overlay the bound dialog and its font
+/// @param text the name, game text
+/// @param x the pen column, in screen pixels
+/// @param y the pen row, in screen pixels
+/// @param right the field's last column, in screen pixels
 void load_overlay_text(
-    ScreenContext* ctx, const LoadGameOverlay& overlay, std::string_view text, int32_t x, int32_t y
+    ScreenContext* ctx,
+    const LoadGameOverlay& overlay,
+    std::string_view text,
+    int32_t x,
+    int32_t y,
+    int32_t right
 ) {
     auto* surface = ctx->surface;
     if (surface == nullptr || !overlay.font || text.empty())
         return;
     const auto width = surface->width;
     const auto height = surface->height;
+    // The font's indices are shown in the palette the dialog is drawn in.
+    const auto& palette = static_cast<const Runtime*>(ctx->host)->screen_palette();
+    if (oa::present::game_text_settings().utf8 && renderer::needs_text_runs(text, false)) {
+        std::ignore = renderer::draw_fnt_game_text(
+            *surface,
+            *overlay.font,
+            text,
+            x,
+            y,
+            oa::present::gui_font_color,
+            palette,
+            {0, 0, right, static_cast<int32_t>(height) - 1},
+            false
+        );
+        return;
+    }
     std::vector<uint8_t> pixels(static_cast<std::size_t>(width) * height);
     std::vector<uint8_t> coverage(pixels.size());
     const oa::formats::fnt::IndexedSurface target{width, height, width, pixels, coverage};
     // Where the pen stops is not needed: the text is copied out whole.
     std::ignore = oa::formats::fnt::raster_text(target, *overlay.font, text, x, y);
-    // The font's indices are shown in the palette the dialog is drawn in.
-    const auto& palette = static_cast<const Runtime*>(ctx->host)->screen_palette();
     for (std::size_t offset = 0; offset < pixels.size(); ++offset) {
         if (coverage[offset] == 0)
             continue;
@@ -879,7 +974,12 @@ void load_overlay_draw(ScreenContext* ctx, void*) {
     if (const auto rect = load_overlay_rect(overlay, "GAMENAME");
         name != nullptr && name->active != 0 && rect)
         load_overlay_text(
-            ctx, overlay, ui::control_text(*name), origin.x + rect->left, origin.y + rect->top
+            ctx,
+            overlay,
+            ui::control_text(*name),
+            origin.x + rect->left,
+            origin.y + rect->top,
+            origin.x + rect->right
         );
 }
 
@@ -1255,6 +1355,20 @@ bool Runtime::save_dialog_open() const {
     return load_overlay().save_role;
 }
 
+void Runtime::compose_save_name(std::string_view composition) {
+    auto& overlay = load_overlay();
+    const auto field = overlay.bound && overlay.save_role ? save_name_field(overlay) : std::nullopt;
+    if (!field)
+        return;
+    std::string text(ui::control_text(*field->control));
+    drop_save_composition(overlay, text);
+    const std::size_t committed = text.size();
+    std::ignore =
+        oa::present::take_typed_text(text, composition, save_name_characters(), field->limits);
+    overlay.composition = text.substr(committed);
+    ui::set_control_text(*field->control, text);
+}
+
 void Runtime::close_save_dialog() {
     auto& overlay = load_overlay();
     overlay.bound = false;
@@ -1355,6 +1469,10 @@ bool Runtime::load_match_hud_layout(const std::string& layout, oa::ui::hud::Side
             match_hud_ = renderer::load_screen(
                 assets_, {layout, tile, "palettes/guipal.pal", "anims/commongui.gaf", panel}
             );
+            // The order buttons and the bars' words in the shown language.
+            caption_gaf_pictures("anims/commongui.gaf", match_hud_->sprites);
+            if (!panel.empty())
+                caption_gaf_pictures(panel, match_hud_->shared_sprites);
             break;
         } catch (const std::exception& error) {
             std::cerr << "match HUD '" << layout << "' unavailable: " << error.what() << '\n';
@@ -2744,13 +2862,22 @@ void Runtime::activate_pause_gadget(std::string_view name) {
         auto& runtime = *static_cast<Runtime*>(host);
         oa::ui::gui_input::GadgetPanel measure;
         measure.host.context = &runtime.match_hud_->font;
+        // Measured as the name is drawn, in the modern fonts when they show
+        // game text.
         measure.host.text_width = [](void* font, const void*, const char* value) {
-            return static_cast<int32_t>(oa::formats::fnt::measure_text(
-                *static_cast<const oa::formats::fnt::Font*>(font), value
-            ));
+            return oa::ui::frontend_renderer::measure_fnt_game_text(
+                *static_cast<const oa::formats::fnt::Font*>(font), value, true
+            );
         };
         const auto wrapped = oa::ui::gui_input::wrap_text(measure, text, width, -1);
-        return static_cast<std::size_t>(std::snprintf(out, capacity, "%s", wrapped.c_str()));
+        if (capacity == 0)
+            return 0;
+        // What fits of the wrapped text, less a UTF-8 character the cut
+        // would split.
+        const std::size_t kept = oa::base::text::whole_character_bytes(wrapped, capacity - 1);
+        std::memcpy(out, wrapped.data(), kept);
+        out[kept] = '\0';
+        return kept;
     };
     context.preferences = &preferences_;
     context.session = ingame_session(
@@ -3892,6 +4019,8 @@ void Runtime::activate_options_gadget() {
                  "anims/commongui.gaf",
                  "anims/commongui.gaf"}
             );
+            caption_gaf_pictures("anims/commongui.gaf", resources_.sprites);
+            caption_gaf_pictures("anims/commongui.gaf", resources_.shared_sprites);
             // A bitmap that cannot be read throws, as the screen's other
             // files do; whether the backdrop changed is not needed.
             std::ignore = load_named_background(background.c_str(), false, false, false);

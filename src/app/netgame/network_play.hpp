@@ -92,6 +92,17 @@ class NetworkPlay {
     /// them while the game runs, outside a match. Run every frame.
     void follow_profile_rules();
 
+    /// Tells whether this machine sends and reads chat as UTF-8: Unicode
+    /// multiplayer chat is on (Runtime::unicode_chat_on).
+    ///
+    /// @return true when it does
+    [[nodiscard]] bool unicode_chat() const;
+
+    /// Passes unicode_chat to the battle room, the network match and a
+    /// recording's playback, which follow it from their next line and
+    /// setup block. Run every frame.
+    void follow_unicode_chat();
+
     /// Runs one frame of the network match; nothing without an active match.
     ///
     /// While loading it runs the load barrier and finishes the load once the
@@ -200,6 +211,23 @@ class NetworkPlay {
     ///
     /// @param line Chat line, speaker prefix included; null sends nothing.
     void net_send_chat(const char* line);
+
+    /// Gives the lines the chat line net_send_chat just sent went out as,
+    /// when Unicode chat cut it into more than one record.
+    ///
+    /// @param line the line net_send_chat sent
+    /// @param index which of them
+    /// @return the line at `index` in UTF-8; null past the last, and for a
+    ///         line that went out as one or was not sent
+    [[nodiscard]] const char* shared_chat_line(const char* line, std::size_t index) const;
+
+    /// Gives the bytes a chat line net_send_chat sends may hold, its end
+    /// included: while Unicode chat may cut it into several records, what
+    /// they carry, oa::netgame::chat_line_parts records' worth.
+    ///
+    /// @return the bytes; 0 without a running network match or with
+    ///         Unicode chat off, where one record carries the line
+    [[nodiscard]] std::size_t shared_chat_line_bytes() const;
 
     /// Resets the traffic statistics of the connection's packet queue at the current tick.
     ///

@@ -3,10 +3,12 @@
 
 // Unit build restrictions (RESTRICT2.GUI).
 #include "oa/ui/frontend_multiplayer/restrict.hpp"
+#include "oa/base/text/line_break.hpp"
 #include "oa/data/defs/layout.hpp"
 #include "oa/data/languages/unit_texts.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -18,6 +20,9 @@
 namespace oa::ui::frontend_multiplayer {
 
 namespace {
+
+// Room to format an entry's text before it is cut to the entry's bytes.
+constexpr std::size_t kRestrictRowBytes = 0x200;
 
 constexpr uint32_t kPictureInterval = 2;
 constexpr std::size_t kRestrictLinesPerRow = 2;
@@ -140,9 +145,11 @@ void restrict_open(Lobby& lobby, RestrictPanel& restrict, Panel& panel) noexcept
         const std::string_view name = oa::data::languages::unit_display_name(
             unit.unit_name != nullptr ? unit.unit_name : "", unit.name
         );
+        // The entry keeps the whole characters that fit.
+        char row[kRestrictRowBytes] = {};
         std::snprintf(
-            entry.text,
-            sizeof(entry.text),
+            row,
+            sizeof(row),
             "%.*s\r%s %dM  %dE",
             static_cast<int>(name.size()),
             name.data(),
@@ -150,6 +157,11 @@ void restrict_open(Lobby& lobby, RestrictPanel& restrict, Panel& panel) noexcept
             static_cast<int>(unit.cost_metal),
             static_cast<int>(unit.cost_energy)
         );
+        const std::string_view formatted(row);
+        const std::size_t kept =
+            oa::base::text::whole_character_bytes(formatted, sizeof(entry.text) - 1);
+        std::memcpy(entry.text, formatted.data(), kept);
+        entry.text[kept] = '\0';
         entry.unit = type;
         UnitSyncRecord record{};
         (void)unit_sync_lookup(lobby, unit.fbi_hash, &record);

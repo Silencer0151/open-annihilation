@@ -33,6 +33,8 @@ endif()
 # FreeType and the fonts text outside the game's own fonts is drawn with,
 # from tools/bootstrap_text_fonts.py (cmake/OaTextFonts.cmake).
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/OaTextFonts.cmake")
+# The engine's language packs, copied beside the fonts (cmake/OaLanguages.cmake).
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/OaLanguages.cmake")
 
 # OA_GAME_DIR, the installed game the game-data tests and native checks read,
 # and the helpers that register those tests (cmake/OaGameData.cmake).
@@ -871,6 +873,8 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/runtime_engine_settings_match.cpp src/app/runtime_engine_settings_match_check.cpp
   src/app/runtime_engine_settings_app_menu.cpp src/app/runtime_engine_settings_dialog_check.cpp
   src/app/runtime_view_rules.cpp src/app/runtime_game_text.cpp src/app/runtime_language.cpp
+  src/app/language_packs.cpp
+  src/app/runtime_picture_captions.cpp
   src/app/runtime_renderer.cpp src/app/runtime_renderer_ladder_check.cpp
   src/app/runtime_visual_rules_check.cpp
   src/app/runtime_touch.cpp src/app/runtime_touch_actions.cpp src/app/runtime_touch_camera.cpp
@@ -899,11 +903,12 @@ set(oa_game_libraries oa-formats-hpi oa-app-game-options oa-app-game-directory o
   oa-data-campaign-assets oa-sim-profile oa-sim-state-hash oa-app-extensions
   oa-ui-engine-settings oa-platform-app-menu oa-platform-text-font oa-platform-job-pool
   oa-platform-render-probe oa-app-render-policy oa-ui-decoded oa-base-bytes oa-base-float-precision oa-base-text
-  oa-app-acceleration-status oa-formats-png oa-data-languages oa-platform-locale
+  oa-app-acceleration-status oa-formats-png oa-data-languages oa-formats-oamod oa-platform-locale
   oa-app-full-terrain oa-app-full-supersampling oa-app-full-fog oa-app-card-executor
   oa-present-gpu-world oa-app-full-models oa-app-platform-hooks oa-app-touch-paint
   oa-ui-touch-gestures oa-ui-touch-hud oa-app-game-files oa-ui-game-files oa-app-mod-install
-  oa-ui-pad-controls oa-ui-folder-chooser oa-platform-game-installs oa-platform-file-types)
+  oa-ui-pad-controls oa-ui-folder-chooser oa-platform-game-installs oa-platform-file-types
+  oa-ui-frontend-multiplayer)
 # The table that combines the extensions' tables of oa-game
 # (extension_list.hpp); the extensions themselves are registered with
 # oa_add_extension (cmake/OaExtensions.cmake).
@@ -923,6 +928,14 @@ if(BUILD_TESTING)
   target_link_libraries(oa-app-hook-call-test PRIVATE oa-app-extensions oa-app-command-line
     oa-test-support oa-options)
   add_test(NAME app-hook-call COMMAND oa-app-hook-call-test)
+  # The files a language pack answers for the game data's language folders:
+  # a briefing under camps/briefs-<word> of its own word, and no other path.
+  add_executable(oa-app-language-packs-test src/app/language_packs_test.cpp
+    src/app/language_packs.cpp)
+  target_link_libraries(oa-app-language-packs-test PRIVATE oa-app-headers oa-data-languages
+    oa-formats-oamod oa-formats-tdf oa-test-support oa-options)
+  add_test(NAME app-language-packs COMMAND oa-app-language-packs-test
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/data/languages/tests)
 endif()
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/OaExtensions.cmake")
 # Without SDL3's intro player, oa-game links the one that skips each movie
@@ -2254,9 +2267,25 @@ if(BUILD_TESTING)
     # match and the characters the cut CJK font keeps. It downloads nothing.
     add_test(NAME text-fonts-bootstrap-selftest COMMAND ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/tools/bootstrap_text_fonts.py --self-test)
+    # tools/language_pack_check.py on the tests' pseudo-language pack, and
+    # on the engine's Simplified Chinese pack against the game data when
+    # OA_GAME_DIR is set: each pack reads, and its coverage is told. A
+    # missing pack is skipped.
+    add_test(NAME language-pack-check-pseudo COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tools/language_pack_check.py
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/data/languages/tests/pseudo-pack)
+    set(oa_language_pack_game_data "")
+    if(OA_GAME_DIR)
+      set(oa_language_pack_game_data --game-dir "${OA_GAME_DIR}" --oa-tool "$<TARGET_FILE:oa-tool>")
+    endif()
+    add_test(NAME language-pack-check COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tools/language_pack_check.py
+      ${CMAKE_CURRENT_SOURCE_DIR}/languages/zh-Hans ${oa_language_pack_game_data})
+    set_tests_properties(language-pack-check PROPERTIES SKIP_RETURN_CODE 77)
     set_tests_properties(fixed-width-rewrite-selftest format-check-selftest licensing-check-selftest
       sdl-bootstrap-selftest macos-deps-bootstrap-selftest ios-deps-bootstrap-selftest
-      text-fonts-bootstrap-selftest PROPERTIES TIMEOUT 60)
+      text-fonts-bootstrap-selftest language-pack-check-pseudo language-pack-check
+      PROPERTIES TIMEOUT 60)
   endif()
 endif()
 
@@ -2391,6 +2420,9 @@ endif()
 # finds them (cmake/OaTextFonts.cmake).
 if(TARGET oa-game)
   oa_copy_text_fonts(oa-game "$<GENEX_EVAL:$<TARGET_PROPERTY:oa-game,OA_GAME_FILES_DIR>>")
+  # The engine's language packs go in its languages folder, where the game
+  # reads them beside the interface catalogue files.
+  oa_copy_language_packs(oa-game "$<GENEX_EVAL:$<TARGET_PROPERTY:oa-game,OA_GAME_FILES_DIR>>")
 endif()
 foreach(target IN ITEMS oa-game oa-intro oa-tool)
   if(NOT TARGET ${target})

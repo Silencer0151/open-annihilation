@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <list>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -30,8 +31,42 @@ namespace {
 
 namespace text_font = oa::platform::text_font;
 
-/// The most drawn lines kept before the store starts again.
+/// The most drawn lines kept; past it, the line drawn again longest ago is
+/// forgotten first.
 constexpr std::size_t kept_lines = 512;
+
+/// The least pixel size ideographs, kana and Hangul are drawn at while a
+/// Chinese, Japanese or Korean language is shown: smaller, their strokes
+/// fill in.
+constexpr int32_t least_cjk_pixel_size = 12;
+
+/// The characters drawn ahead into the glyph store when a Chinese language
+/// comes to be shown, so that its first screen draws few new glyphs on one
+/// core: the 360 hanzi the interface's and the game's texts use most, and
+/// the CJK punctuation.
+constexpr std::string_view common_cjk_characters =
+    "级机高能单甲战位产雷备生地水弹型的炮初量火空和导击器重建车子力工程动金属面配攻光"
+    "达大防舰可装下开射形气垫试对厂验选存上激储反速一造中核用游戏海取者斗等消自坦克集"
+    "发小潜两式体台离关箭飞无电定修超有栖度择置采只设船炸侦时平城指场艇敌声标加闭视制"
+    "移坞换隐以打究范围载图输目要扰转运回音长方筑页部出卫复理鱼墙干塔难利作快所令武保"
+    "限人队站门雾返于纳确死农当轰止许固透测深护轻极前全较坚家野信停控在统伤描述觉始源"
+    "玩挥过原蛛强个太阳具环塞事害种模明息应内井系陆行增读任项阵主收间默普通使到辆爆成"
+    "少非御观军名必杀特为脉远直合联禁允灭剩乐效认操冲向并巨将截查记录黑失屏入役恢命枪"
+    "神头手拦弱菜风族胜随实新守巡星短堆突清略被官道助真圆简般困界象共享称资毁距供之眼"
+    "像龙航升或察兵务亡放预后状态驱除没四活占领密去致切需耗聚变底垂摄闪虫引母蛇送潮汐"
+    "，。、：；？！（）《》「」…—";
+
+/// Tells whether a language is written in Chinese, Japanese or Korean.
+///
+/// @param language the language
+/// @return true for the tags zh, ja and ko and theirs
+bool writes_cjk(const oa::data::languages::Language& language) {
+    const std::string_view tag = language.tag;
+    for (const std::string_view primary : {"zh", "ja", "ko"})
+        if (tag.substr(0, 2) == primary && (tag.size() == 2 || tag[2] == '-'))
+            return true;
+    return false;
+}
 
 /// The pixel size and weight of each face at a scale of 1 and the game
 /// fonts' size: DejaVu Sans Bold 14 px stands as tall as hattfont12, Bold
@@ -46,13 +81,25 @@ constexpr FaceSize message_face{14, text_font::Weight::bold};
 constexpr FaceSize status_face{11, text_font::Weight::bold};
 constexpr FaceSize label_face{11, text_font::Weight::regular};
 
+/// A drawn line in the store, with its place in the order of use.
+struct KeptLine {
+    std::shared_ptr<const oa::present::TextMask> mask{}; ///< null when it could not be drawn
+    std::list<std::string>::iterator place{};
+};
+
 /// The bundled fonts, opened on first use, and the lines they drew, by
 /// face, scale and text; a null line is one they could not draw.
 struct ModernFonts {
     std::mutex mutex{};
     bool opened{};
     std::unique_ptr<text_font::FontStack> stack{};
-    std::unordered_map<std::string, std::shared_ptr<const oa::present::TextMask>> lines{};
+    std::unordered_map<std::string, KeptLine> lines{};
+    /// the keys of the kept lines, the one drawn last first
+    std::list<std::string> order{};
+    /// the language the lines were drawn for; null before the first line
+    const oa::data::languages::Language* language{};
+    /// the least pixel size of ideographs for that language, 0 for none
+    int32_t least_cjk_size{};
 };
 
 ModernFonts& modern_fonts() {
@@ -75,7 +122,8 @@ text_font::FontStack* opened_stack(ModernFonts& fonts) {
 
 /// The style a face is drawn in at a scale and text size: hinted to whole
 /// pixels, one bit a pixel, as crisp as the game's own fonts at every size.
-text_font::Style face_style(oa::present::TextFace face, int32_t scale, int32_t text_size) {
+text_font::Style
+face_style(oa::present::TextFace face, int32_t scale, int32_t text_size, int32_t least_cjk_size) {
     const FaceSize size = face == oa::present::TextFace::message  ? message_face
                           : face == oa::present::TextFace::status ? status_face
                                                                   : label_face;
@@ -87,7 +135,43 @@ text_font::Style face_style(oa::present::TextFace face, int32_t scale, int32_t t
     );
     style.weight = size.weight;
     style.rendering = text_font::Rendering::mono;
+    style.least_cjk_pixel_size = least_cjk_size;
     return style;
+}
+
+/// Draws the common CJK characters into the glyph store in each face at a
+/// scale and text size.
+void warm_glyphs(ModernFonts& fonts, int32_t scale, int32_t text_size) {
+    auto* stack = opened_stack(fonts);
+    if (stack == nullptr)
+        return;
+    for (const auto face :
+         {oa::present::TextFace::message,
+          oa::present::TextFace::status,
+          oa::present::TextFace::label})
+        std::ignore = stack->layout(
+            common_cjk_characters, face_style(face, scale, text_size, fonts.least_cjk_size)
+        );
+}
+
+/// Readies the fonts for the language shown when it is not the one their
+/// lines were drawn for: the least size of ideographs for it, no lines kept
+/// from before, and the common characters drawn ahead for a Chinese,
+/// Japanese or Korean language.
+void follow_language(
+    ModernFonts& fonts,
+    const oa::data::languages::Language& language,
+    int32_t scale,
+    int32_t text_size
+) {
+    if (fonts.language == &language)
+        return;
+    fonts.language = &language;
+    fonts.least_cjk_size = writes_cjk(language) ? least_cjk_pixel_size : 0;
+    fonts.lines.clear();
+    fonts.order.clear();
+    if (fonts.least_cjk_size != 0)
+        warm_glyphs(fonts, scale, text_size);
 }
 
 /// Draws a line in the stack; null when it cannot.
@@ -131,9 +215,18 @@ bool Runtime::modern_fonts_open() {
     return opened_stack(fonts) != nullptr;
 }
 
+void Runtime::warm_game_text() {
+    const int32_t size = oa::present::game_text_size();
+    auto& fonts = modern_fonts();
+    const std::lock_guard lock(fonts.mutex);
+    fonts.language = nullptr;
+    follow_language(fonts, shown_language(), 1, size);
+}
+
 bool Runtime::game_text_utf8() const {
-    const auto& text = ui_rules().text_rendering;
-    return text.enabled && text.unicode;
+    // A language drawn in the modern fonts holds its text in UTF-8, and
+    // chat in UTF-8 is read so too.
+    return unicode_chat_on() || language_needs_modern_fonts();
 }
 
 oa::present::TextSettings Runtime::game_text_settings() const {
@@ -148,12 +241,18 @@ std::string Runtime::typed_game_text(std::string_view typed) const {
     return oa::present::encode_game_text(typed, game_text_utf8());
 }
 
-Runtime::PanelText::PanelText(Runtime& owner) noexcept : runtime(&owner), kept(owner.text_place_) {
+Runtime::PanelText::PanelText(Runtime& owner) noexcept
+    : runtime(&owner), kept(owner.text_place_), kept_top_row(owner.panel_top_row_) {
     owner.text_place_ = TextPlace::panel;
+}
+
+Runtime::PanelText::PanelText(Runtime& owner, int top_row) noexcept : PanelText(owner) {
+    owner.panel_top_row_ = top_row;
 }
 
 Runtime::PanelText::~PanelText() {
     runtime->text_place_ = kept;
+    runtime->panel_top_row_ = kept_top_row;
 }
 
 int32_t Runtime::painted_text_size(const oa::present::TextRun& run) const noexcept {
@@ -231,30 +330,37 @@ void Runtime::install_game_text_hooks() {
     hooks.settings = [](void* context) {
         return static_cast<const Runtime*>(context)->game_text_settings();
     };
-    hooks.draw = [](void*,
+    hooks.draw = [](void* context,
                     std::string_view text,
                     oa::present::TextFace face,
                     int32_t scale,
                     int32_t size) -> std::shared_ptr<const oa::present::TextMask> {
         if (text.empty() || text.size() > text_font::max_text_bytes)
             return nullptr;
-        const auto style = face_style(face, scale, size);
+        const auto& language = static_cast<const Runtime*>(context)->shown_language();
+        auto& fonts = modern_fonts();
+        const std::lock_guard lock(fonts.mutex);
+        follow_language(fonts, language, scale, size);
+        const auto style = face_style(face, scale, size, fonts.least_cjk_size);
         std::string key;
         key.push_back(static_cast<char>(face));
         key += std::to_string(style.pixel_size);
         key.push_back('\0');
         key.append(text);
-        auto& fonts = modern_fonts();
-        const std::lock_guard lock(fonts.mutex);
-        if (const auto found = fonts.lines.find(key); found != fonts.lines.end())
-            return found->second;
+        if (const auto found = fonts.lines.find(key); found != fonts.lines.end()) {
+            fonts.order.splice(fonts.order.begin(), fonts.order, found->second.place);
+            return found->second.mask;
+        }
         auto* stack = opened_stack(fonts);
         if (stack == nullptr)
             return nullptr;
         auto mask = draw_mask(*stack, text, style);
-        if (fonts.lines.size() >= kept_lines)
-            fonts.lines.clear();
-        fonts.lines.emplace(std::move(key), mask);
+        while (!fonts.order.empty() && fonts.lines.size() >= kept_lines) {
+            fonts.lines.erase(fonts.order.back());
+            fonts.order.pop_back();
+        }
+        fonts.order.push_front(key);
+        fonts.lines.emplace(std::move(key), KeptLine{mask, fonts.order.begin()});
         return mask;
     };
     // A match draws in its palette, the frontend in its screen's.

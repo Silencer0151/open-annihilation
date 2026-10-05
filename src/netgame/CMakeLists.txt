@@ -17,13 +17,14 @@ add_library(oa-netgame
   wire/content_hash.cpp
   wire/private_channel.cpp
   wire/recorder_session.cpp
+  wire/unicode_chat.cpp
   wire/dplay.cpp
   dplay/protocol.cpp
   dplay/engine.cpp
   session/session.cpp
   players/player_slots.cpp)
 add_library(oa::netgame ALIAS oa-netgame)
-target_link_libraries(oa-netgame PRIVATE oa-base-game-math)
+target_link_libraries(oa-netgame PRIVATE oa-base-game-math oa-base-text oa-present)
 target_include_directories(oa-netgame PUBLIC include)
 target_link_libraries(oa-netgame PUBLIC oa-base-bytes oa-formats-sqsh oa-options oa-core-types
   PRIVATE oa-base-game-loop)
@@ -80,6 +81,12 @@ if(BUILD_TESTING)
   target_link_libraries(oa-netgame-wire-rules-test PRIVATE oa-netgame)
   add_test(NAME net-wire-rules COMMAND oa-netgame-wire-rules-test)
   set_tests_properties(net-wire-rules PROPERTIES TIMEOUT 30)
+
+  # Unicode chat's announcement, forms and parts.
+  add_executable(oa-netgame-unicode-chat-test tests/unicode_chat_test.cpp)
+  target_link_libraries(oa-netgame-unicode-chat-test PRIVATE oa-netgame)
+  add_test(NAME net-unicode-chat COMMAND oa-netgame-unicode-chat-test)
+  set_tests_properties(net-unicode-chat PROPERTIES TIMEOUT 30)
 
   # The condenser's datagram envelope, pinned for every platform.
   add_executable(oa-netgame-condenser-golden-test tests/condenser_golden_test.cpp)

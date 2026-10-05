@@ -3,8 +3,10 @@
 
 // Connection screens: SELPROV, TCP, SELGAME and NEWMULTI.
 #include "oa/ui/frontend_multiplayer/connect.hpp"
+#include "oa/formats/tdf.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -356,6 +358,12 @@ bool game_list_update(Lobby& lobby, ConnectState& state, Panel& panel) noexcept 
         return false;
     }
     state.session_count = std::min(count, static_cast<int32_t>(kMaxSessions));
+    // The game list's values in the language shown, as 3.1c's list
+    // translates them.
+    const char* language =
+        lobby.services.files != nullptr ? lobby.services.files->language : nullptr;
+    const bool translates_map_names = language != nullptr && language[0] != '\0' &&
+                                      formats::tdf::compare_nocase(language, "english") != 0;
     std::vector<std::string> columns[11];
     for (int32_t index = 0; index < state.session_count; ++index) {
         const auto& session = state.sessions[index];
@@ -370,6 +378,15 @@ bool game_list_update(Lobby& lobby, ConnectState& state, Panel& panel) noexcept 
         std::string map = bounded(session.name + 0x10, 0xf);
         while (!map.empty() && map.back() == ' ')
             map.pop_back();
+        // In a language other than English the map's name is lowered and
+        // looked up, as 3.1c's game list does: a name gamedata\translate.tdf
+        // does not translate shows in lower case.
+        if (translates_map_names) {
+            std::transform(map.begin(), map.end(), map.begin(), [](char c) {
+                return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            });
+            map = lobby_translated(lobby, map.c_str());
+        }
         columns[2].push_back(map);
         const uint32_t flags =
             static_cast<uint32_t>(info->options) | static_cast<uint32_t>(info->status) << 16;
@@ -382,7 +399,7 @@ bool game_list_update(Lobby& lobby, ConnectState& state, Panel& panel) noexcept 
             status_text = "Play";
         else if ((flags & (static_cast<uint32_t>(status::launch_only) << 16)) != 0)
             status_text = "BY";
-        columns[3].emplace_back(status_text);
+        columns[3].emplace_back(lobby_translated(lobby, status_text));
         std::snprintf(text, sizeof(text), "%d", info->memory_mb);
         columns[4].emplace_back(text);
         std::snprintf(text, sizeof(text), "%d", info->metal_hundreds * 100);
@@ -392,13 +409,18 @@ bool game_list_update(Lobby& lobby, ConnectState& state, Panel& panel) noexcept 
         std::snprintf(text, sizeof(text), "%d", info->lowest_latency);
         columns[7].emplace_back(text);
         const auto commander = flags & option::commander_mask;
-        columns[8].emplace_back(
+        columns[8].emplace_back(lobby_translated(
+            lobby,
             commander == 0                        ? "No"
             : commander == option::commander_step ? "Yes"
                                                   : "DM"
+        ));
+        columns[9].emplace_back(
+            lobby_translated(lobby, (flags & option::unmapped) != 0 ? "Blk" : "Gray")
         );
-        columns[9].emplace_back((flags & option::unmapped) != 0 ? "Blk" : "Gray");
-        columns[10].emplace_back((flags & option::los_limited) != 0 ? "No" : "Yes");
+        columns[10].emplace_back(
+            lobby_translated(lobby, (flags & option::los_limited) != 0 ? "No" : "Yes")
+        );
     }
     const char* lists[11] = {
         "GAMENAME",

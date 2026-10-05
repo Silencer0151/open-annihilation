@@ -197,6 +197,20 @@ enum class MainMenuLayout : uint8_t { with_overlay, base_game };
 /// @return The segment for the stage; empty past the last segment.
 [[nodiscard]] std::string_view staged_caption(std::string_view text, std::size_t stage) noexcept;
 
+/// Translates the caption a button with stages shows at a stage.
+///
+/// The button's caption was translated whole as its GUI file was read; each
+/// stage's caption is then translated on its own, as 3.1c translates them
+/// on the panel's first draw, so that "Easy|Medium|Hard" shows each word as
+/// gamedata\translate.tdf gives it.
+///
+/// @param button the button's fields
+/// @param stage the button's stage
+/// @return the stage's caption in the language shown; nothing for a button
+///     without stages, or a caption without a translation
+[[nodiscard]] std::optional<std::string>
+translated_stage_caption(const ui::gui_layout::ButtonFields& button, std::size_t stage);
+
 /// Draws a screen: background, gadgets, list rows and captions.
 ///
 /// A button given a quick key in its presentation underlines it, as a

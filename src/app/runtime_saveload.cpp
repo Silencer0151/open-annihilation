@@ -191,7 +191,12 @@ struct BankGuard {
 bool read_whole_save(BankGuard& guard, const fs::path& path, persist::BankError* error) {
     const persist::FileSource source = persist::stdio_file_source();
     return persist::bank_read_file(
-        &guard.bank, path.string().c_str(), persist::savegame_description, nullptr, &source, error
+        &guard.bank,
+        path_to_utf8(path).c_str(),
+        persist::savegame_description,
+        nullptr,
+        &source,
+        error
     );
 }
 
@@ -1057,13 +1062,14 @@ bool Runtime::write_saved_game(
     fs::create_directories(path.parent_path(), error);
     const persist::FileSink sink = persist::stdio_file_sink();
     const bool written = persist::save_write_game(
-        &save, &summary, path.string().c_str(), description, game_id, &sink
+        &save, &summary, path_to_utf8(path).c_str(), description, game_id, &sink
     );
     // Between missions the save loads the next mission's information to name
     // it, then binds the finished mission again. The file holds none of that
     // information, so a mission that does not load leaves the save as it is:
     // the player sees only the mission loader's message boxes, as in 3.1c.
-    status_ = written ? "Saved " + path.filename().string() : "Could not write " + path.string();
+    status_ = written ? "Saved " + path_to_utf8(path.filename())
+                      : "Could not write " + path_to_utf8(path);
     return written;
 }
 
@@ -1497,8 +1503,8 @@ bool Runtime::load_saved_game(const fs::path& path) {
     reset_match_sight(true);
     finish_saved_game_start(restore_saved_session(bank));
     enter_match_view();
-    status_ =
-        "Loaded " + path.filename().string() + " at tick " + std::to_string(match_timing_.tick);
+    status_ = "Loaded " + path_to_utf8(path.filename()) + " at tick " +
+              std::to_string(match_timing_.tick);
     return true;
 }
 
@@ -1553,7 +1559,7 @@ bool Runtime::load_saved_campaign(
             return false;
         }
         briefing_parent_ = Screen::single_player;
-        status_ = "Loaded " + path.filename().string() + " before " + file.mission_name;
+        status_ = "Loaded " + path_to_utf8(path.filename()) + " before " + file.mission_name;
         return true;
     }
     auto& state = saveload_state();
@@ -1568,8 +1574,8 @@ bool Runtime::load_saved_campaign(
         return false;
     }
     finish_saved_game_start(state.resumed_players);
-    status_ =
-        "Loaded " + path.filename().string() + " at tick " + std::to_string(match_timing_.tick);
+    status_ = "Loaded " + path_to_utf8(path.filename()) + " at tick " +
+              std::to_string(match_timing_.tick);
     return true;
 }
 
@@ -1962,7 +1968,7 @@ void Runtime::run_headless_saveload() {
                 target, persist::command_line_description, persist::command_line_game_id
             ))
             throw std::runtime_error("save failed: " + status_);
-        std::cout << "saveload: saved " << target.string() << " at tick " << match_timing_.tick
+        std::cout << "saveload: saved " << path_to_utf8(target) << " at tick " << match_timing_.tick
                   << "; save failures " << saveload_state().save_failures << '\n';
         saved = true;
     };

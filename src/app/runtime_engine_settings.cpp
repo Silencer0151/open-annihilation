@@ -123,7 +123,7 @@ std::string Runtime::EngineSettingsState::read_installation_ini(const fs::path& 
     std::error_code error;
     for (fs::directory_iterator entry(game_directory, error), end; !error && entry != end;
          entry.increment(error)) {
-        if (ascii_lower(entry->path().filename().string()) != kInstallationIniName ||
+        if (ascii_lower(path_to_utf8(entry->path().filename())) != kInstallationIniName ||
             !entry->is_regular_file(error))
             continue;
         std::ifstream input(entry->path(), std::ios::binary);
@@ -399,9 +399,25 @@ void Runtime::request_soft_restart() {
 }
 
 oa::present::TextStyle Runtime::text_style() const {
-    if (!engine_settings_)
-        return settings::text_style(settings::default_settings(EngineSettingsState::inputs(*this)));
-    return settings::text_style(engine_settings_->current);
+    oa::present::TextStyle style =
+        engine_settings_
+            ? settings::text_style(engine_settings_->current)
+            : settings::text_style(settings::default_settings(EngineSettingsState::inputs(*this)));
+    // A language drawn in the modern fonts has them on whatever the setting.
+    if (language_needs_modern_fonts())
+        style.modern_fonts = true;
+    return style;
+}
+
+bool Runtime::unicode_chat_on() const {
+    // A mod profile's Unicode text, and a language shown in UTF-8 or whose
+    // pack asks for it, turn it on whatever the setting.
+    const auto& text = ui_rules().text_rendering;
+    if ((text.enabled && text.unicode) || oa::data::languages::turns_unicode_chat_on(
+                                              shown_language(), language_unicode_chat() != nullptr
+                                          ))
+        return true;
+    return engine_settings_ && engine_settings_->current.unicode_chat;
 }
 
 render_policy::MenuScaling Runtime::menu_scaling() const noexcept {
@@ -822,6 +838,8 @@ settings::Dialog& Runtime::open_engine_settings_dialog(settings::DialogKind kind
     fill_game_files_rows(dialog);
     // Your files shows the player's own folder.
     dialog.user_folder = path_to_utf8(user_folder_);
+    // The languages whose packs turn Unicode chat on.
+    dialog.unicode_chat_languages = unicode_chat_language_tags();
     // Developer Mode opens as it was left: its open areas and hacks and its filter.
     if (state.last_developer_list) {
         dialog.developer.areas_open = state.last_developer_list->areas_open;

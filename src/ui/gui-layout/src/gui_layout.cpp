@@ -3,6 +3,7 @@
 
 #include "oa/ui/gui_layout.hpp"
 
+#include "oa/base/text.hpp"
 #include "oa/data/languages/translation.hpp"
 
 #include <algorithm>
@@ -620,8 +621,10 @@ skin_tiles(int32_t width, int32_t height, int32_t tile_width, int32_t tile_heigh
 TranslationLookup game_translation_lookup() {
     return [](std::string_view source) -> std::optional<std::string> {
         auto translated = oa::data::languages::translation_of(source);
+        // Cut between whole UTF-8 characters, as a language whose text is
+        // UTF-8 needs.
         if (translated && translated->size() > limit::text_bytes)
-            translated->resize(limit::text_bytes);
+            translated->resize(oa::base::text::whole_characters(*translated, limit::text_bytes));
         return translated;
     };
 }

@@ -31,30 +31,35 @@ std::string_view tag_of(const languages::Language* language) {
     return language != nullptr ? language->tag : std::string_view{"none"};
 }
 
-/// The registry holds English, German, Spanish, French and Italian, English
-/// first and the others in the order of their own names, each with its
-/// name in itself and 3.1c's word for it.
-void registry_lists_the_five_languages_in_menu_order() {
+/// The registry holds English, German, Spanish, French, Italian and
+/// Simplified Chinese, English first and the others in the order of their
+/// own names, each with its name in itself and the game data's word for it.
+void registry_lists_the_six_languages_in_menu_order() {
     const auto known = languages::known_languages();
-    OA_CHECK(known.size() == 5);
-    const std::array<std::string_view, 5> tags{"en", "de", "es", "fr", "it"};
-    const std::array<std::string_view, 5> endonyms{
+    OA_CHECK(known.size() == 6);
+    const std::array<std::string_view, 6> tags{"en", "de", "es", "fr", "it", "zh-Hans"};
+    const std::array<std::string_view, 6> endonyms{
         "English",
         "Deutsch",
         "Espa\xC3\xB1"
         "ol",
         "Fran\xC3\xA7"
         "ais",
-        "Italiano"
+        "Italiano",
+        "\347\256\200\344\275\223\344\270\255\346\226\207"
     };
-    const std::array<std::string_view, 5> words{
-        "English", "German", "Spanish", "French", "Italian"
+    const std::array<std::string_view, 6> words{
+        "English", "German", "Spanish", "French", "Italian", "Chinese"
     };
     for (std::size_t index = 0; index < known.size() && index < tags.size(); ++index) {
         OA_CHECK(known[index].tag == tags[index]);
         OA_CHECK(known[index].endonym == endonyms[index]);
         OA_CHECK(known[index].game_name == words[index]);
-        OA_CHECK(known[index].needs == languages::TextNeeds::game_fonts);
+        OA_CHECK(
+            known[index].needs == (known[index].tag == "zh-Hans"
+                                       ? languages::TextNeeds::modern_fonts
+                                       : languages::TextNeeds::game_fonts)
+        );
         OA_CHECK(languages::drawable(known[index]));
     }
     OA_CHECK(&languages::english() == &known[0]);
@@ -64,7 +69,6 @@ void registry_lists_the_five_languages_in_menu_order() {
         OA_CHECK(known[index - 1].endonym < known[index].endonym);
 }
 
-/// What drawing a language needs decides whether the build offers it.
 void only_the_needs_this_build_meets_are_drawable() {
     languages::Language language{};
     language.needs = languages::TextNeeds::game_fonts;
@@ -78,6 +82,21 @@ void only_the_needs_this_build_meets_are_drawable() {
 }
 
 /// Tags and 3.1c's words are found without regard to case.
+// Simplified Chinese turns Unicode chat on whether or not its pack is
+// there; a language of the code page only when a pack of it asks.
+void languages_in_utf8_turn_unicode_chat_on() {
+    const auto* chinese = languages::find_by_tag("zh-Hans");
+    const auto* german = languages::find_by_tag("de");
+    OA_CHECK(chinese != nullptr && german != nullptr);
+    if (chinese == nullptr || german == nullptr)
+        return;
+    OA_CHECK(languages::turns_unicode_chat_on(*chinese, false));
+    OA_CHECK(languages::turns_unicode_chat_on(*chinese, true));
+    OA_CHECK(!languages::turns_unicode_chat_on(*german, false));
+    OA_CHECK(languages::turns_unicode_chat_on(*german, true));
+    OA_CHECK(!languages::turns_unicode_chat_on(languages::english(), false));
+}
+
 void tags_and_game_words_are_found_without_regard_to_case() {
     OA_CHECK(tag_of(languages::find_by_tag("de")) == "de");
     OA_CHECK(tag_of(languages::find_by_tag("DE")) == "de");
@@ -93,6 +112,7 @@ void tags_and_game_words_are_found_without_regard_to_case() {
     OA_CHECK(tag_of(languages::find_by_game_name("french")) == "fr");
     OA_CHECK(tag_of(languages::find_by_game_name("italian")) == "it");
     OA_CHECK(tag_of(languages::find_by_game_name("english")) == "en");
+    OA_CHECK(tag_of(languages::find_by_game_name("chinese")) == "zh-Hans");
     OA_CHECK(tag_of(languages::find_by_game_name("piglatin")) == "none");
     OA_CHECK(tag_of(languages::find_by_game_name("")) == "none");
 }
@@ -150,7 +170,15 @@ void locales_choose_languages_by_their_leading_subtags() {
     OA_CHECK(tag_of(languages::match_locale("es-419")) == "es");
     OA_CHECK(tag_of(languages::match_locale("en-GB")) == "en");
     OA_CHECK(tag_of(languages::match_locale("pt-BR")) == "none");
-    OA_CHECK(tag_of(languages::match_locale("zh-CN")) == "none");
+    // Simplified Chinese by its script, its places or Chinese alone;
+    // Traditional Chinese's script and places choose none, never Simplified.
+    OA_CHECK(tag_of(languages::match_locale("zh-CN")) == "zh-Hans");
+    OA_CHECK(tag_of(languages::match_locale("zh_SG.UTF-8")) == "zh-Hans");
+    OA_CHECK(tag_of(languages::match_locale("zh-Hans-CN")) == "zh-Hans");
+    OA_CHECK(tag_of(languages::match_locale("zh")) == "zh-Hans");
+    OA_CHECK(tag_of(languages::match_locale("zh-TW")) == "none");
+    OA_CHECK(tag_of(languages::match_locale("zh-Hant-HK")) == "none");
+    OA_CHECK(tag_of(languages::match_locale("zh_HK")) == "none");
     OA_CHECK(tag_of(languages::match_locale("deu")) == "none");
     OA_CHECK(tag_of(languages::match_locale("frx")) == "none");
     OA_CHECK(tag_of(languages::match_locale("C")) == "none");
@@ -166,6 +194,7 @@ void preferred_locales_choose_the_first_known_language() {
     OA_CHECK(pick({"de_DE.UTF-8", "fr"}) == "de");
     OA_CHECK(pick({"en-US", "de"}) == "en");
     OA_CHECK(pick({"ja-JP", "zh-Hant-TW", "ko"}) == "en");
+    OA_CHECK(pick({"zh-TW", "zh-CN"}) == "zh-Hans");
     OA_CHECK(pick({"C", "es_ES"}) == "es");
     OA_CHECK(pick({}) == "en");
 }
@@ -359,8 +388,9 @@ void installed_unit_texts_answer_the_interface() {
 } // namespace
 
 int main() {
-    registry_lists_the_five_languages_in_menu_order();
+    registry_lists_the_six_languages_in_menu_order();
     only_the_needs_this_build_meets_are_drawable();
+    languages_in_utf8_turn_unicode_chat_on();
     tags_and_game_words_are_found_without_regard_to_case();
     fallback_chains_end_in_english();
     locales_are_normalised();

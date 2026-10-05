@@ -8,6 +8,7 @@
 
 #include "geometry.hpp"
 #include "notice_geometry.hpp"
+#include "oa/base/text/line_break.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -137,16 +138,14 @@ std::string break_characters(
     return line;
 }
 
-/// Returns a text's estimated width: estimated_character_width a character.
+/// Returns a text's estimated width: estimated_character_width a character,
+/// twice that for a Chinese, Japanese or Korean character, which is drawn
+/// about twice as wide.
 ///
 /// @param text the text, UTF-8
 /// @return the width, in source pixels
 int32_t estimated_width(std::string_view text) {
-    int32_t characters = 0;
-    for (const char byte : text)
-        if ((static_cast<unsigned char>(byte) & 0xC0U) != 0x80U)
-            ++characters;
-    return characters * estimated_character_width;
+    return static_cast<int32_t>(oa::base::text::text_columns(text)) * estimated_character_width;
 }
 
 /// Places a notice in its fonts, or at estimated widths without them.
@@ -230,6 +229,21 @@ std::vector<std::string> wrap_text(
     std::string_view text, int32_t width, const std::function<int32_t(std::string_view)>& text_width
 ) {
     std::vector<std::string> lines;
+    if (oa::base::text::has_wide_script(text)) {
+        // Chinese, Japanese and Korean are written without spaces: a line
+        // also breaks between their characters, as the line breaker allows.
+        const auto fits = [&](std::string_view start) { return text_width(start) <= width; };
+        for (;;) {
+            while (!text.empty() && text.front() == ' ')
+                text.remove_prefix(1);
+            if (text.empty())
+                break;
+            const auto row = oa::base::text::first_row(text, fits);
+            lines.emplace_back(text.substr(0, row.bytes));
+            text.remove_prefix(row.next);
+        }
+        return lines;
+    }
     std::string line;
     std::size_t at = 0;
     while (at < text.size()) {

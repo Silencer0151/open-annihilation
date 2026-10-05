@@ -140,6 +140,12 @@ int main() {
         "demo runs take a trace"
     );
 
+    // A recording named in Chinese (U+5F55 U+50CF) is read by its UTF-8 name.
+    const auto named = parse({"--play-demo", "\xe5\xbd\x95\xe5\x83\x8f.tad"});
+    expect(named.net.play_demo.u8string() == u8"\u5f55\u50cf.tad", "--play-demo reads UTF-8");
+    const auto recorded = parse({"--net-record", "\xe5\xbd\x95\xe5\x83\x8f.tad"});
+    expect(recorded.net.net_record.u8string() == u8"\u5f55\u50cf.tad", "--net-record reads UTF-8");
+
     // The 3.1c network switches reach network play's handler.
     const auto hosted = parse({"-nTCPIP", "-hHost", "-t60", "-e5"});
     expect(hosted.app.launch.unavailable_switch == 0, "the network switches are taken");

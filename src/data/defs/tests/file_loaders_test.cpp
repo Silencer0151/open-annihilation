@@ -322,6 +322,18 @@ void test_load_locale_table() {
     // A missing file switches the language and leaves the table empty.
     CHECK(!load_locale_table(&view, &table, "gamedata\\missing.tdf", "spanish"));
     CHECK(table.count == 0 && std::strcmp(table.language, "spanish") == 0);
+
+    // A UTF-8 translation longer than its buffer is cut between whole
+    // characters: 85 three-byte characters keep 85 of 255 bytes, never 255.
+    std::string long_text;
+    for (int index = 0; index < 90; ++index)
+        long_text += "\xE4\xB8\xAD";
+    MemoryFiles chinese;
+    chinese.files.push_back({"gamedata/lang.tdf", "[Long]{chinese=" + long_text + ";}"});
+    const Files chinese_view = chinese.view();
+    CHECK(load_locale_table(&chinese_view, &table, "gamedata\\lang.tdf", "chinese"));
+    const std::string cut = locale_translate(&table, "Long");
+    CHECK(cut.size() == 85 * 3 && long_text.starts_with(cut));
     locale_table_free(&table);
 }
 

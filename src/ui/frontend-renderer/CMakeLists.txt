@@ -14,7 +14,7 @@ target_link_libraries(oa-render-main-menu PRIVATE oa-ui-frontend-renderer)
 
 if(BUILD_TESTING)
   add_executable(oa-frontend-renderer-test tests/frontend_renderer_test.cpp)
-  target_link_libraries(oa-frontend-renderer-test PRIVATE oa-ui-frontend-renderer)
+  target_link_libraries(oa-frontend-renderer-test PRIVATE oa-ui-frontend-renderer oa-data-languages)
   add_test(NAME frontend-renderer COMMAND oa-frontend-renderer-test)
 
   add_executable(oa-scroll-bars-test tests/scroll_bars_test.cpp)

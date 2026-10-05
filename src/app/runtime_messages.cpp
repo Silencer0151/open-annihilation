@@ -8,6 +8,7 @@
 #include "oa/app/hook_call.hpp"
 #include "oa/ui/decoded.hpp"
 #include "oa/app/runtime.hpp"
+#include "oa/base/text/line_break.hpp"
 #include "oa/data/languages/unit_texts.hpp"
 #include "oa/app/view_rules.hpp"
 #include "oa/present/model/mesh_raster.hpp"
@@ -283,8 +284,15 @@ void Runtime::post_match_message(
 ) {
     if (!match_)
         return;
+    // The line keeps what fits, less a UTF-8 character the cut would split.
     char line[messages::text_bytes];
-    std::snprintf(line, sizeof line, "%.*s", static_cast<int>(text.size()), text.data());
+    std::snprintf(
+        line,
+        sizeof line,
+        "%.*s",
+        static_cast<int>(oa::base::text::whole_character_bytes(text, sizeof line - 1)),
+        text.data()
+    );
     messages::post_message(match_->state(), line, kind, value, sender, message_hooks());
 }
 

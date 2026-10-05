@@ -3,6 +3,7 @@
 
 // Bounded headless navigation checks.
 #include "oa/app/runtime.hpp"
+#include "oa/app/game_directory.hpp"
 #include "oa/data/defs/layout.hpp"
 #include "map_picture_state.hpp"
 #include "oa/app/asset_files.hpp"
@@ -1653,7 +1654,7 @@ void Runtime::check_navigation() {
     write_ppm(report_directory / "native-campaign-end.ppm", surface_);
     require_game_fonts("navigation check: the mission's statistics", [this] { rebuild_surface(); });
     check_campaign_advance(report_directory);
-    const auto between = check_save_dialog(report_directory, "NAVBETWEEN");
+    const auto between = check_save_dialog(report_directory, "NAVBETWEEN", true);
     if (!between.between_missions ||
         std::string_view(between.mission.data()) == bound_mission_name() ||
         endgame_world() == nullptr)
@@ -2082,8 +2083,9 @@ void Runtime::check_campaign_build_page(const fs::path& report_directory) {
     apply_match_hud_for_selection();
 }
 
-oa::ui::frontend::LoadSummary
-Runtime::check_save_dialog(const fs::path& report_directory, const std::string& name) {
+oa::ui::frontend::LoadSummary Runtime::check_save_dialog(
+    const fs::path& report_directory, const std::string& name, bool compose
+) {
     const auto parent = screen_;
     if (parent == Screen::match) {
         show_match_pause_menu();
@@ -2106,24 +2108,86 @@ Runtime::check_save_dialog(const fs::path& report_directory, const std::string& 
     text.text.text = name.c_str();
     if (!dispatch_screen_input(text))
         throw std::runtime_error("the save dialog took no typed name");
+    std::string saved_name = name;
+    const auto kept_settings = engine_settings();
+    if (compose) {
+        // U+5B58 U+6863, composed from their spelling and committed; U+5B57
+        // typed after them and erased.
+        constexpr std::string_view composed = "\xE5\xAD\x98\xE6\xA1\xA3";
+        constexpr std::string_view erased = "\xE5\xAD\x97";
+        bool running = true;
+        rebuild_surface();
+        const renderer::Surface name_alone = surface_;
+        // While the game's text is in its code page the name takes printable
+        // ASCII alone: neither U+00E9 nor U+5B57 typed now is taken, and the
+        // dialog looks as it did.
+        const std::string refused = "\xC3\xA9" + std::string(erased);
+        text.text.text = refused.c_str();
+        dispatch_event(text, running);
+        rebuild_surface();
+        if (surface_.rgb != name_alone.rgb)
+            throw std::runtime_error("the save dialog's name took a character past ASCII");
+        // With Unicode chat on, the game's text is UTF-8 and the name takes
+        // any script, until the save is written.
+        auto unicode = kept_settings;
+        unicode.unicode_chat = true;
+        apply_engine_settings(unicode);
+        SDL_Event editing{};
+        editing.type = SDL_EVENT_TEXT_EDITING;
+        editing.edit.text = "cundang";
+        dispatch_event(editing, running);
+        // The input method's keys: neither erases the name nor saves it.
+        for (const SDL_Keycode composing : {SDLK_BACKSPACE, SDLK_RETURN}) {
+            key.key.key = composing;
+            dispatch_event(key, running);
+        }
+        const std::string composition(composed);
+        editing.edit.text = composition.c_str();
+        dispatch_event(editing, running);
+        if (screen_ != Screen::load_game || !save_dialog_open())
+            throw std::runtime_error("a key pressed while composing closed the save dialog");
+        rebuild_surface();
+        write_ppm(report_directory / ("native-save-" + name + "-composing.ppm"), surface_);
+        text.text.text = composition.c_str();
+        dispatch_event(text, running);
+        const std::string extra(erased);
+        text.text.text = extra.c_str();
+        dispatch_event(text, running);
+        key.key.key = SDLK_BACKSPACE;
+        dispatch_event(key, running);
+        saved_name += composed;
+        // The modern fonts draw the hanzi: the name looks otherwise than its
+        // bytes drawn in the dialog's font, as they are while the game's text
+        // is in its code page.
+        rebuild_surface();
+        const renderer::Surface in_utf8 = surface_;
+        apply_engine_settings(kept_settings);
+        rebuild_surface();
+        if (modern_fonts_open() && surface_.rgb == in_utf8.rgb)
+            throw std::runtime_error("the save dialog drew the name's hanzi as its font's bytes");
+        apply_engine_settings(unicode);
+    }
     rebuild_surface();
     write_ppm(report_directory / ("native-save-" + name + ".ppm"), surface_);
     key.key.key = SDLK_RETURN;
     // What Return did is checked below.
     std::ignore = dispatch_screen_input(key);
+    if (compose)
+        apply_engine_settings(kept_settings);
     if (screen_ != parent || save_dialog_open())
         throw std::runtime_error(
             "the save did not return to the screen it was opened over: " + status_
         );
+    // The save is listed under the name typed, and read back.
     fs::path written;
     std::error_code error;
     for (const auto& entry : fs::directory_iterator(saves_folder(), error))
-        if (tdf_names_equal(entry.path().stem().string(), name))
+        if (tdf_names_equal(path_to_utf8(entry.path().stem()), saved_name))
             written = entry.path();
     oa::ui::frontend::LoadSummary summary;
     if (written.empty() || !read_save_summary(written, summary))
-        throw std::runtime_error("the save dialog wrote no readable " + name);
-    std::cout << "save dialog check: " << written.filename().string() << " mission "
+        throw std::runtime_error("the save dialog wrote no readable " + saved_name);
+    std::cout << "save dialog check: " << path_to_utf8(written.filename()) << " mission "
               << summary.mission.data() << (summary.between_missions ? " between missions" : "")
               << '\n';
     return summary;

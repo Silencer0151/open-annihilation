@@ -409,7 +409,7 @@ void write_radar_check_save(const fs::path& saves, const oa::present::SurfaceBuf
     };
     persist::save_write_image_rows(&rows, &bank);
     const auto sink = persist::stdio_file_sink();
-    const auto path = (saves / kCheckRadarSaveFile).string();
+    const auto path = path_to_utf8(saves / kCheckRadarSaveFile);
     const bool written = persist::bank_write_file(
         &bank, path.c_str(), persist::savegame_description, true, false, &sink
     );

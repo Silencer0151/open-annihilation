@@ -1,0 +1,4566 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+//
+// Open Annihilation's own words in Simplified Chinese, keyed by the
+// engine's English.
+
+[none]
+	{
+	zh-Hans=无;
+	}
+
+[In Full the graphics card draws the view 1:1;]
+	{
+	zh-Hans=完整模式下显卡按1:1绘制画面；;
+	}
+
+[a level draws it finer for smoother edges.]
+	{
+	zh-Hans=选择等级可绘制得更精细，边缘更平滑。;
+	}
+
+[and scales them down for smoother edges.]
+	{
+	zh-Hans=再缩小以使边缘更平滑。;
+	}
+
+[the most this window allows, scaled down.]
+	{
+	zh-Hans=即此窗口允许的上限，再缩小。;
+	}
+
+[In Full the card draws 2x2 samples a pixel]
+	{
+	zh-Hans=完整模式下显卡每像素绘制2x2个采样;
+	}
+
+[In Full the card draws 4x4 samples a pixel]
+	{
+	zh-Hans=完整模式下显卡每像素绘制4x4个采样;
+	}
+
+[In Full the card draws 8x8 samples a pixel]
+	{
+	zh-Hans=完整模式下显卡每像素绘制8x8个采样;
+	}
+
+[In Full the card draws 16x16 samples a pixel]
+	{
+	zh-Hans=完整模式下显卡每像素绘制16x16个采样;
+	}
+
+[Off]
+	{
+	zh-Hans=关闭;
+	}
+
+[Basic]
+	{
+	zh-Hans=基础;
+	}
+
+[Full]
+	{
+	zh-Hans=完整;
+	}
+
+[Sharp]
+	{
+	zh-Hans=锐利;
+	}
+
+[Whole steps]
+	{
+	zh-Hans=整数倍;
+	}
+
+[Unfiltered]
+	{
+	zh-Hans=不过滤;
+	}
+
+[Automatic]
+	{
+	zh-Hans=自动;
+	}
+
+[Box]
+	{
+	zh-Hans=框选;
+	}
+
+[Scroll]
+	{
+	zh-Hans=滚动;
+	}
+
+[Stay on]
+	{
+	zh-Hans=保持开启;
+	}
+
+[One action]
+	{
+	zh-Hans=单次操作;
+	}
+
+[Standard]
+	{
+	zh-Hans=标准;
+	}
+
+[Large]
+	{
+	zh-Hans=大;
+	}
+
+[Larger]
+	{
+	zh-Hans=更大;
+	}
+
+[Trackpads]
+	{
+	zh-Hans=触控板;
+	}
+
+[Sticks]
+	{
+	zh-Hans=摇杆;
+	}
+
+[Relative]
+	{
+	zh-Hans=相对;
+	}
+
+[Absolute]
+	{
+	zh-Hans=绝对;
+	}
+
+[Low]
+	{
+	zh-Hans=低;
+	}
+
+[High]
+	{
+	zh-Hans=高;
+	}
+
+[Zoom]
+	{
+	zh-Hans=缩放;
+	}
+
+[Pointer]
+	{
+	zh-Hans=指针;
+	}
+
+[Nothing]
+	{
+	zh-Hans=无操作;
+	}
+
+[While the right pad is touched]
+	{
+	zh-Hans=触摸右触控板时;
+	}
+
+[While the right stick is touched]
+	{
+	zh-Hans=触摸右摇杆时;
+	}
+
+[Always]
+	{
+	zh-Hans=始终;
+	}
+
+[Light]
+	{
+	zh-Hans=轻;
+	}
+
+[Strong]
+	{
+	zh-Hans=强;
+	}
+
+[The processor draws and scales the view.]
+	{
+	zh-Hans=由处理器绘制并缩放画面。;
+	}
+
+[Off: the processor draws and scales the view.]
+	{
+	zh-Hans=关闭：由处理器绘制并缩放画面。;
+	}
+
+[Set it to Off and back, or restore defaults.]
+	{
+	zh-Hans=将其设为关闭再改回，或恢复默认设置。;
+	}
+
+[A failed graphics driver is skipped.]
+	{
+	zh-Hans=已跳过出错的图形驱动。;
+	}
+
+[Not in use: it needs at least 2 GB of memory.]
+	{
+	zh-Hans=未启用：至少需要2 GB内存。;
+	}
+
+[Full in use: the graphics card draws the view.]
+	{
+	zh-Hans=正在使用完整模式：由显卡绘制画面。;
+	}
+
+[Basic lets the graphics card scale it evenly.]
+	{
+	zh-Hans=基础模式让显卡均匀缩放画面。;
+	}
+
+[For this run only. The setting is kept.]
+	{
+	zh-Hans=仅限本次运行。设置保持不变。;
+	}
+
+[Not in use: the environment names a driver.]
+	{
+	zh-Hans=未启用：环境变量指定了驱动。;
+	}
+
+[Not in use: there is too little memory.]
+	{
+	zh-Hans=未启用：内存不足。;
+	}
+
+[Off for this game: in a shared game, Basic]
+	{
+	zh-Hans=本局关闭：在多人游戏中，基础模式;
+	}
+
+[takes effect from the next game.]
+	{
+	zh-Hans=从下一局起生效。;
+	}
+
+[Not in use: an error stopped it for this run.]
+	{
+	zh-Hans=未启用：本次运行中因错误而停止。;
+	}
+
+[Not in use: the graphics driver failed.]
+	{
+	zh-Hans=未启用：图形驱动出错。;
+	}
+
+[Not in use: the game stopped while using it.]
+	{
+	zh-Hans=未启用：游戏曾在使用它时中止。;
+	}
+
+[Not in use: no usable graphics card was found.]
+	{
+	zh-Hans=未启用：未找到可用的显卡。;
+	}
+
+[Not in use: the graphics card lacks a feature.]
+	{
+	zh-Hans=未启用：显卡缺少所需功能。;
+	}
+
+[Not in use: the game cannot save its files.]
+	{
+	zh-Hans=未启用：游戏无法保存其文件。;
+	}
+
+[Takes effect from the next start.]
+	{
+	zh-Hans=下次启动时生效。;
+	}
+
+[The processor draws and scales the view until then.]
+	{
+	zh-Hans=在此之前由处理器绘制并缩放画面。;
+	}
+
+[Basic in use: the game cannot save its files.]
+	{
+	zh-Hans=正在使用基础模式：游戏无法保存其文件。;
+	}
+
+[Basic in use: there is too little memory for Full.]
+	{
+	zh-Hans=正在使用基础模式：内存不足以使用完整模式。;
+	}
+
+[Basic in use: Full stopped for this run.]
+	{
+	zh-Hans=正在使用基础模式：完整模式在本次运行中已停止。;
+	}
+
+[Basic in use: Full failed before on this driver.]
+	{
+	zh-Hans=正在使用基础模式：完整模式曾在此驱动上出错。;
+	}
+
+[Basic in use: the card lacks a feature Full needs.]
+	{
+	zh-Hans=正在使用基础模式：显卡缺少完整模式所需功能。;
+	}
+
+[Basic for this game: in a shared game, Full]
+	{
+	zh-Hans=本局使用基础模式：在多人游戏中，完整模式;
+	}
+
+[Basic in use, on another driver: one failed.]
+	{
+	zh-Hans=正在使用基础模式，已换用另一驱动：原驱动出错。;
+	}
+
+[Basic in use; no smoothing when zoomed out here.]
+	{
+	zh-Hans=正在使用基础模式；此处缩小视图时不做平滑。;
+	}
+
+[Basic in use.]
+	{
+	zh-Hans=正在使用基础模式。;
+	}
+
+[Off for this game: in a shared game, Full]
+	{
+	zh-Hans=本局关闭：在多人游戏中，完整模式;
+	}
+
+[Off for this game: in a replay, Basic]
+	{
+	zh-Hans=本局关闭：在回放中，基础模式;
+	}
+
+[Off for this game: in a replay, Full]
+	{
+	zh-Hans=本局关闭：在回放中，完整模式;
+	}
+
+[Basic for this game: in a replay, Full]
+	{
+	zh-Hans=本局使用基础模式：在回放中，完整模式;
+	}
+
+[Smoothed at every zoom.]
+	{
+	zh-Hans=各缩放级别均做平滑。;
+	}
+
+[Smoothed at every zoom; 2x2 samples a pixel.]
+	{
+	zh-Hans=各缩放级别均做平滑；每像素2x2个采样。;
+	}
+
+[Smoothed at every zoom; 4x4 samples a pixel.]
+	{
+	zh-Hans=各缩放级别均做平滑；每像素4x4个采样。;
+	}
+
+[Smoothed at every zoom; 8x8 samples a pixel.]
+	{
+	zh-Hans=各缩放级别均做平滑；每像素8x8个采样。;
+	}
+
+[Smoothed at every zoom; 16x16 samples a pixel.]
+	{
+	zh-Hans=各缩放级别均做平滑；每像素16x16个采样。;
+	}
+
+[It scales the menus and the interface evenly.]
+	{
+	zh-Hans=均匀缩放菜单和界面。;
+	}
+
+[It scales the interface and zoomed-in view evenly.]
+	{
+	zh-Hans=均匀缩放界面和放大后的视图。;
+	}
+
+[It scales evenly and smooths the zoomed-out view.]
+	{
+	zh-Hans=均匀缩放，并平滑缩小后的视图。;
+	}
+
+[It smooths the zoomed-out view.]
+	{
+	zh-Hans=平滑缩小后的视图。;
+	}
+
+[Here the view is drawn as when it is off.]
+	{
+	zh-Hans=此处画面的绘制与关闭时相同。;
+	}
+
+[SAVES]
+	{
+	zh-Hans=存档;
+	}
+
+[SCREENSHOTS]
+	{
+	zh-Hans=截图;
+	}
+
+[MODS]
+	{
+	zh-Hans=模组;
+	}
+
+[System default]
+	{
+	zh-Hans=系统默认;
+	}
+
+[Mods]
+	{
+	zh-Hans=模组;
+	}
+
+[Controls]
+	{
+	zh-Hans=操作;
+	}
+
+[Common Tweaks]
+	{
+	zh-Hans=常用调整;
+	}
+
+[Graphics]
+	{
+	zh-Hans=图形;
+	}
+
+[Language]
+	{
+	zh-Hans=语言;
+	}
+
+[Touch]
+	{
+	zh-Hans=触控;
+	}
+
+[Controller]
+	{
+	zh-Hans=手柄;
+	}
+
+[Developer]
+	{
+	zh-Hans=开发者;
+	}
+
+[Game files]
+	{
+	zh-Hans=游戏文件;
+	}
+
+[Keys]
+	{
+	zh-Hans=按键;
+	}
+
+[Patrolling]
+	{
+	zh-Hans=巡逻;
+	}
+
+[Guarding]
+	{
+	zh-Hans=护卫;
+	}
+
+[Build tools]
+	{
+	zh-Hans=建造工具;
+	}
+
+[Snap & chat]
+	{
+	zh-Hans=吸附与聊天;
+	}
+
+[CONTROLS]
+	{
+	zh-Hans=操作;
+	}
+
+[COMMON TWEAKS]
+	{
+	zh-Hans=常用调整;
+	}
+
+[GRAPHICS]
+	{
+	zh-Hans=图形;
+	}
+
+[LANGUAGE]
+	{
+	zh-Hans=语言;
+	}
+
+[TOUCH]
+	{
+	zh-Hans=触控;
+	}
+
+[CONTROLLER]
+	{
+	zh-Hans=手柄;
+	}
+
+[DEVELOPER]
+	{
+	zh-Hans=开发者;
+	}
+
+[GAME FILES]
+	{
+	zh-Hans=游戏文件;
+	}
+
+[MOD KEYS]
+	{
+	zh-Hans=模组按键;
+	}
+
+[PATROLLING BUILDERS]
+	{
+	zh-Hans=巡逻中的建造单位;
+	}
+
+[GUARDING BUILDERS]
+	{
+	zh-Hans=护卫中的建造单位;
+	}
+
+[BUILD TOOLS]
+	{
+	zh-Hans=建造工具;
+	}
+
+[SNAP & CHAT]
+	{
+	zh-Hans=吸附与聊天;
+	}
+
+[Pathfinding cycles]
+	{
+	zh-Hans=寻路周期;
+	}
+
+[Mouse wheel zoom]
+	{
+	zh-Hans=鼠标滚轮缩放;
+	}
+
+[Escape opens the game menu]
+	{
+	zh-Hans=Esc键打开游戏菜单;
+	}
+
+[Select groups without Alt]
+	{
+	zh-Hans=无需Alt即可选择编队;
+	}
+
+[Unit limit]
+	{
+	zh-Hans=单位上限;
+	}
+
+[Maximum frame rate]
+	{
+	zh-Hans=最高帧率;
+	}
+
+[Enhanced anti-aliasing]
+	{
+	zh-Hans=增强抗锯齿;
+	}
+
+[Screen size]
+	{
+	zh-Hans=画面尺寸;
+	}
+
+[Enable Developer Mode]
+	{
+	zh-Hans=启用开发者模式;
+	}
+
+[Show performance statistics]
+	{
+	zh-Hans=显示性能统计;
+	}
+
+[Hardware acceleration]
+	{
+	zh-Hans=硬件加速;
+	}
+
+[Vertical sync]
+	{
+	zh-Hans=垂直同步;
+	}
+
+[Menu scaling]
+	{
+	zh-Hans=菜单缩放;
+	}
+
+[Native pixel density]
+	{
+	zh-Hans=原生像素密度;
+	}
+
+[Use modern fonts for game text]
+	{
+	zh-Hans=游戏文字使用现代字体;
+	}
+
+[Font outline]
+	{
+	zh-Hans=字体描边;
+	}
+
+[Font shadow]
+	{
+	zh-Hans=字体阴影;
+	}
+
+[Game text background]
+	{
+	zh-Hans=游戏文字背景;
+	}
+
+[Text size]
+	{
+	zh-Hans=文字大小;
+	}
+
+[One-finger drag]
+	{
+	zh-Hans=单指拖动;
+	}
+
+[Hold delay]
+	{
+	zh-Hans=长按延迟;
+	}
+
+[QUEUE and ADD]
+	{
+	zh-Hans=排队与追加;
+	}
+
+[Haptics]
+	{
+	zh-Hans=触感反馈;
+	}
+
+[Left-handed layout]
+	{
+	zh-Hans=左手布局;
+	}
+
+[Control size]
+	{
+	zh-Hans=控件大小;
+	}
+
+[Scheme]
+	{
+	zh-Hans=方案;
+	}
+
+[Right trackpad]
+	{
+	zh-Hans=右触控板;
+	}
+
+[Pointer speed]
+	{
+	zh-Hans=指针速度;
+	}
+
+[Pointer acceleration]
+	{
+	zh-Hans=指针加速;
+	}
+
+[Trackpad glide]
+	{
+	zh-Hans=触控板滑行;
+	}
+
+[Right stick]
+	{
+	zh-Hans=右摇杆;
+	}
+
+[Magnetism (stick pointer)]
+	{
+	zh-Hans=磁吸（摇杆指针）;
+	}
+
+[Gyro pointer]
+	{
+	zh-Hans=陀螺仪指针;
+	}
+
+[Gyro speed]
+	{
+	zh-Hans=陀螺仪速度;
+	}
+
+[Button prompts]
+	{
+	zh-Hans=按键提示;
+	}
+
+[Left-handed]
+	{
+	zh-Hans=左手模式;
+	}
+
+[Mod]
+	{
+	zh-Hans=模组;
+	}
+
+[Snap override key]
+	{
+	zh-Hans=取消吸附键;
+	}
+
+[Autoclick key]
+	{
+	zh-Hans=自动点击键;
+	}
+
+[Rotate build key]
+	{
+	zh-Hans=旋转建筑键;
+	}
+
+[Hold position]
+	{
+	zh-Hans=固守;
+	}
+
+[Maneuver]
+	{
+	zh-Hans=机动;
+	}
+
+[Roam]
+	{
+	zh-Hans=漫游;
+	}
+
+[Mex snap radius]
+	{
+	zh-Hans=金属采集器吸附半径;
+	}
+
+[Wreck snap radius]
+	{
+	zh-Hans=残骸吸附半径;
+	}
+
+[Optimize DT rows]
+	{
+	zh-Hans=优化龙牙排列;
+	}
+
+[Full rings]
+	{
+	zh-Hans=完整环形;
+	}
+
+[Accessible chat]
+	{
+	zh-Hans=易读聊天;
+	}
+
+[Resource bar background]
+	{
+	zh-Hans=资源栏背景;
+	}
+
+[Installed]
+	{
+	zh-Hans=已安装;
+	}
+
+[Include in device backups]
+	{
+	zh-Hans=包含在设备备份中;
+	}
+
+[Where the files are]
+	{
+	zh-Hans=文件位置;
+	}
+
+[Your files]
+	{
+	zh-Hans=你的文件;
+	}
+
+[More cycles find routes faster but use more CPU.]
+	{
+	zh-Hans=周期越多寻路越快，但占用更多CPU。;
+	}
+
+[Scroll to zoom the battlefield in and out.]
+	{
+	zh-Hans=滚动滚轮缩放战场。;
+	}
+
+[The first press clears the selection,]
+	{
+	zh-Hans=第一次按下清除选择，;
+	}
+
+[the second opens the menu.]
+	{
+	zh-Hans=第二次按下打开菜单。;
+	}
+
+[A number key selects its group on its own.]
+	{
+	zh-Hans=数字键直接选择其编队。;
+	}
+
+[Units each player can have.]
+	{
+	zh-Hans=每名玩家可拥有的单位数。;
+	}
+
+[Applies from the next game.]
+	{
+	zh-Hans=从下一局起生效。;
+	}
+
+[Lower it to save power.]
+	{
+	zh-Hans=调低可省电。;
+	}
+
+[Units drawn at 16x and scaled down.]
+	{
+	zh-Hans=单位以16x绘制后缩小。;
+	}
+
+[Needs a fast CPU.]
+	{
+	zh-Hans=需要高速CPU。;
+	}
+
+[Units drawn at 8x and scaled down.]
+	{
+	zh-Hans=单位以8x绘制后缩小。;
+	}
+
+[Units drawn at higher resolution and scaled down]
+	{
+	zh-Hans=单位以更高分辨率绘制后缩小，;
+	}
+
+[for smoother edges.]
+	{
+	zh-Hans=使边缘更平滑。;
+	}
+
+[Full screen at this size, or a window of it.]
+	{
+	zh-Hans=以此尺寸全屏显示，或使用同尺寸窗口。;
+	}
+
+[Applies from the next start.]
+	{
+	zh-Hans=下次启动时生效。;
+	}
+
+[Your changes to the profile's hacks apply while on.]
+	{
+	zh-Hans=开启时，你对配置中修改项的更改生效。;
+	}
+
+[Frame and tick times over the battlefield.]
+	{
+	zh-Hans=在战场上方显示帧时间和逻辑帧时间。;
+	}
+
+[Each frame waits for the display: no tearing.]
+	{
+	zh-Hans=每帧等待显示器刷新：无画面撕裂。;
+	}
+
+[The menus fill the window, every pixel]
+	{
+	zh-Hans=菜单填满窗口，每个像素;
+	}
+
+[as wide as the next.]
+	{
+	zh-Hans=宽度相同。;
+	}
+
+[The largest whole-number scale that fits:]
+	{
+	zh-Hans=能容纳的最大整数倍缩放：;
+	}
+
+[smaller menus, every pixel square.]
+	{
+	zh-Hans=菜单较小，每个像素都是正方形。;
+	}
+
+[The menus fill the window, unfiltered,]
+	{
+	zh-Hans=菜单填满窗口，不过滤，;
+	}
+
+[as the game always drew them.]
+	{
+	zh-Hans=与游戏一贯的绘制方式相同。;
+	}
+
+[The display's own pixel density (Retina on a Mac).]
+	{
+	zh-Hans=使用显示器自身的像素密度（Mac上的Retina）。;
+	}
+
+[Modern fonts for in-game text,]
+	{
+	zh-Hans=游戏内文字使用现代字体，;
+	}
+
+[including internationalization.]
+	{
+	zh-Hans=支持多语言文字。;
+	}
+
+[A dark edge round each letter of modern text.]
+	{
+	zh-Hans=现代字体的每个字周围加深色描边。;
+	}
+
+[A dark shadow under modern text.]
+	{
+	zh-Hans=现代字体下方加深色阴影。;
+	}
+
+[A shaded box behind each line of game text.]
+	{
+	zh-Hans=每行游戏文字后加阴影底框。;
+	}
+
+[The game's own text and unit names, where its]
+	{
+	zh-Hans=游戏自身的文字和单位名称，;
+	}
+
+[data has them in the language.]
+	{
+	zh-Hans=在其数据含有该语言时显示。;
+	}
+
+[The size of game text in the modern fonts.]
+	{
+	zh-Hans=现代字体下游戏文字的大小。;
+	}
+
+[Larger sizes are easier to read.]
+	{
+	zh-Hans=字号越大越易读。;
+	}
+
+[The game's own fonts have fixed sizes.]
+	{
+	zh-Hans=游戏自带字体的大小固定。;
+	}
+
+[Automatic: a selection box on a tablet,]
+	{
+	zh-Hans=自动：平板上为框选，;
+	}
+
+[scrolling on a phone.]
+	{
+	zh-Hans=手机上为滚动。;
+	}
+
+[A drag draws a selection box;]
+	{
+	zh-Hans=拖动绘制选择框；;
+	}
+
+[two fingers scroll the map.]
+	{
+	zh-Hans=双指滚动地图。;
+	}
+
+[A drag scrolls the map;]
+	{
+	zh-Hans=拖动滚动地图；;
+	}
+
+[hold, then drag, for a selection box.]
+	{
+	zh-Hans=长按后拖动绘制选择框。;
+	}
+
+[How long a finger or button is held for a hold.]
+	{
+	zh-Hans=手指或按键按住多久算作长按。;
+	}
+
+[A tapped QUEUE, ADD or x5 turns off]
+	{
+	zh-Hans=点按开启的排队、追加或x5;
+	}
+
+[after the next order or selection.]
+	{
+	zh-Hans=在下一次命令或选择后关闭。;
+	}
+
+[A tapped QUEUE, ADD or x5 stays on]
+	{
+	zh-Hans=点按开启的排队、追加或x5;
+	}
+
+[until it is tapped again.]
+	{
+	zh-Hans=保持开启，直到再次点按。;
+	}
+
+[A short vibration as a touch control acts.]
+	{
+	zh-Hans=触控操作生效时短暂振动。;
+	}
+
+[The minimap and the thumb controls on the]
+	{
+	zh-Hans=小地图和拇指控件在右侧，;
+	}
+
+[right, the orders on the left.]
+	{
+	zh-Hans=命令在左侧。;
+	}
+
+[The size of the touch controls; the game's own]
+	{
+	zh-Hans=触控控件的大小；游戏自身的;
+	}
+
+[screens keep theirs.]
+	{
+	zh-Hans=界面保持原有大小。;
+	}
+
+[The right stick moves the pointer and the left]
+	{
+	zh-Hans=右摇杆移动指针，;
+	}
+
+[stick the map.]
+	{
+	zh-Hans=左摇杆移动地图。;
+	}
+
+[The right trackpad points and the left one moves]
+	{
+	zh-Hans=右触控板控制指针，左触控板;
+	}
+
+[the map; a pad without trackpads plays Sticks.]
+	{
+	zh-Hans=移动地图；没有触控板的手柄使用摇杆方案。;
+	}
+
+[Each point of the pad is a point of the view.]
+	{
+	zh-Hans=触控板上每一点对应画面上的一点。;
+	}
+
+[The pointer moves as the thumb slides.]
+	{
+	zh-Hans=指针随拇指滑动而移动。;
+	}
+
+[How far the pointer moves for a slide.]
+	{
+	zh-Hans=每次滑动指针移动的距离。;
+	}
+
+[A quick slide moves the pointer further.]
+	{
+	zh-Hans=快速滑动时指针移动更远。;
+	}
+
+[The pointer keeps moving after a quick flick.]
+	{
+	zh-Hans=快速轻扫后指针继续移动。;
+	}
+
+[Up and down zoom about the pointer; a flick left]
+	{
+	zh-Hans=上下推动以指针为中心缩放；左右轻扫;
+	}
+
+[or right turns the build page while building.]
+	{
+	zh-Hans=在建造时翻动建造页。;
+	}
+
+[The right stick moves the pointer, as in the]
+	{
+	zh-Hans=右摇杆移动指针，;
+	}
+
+[Sticks scheme.]
+	{
+	zh-Hans=与摇杆方案相同。;
+	}
+
+[The right stick does nothing.]
+	{
+	zh-Hans=右摇杆不起作用。;
+	}
+
+[The stick pointer settles on a lone unit near it.]
+	{
+	zh-Hans=摇杆指针会停在附近的单个单位上。;
+	}
+
+[Turning the controller fine-tunes the pointer.]
+	{
+	zh-Hans=转动手柄可微调指针。;
+	}
+
+[How far the pointer moves as the controller turns.]
+	{
+	zh-Hans=转动手柄时指针移动的距离。;
+	}
+
+[Small ticks and bumps felt through the controller.]
+	{
+	zh-Hans=通过手柄感受到的细微震动。;
+	}
+
+[The button pictures the controls and rings show.]
+	{
+	zh-Hans=控件和环形菜单显示的按键图标。;
+	}
+
+[Mirrors the roles: the left pad points, the right]
+	{
+	zh-Hans=左右功能互换：左触控板控制指针，;
+	}
+
+[pad moves the map, triggers and grips swap.]
+	{
+	zh-Hans=右触控板移动地图，扳机键和背键互换。;
+	}
+
+[A mod from a mods folder, or one picked.]
+	{
+	zh-Hans=来自模组文件夹或手动选择的模组。;
+	}
+
+[Held, a click is not snapped.]
+	{
+	zh-Hans=按住时，点击不吸附。;
+	}
+
+[Held, a build click lays a line or a ring.]
+	{
+	zh-Hans=按住时，建造点击会排成一行或一圈。;
+	}
+
+[Turns the building being placed.]
+	{
+	zh-Hans=旋转正在放置的建筑。;
+	}
+
+[What patrolling builders do.]
+	{
+	zh-Hans=巡逻中的建造单位的行为。;
+	}
+
+[What guarding builders do.]
+	{
+	zh-Hans=护卫中的建造单位的行为。;
+	}
+
+[Cells a metal extractor snaps to metal.]
+	{
+	zh-Hans=金属采集器吸附到金属点的格数。;
+	}
+
+[Cells a reclaim click snaps to a wreck.]
+	{
+	zh-Hans=回收点击吸附到残骸的格数。;
+	}
+
+[Lines of 2x2 walls build as a double row.]
+	{
+	zh-Hans=2x2的墙排成一行时建成双排。;
+	}
+
+[Rings include their corners.]
+	{
+	zh-Hans=环形包括四角。;
+	}
+
+[A dark backdrop under each chat line.]
+	{
+	zh-Hans=每行聊天文字下加深色背景。;
+	}
+
+[Behind the resource bar's text.]
+	{
+	zh-Hans=位于资源栏文字后方。;
+	}
+
+[After restoring this {device} from a backup,]
+	{
+	zh-Hans=从备份恢复此{device}后，;
+	}
+
+[add the game files again.]
+	{
+	zh-Hans=请重新添加游戏文件。;
+	}
+
+[per player]
+	{
+	zh-Hans=每名玩家;
+	}
+
+[Desktop]
+	{
+	zh-Hans=桌面;
+	}
+
+[Reclaim only]
+	{
+	zh-Hans=仅回收;
+	}
+
+[Both]
+	{
+	zh-Hans=两者;
+	}
+
+[Assist only]
+	{
+	zh-Hans=仅协助;
+	}
+
+[Stay]
+	{
+	zh-Hans=原地;
+	}
+
+[Normal]
+	{
+	zh-Hans=正常;
+	}
+
+[Scatter]
+	{
+	zh-Hans=分散;
+	}
+
+[None]
+	{
+	zh-Hans=无;
+	}
+
+[Text]
+	{
+	zh-Hans=文字;
+	}
+
+[Solid]
+	{
+	zh-Hans=实心;
+	}
+
+[cells]
+	{
+	zh-Hans=格;
+	}
+
+[ms]
+	{
+	zh-Hans=毫秒;
+	}
+
+[device]
+	{
+	zh-Hans=设备;
+	}
+
+[Locked during a game]
+	{
+	zh-Hans=游戏中锁定;
+	}
+
+[Set by the host]
+	{
+	zh-Hans=由主持者设置;
+	}
+
+[Set on the command line]
+	{
+	zh-Hans=由命令行设置;
+	}
+
+[Not available here]
+	{
+	zh-Hans=此处不可用;
+	}
+
+[Set by the mod]
+	{
+	zh-Hans=由模组设置;
+	}
+
+[Needs modern fonts]
+	{
+	zh-Hans=需要现代字体;
+	}
+
+[Always on here]
+	{
+	zh-Hans=此处始终开启;
+	}
+
+[MANAGE…]
+	{
+	zh-Hans=管理……;
+	}
+
+[RESTORE PROFILE VALUES]
+	{
+	zh-Hans=恢复配置值;
+	}
+
+[Applies at next match]
+	{
+	zh-Hans=下一局生效;
+	}
+
+[Off: it plays as 3.1c.]
+	{
+	zh-Hans=关闭：按3.1c原样运行。;
+	}
+
+[Not implemented by this engine.]
+	{
+	zh-Hans=本引擎未实现。;
+	}
+
+[Items]
+	{
+	zh-Hans=项目;
+	}
+
+[Steam Input is on: the trackpads and back grips reach the game as Steam's mouse and keys. Turn Steam Input off for Open Annihilation in Steam's controller settings to use them here.]
+	{
+	zh-Hans=Steam Input已开启：触控板和背键以Steam的鼠标和按键形式传给游戏。要在此使用它们，请在Steam的手柄设置中为Open Annihilation关闭Steam Input。;
+	}
+
+[Steam Deck: starts at the screen's {rate} fps.]
+	{
+	zh-Hans=Steam Deck：以屏幕的{rate} fps启动。;
+	}
+
+[SETTINGS]
+	{
+	zh-Hans=设置;
+	}
+
+[No Mod]
+	{
+	zh-Hans=无模组;
+	}
+
+[The game's own rules, as 3.1c plays them.]
+	{
+	zh-Hans=游戏自身的规则，与3.1c相同。;
+	}
+
+[N/A]
+	{
+	zh-Hans=无;
+	}
+
+[No oamod.yaml present]
+	{
+	zh-Hans=没有oamod.yaml;
+	}
+
+[PLAYING]
+	{
+	zh-Hans=使用中;
+	}
+
+[OPEN MODS FOLDER]
+	{
+	zh-Hans=打开模组文件夹;
+	}
+
+[Lists the mods in the game folder's mods folder and]
+	{
+	zh-Hans=列出游戏文件夹的mods文件夹中，以及;
+	}
+
+[in Documents/Open Annihilation/Mods.]
+	{
+	zh-Hans=Documents/Open Annihilation/Mods中的模组。;
+	}
+
+[SWITCH MOD]
+	{
+	zh-Hans=切换模组;
+	}
+
+[This folder has no oamod.yaml, so the game's own rules apply.]
+	{
+	zh-Hans=此文件夹没有oamod.yaml，因此使用游戏自身的规则。;
+	}
+
+[SWITCH]
+	{
+	zh-Hans=切换;
+	}
+
+[ROLL BACK]
+	{
+	zh-Hans=回滚;
+	}
+
+[ROLL BACK MOD]
+	{
+	zh-Hans=回滚模组;
+	}
+
+[{from} to {to}]
+	{
+	zh-Hans={from}至{to};
+	}
+
+[Roll back {title} to {to}? {from} is kept in its place, and ROLL BACK again brings it back.]
+	{
+	zh-Hans=将{title}回滚到{to}？{from}会保留在原处，再次回滚即可恢复。;
+	}
+
+[The game reloads its data for the mod and returns to the main menu.]
+	{
+	zh-Hans=游戏将为该模组重新载入数据并返回主菜单。;
+	}
+
+[CANCEL]
+	{
+	zh-Hans=取消;
+	}
+
+[Locked during a game. Choose the mod from the main menu.]
+	{
+	zh-Hans=游戏中锁定。请在主菜单中选择模组。;
+	}
+
+[Saved games, screenshots, films and mods.]
+	{
+	zh-Hans=存档、截图、录像和模组。;
+	}
+
+[The command line chose this run's mod.]
+	{
+	zh-Hans=本次运行的模组由命令行指定。;
+	}
+
+[Shared game - still running]
+	{
+	zh-Hans=多人游戏 - 仍在进行;
+	}
+
+[RESTORE DEFAULTS]
+	{
+	zh-Hans=恢复默认设置;
+	}
+
+[OK]
+	{
+	zh-Hans=确定;
+	}
+
+[OFF]
+	{
+	zh-Hans=关闭;
+	}
+
+[ON]
+	{
+	zh-Hans=打开;
+	}
+
+[OPEN FOLDER]
+	{
+	zh-Hans=打开文件夹;
+	}
+
+[REPLACE]
+	{
+	zh-Hans=替换;
+	}
+
+[INSTALL ALONGSIDE]
+	{
+	zh-Hans=并列安装;
+	}
+
+[REINSTALL]
+	{
+	zh-Hans=重新安装;
+	}
+
+[PLAY NOW]
+	{
+	zh-Hans=立即游戏;
+	}
+
+[INSTALLING MOD]
+	{
+	zh-Hans=正在安装模组;
+	}
+
+[UPDATE MOD]
+	{
+	zh-Hans=更新模组;
+	}
+
+[ANOTHER VERSION]
+	{
+	zh-Hans=其他版本;
+	}
+
+[ALREADY INSTALLED]
+	{
+	zh-Hans=已安装;
+	}
+
+[FOLDER IN USE]
+	{
+	zh-Hans=文件夹已被占用;
+	}
+
+[MOD INSTALLED]
+	{
+	zh-Hans=模组已安装;
+	}
+
+[MOD UPDATED]
+	{
+	zh-Hans=模组已更新;
+	}
+
+[MOD NOT INSTALLED]
+	{
+	zh-Hans=模组未安装;
+	}
+
+[MOD NOT ROLLED BACK]
+	{
+	zh-Hans=模组未回滚;
+	}
+
+[The folder kept for ROLL BACK, which holds no mod that can be read, is removed.]
+	{
+	zh-Hans=为回滚保留的文件夹中没有可读取的模组，已将其删除。;
+	}
+
+[The folder kept for ROLL BACK ({backup}) is removed.]
+	{
+	zh-Hans=为回滚保留的文件夹（{backup}）已删除。;
+	}
+
+[{version} of an unknown revision]
+	{
+	zh-Hans={version}（修订号未知）;
+	}
+
+[{version} revision {n}]
+	{
+	zh-Hans={version}，修订号{n};
+	}
+
+[Putting the files in place...]
+	{
+	zh-Hans=正在放置文件……;
+	}
+
+[Unpacking {title} {version}...]
+	{
+	zh-Hans=正在解压{title} {version}……;
+	}
+
+[{done} of {total}]
+	{
+	zh-Hans={done}/{total};
+	}
+
+[{title} {version}, an unknown revision, is installed. Replace it with revision {incoming} from {file}?]
+	{
+	zh-Hans=已安装{title} {version}（修订号未知）。要用{file}中的修订号{incoming}替换它吗？;
+	}
+
+[{title} {version}, revision {installed}, is installed. Replace it with revision {incoming} from {file}?]
+	{
+	zh-Hans=已安装{title} {version}，修订号{installed}。要用{file}中的修订号{incoming}替换它吗？;
+	}
+
+[Revision {incoming} is older than the one installed.]
+	{
+	zh-Hans=修订号{incoming}比已安装的旧。;
+	}
+
+[The version installed is kept, and ROLL BACK on Mods in the Open Annihilation settings brings it back.]
+	{
+	zh-Hans=已安装的版本会保留，在Open Annihilation设置的“模组”页点击回滚即可恢复。;
+	}
+
+[Revision {installed} is kept, and ROLL BACK on Mods in the Open Annihilation settings brings it back.]
+	{
+	zh-Hans=修订号{installed}会保留，在Open Annihilation设置的“模组”页点击回滚即可恢复。;
+	}
+
+[{title} {installed} is installed. Replace it with {incoming}, or install {incoming} alongside it?]
+	{
+	zh-Hans=已安装{title} {installed}。要用{incoming}替换它，还是将{incoming}与其并列安装？;
+	}
+
+[Replacing keeps {installed}, and ROLL BACK on Mods in the Open Annihilation settings brings it back.]
+	{
+	zh-Hans=替换后会保留{installed}，在Open Annihilation设置的“模组”页点击回滚即可恢复。;
+	}
+
+[Alongside, {incoming} goes in a folder of its own:]
+	{
+	zh-Hans=并列安装时，{incoming}将放在单独的文件夹中：;
+	}
+
+[{title} {version}, revision {revision}, is already installed. Install its files again from {file}?]
+	{
+	zh-Hans={title} {version}（修订号{revision}）已安装。要从{file}重新安装其文件吗？;
+	}
+
+[Files added to its folder, or changed, since it was installed are replaced or removed.]
+	{
+	zh-Hans=安装后在其文件夹中添加或更改的文件将被替换或删除。;
+	}
+
+[The version kept, {backup}, stays.]
+	{
+	zh-Hans=保留的版本{backup}不受影响。;
+	}
+
+[The folder kept for ROLL BACK stays.]
+	{
+	zh-Hans=为回滚保留的文件夹不受影响。;
+	}
+
+[Your Mods folder already has a folder named {folder} that does not hold {title}. It is left as it is.]
+	{
+	zh-Hans=你的Mods文件夹中已有名为{folder}的文件夹，但其中不是{title}。该文件夹保持不变。;
+	}
+
+[Install {title} {version} alongside it, in a folder of its own?]
+	{
+	zh-Hans=要将{title} {version}并列安装到单独的文件夹中吗？;
+	}
+
+[{title} {version} is installed in your Mods folder:]
+	{
+	zh-Hans={title} {version}已安装到你的Mods文件夹：;
+	}
+
+[Choose PLAY NOW to play it, or choose it later on Mods in the Open Annihilation settings.]
+	{
+	zh-Hans=选择“立即游戏”开始游玩，或稍后在Open Annihilation设置的“模组”页中选择它。;
+	}
+
+[Choose it on Mods in the Open Annihilation settings to play it.]
+	{
+	zh-Hans=在Open Annihilation设置的“模组”页中选择它即可游玩。;
+	}
+
+[{title} is now {new}. {old} is kept, and ROLL BACK on Mods in the Open Annihilation settings brings it back.]
+	{
+	zh-Hans={title}现在是{new}。{old}已保留，在Open Annihilation设置的“模组”页点击回滚即可恢复。;
+	}
+
+[{title} is now {new}.]
+	{
+	zh-Hans={title}现在是{new}。;
+	}
+
+[The files of {title} {version} were installed again.]
+	{
+	zh-Hans=已重新安装{title} {version}的文件。;
+	}
+
+[{title} is back to {new}. {old} is kept, and ROLL BACK brings it back.]
+	{
+	zh-Hans={title}已回到{new}。{old}已保留，点击回滚即可恢复。;
+	}
+
+[{title} is back to {new}.]
+	{
+	zh-Hans={title}已回到{new}。;
+	}
+
+[{old} could not be kept as the earlier version; it is in:]
+	{
+	zh-Hans=无法将{old}保留为旧版本；它位于：;
+	}
+
+[It cannot be read.]
+	{
+	zh-Hans=无法读取该文件。;
+	}
+
+[It is not a zip archive.]
+	{
+	zh-Hans=它不是zip压缩包。;
+	}
+
+[It is damaged.]
+	{
+	zh-Hans=文件已损坏。;
+	}
+
+[It is damaged: {name} does not unpack as recorded.]
+	{
+	zh-Hans=文件已损坏：{name}解压结果与记录不符。;
+	}
+
+[It holds no oamod.yaml at its top, or in a single folder at its top.]
+	{
+	zh-Hans=其顶层或顶层的唯一文件夹中没有oamod.yaml。;
+	}
+
+[Its oamod.yaml is larger than 256 KiB.]
+	{
+	zh-Hans=其oamod.yaml大于256 KiB。;
+	}
+
+[Its oamod.yaml has errors:]
+	{
+	zh-Hans=其oamod.yaml有错误：;
+	}
+
+[It holds a file it cannot unpack safely: {name}.]
+	{
+	zh-Hans=其中有无法安全解压的文件：{name}。;
+	}
+
+[It holds two names that differ only in case: {name}.]
+	{
+	zh-Hans=其中有两个仅大小写不同的名称：{name}。;
+	}
+
+[It holds a link to another file: {name}.]
+	{
+	zh-Hans=其中有指向其他文件的链接：{name}。;
+	}
+
+[It holds an encrypted file: {name}.]
+	{
+	zh-Hans=其中有加密文件：{name}。;
+	}
+
+[It holds a file packed in a way it cannot unpack: {name}. Pack it again with standard (deflate) compression.]
+	{
+	zh-Hans=其中有以无法解压的方式打包的文件：{name}。请用标准（deflate）压缩重新打包。;
+	}
+
+[It unpacks to {size}, more than the {limit} a mod may take.]
+	{
+	zh-Hans=解压后为{size}，超过了模组可占用的{limit}。;
+	}
+
+[It unpacks to {size} from {packed}, far more than a mod's files take.]
+	{
+	zh-Hans=从{packed}解压后为{size}，远超模组文件应有的大小。;
+	}
+
+[It holds more than {limit} folders, more than a mod may take.]
+	{
+	zh-Hans=其中的文件夹超过{limit}个，超过了模组允许的数量。;
+	}
+
+[It needs {size} free, and the disk holding your Mods folder has {free}.]
+	{
+	zh-Hans=需要{size}可用空间，而你的Mods文件夹所在磁盘只有{free}。;
+	}
+
+[Its id, {id}, cannot name a folder on Windows.]
+	{
+	zh-Hans=其id“{id}”在Windows上不能用作文件夹名。;
+	}
+
+[Your Mods folder has no free folder name for it.]
+	{
+	zh-Hans=你的Mods文件夹中没有可供它使用的文件夹名。;
+	}
+
+[Its files could not be put in place. Another program, such as a file sync or a virus scanner, may be using its files; try again in a moment.]
+	{
+	zh-Hans=无法放置其文件。可能有其他程序（如文件同步或病毒扫描程序）正在使用这些文件；请稍后再试。;
+	}
+
+[Your Mods folder changed while this mod was being installed; nothing was changed. Open the file again.]
+	{
+	zh-Hans=安装此模组时你的Mods文件夹发生了变化；未做任何更改。请重新打开该文件。;
+	}
+
+[Another copy of Open Annihilation is changing your Mods folder. Try again once it has finished.]
+	{
+	zh-Hans=另一个Open Annihilation正在更改你的Mods文件夹。请在其完成后再试。;
+	}
+
+[{file} cannot be installed.]
+	{
+	zh-Hans=无法安装{file}。;
+	}
+
+[And {n} more; the log has them all.]
+	{
+	zh-Hans=另有{n}项；完整列表见日志。;
+	}
+
+[Nothing was changed.]
+	{
+	zh-Hans=未做任何更改。;
+	}
+
+[{title} could not be rolled back; nothing was changed.]
+	{
+	zh-Hans=无法回滚{title}；未做任何更改。;
+	}
+
+[{title} {to}, the version kept for ROLL BACK, cannot be played.]
+	{
+	zh-Hans=为回滚保留的版本{title} {to}无法使用。;
+	}
+
+[the folder you chose]
+	{
+	zh-Hans=你选择的文件夹;
+	}
+
+[a file]
+	{
+	zh-Hans=一个文件;
+	}
+
+[Game archives]
+	{
+	zh-Hans=游戏数据包;
+	}
+
+[3.1c update]
+	{
+	zh-Hans=3.1c更新;
+	}
+
+[Extra units and maps]
+	{
+	zh-Hans=额外单位和地图;
+	}
+
+[Music]
+	{
+	zh-Hans=音乐;
+	}
+
+[Movies]
+	{
+	zh-Hans=影片;
+	}
+
+[Left out]
+	{
+	zh-Hans=已排除;
+	}
+
+[The Total Annihilation demo (1997)]
+	{
+	zh-Hans=横扫千军试玩版（1997）;
+	}
+
+[The demo's unpacked data]
+	{
+	zh-Hans=试玩版解压后的数据;
+	}
+
+[Not found]
+	{
+	zh-Hans=未找到;
+	}
+
+[not found]
+	{
+	zh-Hans=未找到;
+	}
+
+[1 file]
+	{
+	zh-Hans=1个文件;
+	}
+
+[1 track]
+	{
+	zh-Hans=1首曲目;
+	}
+
+[optional]
+	{
+	zh-Hans=可选;
+	}
+
+[intro and endings · optional]
+	{
+	zh-Hans=片头和结局动画 · 可选;
+	}
+
+[intro and endings]
+	{
+	zh-Hans=片头和结局动画;
+	}
+
+[its mod profile cannot be used]
+	{
+	zh-Hans=其模组配置无法使用;
+	}
+
+[installer recognised by its size; checked when it is unpacked]
+	{
+	zh-Hans=已按大小识别安装程序；解压时检查;
+	}
+
+[no longer used now that the full game is here]
+	{
+	zh-Hans=已有完整游戏，不再使用;
+	}
+
+[Recommended]
+	{
+	zh-Hans=推荐;
+	}
+
+[Recommended: shared games with players who have it may not match.]
+	{
+	zh-Hans=推荐：与拥有它的玩家进行多人游戏时可能不一致。;
+	}
+
+[Shared games need the same files on every machine]
+	{
+	zh-Hans=多人游戏需要每台电脑上的文件相同;
+	}
+
+[Windows program or shortcut]
+	{
+	zh-Hans=Windows程序或快捷方式;
+	}
+
+[icon, manual or help file]
+	{
+	zh-Hans=图标、手册或帮助文件;
+	}
+
+[uninstaller]
+	{
+	zh-Hans=卸载程序;
+	}
+
+[system file]
+	{
+	zh-Hans=系统文件;
+	}
+
+[symbolic link, never followed]
+	{
+	zh-Hans=符号链接，不会跟随;
+	}
+
+[a name the game cannot use]
+	{
+	zh-Hans=游戏无法使用的名称;
+	}
+
+[differs only in capital letters]
+	{
+	zh-Hans=仅大小写不同;
+	}
+
+[left out]
+	{
+	zh-Hans=已排除;
+	}
+
+[Windows programs, shortcuts, icons, manuals and help files]
+	{
+	zh-Hans=Windows程序、快捷方式、图标、手册和帮助文件;
+	}
+
+[This folder does not hold a Total Annihilation installation]
+	{
+	zh-Hans=此文件夹中没有已安装的横扫千军;
+	}
+
+[It holds no Total Annihilation archives (.hpi, .ufo, .ccx or rev31.gp3 files) and no installer of the Total Annihilation demo (1997).]
+	{
+	zh-Hans=其中没有横扫千军数据包（.hpi、.ufo、.ccx或rev31.gp3文件），也没有横扫千军试玩版（1997）的安装程序。;
+	}
+
+[Choose the folder that holds totala1.hpi.]
+	{
+	zh-Hans=请选择含有totala1.hpi的文件夹。;
+	}
+
+[These files cannot be played]
+	{
+	zh-Hans=这些文件无法用于游戏;
+	}
+
+[The folder may be missing totala1.hpi.]
+	{
+	zh-Hans=该文件夹可能缺少totala1.hpi。;
+	}
+
+[This is not the demo's installer]
+	{
+	zh-Hans=这不是试玩版的安装程序;
+	}
+
+[This file]
+	{
+	zh-Hans=此文件;
+	}
+
+[The copy stopped]
+	{
+	zh-Hans=复制已停止;
+	}
+
+[The folder can no longer be read]
+	{
+	zh-Hans=无法再读取该文件夹;
+	}
+
+[The folder has changed]
+	{
+	zh-Hans=文件夹已更改;
+	}
+
+[Is this the right folder?]
+	{
+	zh-Hans=这是正确的文件夹吗？;
+	}
+
+[No game folder yet]
+	{
+	zh-Hans=尚无游戏文件夹;
+	}
+
+[Found your files]
+	{
+	zh-Hans=已找到你的文件;
+	}
+
+[Found game archives]
+	{
+	zh-Hans=已找到游戏数据包;
+	}
+
+[Archives are loose in Open Annihilation's folder. Gather them into Total Annihilation?]
+	{
+	zh-Hans=数据包散落在Open Annihilation的文件夹中。要将它们集中到Total Annihilation文件夹吗？;
+	}
+
+[The file picker did not open]
+	{
+	zh-Hans=文件选择器未能打开;
+	}
+
+[The system's file picker could not be opened.]
+	{
+	zh-Hans=无法打开系统的文件选择器。;
+	}
+
+[The copy could not start]
+	{
+	zh-Hans=无法开始复制;
+	}
+
+[Open Annihilation could not write its own folder.]
+	{
+	zh-Hans=Open Annihilation无法写入自己的文件夹。;
+	}
+
+[Stop copying?]
+	{
+	zh-Hans=停止复制？;
+	}
+
+[Replace the game files?]
+	{
+	zh-Hans=替换游戏文件？;
+	}
+
+[Nothing in this folder is left out.]
+	{
+	zh-Hans=此文件夹中没有排除任何内容。;
+	}
+
+[This mod cannot be used]
+	{
+	zh-Hans=此模组无法使用;
+	}
+
+[Its mod profile cannot be used:]
+	{
+	zh-Hans=其模组配置无法使用：;
+	}
+
+[It is still copied, so it can be fixed in your file manager; the Mods page plays only mods that work.]
+	{
+	zh-Hans=它仍会被复制，以便在文件管理器中修复；“模组”页只能运行可用的模组。;
+	}
+
+[Remove the old folder?]
+	{
+	zh-Hans=删除旧文件夹？;
+	}
+
+[Remove the demo's data?]
+	{
+	zh-Hans=删除试玩版数据？;
+	}
+
+[this part]
+	{
+	zh-Hans=此部分;
+	}
+
+[The game plays without it.]
+	{
+	zh-Hans=没有它游戏也能运行。;
+	}
+
+[Saved games that use its units cannot be loaded without it, and shared games need the same files on every machine.]
+	{
+	zh-Hans=没有它就无法载入使用其单位的存档，而且多人游戏需要每台电脑上的文件相同。;
+	}
+
+[It is removed at the next start of Open Annihilation.]
+	{
+	zh-Hans=将在Open Annihilation下次启动时删除。;
+	}
+
+[Remove all game files?]
+	{
+	zh-Hans=删除所有游戏文件？;
+	}
+
+[Add files]
+	{
+	zh-Hans=添加文件;
+	}
+
+[Expansions, extra maps and mods are added beside what is there; nothing already there is replaced.]
+	{
+	zh-Hans=资料片、额外地图和模组会添加到现有文件旁；不会替换已有的任何内容。;
+	}
+
+[From the next start]
+	{
+	zh-Hans=下次启动起;
+	}
+
+[The changes are used from the next start of Open Annihilation.]
+	{
+	zh-Hans=更改将从Open Annihilation下次启动起生效。;
+	}
+
+[The new game files are used from the next start of Open Annihilation. Adding or removing files waits until then.]
+	{
+	zh-Hans=新游戏文件将从Open Annihilation下次启动起使用。在此之前无法添加或删除文件。;
+	}
+
+[Copying stopped. Nothing was added.]
+	{
+	zh-Hans=复制已停止。未添加任何内容。;
+	}
+
+[Copying went on while Open Annihilation was away]
+	{
+	zh-Hans=Open Annihilation不在前台时复制仍在继续;
+	}
+
+[Copying paused while Open Annihilation was away and has started again]
+	{
+	zh-Hans=Open Annihilation不在前台时复制曾暂停，现已重新开始;
+	}
+
+[1 file was added]
+	{
+	zh-Hans=已添加1个文件;
+	}
+
+[Mod: {name}]
+	{
+	zh-Hans=模组：{name};
+	}
+
+[{n} files]
+	{
+	zh-Hans={n}个文件;
+	}
+
+[{n} tracks]
+	{
+	zh-Hans={n}首曲目;
+	}
+
+[{tracks} · optional]
+	{
+	zh-Hans={tracks} · 可选;
+	}
+
+[{kinds} · 1 file]
+	{
+	zh-Hans={kinds} · 1个文件;
+	}
+
+[{kinds} · {n} files]
+	{
+	zh-Hans={kinds} · {n}个文件;
+	}
+
+[at least {size}]
+	{
+	zh-Hans=至少{size};
+	}
+
+[{problem} The folder may be missing totala1.hpi.]
+	{
+	zh-Hans={problem}该文件夹可能缺少totala1.hpi。;
+	}
+
+[{file} is not the release of the Total Annihilation demo (1997) that Open Annihilation recognises. Installers of the full game are Windows programs, which Open Annihilation never runs: install the game on a computer, then copy its folder.]
+	{
+	zh-Hans={file}不是Open Annihilation能识别的横扫千军试玩版（1997）。完整游戏的安装程序是Windows程序，Open Annihilation从不运行它们：请在电脑上安装游戏，然后复制其文件夹。;
+	}
+
+[Not enough space on this {device}]
+	{
+	zh-Hans=此{device}空间不足;
+	}
+
+[These files need {need} and this {device} has {free} free. {advice}, or turn off a part above, then tap Check again.]
+	{
+	zh-Hans=这些文件需要{need}，而此{device}只有{free}可用空间。{advice}，或关闭上方的某一部分，然后点按“重新检查”。;
+	}
+
+[This {device} ran out of space]
+	{
+	zh-Hans=此{device}空间已用尽;
+	}
+
+[The copy stopped after {size}. What was copied is kept: free some space, then tap Continue.]
+	{
+	zh-Hans=复制在{size}后停止。已复制的内容会保留：请释放一些空间，然后点按“继续”。;
+	}
+
+[Open Annihilation could not read {file}. Connect it again and tap Continue. What was copied is kept.]
+	{
+	zh-Hans=Open Annihilation无法读取{file}。请重新连接并点按“继续”。已复制的内容会保留。;
+	}
+
+[Open Annihilation could not read {file}: {why}. Connect it again and tap Continue. What was copied is kept.]
+	{
+	zh-Hans=Open Annihilation无法读取{file}：{why}。请重新连接并点按“继续”。已复制的内容会保留。;
+	}
+
+[{file} is in {cloud} and could not be downloaded. Connect to the internet and tap Continue.]
+	{
+	zh-Hans={file}位于{cloud}中，无法下载。请连接互联网并点按“继续”。;
+	}
+
+[{file} is in {cloud} and could not be downloaded: {why}. Connect to the internet and tap Continue.]
+	{
+	zh-Hans={file}位于{cloud}中，无法下载：{why}。请连接互联网并点按“继续”。;
+	}
+
+[Open Annihilation may no longer read {location}. Choose the folder again to go on; what was copied is kept.]
+	{
+	zh-Hans=Open Annihilation已无权读取{location}。请重新选择该文件夹以继续；已复制的内容会保留。;
+	}
+
+[Some files in {location} changed since the copy began. Files that match are kept; the rest are copied again.]
+	{
+	zh-Hans=复制开始后{location}中的部分文件发生了变化。一致的文件会保留，其余文件将重新复制。;
+	}
+
+[This folder holds {size}, far more than a Total Annihilation installation (about 1.1 GB with everything).]
+	{
+	zh-Hans=此文件夹有{size}，远大于横扫千军的安装大小（全部内容约1.1 GB）。;
+	}
+
+[There is no Total Annihilation folder on this {device} yet. {steps} Name it Total Annihilation. Wait until the copy has finished, then tap Check again.]
+	{
+	zh-Hans=此{device}上还没有Total Annihilation文件夹。{steps}将其命名为Total Annihilation。等复制完成后，点按“重新检查”。;
+	}
+
+[Found your files in {folder}. Use that folder?]
+	{
+	zh-Hans=在{folder}中找到了你的文件。要使用该文件夹吗？;
+	}
+
+[The system's file picker could not be opened: {error}.]
+	{
+	zh-Hans=无法打开系统的文件选择器：{error}。;
+	}
+
+[Open Annihilation could not write its own folder: {error}.]
+	{
+	zh-Hans=Open Annihilation无法写入自己的文件夹：{error}。;
+	}
+
+[{done} of {total} is copied. Keep it, and choosing the same folder later continues from here.]
+	{
+	zh-Hans=已复制{done}/{total}。保留它，以后选择同一文件夹即可从此处继续。;
+	}
+
+[This replaces the game files on this {device} ({size}) with the folder you chose. The current folder is kept as Total Annihilation (old) until you remove it. Saved games and settings stay.]
+	{
+	zh-Hans=这会用你选择的文件夹替换此{device}上的游戏文件（{size}）。当前文件夹会保留为Total Annihilation (old)，直到你将其删除。存档和设置保持不变。;
+	}
+
+[{kinds} ({size})]
+	{
+	zh-Hans={kinds}（{size}）;
+	}
+
+[Total Annihilation (old) is the folder that was there before ({size}). The game does not use it; removing it frees the space.]
+	{
+	zh-Hans=Total Annihilation (old)是之前的文件夹（{size}）。游戏不再使用它；删除可释放空间。;
+	}
+
+[The demo's unpacked data ({size}) is no longer used.]
+	{
+	zh-Hans=试玩版解压后的数据（{size}）已不再使用。;
+	}
+
+[Remove {name} ({size})?]
+	{
+	zh-Hans=删除{name}（{size}）？;
+	}
+
+[Remove every game file from this {device} ({size})? Saved games and settings stay. The game cannot start until you add the files again.]
+	{
+	zh-Hans=删除此{device}上的所有游戏文件（{size}）？存档和设置保持不变。重新添加文件之前，游戏无法启动。;
+	}
+
+[Copying from {location} stopped at {done} of {total}. Choose the same folder to continue; what was copied is kept.]
+	{
+	zh-Hans=从{location}复制在{done}/{total}时停止。选择同一文件夹即可继续；已复制的内容会保留。;
+	}
+
+[Copying from {location} stopped at {done}. Choose the same folder to continue; what was copied is kept.]
+	{
+	zh-Hans=从{location}复制在{done}时停止。选择同一文件夹即可继续；已复制的内容会保留。;
+	}
+
+[The Total Annihilation folder on this {device} cannot be played.]
+	{
+	zh-Hans=此{device}上的Total Annihilation文件夹无法用于游戏。;
+	}
+
+[The Total Annihilation folder on this {device} cannot be played: {problem}]
+	{
+	zh-Hans=此{device}上的Total Annihilation文件夹无法用于游戏：{problem};
+	}
+
+[{n} files were added]
+	{
+	zh-Hans=已添加{n}个文件;
+	}
+
+[1 file was added from {source}]
+	{
+	zh-Hans=已从{source}添加1个文件;
+	}
+
+[{n} files were added from {source}]
+	{
+	zh-Hans=已从{source}添加{n}个文件;
+	}
+
+[{added}; {name} is there already and was kept.]
+	{
+	zh-Hans={added}；{name}已存在，已保留。;
+	}
+
+[{n} more]
+	{
+	zh-Hans=另有{n}项;
+	}
+
+[{added}; {names} are there already and were kept.]
+	{
+	zh-Hans={added}；{names}已存在，已保留。;
+	}
+
+[{added}.]
+	{
+	zh-Hans={added}。;
+	}
+
+[{added} The new files are used from the next start of Open Annihilation.]
+	{
+	zh-Hans={added}新文件将从Open Annihilation下次启动起使用。;
+	}
+
+[{changes} Waiting to be removed: {names}.]
+	{
+	zh-Hans={changes}等待删除：{names}。;
+	}
+
+[Choose the game folder]
+	{
+	zh-Hans=选择游戏文件夹;
+	}
+
+[CHOOSE FOLDER]
+	{
+	zh-Hans=选择文件夹;
+	}
+
+[Copy it yourself]
+	{
+	zh-Hans=自行复制;
+	}
+
+[I HAVE COPIED IT]
+	{
+	zh-Hans=我已复制;
+	}
+
+[Play the 1997 demo]
+	{
+	zh-Hans=游玩1997年试玩版;
+	}
+
+[CHOOSE INSTALLER]
+	{
+	zh-Hans=选择安装程序;
+	}
+
+[WHY]
+	{
+	zh-Hans=原因;
+	}
+
+[SHOW]
+	{
+	zh-Hans=显示;
+	}
+
+[REMOVE]
+	{
+	zh-Hans=删除;
+	}
+
+[Add your Total Annihilation files]
+	{
+	zh-Hans=添加你的横扫千军文件;
+	}
+
+[You need the folder of an installed copy of Total Annihilation, the one that holds totala1.hpi: about 1.1 GB with both expansions and the music. Installers of the full game are Windows programs and cannot be used here; install the game on a computer and bring its folder.]
+	{
+	zh-Hans=你需要已安装的横扫千军的文件夹，即含有totala1.hpi的那个：包括两个资料片和音乐约1.1 GB。完整游戏的安装程序是Windows程序，无法在此使用；请在电脑上安装游戏，再把其文件夹带过来。;
+	}
+
+[OA settings › Game files manages them later.]
+	{
+	zh-Hans=以后可在OA设置 › 游戏文件中管理它们。;
+	}
+
+[OA settings › Game files adds an expansion or removes the files later.]
+	{
+	zh-Hans=以后可在OA设置 › 游戏文件中添加资料片或删除文件。;
+	}
+
+[Looking at the file]
+	{
+	zh-Hans=正在查看文件;
+	}
+
+[Looking at the folder]
+	{
+	zh-Hans=正在查看文件夹;
+	}
+
+[Reading names and sizes only: nothing is copied or downloaded yet.]
+	{
+	zh-Hans=仅读取名称和大小：尚未复制或下载任何内容。;
+	}
+
+[A game folder inside]
+	{
+	zh-Hans=内含游戏文件夹;
+	}
+
+[a folder]
+	{
+	zh-Hans=一个文件夹;
+	}
+
+[This folder holds no game archives, but folders inside it do. Choose one.]
+	{
+	zh-Hans=此文件夹中没有游戏数据包，但其子文件夹中有。请选择一个。;
+	}
+
+[USE THAT FOLDER]
+	{
+	zh-Hans=使用该文件夹;
+	}
+
+[CHOOSE ANOTHER FOLDER]
+	{
+	zh-Hans=选择其他文件夹;
+	}
+
+[This is already the game folder.]
+	{
+	zh-Hans=这已经是游戏文件夹。;
+	}
+
+[CHECK IT]
+	{
+	zh-Hans=检查;
+	}
+
+[Ready to copy]
+	{
+	zh-Hans=准备复制;
+	}
+
+[Checked: the game can start from these files.]
+	{
+	zh-Hans=已检查：游戏可以用这些文件启动。;
+	}
+
+[Checked fully once copied.]
+	{
+	zh-Hans=复制后将完整检查。;
+	}
+
+[CHOOSE ANOTHER FILE]
+	{
+	zh-Hans=选择其他文件;
+	}
+
+[CHECK AGAIN]
+	{
+	zh-Hans=重新检查;
+	}
+
+[REPLACE GAME FILES]
+	{
+	zh-Hans=替换游戏文件;
+	}
+
+[COPY]
+	{
+	zh-Hans=复制;
+	}
+
+[Copying]
+	{
+	zh-Hans=正在复制;
+	}
+
+[STOP]
+	{
+	zh-Hans=停止;
+	}
+
+[Keep Open Annihilation open until the copy ends. If you leave it, the copy goes on for a short while, then pauses and continues when you come back.]
+	{
+	zh-Hans=复制完成前请保持Open Annihilation打开。如果离开，复制会继续一小段时间后暂停，回来后继续。;
+	}
+
+[Checking]
+	{
+	zh-Hans=正在检查;
+	}
+
+[Checking the copied files with the game's own check…]
+	{
+	zh-Hans=正在用游戏自身的检查方式检查已复制的文件……;
+	}
+
+[Ready to play]
+	{
+	zh-Hans=可以开始游戏;
+	}
+
+[REMOVE OLD FOLDER]
+	{
+	zh-Hans=删除旧文件夹;
+	}
+
+[DONE]
+	{
+	zh-Hans=完成;
+	}
+
+[PLAY]
+	{
+	zh-Hans=开始游戏;
+	}
+
+[ADD FILES…]
+	{
+	zh-Hans=添加文件……;
+	}
+
+[REPLACE THE GAME FILES…]
+	{
+	zh-Hans=替换游戏文件……;
+	}
+
+[REMOVE ALL GAME FILES…]
+	{
+	zh-Hans=删除所有游戏文件……;
+	}
+
+[Pick the folder that holds totala1.hpi: {places}. It is checked, then copied in.]
+	{
+	zh-Hans=选择含有totala1.hpi的文件夹：{places}。检查后将复制进来。;
+	}
+
+[The folder that holds totala1.hpi: {places}.]
+	{
+	zh-Hans=含有totala1.hpi的文件夹：{places}。;
+	}
+
+[{steps} Name it Total Annihilation.]
+	{
+	zh-Hans={steps}将其命名为Total Annihilation。;
+	}
+
+[{steps}, named Total Annihilation.]
+	{
+	zh-Hans={steps}，命名为Total Annihilation。;
+	}
+
+[Choose the installer of the Total Annihilation demo (1997). The game recognises it, never runs it, and unpacks its {size} of game data.]
+	{
+	zh-Hans=选择横扫千军试玩版（1997）的安装程序。游戏会识别它但不会运行它，并解压其中{size}的游戏数据。;
+	}
+
+[The demo's installer: recognised, never run, {size} unpacked.]
+	{
+	zh-Hans=试玩版安装程序：只识别、不运行，解压{size}。;
+	}
+
+[Copied onto this {device} once from your own copy. Nothing is downloaded.]
+	{
+	zh-Hans=从你自己的副本一次性复制到此{device}。不下载任何内容。;
+	}
+
+[Open Annihilation plays the game from your own copy, as it does on a computer. It comes with no game data and downloads nothing: the files are copied onto this {device} once and stay here.]
+	{
+	zh-Hans=Open Annihilation使用你自己的游戏副本运行游戏，与在电脑上一样。它不附带任何游戏数据，也不下载任何内容：文件一次性复制到此{device}并保存在这里。;
+	}
+
+[{size} free on this {device}.]
+	{
+	zh-Hans=此{device}可用空间{size}。;
+	}
+
+[Looking at {location}…]
+	{
+	zh-Hans=正在查看{location}……;
+	}
+
+[1 file, {size} so far]
+	{
+	zh-Hans=1个文件，目前{size};
+	}
+
+[{n} files, {size} so far]
+	{
+	zh-Hans={n}个文件，目前{size};
+	}
+
+[You chose: {location}]
+	{
+	zh-Hans=你选择了：{location};
+	}
+
+[This folder holds no game archives, but {folder} does.]
+	{
+	zh-Hans=此文件夹中没有游戏数据包，但{folder}中有。;
+	}
+
+[{warning} Turning off {parts} would make them fit.]
+	{
+	zh-Hans={warning}关闭{parts}即可放下。;
+	}
+
+[From {location}]
+	{
+	zh-Hans=来自{location};
+	}
+
+[{size} is in {cloud} only and is downloaded while copying.]
+	{
+	zh-Hans=有{size}仅存于{cloud}中，将在复制时下载。;
+	}
+
+[Copies at least {size}.]
+	{
+	zh-Hans=至少复制{size}。;
+	}
+
+[Copies {size}.]
+	{
+	zh-Hans=复制{size}。;
+	}
+
+[Downloading {file} from {cloud}…]
+	{
+	zh-Hans=正在从{cloud}下载{file}……;
+	}
+
+[Unpacking the demo's game data ({size})…]
+	{
+	zh-Hans=正在解压试玩版的游戏数据（{size}）……;
+	}
+
+[Uses {size} on this {device} · {free} free.]
+	{
+	zh-Hans=在此{device}上占用{size} · 可用{free}。;
+	}
+
+[Uses {size} on this {device}.]
+	{
+	zh-Hans=在此{device}上占用{size}。;
+	}
+
+[These files are not in this {device}'s backups. Keep your original copy.]
+	{
+	zh-Hans=这些文件不在此{device}的备份中。请保留你的原始副本。;
+	}
+
+[{file} could not be opened, so the game plays without it: it may be damaged. Copy it again from the original.]
+	{
+	zh-Hans=无法打开{file}，因此游戏将在没有它的情况下运行：它可能已损坏。请从原始副本重新复制。;
+	}
+
+[The folder that was there before is kept as Total Annihilation (old), {size}.]
+	{
+	zh-Hans=原来的文件夹已保留为Total Annihilation (old)，{size}。;
+	}
+
+[{size} on this {device} · {free} free]
+	{
+	zh-Hans=此{device}上{size} · 可用{free};
+	}
+
+[{size} on this {device}]
+	{
+	zh-Hans=此{device}上{size};
+	}
+
+[working out the time left]
+	{
+	zh-Hans=正在计算剩余时间;
+	}
+
+[a few seconds left]
+	{
+	zh-Hans=还剩几秒;
+	}
+
+[about a minute left]
+	{
+	zh-Hans=还剩约1分钟;
+	}
+
+[about an hour left]
+	{
+	zh-Hans=还剩约1小时;
+	}
+
+[The Total Annihilation demo (1997).]
+	{
+	zh-Hans=横扫千军试玩版（1997）。;
+	}
+
+[extra units and maps]
+	{
+	zh-Hans=额外单位和地图;
+	}
+
+[music]
+	{
+	zh-Hans=音乐;
+	}
+
+[movies]
+	{
+	zh-Hans=影片;
+	}
+
+[mods]
+	{
+	zh-Hans=模组;
+	}
+
+[1 mod]
+	{
+	zh-Hans=1个模组;
+	}
+
+[No game files]
+	{
+	zh-Hans=没有游戏文件;
+	}
+
+[{a}, {b}]
+	{
+	zh-Hans={a}、{b};
+	}
+
+[{n} byte]
+	{
+	zh-Hans={n}字节;
+	}
+
+[{n} bytes]
+	{
+	zh-Hans={n}字节;
+	}
+
+[about {n} minutes left]
+	{
+	zh-Hans=还剩约{n}分钟;
+	}
+
+[about {n} hours left]
+	{
+	zh-Hans=还剩约{n}小时;
+	}
+
+[{game} with {expansions}, {others}.]
+	{
+	zh-Hans={game}，含{expansions}、{others}。;
+	}
+
+[{game} with {list}.]
+	{
+	zh-Hans={game}，含{list}。;
+	}
+
+[{game}.]
+	{
+	zh-Hans={game}。;
+	}
+
+[{n} mods]
+	{
+	zh-Hans={n}个模组;
+	}
+
+[ADD THE MISSING FILES]
+	{
+	zh-Hans=添加缺失的文件;
+	}
+
+[BACK]
+	{
+	zh-Hans=返回;
+	}
+
+[CANCEL THE REPLACEMENT]
+	{
+	zh-Hans=取消替换;
+	}
+
+[CHANGE WHAT IS COPIED]
+	{
+	zh-Hans=更改复制内容;
+	}
+
+[CHOOSE A FOLDER]
+	{
+	zh-Hans=选择文件夹;
+	}
+
+[CHOOSE ARCHIVES]
+	{
+	zh-Hans=选择数据包;
+	}
+
+[CHOOSE THE DEMO'S INSTALLER]
+	{
+	zh-Hans=选择试玩版安装程序;
+	}
+
+[CHOOSE THE FOLDER AGAIN]
+	{
+	zh-Hans=重新选择文件夹;
+	}
+
+[CONTINUE]
+	{
+	zh-Hans=继续;
+	}
+
+[COPY ANYWAY]
+	{
+	zh-Hans=仍然复制;
+	}
+
+[DISCARD]
+	{
+	zh-Hans=放弃;
+	}
+
+[DISCARD WHAT WAS COPIED]
+	{
+	zh-Hans=放弃已复制的内容;
+	}
+
+[GATHER THEM]
+	{
+	zh-Hans=集中整理;
+	}
+
+[KEEP]
+	{
+	zh-Hans=保留;
+	}
+
+[KEEP COPYING]
+	{
+	zh-Hans=继续复制;
+	}
+
+[KEEP WHAT WAS COPIED]
+	{
+	zh-Hans=保留已复制的内容;
+	}
+
+[REMOVE ALL]
+	{
+	zh-Hans=全部删除;
+	}
+
+[START AGAIN]
+	{
+	zh-Hans=重新开始;
+	}
+
+[TRY AGAIN]
+	{
+	zh-Hans=重试;
+	}
+
+[USE IT]
+	{
+	zh-Hans=使用;
+	}
+
+[Copy your Total Annihilation folder into Open Annihilation's own folder with your file manager.]
+	{
+	zh-Hans=用文件管理器将你的横扫千军文件夹复制到Open Annihilation自己的文件夹中。;
+	}
+
+[Into Open Annihilation's own folder]
+	{
+	zh-Hans=复制到Open Annihilation自己的文件夹;
+	}
+
+[on this device or anywhere the system's file picker reaches]
+	{
+	zh-Hans=此设备上或系统文件选择器能访问的任何位置;
+	}
+
+[anywhere the file picker reaches]
+	{
+	zh-Hans=文件选择器能访问的任何位置;
+	}
+
+[Free up space on this device]
+	{
+	zh-Hans=释放此设备上的空间;
+	}
+
+[In your file manager: Open Annihilation's own folder › Total Annihilation]
+	{
+	zh-Hans=在文件管理器中：Open Annihilation自己的文件夹 › Total Annihilation;
+	}
+
+[the cloud]
+	{
+	zh-Hans=云端;
+	}
+
+[{a} and {b}]
+	{
+	zh-Hans={a}和{b};
+	}
+
+[{a} or {b}]
+	{
+	zh-Hans={a}或{b};
+	}
+
+[GAME FOLDER]
+	{
+	zh-Hans=游戏文件夹;
+	}
+
+[Total Annihilation is on this computer in more than one place. Choose the one to play.]
+	{
+	zh-Hans=此电脑上有多处横扫千军。请选择要游玩的那一个。;
+	}
+
+[Total Annihilation was found on this computer. Play it, or choose another folder.]
+	{
+	zh-Hans=已在此电脑上找到横扫千军。直接游玩，或选择其他文件夹。;
+	}
+
+[Choose the folder that holds totala1.hpi, or the folder that holds the installer of the Total Annihilation demo (1997).]
+	{
+	zh-Hans=选择含有totala1.hpi的文件夹，或含有横扫千军试玩版（1997）安装程序的文件夹。;
+	}
+
+[Choose your Total Annihilation folder]
+	{
+	zh-Hans=选择你的横扫千军文件夹;
+	}
+
+[Or find the folder yourself:]
+	{
+	zh-Hans=或自行查找文件夹：;
+	}
+
+[Browse…]
+	{
+	zh-Hans=浏览……;
+	}
+
+[Look through this computer's folders, drives and SD cards.]
+	{
+	zh-Hans=浏览此电脑的文件夹、驱动器和SD卡。;
+	}
+
+[Choose the folder its installer is in, usually Downloads.]
+	{
+	zh-Hans=选择其安装程序所在的文件夹，通常是“下载”。;
+	}
+
+[Use the desktop's folder dialog]
+	{
+	zh-Hans=使用桌面系统的文件夹对话框;
+	}
+
+[Choose the folder in the system's own window.]
+	{
+	zh-Hans=在系统自己的窗口中选择文件夹。;
+	}
+
+[QUIT]
+	{
+	zh-Hans=退出;
+	}
+
+[PARENT FOLDER]
+	{
+	zh-Hans=上级文件夹;
+	}
+
+[No folders here.]
+	{
+	zh-Hans=此处没有文件夹。;
+	}
+
+[PLAY THIS FOLDER]
+	{
+	zh-Hans=游玩此文件夹;
+	}
+
+[Settings were not saved.]
+	{
+	zh-Hans=设置未保存。;
+	}
+
+[That folder cannot be found.]
+	{
+	zh-Hans=找不到该文件夹。;
+	}
+
+[That folder's oamod.yaml cannot be read.]
+	{
+	zh-Hans=无法读取该文件夹的oamod.yaml。;
+	}
+
+[That folder cannot be played; the log says why.]
+	{
+	zh-Hans=该文件夹无法用于游戏；原因见日志。;
+	}
+
+[Its oamod.yaml cannot be played; the log says why.]
+	{
+	zh-Hans=其oamod.yaml无法使用；原因见日志。;
+	}
+
+[The graphics card could not be used, so the processor draws the game. You can try it again under Graphics in the OA settings.]
+	{
+	zh-Hans=无法使用显卡，因此由处理器绘制游戏。你可以在OA设置的“图形”中再次尝试。;
+	}
+
+[A graphics driver failed, so the game now uses another one. You can try it again under Graphics in the OA settings.]
+	{
+	zh-Hans=一个图形驱动出错，游戏已改用另一个。你可以在OA设置的“图形”中再次尝试。;
+	}
+
+[The graphics card could not draw the battlefield, so it only scales it now. You can try Full again under Graphics in the OA settings.]
+	{
+	zh-Hans=显卡无法绘制战场，现在只用它缩放画面。你可以在OA设置的“图形”中再次尝试“完整”。;
+	}
+
+[This game includes no skirmish maps, so skirmish is not available.]
+	{
+	zh-Hans=此游戏没有遭遇战地图，因此无法进行遭遇战。;
+	}
+
+[This game includes no multiplayer maps, so multiplayer is not available.]
+	{
+	zh-Hans=此游戏没有多人游戏地图，因此无法进行多人游戏。;
+	}
+
+[Campaign complete. This game includes no further missions.]
+	{
+	zh-Hans=战役完成。此游戏没有更多任务。;
+	}
+
+[{used} · {free} free on this {device}]
+	{
+	zh-Hans={used} · 此{device}可用{free};
+	}
+
+[{used} on this {device}]
+	{
+	zh-Hans=此{device}上{used};
+	}
+
+[SAVED GAMES MOVED]
+	{
+	zh-Hans=存档已移动;
+	}
+
+[GAME FOLDER FOUND]
+	{
+	zh-Hans=已找到游戏文件夹;
+	}
+
+[MOD FILES MISSING]
+	{
+	zh-Hans=模组文件缺失;
+	}
+
+[OPEN MOD FOLDER]
+	{
+	zh-Hans=打开模组文件夹;
+	}
+
+[New saved games go in:]
+	{
+	zh-Hans=新存档将保存在：;
+	}
+
+[Screenshots, films and mods now go in the same Open Annihilation folder.]
+	{
+	zh-Hans=截图、录像和模组现在也保存在同一个Open Annihilation文件夹中。;
+	}
+
+[Open Annihilation remembers it for later starts; start it with --choose-game-dir to choose another folder.]
+	{
+	zh-Hans=Open Annihilation会记住它供以后启动使用；使用--choose-game-dir启动可选择其他文件夹。;
+	}
+
+[None of this mod's units were found.]
+	{
+	zh-Hans=未找到此模组的任何单位。;
+	}
+
+[Its games can't start until the mod's files are added to its folder:]
+	{
+	zh-Hans=在将模组文件添加到其文件夹之前，无法开始其游戏：;
+	}
+
+[Its games still start. Add the missing files to its folder to show them:]
+	{
+	zh-Hans=其游戏仍可开始。将缺失的文件添加到其文件夹即可显示它们：;
+	}
+
+[Income Multipliers]
+	{
+	zh-Hans=收入倍数;
+	}
+
+[Difficulty Names]
+	{
+	zh-Hans=难度名称;
+	}
+
+[Commander Runs Factories]
+	{
+	zh-Hans=指挥官操控工厂;
+	}
+
+[Factory Tick Filter]
+	{
+	zh-Hans=工厂周期过滤;
+	}
+
+[Commander Builder Limit]
+	{
+	zh-Hans=指挥官建造单位上限;
+	}
+
+[Commander Keeps Orders When Hit]
+	{
+	zh-Hans=指挥官受击时保持命令;
+	}
+
+[Attack Wave Size]
+	{
+	zh-Hans=攻击波规模;
+	}
+
+[Patrol Group Size]
+	{
+	zh-Hans=巡逻编队规模;
+	}
+
+[Patrol Edge Fallback]
+	{
+	zh-Hans=巡逻边缘回退;
+	}
+
+[Squad Assignment]
+	{
+	zh-Hans=编队分配;
+	}
+
+[Ignore Submerged Targets]
+	{
+	zh-Hans=忽略水下目标;
+	}
+
+[Selective Weapon Use]
+	{
+	zh-Hans=选择性使用武器;
+	}
+
+[Fire While Building]
+	{
+	zh-Hans=建造时开火;
+	}
+
+[Repair Finish Check]
+	{
+	zh-Hans=修理完成检查;
+	}
+
+[Reclaim Cursor on Any Unit]
+	{
+	zh-Hans=任意单位显示回收光标;
+	}
+
+[Resurrectors Reclaim Wrecks]
+	{
+	zh-Hans=复活单位回收残骸;
+	}
+
+[Build Site Kickout]
+	{
+	zh-Hans=建造点清场;
+	}
+
+[Builder Patrol and Guard Options]
+	{
+	zh-Hans=建造单位巡逻与护卫选项;
+	}
+
+[No Repair Retreat]
+	{
+	zh-Hans=不撤退修理;
+	}
+
+[Guard Respects Hold Position]
+	{
+	zh-Hans=护卫遵守固守;
+	}
+
+[Gunships Hover to Strafe]
+	{
+	zh-Hans=武装直升机悬停扫射;
+	}
+
+[Retarget Out of Range]
+	{
+	zh-Hans=超出射程时重选目标;
+	}
+
+[High-Arc Ballistics]
+	{
+	zh-Hans=高抛弹道;
+	}
+
+[Timed Shell Detonation]
+	{
+	zh-Hans=炮弹定时引爆;
+	}
+
+[Vertical Launch Before Turret]
+	{
+	zh-Hans=先垂直发射后转炮塔;
+	}
+
+[Repair Rate]
+	{
+	zh-Hans=修理速度;
+	}
+
+[Self-Repair by Heal Time]
+	{
+	zh-Hans=按自愈时间自我修复;
+	}
+
+[Veterancy Model]
+	{
+	zh-Hans=老兵模型;
+	}
+
+[Deterministic Wind]
+	{
+	zh-Hans=确定性风力;
+	}
+
+[Statistics Exclude Shared Income]
+	{
+	zh-Hans=统计不计共享收入;
+	}
+
+[Allied Line of Sight]
+	{
+	zh-Hans=盟友视野;
+	}
+
+[Ignore Allied Jammers]
+	{
+	zh-Hans=忽略盟友干扰器;
+	}
+
+[Team Start Positions]
+	{
+	zh-Hans=队伍出生位置;
+	}
+
+[Map Scripted Units]
+	{
+	zh-Hans=地图脚本单位;
+	}
+
+[Start with One Human]
+	{
+	zh-Hans=单名真人玩家即可开始;
+	}
+
+[Several Local AI Players]
+	{
+	zh-Hans=多个本地电脑玩家;
+	}
+
+[AI Player Names]
+	{
+	zh-Hans=电脑玩家名称;
+	}
+
+[Commander Warp]
+	{
+	zh-Hans=指挥官传送;
+	}
+
+[Prebuilt Base]
+	{
+	zh-Hans=预建基地;
+	}
+
+[Team Number Alliances]
+	{
+	zh-Hans=按队伍编号结盟;
+	}
+
+[Keep Allied Victory]
+	{
+	zh-Hans=保留联盟胜利;
+	}
+
+[Alliance Menu Everywhere]
+	{
+	zh-Hans=处处可用结盟菜单;
+	}
+
+[Structure Gift Rate Limit]
+	{
+	zh-Hans=建筑赠送频率限制;
+	}
+
+[Take Waits for Commander Deaths]
+	{
+	zh-Hans=接管需等待指挥官阵亡;
+	}
+
+[Take and Give Commands]
+	{
+	zh-Hans=接管与赠送命令;
+	}
+
+[Unit Slot Reuse Delay]
+	{
+	zh-Hans=单位槽位重用延迟;
+	}
+
+[Ignore Unit 0 Deaths]
+	{
+	zh-Hans=忽略0号单位的死亡;
+	}
+
+[Skip Empty Yard Maps]
+	{
+	zh-Hans=跳过空的占地图;
+	}
+
+[Water State Rules]
+	{
+	zh-Hans=水域状态规则;
+	}
+
+[Placement by Builder]
+	{
+	zh-Hans=按建造单位放置;
+	}
+
+[Mobile Unit Yard Maps]
+	{
+	zh-Hans=移动单位占地图;
+	}
+
+[Build Rotation]
+	{
+	zh-Hans=建筑旋转;
+	}
+
+[Cloak After Build]
+	{
+	zh-Hans=建成后隐形;
+	}
+
+[AI and Control Cheats]
+	{
+	zh-Hans=电脑与控制作弊;
+	}
+
+[LOS Type Cheat]
+	{
+	zh-Hans=视野类型作弊;
+	}
+
+[ATM Amount]
+	{
+	zh-Hans=ATM数额;
+	}
+
+[Key Remaps]
+	{
+	zh-Hans=按键重映射;
+	}
+
+[Game Speed Range]
+	{
+	zh-Hans=游戏速度范围;
+	}
+
+[Chat Extension Channel]
+	{
+	zh-Hans=聊天扩展频道;
+	}
+
+[Version Check]
+	{
+	zh-Hans=版本检查;
+	}
+
+[Vote to Remove Players]
+	{
+	zh-Hans=投票移除玩家;
+	}
+
+[Lag Guard]
+	{
+	zh-Hans=延迟保护;
+	}
+
+[Commander Start Sync]
+	{
+	zh-Hans=指挥官开局同步;
+	}
+
+[Keep Remote Player Colours]
+	{
+	zh-Hans=保留远程玩家颜色;
+	}
+
+[Clear Session Description]
+	{
+	zh-Hans=清除会话描述;
+	}
+
+[Host Stays as Watcher]
+	{
+	zh-Hans=主持者留下观战;
+	}
+
+[Recorder Session Commands]
+	{
+	zh-Hans=录像会话命令;
+	}
+
+[Game Recorder]
+	{
+	zh-Hans=游戏录像;
+	}
+
+[Ten-Player Replay]
+	{
+	zh-Hans=十名玩家回放;
+	}
+
+[Megamap]
+	{
+	zh-Hans=全景地图;
+	}
+
+[Whiteboard]
+	{
+	zh-Hans=白板;
+	}
+
+[Resource Panel]
+	{
+	zh-Hans=资源面板;
+	}
+
+[Camera Sharing]
+	{
+	zh-Hans=视角共享;
+	}
+
+[Allied Unit Display]
+	{
+	zh-Hans=盟友单位显示;
+	}
+
+[Selection Shortcuts]
+	{
+	zh-Hans=选择快捷键;
+	}
+
+[Build Tools]
+	{
+	zh-Hans=建造工具;
+	}
+
+[Click Snap]
+	{
+	zh-Hans=点击吸附;
+	}
+
+[Build Preview]
+	{
+	zh-Hans=建造预览;
+	}
+
+[Options Dialog]
+	{
+	zh-Hans=选项对话框;
+	}
+
+[Share Dialog and Lobby Buttons]
+	{
+	zh-Hans=共享对话框与大厅按钮;
+	}
+
+[Text Rendering]
+	{
+	zh-Hans=文字渲染;
+	}
+
+[Veterancy Label]
+	{
+	zh-Hans=老兵标签;
+	}
+
+[Map Features Always Drawn]
+	{
+	zh-Hans=始终绘制地图地物;
+	}
+
+[Unit Voice Fixes]
+	{
+	zh-Hans=单位语音修复;
+	}
+
+[Effects Tweaks]
+	{
+	zh-Hans=特效调整;
+	}
+
+[Interface Fixes]
+	{
+	zh-Hans=界面修复;
+	}
+
+[End-of-Game Statistics]
+	{
+	zh-Hans=游戏结束统计;
+	}
+
+[Audio]
+	{
+	zh-Hans=音频;
+	}
+
+[Display Modes]
+	{
+	zh-Hans=显示模式;
+	}
+
+[External Exports]
+	{
+	zh-Hans=外部导出;
+	}
+
+[AI]
+	{
+	zh-Hans=电脑玩家;
+	}
+
+[Aircraft]
+	{
+	zh-Hans=飞机;
+	}
+
+[Console]
+	{
+	zh-Hans=控制台;
+	}
+
+[Economy]
+	{
+	zh-Hans=经济;
+	}
+
+[Vision and Radar]
+	{
+	zh-Hans=视野与雷达;
+	}
+
+[Network]
+	{
+	zh-Hans=网络;
+	}
+
+[Orders]
+	{
+	zh-Hans=命令;
+	}
+
+[Recorder]
+	{
+	zh-Hans=录像;
+	}
+
+[Repair]
+	{
+	zh-Hans=修理;
+	}
+
+[Game Setup]
+	{
+	zh-Hans=开局设置;
+	}
+
+[Sharing]
+	{
+	zh-Hans=共享;
+	}
+
+[Teams]
+	{
+	zh-Hans=队伍;
+	}
+
+[Interface]
+	{
+	zh-Hans=界面;
+	}
+
+[Units]
+	{
+	zh-Hans=单位;
+	}
+
+[Veterancy]
+	{
+	zh-Hans=老兵;
+	}
+
+[Weapons]
+	{
+	zh-Hans=武器;
+	}
+
+[MOVE]
+	{
+	zh-Hans=移动;
+	}
+
+[ATTACK]
+	{
+	zh-Hans=攻击;
+	}
+
+[PATROL]
+	{
+	zh-Hans=巡逻;
+	}
+
+[DEFEND]
+	{
+	zh-Hans=护卫;
+	}
+
+[BLAST]
+	{
+	zh-Hans=D枪;
+	}
+
+[RECLAIM]
+	{
+	zh-Hans=回收;
+	}
+
+[REPAIR]
+	{
+	zh-Hans=修理;
+	}
+
+[CAPTURE]
+	{
+	zh-Hans=俘获;
+	}
+
+[LOAD]
+	{
+	zh-Hans=装载;
+	}
+
+[UNLOAD]
+	{
+	zh-Hans=卸载;
+	}
+
+[GUARD]
+	{
+	zh-Hans=护卫;
+	}
+
+[D-GUN]
+	{
+	zh-Hans=D枪;
+	}
+
+[INFO]
+	{
+	zh-Hans=信息;
+	}
+
+[TYPE]
+	{
+	zh-Hans=同类;
+	}
+
+[MOVE: the selection moves to the held point.]
+	{
+	zh-Hans=移动：选中单位移动到长按处。;
+	}
+
+[PATROL: the selection patrols to the held point.]
+	{
+	zh-Hans=巡逻：选中单位巡逻至长按处。;
+	}
+
+[ATTACK: the selection attacks the unit or ground at the held point.]
+	{
+	zh-Hans=攻击：选中单位攻击长按处的单位或地面。;
+	}
+
+[D-GUN: the commander fires the D-gun at the held point.]
+	{
+	zh-Hans=D枪：指挥官向长按处发射D枪。;
+	}
+
+[LOAD: the transport loads the unit at the held point.]
+	{
+	zh-Hans=装载：运输单位装载长按处的单位。;
+	}
+
+[CAPTURE: the selection captures the unit at the held point.]
+	{
+	zh-Hans=俘获：选中单位俘获长按处的单位。;
+	}
+
+[STOP: the selection stops at once.]
+	{
+	zh-Hans=停止：选中单位立即停止。;
+	}
+
+[INFO: shows the information of the unit at the held point.]
+	{
+	zh-Hans=信息：显示长按处单位的信息。;
+	}
+
+[TYPE: selects every unit of the held unit's type.]
+	{
+	zh-Hans=同类：选择与长按单位同类型的所有单位。;
+	}
+
+[RECLAIM: the selection reclaims the wreck or unit at the held point.]
+	{
+	zh-Hans=回收：选中单位回收长按处的残骸或单位。;
+	}
+
+[REPAIR: the selection repairs or helps build the unit at the held point.]
+	{
+	zh-Hans=修理：选中单位修理或协助建造长按处的单位。;
+	}
+
+[UNLOAD: the transport unloads at the held point.]
+	{
+	zh-Hans=卸载：运输单位在长按处卸载。;
+	}
+
+[GUARD: the selection guards the unit at the held point.]
+	{
+	zh-Hans=护卫：选中单位护卫长按处的单位。;
+	}
+
+[Fire orders: tap to step through Hold fire, Return fire and Fire at will.]
+	{
+	zh-Hans=开火命令：点按依次切换停火、还击和自由开火。;
+	}
+
+[Move orders: tap to step through Hold position, Maneuver and Roam.]
+	{
+	zh-Hans=移动命令：点按依次切换固守、机动和漫游。;
+	}
+
+[On/Off: tap to switch the selected units on or off.]
+	{
+	zh-Hans=开/关：点按激活或停用选中单位。;
+	}
+
+[CLOAK]
+	{
+	zh-Hans=隐形;
+	}
+
+[Cloak: tap to turn cloaking on or off; a cloaked unit uses energy.]
+	{
+	zh-Hans=隐形：点按开启或关闭隐形；隐形单位会消耗能量。;
+	}
+
+[ORDERS]
+	{
+	zh-Hans=命令;
+	}
+
+[ORDERS: shows the orders page.]
+	{
+	zh-Hans=命令：显示命令页。;
+	}
+
+[BUILD]
+	{
+	zh-Hans=建造;
+	}
+
+[BUILD: shows the build pages.]
+	{
+	zh-Hans=建造：显示建造页。;
+	}
+
+[PREV]
+	{
+	zh-Hans=上一页;
+	}
+
+[PREV: shows the build page before this one.]
+	{
+	zh-Hans=上一页：显示前一个建造页。;
+	}
+
+[NEXT]
+	{
+	zh-Hans=下一页;
+	}
+
+[NEXT: shows the build page after this one.]
+	{
+	zh-Hans=下一页：显示后一个建造页。;
+	}
+
+[MOVE: tap to arm it, then tap where the selection goes.]
+	{
+	zh-Hans=移动：点按启用，然后点按选中单位的目的地。;
+	}
+
+[ATTACK: tap to arm it, then tap the unit or ground to fire at.]
+	{
+	zh-Hans=攻击：点按启用，然后点按要攻击的单位或地面。;
+	}
+
+[PATROL: tap to arm it, then tap the points to patrol between.]
+	{
+	zh-Hans=巡逻：点按启用，然后点按要往返巡逻的各点。;
+	}
+
+[GUARD: tap to arm it, then tap the unit to guard.]
+	{
+	zh-Hans=护卫：点按启用，然后点按要护卫的单位。;
+	}
+
+[D-GUN: tap to arm it, then tap where the commander fires it.]
+	{
+	zh-Hans=D枪：点按启用，然后点按指挥官的射击位置。;
+	}
+
+[RECLAIM: tap to arm it, then tap the wreck or unit to reclaim.]
+	{
+	zh-Hans=回收：点按启用，然后点按要回收的残骸或单位。;
+	}
+
+[REPAIR: tap to arm it, then tap the unit to repair or help build.]
+	{
+	zh-Hans=修理：点按启用，然后点按要修理或协助建造的单位。;
+	}
+
+[CAPTURE: tap to arm it, then tap the unit to capture.]
+	{
+	zh-Hans=俘获：点按启用，然后点按要俘获的单位。;
+	}
+
+[UNLOAD: tap to arm it, then tap where the transport unloads.]
+	{
+	zh-Hans=卸载：点按启用，然后点按运输单位的卸载位置。;
+	}
+
+[LOAD: tap to arm it, then tap the unit to load.]
+	{
+	zh-Hans=装载：点按启用，然后点按要装载的单位。;
+	}
+
+[ALL]
+	{
+	zh-Hans=全部;
+	}
+
+[BUILDERS]
+	{
+	zh-Hans=建造单位;
+	}
+
+[FACTORIES]
+	{
+	zh-Hans=工厂;
+	}
+
+[AIRCRAFT]
+	{
+	zh-Hans=飞机;
+	}
+
+[ON SCREEN]
+	{
+	zh-Hans=屏幕内;
+	}
+
+[COMMANDER]
+	{
+	zh-Hans=指挥官;
+	}
+
+[SAME TYPE]
+	{
+	zh-Hans=同类型;
+	}
+
+[CENTRE]
+	{
+	zh-Hans=居中;
+	}
+
+[FOLLOW]
+	{
+	zh-Hans=跟随;
+	}
+
+[NEXT UNIT]
+	{
+	zh-Hans=下一单位;
+	}
+
+[NEXT REPORT]
+	{
+	zh-Hans=下一报告;
+	}
+
+[SLOWER]
+	{
+	zh-Hans=减速;
+	}
+
+[FASTER]
+	{
+	zh-Hans=加速;
+	}
+
+[GAME MENU]
+	{
+	zh-Hans=游戏菜单;
+	}
+
+[CHAT]
+	{
+	zh-Hans=聊天;
+	}
+
+[SELECT]
+	{
+	zh-Hans=选择;
+	}
+
+[ASSIST]
+	{
+	zh-Hans=协助;
+	}
+
+[PLACE]
+	{
+	zh-Hans=放置;
+	}
+
+[FIRE ORDERS]
+	{
+	zh-Hans=开火命令;
+	}
+
+[MOVE ORDERS]
+	{
+	zh-Hans=移动命令;
+	}
+
+[ON/OFF]
+	{
+	zh-Hans=开/关;
+	}
+
+[SELF-DESTRUCT]
+	{
+	zh-Hans=自毁;
+	}
+
+[QUEUE: Shift for orders, building and placement. Tap to latch, hold for one.]
+	{
+	zh-Hans=排队：命令、建造和放置的Shift键。点按锁定，长按单次生效。;
+	}
+
+[ADD: Shift for selecting, so taps, boxes and groups add to the selection. Tap to latch, hold for one.]
+	{
+	zh-Hans=追加：选择时的Shift键，点按、框选和编队都会加入当前选择。点按锁定，长按单次生效。;
+	}
+
+[x5: Shift for the build buttons, five at a time. Tap to latch, hold for one.]
+	{
+	zh-Hans=x5：建造按钮的Shift键，每次5个。点按锁定，长按单次生效。;
+	}
+
+[CLEAR: takes back the armed order or the building being placed, else clears the selection.]
+	{
+	zh-Hans=清除：撤回已启用的命令或正在放置的建筑，否则清除选择。;
+	}
+
+[SELECT: selects all units, builders, factories, aircraft, the units on screen, the commander or the same type.]
+	{
+	zh-Hans=选择：选择所有单位、建造单位、工厂、飞机、屏幕内单位、指挥官或同类型单位。;
+	}
+
+[STORE: stores the selection as the lowest free group.]
+	{
+	zh-Hans=存储：将选中单位存为编号最小的空闲编队。;
+	}
+
+[Group: tap to select it, tap again to centre on it, hold to store the selection in it.]
+	{
+	zh-Hans=编队：点按选择，再次点按居中显示，长按将当前选择存入。;
+	}
+
+[PAUSE: pauses or resumes the game.]
+	{
+	zh-Hans=暂停：暂停或继续游戏。;
+	}
+
+[SPEED: makes the game slower or faster.]
+	{
+	zh-Hans=速度：减慢或加快游戏。;
+	}
+
+[CHAT: writes a message to the other players.]
+	{
+	zh-Hans=聊天：给其他玩家发送消息。;
+	}
+
+[CENTRE: centres the view on the selected unit.]
+	{
+	zh-Hans=居中：将视图移到选中单位上。;
+	}
+
+[FOLLOW: the view follows the selected unit; tap again for the next one.]
+	{
+	zh-Hans=跟随：视图跟随选中单位；再次点按切换到下一个。;
+	}
+
+[NEXT: centres the view on the next unit not yet visited.]
+	{
+	zh-Hans=下一单位：将视图移到下一个尚未查看的单位。;
+	}
+
+[INFO: shows the selected unit's information.]
+	{
+	zh-Hans=信息：显示选中单位的信息。;
+	}
+
+[MENU: opens the game menu.]
+	{
+	zh-Hans=菜单：打开游戏菜单。;
+	}
+
+[BUILD: opens the builder's build pages, or the orders page for other units.]
+	{
+	zh-Hans=建造：打开建造单位的建造页，其他单位则打开命令页。;
+	}
+
+[Zoom out: shows more of the battlefield.]
+	{
+	zh-Hans=缩小：显示更大范围的战场。;
+	}
+
+[Zoom in: shows the battlefield closer.]
+	{
+	zh-Hans=放大：拉近显示战场。;
+	}
+
+[Order: tap to arm it, then tap where it goes; tap again to take it back.]
+	{
+	zh-Hans=命令：点按启用，然后点按目标位置；再次点按可撤回。;
+	}
+
+[MORE: the other orders, fire and move orders, on and off, cloak and self-destruct.]
+	{
+	zh-Hans=更多：其他命令、开火和移动命令、开/关、隐形和自毁。;
+	}
+
+[BUILD: shows the builder's build pages.]
+	{
+	zh-Hans=建造：显示建造单位的建造页。;
+	}
+
+[Closes the build drawer.]
+	{
+	zh-Hans=关闭建造栏。;
+	}
+
+[Shows the previous page.]
+	{
+	zh-Hans=显示上一页。;
+	}
+
+[Shows the next page.]
+	{
+	zh-Hans=显示下一页。;
+	}
+
+[CANCEL: stops placing the building.]
+	{
+	zh-Hans=取消：停止放置建筑。;
+	}
+
+[Takes back the armed order.]
+	{
+	zh-Hans=撤回已启用的命令。;
+	}
+
+[Chooses this item.]
+	{
+	zh-Hans=选择此项。;
+	}
+
+[SELF-DESTRUCT: hold to start or stop the selection's self-destruct countdown.]
+	{
+	zh-Hans=自毁：长按开始或停止选中单位的自毁倒计时。;
+	}
+
+[Gives this order at the held point.]
+	{
+	zh-Hans=在长按处下达此命令。;
+	}
+
+[QUEUE: the next order picked is queued after the selection's orders.]
+	{
+	zh-Hans=排队：下一个选择的命令将排在选中单位现有命令之后。;
+	}
+
+[Closes the open menu.]
+	{
+	zh-Hans=关闭打开的菜单。;
+	}
+
+[FORCE: Ctrl for orders and selecting while held, so a click forces fire on the ground or a friend.]
+	{
+	zh-Hans=强制：按住时作为命令和选择的Ctrl键，点击即可强制向地面或友军开火。;
+	}
+
+[Build ring: presses its build button or toggle, or turns the build page.]
+	{
+	zh-Hans=建造环：按下其建造按钮或开关，或翻动建造页。;
+	}
+
+[Group: select it, again to centre on it, hold to store the selection in it.]
+	{
+	zh-Hans=编队：选择它，再次选择居中显示，长按将当前选择存入。;
+	}
+
+[FORCE]
+	{
+	zh-Hans=强制;
+	}
+
+[QUEUE]
+	{
+	zh-Hans=排队;
+	}
+
+[ADD]
+	{
+	zh-Hans=追加;
+	}
+
+[CLEAR]
+	{
+	zh-Hans=清除;
+	}
+
+[STORE]
+	{
+	zh-Hans=存储;
+	}
+
+[PAUSE]
+	{
+	zh-Hans=暂停;
+	}
+
+[SPEED]
+	{
+	zh-Hans=速度;
+	}
+
+[MENU]
+	{
+	zh-Hans=菜单;
+	}
+
+[MORE]
+	{
+	zh-Hans=更多;
+	}
+
+[CLOSE]
+	{
+	zh-Hans=关闭;
+	}
+
+[SELF-DESTRUCT · HOLD]
+	{
+	zh-Hans=自毁 · 长按;
+	}
+
+[DRAG TO MOVE · DOUBLE-TAP OR HOLD TO PLACE]
+	{
+	zh-Hans=拖动以移动 · 双击或长按以放置;
+	}
+
+[RELEASE]
+	{
+	zh-Hans=松开;
+	}
+
+[GIVE]
+	{
+	zh-Hans=下达;
+	}
+
+[ARM]
+	{
+	zh-Hans=启用;
+	}
+
+[Cross]
+	{
+	zh-Hans=叉键;
+	}
+
+[Circle]
+	{
+	zh-Hans=圆圈键;
+	}
+
+[Square]
+	{
+	zh-Hans=方块键;
+	}
+
+[Triangle]
+	{
+	zh-Hans=三角键;
+	}
+
+[Minus]
+	{
+	zh-Hans=减号键;
+	}
+
+[View]
+	{
+	zh-Hans=视图键;
+	}
+
+[Plus]
+	{
+	zh-Hans=加号键;
+	}
+
+[Menu]
+	{
+	zh-Hans=菜单键;
+	}
+
+[D-pad up]
+	{
+	zh-Hans=方向键上;
+	}
+
+[D-pad right]
+	{
+	zh-Hans=方向键右;
+	}
+
+[D-pad down]
+	{
+	zh-Hans=方向键下;
+	}
+
+[D-pad left]
+	{
+	zh-Hans=方向键左;
+	}
+
+[left trackpad]
+	{
+	zh-Hans=左触控板;
+	}
+
+[right trackpad]
+	{
+	zh-Hans=右触控板;
+	}
+
+[left stick touch]
+	{
+	zh-Hans=触摸左摇杆;
+	}
+
+[right stick touch]
+	{
+	zh-Hans=触摸右摇杆;
+	}
+
+[1 UNIT]
+	{
+	zh-Hans=1个单位;
+	}
+
+[UNITS]
+	{
+	zh-Hans=个单位;
+	}
+
+[LATCHED]
+	{
+	zh-Hans=已锁定;
+	}
+
+[Hold to self-destruct]
+	{
+	zh-Hans=长按以自毁;
+	}
+
+[DOUBLE TAP OR HOLD TO BUILD · QUEUE ON]
+	{
+	zh-Hans=双击或长按以建造 · 排队已开启;
+	}
+
+[DOUBLE TAP OR HOLD TO BUILD]
+	{
+	zh-Hans=双击或长按以建造;
+	}
+
+[TAP POINTS · QUEUE KEEPS ADDING]
+	{
+	zh-Hans=点按各点 · 排队持续追加;
+	}
+
+[TAP A TARGET · ✕ TAKES IT BACK]
+	{
+	zh-Hans=点按目标 · ✕ 撤回;
+	}
+
+[Enable Unicode Multiplayer Chat]
+	{
+	zh-Hans=启用Unicode多人聊天;
+	}
+
+[Chat in any language with players who have it;]
+	{
+	zh-Hans=与开启此项的玩家可用任何语言聊天；;
+	}
+
+[others see ? for letters they lack.]
+	{
+	zh-Hans=其他玩家会把缺少的字看成?。;
+	}
+
+[Set by the language]
+	{
+	zh-Hans=由语言设定;
+	}
+
+[On (set by {language})]
+	{
+	zh-Hans=打开（由{language}设定）;
+	}
+
+// Whole sentences the engine fills in, with {slots} where the values go.
+[Item {n}]
+	{
+	zh-Hans=第{n}项;
+	}
+[{on} of {total} on]
+	{
+	zh-Hans=已开启{on}/{total};
+	}
+[Show Active Only ({active}/{total})]
+	{
+	zh-Hans=仅显示已开启（{active}/{total}）;
+	}
+[Switch to {title} now? The game reloads its data for the new mod and returns to the main menu. Your other settings are kept.]
+	{
+	zh-Hans=现在切换到{title}吗？游戏将为新模组重新载入数据并返回主菜单。其他设置保持不变。;
+	}
+[This folder can be played: {folder}]
+	{
+	zh-Hans=此文件夹可以游玩：{folder};
+	}
+[{n} UNITS]
+	{
+	zh-Hans={n}个单位;
+	}
+
+// The game's title, as the game-files screen and the folder chooser name it.
+[Total Annihilation]
+	{
+	zh-Hans=横扫千军;
+	}
+[Total Annihilation 3.1c]
+	{
+	zh-Hans=3.1c版横扫千军;
+	}

@@ -4,6 +4,7 @@
 // The session display: its start, the lookup tables, and the sinks that
 // receive each finished 8-bit frame (SDL texture or headless capture).
 #include "oa/app/runtime.hpp"
+#include "oa/app/game_directory.hpp"
 #include "render_run.hpp"
 #include "oa/base/float_precision.hpp"
 #include "oa/present/palette_tables.hpp"
@@ -140,7 +141,7 @@ void Runtime::write_display_pcx(const fs::path& path) const {
         oa::present::save_pcx_surface(stream, display_.context, captured_frame_.frame.surface);
     if (status != oa::present::PcxStatus::ok)
         throw std::runtime_error(
-            "cannot encode " + path.string() + ": " + oa::present::pcx_status_text(status)
+            "cannot encode " + path_to_utf8(path) + ": " + oa::present::pcx_status_text(status)
         );
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
     output.write(
@@ -148,7 +149,7 @@ void Runtime::write_display_pcx(const fs::path& path) const {
         static_cast<std::streamsize>(writer.bytes.size())
     );
     if (!output)
-        throw std::runtime_error("cannot write " + path.string());
+        throw std::runtime_error("cannot write " + path_to_utf8(path));
 }
 
 void Runtime::present_sink_frame(

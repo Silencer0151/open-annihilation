@@ -72,6 +72,9 @@ struct Style {
     Rendering rendering{Rendering::mono};
     /// pixels added after each character's advance, 0..max_letter_spacing
     int32_t letter_spacing{};
+    /// the least pixels per em Noto Sans CJK is drawn at, 0..max_pixel_size:
+    /// smaller ideographs fill in; 0 leaves it at related_pixel_size
+    int32_t least_cjk_pixel_size{};
 };
 
 /// The rows of a line in one style, which fit every font of the stack.
@@ -209,7 +212,14 @@ class FontStack {
     /// @return glyphs kept, at most kept_glyphs
     [[nodiscard]] std::size_t cached_glyphs() const noexcept;
 
-    /// The most drawn glyphs a stack keeps before it starts again.
+    /// Tells how many glyphs the stack has drawn since it opened, each
+    /// counted again when it is drawn again after the store forgot it.
+    ///
+    /// @return glyphs drawn
+    [[nodiscard]] std::size_t drawn_glyphs() const noexcept;
+
+    /// The most drawn glyphs a stack keeps; past it, the glyph used longest
+    /// ago is forgotten first.
     static constexpr std::size_t kept_glyphs = 4096;
 
   private:

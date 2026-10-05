@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <map>
 #include <mutex>
+#include <optional>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -107,6 +109,25 @@ int32_t fnt_font_baseline(const formats::fnt::Font& font) {
         return *bottom;
     return static_cast<int32_t>(formats::fnt::line_height(font)) - fnt_rows_under_baseline -
            formats::fnt::row_lift(font);
+}
+
+uint8_t fnt_font_ink(const formats::fnt::Font& font, const PaletteBytes& palette) {
+    uint8_t ink = formats::fnt::foreground_index;
+    const auto& glyph = font.glyphs[fnt_baseline_glyph];
+    if (!glyph)
+        return ink;
+    // Lightness as the sum of the three channels.
+    const auto lightness = [&palette](uint8_t index) {
+        const std::size_t at = static_cast<std::size_t>(index) * palette_entry_bytes;
+        return palette[at] + palette[at + 1] + palette[at + 2];
+    };
+    int32_t lightest = -1;
+    for (std::size_t at = 0; at < glyph->coverage.size() && at < glyph->pixels.size(); ++at)
+        if (glyph->coverage[at] != 0 && lightness(glyph->pixels[at]) > lightest) {
+            ink = glyph->pixels[at];
+            lightest = lightness(ink);
+        }
+    return ink;
 }
 
 present::TextFace fnt_font_face(const formats::fnt::Font& font) {
@@ -268,6 +289,82 @@ int32_t draw_fnt_game_text(
     return x;
 }
 
+int32_t draw_fnt_composition(
+    Surface& surface,
+    const formats::fnt::Font& font,
+    std::string_view composition,
+    int32_t x,
+    int32_t y,
+    std::array<uint8_t, 3> color,
+    const PaletteBytes& palette,
+    const TextClip& clip
+) {
+    if (composition.empty())
+        return x;
+    const auto underline = [&](int32_t left, int32_t row, int32_t width, int32_t rows) {
+        for (int32_t py = std::max(row, clip.top); py < row + rows && py <= clip.bottom; ++py)
+            for (int32_t px = std::max(left, clip.left); px < left + width && px <= clip.right;
+                 ++px) {
+                if (px < 0 || py < 0 || px >= static_cast<int32_t>(surface.width) ||
+                    py >= static_cast<int32_t>(surface.height))
+                    continue;
+                const auto at =
+                    (static_cast<std::size_t>(py) * surface.width + static_cast<std::size_t>(px)) *
+                    3U;
+                std::copy(
+                    color.begin(),
+                    color.end(),
+                    surface.rgb.begin() + static_cast<std::ptrdiff_t>(at)
+                );
+            }
+    };
+    const std::string text =
+        present::decode_game_text(composition, present::game_text_settings().utf8);
+    const auto face = fnt_font_face(font);
+    constexpr int32_t size = present::game_font_text_size;
+    std::size_t shown = text.size();
+    std::optional<present::TextLayers> layers = present::modern_text(text, face, 1, size);
+    if (layers && x + layers->advance - 1 > clip.right) {
+        shown = present::modern_text_fit(text, face, 1, size, clip.right - x + 1);
+        layers = shown != 0
+                     ? present::modern_text(std::string_view(text).substr(0, shown), face, 1, size)
+                     : std::nullopt;
+        if (!layers)
+            return x;
+    }
+    if (!layers) {
+        const int32_t pen =
+            draw_fnt_game_text(surface, font, composition, x, y, color, palette, clip, false);
+        underline(
+            x,
+            y + static_cast<int32_t>(formats::fnt::line_height(font)) - 1 -
+                formats::fnt::row_lift(font),
+            pen - x,
+            1
+        );
+        return pen;
+    }
+    // The modern line keeps the font's baseline, as the line's own modern
+    // characters do.
+    const int32_t baseline = y + fnt_font_baseline(font);
+    auto canvas = present::rgb_canvas(
+        surface.rgb,
+        static_cast<int32_t>(surface.width),
+        static_cast<int32_t>(surface.height),
+        palette
+    );
+    canvas.clip_left = std::max(canvas.clip_left, clip.left);
+    canvas.clip_top = std::max(canvas.clip_top, clip.top);
+    canvas.clip_right = std::min(canvas.clip_right, clip.right);
+    canvas.clip_bottom = std::min(canvas.clip_bottom, clip.bottom);
+    present::lay_text(canvas, *layers, x, baseline, color);
+    if (const auto marked = present::modern_text_underline(
+            std::string_view(text).substr(0, shown), face, 1, size, 0, shown
+        ))
+        underline(x + marked->left, baseline + marked->row, marked->width, marked->thickness);
+    return x + layers->advance;
+}
+
 int32_t
 measure_fnt_game_text(const formats::fnt::Font& font, std::string_view text, bool game_text) {
     if (!needs_text_runs(text, game_text))
@@ -285,6 +382,19 @@ measure_fnt_game_text(const formats::fnt::Font& font, std::string_view text, boo
         width += static_cast<int32_t>(formats::fnt::measure_text(font, bytes));
     }
     return width;
+}
+
+int32_t fnt_game_text_rise(const formats::fnt::Font& font, std::string_view text, bool game_text) {
+    if (!needs_text_runs(text, game_text))
+        return 0;
+    const int32_t baseline = fnt_font_baseline(font);
+    int32_t rise = 0;
+    for (const auto& run : split_game_text(text, fnt_font_characters(font), game_text))
+        if (run.modern)
+            if (const auto layers =
+                    present::modern_text(run.text, fnt_font_face(font), 1, screen_text_size(run)))
+                rise = std::max(rise, layers->baseline - baseline);
+    return rise;
 }
 
 } // namespace oa::ui::frontend_renderer

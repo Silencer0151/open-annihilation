@@ -121,6 +121,16 @@ struct FallbackChain {
 ///     other needs are not built yet
 [[nodiscard]] bool drawable(const Language& language) noexcept;
 
+/// Tells whether a language turns Unicode multiplayer chat on while it is
+/// shown: its text is held in UTF-8 (TextNeeds::modern_fonts), so that a
+/// line typed in it reaches each machine in the form that machine reads,
+/// or one of its packs asks for it (unicode: true).
+///
+/// @param language the language shown
+/// @param pack_asks a pack of the language asks for Unicode chat
+/// @return true when it turns it on
+[[nodiscard]] bool turns_unicode_chat_on(const Language& language, bool pack_asks) noexcept;
+
 /// Finds a known language by its tag, matched without regard to the case of
 /// its letters, '_' read as '-'.
 ///
@@ -153,7 +163,10 @@ struct FallbackChain {
 
 /// Finds the known language a locale chooses: the entry with the longest
 /// of its locales that is the locale's whole tag or its leading subtags.
-/// Only drawable languages are chosen.
+/// Only drawable languages are chosen. A locale of a language the game does
+/// not offer yet, as Traditional Chinese's "zh-TW" and "zh-Hant-HK", chooses
+/// none when its match is longer than any entry's, so it never falls to a
+/// shorter one such as "zh".
 ///
 /// @param locale a locale, in any form normalised_locale reads
 /// @return the language; null when none is chosen

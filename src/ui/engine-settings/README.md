@@ -22,12 +22,13 @@ the locks a running game puts on them (`settings_locks`).
 | Common Tweaks | Your files: the player's own folder and buttons that open its Saves, Screenshots and Mods folders | changes no setting | | `open-annihilation.user-folder`, read at start (`src/app/include/oa/app/user_folder.hpp`) |
 | | Unit limit | 50 to 1500 per player, steps of 50, or on to a mod's higher maximum | the installation's `totala.ini` UnitLimit, else 250 or a mod's default | `open-annihilation.unit-limit` |
 | | Pathfinding cycles | 1× to 8× of 1333 path nodes a tick, or of a mod's budget | 1× | `open-annihilation.path-search-nodes` |
-| Language | Language | System default, English, Deutsch, Español, Français, Italiano | System default with the player's own preferences file; English with `--preferences-file` | `open-annihilation.language` (`system` or a language's tag, as `de`) |
-| | Use modern fonts for game text | Off, On | On with the player's own preferences file; Off with `--preferences-file` | `open-annihilation.modern-fonts` |
+| Language | Language | System default, English, Deutsch, Español, Français, Italiano, 简体中文 | System default with the player's own preferences file; English with `--preferences-file` | `open-annihilation.language` (`system` or a language's tag, as `de`) |
+| | Use modern fonts for game text; On, locked, while a language drawn only in them is chosen | Off, On | On with the player's own preferences file; Off with `--preferences-file` | `open-annihilation.modern-fonts` |
 | | Text size, of the modern fonts | 50% to 300% of the game fonts' sizes, steps of 10% | 80% | `open-annihilation.text-size` |
 | | Font outline | Off, On | On | `open-annihilation.text-outline` |
 | | Font shadow | Off, On | On | `open-annihilation.text-shadow` |
 | | Game text background | Off, On | Off | `open-annihilation.text-background` |
+| | Enable Unicode Multiplayer Chat; On, locked, while a language whose pack asks for it is chosen | Off, On | Off | `open-annihilation.unicode-chat` |
 | Graphics | Maximum frame rate | 30 to 120, steps of 5 | 120; 60 on a Raspberry Pi or a light machine with the player's own preferences file; a Steam Deck's screen rate (60 on the LCD model, 90 on the OLED) on a Deck with the player's own preferences file | `open-annihilation.max-fps` |
 | | Enhanced anti-aliasing | Off, 2×, 4×, 8×, 16×; a stored level between reads as the one below it, a stored 3 as 2× | Off, a Raspberry Pi and a light machine included | `open-annihilation.anti-aliasing` |
 | | Screen size, from the next start | Desktop, 640×480, 800×600, 1024×768, 1280×1024 | Desktop; 800×600 on a light machine with the player's own preferences file, 640×480 when its desktop is smaller | `open-annihilation.screen-size` (`desktop` or `800x600`) |
@@ -204,7 +205,17 @@ slider is locked, faded with a padlock and "Needs modern fonts"
 (`Lock::needs_modern_fonts`, which the dialog sets itself in
 `Locks::text_size`), and its second hint line says the game's own fonts
 have fixed sizes; turning the modern fonts On lifts the lock at once.
-Restore defaults resets the size whatever the switch shows. A stored size
+Restore defaults resets the size whatever the switch shows.
+
+A language drawn only in the modern fonts (`TextNeeds::modern_fonts`,
+Simplified Chinese) turns Use modern fonts for game text On when it is
+chosen, and while it is chosen the switch shows On with a padlock and "Set
+by the language" (`Lock::set_by_language`, in `Locks::modern_fonts`).
+Enable Unicode Multiplayer Chat is locked the same way (`Locks::unicode_chat`)
+while the language chosen is one of `Dialog::unicode_chat_languages`, the
+tags whose language packs say `unicode: true`, which the host sets as the
+dialog opens; the stored value is the player's own and returns with
+another language. A stored size
 is clamped to 50% to 300%, and one between the slider's steps is kept as
 stored; a file without the key reads as 80%. How each place in the game
 draws the size is in the application's README and on the

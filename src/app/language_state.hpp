@@ -9,9 +9,11 @@
 // time the setting changes, and puts it in effect.
 #pragma once
 
+#include "language_packs.hpp"
 #include "oa/app/runtime.hpp"
 #include "oa/data/languages.hpp"
 #include "oa/data/languages/interface_text.hpp"
+#include "oa/data/languages/language_pack.hpp"
 #include "oa/data/languages/unit_texts.hpp"
 #include "oa/data/defs/locale.hpp"
 
@@ -73,6 +75,26 @@ struct Runtime::LanguageState {
     /// The translation tables of the words after the first (words), tried
     /// in order after the game's own table: a language's fallbacks.
     std::vector<std::unique_ptr<FallbackTable>> fallback_tables;
+
+    /// The language packs of the mod played (its languages folder), read at
+    /// start; they come before the game data.
+    std::vector<std::unique_ptr<LoadedLanguagePack>> mod_packs;
+    /// The player's language packs (Languages in their own folder), read at
+    /// start; they come after the game data, before the engine's.
+    std::vector<std::unique_ptr<LoadedLanguagePack>> player_packs;
+    /// The engine's own language packs (the languages folder beside the
+    /// game's other files), read at start; they come last.
+    std::vector<std::unique_ptr<LoadedLanguagePack>> engine_packs;
+    /// The packs each of words is looked up in, set with the language.
+    std::vector<oa::data::languages::PackLayer> layers;
+    /// The captions drawn over pictures in the language shown.
+    oa::data::languages::PictureCaptions pictures;
+    /// The manifest of the first pack of the language shown that asks for
+    /// multiplayer chat in UTF-8 (unicode: true); null for none.
+    const oa::data::languages::PackManifest* unicode_manifest{};
+    /// The bytes of the last file of the language folders a pack answered,
+    /// which TranslationHooks::language_file's answer points to.
+    std::string language_file;
 };
 
 } // namespace oa::app

@@ -622,15 +622,16 @@ void switches_take_a_click_on_either_half_and_keys() {
     CHECK(developer.chosen.frame_stats && !developer.chosen.developer_mode);
 }
 
-void language_and_text_shows_a_language_four_switches_and_a_size() {
+void language_and_text_shows_a_language_five_switches_and_a_size() {
     const auto rows = settings::page_settings(Page::language);
-    CHECK(rows.size() == 6);
+    CHECK(rows.size() == 7);
     CHECK(rows[0] == Setting::language);
     CHECK(rows[1] == Setting::modern_fonts);
     CHECK(rows[2] == Setting::text_size);
     CHECK(rows[3] == Setting::text_outline);
     CHECK(rows[4] == Setting::text_shadow);
     CHECK(rows[5] == Setting::text_background);
+    CHECK(rows[6] == Setting::unicode_chat);
     for (const Setting setting : rows)
         CHECK(
             setting == Setting::language ? geometry::is_choice(setting)
@@ -672,25 +673,29 @@ void language_and_text_shows_a_language_four_switches_and_a_size() {
           "Larger sizes are easier to read.",
           "80%"})
         CHECK(find_part(parts, text, settings::no_control) != nullptr);
-    // The six are taller than the view by 129 rows: the switches under Text
-    // size show as the section scrolls, under its scroll bar.
-    CHECK(geometry::open_rows(dialog).limit == 129);
+    // The seven are taller than the view by 188 rows: the switches under
+    // Text size show as the section scrolls, under its scroll bar.
+    CHECK(geometry::open_rows(dialog).limit == 188);
     CHECK(find_part(parts, {}, settings::scroll_bar_control) != nullptr);
-    dialog.scroll[static_cast<std::size_t>(Page::language)] = 129;
+    dialog.scroll[static_cast<std::size_t>(Page::language)] = 188;
     for (const std::string_view text :
          {"Font outline",
           "A dark edge round each letter of modern text.",
           "Font shadow",
           "A dark shadow under modern text.",
           "Game text background",
-          "A shaded box behind each line of game text."})
+          "A shaded box behind each line of game text.",
+          "Enable Unicode Multiplayer Chat",
+          "Chat in any language with players who have it;",
+          "others see ? for letters they lack."})
         CHECK(find_part(settings::dialog_layout(dialog), text, settings::no_control) != nullptr);
     dialog.scroll[static_cast<std::size_t>(Page::language)] = 0;
     const auto placed = geometry::place_rows(Page::language, {});
     CHECK(placed.rows[0].hint_lines == 2 && placed.rows[1].hint_lines == 2);
     CHECK(placed.rows[2].hint_lines == 2);
-    for (std::size_t row = 3; row < placed.rows.size(); ++row)
+    for (std::size_t row = 3; row + 1 < placed.rows.size(); ++row)
         CHECK(placed.rows[row].hint_lines == 1);
+    CHECK(placed.rows.back().hint_lines == 2);
     // No game locks a Language row; only the dialog's own lock on
     // Text size, while it shows the modern fonts Off, and the command
     // line's on the language.
@@ -812,8 +817,8 @@ void language_drop_down_names_each_language_in_itself() {
     // System default first, naming the system's language in itself, then
     // English and the others in the order of their own names.
     auto dialog = language_dialog();
-    CHECK(geometry::choice_count(dialog, Setting::language) == 6);
-    const std::array<std::string_view, 6> names{
+    CHECK(geometry::choice_count(dialog, Setting::language) == 7);
+    const std::array<std::string_view, 7> names{
         "System default (Deutsch)",
         "English",
         "Deutsch",
@@ -822,24 +827,25 @@ void language_drop_down_names_each_language_in_itself() {
         "Fran\xC3\xA7"
         "ais",
         "Italiano",
+        "\347\256\200\344\275\223\344\270\255\346\226\207",
     };
     for (std::size_t index = 0; index < names.size(); ++index)
         CHECK(geometry::choice_text(dialog, Setting::language, index) == names[index]);
     settings::Dialog english = dialog;
     english.system_language = nullptr;
     CHECK(geometry::choice_text(english, Setting::language, 0) == "System default (English)");
-    CHECK(geometry::choice_text(dialog, Setting::language, 6).empty());
+    CHECK(geometry::choice_text(dialog, Setting::language, 7).empty());
     CHECK(geometry::choice_count(dialog, Setting::modern_fonts) == 0);
     // Each choice keeps its tag, and a tag not offered shows System default.
     settings::Dialog state = dialog;
-    const std::array<std::string_view, 6> tags{"system", "en", "de", "es", "fr", "it"};
+    const std::array<std::string_view, 7> tags{"system", "en", "de", "es", "fr", "it", "zh-Hans"};
     for (std::size_t index = 0; index < tags.size(); ++index) {
         geometry::set_choice(state, Setting::language, index);
         CHECK(state.chosen.language == tags[index]);
         CHECK(geometry::choice_index(state, Setting::language) == index);
     }
     geometry::set_choice(state, Setting::language, 99);
-    CHECK(state.chosen.language == "it");
+    CHECK(state.chosen.language == "zh-Hans");
     state.chosen.language = "pt";
     CHECK(geometry::choice_index(state, Setting::language) == 0);
 
@@ -921,7 +927,7 @@ void language_drop_down_opens_marks_and_chooses() {
     // does nothing.
     CHECK(click(dialog, centre(field)) == DialogAction::none);
     CHECK(dialog.open_list == settings::no_control);
-    // The wheel over an open list of six moves neither it nor the section.
+    // The wheel over an open list of seven moves neither it nor the section.
     CHECK(click(dialog, centre(field)) == DialogAction::redraw);
     CHECK(settings::dialog_wheel(dialog, item(2).x, item(2).y, -1.0F) == DialogAction::none);
     CHECK(dialog.scroll[static_cast<std::size_t>(Page::language)] == 0);
@@ -931,12 +937,14 @@ void language_drop_down_opens_marks_and_chooses() {
     // Escape closes it unchanged and leaves the dialog open.
     CHECK(settings::dialog_key(dialog, DialogKey::down) == DialogAction::redraw);
     CHECK(dialog.list_marked == 5);
+    CHECK(settings::dialog_key(dialog, DialogKey::down) == DialogAction::redraw);
+    CHECK(dialog.list_marked == 6);
     CHECK(settings::dialog_key(dialog, DialogKey::down) == DialogAction::none);
     CHECK(settings::dialog_key(dialog, DialogKey::home) == DialogAction::redraw);
     CHECK(dialog.list_marked == 0);
     CHECK(settings::dialog_key(dialog, DialogKey::up) == DialogAction::none);
     CHECK(settings::dialog_key(dialog, DialogKey::end) == DialogAction::redraw);
-    CHECK(dialog.list_marked == 5);
+    CHECK(dialog.list_marked == 6);
     CHECK(settings::dialog_key(dialog, DialogKey::left) == DialogAction::none);
     CHECK(settings::dialog_key(dialog, DialogKey::escape) == DialogAction::redraw);
     CHECK(dialog.open_list == settings::no_control && dialog.chosen.language == "fr");
@@ -946,7 +954,10 @@ void language_drop_down_opens_marks_and_chooses() {
     CHECK(dialog.focused == settings::first_row_control);
     CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
     CHECK(dialog.chosen.language == "it");
+    CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
+    CHECK(dialog.chosen.language == "zh-Hans");
     CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::redraw);
+    CHECK(settings::dialog_key(dialog, DialogKey::left) == DialogAction::changed);
     CHECK(settings::dialog_key(dialog, DialogKey::left) == DialogAction::changed);
     CHECK(dialog.chosen.language == "fr");
     CHECK(settings::dialog_key(dialog, DialogKey::space) == DialogAction::redraw);
@@ -1185,6 +1196,47 @@ void text_size_waits_for_the_modern_fonts() {
     CHECK(dialog.chosen.text_size == settings::default_text_size && dialog.chosen == plain);
     CHECK(click(dialog, centre(geometry::cancel_button)) == DialogAction::cancelled);
     CHECK(dialog.chosen.text_size == 200);
+}
+
+void a_language_locks_the_modern_fonts_and_unicode_chat() {
+    // Simplified Chinese draws in the modern fonts, and its pack asks for
+    // chat in UTF-8: choosing it turns the fonts on, and both switches show
+    // On, locked, set by the language, until another language is chosen.
+    settings::EngineSettings plain{};
+    settings::Dialog dialog;
+    settings::open_dialog(dialog, plain, plain, {}, "v0.2.0", Page::language);
+    dialog.unicode_chat_languages = {"zh-Hans"};
+    CHECK(geometry::shown_locks(dialog).modern_fonts == Lock::none);
+    CHECK(geometry::shown_locks(dialog).unicode_chat == Lock::none);
+    const auto offered = geometry::offered_languages();
+    const auto chinese = std::find_if(offered.begin(), offered.end(), [](const auto* language) {
+        return language->tag == "zh-Hans";
+    });
+    CHECK(chinese != offered.end());
+    if (chinese == offered.end())
+        return;
+    geometry::set_choice(
+        dialog, Setting::language, static_cast<std::size_t>(chinese - offered.begin()) + 1
+    );
+    CHECK(dialog.chosen.language == "zh-Hans" && dialog.chosen.modern_fonts);
+    CHECK(!dialog.chosen.unicode_chat);
+    const auto locks = geometry::shown_locks(dialog);
+    CHECK(locks.modern_fonts == Lock::set_by_language);
+    CHECK(locks.unicode_chat == Lock::set_by_language);
+    CHECK(locks.text_size == Lock::none);
+    CHECK(geometry::lock_text(Lock::set_by_language) == "Set by the language");
+    const auto rows = geometry::open_rows(dialog).rows.rows;
+    const auto chat = std::find_if(rows.begin(), rows.end(), [](const auto& row) {
+        return row.setting == Setting::unicode_chat;
+    });
+    CHECK(chat != rows.end() && chat->lock == Lock::set_by_language);
+    // English lifts both locks; the fonts stay on as the player left them,
+    // and the chat setting is the player's own again.
+    geometry::set_choice(dialog, Setting::language, 1);
+    CHECK(dialog.chosen.language == "en" && dialog.chosen.modern_fonts);
+    CHECK(geometry::shown_locks(dialog).modern_fonts == Lock::none);
+    CHECK(geometry::shown_locks(dialog).unicode_chat == Lock::none);
+    CHECK(!dialog.chosen.unicode_chat);
 }
 
 void every_stop_maps_to_its_value_and_back() {
@@ -1690,14 +1742,14 @@ void sections_that_fit_do_not_scroll() {
     // Each section's content: its rows, and the end gap under the last.
     // Controls' three switches are 162 and Common Tweaks' Your files, unit
     // limit and pathfinding sliders 210, and both fit; Graphics' seven rows
-    // are 434 and Language's drop-down, four switches and slider 365, and
+    // are 434 and Language's drop-down, five switches and slider 424, and
     // both scroll. Mods' list and Developer's list scroll in views of their
     // own (mods_scroll, developer_*).
     const std::array<Page, 4> pages{
         Page::controls, Page::common_tweaks, Page::graphics, Page::language
     };
-    const std::array<int32_t, 4> content{162, 210, 434, 365};
-    const std::array<int32_t, 4> limits{0, 0, 198, 129};
+    const std::array<int32_t, 4> content{162, 210, 434, 424};
+    const std::array<int32_t, 4> limits{0, 0, 198, 188};
     for (std::size_t index = 0; index < content.size(); ++index) {
         const Page page = pages[index];
         if (limits[index] != 0) {
@@ -4206,6 +4258,8 @@ void summaries_break_into_lines_the_fonts_hold() {
         ) == "4x work, a*b, +/-100"
     );
     CHECK(geometry::ascii_text("caf\xC3\xA9!") == "caf?!");
+    // Chinese stays, for the modern fonts to draw.
+    CHECK(geometry::ascii_text("指挥官 ok") == "指挥官 ok");
     // A word longer than a line breaks after its last slash that fits.
     const auto broken = geometry::summary_lines(
         "Commands +sharemetal/+shareenergy/+setshare*/+shootall/+noshake work."
@@ -4806,10 +4860,8 @@ void long_mod_texts_are_cut_with_an_ellipsis() {
     std::string joined;
     for (const auto& line : lines)
         joined += (joined.empty() ? "" : " ") + line;
-    CHECK(
-        joined == std::string(geometry::switch_ask_before_text) + "Zeta" +
-                      std::string(geometry::switch_ask_after_text)
-    );
+    CHECK(joined == geometry::filled(geometry::switch_ask_text, {{"title", "Zeta"}}));
+    CHECK(joined.starts_with("Switch to Zeta now? "));
 }
 
 /// Opens Mods with more mod folders than its view holds rows for.
@@ -4837,6 +4889,35 @@ settings::Dialog many_mods_dialog(std::size_t count) {
         settings::ModOffer{names, folders, {}, {}}
     );
     return dialog;
+}
+
+/// While the dialog's words are drawn in the modern fonts, whose ideographs
+/// stand taller than the game's fonts, a mod row is taller and its
+/// description lower, clear of its title and of its border; in a language
+/// the game's fonts draw, the rows keep their place.
+void mod_rows_grow_while_the_modern_fonts_draw_the_words() {
+    settings::Dialog dialog = many_mods_dialog(1);
+    const auto game_fonts = geometry::place_mod_rows(dialog, 0);
+    static oa::data::languages::Language modern{};
+    modern.tag = "en-XA";
+    modern.needs = oa::data::languages::TextNeeds::modern_fonts;
+    oa::data::languages::set_interface_language(nullptr, modern);
+    const auto tall = geometry::place_mod_rows(dialog, 0);
+    oa::data::languages::set_interface_language(nullptr, oa::data::languages::english());
+    CHECK(game_fonts.rows.size() == 2 && tall.rows.size() == 2);
+    if (game_fonts.rows.size() != 2 || tall.rows.size() != 2)
+        return;
+    const auto& row = game_fonts.rows[0];
+    CHECK(row.control_area.height == 28 && row.label.y == row.top + 1);
+    CHECK(row.hints[0].y == row.top + 15 && game_fonts.rows[1].top == row.top + 28 + 3);
+    const auto& grown = tall.rows[0];
+    CHECK(grown.control_area.height == 34 && grown.label.y == grown.top + 1);
+    CHECK(grown.hints[0].y == grown.top + 19 && tall.rows[1].top == grown.top + 34 + 3);
+    CHECK(grown.hints[0].y >= grown.label.y + geometry::label_line_height + 2);
+    CHECK(
+        grown.hints[0].y + geometry::hint_line_height <
+        grown.control_area.y + grown.control_area.height - 2
+    );
 }
 
 void the_mods_list_scrolls_while_its_button_and_note_stay() {
@@ -4963,8 +5044,8 @@ void choosing_another_mod_asks_before_switching() {
     dialog.switch_question = 1;
     auto lines = geometry::question_text_lines(dialog, one_a_character);
     CHECK(
-        lines.size() == 1 && lines[0] == std::string(geometry::switch_ask_before_text) + "alpha" +
-                                             std::string(geometry::switch_ask_after_text)
+        lines.size() == 1 &&
+        lines[0] == geometry::filled(geometry::switch_ask_text, {{"title", "alpha"}})
     );
     dialog.switch_question = settings::no_question;
     CHECK(click(dialog, mod_point(dialog, 2)) == DialogAction::redraw);
@@ -5263,6 +5344,11 @@ void the_notice_wraps_its_text_and_places_its_buttons() {
     CHECK(words[0] == "Screenshots," && words[1] == "films and mods" && words[2] == "now go here.");
     CHECK(settings::wrap_text("", 16, width).empty());
     CHECK(settings::wrap_text(std::string(40, 'w'), 16, width).size() == 3);
+    // Chinese breaks between its characters, never before a full-width comma.
+    CHECK(
+        (settings::wrap_text("建造完成，单位已就绪", 4, width) ==
+         std::vector<std::string>{"建造完", "成，单位", "已就绪"})
+    );
 }
 
 void the_notice_answers_its_buttons_and_keys() {
@@ -6402,6 +6488,55 @@ void language_text_lists_one_section_and_draws_without_the_game_fonts() {
     Canvas bare = blank(settings::dialog_width, settings::dialog_height);
     settings::draw_dialog(bare.surface, {0, 0, 1}, dialog, empty, kNoIcon);
     CHECK(settings::dialog_text_width(empty, settings::DialogFont::regular, "Language") == 0);
+}
+
+/// The settings the scripted modern fonts draw with in an outline and a
+/// shadow, as the game's text settings choose by default.
+oa::present::TextSettings outlined_text_settings(void*) {
+    oa::present::TextSettings settings;
+    settings.style.outline = true;
+    settings.style.shadow = true;
+    settings.style.background = false;
+    return settings;
+}
+
+/// Letters as dark as their outline, as OK's caption on the accent, are
+/// drawn bare in the modern fonts: only the accent's face, its lighter edge
+/// and the letters lie on the button. Lighter letters keep their outline.
+void dark_letters_on_the_accent_are_drawn_bare() {
+    settings::Dialog dialog;
+    settings::open_language_text_dialog(dialog, {}, {}, {}, "v0.6");
+    const settings::DialogFonts empty{};
+    oa::present::GameTextHooks hooks{};
+    hooks.draw = scripted_modern_draw;
+    hooks.settings = outlined_text_settings;
+    oa::present::set_game_text_hooks(hooks);
+    Canvas canvas = blank(settings::dialog_width, settings::dialog_height);
+    settings::draw_dialog(canvas.surface, {0, 0, 1}, dialog, empty, kNoIcon);
+    oa::present::set_game_text_hooks({});
+    constexpr renderer::Rgb on_accent{0x10, 0x12, 0x0d};
+    constexpr renderer::Rgb accent_edge{0xb6, 0xe0, 0x5a};
+    const auto ok = geometry::footer_button(settings::ok_control);
+    std::size_t letters = 0;
+    std::size_t others = 0;
+    for (int32_t y = ok.y; y < ok.y + ok.height; ++y)
+        for (int32_t x = ok.x; x < ok.x + ok.width; ++x) {
+            const auto shown = canvas.at(x, y);
+            letters += shown == on_accent ? 1 : 0;
+            others += shown != on_accent && shown != kAccent && shown != accent_edge ? 1 : 0;
+        }
+    CHECK(letters > 0);
+    CHECK(others == 0);
+    // The light label beside it keeps its dark outline.
+    const auto label = geometry::place_rows(Page::language, {}).rows[0].label;
+    bool outline = false;
+    for (int32_t y = label.y - 2; y < label.y + label.height + 2; ++y)
+        for (int32_t x = label.x - 2; x < label.x + 50; ++x) {
+            const auto shown = canvas.at(x, y);
+            outline = outline || shown == oa::present::text_outline_color ||
+                      shown == oa::present::text_dark_outline_color;
+        }
+    CHECK(outline);
 }
 
 /// Clicks a strip's caption where the dialog draws it.
@@ -7559,7 +7694,7 @@ int main(int argc, char** argv) {
         a_click_on_an_entry_shows_its_section();
         every_control_is_pressed_where_it_is_drawn();
         switches_take_a_click_on_either_half_and_keys();
-        language_and_text_shows_a_language_four_switches_and_a_size();
+        language_and_text_shows_a_language_five_switches_and_a_size();
         language_drop_down_names_each_language_in_itself();
         language_drop_down_opens_marks_and_chooses();
         language_drop_down_locks_by_the_command_line();
@@ -7567,6 +7702,7 @@ int main(int argc, char** argv) {
         path_tails_keep_the_last_components_that_fit();
         text_size_runs_from_half_to_three_times_in_tenths();
         text_size_waits_for_the_modern_fonts();
+        a_language_locks_the_modern_fonts_and_unicode_chat();
         every_stop_maps_to_its_value_and_back();
         sliders_follow_the_pointer_and_the_arrows();
         the_level_strip_picks_a_level();
@@ -7623,11 +7759,13 @@ int main(int argc, char** argv) {
         game_files_shows_what_is_installed_the_backups_and_the_folder();
         manage_asks_the_host_and_the_backups_switch_changes_at_once();
         language_text_lists_one_section_and_draws_without_the_game_fonts();
+        dark_letters_on_the_accent_are_drawn_bare();
         your_files_shows_the_folder_and_opens_its_folders();
         mods_lists_the_mod_played_first_then_no_mod_then_the_others_by_title();
         each_mod_row_shows_its_badge_title_version_and_description();
         long_mod_texts_are_cut_with_an_ellipsis();
         the_mods_list_scrolls_while_its_button_and_note_stay();
+        mod_rows_grow_while_the_modern_fonts_draw_the_words();
         choosing_another_mod_asks_before_switching();
         the_keys_answer_the_switch_mod_question();
         a_kept_version_rolls_back_after_a_question();

@@ -26,6 +26,8 @@
 #include "oa/present/model/mesh_raster.hpp"
 #include "oa/present/palette_tables.hpp"
 #include "oa/present/surface.hpp"
+#include "oa/present/game_text.hpp"
+#include "oa/present/typed_text.hpp"
 #include "oa/platform/system.hpp"
 
 #include <algorithm>
@@ -144,6 +146,8 @@ struct Ui {
     uint8_t lobby_buttons = 0;
     /// The network rules the battle room plays by; 3.1c's until bound.
     netgame::WireRules wire_rules{};
+    /// This machine sends and reads chat as UTF-8; off until bound.
+    bool unicode_chat{};
     /// The line this machine's recorder answers .report with.
     std::string program_line;
     std::string message;
@@ -175,6 +179,10 @@ struct Ui {
     // last key press; zero for none. The character it types is dropped, so
     // it never reaches the text box focused under the question.
     int answered_key = 0;
+    // The input method's composition shown at the end of the battle room's
+    // chat line, as game text: as much of it as fits. It is no part of the
+    // line that is sent.
+    std::string composition;
 
     Ui() {
         data::campaign::campaign_file_init(&map_context);
@@ -676,6 +684,7 @@ void bind_boundaries() {
         maps_read
     };
     lobby.wire_rules = state.wire_rules;
+    lobby.unicode_chat = state.unicode_chat;
     lobby.local_version_major = state.wire_rules.version_major;
     lobby.local_version_minor = state.wire_rules.version_minor;
     std::snprintf(
@@ -1494,8 +1503,8 @@ void compose_layout(
 ///
 /// The text keeps the game's own fonts whatever the Language settings say,
 /// the battle room's chat entry included, as do the screens' lists and
-/// buttons: a character the font lacks is drawn in the modern fonts, as with
-/// them off.
+/// buttons: a character the font lacks is drawn in the modern fonts, in the
+/// font's own colour, as with them off.
 ///
 /// @param[in,out] surface image drawn on
 /// @param res screen resources
@@ -1520,7 +1529,9 @@ void draw_text_in(
     const auto& palette = res.screen.background.palette.has_value() ? *res.screen.background.palette
                                                                     : res.screen.gui_palette;
     if (renderer::needs_text_runs(text, false)) {
-        const std::size_t ink = static_cast<std::size_t>(formats::fnt::foreground_index) * 4U;
+        // The modern fonts' letters take the font's own colour.
+        const std::size_t ink =
+            static_cast<std::size_t>(renderer::fnt_font_ink(font, palette)) * 4U;
         std::ignore = renderer::draw_fnt_game_text(
             surface,
             font,
@@ -1805,22 +1816,46 @@ void draw_pictures(renderer::Surface& surface, const Resources& res) {
 
 void draw_text_boxes(renderer::Surface& surface, Resources& res) {
     auto& panel = res.panel;
+    const std::string& composition = ui().composition;
     for (int32_t index = 1; index < panel.count; ++index) {
         const auto& control = panel.controls[static_cast<std::size_t>(index)];
         if (control.type != ControlType::text_box || control.active == 0)
             continue;
         std::string text(control_text(control));
-        if (index == panel.focus && ((elapsed_ms() / 500U) & 1U) == 0)
+        const bool focused = index == panel.focus;
+        const bool cursor = focused && ((elapsed_ms() / 500U) & 1U) == 0;
+        const int32_t x = control.x + res.offset_x + 3;
+        const int32_t y = control.y + res.offset_y + 3;
+        const int32_t width = control.width - 4;
+        const int32_t height = control.height - 2;
+        // The input method's composition at the end of the focused box is
+        // drawn in the modern fonts, as the characters it composes are,
+        // and underlined.
+        if (focused && !composition.empty() && text.ends_with(composition)) {
+            text.resize(text.size() - composition.size());
+            draw_text(surface, res, text, x, y, width, height);
+            const auto& palette = res.screen.background.palette.has_value()
+                                      ? *res.screen.background.palette
+                                      : res.screen.gui_palette;
+            const std::size_t ink =
+                static_cast<std::size_t>(renderer::fnt_font_ink(res.screen.font, palette)) * 4U;
+            const int32_t pen = renderer::draw_fnt_composition(
+                surface,
+                res.screen.font,
+                composition,
+                x + renderer::measure_fnt_game_text(res.screen.font, text, false),
+                y,
+                {palette[ink], palette[ink + 1], palette[ink + 2]},
+                palette,
+                {x, y, x + width - 1, y + height - 1}
+            );
+            if (cursor && pen < x + width)
+                draw_text(surface, res, "_", pen, y, x + width - pen, height);
+            continue;
+        }
+        if (cursor)
             text += '_';
-        draw_text(
-            surface,
-            res,
-            text,
-            control.x + res.offset_x + 3,
-            control.y + res.offset_y + 3,
-            control.width - 4,
-            control.height - 2
-        );
+        draw_text(surface, res, text, x, y, width, height);
     }
 }
 
@@ -2430,6 +2465,70 @@ bool typed_answered_key(const char* text, int answered) {
            std::tolower(static_cast<unsigned char>(text[0])) == answered;
 }
 
+namespace {
+
+/// Returns the focused text box of the front panel.
+///
+/// @return the box; null when no text box has the focus
+Control* focused_text_box() noexcept {
+    auto& panel = front().panel;
+    if (panel.focus <= 0 || panel.focus >= panel.count)
+        return nullptr;
+    auto& control = panel.controls[static_cast<std::size_t>(panel.focus)];
+    return control.type == ControlType::text_box ? &control : nullptr;
+}
+
+/// Tells whether a text box is the battle room's chat line, which takes
+/// every character as game text. The other boxes (the address, names and
+/// passwords) take printable ASCII alone.
+///
+/// @param control a text box
+/// @return true for the chat line
+bool takes_any_character(const Control& control) noexcept {
+    return control_name(control) == "MESSAGE";
+}
+
+/// Returns the most bytes a text box holds.
+///
+/// @param control a text box
+/// @return its length limit, below the text field's size
+std::size_t text_box_limit(const Control& control) noexcept {
+    return control.value > 0 ? static_cast<std::size_t>(control.value) : kControlTextBytes - 1;
+}
+
+/// Adds typed text to the chat line as game text, whole characters at a
+/// time, while the line stays within its limit.
+///
+/// @param[in,out] value the line's game text
+/// @param typed UTF-8, as the platform sends it
+/// @param limit the most bytes the line holds
+void take_game_text(std::string& value, std::string_view typed, std::size_t limit) {
+    const bool utf8 = oa::present::game_text_settings().utf8;
+    const std::string taken =
+        oa::present::typed_characters(typed, oa::present::TypedCharacters::text);
+    for (std::size_t at = 0; at < taken.size();) {
+        const std::size_t bytes =
+            std::max<std::size_t>(oa::present::utf8_sequence(taken.substr(at)).bytes, 1);
+        const std::string game = oa::present::encode_game_text(taken.substr(at, bytes), utf8);
+        if (value.size() + game.size() > limit)
+            break;
+        value += game;
+        at += bytes;
+    }
+}
+
+/// Takes the input method's composition away from the end of a text box.
+///
+/// @param[in,out] value the box's text
+void drop_composition(std::string& value) {
+    auto& composition = ui().composition;
+    if (!composition.empty() && value.ends_with(composition))
+        value.resize(value.size() - composition.size());
+    composition.clear();
+}
+
+} // namespace
+
 int screen_event(ScreenContext* ctx, void*) {
     auto& state = ui();
     state.ctx = ctx;
@@ -2510,9 +2609,15 @@ int screen_event(ScreenContext* ctx, void*) {
             }
         }
         if (input->key == kSdlKeyBackspace && panel.focus > 0 && panel.focus < panel.count) {
+            // Backspace takes the last character away: a whole UTF-8
+            // sequence of the chat line where game text holds UTF-8, else
+            // one byte.
             auto& control = panel.controls[static_cast<std::size_t>(panel.focus)];
             std::string text(control_text(control));
-            if (!text.empty())
+            if (control.type == ControlType::text_box && takes_any_character(control) &&
+                oa::present::game_text_settings().utf8)
+                std::ignore = oa::present::erase_last_character(text);
+            else if (!text.empty())
                 text.pop_back();
             set_control_text(control, text);
             return 1;
@@ -2680,6 +2785,11 @@ void multiplayer_bind_net(const LobbyNet& net) noexcept {
     ui().lobby.net = net;
 }
 
+void multiplayer_bind_unicode_chat(bool on) noexcept {
+    ui().unicode_chat = on;
+    ui().lobby.unicode_chat = on;
+}
+
 void multiplayer_bind_wire_rules(const netgame::WireRules& rules, const char* program) noexcept {
     auto& state = ui();
     state.wire_rules = rules;
@@ -2796,21 +2906,38 @@ bool multiplayer_click(ScreenContext* ctx, const char* name, uint8_t button) noe
 
 void multiplayer_type(ScreenContext* ctx, const char* text) noexcept {
     ui().ctx = ctx;
-    auto& panel = front().panel;
-    if (panel.focus <= 0 || panel.focus >= panel.count || text == nullptr)
+    Control* control = focused_text_box();
+    if (control == nullptr || text == nullptr)
         return;
-    auto& control = panel.controls[static_cast<std::size_t>(panel.focus)];
-    if (control.type != ControlType::text_box)
-        return;
-    std::string value(control_text(control));
-    const std::size_t limit =
-        control.value > 0 ? static_cast<std::size_t>(control.value) : kControlTextBytes - 1;
-    for (const char* at = text; *at != '\0'; ++at)
-        if (static_cast<unsigned char>(*at) >= 0x20 && static_cast<unsigned char>(*at) < 0x7f &&
-            value.size() < limit)
-            value.push_back(*at);
-    set_control_text(control, value);
-    panel.dirty = true;
+    std::string value(control_text(*control));
+    const std::size_t limit = text_box_limit(*control);
+    if (takes_any_character(*control)) {
+        drop_composition(value);
+        take_game_text(value, text, limit);
+    } else {
+        for (const char* at = text; *at != '\0'; ++at)
+            if (static_cast<unsigned char>(*at) >= 0x20 && static_cast<unsigned char>(*at) < 0x7f &&
+                value.size() < limit)
+                value.push_back(*at);
+    }
+    set_control_text(*control, value);
+    front().panel.dirty = true;
+}
+
+bool multiplayer_compose(const char* composition) noexcept {
+    if (!ui().showing)
+        return false;
+    Control* control = focused_text_box();
+    if (control == nullptr || !takes_any_character(*control))
+        return false;
+    std::string value(control_text(*control));
+    drop_composition(value);
+    const std::size_t committed = value.size();
+    take_game_text(value, composition != nullptr ? composition : "", text_box_limit(*control));
+    ui().composition = value.substr(committed);
+    set_control_text(*control, value);
+    front().panel.dirty = true;
+    return true;
 }
 
 void multiplayer_bind_clock(const LobbyClock& clock) noexcept {
@@ -2832,6 +2959,7 @@ void multiplayer_reset() noexcept {
     close_modal();
     state.message.clear();
     state.answered_key = 0;
+    state.composition.clear();
     state.in_lobby = false;
     state.banner_said.clear();
     state.custom_net = custom;

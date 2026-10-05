@@ -5,7 +5,9 @@
 #include "oa/app/runtime.hpp"
 #include "oa/app/hook_call.hpp"
 #include "oa/ui/frontend/main_menu.hpp"
+#include "oa/ui/frontend_multiplayer/screens.hpp"
 #include "oa/media/intro_player.hpp"
+#include "oa/present/typed_text.hpp"
 #include "oa/ui/gui_input/gadget_panel.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -101,16 +103,26 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
     if (whiteboard_text(event))
         return;
     if (event.type == SDL_EVENT_TEXT_INPUT && chat_composing_) {
-        chat_buffer_ += event.text.text;
+        chat_buffer_ +=
+            oa::present::typed_characters(event.text.text, oa::present::TypedCharacters::text);
         chat_composition_.clear();
         return;
     }
     // The input method's composition shows after the chat line until it is
     // committed, as the line will be sent.
     if (event.type == SDL_EVENT_TEXT_EDITING && chat_composing_) {
-        chat_composition_ = event.edit.text != nullptr ? event.edit.text : "";
+        chat_composition_ = text_composition_;
         return;
     }
+    // The save dialog shows it at the end of the name being typed, and the
+    // battle room at the end of its chat line.
+    if (event.type == SDL_EVENT_TEXT_EDITING && save_dialog_open()) {
+        compose_save_name(text_composition_);
+        return;
+    }
+    if (event.type == SDL_EVENT_TEXT_EDITING &&
+        oa::ui::frontend_multiplayer::multiplayer_compose(text_composition_.c_str()))
+        return;
     if (event.type == SDL_EVENT_KEY_DOWN && handle_match_hotkey(event.key))
         return;
     if (event.type == SDL_EVENT_KEY_DOWN && typed_key_hook_ != TypedKeyHook::none) {

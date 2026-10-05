@@ -249,6 +249,60 @@ void draws_mono_and_antialiased() {
     OA_CHECK(again && plain && again->alpha == plain->alpha);
 }
 
+void keeps_the_glyphs_used_last() {
+    auto stack = open_beside();
+    if (!stack)
+        return;
+    const auto style = style_of(8, Weight::bold);
+    // Lines of a hundred new hanzi each, and an A in every one, until more
+    // glyphs than the store keeps have been drawn.
+    char32_t next = 0x4E00;
+    while (stack->drawn_glyphs() <= text_font::FontStack::kept_glyphs + 200) {
+        std::string line = "A";
+        for (int count = 0; count < 100; ++count) {
+            const char32_t character = next++;
+            line += static_cast<char>(0xE0 | (character >> 12));
+            line += static_cast<char>(0x80 | ((character >> 6) & 0x3F));
+            line += static_cast<char>(0x80 | (character & 0x3F));
+        }
+        OA_CHECK(stack->draw(line, style).has_value());
+    }
+    // The store stays within its bound and forgets a glyph at a time,
+    // never starting again.
+    OA_CHECK(stack->cached_glyphs() <= text_font::FontStack::kept_glyphs);
+    OA_CHECK(stack->cached_glyphs() > text_font::FontStack::kept_glyphs - 101);
+    // The A, used in every line, is kept; the first hanzi, used longest
+    // ago, is drawn again.
+    const std::size_t drawn = stack->drawn_glyphs();
+    OA_CHECK(stack->draw("A", style).has_value());
+    OA_CHECK(stack->drawn_glyphs() == drawn);
+    OA_CHECK(stack->draw("\xE4\xB8\x80", style).has_value());
+    OA_CHECK(stack->drawn_glyphs() == drawn + 1);
+}
+
+void holds_ideographs_to_a_least_size() {
+    auto stack = open_beside();
+    if (!stack)
+        return;
+    const auto small = style_of(8, Weight::bold);
+    auto floored = small;
+    floored.least_cjk_pixel_size = 12;
+    // An ideograph at 8 px is drawn at 12 px; Latin letters keep their
+    // size, in a line grown to hold the ideographs.
+    const auto plain = stack->draw("\xE4\xB8\xAD", small);
+    const auto held = stack->draw("\xE4\xB8\xAD", floored);
+    OA_CHECK(plain && held && plain->advance < 12 && held->advance >= 12);
+    const auto latin = stack->draw("H", small);
+    const auto latin_held = stack->draw("H", floored);
+    OA_CHECK(
+        latin && latin_held && latin->advance == latin_held->advance &&
+        latin->width == latin_held->width && latin_held->height > latin->height
+    );
+    auto beyond = small;
+    beyond.least_cjk_pixel_size = text_font::max_pixel_size + 1;
+    OA_CHECK(!stack->draw("H", beyond));
+}
+
 /// "Ab", a Chinese character and the rocket emoji, bold at 14 px, mono:
 /// the line as FreeType 2.14.3 draws it with the pinned fonts.
 constexpr std::string_view mixed_line = "Ab\xE4\xB8\xAD\xF0\x9F\x9A\x80";
@@ -311,5 +365,7 @@ int main(int argc, char** argv) {
     falls_back_through_the_chain();
     matches_the_game_fonts_sizes();
     draws_mono_and_antialiased();
+    keeps_the_glyphs_used_last();
+    holds_ideographs_to_a_least_size();
     return oa::test::check_exit_status();
 }

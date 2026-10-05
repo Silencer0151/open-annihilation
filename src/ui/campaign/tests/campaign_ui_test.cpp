@@ -106,6 +106,15 @@ void wrap_tests() {
     expect(std::strcmp(out, "supercalifragilistic word") == 0, "long word stays whole");
     wrap_text("alpha beta gamma", 60, measure, nullptr, out, sizeof(out));
     expect(std::strcmp(out, "alpha\r\nbeta gamma") == 0, "a line reaching the width breaks");
+    // Chinese breaks between its characters, never before a full-width
+    // comma, and keeps a highlight's markers with the words they mark.
+    wrap_text("建造完成，单位已就绪", 61, measure, nullptr, out, sizeof(out));
+    expect(std::strcmp(out, "建造完\r\n成，单\r\n位已就\r\n绪") == 0, "Chinese breaks by kinsoku");
+    wrap_text("我们&R敌人&北方", 61, measure, nullptr, out, sizeof(out));
+    expect(std::strcmp(out, "我们\r\n&R敌人&\r\n北方") == 0, "markers stay with their words");
+    // Out of room, the text stops before a character it cannot hold whole.
+    wrap_text("指挥官", 100, measure, nullptr, out, 10);
+    expect(std::strcmp(out, "指挥") == 0, "Chinese cut between characters");
 
     char reflowed[128];
     reflow_span_text("go &Rred\r\nzone& now", reflowed, sizeof(reflowed));
@@ -117,6 +126,20 @@ void wrap_tests() {
         sizeof(reflowed)
     );
     expect(std::strcmp(reflowed, "a") == 0, "0xFF ends the text");
+}
+
+void chinese_row_tests() {
+    // A row longer than a row's bytes keeps the whole characters that fit:
+    // 42 hanzi, 126 bytes, of 50.
+    std::string text;
+    for (int i = 0; i < 50; ++i)
+        text += "中";
+    BriefingPager pager{};
+    briefing_pager_reset(&pager, text.c_str());
+    BriefingRegion region{10, 20, 30, 10};
+    static BriefingPage page;
+    briefing_next_page(&pager, &region, measure, nullptr, &page);
+    expect(std::strlen(page.rows[0].text) == 126, "Chinese row cut between characters");
 }
 
 void page_tests() {
@@ -501,6 +524,7 @@ int main(int argc, char** argv) {
     } else {
         wrap_tests();
         page_tests();
+        chinese_row_tests();
         single_player_tests();
         new_game_tests();
     }

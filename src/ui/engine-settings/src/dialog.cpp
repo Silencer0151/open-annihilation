@@ -59,13 +59,14 @@ constexpr std::array<Setting, 7> kGraphicsRows{
 };
 /// Language's rows: the language first, and the text size right
 /// under the switch it needs.
-constexpr std::array<Setting, 6> kLanguageRows{
+constexpr std::array<Setting, 7> kLanguageRows{
     Setting::language,
     Setting::modern_fonts,
     Setting::text_size,
     Setting::text_outline,
     Setting::text_shadow,
     Setting::text_background,
+    Setting::unicode_chat,
 };
 /// Touch's rows: how a finger's drag and hold work, then the latches, the
 /// haptics, the side the controls stand on and their size.
@@ -319,7 +320,7 @@ struct SwitchMember {
 };
 
 /// Every switch and its value: the one table switch_on and set_switch read.
-constexpr std::array<SwitchMember, 20> kSwitches{{
+constexpr std::array<SwitchMember, 21> kSwitches{{
     {Setting::wheel_zoom, &EngineSettings::wheel_zoom, nullptr},
     {Setting::escape_opens_menu, &EngineSettings::escape_opens_menu, nullptr},
     {Setting::switch_alt, &EngineSettings::switch_alt, nullptr},
@@ -331,6 +332,7 @@ constexpr std::array<SwitchMember, 20> kSwitches{{
     {Setting::text_outline, &EngineSettings::text_outline, nullptr},
     {Setting::text_shadow, &EngineSettings::text_shadow, nullptr},
     {Setting::text_background, &EngineSettings::text_background, nullptr},
+    {Setting::unicode_chat, &EngineSettings::unicode_chat, nullptr},
     {Setting::touch_haptics, &EngineSettings::touch_haptics, nullptr},
     {Setting::touch_left_handed, &EngineSettings::touch_left_handed, nullptr},
     {Setting::pad_glide, &EngineSettings::pad_glide, nullptr},
@@ -1218,6 +1220,14 @@ void set_choice(Dialog& dialog, Setting setting, std::size_t index) {
     }
     settings.language = clamped == 0 ? std::string(oa::data::languages::system_choice)
                                      : std::string(offered_languages()[clamped - 1]->tag);
+    // A language drawn in the modern fonts turns them on, and keeps them on
+    // after it.
+    const oa::data::languages::Language& system = dialog.system_language != nullptr
+                                                      ? *dialog.system_language
+                                                      : oa::data::languages::english();
+    if (oa::data::languages::chosen_language(settings.language, system).needs ==
+        oa::data::languages::TextNeeds::modern_fonts)
+        settings.modern_fonts = true;
 }
 
 int32_t shown_choices(std::size_t choices) noexcept {
@@ -1283,6 +1293,10 @@ Lock lock_of(const Locks& locks, Setting setting) noexcept {
         return locks.text_size;
     case Setting::language:
         return locks.language;
+    case Setting::modern_fonts:
+        return locks.modern_fonts;
+    case Setting::unicode_chat:
+        return locks.unicode_chat;
     case Setting::mod:
         return locks.mod;
     default:
@@ -1435,7 +1449,22 @@ int32_t scroll_limit(int32_t content_height) noexcept {
 
 Locks shown_locks(const Dialog& dialog) noexcept {
     Locks locks = dialog.locks;
-    if (locks.text_size == Lock::none && !dialog.chosen.modern_fonts)
+    // The language chosen, System default's included, may need the modern
+    // fonts and chat in UTF-8.
+    namespace languages = oa::data::languages;
+    const languages::Language& system =
+        dialog.system_language != nullptr ? *dialog.system_language : languages::english();
+    const languages::Language& chosen = languages::chosen_language(dialog.chosen.language, system);
+    if (locks.modern_fonts == Lock::none && chosen.needs == languages::TextNeeds::modern_fonts)
+        locks.modern_fonts = Lock::set_by_language;
+    if (locks.unicode_chat == Lock::none &&
+        std::find(
+            dialog.unicode_chat_languages.begin(), dialog.unicode_chat_languages.end(), chosen.tag
+        ) != dialog.unicode_chat_languages.end())
+        locks.unicode_chat = Lock::set_by_language;
+    const bool modern_fonts =
+        dialog.chosen.modern_fonts || locks.modern_fonts == Lock::set_by_language;
+    if (locks.text_size == Lock::none && !modern_fonts)
         locks.text_size = Lock::needs_modern_fonts;
     return locks;
 }
@@ -1700,6 +1729,8 @@ std::string_view label_of(Setting setting) noexcept {
         return "Font shadow";
     case Setting::text_background:
         return "Game text background";
+    case Setting::unicode_chat:
+        return "Enable Unicode Multiplayer Chat";
     case Setting::text_size:
         return "Text size";
     case Setting::language:
@@ -1899,6 +1930,11 @@ std::string_view hint_line(
     case Setting::text_background:
         lines = {"A shaded box behind each line of game text.", {}};
         break;
+    case Setting::unicode_chat:
+        lines = {
+            "Chat in any language with players who have it;", "others see ? for letters they lack."
+        };
+        break;
     case Setting::language:
         lines = {"The game's own text and unit names, where its", "data has them in the language."};
         break;
@@ -2069,6 +2105,7 @@ std::size_t hint_line_count(Setting setting) noexcept {
     case Setting::hardware_acceleration:
     case Setting::mod:
     case Setting::modern_fonts:
+    case Setting::unicode_chat:
     case Setting::text_size:
     case Setting::language:
     case Setting::menu_scaling:
@@ -2311,6 +2348,8 @@ std::string_view lock_text(Lock lock) noexcept {
         return "Needs modern fonts";
     case Lock::always_on:
         return "Always on here";
+    case Lock::set_by_language:
+        return "Set by the language";
     }
     return {};
 }
@@ -3012,6 +3051,9 @@ void copy_setting(EngineSettings& to, const EngineSettings& from, Setting settin
         break;
     case Setting::text_background:
         to.text_background = from.text_background;
+        break;
+    case Setting::unicode_chat:
+        to.unicode_chat = from.unicode_chat;
         break;
     case Setting::text_size:
         to.text_size = from.text_size;

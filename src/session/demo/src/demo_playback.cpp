@@ -288,7 +288,7 @@ void note_record(void* context, uint32_t sender_id, const uint8_t* record, std::
             return;
         char text[sizeof(netgame::ChatRecord::text) + 1]{};
         std::memcpy(text, record + 1, std::min(size - 1, sizeof(netgame::ChatRecord::text)));
-        session.lines.emplace_back(text);
+        session.lines.push_back(netgame::match::net_match_chat_text(&session.net, *sender, text));
         return;
     }
     if (type == netgame::RecordType::economy &&
@@ -376,8 +376,12 @@ bool demo_recognised(std::span<const uint8_t> bytes) noexcept {
 
 bool demo_open(DemoPlayback* playback, const std::filesystem::path& path, std::string* error) {
     std::ifstream in(path, std::ios::binary);
-    if (!in)
-        return fail(error, "cannot open demo: " + path.string());
+    if (!in) {
+        // In UTF-8: a recording named outside the system's code page has no
+        // narrow spelling on Windows.
+        const auto name = path.u8string();
+        return fail(error, "cannot open demo: " + std::string(name.begin(), name.end()));
+    }
     std::vector<uint8_t> bytes(
         (std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()
     );
@@ -671,6 +675,10 @@ bool demo_session_begin(
         netgame::match::match_binding_sim(&session->binding),
         hooks
     );
+    // A recording keeps each line as its machine heard it; a player whose
+    // block says UTF-8 chat was heard in UTF-8.
+    session->net.recorded_chat = true;
+    session->net.unicode_chat = session->unicode_chat;
     netgame::match::match_binding_install(&session->binding);
     netgame::match::net_match_enter_game(&session->net);
     session->tick_errors = 0;

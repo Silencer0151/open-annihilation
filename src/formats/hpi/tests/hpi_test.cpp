@@ -889,6 +889,42 @@ void asset_store_refuses_files_over_the_entry_limit() {
     fs::remove(over, error);
 }
 
+/// A game folder named in Chinese is mounted once however its path is
+/// spelled, and a loose file named in Chinese is listed and read by its UTF-8
+/// name, whatever the system's code page.
+void asset_store_names_in_any_script() {
+    TempDir dir;
+    const auto utf8 = [](std::string_view text) {
+        return fs::path(std::u8string(text.begin(), text.end()));
+    };
+    // U+6E38 U+620F, and U+5730 U+56FE.
+    const fs::path game = dir.path() / utf8("\xe6\xb8\xb8\xe6\x88\x8f");
+    const std::string map = "\xe5\x9c\xb0\xe5\x9b\xbe.ota";
+    fs::create_directories(game / "maps");
+    {
+        std::ofstream stream(game / "maps" / utf8(map), std::ios::binary);
+        stream << "m";
+    }
+    const auto archive = game / "names.hpi";
+    {
+        const Bytes bytes = archive_of({{"units/x.fbi", text("x"), 0}});
+        std::ofstream stream(archive, std::ios::binary);
+        stream.write(
+            reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size())
+        );
+    }
+    oa::AssetStore store(game);
+    store.mount(archive);
+    std::string refused;
+    check(
+        !store.try_mount(game / "." / "names.hpi", &refused) && refused == "already mounted",
+        "an archive in a folder named in Chinese is mounted once"
+    );
+    const auto maps = store.list_effective("maps", ".ota");
+    check(maps.size() == 1 && maps[0] == "maps/" + map, "a loose file named in Chinese is listed");
+    check(store.read("maps/" + map).bytes == text("m"), "and read by the name listed");
+}
+
 /// Loose lookups answer from folder listings taken once, until a rescan, and
 /// list on every lookup once the listings would exceed the store's limit.
 void asset_store_loose_listings() {
@@ -970,6 +1006,7 @@ int main(int argc, char** argv) {
         asset_store_discover_order_and_hpi_limit();
         asset_store_discover_pins_install_layout();
         asset_store_loose_listings();
+        asset_store_names_in_any_script();
         asset_store_loose_links();
         asset_store_refuses_files_over_the_entry_limit();
         resource_file_semantics();

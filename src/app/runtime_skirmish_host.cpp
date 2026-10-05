@@ -131,10 +131,11 @@ void Runtime::set_text(
     auto* gadget = widget(name);
     if (gadget == nullptr)
         return;
+    const std::string shown = translate_ui(text);
     if (auto* button = std::get_if<oa::ui::gui_layout::ButtonFields>(&gadget->fields))
-        button->text = text;
+        button->text = shown;
     else if (auto* label = std::get_if<oa::ui::gui_layout::LabelFields>(&gadget->fields))
-        label->text = text;
+        label->text = shown;
 }
 
 void Runtime::set_enabled(std::string_view name, int32_t enabled) {
@@ -341,7 +342,16 @@ std::string Runtime::permitted_player_counts_text() {
 }
 
 std::string Runtime::map_description() {
-    return selected_map_metadata_ ? selected_map_metadata_->mission_description : std::string{};
+    if (!selected_map_metadata_)
+        return {};
+    const std::string& own = selected_map_metadata_->mission_description;
+    std::string lowered = own;
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](char c) {
+        return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    });
+    const char* translated = game_translation(lowered.c_str());
+    return translated != nullptr && !tdf_names_equal(translated, lowered) ? std::string(translated)
+                                                                          : own;
 }
 
 std::string Runtime::terrain_resource_path() {

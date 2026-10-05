@@ -291,6 +291,10 @@ the line. **STEAM** and **X** together open the keyboard by hand. In
 Desktop Mode with Steam closed, the desktop's own on-screen keyboard
 serves, and the touch screen and a USB keyboard always work.
 
+Steam's keyboard sends finished text: with its Chinese layout, for
+example, the characters are chosen in the keyboard and go into the field
+once chosen ([typing.md](../typing.md#steam-deck)).
+
 ## Proton
 
 The Windows package also runs through Proton, but that is not the supported

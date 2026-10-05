@@ -2169,7 +2169,9 @@ into the records and decisions of the modules that carry them out, and
   its text, a logo counted a line height wide, from the row above to the
   row below (`chat_backdrop_rect`), whatever the Game text background
   setting says; the line is drawn as all game text is. The chat line shows
-  the input method's composition after its text until it is committed, and
+  the input method's composition after its text, underlined
+  (`oa::present::modern_text_underline`, `underline_typed_composition`),
+  until it is committed, and
   Backspace in the chat line and on the whiteboard takes the whole last
   character.
 - **Game text** (the Language settings, `text_style`): the match's
@@ -2201,7 +2203,9 @@ into the records and decisions of the modules that carry them out, and
   bottom bars, the build captions, the digits under and over a unit's bar,
   the kill board, the resource panel and its clock line, the frame
   statistics, the debug keys' line, the commander placement's prompt and
-  an extension's overlay.
+  an extension's overlay. The unit panel's `PanelText` also names the
+  bottom bar's top row, so that its status line, whose ideographs would
+  rise above the bar, is lowered to keep within it.
 - **Language** (`runtime_language.cpp`, `language_state.hpp`): the
   language the game shows its text in ([docs/languages.md](../../docs/languages.md)).
   `start_language` asks the operating system for its preferred locales
@@ -2224,6 +2228,16 @@ into the records and decisions of the modules that carry them out, and
   unit files themselves, and English after it; the
   `native-unit-language-*` checks run it in each language and in the
   system's.
+- **Picture captions** (`runtime_picture_captions.cpp`): while a language
+  other than English is shown, the words its packs' `pictures.tdf` gives
+  (`language_pictures`, drawn by `oa/present/picture_captions.hpp`) are
+  drawn in the bundled fonts over the pictures they name as each is
+  loaded: the GAF files the runtime reads (`append_gaf_file`), the match
+  bar's `commongui.gaf` and side panel, a screen's sprites and the named
+  backgrounds. A picture the
+  game data holds in the language's own folder (`bitmaps-<word>`,
+  `anims-<word>`) already shows its words and is left as it is, as is
+  every picture no pack names.
 - **Options dialog** (ui.options-dialog): Ctrl+F2 in a match opens the
   settings dialog as its mod options kind beside the in-game menu
   (`open_engine_settings_in_match`), over the player's view settings

@@ -12,6 +12,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
+#include <filesystem>
 #include <new>
 #include <string>
 
@@ -536,9 +538,30 @@ bool bank_read_image(
     return ok;
 }
 
+namespace {
+
+/// Opens a file by its UTF-8 path, as fopen does.
+///
+/// @param path the path, UTF-8
+/// @param mode the mode in fopen's spelling
+/// @return the stream; null when the file cannot be opened, or the path is
+///         not UTF-8 the system can spell
+std::FILE* open_utf8(const char* path, const char* mode) noexcept {
+    try {
+        const std::string_view text(path);
+        return oa::platform::open_file(
+            std::filesystem::path(std::u8string(text.begin(), text.end())), mode
+        );
+    } catch (const std::exception&) {
+        return nullptr;
+    }
+}
+
+} // namespace
+
 FileSink stdio_file_sink() {
     return FileSink{nullptr, [](void*, const char* path, const uint8_t* data, std::size_t size) {
-                        std::FILE* file = oa::platform::open_file(path, "wb");
+                        std::FILE* file = open_utf8(path, "wb");
                         if (file == nullptr)
                             return false;
                         const bool written = size == 0 || std::fwrite(data, 1, size, file) == size;
@@ -548,7 +571,7 @@ FileSink stdio_file_sink() {
 
 FileSource stdio_file_source() {
     return FileSource{nullptr, [](void*, const char* path, ByteImage* out) {
-                          std::FILE* file = oa::platform::open_file(path, "rb");
+                          std::FILE* file = open_utf8(path, "rb");
                           if (file == nullptr)
                               return false;
                           bool ok = std::fseek(file, 0, SEEK_END) == 0;

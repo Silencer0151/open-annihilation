@@ -36,6 +36,16 @@ constexpr uint8_t kShadowedByLoose = 0x02;
     throw std::runtime_error(message);
 }
 
+/// Returns a path's UTF-8 spelling: a name outside the system's code page
+/// has no narrow spelling on Windows.
+///
+/// @param path the path
+/// @return its UTF-8 spelling
+std::string utf8_text(const std::filesystem::path& path) {
+    const auto text = path.u8string();
+    return {text.begin(), text.end()};
+}
+
 /// Throws the error of a read from a mounted archive, naming the entry and
 /// the archive.
 ///
@@ -53,7 +63,7 @@ constexpr uint8_t kShadowedByLoose = 0x02;
                                  : std::string(error.message);
     fail(
         what + " (" + node.name + ", length " + std::to_string(node.size) + ", at byte " +
-        std::to_string(error.offset) + " of " + archive_path.filename().string() + ")"
+        std::to_string(error.offset) + " of " + utf8_text(archive_path.filename()) + ")"
     );
 }
 
@@ -106,7 +116,10 @@ std::size_t last_separator(std::string_view path) noexcept {
 }
 
 std::string full_path_key(const std::filesystem::path& path) {
-    std::string text = std::filesystem::weakly_canonical(path).generic_string();
+    // In UTF-8: a folder named outside the system's code page has no narrow
+    // spelling on Windows.
+    const auto spelled = std::filesystem::weakly_canonical(path).generic_u8string();
+    std::string text(spelled.begin(), spelled.end());
     std::transform(text.begin(), text.end(), text.begin(), ascii_upper);
     return text;
 }
@@ -151,11 +164,11 @@ std::vector<uint8_t> read_loose(const std::filesystem::path& path) {
         fail("loose asset exceeds entry size limit");
     std::ifstream stream(path, std::ios::binary);
     if (!stream)
-        fail("cannot open loose asset '" + path.string() + "'");
+        fail("cannot open loose asset '" + utf8_text(path) + "'");
     std::vector<uint8_t> bytes(static_cast<std::size_t>(size));
     stream.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
     if (stream.gcount() != static_cast<std::streamsize>(bytes.size()))
-        fail("truncated loose asset '" + path.string() + "'");
+        fail("truncated loose asset '" + utf8_text(path) + "'");
     return bytes;
 }
 
@@ -206,12 +219,12 @@ open_archive_file(const std::filesystem::path& path, std::string& reason) {
     std::error_code status;
     const auto size = std::filesystem::file_size(path, status);
     if (status) {
-        reason = "cannot stat HPI archive '" + path.string() + "': " + status.message();
+        reason = "cannot stat HPI archive '" + utf8_text(path) + "': " + status.message();
         return nullptr;
     }
     std::ifstream stream(path, std::ios::binary);
     if (!stream) {
-        reason = "cannot open HPI archive '" + path.string() + "'";
+        reason = "cannot open HPI archive '" + utf8_text(path) + "'";
         return nullptr;
     }
     return std::make_unique<ArchiveFile>(std::move(stream), size);
@@ -232,7 +245,9 @@ std::vector<LooseItem> loose_listing(const std::filesystem::path& directory) {
     if (!std::filesystem::is_directory(directory, error))
         return items;
     for (const auto& item : std::filesystem::directory_iterator(directory, error)) {
-        LooseItem entry{item.path().filename().string(), item.path(), item.is_directory(error), 0};
+        LooseItem entry{
+            utf8_text(item.path().filename()), item.path(), item.is_directory(error), 0
+        };
         if (!entry.directory && item.is_regular_file(error)) {
             const auto size = item.file_size(error);
             entry.size = error ? 0 : static_cast<uint32_t>(std::min<uintmax_t>(size, 0xFFFFFFFFU));
@@ -420,7 +435,7 @@ AssetStore::LooseIndex::listing(const std::string& key, const std::filesystem::p
     for (const auto& item : std::filesystem::directory_iterator(host, error)) {
         ++fresh.entry_count;
         auto [slot, inserted] =
-            fresh.children.try_emplace(normalized_path(item.path().filename().string()));
+            fresh.children.try_emplace(normalized_path(utf8_text(item.path().filename())));
         if (!inserted) {
             slot->second.ambiguous = true;
             continue;
@@ -516,7 +531,8 @@ bool AssetStore::try_mount(const std::filesystem::path& archive, std::string* er
     const auto absolute = std::filesystem::weakly_canonical(archive, status);
     std::string reason;
     if (status)
-        reason = "cannot resolve HPI archive path '" + archive.string() + "': " + status.message();
+        reason =
+            "cannot resolve HPI archive path '" + utf8_text(archive) + "': " + status.message();
     auto file = status ? nullptr : open_archive_file(absolute, reason);
     if (!file) {
         if (error != nullptr)
@@ -704,7 +720,7 @@ AssetStore::loose_path_listed_in(std::size_t root, const std::string& key) const
         // Windows ASCII case-insensitivity on case-sensitive hosts. Ambiguous
         // case collisions are rejected instead of choosing host order.
         for (const auto& item : std::filesystem::directory_iterator(loose, error)) {
-            if (normalized_path(item.path().filename().string()) == part) {
+            if (normalized_path(utf8_text(item.path().filename())) == part) {
                 if (match)
                     fail("ambiguous loose asset case: " + key);
                 match = item.path();
@@ -1125,7 +1141,7 @@ std::vector<std::string> AssetStore::list_resources(
             std::optional<std::filesystem::path> match;
             if (std::filesystem::is_directory(*loose))
                 for (const auto& item : std::filesystem::directory_iterator(*loose))
-                    if (normalized_path(item.path().filename().string()) == part) {
+                    if (normalized_path(utf8_text(item.path().filename())) == part) {
                         if (match)
                             fail("ambiguous loose asset directory: " + prefix);
                         match = item.path();
@@ -1161,8 +1177,10 @@ std::vector<std::string> AssetStore::list_resources(
             if (!item.is_regular_file() ||
                 (item.is_symlink(link_error) && !stays_inside(root, item.path())))
                 return;
+            // Keys spell names in UTF-8, as the lookups compare them.
+            const auto relative = item.path().lexically_relative(loose).generic_u8string();
             const auto key =
-                prefix + normalized_path(item.path().lexically_relative(loose).generic_string());
+                prefix + normalized_path(std::string(relative.begin(), relative.end()));
             if (matches(key)) {
                 if (!folder_keys.insert(key).second)
                     fail("ambiguous loose asset case: " + key);
@@ -1177,7 +1195,7 @@ std::vector<std::string> AssetStore::list_resources(
                  item != std::filesystem::recursive_directory_iterator();
                  ++item) {
                 if (at_top && item.depth() == 0 && item->is_directory() &&
-                    hidden_at_top(normalized_path(item->path().filename().string()))) {
+                    hidden_at_top(normalized_path(utf8_text(item->path().filename())))) {
                     item.disable_recursion_pending();
                     continue;
                 }

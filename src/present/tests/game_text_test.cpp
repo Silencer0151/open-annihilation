@@ -504,6 +504,10 @@ void breaks_lines_into_rows() {
     );
     // Every row holds a character, however narrow the room.
     OA_CHECK((rows_of("ab", 1) == std::vector<std::string>{"a", "b"}));
+    // Chinese breaks between any two characters after a space early in the
+    // row, and keeps the full-width comma off a row's start.
+    OA_CHECK((rows_of("ab 指挥官已阵亡", 15) == std::vector<std::string>{"ab 指挥", "官已阵亡"}));
+    OA_CHECK((rows_of("建造完成，单位", 12) == std::vector<std::string>{"建造完", "成，单位"}));
     // The borders take room: an outline and a shadow one pixel each.
     drawn.settings.style.outline = true;
     drawn.settings.style.shadow = true;
@@ -520,6 +524,33 @@ void breaks_lines_into_rows() {
     OA_CHECK(tail("a" + suns, 6) == 4 && tail("", 6) == 0);
     present::set_game_text_hooks({});
     OA_CHECK(tail("abcdef", 2) == 0);
+}
+
+void underlines_a_stretch() {
+    Drawn drawn{};
+    constexpr int32_t full = present::game_font_text_size;
+    const auto underline = [](std::string_view text, std::size_t from, std::size_t to) {
+        return present::modern_text_underline(text, present::TextFace::label, 1, full, from, to);
+    };
+    OA_CHECK(!underline("abcd", 1, 3));
+    present::set_game_text_hooks(three_pixel_hooks(drawn));
+    // Under the characters from the pen after the one before, on the
+    // line's lowest row: the dot's line holds three rows over a baseline at
+    // its third.
+    const auto middle = underline("abcd", 1, 3);
+    OA_CHECK(middle && middle->left == 3 && middle->width == 6);
+    OA_CHECK(middle && middle->row == 0 && middle->thickness == 1);
+    const std::string mixed = "a" + std::string(sun) + "b";
+    const auto hanzi = underline(mixed, 1, 1 + sun.size());
+    OA_CHECK(hanzi && hanzi->left == 3 && hanzi->width == 3);
+    const auto end = underline(mixed, 1, mixed.size());
+    OA_CHECK(end && end->left == 3 && end->width == 6);
+    // Twice the scale, twice the thickness.
+    const auto scaled =
+        present::modern_text_underline("abcd", present::TextFace::label, 2, full, 0, 1);
+    OA_CHECK(scaled && scaled->thickness == 2);
+    OA_CHECK(!underline("abcd", 2, 2) && !underline("abcd", 4, 6) && !underline("", 0, 1));
+    present::set_game_text_hooks({});
 }
 
 void reduces_colours_to_the_palette() {
@@ -550,6 +581,7 @@ int main() {
     draws_through_the_hooks();
     sizes_text_from_the_setting();
     breaks_lines_into_rows();
+    underlines_a_stretch();
     reduces_colours_to_the_palette();
     return oa::test::check_exit_status();
 }

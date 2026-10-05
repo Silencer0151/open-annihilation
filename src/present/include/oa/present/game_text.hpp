@@ -370,6 +370,35 @@ modern_text_fit(std::string_view text, TextFace face, int32_t scale, int32_t siz
 [[nodiscard]] std::size_t
 modern_text_tail(std::string_view text, TextFace face, int32_t scale, int32_t size, int32_t width);
 
+/// Where a stretch of a modern line is underlined, as the input method's
+/// composition is marked apart from the text already typed.
+struct TextUnderline {
+    int32_t left{};      ///< its first column, from the line's pen
+    int32_t width{};     ///< columns
+    int32_t row{};       ///< its first row, from the line's baseline
+    int32_t thickness{}; ///< rows
+};
+
+/// Gives where a stretch of a modern line is underlined: under its
+/// characters, on the line's lowest rows, as thick as its outline.
+///
+/// @param text UTF-8 text, the whole line
+/// @param face the game font it stands in for
+/// @param scale screen pixels to a game pixel
+/// @param size the text size, in percent
+/// @param from the stretch's first byte
+/// @param to the byte past the stretch's last
+/// @return the underline; none when the modern fonts cannot draw the line
+///         or the stretch holds no character
+[[nodiscard]] std::optional<TextUnderline> modern_text_underline(
+    std::string_view text,
+    TextFace face,
+    int32_t scale,
+    int32_t size,
+    std::size_t from,
+    std::size_t to
+);
+
 /// Where one row of a broken line lies in its text.
 struct TextRowSpan {
     std::size_t offset{}; ///< the row's first byte
@@ -379,9 +408,12 @@ struct TextRowSpan {
 /// Breaks a line of modern text into rows no wider than a width, as
 /// modern_text draws them with the borders the settings choose.
 ///
-/// A row ends at the last space that lets it fit; the spaces there belong
-/// to neither row. A word wider than a row is broken after its last
-/// character that fits, and every row holds at least one character.
+/// A row ends at the last place that lets it fit where it may break
+/// (oa::base::text::first_row): at a space, whose spaces belong to neither
+/// row, or between two Chinese, Japanese or Korean characters, never
+/// starting a row with a closing mark or ending one with an opening mark.
+/// A word wider than a row is broken after its last character that fits,
+/// and every row holds at least one character.
 ///
 /// @param text UTF-8 text
 /// @param face the game font it stands in for

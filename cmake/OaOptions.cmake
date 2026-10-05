@@ -12,8 +12,9 @@ if(NOT TARGET oa-options)
   add_library(oa::options ALIAS oa-options)
   if(MSVC)
     # No warning that a type was padded to the alignment alignas asks for,
-    # which is what alignas is for.
-    target_compile_options(oa-options INTERFACE /W4 /permissive- /wd4324)
+    # which is what alignas is for. The sources are UTF-8, and so are their
+    # strings, Chinese among them, whatever the machine's code page.
+    target_compile_options(oa-options INTERFACE /W4 /permissive- /wd4324 /utf-8)
   else()
     target_compile_options(oa-options INTERFACE -Wall -Wextra -Wpedantic)
   endif()

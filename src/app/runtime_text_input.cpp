@@ -5,6 +5,7 @@
 // on-screen keyboard (Steam's in Game Mode, the system's on a desktop)
 // opens clear of it, and an input method's candidates stand beside it.
 #include "oa/app/runtime.hpp"
+#include "oa/present/typed_text.hpp"
 #include <SDL3/SDL.h>
 
 #include <algorithm>
@@ -51,6 +52,8 @@ window_area(SDL_Renderer* renderer, const oa::ui::display_layout::Rect& field) {
 } // namespace
 
 void Runtime::start_text_input(std::optional<oa::ui::display_layout::Rect> field) {
+    // A field opening starts with no composition of the one before.
+    text_composition_.clear();
     if (sdl_.window == nullptr)
         return;
     // The field's place first, so that a keyboard opening with the input
@@ -66,8 +69,20 @@ void Runtime::start_text_input(std::optional<oa::ui::display_layout::Rect> field
 }
 
 void Runtime::stop_text_input() {
+    text_composition_.clear();
     if (sdl_.window != nullptr)
         SDL_StopTextInput(sdl_.window);
+}
+
+bool Runtime::take_composition_event(const SDL_Event& event) {
+    if (event.type == SDL_EVENT_TEXT_EDITING)
+        text_composition_ = oa::present::typed_characters(
+            event.edit.text != nullptr ? event.edit.text : "", oa::present::TypedCharacters::text
+        );
+    else if (event.type == SDL_EVENT_TEXT_INPUT)
+        text_composition_.clear();
+    return event.type == SDL_EVENT_KEY_DOWN && !text_composition_.empty() &&
+           event.key.key != SDLK_ESCAPE;
 }
 
 } // namespace oa::app

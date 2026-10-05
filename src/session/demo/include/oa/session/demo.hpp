@@ -271,6 +271,11 @@ struct DemoSession {
     uint32_t tick_errors{};
     std::string last_error;
     std::vector<std::string> lines; // chat and notices since the last drain
+    /// The viewer reads chat as UTF-8: a recorded line kept in UTF-8 shows
+    /// as it is, else in the code page (netgame::match::net_match_chat_text).
+    /// demo_session_begin passes it to the match; set it again while bound
+    /// through net.unicode_chat.
+    bool unicode_chat{};
     FullRecordStats full_records;
     std::vector<uint16_t> placed_type; // by unit slot: type at its last full record
     std::vector<FixedVec3> placed_at;  // by unit slot: position of that record

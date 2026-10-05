@@ -7,6 +7,7 @@
 #include "oa/formats/gaf.hpp"
 #include "oa/netgame/private_channel.hpp"
 #include "oa/netgame/records.hpp"
+#include "oa/netgame/unicode_chat.hpp"
 #include "oa/ui/frontend_multiplayer/connect.hpp"
 #include "oa/ui/frontend_multiplayer/dialogs.hpp"
 #include "oa/ui/frontend_multiplayer/lobby.hpp"
@@ -20,6 +21,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace mp = oa::ui::frontend_multiplayer;
@@ -1312,6 +1314,20 @@ void test_slot_cycle(const oa::ui::gui_layout::Layout& lounge) {
     expect(slot.status == mp::kSlotBlocked, "host click blocks an open slot");
     mp::lobby_update_status(f.lobby, f.panel);
     expect(mp::panel_text(f.panel, "PLAYER2") == "[BLOCKED]", "blocked slot label");
+    // In another language the labels are translated: BLOCKED inside its
+    // brackets.
+    f.lobby.services.translate = [](void*, const char* text) -> const char* {
+        const std::string_view english(text);
+        return english == "BLOCKED" ? "Gesperrt" : english == "UNUSED" ? "Unbenutzt" : nullptr;
+    };
+    mp::lobby_update_status(f.lobby, f.panel);
+    expect(
+        mp::panel_text(f.panel, "PLAYER2") == "[Gesperrt]" &&
+            mp::panel_text(f.panel, "PLAYER3") == "Unbenutzt",
+        "blocked and open slots' labels translated"
+    );
+    f.lobby.services.translate = nullptr;
+    mp::lobby_update_status(f.lobby, f.panel);
     expect(f.press("PLAYER2"), "PLAYER2 clickable when blocked");
     // The computer stays pending until the session announces its arrival.
     expect(
@@ -2307,6 +2323,37 @@ void test_game_list(const oa::AssetStore& assets) {
     expect(mp::panel_control(panel, "STATUS")->items[1] == "Lock", "closed game shows Lock");
     expect(mp::panel_control(panel, "METAL")->items[0] == "1000", "metal column in units");
     expect(mp::panel_control(panel, "COMMANDER")->items[0] == "Yes", "commander column");
+    // In another language the list's values are translated, and a map's name
+    // is lowered and looked up: one without a translation shows in lower case.
+    static bool map_translated = false;
+    oa::data::campaign::CampaignFiles german{};
+    german.language = "German";
+    lobby.services.files = &german;
+    lobby.services.translate = [](void*, const char* text) -> const char* {
+        const std::string_view english(text);
+        if (english == "Lock")
+            return "Gesperrt";
+        if (english == "Yes")
+            return "Ja";
+        if (english == "seven islands" && map_translated)
+            return "Sieben Inseln";
+        return nullptr;
+    };
+    expect(mp::game_list_update(lobby, state, panel), "game list refreshes in German");
+    expect(
+        mp::panel_control(panel, "STATUS")->items[1] == "Gesperrt" &&
+            mp::panel_control(panel, "COMMANDER")->items[0] == "Ja",
+        "game list's values translated"
+    );
+    expect(
+        mp::panel_control(panel, "MAPNAME")->items[0] == "seven islands",
+        "untranslated map name lowered"
+    );
+    map_translated = true;
+    expect(mp::game_list_update(lobby, state, panel), "game list refreshes again");
+    expect(mp::panel_control(panel, "MAPNAME")->items[0] == "Sieben Inseln", "map name translated");
+    lobby.services = test_services();
+    expect(mp::game_list_update(lobby, state, panel), "game list refreshes in English");
     expect(!mp::panel_control(panel, "JOINGAME")->grayed, "open game joinable");
     expect(!mp::panel_control(panel, "WATCH")->grayed, "watching allowed");
     // Ten games fit the columns' 160 pixels; the bar shows from the eleventh.
@@ -3843,6 +3890,71 @@ void test_recorder_in_the_battle_room() {
     );
 }
 
+// The battle room with Unicode chat on: the blocks it sends say so, and a
+// line goes to the machine whose block says UTF-8 in UTF-8 and to the one
+// whose block does not in the code page, '?' for each hanzi. A line from a
+// machine that says UTF-8 is read strictly. With the setting off, the line
+// goes once to everyone as typed and the blocks keep their chat bytes zero.
+void test_unicode_chat_in_the_battle_room() {
+    using oa::netgame::RecordType;
+    // U+4F60 U+597D in UTF-8.
+    const std::string hanzi = "\xe4\xbd\xa0\xe5\xa5\xbd";
+    constexpr uint32_t kEveryone = 0; // a broadcast's destination id
+    for (const bool on : {true, false}) {
+        Room host(true);
+        host.lobby.unicode_chat = on;
+        join_remote(host.lobby, kRoomThird);
+        const auto guest_slot = mp::slot_for_player_id(host.lobby, kRoomGuest);
+        oa::netgame::mark_unicode_chat(
+            reinterpret_cast<uint8_t*>(mp::slot_info(host.lobby, guest_slot)), true
+        );
+        mp::lobby_send_player_info(host.lobby);
+        const auto infos = host.sent(RecordType::player_info);
+        bool announced = !infos.empty();
+        for (const auto index : infos) {
+            const auto* chat =
+                host.loopback.sent[index] + 1 + oa::netgame::player_info_chat_signature_offset;
+            announced = announced && chat[0] == (on ? 'U' : 0) && chat[1] == (on ? '8' : 0) &&
+                        chat[2] == (on ? oa::netgame::chat_flag_utf8 : 0);
+        }
+        expect(announced, "the blocks say Unicode chat only while it is on");
+
+        host.loopback.sent_count = 0;
+        mp::lobby_say(host.lobby, mp::local_player(host.lobby), hanzi.c_str());
+        const auto chats = host.sent(RecordType::chat);
+        const auto text = [&](int32_t index) {
+            const auto* bytes = reinterpret_cast<const char*>(host.loopback.sent[index] + 1);
+            return std::string(bytes, ::strnlen(bytes, 64));
+        };
+        if (on) {
+            expect(
+                chats.size() == 2 && host.loopback.sent_to[chats[0]] == kRoomGuest &&
+                    text(chats[0]) == "<Host> " + hanzi &&
+                    host.loopback.sent_to[chats[1]] == kRoomThird && text(chats[1]) == "<Host> ??",
+                "each machine gets the line in the form it reads"
+            );
+        } else {
+            expect(
+                chats.size() == 1 && host.loopback.sent_to[chats[0]] == kEveryone &&
+                    text(chats[0]) == "<Host> " + hanzi,
+                "with the setting off the line goes once, as typed"
+            );
+        }
+
+        oa::netgame::ChatRecord malformed{};
+        std::memcpy(malformed.text, "<Guest> \xc0\xaf\xe4\xbd", 12);
+        (void)mp::lobby_apply_event(host.lobby, record_event(kRoomGuest, malformed));
+        auto& game = *host.game;
+        const auto head = mp::lobby_chat_head(game);
+        const std::string shown =
+            mp::lobby_chat_line(game, static_cast<std::size_t>(head + mp::kChatLines - 1));
+        expect(
+            shown == (on ? std::string("<Guest> ????") : std::string(malformed.text, 12)),
+            "a line from a machine that says UTF-8 is read strictly"
+        );
+    }
+}
+
 // The host's recorder commands typed as chat change the options on every
 // recorder; a guest's do not, and private lines are never shown.
 void test_recorder_commands_in_the_battle_room() {
@@ -5165,6 +5277,7 @@ int main(int argc, char** argv) {
         test_session_description();
         test_versioned_rules();
         test_recorder_in_the_battle_room();
+        test_unicode_chat_in_the_battle_room();
         test_recorder_commands_in_the_battle_room();
         test_recorder_prebuilt_base_in_the_battle_room();
         test_hot_surfaces();

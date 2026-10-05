@@ -3,6 +3,7 @@
 
 #include "oa/netgame/recorder_session.hpp"
 #include "oa/netgame/private_channel.hpp"
+#include "oa/base/text/line_break.hpp"
 
 #include <climits>
 #include <cstdint>
@@ -139,8 +140,13 @@ RecorderCommandLine parse_recorder_command(const char* line) noexcept {
         return out;
     auto rest = text;
     const auto first = next_word(rest);
-    const auto copied = first.size() < sizeof out.argument ? first.size() : sizeof out.argument - 1;
-    std::memcpy(out.argument, first.data(), copied);
+    // The argument keeps what fits, less a UTF-8 character the cut would
+    // split.
+    std::memcpy(
+        out.argument,
+        first.data(),
+        oa::base::text::whole_character_bytes(first, sizeof out.argument - 1)
+    );
     out.first = number_of(first);
     out.second = number_of(next_word(rest));
     const auto all = text.size() < sizeof out.arguments ? text.size() : sizeof out.arguments - 1;

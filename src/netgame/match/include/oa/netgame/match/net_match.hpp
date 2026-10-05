@@ -24,6 +24,8 @@
 
 #include <array>
 #include <cstddef>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace oa::netgame::match {
@@ -244,6 +246,18 @@ struct NetMatch {
     uint32_t commander_syncs_applied{}; ///< commander positions taken from a start sync
     uint32_t commander_syncs_sent{};    ///< start sync records sent
     bool sending_copies{};              ///< a broadcast goes out as one copy per machine
+    /// This machine sends and reads chat as UTF-8: its setup blocks say so
+    /// (oa::netgame::announce_unicode_chat) and each machine gets a line in
+    /// the form it reads (net_match_say). The app sets it; net_match_begin
+    /// clears it.
+    bool unicode_chat{};
+    /// The match plays a recording, whose lines from a player whose block
+    /// says UTF-8 chat are UTF-8 whatever this machine reads
+    /// (net_match_chat_text).
+    bool recorded_chat{};
+    /// The records the last line net_match_say sent went out as, in UTF-8,
+    /// when it went out as more than one; empty otherwise.
+    std::vector<std::string> said_parts;
     /// The recorder's claim on a silent player's units (sharing.recorder-take-give).
     RecorderTake take{};
     /// By unit slot, while sharing.recorder-take-give is on: each unit as the
@@ -698,9 +712,39 @@ void net_match_set_speed(NetMatch* match, int32_t speed, bool broadcast) noexcep
 /// nothing. The recorder then reads the line for its commands, so an answer
 /// follows the line that asked for it.
 ///
+/// With NetMatch::unicode_chat off the record carries the line's first 64
+/// bytes, cut between whole UTF-8 characters, as it always has. With it on
+/// the line is read as UTF-8 (oa::netgame::chat_utf8) and each machine gets
+/// it in the form it reads: UTF-8 where its setup block says so
+/// (oa::netgame::announces_unicode_chat), the code page with '?' elsewhere.
+/// A command ('+' or '.' first) goes as one record; another line longer
+/// than a record goes as up to four, each "<Name> " and a part
+/// (oa::netgame::chat_parts), which NetMatch::said_parts keeps. When the
+/// forms differ, the record_seen hook sees the UTF-8 form once and the
+/// copies go out with NetMatch::sending_copies set; a record all in ASCII
+/// reads the same in both forms and goes once, so a line all in ASCII that
+/// fits one record goes exactly as with the setting off.
+///
 /// @param[in,out] match Running match.
-/// @param text Line to send, truncated to 64 bytes; null sends an empty line.
+/// @param text Line to send, as this machine holds game text; null sends an
+///        empty line.
 void net_match_say(NetMatch* match, const char* text) noexcept;
+
+/// Gives a received chat line as this machine holds game text.
+///
+/// A line from a player whose setup block says UTF-8 chat is read strictly
+/// as UTF-8 (oa::netgame::chat_strict_utf8) while NetMatch::unicode_chat is
+/// on, and, from a recording (NetMatch::recorded_chat), written in the code
+/// page while it is off. Every other line is kept as it came, to be read in
+/// the code page, or as well-formed UTF-8 where it is that, while game text
+/// may hold UTF-8.
+///
+/// @param match The match the line reached.
+/// @param from The player it came from.
+/// @param bytes The line, up to its first zero byte.
+/// @return The line to show.
+[[nodiscard]] std::string
+net_match_chat_text(const NetMatch* match, const Player& from, std::string_view bytes);
 
 /// Tells the receiver's machine about energy or metal a local player gave, which has already moved here.
 ///

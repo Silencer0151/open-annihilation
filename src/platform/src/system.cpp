@@ -12,6 +12,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
@@ -78,9 +80,14 @@ void show_error_message(const char* message) noexcept {
 }
 
 bool append_error_log(const char* directory, const char* text) noexcept {
-    std::string path = directory != nullptr ? directory : "";
-    path += error_log_file_name;
-    std::FILE* log = open_file(path.c_str(), "ab");
+    std::FILE* log = nullptr;
+    try {
+        std::string path = directory != nullptr ? directory : "";
+        path += error_log_file_name;
+        log = open_file(std::filesystem::path(std::u8string(path.begin(), path.end())), "ab");
+    } catch (const std::exception&) {
+        return false;
+    }
     if (log == nullptr)
         return false;
     const std::size_t length = text != nullptr ? std::strlen(text) : 0;
