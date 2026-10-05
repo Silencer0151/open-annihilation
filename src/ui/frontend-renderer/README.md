@@ -56,7 +56,8 @@ focused record is ringed with the focus marker's six outlines, a pixel apart,
 lit through `PALETTE.LHT` levels 31, 28, 24, 19, 13 and 6 and clipped to the
 panel's root (`focus_rings`, shared with the gadget engine's own draw). Each
 ring pixel is lit as its palette entry, the nearest one for a colour off the
-palette. The frontend screens pass neither, and draw neither.
+palette. The frontend screens pass both, the focus only while the screen has
+the keyboard.
 
 Runtime image pointers are explicit presentation bindings. Dynamic `SIDEx`
 buttons and `ally icons` bind to the screen GAF, while player colors bind to
