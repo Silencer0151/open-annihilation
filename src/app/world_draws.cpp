@@ -14,6 +14,8 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <memory>
+#include <optional>
 #include <utility>
 
 namespace oa::app {
@@ -317,6 +319,7 @@ void clear_world_draws(WorldDrawList& list) {
     list.fragments.clear();
     list.decoded.clear();
     list.decoded_of.clear();
+    list.held.clear();
 }
 
 const oa::formats::gaf::RenderedFrame*
@@ -331,6 +334,95 @@ decoded_frame(WorldDrawList& list, const oa::formats::gaf::Frame& frame) {
     }
     list.decoded_of.emplace(&frame, decoded);
     return decoded;
+}
+
+bool draws_frame_by_frame(const oa::formats::gaf::Archive& checked, uint64_t threshold) noexcept {
+    return oa::formats::gaf::decoded_bytes(checked) > threshold;
+}
+
+GafFrameCache::GafFrameCache(std::size_t budget) noexcept : budget_bytes_(budget) {
+}
+
+std::shared_ptr<const oa::formats::gaf::RenderedFrame>
+GafFrameCache::find(const oa::formats::gaf::Frame* frame) {
+    const auto found = entries_.find(frame);
+    if (found == entries_.end())
+        return nullptr;
+    recent_.splice(recent_.begin(), recent_, found->second);
+    return found->second->rendered;
+}
+
+bool GafFrameCache::keep(
+    const oa::formats::gaf::Frame* frame,
+    std::shared_ptr<const oa::formats::gaf::RenderedFrame> rendered
+) {
+    if (const auto found = entries_.find(frame); found != entries_.end()) {
+        kept_bytes_ -= found->second->bytes;
+        recent_.erase(found->second);
+        entries_.erase(found);
+    }
+    if (rendered == nullptr)
+        return false;
+    const std::size_t bytes = rendered->pixels.size() + rendered->coverage.size();
+    if (bytes > budget_bytes_)
+        return false;
+    // The kept bytes never pass the budget, so the room left cannot wrap.
+    while (bytes > budget_bytes_ - kept_bytes_ && !recent_.empty()) {
+        kept_bytes_ -= recent_.back().bytes;
+        entries_.erase(recent_.back().frame);
+        recent_.pop_back();
+    }
+    recent_.push_front({frame, std::move(rendered), bytes});
+    entries_[frame] = recent_.begin();
+    kept_bytes_ += bytes;
+    return true;
+}
+
+void GafFrameCache::mark_failed(const oa::formats::gaf::Frame* frame) {
+    failed_.insert(frame);
+}
+
+bool GafFrameCache::failed(const oa::formats::gaf::Frame* frame) const {
+    return failed_.count(frame) != 0;
+}
+
+void GafFrameCache::clear() noexcept {
+    recent_.clear();
+    entries_.clear();
+    failed_.clear();
+    kept_bytes_ = 0;
+}
+
+const oa::formats::gaf::RenderedFrame* ranged_frame(
+    WorldDrawList& list,
+    GafFrameCache& cache,
+    const oa::formats::gaf::Frame& frame,
+    const oa::formats::gaf::ReadHooks& reader,
+    std::optional<oa::formats::gaf::Error>* failure
+) {
+    if (const auto found = list.decoded_of.find(&frame); found != list.decoded_of.end())
+        return found->second;
+    if (cache.failed(&frame)) {
+        list.decoded_of.emplace(&frame, nullptr);
+        return nullptr;
+    }
+    auto rendered = cache.find(&frame);
+    if (rendered == nullptr) {
+        auto result = oa::formats::gaf::render_ranged(frame, reader);
+        if (!result.ok()) {
+            cache.mark_failed(&frame);
+            if (failure != nullptr)
+                *failure = std::move(result.error);
+            list.decoded_of.emplace(&frame, nullptr);
+            return nullptr;
+        }
+        rendered =
+            std::make_shared<const oa::formats::gaf::RenderedFrame>(std::move(*result.frame));
+        (void)cache.keep(&frame, rendered);
+    }
+    list.held.push_back(rendered);
+    list.decoded_of.emplace(&frame, rendered.get());
+    return rendered.get();
 }
 
 void add_world_draw(WorldDrawList& list, WorldDrawKind kind, std::size_t index) {

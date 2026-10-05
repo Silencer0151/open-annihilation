@@ -1514,7 +1514,7 @@ void Runtime::render_match_surface() {
             item.frame < 0 || static_cast<std::size_t>(item.frame) >= item.sequence->frames.size())
             return;
         const auto* decoded =
-            decoded_frame(draw_list, item.sequence->frames[static_cast<std::size_t>(item.frame)]);
+            effect_frame(draw_list, *item.sequence, static_cast<std::size_t>(item.frame));
         if (decoded == nullptr)
             return;
         draw_list.sprites.push_back({decoded, screen});

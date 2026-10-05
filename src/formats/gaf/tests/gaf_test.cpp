@@ -3,9 +3,11 @@
 
 #include "oa/formats/gaf.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <exception>
 #include <iostream>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -380,6 +382,175 @@ void checked_parse_keeps_no_decoded_total() {
     );
 }
 
+/// The file a ranged render reads, the reads it made, and whether they fail.
+struct FileReads {
+    const std::vector<uint8_t>* file{};
+    std::size_t reads{};
+    bool fail{};
+};
+
+/// Copies bytes of the file a FileReads names; past its end, or when told
+/// to fail, reads nothing.
+bool read_file(void* context, uint32_t offset, std::span<uint8_t> output) {
+    auto& reads = *static_cast<FileReads*>(context);
+    ++reads.reads;
+    const auto& file = *reads.file;
+    if (reads.fail || offset > file.size() || output.size() > file.size() - offset)
+        return false;
+    std::copy_n(file.begin() + offset, output.size(), output.begin());
+    return true;
+}
+
+/// Checks that the first frame of a file renders from its byte ranges as it
+/// renders decoded, reading the file `expected_reads` times.
+void require_ranged_render_matches(
+    const std::vector<uint8_t>& bytes, std::size_t expected_reads, std::string_view message
+) {
+    const auto decoded = gaf::parse(bytes);
+    const auto checked = gaf::parse(bytes, gaf::PixelData::checked);
+    require(decoded.ok() && checked.ok(), message);
+    const auto& frame = checked.archive->sequences[0].frames[0];
+    FileReads reads{&bytes};
+    const auto ranged = gaf::render_ranged(frame, {&reads, read_file});
+    const auto normal = gaf::render_normal(decoded.archive->sequences[0].frames[0]);
+    require(ranged.ok() && normal.ok(), message);
+    require(
+        ranged.frame->width == normal.frame->width &&
+            ranged.frame->height == normal.frame->height &&
+            ranged.frame->origin_x == normal.frame->origin_x &&
+            ranged.frame->origin_y == normal.frame->origin_y &&
+            ranged.frame->transparency_index == normal.frame->transparency_index &&
+            ranged.frame->pixels == normal.frame->pixels &&
+            ranged.frame->coverage == normal.frame->coverage,
+        message
+    );
+    require(reads.reads == expected_reads, message);
+}
+
+// A raw frame: its pixel data is width * height bytes where its record
+// points, and it renders from them as decoded, the transparency index
+// left uncovered.
+void ranged_raw_frame() {
+    auto bytes = one_frame_file();
+    frame_header(bytes, 64, 3, 2, -2, 4, 9, false, 0, 0, 88);
+    for (std::size_t index = 0; index < 6; ++index)
+        bytes[88 + index] = static_cast<uint8_t>(index == 1 ? 9 : index + 1);
+    const auto checked = gaf::parse(bytes, gaf::PixelData::checked);
+    require(checked.ok(), "a raw frame did not parse");
+    const auto& frame = checked.archive->sequences[0].frames[0];
+    require(
+        frame.pixel_data_offset == 88 && frame.pixel_data_bytes == 6 && frame.pixels.empty(),
+        "a raw frame's pixel data range disagreed"
+    );
+    require_ranged_render_matches(bytes, 1, "a raw frame rendered from its range disagreed");
+}
+
+// A compressed frame: its pixel data is every row with its length word, an
+// empty row included.
+void ranged_compressed_frame() {
+    auto bytes = one_frame_file();
+    frame_header(bytes, 64, 6, 2, 1, 1, 0, true, 0, 0, 88);
+    // literal(2): 10,11; transparent(1); repeat(3): 7; then an empty row.
+    put16(bytes, 88, 6);
+    bytes[90] = 4;
+    bytes[91] = 10;
+    bytes[92] = 11;
+    bytes[93] = 3;
+    bytes[94] = 10;
+    bytes[95] = 7;
+    put16(bytes, 96, 0);
+    const auto checked = gaf::parse(bytes, gaf::PixelData::checked);
+    require(checked.ok(), "a compressed frame did not parse");
+    const auto& frame = checked.archive->sequences[0].frames[0];
+    require(
+        frame.pixel_data_offset == 88 && frame.pixel_data_bytes == 10,
+        "a compressed frame's pixel data range disagreed"
+    );
+    require_ranged_render_matches(bytes, 1, "a compressed frame rendered from its range disagreed");
+
+    // The rows read when the frame is drawn are decoded as parse decodes
+    // them: a literal run past the row's bytes is refused where it starts
+    // in the file.
+    auto changed = bytes;
+    changed[90] = 0xfc;
+    FileReads reads{&changed};
+    const auto refused = gaf::render_ranged(frame, {&reads, read_file});
+    require(
+        !refused.ok() && refused.error->code == gaf::ErrorCode::malformed_compression &&
+            refused.error->offset == 90,
+        "rows that no longer decode were drawn"
+    );
+}
+
+// A frame of two layers, each read on its own: raw layers clipped at the
+// frame's edge and placed by their origins, and a raw layer under a
+// compressed one whose literal of the transparency index still covers it.
+void ranged_layered_frame() {
+    auto bytes = one_frame_file();
+    frame_header(bytes, 64, 4, 3, 2, 1, 0, false, 2, 0, 88);
+    put32(bytes, 88, 96);
+    put32(bytes, 92, 128);
+    frame_header(bytes, 96, 3, 2, 3, 1, 0, false, 0, 0, 160);
+    for (std::size_t index = 0; index < 6; ++index)
+        bytes[160 + index] = static_cast<uint8_t>(index == 4 ? 0 : index + 1);
+    frame_header(bytes, 128, 2, 2, 0, 0, 9, false, 0, 0, 166);
+    bytes[166] = 7;
+    bytes[167] = 9;
+    bytes[168] = 8;
+    bytes[169] = 5;
+    require_ranged_render_matches(bytes, 2, "raw layers rendered from their ranges disagreed");
+
+    auto mixed = one_frame_file();
+    frame_header(mixed, 64, 3, 1, 0, 0, 0, false, 2, 0, 88);
+    put32(mixed, 88, 96);
+    put32(mixed, 92, 128);
+    frame_header(mixed, 96, 3, 1, 0, 0, 0, false, 0, 0, 152);
+    mixed[152] = 7;
+    mixed[153] = 7;
+    mixed[154] = 7;
+    frame_header(mixed, 128, 3, 1, 0, 0, 9, true, 0, 0, 155);
+    put16(mixed, 155, 5);
+    mixed[157] = 0;
+    mixed[158] = 9;
+    mixed[159] = 3;
+    mixed[160] = 6;
+    mixed[161] = 9;
+    require_ranged_render_matches(
+        mixed, 2, "a raw and a compressed layer rendered from their ranges disagreed"
+    );
+
+    const auto checked = gaf::parse(mixed, gaf::PixelData::checked);
+    require(
+        checked.ok() && gaf::decoded_bytes(checked.archive->sequences[0].frames[0]) == 12 &&
+            gaf::decoded_bytes(*checked.archive) == 12,
+        "the decoded bytes of a layered frame disagreed"
+    );
+}
+
+// A read that fails, or no read at all, renders nothing.
+void ranged_failed_read() {
+    auto bytes = one_frame_file();
+    frame_header(bytes, 64, 2, 1, 0, 0, 0, false, 0, 0, 88);
+    bytes[88] = 3;
+    bytes[89] = 4;
+    const auto checked = gaf::parse(bytes, gaf::PixelData::checked);
+    require(checked.ok(), "a raw frame did not parse");
+    const auto& frame = checked.archive->sequences[0].frames[0];
+    FileReads reads{&bytes};
+    reads.fail = true;
+    const auto failed = gaf::render_ranged(frame, {&reads, read_file});
+    require(
+        !failed.ok() && failed.error->code == gaf::ErrorCode::unreadable &&
+            failed.error->offset == 88 && reads.reads == 1,
+        "a frame whose read failed was rendered"
+    );
+    const auto unread = gaf::render_ranged(frame, gaf::ReadHooks{});
+    require(
+        !unread.ok() && unread.error->code == gaf::ErrorCode::unreadable,
+        "a frame with no read was rendered"
+    );
+}
+
 } // namespace
 
 int main() {
@@ -392,6 +563,10 @@ int main() {
         malformed_and_bounded_inputs();
         frame_bounds_come_before_decoding();
         checked_parse_keeps_no_decoded_total();
+        ranged_raw_frame();
+        ranged_compressed_frame();
+        ranged_layered_frame();
+        ranged_failed_read();
     } catch (const std::exception& error) {
         std::cerr << "sprite-format test failure: " << error.what() << '\n';
         return 1;

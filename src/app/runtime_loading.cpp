@@ -273,6 +273,9 @@ void Runtime::teardown_match() {
     // Its models and radar are keyed by address; a later match can reuse the
     // addresses, and so can the sprite pages' frames.
     match_models_.reset();
+    // The explosion frames rendered for its draws go too; the files they
+    // were read from stay checked for the next match.
+    explosion_frame_cache_.reset();
     free_full_match_state();
     // Each 3D feature's cached image and silhouette go with the match's
     // renderer, as they did when the renderer kept them.

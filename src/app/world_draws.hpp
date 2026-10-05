@@ -11,7 +11,9 @@
 // frame alone (draw_world_band), reading the list and the models and
 // writing only its rows of the frame and of the model bridge, so that the
 // bands give the frame drawn whole byte for byte, one after another or at
-// the same time.
+// the same time. A large explosion file is drawn a frame at a time: each of
+// its frames is rendered from the file's bytes as it is drawn, through a
+// cache of rendered frames with a budget of bytes (GafFrameCache).
 #pragma once
 
 #include "oa/core/world.h"
@@ -31,7 +33,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <list>
+#include <memory>
+#include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace oa::app {
@@ -269,6 +275,10 @@ struct WorldDrawList {
     /// The decoded frame of each GAF frame, by the GAF frame's address.
     std::unordered_map<const oa::formats::gaf::Frame*, const oa::formats::gaf::RenderedFrame*>
         decoded_of;
+    /// Frames of files drawn a frame at a time that this frame's draws use
+    /// (ranged_frame), held so that the cache may let them go while the
+    /// frame is drawn.
+    std::vector<std::shared_ptr<const oa::formats::gaf::RenderedFrame>> held;
 };
 
 /// Empties a draw list for the next frame, keeping its buffers.
@@ -320,6 +330,130 @@ void set_frame_shadows(
 /// @return the decoded frame, or null when it cannot be decoded
 const oa::formats::gaf::RenderedFrame*
 decoded_frame(WorldDrawList& list, const oa::formats::gaf::Frame& frame);
+
+/// Bytes of decoded pixels and coverage past which an explosion file is drawn
+/// a frame at a time (draws_frame_by_frame): 16 MiB. The largest 3.1c
+/// explosion file decodes to 2.5 MB.
+inline constexpr uint64_t frame_by_frame_decoded_bytes = 16U * 1024U * 1024U;
+
+/// Bytes of rendered frames a GafFrameCache keeps unless told otherwise:
+/// 32 MiB, room for one frame of the largest a GAF holds, 4096 pixels square.
+inline constexpr std::size_t gaf_frame_cache_bytes = 32U * 1024U * 1024U;
+
+/// Tells whether a file is drawn a frame at a time, each frame rendered from
+/// the file's bytes as it is drawn, rather than each sequence decoded whole
+/// and kept: whether its pixels and coverage, decoded, take more than a
+/// threshold.
+///
+/// @param checked the file, parsed with or without its pixels
+/// @param threshold decoded bytes past which the file is drawn a frame at a time
+/// @return true for a file over the threshold
+[[nodiscard]] bool draws_frame_by_frame(
+    const oa::formats::gaf::Archive& checked, uint64_t threshold = frame_by_frame_decoded_bytes
+) noexcept;
+
+/// Rendered frames of files drawn a frame at a time, kept from one frame's
+/// draws to the next while together they fit a budget of bytes; to make
+/// room, the frame drawn longest ago goes first. Frames are known by the
+/// address of their GAF frame record, so the cache is cleared whenever the
+/// records it was filled from go. It also remembers the frames that failed
+/// to render, so that they are not read again.
+class GafFrameCache {
+  public:
+
+    /// Creates an empty cache.
+    ///
+    /// @param budget most bytes of rendered pixels and coverage kept
+    explicit GafFrameCache(std::size_t budget = gaf_frame_cache_bytes) noexcept;
+
+    /// Returns a kept frame, which becomes the one drawn most recently.
+    ///
+    /// @param frame the GAF frame's record
+    /// @return the rendered frame, or null when it is not kept
+    [[nodiscard]] std::shared_ptr<const oa::formats::gaf::RenderedFrame>
+    find(const oa::formats::gaf::Frame* frame);
+
+    /// Keeps a rendered frame as the one drawn most recently, letting the
+    /// frames drawn longest ago go until it fits the budget. A frame larger
+    /// than the whole budget is not kept, and nothing goes for it.
+    ///
+    /// @param frame the GAF frame's record; a frame kept already is replaced
+    /// @param rendered the frame rendered
+    /// @return true when the frame is kept
+    bool keep(
+        const oa::formats::gaf::Frame* frame,
+        std::shared_ptr<const oa::formats::gaf::RenderedFrame> rendered
+    );
+
+    /// Remembers that a frame failed to render.
+    ///
+    /// @param frame the GAF frame's record
+    void mark_failed(const oa::formats::gaf::Frame* frame);
+
+    /// Tells whether a frame failed to render.
+    ///
+    /// @param frame the GAF frame's record
+    /// @return true once mark_failed named it, until the cache is cleared
+    [[nodiscard]] bool failed(const oa::formats::gaf::Frame* frame) const;
+
+    /// Lets every frame go and forgets the frames that failed.
+    void clear() noexcept;
+
+    /// Returns the bytes of rendered pixels and coverage kept.
+    ///
+    /// @return at most budget_bytes()
+    [[nodiscard]] std::size_t kept_bytes() const noexcept { return kept_bytes_; }
+
+    /// Returns how many frames are kept.
+    ///
+    /// @return the count
+    [[nodiscard]] std::size_t kept_frames() const noexcept { return recent_.size(); }
+
+    /// Returns the most bytes the cache keeps.
+    ///
+    /// @return the budget
+    [[nodiscard]] std::size_t budget_bytes() const noexcept { return budget_bytes_; }
+
+  private:
+
+    /// A kept frame and the bytes it takes.
+    struct Entry {
+        const oa::formats::gaf::Frame* frame{};
+        std::shared_ptr<const oa::formats::gaf::RenderedFrame> rendered;
+        std::size_t bytes{};
+    };
+
+    std::size_t budget_bytes_{};
+    std::size_t kept_bytes_{};
+    std::list<Entry> recent_; ///< the frame drawn most recently first
+    std::unordered_map<const oa::formats::gaf::Frame*, std::list<Entry>::iterator> entries_;
+    std::unordered_set<const oa::formats::gaf::Frame*> failed_;
+};
+
+/// Returns a frame of a file drawn a frame at a time, rendered for a frame's
+/// draws: the cache's copy, else the frame rendered from the file's bytes
+/// (oa::formats::gaf::render_ranged) and kept in the cache.
+///
+/// The list holds the frame until it is cleared, so that the cache may let
+/// it go while the frame is drawn. A frame larger than the cache's whole
+/// budget is rendered for these draws alone and rendered again when drawn
+/// again. A frame that fails to render is remembered by the cache and not
+/// read again.
+///
+/// @param[in,out] list the frame's list, which holds the rendered frame
+/// @param[in,out] cache the frames kept from one frame's draws to the next
+/// @param frame the GAF frame, from a parse of the file without its pixels
+/// @param reader where the file's bytes are read from
+/// @param[out] failure receives the error of a frame that fails to render
+///     for the first time; may be null
+/// @return the rendered frame, or null when it cannot be rendered
+const oa::formats::gaf::RenderedFrame* ranged_frame(
+    WorldDrawList& list,
+    GafFrameCache& cache,
+    const oa::formats::gaf::Frame& frame,
+    const oa::formats::gaf::ReadHooks& reader,
+    std::optional<oa::formats::gaf::Error>* failure = nullptr
+);
 
 /// Adds a draw of a kind to the end of a list.
 ///

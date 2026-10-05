@@ -178,7 +178,16 @@ logs it.
   a feature sequence's pixels are decoded from its file when a feature first
   draws it, and the map's sprite features' sequences once each, as the first
   of them is placed. A 3DO model the map's features share is loaded once.
-  The collision plots go once the match holds its own copy.
+  The collision plots go once the match holds its own copy. The weapons'
+  explosion files are read and checked the same way before the match
+  starts (`load_explosion_gaf`); a sequence is decoded whole the first time
+  an explosion asks for it (`explosion_sequence`), and one that cannot be
+  decoded is reported once and not read again. A file whose pixels would
+  decode past 16 MiB is never decoded whole: the simulation gets its checked
+  sequences, of which it reads only frame counts, durations and repeat
+  flags, and each frame is rendered from the file's bytes as it is drawn,
+  through a cache of 32 MiB that lets the frame drawn longest ago go first
+  (`effect_frame`, `GafFrameCache` in `world_draws.hpp`).
 - `world_draws.hpp`, `world_draws.cpp`, `runtime_match_render.cpp`: the
   battlefield drawn in horizontal bands. `render_match_surface` first works
   out the frame's draws in their order (`WorldDrawList` in `MatchModels`):

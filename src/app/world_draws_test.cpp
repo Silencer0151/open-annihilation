@@ -11,7 +11,11 @@
 // own pixels, as the game always draws them. A feature's shadow frame,
 // drawn or blended, mixes from the ground toward the game's shadow by the
 // frame's shadow level and is not drawn at level 0; a frame's shadows are
-// set from its zoom (set_frame_shadows).
+// set from its zoom (set_frame_shadows). A file drawn a frame at a time is
+// one over the decoded threshold; its frames render from the file's bytes as
+// decoded, through a cache that keeps them within its budget, the frame
+// drawn longest ago going first, draws a frame larger than its budget
+// without keeping it, and does not read a frame that failed again.
 #include "world_draws.hpp"
 
 #include "oa/platform/job_pool.hpp"
@@ -19,11 +23,14 @@
 #include "oa/present/surface.hpp"
 #include "oa/test/check.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
+#include <optional>
+#include <span>
 #include <vector>
 
 namespace {
@@ -381,11 +388,213 @@ void test_frame_shadows() {
     }
 }
 
+namespace gaf = oa::formats::gaf;
+
+/// Writes a little-endian value of `bytes` bytes at `at`.
+void put_le(std::vector<uint8_t>& file, std::size_t at, uint32_t value, std::size_t bytes) {
+    for (std::size_t index = 0; index < bytes; ++index)
+        file[at + index] = static_cast<uint8_t>(value >> (8U * index));
+}
+
+/// Returns a GAF file of one sequence of raw square frames, each as many
+/// pixels across as its side, the pixels of frame i counting up from i, with
+/// palette index 0 transparent.
+///
+/// @param sides each frame's side, in pixels
+/// @return the file's bytes
+std::vector<uint8_t> raw_frames_file(std::span<const uint16_t> sides) {
+    constexpr std::size_t list_at = 56;
+    constexpr std::size_t list_item_bytes = 8;
+    constexpr std::size_t record_bytes = 24;
+    const std::size_t records_at = list_at + sides.size() * list_item_bytes;
+    std::size_t pixels_at = records_at + sides.size() * record_bytes;
+    std::vector<uint8_t> file(pixels_at);
+    put_le(file, 0, 0x00010100U, 4);
+    put_le(file, 4, 1, 4);
+    put_le(file, 12, 16, 4);
+    put_le(file, 16, static_cast<uint32_t>(sides.size()), 2);
+    for (std::size_t frame = 0; frame < sides.size(); ++frame) {
+        const std::size_t record_at = records_at + frame * record_bytes;
+        put_le(file, list_at + frame * list_item_bytes, static_cast<uint32_t>(record_at), 4);
+        put_le(file, list_at + frame * list_item_bytes + 4, 2, 4);
+        put_le(file, record_at, sides[frame], 2);
+        put_le(file, record_at + 2, sides[frame], 2);
+        put_le(file, record_at + 16, static_cast<uint32_t>(pixels_at), 4);
+        const std::size_t pixel_count = std::size_t{sides[frame]} * sides[frame];
+        for (std::size_t pixel = 0; pixel < pixel_count; ++pixel)
+            file.push_back(static_cast<uint8_t>(frame + pixel));
+        pixels_at += pixel_count;
+    }
+    return file;
+}
+
+/// The file a ranged render reads, the reads it made and whether they fail.
+struct FileReads {
+    const std::vector<uint8_t>* file{};
+    std::size_t reads{};
+    bool fail{};
+};
+
+/// Copies bytes of the file a FileReads names; past its end, or when told
+/// to fail, reads nothing.
+bool read_file(void* context, uint32_t offset, std::span<uint8_t> output) {
+    auto& reads = *static_cast<FileReads*>(context);
+    ++reads.reads;
+    const auto& file = *reads.file;
+    if (reads.fail || offset > file.size() || output.size() > file.size() - offset)
+        return false;
+    std::copy_n(file.begin() + offset, output.size(), output.begin());
+    return true;
+}
+
+/// Returns a rendered frame, all its pixels covered.
+///
+/// @param width pixels across
+/// @param height pixels down
+/// @return the frame, 2 bytes a pixel
+std::shared_ptr<const gaf::RenderedFrame> covered_frame(uint16_t width, uint16_t height) {
+    const std::size_t pixels = std::size_t{width} * height;
+    return std::make_shared<const gaf::RenderedFrame>(gaf::RenderedFrame{
+        width, height, 0, 0, 0, std::vector<uint8_t>(pixels, 1), std::vector<uint8_t>(pixels, 1)
+    });
+}
+
+/// A file is drawn a frame at a time once its pixels and coverage, decoded,
+/// take more than the threshold.
+void test_frame_by_frame_threshold() {
+    const std::array<uint16_t, 2> sides{4, 2};
+    const auto parsed = gaf::parse(raw_frames_file(sides), gaf::PixelData::checked);
+    OA_CHECK(parsed.ok());
+    if (!parsed.ok())
+        return;
+    // 16 and 4 pixels, 2 bytes each.
+    OA_CHECK(gaf::decoded_bytes(*parsed.archive) == 40);
+    OA_CHECK(oa::app::draws_frame_by_frame(*parsed.archive, 39));
+    OA_CHECK(!oa::app::draws_frame_by_frame(*parsed.archive, 40));
+    OA_CHECK(!oa::app::draws_frame_by_frame(*parsed.archive));
+}
+
+/// An empty cache holds nothing and knows no failed frame.
+void test_frame_cache_empty() {
+    oa::app::GafFrameCache cache(100);
+    const gaf::Frame frame{};
+    OA_CHECK(cache.find(&frame) == nullptr);
+    OA_CHECK(!cache.failed(&frame));
+    OA_CHECK(cache.kept_bytes() == 0 && cache.kept_frames() == 0);
+    OA_CHECK(cache.budget_bytes() == 100);
+    cache.clear();
+    OA_CHECK(cache.kept_bytes() == 0 && cache.kept_frames() == 0);
+}
+
+/// A frame larger than the whole budget is not kept, and nothing kept goes
+/// for it.
+void test_frame_cache_over_budget() {
+    oa::app::GafFrameCache cache(40);
+    const std::array<gaf::Frame, 2> frames{};
+    OA_CHECK(cache.keep(&frames[0], covered_frame(4, 4)));
+    OA_CHECK(!cache.keep(&frames[1], covered_frame(5, 5)));
+    OA_CHECK(cache.find(&frames[1]) == nullptr);
+    OA_CHECK(cache.find(&frames[0]) != nullptr);
+    OA_CHECK(cache.kept_bytes() == 32 && cache.kept_frames() == 1);
+}
+
+/// To make room, the frame drawn longest ago goes first; finding a frame
+/// counts as drawing it.
+void test_frame_cache_order() {
+    // Room for three frames of 2 by 2, 8 bytes each.
+    oa::app::GafFrameCache cache(24);
+    const std::array<gaf::Frame, 4> frames{};
+    for (std::size_t index = 0; index < 3; ++index)
+        OA_CHECK(cache.keep(&frames[index], covered_frame(2, 2)));
+    OA_CHECK(cache.find(&frames[0]) != nullptr);
+    OA_CHECK(cache.keep(&frames[3], covered_frame(2, 2)));
+    OA_CHECK(cache.find(&frames[1]) == nullptr);
+    OA_CHECK(cache.find(&frames[0]) != nullptr);
+    OA_CHECK(cache.find(&frames[2]) != nullptr);
+    OA_CHECK(cache.find(&frames[3]) != nullptr);
+    OA_CHECK(cache.kept_bytes() == 24 && cache.kept_frames() == 3);
+    // A larger frame lets as many go as it needs, longest ago first: 2,
+    // then 3, were drawn before 0.
+    OA_CHECK(cache.find(&frames[2]) != nullptr);
+    OA_CHECK(cache.find(&frames[3]) != nullptr);
+    OA_CHECK(cache.find(&frames[0]) != nullptr);
+    OA_CHECK(cache.keep(&frames[1], covered_frame(4, 2)));
+    OA_CHECK(cache.find(&frames[2]) == nullptr && cache.find(&frames[3]) == nullptr);
+    OA_CHECK(cache.find(&frames[0]) != nullptr && cache.find(&frames[1]) != nullptr);
+    OA_CHECK(cache.kept_bytes() == 24 && cache.kept_frames() == 2);
+    cache.clear();
+    OA_CHECK(cache.find(&frames[0]) == nullptr && cache.kept_bytes() == 0);
+}
+
+/// Frames of a file drawn a frame at a time render from the file as they
+/// render decoded, each read once while the cache keeps it; one larger than
+/// the budget is drawn and read again for each frame's draws, a frame the
+/// cache let go stays whole while the draws that use it hold it, and a
+/// frame that failed is not read again.
+void test_ranged_frames() {
+    const std::array<uint16_t, 3> sides{4, 8, 4};
+    const auto file = raw_frames_file(sides);
+    const auto checked = gaf::parse(file, gaf::PixelData::checked);
+    const auto decoded = gaf::parse(file);
+    OA_CHECK(checked.ok() && decoded.ok());
+    if (!checked.ok() || !decoded.ok())
+        return;
+    const auto& frames = checked.archive->sequences[0].frames;
+    const auto rendered_as_decoded = [&](const gaf::RenderedFrame* rendered, std::size_t index) {
+        const auto normal = gaf::render_normal(decoded.archive->sequences[0].frames[index]);
+        return rendered != nullptr && normal.ok() && rendered->pixels == normal.frame->pixels &&
+               rendered->coverage == normal.frame->coverage;
+    };
+    FileReads reads{&file};
+    const gaf::ReadHooks reader{&reads, read_file};
+    // Room for one frame of 4 by 4, 32 bytes.
+    oa::app::GafFrameCache cache(32);
+    oa::app::WorldDrawList list;
+    const auto* first = oa::app::ranged_frame(list, cache, frames[0], reader);
+    OA_CHECK(rendered_as_decoded(first, 0));
+    OA_CHECK(oa::app::ranged_frame(list, cache, frames[0], reader) == first);
+    OA_CHECK(reads.reads == 1 && cache.kept_frames() == 1);
+    const auto* large = oa::app::ranged_frame(list, cache, frames[1], reader);
+    OA_CHECK(rendered_as_decoded(large, 1));
+    OA_CHECK(reads.reads == 2 && cache.kept_frames() == 1 && list.held.size() == 2);
+
+    oa::app::clear_world_draws(list);
+    OA_CHECK(list.held.empty());
+    OA_CHECK(rendered_as_decoded(oa::app::ranged_frame(list, cache, frames[0], reader), 0));
+    OA_CHECK(reads.reads == 2);
+    OA_CHECK(rendered_as_decoded(oa::app::ranged_frame(list, cache, frames[1], reader), 1));
+    OA_CHECK(reads.reads == 3);
+    // Frame 2 takes frame 0's place in the cache; the draws still hold 0.
+    const auto* held = oa::app::ranged_frame(list, cache, frames[0], reader);
+    OA_CHECK(rendered_as_decoded(oa::app::ranged_frame(list, cache, frames[2], reader), 2));
+    OA_CHECK(cache.kept_frames() == 1 && cache.find(&frames[0]) == nullptr);
+    OA_CHECK(rendered_as_decoded(held, 0));
+
+    oa::app::clear_world_draws(list);
+    cache.clear();
+    reads.fail = true;
+    std::optional<gaf::Error> failure;
+    OA_CHECK(oa::app::ranged_frame(list, cache, frames[0], reader, &failure) == nullptr);
+    OA_CHECK(failure.has_value() && failure->code == gaf::ErrorCode::unreadable);
+    OA_CHECK(cache.failed(&frames[0]));
+    const auto reads_before = reads.reads;
+    oa::app::clear_world_draws(list);
+    reads.fail = false;
+    failure.reset();
+    OA_CHECK(oa::app::ranged_frame(list, cache, frames[0], reader, &failure) == nullptr);
+    OA_CHECK(!failure.has_value() && reads.reads == reads_before);
+}
+
 } // namespace
 
 int main() {
     test_thin_lines_in_bands();
     test_feature_shadows();
     test_frame_shadows();
+    test_frame_by_frame_threshold();
+    test_frame_cache_empty();
+    test_frame_cache_over_budget();
+    test_frame_cache_order();
+    test_ranged_frames();
     return oa::test::check_exit_status();
 }

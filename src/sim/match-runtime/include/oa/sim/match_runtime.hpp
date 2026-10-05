@@ -195,7 +195,9 @@ struct OfflineInputs {
     float tidal_strength{};
     std::span<const oa::FeatureDef> feature_defs{}; // indexed by the plot feature words
     // Named entry of a loaded GAF archive (the effect and weapon explosion
-    // entries resolve at load); an empty archive is FX.GAF.
+    // entries resolve at load); an empty archive is FX.GAF. The simulation
+    // reads only a sequence's frame count, its frames' durations and its
+    // repeat flags, never its pixels, so a sequence may come without them.
     std::function<const formats::gaf::Sequence*(std::string_view archive, std::string_view entry)>
         effect_sequence{};
     // One frame of a GAF sequence the FeatureDef table references (the refs

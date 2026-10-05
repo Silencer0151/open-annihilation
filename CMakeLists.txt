@@ -735,7 +735,10 @@ if(BUILD_TESTING)
   # the same on 1 to 8 bands and drawing threads; 1 pixel thick, the line's
   # own pixels. A feature's shadow frame mixed toward the game's shadow by
   # the frame's shadow level and left out at 0, and a frame's shadows set
-  # from its zoom.
+  # from its zoom. A file over the decoded threshold drawn a frame at a
+  # time, its frames rendered from its bytes through the frame cache: its
+  # budget, the frame drawn longest ago going first, a frame over the
+  # budget drawn without being kept, and a failed frame not read again.
   add_executable(oa-app-world-draws-test src/app/world_draws_test.cpp src/app/world_draws.cpp)
   target_link_libraries(oa-app-world-draws-test PRIVATE oa-present oa-present-model
     oa-present-world-renderer oa-formats-gaf oa-sim-effect-particles oa-sim-model-runtime

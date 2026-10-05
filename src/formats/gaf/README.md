@@ -24,10 +24,16 @@ clipping relationship.
 `parse` keeps every simple frame's decoded pixels and coverage by default.
 With `PixelData::checked` it decodes and checks them all the same, so a file
 parses or fails exactly as it would, and keeps none: the archive holds each
-frame's size, origin, duration and layers. `parse_sequence` then decodes one
-sequence of the file, by its place in the sequence table, with its pixels,
-for a reader that draws a few of a large file's sequences, as the map's
-features do.
+frame's size, origin, duration and layers, and where each simple frame's
+pixel data lies in the file (`pixel_data_offset`, `pixel_data_bytes`).
+`parse_sequence` then decodes one sequence of the file, by its place in the
+sequence table, with its pixels, for a reader that draws a few of a large
+file's sequences, as the map's features do. `render_ranged` renders one
+frame, with its layers, reading each simple frame's pixel data through the
+caller's `ReadHooks` and decoding it as `parse` does, so that it gives what
+`render_normal` gives for the frame decoded; a reader draws a file too large
+to decode whole that way, a frame at a time. `decoded_bytes` tells what a
+frame or a file's pixels and coverage take decoded.
 
 `render_normal` models normal drawing. Special rendering and its blend table
 are not implemented, so a special child is reported as

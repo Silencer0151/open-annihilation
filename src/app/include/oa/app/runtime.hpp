@@ -145,6 +145,7 @@ PaletteBytes load_active_palette(const AssetStore& assets);
 struct MatchConsole;
 struct MatchModels;
 struct WorldDrawList;
+class GafFrameCache;
 class RendererHost;
 struct FolderOpening;
 struct ModStartGaps;
@@ -2283,19 +2284,43 @@ class Runtime final : public menu::Host,
     /// again. A missing file has no sequences; 3.1c stops with a fatal error
     /// there.
     ///
+    /// A file whose pixels would decode past frame_by_frame_decoded_bytes is
+    /// drawn a frame at a time: its sequence is the one checked at load,
+    /// with each frame's size, origin and duration and no pixels, which is
+    /// all the simulation reads of an explosion's sequence, and each frame
+    /// is rendered from the file as it is drawn (effect_frame).
+    ///
     /// @param archive animation file name without extension, any case
     /// @param entry sequence name
-    /// @return the decoded sequence, or null when the file or entry is
-    ///     missing or the sequence cannot be decoded
+    /// @return the decoded sequence, the checked one of a file drawn a
+    ///     frame at a time, or null when the file or entry is missing or the
+    ///     sequence cannot be decoded
     const oa::formats::gaf::Sequence*
     explosion_sequence(std::string_view archive, std::string_view entry);
 
     /// Reads and checks anims/<name>.gaf on first use, keeping the path it
     /// was read from and its sequences without pixels, not its bytes; a
     /// damaged file is reported on stderr once and then has no sequences.
+    /// A file over frame_by_frame_decoded_bytes decoded is marked to be
+    /// drawn a frame at a time.
     ///
     /// @param name animation file name without extension, any case
     void load_explosion_gaf(std::string_view name);
+
+    /// Returns a frame of an effect's sequence rendered for a frame's draws.
+    ///
+    /// A frame of an explosion file drawn a frame at a time is rendered from
+    /// the file's bytes through the explosion frame cache (ranged_frame),
+    /// the first failure of each such file reported on stderr once; any
+    /// other frame is decoded for the draws (decoded_frame).
+    ///
+    /// @param[in,out] list the frame's draws, which keep the rendered frame
+    /// @param sequence the effect's sequence
+    /// @param index frame index, below the sequence's frame count
+    /// @return the rendered frame, or null when it cannot be rendered
+    const oa::formats::gaf::RenderedFrame* effect_frame(
+        WorldDrawList& list, const oa::formats::gaf::Sequence& sequence, std::size_t index
+    );
 
     /// Appends the sequences of a GAF file to an archive.
     ///
@@ -12049,11 +12074,23 @@ class Runtime final : public menu::Host,
         /// The places of the sequences that could not be read or decoded;
         /// each was reported once and is not read again.
         std::set<std::size_t> failed;
+        /// The file is drawn a frame at a time: its sequences are handed
+        /// out as checked, and their frames are rendered as they are drawn.
+        bool frame_by_frame{};
+        /// A frame of the file drawn a frame at a time failed to render and
+        /// was reported; later failures are not.
+        bool frame_failure_reported{};
     };
 
     // The explosion animation files read so far, by name with letters
     // lowered; they are kept from match to match.
     std::map<std::string, ExplosionGafFile> match_explosion_gafs_{};
+    // Each sequence of a file drawn a frame at a time, with its file, and
+    // the rendered frames kept for them. Both point into the files above
+    // and are cleared whenever they are; the rendered frames also go when
+    // a match is torn down.
+    std::map<const oa::formats::gaf::Sequence*, ExplosionGafFile*> frame_by_frame_sequences_{};
+    std::shared_ptr<GafFrameCache> explosion_frame_cache_{};
 
     struct MatchGafFeatureAnim {
         std::vector<oa::formats::gaf::RenderedFrame> frames;

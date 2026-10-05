@@ -119,6 +119,14 @@ struct Frame {
     uint32_t reserved = 0;       // on_disk::FrameInfo::reserved, as read
     uint32_t aux_plane_slot = 0; // ? on_disk::FrameInfo::aux_plane_slot, as read
     uint16_t duration = 0;
+    /// Where a simple frame's pixel data lies in the file, from its start:
+    /// its raw palette indices, or its compressed rows with their length
+    /// words. Zero, with pixel_data_bytes, for a frame with layers or one
+    /// of no pixels.
+    uint32_t pixel_data_offset{};
+    /// Bytes of a simple frame's pixel data in the file: width * height for
+    /// a raw frame, every row with its length word for a compressed one.
+    uint32_t pixel_data_bytes{};
     // Simple frames contain width*height palette indices. Composite frames
     // contain layers instead. Coverage distinguishes compressed transparent
     // skip commands from literal pixels equal to the transparency index.
@@ -155,6 +163,7 @@ enum class ErrorCode {
     malformed_compression,
     unsupported_special_render,
     side_limit, ///< a frame or layer wider or taller than the caller allows
+    unreadable, ///< a frame's pixel data could not be read from the file (render_ranged)
 };
 
 struct Error {
@@ -185,9 +194,19 @@ enum class PixelData {
     decoded,
     /// The pixels are decoded and checked as `decoded` checks them, and the
     /// frame's pixels and coverage are left empty; `parse_sequence` decodes a
-    /// sequence's pixels when they are needed. Since nothing is kept, the
-    /// file's frames together may decode past `limit::total_decoded_bytes`.
+    /// sequence's pixels when they are needed, and `render_ranged` one
+    /// frame's as it is drawn. Since nothing is kept, the file's frames
+    /// together may decode past `limit::total_decoded_bytes`.
     checked,
+};
+
+/// Where `render_ranged` reads a file's bytes from.
+struct ReadHooks {
+    void* context{};
+    /// Fills `output` with the file's bytes from `offset`, counted from the
+    /// start of the file; returns false when they cannot all be read. Null
+    /// reads nothing, so that every frame with pixels fails to render.
+    bool (*read)(void* context, uint32_t offset, std::span<uint8_t> output){};
 };
 
 struct RenderedFrame {
@@ -259,5 +278,36 @@ struct RenderResult {
 /// @return pixels and coverage, or unsupported_special_render when a child
 ///         needs special blending
 [[nodiscard]] RenderResult render_normal(const Frame& frame);
+
+/// Renders a frame of a checked parse as render_normal renders it decoded,
+/// reading the pixel data of each simple frame from the file as it draws it.
+///
+/// Each simple frame's pixel data (Frame::pixel_data_offset and
+/// pixel_data_bytes) is read through `reader` and decoded and checked as
+/// `parse` decodes it, one simple frame at a time; nothing read is kept
+/// once the frame is rendered. A simple frame that holds its pixels and
+/// coverage is drawn from them without a read.
+///
+/// @param frame parsed frame, as `parse` gives it with PixelData::checked
+/// @param reader where the file's bytes are read from
+/// @return the pixels and coverage render_normal gives for the frame
+///     decoded; unreadable when a read fails, or the error `parse` gives for
+///     bytes that do not decode
+[[nodiscard]] RenderResult render_ranged(const Frame& frame, const ReadHooks& reader);
+
+/// Returns the bytes `parse` keeps for a frame's decoded pixels and coverage,
+/// two for each pixel of the frame or of each of its layers, nested layers
+/// included.
+///
+/// @param frame parsed frame, with or without its pixels
+/// @return the bytes
+[[nodiscard]] uint64_t decoded_bytes(const Frame& frame) noexcept;
+
+/// Returns the bytes `parse` keeps for the decoded pixels and coverage of
+/// every frame of an archive.
+///
+/// @param archive parsed archive, with or without its pixels
+/// @return the bytes
+[[nodiscard]] uint64_t decoded_bytes(const Archive& archive) noexcept;
 
 } // namespace oa::formats::gaf

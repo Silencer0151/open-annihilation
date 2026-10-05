@@ -29,6 +29,8 @@ constexpr std::size_t counted_bias = 1;
 
 constexpr std::size_t pointer_bytes = sizeof(uint32_t);
 constexpr std::size_t row_length_bytes = sizeof(uint16_t);
+/// Bytes a decoded pixel takes: its palette index and its coverage byte.
+constexpr std::size_t decoded_bytes_per_pixel = 2;
 
 [[nodiscard]] bool fits(std::size_t offset_value, std::size_t count, std::size_t size) noexcept {
     return offset_value <= size && count <= size - offset_value;
@@ -99,6 +101,20 @@ read_frame_info(std::span<const uint8_t> bytes, std::size_t at) noexcept {
     info.data_offset = cursor.u32();
     info.aux_plane_slot = cursor.u32();
     return info;
+}
+
+/// Sets the coverage of raw pixels: every pixel but the transparency index
+/// is drawn.
+///
+/// @param pixels `count` palette indices
+/// @param[out] coverage `count` bytes, 1 for a drawn pixel
+/// @param count pixels
+/// @param transparent the frame's transparency index
+void cover_raw_pixels(
+    const uint8_t* pixels, uint8_t* coverage, std::size_t count, uint8_t transparent
+) noexcept {
+    for (std::size_t index = 0; index < count; ++index)
+        coverage[index] = pixels[index] != transparent ? 1U : 0U;
 }
 
 class Parser {
@@ -310,19 +326,26 @@ class Parser {
         }
 
         // The frame's raw pixels, or every row's length and bytes, must be
-        // in the file before its buffers are made.
+        // in the file before its buffers are made. Where they lie is kept,
+        // so that the frame can be read again on its own.
         if (pixel_count != 0) {
+            std::size_t data_bytes = pixel_count;
             if (!output.compressed) {
                 if (!fits(data_at, pixel_count, bytes_.size()))
                     return set_error(ErrorCode::truncated, data_at, "truncated raw GAF pixels");
-            } else if (!compressed_rows_present(data_at, output.height)) {
-                return false;
+            } else {
+                std::size_t rows_end = 0;
+                if (!compressed_rows_present(data_at, output.height, rows_end))
+                    return false;
+                data_bytes = rows_end - data_at;
             }
+            // Both lie within the input, which is at most limit::input_bytes.
+            output.pixel_data_offset = static_cast<uint32_t>(data_at);
+            output.pixel_data_bytes = static_cast<uint32_t>(data_bytes);
         }
 
         // Only kept pixels count towards the decoded total: a checked frame
         // reuses the parser's own buffers.
-        constexpr std::size_t decoded_bytes_per_pixel = 2;
         if (pixels_ == PixelData::decoded) {
             if (pixel_count >
                 (limit::total_decoded_bytes - total_decoded_bytes_) / decoded_bytes_per_pixel) {
@@ -343,10 +366,8 @@ class Parser {
         uint8_t* const pixels = kept_pixels.data();
         uint8_t* const coverage = kept_coverage.data();
         if (!output.compressed) {
-            const uint8_t transparent = output.transparency_index;
             std::memcpy(pixels, bytes_.data() + data_at, pixel_count);
-            for (std::size_t index = 0; index < pixel_count; ++index)
-                coverage[index] = pixels[index] != transparent ? 1U : 0U;
+            cover_raw_pixels(pixels, coverage, pixel_count, output.transparency_index);
             return true;
         }
         return decode_compressed(data_at, output, pixels, coverage);
@@ -357,8 +378,11 @@ class Parser {
     ///
     /// @param at file offset of the first row's length word
     /// @param height count of rows
+    /// @param[out] end the file offset after the last row; set only when
+    ///     every row lies in the file
     /// @return true when every row lies in the file; else the error is set
-    [[nodiscard]] bool compressed_rows_present(std::size_t at, std::size_t height) {
+    [[nodiscard]] bool
+    compressed_rows_present(std::size_t at, std::size_t height, std::size_t& end) {
         std::size_t row_at = at;
         for (std::size_t y = 0; y < height; ++y) {
             if (!fits(row_at, row_length_bytes, bytes_.size()))
@@ -371,11 +395,24 @@ class Parser {
                 return set_error(ErrorCode::truncated, row_at, "truncated compressed GAF row data");
             row_at += encoded_bytes;
         }
+        end = row_at;
         return true;
     }
 
+  public:
+
     /// Decodes the row-compressed pixels at `at` of `output`, a frame of
     /// output.width by output.height, into `pixels` and `coverage`.
+    ///
+    /// Every row's length word and commands are checked against the input,
+    /// and a nonempty row must cover the frame's width.
+    ///
+    /// @param at input offset of the first row's length word
+    /// @param output the frame's size
+    /// @param[out] pixels width * height palette indices, filled beforehand
+    ///     with the transparency index
+    /// @param[out] coverage width * height bytes, zero beforehand
+    /// @return true when every row decoded; else error() holds why
     [[nodiscard]] bool
     decode_compressed(std::size_t at, const Frame& output, uint8_t* pixels, uint8_t* coverage) {
         std::size_t row_at = at;
@@ -444,15 +481,89 @@ class Parser {
         }
         return true;
     }
+
+    /// Returns the first error, once a step has failed.
+    [[nodiscard]] const std::optional<Error>& error() const noexcept { return error_; }
 };
 
+/// What render_ranged reads a simple frame's pixel data through, and the
+/// buffers it decodes the frame into, kept from one simple frame to the
+/// next.
+struct RangedPixels {
+    const ReadHooks* reader{};
+    std::vector<uint8_t> bytes; ///< a compressed frame's rows, as read
+    std::vector<uint8_t> pixels;
+    std::vector<uint8_t> coverage;
+};
+
+/// Reads a simple frame's pixel data and decodes it into `ranged`'s pixels
+/// and coverage, as `parse` decodes it.
+///
+/// @param source simple frame of width * height pixels, at least one
+/// @param[in,out] ranged the read and the buffers
+/// @param[out] error why it failed, its offset from the start of the file
+/// @return true when the pixels and coverage were decoded
+[[nodiscard]] bool read_simple_frame(const Frame& source, RangedPixels& ranged, Error& error) {
+    const auto pixel_count = static_cast<std::size_t>(source.width) * source.height;
+    const auto data_at = static_cast<std::size_t>(source.pixel_data_offset);
+    const auto data_bytes = static_cast<std::size_t>(source.pixel_data_bytes);
+    if (data_bytes > limit::input_bytes || (!source.compressed && data_bytes != pixel_count)) {
+        error = {ErrorCode::truncated, data_at, "GAF frame pixel data does not fit its size"};
+        return false;
+    }
+    const auto read_range = [&ranged](uint32_t at, std::span<uint8_t> output) {
+        return ranged.reader->read != nullptr &&
+               ranged.reader->read(ranged.reader->context, at, output);
+    };
+    if (!source.compressed) {
+        // A raw frame's pixel data is its pixels.
+        ranged.pixels.resize(pixel_count);
+        ranged.coverage.resize(pixel_count);
+        if (!read_range(source.pixel_data_offset, ranged.pixels)) {
+            error = {ErrorCode::unreadable, data_at, "GAF frame pixels could not be read"};
+            return false;
+        }
+        cover_raw_pixels(
+            ranged.pixels.data(), ranged.coverage.data(), pixel_count, source.transparency_index
+        );
+        return true;
+    }
+    ranged.bytes.resize(data_bytes);
+    if (!read_range(source.pixel_data_offset, ranged.bytes)) {
+        error = {ErrorCode::unreadable, data_at, "GAF frame rows could not be read"};
+        return false;
+    }
+    ranged.pixels.assign(pixel_count, source.transparency_index);
+    ranged.coverage.assign(pixel_count, 0);
+    Parser rows(ranged.bytes, PixelData::decoded);
+    if (!rows.decode_compressed(0, source, ranged.pixels.data(), ranged.coverage.data())) {
+        error = *rows.error();
+        error.offset += data_at;
+        return false;
+    }
+    return true;
+}
+
+/// Draws a frame and its layers into `destination` with its top left corner
+/// at (`left`, `top`), clipped to it.
+///
+/// @param source the frame
+/// @param[in,out] destination the canvas
+/// @param left canvas column of the frame's left edge
+/// @param top canvas row of the frame's top edge
+/// @param[out] error why it failed
+/// @param depth nesting depth of `source`, from 1
+/// @param ranged where a simple frame without its pixels reads them; null
+///     when every simple frame holds its own
+/// @return true when the frame was drawn
 [[nodiscard]] bool render_into(
     const Frame& source,
     RenderedFrame& destination,
     int32_t left,
     int32_t top,
     Error& error,
-    std::size_t depth
+    std::size_t depth,
+    RangedPixels* ranged
 ) {
     if (depth > limit::nesting_depth) {
         error = {ErrorCode::nesting_limit, 0, "GAF render nesting exceeds limit"};
@@ -476,13 +587,22 @@ class Parser {
                 left + static_cast<int32_t>(source.origin_x) - static_cast<int32_t>(layer.origin_x);
             const auto child_top =
                 top + static_cast<int32_t>(source.origin_y) - static_cast<int32_t>(layer.origin_y);
-            if (!render_into(layer, destination, child_left, child_top, error, depth + 1))
+            if (!render_into(layer, destination, child_left, child_top, error, depth + 1, ranged))
                 return false;
         }
         return true;
     }
     const auto expected = static_cast<std::size_t>(source.width) * source.height;
-    if (source.pixels.size() != expected || source.coverage.size() != expected) {
+    // Plain pointers keep the per-pixel loop free of calls in unoptimised builds.
+    const uint8_t* source_pixels = source.pixels.data();
+    const uint8_t* source_coverage = source.coverage.data();
+    const bool held = source.pixels.size() == expected && source.coverage.size() == expected;
+    if (!held && ranged != nullptr && expected != 0) {
+        if (!read_simple_frame(source, *ranged, error))
+            return false;
+        source_pixels = ranged->pixels.data();
+        source_coverage = ranged->coverage.data();
+    } else if (!held) {
         error = {
             ErrorCode::pixel_limit, 0, "GAF model pixel/coverage count does not match dimensions"
         };
@@ -494,9 +614,6 @@ class Parser {
     const int64_t end_x = std::min<int64_t>(
         source.width, static_cast<int64_t>(destination.width) - static_cast<int64_t>(left)
     );
-    // Plain pointers keep the per-pixel loop free of calls in unoptimised builds.
-    const uint8_t* const source_pixels = source.pixels.data();
-    const uint8_t* const source_coverage = source.coverage.data();
     uint8_t* const destination_pixels = destination.pixels.data();
     uint8_t* const destination_coverage = destination.coverage.data();
     for (int32_t y = 0; y < static_cast<int32_t>(source.height); ++y) {
@@ -519,6 +636,34 @@ class Parser {
     return true;
 }
 
+/// Renders a frame and its layers onto a canvas of the frame's size.
+///
+/// @param frame the frame
+/// @param ranged where a simple frame without its pixels reads them; null
+///     when every simple frame holds its own
+/// @return the pixels and coverage, or the first error
+[[nodiscard]] RenderResult render_frame(const Frame& frame, RangedPixels* ranged) {
+    const auto pixel_count = static_cast<std::size_t>(frame.width) * frame.height;
+    if (pixel_count > limit::pixels_per_frame) {
+        return {std::nullopt, Error{ErrorCode::pixel_limit, 0, "GAF render pixels exceed limit"}};
+    }
+    RenderedFrame rendered{
+        frame.width,
+        frame.height,
+        frame.origin_x,
+        frame.origin_y,
+        frame.transparency_index,
+        std::vector<uint8_t>(pixel_count, frame.transparency_index),
+        std::vector<uint8_t>(pixel_count, 0)
+    };
+    Error error;
+    // A top-level frame's own special-render flag is ignored; only a child's
+    // flag selects special rendering.
+    if (!render_into(frame, rendered, 0, 0, error, 1, ranged))
+        return {std::nullopt, std::move(error)};
+    return {std::move(rendered), std::nullopt};
+}
+
 } // namespace
 
 ParseResult parse(std::span<const uint8_t> bytes, PixelData pixels, uint16_t largest_side) {
@@ -539,25 +684,30 @@ const Frame* frame_at(const Sequence* sequence, int32_t index) noexcept {
 }
 
 RenderResult render_normal(const Frame& frame) {
-    const auto pixel_count = static_cast<std::size_t>(frame.width) * frame.height;
-    if (pixel_count > limit::pixels_per_frame) {
-        return {std::nullopt, Error{ErrorCode::pixel_limit, 0, "GAF render pixels exceed limit"}};
-    }
-    RenderedFrame rendered{
-        frame.width,
-        frame.height,
-        frame.origin_x,
-        frame.origin_y,
-        frame.transparency_index,
-        std::vector<uint8_t>(pixel_count, frame.transparency_index),
-        std::vector<uint8_t>(pixel_count, 0)
-    };
-    Error error;
-    // A top-level frame's own special-render flag is ignored; only a child's
-    // flag selects special rendering.
-    if (!render_into(frame, rendered, 0, 0, error, 1))
-        return {std::nullopt, std::move(error)};
-    return {std::move(rendered), std::nullopt};
+    return render_frame(frame, nullptr);
+}
+
+RenderResult render_ranged(const Frame& frame, const ReadHooks& reader) {
+    RangedPixels ranged;
+    ranged.reader = &reader;
+    return render_frame(frame, &ranged);
+}
+
+uint64_t decoded_bytes(const Frame& frame) noexcept {
+    if (frame.layers.empty())
+        return uint64_t{frame.width} * uint64_t{frame.height} * decoded_bytes_per_pixel;
+    uint64_t total = 0;
+    for (const auto& layer : frame.layers)
+        total += decoded_bytes(layer);
+    return total;
+}
+
+uint64_t decoded_bytes(const Archive& archive) noexcept {
+    uint64_t total = 0;
+    for (const auto& sequence : archive.sequences)
+        for (const auto& frame : sequence.frames)
+            total += decoded_bytes(frame);
+    return total;
 }
 
 } // namespace oa::formats::gaf

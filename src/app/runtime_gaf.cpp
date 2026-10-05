@@ -5,12 +5,16 @@
 #include "oa/app/runtime.hpp"
 #include "oa/app/asset_files.hpp"
 #include "oa/sim/gameplay_input/order_cursor.hpp"
+#include "world_draws.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <memory>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -161,6 +165,13 @@ void Runtime::load_explosion_gaf(std::string_view name) {
         }
         loaded.path = path;
         loaded.archive = std::move(*parsed.archive);
+        // A file this large is never decoded whole: its frames are rendered
+        // as they are drawn, from the sequences checked here.
+        if (draws_frame_by_frame(loaded.archive)) {
+            loaded.frame_by_frame = true;
+            for (const auto& sequence : loaded.archive.sequences)
+                frame_by_frame_sequences_[&sequence] = &loaded;
+        }
     } catch (const std::exception& error) {
         const std::string_view what = error.what();
         if (what.find("asset not found") == std::string_view::npos)
@@ -176,8 +187,8 @@ Runtime::explosion_sequence(std::string_view archive, std::string_view entry) {
     load_explosion_gaf(archive);
     auto& loaded = match_explosion_gafs_[key];
     const auto* listed = gaf_sequence(loaded.archive, entry);
-    if (listed == nullptr)
-        return nullptr;
+    if (listed == nullptr || loaded.frame_by_frame)
+        return listed;
     const auto index = static_cast<std::size_t>(listed - loaded.archive.sequences.data());
     if (const auto found = loaded.decoded.find(index); found != loaded.decoded.end())
         return &found->second;
@@ -202,6 +213,66 @@ Runtime::explosion_sequence(std::string_view archive, std::string_view entry) {
     std::cerr << "explosion GAF '" << loaded.path << "' sequence '" << listed->name
               << "' is not drawn: " << reason << '\n';
     return nullptr;
+}
+
+namespace {
+
+/// The file a frame drawn a frame at a time is read from.
+struct ExplosionFileReader {
+    const oa::AssetStore* assets{};
+    const std::string* path{};
+};
+
+/// Reads bytes of an explosion file through the asset store, inflating only
+/// the blocks of an archive entry the bytes lie in.
+///
+/// @param context the ExplosionFileReader
+/// @param offset first byte, from the start of the file
+/// @param[out] output receives the bytes
+/// @return true when every byte was read
+bool read_explosion_file(void* context, uint32_t offset, std::span<uint8_t> output) {
+    const auto& reader = *static_cast<const ExplosionFileReader*>(context);
+    oa::ResourceFile* file = nullptr;
+    try {
+        file = reader.assets->open(*reader.path);
+        bool reading = file != nullptr && oa::AssetStore::seek(file, offset) != -1;
+        for (std::size_t done = 0; reading && done < output.size();) {
+            const auto count = oa::AssetStore::read(file, output.subspan(done));
+            reading = count > 0;
+            if (reading)
+                done += static_cast<std::size_t>(count);
+        }
+        oa::AssetStore::close(file);
+        return reading;
+    } catch (const std::exception&) {
+        oa::AssetStore::close(file);
+        return false;
+    }
+}
+
+} // namespace
+
+const oa::formats::gaf::RenderedFrame* Runtime::effect_frame(
+    WorldDrawList& list, const oa::formats::gaf::Sequence& sequence, std::size_t index
+) {
+    const auto& frame = sequence.frames[index];
+    const auto found = frame_by_frame_sequences_.find(&sequence);
+    if (found == frame_by_frame_sequences_.end())
+        return decoded_frame(list, frame);
+    auto& file = *found->second;
+    if (explosion_frame_cache_ == nullptr)
+        explosion_frame_cache_ = std::make_shared<GafFrameCache>();
+    ExplosionFileReader reader{&assets_, &file.path};
+    std::optional<oa::formats::gaf::Error> failure;
+    const auto* rendered = ranged_frame(
+        list, *explosion_frame_cache_, frame, {&reader, read_explosion_file}, &failure
+    );
+    if (failure && !file.frame_failure_reported) {
+        file.frame_failure_reported = true;
+        std::cerr << "explosion GAF '" << file.path << "' sequence '" << sequence.name << "' frame "
+                  << index << " is not drawn: " << failure->message << '\n';
+    }
+    return rendered;
 }
 
 void Runtime::append_gaf_file(oa::formats::gaf::Archive& destination, std::string_view path) {
