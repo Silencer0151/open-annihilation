@@ -1753,8 +1753,9 @@ void pad_hints_name_the_buttons() {
         words(hud::ring_hint(false, fallback_map()), pad::GlyphStyle::xbox) ==
         "RELEASE RB GIVE · A ARM · B CLOSE"
     );
-    for (std::size_t part = 0; part < hud::ring_hint(false, fallback_map()).count; ++part) {
-        const auto& chord = hud::ring_hint(false, fallback_map()).parts[part].chord;
+    const hud::PadHint ring = hud::ring_hint(false, fallback_map());
+    for (std::size_t part = 0; part < ring.count; ++part) {
+        const auto& chord = ring.parts[part].chord;
         OA_CHECK(!chord || (!chord->tap && !chord->hold));
     }
 }
