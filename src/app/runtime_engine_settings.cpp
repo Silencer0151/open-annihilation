@@ -1031,7 +1031,6 @@ std::optional<settings::DialogKey>
 Runtime::engine_settings_dialog_key(uint32_t key, uint16_t modifiers) noexcept {
     switch (key) {
     case SDLK_RETURN:
-    case SDLK_KP_ENTER:
         return settings::DialogKey::enter;
     case SDLK_ESCAPE:
         return settings::DialogKey::escape;

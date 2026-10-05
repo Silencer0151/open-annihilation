@@ -191,7 +191,7 @@ bool Runtime::whiteboard_key(const SDL_KeyboardEvent& key) {
         return false;
     auto& input = whiteboard_input_;
     if (input.editing) {
-        if (key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER || key.key == SDLK_ESCAPE) {
+        if (key.key == SDLK_RETURN || key.key == SDLK_ESCAPE) {
             input.editing = false;
             stop_text_input();
             const auto color = hud::player_dot_color(match_->state(), match_local_player_);

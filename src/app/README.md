@@ -1524,7 +1524,10 @@ saves, recordings and network games are unaffected.
   state it is exactly `SDL_GetModState()`. `press_match_key` runs a key with
   modifiers held for the call (SELECT ▾'s items), `refresh_pointer_modifiers`
   brings the pointer's key word up to a changed latch, and `play_haptic`
-  reaches the platform's haptics.
+  reaches the platform's haptics. `remap_keypad_enter` turns the keypad's
+  Enter into Return as `dispatch_event` takes each key, so it opens and
+  sends the chat line, answers dialogs and ends typed names wherever Return
+  does, as in 3.1c; the event keeps the keypad's scancode.
 - `runtime_touch_hud.cpp` draws the controls into a layer of their own,
   composed over the CPU frame (`compose_touch_layer`) and presented in every
   tier (`present_touch_layer`), with the primitives of `touch_paint.*`

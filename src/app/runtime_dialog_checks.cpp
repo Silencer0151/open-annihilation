@@ -1006,6 +1006,26 @@ void Runtime::check_match_dialogs() {
     );
 #endif
     close_chat_line();
+    // The keypad's Enter is Return: it opens the chat line, sends the line
+    // typed into it, and answers HELP.GUI over the in-game menu with the
+    // dialog's Enter default.
+    const auto keypad_enter = chat_key(SDLK_KP_ENTER, SDL_SCANCODE_KP_ENTER, false);
+    require(send(keypad_enter) && chat_composing_, "keypad Enter did not open the chat line");
+    SDL_Event line{};
+    line.type = SDL_EVENT_TEXT_INPUT;
+    line.text.text = "sent from the keypad";
+    require(
+        send(line) && send(keypad_enter) && !chat_composing_ && status_ == line.text.text,
+        "keypad Enter did not send the chat line"
+    );
+    show_match_pause_menu();
+    activate_pause_gadget("HELP");
+    require(dialogs::dialog_kind() == dialogs::DialogKind::help, "HELP did not open HELP.GUI");
+    require(
+        send(keypad_enter) && dialogs::dialog_count() == 0 && match_paused_,
+        "keypad Enter did not answer HELP.GUI"
+    );
+    resume_match_pause();
     require(
         send(close_request(SDL_EVENT_WINDOW_CLOSE_REQUESTED)) && !exit_requested_,
         "closing the window ended a running match"

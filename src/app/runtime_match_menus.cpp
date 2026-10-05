@@ -712,7 +712,7 @@ int save_overlay_key(ScreenContext* ctx, LoadGameOverlay& overlay, const ScreenI
         return 1;
     if (input.key == SDLK_BACKSPACE && oa::present::erase_last_character(text)) {
         ui::set_control_text(control, text);
-    } else if (input.key == SDLK_RETURN || input.key == SDLK_KP_ENTER) {
+    } else if (input.key == SDLK_RETURN) {
         return save_overlay_enter(ctx, overlay, index);
     } else if (input.key == SDLK_ESCAPE) {
         overlay.panel.selected = ui::panel_find(overlay.panel, "CANCEL");
@@ -771,7 +771,7 @@ void load_overlay_click(ScreenContext* ctx, LoadGameOverlay& overlay, int32_t co
 int load_overlay_key(ScreenContext* ctx, LoadGameOverlay& overlay, const ScreenInput& input) {
     if (input.kind != ScreenInputKind::key_down || oa::ui::frontend_dialogs::dialog_count() != 0)
         return 0;
-    if (input.key == SDLK_RETURN || input.key == SDLK_KP_ENTER) {
+    if (input.key == SDLK_RETURN) {
         if (const auto load = ui::panel_find(overlay.panel, "LOAD"); load >= 0)
             std::ignore = load_overlay_activate(ctx, overlay, load);
         return 1;
@@ -3080,7 +3080,7 @@ bool Runtime::press_match_panel_key(const SDL_KeyboardEvent& key) {
     // Keys with Ctrl, Alt or the system key down type no character.
     if ((key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0)
         return false;
-    const bool enter = key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER;
+    const bool enter = key.key == SDLK_RETURN;
     const bool escape = key.key == SDLK_ESCAPE;
     if (confirming && (enter || escape))
         return false;

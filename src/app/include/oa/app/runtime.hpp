@@ -1792,6 +1792,15 @@ class Runtime final : public menu::Host,
     /// @param[in,out] event the event dispatch_event is given
     void remap_command_key(SDL_Event& event) const;
 
+    /// Rewrites a press or release of the keypad's Enter as Return, which every screen,
+    /// dialog and text field then takes as Enter, as in 3.1c.
+    ///
+    /// The scancode stays the keypad's, so the key held can still be told from Return.
+    /// Leaves every other event unchanged. [runtime_input_modifiers.cpp]
+    ///
+    /// @param[in,out] event the event dispatch_event is given
+    static void remap_keypad_enter(SDL_Event& event) noexcept;
+
     /// Plays a haptic through the platform hook when the Touch setting allows haptics.
     /// [runtime_input_modifiers.cpp]
     ///

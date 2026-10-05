@@ -134,16 +134,15 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
     // opened one may have come from the same key.
     if (event.type == SDL_EVENT_KEY_DOWN && event.key.repeat &&
         (screen_ == Screen::campaign_end || screen_ == Screen::briefing) &&
-        (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER))
+        event.key.key == SDLK_RETURN)
         return;
     if (event.type == SDL_EVENT_KEY_DOWN && screen_ == Screen::campaign_end &&
-        (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER)) {
+        event.key.key == SDLK_RETURN) {
         activate_end_panel_default();
         return;
     }
     if (event.type == SDL_EVENT_KEY_DOWN && screen_ == Screen::briefing &&
-        (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER ||
-         event.key.key == SDLK_ESCAPE) &&
+        (event.key.key == SDLK_RETURN || event.key.key == SDLK_ESCAPE) &&
         press_briefing_default(event.key.key == SDLK_ESCAPE))
         return;
     // Up and Down move the selection of NEWGAME.GUI's focused list.
@@ -500,7 +499,7 @@ bool Runtime::press_frontend_quick_key(const SDL_KeyboardEvent& key) {
 }
 
 bool Runtime::press_frontend_focus_key(const SDL_KeyboardEvent& key) {
-    const bool enter = key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER;
+    const bool enter = key.key == SDLK_RETURN;
     if ((!enter && key.key != SDLK_SPACE) || key.repeat ||
         (key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0)
         return false;

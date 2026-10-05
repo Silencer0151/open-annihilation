@@ -123,7 +123,7 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
             close_chat_line();
             return true;
         }
-        if (key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER) {
+        if (key.key == SDLK_RETURN) {
             submit_chat_line();
             return true;
         }
@@ -136,11 +136,10 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
     }
     // The surrender confirmation answers Enter as No, its Enter default;
     // escape_match_menu answers its Escape.
-    if (match_paused_ && (key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER) && enter_match_menu())
+    if (match_paused_ && key.key == SDLK_RETURN && enter_match_menu())
         return true;
     // The unit info panel's Enter and Escape defaults are both DONE.
-    if (unit_info_panel_ &&
-        (key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER || key.key == SDLK_ESCAPE)) {
+    if (unit_info_panel_ && (key.key == SDLK_RETURN || key.key == SDLK_ESCAPE)) {
         press_unit_info_done();
         return true;
     }

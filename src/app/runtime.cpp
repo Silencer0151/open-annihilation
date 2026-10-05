@@ -583,6 +583,9 @@ void Runtime::dispatch_event(SDL_Event& event, bool& running) {
     // reach no screen; the touch controls take fingers and the presses on
     // their controls, and the gamepads their own events.
     remap_command_key(event);
+    // The keypad's Enter is Return to everything after this, as it is in
+    // 3.1c: it opens and sends the chat line and answers dialogs.
+    remap_keypad_enter(event);
     // Each key press, whichever screen takes it, forgets the quick key the
     // last one answered a panel with; the press records its own again.
     if (event.type == SDL_EVENT_KEY_DOWN)

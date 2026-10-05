@@ -5,7 +5,7 @@
 // key's pulse, the touch latch that gives Shift to that use and the pad's
 // FORCE that gives Ctrl to orders and selection; the pointer key word kept
 // in step with a latch; keys pressed for the touch controls; the Cmd
-// alternates of a hardware keyboard; haptics, on the platform's device and
+// alternates of a hardware keyboard; the keypad's Enter as Return; haptics, on the platform's device and
 // the gamepad in use (docs/touch-controls.md, docs/controllers.md). This is
 // the one place the engine reads SDL_GetModState().
 #include "oa/app/runtime.hpp"
@@ -144,6 +144,12 @@ void Runtime::remap_command_key(SDL_Event& event) const {
         event.key.mod = static_cast<SDL_Keymod>(event.key.mod & ~SDL_KMOD_GUI);
         return;
     }
+}
+
+void Runtime::remap_keypad_enter(SDL_Event& event) noexcept {
+    if ((event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) &&
+        event.key.key == SDLK_KP_ENTER)
+        event.key.key = SDLK_RETURN;
 }
 
 void Runtime::play_haptic(oa::app::Haptic kind) const {
