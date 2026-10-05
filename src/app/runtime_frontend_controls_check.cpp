@@ -429,6 +429,41 @@ void Runtime::check_frontend_controls() {
     click(entry::resource_name(entry::Button::skirmish));
     require(screen_ == Screen::skirmish, "Skirmish did not open SKIRMISH.GUI");
     snapshot("skirmish-start");
+    // SKIRMISH.GUI, and SELMAP.GUI over it, show in the main menu's palette,
+    // so no pixel shows a colour only the screen's own picture's palette
+    // holds: on SKIRMISH.GUI, the bright green of the entries its picture
+    // does not use, where the focus marker's outline lights CommanderDeath.
+    const auto expect_main_menu_palette = [&](std::string_view picture, std::string_view panel) {
+        expect(
+            main_menu_palette_ && screen_palette() == *main_menu_palette_,
+            std::string(panel) + " does not show in the main menu's palette"
+        );
+        const auto& slots = named_backgrounds_.cache.slots;
+        const auto* slot = std::find_if(std::begin(slots), std::end(slots), [&](const auto& kept) {
+            return tdf_names_equal(kept.name, picture);
+        });
+        if (!main_menu_palette_ || slot == std::end(slots) || slot->palette == nullptr)
+            return;
+        const auto holds = [](const uint8_t* palette, const uint8_t* rgb) {
+            for (std::size_t entry = 0; entry < oa::palette_color_count; ++entry)
+                if (std::equal(rgb, rgb + 3, palette + entry * oa::palette_entry_bytes))
+                    return true;
+            return false;
+        };
+        const auto shown = frame();
+        std::size_t foreign = 0;
+        for (std::size_t pixel = 0; pixel * 3U < shown.rgb.size(); ++pixel) {
+            const uint8_t* rgb = &shown.rgb[pixel * 3U];
+            if (holds(slot->palette, rgb) && !holds(main_menu_palette_->data(), rgb))
+                ++foreign;
+        }
+        expect(
+            foreign == 0,
+            std::string(panel) + " shows " + std::to_string(foreign) +
+                " pixels in colours only its picture's own palette holds"
+        );
+    };
+    expect_main_menu_palette("Skirmsetup4x", "SKIRMISH.GUI");
     // Every row shows the metal and energy of the setup's slot, each in the
     // range the row's clicks keep it in.
     const auto expect_row_resources = [&](const entry::SkirmishSettings& setup,
@@ -505,6 +540,7 @@ void Runtime::check_frontend_controls() {
         "Select Map did not open SELMAP.GUI with maps"
     );
     require(bound_map_names_.size() > 1, "SELMAP.GUI lists a single map");
+    expect_main_menu_palette("DSELECTMAP2", "SELMAP.GUI");
     const auto current = static_cast<std::size_t>(std::max<int16_t>(0, modal_map_index_));
     const auto chosen_index = (current + 1U) % bound_map_names_.size();
     const auto chosen = bound_map_names_[chosen_index];

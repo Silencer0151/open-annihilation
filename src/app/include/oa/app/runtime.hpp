@@ -5630,7 +5630,8 @@ class Runtime final : public menu::Host,
     /// Shows the background bitmap's indices in a palette, which the screen's gadgets are then
     /// drawn in too.
     ///
-    /// @param palette palette of the frame the screen is drawn over
+    /// @param palette the palette the screen shows in: the frame's the screen is drawn over, or
+    ///        the main menu's
     void show_background_in(const oa::PaletteBytes& palette);
 
     /// Reports whether the panel on show is drawn over another screen: the load and save
@@ -11429,6 +11430,10 @@ class Runtime final : public menu::Host,
 
     /// Loads the panel's named background and redraws the screen.
     ///
+    /// The skirmish setup and the map selection, which call it, make neither
+    /// picture's palette the display's: once the main menu has been shown,
+    /// both screens show in its palette (main_menu_palette_), as in 3.1c.
+    ///
     /// @param name bitmap name
     void load_background(std::string_view name) override;
 
@@ -12583,6 +12588,10 @@ class Runtime final : public menu::Host,
     // bottom bar in a window taller than the chrome took back its own rows.
     renderer::Surface preferences_hud_;
     NamedBackgrounds named_backgrounds_;
+    // The main menu's palette, its picture's, which the skirmish setup and
+    // the map selection keep showing (load_background); empty until the main
+    // menu has been shown.
+    std::optional<oa::PaletteBytes> main_menu_palette_;
     // The options lightbar's FLIPSURFACE (the frame below) and BKUPSURFACE.
     static constexpr oa_ref32 kOptionsFlipSurface = 1;
     static constexpr oa_ref32 kOptionsBackupSurface = 2;

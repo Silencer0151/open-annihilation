@@ -53,6 +53,11 @@ void Runtime::load_background(std::string_view name) {
     // A bitmap that cannot be read throws; the result only says whether the
     // backdrop changed, and the surface is rebuilt either way.
     std::ignore = load_named_background(std::string(name).c_str(), false, false, false);
+    // The screen keeps the main menu's palette. The skirmish setup's picture
+    // holds bright green in the palette entries it does not use, which lit
+    // pixels, such as the focus marker's outline, would otherwise show.
+    if (main_menu_palette_)
+        show_background_in(*main_menu_palette_);
     rebuild_surface();
 }
 

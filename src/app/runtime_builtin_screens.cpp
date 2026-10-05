@@ -282,6 +282,9 @@ struct BuiltinScreens {
     // writes the version label back to its widget; without `starts_music`
     // the music plays on as it is.
     static void setup_main_menu_panel(Runtime& runtime, bool starts_music = true) {
+        // The main menu shows in its picture's palette, which the skirmish
+        // setup and the map selection keep.
+        runtime.main_menu_palette_ = runtime.resources_.background.palette;
         static ui::frontend::MainMenuChecks checks;
         ui::frontend::MainMenuHost menu{};
         menu.context = &runtime;
