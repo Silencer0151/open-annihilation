@@ -21,7 +21,7 @@ namespace panel_flag = oa::ui::gui_input::panel_flag;
 
 // Panel flags the load dialog opens with: centred, with a backdrop,
 // darkening the panel below. Over a match the save dialog opens with them
-// too, centred on the screen (VARIANCES.md).
+// too, centred on the screen, a deliberate difference from 3.1c.
 constexpr uint32_t kLoadDialogFlags =
     panel_flag::shade_below | panel_flag::centre | panel_flag::modal_backdrop;
 // Over the end of a mission the save dialog opens at its authored position,

@@ -791,7 +791,8 @@ logs it.
   as F2 does; the Pause key's pause is left as it is. The load and save dialogs darken the panel below with the frontend
   renderer's `shade_panel_below`, as the frontend dialogs do. Over a match
   both open centred on the screen, at every window size and interface
-  scale (the save dialog's centring is in [VARIANCES.md](../../VARIANCES.md));
+  scale (3.1c leaves the save dialog where its GUI file puts it; the engine
+  centres it on purpose);
   at the end of a mission the save dialog keeps its place from the GUI
   file, as in 3.1c (`enter_load_game`, `runtime_load_game.cpp`). The
   dialogs' buttons are clicked as the frontend's own are: a press holds the
@@ -1118,8 +1119,8 @@ logs it.
 - `runtime_console_cheats.cpp`, `runtime_console_sound.cpp`: the cheat flag
   each mission start sets, from `sim::scenario::session_cheats_allowed`: a
   campaign and a skirmish run cheats, a multiplayer game while its host's
-  CHEATING option is on (3.1c refuses them in a campaign;
-  [VARIANCES.md](../../VARIANCES.md)). "+Sing" flips the novelty voice,
+  CHEATING option is on (3.1c refuses them in a campaign; the engine
+  differs there on purpose). "+Sing" flips the novelty voice,
   which lasts from match to match until the program ends and no save
   holds; its two sounds are the mod profile's `strings.cheat.sing-sounds`,
   else 3.1c's honk and sing, bound to the announcement gates as each match
@@ -2558,7 +2559,7 @@ into, so that what is bound to it stays valid. It binds the engine's line
 to the battle room (`multiplayer_bind_engine_banner`): `[Engine: OpenAnnihilation v<version>]`,
 or with ` DEV MODE` before the bracket while `Runtime::developer_mode` says
 Developer Mode is on, which the battle room says as the local player's chat
-line as it is entered and again each time the line changes there
-(VARIANCES.md).
+line as it is entered and again each time the line changes there, a
+deliberate difference from 3.1c.
 [docs/development/testing.md](../../docs/development/testing.md#network-play)
 lists its tests.

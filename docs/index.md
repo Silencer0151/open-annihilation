@@ -22,8 +22,6 @@ Every document in the repository, by what you want to do.
   Graphics, Touch, Controller, Game files and Developer does, its default,
   when it takes effect and when to change it; the command-line options
   that set them for one run, and where they are kept.
-- [VARIANCES.md](../VARIANCES.md): where the engine always differs from
-  3.1c, on purpose.
 - [touch-controls.md](touch-controls.md): playing with fingers on an iPad,
   an iPhone or a touch screen: the gestures, the tablet and phone layouts,
   QUEUE, ADD and x5, the order wheel, building, the Touch settings, the

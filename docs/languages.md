@@ -33,7 +33,7 @@ the setting changes:
 A preferences file named with `--preferences-file` starts in English, the
 game's own default, so that a check plays the same on every machine. 3.1c
 takes its language from the command line or the registry and never asks
-the operating system; [VARIANCES.md](../VARIANCES.md) says so.
+the operating system; the engine differs there on purpose.
 
 ## What is shown in it
 

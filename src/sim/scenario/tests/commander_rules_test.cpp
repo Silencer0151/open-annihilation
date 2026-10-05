@@ -226,7 +226,8 @@ void abandoned_game_countdown() {
 
 // Mission start: on for a campaign and a skirmish, whatever came before, and
 // for a multiplayer game bit 0x2000 of the options of the first seated player
-// with role bit 0. 3.1c turns it off for a campaign (VARIANCES.md).
+// with role bit 0. 3.1c turns it off for a campaign; the engine differs on
+// purpose.
 void session_cheat_flag() {
     using oa::data::campaign::SessionKind;
     Game4 g;

@@ -196,8 +196,8 @@ the text drawing reads each frame (`oa::present::TextStyle`,
 saved game and what a shared game sends are the same whatever they hold,
 so no game locks them. Modern fonts are On by default with the player's
 own preferences file, and Off with `--preferences-file`; the text starts at
-80%, a fifth smaller than the game's fonts. Both are departures from the
-game's look that VARIANCES.md lists.
+80%, a fifth smaller than the game's fonts. Both are deliberate departures
+from the game's look.
 
 Text size applies to the modern fonts alone: the game's own fonts have
 fixed sizes. While the dialog shows Use modern fonts for game text Off, the

@@ -408,8 +408,8 @@ line, which engine the machine runs: `[Engine: OpenAnnihilation v<version>]`,
 or `[Engine: OpenAnnihilation v<version> DEV MODE]` while Developer Mode is
 on. It is said once as the battle room is entered, and again whenever
 Developer Mode is turned on or off there, so every player sees whether
-Open Annihilation and its Developer Mode are in use
-([VARIANCES.md](../../VARIANCES.md#engine-line-in-the-battle-room)).
+Open Annihilation and its Developer Mode are in use. 3.1c says nothing
+there; the engine differs on purpose.
 
 ## For contributors
 

@@ -5104,7 +5104,7 @@ class Runtime final : public menu::Host,
     /// alike, the circles following the terrain of never-mapped ground too.
     /// In 3.1c the smoke covers them, and the fog blacks them out on
     /// never-mapped ground and grays them on ground out of sight.
-    /// VARIANCES.md lists this difference.
+    /// The engine differs from 3.1c here on purpose.
     ///
     /// @param[in,out] destination battlefield frame
     /// @param viewport battlefield viewport
@@ -10318,7 +10318,7 @@ class Runtime final : public menu::Host,
     /// Checks the cheat gate of a campaign.
     ///
     /// The mission start opened the cheat class to the chat line, as a
-    /// skirmish's does (3.1c closes it; VARIANCES.md): "+atm" adds its amount
+    /// skirmish's does (3.1c closes it; the engine differs on purpose): "+atm" adds its amount
     /// and its echo goes to everyone, option commands such as "+clock" run,
     /// every cheat takes effect (check_console_cheat_effects) and "+sing"
     /// works (check_console_sing_command), all typed through the chat line
