@@ -7,6 +7,7 @@
 // running game; what they tell the other players' machines goes through the
 // extension's TeamPanelHost.
 #include "oa/app/runtime.hpp"
+#include "panel_first_draw.hpp"
 #include "oa/data/defs/layout.hpp"
 #include "oa/data/defs/categories.hpp"
 #include "oa/sim/match_runtime.hpp"
@@ -185,16 +186,8 @@ oa::ui::gui_layout::ButtonFields* button_of(oa::ui::gui_layout::Gadget& gadget) 
     return std::get_if<oa::ui::gui_layout::ButtonFields>(&gadget.fields);
 }
 
-/// Gives a button of a loaded panel the quick key its caption gives it, as
-/// the gadget engine does when it sets a caption
-/// (ui::gui_input::caption_quick_key): none with stages, the old one with
-/// the no_quick_key attribute or an empty caption, else the first caption
-/// letter no other button's key takes (ui::gui_input::free_quick_key). A
-/// loaded layout's labels hold no quick key: the gadget engine gives a label
-/// one only when a caption is set on a label with a link.
-///
-/// @param[in,out] gadgets the panel's records, root first
-/// @param index the button's record
+} // namespace
+
 void assign_button_quick_key(std::vector<oa::ui::gui_layout::Gadget>& gadgets, std::size_t index) {
     auto* button = button_of(gadgets[index]);
     if (button == nullptr)
@@ -213,8 +206,6 @@ void assign_button_quick_key(std::vector<oa::ui::gui_layout::Gadget>& gadgets, s
             taken.push_back(fields->quick_key);
     button->quick_key = static_cast<int8_t>(oa::ui::gui_input::free_quick_key(button->text, taken));
 }
-
-} // namespace
 
 bool Runtime::multiplayer_session() const {
     return (current_extension_state() & extension_state::multiplayer) != 0;

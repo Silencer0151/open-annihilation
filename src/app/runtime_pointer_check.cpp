@@ -7,6 +7,7 @@
 // the on-screen unit list, the pointer's pick and what they drive, and the
 // commander placement, through synthetic SDL input.
 #include "oa/app/runtime.hpp"
+#include "panel_first_draw.hpp"
 #include "oa/data/defs/layout.hpp"
 #include "oa/core/map_plot.h"
 #include "oa/ui/console/game_fields.hpp"
@@ -16,6 +17,7 @@
 #include "oa/ui/hud/chat_panel.hpp"
 #include "oa/ui/hud/order_overlays.hpp"
 #include "oa/ui/hud/resource_bar.hpp"
+#include "oa/formats/gaf.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
@@ -1508,12 +1510,72 @@ void Runtime::check_pointer_picks() {
         picture.width > 0 && matching == static_cast<std::size_t>(picture.width) * picture.height,
         "the HOTR pixels are not the unit's picture"
     );
+    // The panel names no picture of its own: its face is BackTile and DONE
+    // shows BUTTONS0's 96x20 picture, both from the common GUI art, with
+    // OK's O its quick key; it is centred right of the HUD strip whatever
+    // position its file gives, and shows centred right of the side column.
+    {
+        const auto& screen = *unit_info_panel_->screen;
+        const auto& root = unit_info_panel_->root;
+        const auto art_pixel = [&](std::string_view sequence, std::size_t frame, int fx, int fy) {
+            const auto* found = gaf_sequence(screen.shared_sprites, sequence);
+            if (found == nullptr || frame >= found->frames.size())
+                return std::optional<std::array<uint8_t, 3>>{};
+            const auto rendered = oa::formats::gaf::render_normal(found->frames[frame]);
+            if (!rendered.ok())
+                return std::optional<std::array<uint8_t, 3>>{};
+            const auto index =
+                static_cast<std::size_t>(rendered.frame->pixels
+                                             [static_cast<std::size_t>(fy) * rendered.frame->width +
+                                              static_cast<std::size_t>(fx)]);
+            return std::optional<std::array<uint8_t, 3>>{std::array<uint8_t, 3>{
+                match_palette_[index * 4U],
+                match_palette_[index * 4U + 1],
+                match_palette_[index * 4U + 2]
+            }};
+        };
+        const auto drawn_at = [&](int x, int y) {
+            const auto* pixel =
+                drawn.rgb.data() +
+                (static_cast<std::size_t>(y) * drawn.width + static_cast<std::size_t>(x)) * 3U;
+            return std::array<uint8_t, 3>{pixel[0], pixel[1], pixel[2]};
+        };
+        require_pick(
+            root.x == (kCanvasWidth - kBattlefieldLeft - root.width) / 2 + kBattlefieldLeft &&
+                root.y == (kCanvasHeight - root.height) / 2,
+            "the unit info panel is not centred right of the HUD strip"
+        );
+        require_pick(
+            art_pixel(kBackTile, 0, 0, 0) == drawn_at(root.x, root.y) &&
+                art_pixel(kBackTile, 2, 63, 0) == drawn_at(root.x + root.width - 1, root.y),
+            "the unit info panel's face is not BackTile"
+        );
+        const auto* fields = std::get_if<oa::ui::gui_layout::ButtonFields>(&done->fields);
+        require_pick(
+            done->common.width == 96 && done->common.height == 20 &&
+                art_pixel("BUTTONS0", 12, 0, 0) == drawn_at(done->common.x, done->common.y) &&
+                fields != nullptr && fields->quick_key == 'O',
+            "DONE is not BUTTONS0's 96x20 picture with O its quick key"
+        );
+        const auto area = unit_info_area();
+        require_pick(
+            area.has_value() &&
+                area->x == (match_layout_.width - match_layout_.left - area->width) / 2 +
+                               match_layout_.left &&
+                area->y == (match_layout_.height - area->height) / 2,
+            "the unit info panel does not show centred right of the side column"
+        );
+    }
     snapshot("native-pointer-unit-info.ppm");
-    const auto done_canvas = oa::ui::display_layout::source_to_canvas(
-        match_layout_,
-        done->common.x + done->common.width / 2,
-        done->common.y + done->common.height / 2
-    );
+    const auto info_area = unit_info_area();
+    require_pick(info_area.has_value(), "the unit info panel shows nowhere");
+    const auto& info_root = unit_info_panel_->root;
+    const auto done_canvas = oa::ui::display_layout::Point{
+        info_area->x + (done->common.x + done->common.width / 2 - info_root.x) * info_area->width /
+                           info_root.width,
+        info_area->y + (done->common.y + done->common.height / 2 - info_root.y) *
+                           info_area->height / info_root.height
+    };
     click(SDL_BUTTON_LEFT, static_cast<float>(done_canvas.x), static_cast<float>(done_canvas.y));
     require_pick(
         !unit_info_panel_ && (game.frame_flags & hud::kFrameUnitInfoOpen) == 0,
@@ -1523,6 +1585,11 @@ void Runtime::check_pointer_picks() {
     key(SDLK_F1, SDL_SCANCODE_F1);
     key(SDLK_ESCAPE, SDL_SCANCODE_ESCAPE);
     require_pick(!unit_info_panel_, "Escape did not close the unit info panel");
+    move_to(info_x, info_y);
+    key(SDLK_F1, SDL_SCANCODE_F1);
+    require_pick(unit_info_panel_.has_value(), "F1 did not open the unit info panel again");
+    key(SDLK_O, SDL_SCANCODE_O);
+    require_pick(!unit_info_panel_, "O, OK's quick key, did not close the unit info panel");
 
     // 'n' centres on the next unvisited local unit and selects nothing; the
     // units then on screen are visited; with every unit visited the cycle

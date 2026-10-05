@@ -3,6 +3,7 @@
 
 // Match hotkeys, selection commands and overlays.
 #include "oa/app/runtime.hpp"
+#include "panel_first_draw.hpp"
 #include "oa/app/view_rules.hpp"
 #include "oa/data/languages/translation.hpp"
 #include "oa/present/game_text.hpp"
@@ -17,6 +18,7 @@
 #include "oa/ui/hud/chat_panel.hpp"
 #include "oa/ui/hud/order_panel.hpp"
 #include "oa/ui/hud/unit_info.hpp"
+#include "oa/ui/gui_input/gadget_panel.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
@@ -62,6 +64,46 @@ int page_key_step(const SDL_KeyboardEvent& key) {
     if (key.key == SDLK_COMMA)
         return -1;
     return 0;
+}
+
+// The unit info panel's control that shows the unit's picture, and the one
+// that closes it.
+constexpr const char* kUnitInfoPicture = "HOTR";
+constexpr const char* kUnitInfoDone = "DONE";
+// The art the unit info panel's face and button come from.
+constexpr const char* kUnitInfoArt = "anims/commongui.gaf";
+// Height of a statistic label the unit info panel adds: one line of the GUI
+// font.
+constexpr int16_t kUnitInfoLabelHeight = 12;
+
+// Quick keys are ASCII characters below this one.
+constexpr SDL_Keycode kQuickKeyEnd = 0x7F;
+
+/// Returns whether a key types the quick key of a panel's named button.
+///
+/// Keys with Ctrl, Alt or the system key down type no character; a letter
+/// matches in either case.
+///
+/// @param gadgets the panel's records
+/// @param name the button's name
+/// @param key the key pressed
+/// @return true when the button holds a quick key and the key types it
+bool types_quick_key(
+    const std::vector<oa::ui::gui_layout::Gadget>& gadgets,
+    std::string_view name,
+    const SDL_KeyboardEvent& key
+) {
+    if ((key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0 || key.key == 0 ||
+        key.key >= kQuickKeyEnd)
+        return false;
+    const auto typed = std::tolower(static_cast<int>(key.key));
+    return std::any_of(
+        gadgets.begin(), gadgets.end(), [&](const oa::ui::gui_layout::Gadget& gadget) {
+            const auto* button = std::get_if<oa::ui::gui_layout::ButtonFields>(&gadget.fields);
+            return button != nullptr && gadget.common.name == name && button->quick_key != 0 &&
+                   std::tolower(static_cast<unsigned char>(button->quick_key)) == typed;
+        }
+    );
 }
 
 } // namespace
@@ -154,8 +196,12 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
     // escape_match_menu answers its Escape.
     if (match_paused_ && key.key == SDLK_RETURN && enter_match_menu())
         return true;
-    // The unit info panel's Enter and Escape defaults are both DONE.
-    if (unit_info_panel_ && (key.key == SDLK_RETURN || key.key == SDLK_ESCAPE)) {
+    // The unit info panel's Enter and Escape defaults are both DONE, and so
+    // is its quick key, OK's O.
+    if (unit_info_panel_ &&
+        (key.key == SDLK_RETURN || key.key == SDLK_ESCAPE ||
+         (unit_info_panel_->screen &&
+          types_quick_key(unit_info_panel_->screen->layout.gadgets, kUnitInfoDone, key)))) {
         press_unit_info_done();
         return true;
     }
@@ -619,16 +665,6 @@ void Runtime::adjust_game_speed(int delta) {
         );
 }
 
-namespace {
-
-// The panel control that shows the unit's picture, and the one that closes it.
-constexpr const char* kUnitInfoPicture = "HOTR";
-constexpr const char* kUnitInfoDone = "DONE";
-// Height of a statistic label the panel adds: one line of the GUI font.
-constexpr int16_t kUnitInfoLabelHeight = 12;
-
-} // namespace
-
 bool Runtime::open_unit_info() {
     namespace hud = oa::ui::hud;
     if (!match_)
@@ -659,16 +695,13 @@ bool Runtime::open_unit_info() {
     loader.user = this;
     loader.load = [](void* user, const char* name, const oa::Unit*, int32_t) {
         auto& self = *static_cast<Runtime*>(user);
-        const auto chrome = self.match_side_panel_gaf();
         UnitInfoPanel panel;
         try {
+            // The panel's art is the common GUI art: its face and its
+            // button's picture, as the panel names no GAF of its own.
             panel.screen = renderer::load_screen(
                 self.assets_,
-                {oa::data::defs::gui_path(name),
-                 "",
-                 "palettes/guipal.pal",
-                 "anims/commongui.gaf",
-                 chrome}
+                {oa::data::defs::gui_path(name), "", "palettes/guipal.pal", "", kUnitInfoArt}
             );
         } catch (const std::exception& error) {
             std::cerr << "unit info panel unavailable: " << error.what() << '\n';
@@ -677,14 +710,26 @@ bool Runtime::open_unit_info() {
         auto& gadgets = panel.screen->layout.gadgets;
         if (gadgets.empty())
             return false;
-        // The controls lie in the panel, which the file places on the screen.
-        panel.root = gadgets.front().common;
+        // The panel is centred right of the HUD strip, as 3.1c places it
+        // whatever position its file gives; the controls lie in it.
+        auto& root = gadgets.front().common;
+        oa::ui::gui_input::place_root(
+            root.x,
+            root.y,
+            root.width,
+            root.height,
+            oa::ui::gui_input::panel_flag::beside_hud | oa::ui::gui_input::panel_flag::first_draw,
+            kCanvasWidth,
+            kCanvasHeight,
+            kBattlefieldLeft
+        );
+        panel.root = root;
         for (std::size_t index = 1; index < gadgets.size(); ++index) {
             gadgets[index].common.x = static_cast<int16_t>(gadgets[index].common.x + panel.root.x);
             gadgets[index].common.y = static_cast<int16_t>(gadgets[index].common.y + panel.root.y);
         }
-        // The panel has no picture of its own; it is drawn over black in
-        // the game palette.
+        // The panel names no picture of its own, so its face is the common
+        // GUI art's BackTile, drawn in the game palette.
         auto& background = panel.screen->background;
         background.width = static_cast<uint32_t>(kCanvasWidth);
         background.height = static_cast<uint32_t>(kCanvasHeight);
@@ -693,6 +738,13 @@ bool Runtime::open_unit_info() {
                 return b != 0;
             }))
             background.palette = self.match_palette_;
+        if (const auto* tile = self.gaf_sequence(panel.screen->shared_sprites, kBackTile))
+            draw_back_tile(
+                background,
+                panel.root,
+                *tile,
+                background.palette ? *background.palette : panel.screen->gui_palette
+            );
         self.unit_info_panel_ = std::move(panel);
         self.match_->state().game.frame_flags =
             static_cast<uint16_t>(self.match_->state().game.frame_flags | hud::kFrameUnitInfoOpen);
@@ -774,9 +826,23 @@ bool Runtime::open_unit_info() {
         return false;
     }
     // The panel is drawn once, its picture copied at HOTR at its own size.
+    // Each button shows the quick key its caption gives it on the panel's
+    // first draw, underlined: OK's O.
     auto& panel = *unit_info_panel_;
+    std::vector<renderer::ButtonPresentation> buttons;
+    auto& gadgets = panel.screen->layout.gadgets;
+    for (std::size_t index = 0; index < gadgets.size(); ++index) {
+        assign_button_quick_key(gadgets, index);
+        if (const auto* button =
+                std::get_if<oa::ui::gui_layout::ButtonFields>(&gadgets[index].fields)) {
+            renderer::ButtonPresentation shown;
+            shown.name = gadgets[index].common.name;
+            shown.quick_key = static_cast<char>(button->quick_key);
+            buttons.push_back(std::move(shown));
+        }
+    }
     try {
-        panel.frame = renderer::render_screen(*panel.screen);
+        panel.frame = renderer::render_screen(*panel.screen, buttons);
     } catch (const std::exception& error) {
         std::cerr << "unit info panel: " << error.what() << '\n';
         panel.frame = {};
@@ -853,20 +919,60 @@ void Runtime::press_unit_info_done() {
         close_unit_info();
 }
 
+std::optional<oa::ui::display_layout::Rect> Runtime::unit_info_area() const {
+    if (!unit_info_panel_ || match_layout_.scale <= 0.0 ||
+        oa::ui::display_layout::placed_mode(match_layout_))
+        return std::nullopt;
+    const auto& root = unit_info_panel_->root;
+    if (root.width <= 0 || root.height <= 0)
+        return std::nullopt;
+    const auto scaled = [this](int32_t value) {
+        return std::max(
+            1, static_cast<int32_t>(std::lround(static_cast<double>(value) * match_layout_.scale))
+        );
+    };
+    const auto width = scaled(root.width);
+    const auto height = scaled(root.height);
+    int16_t x = 0;
+    int16_t y = 0;
+    oa::ui::gui_input::place_root(
+        x,
+        y,
+        width,
+        height,
+        oa::ui::gui_input::panel_flag::beside_hud | oa::ui::gui_input::panel_flag::first_draw,
+        match_layout_.width,
+        match_layout_.height,
+        match_layout_.left
+    );
+    return oa::ui::display_layout::Rect{x, y, width, height};
+}
+
 bool Runtime::click_unit_info(float x, float y) {
     if (!unit_info_panel_ || !unit_info_panel_->screen)
         return false;
-    const auto point = oa::ui::display_layout::canvas_to_source(
-        match_layout_, static_cast<int>(x), static_cast<int>(y)
-    );
     const auto& root = unit_info_panel_->root;
+    const auto column = static_cast<int>(x);
+    const auto row = static_cast<int>(y);
+    // The point in the panel's own pixels: on the phone layout through the
+    // region it shows in, elsewhere through where it shows over the
+    // battlefield.
+    auto point = oa::ui::display_layout::canvas_to_source(match_layout_, column, row);
+    if (!oa::ui::display_layout::placed_mode(match_layout_)) {
+        const auto area = unit_info_area();
+        if (!area || column < area->x || row < area->y || column >= area->x + area->width ||
+            row >= area->y + area->height)
+            return false;
+        point.x = root.x + (column - area->x) * root.width / area->width;
+        point.y = root.y + (row - area->y) * root.height / area->height;
+    }
     if (point.x < root.x || point.y < root.y || point.x >= root.x + root.width ||
         point.y >= root.y + root.height)
         return false;
     for (const auto& gadget : unit_info_panel_->screen->layout.gadgets) {
-        const auto& area = gadget.common;
-        if (area.name == kUnitInfoDone && point.x >= area.x && point.y >= area.y &&
-            point.x < area.x + area.width && point.y < area.y + area.height) {
+        const auto& control = gadget.common;
+        if (control.name == kUnitInfoDone && point.x >= control.x && point.y >= control.y &&
+            point.x < control.x + control.width && point.y < control.y + control.height) {
             press_unit_info_done();
             break;
         }
@@ -881,16 +987,20 @@ void Runtime::draw_unit_info_panel() {
         return;
     if (!unit_info_panel_ || unit_info_panel_->frame.rgb.empty())
         return;
+    const auto area = unit_info_area();
+    if (!area)
+        return;
+    // The panel keeps the interface's scale, centred right of the side
+    // column as 3.1c centres it right of the HUD strip on its screen.
     const auto& root = unit_info_panel_->root;
-    const auto top_left = hud_canvas(root.x, root.y);
-    const auto bottom_right = hud_canvas(root.x + root.width, root.y + root.height);
+    const auto at = canvas_paint(area->x, area->y);
     scale_blit(
         paint_target(),
         unit_info_panel_->frame,
-        top_left.x,
-        top_left.y,
-        std::max(1, bottom_right.x - top_left.x),
-        std::max(1, bottom_right.y - top_left.y),
+        at.x,
+        at.y,
+        area->width,
+        area->height,
         root.x,
         root.y,
         root.width,

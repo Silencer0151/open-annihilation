@@ -8927,9 +8927,19 @@ class Runtime final : public menu::Host,
     /// picture; nothing when it is not open.
     void close_unit_info();
 
-    /// Presses the unit info panel's DONE, which the panel's Enter and Escape defaults also press:
-    /// the button sound, then the panel closes.
+    /// Presses the unit info panel's DONE, which the panel's Enter and Escape defaults and OK's
+    /// quick key also press: the button sound, then the panel closes.
     void press_unit_info_done();
+
+    /// Returns where the unit info panel shows over the battlefield: at the
+    /// interface's scale, centred right of the side column, as 3.1c centres it
+    /// right of the HUD strip on its screen; on a 640x480 window that is the
+    /// panel's own position. On the phone layout the panel shows through its
+    /// placed region instead.
+    ///
+    /// @return the panel's rectangle in canvas pixels, or nothing when it is not open or the
+    ///         phone layout places it
+    [[nodiscard]] std::optional<oa::ui::display_layout::Rect> unit_info_area() const;
 
     /// Handles a left click while the unit info panel is open: DONE closes it.
     ///
@@ -8938,8 +8948,8 @@ class Runtime final : public menu::Host,
     /// @return true when the click was on the panel
     bool click_unit_info(float x, float y);
 
-    /// Draws the unit info panel over the battlefield: its controls, the statistic labels and the
-    /// unit's picture at HOTR at the picture's own size.
+    /// Draws the unit info panel over the battlefield where unit_info_area() puts it: its face,
+    /// its controls, the statistic labels and the unit's picture at HOTR at the picture's own size.
     void draw_unit_info_panel();
 
     /// Draws the bottom bar's unit panel: the unit under the cursor, the build button under the
@@ -12815,9 +12825,10 @@ class Runtime final : public menu::Host,
     // screen with the added statistic labels, drawn once as it opens.
     struct UnitInfoPanel {
         std::optional<renderer::ScreenResources> screen{};
-        renderer::Surface frame{};               // the panel drawn over black, 640x480
-        oa::ui::gui_layout::CommonFields root{}; // the panel's rectangle on screen
-        std::string picture_path{};              // unitpics\<name>.PCX, empty once released
+        renderer::Surface frame{}; // the panel on its BackTile face, over black, 640x480
+        // The panel's rectangle in the frame: centred right of the HUD strip.
+        oa::ui::gui_layout::CommonFields root{};
+        std::string picture_path{}; // unitpics\<name>.PCX, empty once released
     };
 
     std::optional<UnitInfoPanel> unit_info_panel_{};

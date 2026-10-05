@@ -21,6 +21,7 @@
 #include "oa/present/surface.hpp"
 #include "oa/sim/speed.hpp"
 #include "match_fault.hpp"
+#include "panel_first_draw.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <cstddef>
@@ -51,9 +52,8 @@ constexpr int32_t kCursorReach = 64;
 // one unit at a time.
 constexpr int kReadoutSettleSteps = 256;
 // The face of a panel whose GUI file names no picture of its own: the common
-// GUI art's BackTile, three rows (top, middle, bottom) of three frames (left,
-// middle, right).
-constexpr std::string_view kBackTile = "BackTile";
+// GUI art's BackTile (kBackTile), three rows (top, middle, bottom) of three
+// frames (left, middle, right).
 constexpr std::size_t kBackTileFrames = 9;
 constexpr std::size_t kBackTileRowFrames = 3;
 constexpr std::size_t kBackTileMiddle = 1;

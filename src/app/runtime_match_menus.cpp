@@ -28,6 +28,7 @@
 #include "oa/ui/console/game_fields.hpp"
 #include "oa/present/world_renderer/world_camera.hpp"
 #include "oa/app/runtime.hpp"
+#include "panel_first_draw.hpp"
 #include "oa/base/text/line_break.hpp"
 #include "oa/ui/hud/resource_bar.hpp"
 #include "oa/app/view_rules.hpp"
@@ -248,20 +249,8 @@ void paste_area(
         }
 }
 
-// The face 3.1c gives a panel whose GUI file names no picture of its own: the
-// common GUI art's BackTile, a nine-frame skin.
-constexpr std::string_view kBackTile = "BackTile";
+} // namespace
 
-/// Tiles the BackTile frames over a panel root's rectangle of an RGB image.
-///
-/// The frames are laid out as `oa::ui::gui_layout::skin_tiles` places them
-/// over the root. Frame origins are ignored, and nothing is drawn outside the
-/// root.
-///
-/// @param[in,out] image RGB image the root lies on
-/// @param root the panel's root, in the image's pixels
-/// @param tile the BackTile sequence
-/// @param palette palette the frames' colours index, 4 bytes per colour
 void draw_back_tile(
     oa::Image& image,
     const oa::ui::gui_layout::CommonFields& root,
@@ -315,6 +304,8 @@ void draw_back_tile(
     for (const auto& placed : tiles)
         stamp(frames[placed.frame], placed.x, placed.y);
 }
+
+namespace {
 
 // Copies the top-left of `art` the size of the panel root onto the panel.
 void draw_panel_backdrop(
