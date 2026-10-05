@@ -4,6 +4,7 @@
 // Unit naming, GAF sequence helpers and game cursors.
 #include "oa/app/runtime.hpp"
 #include "oa/app/asset_files.hpp"
+#include "oa/data/languages/unit_texts.hpp"
 #include "oa/sim/gameplay_input/order_cursor.hpp"
 #include "world_draws.hpp"
 #include <algorithm>
@@ -101,9 +102,13 @@ std::string Runtime::unit_info_name(uint16_t unit) const {
     if (definition == nullptr)
         return unit_gui_name(unit);
     if (!definition->display_name.empty()) {
+        // The name in the language shown, as the bottom bar shows it.
+        const std::string name(
+            oa::data::languages::unit_display_name(definition->unit_name, definition->display_name)
+        );
         if (!definition->side.empty())
-            return definition->side + " " + definition->display_name;
-        return definition->display_name;
+            return definition->side + " " + name;
+        return name;
     }
     return definition->unit_name.empty() ? unit_gui_name(unit) : definition->unit_name;
 }

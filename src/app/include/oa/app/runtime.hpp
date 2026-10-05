@@ -2358,7 +2358,10 @@ class Runtime final : public menu::Host,
     /// @return the type name, or empty for no match, no unit or an unknown type
     std::string unit_gui_name(uint16_t unit) const;
 
-    /// Returns the name the unit readout shows for a match unit.
+    /// Returns the name the unit readout and the touch and pad controls show for a match unit.
+    ///
+    /// The display name is the one the language shown gives the type
+    /// (oa::data::languages::unit_display_name), as the bottom bar shows it.
     ///
     /// @param unit unit id
     /// @return the side and display name, the display name alone, the unit name,
@@ -4558,13 +4561,14 @@ class Runtime final : public menu::Host,
     /// PREV and NEXT turn the unit's page among its type's pages, from the
     /// last to the first and back; from the order page they turn the page
     /// the unit kept. With `cycle`, as the ',' and '.' keys turn it, a turn
-    /// for each repeat of a held one, the order page takes its turn between the last page and the first, so from the
-    /// order page '.' opens the first page and ',' the last. On a page taller
-    /// than the side column the turn steps through its parts first, which the
-    /// unit does not keep, and a page turned back to opens at its last part.
-    /// Selecting the unit again opens what it shows, and a save keeps it.
-    /// Nothing changes with none or several units selected. The choice is the
-    /// local player's own: no other machine hears of it.
+    /// for each repeat of a held one, the order page takes its turn between
+    /// the last page and the first, so from the order page '.' opens the
+    /// first page and ',' the last. On a page taller than the side column
+    /// the turn steps through its parts first, which the unit does not keep,
+    /// and a page turned back to opens at its last part. Selecting the unit
+    /// again opens what it shows, and a save keeps it. Nothing changes with
+    /// none or several units selected. The choice is the local player's own:
+    /// no other machine hears of it.
     ///
     /// @param press the button pressed; any other action does nothing
     /// @param cycle whether the order page takes a turn among the build pages

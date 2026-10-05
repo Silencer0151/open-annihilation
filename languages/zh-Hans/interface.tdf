@@ -4504,6 +4504,16 @@
 	zh-Hans=点按目标 · ✕ 撤回;
 	}
 
+[TAP: {action}]
+	{
+	zh-Hans=点按：{action};
+	}
+
+[ENEMY: {action}]
+	{
+	zh-Hans=敌方：{action};
+	}
+
 [Enable Unicode Multiplayer Chat]
 	{
 	zh-Hans=启用Unicode多人聊天;

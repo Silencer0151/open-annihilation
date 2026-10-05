@@ -4,7 +4,7 @@
 // The device class, the latches, the orders' names, the hit tests, the help
 // lines, the labels, the status hint, and the pad's badges, hints and button
 // names (touch_hud.hpp). Every text is English and untranslated; the drawing
-// translates it.
+// translates it, or hands its translation to shown_label and status_hint.
 #include "oa/ui/touch_hud.hpp"
 
 #include "touch_hud_rects.hpp"
@@ -173,6 +173,11 @@ constexpr std::array<std::string_view, 10> group_labels{
     "8",
     "9",
 };
+
+/// The status hint's piece for what a tap gives, as it is translated.
+constexpr std::string_view tap_phrase = "TAP: {action}";
+/// The status hint's piece for what a tap on an enemy gives, as it is translated.
+constexpr std::string_view enemy_phrase = "ENEMY: {action}";
 
 /// Returns the word a tap's action is shown with in the status hint.
 ///
@@ -643,28 +648,42 @@ control_label_lookup(Control control, uint8_t index, const HudState& state) noex
 std::string shown_label(
     std::string_view label,
     std::string_view lookup,
-    const std::function<std::string(std::string_view)>& translate
+    const std::function<std::string(std::string_view)>& translate,
+    std::string_view action
 ) {
     if (lookup.empty() || lookup == label)
         return translate(label);
     std::string translated = translate(lookup);
-    return translated == lookup ? std::string(label) : translated;
+    if (translated == lookup)
+        return std::string(label);
+    if (action.empty())
+        return translated;
+    const std::string word = translate(action);
+    std::string shown;
+    std::size_t at = 0;
+    for (std::size_t found = translated.find(action_field); found != std::string::npos;
+         found = translated.find(action_field, at)) {
+        shown.append(translated, at, found - at);
+        shown += word;
+        at = found + action_field.size();
+    }
+    shown.append(translated, at);
+    return shown;
 }
 
-std::string status_hint(TapAction tap, TapAction enemy) {
+std::string status_hint(
+    TapAction tap, TapAction enemy, const std::function<std::string(std::string_view)>& translate
+) {
     // While placing, the line says how to place.
     if (tap == TapAction::place)
-        return "DRAG TO MOVE · DOUBLE-TAP OR HOLD TO PLACE";
+        return translate("DRAG TO MOVE · DOUBLE-TAP OR HOLD TO PLACE");
     std::string hint;
-    if (const auto word = tap_action_word(tap); !word.empty()) {
-        hint += "TAP: ";
-        hint += word;
-    }
+    if (const auto word = tap_action_word(tap); !word.empty())
+        hint += shown_label("TAP: " + std::string(word), tap_phrase, translate, word);
     if (const auto word = tap_action_word(enemy); !word.empty()) {
         if (!hint.empty())
             hint += " · ";
-        hint += "ENEMY: ";
-        hint += word;
+        hint += shown_label("ENEMY: " + std::string(word), enemy_phrase, translate, word);
     }
     return hint;
 }
@@ -698,17 +717,20 @@ constexpr std::string_view hint_separator = "\xC2\xB7";
 /// @param chord the piece's glyphs; none for words alone
 /// @param text the piece's words
 /// @param lookup the text the words are translated by when it is not the words themselves
+/// @param action the word the lookup's action_field holds; empty for none
 void add_part(
     PadHint& hint,
     std::optional<pad::Chord> chord,
     std::string_view text,
-    std::string_view lookup = {}
+    std::string_view lookup = {},
+    std::string_view action = {}
 ) {
     if (hint.count >= max_hint_parts)
         return;
     hint.parts[hint.count].chord = chord;
     hint.parts[hint.count].text = std::string(text);
     hint.parts[hint.count].lookup = std::string(lookup);
+    hint.parts[hint.count].action = std::string(action);
     ++hint.count;
 }
 
@@ -718,15 +740,17 @@ void add_part(
 /// @param chord the piece's glyphs; none for words alone
 /// @param text the piece's words
 /// @param lookup the text the words are translated by when it is not the words themselves
+/// @param action the word the lookup's action_field holds; empty for none
 void add_separated(
     PadHint& hint,
     std::optional<pad::Chord> chord,
     std::string_view text,
-    std::string_view lookup = {}
+    std::string_view lookup = {},
+    std::string_view action = {}
 ) {
     if (hint.count > 0)
         add_part(hint, std::nullopt, hint_separator);
-    add_part(hint, chord, text, lookup);
+    add_part(hint, chord, text, lookup, action);
 }
 
 /// Returns a chord's buttons with neither its tap nor its hold: the glyphs a hint shows beside
@@ -772,7 +796,9 @@ PadHint pad_status_hint(
     // An enemy's click is named when it gives something else than the click at the pointer.
     const auto add_enemy = [&] {
         if (!enemy_word.empty() && enemy != tap)
-            add_separated(hint, std::nullopt, "ENEMY: " + std::string(enemy_word));
+            add_separated(
+                hint, std::nullopt, "ENEMY: " + std::string(enemy_word), enemy_phrase, enemy_word
+            );
     };
     if (right_click_interface && !armed_or_placing) {
         // The left button selects; the right gives the order the cursor shows.

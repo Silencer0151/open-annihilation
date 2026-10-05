@@ -46,16 +46,20 @@ against it; the drawing reads both. The gamepad dispatcher writes
   slots; the hub is a one-shot QUEUE.
 - `hit`, `nearest_rect` and `covers` find the control or rectangle under a
   finger, the nearest within a radius when none is exactly under it.
-- `control_help`, `control_label`, `menu_item_label`, `order_name`,
-  `order_label` and `status_hint` give the texts the controls show,
-  untranslated; `order_name` gives the order panel names
+- `control_help`, `control_label`, `menu_item_label`, `order_name` and
+  `order_label` give the texts the controls show, untranslated;
+  `order_name` gives the order panel names
   `arm_match_command` takes (MOVE, ATTACK, PATROL, DEFEND, STOP, BLAST,
   RECLAIM, REPAIR, CAPTURE, LOAD, UNLOAD). `control_label_lookup` gives
   the text a label is translated by, which is the label itself but where
   one word stands for two things: the rail's NEXT (next unit) is looked up
   as NEXT UNIT and the build pages' NEXT as NEXT PAGE. `shown_label` draws
   a label from its lookup text's translation, or in English when the
-  language has none, never from the bare word's.
+  language has none, never from the bare word's; a lookup text with an
+  `{action}` field has it filled with the action's own translation.
+  `status_hint` gives the status hint ("TAP: MOVE · ENEMY: ATTACK") in the
+  language shown, each piece translated whole as "TAP: {action}" and
+  "ENEMY: {action}".
 - `gadget_help` gives the help line a long press on a 3.1c order panel
   gadget shows when the gadget carries none (the game's GUI files give the
   in-game panels no help text): the order buttons, the standing-order
@@ -83,7 +87,8 @@ against it; the drawing reads both. The gamepad dispatcher writes
   the fallback and left-handed maps name the right ones. A piece's
   `lookup` names the text its words are translated by when it is not the
   words themselves: ARM is looked up as ARM ORDER, since the game's own
-  table holds ARM as the side's name. `control_badge`
+  table holds ARM as the side's name, and the enemy's piece as
+  "ENEMY: {action}" with its `action`. `control_badge`
   gives a control's badge (QUEUE R4, ADD L4, CLEAR B, SELECT ▾ D-pad left,
   PAUSE View+X, CHAT View+A, CENTRE L3, FOLLOW R3, NEXT D-pad right, INFO
   View, FORCE R5, a group chip's groups-layer button), and

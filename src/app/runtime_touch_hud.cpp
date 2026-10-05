@@ -807,7 +807,7 @@ void paint_pill(const PaintContext& context, paint::Area area, paint::Rgba edge,
 /// @param part the piece
 /// @return the words to draw
 std::string piece_words(const PaintContext& context, const hud::HintPart& part) {
-    std::string words = hud::shown_label(part.text, part.lookup, context.translate);
+    std::string words = hud::shown_label(part.text, part.lookup, context.translate, part.action);
     if (part.chord && !context.state.pad.badges) {
         const std::string names = hud::chord_words(*part.chord, context.state.pad.glyphs);
         words = words.empty() ? names : names + " " + words;
@@ -1342,7 +1342,7 @@ void paint_status(const PaintContext& context) {
         return;
     }
     const std::string hint =
-        context.translate(hud::status_hint(state.tap_action, state.enemy_action));
+        hud::status_hint(state.tap_action, state.enemy_action, context.translate);
     paint_title_and_hint(
         context,
         context.translate(state.selection_text),

@@ -52,7 +52,10 @@ int game_speed_key_step(const SDL_KeyboardEvent& key) {
     return 0;
 }
 
-// The page a build-page key turns: 1 for '.', -1 for ',', 0 for any other key.
+/// Returns the way a build-page key turns the order panel's page.
+///
+/// @param key the key pressed
+/// @return 1 for '.', -1 for ',', 0 for any other key
 int page_key_step(const SDL_KeyboardEvent& key) {
     if (key.key == SDLK_PERIOD)
         return 1;

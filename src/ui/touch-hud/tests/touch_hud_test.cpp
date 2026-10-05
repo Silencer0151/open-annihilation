@@ -345,12 +345,17 @@ void orders_have_their_panel_names() {
     }
     OA_CHECK(hud::order_label(hud::Order::guard) == "GUARD");
     OA_CHECK(hud::order_label(hud::Order::blast) == "D-GUN");
+    const std::function<std::string(std::string_view)> english = [](std::string_view text) {
+        return std::string(text);
+    };
     OA_CHECK(
-        hud::status_hint(hud::TapAction::move, hud::TapAction::attack) ==
+        hud::status_hint(hud::TapAction::move, hud::TapAction::attack, english) ==
         "TAP: MOVE · ENEMY: ATTACK"
     );
-    OA_CHECK(hud::status_hint(hud::TapAction::select, hud::TapAction::none) == "TAP: SELECT");
-    OA_CHECK(hud::status_hint(hud::TapAction::none, hud::TapAction::none).empty());
+    OA_CHECK(
+        hud::status_hint(hud::TapAction::select, hud::TapAction::none, english) == "TAP: SELECT"
+    );
+    OA_CHECK(hud::status_hint(hud::TapAction::none, hud::TapAction::none, english).empty());
 }
 
 /// Checks the tablet's pinned rectangles at 1180x820 beside the 3.1c HUD.
@@ -1783,10 +1788,14 @@ void pad_hints_name_the_buttons() {
         // themselves.
         OA_CHECK(ring.parts[part].lookup == (ring.parts[part].text == "ARM" ? "ARM ORDER" : ""));
     }
+    // The enemy's piece is looked up whole, its action filled in; the others by themselves.
     const hud::PadHint status =
         hud::pad_status_hint(TapAction::move, TapAction::attack, true, false, map);
-    for (std::size_t part = 0; part < status.count; ++part)
-        OA_CHECK(status.parts[part].lookup.empty());
+    for (std::size_t part = 0; part < status.count; ++part) {
+        const bool enemy = status.parts[part].text == "ENEMY: ATTACK";
+        OA_CHECK(status.parts[part].lookup == (enemy ? "ENEMY: {action}" : ""));
+        OA_CHECK(status.parts[part].action == (enemy ? "ATTACK" : ""));
+    }
 }
 
 /// Checks that a label whose word stands for two things is drawn from the text that says
@@ -1845,6 +1854,64 @@ void labels_with_two_meanings_are_told_apart() {
     OA_CHECK(shown(Control::drawer_next, 0, english) == "NEXT");
     OA_CHECK(shown(Control::queue, 0, english) == "QUEUE");
     OA_CHECK(arm_shown(english) == "ARM");
+}
+
+/// Checks that the status hint and the pad's enemy piece are translated piece by piece, the
+/// action's word filled into its phrase's translation, and in English where the language has
+/// no translation of the phrase.
+void tap_hints_are_translated_whole() {
+    using hud::TapAction;
+    using Words = std::vector<std::pair<std::string_view, std::string_view>>;
+    const auto translator = [](Words words) {
+        return std::function<std::string(std::string_view)>([words](std::string_view text) {
+            for (const auto& [english, shown] : words)
+                if (english == text)
+                    return std::string(shown);
+            return std::string(text);
+        });
+    };
+    const auto enemy_shown = [](const hud::PadHint& hint, const auto& translate) {
+        for (std::size_t part = 0; part < hint.count; ++part)
+            if (!hint.parts[part].action.empty())
+                return hud::shown_label(
+                    hint.parts[part].text,
+                    hint.parts[part].lookup,
+                    translate,
+                    hint.parts[part].action
+                );
+        return std::string{};
+    };
+    const hud::PadHint pad_hint =
+        hud::pad_status_hint(TapAction::move, TapAction::attack, false, false, deck_map());
+    // A pack that translates the phrases and the words.
+    const auto chinese = translator(
+        {{"TAP: {action}", "点按：{action}"},
+         {"ENEMY: {action}", "敌方：{action}"},
+         {"MOVE", "移动"},
+         {"ATTACK", "攻击"}}
+    );
+    OA_CHECK(
+        hud::status_hint(TapAction::move, TapAction::attack, chinese) == "点按：移动 · 敌方：攻击"
+    );
+    OA_CHECK(enemy_shown(pad_hint, chinese) == "敌方：攻击");
+    // A table with the words alone: the phrases show in English, never around a translated word.
+    const auto words_alone = translator({{"MOVE", "BEWEGEN"}, {"ATTACK", "ANGRIFF"}});
+    OA_CHECK(
+        hud::status_hint(TapAction::move, TapAction::attack, words_alone) ==
+        "TAP: MOVE · ENEMY: ATTACK"
+    );
+    OA_CHECK(enemy_shown(pad_hint, words_alone) == "ENEMY: ATTACK");
+    // The word filled in is never read as a field.
+    const auto braces = translator({{"TAP: {action}", "{action}!"}, {"MOVE", "{action}"}});
+    OA_CHECK(hud::status_hint(TapAction::move, TapAction::none, braces) == "{action}!");
+    // While placing, the line is translated as one text.
+    const auto placing = translator(
+        {{"DRAG TO MOVE · DOUBLE-TAP OR HOLD TO PLACE", "拖动以移动 · 双击或长按以放置"}}
+    );
+    OA_CHECK(
+        hud::status_hint(TapAction::place, TapAction::attack, placing) ==
+        "拖动以移动 · 双击或长按以放置"
+    );
 }
 
 /// Checks the badges the touch controls show once a pad was used, through each map, and the
@@ -2005,6 +2072,7 @@ int main() {
     group_ring_sits_at_the_lower_left();
     pad_hints_name_the_buttons();
     labels_with_two_meanings_are_told_apart();
+    tap_hints_are_translated_whole();
     badges_name_the_pad_buttons();
     return oa::test::check_exit_status();
 }

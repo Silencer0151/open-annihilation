@@ -830,8 +830,10 @@ std::string with_name(const char* text, std::string_view name) {
 /// Returns one of the engine's own notices in the language shown, from the
 /// interface catalogue, with each "{field}" filled in.
 ///
-/// The line keeps the most bytes a notice holds, cut between whole
-/// characters.
+/// The fields are filled in one pass over the notice, so a field's text
+/// shows as it is even when it holds braces, as a player's name may. A
+/// field the list does not name shows as written. The line keeps the most
+/// bytes a notice holds, cut between whole characters.
 ///
 /// @param english The notice in English, with its fields in braces.
 /// @param fields Each field's name and text.
@@ -839,12 +841,29 @@ std::string with_name(const char* text, std::string_view name) {
 std::string own_words(
     std::string_view english, std::initializer_list<std::pair<std::string_view, std::string>> fields
 ) {
-    std::string line(oa::data::languages::interface_text(english));
-    for (const auto& [name, value] : fields) {
-        const std::string field = "{" + std::string(name) + "}";
-        for (std::size_t at = line.find(field); at != std::string::npos;
-             at = line.find(field, at + value.size()))
-            line.replace(at, field.size(), value);
+    const std::string_view text = oa::data::languages::interface_text(english);
+    std::string line;
+    std::size_t at = 0;
+    while (at < text.size()) {
+        const std::size_t open = text.find('{', at);
+        const std::size_t close =
+            open == std::string_view::npos ? std::string_view::npos : text.find('}', open);
+        if (close == std::string_view::npos) {
+            line.append(text.substr(at));
+            break;
+        }
+        line.append(text.substr(at, open - at));
+        const std::string_view name = text.substr(open + 1, close - open - 1);
+        const auto* field = std::find_if(fields.begin(), fields.end(), [&](const auto& entry) {
+            return entry.first == name;
+        });
+        if (field != fields.end()) {
+            line += field->second;
+            at = close + 1;
+        } else {
+            line += '{';
+            at = open + 1;
+        }
     }
     line.resize(oa::base::text::whole_characters(line, notice_bytes - 1));
     return line;
@@ -2472,8 +2491,10 @@ bool dispatch_record(NetMatch* m, Player& from, Player& to, const Packet& packet
         IntegrityNoticeRecord r{};
         if (decode_record(data, size, &r) == WireError::ok)
             if (const auto* p = player_of(world, r.player_id)) {
-                // The name, then the game's own text, translated, two spaces
-                // inside it as the game's table keys it.
+                // The name, then the game's own line, with the two spaces
+                // 3.1c shows inside it. 3.1c's table holds no translation
+                // of it, so it shows in English unless a language pack
+                // keys it.
                 std::string line = name_of(*p);
                 line += ' ';
                 line += game_text(m, "has modified his executable.  Game integrity breached.");

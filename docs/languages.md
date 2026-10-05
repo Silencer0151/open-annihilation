@@ -43,7 +43,7 @@ language; whatever the data leaves untranslated shows in English.
 | What | Where the game data holds it |
 |---|---|
 | Units' names and descriptions: the build menu's buttons and the bottom bar, the unit panel, the F1 panel, the unit restrictions list, the units' spoken lines in the message log | each unit file's `GermanName` and `GermanDescription` (`FrenchName`, …), else `Name` and `Description` |
-| Menus, dialogs, message boxes, panels' texts, the kill board, the loading screen, the F1 panel's labels, the units' spoken words, the message log's own phrases, a shared game's notices (speed changes, a player's disconnection, a modified program), the network loading screen's line, the battle room's TIMEOUT dialog and rejection messages, features' descriptions, a chosen map's name and its description | `gamedata\translate.tdf`: a section names the English text, and its key for the language holds the translation |
+| Menus, dialogs, message boxes, panels' texts, the kill board, the loading screen, the F1 panel's labels, the units' spoken words, the message log's own phrases, a shared game's notices (speed changes, a player's disconnection), the network loading screen's line, the battle room's TIMEOUT dialog and rejection messages, features' descriptions, a chosen map's name and its description | `gamedata\translate.tdf`: a section names the English text, and its key for the language holds the translation |
 | Campaign missions' names, briefings, hints and narration | a mission's `<Language>missionname` (also `brief`, `narration`, `missionhint`), and the `camps\briefs-<Language>` and `camps\hints-<Language>` folders |
 | Pictures with words drawn in them | `bitmaps-<Language>`, as the battle room's `battleroom.pcx`; `unitpics-<Language>` |
 | Fonts | `fonts-<Language>` |
@@ -83,7 +83,9 @@ shows it in the viewer's language. This is a deliberate difference from
 reads them in English, and a line a player types in the same words shows
 translated too. The notices about another machine (a speed it set, a
 player's disconnection, a modified program) are built on each machine in
-its own language, as 3.1c builds them.
+its own language, as 3.1c builds them. 3.1c's table holds no translation
+of the modified-program line, so it shows in English unless a language
+pack keys it.
 
 ## Language packs
 

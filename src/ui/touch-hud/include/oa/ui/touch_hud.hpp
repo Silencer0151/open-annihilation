@@ -651,28 +651,42 @@ control_label(Control control, uint8_t index, const HudState& state) noexcept;
 /// @return the text, untranslated; empty for a control with no label
 [[nodiscard]] std::string_view
 control_label_lookup(Control control, uint8_t index, const HudState& state) noexcept;
+/// The field a lookup text holds an action's word in: "ENEMY: {action}".
+inline constexpr std::string_view action_field = "{action}";
 /// Returns a label as the language shown draws it.
 ///
 /// A label looked up by itself is translated. A label with a lookup text of its own shows that
 /// text's translation, or the label in English when the language has none: never the
-/// translation of the word alone, which may mean something else.
+/// translation of the word alone, which may mean something else. With an action, the
+/// translation's action_field is filled with the action's own translation, in one pass, so
+/// the words filled in are never read as a field.
 ///
 /// @param label the label, untranslated
 /// @param lookup the text it is translated by (control_label_lookup, HintPart::lookup); empty
 ///     or the label itself for the label alone
 /// @param translate turns a text into the language shown, or returns it unchanged
+/// @param action the word the lookup's action_field holds, untranslated (HintPart::action);
+///     empty for a lookup without one
 /// @return the words to draw
 [[nodiscard]] std::string shown_label(
     std::string_view label,
     std::string_view lookup,
-    const std::function<std::string(std::string_view)>& translate
+    const std::function<std::string(std::string_view)>& translate,
+    std::string_view action = {}
 );
 /// Returns the status hint for the actions a tap gives: "TAP: MOVE · ENEMY: ATTACK".
 ///
+/// Each piece is translated whole, as "TAP: {action}" and "ENEMY: {action}" with the action's
+/// word filled in (shown_label), so a language with no translation of a piece shows it in
+/// English.
+///
 /// @param tap what a tap gives at the hover point
 /// @param enemy what a tap on an enemy gives
-/// @return the hint, untranslated
-[[nodiscard]] std::string status_hint(TapAction tap, TapAction enemy);
+/// @param translate turns a text into the language shown, or returns it unchanged
+/// @return the hint in the language shown
+[[nodiscard]] std::string status_hint(
+    TapAction tap, TapAction enemy, const std::function<std::string(std::string_view)>& translate
+);
 /// Returns the label of a SELECT ▾, speed or phone menu item.
 ///
 /// @param sheet the open sheet
@@ -709,6 +723,8 @@ struct HintPart {
     /// the text the words are translated by when it is not the words themselves
     /// (shown_label); empty for the words
     std::string lookup;
+    /// the word the lookup's action_field holds, untranslated; empty for a lookup without one
+    std::string action;
 };
 
 /// The most pieces a pad hint has.
@@ -722,6 +738,9 @@ struct PadHint {
 
 /// Returns the pad's status line: what R2 and L2 would do now ("R2 MOVE · ENEMY: ATTACK ·
 /// L2 CANCEL"; right-click interface "R2 SELECT · L2 MOVE").
+///
+/// The enemy's piece is looked up as "ENEMY: {action}" with its action's word (HintPart::action),
+/// as status_hint translates it.
 ///
 /// @param tap what a click gives at the pointer
 /// @param enemy what a click on an enemy gives

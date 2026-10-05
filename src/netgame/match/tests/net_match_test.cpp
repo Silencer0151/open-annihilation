@@ -3479,9 +3479,15 @@ void votes_reject_on_every_machine() {
     const auto* opened = vote_find(a.match->votes, kC);
     CHECK(opened != nullptr && opened->flag == vote_flag_manual && opened->yes == 1u);
     CHECK(!net_match_propose_reject(a.match.get(), 2));
+    // A name that holds a later field's braces shows as it is.
+    std::snprintf(b.player(2).name, sizeof b.player(2).name, "%s", "{no}{seconds}");
     (void)net_match_pump(b.match.get());
     const auto* heard = vote_find(b.match->votes, kC);
     CHECK(heard != nullptr && heard->yes == 1u);
+    CHECK(
+        !b.notices.empty() &&
+        b.notices.back().rfind("Vote: reject {no}{seconds} (1 yes/0 no/3, ", 0) == 0
+    );
     CHECK(net_match_cast_vote(b.match.get(), kC, true));
     // Two of three: passed on the voter's machine at once.
     CHECK(vote_find(b.match->votes, kC) == nullptr);
