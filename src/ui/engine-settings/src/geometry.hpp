@@ -103,6 +103,11 @@ inline constexpr int32_t label_line_height = 16;
 inline constexpr int32_t hint_gap = 2;
 /// A hint line's height.
 inline constexpr int32_t hint_line_height = 12;
+/// The rows added between two lines of a hint, or of a notice, while the
+/// dialog's words are drawn in the modern fonts, whose ideographs stand as
+/// tall as a hint line: one line's letters, outline and shadow then keep
+/// clear of the next's.
+inline constexpr int32_t tall_hint_line_gap = 3;
 /// The most lines a hint takes.
 inline constexpr std::size_t most_hint_lines = 2;
 /// The most lines a notice row's text takes under its label: Controller's

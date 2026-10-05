@@ -4920,6 +4920,63 @@ void mod_rows_grow_while_the_modern_fonts_draw_the_words() {
     );
 }
 
+/// While the dialog's words are drawn in the modern fonts, whose ideographs
+/// stand as tall as a hint line, a hint's two lines lie three rows further
+/// apart, so that one line's letters, outline and shadow keep clear of the
+/// next's; a one-line hint, and every hint in a language the game's fonts
+/// draw, keeps its place.
+void hint_lines_part_while_the_modern_fonts_draw_the_words() {
+    const auto game_fonts = geometry::place_rows(Page::controls, {});
+    static oa::data::languages::Language modern{};
+    modern.tag = "en-XA";
+    modern.needs = oa::data::languages::TextNeeds::modern_fonts;
+    oa::data::languages::set_interface_language(nullptr, modern);
+    const auto tall = geometry::place_rows(Page::controls, {});
+    oa::data::languages::set_interface_language(nullptr, oa::data::languages::english());
+    CHECK(game_fonts.rows.size() == 3 && tall.rows.size() == 3);
+    if (game_fonts.rows.size() != 3 || tall.rows.size() != 3)
+        return;
+    // Mouse wheel zoom: one line, in the same place.
+    CHECK(tall.rows[0].hint_lines == 1 && tall.rows[0].height == game_fonts.rows[0].height);
+    // Escape opens the game menu: two lines, 12 rows apart beside the game's
+    // fonts and 15 beside the modern fonts; the row is 3 rows taller.
+    const auto& escape = game_fonts.rows[1];
+    const auto& parted = tall.rows[1];
+    CHECK(escape.hint_lines == 2 && parted.hint_lines == 2);
+    CHECK(escape.hints[1].y == escape.hints[0].y + 12);
+    CHECK(parted.hints[0].y == escape.hints[0].y && parted.hints[1].y == parted.hints[0].y + 15);
+    CHECK(parted.height == escape.height + 3 && tall.rows[2].top == game_fonts.rows[2].top + 3);
+}
+
+/// While the dialog's words are drawn in the modern fonts, the view's top
+/// edge cuts no hint line at the end of a section's scroll: ideographs fill
+/// a hint line from the row over it to its last row, so a cut line would
+/// leave a sliver of them under the edge.
+void hint_lines_stay_whole_at_the_end_of_a_section() {
+    static oa::data::languages::Language modern{};
+    modern.tag = "en-XA";
+    modern.needs = oa::data::languages::TextNeeds::modern_fonts;
+    oa::data::languages::set_interface_language(nullptr, modern);
+    for (const Page page :
+         {Page::controls,
+          Page::common_tweaks,
+          Page::language,
+          Page::graphics,
+          Page::touch,
+          Page::controller}) {
+        settings::Dialog dialog = opened_with_controller(page, true, true);
+        dialog.scroll[static_cast<std::size_t>(page)] = std::numeric_limits<int32_t>::max();
+        const auto open = geometry::open_rows(dialog);
+        const int32_t edge = open.area.view.y;
+        for (const auto& row : open.rows.rows)
+            for (std::size_t line = 0; line < row.hint_lines; ++line) {
+                const auto& box = row.hints[line];
+                CHECK(box.y + box.height <= edge || box.y - 1 >= edge);
+            }
+    }
+    oa::data::languages::set_interface_language(nullptr, oa::data::languages::english());
+}
+
 void the_mods_list_scrolls_while_its_button_and_note_stay() {
     settings::Dialog dialog = many_mods_dialog(20);
     const auto first = geometry::open_rows(dialog);
@@ -7766,6 +7823,8 @@ int main(int argc, char** argv) {
         long_mod_texts_are_cut_with_an_ellipsis();
         the_mods_list_scrolls_while_its_button_and_note_stay();
         mod_rows_grow_while_the_modern_fonts_draw_the_words();
+        hint_lines_part_while_the_modern_fonts_draw_the_words();
+        hint_lines_stay_whole_at_the_end_of_a_section();
         choosing_another_mod_asks_before_switching();
         the_keys_answer_the_switch_mod_question();
         a_kept_version_rolls_back_after_a_question();

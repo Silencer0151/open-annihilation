@@ -2234,7 +2234,9 @@ into the records and decisions of the modules that carry them out, and
   statistics, the debug keys' line, the commander placement's prompt and
   an extension's overlay. The unit panel's `PanelText` also names the
   bottom bar's top row, so that its status line, whose ideographs would
-  rise above the bar, is lowered to keep within it.
+  rise above the bar, is lowered to keep within it (`panel_text_drop`);
+  the unit's metal and energy figures under it then move down as far and
+  one outline further, clear of its outline and shadow.
 - **Language** (`runtime_language.cpp`, `language_state.hpp`): the
   language the game shows its text in ([docs/languages.md](../../docs/languages.md)).
   `start_language` asks the operating system for its preferred locales

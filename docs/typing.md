@@ -27,11 +27,11 @@ a chat line in another script is described in
 On Windows, macOS and Linux, an input method, such as Pinyin, types into
 these fields. What you are composing shows at the end of the field until
 you choose the characters, which then go in. In a chat line, in a match
-or in the battle room, it is underlined, and drawn in the modern fonts
-as the characters it composes are. While a composition is open
-the keys are the input method's: Backspace, Enter, the arrows and the
-game's own keys act on the composition and do nothing in the field or the
-game. Escape still closes the field.
+or in the battle room, and in the save dialog's name, it is underlined,
+and drawn in the modern fonts as the characters it composes are. While a
+composition is open the keys are the input method's: Backspace, Enter,
+the arrows and the game's own keys act on the composition and do nothing
+in the field or the game. Escape still closes the field.
 
 ## Commands
 

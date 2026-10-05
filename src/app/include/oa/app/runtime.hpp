@@ -4912,7 +4912,20 @@ class Runtime final : public menu::Host,
     /// Draws a unit's energy and metal make and use as of the last economy settlement.
     ///
     /// @param unit unit the readout shows
-    void draw_unit_rates(const oa::Unit& unit);
+    /// @param lowered paint rows the figures lie under their places
+    void draw_unit_rates(const oa::Unit& unit, int lowered);
+
+    /// Gives how far paint_text lowers a line in a panel that keeps its text
+    /// below a row (PanelText): far enough that no letter of the modern fonts
+    /// rises above that row.
+    ///
+    /// @param font the font the line is drawn in
+    /// @param y the paint row of the line's pen
+    /// @param text the line, game text
+    /// @param scale pixel repeat
+    /// @return paint rows; 0 outside such a panel, and for a line that keeps its place
+    [[nodiscard]] int
+    panel_text_drop(const oa::formats::fnt::Font& font, int y, std::string_view text, int scale);
 
     /// Returns the overlay raster that draws rectangles and text in 640x480 source space on the
     /// HUD.

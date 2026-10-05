@@ -362,9 +362,15 @@ Text size slider, by 129, and Touch, with its three strips, the Hold delay
 slider and two switches, by 121; Controls and Common Tweaks fit, Common
 Tweaks' Your files and two sliders in 210 pixels, and draw as if there were
 no scrolling,
-with no bar. Each section keeps its offset while the
-dialog is open, and every section starts at its top each time it opens. A
-row the view cuts shows the part inside it and takes a press only there;
+with no bar. While the dialog's words are drawn in the modern fonts, as in
+Simplified Chinese, whose ideographs stand as tall as a hint line, the
+lines of a hint or a notice lie three pixels further apart
+(`tall_hint_line_gap`), clear of each other: each row with such lines is
+taller by three pixels a line after the first, and a section that scrolls
+scrolls further than the pixels given above. Each section keeps its offset
+while the dialog is open, and every section starts at its top each time it
+opens. A row the view cuts shows the part inside it and takes a press
+only there;
 while the section is scrolled from its top, the view's first pixel row keeps
 a hairline, the same as a row's own line. `dialog_layout` lists only the
 parts wholly in the view.

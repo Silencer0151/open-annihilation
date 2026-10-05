@@ -2148,8 +2148,33 @@ oa::ui::frontend::LoadSummary Runtime::check_save_dialog(
             throw std::runtime_error("a key pressed while composing closed the save dialog");
         rebuild_surface();
         write_ppm(report_directory / ("native-save-" + name + "-composing.ppm"), surface_);
+        const renderer::Surface composing = surface_;
         text.text.text = composition.c_str();
         dispatch_event(text, running);
+        // The composition is underlined in the dialog's letter colour on one
+        // row under its characters; committed, the characters stay as they
+        // were and the underline goes.
+        rebuild_surface();
+        std::set<std::size_t> marked_rows;
+        bool letter_colour = true;
+        for (std::size_t at = 0; at + 2 < surface_.rgb.size() && at + 2 < composing.rgb.size();
+             at += 3) {
+            const auto shown = composing.rgb.begin() + static_cast<std::ptrdiff_t>(at);
+            if (std::equal(
+                    shown, shown + 3, surface_.rgb.begin() + static_cast<std::ptrdiff_t>(at)
+                ))
+                continue;
+            marked_rows.insert(at / 3 / surface_.width);
+            letter_colour =
+                letter_colour &&
+                std::equal(
+                    oa::present::gui_font_color.begin(), oa::present::gui_font_color.end(), shown
+                );
+        }
+        if (marked_rows.size() != 1 || !letter_colour)
+            throw std::runtime_error(
+                "the save dialog did not underline the input method's composition"
+            );
         const std::string extra(erased);
         text.text.text = extra.c_str();
         dispatch_event(text, running);

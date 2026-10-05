@@ -1331,6 +1331,10 @@ Rows place_rows(
     Rows placed{};
     int32_t top = first_row_top;
     const auto settings = section_settings(page, section, context);
+    // While the dialog's words are drawn in the modern fonts, a hint's lines
+    // lie further apart.
+    const bool tall = oa::data::languages::interface_language().needs !=
+                      oa::data::languages::TextNeeds::game_fonts;
     // Developer's own rows lie closer, over its list.
     const bool own_section = section != nullptr && section->settings != nullptr;
     const int32_t row_gap =
@@ -1391,6 +1395,8 @@ Rows place_rows(
         row.hint_lines = hint_line_count(row.setting, context);
         int32_t bottom = label_top + label_line_height + hint_gap;
         for (std::size_t line = 0; line < row.hint_lines; ++line) {
+            if (line > 0 && tall)
+                bottom += tall_hint_line_gap;
             row.hints[line] = {content_left, bottom, content_width, hint_line_height};
             bottom += hint_line_height;
         }

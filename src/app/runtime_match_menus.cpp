@@ -843,9 +843,11 @@ int load_overlay_event(ScreenContext* ctx, void*) {
 /// Draws the save dialog's name in the dialog's font.
 ///
 /// While the game's text is UTF-8 the name may hold characters the font
-/// lacks, such as hanzi, and the modern fonts draw those, and an input
-/// method's composition among them, in hattfont12's letter colour up to the
-/// field's right edge. Otherwise the font draws the name's bytes alone.
+/// lacks, such as hanzi, and the modern fonts draw those in hattfont12's
+/// letter colour up to the field's right edge. Otherwise the font draws the
+/// name's bytes alone. The input method's composition at the name's end is
+/// drawn as the chat lines draw theirs: wholly in the modern fonts, in that
+/// colour, and underlined (renderer::draw_fnt_composition).
 ///
 /// @param[in,out] ctx screen being drawn; its surface takes the name
 /// @param overlay the bound dialog and its font
@@ -868,25 +870,46 @@ void load_overlay_text(
     const auto height = surface->height;
     // The font's indices are shown in the palette the dialog is drawn in.
     const auto& palette = static_cast<const Runtime*>(ctx->host)->screen_palette();
+    const renderer::TextClip clip{0, 0, right, static_cast<int32_t>(height) - 1};
+    // The composition follows the typed name, drawn apart from it.
+    std::string_view composition;
+    if (!overlay.composition.empty() && text.ends_with(overlay.composition)) {
+        composition = overlay.composition;
+        text.remove_suffix(composition.size());
+    }
+    const auto compose = [&](int32_t pen) {
+        if (!composition.empty())
+            std::ignore = renderer::draw_fnt_composition(
+                *surface,
+                *overlay.font,
+                composition,
+                pen,
+                y,
+                oa::present::gui_font_color,
+                palette,
+                clip
+            );
+    };
     if (oa::present::game_text_settings().utf8 && renderer::needs_text_runs(text, false)) {
-        std::ignore = renderer::draw_fnt_game_text(
-            *surface,
-            *overlay.font,
-            text,
-            x,
-            y,
-            oa::present::gui_font_color,
-            palette,
-            {0, 0, right, static_cast<int32_t>(height) - 1},
-            false
+        compose(
+            renderer::draw_fnt_game_text(
+                *surface,
+                *overlay.font,
+                text,
+                x,
+                y,
+                oa::present::gui_font_color,
+                palette,
+                clip,
+                false
+            )
         );
         return;
     }
     std::vector<uint8_t> pixels(static_cast<std::size_t>(width) * height);
     std::vector<uint8_t> coverage(pixels.size());
     const oa::formats::fnt::IndexedSurface target{width, height, width, pixels, coverage};
-    // Where the pen stops is not needed: the text is copied out whole.
-    std::ignore = oa::formats::fnt::raster_text(target, *overlay.font, text, x, y);
+    const int32_t pen = oa::formats::fnt::raster_text(target, *overlay.font, text, x, y);
     for (std::size_t offset = 0; offset < pixels.size(); ++offset) {
         if (coverage[offset] == 0)
             continue;
@@ -898,6 +921,7 @@ void load_overlay_text(
         surface->rgb[out + 1] = palette[index + 1];
         surface->rgb[out + 2] = palette[index + 2];
     }
+    compose(pen);
 }
 
 /// Draws the RADAR picture as a hot surface's image.

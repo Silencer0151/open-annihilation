@@ -388,23 +388,12 @@ void Runtime::paint_text(
     const auto face = renderer::fnt_font_face(font);
     const auto runs = renderer::split_game_text(text, renderer::fnt_font_characters(font), true);
     std::vector<std::optional<oa::present::TextLayers>> laid(runs.size());
-    // In a panel that keeps its text below a row (PanelText), a line whose
-    // letters would rise above it, as ideographs beside the game's fonts
-    // may, is lowered until they do not.
-    int drop = 0;
-    for (std::size_t index = 0; index < runs.size(); ++index) {
-        if (!runs[index].modern)
-            continue;
-        const int32_t size = painted_text_size(runs[index]);
-        laid[index] =
-            oa::present::modern_text(runs[index].text, face, scale, size, allow_background);
-        if (laid[index] && text_place_ == TextPlace::panel && panel_top_row_)
-            drop = std::max(
-                drop,
-                *panel_top_row_ - (y + painted_baseline(font_baseline, size) * scale -
-                                   letter_rows_above_baseline(*laid[index]))
+    for (std::size_t index = 0; index < runs.size(); ++index)
+        if (runs[index].modern)
+            laid[index] = oa::present::modern_text(
+                runs[index].text, face, scale, painted_text_size(runs[index]), allow_background
             );
-    }
+    const int drop = panel_text_drop(font, y, text, scale);
     int pen = x;
     for (std::size_t index = 0; index < runs.size(); ++index) {
         const auto& run = runs[index];
@@ -421,6 +410,32 @@ void Runtime::paint_text(
         paint_font_text(font, pen, y + drop, bytes, color, scale);
         pen += static_cast<int>(oa::formats::fnt::measure_text(font, bytes)) * scale;
     }
+}
+
+int Runtime::panel_text_drop(
+    const oa::formats::fnt::Font& font, int y, std::string_view text, int scale
+) {
+    if (text_place_ != TextPlace::panel || !panel_top_row_ ||
+        !renderer::needs_text_runs(text, true))
+        return 0;
+    // A line whose letters would rise above the row, as ideographs beside
+    // the game's fonts may, is lowered until they do not.
+    const int32_t font_baseline = renderer::fnt_font_baseline(font);
+    const auto face = renderer::fnt_font_face(font);
+    int drop = 0;
+    for (const auto& run :
+         renderer::split_game_text(text, renderer::fnt_font_characters(font), true)) {
+        if (!run.modern)
+            continue;
+        const int32_t size = painted_text_size(run);
+        if (const auto layers = oa::present::modern_text(run.text, face, scale, size, false))
+            drop = std::max(
+                drop,
+                *panel_top_row_ - (y + painted_baseline(font_baseline, size) * scale -
+                                   letter_rows_above_baseline(*layers))
+            );
+    }
+    return drop;
 }
 
 int Runtime::match_text_width(
@@ -782,11 +797,12 @@ void Runtime::draw_resource_readout() {
     );
 }
 
-void Runtime::draw_unit_rates(const oa::Unit& unit) {
-    const auto rate = [this](const HudRect& at, float amount, bool metal, bool produced) {
+void Runtime::draw_unit_rates(const oa::Unit& unit, int lowered) {
+    const auto rate = [this, lowered](const HudRect& at, float amount, bool metal, bool produced) {
         const auto text =
             oa::ui::hud::format_unit_rate(match_->state().game, amount, metal, produced);
-        draw_hud_label(at.x, at.y, text.text, text.color);
+        const auto point = hud_canvas(at.x, at.y);
+        draw_match_label(point.x, point.y + lowered, text.text, text.color);
     };
     rate(side_hud_.unit_energy_make, unit.economy.energy.last_produced, false, true);
     rate(side_hud_.unit_energy_use, unit.economy.energy.last_requested, false, false);
@@ -1000,8 +1016,21 @@ void Runtime::draw_unit_panel() {
                 }
         }
     }
+    // The status line, lowered to keep within the bar, takes the rate
+    // figures under it down as far and one outline further, so that its
+    // outline and shadow fall clear of their letters.
+    int lowered = 0;
+    if (const auto* font = match_label_font(); font != nullptr && panel.mission_text[0] != '\0')
+        if (const int drop = panel_text_drop(
+                *font,
+                hud_canvas(side_hud_.mission_text.x, side_hud_.mission_text.y).y,
+                panel.mission_text,
+                1
+            );
+            drop > 0)
+            lowered = drop + oa::present::text_border(1, oa::present::game_font_text_size);
     if (panel.show_rates)
-        draw_unit_rates(*unit);
+        draw_unit_rates(*unit, lowered);
     if (panel.show_kills)
         draw_hud_label(
             side_hud_.damage_bar.x,

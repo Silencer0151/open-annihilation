@@ -15,6 +15,7 @@
 #include "oa/ui/hud/camera_scroll.hpp"
 #include "oa/ui/hud/chat_panel.hpp"
 #include "oa/ui/hud/order_overlays.hpp"
+#include "oa/ui/hud/resource_bar.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
@@ -1200,6 +1201,8 @@ void Runtime::check_pointer_picks() {
     };
     constexpr int kTextReach = 40;
     constexpr int kLineReach = 200;
+    // The rows over the status's place its letters are looked for from.
+    constexpr int kStatusRise = 12;
     clear_panels();
     match_->stop_orders(commander);
     const auto solar = type_of("ARMSOLAR");
@@ -1238,6 +1241,69 @@ void Runtime::check_pointer_picks() {
         "the unit the commander builds was not drawn at UNITNAME2"
     );
     snapshot("native-pointer-unit-panel.ppm");
+    // In Simplified Chinese the status's ideographs stand taller than the
+    // game's fonts: lowered to keep within the bar, the status takes the
+    // metal and energy figures under it down with it, and the letters of the
+    // two lines keep the rows of an outline and a shadow and one more
+    // between them. Back in English the figures lie where they did.
+    {
+        const auto& palette = match_hud_ && match_hud_->background.palette
+                                  ? *match_hud_->background.palette
+                                  : match_palette_;
+        const auto colour_of = [&](uint8_t index) {
+            const auto at = static_cast<std::size_t>(index) * 4U;
+            return std::array<uint8_t, 3>{palette[at], palette[at + 1], palette[at + 2]};
+        };
+        const auto* unit = oa::world_unit_at(&match_->state(), commander);
+        const auto status_colour = colour_of(255);
+        const auto metal_colour = colour_of(
+            oa::ui::hud::format_unit_rate(
+                match_->state().game,
+                unit != nullptr ? unit->economy.metal.last_produced : 0.0F,
+                true,
+                true
+            )
+                .color
+        );
+        // The first and last HUD rows holding a colour across a panel
+        // point's columns, from a little above it to the HUD's last row.
+        const auto rows_of =
+            [&](const HudRect& at, int left, int right, std::array<uint8_t, 3> colour) {
+                frame();
+                std::pair<int, int> rows{-1, -1};
+                const auto width = static_cast<int>(match_hud_cpu_.width);
+                const auto height = static_cast<int>(match_hud_cpu_.height);
+                for (int y = std::max(0, at.y - kStatusRise); y < height; ++y)
+                    for (int x = std::max(0, at.x - left); x < std::min(width, at.x + right); ++x) {
+                        const auto* pixel = match_hud_cpu_.rgb.data() +
+                                            (static_cast<std::size_t>(y) * match_hud_cpu_.width +
+                                             static_cast<std::size_t>(x)) *
+                                                3U;
+                        if (std::equal(colour.begin(), colour.end(), pixel)) {
+                            rows.first = rows.first < 0 ? y : rows.first;
+                            rows.second = y;
+                        }
+                    }
+                return rows;
+            };
+        const auto english = rows_of(side_hud_.unit_metal_make, 0, kTextReach, metal_colour);
+        const std::string kept(shown_language().tag);
+        set_language_choice("zh-Hans");
+        move_to(commander_canvas_x, commander_canvas_y);
+        const auto status = rows_of(side_hud_.mission_text, kTextReach, kTextReach, status_colour);
+        const auto metal = rows_of(side_hud_.unit_metal_make, 0, kTextReach, metal_colour);
+        snapshot("native-pointer-unit-panel-zh-Hans.ppm");
+        require_pick(
+            status.first >= 0 && metal.first >= 0 && status.second + 3 <= metal.first,
+            "in Simplified Chinese the commander's status meets the metal figure under it"
+        );
+        set_language_choice(kept);
+        move_to(commander_canvas_x, commander_canvas_y);
+        require_pick(
+            rows_of(side_hud_.unit_metal_make, 0, kTextReach, metal_colour) == english,
+            "back in English the metal figure does not lie where it did"
+        );
+    }
     // A build button on the commander's build page.
     adopt_selection(commander);
     selected_match_unit_ = commander;
