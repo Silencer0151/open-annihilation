@@ -422,6 +422,8 @@ struct PadRun {
     uint16_t lab{};                    ///< a finished Kbot Lab beside the commander
     StandIn deck{};                    ///< the stand-in Steam Deck
     StandIn xbox{};                    ///< the stand-in Xbox pad
+    bool touch_controls{};             ///< touch controls are on (always on a phone or tablet)
+    bool side_panel{true};             ///< the 3.1c side panel shows (none on the phone layout)
     std::vector<CaseResult> results;   ///< every case's outcome, in order
     std::vector<std::string> notes;    ///< what the snapshots show, and cases left with a note
 };
@@ -1868,6 +1870,8 @@ struct PadCheckAccess {
         step(runtime, run, kFrameMs);
         run.px_per_point =
             std::max(kLeastPxPerPoint, static_cast<float>(runtime.match_layout_.px_per_point));
+        run.touch_controls = runtime.touch_controls_active();
+        run.side_panel = !runtime.match_layout_.phone;
         run.start_zoom_target = runtime.match_zoom_target_;
         for (const auto& slot : runtime.match_->world().slots)
             if (slot.unit != nullptr && slot.record.type_index != 0 &&
@@ -1967,8 +1971,9 @@ struct PadCheckAccess {
                         Part::hud,
                         "the touch layer lays out FORCE with no gamepad"
                     );
+                // The phone layout's touch controls have a status pill of their own.
                 require(
-                    !has_area(state->frame.status),
+                    !run.side_panel || !has_area(state->frame.status),
                     Part::hud,
                     "the touch layer lays out the pad HUD's status pill with no gamepad"
                 );
@@ -2239,7 +2244,8 @@ struct PadCheckAccess {
     }
 
     /// K4. L2 clears the selection or takes back an armed order (left-click interface); on a
-    /// factory's build button it takes one off the queue.
+    /// factory's build button, or its wedge of the build ring on the phone layout, it takes one
+    /// off the queue.
     static void case_right_button(Runtime& runtime, PadRun& run) {
         require_attached(run.deck);
         select_only(runtime, run.commander);
@@ -2272,12 +2278,19 @@ struct PadCheckAccess {
             Part::check,
             "the lab did not queue two Peewees"
         );
-        point_at(runtime, run, gadget_centre(runtime, button), "the ARMPW build button");
-        click(runtime, run, run.deck, pad::PadButton::l2);
+        if (run.side_panel) {
+            point_at(runtime, run, gadget_centre(runtime, button), "the ARMPW build button");
+            click(runtime, run, run.deck, pad::PadButton::l2);
+        } else {
+            aim_ring_from(runtime, run, run.lab, button, "ARMPW");
+            click(runtime, run, run.deck, pad::PadButton::l2);
+            let_ring_go(runtime, run);
+        }
         require(
             runtime.match_->queued_build_count(run.lab, kbot) == 1,
             Part::dispatch,
-            "L2 on the ARMPW build button did not take one off the lab's queue"
+            run.side_panel ? "L2 on the ARMPW build button did not take one off the lab's queue"
+                           : "L2 on the build ring's ARMPW did not take one off the lab's queue"
         );
         empty_factory(runtime, run.lab, kbot);
     }
@@ -2334,7 +2347,8 @@ struct PadCheckAccess {
         );
     }
 
-    /// K6. QUEUE: R4 held queues R2's orders, a tap latches it; on a build button R4 is x5.
+    /// K6. QUEUE: R4 held queues R2's orders, a tap latches it; on a build button R4 is x5, and on
+    /// the build ring's wedge of a factory (the phone layout's) R4 and R2 queue five.
     static void case_queue(Runtime& runtime, PadRun& run) {
         require_attached(run.deck);
         const auto a = run.peewees[0];
@@ -2376,6 +2390,22 @@ struct PadCheckAccess {
         step(runtime, run, kFrameMs);
         empty_factory(runtime, run.lab, kbot);
         const auto button = build_button(runtime, "ARMPW");
+        if (!run.side_panel) {
+            // The phone layout's build buttons are the build ring's wedges, where R4 is QUEUE
+            // and an R2 with it queues five.
+            aim_ring_from(runtime, run, run.lab, button, "ARMPW");
+            push(runtime, run, run.deck, pad::PadButton::r4);
+            click(runtime, run, run.deck, pad::PadButton::r2);
+            lift(runtime, run, run.deck, pad::PadButton::r4);
+            let_ring_go(runtime, run);
+            require(
+                runtime.match_->queued_build_count(run.lab, kbot) == kTimesFive,
+                Part::dispatch,
+                "R2 on the build ring's ARMPW with R4 held did not queue five"
+            );
+            empty_factory(runtime, run.lab, kbot);
+            return;
+        }
         point_at(runtime, run, gadget_centre(runtime, button), "the ARMPW build button");
         push(runtime, run, run.deck, pad::PadButton::r4);
         require(
@@ -2708,6 +2738,43 @@ struct PadCheckAccess {
             Part::dispatch,
             "the right thumb toward a wedge does not aim the build ring at it (pad.build_aim)"
         );
+    }
+
+    /// Opens the build ring of the selection at open ground beside a unit, with L1 held, and aims
+    /// it at a build button's wedge.
+    ///
+    /// @param runtime the runtime
+    /// @param run the check's state
+    /// @param beside the unit the ring opens beside
+    /// @param button the build button
+    /// @param name the unit type's name, which the button carries
+    static void aim_ring_from(
+        Runtime& runtime, PadRun& run, uint16_t beside, std::size_t button, std::string_view name
+    ) {
+        point_at(
+            runtime,
+            run,
+            ground_beside(runtime, run, beside, 0.0F, kGroundOffsetPoints),
+            "open ground"
+        );
+        push(runtime, run, run.deck, pad::PadButton::l1);
+        require(
+            touch(runtime).hud.build_ring.has_value(),
+            Part::dispatch,
+            "L1 did not open the build ring for " + std::string(name)
+        );
+        aim_build(runtime, run, build_slot(runtime, button, name));
+    }
+
+    /// Lets L1 go on the build ring's aimed wedge, then the right thumb: a builder's ring arms
+    /// the building, a factory's closes.
+    ///
+    /// @param runtime the runtime
+    /// @param run the check's state
+    static void let_ring_go(Runtime& runtime, PadRun& run) {
+        lift(runtime, run, run.deck, pad::PadButton::l1);
+        set_thumb(run.deck, pad::Side::right, false, {kPadMiddle, kPadMiddle});
+        step(runtime, run, kFrameMs);
     }
 
     /// K10. The build ring: L1 opens it with the builder's page, PREV at W and NEXT at E;
@@ -3208,6 +3275,62 @@ struct PadCheckAccess {
         require(layer, Part::dispatch, "the group chips show no buttons while L5 is held");
     }
 
+    /// K16 with touch controls on: after the pad's input the touch controls stay, each with its
+    /// gamepad badge, and the slim pad HUD stays away; FORCE tops a tablet's thumb column, a
+    /// stored group has its chip, and the group buttons show while L5 is held.
+    static void case_pad_badges(Runtime& runtime, PadRun& run) {
+        require_attached(run.deck);
+        select_only(runtime, run.peewees[0]);
+        runtime.assign_squad(1);
+        select_none(runtime);
+        steps(runtime, run, 2 * kFrameMs, kFrameMs);
+        const auto& state = touch(runtime);
+        require(
+            !state.hud.pad.hud,
+            Part::dispatch,
+            "HudState::pad.hud is on after pad input with touch controls on"
+        );
+        require(
+            state.hud.pad.badges, Part::dispatch, "HudState::pad.badges is off after pad input"
+        );
+        require(
+            state.hud.pad.force_shown,
+            Part::dispatch,
+            "HudState::pad.force_shown is off for a pad with grips"
+        );
+        require(state.frame_ready, Part::hud, "the touch layer laid out no frame");
+        for (const auto& [control, name] : std::array<std::pair<hud::Control, const char*>, 2>{
+                 {{hud::Control::queue, "QUEUE"}, {hud::Control::add, "ADD"}}
+             })
+            require(
+                find_control(runtime, control, -1) != nullptr,
+                Part::hud,
+                std::string("the touch controls lost their ") + name + " after pad input"
+            );
+        if (run.side_panel) {
+            require(
+                !has_area(state.frame.status),
+                Part::hud,
+                "the slim pad HUD's status pill shows over a tablet's touch controls"
+            );
+            require(
+                find_control(runtime, hud::Control::force, -1) != nullptr,
+                Part::hud,
+                "the tablet's thumb column has no FORCE for a pad with grips"
+            );
+        }
+        require(
+            find_control(runtime, hud::Control::group_chip, 1) != nullptr,
+            Part::hud,
+            "the touch controls show no chip for a stored group"
+        );
+        snapshot(runtime, run, "pad-badges.ppm");
+        push(runtime, run, run.deck, pad::PadButton::l5);
+        const bool layer = state.hud.pad.groups_layer;
+        lift(runtime, run, run.deck, pad::PadButton::l5);
+        require(layer, Part::dispatch, "the group chips show no buttons while L5 is held");
+    }
+
     /// K17. The same as the mouse: a click and two clicks with R4 held give the moves a click
     /// and two Shift-clicks give, from the same state.
     static void case_same_as_mouse(Runtime& runtime, PadRun& run) {
@@ -3261,8 +3384,9 @@ struct PadCheckAccess {
         );
     }
 
-    /// K18. Placement by the pad: R2 on a build button arms the building as the pad's placement,
-    /// whose ghost follows the pointer; R2 on a legal site builds there; B cancels.
+    /// K18. Placement by the pad: R2 on a build button (on the phone layout, L1 let go on the build
+    /// ring's wedge) arms the building as the pad's placement, whose ghost follows the pointer; R2
+    /// on a legal site builds there; B cancels.
     static void case_placement(Runtime& runtime, PadRun& run) {
         require_attached(run.deck);
         const auto solar = type_of(runtime, "ARMSOLAR");
@@ -3271,13 +3395,19 @@ struct PadCheckAccess {
         step(runtime, run, kFrameMs);
         const auto button = build_button(runtime, "ARMSOLAR");
         const auto arm = [&] {
-            point_at(runtime, run, gadget_centre(runtime, button), "the ARMSOLAR build button");
-            click(runtime, run, run.deck, pad::PadButton::r2);
+            if (run.side_panel) {
+                point_at(runtime, run, gadget_centre(runtime, button), "the ARMSOLAR build button");
+                click(runtime, run, run.deck, pad::PadButton::r2);
+            } else {
+                aim_ring_from(runtime, run, run.commander, button, "ARMSOLAR");
+                let_ring_go(runtime, run);
+            }
             require(
                 runtime.pending_build_type_ == solar &&
                     runtime.match_command_ == MatchCommand::build,
                 Part::dispatch,
-                "R2 on the ARMSOLAR build button did not arm the building"
+                run.side_panel ? "R2 on the ARMSOLAR build button did not arm the building"
+                               : "releasing L1 on the build ring's ARMSOLAR did not arm it"
             );
             require(
                 touch(runtime).dispatch.placement_by_pad,
@@ -3499,6 +3629,12 @@ void Runtime::check_pad_controls() {
     PadRun run;
     run.clock_ns = SDL_GetTicksNS() + frame_pacing::kNanosecondsPerSecond;
     pad_state().check_clock_ns = run.clock_ns;
+    // The check plays with its own virtual stand-ins alone: a gamepad the machine has, such as
+    // the one a simulator adds, is let go and stays closed while it runs.
+    pad_state().virtual_pads_only = true;
+    for (const auto& open : pad_state().pads)
+        if (const auto id = open.id; id != 0 && !SDL_IsJoystickVirtual(id))
+            PadAccess::close_pad(*this, id);
     touch_state().dispatch.check_clock_ns = run.clock_ns;
     start_benchmark_skirmish();
     apply_output_mode();
@@ -3507,6 +3643,13 @@ void Runtime::check_pad_controls() {
     const auto run_case = [&](std::string name, Access::CaseBody body) {
         Access::run_case(*this, run, std::move(name), body);
     };
+    if (run.touch_controls)
+        run.notes.push_back(
+            run.side_panel ? "touch controls on: K16 checks the pad's badges on them"
+                           : "touch controls on, the phone layout: K16 checks the pad's badges on "
+                             "them, and K4, K6 and K18 press the build ring's wedges, as the "
+                             "layout has no side panel"
+        );
     run_case("X0 no pad", Access::case_no_pad);
     start_gamepad_subsystem();
     if ((SDL_WasInit(SDL_INIT_GAMEPAD) & SDL_INIT_GAMEPAD) == 0)
@@ -3516,7 +3659,10 @@ void Runtime::check_pad_controls() {
     run_case("K0 detection and route", Access::case_detection);
     // From here the pad layer is on whatever K0 found, so each case stands on its own.
     pad_state().forced = true;
-    run_case("K16 slim pad HUD", Access::case_pad_hud);
+    if (run.touch_controls)
+        run_case("K16 pad badges on the touch controls", Access::case_pad_badges);
+    else
+        run_case("K16 slim pad HUD", Access::case_pad_hud);
     run_case("K1 pointer, hover and edge", Access::case_pointer);
     run_case("K2 click and double press", Access::case_click);
     run_case("K3 box", Access::case_box);

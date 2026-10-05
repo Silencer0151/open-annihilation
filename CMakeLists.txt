@@ -1739,6 +1739,24 @@ if(OA_BUILD_PLATFORM)
       set_tests_properties(native-pad-controls PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_pad_check_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # The same with touch controls on, as an iPhone and an iPad always
+      # have them, at their sizes: the touch controls with the pad's badges,
+      # and on the phone layout the build ring for the side panel's buttons.
+      foreach(oa_pad_touch IN ITEMS "phone;874x402" "tablet;1180x820")
+        list(GET oa_pad_touch 0 oa_pad_touch_name)
+        list(GET oa_pad_touch 1 oa_pad_touch_size)
+        set(oa_pad_touch_dir
+          "${CMAKE_CURRENT_BINARY_DIR}/native-checks/pad-controls-touch-${oa_pad_touch_name}")
+        file(MAKE_DIRECTORY "${oa_pad_touch_dir}")
+        add_test(NAME native-pad-controls-touch-${oa_pad_touch_name} COMMAND oa-game
+          --game-dir "${OA_GAME_DIR}" --skip-intro --mute --check-pad-controls --touch-controls
+          --resolution ${oa_pad_touch_size}
+          --preferences-file "${oa_pad_touch_dir}/pad-controls.conf")
+        set_tests_properties(native-pad-controls-touch-${oa_pad_touch_name} PROPERTIES
+          TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+          WORKING_DIRECTORY "${oa_pad_touch_dir}"
+          ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      endforeach()
       # --check-multiplayer-menu: MULTI clicked through SDL input opens the
       # multiplayer screens, which network play's check walks. Scribbled
       # frees turn a focus handed back to a closed window into a fault.

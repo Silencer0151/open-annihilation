@@ -453,9 +453,12 @@ controller. It drives each row of the tables above, compares what the
 gamepad gives with what the mouse and keys give from the same state
 (selection, orders, the queue, the latches and the camera), checks the pad
 HUD's layout, the haptics sent, the fallback map and F13 to F16, and that
-nothing changes before a gamepad is used. The `native-pad-controls` test
-runs it; the pure model's tables and timings have their own unit tests
-(`ui-pad-controls`). See [development/testing.md](development/testing.md).
+nothing changes before a gamepad is used. With touch controls on, as on an
+iPhone or an iPad, it checks the badges on the touch controls instead of the
+slim HUD, and on a phone it presses the build ring's wedges, since a phone
+shows no side panel. The `native-pad-controls` tests run it; the pure
+model's tables and timings have their own unit tests (`ui-pad-controls`).
+See [development/testing.md](development/testing.md).
 
 ## What needs a Deck
 

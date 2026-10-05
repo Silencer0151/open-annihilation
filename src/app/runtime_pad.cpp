@@ -523,8 +523,10 @@ void PadAccess::open_pad(Runtime& runtime, SDL_JoystickID id) {
     const auto free = std::find_if(state.pads.begin(), state.pads.end(), [](const OpenPad& pad) {
         return pad.id == 0;
     });
-    // Pads past the most kept open are left closed.
-    if (free == state.pads.end())
+    // Pads past the most kept open are left closed, and while the pad
+    // check runs so is every pad but its virtual stand-ins: a gamepad the
+    // machine has, such as a simulator's own, stays out of it.
+    if (free == state.pads.end() || (state.virtual_pads_only && !SDL_IsJoystickVirtual(id)))
         return;
     SDL_Gamepad* gamepad = SDL_OpenGamepad(id);
     if (gamepad == nullptr) {

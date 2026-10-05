@@ -91,6 +91,7 @@ struct Runtime::PadState {
     SDL_JoystickID active{};                   ///< the pad that last sent input; 0 before any
     bool used{};                               ///< a gamepad sent input in this run
     bool forced{};                             ///< the pad check turned the layer on
+    bool virtual_pads_only{};                  ///< the pad check opens only its virtual pads
     bool grip_keys_seen{};                     ///< F13–F16 arrived while a pad was open
     bool force{};                              ///< R5 (or its key) is held
     /// The check's clock, nanoseconds; times come from it while set.

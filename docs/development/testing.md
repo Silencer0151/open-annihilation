@@ -618,7 +618,17 @@ check starts a skirmish and drives the game with SDL virtual pads imitating
 a Steam Deck and an Xbox pad, through the game's event dispatch, with its
 own clock; it ends with one line starting `pad controls check:`. A run
 without a gamepad never turns the gamepad controls on, so every other
-check, digest and recording is unchanged.
+check, digest and recording is unchanged. While the check runs, the game
+opens only SDL's virtual pads, so a gamepad the machine has, such as the
+one an iOS simulator adds, stays out of it.
+
+`native-pad-controls-touch-phone` (874x402) and
+`native-pad-controls-touch-tablet` (1180x820) run the same check with
+`--touch-controls`, as an iPhone and an iPad always have them, at their
+sizes. There the pad's input leaves the touch controls in place with its
+badges on them instead of showing the slim pad HUD (K16), and the phone
+layout, which has no side panel, presses the build ring's wedges where the
+other runs press the side panel's build buttons (K4, K6 and K18).
 
 ### Game files screen
 

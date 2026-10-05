@@ -1601,7 +1601,9 @@ leaves the game without gamepads.
   move; `runtime_pad_haptics.cpp` `play_pad_feel`, a trackpad pulse where
   the driver takes it, else a rumble.
 - `runtime_pad_check.cpp` is `--check-pad-controls`
-  ([testing.md](../../docs/development/testing.md#gamepad-controls)).
+  ([testing.md](../../docs/development/testing.md#gamepad-controls)); while
+  it runs, the dispatcher opens only SDL's virtual pads, its stand-ins
+  (`PadState::virtual_pads_only`).
 - `pad_glyphs.*` (in `oa-app-touch-paint`) paint the button glyphs of the
   Steam Deck, Xbox, PlayStation and Nintendo styles with the touch layer's
   painter: the project's own shapes and letters.
