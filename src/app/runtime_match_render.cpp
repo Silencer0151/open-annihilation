@@ -1938,12 +1938,6 @@ void Runtime::render_match_surface() {
     paint_on(PaintLayer::hud);
     blit_match_minimap();
     draw_shared_camera_rectangles();
-    // The HUD overlay then clips to the game view and draws the status strip.
-    // The panels' text keeps to the game fonts' size at most (PanelText).
-    {
-        const PanelText panel(*this);
-        draw_status_panel();
-    }
     if (selected_match_unit_ == 0 && !match_paused_)
         fill_source_rect(0, 128, 128, 352, 10);
     paint_on(PaintLayer::battlefield);
@@ -2028,6 +2022,12 @@ void Runtime::render_match_surface() {
     draw_whiteboard(painted);
     draw_commander_placement();
     draw_match_kill_board();
+    // Then the status strip over the bottom of the battlefield. The panels'
+    // text keeps to the game fonts' size at most (PanelText).
+    {
+        const PanelText panel(*this);
+        draw_status_panel();
+    }
     draw_resource_panel_overlay();
     draw_clock_line();
     draw_chat_overlay();

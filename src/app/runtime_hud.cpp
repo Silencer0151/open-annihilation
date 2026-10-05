@@ -1146,17 +1146,25 @@ void Runtime::blit_match_minimap() {
 }
 
 void Runtime::draw_status_panel() {
-    constexpr int kViewLeft = oa::ui::display_layout::kSourceLeft;
-    constexpr int kViewBottom = oa::ui::display_layout::kSourceBottomBarY - 1;
     namespace hud = oa::ui::hud;
     if (!match_)
         return;
-    const bool* keys = SDL_GetKeyboardState(nullptr);
-    const bool held = keys != nullptr && keys[SDL_SCANCODE_SPACE] && !chat_composing_;
+    const bool held = control_key_down(oa::ui::gui_input::ControlKey::space) && !chat_composing_;
     auto& game = match_->state().game;
-    hud::status_panel_step(
-        game, status_panel_next_step_ms_, static_cast<uint32_t>(SDL_GetTicks()), held
-    );
+    // The strip sounds "Panel" as it leaves an end and "Options" as it
+    // reaches one, as the kills board does.
+    const auto at_end = [](int32_t offset) {
+        return offset == 0 || offset == -hud::kStatusPanelRise;
+    };
+    const int32_t before = game.status_panel_offset;
+    if (hud::status_panel_step(
+            game, status_panel_next_step_ms_, static_cast<uint32_t>(SDL_GetTicks()), held
+        )) {
+        if (at_end(before))
+            play_match_interface_sound("Panel");
+        if (at_end(game.status_panel_offset))
+            play_match_interface_sound("Options");
+    }
     if (game.status_panel_offset == 0)
         return;
     if (!status_lightbar_loaded_) {
@@ -1179,23 +1187,41 @@ void Runtime::draw_status_panel() {
             std::cerr << "status strip LIGHTBAR unavailable: " << error.what() << '\n';
         }
     }
-    const int top = kViewBottom + game.status_panel_offset;
+    // The strip rises over the bottom of the overlays' area (the
+    // battlefield, or the part of it the touch controls leave clear) from
+    // its left edge, at the text's scale, less while it would be wider than
+    // the area. Its top row lies the offset above the area's last row, and
+    // only the rows down to that last row show, as the game's view cuts the
+    // strip off: the bottom bar keeps its pixels.
+    const auto area = overlay_area();
+    int scale = hud_text_scale();
+    if (status_lightbar_)
+        while (scale > 1 && static_cast<int>(status_lightbar_->width) * scale > area.width)
+            --scale;
+    const int area_bottom = area.y + area.height;
+    const int area_right = area.x + area.width;
+    const int rows_shown = 1 - game.status_panel_offset;
+    const auto row_top = [&](int row) { return area_bottom - (rows_shown - row) * scale; };
     if (status_lightbar_) {
         const auto& frame = *status_lightbar_;
-        for (std::size_t row = 0; row < frame.height; ++row) {
-            const int y = top + static_cast<int>(row);
-            if (y > kViewBottom)
-                break;
+        const int rows = std::min(rows_shown, static_cast<int>(frame.height));
+        for (int row = 0; row < rows; ++row)
             for (std::size_t column = 0; column < frame.width; ++column) {
-                const auto at = row * frame.width + column;
-                if (at < frame.coverage.size() && frame.coverage[at] != 0)
-                    fill_source_rect(
-                        kViewLeft + static_cast<int>(column), y, 1, 1, frame.pixels[at]
-                    );
+                const int x = area.x + static_cast<int>(column) * scale;
+                if (x >= area_right)
+                    break;
+                const auto at = static_cast<std::size_t>(row) * frame.width + column;
+                if (at >= frame.coverage.size() || frame.coverage[at] == 0)
+                    continue;
+                const auto corner = canvas_paint(x, row_top(row));
+                fill_hud_rect(
+                    corner.x, corner.y, std::min(scale, area_right - x), scale, frame.pixels[at]
+                );
             }
-        }
     }
-    const int text_y = top + hud::kStatusPanelTextDrop;
+    const int rows_below_pen = rows_shown - hud::kStatusPanelTextDrop;
+    if (rows_below_pen <= 0)
+        return;
     const auto translate = [](void* context, const char* text) -> const char* {
         auto& runtime = *static_cast<Runtime*>(context);
         runtime.status_label_ = runtime.translate_ui(text);
@@ -1203,27 +1229,29 @@ void Runtime::draw_status_panel() {
     };
     hud::StatusPanelText text{};
     hud::format_status_panel(game, translate, this, text);
+    const auto pen = [&](int x) {
+        return canvas_paint(area.x + x * scale, row_top(hud::kStatusPanelTextDrop));
+    };
     // The readouts are gadget text in the GUI's second font, cut off at the
-    // view's bottom row as the strip is.
+    // area's last row as the strip is.
     ensure_gui_font();
+    const std::pair<int, const char*> readouts[] = {
+        {hud::kStatusPanelTimeX, text.time},
+        {hud::kStatusPanelUnitsX, text.units},
+        {hud::kStatusPanelSpeedX, text.speed}
+    };
     if (!gui_label_font_.sequences.empty()) {
-        for (const auto& [x, line] :
-             {std::pair{hud::kStatusPanelTimeX, text.time},
-              std::pair{hud::kStatusPanelUnitsX, text.units},
-              std::pair{hud::kStatusPanelSpeedX, text.speed}})
-            overlay_gui_text(
-                gui_label_font_, hud_canvas(kViewLeft + x, text_y), line, kViewBottom + 1 - text_y
-            );
+        for (const auto& [x, line] : readouts)
+            overlay_gui_text(gui_label_font_, pen(x), line, rows_below_pen, true, scale);
         return;
     }
-    const oa::formats::fnt::Font* font =
-        match_small_font_ ? &*match_small_font_ : (match_hud_ ? &match_hud_->font : nullptr);
-    if (font == nullptr ||
-        text_y + static_cast<int>(oa::formats::fnt::line_height(*font)) > kViewBottom + 1)
+    const oa::formats::fnt::Font* font = match_label_font();
+    if (font == nullptr || static_cast<int>(oa::formats::fnt::line_height(*font)) > rows_below_pen)
         return;
-    draw_hud_label(kViewLeft + hud::kStatusPanelTimeX, text_y, text.time, hud::kPaletteWhite);
-    draw_hud_label(kViewLeft + hud::kStatusPanelUnitsX, text_y, text.units, hud::kPaletteWhite);
-    draw_hud_label(kViewLeft + hud::kStatusPanelSpeedX, text_y, text.speed, hud::kPaletteWhite);
+    for (const auto& [x, line] : readouts) {
+        const auto at = pen(x);
+        draw_match_label(at.x, at.y, line, hud::kPaletteWhite, scale);
+    }
 }
 
 } // namespace oa::app

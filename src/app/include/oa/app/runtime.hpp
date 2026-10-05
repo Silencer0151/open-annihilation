@@ -954,8 +954,9 @@ class Runtime final : public menu::Host,
 
     /// Tests whether a control key is held, from SDL's keyboard state.
     ///
-    /// Shift also counts as held while a check holds it (shift_held_by_check_),
-    /// since the keyboard state of SDL's dummy devices holds no key.
+    /// Shift and Space also count as held while a check holds them
+    /// (shift_held_by_check_, space_held_by_check_), since the keyboard state
+    /// of SDL's dummy devices holds no key.
     ///
     /// @param key control key
     /// @return true while it is down
@@ -1242,7 +1243,10 @@ class Runtime final : public menu::Host,
     /// opens no dialog and changes nothing else on the frame. Its margin is the
     /// battlefield through shade row 8, the local player's row starts with the
     /// colour logo and the "Kills" header is drawn. A second F4 slides it away
-    /// again. A press of Space selects nothing and moves no camera. Throws
+    /// again. A press of Space selects nothing and moves no camera; held, it
+    /// slides the board in and raises the status strip over the battlefield's
+    /// bottom left, and let go, both leave again, every frame keeping the
+    /// bottom bar and the rest of the interface as they were. Throws
     /// std::runtime_error on a failure.
     void check_kill_board();
 
@@ -7629,11 +7633,11 @@ class Runtime final : public menu::Host,
     ///
     /// The glyphs are placed as gadget text places them, each lowered by the
     /// height of the font's 'I' and drawn in its own colours; a source pixel
-    /// is a hud_text_scale() block from `pen`. Nothing is drawn for an empty
-    /// font. The modern fonts draw the whole line while the settings choose
-    /// them, and otherwise each run of characters the font lacks, at
-    /// hud_text_scale() times their size, on the font's baseline, in
-    /// hattfont12's colour (paint_modern_text).
+    /// is a `scale` block from `pen`. Nothing is drawn for an empty font. The
+    /// modern fonts draw the whole line while the settings choose them, and
+    /// otherwise each run of characters the font lacks, at `scale` times
+    /// their size, on the font's baseline, in hattfont12's colour
+    /// (paint_modern_text).
     ///
     /// @param font GUI font (gui_font_ or gui_label_font_)
     /// @param pen paint point of the pen
@@ -7642,12 +7646,15 @@ class Runtime final : public menu::Host,
     ///        drawn; the rest are cut off
     /// @param allow_background false leaves out the background box the
     ///        settings may ask for, where the caller lays the box itself
+    /// @param scale paint pixels a source pixel spans each way; 0 for
+    ///        hud_text_scale()
     void overlay_gui_text(
         const oa::present::GafSprites& font,
         oa::ui::display_layout::Point pen,
         std::string_view text,
         int rows_below_pen,
-        bool allow_background = true
+        bool allow_background = true,
+        int scale = 0
     );
 
     /// Overlays GUI-font text glyph by glyph, as overlay_gui_text overlays
@@ -7657,12 +7664,15 @@ class Runtime final : public menu::Host,
     /// @param pen paint point of the pen
     /// @param text the bytes
     /// @param rows_below_pen source rows from the pen row down that may be drawn
+    /// @param scale paint pixels a source pixel spans each way; 0 for
+    ///        hud_text_scale()
     /// @return the text's width in source pixels
     int overlay_gui_glyphs(
         const oa::present::GafSprites& font,
         oa::ui::display_layout::Point pen,
         std::string_view text,
-        int rows_below_pen
+        int rows_below_pen,
+        int scale = 0
     );
 
     /// Paints a line of the modern fonts on the paint target.
@@ -7754,8 +7764,8 @@ class Runtime final : public menu::Host,
     /// `draw` paints a width x height patch into an 8-bit surface whose origin
     /// is the patch's top-left pixel, once over each pass fill. Each pixel both
     /// passes agree on (what `draw` painted) goes to the paint target as a
-    /// hud_text_scale() block: the patch's pixel (column, row) covers the block
-    /// at `corner` + (column, row) x scale, clipped to the target.
+    /// `scale` block: the patch's pixel (column, row) covers the block at
+    /// `corner` + (column, row) x scale, clipped to the target.
     ///
     /// @param corner paint point of the block of the patch's top-left pixel
     /// @param width patch width
@@ -7763,13 +7773,16 @@ class Runtime final : public menu::Host,
     /// @param columns patch columns painted, from the left; the rest are left out
     /// @param draw paints the patch
     /// @param user passed to `draw`
+    /// @param scale paint pixels a patch pixel spans each way; 0 for
+    ///        hud_text_scale()
     void overlay_patch(
         oa::ui::display_layout::Point corner,
         int width,
         int height,
         int columns,
         void (*draw)(void* user, oa::Surface& surface),
-        void* user
+        void* user,
+        int scale = 0
     );
 
     /// Renders the frame of the logo sequence for a player's colour.
@@ -12320,6 +12333,12 @@ class Runtime final : public menu::Host,
 
     /// Draws the status strip that slides up from the bottom of the battlefield while Space is
     /// held: the lightbar and the time, unit and speed readouts.
+    ///
+    /// It rises from the bottom left of the overlays' area at the text's
+    /// scale, less while the strip would be wider than the area, and is
+    /// painted on the battlefield's layer, cut off at the area's last row, so
+    /// that it leaves the bottom bar as it is. It sounds "Panel" as it leaves
+    /// an end and "Options" as it reaches one.
     void draw_status_panel();
     int radar_map_h_ = 0;
     std::optional<oa::present::world_renderer::TextureCatalog> texture_catalog_;
@@ -13323,8 +13342,10 @@ class Runtime final : public menu::Host,
     MatchCommand match_command_ = MatchCommand::none;
     // Names play_match_interface_sound was given while a check listens.
     std::vector<std::string>* heard_interface_sounds_ = nullptr;
-    // Shift held by a check for control_key_down: SDL's dummy devices hold no key.
+    // Shift and Space held by a check for control_key_down: SDL's dummy
+    // devices hold no key.
     bool shift_held_by_check_ = false;
+    bool space_held_by_check_ = false;
     int match_build_page_ = 0;
     uint16_t match_build_page_unit_ = 0; // unit whose page match_build_page_ is
     // Lowest row the loaded unit's page reaches, source pixels; 0 for another panel.

@@ -14,6 +14,7 @@
 #include "oa/ui/console/game_fields.hpp"
 #include "oa/ui/hud/kill_board.hpp"
 #include "oa/ui/hud/resource_bar.hpp"
+#include "oa/ui/hud/status_panel.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
@@ -31,6 +32,7 @@
 #include <tuple>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace oa::app {
 
@@ -149,7 +151,8 @@ void Runtime::overlay_patch(
     int height,
     int columns,
     void (*draw)(void* user, oa::Surface& surface),
-    void* user
+    void* user,
+    int scale
 ) {
     if (width <= 0 || height <= 0)
         return;
@@ -161,7 +164,8 @@ void Runtime::overlay_patch(
         draw(user, passes[pass].surface);
     }
     auto& layer = paint_target();
-    const int scale = hud_text_scale();
+    if (scale <= 0)
+        scale = hud_text_scale();
     columns = std::min(width, columns);
     for (int row = 0; row < height; ++row)
         for (int column = 0; column < columns; ++column) {
@@ -239,17 +243,19 @@ void Runtime::overlay_gui_text(
     oa::ui::display_layout::Point pen,
     std::string_view text,
     int rows_below_pen,
-    bool allow_background
+    bool allow_background,
+    int scale
 ) {
     if (font.sequences.empty() || text.empty() || rows_below_pen <= 0)
         return;
+    if (scale <= 0)
+        scale = hud_text_scale();
     if (!renderer::needs_text_runs(text, true)) {
-        std::ignore = overlay_gui_glyphs(font, pen, text, rows_below_pen);
+        std::ignore = overlay_gui_glyphs(font, pen, text, rows_below_pen, scale);
         return;
     }
     // The modern fonts sit on the font's baseline, drawn at the text's
     // scale and the size the text takes here, in hattfont12's colour.
-    const int scale = hud_text_scale();
     const int32_t font_baseline = renderer::gui_font_baseline(font);
     const auto face = renderer::gui_font_face(font);
     for (const auto& run :
@@ -265,7 +271,7 @@ void Runtime::overlay_gui_text(
         }
         const std::string bytes =
             run.modern ? oa::present::encode_game_text(run.text, false) : run.text;
-        pen.x += overlay_gui_glyphs(font, pen, bytes, rows_below_pen) * scale;
+        pen.x += overlay_gui_glyphs(font, pen, bytes, rows_below_pen, scale) * scale;
     }
 }
 
@@ -294,10 +300,13 @@ int Runtime::overlay_gui_glyphs(
     const oa::present::GafSprites& font,
     oa::ui::display_layout::Point pen,
     std::string_view text,
-    int rows_below_pen
+    int rows_below_pen,
+    int scale
 ) {
     if (font.sequences.empty() || text.empty() || rows_below_pen <= 0)
         return 0;
+    if (scale <= 0)
+        scale = hud_text_scale();
     const std::string line(text);
     const auto* glyphs = &font.sequences.front();
     int width = 0;
@@ -310,7 +319,6 @@ int Runtime::overlay_gui_glyphs(
         const char* text;
     } const run{&font, line.c_str()};
 
-    const int scale = hud_text_scale();
     // The patch reaches a glyph's width left of the pen and a glyph's height
     // above it; below, it stops where the caller cuts the text off.
     overlay_patch(
@@ -330,7 +338,8 @@ int Runtime::overlay_gui_glyphs(
                 0
             );
         },
-        const_cast<Run*>(&run)
+        const_cast<Run*>(&run),
+        scale
     );
     return width;
 }
@@ -495,6 +504,9 @@ constexpr int kCursorReach = 64;
 constexpr int kReadoutSettleSteps = 256;
 // Frames the board takes to slide all the way in or out.
 constexpr int kSlideFrames = 18;
+// Frames Space is held or let go for at most: the strip steps on the clock,
+// once every kStatusPanelStepMs, and each frame waits a step.
+constexpr int kMostSpaceFrames = 200;
 constexpr int kShadeRow = 0x20 - 0x18; // shade table row of the board's level
 constexpr int kHeaderWidth = 30;       // screen columns the "Kills" header covers
 constexpr int kHeaderRows = 14;
@@ -727,14 +739,109 @@ void Runtime::check_kill_board() {
         handle_sdl_event(event, running);
     };
     send_space(true);
+    space_held_by_check_ = true;
     unmoved("when pressed");
+    // Held, the board slides in and the strip rises over the bottom of the
+    // battlefield; let go, both leave. No frame changes the interface
+    // outside the battlefield, the bottom bar among it.
+    const Rect field{
+        match_layout_.battlefield_x(),
+        match_layout_.battlefield_y(),
+        match_layout_.battlefield_width(),
+        match_layout_.battlefield_height()
+    };
+    const auto& strip_offset = game.status_panel_offset;
+    std::vector<std::string> heard;
+    heard_interface_sounds_ = &heard;
+
+    struct StopListening {
+        Runtime& runtime;
+
+        ~StopListening() { runtime.heard_interface_sounds_ = nullptr; }
+    } const stop_listening{*this};
+
+    // Each of the board and the strip sounds "Panel" as it leaves an end
+    // and "Options" as it reaches the other.
+    const auto heard_twice = [&](const char* name) {
+        return std::count(heard.begin(), heard.end(), name) == 2;
+    };
+    const auto play = [&](bool held, renderer::Surface& frame, renderer::Surface* rising) {
+        const int32_t slide = held ? hud::kBoardWidth : 0;
+        const int32_t offset = held ? -hud::kStatusPanelRise : 0;
+        heard.clear();
+        int frames = 0;
+        do {
+            SDL_Delay(hud::kStatusPanelStepMs + 1);
+            capture(frame);
+            if (differing_outside(still, frame, {field, cursor}) != 0)
+                throw std::runtime_error(
+                    "kill board check: the interface outside the battlefield changed with the "
+                    "strip's offset at " +
+                    std::to_string(strip_offset)
+                );
+            // The first frame whose strip shows its text cut off.
+            if (rising != nullptr && rising->rgb.empty() &&
+                strip_offset < -hud::kStatusPanelTextDrop && strip_offset > offset)
+                *rising = frame;
+            ++frames;
+        } while ((kill_board_.slide != slide || strip_offset != offset) &&
+                 frames < kMostSpaceFrames);
+        if (kill_board_.slide != slide || strip_offset != offset)
+            throw std::runtime_error(
+                std::string("kill board check: the board and the strip did not ") +
+                (held ? "come out" : "leave") + " with Space " + (held ? "held" : "let go")
+            );
+        if (heard.size() != 4 || !heard_twice("Panel") || !heard_twice("Options"))
+            throw std::runtime_error(
+                std::string(
+                    "kill board check: the board and the strip did not each sound "
+                    "Panel and Options as they "
+                ) +
+                (held ? "came out" : "left")
+            );
+    };
+    renderer::Surface rising;
+    renderer::Surface raised;
+    play(true, raised, &rising);
+    unmoved("while held");
+    write_ppm(report_directory / "native-kill-board-space-rising.ppm", rising);
+    write_ppm(report_directory / "native-kill-board-space.ppm", raised);
+    if (!status_lightbar_)
+        throw std::runtime_error("kill board check: the status strip has no LIGHTBAR frame");
+    // At the text's scale, less while the strip would be wider than the
+    // battlefield.
+    const auto strip_width = static_cast<int>(status_lightbar_->width);
+    int strip_scale = scale;
+    while (strip_scale > 1 && strip_width * strip_scale > overlays.width)
+        --strip_scale;
+    const int strip_rows = (1 + hud::kStatusPanelRise) * strip_scale;
+    const Rect strip{
+        overlays.x,
+        overlays.y + overlays.height - strip_rows,
+        std::min(strip_width * strip_scale, overlays.width),
+        strip_rows
+    };
+    if (differing_inside(still, raised, strip) <
+        static_cast<std::size_t>(strip.width) * strip.height / 2)
+        throw std::runtime_error("kill board check: the status strip did not rise");
+    if (differing_inside(still, raised, board) < area / 2)
+        throw std::runtime_error("kill board check: Space did not slide the board in");
+    if (differing_outside(still, raised, {board, strip, cursor}) != 0)
+        throw std::runtime_error(
+            "kill board check: Space changed the frame outside the board and the strip"
+        );
+    space_held_by_check_ = false;
     send_space(false);
-    capture(still);
+    renderer::Surface after;
+    play(false, after, nullptr);
     unmoved("after it was let go");
+    if (differing_outside(still, after, {cursor}) != 0)
+        throw std::runtime_error("kill board check: Space left pixels behind");
     std::cout << "kill board check: " << board.width << 'x' << board.height << " at " << board.x
               << ',' << board.y << " on the " << match_layout_.width << 'x' << match_layout_.height
               << " canvas, shaded by " << (full ? "the card in the full tier" : "the shade table")
-              << "; Space selected nothing and moved no camera\n";
+              << "; Space raised a " << strip.width << 'x' << strip.height << " strip at "
+              << strip.x << ',' << strip.y << " and left the bottom bar as it was\n";
 }
 
 } // namespace oa::app
