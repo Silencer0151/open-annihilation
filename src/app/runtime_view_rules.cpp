@@ -706,6 +706,11 @@ void Runtime::capture_named_screenshot() {
     }
     const auto folder =
         game_file_path(output + screenshot_folder, ui::frontend::SavePathUse::write);
+    // An output directory that would leave the save root has no host path.
+    if (folder.empty()) {
+        status_ = "error writing screenshot";
+        return;
+    }
     std::error_code error;
     fs::create_directories(folder, error);
     fs::path path;

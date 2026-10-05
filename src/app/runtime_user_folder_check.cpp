@@ -415,6 +415,11 @@ void Runtime::check_user_folder() {
         );
     };
     lands("default", "CHECK.SAV");
+    require(
+        game_file_path("SAVEGAME\\x\\..\\..\\outside.SAV", ui::frontend::SavePathUse::write)
+            .empty(),
+        "a saved game's name that leaves the saved games folder is given a place"
+    );
     options_.mod_profile = made_up;
     lands("made-up-mod", "MADEUP.SAV");
     const auto mod_saves = listed_saves();

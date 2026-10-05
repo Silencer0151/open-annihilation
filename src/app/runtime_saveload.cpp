@@ -1048,6 +1048,11 @@ bool Runtime::write_saved_game(
             ))
             throw std::runtime_error("the campaign map's victory conditions cannot be saved");
     };
+    // A name that would leave the saved games' folder has no host path.
+    if (path.empty()) {
+        status_ = "Could not write the saved game: its name leaves the saved games folder";
+        return false;
+    }
     std::error_code error;
     fs::create_directories(path.parent_path(), error);
     const persist::FileSink sink = persist::stdio_file_sink();

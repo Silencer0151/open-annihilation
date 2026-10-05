@@ -340,6 +340,69 @@ OA_GAME_DATA_TEST(save_dialog_saves_only_through_its_buttons) {
     OA_CHECK(press("LOAD") == SaveDialogAction::none);
 }
 
+// A save whose description would name a file outside the save directory:
+// selecting it leaves the name field empty, and typing that name saves
+// nothing, while a name with spaces and mixed case still saves.
+OA_GAME_DATA_TEST(save_dialog_refuses_a_name_that_leaves_the_folder) {
+    Panel panel;
+    if (!loadgame_panel(panel))
+        return;
+    auto fixture = saves_fixture();
+    fixture.saves["first.SAV"].strings["Description"] = "x/../../outside";
+    auto context = make_context(fixture);
+    savegame_enter_save(panel, context);
+    OA_CHECK(text_of(panel, "GAMENAME").empty());
+    OA_CHECK(text_of(panel, "MISSION") == "Core3");
+    const auto ok = [&] {
+        return savegame_on_save_press(panel, context, panel_find(panel, "LOAD"));
+    };
+    OA_CHECK(ok().action == SaveDialogAction::none);
+    panel_set_text(panel, "GAMENAME", "x/../../outside");
+    OA_CHECK(ok().action == SaveDialogAction::none);
+    panel_set_text(panel, "GAMENAME", "..");
+    OA_CHECK(ok().action == SaveDialogAction::none);
+    panel_set_text(panel, "GAMENAME", "My Battle");
+    const auto saved = ok();
+    OA_CHECK(saved.action == SaveDialogAction::save);
+    OA_CHECK(std::string(saved.path.data()) == "SAVEGAME\\My Battle.SAV");
+}
+
+// Names a save may take, and paths that would leave their folder: those
+// have no host path, so writing one fails and creates no file.
+OA_TEST(save_paths_stay_in_their_folders) {
+    OA_CHECK(savegame_title_allowed("My Battle"));
+    OA_CHECK(savegame_title_allowed("ab:c"));
+    OA_CHECK(!savegame_title_allowed(""));
+    OA_CHECK(!savegame_title_allowed("."));
+    OA_CHECK(!savegame_title_allowed(".."));
+    OA_CHECK(!savegame_title_allowed("x/../../outside"));
+    OA_CHECK(!savegame_title_allowed("x\\outside"));
+
+    const auto scratch = oa::test::make_scratch_directory("oa-ui-frontend-save-paths");
+    const SaveRoots roots{scratch / "root" / "game", scratch / "Saves", {}};
+    std::filesystem::create_directories(roots.saves);
+    std::filesystem::create_directories(roots.root);
+    OA_CHECK(
+        savegame_host_path(roots, "SAVEGAME\\My Battle.SAV", SavePathUse::write) ==
+        roots.saves / "My Battle.SAV"
+    );
+    for (const char* leaving :
+         {"SAVEGAME\\x\\..\\..\\outside.SAV", "SAVEGAME\\\\outside.SAV", "..\\..\\outside.LST"}) {
+        OA_CHECK(savegame_host_path(roots, leaving, SavePathUse::write).empty());
+        OA_CHECK(savegame_host_path(roots, leaving, SavePathUse::read).empty());
+    }
+    const auto files = savegame_host_files(&roots);
+    const std::vector<uint8_t> bytes{'s', 'a', 'v', 'e'};
+    OA_CHECK(!files.write_file(files.context, "SAVEGAME\\x\\..\\..\\outside.SAV", bytes));
+    OA_CHECK(!files.write_file(files.context, "..\\..\\outside.LST", bytes));
+    OA_CHECK(!std::filesystem::exists(scratch / "outside.SAV"));
+    OA_CHECK(!std::filesystem::exists(scratch / "outside.LST"));
+    OA_CHECK(files.write_file(files.context, "SAVEGAME\\My Battle.SAV", bytes));
+    OA_CHECK(std::filesystem::exists(roots.saves / "My Battle.SAV"));
+    std::error_code error;
+    std::filesystem::remove_all(scratch, error);
+}
+
 OA_TEST(load_summary_fields) {
     auto fixture = saves_fixture();
     auto context = make_context(fixture);

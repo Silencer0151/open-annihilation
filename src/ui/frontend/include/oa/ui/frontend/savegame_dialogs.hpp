@@ -131,10 +131,19 @@ void savegame_entry_path(
 /// @param capacity Size of `out` in bytes.
 void savegame_format_time(int32_t ticks, char* out, std::size_t capacity) noexcept;
 
+/// Returns whether a name can be a saved game's file name in the save
+/// directory: it is not empty, holds no '/' or '\\', and is not "." or "..".
+/// Spaces, mixed case and every other character are allowed.
+///
+/// @param title the name typed into GAMENAME, or a save's description
+/// @return true when "<directory>\\<title>.SAV" stays in the save directory
+[[nodiscard]] bool savegame_title_allowed(std::string_view title) noexcept;
+
 /// Fills the save preview from the summary of the selected GAMES entry, or clears it.
 ///
-/// GAMENAME takes the description; the radar image saved with the game
-/// replaces context.radar_picture and RADAR shows while it has one;
+/// GAMENAME takes the description, or stays empty when the description is
+/// not a name savegame_title_allowed accepts; the radar image saved with the
+/// game replaces context.radar_picture and RADAR shows while it has one;
 /// GAMETYPE reads "Single", "Skirmish (<n> players)" or "???"; a campaign save
 /// shows CAMPAIGN and its mission, a skirmish save hides CAMPAIGN and shows
 /// its map; TIME, SIDE (the side name at the saved "Side" index, "???"
@@ -207,9 +216,10 @@ SaveDialogResult savegame_on_load_click(Panel& panel, SaveDialogContext& context
 /// Closing releases the lists. CANCEL plays "Previous". DELETE removes the
 /// selected save, relists, keeps the selection in range and refreshes the
 /// preview. LOAD (OK), GAMES or GAMENAME plays "smlbutton" and returns the
-/// path "<directory>\<GAMENAME>.SAV" (any extension replaced); an empty name
-/// does nothing. GAMENAME is activated by Return at the end of the name, never
-/// by a press on it (savegame_on_save_press).
+/// path "<directory>\<GAMENAME>.SAV" (any extension replaced); a name
+/// savegame_title_allowed refuses, the empty name among them, does nothing.
+/// GAMENAME is activated by Return at the end of the name, never by a press
+/// on it (savegame_on_save_press).
 ///
 /// @param[in,out] panel The loaded dialog.
 /// @param[in,out] context Directory services, list, summary reader and host.
@@ -389,12 +399,14 @@ enum class SavePathUse : uint8_t {
 /// case, lies in SaveRoots::saves, or for reading in the first of
 /// SaveRoots::earlier that holds its name when SaveRoots::saves does not;
 /// any other relative path lies under SaveRoots::root; an absolute path
-/// stays where it is.
+/// stays where it is. A relative path whose parts, once "." and ".." are
+/// resolved, would leave its folder, or that names a root or a drive after
+/// kSaveDirectory, has no host path.
 ///
 /// @param roots where the paths lie
 /// @param path the path
 /// @param use what the path is for
-/// @return the host path
+/// @return the host path; empty when the path would leave its folder
 [[nodiscard]] std::filesystem::path
 savegame_host_path(const SaveRoots& roots, std::string_view path, SavePathUse use);
 

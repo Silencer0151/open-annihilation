@@ -262,6 +262,12 @@ void savegame_format_time(int32_t ticks, char* out, std::size_t capacity) noexce
     );
 }
 
+bool savegame_title_allowed(std::string_view title) noexcept {
+    if (title.empty() || title == "." || title == "..")
+        return false;
+    return title.find_first_of("/\\") == std::string_view::npos;
+}
+
 void savegame_fill_preview(Panel& panel, SaveDialogContext& context) {
     if (panel_control(panel, "GAMES") == nullptr)
         return;
@@ -272,7 +278,14 @@ void savegame_fill_preview(Panel& panel, SaveDialogContext& context) {
     void* bank = nullptr;
     if (described) {
         const auto& entry = context.list.entries[static_cast<std::size_t>(index)];
-        panel_set_text(panel, "GAMENAME", view(entry.description));
+        // The name field is what a save is written under, so a description
+        // that would name a file outside the save directory is not copied.
+        const auto description = view(entry.description);
+        panel_set_text(
+            panel,
+            "GAMENAME",
+            savegame_title_allowed(description) ? description : std::string_view{}
+        );
         char path[kSaveFileBytes * 2];
         join_path(context, view(entry.file), path, sizeof path);
         if (context.reader.open != nullptr)
@@ -494,7 +507,7 @@ SaveDialogResult savegame_on_save_click(Panel& panel, SaveDialogContext& context
     play(context, kSmallButtonLowerSound);
     const auto* field = panel_control(panel, "GAMENAME");
     const auto name = field != nullptr ? control_text(*field) : std::string_view{};
-    if (name.empty())
+    if (!savegame_title_allowed(name))
         return result;
     char path[kSaveFileBytes * 2];
     variant_path(context, name, kSaveExtension, path, sizeof path);
@@ -870,18 +883,37 @@ void close_summary_bank(void* /*context*/, void* bank) {
     delete owned;
 }
 
+/// Returns whether a relative path stays in the folder it is joined to.
+///
+/// @param tail the path joined to the folder
+/// @return false when it names a root or a drive, or when, once "." and ".."
+///     are resolved, it starts by leaving the folder
+bool stays_in_folder(const std::filesystem::path& tail) {
+    if (tail.has_root_name() || tail.has_root_directory())
+        return false;
+    const std::filesystem::path normal = tail.lexically_normal();
+    return normal.empty() || *normal.begin() != "..";
+}
+
 } // namespace
 
 std::filesystem::path
 savegame_host_path(const SaveRoots& roots, std::string_view path, SavePathUse use) {
     std::string relative(path);
     std::replace(relative.begin(), relative.end(), '\\', '/');
+    const std::filesystem::path whole = utf8_path(relative);
+    // A path the player gave with its own root, such as a chosen Image
+    // Output Directory, stays where it is.
+    if (whole.has_root_name() || whole.has_root_directory())
+        return roots.root / whole;
     const auto slash = relative.find('/');
     const std::string head = relative.substr(0, slash);
     if (upper(head) != upper(std::string(kSaveDirectory)))
-        return roots.root / utf8_path(relative);
+        return stays_in_folder(whole) ? roots.root / whole : std::filesystem::path{};
     const std::string rest =
         slash == std::string::npos ? std::string() : relative.substr(slash + 1);
+    if (!stays_in_folder(utf8_path(rest)))
+        return {};
     const std::filesystem::path written = roots.saves / utf8_path(rest);
     if (use == SavePathUse::write || roots.earlier.empty() || rest.empty())
         return written;

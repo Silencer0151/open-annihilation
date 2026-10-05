@@ -1713,9 +1713,11 @@ effect:
   the Image Output Directory by default (`own_image_output_directory`), the
   `screenshots` folder is the mod's folder in `Screenshots` and a
   `MOVIEnnn` folder lies in its folder in `Films` (`place_capture_path`).
-  A stored Image Output Directory that is the game's default, the game
-  folder's folder named after the user, gives way to it; any other one the
-  player chose wins, used as it is.
+  A relative path whose `..` parts would leave its folder, such as a saved
+  game's name taken from a downloaded save's description, has no place,
+  and nothing is written for it. A stored Image Output Directory that is
+  the game's default, the game folder's folder named after the user, gives
+  way to it; any other one the player chose wins, used as it is.
 - **The moves:** the first start with the player's own preferences file
   that finds no `open-annihilation.saves-moved` record moves the saved
   games earlier versions kept beside that file, `SAVEGAME` and each
