@@ -8,8 +8,8 @@
 # annotations. Licence texts and third-party notices (LICENSE, licenses/)
 # state their own terms. Every copyright line names the project's authors
 # and points to COPYRIGHT, which names the holder once for the repository,
-# except the branding's at the end, which is not under the project's
-# licence.
+# except the SDL patches', which keep SDL's terms, and the branding's at the
+# end, which is not under the project's licence.
 #
 # The paths name the engine's own directories only. '*' matches within one
 # directory and '**' across directories.
@@ -56,7 +56,8 @@ SPDX-License-Identifier = "GPL-3.0-only"
 
 # The files of the builds for other platforms (platforms/) that cannot hold
 # a comment: their documents, bundle property lists and templates, launch
-# screens, data, images, build settings and entitlements.
+# screens, data, images, build settings and entitlements, and the Steam
+# Input templates the Linux package carries for the Steam Deck.
 [[annotations]]
 path = [
     "platforms/**.md",
@@ -67,6 +68,7 @@ path = [
     "platforms/**.png",
     "platforms/**.xcconfig",
     "platforms/**.entitlements",
+    "platforms/**.vdf",
 ]
 SPDX-FileCopyrightText = "The Open Annihilation Authors; see COPYRIGHT"
 SPDX-License-Identifier = "GPL-3.0-only"
@@ -77,6 +79,19 @@ SPDX-License-Identifier = "GPL-3.0-only"
 path = "src/audio/tests/data/**"
 SPDX-FileCopyrightText = "The Open Annihilation Authors; see COPYRIGHT"
 SPDX-License-Identifier = "GPL-3.0-only"
+
+# The changes the build makes to the pinned SDL release (tools/sdl-patches).
+# Each patch holds lines of the SDL file it changes, whose authors that file
+# names, and the change, which the project's authors offer to SDL under
+# SDL's own licence, zlib, so each patch keeps SDL's terms.
+[[annotations]]
+path = "tools/sdl-patches/**.patch"
+precedence = "override"
+SPDX-FileCopyrightText = [
+    "The authors of the SDL files each patch changes, as each file names them",
+    "The Open Annihilation Authors; see COPYRIGHT",
+]
+SPDX-License-Identifier = "Zlib"
 
 # Adapted from the Contributor Covenant, version 2.1, which is distributed
 # under the Creative Commons Attribution 4.0 licence.

@@ -133,6 +133,8 @@ std::string_view page_slug(settings::Page page) {
         return "language";
     case settings::Page::touch:
         return "touch";
+    case settings::Page::controller:
+        return "controller";
     case settings::Page::developer:
         return "developer";
     case settings::Page::game_files:

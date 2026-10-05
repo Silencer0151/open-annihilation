@@ -109,7 +109,8 @@ class IntroPlayer {
 
     /// Plays the movie, or decodes it without a window for a headless check.
     ///
-    /// Escape, a quit event or closing the window skips the rest. The sound
+    /// An event that skips_movie() accepts skips the rest; every gamepad is
+    /// open while the movie plays, so that its buttons arrive. The sound
     /// output is started for the movie's sound and stopped after it; when
     /// it cannot start or take the movie's stream, one line is logged and
     /// the movie is shown without sound. Full playback then waits at most
@@ -151,6 +152,15 @@ struct LetterboxDest {
     float w = 0;
     float h = 0;
 };
+
+/// Tells whether an event skips the rest of a movie: Escape, a quit event,
+/// closing the window, a mouse button, a touch, or a gamepad's A, B or Start
+/// (Menu on the Steam Deck), so that a touch screen or a gamepad alone can
+/// skip it. Built with the SDL3 player only.
+///
+/// @param event The event.
+/// @return true when it skips the movie.
+[[nodiscard]] bool skips_movie(const SDL_Event& event) noexcept;
 
 /// Returns the letterboxed destination rectangle of a canvas on an output.
 ///

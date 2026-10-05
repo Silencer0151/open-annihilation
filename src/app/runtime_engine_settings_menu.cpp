@@ -243,12 +243,17 @@ void Runtime::EngineSettingsMenuHost::dialog_tick(ScreenContext* context, void*)
         return;
     if (runtime.screen_ == Screen::main_menu) {
         // Hardware acceleration's status follows the renderer while the
-        // dialog shows, and Touch shows once a finger turns the touch
-        // controls on; the main menu is drawn every frame.
+        // dialog shows, Touch shows once a finger turns the touch controls
+        // on, and Controller once a gamepad sends input, with its Steam
+        // Input notice while that applies; the main menu is drawn every
+        // frame.
         if (auto* dialog = runtime.engine_settings_dialog()) {
             std::ignore =
                 settings::set_acceleration_status(*dialog, runtime.acceleration_report().status);
             std::ignore = settings::set_touch_controls(*dialog, runtime.touch_controls_active());
+            std::ignore = settings::set_controller_section(
+                *dialog, runtime.pad_used(), runtime.pad_steam_input()
+            );
         }
         return;
     }

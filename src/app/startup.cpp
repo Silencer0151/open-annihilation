@@ -279,6 +279,7 @@ void check_game_files_options(Options& options) {
         {options.check_reclaim_cursor, "--check-reclaim-cursor"},
         {options.check_pointer_interfaces, "--check-pointer-interfaces"},
         {options.check_touch_controls, "--check-touch-controls"},
+        {options.check_pad_controls, "--check-pad-controls"},
         {options.check_multiplayer_menu, "--check-multiplayer-menu"},
     };
     for (const auto& [given, name] : refused)
@@ -460,6 +461,7 @@ void check_director_options(Options& options) {
         {options.check_reclaim_cursor, "--check-reclaim-cursor"},
         {options.check_pointer_interfaces, "--check-pointer-interfaces"},
         {options.check_touch_controls, "--check-touch-controls"},
+        {options.check_pad_controls, "--check-pad-controls"},
         {options.check_multiplayer_menu, "--check-multiplayer-menu"},
         {options.check_director_view, "--check-director-view"},
         {options.check_director_render, "--check-director-render"},
@@ -761,6 +763,8 @@ namespace {
             result.check_pointer_interfaces = true;
         else if (argument == "--check-touch-controls")
             result.check_touch_controls = true;
+        else if (argument == "--check-pad-controls")
+            result.check_pad_controls = true;
         else if (argument == "--touch-controls")
             result.touch_controls = true;
         else if (argument == "--check-game-files")
@@ -838,7 +842,7 @@ namespace {
                    "[--check-kill-board] "
                    "[--check-unit-language TAG] "
                    "[--check-patrol-reclaim] [--check-reclaim-cursor] "
-                   "[--check-pointer-interfaces] [--check-touch-controls] "
+                   "[--check-pointer-interfaces] [--check-pad-controls] [--check-touch-controls] "
                    "[--check-game-files] "
                    "[--check-multiplayer-menu] "
                    "[--check-load-save] [--check-frontend-controls] "
@@ -1000,8 +1004,9 @@ namespace {
         !result.check_unit_pages.empty() || result.check_kill_board ||
         !result.check_unit_language.empty() || result.check_patrol_reclaim ||
         result.check_reclaim_cursor || result.check_pointer_interfaces ||
-        result.check_touch_controls || result.check_director_view || result.check_director_render ||
-        result.check_interpolation || result.check_unit_playout || result.check_paused_save;
+        result.check_touch_controls || result.check_pad_controls || result.check_director_view ||
+        result.check_director_render || result.check_interpolation || result.check_unit_playout ||
+        result.check_paused_save;
     // A capture and a showcase need the application's own loop and window,
     // which checks and benchmarks do not run.
     const bool check_run = result.fixed_clock || result.check_navigation ||

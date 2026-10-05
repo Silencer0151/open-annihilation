@@ -5,9 +5,10 @@
 
 // The machine the game runs on, where it changes what the game offers by
 // default: a Raspberry Pi starts with settings its graphics keep up with, and
-// so does a light machine (one processor, no SSE2 or little memory); on
+// so does a light machine (one processor, no SSE2 or little memory); a Steam
+// Deck starts at its screen's refresh rate with larger touch controls; on
 // Windows before Vista only one render driver may draw through the graphics
-// card.
+// card. Whether Steam's Game Mode runs the game is read from the environment.
 
 #include <cstddef>
 #include <cstdint>
@@ -100,5 +101,70 @@ struct MachineTraits {
 ///     the system reports it, and whether a 32-bit x86 processor reports
 ///     SSE2 (true on every other processor)
 [[nodiscard]] MachineTraits read_machine_traits() noexcept;
+
+/// The folder Linux describes the machine's maker and model in.
+inline constexpr char dmi_folder_path[] = "/sys/class/dmi/id";
+/// The maker a Steam Deck names.
+inline constexpr std::string_view steam_deck_vendor = "Valve";
+/// The product name of the Steam Deck with the LCD screen.
+inline constexpr std::string_view steam_deck_lcd_model = "Jupiter";
+/// The product name of the Steam Deck with the OLED screen.
+inline constexpr std::string_view steam_deck_oled_model = "Galileo";
+/// How many times a second the LCD model's screen refreshes.
+inline constexpr uint32_t steam_deck_lcd_refresh_hz = 60;
+/// How many times a second the OLED model's screen refreshes.
+inline constexpr uint32_t steam_deck_oled_refresh_hz = 90;
+/// The most bytes of a DMI file read.
+inline constexpr std::size_t dmi_file_limit = 256;
+
+/// Which Steam Deck the game runs on.
+enum class SteamDeckModel : uint8_t {
+    none, ///< not a Steam Deck
+    lcd,  ///< the model with the LCD screen
+    oled, ///< the model with the OLED screen
+};
+
+/// Tells which Steam Deck a maker and product name are.
+///
+/// @param vendor the maker's name; trailing white space is ignored
+/// @param product the product's name; trailing white space is ignored
+/// @return the model, or none for another machine
+[[nodiscard]] SteamDeckModel
+steam_deck_model(std::string_view vendor, std::string_view product) noexcept;
+
+/// Tells which Steam Deck a DMI folder describes, from its sys_vendor and product_name (else
+/// board_vendor and board_name).
+///
+/// Reads at most dmi_file_limit bytes of each file.
+///
+/// @param dmi_folder the folder
+/// @return the model, or none when the files are missing, unreadable or name another machine
+[[nodiscard]] SteamDeckModel steam_deck_model_in(const std::filesystem::path& dmi_folder);
+
+/// Tells which Steam Deck the game runs on.
+///
+/// @return on Linux, the model dmi_folder_path describes (steam_deck_model_in); none on every
+///     other system
+[[nodiscard]] SteamDeckModel running_steam_deck_model();
+
+/// Returns a model's screen refresh rate.
+///
+/// @param model the model
+/// @return times a second; 0 for none
+[[nodiscard]] uint32_t steam_deck_refresh_hz(SteamDeckModel model) noexcept;
+
+/// Tells whether the environment's words say the game runs in Steam's Game Mode or Big
+/// Picture: SteamGamepadUI is "1", or XDG_CURRENT_DESKTOP names gamescope.
+///
+/// @param gamepad_ui the SteamGamepadUI variable's value; empty when unset
+/// @param current_desktop the XDG_CURRENT_DESKTOP variable's value; empty when unset
+/// @return whether those words name Steam's Game Mode or Big Picture
+[[nodiscard]] bool
+steam_game_mode(std::string_view gamepad_ui, std::string_view current_desktop) noexcept;
+
+/// Tells whether this run is in Steam's Game Mode, from the environment.
+///
+/// @return steam_game_mode of this process's environment
+[[nodiscard]] bool running_in_steam_game_mode();
 
 } // namespace oa::platform

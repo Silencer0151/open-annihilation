@@ -27,6 +27,8 @@
 
 namespace oa::ui::engine_settings {
 
+namespace pad_controls = oa::ui::pad_controls;
+
 namespace geometry {
 
 namespace {
@@ -66,14 +68,44 @@ constexpr std::array<Setting, 6> kLanguageRows{
     Setting::text_background,
 };
 /// Touch's rows: how a finger's drag and hold work, then the latches, the
-/// haptics and the side the controls stand on.
-constexpr std::array<Setting, 5> kTouchRows{
+/// haptics, the side the controls stand on and their size.
+constexpr std::array<Setting, 6> kTouchRows{
     Setting::touch_drag,
     Setting::touch_hold_delay,
     Setting::touch_latches,
     Setting::touch_haptics,
     Setting::touch_left_handed,
+    Setting::touch_control_size,
 };
+/// Controller's rows: the scheme, the right trackpad's pointer, the right
+/// stick and the gyro, what the pad feels and shows, the mirror, then the
+/// rows it shares with Touch.
+constexpr std::array<Setting, 15> kControllerRows{
+    Setting::pad_scheme,
+    Setting::pad_right_trackpad,
+    Setting::pad_pointer_speed,
+    Setting::pad_acceleration,
+    Setting::pad_glide,
+    Setting::pad_right_stick,
+    Setting::pad_magnetism,
+    Setting::pad_gyro,
+    Setting::pad_gyro_speed,
+    Setting::pad_haptics,
+    Setting::pad_prompts,
+    Setting::pad_left_handed,
+    Setting::touch_control_size,
+    Setting::touch_hold_delay,
+    Setting::touch_latches,
+};
+/// Controller's rows under the Steam Input notice, while the gamepad
+/// reaches the game through Steam Input.
+constexpr std::array<Setting, kControllerRows.size() + 1> kSteamInputControllerRows = [] {
+    std::array<Setting, kControllerRows.size() + 1> rows{};
+    rows[0] = Setting::pad_steam_input_notice;
+    for (std::size_t index = 0; index < kControllerRows.size(); ++index)
+        rows[index + 1] = kControllerRows[index];
+    return rows;
+}();
 /// Game files' rows: what is installed with its MANAGE… button, the
 /// backups switch, and where the files are.
 constexpr std::array<Setting, 3> kGameFilesRows{
@@ -116,74 +148,86 @@ constexpr std::array<Setting, 3> kModChatRows{
     Setting::chat_backdrop,
     Setting::panel_background,
 };
-/// The engine's sections, in the list's order, while the game has no touch
-/// controls.
-constexpr std::array<Page, 6> kEnginePages{
-    Page::mods,
-    Page::controls,
-    Page::common_tweaks,
-    Page::language,
-    Page::graphics,
-    Page::developer,
+
+/// The sections a dialog of the engine's settings lists, in the list's order.
+struct EnginePageList {
+    std::array<Page, most_listed_pages> pages{}; ///< the sections; the first `count` count
+    std::size_t count{};                         ///< how many it lists
 };
-static_assert(kEnginePages.size() <= most_listed_pages);
-/// The engine's sections, in the list's order, while the game has touch
-/// controls: Touch between Graphics and Developer.
-constexpr std::array<Page, 7> kTouchEnginePages{
-    Page::mods,
-    Page::controls,
-    Page::common_tweaks,
-    Page::language,
-    Page::graphics,
-    Page::touch,
-    Page::developer,
+
+/// Returns the engine's sections a dialog lists, in the list's order: the
+/// five that every dialog lists, then Touch, Controller and Game files where
+/// each is listed, then Developer.
+///
+/// @param touch the dialog lists Touch
+/// @param controller the dialog lists Controller
+/// @param game_files the dialog lists Game files
+/// @return the sections
+constexpr EnginePageList engine_page_list(bool touch, bool controller, bool game_files) noexcept {
+    EnginePageList list{};
+    const auto add = [&list](Page page) { list.pages[list.count++] = page; };
+    for (const Page page :
+         {Page::mods, Page::controls, Page::common_tweaks, Page::language, Page::graphics})
+        add(page);
+    if (touch)
+        add(Page::touch);
+    if (controller)
+        add(Page::controller);
+    if (game_files)
+        add(Page::game_files);
+    add(Page::developer);
+    return list;
+}
+
+/// Returns a list's place among kEnginePageLists.
+///
+/// @param touch the dialog lists Touch
+/// @param controller the dialog lists Controller
+/// @param game_files the dialog lists Game files
+/// @return 0 to 7: Touch adds 1, Controller 2 and Game files 4
+constexpr std::size_t
+engine_page_list_index(bool touch, bool controller, bool game_files) noexcept {
+    return (touch ? 1U : 0U) + (controller ? 2U : 0U) + (game_files ? 4U : 0U);
+}
+
+/// Every list of the engine's sections, by engine_page_list_index.
+constexpr std::array<EnginePageList, 8> kEnginePageLists{
+    engine_page_list(false, false, false),
+    engine_page_list(true, false, false),
+    engine_page_list(false, true, false),
+    engine_page_list(true, true, false),
+    engine_page_list(false, false, true),
+    engine_page_list(true, false, true),
+    engine_page_list(false, true, true),
+    engine_page_list(true, true, true),
 };
-static_assert(kTouchEnginePages.size() < most_listed_pages);
-/// The engine's sections, in the list's order, in the main menu's dialog of
-/// a game that brings game files in: Game files between Graphics and
-/// Developer.
-constexpr std::array<Page, 7> kGameFilesEnginePages{
-    Page::mods,
-    Page::controls,
-    Page::common_tweaks,
-    Page::language,
-    Page::graphics,
-    Page::game_files,
-    Page::developer,
-};
-static_assert(kGameFilesEnginePages.size() < most_listed_pages);
-/// The engine's sections with Touch and Game files both listed, Game files
-/// between Touch and Developer.
-constexpr std::array<Page, 8> kTouchGameFilesEnginePages{
-    Page::mods,
-    Page::controls,
-    Page::common_tweaks,
-    Page::language,
-    Page::graphics,
-    Page::touch,
-    Page::game_files,
-    Page::developer,
-};
-static_assert(kTouchGameFilesEnginePages.size() == most_listed_pages);
+static_assert(kEnginePageLists.front().count == 6, "six sections without the optional three");
+static_assert(
+    kEnginePageLists.back().count == most_listed_pages,
+    "the longest list holds the most sections a dialog lists"
+);
 /// The one section a Language dialog lists.
 constexpr std::array<Page, 1> kLanguageTextPages{Page::language};
 
 /// Tells whether every section's entry number is its place in the list of
-/// the engine's settings with Touch, the list without Touch only leaving
-/// Touch's number out.
+/// the engine's settings with Touch and Controller, a list without either
+/// only leaving its number out.
 ///
-/// @return true when page_control follows the list with Touch
+/// @return true when page_control follows the list with Touch and Controller
 constexpr bool entries_follow_the_list() noexcept {
-    for (std::size_t index = 0; index < kTouchEnginePages.size(); ++index)
-        if (page_control(kTouchEnginePages[index]) != static_cast<int32_t>(index))
+    const EnginePageList& list = kEnginePageLists[engine_page_list_index(true, true, false)];
+    for (std::size_t index = 0; index < list.count; ++index)
+        if (page_control(list.pages[index]) != static_cast<int32_t>(index))
             return false;
     return true;
 }
 
-static_assert(entries_follow_the_list(), "each entry's number is its place with Touch listed");
+static_assert(
+    entries_follow_the_list(), "each entry's number is its place with Touch and Controller listed"
+);
 static_assert(
     page_control(Page::game_files) == page_control(Page::developer) + 1,
-    "Game files' entry number follows Developer's, so Touch and Developer keep theirs"
+    "Game files' entry number follows Developer's, so Touch, Controller and Developer keep theirs"
 );
 /// The mod options' sections, in the list's order.
 constexpr std::array<Page, 5> kModPages{
@@ -275,7 +319,7 @@ struct SwitchMember {
 };
 
 /// Every switch and its value: the one table switch_on and set_switch read.
-constexpr std::array<SwitchMember, 17> kSwitches{{
+constexpr std::array<SwitchMember, 20> kSwitches{{
     {Setting::wheel_zoom, &EngineSettings::wheel_zoom, nullptr},
     {Setting::escape_opens_menu, &EngineSettings::escape_opens_menu, nullptr},
     {Setting::switch_alt, &EngineSettings::switch_alt, nullptr},
@@ -289,6 +333,9 @@ constexpr std::array<SwitchMember, 17> kSwitches{{
     {Setting::text_background, &EngineSettings::text_background, nullptr},
     {Setting::touch_haptics, &EngineSettings::touch_haptics, nullptr},
     {Setting::touch_left_handed, &EngineSettings::touch_left_handed, nullptr},
+    {Setting::pad_glide, &EngineSettings::pad_glide, nullptr},
+    {Setting::pad_magnetism, &EngineSettings::pad_magnetism, nullptr},
+    {Setting::pad_left_handed, &EngineSettings::pad_left_handed, nullptr},
     {Setting::game_files_backed_up, &EngineSettings::game_files_backed_up, nullptr},
     {Setting::optimize_dt_rows, nullptr, &ModOptions::optimize_dt_rows},
     {Setting::full_rings, nullptr, &ModOptions::full_rings},
@@ -321,6 +368,72 @@ static_assert(
     kTouchLatchesCaptions.size() == touch_latches_choices.size(),
     "every way of QUEUE and ADD has its caption"
 );
+
+/// Control size's captions, in control_size_choices' order.
+constexpr std::array<std::string_view, 3> kControlSizeCaptions{"Standard", "Large", "Larger"};
+static_assert(
+    kControlSizeCaptions.size() == control_size_choices.size(), "every Control size has its caption"
+);
+/// The schemes, in the order Scheme's strip offers them.
+constexpr std::array<pad_controls::Scheme, 2> kSchemeChoices{
+    pad_controls::Scheme::trackpads, pad_controls::Scheme::sticks
+};
+/// Scheme's captions, in kSchemeChoices' order.
+constexpr std::array<std::string_view, 2> kSchemeCaptions{"Trackpads", "Sticks"};
+/// The right trackpad's ways, in the order Right trackpad's strip offers them.
+constexpr std::array<pad_controls::RightTrackpad, 2> kRightTrackpadChoices{
+    pad_controls::RightTrackpad::relative, pad_controls::RightTrackpad::absolute
+};
+/// Right trackpad's captions, in kRightTrackpadChoices' order: the pointer,
+/// relative and absolute.
+constexpr std::array<std::string_view, 2> kRightTrackpadCaptions{"Relative", "Absolute"};
+/// The accelerations, in the order Pointer acceleration's strip offers them.
+constexpr std::array<pad_controls::Acceleration, 3> kAccelerationChoices{
+    pad_controls::Acceleration::off,
+    pad_controls::Acceleration::low,
+    pad_controls::Acceleration::high
+};
+/// Pointer acceleration's captions, in kAccelerationChoices' order.
+constexpr std::array<std::string_view, 3> kPadAccelerationCaptions{"Off", "Low", "High"};
+/// The right stick's roles, in the order Right stick's strip offers them.
+constexpr std::array<pad_controls::RightStick, 3> kRightStickChoices{
+    pad_controls::RightStick::zoom_and_pages,
+    pad_controls::RightStick::pointer,
+    pad_controls::RightStick::nothing
+};
+/// Right stick's captions, in kRightStickChoices' order: Zoom is zoom and
+/// build pages, which its hint says in full.
+constexpr std::array<std::string_view, 3> kRightStickCaptions{"Zoom", "Pointer", "Nothing"};
+/// The gyro's ways, in the order Gyro pointer's drop-down offers them.
+constexpr std::array<pad_controls::Gyro, 4> kGyroChoices{
+    pad_controls::Gyro::off,
+    pad_controls::Gyro::right_pad_touched,
+    pad_controls::Gyro::right_stick_touched,
+    pad_controls::Gyro::always
+};
+/// Gyro pointer's choices' texts, in kGyroChoices' order.
+constexpr std::array<std::string_view, 4> kGyroCaptions{
+    "Off", "While the right pad is touched", "While the right stick is touched", "Always"
+};
+/// The haptics' strengths, in the order Haptics' strip offers them.
+constexpr std::array<pad_controls::Haptics, 3> kHapticsChoices{
+    pad_controls::Haptics::off, pad_controls::Haptics::light, pad_controls::Haptics::strong
+};
+/// The Controller section's Haptics' captions, in kHapticsChoices' order.
+constexpr std::array<std::string_view, 3> kPadHapticsCaptions{"Off", "Light", "Strong"};
+/// The button prompts, in the order Button prompts' drop-down offers them.
+constexpr std::array<pad_controls::Prompts, 6> kPromptsChoices{
+    pad_controls::Prompts::automatic,
+    pad_controls::Prompts::steam_deck,
+    pad_controls::Prompts::xbox,
+    pad_controls::Prompts::playstation,
+    pad_controls::Prompts::nintendo,
+    pad_controls::Prompts::off
+};
+/// Button prompts' choices' texts, in kPromptsChoices' order.
+constexpr std::array<std::string_view, 6> kPromptsCaptions{
+    "Automatic", "Steam Deck", "Xbox", "PlayStation", "Nintendo", "Off"
+};
 
 /// Returns a choice's place among the choices a strip offers.
 ///
@@ -601,6 +714,8 @@ bool is_slider(Setting setting) noexcept {
     case Setting::panel_background:
     case Setting::text_size:
     case Setting::touch_hold_delay:
+    case Setting::pad_pointer_speed:
+    case Setting::pad_gyro_speed:
         return true;
     default:
         return false;
@@ -639,6 +754,18 @@ Slider slider_of(Setting setting, uint16_t highest_offered_unit) noexcept {
     case Setting::touch_hold_delay:
         return Slider{static_cast<int32_t>(
             (highest_touch_hold_ms - lowest_touch_hold_ms) / touch_hold_step_ms + 1
+        )};
+    case Setting::pad_pointer_speed:
+        return Slider{static_cast<int32_t>(
+            (pad_controls::highest_pointer_speed - pad_controls::lowest_pointer_speed) /
+                pad_controls::pointer_speed_step +
+            1
+        )};
+    case Setting::pad_gyro_speed:
+        return Slider{static_cast<int32_t>(
+            (pad_controls::highest_gyro_speed - pad_controls::lowest_gyro_speed) /
+                pad_controls::gyro_speed_step +
+            1
         )};
     default:
         return Slider{2};
@@ -702,6 +829,18 @@ stop_of(const EngineSettings& settings, Setting setting, uint16_t highest_offere
     case Setting::touch_hold_delay:
         stop = steps_from(settings.touch_hold_ms, lowest_touch_hold_ms, touch_hold_step_ms);
         break;
+    case Setting::pad_pointer_speed:
+        stop = steps_from(
+            settings.pad_pointer_speed,
+            pad_controls::lowest_pointer_speed,
+            pad_controls::pointer_speed_step
+        );
+        break;
+    case Setting::pad_gyro_speed:
+        stop = steps_from(
+            settings.pad_gyro_speed, pad_controls::lowest_gyro_speed, pad_controls::gyro_speed_step
+        );
+        break;
     default:
         break;
     }
@@ -756,15 +895,37 @@ void set_stop(
         settings.touch_hold_ms =
             lowest_touch_hold_ms + static_cast<uint32_t>(clamped) * touch_hold_step_ms;
         break;
+    case Setting::pad_pointer_speed:
+        settings.pad_pointer_speed =
+            pad_controls::lowest_pointer_speed +
+            static_cast<uint32_t>(clamped) * pad_controls::pointer_speed_step;
+        break;
+    case Setting::pad_gyro_speed:
+        settings.pad_gyro_speed = pad_controls::lowest_gyro_speed +
+                                  static_cast<uint32_t>(clamped) * pad_controls::gyro_speed_step;
+        break;
     default:
         break;
     }
 }
 
 bool is_strip(Setting setting) noexcept {
-    return setting == Setting::anti_aliasing || setting == Setting::hardware_acceleration ||
-           setting == Setting::menu_scaling || setting == Setting::touch_drag ||
-           setting == Setting::touch_latches;
+    switch (setting) {
+    case Setting::anti_aliasing:
+    case Setting::hardware_acceleration:
+    case Setting::menu_scaling:
+    case Setting::touch_drag:
+    case Setting::touch_latches:
+    case Setting::touch_control_size:
+    case Setting::pad_scheme:
+    case Setting::pad_right_trackpad:
+    case Setting::pad_acceleration:
+    case Setting::pad_right_stick:
+    case Setting::pad_haptics:
+        return true;
+    default:
+        return false;
+    }
 }
 
 Strip strip_of(Setting setting) noexcept {
@@ -779,6 +940,18 @@ Strip strip_of(Setting setting) noexcept {
         return Strip{touch_drag_choices.size(), touch_drag_level_width};
     case Setting::touch_latches:
         return Strip{touch_latches_choices.size(), touch_latches_level_width};
+    case Setting::touch_control_size:
+        return Strip{control_size_choices.size(), control_size_level_width};
+    case Setting::pad_scheme:
+        return Strip{kSchemeChoices.size(), scheme_level_width};
+    case Setting::pad_right_trackpad:
+        return Strip{kRightTrackpadChoices.size(), right_trackpad_level_width};
+    case Setting::pad_acceleration:
+        return Strip{kAccelerationChoices.size(), pad_acceleration_level_width};
+    case Setting::pad_right_stick:
+        return Strip{kRightStickChoices.size(), right_stick_level_width};
+    case Setting::pad_haptics:
+        return Strip{kHapticsChoices.size(), pad_haptics_level_width};
     default:
         return Strip{};
     }
@@ -796,6 +969,18 @@ std::size_t strip_level(const EngineSettings& settings, Setting setting) noexcep
         return choice_place(touch_drag_choices, settings.touch_drag);
     case Setting::touch_latches:
         return choice_place(touch_latches_choices, settings.touch_latches);
+    case Setting::touch_control_size:
+        return choice_place(control_size_choices, settings.touch_control_size);
+    case Setting::pad_scheme:
+        return choice_place(kSchemeChoices, settings.pad_scheme);
+    case Setting::pad_right_trackpad:
+        return choice_place(kRightTrackpadChoices, settings.pad_right_trackpad);
+    case Setting::pad_acceleration:
+        return choice_place(kAccelerationChoices, settings.pad_acceleration);
+    case Setting::pad_right_stick:
+        return choice_place(kRightStickChoices, settings.pad_right_stick);
+    case Setting::pad_haptics:
+        return choice_place(kHapticsChoices, settings.pad_haptics);
     default:
         return 0;
     }
@@ -822,6 +1007,24 @@ void set_strip_level(EngineSettings& settings, Setting setting, std::size_t leve
     case Setting::touch_latches:
         settings.touch_latches = touch_latches_choices[clamped];
         break;
+    case Setting::touch_control_size:
+        settings.touch_control_size = control_size_choices[clamped];
+        break;
+    case Setting::pad_scheme:
+        settings.pad_scheme = kSchemeChoices[clamped];
+        break;
+    case Setting::pad_right_trackpad:
+        settings.pad_right_trackpad = kRightTrackpadChoices[clamped];
+        break;
+    case Setting::pad_acceleration:
+        settings.pad_acceleration = kAccelerationChoices[clamped];
+        break;
+    case Setting::pad_right_stick:
+        settings.pad_right_stick = kRightStickChoices[clamped];
+        break;
+    case Setting::pad_haptics:
+        settings.pad_haptics = kHapticsChoices[clamped];
+        break;
     default:
         break;
     }
@@ -839,6 +1042,18 @@ std::string_view strip_caption(Setting setting, std::size_t level) noexcept {
         return kTouchDragCaptions[level];
     case Setting::touch_latches:
         return kTouchLatchesCaptions[level];
+    case Setting::touch_control_size:
+        return kControlSizeCaptions[level];
+    case Setting::pad_scheme:
+        return kSchemeCaptions[level];
+    case Setting::pad_right_trackpad:
+        return kRightTrackpadCaptions[level];
+    case Setting::pad_acceleration:
+        return kPadAccelerationCaptions[level];
+    case Setting::pad_right_stick:
+        return kRightStickCaptions[level];
+    case Setting::pad_haptics:
+        return kPadHapticsCaptions[level];
     default:
         return kAccelerationCaptions[level];
     }
@@ -849,7 +1064,7 @@ bool is_button(Setting setting) noexcept {
 }
 
 bool is_text(Setting setting) noexcept {
-    return setting == Setting::game_files_location;
+    return setting == Setting::game_files_location || setting == Setting::pad_steam_input_notice;
 }
 
 bool is_switch(Setting setting) noexcept {
@@ -901,7 +1116,12 @@ std::string shown_hint_text(
 }
 
 bool is_choice(Setting setting) noexcept {
-    return setting == Setting::language;
+    return setting == Setting::language || setting == Setting::pad_gyro ||
+           setting == Setting::pad_prompts;
+}
+
+int32_t choice_field_width(Setting setting) noexcept {
+    return setting == Setting::pad_gyro ? wide_choice_width : choice_width;
 }
 
 std::span<const oa::data::languages::Language* const> offered_languages() {
@@ -917,14 +1137,25 @@ std::span<const oa::data::languages::Language* const> offered_languages() {
 
 std::size_t choice_count(const Dialog& dialog, Setting setting) {
     static_cast<void>(dialog);
-    if (setting == Setting::language)
+    switch (setting) {
+    case Setting::language:
         return 1 + offered_languages().size();
-    return 0;
+    case Setting::pad_gyro:
+        return kGyroChoices.size();
+    case Setting::pad_prompts:
+        return kPromptsChoices.size();
+    default:
+        return 0;
+    }
 }
 
 std::string choice_text(const Dialog& dialog, Setting setting, std::size_t index) {
     if (index >= choice_count(dialog, setting))
         return {};
+    if (setting == Setting::pad_gyro)
+        return std::string(shown_text(kGyroCaptions[index]));
+    if (setting == Setting::pad_prompts)
+        return std::string(shown_text(kPromptsCaptions[index]));
     if (index == 0) {
         const auto* system = dialog.system_language;
         const auto& named = system != nullptr ? *system : oa::data::languages::english();
@@ -958,6 +1189,10 @@ std::string field_text(
 
 std::size_t choice_index(const Dialog& dialog, Setting setting) {
     const EngineSettings& settings = dialog.chosen;
+    if (setting == Setting::pad_gyro)
+        return choice_place(kGyroChoices, settings.pad_gyro);
+    if (setting == Setting::pad_prompts)
+        return choice_place(kPromptsChoices, settings.pad_prompts);
     if (setting != Setting::language)
         return 0;
     const auto offered = offered_languages();
@@ -973,6 +1208,14 @@ void set_choice(Dialog& dialog, Setting setting, std::size_t index) {
         return;
     const std::size_t clamped = std::min(index, count - 1);
     EngineSettings& settings = dialog.chosen;
+    if (setting == Setting::pad_gyro) {
+        settings.pad_gyro = kGyroChoices[clamped];
+        return;
+    }
+    if (setting == Setting::pad_prompts) {
+        settings.pad_prompts = kPromptsChoices[clamped];
+        return;
+    }
     settings.language = clamped == 0 ? std::string(oa::data::languages::system_choice)
                                      : std::string(offered_languages()[clamped - 1]->tag);
 }
@@ -1051,16 +1294,29 @@ bool hint_is_status(Setting setting) noexcept {
     return setting == Setting::hardware_acceleration;
 }
 
-std::span<const Setting> section_settings(Page page, const SectionHooks* section) {
+RowContext row_context(const Dialog& dialog) noexcept {
+    return RowContext{dialog.steam_input, dialog.steam_deck_panel_hz};
+}
+
+std::span<const Setting>
+section_settings(Page page, const SectionHooks* section, const RowContext& context) {
     if (section == nullptr || section->settings == nullptr)
-        return page_settings(page);
+        return page == Page::controller && context.steam_input
+                   ? std::span<const Setting>(kSteamInputControllerRows)
+                   : page_settings(page);
     return section->settings(section->context, page);
 }
 
-Rows place_rows(Page page, const Locks& locks, int32_t scroll, const SectionHooks* section) {
+Rows place_rows(
+    Page page,
+    const Locks& locks,
+    int32_t scroll,
+    const SectionHooks* section,
+    const RowContext& context
+) {
     Rows placed{};
     int32_t top = first_row_top;
-    const auto settings = section_settings(page, section);
+    const auto settings = section_settings(page, section, context);
     // Developer's own rows lie closer, over its list.
     const bool own_section = section != nullptr && section->settings != nullptr;
     const int32_t row_gap =
@@ -1118,7 +1374,7 @@ Rows place_rows(Page page, const Locks& locks, int32_t scroll, const SectionHook
             }
         }
         row.label = {content_left, label_top, label_right - content_left, label_line_height};
-        row.hint_lines = hint_line_count(row.setting);
+        row.hint_lines = hint_line_count(row.setting, context);
         int32_t bottom = label_top + label_line_height + hint_gap;
         for (std::size_t line = 0; line < row.hint_lines; ++line) {
             row.hints[line] = {content_left, bottom, content_width, hint_line_height};
@@ -1138,7 +1394,9 @@ Rows place_rows(Page page, const Locks& locks, int32_t scroll, const SectionHook
         } else if (is_choice(row.setting)) {
             // A drop-down's field stands on its own line, as a slider's track.
             bottom += slider_gap;
-            row.control_area = {content_left, bottom, choice_width, choice_line_height};
+            row.control_area = {
+                content_left, bottom, choice_field_width(row.setting), choice_line_height
+            };
             bottom += choice_line_height;
         }
         bottom += row_gap;
@@ -1194,7 +1452,8 @@ ScrolledRows open_rows(const Dialog& dialog) {
         scroll_rows(open.rows, open.scroll);
         return open;
     }
-    open.rows = place_rows(dialog.page, shown_locks(dialog), 0, dialog.section_hooks);
+    open.rows =
+        place_rows(dialog.page, shown_locks(dialog), 0, dialog.section_hooks, row_context(dialog));
     if (developer_page(dialog)) {
         // Developer's rows stay at its top; its list scrolls under them in a
         // view of its own, with the end gap under its last row.
@@ -1265,13 +1524,14 @@ int32_t scroll_at(
     return (limit * along + travel / 2) / travel;
 }
 
-SourceRect list_item(Page page, bool touch, bool game_files) noexcept {
-    // Each entry at its place in the list its dialog shows; Touch, which
-    // only a dialog that lists it asks for, keeps its own place.
+SourceRect list_item(Page page, bool touch, bool game_files, bool controller) noexcept {
+    // Each entry at its place in the list its dialog shows; Touch and
+    // Controller, which only a dialog that lists them asks for, keep their
+    // own places.
     const auto kind = static_cast<int32_t>(page) >= static_cast<int32_t>(Page::mod_keys)
                           ? DialogKind::mod_options
                           : DialogKind::engine;
-    const auto listed = dialog_pages(kind, touch, game_files);
+    const auto listed = dialog_pages(kind, touch, game_files, controller);
     const auto found = std::find(listed.begin(), listed.end(), page);
     const auto index = found != listed.end() ? static_cast<int32_t>(found - listed.begin())
                                              : page_control(page) - first_page_control;
@@ -1348,6 +1608,8 @@ std::string_view page_name(Page page) noexcept {
         return "Language";
     case Page::touch:
         return "Touch";
+    case Page::controller:
+        return "Controller";
     case Page::developer:
         return "Developer";
     case Page::game_files:
@@ -1380,6 +1642,8 @@ std::string_view page_heading(Page page) noexcept {
         return "LANGUAGE";
     case Page::touch:
         return "TOUCH";
+    case Page::controller:
+        return "CONTROLLER";
     case Page::developer:
         return "DEVELOPER";
     case Page::game_files:
@@ -1450,6 +1714,34 @@ std::string_view label_of(Setting setting) noexcept {
         return "Haptics";
     case Setting::touch_left_handed:
         return "Left-handed layout";
+    case Setting::touch_control_size:
+        return "Control size";
+    case Setting::pad_scheme:
+        return "Scheme";
+    case Setting::pad_right_trackpad:
+        return "Right trackpad";
+    case Setting::pad_pointer_speed:
+        return "Pointer speed";
+    case Setting::pad_acceleration:
+        return "Pointer acceleration";
+    case Setting::pad_glide:
+        return "Trackpad glide";
+    case Setting::pad_right_stick:
+        return "Right stick";
+    case Setting::pad_magnetism:
+        return "Magnetism (stick pointer)";
+    case Setting::pad_gyro:
+        return "Gyro pointer";
+    case Setting::pad_gyro_speed:
+        return "Gyro speed";
+    case Setting::pad_haptics:
+        return "Haptics";
+    case Setting::pad_prompts:
+        return "Button prompts";
+    case Setting::pad_left_handed:
+        return "Left-handed";
+    case Setting::pad_steam_input_notice:
+        return "Steam Input";
     case Setting::mod:
         return "Mod";
     case Setting::snap_override_key:
@@ -1632,7 +1924,7 @@ std::string_view hint_line(
         }
         break;
     case Setting::touch_hold_delay:
-        lines = {"How long a finger stays down for a hold.", {}};
+        lines = {"How long a finger or button is held for a hold.", {}};
         break;
     case Setting::touch_latches:
         lines =
@@ -1645,6 +1937,71 @@ std::string_view hint_line(
         break;
     case Setting::touch_left_handed:
         lines = {"The minimap and the thumb controls on the", "right, the orders on the left."};
+        break;
+    case Setting::touch_control_size:
+        lines = {"The size of the touch controls; the game's own", "screens keep theirs."};
+        break;
+    case Setting::pad_scheme:
+        lines = settings.pad_scheme == pad_controls::Scheme::sticks
+                    ? Lines{"The right stick moves the pointer and the left", "stick the map."}
+                    : Lines{
+                          "The right trackpad points and the left one moves",
+                          "the map; a pad without trackpads plays Sticks."
+                      };
+        break;
+    case Setting::pad_right_trackpad:
+        lines = settings.pad_right_trackpad == pad_controls::RightTrackpad::absolute
+                    ? Lines{"Each point of the pad is a point of the view.", {}}
+                    : Lines{"The pointer moves as the thumb slides.", {}};
+        break;
+    case Setting::pad_pointer_speed:
+        lines = {"How far the pointer moves for a slide.", {}};
+        break;
+    case Setting::pad_acceleration:
+        lines = {"A quick slide moves the pointer further.", {}};
+        break;
+    case Setting::pad_glide:
+        lines = {"The pointer keeps moving after a quick flick.", {}};
+        break;
+    case Setting::pad_right_stick:
+        switch (settings.pad_right_stick) {
+        case pad_controls::RightStick::zoom_and_pages:
+            lines = {
+                "Up and down zoom about the pointer; a flick left",
+                "or right turns the build page while building."
+            };
+            break;
+        case pad_controls::RightStick::pointer:
+            lines = {"The right stick moves the pointer, as in the", "Sticks scheme."};
+            break;
+        case pad_controls::RightStick::nothing:
+            lines = {"The right stick does nothing.", {}};
+            break;
+        }
+        break;
+    case Setting::pad_magnetism:
+        lines = {"The stick pointer settles on a lone unit near it.", {}};
+        break;
+    case Setting::pad_gyro:
+        lines = {"Turning the controller fine-tunes the pointer.", {}};
+        break;
+    case Setting::pad_gyro_speed:
+        lines = {"How far the pointer moves as the controller turns.", {}};
+        break;
+    case Setting::pad_haptics:
+        lines = {"Small ticks and bumps felt through the controller.", {}};
+        break;
+    case Setting::pad_prompts:
+        lines = {"The button pictures the controls and rings show.", {}};
+        break;
+    case Setting::pad_left_handed:
+        lines = {
+            "Mirrors the roles: the left pad points, the right",
+            "pad moves the map, triggers and grips swap."
+        };
+        break;
+    case Setting::pad_steam_input_notice:
+        // Its lines are its notice, broken between words (row_hint).
         break;
     case Setting::mod:
         lines = {"A mod from a mods folder, or one picked.", "Applies from the next start."};
@@ -1719,14 +2076,27 @@ std::size_t hint_line_count(Setting setting) noexcept {
     case Setting::touch_drag:
     case Setting::touch_latches:
     case Setting::touch_left_handed:
+    case Setting::touch_control_size:
+    case Setting::pad_scheme:
+    case Setting::pad_right_stick:
+    case Setting::pad_left_handed:
     case Setting::game_files_summary:
     case Setting::game_files_backed_up:
     case Setting::game_files_location:
     case Setting::user_folder:
         return 2;
+    case Setting::pad_steam_input_notice:
+        return most_notice_lines;
     default:
         return 1;
     }
+}
+
+std::size_t hint_line_count(Setting setting, const RowContext& context) noexcept {
+    // On a Steam Deck, Maximum frame rate names the screen's rate it starts at.
+    if (setting == Setting::max_frame_rate && context.steam_deck_panel_hz != 0)
+        return hint_line_count(setting) + 1;
+    return hint_line_count(setting);
 }
 
 std::string value_text(Setting setting, const EngineSettings& settings) {
@@ -1786,6 +2156,10 @@ std::string value_text(Setting setting, const EngineSettings& settings) {
         return std::to_string(settings.text_size) + "%";
     case Setting::touch_hold_delay:
         return std::to_string(settings.touch_hold_ms) + " " + std::string(shown_text("ms"));
+    case Setting::pad_pointer_speed:
+        return std::to_string(settings.pad_pointer_speed) + "%";
+    case Setting::pad_gyro_speed:
+        return std::to_string(settings.pad_gyro_speed) + "%";
     default:
         return {};
     }
@@ -1810,6 +2184,25 @@ HintLine row_hint(const Dialog& dialog, Setting setting, std::size_t line) {
         const auto lines = break_lines(dialog.game_files_location, hint_line_characters, 2);
         return {line < lines.size() ? lines[line] : std::string{}};
     }
+    case Setting::pad_steam_input_notice: {
+        // The notice, in the language shown, between words, as a notice.
+        const auto lines = break_lines(
+            shown_text(steam_input_notice_text), hint_line_characters, most_notice_lines
+        );
+        return {line < lines.size() ? lines[line] : std::string{}, true};
+    }
+    case Setting::max_frame_rate:
+        // On a Steam Deck, a second line names the screen's rate, which
+        // the setting starts at.
+        if (line == 1 && dialog.steam_deck_panel_hz != 0) {
+            constexpr std::string_view rate_field = "{rate}";
+            std::string text(shown_text(steam_deck_rate_text));
+            const auto at = text.find(rate_field);
+            if (at != std::string::npos)
+                text.replace(at, rate_field.size(), std::to_string(dialog.steam_deck_panel_hz));
+            return {text};
+        }
+        break;
     case Setting::game_files_backed_up: {
         // The device's own name, or the neutral word, in the line shown.
         std::string text(shown_text(hint_line(setting, dialog.chosen, dialog.acceleration, line)));
@@ -1895,7 +2288,7 @@ break_lines(std::string_view text, std::size_t characters, std::size_t most_line
 
 SourceRect dialog_list_item(const Dialog& dialog, Page page) noexcept {
     if (dialog.kind != DialogKind::language_text)
-        return list_item(page, dialog.touch, dialog.game_files);
+        return list_item(page, dialog.touch, dialog.game_files, dialog.controller);
     // A Language dialog lists its one section at the top.
     return {list_item_left, list_first_top, list_item_width, list_item_height};
 }
@@ -2033,7 +2426,8 @@ control_at(const Dialog& dialog, const layout::ScrolledRows& open, int32_t x, in
         if (contains(layout::footer_button(control), x, y))
             return control;
     }
-    for (const Page page : dialog_pages(dialog.kind, dialog.touch, dialog.game_files)) {
+    for (const Page page :
+         dialog_pages(dialog.kind, dialog.touch, dialog.game_files, dialog.controller)) {
         if (contains(layout::dialog_list_item(dialog, page), x, y))
             return page_control(page);
     }
@@ -2069,7 +2463,8 @@ std::vector<int32_t> focus_order(const Dialog& dialog, const layout::ScrolledRow
     order.push_back(restore_control);
     order.push_back(cancel_control);
     order.push_back(ok_control);
-    for (const Page page : dialog_pages(dialog.kind, dialog.touch, dialog.game_files))
+    for (const Page page :
+         dialog_pages(dialog.kind, dialog.touch, dialog.game_files, dialog.controller))
         order.push_back(page_control(page));
     return order;
 }
@@ -2572,6 +2967,48 @@ void copy_setting(EngineSettings& to, const EngineSettings& from, Setting settin
     case Setting::touch_left_handed:
         to.touch_left_handed = from.touch_left_handed;
         break;
+    case Setting::touch_control_size:
+        to.touch_control_size = from.touch_control_size;
+        break;
+    case Setting::pad_scheme:
+        to.pad_scheme = from.pad_scheme;
+        break;
+    case Setting::pad_right_trackpad:
+        to.pad_right_trackpad = from.pad_right_trackpad;
+        break;
+    case Setting::pad_pointer_speed:
+        to.pad_pointer_speed = from.pad_pointer_speed;
+        break;
+    case Setting::pad_acceleration:
+        to.pad_acceleration = from.pad_acceleration;
+        break;
+    case Setting::pad_glide:
+        to.pad_glide = from.pad_glide;
+        break;
+    case Setting::pad_right_stick:
+        to.pad_right_stick = from.pad_right_stick;
+        break;
+    case Setting::pad_magnetism:
+        to.pad_magnetism = from.pad_magnetism;
+        break;
+    case Setting::pad_gyro:
+        to.pad_gyro = from.pad_gyro;
+        break;
+    case Setting::pad_gyro_speed:
+        to.pad_gyro_speed = from.pad_gyro_speed;
+        break;
+    case Setting::pad_haptics:
+        to.pad_haptics = from.pad_haptics;
+        break;
+    case Setting::pad_prompts:
+        to.pad_prompts = from.pad_prompts;
+        break;
+    case Setting::pad_left_handed:
+        to.pad_left_handed = from.pad_left_handed;
+        break;
+    case Setting::pad_steam_input_notice:
+        // A text row, which keeps no setting.
+        break;
     case Setting::game_files_backed_up:
         to.game_files_backed_up = from.game_files_backed_up;
         break;
@@ -2653,7 +3090,8 @@ DialogAction restore_defaults(Dialog& dialog) {
     if (dialog.kind == DialogKind::language_text) {
         // Language alone: only its settings go back to their defaults, each
         // locked one kept.
-        for (const Setting setting : layout::section_settings(Page::language, dialog.section_hooks))
+        const auto language = layout::section_settings(Page::language, dialog.section_hooks);
+        for (const Setting setting : language)
             if (layout::row_lock(dialog.locks, setting, dialog.section_hooks) == Lock::none)
                 copy_setting(dialog.chosen, dialog.defaults, setting);
         dialog.restored = true;
@@ -2669,8 +3107,10 @@ DialogAction restore_defaults(Dialog& dialog) {
     // The backups switch changes only where the dialog lists it.
     if (!dialog.game_files)
         restored.game_files_backed_up = before.game_files_backed_up;
-    for (const Page page : dialog_pages(dialog.kind, dialog.touch, dialog.game_files)) {
-        for (const Setting setting : layout::section_settings(page, dialog.section_hooks)) {
+    for (const Page page :
+         dialog_pages(dialog.kind, dialog.touch, dialog.game_files, dialog.controller)) {
+        const auto settings = layout::section_settings(page, dialog.section_hooks);
+        for (const Setting setting : settings) {
             if (layout::row_lock(dialog.locks, setting, dialog.section_hooks) != Lock::none)
                 copy_setting(restored, before, setting);
         }
@@ -2746,7 +3186,8 @@ DialogAction activate(Dialog& dialog, const layout::ScrolledRows& open, int32_t 
         return accept(dialog);
     // A section's entry, by its number: a dialog without Touch has no
     // entry numbered as Touch.
-    for (const Page page : dialog_pages(dialog.kind, dialog.touch, dialog.game_files))
+    for (const Page page :
+         dialog_pages(dialog.kind, dialog.touch, dialog.game_files, dialog.controller))
         if (control == page_control(page))
             return show_page(dialog, page);
     if (layout::developer_page(dialog)) {
@@ -2853,7 +3294,8 @@ std::vector<PressArea> press_areas(const Dialog& dialog, const layout::ScrolledR
         add(scroll_bar_control, open.area.hit);
     for (const int32_t control : {restore_control, cancel_control, ok_control})
         add(control, layout::footer_button(control));
-    for (const Page page : dialog_pages(dialog.kind, dialog.touch, dialog.game_files))
+    for (const Page page :
+         dialog_pages(dialog.kind, dialog.touch, dialog.game_files, dialog.controller))
         add(page_control(page), layout::dialog_list_item(dialog, page));
     return areas;
 }
@@ -2968,6 +3410,8 @@ std::span<const Setting> page_settings(Page page) noexcept {
         return layout::kLanguageRows;
     case Page::touch:
         return layout::kTouchRows;
+    case Page::controller:
+        return layout::kControllerRows;
     case Page::developer:
         return layout::kDeveloperRows;
     case Page::game_files:
@@ -2986,7 +3430,8 @@ std::span<const Setting> page_settings(Page page) noexcept {
     return {};
 }
 
-std::span<const Page> dialog_pages(DialogKind kind, bool touch, bool game_files) noexcept {
+std::span<const Page>
+dialog_pages(DialogKind kind, bool touch, bool game_files, bool controller) noexcept {
     switch (kind) {
     case DialogKind::engine:
         break;
@@ -2995,11 +3440,9 @@ std::span<const Page> dialog_pages(DialogKind kind, bool touch, bool game_files)
     case DialogKind::language_text:
         return layout::kLanguageTextPages;
     }
-    if (game_files)
-        return touch ? std::span<const Page>(layout::kTouchGameFilesEnginePages)
-                     : std::span<const Page>(layout::kGameFilesEnginePages);
-    return touch ? std::span<const Page>(layout::kTouchEnginePages)
-                 : std::span<const Page>(layout::kEnginePages);
+    const layout::EnginePageList& list =
+        layout::kEnginePageLists[layout::engine_page_list_index(touch, controller, game_files)];
+    return std::span<const Page>(list.pages.data(), list.count);
 }
 
 void open_dialog(
@@ -3015,11 +3458,13 @@ void open_dialog(
     std::span<const oa::data::mod_profile::HackState> profile_hacks,
     const oa::data::languages::Language* system_language,
     bool touch,
-    bool game_files
+    bool game_files,
+    bool controller
 ) {
     dialog = Dialog{};
     dialog.touch = touch;
     dialog.game_files = game_files;
+    dialog.controller = controller;
     dialog.system_language = system_language;
     dialog.highest_offered_unit = highest_offered_unit;
     dialog.mod_names.assign(mods.names.begin(), mods.names.end());
@@ -3032,8 +3477,9 @@ void open_dialog(
     dialog.locks = locks;
     dialog.acceleration = acceleration;
     dialog.version = std::string(version);
-    // Touch and Game files show only while they are listed.
-    dialog.page = (page == Page::touch && !touch) || (page == Page::game_files && !game_files)
+    // Touch, Controller and Game files show only while they are listed.
+    dialog.page = (page == Page::touch && !touch) || (page == Page::game_files && !game_files) ||
+                          (page == Page::controller && !controller)
                       ? dialog_pages(DialogKind::engine).front()
                       : page;
     if (profile_hacks.empty())
@@ -3104,6 +3550,45 @@ DialogAction set_touch_controls(Dialog& dialog, bool touch) noexcept {
         if (*control == entry || (dialog.page == Page::touch && *control >= first_row_control))
             *control = no_control;
     if (dialog.page == Page::touch) {
+        static_cast<void>(show_page(dialog, dialog_pages(DialogKind::engine).front()));
+        dialog.dragging = false;
+    }
+    return DialogAction::redraw;
+}
+
+DialogAction set_controller_section(Dialog& dialog, bool controller, bool steam_input) noexcept {
+    if (dialog.controller == controller && dialog.steam_input == steam_input)
+        return DialogAction::none;
+    const bool showing = dialog.kind == DialogKind::engine && dialog.page == Page::controller;
+    if (dialog.steam_input != steam_input && showing && dialog.controller && controller) {
+        // The notice comes or goes above Controller's rows: each row's
+        // control moves by one, the focus with its row; a hover, a press or
+        // an open list on a row lets go.
+        const int32_t moved = steam_input ? 1 : -1;
+        if (dialog.focused >= first_row_control)
+            dialog.focused = std::max(dialog.focused + moved, first_row_control);
+        for (int32_t* control : {&dialog.hovered, &dialog.pressed})
+            if (*control >= first_row_control)
+                *control = no_control;
+        if (dialog.open_list >= first_row_control) {
+            dialog.open_list = no_control;
+            dialog.list_pressed = -1;
+        }
+        dialog.dragging = false;
+    }
+    dialog.steam_input = steam_input;
+    if (dialog.controller == controller)
+        return DialogAction::redraw;
+    dialog.controller = controller;
+    if (dialog.kind != DialogKind::engine || controller)
+        return DialogAction::redraw;
+    // Controller's entry and rows leave the dialog: what pointed at them
+    // points at nothing, and Controller's section gives way to the first.
+    const int32_t entry = page_control(Page::controller);
+    for (int32_t* control : {&dialog.hovered, &dialog.pressed, &dialog.focused})
+        if (*control == entry || (showing && *control >= first_row_control))
+            *control = no_control;
+    if (showing) {
         static_cast<void>(show_page(dialog, dialog_pages(DialogKind::engine).front()));
         dialog.dragging = false;
     }
@@ -3770,7 +4255,8 @@ std::vector<LayoutPart> dialog_layout(const Dialog& dialog, const DialogFonts* f
     }
 
     // The section list.
-    for (const Page page : dialog_pages(dialog.kind, dialog.touch, dialog.game_files)) {
+    for (const Page page :
+         dialog_pages(dialog.kind, dialog.touch, dialog.game_files, dialog.controller)) {
         const layout::SourceRect item = layout::dialog_list_item(dialog, page);
         parts.push_back(
             LayoutPart{

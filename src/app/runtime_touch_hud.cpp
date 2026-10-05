@@ -3,17 +3,22 @@
 
 // The touch layer: the controls, the radial order menu, the sheets, the
 // phone's build drawer and MORE sheet frames, the banner, the status pill,
-// the tip and the placement bar, painted into a layer of their own at the
-// display's pixels, composed over the CPU frame and presented in every tier
-// (docs/touch-controls.md). The layer is drawn again only when the HUD
-// state's revision, the layout of the controls, the window's size or its
-// density changes, and only its painted rows are uploaded.
+// the tip and the placement bar, and with a gamepad the slim pad HUD, the
+// button badges, the rings' aim and hints, the build ring with its 3.1c
+// pictures, the group ring and the hold's progress, painted into a layer of
+// their own at the display's pixels, composed over the CPU frame and
+// presented in every tier (docs/touch-controls.md). The layer is drawn again
+// only when the HUD state's revision, the layout of the controls, the
+// window's size or its density changes, and only its painted rows are
+// uploaded.
 #include "oa/app/runtime.hpp"
+#include "pad_glyphs.hpp"
 #include "render_run.hpp"
 #include "touch_paint.hpp"
 #include "touch_state.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <exception>
 #include <functional>
@@ -29,6 +34,7 @@ namespace oa::app {
 namespace {
 
 namespace hud = oa::ui::touch_hud;
+namespace pad = oa::ui::pad_controls;
 namespace paint = touch_paint;
 namespace text_font = oa::platform::text_font;
 using hud::Control;
@@ -88,6 +94,19 @@ constexpr float tip_points = 10.0F;         ///< tip bubble text
 constexpr float pill_pad_points = 14.0F;    ///< text inset of the banner and the status pill
 constexpr float dot_points = 5.0F;          ///< page dot diameter
 constexpr float dot_gap_points = 4.0F;      ///< between page dots
+constexpr float hint_glyph_points = 16.0F;  ///< a button's glyph in the pad's hints and chips
+constexpr float hint_gap_points = 4.0F;     ///< between a glyph and its words
+constexpr float hint_piece_points = 6.0F;   ///< between a hint's pieces
+constexpr float least_text_points = 7.0F;   ///< the smallest a hint's words shrink to
+constexpr float badge_points = 14.0F;       ///< a control's badge glyphs
+constexpr float badge_inset_points = 2.0F;  ///< a badge from its control's corner
+constexpr float ring_hint_points = 26.0F;   ///< a ring's hint pill
+constexpr float ring_hint_gap = 8.0F;       ///< between a ring and its hint pill
+constexpr float aim_dot_points = 4.0F;      ///< the pad's aim dot
+constexpr float hold_ring_points = 22.0F;   ///< the pad's hold progress ring
+constexpr float hold_stroke_points = 4.0F;  ///< its stroke
+/// The track of the hold progress ring, before it fills.
+constexpr float hold_track_opacity = 0.35F;
 /// The cap height of the bundled fonts, as a share of the pixel size: used
 /// to centre capitals on a row.
 constexpr float cap_share = 0.73F;
@@ -105,6 +124,10 @@ struct PaintContext {
     const Translate& translate;    ///< interface text into the game's language
     const hud::HudState& state;    ///< what the controls show
     const hud::Frame& frame;       ///< where they are
+    /// The HUD layer the build ring's 3.1c pictures are copied from; null when none shows.
+    const renderer::Surface* hud_layer{};
+    /// Where each build ring wedge's picture comes from and goes; null without the ring.
+    const std::array<RingPicture, hud::build_ring_slot_count>* pictures{};
 };
 
 /// How a control's icon and label are arranged inside it.
@@ -397,6 +420,9 @@ paint::Icon control_icon(const hud::ControlRect& control, const hud::HudState& s
     case Control::radial_item:
     case Control::radial_hub:
     case Control::sheet_outside:
+    case Control::force:
+    case Control::build_wedge:
+    case Control::group_wedge:
         return paint::Icon::none;
     }
     return paint::Icon::none;
@@ -492,7 +518,14 @@ ControlLook look_of(const hud::ControlRect& control, const hud::HudState& state)
     };
     switch (control.control) {
     case Control::queue:
-        latch(hud::Latch::queue);
+        // The pad HUD's chip is x5 over a build button, and lit by x5.
+        latch(
+            state.pad.hud && state.pad.over_build_button ? hud::Latch::times_five
+                                                         : hud::Latch::queue
+        );
+        break;
+    case Control::force:
+        look.lit = state.pad.force_active || state.force_touch;
         break;
     case Control::add:
         latch(hud::Latch::add);
@@ -738,6 +771,272 @@ void paint_content(
     }
 }
 
+/// Paints a pill: a panel whose ends are half circles.
+///
+/// @param context the painting
+/// @param area the pill, layer pixels
+/// @param edge the colour of its edge
+/// @param edge_width its edge's width, layer pixels
+void paint_pill(const PaintContext& context, paint::Area area, paint::Rgba edge, float edge_width) {
+    const float radius = area.height * 0.5F;
+    context.painter.fill_rounded_rect(area, radius, sheet_colour);
+    context.painter.outline_rounded_rect(area, radius, edge_width, edge);
+}
+
+// ---- The gamepad's prompts --------------------------------------------------------------
+
+/// Returns a hint piece's words: translated, and with no glyphs drawn (prompts Off) the
+/// buttons' names before them.
+///
+/// @param context the painting
+/// @param part the piece
+/// @return the words to draw
+std::string piece_words(const PaintContext& context, const hud::HintPart& part) {
+    std::string words = context.translate(part.text);
+    if (part.chord && !context.state.pad.badges) {
+        const std::string names = hud::chord_words(*part.chord, context.state.pad.glyphs);
+        words = words.empty() ? names : names + " " + words;
+    }
+    return words;
+}
+
+/// Returns how wide a pad hint is drawn: each piece's glyphs and words, the pieces apart.
+///
+/// @param context the painting
+/// @param hint the hint
+/// @param glyph the glyphs' height, layer pixels
+/// @param text_points the words' size
+/// @return layer pixels
+float hint_width(
+    const PaintContext& context, const hud::PadHint& hint, float glyph, float text_points
+) {
+    float width = 0.0F;
+    const std::size_t count = std::min<std::size_t>(hint.count, hud::max_hint_parts);
+    for (std::size_t index = 0; index < count; ++index) {
+        const auto& part = hint.parts[index];
+        if (index > 0)
+            width += px(context, hint_piece_points);
+        const std::string words = piece_words(context, part);
+        if (part.chord && context.state.pad.badges) {
+            width += pad_glyphs::chord_width(*part.chord, context.state.pad.glyphs, glyph);
+            if (!words.empty())
+                width += px(context, hint_gap_points);
+        }
+        width += text_width(context, words, text_points);
+    }
+    return width;
+}
+
+/// Paints a pad hint left to right from a column with its middle on a row: each piece's
+/// glyphs, then its words.
+///
+/// @param context the painting
+/// @param hint the hint
+/// @param left the column it starts at, layer pixels
+/// @param middle the row its middle lies on, layer pixels
+/// @param glyph the glyphs' height, layer pixels
+/// @param text_points the words' size
+/// @param colour the words' colour
+void paint_hint(
+    const PaintContext& context,
+    const hud::PadHint& hint,
+    float left,
+    float middle,
+    float glyph,
+    float text_points,
+    paint::Rgba colour
+) {
+    float pen = left;
+    const std::size_t count = std::min<std::size_t>(hint.count, hud::max_hint_parts);
+    for (std::size_t index = 0; index < count; ++index) {
+        const auto& part = hint.parts[index];
+        if (index > 0)
+            pen += px(context, hint_piece_points);
+        const std::string words = piece_words(context, part);
+        if (part.chord && context.state.pad.badges) {
+            const float width =
+                pad_glyphs::chord_width(*part.chord, context.state.pad.glyphs, glyph);
+            pad_glyphs::draw_chord(
+                context.painter,
+                context.fonts,
+                *part.chord,
+                context.state.pad.glyphs,
+                {pen, middle - glyph * 0.5F, width, glyph},
+                ink_colour,
+                label_colour
+            );
+            pen += width;
+            if (!words.empty())
+                pen += px(context, hint_gap_points);
+        }
+        const float words_width = text_width(context, words, text_points);
+        text_from(context, words, pen, middle, text_points, colour, words_width + 1.0F);
+        pen += words_width;
+    }
+}
+
+/// Paints a pad hint centred in an area, at the largest size from the hint size down that fits
+/// its width.
+///
+/// @param context the painting
+/// @param hint the hint
+/// @param area the area, layer pixels
+/// @param colour the words' colour
+void paint_hint_in(
+    const PaintContext& context, const hud::PadHint& hint, paint::Area area, paint::Rgba colour
+) {
+    const float room = area.width - 2.0F * px(context, pill_pad_points);
+    for (float size = hint_points; size >= least_text_points; size -= 0.5F) {
+        const float glyph =
+            std::min(px(context, hint_glyph_points * size / hint_points), area.height * 0.8F);
+        const float width = hint_width(context, hint, glyph, size);
+        if (width > room && size - 0.5F >= least_text_points)
+            continue;
+        paint_hint(
+            context,
+            hint,
+            area.x + std::max(px(context, pill_pad_points), (area.width - width) * 0.5F),
+            area.y + area.height * 0.5F,
+            glyph,
+            size,
+            colour
+        );
+        return;
+    }
+}
+
+/// A control's badge: the pad buttons that give it, and where they go.
+struct Badge {
+    pad::Chord chord{}; ///< the buttons
+    paint::Area box{};  ///< the glyphs' place, layer pixels
+    float band{};       ///< the strip at the control's top the badge takes, layer pixels
+};
+
+/// Returns a control's badge, in its top right corner, once a pad was used and prompts show;
+/// group chips show their button (the groups layer's L5 is held) only while that layer is held.
+///
+/// @param context the painting
+/// @param control the control
+/// @return the badge; none for a control with none or too narrow for it
+std::optional<Badge> badge_for(const PaintContext& context, const hud::ControlRect& control) {
+    const auto& pad_look = context.state.pad;
+    if (!pad_look.badges || (control.control == Control::group_chip && !pad_look.groups_layer))
+        return std::nullopt;
+    auto chord = hud::control_badge(control.control, control.index, pad_look.map);
+    if (!chord)
+        return std::nullopt;
+    if (control.control == Control::group_chip)
+        chord->held = pad::PadButton::none;
+    const auto area = area_of(context, control.rect);
+    const float height = std::min(px(context, badge_points), area.height * 0.3F);
+    const float width = pad_glyphs::chord_width(*chord, pad_look.glyphs, height);
+    const float inset = px(context, badge_inset_points);
+    if (width > area.width - 2.0F * inset || height <= 0.0F)
+        return std::nullopt;
+    Badge badge{};
+    badge.chord = *chord;
+    badge.box = {area.x + area.width - inset - width, area.y + inset, width, height};
+    badge.band = height + inset;
+    return badge;
+}
+
+/// Paints a control's badge.
+///
+/// @param context the painting
+/// @param badge the badge
+void paint_badge(const PaintContext& context, const Badge& badge) {
+    pad_glyphs::draw_chord(
+        context.painter,
+        context.fonts,
+        badge.chord,
+        context.state.pad.glyphs,
+        badge.box,
+        ink_colour,
+        label_colour
+    );
+}
+
+/// Returns a control's area less the strip its badge takes: where its icon and label go.
+///
+/// @param area the control, layer pixels
+/// @param badge its badge, if any
+/// @return the area below the badge's strip
+paint::Area below_badge(paint::Area area, const std::optional<Badge>& badge) {
+    if (!badge)
+        return area;
+    return {area.x, area.y + badge->band, area.width, std::max(0.0F, area.height - badge->band)};
+}
+
+/// Paints one of the pad HUD's QUEUE, ADD and FORCE chips: its label and, with prompts, the
+/// buttons that give it beside the label; lit while held or latched.
+///
+/// @param context the painting
+/// @param control the chip
+/// @param look its looks
+void paint_pad_chip(
+    const PaintContext& context, const hud::ControlRect& control, const ControlLook& look
+) {
+    const auto area = area_of(context, control.rect);
+    paint_face(context, area, look);
+    const auto& pad_look = context.state.pad;
+    const std::string label = context.translate(control_text(control, context.state));
+    const auto colour = content_colour(look);
+    const auto chord = pad_look.badges
+                           ? hud::control_badge(control.control, control.index, pad_look.map)
+                           : std::nullopt;
+    const float pad_px = px(context, text_pad_points);
+    const float glyph = std::min(px(context, hint_glyph_points), area.height - 2.0F * pad_px);
+    const float glyph_width =
+        chord ? pad_glyphs::chord_width(*chord, pad_look.glyphs, glyph) : 0.0F;
+    const float gap = chord ? px(context, row_gap_points) : 0.0F;
+    const float room = area.width - 2.0F * pad_px - glyph_width - gap;
+    const float label_width = std::min(text_width(context, label, row_label_points), room);
+    const float left = area.x + (area.width - label_width - gap - glyph_width) * 0.5F;
+    const float middle = area.y + area.height * 0.5F;
+    text_from(context, label, left, middle, row_label_points, colour, label_width + 1.0F);
+    if (chord)
+        pad_glyphs::draw_chord(
+            context.painter,
+            context.fonts,
+            *chord,
+            pad_look.glyphs,
+            {left + label_width + gap, middle - glyph * 0.5F, glyph_width, glyph},
+            ink_colour,
+            label_colour
+        );
+}
+
+/// Paints a ring's hint pill under the ring, or over it when there is no room below.
+///
+/// @param context the painting
+/// @param build_ring whether for the build ring, else the order ring
+/// @param centre the ring's centre, layer pixels
+/// @param outer the ring's outer radius, layer pixels
+void paint_ring_hint(
+    const PaintContext& context, bool build_ring, paint::Spot centre, float outer
+) {
+    const auto hint = hud::ring_hint(build_ring, context.state.pad.map);
+    const float height = px(context, ring_hint_points);
+    const float glyph = px(context, hint_glyph_points) * 0.85F;
+    const float canvas_width = static_cast<float>(context.painter.canvas().width);
+    const float canvas_height = static_cast<float>(context.painter.canvas().height);
+    const float width = std::min(
+        hint_width(context, hint, glyph, hint_points) + 2.0F * px(context, pill_pad_points),
+        canvas_width - 2.0F * px(context, ring_hint_gap)
+    );
+    float top = centre.y + outer + px(context, ring_hint_gap);
+    if (top + height > canvas_height - px(context, ring_hint_gap))
+        top = centre.y - outer - px(context, ring_hint_gap) - height;
+    const float left = std::clamp(
+        centre.x - width * 0.5F,
+        px(context, ring_hint_gap),
+        std::max(px(context, ring_hint_gap), canvas_width - px(context, ring_hint_gap) - width)
+    );
+    const paint::Area area{left, top, width, height};
+    paint_pill(context, area, edge_colour, px(context, edge_points));
+    paint_hint_in(context, hint, area, label_colour);
+}
+
 /// Paints a group chip: its number large and its unit count small; the
 /// selection's group lit by its edge and number.
 ///
@@ -747,8 +1046,12 @@ void paint_content(
 void paint_group_chip(
     const PaintContext& context, const hud::ControlRect& control, const ControlLook& look
 ) {
-    const auto area = area_of(context, control.rect);
-    paint_face(context, area, look);
+    const auto face = area_of(context, control.rect);
+    paint_face(context, face, look);
+    const auto badge = badge_for(context, control);
+    if (badge)
+        paint_badge(context, *badge);
+    const auto area = below_badge(face, badge);
     const auto colour = content_colour(look);
     const uint8_t group = control.index;
     const uint16_t units =
@@ -828,9 +1131,22 @@ void paint_control(const PaintContext& context, const hud::ControlRect& control)
     default:
         break;
     }
+    switch (control.control) {
+    case Control::build_wedge:
+    case Control::group_wedge:
+        return; // the rings are painted whole
+    default:
+        break;
+    }
     const auto look = look_of(control, context.state);
     if (control.control == Control::group_chip) {
         paint_group_chip(context, control, look);
+        return;
+    }
+    if (context.state.pad.hud &&
+        (control.control == Control::queue || control.control == Control::add ||
+         control.control == Control::force)) {
+        paint_pad_chip(context, control, look);
         return;
     }
     if (control.control == Control::more_item &&
@@ -864,8 +1180,15 @@ void paint_control(const PaintContext& context, const hud::ControlRect& control)
 
     const float width_points = area.width / context.point;
     const float height_points = area.height / context.point;
-    const auto arrangement =
-        arrangement_of(control.control, width_points, height_points, icon, label);
+    auto arrangement = arrangement_of(control.control, width_points, height_points, icon, label);
+    // PAUSE and MENU beside their icon only while the label fits whole there (a larger Control
+    // size narrows the room); else stacked, or the icon alone on a short button.
+    if (arrangement == Arrangement::row &&
+        (control.control == Control::pause || control.control == Control::menu) &&
+        px(context, row_icon_points + row_gap_points) +
+                text_width(context, label, row_label_points) >
+            area.width - 2.0F * px(context, text_pad_points))
+        arrangement = height_points >= 40.0F ? Arrangement::stacked : Arrangement::icon_only;
     if (control.control == Control::banner_cancel) {
         // The banner's ✕ sits on the banner: only a resting finger shows a face.
         if (look.pressed)
@@ -883,6 +1206,11 @@ void paint_control(const PaintContext& context, const hud::ControlRect& control)
         return;
     }
     paint_face(context, area, look);
+    // A badge takes a strip at the top; the icon and label go under it.
+    const auto badge = badge_for(context, control);
+    if (badge)
+        paint_badge(context, *badge);
+    const auto content = below_badge(area, badge);
     float text_points = 0.0F;
     if (control.control == Control::times_five)
         text_points = 14.0F;
@@ -895,20 +1223,8 @@ void paint_control(const PaintContext& context, const hud::ControlRect& control)
         text_points = 11.0F;
     const std::string sub_label = look.latched ? context.translate("LATCHED") : std::string{};
     paint_content(
-        context, area, arrangement, icon, label, sub_label, content_colour(look), text_points
+        context, content, arrangement, icon, label, sub_label, content_colour(look), text_points
     );
-}
-
-/// Paints a pill: a panel whose ends are half circles.
-///
-/// @param context the painting
-/// @param area the pill, layer pixels
-/// @param edge the colour of its edge
-/// @param edge_width its edge's width, layer pixels
-void paint_pill(const PaintContext& context, paint::Area area, paint::Rgba edge, float edge_width) {
-    const float radius = area.height * 0.5F;
-    context.painter.fill_rounded_rect(area, radius, sheet_colour);
-    context.painter.outline_rounded_rect(area, radius, edge_width, edge);
 }
 
 /// Paints a title and a hint side by side, centred between two columns:
@@ -989,6 +1305,22 @@ void paint_status(const PaintContext& context) {
         return;
     const auto area = area_of(context, frame.status);
     paint_pill(context, area, edge_colour, px(context, edge_points));
+    // The pad HUD's pill: what R2 and L2 give now, the buttons' glyphs among the words.
+    if (state.pad.hud) {
+        paint_hint_in(
+            context,
+            hud::pad_status_hint(
+                state.tap_action,
+                state.enemy_action,
+                state.armed_or_placing,
+                state.right_click_interface,
+                state.pad.map
+            ),
+            area,
+            label_colour
+        );
+        return;
+    }
     const std::string hint =
         context.translate(hud::status_hint(state.tap_action, state.enemy_action));
     paint_title_and_hint(
@@ -1245,6 +1577,20 @@ void paint_sheet(const PaintContext& context) {
     }
 }
 
+/// Paints the pad's aim dot: where the thumb aims inside an open ring.
+///
+/// @param context the painting
+/// @param at canvas pixels
+void paint_aim_dot(const PaintContext& context, hud::Point at) {
+    const paint::Spot spot{
+        static_cast<float>(at.x) * context.scale_x, static_cast<float>(at.y) * context.scale_y
+    };
+    context.painter.fill_circle(spot, px(context, aim_dot_points), label_colour);
+    context.painter.outline_circle(
+        spot, px(context, aim_dot_points), px(context, 1.0F), ink_colour
+    );
+}
+
 /// Paints the open radial order menu: twelve wedges round the QUEUE hub, the
 /// greyed ones at 40%, the plain tap's item ringed, the pressed one lit.
 ///
@@ -1264,14 +1610,20 @@ void paint_radial(const PaintContext& context) {
     const float outer = static_cast<float>(radial.outer_radius) * context.scale_x;
     if (outer <= inner || inner <= 0.0F)
         return;
-    // The ring, then each wedge's lit or ringed look, then the gaps between them.
+    // The ring, then each wedge's lit or ringed look, then the gaps between them. The wedge the
+    // pad aims at is lit as a pressed one.
+    const auto& pad_look = state.pad;
+    const auto aimed = [&](std::size_t slot) {
+        return pad_look.ring_by_pad && pad_look.radial_aim && *pad_look.radial_aim == slot;
+    };
     context.painter.fill_sector(centre, 0.0F, outer, 0.0F, pi, sheet_colour);
     for (std::size_t slot = 0; slot < radial.wedges.size(); ++slot) {
         const auto& wedge = radial.wedges[slot];
         const float middle = static_cast<float>(slot) * slot_angle;
         const bool pressed =
             wedge.available &&
-            is_pressed(state, Control::radial_item, static_cast<uint8_t>(wedge.item));
+            (aimed(slot) ||
+             is_pressed(state, Control::radial_item, static_cast<uint8_t>(wedge.item)));
         if (pressed)
             context.painter.fill_sector(
                 centre, inner, outer, middle, slot_angle * 0.5F, lit_colour
@@ -1306,10 +1658,12 @@ void paint_radial(const PaintContext& context) {
     const float cap = cap_share * static_cast<float>(font_px(context, size_points));
     const float gap = px(context, 3.0F);
     const float room = (outer - inner) * 1.1F;
-    for (const auto& wedge : radial.wedges) {
+    for (std::size_t slot = 0; slot < radial.wedges.size(); ++slot) {
+        const auto& wedge = radial.wedges[slot];
         const bool pressed =
             wedge.available &&
-            is_pressed(state, Control::radial_item, static_cast<uint8_t>(wedge.item));
+            (aimed(slot) ||
+             is_pressed(state, Control::radial_item, static_cast<uint8_t>(wedge.item)));
         paint::Rgba colour = wedge.default_item ? lit_colour : label_colour;
         if (pressed)
             colour = ink_colour;
@@ -1367,11 +1721,305 @@ void paint_radial(const PaintContext& context) {
         );
         context.painter.fill_circle({anchor_x, anchor_y}, px(context, 2.0F), label_colour);
     }
+    // A ring the pad opened: where the thumb aims, and how to give, arm or close.
+    if (pad_look.ring_by_pad) {
+        paint_aim_dot(context, pad_look.aim_dot);
+        paint_ring_hint(context, false, centre, outer);
+    }
+}
+
+/// Returns the icon a build ring wedge shows when it has no 3.1c picture.
+///
+/// @param kind what the wedge is
+/// @return its icon
+paint::Icon build_wedge_icon(hud::BuildWedgeKind kind) {
+    switch (kind) {
+    case hud::BuildWedgeKind::empty:
+        return paint::Icon::none;
+    case hud::BuildWedgeKind::build:
+        return paint::Icon::grid;
+    case hud::BuildWedgeKind::prev:
+        return paint::Icon::chevron_left;
+    case hud::BuildWedgeKind::next:
+        return paint::Icon::chevron_right;
+    case hud::BuildWedgeKind::fire_orders:
+        return paint::Icon::crosshair;
+    case hud::BuildWedgeKind::move_orders:
+        return paint::Icon::arrow;
+    case hud::BuildWedgeKind::on_off:
+        return paint::Icon::power;
+    case hud::BuildWedgeKind::cloak:
+        return paint::Icon::cloak;
+    case hud::BuildWedgeKind::info:
+        return paint::Icon::info;
+    case hud::BuildWedgeKind::self_destruct:
+        return paint::Icon::warning;
+    }
+    return paint::Icon::none;
+}
+
+/// Paints the open build ring: eight wedges round the hub, the one the pad aims at lit, each
+/// with its 3.1c picture (its caption carries a factory's count), PREV and NEXT and the
+/// standing orders' marks, the greyed ones at 40%, and the ring's hint under it.
+///
+/// @param context the painting
+void paint_build_ring(const PaintContext& context) {
+    const auto& state = context.state;
+    if (!state.build_ring)
+        return;
+    const auto& ring = *state.build_ring;
+    constexpr float pi = std::numbers::pi_v<float>;
+    constexpr float slot_angle = 2.0F * pi / static_cast<float>(hud::build_ring_slot_count);
+    const paint::Spot centre{
+        static_cast<float>(ring.centre.x) * context.scale_x,
+        static_cast<float>(ring.centre.y) * context.scale_y
+    };
+    const float inner = static_cast<float>(ring.inner_radius) * context.scale_x;
+    const float outer = static_cast<float>(ring.outer_radius) * context.scale_x;
+    if (outer <= inner || inner <= 0.0F)
+        return;
+    const auto& aim = state.pad.build_aim;
+    context.painter.fill_sector(centre, 0.0F, outer, 0.0F, pi, sheet_colour);
+    for (std::size_t slot = 0; slot < ring.wedges.size(); ++slot) {
+        const auto& wedge = ring.wedges[slot];
+        if (!aim || *aim != slot || wedge.kind == hud::BuildWedgeKind::empty)
+            continue;
+        const float middle = static_cast<float>(slot) * slot_angle;
+        if (wedge.available)
+            context.painter.fill_sector(
+                centre, inner, outer, middle, slot_angle * 0.5F, lit_colour
+            );
+        else
+            context.painter.outline_sector(
+                centre,
+                inner,
+                outer,
+                middle,
+                slot_angle * 0.5F,
+                px(context, lit_edge_points),
+                greyed_if(lit_colour, true)
+            );
+    }
+    for (std::size_t slot = 0; slot < ring.wedges.size(); ++slot) {
+        const float angle = (static_cast<float>(slot) + 0.5F) * slot_angle;
+        context.painter.stroke_line(
+            {centre.x + std::sin(angle) * inner, centre.y - std::cos(angle) * inner},
+            {centre.x + std::sin(angle) * outer, centre.y - std::cos(angle) * outer},
+            px(context, 1.5F),
+            wedge_gap_colour
+        );
+    }
+    context.painter.outline_circle(
+        centre, outer - px(context, 0.5F), px(context, 1.0F), edge_colour
+    );
+    // Each wedge's picture, or its mark and label.
+    const auto* hud_layer = context.hud_layer;
+    for (std::size_t slot = 0; slot < ring.wedges.size(); ++slot) {
+        const auto& wedge = ring.wedges[slot];
+        if (wedge.kind == hud::BuildWedgeKind::empty)
+            continue;
+        const bool lit = wedge.available && aim && *aim == slot;
+        const float opacity = wedge.available ? 1.0F : greyed_opacity;
+        const RingPicture* picture =
+            context.pictures != nullptr ? &(*context.pictures)[slot] : nullptr;
+        if (picture != nullptr && !empty(picture->source) && hud_layer != nullptr) {
+            const auto at = area_of(context, picture->canvas);
+            context.painter.draw_rgb(
+                hud_layer->rgb,
+                static_cast<int>(hud_layer->width),
+                static_cast<int>(hud_layer->height),
+                {picture->source.x,
+                 picture->source.y,
+                 picture->source.width,
+                 picture->source.height},
+                at,
+                opacity
+            );
+            if (lit)
+                context.painter.outline_rounded_rect(
+                    at, px(context, 2.0F), px(context, lit_edge_points), label_colour
+                );
+            continue;
+        }
+        const auto box = area_of(context, wedge.picture);
+        const float side = px(context, 18.0F);
+        const float size_points = 8.5F;
+        const float cap = cap_share * static_cast<float>(font_px(context, size_points));
+        const float gap = px(context, 3.0F);
+        const paint::Rgba colour = greyed_if(lit ? ink_colour : label_colour, !wedge.available);
+        const float top = box.y + (box.height - side - gap - cap) * 0.5F;
+        context.painter.draw_icon(
+            build_wedge_icon(wedge.kind),
+            {box.x + (box.width - side) * 0.5F, top, side, side},
+            colour
+        );
+        std::string label(
+            hud::control_label(Control::build_wedge, static_cast<uint8_t>(slot), state)
+        );
+        if (label.empty() && wedge.queued > 0)
+            label = std::to_string(wedge.queued);
+        text_centred(
+            context,
+            context.translate(label),
+            box.x + box.width * 0.5F,
+            top + side + gap + cap * 0.5F,
+            size_points,
+            colour,
+            (outer - inner) * 1.1F
+        );
+    }
+    // The hub closes the ring: nothing is given there.
+    const float hub = inner - px(context, 3.0F);
+    context.painter.fill_circle(centre, hub, panel_colour);
+    context.painter.outline_circle(centre, hub, px(context, edge_points), edge_colour);
+    text_centred(
+        context,
+        context.translate(ring.standing_orders ? "ORDERS" : "BUILD"),
+        centre.x,
+        centre.y,
+        8.5F,
+        quiet_colour,
+        hub * 1.8F
+    );
+    paint_ring_hint(context, true, centre, outer);
+}
+
+/// Paints the group ring while the groups layer is held: nine wedges with their group numbers
+/// and sizes, the aimed one lit, the selection's group ringed, empty groups greyed.
+///
+/// @param context the painting
+void paint_group_ring(const PaintContext& context) {
+    const auto& state = context.state;
+    if (!state.pad.group_ring)
+        return;
+    const auto& ring = *state.pad.group_ring;
+    constexpr float pi = std::numbers::pi_v<float>;
+    constexpr float slot_angle = 2.0F * pi / static_cast<float>(hud::group_ring_slot_count);
+    const paint::Spot centre{
+        static_cast<float>(ring.centre.x) * context.scale_x,
+        static_cast<float>(ring.centre.y) * context.scale_y
+    };
+    const float inner = static_cast<float>(ring.inner_radius) * context.scale_x;
+    const float outer = static_cast<float>(ring.outer_radius) * context.scale_x;
+    if (outer <= inner || inner <= 0.0F)
+        return;
+    context.painter.fill_sector(centre, inner, outer, 0.0F, pi, sheet_colour);
+    for (std::size_t slot = 0; slot < hud::group_ring_slot_count; ++slot) {
+        const auto group = static_cast<uint8_t>(slot + 1);
+        const float middle = static_cast<float>(slot) * slot_angle;
+        if (ring.aim && *ring.aim == group)
+            context.painter.fill_sector(
+                centre, inner, outer, middle, slot_angle * 0.5F, lit_colour
+            );
+        else if (state.selected_group == group)
+            context.painter.outline_sector(
+                centre,
+                inner,
+                outer,
+                middle,
+                slot_angle * 0.5F,
+                px(context, lit_edge_points),
+                lit_colour
+            );
+    }
+    for (std::size_t slot = 0; slot < hud::group_ring_slot_count; ++slot) {
+        const float angle = (static_cast<float>(slot) + 0.5F) * slot_angle;
+        context.painter.stroke_line(
+            {centre.x + std::sin(angle) * inner, centre.y - std::cos(angle) * inner},
+            {centre.x + std::sin(angle) * outer, centre.y - std::cos(angle) * outer},
+            px(context, 1.5F),
+            wedge_gap_colour
+        );
+    }
+    context.painter.outline_circle(
+        centre, outer - px(context, 0.5F), px(context, 1.0F), edge_colour
+    );
+    const float radius = (inner + outer) * 0.5F;
+    const float number_points = 12.0F;
+    const float count_points = sub_label_points;
+    const float cap = cap_share * static_cast<float>(font_px(context, number_points));
+    const float sub_cap = cap_share * static_cast<float>(font_px(context, count_points));
+    const float gap = px(context, 2.0F);
+    for (std::size_t slot = 0; slot < hud::group_ring_slot_count; ++slot) {
+        const auto group = static_cast<uint8_t>(slot + 1);
+        const float angle = static_cast<float>(slot) * slot_angle;
+        const float x = centre.x + std::sin(angle) * radius;
+        const float y = centre.y - std::cos(angle) * radius;
+        const uint16_t units = group < state.group_counts.size() ? state.group_counts[group] : 0;
+        const bool lit = ring.aim && *ring.aim == group;
+        const paint::Rgba colour = greyed_if(lit ? ink_colour : label_colour, units == 0);
+        const float top = y - (cap + (units != 0 ? gap + sub_cap : 0.0F)) * 0.5F;
+        text_centred(
+            context,
+            std::to_string(group),
+            x,
+            top + cap * 0.5F,
+            number_points,
+            colour,
+            outer - inner
+        );
+        if (units != 0)
+            text_centred(
+                context,
+                std::to_string(units),
+                x,
+                top + cap + gap + sub_cap * 0.5F,
+                count_points,
+                colour,
+                outer - inner
+            );
+    }
+}
+
+/// Paints a timed pad hold's progress (self-destruct): a ring that fills clockwise from the top.
+///
+/// @param context the painting
+void paint_hold_progress(const PaintContext& context) {
+    const auto& pad_look = context.state.pad;
+    if (pad_look.hold_progress <= 0.0F)
+        return;
+    constexpr float pi = std::numbers::pi_v<float>;
+    const paint::Spot centre{
+        static_cast<float>(pad_look.hold_point.x) * context.scale_x,
+        static_cast<float>(pad_look.hold_point.y) * context.scale_y
+    };
+    const float radius = px(context, hold_ring_points);
+    const float width = px(context, hold_stroke_points);
+    const float progress = std::clamp(pad_look.hold_progress, 0.0F, 1.0F);
+    context.painter.outline_circle(
+        centre, radius, width, paint::with_opacity(danger_colour, hold_track_opacity)
+    );
+    context.painter.stroke_arc(centre, radius, progress * pi, progress * pi, width, danger_colour);
+}
+
+/// Paints the ring round the SELECT ▾ item the D-pad marks.
+///
+/// @param context the painting
+void paint_sheet_focus(const PaintContext& context) {
+    const auto& state = context.state;
+    if (state.sheet != hud::Sheet::select_menu || state.sheet_focus < 0)
+        return;
+    const auto& frame = context.frame;
+    for (std::size_t i = 0; i < std::min<std::size_t>(frame.control_count, frame.controls.size());
+         ++i) {
+        const auto& control = frame.controls[i];
+        if (control.control != Control::menu_item ||
+            control.index != static_cast<uint8_t>(state.sheet_focus))
+            continue;
+        context.painter.outline_rounded_rect(
+            area_of(context, control.rect),
+            px(context, corner_points),
+            px(context, lit_edge_points),
+            lit_colour
+        );
+        return;
+    }
 }
 
 /// Paints every touch control the frame lays out, in the order they stack:
 /// the status pill and the banner, the controls on the battlefield, the
-/// open sheet and its controls, the radial menu, and the tip on top.
+/// open sheet and its controls with the D-pad's focus, the radial menu, the
+/// pad's build and group rings and its hold, and the tip on top.
 ///
 /// @param context the painting
 void paint_controls(const PaintContext& context) {
@@ -1409,7 +2057,11 @@ void paint_controls(const PaintContext& context) {
     for (std::size_t i = 0; i < count; ++i)
         if (in_sheet(frame.controls[i]))
             paint_control(context, frame.controls[i]);
+    paint_sheet_focus(context);
     paint_radial(context);
+    paint_build_ring(context);
+    paint_group_ring(context);
+    paint_hold_progress(context);
     paint_tip(context);
 }
 
@@ -1447,8 +2099,9 @@ bool same_frame(const hud::Frame& a, const hud::Frame& b) {
 } // namespace
 
 bool TouchDrawAccess::refresh_layer(Runtime& runtime) {
-    if (runtime.touch_ == nullptr || !runtime.touch_controls_active() ||
-        runtime.screen_ != Screen::match)
+    // The touch controls, or the pad HUD a gamepad brought; without either nothing is drawn.
+    if (runtime.touch_ == nullptr || runtime.screen_ != Screen::match ||
+        (!runtime.touch_controls_active() && !runtime.touch_->hud.pad.hud))
         return false;
     auto& state = *runtime.touch_;
     auto& layer = state.layer;
@@ -1487,6 +2140,10 @@ bool TouchDrawAccess::refresh_layer(Runtime& runtime) {
     };
     const float scale_x = static_cast<float>(look.layer_width) / static_cast<float>(look.width);
     const float scale_y = static_cast<float>(look.layer_height) / static_cast<float>(look.height);
+    // The build ring's pictures, from the HUD layer as the phone drawer's regions show them.
+    std::array<RingPicture, hud::build_ring_slot_count> pictures{};
+    if (state.hud.build_ring)
+        pictures = PhoneHudAccess::build_ring_pictures(runtime, *state.hud.build_ring);
     const PaintContext context{
         painter,
         layer.fonts.get(),
@@ -1495,7 +2152,9 @@ bool TouchDrawAccess::refresh_layer(Runtime& runtime) {
         look.px_per_point * scale_x,
         translate,
         state.hud,
-        state.frame
+        state.frame,
+        state.hud.build_ring ? &runtime.match_hud_cpu_ : nullptr,
+        state.hud.build_ring ? &pictures : nullptr
     };
     paint_controls(context);
     layer.bounds = painter.painted();

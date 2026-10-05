@@ -1136,6 +1136,9 @@ void Runtime::show_mission_briefing() {
     briefing_from_pause_ = false;
     hovered_.reset();
     selected_ = -1;
+    // The focus was a record of the screen before, which Enter and the
+    // gamepad's A would press here.
+    frontend_focus_ = -1;
     apply_output_mode();
     play_briefing_narration(state.events.narration, state.events.narration_delay);
     rebuild_surface();
@@ -1200,6 +1203,7 @@ void Runtime::show_in_game_briefing() {
     screen_ = Screen::briefing;
     match_paused_ = true;
     hovered_.reset();
+    frontend_focus_ = -1;
     selected_ = -1;
     apply_output_mode();
     rebuild_surface();

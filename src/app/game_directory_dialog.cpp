@@ -2,11 +2,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // The game directory host over SDL's native folder dialog and message boxes,
-// with the platform's default folder and advice from its hooks.
+// with the platform's default folder and advice from its hooks, the folders
+// found on this machine and the in-engine chooser's place.
+#include "folder_chooser_screen.hpp"
 #include "oa/app/app.hpp"
 #include "oa/app/game_directory.hpp"
 #include "oa/app/game_files_hooks.hpp"
 #include "oa/app/platform_hooks.hpp"
+#include "oa/platform/game_installs.hpp"
+#include "oa/platform/machine.hpp"
 #include <SDL3/SDL.h>
 #include <array>
 #include <atomic>
@@ -201,6 +205,8 @@ struct NativeHost {
     std::string data_folder_problem;
     // The mod folder and profile each candidate folder is inspected with.
     ModChoice mod;
+    /// The preferences the stored folder and the mod come from; the mod choice points here.
+    oa::platform::preferences::Values values{};
 };
 
 // Without the folder dialog in the build, the host offers none
@@ -286,35 +292,35 @@ void take_platform_folder(GameDirectoryRequest& request) {
             std::string(text_or_empty(hooks.game_folder_check_again(hooks.context)));
 }
 
-} // namespace
+/// Tells whether nobody watches a run: --unattended and the scripted runs, CI, or a dummy or
+/// offscreen video driver.
+///
+/// @param options parsed command line
+/// @return true when no dialog can be answered
+[[nodiscard]] bool unattended_run(const Options& options) {
+    return options.unattended ||
+           unattended_environment(
+               text_or_empty(SDL_getenv("CI")), text_or_empty(SDL_GetHint(SDL_HINT_VIDEO_DRIVER))
+           );
+}
 
-std::optional<GameDirectory> find_game_directory(const Options& options, GameFilesNeeded* needed) {
-    GameDirectoryRequest request;
-    request.argument = options.game_dir;
-    request.choose = options.choose_game_dir;
-    request.archives_named = !options.archives.empty();
-    request.unattended = options.unattended || unattended_environment(
-                                                   text_or_empty(SDL_getenv("CI")),
-                                                   text_or_empty(SDL_GetHint(SDL_HINT_VIDEO_DRIVER))
-                                               );
-    // An unattended run reads stored choices only from a preferences file it
-    // was given, never from the player's own.
-    oa::platform::preferences::Values values;
-    if (!request.unattended || options.preferences_file)
-        values = oa::platform::preferences::load(preference_file(options.preferences_file));
-    if (request.argument.empty())
-        request.stored = stored_game_directory(values);
-    take_platform_folder(request);
-    // The Game files screen takes the place of the missing-folder notice
-    // where the platform brings game files in, unless the player asked for
-    // the notice; a scripted run never opens it, but for its own check.
-    request.import_offered = needed != nullptr && game_files_import_offered(game_files_hooks()) &&
-                             !options.no_game_files_screen &&
-                             (!request.unattended || options.check_game_files);
-    NativeHost native;
-    native.mod.folder = chosen_mod_directory(options.mod_dir, options.base_game, values);
-    // A mod folder chosen earlier that is gone is dropped with a notice, and
-    // the game folder plays as it is; one named with --mod-dir must exist.
+/// Prepares the inspection of candidate folders: the preferences, the mod folder and profile,
+/// and the data folder the demo is unpacked to.
+///
+/// An unattended run reads stored choices only from a preferences file it was given, never
+/// from the player's own. A mod folder chosen earlier that is gone is dropped, and the game
+/// folder plays as it is; one named with --mod-dir must exist.
+///
+/// @param options parsed command line
+/// @param unattended nobody watches the run
+/// @param tell_gone_mod say that a mod folder chosen earlier is gone (once, at the start)
+/// @param[out] native the host to prepare
+void prepare_native_host(
+    const Options& options, bool unattended, bool tell_gone_mod, NativeHost& native
+) {
+    if (!unattended || options.preferences_file)
+        native.values = oa::platform::preferences::load(preference_file(options.preferences_file));
+    native.mod.folder = chosen_mod_directory(options.mod_dir, options.base_game, native.values);
     std::error_code missing;
     if (options.mod_dir.empty() && !native.mod.folder.empty() &&
         !fs::is_directory(native.mod.folder, missing)) {
@@ -322,15 +328,15 @@ std::optional<GameDirectory> find_game_directory(const Options& options, GameFil
                           path_to_utf8(native.mod.folder) +
                           "\n\nThe game starts without it; choose a mod again in the "
                           "Open Annihilation settings.";
-        if (request.unattended)
+        if (tell_gone_mod && unattended)
             std::cerr << "open-annihilation: " << text << '\n';
-        else
+        else if (tell_gone_mod)
             tell_user(&native.dialogs, Notice::information, text);
         native.mod.folder.clear();
     }
     native.mod.profile_file = options.mod_file;
     native.mod.accept_unimplemented_hacks = options.accept_unimplemented_hacks;
-    native.mod.preferences = &values;
+    native.mod.preferences = &native.values;
     if (options.data_dir) {
         native.data_folder = *options.data_dir;
     } else {
@@ -340,12 +346,72 @@ std::optional<GameDirectory> find_game_directory(const Options& options, GameFil
             native.data_folder_problem = error.what();
         }
     }
+}
+
+} // namespace
+
+std::optional<GameDirectory> find_game_directory(const Options& options, GameFilesNeeded* needed) {
+    GameDirectoryRequest request;
+    request.argument = options.game_dir;
+    request.choose = options.choose_game_dir;
+    request.archives_named = !options.archives.empty();
+    request.unattended = unattended_run(options);
+    NativeHost native;
+    prepare_native_host(options, request.unattended, true, native);
+    if (request.argument.empty())
+        request.stored = stored_game_directory(native.values);
+    take_platform_folder(request);
+    // The Game files screen takes the place of the missing-folder notice
+    // where the platform brings game files in, unless the player asked for
+    // the notice; a scripted run never opens it, but for its own check.
+    request.import_offered = needed != nullptr && game_files_import_offered(game_files_hooks()) &&
+                             !options.no_game_files_screen &&
+                             (!request.unattended || options.check_game_files);
+    // A run someone watches that names no folder looks where Steam, Heroic,
+    // Lutris and Bottles put the game, and may show the in-engine chooser,
+    // before the system's dialog in Steam's Game Mode. Scripted runs resolve
+    // as they always have.
+    if (!request.unattended && request.argument.empty()) {
+        request.found = oa::platform::game_installs::find_candidates(
+            oa::platform::game_installs::default_search_roots()
+        );
+        request.chooser_offered = needed != nullptr && folder_chooser_offered(options);
+        request.chooser_first = oa::platform::running_in_steam_game_mode();
+    }
     GameDirectoryHost host{
         &native, kNativeFolderDialog ? pick_native_folder : nullptr, tell_native_user, inspect
     };
     host.ask = ask_native_user;
     host.find_platform_default = find_native_platform_default;
     return resolve_game_directory(request, host, needed);
+}
+
+FolderPick
+pick_game_folder_with_dialog(const fs::path& start, fs::path* chosen, std::string* error) {
+#if OA_NATIVE_FOLDER_DIALOG
+    NativeDialogs dialogs;
+    // Windows reports a choice with no folder on disk behind it (This PC, a
+    // library) as a failure, so a failure opens the dialog once more.
+    FolderPick pick = pick_folder(&dialogs, start, chosen, error);
+    if (pick == FolderPick::unavailable) {
+        error->clear();
+        pick = pick_folder(&dialogs, start, chosen, error);
+    }
+    return pick;
+#else
+    std::ignore = start;
+    std::ignore = chosen;
+    *error = "this build offers no folder dialog";
+    return FolderPick::unavailable;
+#endif
+}
+
+std::optional<GameDirectory>
+take_chosen_folder(const Options& options, const fs::path& folder, std::string* problem) {
+    NativeHost native;
+    prepare_native_host(options, unattended_run(options), false, native);
+    const GameDirectoryHost host{&native, nullptr, tell_native_user, inspect};
+    return take_picked_folder(host, folder, problem);
 }
 
 } // namespace oa::app

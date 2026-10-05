@@ -1,0 +1,38 @@
+Steam Deck: send the trackpads' haptic pulses as a joystick effect
+
+SDL's Steam Deck driver plays rumble on the trackpads' actuators but
+refuses SDL_SendGamepadEffect. With this change the driver accepts one
+kind of effect: a 65-byte buffer, the report ID byte followed by the
+controller's 64-byte feature report, whose report type is the trackpad
+haptic command (ID_TRIGGER_HAPTIC_CMD). It sends that report to the
+controller with SDL_hid_send_feature_report, as the Steam Controller
+driver sends its own effects. Every other size or report type stays
+unsupported, so nothing else the driver does changes.
+
+Open Annihilation applies it to the pinned SDL release when
+tools/bootstrap_sdl.py unpacks the release, so that the game can play a
+light tick on one trackpad; without it the game plays the same feel as
+rumble. The change is offered upstream to SDL, under SDL's own licence
+(zlib), the terms of the file it changes.
+
+--- a/src/joystick/hidapi/SDL_hidapi_steamdeck.c
++++ b/src/joystick/hidapi/SDL_hidapi_steamdeck.c
+@@ -462,7 +462,17 @@
+ 
+ static bool HIDAPI_DriverSteamDeck_SendJoystickEffect(SDL_HIDAPI_Device *device, SDL_Joystick *joystick, const void *data, int size)
+ {
+-    return SDL_Unsupported();
++    // A trackpad haptic command: the report ID byte, then the controller's
++    // feature report, whose first byte is the report type.
++    const Uint8 *report = (const Uint8 *)data;
++
++    if (!report || size != HID_FEATURE_REPORT_BYTES + 1 || report[1] != ID_TRIGGER_HAPTIC_CMD) {
++        return SDL_Unsupported();
++    }
++    if (SDL_hid_send_feature_report(device->dev, report, size) != size) {
++        return SDL_SetError("Couldn't send the trackpad haptic report");
++    }
++    return true;
+ }
+ 
+ static bool HIDAPI_DriverSteamDeck_SetSensorsEnabled(SDL_HIDAPI_Device *device, SDL_Joystick *joystick, bool enabled)

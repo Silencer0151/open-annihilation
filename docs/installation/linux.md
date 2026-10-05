@@ -2,13 +2,14 @@
 
 Open Annihilation has three Linux packages: one for 64-bit PCs, and two for
 ARM computers such as the Raspberry Pi. No game data is included: you also
-need the game data from your own copy of Total Annihilation.
+need the game data from your own copy of Total Annihilation. On a Steam
+Deck, see [Steam Deck](#steam-deck) below.
 
 ## 1. Choose your package
 
 | Your computer | Package | Needs |
 |---|---|---|
-| 64-bit PC | `open-annihilation-<version>-linux-x86_64.zip` | glibc 2.28 or later: Debian 10, Ubuntu 20.04, Fedora 29, RHEL 8 or newer |
+| 64-bit PC, including the Steam Deck | `open-annihilation-<version>-linux-x86_64.zip` | glibc 2.28 or later: Debian 10, Ubuntu 20.04, Fedora 29, RHEL 8, SteamOS 3 or newer |
 | 64-bit ARM, including 64-bit Raspberry Pi OS | `open-annihilation-<version>-linux-arm64.zip` | glibc 2.28 or later |
 | 32-bit ARMv7, including 32-bit Raspberry Pi OS | `open-annihilation-<version>-linux-armhf.zip` | glibc 2.36 or later: Debian 12, Raspberry Pi OS Bookworm or newer |
 
@@ -44,8 +45,10 @@ unzip open-annihilation-<version>-linux-x86_64.zip
 ```
 
 This makes the folder `open-annihilation-<version>-linux-x86_64`, which
-holds the game, `open-annihilation`. If `unzip` is missing, install it, for
-example with `sudo apt install unzip`.
+holds the game, `open-annihilation`, and in the 64-bit PC package the
+`steam-deck` folder, with the game's Steam Input layouts and library
+artwork (see [Steam Deck](#steam-deck)). If `unzip` is missing, install it,
+for example with `sudo apt install unzip`.
 
 ## 4. Get the game data
 
@@ -74,6 +77,14 @@ from it: right-click the game's icon in Finder, choose **Show Package
 Contents**, open **drive_c**, **Program Files**, then **GOG.com**, and copy
 the **Total Annihilation** folder to the Linux computer as above.
 
+### From Steam, Heroic or Lutris
+
+Total Annihilation bought on Steam (app 298030) and installed there, on any
+of your Steam libraries, or GOG's installed with Heroic Games Launcher, or
+installed in a Lutris, Bottles or Wine prefix under `~/Games`, can be played
+where it is: the game finds it at its first start (step 5). Steam's copy
+never needs to be started or run through Proton.
+
 ### The free demo
 
 To try Open Annihilation without the full game, see
@@ -88,10 +99,15 @@ cd open-annihilation-<version>-linux-x86_64
 ./open-annihilation
 ```
 
-- **On a desktop:** the first time, it asks for your Total Annihilation
-  folder with your desktop's file chooser. Choose the folder from step 4.
-  It remembers your choice. To choose another folder later, start it with
-  `--choose-game-dir`.
+- **On a desktop:** the first time, it looks for Total Annihilation where
+  Steam, Heroic and Lutris put it. When it finds exactly one usable copy, it
+  plays it without asking and says on the main menu where it found it.
+  Otherwise it asks for your Total Annihilation folder, with your desktop's
+  file chooser, or with its own folder chooser when it found several copies
+  or the file chooser cannot open. Choose the folder from step 4. It
+  remembers your choice. To choose another folder later, start it with
+  `--choose-game-dir`; a folder named with `--game-dir`, or one you chose
+  before, always wins over the copies it finds.
 - **From the text console** (for example Raspberry Pi OS Lite, or a Pi with
   the desktop switched off): there is no folder dialog, so name the folder
   each time:
@@ -124,6 +140,20 @@ data to the Pi, unzip the package and start the game.
 On a Raspberry Pi the game starts at 60 frames a second, without enhanced
 anti-aliasing, which the Pi's graphics keep up with. Both can be changed in
 the settings like on any other computer.
+
+## Steam Deck
+
+The Steam Deck runs the 64-bit PC package; its support is experimental.
+Its own guide, [Installing on the Steam Deck](steam-deck.md), walks through
+it: unzipping the package in Desktop Mode, adding the game to Steam as a
+non-Steam game, installing the Steam Input layouts and the artwork from the
+`steam-deck` folder by hand, the controls, the first start and the Deck's
+settings.
+
+Steam's own **Add a Non-Steam Game** adds the game to Steam on any Linux
+computer with Steam in the same way, and the layouts install there as the
+guide describes. A gamepad works on every Linux computer, with or without
+Steam; [controllers.md](../controllers.md) describes the gamepad controls.
 
 ## Where it keeps its files
 

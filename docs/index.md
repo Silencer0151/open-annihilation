@@ -11,6 +11,10 @@ Every document in the repository, by what you want to do.
   - [macOS](installation/macos.md)
   - [Windows](installation/windows.md), including Windows XP
   - [Linux and Raspberry Pi](installation/linux.md)
+  - [Steam Deck](installation/steam-deck.md), experimental:
+    the Linux package in Desktop Mode, adding it to Steam as a non-Steam
+    game, the Steam Input layouts and artwork installed by hand, the
+    controls, the first start, the Deck's settings and the logs
   - [iPhone and iPad](installation/ios.md), built on your own Mac
 - [VARIANCES.md](../VARIANCES.md): where the engine always differs from
   3.1c, on purpose.
@@ -18,6 +22,12 @@ Every document in the repository, by what you want to do.
   an iPhone or a touch screen: the gestures, the tablet and phone layouts,
   QUEUE, ADD and x5, the order wheel, building, the Touch settings, the
   keyboard's Cmd keys and the Pencil.
+- [controllers.md](controllers.md): playing with a gamepad: the Steam
+  Deck's pad pointer (the right trackpad as the mouse, the grips as QUEUE,
+  ADD, FORCE and the groups, the order and build rings), sticks only for
+  other gamepads, the fallback map, menus, the pad HUD and button prompts,
+  the Controller settings, haptics, the Steam Input templates and the
+  `--check-pad-controls` check.
 - [game-files.md](game-files.md): the Game files screen that brings your
   Total Annihilation files onto an iPhone or an iPad: its three routes,
   stopping and continuing a copy, Settings › Game files and managing the
@@ -66,7 +76,12 @@ Every document in the repository, by what you want to do.
   builds, and copying the game data onto the device.
 - [development/releasing.md](development/releasing.md): building, signing,
   notarizing and checking the macOS release packages with
-  `tools/release_macos.sh`, on the maintainer's Mac.
+  `tools/release_macos.sh`, on the maintainer's Mac, and the `steam-deck`
+  folder of the Linux x86_64 package.
+- [tools/sdl-patches](../tools/sdl-patches/README.md): the changes
+  the build makes to the pinned SDL release, which
+  [tools/bootstrap_sdl.py](../tools/bootstrap_sdl.py) applies, each offered
+  upstream.
 - [development/formats.md](development/formats.md): the HPI archive (its
   encryption and SQSH compression) and PCX image formats as the asset reader
   implements them, and which archive's copy of a file wins.

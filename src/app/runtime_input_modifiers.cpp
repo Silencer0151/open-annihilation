@@ -2,14 +2,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // The modifier keys as each use reads them: the keyboard's, a synthetic
-// key's pulse, and the touch latch that gives Shift to that use; the pointer
-// key word kept in step with a latch; keys pressed for the touch controls;
-// the Cmd alternates of a hardware keyboard; haptics (docs/touch-controls.md).
-// This is the one place the engine reads SDL_GetModState().
+// key's pulse, the touch latch that gives Shift to that use and the pad's
+// FORCE that gives Ctrl to orders and selection; the pointer key word kept
+// in step with a latch; keys pressed for the touch controls; the Cmd
+// alternates of a hardware keyboard; haptics, on the platform's device and
+// the gamepad in use (docs/touch-controls.md, docs/controllers.md). This is
+// the one place the engine reads SDL_GetModState().
 #include "oa/app/runtime.hpp"
 #include "touch_state.hpp"
 #include "oa/app/platform_hooks.hpp"
 #include "oa/sim/gameplay_input/input.hpp"
+#include "oa/ui/pad_controls.hpp"
 #include "oa/ui/touch_hud.hpp"
 #include <SDL3/SDL.h>
 #include <cstdint>
@@ -35,6 +38,25 @@ constexpr CommandAlternate kCommandAlternates[] = {
     {SDLK_P, SDLK_PAUSE, SDL_SCANCODE_PAUSE},
 };
 
+/// Returns the gamepad's feel for a haptic moment.
+///
+/// @param kind the moment
+/// @return the feel the pad plays for it
+oa::ui::pad_controls::Feel pad_feel_of(Haptic kind) noexcept {
+    namespace pc = oa::ui::pad_controls;
+    switch (kind) {
+    case Haptic::hold_started:
+        return pc::Feel::hold_started;
+    case Haptic::box_started:
+        return pc::Feel::box_started;
+    case Haptic::site_refused:
+        return pc::Feel::site_refused;
+    case Haptic::queue_reduced:
+        return pc::Feel::queue_reduced;
+    }
+    return pc::Feel::hold_started;
+}
+
 } // namespace
 
 SDL_Keymod Runtime::input_modifiers(ModifierUse use) const {
@@ -43,6 +65,9 @@ SDL_Keymod Runtime::input_modifiers(ModifierUse use) const {
         modifiers |= state->dispatch.pulse;
     if (virtual_shift(use))
         modifiers |= SDL_KMOD_LSHIFT;
+    // FORCE is the pad's Ctrl for clicks, never for the keys the pad presses.
+    if ((use == ModifierUse::order || use == ModifierUse::selection) && pad_force_held())
+        modifiers |= SDL_KMOD_LCTRL;
     return static_cast<SDL_Keymod>(modifiers);
 }
 
@@ -122,6 +147,9 @@ void Runtime::remap_command_key(SDL_Event& event) const {
 }
 
 void Runtime::play_haptic(oa::app::Haptic kind) const {
+    // The gamepad in use plays it too, by its own Haptics setting.
+    if (pad_used())
+        play_pad_feel(pad_feel_of(kind));
     // The Touch setting as the dispatcher last read it; haptics are on
     // by default.
     if (const auto* state = touch_state_if_made();

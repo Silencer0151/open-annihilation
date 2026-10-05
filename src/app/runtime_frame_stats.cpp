@@ -10,6 +10,7 @@
 #include "frame_stats_panel.hpp"
 #include "graphics_report.hpp"
 #include "match_clock.hpp"
+#include "pad_state.hpp"
 #include "oa/app/frame_pacing.hpp"
 #include "oa/app/match_console.hpp"
 #include "oa/ui/console/console.hpp"
@@ -118,7 +119,13 @@ bool input_event(const SDL_Event& event) {
     case SDL_EVENT_GAMEPAD_AXIS_MOTION:
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
     case SDL_EVENT_GAMEPAD_BUTTON_UP:
+    case SDL_EVENT_GAMEPAD_TOUCHPAD_DOWN:
+    case SDL_EVENT_GAMEPAD_TOUCHPAD_MOTION:
+    case SDL_EVENT_GAMEPAD_TOUCHPAD_UP:
         return true;
+    // A gyro's readings come while the pad lies still: no input.
+    case SDL_EVENT_GAMEPAD_SENSOR_UPDATE:
+        return false;
     default:
         return false;
     }
@@ -265,10 +272,12 @@ void Runtime::pace_next_frame(bool& running) {
     activity.match_advancing =
         match_clock_steps() && (match_->state().game.sim_run_flags & console::kSimRunPaused) == 0;
     activity.camera_moving = camera_moved_;
-    // A finger resting on the screen is a held button: hold timers, ghost
-    // drags and auto-scroll need the full rate.
+    // A finger resting on the screen, or a pad's button, stick or trackpad
+    // held, is a held button: hold timers, ghost drags and auto-scroll need
+    // the full rate.
     activity.input_recent = (last_input_ns_ != 0 && now - last_input_ns_ < kInputActivityNs) ||
-                            SDL_GetMouseState(nullptr, nullptr) != 0 || touch_finger_count() != 0;
+                            SDL_GetMouseState(nullptr, nullptr) != 0 || touch_finger_count() != 0 ||
+                            PadAccess::input_held(*this);
     activity.unattended = options_.unattended;
     paced_frames_per_second_ = paced_frame_rate(options_.max_frames_per_second, activity);
     // While the renderer waits for the display, the loop keeps just below

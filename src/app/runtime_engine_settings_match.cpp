@@ -453,8 +453,9 @@ void Runtime::EngineSettingsMatchHost::overlay_tick(ScreenContext*, void* state)
     auto& runtime = *static_cast<Runtime*>(state);
     close_when_column_hidden(runtime);
     // Hardware acceleration's status follows the renderer while the dialog
-    // is open, and Touch shows once a finger turns the touch controls on;
-    // the layer is drawn again only when either changes.
+    // is open, Touch shows once a finger turns the touch controls on, and
+    // Controller once a gamepad sends input, with its Steam Input notice
+    // while that applies; the layer is drawn again only when one changes.
     auto& host = runtime.engine_settings_match_host();
     if (auto* dialog = host.dialog_open ? runtime.engine_settings_dialog() : nullptr;
         dialog != nullptr) {
@@ -463,6 +464,10 @@ void Runtime::EngineSettingsMatchHost::overlay_tick(ScreenContext*, void* state)
             ++host.revision;
         if (settings::set_touch_controls(*dialog, runtime.touch_controls_active()) ==
             settings::DialogAction::redraw)
+            ++host.revision;
+        if (settings::set_controller_section(
+                *dialog, runtime.pad_used(), runtime.pad_steam_input()
+            ) == settings::DialogAction::redraw)
             ++host.revision;
     }
 }

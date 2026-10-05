@@ -562,6 +562,39 @@ phone layout. A run without it and without a finger never turns them on,
 which the rest of the suite relies on: every other check, digest and
 recording is the same as before the touch controls existed.
 
+### Gamepad controls
+
+The gamepad controls (described in docs/controllers.md) are tested without
+a gamepad. These tests need no game data:
+
+- `ui-pad-controls` feeds the gamepad controls' model (the module in
+  src/ui/pad-controls) timelines with explicit times: the right trackpad as
+  a pointer (acceleration, speed, the landing dead band, click lock, glide
+  and its ticks, the absolute mode), the rings' wedge aim, triggers read as
+  buttons, holds, menu repeat, double clicks, the stick cursor and flicks,
+  every row of the maps from buttons to actions with the fallback map and
+  the left-handed mirror, the effective scheme, the glyph styles and the
+  haptics;
+- `ui-touch-hud` and `app-touch-paint` also check the slim pad HUD, the
+  build and group rings, the badges and the glyphs;
+- `ui-engine-settings` and `ui-engine-settings-dialog` check the Controller
+  section's settings, the Control size and the Steam Deck's defaults;
+  `platform-machine` checks how a Steam Deck and Steam's Game Mode are
+  recognised;
+- `platform-game-installs` builds home folders in a temporary folder with
+  Steam, Heroic, Lutris and Bottles installs, and checks the folders found
+  and the readers of each library file; `ui-folder-chooser` lays out the
+  in-engine folder chooser and checks its focus, keys, presses and
+  scrolling; `game-directory` checks resolution with found folders.
+
+Over the installation, `native-pad-controls` runs `--check-pad-controls` in
+a window of the dummy video driver at 1280x800, the Steam Deck's screen. The
+check starts a skirmish and drives the game with SDL virtual pads imitating
+a Steam Deck and an Xbox pad, through the game's event dispatch, with its
+own clock; it ends with one line starting `pad controls check:`. A run
+without a gamepad never turns the gamepad controls on, so every other
+check, digest and recording is unchanged.
+
 ### Game files screen
 
 The Game files screen ([docs/game-files.md](../game-files.md)) and the

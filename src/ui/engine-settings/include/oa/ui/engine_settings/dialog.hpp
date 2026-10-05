@@ -56,11 +56,15 @@ enum class Page : uint8_t {
     /// Touch: how the touch controls answer a finger; listed only while the
     /// game has touch controls (Dialog::touch)
     touch,
+    /// Controller: how a gamepad points, moves the map and answers; listed,
+    /// after Touch, only once a gamepad has sent input in this run
+    /// (Dialog::controller)
+    controller,
     /// Developer, at the foot of the list under a divider: its rows over
     /// Developer Mode's list of the standard hacks
     developer,
     /// Game files: what is installed, the backups switch and where the
-    /// files are; listed, between Touch and Developer, only where the
+    /// files are; listed, between Controller and Developer, only where the
     /// platform brings game files in and the dialog is the main menu's
     /// (Dialog::game_files)
     game_files,
@@ -72,15 +76,17 @@ enum class Page : uint8_t {
 };
 
 /// The number of sections, of every kind of dialog.
-inline constexpr std::size_t page_count = 13;
-/// The most sections a dialog lists: the engine's settings' eight with
-/// Touch and Game files, six without them; a mod's options have five.
-inline constexpr std::size_t most_listed_pages = 8;
+inline constexpr std::size_t page_count = 14;
+/// The most sections a dialog lists: the engine's settings' nine with
+/// Touch, Controller and Game files, six without them; a mod's options have
+/// five.
+inline constexpr std::size_t most_listed_pages = 9;
 
 /// Which settings a dialog shows.
 enum class DialogKind : uint8_t {
     /// the engine's settings: the sections up to Developer, Touch among them
-    /// only while the game has touch controls
+    /// only while the game has touch controls and Controller only once a
+    /// gamepad has sent input
     engine,
     mod_options, ///< a mod's options: the last five sections
     /// Language alone, as the Game files screen opens it before the game's
@@ -94,12 +100,17 @@ enum class DialogKind : uint8_t {
 /// @param touch the game has touch controls (Dialog::touch), so that the
 ///     engine's settings list Touch between Graphics and Developer
 /// @param game_files the dialog lists Game files (Dialog::game_files),
-///     between Touch and Developer
-/// @return six sections for the engine's settings, seven with Touch or
-///     Game files, eight with both; five for a mod's options and one for
-///     Language alone, whatever the other two say
-[[nodiscard]] std::span<const Page>
-dialog_pages(DialogKind kind, bool touch = false, bool game_files = false) noexcept;
+///     after Touch and Controller and before Developer
+/// @param controller a gamepad has sent input in this run
+///     (Dialog::controller), so that the engine's settings list Controller
+///     after Touch and before Game files and Developer
+/// @return six sections for the engine's settings, one more for each of
+///     Touch, Controller and Game files listed, nine with all three; five
+///     for a mod's options and one for Language alone, whatever the others
+///     say
+[[nodiscard]] std::span<const Page> dialog_pages(
+    DialogKind kind, bool touch = false, bool game_files = false, bool controller = false
+) noexcept;
 
 /// The settings, as the dialog's rows show them.
 enum class Setting : uint8_t {
@@ -131,6 +142,33 @@ enum class Setting : uint8_t {
     touch_latches,     ///< QUEUE and ADD: a strip of Stay on and One action
     touch_haptics,     ///< Haptics: a switch
     touch_left_handed, ///< Left-handed layout: a switch
+    /// Control size: a strip of Standard, Large and Larger, in Touch and in
+    /// Controller
+    touch_control_size,
+    pad_scheme, ///< Scheme: a strip of Trackpads and Sticks
+    /// Right trackpad: a strip of the pointer's two ways, Relative and
+    /// Absolute
+    pad_right_trackpad,
+    pad_pointer_speed, ///< Pointer speed: a slider of percent
+    pad_acceleration,  ///< Pointer acceleration: a strip of Off, Low and High
+    pad_glide,         ///< Trackpad glide: a switch
+    /// Right stick: a strip of Zoom (zoom and build pages), Pointer and
+    /// Nothing
+    pad_right_stick,
+    pad_magnetism, ///< Magnetism (stick pointer): a switch
+    /// Gyro pointer: a drop-down of Off, While the right pad is touched,
+    /// While the right stick is touched and Always
+    pad_gyro,
+    pad_gyro_speed, ///< Gyro speed: a slider of percent
+    pad_haptics,    ///< Haptics: a strip of Off, Light and Strong
+    /// Button prompts: a drop-down of Automatic, Steam Deck, Xbox,
+    /// PlayStation, Nintendo and Off
+    pad_prompts,
+    pad_left_handed, ///< Left-handed: a switch
+    /// Steam Input: a text row, Controller's first while the gamepad reaches
+    /// the game through Steam Input (Dialog::steam_input), saying so; it
+    /// changes no setting
+    pad_steam_input_notice,
     /// Mods: the list of the mods the game can play, one row each, which
     /// switches the game to the one chosen once the player confirms it
     mod,
@@ -176,7 +214,7 @@ enum class Setting : uint8_t {
 // buttons, then the scroll bar, then the open section's rows, which have no
 // upper end, so a row never takes a fixed control's number. The entries
 // keep room for the most sections a dialog lists, so every other number is
-// the same whether or not the dialog lists Touch.
+// the same whether or not the dialog lists Touch, Controller or Game files.
 
 /// No control: what Dialog::hovered, pressed and focused hold when they name none.
 inline constexpr int32_t no_control = -1;
@@ -187,8 +225,8 @@ inline constexpr int32_t question_yes_control = no_control - 1;
 /// The question's CANCEL button, while the question shows.
 inline constexpr int32_t question_no_control = no_control - 2;
 /// The first section's entry in the list; each section's entry is its
-/// place among its kind of dialog's sections with Touch (page_control),
-/// whether or not the dialog lists Touch.
+/// place among its kind of dialog's sections with Touch and Controller
+/// (page_control), whether or not the dialog lists them.
 inline constexpr int32_t first_page_control = 0;
 /// Restore defaults: the first number after the sections' entries.
 inline constexpr int32_t restore_control =
@@ -229,9 +267,10 @@ static_assert(
 );
 
 /// Returns the control of a section's entry in the list: its place among
-/// its kind of dialog's sections, Touch counted whether or not it is
-/// listed, so that Touch is 5 and Developer 6 in every dialog of the
-/// engine's settings, and a dialog without Touch has no control 5.
+/// its kind of dialog's sections, each section counted whether or not it is
+/// listed, so that Touch is 5, Controller 6, Developer 7 and Game files 8
+/// in every dialog of the engine's settings, and a dialog without Touch has
+/// no control 5, one without Controller no control 6.
 ///
 /// @param page the section
 /// @return its control's number
@@ -570,6 +609,19 @@ struct Dialog {
     /// Touch (dialog_pages); a host gives it to open_dialog and keeps it
     /// with set_touch_controls.
     bool touch{};
+    /// A gamepad has sent input in this run, so that the engine's settings
+    /// list Controller (dialog_pages); a host gives it to open_dialog and
+    /// keeps it with set_controller_section.
+    bool controller{};
+    /// The gamepad in use reaches the game through Steam Input, so that
+    /// Controller's first row says so and how to turn it off; a host keeps
+    /// it with set_controller_section.
+    bool steam_input{};
+    /// The game runs on a Steam Deck whose screen refreshes this many times
+    /// a second (Inputs::steam_deck_panel_hz), so that Maximum frame rate's
+    /// hint has a second line naming the rate it starts at; 0 elsewhere. A
+    /// host sets it as the dialog opens.
+    uint32_t steam_deck_panel_hz{};
     /// The Game files section is listed (dialog_pages): a host gives it to
     /// open_dialog where the platform brings game files in and the dialog is
     /// the main menu's.
@@ -717,6 +769,9 @@ struct ModOffer {
 ///     first section instead
 /// @param game_files the dialog lists Game files (Dialog::game_files);
 ///     without it, a dialog asked to show Game files shows its first section
+/// @param controller a gamepad has sent input in this run, so that the
+///     dialog lists Controller (Dialog::controller); without it, a dialog
+///     asked to show Controller shows its first section
 void open_dialog(
     Dialog& dialog,
     const EngineSettings& current,
@@ -730,7 +785,8 @@ void open_dialog(
     std::span<const oa::data::mod_profile::HackState> profile_hacks = {},
     const oa::data::languages::Language* system_language = nullptr,
     bool touch = false,
-    bool game_files = false
+    bool game_files = false,
+    bool controller = false
 );
 
 /// Opens the dialog over a mod's options (ui.options-dialog): its sections
@@ -823,6 +879,24 @@ set_acceleration_status(Dialog& dialog, const AccelerationStatus& acceleration) 
 /// @param touch the game has touch controls (Dialog::touch)
 /// @return DialogAction::redraw when the list changed, else DialogAction::none
 [[nodiscard]] DialogAction set_touch_controls(Dialog& dialog, bool touch) noexcept;
+
+/// Tells the dialog whether a gamepad has sent input in this run and
+/// whether it reaches the game through Steam Input; a host calls it each
+/// frame while the dialog is open (as set_touch_controls), so that
+/// Controller is listed from the moment a gamepad is used and its Steam
+/// Input notice shows while it applies. A dialog that stops listing
+/// Controller while it shows it shows its first section, and the focus
+/// leaves Controller's controls; the notice coming or going while
+/// Controller shows keeps the focus on the row it was on.
+///
+/// @param[in,out] dialog the dialog
+/// @param controller a gamepad has sent input in this run (Dialog::controller)
+/// @param steam_input the gamepad reaches the game through Steam Input
+///     (Dialog::steam_input)
+/// @return DialogAction::redraw when the list or the section changed, else
+///     DialogAction::none
+[[nodiscard]] DialogAction
+set_controller_section(Dialog& dialog, bool controller, bool steam_input) noexcept;
 
 /// Moves the pointer: hovers a control, or drags what a held press holds. A
 /// slider's knob follows the pointer's column only; the scroll bar's thumb

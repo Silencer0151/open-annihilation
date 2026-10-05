@@ -16,7 +16,7 @@
   <a href="https://github.com/open-annihilation/open-annihilation/releases"><img alt="macOS" src="https://img.shields.io/badge/macOS-000000?style=for-the-badge&logo=apple&logoColor=white"></a>
   <a href="https://github.com/open-annihilation/open-annihilation/releases"><img alt="Windows" src="https://img.shields.io/badge/Windows-0078D6?style=for-the-badge"></a>
   <a href="docs/installation/ios.md"><img alt="iOS" src="https://img.shields.io/badge/iOS-000000?style=for-the-badge&logo=apple&logoColor=white"></a>
-  <a href="https://github.com/open-annihilation/open-annihilation/releases"><img alt="Steam Deck: soon" title="Steam Deck: soon" src="https://img.shields.io/badge/Steam%20Deck-soon-808080?style=for-the-badge&logo=steamdeck&logoColor=c8c8c8&labelColor=5a5a5a"></a>
+  <a href="docs/installation/steam-deck.md"><img alt="Steam Deck: experimental" title="Steam Deck: experimental" src="https://img.shields.io/badge/Steam%20Deck-experimental-E67E22?style=for-the-badge&logo=steamdeck&logoColor=white&labelColor=1A9FFF"></a>
 </p>
 
 <p align="center"><b>Built with</b></p>
@@ -63,6 +63,7 @@ from your copy of Total Annihilation and starting the game:
     <tr><th colspan="3" align="left">Mobile &amp; small form factor</th></tr>
     <tr><td align="center"><img alt="iOS" src="docs/images/platforms/ios.svg"></td><td>iPhone and iPad: iOS and iPadOS 15 or later, built on your own Mac</td><td><a href="docs/installation/ios.md">Installing on iPhone and iPad</a></td></tr>
     <tr><td align="center"><img alt="Raspberry Pi" src="docs/images/platforms/raspberry-pi.svg"></td><td>Raspberry Pi 2, 3, 4, 400 and 5 with Raspberry Pi OS Bookworm or later</td><td><a href="docs/installation/linux.md#raspberry-pi">Installing on Raspberry Pi</a></td></tr>
+    <tr><td align="center"><img alt="Steam Deck" src="docs/images/platforms/steam-deck.svg"></td><td>Steam Deck, LCD and OLED, in Game Mode with the Linux 64-bit PC package; experimental</td><td><a href="docs/installation/steam-deck.md">Installing on the Steam Deck</a></td></tr>
   </tbody>
 </table>
 
@@ -151,7 +152,8 @@ in a dialog of their own
   outline (on by default), Font shadow (on by default) and Game text
   background, a shaded box behind each line (off by default), shape the
   modern text.
-- **Graphics:** Maximum frame rate, 30 to 120 frames a second. Enhanced
+- **Graphics:** Maximum frame rate, 30 to 120 frames a second (on a Steam
+  Deck the game starts at the screen's rate, 60 or 90). Enhanced
   anti-aliasing, off or 2× to 16×: units are drawn at a higher resolution
   and scaled down for smoother edges; 8× and 16× need a fast CPU. Screen
   size, from the next start: Desktop, the default, leaves the screen at the
@@ -201,9 +203,23 @@ in a dialog of their own
   stays on until it is tapped again, or One action, it turns off after the
   next order or selection. Haptics (on by default): a short vibration as a
   touch control acts. Left-handed layout (off by default): the minimap and
-  the thumb controls on the right, the orders on the left. A finger's press
-  near a control of the dialog takes the nearest within 22 points, and on a
-  phone the dialog fits the screen's safe area.
+  the thumb controls on the right, the orders on the left. Control size,
+  Standard, Large or Larger (Standard by default, Larger on a Steam Deck):
+  how large the touch controls are drawn, never the 3.1c screen. A finger's
+  press near a control of the dialog takes the nearest within 22 points,
+  and on a phone the dialog fits the screen's safe area.
+- **Controller**, listed once a gamepad has sent input in this run: Scheme,
+  Trackpads (the Steam Deck's right trackpad as the pointer, the default)
+  or Sticks (the right stick as the pointer, which every gamepad without
+  two trackpads plays); Right trackpad, relative or absolute; Pointer
+  speed, 50 to 300 %; Pointer acceleration, Off, Low or High; Trackpad
+  glide; Right stick, Zoom and build pages, Pointer or Nothing; Magnetism
+  for the stick pointer; Gyro pointer and Gyro speed; Haptics, Off, Light
+  or Strong; Button prompts, Automatic, Steam Deck, Xbox, PlayStation,
+  Nintendo or Off; Left-handed; and Control size, Hold delay and QUEUE and
+  ADD, shared with Touch. When the gamepad comes through Steam Input, the
+  section says so. [docs/controllers.md](docs/controllers.md) describes
+  every gamepad input.
 - **Developer:** Enable Developer Mode (off by default) changes the
   standard hacks of the mod being played, or of 3.1c without one, without
   editing its profile ([docs/mods](docs/mods/README.md#developer-mode)). A

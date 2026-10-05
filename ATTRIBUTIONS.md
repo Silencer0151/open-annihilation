@@ -17,7 +17,7 @@ in this repository or in the release packages.
 
 | Component | Version | Licence | macOS | Windows | Linux |
 |---|---|---|---|---|---|
-| [SDL](#sdl) | 3.4.16 | zlib | static | static | static |
+| [SDL](#sdl) | 3.4.16, changed | zlib | static | static | static |
 | [zlib](#zlib) | 1.3.1 | zlib | static | static | static |
 | [FreeType](#freetype) | 2.14.3 | FreeType License | static | static | static |
 | [DejaVu fonts](#dejavu-fonts) | 2.37, DejaVu Sans and DejaVu Sans Bold | Bitstream Vera and Arev licences; DejaVu changes public domain | font files | font files | font files |
@@ -42,9 +42,11 @@ repository with CMake links these components as follows:
   [`third_party/`](third_party/) and compiled into every build. The movies
   and the rest of the sound are decoded by the engine's own code.
 - When CMake is pointed at the SDL that `tools/bootstrap_sdl.py` installs,
-  as `run.sh` and the README do, SDL 3.4.16 is linked statically. Otherwise
-  the build takes whichever SDL 3.2 or later CMake finds, which may be a
-  shared library.
+  as `run.sh` and the README do, SDL 3.4.16 with the changes described
+  under [SDL](#sdl) is linked statically. Otherwise the build takes
+  whichever SDL 3.2 or later CMake finds, which may be a shared library and
+  lacks those changes; the game then plays the Steam Deck's trackpad
+  ticks as rumble.
 - On macOS and Linux, zlib is the system's, except in the macOS release
   build below: the executables link the zlib CMake finds, and the build
   copies none beside the executables.
@@ -71,7 +73,14 @@ repository with CMake links these components as follows:
 
 SDL 3.4.16, from <https://www.libsdl.org/release/SDL3-3.4.16.tar.gz>
 (SHA-256 `7322236cd12090c3eb40b9728be4d49c76f66ad17d04369584d4ecad5cf77c68`),
-unmodified and linked statically.
+linked statically. **This is an altered version of SDL**: the packages'
+SDL is that release with the patches in
+[`tools/sdl-patches/`](tools/sdl-patches/) applied, which `tools/bootstrap_sdl.py` applies when it
+unpacks the release, and which are offered upstream to SDL under SDL's own
+licence. Each patch says what it changes; today there is one, which lets
+SDL's Steam Deck driver send the controller a trackpad haptic report given
+to `SDL_SendGamepadEffect`. The rest of SDL is as the release published
+it. SDL 3.2.0, which the build also accepts, is built unchanged.
 
 > Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
 >

@@ -19,7 +19,12 @@
 // values, Show Active Only, its scrolling and its focus. The Touch section,
 // listed only with touch controls: its place in the list, the entries'
 // numbers kept with and without it, its rows and their values, and a
-// finger's press taking the nearest control within reach. The Game files
+// finger's press taking the nearest control within reach. The Controller
+// section, listed only once a gamepad has sent input: its place in the
+// list after Touch, the entries' numbers kept, its rows and their strips,
+// sliders, switches and drop-downs, the rows it shares with Touch, the
+// Steam Input notice, and Restore defaults, a Steam Deck's included. On a
+// Steam Deck, Maximum frame rate's second hint line. The Game files
 // section, listed only where the host says the platform brings game files
 // in: its place in the list and its entry's number, its rows (what is
 // installed with MANAGE…, the backups switch with the device's name, where
@@ -132,6 +137,45 @@ constexpr std::array<Page, 8> kTouchGameFilesPages{
     Page::developer,
 };
 
+/// The engine's sections once a gamepad has sent input: Controller between
+/// Graphics and Developer.
+constexpr std::array<Page, 7> kControllerPages{
+    Page::mods,
+    Page::controls,
+    Page::common_tweaks,
+    Page::language,
+    Page::graphics,
+    Page::controller,
+    Page::developer,
+};
+
+/// The engine's sections with Touch and Controller listed, Controller after
+/// Touch.
+constexpr std::array<Page, 8> kTouchControllerPages{
+    Page::mods,
+    Page::controls,
+    Page::common_tweaks,
+    Page::language,
+    Page::graphics,
+    Page::touch,
+    Page::controller,
+    Page::developer,
+};
+
+/// The engine's sections with all three listed: Touch, Controller, then
+/// Game files.
+constexpr std::array<Page, 9> kAllPages{
+    Page::mods,
+    Page::controls,
+    Page::common_tweaks,
+    Page::language,
+    Page::graphics,
+    Page::touch,
+    Page::controller,
+    Page::game_files,
+    Page::developer,
+};
+
 /// Every lock state the dialog opens with.
 std::vector<settings::Locks> lock_states() {
     std::vector<settings::Locks> states;
@@ -230,6 +274,43 @@ settings::Dialog opened_with_game_files(Page page, bool touch = false) {
     dialog.game_files_sizes = "1.1 GB · 37 GB free on this tablet";
     dialog.game_files_location = "In the file manager: Open Annihilation › Total Annihilation";
     dialog.game_files_device = "tablet";
+    return dialog;
+}
+
+/// Returns a dialog of the engine's settings opened on a section, with or
+/// without the Controller section listed (a gamepad has sent input), and
+/// with or without Touch and Game files.
+///
+/// @param page the section
+/// @param controller the dialog lists Controller
+/// @param touch the dialog lists Touch
+/// @param game_files the dialog lists Game files
+/// @param current the settings in effect, which the defaults are too
+/// @return the dialog
+settings::Dialog opened_with_controller(
+    Page page,
+    bool controller = true,
+    bool touch = false,
+    bool game_files = false,
+    const settings::EngineSettings& current = {}
+) {
+    settings::Dialog dialog;
+    settings::open_dialog(
+        dialog,
+        current,
+        current,
+        {},
+        "v0.2.0",
+        page,
+        {},
+        settings::highest_unit_limit,
+        {},
+        {},
+        nullptr,
+        touch,
+        game_files,
+        controller
+    );
     return dialog;
 }
 
@@ -388,12 +469,12 @@ void each_section_shows_its_rows() {
     // The list names the sections in order, Developer last under a divider.
     const auto engine = settings::dialog_pages(settings::DialogKind::engine);
     CHECK(std::equal(engine.begin(), engine.end(), kPages.begin(), kPages.end()));
-    // Each entry's number is its place in the list with Touch, which keeps
-    // its number listed or not: Developer is 6.
+    // Each entry's number is its place in the list with Touch and
+    // Controller, which keep their numbers listed or not: Developer is 7.
     for (std::size_t index = 0; index < kPages.size(); ++index)
         CHECK(
             settings::page_control(kPages[index]) ==
-            static_cast<int32_t>(kPages[index] == Page::developer ? index + 1 : index)
+            static_cast<int32_t>(kPages[index] == Page::developer ? index + 2 : index)
         );
     for (std::size_t index = 1; index < kPages.size(); ++index) {
         const auto above = geometry::list_item(kPages[index - 1]);
@@ -1732,28 +1813,31 @@ void a_long_section_scrolls_by_its_overflow() {
 }
 
 void control_numbers_put_the_rows_after_every_fixed_control() {
-    // Each entry is its place in the list with Touch, whether or not the
-    // dialog lists Touch: the five sections before Touch are 0 to 4, Touch
-    // 5 and Developer 6; Game files, listed only by the main menu's dialog
-    // of a game that brings game files in, is 7.
-    for (std::size_t index = 0; index < kTouchPages.size(); ++index)
-        CHECK(settings::page_control(kTouchPages[index]) == static_cast<int32_t>(index));
+    // Each entry is its place in the list with Touch and Controller,
+    // whether or not the dialog lists them: the five sections before Touch
+    // are 0 to 4, Touch 5, Controller 6 and Developer 7; Game files, listed
+    // only by the main menu's dialog of a game that brings game files in,
+    // is 8.
+    for (std::size_t index = 0; index < kTouchControllerPages.size(); ++index)
+        CHECK(settings::page_control(kTouchControllerPages[index]) == static_cast<int32_t>(index));
     CHECK(settings::page_control(Page::touch) == 5);
-    CHECK(settings::page_control(Page::developer) == 6);
-    CHECK(settings::page_control(Page::game_files) == 7);
-    CHECK(settings::most_listed_pages == 8);
-    CHECK(settings::restore_control == 8);
-    CHECK(settings::cancel_control == 9);
-    CHECK(settings::ok_control == 10);
-    CHECK(settings::scroll_bar_control == 11);
-    CHECK(settings::first_row_control == 12);
+    CHECK(settings::page_control(Page::controller) == 6);
+    CHECK(settings::page_control(Page::developer) == 7);
+    CHECK(settings::page_control(Page::game_files) == 8);
+    CHECK(settings::most_listed_pages == 9);
+    CHECK(settings::page_count == 14);
+    CHECK(settings::restore_control == 9);
+    CHECK(settings::cancel_control == 10);
+    CHECK(settings::ok_control == 11);
+    CHECK(settings::scroll_bar_control == 12);
+    CHECK(settings::first_row_control == 13);
     // Developer's two rows come first, Enable Developer Mode and Show
     // performance statistics, then its footer's switch and button, then
     // its list's rows.
-    CHECK(settings::developer_mode_control == 12);
-    CHECK(settings::active_only_control == 14);
-    CHECK(settings::restore_profile_control == 15);
-    CHECK(settings::first_hack_list_control == 16);
+    CHECK(settings::developer_mode_control == 13);
+    CHECK(settings::active_only_control == 15);
+    CHECK(settings::restore_profile_control == 16);
+    CHECK(settings::first_hack_list_control == 17);
 
     // Every row's number comes after every fixed control's, and each is its own.
     Scrolling all(nine_rows());
@@ -5250,6 +5334,84 @@ void fonts_load_and_every_text_fits_its_place() {
         std::cout << "'" << text << "' is "
                   << oa::formats::fnt::measure_text(fonts.small.font, text) << " columns\n";
 
+    // The Controller section, with each way of its strips and drop-downs,
+    // with and without the Steam Input notice and its drop-down lists open,
+    // at every offset; and Graphics on a Steam Deck: every text fits its place.
+    const auto every_text_fits = [&fonts](const settings::Dialog& dialog) {
+        for (const auto& part : settings::dialog_layout(dialog)) {
+            if (part.text.empty())
+                continue;
+            const auto& font =
+                part.font == settings::DialogFont::regular ? fonts.regular.font : fonts.small.font;
+            const auto width =
+                static_cast<int32_t>(oa::formats::fnt::measure_text(font, part.text)) +
+                part.tracking * static_cast<int32_t>(part.text.size() - 1);
+            if (width > part.rect.width || font.nominal_height > part.rect.height) {
+                std::cerr << "'" << part.text << "' is " << width << " wide in a box "
+                          << part.rect.width << " wide\n";
+                CHECK(width <= part.rect.width);
+                CHECK(font.nominal_height <= part.rect.height);
+            }
+        }
+    };
+    {
+        namespace pad = oa::ui::pad_controls;
+        std::vector<settings::EngineSettings> pad_states;
+        for (const auto scheme : {pad::Scheme::trackpads, pad::Scheme::sticks})
+            for (const auto stick :
+                 {pad::RightStick::zoom_and_pages,
+                  pad::RightStick::pointer,
+                  pad::RightStick::nothing})
+                for (const auto trackpad :
+                     {pad::RightTrackpad::relative, pad::RightTrackpad::absolute}) {
+                    settings::EngineSettings state{};
+                    state.pad_scheme = scheme;
+                    state.pad_right_stick = stick;
+                    state.pad_right_trackpad = trackpad;
+                    state.pad_gyro = pad::Gyro::right_stick_touched;
+                    state.pad_prompts = pad::Prompts::playstation;
+                    state.pad_pointer_speed = pad::highest_pointer_speed;
+                    state.pad_gyro_speed = pad::highest_gyro_speed;
+                    state.touch_hold_ms = settings::highest_touch_hold_ms;
+                    state.touch_latches = settings::TouchLatches::one_action;
+                    pad_states.push_back(state);
+                }
+        for (const auto& state : pad_states)
+            for (const bool steam_input : {false, true}) {
+                settings::Dialog dialog =
+                    opened_with_controller(Page::controller, true, true, true);
+                dialog.chosen = state;
+                static_cast<void>(settings::set_controller_section(dialog, true, steam_input));
+                const int32_t limit = geometry::open_rows(dialog).limit;
+                for (int32_t scroll = 0; scroll <= limit; ++scroll) {
+                    dialog.scroll[static_cast<std::size_t>(Page::controller)] = scroll;
+                    every_text_fits(dialog);
+                }
+            }
+        // Each drop-down's list, open over the section.
+        for (const Setting setting : {Setting::pad_gyro, Setting::pad_prompts}) {
+            settings::Dialog dialog = opened_with_controller(Page::controller);
+            const auto open = geometry::open_rows(dialog);
+            for (const auto& row : open.rows.rows)
+                if (row.setting == setting) {
+                    dialog.scroll[static_cast<std::size_t>(Page::controller)] =
+                        geometry::scroll_showing(
+                            open,
+                            static_cast<std::size_t>(row.control - settings::first_row_control)
+                        );
+                    dialog.focused = row.control;
+                }
+            static_cast<void>(settings::dialog_key(dialog, DialogKey::space));
+            CHECK(dialog.open_list != settings::no_control);
+            every_text_fits(dialog);
+        }
+        for (const uint32_t rate : {60U, 90U}) {
+            settings::Dialog deck = opened(Page::graphics);
+            deck.steam_deck_panel_hz = rate;
+            every_text_fits(deck);
+        }
+    }
+
     // A section that scrolls: every text it lists fits its place at every
     // offset, and each lock's text fits beside a kept switch as on a slider.
     Scrolling all(nine_rows());
@@ -5738,11 +5900,13 @@ void game_files_is_listed_only_where_the_host_says() {
         geometry::footer_rule_row
     );
 
-    // Touch is 5, Developer 6 and Game files 7 in every dialog: a dialog
-    // without Touch has no control 5, one without Game files no control 7.
+    // Touch is 5, Controller 6, Developer 7 and Game files 8 in every
+    // dialog: a dialog without Touch has no control 5, one without Game
+    // files no control 8.
     CHECK(settings::page_control(Page::touch) == 5);
-    CHECK(settings::page_control(Page::developer) == 6);
-    CHECK(settings::page_control(Page::game_files) == 7);
+    CHECK(settings::page_control(Page::controller) == 6);
+    CHECK(settings::page_control(Page::developer) == 7);
+    CHECK(settings::page_control(Page::game_files) == 8);
     for (const bool touch : {false, true}) {
         const auto entries = list_entries(opened_with_game_files(Page::common_tweaks, touch));
         const auto& order = touch ? std::span<const Page>(kTouchGameFilesPages)
@@ -6135,28 +6299,46 @@ void language_text_lists_one_section_and_draws_without_the_game_fonts() {
     CHECK(settings::dialog_text_width(empty, settings::DialogFont::regular, "Language") == 0);
 }
 
+/// Clicks a strip's caption where the dialog draws it.
+///
+/// @param[in,out] dialog the dialog
+/// @param control the strip's row's control
+/// @param caption the caption
+/// @return what the click asks of the host; DialogAction::none when the caption is not shown
+DialogAction click_caption_at(settings::Dialog& dialog, int32_t control, std::string_view caption) {
+    const auto shown = settings::dialog_layout(dialog);
+    for (const auto& part : shown)
+        if (part.text == caption && part.control == control)
+            return click(dialog, centre(part.rect));
+    std::cerr << "no caption '" << caption << "' on control " << control << '\n';
+    CHECK(false);
+    return DialogAction::none;
+}
+
 void touch_shows_its_rows_and_their_values() {
     const auto rows = settings::page_settings(Page::touch);
-    CHECK(rows.size() == 5);
-    constexpr std::array<Setting, 5> kTouchRows{
+    CHECK(rows.size() == 6);
+    constexpr std::array<Setting, 6> kTouchRows{
         Setting::touch_drag,
         Setting::touch_hold_delay,
         Setting::touch_latches,
         Setting::touch_haptics,
         Setting::touch_left_handed,
+        Setting::touch_control_size,
     };
     CHECK(std::equal(rows.begin(), rows.end(), kTouchRows.begin(), kTouchRows.end()));
     CHECK(geometry::is_strip(Setting::touch_drag) && geometry::is_strip(Setting::touch_latches));
     CHECK(geometry::is_slider(Setting::touch_hold_delay));
     CHECK(geometry::is_switch(Setting::touch_haptics));
     CHECK(geometry::is_switch(Setting::touch_left_handed));
+    CHECK(geometry::is_strip(Setting::touch_control_size));
 
     settings::Dialog dialog = opened_with_touch(Page::touch);
     // Every part inside the dialog and apart, at every offset; no game lock
     // reaches a Touch row.
-    // Its five rows are taller than the view, by 62 rows.
+    // Its six rows are taller than the view, by 121 rows.
     const auto open = geometry::open_rows(dialog);
-    CHECK(open.limit == 62);
+    CHECK(open.limit == 121);
     const renderer::SourceRect face{
         geometry::edge,
         geometry::edge,
@@ -6190,7 +6372,7 @@ void touch_shows_its_rows_and_their_values() {
           "Box",
           "Scroll",
           "Hold delay",
-          "How long a finger stays down for a hold.",
+          "How long a finger or button is held for a hold.",
           "350 ms",
           "QUEUE and ADD",
           "A tapped QUEUE, ADD or x5 stays on",
@@ -6200,14 +6382,29 @@ void touch_shows_its_rows_and_their_values() {
           "Haptics",
           "A short vibration as a touch control acts."})
         CHECK(find_part(parts, text, settings::no_control) != nullptr);
-    // At its end: Left-handed layout.
+    // At its end: Left-handed layout and Control size.
     CHECK(settings::dialog_key(dialog, DialogKey::end) == DialogAction::redraw);
     parts = settings::dialog_layout(dialog);
     for (const std::string_view text :
          {"Left-handed layout",
           "The minimap and the thumb controls on the",
-          "right, the orders on the left."})
+          "right, the orders on the left.",
+          "Control size",
+          "The size of the touch controls; the game's own",
+          "screens keep theirs.",
+          "Standard",
+          "Large",
+          "Larger"})
         CHECK(find_part(parts, text, settings::no_control) != nullptr);
+    CHECK(
+        click_caption_at(dialog, settings::first_row_control + 5, "Larger") == DialogAction::changed
+    );
+    CHECK(dialog.chosen.touch_control_size == settings::ControlSize::larger);
+    dialog.focused = settings::first_row_control + 5;
+    CHECK(settings::dialog_key(dialog, DialogKey::left) == DialogAction::changed);
+    CHECK(dialog.chosen.touch_control_size == settings::ControlSize::large);
+    dialog.chosen.touch_control_size = settings::ControlSize::standard;
+    dialog.focused = settings::no_control;
     CHECK(settings::dialog_key(dialog, DialogKey::home) == DialogAction::redraw);
 
     // The strips: a click on a caption picks it, and the hint follows.
@@ -6276,7 +6473,9 @@ void touch_shows_its_rows_and_their_values() {
     CHECK(dialog.chosen.touch_left_handed);
 
     // Restore defaults puts every Touch row back; Cancel what it opened with.
+    dialog.chosen.touch_control_size = settings::ControlSize::large;
     CHECK(click(dialog, centre(geometry::restore_button)) == DialogAction::changed);
+    CHECK(dialog.chosen.touch_control_size == settings::ControlSize::standard);
     CHECK(dialog.chosen.touch_drag == settings::TouchDrag::automatic);
     CHECK(dialog.chosen.touch_hold_ms == settings::default_touch_hold_ms);
     CHECK(dialog.chosen.touch_latches == settings::TouchLatches::stay_on);
@@ -6399,6 +6598,566 @@ void touch_changes_only_its_entry_and_the_sections_under_it() {
                                      y >= touch_top && y < geometry::footer_rule_row;
                 ++(in_list ? differing_below : differing_outside);
             }
+        CHECK(differing_outside == 0);
+        CHECK(differing_below > 0);
+    }
+}
+
+void controller_is_listed_only_once_a_gamepad_sent_input() {
+    // Without a gamepad the engine's settings list as they always have;
+    // with one, Controller comes after Graphics and Touch, before Game files
+    // and Developer. A mod's options and Language alone never list it.
+    const auto engine = settings::dialog_pages(settings::DialogKind::engine);
+    CHECK(std::equal(engine.begin(), engine.end(), kPages.begin(), kPages.end()));
+    const auto pad = settings::dialog_pages(settings::DialogKind::engine, false, false, true);
+    CHECK(std::equal(pad.begin(), pad.end(), kControllerPages.begin(), kControllerPages.end()));
+    const auto both = settings::dialog_pages(settings::DialogKind::engine, true, false, true);
+    CHECK(
+        std::equal(
+            both.begin(), both.end(), kTouchControllerPages.begin(), kTouchControllerPages.end()
+        )
+    );
+    const auto all = settings::dialog_pages(settings::DialogKind::engine, true, true, true);
+    CHECK(std::equal(all.begin(), all.end(), kAllPages.begin(), kAllPages.end()));
+    CHECK(all.size() == settings::most_listed_pages);
+    const auto files = settings::dialog_pages(settings::DialogKind::engine, false, true, true);
+    CHECK(files.size() == 8 && files[5] == Page::controller && files[6] == Page::game_files);
+    const auto mods = settings::dialog_pages(settings::DialogKind::mod_options, true, true, true);
+    CHECK(std::equal(mods.begin(), mods.end(), kModPages.begin(), kModPages.end()));
+    const auto language =
+        settings::dialog_pages(settings::DialogKind::language_text, true, true, true);
+    CHECK(language.size() == 1 && language[0] == Page::language);
+
+    // Its entry takes the sixth place, or the seventh after Touch; Game files
+    // follows it; the line and Developer stay at the list's foot.
+    CHECK(geometry::list_item(Page::controller, false, false, true).y == 141);
+    CHECK(geometry::list_item(Page::touch, true, false, true).y == 141);
+    CHECK(geometry::list_item(Page::controller, true, false, true).y == 162);
+    CHECK(geometry::list_item(Page::game_files, true, true, true).y == 183);
+    CHECK(geometry::list_item(Page::game_files, false, true, true).y == 162);
+    CHECK(geometry::list_item(Page::developer, true, true, true).y == 262);
+    CHECK(
+        geometry::list_item(Page::game_files, true, true, true).y + geometry::list_item_height <
+        geometry::list_divider().y
+    );
+
+    // Each section's entry keeps its number with or without Controller
+    // listed; a dialog without it has no entry numbered as Controller.
+    for (const Page page : kPages) {
+        const auto plain = list_entries(opened_with_controller(page, false));
+        const auto with_pad = list_entries(opened_with_controller(page));
+        CHECK(plain.size() == kPages.size());
+        CHECK(with_pad.size() == kControllerPages.size());
+        for (std::size_t index = 0; index < plain.size() && index < kPages.size(); ++index) {
+            CHECK(plain[index].first == settings::page_control(kPages[index]));
+            CHECK(plain[index].first != settings::page_control(Page::controller));
+            CHECK(same_entry(plain[index].second, list_entries(opened(page))[index].second));
+        }
+        for (std::size_t index = 0; index < with_pad.size() && index < kControllerPages.size();
+             ++index)
+            CHECK(with_pad[index].first == settings::page_control(kControllerPages[index]));
+        const auto every = list_entries(opened_with_controller(page, true, true, true));
+        CHECK(every.size() == kAllPages.size());
+        for (std::size_t index = 0; index < every.size() && index < kAllPages.size(); ++index) {
+            CHECK(every[index].first == settings::page_control(kAllPages[index]));
+            CHECK(
+                every[index].second.y == geometry::list_item(kAllPages[index], true, true, true).y
+            );
+        }
+    }
+    const auto parts = settings::dialog_layout(opened_with_controller(Page::graphics, false));
+    CHECK(find_part(parts, "Controller", settings::no_control) == nullptr);
+    const auto pad_parts = settings::dialog_layout(opened_with_controller(Page::graphics));
+    const auto* entry = find_part(pad_parts, "Controller", settings::no_control);
+    CHECK(entry != nullptr && entry->control == settings::page_control(Page::controller));
+
+    // Controller opens only where it is listed.
+    CHECK(opened_with_controller(Page::controller, false).page == Page::mods);
+    CHECK(opened_with_controller(Page::controller).page == Page::controller);
+    CHECK(opened_with_controller(Page::controller).controller);
+    CHECK(!opened(Page::graphics).controller && !opened(Page::graphics).steam_input);
+
+    // A click on its entry shows it; the focus walks the entries in the
+    // list's order, Controller among them.
+    settings::Dialog dialog = opened_with_controller(Page::common_tweaks, true, true);
+    CHECK(
+        click(dialog, centre(geometry::list_item(Page::controller, true, false, true))) ==
+        DialogAction::redraw
+    );
+    CHECK(dialog.page == Page::controller);
+    CHECK(
+        click(dialog, centre(geometry::list_item(Page::developer, true, false, true))) ==
+        DialogAction::redraw
+    );
+    CHECK(dialog.page == Page::developer);
+    settings::Dialog keys = opened_with_controller(Page::common_tweaks, true, true);
+    const std::vector<int32_t> walked = entries_walked(keys);
+    CHECK(walked.size() == kTouchControllerPages.size());
+    for (std::size_t index = 0; index < walked.size() && index < kTouchControllerPages.size();
+         ++index)
+        CHECK(walked[index] == settings::page_control(kTouchControllerPages[index]));
+
+    // A gamepad's first input lists Controller at once; going off, a dialog
+    // showing Controller shows its first section and the focus leaves it.
+    settings::Dialog later = opened_with_controller(Page::graphics, false);
+    CHECK(settings::set_controller_section(later, false, false) == DialogAction::none);
+    CHECK(settings::set_controller_section(later, true, false) == DialogAction::redraw);
+    CHECK(later.controller && list_entries(later).size() == kControllerPages.size());
+    CHECK(settings::set_controller_section(later, true, false) == DialogAction::none);
+    CHECK(
+        click(later, centre(geometry::list_item(Page::controller, false, false, true))) ==
+        DialogAction::redraw
+    );
+    CHECK(later.page == Page::controller);
+    later.focused = settings::first_row_control + 2;
+    CHECK(settings::set_controller_section(later, false, false) == DialogAction::redraw);
+    CHECK(later.page == Page::mods && later.focused == settings::no_control);
+    CHECK(list_entries(later).size() == kPages.size());
+    // Off while another section shows, that section stays and keeps its focus.
+    settings::Dialog elsewhere = opened_with_controller(Page::graphics);
+    elsewhere.focused = settings::first_row_control;
+    CHECK(settings::set_controller_section(elsewhere, false, false) == DialogAction::redraw);
+    CHECK(elsewhere.page == Page::graphics && elsewhere.focused == settings::first_row_control);
+    // A mod's options never list it, whatever the host says.
+    settings::Dialog options = opened_mod_options(Page::mod_keys);
+    static_cast<void>(settings::set_controller_section(options, true, true));
+    const auto option_pages =
+        settings::dialog_pages(options.kind, options.touch, options.game_files, options.controller);
+    CHECK(std::equal(option_pages.begin(), option_pages.end(), kModPages.begin(), kModPages.end()));
+}
+
+void controller_shows_its_rows_and_their_values() {
+    namespace pad = oa::ui::pad_controls;
+    const auto rows = settings::page_settings(Page::controller);
+    constexpr std::array<Setting, 15> kControllerRows{
+        Setting::pad_scheme,
+        Setting::pad_right_trackpad,
+        Setting::pad_pointer_speed,
+        Setting::pad_acceleration,
+        Setting::pad_glide,
+        Setting::pad_right_stick,
+        Setting::pad_magnetism,
+        Setting::pad_gyro,
+        Setting::pad_gyro_speed,
+        Setting::pad_haptics,
+        Setting::pad_prompts,
+        Setting::pad_left_handed,
+        Setting::touch_control_size,
+        Setting::touch_hold_delay,
+        Setting::touch_latches,
+    };
+    CHECK(std::equal(rows.begin(), rows.end(), kControllerRows.begin(), kControllerRows.end()));
+    // Control size stands in Touch too: one setting, two rows.
+    const auto touch_rows = settings::page_settings(Page::touch);
+    CHECK(
+        std::find(touch_rows.begin(), touch_rows.end(), Setting::touch_control_size) !=
+        touch_rows.end()
+    );
+    for (const Setting strip :
+         {Setting::touch_control_size,
+          Setting::pad_scheme,
+          Setting::pad_right_trackpad,
+          Setting::pad_acceleration,
+          Setting::pad_right_stick,
+          Setting::pad_haptics})
+        CHECK(geometry::is_strip(strip));
+    for (const Setting slider : {Setting::pad_pointer_speed, Setting::pad_gyro_speed})
+        CHECK(geometry::is_slider(slider));
+    for (const Setting choice : {Setting::pad_gyro, Setting::pad_prompts})
+        CHECK(geometry::is_choice(choice) && !geometry::is_switch(choice));
+    for (const Setting toggle :
+         {Setting::pad_glide, Setting::pad_magnetism, Setting::pad_left_handed})
+        CHECK(geometry::is_switch(toggle));
+    CHECK(geometry::is_text(Setting::pad_steam_input_notice));
+    CHECK(!geometry::is_switch(Setting::pad_steam_input_notice));
+
+    // Every part inside the dialog and apart, at every offset, with and
+    // without the notice; no game lock reaches a Controller row.
+    const renderer::SourceRect face{
+        geometry::edge,
+        geometry::edge,
+        settings::dialog_width - 2 * geometry::edge,
+        settings::dialog_height - 2 * geometry::edge,
+    };
+    for (const auto& locks : lock_states())
+        for (const auto& row : geometry::place_rows(Page::controller, locks).rows)
+            CHECK(row.lock == Lock::none);
+    for (const bool steam_input : {false, true}) {
+        settings::Dialog dialog = opened_with_controller(Page::controller);
+        static_cast<void>(settings::set_controller_section(dialog, true, steam_input));
+        const int32_t limit = geometry::open_rows(dialog).limit;
+        CHECK(limit > 0);
+        for (int32_t scroll = 0; scroll <= limit; ++scroll) {
+            dialog.scroll[static_cast<std::size_t>(Page::controller)] = scroll;
+            const auto parts = settings::dialog_layout(dialog);
+            for (std::size_t a = 0; a < parts.size(); ++a) {
+                CHECK(inside(parts[a].rect, face));
+                for (std::size_t b = a + 1; b < parts.size(); ++b)
+                    CHECK(!overlap(parts[a].rect, parts[b].rect));
+            }
+        }
+    }
+
+    // At its top: the heading, labels, captions, hints and values.
+    settings::Dialog dialog = opened_with_controller(Page::controller);
+    auto parts = settings::dialog_layout(dialog);
+    for (const std::string_view text :
+         {"CONTROLLER",
+          "Scheme",
+          "Trackpads",
+          "Sticks",
+          "The right trackpad points and the left one moves",
+          "the map; a pad without trackpads plays Sticks.",
+          "Right trackpad",
+          "Relative",
+          "Absolute",
+          "The pointer moves as the thumb slides.",
+          "Pointer speed",
+          "100%"})
+        CHECK(find_part(parts, text, settings::no_control) != nullptr);
+    // Each row's label shows once it is scrolled to, and the last at the end.
+    const auto shows_label = [&dialog](Setting setting) {
+        settings::Dialog seen = dialog;
+        const auto open = geometry::open_rows(seen);
+        std::size_t index = 0;
+        while (index < open.rows.rows.size() && open.rows.rows[index].setting != setting)
+            ++index;
+        seen.scroll[static_cast<std::size_t>(Page::controller)] =
+            geometry::scroll_showing(open, index);
+        const auto shown = settings::dialog_layout(seen);
+        return find_part(shown, geometry::label_of(setting), settings::no_control) != nullptr;
+    };
+    for (const Setting setting : kControllerRows)
+        CHECK(shows_label(setting));
+    CHECK(settings::dialog_key(dialog, DialogKey::end) == DialogAction::redraw);
+    parts = settings::dialog_layout(dialog);
+    for (const std::string_view text :
+         {"QUEUE and ADD", "Stay on", "One action", "A tapped QUEUE, ADD or x5 stays on"})
+        CHECK(find_part(parts, text, settings::no_control) != nullptr);
+    CHECK(settings::dialog_key(dialog, DialogKey::home) == DialogAction::redraw);
+
+    // The strips: a click on a caption picks it, and the hint follows.
+    CHECK(click_caption_at(dialog, settings::first_row_control, "Sticks") == DialogAction::changed);
+    CHECK(dialog.chosen.pad_scheme == pad::Scheme::sticks);
+    CHECK(
+        find_part(settings::dialog_layout(dialog), "stick the map.", settings::no_control) !=
+        nullptr
+    );
+    CHECK(
+        click_caption_at(dialog, settings::first_row_control + 1, "Absolute") ==
+        DialogAction::changed
+    );
+    CHECK(dialog.chosen.pad_right_trackpad == pad::RightTrackpad::absolute);
+    CHECK(
+        find_part(
+            settings::dialog_layout(dialog),
+            "Each point of the pad is a point of the view.",
+            settings::no_control
+        ) != nullptr
+    );
+    // The keys step a strip: Left and Right.
+    dialog.focused = settings::first_row_control + 3;
+    CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
+    CHECK(dialog.chosen.pad_acceleration == pad::Acceleration::high);
+    CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::redraw);
+    CHECK(settings::dialog_key(dialog, DialogKey::left) == DialogAction::changed);
+    CHECK(settings::dialog_key(dialog, DialogKey::left) == DialogAction::changed);
+    CHECK(dialog.chosen.pad_acceleration == pad::Acceleration::off);
+    // Right stick and Haptics, by the keys.
+    dialog.focused = settings::first_row_control + 5;
+    CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
+    CHECK(dialog.chosen.pad_right_stick == pad::RightStick::pointer);
+    CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
+    CHECK(dialog.chosen.pad_right_stick == pad::RightStick::nothing);
+    CHECK(
+        find_part(
+            settings::dialog_layout(dialog), "The right stick does nothing.", settings::no_control
+        ) != nullptr
+    );
+    dialog.focused = settings::first_row_control + 9;
+    CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
+    CHECK(dialog.chosen.pad_haptics == pad::Haptics::strong);
+    CHECK(settings::dialog_key(dialog, DialogKey::left) == DialogAction::changed);
+    CHECK(settings::dialog_key(dialog, DialogKey::left) == DialogAction::changed);
+    CHECK(dialog.chosen.pad_haptics == pad::Haptics::off);
+
+    // The switches.
+    dialog.focused = settings::first_row_control + 4;
+    CHECK(settings::dialog_key(dialog, DialogKey::space) == DialogAction::changed);
+    CHECK(dialog.chosen.pad_glide);
+    dialog.focused = settings::first_row_control + 6;
+    CHECK(settings::dialog_key(dialog, DialogKey::space) == DialogAction::changed);
+    CHECK(!dialog.chosen.pad_magnetism);
+    dialog.focused = settings::first_row_control + 11;
+    CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
+    CHECK(dialog.chosen.pad_left_handed);
+
+    // The sliders: Pointer speed 26 stops of 10 % from 50 to 300, Gyro speed
+    // 36 from 50 to 400, each its own value.
+    CHECK(geometry::slider_of(Setting::pad_pointer_speed).stops == 26);
+    CHECK(geometry::slider_of(Setting::pad_gyro_speed).stops == 36);
+    settings::EngineSettings state{};
+    CHECK(geometry::stop_of(state, Setting::pad_pointer_speed) == 5);
+    CHECK(geometry::stop_of(state, Setting::pad_gyro_speed) == 5);
+    for (int32_t stop = 0; stop < 36; ++stop) {
+        geometry::set_stop(state, Setting::pad_gyro_speed, stop);
+        CHECK(state.pad_gyro_speed == pad::lowest_gyro_speed + 10U * static_cast<uint32_t>(stop));
+        CHECK(geometry::stop_of(state, Setting::pad_gyro_speed) == stop);
+        CHECK(
+            geometry::value_text(Setting::pad_gyro_speed, state) ==
+            std::to_string(state.pad_gyro_speed) + "%"
+        );
+        if (stop >= 26)
+            continue;
+        geometry::set_stop(state, Setting::pad_pointer_speed, stop);
+        CHECK(
+            state.pad_pointer_speed == pad::lowest_pointer_speed + 10U * static_cast<uint32_t>(stop)
+        );
+        CHECK(geometry::stop_of(state, Setting::pad_pointer_speed) == stop);
+    }
+    geometry::set_stop(state, Setting::pad_pointer_speed, 99);
+    CHECK(state.pad_pointer_speed == pad::highest_pointer_speed);
+    dialog.focused = settings::first_row_control + 2;
+    CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
+    CHECK(dialog.chosen.pad_pointer_speed == 110);
+    const auto track = geometry::open_rows(dialog).rows.rows[2].control_area;
+    static_cast<void>(click(dialog, {track.x + track.width - 1, track.y + track.height / 2}));
+    CHECK(dialog.chosen.pad_pointer_speed == pad::highest_pointer_speed);
+    CHECK(find_part(settings::dialog_layout(dialog), "300%", settings::no_control) != nullptr);
+
+    // The drop-downs: Space opens Gyro pointer's list, Down and Enter choose.
+    dialog.focused = settings::first_row_control + 7;
+    CHECK(settings::dialog_key(dialog, DialogKey::space) == DialogAction::redraw);
+    CHECK(dialog.open_list == settings::first_row_control + 7);
+    parts = settings::dialog_layout(dialog);
+    for (const std::string_view text :
+         {"Off", "While the right pad is touched", "While the right stick is touched", "Always"})
+        CHECK(find_part(parts, text, settings::no_control) != nullptr);
+    CHECK(settings::dialog_key(dialog, DialogKey::down) == DialogAction::redraw);
+    CHECK(settings::dialog_key(dialog, DialogKey::enter) == DialogAction::changed);
+    CHECK(dialog.chosen.pad_gyro == pad::Gyro::right_pad_touched);
+    CHECK(dialog.open_list == settings::no_control);
+    CHECK(
+        find_part(
+            settings::dialog_layout(dialog), "While the right pad is touched", settings::no_control
+        ) != nullptr
+    );
+    CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
+    CHECK(dialog.chosen.pad_gyro == pad::Gyro::right_stick_touched);
+    // Button prompts: each choice by its list item.
+    dialog.focused = settings::first_row_control + 10;
+    for (std::size_t index = 0; index < 6; ++index) {
+        CHECK(settings::dialog_key(dialog, DialogKey::space) == DialogAction::redraw);
+        for (std::size_t step = 0; step < 6; ++step)
+            static_cast<void>(settings::dialog_key(dialog, DialogKey::up));
+        for (std::size_t step = 0; step < index; ++step)
+            static_cast<void>(settings::dialog_key(dialog, DialogKey::down));
+        static_cast<void>(settings::dialog_key(dialog, DialogKey::enter));
+        constexpr std::array<pad::Prompts, 6> kPrompts{
+            pad::Prompts::automatic,
+            pad::Prompts::steam_deck,
+            pad::Prompts::xbox,
+            pad::Prompts::playstation,
+            pad::Prompts::nintendo,
+            pad::Prompts::off,
+        };
+        CHECK(dialog.chosen.pad_prompts == kPrompts[index]);
+    }
+    constexpr std::array<std::string_view, 6> kPromptTexts{
+        "Automatic", "Steam Deck", "Xbox", "PlayStation", "Nintendo", "Off"
+    };
+    for (std::size_t index = 0; index < kPromptTexts.size(); ++index)
+        CHECK(geometry::choice_text(dialog, Setting::pad_prompts, index) == kPromptTexts[index]);
+
+    // Control size here is Touch's: a change shows in both sections.
+    dialog.focused = settings::first_row_control + 12;
+    CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
+    CHECK(dialog.chosen.touch_control_size == settings::ControlSize::large);
+    // The hold delay and QUEUE and ADD here are Touch's own settings.
+    dialog.focused = settings::first_row_control + 13;
+    CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
+    CHECK(dialog.chosen.touch_hold_ms == 400);
+    dialog.focused = settings::first_row_control + 14;
+    CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
+    CHECK(dialog.chosen.touch_latches == settings::TouchLatches::one_action);
+
+    // Restore defaults puts every Controller row back; Cancel what it opened with.
+    CHECK(click(dialog, centre(geometry::restore_button)) == DialogAction::changed);
+    const settings::EngineSettings defaults{};
+    CHECK(dialog.chosen.pad_scheme == defaults.pad_scheme);
+    CHECK(dialog.chosen.pad_right_trackpad == defaults.pad_right_trackpad);
+    CHECK(dialog.chosen.pad_pointer_speed == defaults.pad_pointer_speed);
+    CHECK(dialog.chosen.pad_acceleration == defaults.pad_acceleration);
+    CHECK(dialog.chosen.pad_glide == defaults.pad_glide);
+    CHECK(dialog.chosen.pad_right_stick == defaults.pad_right_stick);
+    CHECK(dialog.chosen.pad_magnetism == defaults.pad_magnetism);
+    CHECK(dialog.chosen.pad_gyro == defaults.pad_gyro);
+    CHECK(dialog.chosen.pad_gyro_speed == defaults.pad_gyro_speed);
+    CHECK(dialog.chosen.pad_haptics == defaults.pad_haptics);
+    CHECK(dialog.chosen.pad_prompts == defaults.pad_prompts);
+    CHECK(dialog.chosen.pad_left_handed == defaults.pad_left_handed);
+    CHECK(dialog.chosen.touch_control_size == defaults.touch_control_size);
+    CHECK(dialog.chosen.touch_hold_ms == defaults.touch_hold_ms);
+    CHECK(dialog.chosen.touch_latches == defaults.touch_latches);
+    CHECK(settings::dialog_key(dialog, DialogKey::escape) == DialogAction::cancelled);
+    CHECK(dialog.chosen == dialog.opened);
+
+    // On a Steam Deck, Restore defaults gives back the Deck's frame rate and
+    // Control size Larger, whatever the player chose.
+    settings::EngineSettings deck{};
+    deck.max_frame_rate = 90;
+    deck.touch_control_size = settings::ControlSize::larger;
+    settings::Dialog on_deck = opened_with_controller(Page::controller, true, false, false, deck);
+    on_deck.chosen.max_frame_rate = 120;
+    on_deck.chosen.touch_control_size = settings::ControlSize::standard;
+    CHECK(click(on_deck, centre(geometry::restore_button)) == DialogAction::changed);
+    CHECK(on_deck.chosen.max_frame_rate == 90);
+    CHECK(on_deck.chosen.touch_control_size == settings::ControlSize::larger);
+}
+
+void the_steam_input_notice_shows_while_it_applies() {
+    settings::Dialog dialog = opened_with_controller(Page::controller);
+    const auto plain = geometry::open_rows(dialog);
+    CHECK(plain.rows.rows.front().setting == Setting::pad_scheme);
+    CHECK(
+        find_part(settings::dialog_layout(dialog), "Steam Input", settings::no_control) == nullptr
+    );
+    // The notice comes first, the rows under it; it takes no press or focus.
+    dialog.focused = settings::first_row_control + 1; // Right trackpad
+    CHECK(settings::set_controller_section(dialog, true, true) == DialogAction::redraw);
+    CHECK(dialog.steam_input);
+    CHECK(dialog.focused == settings::first_row_control + 2);
+    const auto open = geometry::open_rows(dialog);
+    CHECK(open.rows.rows.size() == plain.rows.rows.size() + 1);
+    const auto& notice = open.rows.rows.front();
+    CHECK(notice.setting == Setting::pad_steam_input_notice);
+    CHECK(notice.control_area.width == 0);
+    CHECK(notice.hint_lines == geometry::most_notice_lines);
+    CHECK(open.rows.rows[2].setting == Setting::pad_right_trackpad);
+    // Its text, between words over its lines, says exactly what to do.
+    const auto parts = settings::dialog_layout(dialog);
+    CHECK(find_part(parts, "Steam Input", settings::no_control) != nullptr);
+    std::string joined;
+    for (std::size_t line = 0; line < notice.hint_lines; ++line) {
+        const auto hint = geometry::row_hint(dialog, Setting::pad_steam_input_notice, line);
+        CHECK(hint.notice);
+        CHECK(!hint.text.empty());
+        CHECK(find_part(parts, hint.text, settings::no_control) != nullptr);
+        joined += (joined.empty() ? "" : " ") + hint.text;
+    }
+    CHECK(
+        joined ==
+        "Steam Input is on: the trackpads and back grips reach the game as Steam's mouse and "
+        "keys. Turn Steam Input off for Open Annihilation in Steam's controller settings to use "
+        "them here."
+    );
+    CHECK(joined == geometry::steam_input_notice_text);
+    // A click on it does nothing; Tab from the footer's last entry comes to
+    // the first row under it.
+    CHECK(click(dialog, centre(notice.label)) == DialogAction::none);
+    settings::Dialog keys = dialog;
+    keys.focused = settings::no_control;
+    CHECK(settings::dialog_key(keys, DialogKey::tab) == DialogAction::redraw);
+    CHECK(keys.focused == settings::first_row_control + 1);
+    // The notice drawn: its lines in the lock's amber.
+    const auto fonts = block_fonts();
+    Canvas canvas = blank(settings::dialog_width, settings::dialog_height);
+    settings::draw_dialog(canvas.surface, {0, 0, 1}, dialog, fonts, kNoIcon);
+    Canvas without = blank(settings::dialog_width, settings::dialog_height);
+    settings::Dialog quiet = dialog;
+    static_cast<void>(settings::set_controller_section(quiet, true, false));
+    settings::draw_dialog(without.surface, {0, 0, 1}, quiet, fonts, kNoIcon);
+    bool differs = false;
+    for (int32_t y = notice.hints[0].y; y < notice.hints[0].y + notice.hints[0].height; ++y)
+        for (int32_t x = notice.hints[0].x; x < notice.hints[0].x + 40; ++x)
+            differs = differs || canvas.at(x, y) != without.at(x, y);
+    CHECK(differs);
+    // Steam Input going off takes the notice away, the focus staying on its row.
+    CHECK(settings::set_controller_section(dialog, true, false) == DialogAction::redraw);
+    CHECK(dialog.focused == settings::first_row_control + 1);
+    CHECK(geometry::open_rows(dialog).rows.rows.front().setting == Setting::pad_scheme);
+    // While another section shows, the notice coming leaves the focus be.
+    settings::Dialog graphics = opened_with_controller(Page::graphics);
+    graphics.focused = settings::first_row_control;
+    CHECK(settings::set_controller_section(graphics, true, true) == DialogAction::redraw);
+    CHECK(graphics.focused == settings::first_row_control);
+    // An open list on a row closes as the rows move.
+    settings::Dialog listing = opened_with_controller(Page::controller);
+    listing.focused = settings::first_row_control + 7;
+    CHECK(settings::dialog_key(listing, DialogKey::space) == DialogAction::redraw);
+    CHECK(listing.open_list != settings::no_control);
+    static_cast<void>(settings::set_controller_section(listing, true, true));
+    CHECK(listing.open_list == settings::no_control);
+    CHECK(listing.focused == settings::first_row_control + 8);
+}
+
+void a_steam_deck_names_its_screen_rate_under_maximum_frame_rate() {
+    // Off a Deck, Maximum frame rate keeps its one hint line and Graphics its
+    // rows' places exactly.
+    settings::Dialog desktop = opened(Page::graphics);
+    const auto plain = geometry::open_rows(desktop);
+    const auto as_ever = geometry::place_rows(Page::graphics, {});
+    CHECK(plain.rows.rows.size() == as_ever.rows.size());
+    for (std::size_t index = 0; index < plain.rows.rows.size() && index < as_ever.rows.size();
+         ++index) {
+        CHECK(plain.rows.rows[index].top == as_ever.rows[index].top);
+        CHECK(plain.rows.rows[index].height == as_ever.rows[index].height);
+    }
+    CHECK(plain.rows.rows[0].hint_lines == 1);
+    auto parts = settings::dialog_layout(desktop);
+    CHECK(find_part(parts, "Lower it to save power.", settings::no_control) != nullptr);
+    for (const auto& part : parts)
+        CHECK(part.text.find("Steam Deck") == std::string::npos);
+    // On a Deck, a second line names the screen's rate it starts at.
+    for (const uint32_t rate : {60U, 90U}) {
+        settings::Dialog deck = opened(Page::graphics);
+        deck.steam_deck_panel_hz = rate;
+        const auto rows = geometry::open_rows(deck);
+        CHECK(rows.rows.rows[0].hint_lines == 2);
+        CHECK(rows.rows.rows[0].height == plain.rows.rows[0].height + geometry::hint_line_height);
+        parts = settings::dialog_layout(deck);
+        CHECK(find_part(parts, "Lower it to save power.", settings::no_control) != nullptr);
+        const std::string line =
+            "Steam Deck: starts at the screen's " + std::to_string(rate) + " fps.";
+        CHECK(find_part(parts, line, settings::no_control) != nullptr);
+        CHECK(geometry::row_hint(deck, Setting::max_frame_rate, 1).text == line);
+        CHECK(geometry::row_hint(deck, Setting::max_frame_rate, 2).text.empty());
+    }
+    CHECK(geometry::hint_line_count(Setting::max_frame_rate, {}) == 1);
+    CHECK(geometry::hint_line_count(Setting::max_frame_rate, {false, 90}) == 2);
+    CHECK(geometry::hint_line_count(Setting::vertical_sync, {false, 90}) == 1);
+}
+
+void controller_changes_only_its_entry_and_the_sections_under_it() {
+    // A section drawn with Controller listed differs from it drawn without
+    // only in the list from Controller's entry down.
+    const auto fonts = block_fonts();
+    const int32_t controller_top = geometry::list_item(Page::controller, false, false, true).y;
+    for (const Page page : kPages) {
+        Canvas plain = blank(settings::dialog_width, settings::dialog_height);
+        Canvas with_pad = blank(settings::dialog_width, settings::dialog_height);
+        Canvas as_ever = blank(settings::dialog_width, settings::dialog_height);
+        settings::draw_dialog(
+            plain.surface, {0, 0, 1}, opened_with_controller(page, false), fonts, kNoIcon
+        );
+        settings::draw_dialog(
+            with_pad.surface, {0, 0, 1}, opened_with_controller(page), fonts, kNoIcon
+        );
+        settings::draw_dialog(as_ever.surface, {0, 0, 1}, opened(page), fonts, kNoIcon);
+        std::size_t differing_outside = 0;
+        std::size_t differing_below = 0;
+        std::size_t differing_from_ever = 0;
+        for (int32_t y = 0; y < settings::dialog_height; ++y)
+            for (int32_t x = 0; x < settings::dialog_width; ++x) {
+                if (plain.at(x, y) != as_ever.at(x, y))
+                    ++differing_from_ever;
+                if (plain.at(x, y) == with_pad.at(x, y))
+                    continue;
+                const bool in_list = x > geometry::edge && x < geometry::list_rule_column &&
+                                     y >= controller_top && y < geometry::footer_rule_row;
+                ++(in_list ? differing_below : differing_outside);
+            }
+        CHECK(differing_from_ever == 0);
         CHECK(differing_outside == 0);
         CHECK(differing_below > 0);
     }
@@ -6749,6 +7508,11 @@ int main(int argc, char** argv) {
         touch_is_listed_only_with_touch_controls();
         touch_shows_its_rows_and_their_values();
         touch_changes_only_its_entry_and_the_sections_under_it();
+        controller_is_listed_only_once_a_gamepad_sent_input();
+        controller_shows_its_rows_and_their_values();
+        the_steam_input_notice_shows_while_it_applies();
+        a_steam_deck_names_its_screen_rate_under_maximum_frame_rate();
+        controller_changes_only_its_entry_and_the_sections_under_it();
         a_finger_takes_the_nearest_control();
         game_files_is_listed_only_where_the_host_says();
         game_files_shows_what_is_installed_the_backups_and_the_folder();

@@ -153,6 +153,9 @@ add_subdirectory(src/platform/job-pool)
 add_subdirectory(src/platform/render-probe)
 add_subdirectory(src/platform/sound-device)
 add_subdirectory(src/platform/locale)
+# Total Annihilation folders found where Steam, Heroic, Lutris or Bottles put
+# them (docs/installation/steam-deck.md).
+add_subdirectory(src/platform/game-installs)
 add_subdirectory(src/ui/decoded)
 add_subdirectory(src/ui/services)
 add_subdirectory(src/present)
@@ -212,10 +215,14 @@ add_subdirectory(src/sim/trace)
 add_subdirectory(src/sim/state-hash)
 add_subdirectory(src/ui)
 add_subdirectory(src/ui/display-layout)
+# The gamepad controls' model (docs/controllers.md).
+add_subdirectory(src/ui/pad-controls)
 # The touch controls' gesture recogniser and model (docs/touch-controls.md).
 add_subdirectory(src/ui/touch-gestures)
 add_subdirectory(src/ui/touch-hud)
 add_subdirectory(src/ui/game-files)
+# The in-engine game folder chooser's model.
+add_subdirectory(src/ui/folder-chooser)
 add_subdirectory(src/ui/screen-registry)
 add_subdirectory(src/sim/session)
 if(TARGET oa-media-intro-player)
@@ -237,9 +244,11 @@ add_subdirectory(src/audio)
 add_library(oa-app-headers INTERFACE)
 add_library(oa::app::headers ALIAS oa-app-headers)
 target_include_directories(oa-app-headers INTERFACE src/app/include)
-# app.hpp and render_policy.hpp include the engine settings' header.
+# app.hpp and render_policy.hpp include the engine settings' header,
+# runtime.hpp the gamepad controls' model and game_directory.hpp the found
+# installs' header.
 target_link_libraries(oa-app-headers INTERFACE oa-base-sha256 oa-data-languages oa-data-limits
-  oa-data-mod-profile oa-ui-engine-settings)
+  oa-data-mod-profile oa-ui-engine-settings oa-ui-pad-controls oa-platform-game-installs)
 # oa-game's command line, which the option tests parse without a running app.
 add_library(oa-app-game-options src/app/startup.cpp)
 add_library(oa::app::game_options ALIAS oa-app-game-options)
@@ -247,13 +256,14 @@ target_link_libraries(oa-app-game-options PUBLIC oa-app-headers)
 target_link_libraries(oa-app-game-options PUBLIC oa-ui-frontend-renderer oa-ui-frontend-state oa-sim-scenario
   oa-ui-screen-registry oa-app-command-line oa-platform-preferences oa-app-mod-profile
   PRIVATE oa-platform-job-pool oa-options)
-# oa-game's game folder: --game-dir, the remembered folder or the folder
-# dialog's choice, the installation checks, and the installer of the Total
-# Annihilation demo (1997) recognised and its archive unpacked.
+# oa-game's game folder: --game-dir, the remembered folder, a folder found
+# where Steam, Heroic or Lutris put it, or the folder dialog's choice, the
+# installation checks, and the installer of the Total Annihilation demo
+# (1997) recognised and its archive unpacked.
 add_library(oa-app-game-directory src/app/game_directory.cpp src/app/demo_installer.cpp)
 add_library(oa::app::game_directory ALIAS oa-app-game-directory)
 target_link_libraries(oa-app-game-directory PUBLIC oa-app-headers oa-base-sha256 oa-platform-preferences
-  oa-app-mod-profile PRIVATE oa-formats-hpi oa-formats-pe oa-platform-shims oa-options)
+  oa-app-mod-profile oa-platform-game-installs PRIVATE oa-formats-hpi oa-formats-pe oa-platform-shims oa-options)
 # oa-game's mod profile: a folder's oamod.yaml found and resolved with the
 # settings it binds, the mod folders a game folder offers, the layout and
 # discovery a profile sets, the --mod and --print-profile options, and the
@@ -408,12 +418,13 @@ add_library(oa::app::acceleration_status ALIAS oa-app-acceleration-status)
 target_link_libraries(oa-app-acceleration-status PUBLIC oa-app-headers oa-ui-engine-settings
   oa-app-render-policy PRIVATE oa-options)
 # Painting for the touch controls' layer: RGBA rectangles, the controls'
-# icon marks and their text (touch_paint.hpp, docs/touch-controls.md).
-add_library(oa-app-touch-paint src/app/touch_paint.cpp)
+# icon marks and their text (touch_paint.hpp, docs/touch-controls.md), and
+# the gamepad's button glyphs (pad_glyphs.hpp, docs/controllers.md).
+add_library(oa-app-touch-paint src/app/touch_paint.cpp src/app/pad_glyphs.cpp)
 add_library(oa::app::touch_paint ALIAS oa-app-touch-paint)
 target_compile_features(oa-app-touch-paint PUBLIC cxx_std_20)
 # The text is drawn with the fonts that travel with the game.
-target_link_libraries(oa-app-touch-paint PUBLIC oa-platform-text-font PRIVATE oa-options)
+target_link_libraries(oa-app-touch-paint PUBLIC oa-platform-text-font oa-ui-pad-controls PRIVATE oa-options)
 if(BUILD_TESTING)
   # Rectangles clipped to the canvas, the icon marks and the text.
   add_executable(oa-app-touch-paint-test src/app/touch_paint_test.cpp)
@@ -859,7 +870,10 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/runtime_input_modifiers.cpp src/app/runtime_touch_check.cpp src/app/runtime_touch_hud.cpp
   src/app/runtime_phone_hud.cpp src/app/runtime_lifecycle.cpp
   src/app/game_files_screen.cpp src/app/game_files_paint.cpp src/app/game_files_dialog.cpp
-  src/app/game_files_check.cpp src/app/runtime_game_files.cpp)
+  src/app/game_files_check.cpp src/app/runtime_game_files.cpp
+  src/app/runtime_pad.cpp src/app/runtime_pad_actions.cpp src/app/runtime_pad_pointer.cpp
+  src/app/runtime_pad_haptics.cpp src/app/runtime_pad_check.cpp src/app/runtime_text_input.cpp
+  src/app/folder_chooser_screen.cpp src/app/runtime_found_install.cpp)
 # The run manifest of a director render, the settings dialog's header and the
 # Game files screen's header name the engine's version, and the renderer
 # records are written under it.
@@ -881,7 +895,8 @@ set(oa_game_libraries oa-formats-hpi oa-app-game-options oa-app-game-directory o
   oa-app-acceleration-status oa-formats-png oa-data-languages oa-platform-locale
   oa-app-full-terrain oa-app-full-supersampling oa-app-full-fog oa-app-card-executor
   oa-present-gpu-world oa-app-full-models oa-app-platform-hooks oa-app-touch-paint
-  oa-ui-touch-gestures oa-ui-touch-hud oa-app-game-files oa-ui-game-files)
+  oa-ui-touch-gestures oa-ui-touch-hud oa-app-game-files oa-ui-game-files
+  oa-ui-pad-controls oa-ui-folder-chooser oa-platform-game-installs)
 # The table that combines the extensions' tables of oa-game
 # (extension_list.hpp); the extensions themselves are registered with
 # oa_add_extension (cmake/OaExtensions.cmake).
@@ -1685,6 +1700,17 @@ if(OA_BUILD_PLATFORM)
       set_tests_properties(native-touch-controls-phone PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_touch_phone_check_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # --check-pad-controls: the gamepad controls, driven through the event
+      # path by SDL virtual pads imitating a Steam Deck and an Xbox pad, on a
+      # skirmish at the Deck's screen size (docs/controllers.md).
+      set(oa_pad_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/pad-controls")
+      file(MAKE_DIRECTORY "${oa_pad_check_dir}")
+      add_test(NAME native-pad-controls COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-pad-controls --resolution 1280x800
+        --preferences-file "${oa_pad_check_dir}/pad-controls.conf")
+      set_tests_properties(native-pad-controls PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_pad_check_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # --check-multiplayer-menu: MULTI clicked through SDL input opens the
       # multiplayer screens, which network play's check walks. Scribbled
       # frees turn a focus handed back to a closed window into a fault.
@@ -2040,6 +2066,8 @@ if(OA_REQUIRE_GAME AND NOT TARGET oa-game)
 endif()
 add_executable(oa-tool tools/oa-tool/main.cpp)
 target_link_libraries(oa-tool PRIVATE oa-formats-hpi oa-formats-png oa-ui-decoded)
+# The Steam Deck's artwork and files for the Linux package.
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/OaSteamDeck.cmake")
 
 if(OA_BUILD_PLATFORM)
   add_executable(oa-platform tools/platform-probe/platform_probe.cpp)
@@ -2149,7 +2177,8 @@ if(BUILD_TESTING)
       ${CMAKE_CURRENT_SOURCE_DIR}/tools/spdx_headers.py --self-test)
     # tools/bootstrap_sdl.py reads its command line as its help says: the
     # pinned releases, a release given with its SHA-256, the refusals, and
-    # the folders each release builds in. It downloads nothing.
+    # the folders each release builds in; and its SDL patches read and
+    # apply (tools/sdl-patches/README.md). It downloads nothing.
     add_test(NAME sdl-bootstrap-selftest COMMAND ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/tools/bootstrap_sdl.py --self-test)
     # tools/bootstrap_text_fonts.py's pins, the licence texts they must

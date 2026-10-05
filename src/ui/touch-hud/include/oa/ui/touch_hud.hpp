@@ -3,9 +3,11 @@
 
 // The touch controls' model: the device class, the tablet and phone layouts
 // in points, the QUEUE, ADD and x5 latches, the radial order menu, the sheets,
-// the banner, the status line, the tip and the hit tests. Pure: no SDL and no
-// runtime (docs/touch-controls.md). Geometry is in canvas pixels, computed
-// from points with Viewport::px_per_point.
+// the banner, the status line, the tip and the hit tests, and the gamepad's
+// part of them: the slim pad HUD, the FORCE chip, the button badges, the
+// build and group rings and the pad's hints. Pure: no SDL and no runtime
+// (docs/touch-controls.md). Geometry is in canvas pixels, computed from
+// points with Viewport::px_per_point.
 #pragma once
 
 #include <array>
@@ -15,6 +17,7 @@
 #include <string>
 #include <string_view>
 #include "oa/ui/display_layout.hpp"
+#include "oa/ui/pad_controls.hpp"
 
 namespace oa::ui::touch_hud {
 
@@ -352,6 +355,9 @@ enum class Control : uint8_t {
     radial_item,       ///< index: RadialItem
     radial_hub,        ///< the radial's QUEUE hub
     sheet_outside,     ///< anywhere outside an open sheet or radial: closes it, taken
+    force,             ///< FORCE (shown with the pad HUD or badges when the pad has grips)
+    build_wedge,       ///< a wedge of the build ring; index: its slot 0..7
+    group_wedge,       ///< a wedge of the left pad's group ring; index: the group 1..9
 };
 
 /// One laid-out control.
@@ -361,8 +367,9 @@ struct ControlRect {
     Rect rect{};                    ///< canvas pixels
 };
 
-/// The most controls a frame lays out.
-inline constexpr std::size_t max_controls = 64;
+/// The most controls a frame lays out: the tablet's with FORCE, a sheet, the radial, the build
+/// ring and the group ring at once.
+inline constexpr std::size_t max_controls = 96;
 /// The most cells the phone's build drawer shows.
 inline constexpr std::size_t max_drawer_cells = 12;
 /// The most cells the phone's MORE sheet shows for order-page gadgets.
@@ -408,6 +415,90 @@ struct Placement {
     std::string name; ///< the building's name for the header
 };
 
+/// The build ring's wedges, clockwise from the top: six build buttons at N, NE, SE, S, SW, NW,
+/// PREV at W and NEXT at E.
+inline constexpr std::size_t build_ring_slot_count = 8;
+/// The build ring's NEXT wedge (E).
+inline constexpr uint8_t build_ring_next_slot = 2;
+/// The build ring's PREV wedge (W).
+inline constexpr uint8_t build_ring_prev_slot = 6;
+/// What a build ring wedge is.
+enum class BuildWedgeKind : uint8_t {
+    empty,         ///< nothing
+    build,         ///< a build button
+    prev,          ///< the previous build page
+    next,          ///< the next build page
+    fire_orders,   ///< the fire standing order (standing-orders ring)
+    move_orders,   ///< the move standing order (standing-orders ring)
+    on_off,        ///< activation on or off (standing-orders ring)
+    cloak,         ///< cloak on or off (standing-orders ring)
+    info,          ///< INFO (standing-orders ring)
+    self_destruct, ///< self-destruct, held (standing-orders ring)
+};
+
+/// One laid-out build ring wedge.
+struct BuildWedge {
+    BuildWedgeKind kind{BuildWedgeKind::empty}; ///< what it is
+    int16_t gadget{-1};                         ///< the loaded HUD gadget it presses, -1 for none
+    uint16_t queued{};                          ///< a factory's queue count for it
+    bool available{};                           ///< drawn greyed and ignored when false
+    Rect hit{};     ///< canvas rectangle around its picture, at least 44 pt
+    Rect picture{}; ///< where the gadget's own 3.1c picture is drawn
+};
+
+/// What the dispatcher puts in the build ring.
+struct BuildRingContent {
+    std::array<BuildWedgeKind, build_ring_slot_count> kinds{}; ///< by slot
+    std::array<int16_t, build_ring_slot_count> gadgets{};      ///< by slot; -1 for none
+    std::array<uint16_t, build_ring_slot_count> queued{};      ///< by slot
+    std::array<bool, build_ring_slot_count> available{};       ///< by slot
+    bool standing_orders{}; ///< no builder: the standing-orders ring
+};
+
+/// The open build ring.
+struct BuildRing {
+    Point anchor{};     ///< the pointer where it opened, canvas pixels
+    Point centre{};     ///< the anchor moved inside the safe area, canvas pixels
+    int inner_radius{}; ///< canvas pixels (44 pt)
+    int outer_radius{}; ///< canvas pixels (128 pt)
+    std::array<BuildWedge, build_ring_slot_count> wedges{}; ///< by slot
+    bool standing_orders{};                                 ///< the standing-orders ring
+};
+
+/// The groups the left pad's group ring holds.
+inline constexpr std::size_t group_ring_slot_count = 9;
+
+/// The left pad's ring of the nine groups, drawn at the battlefield's lower left while the
+/// groups layer is held on a pad with trackpads.
+struct GroupRing {
+    Point centre{};               ///< canvas pixels
+    int inner_radius{};           ///< canvas pixels
+    int outer_radius{};           ///< canvas pixels
+    std::optional<uint8_t> aim{}; ///< the group aimed at, 1..9
+};
+
+/// What the pad shows; written by the gamepad dispatcher each frame (tick_pad), read by
+/// lay_out (fields marked (layout)) and the drawing. refresh_hud never writes it.
+struct PadLook {
+    bool hud{};    ///< (layout) the slim pad HUD: a gamepad sent input, touch controls off
+    bool badges{}; ///< touch controls show their pad buttons (a pad was used, prompts not Off)
+    /// The glyph set the prompts use.
+    oa::ui::pad_controls::GlyphStyle glyphs{oa::ui::pad_controls::GlyphStyle::xbox};
+    oa::ui::pad_controls::MapContext map{}; ///< which buttons give which roles, for prompts
+    bool force_shown{};       ///< (layout) the FORCE chip is laid out (the pad has grips)
+    bool force_active{};      ///< FORCE gives Ctrl now: lit
+    bool groups_layer{};      ///< the groups layer is held: group chips show their buttons
+    bool over_build_button{}; ///< the pointer is on a build button: QUEUE reads x5
+    std::optional<uint8_t> radial_aim{}; ///< the order ring wedge the pad aims at
+    std::optional<uint8_t> build_aim{};  ///< the build ring wedge the pad aims at
+    Point aim_dot{};                     ///< where the aim dot is drawn, canvas pixels
+    bool ring_by_pad{}; ///< the open ring was opened by the pad: its hint line shows
+    /// (layout) shown while the groups layer is held with trackpads.
+    std::optional<GroupRing> group_ring{};
+    float hold_progress{}; ///< 0..1 while a timed pad hold runs (self-destruct), else 0
+    Point hold_point{};    ///< where that hold's ring fills, canvas pixels
+};
+
 /// Everything the controls show. The dispatcher writes it and bumps `revision` on each change;
 /// the drawing reads it and redraws its layer when `revision` or the frame changes. lay_out
 /// reads only the fields marked (layout); every other field changes looks, not rectangles.
@@ -446,19 +537,28 @@ struct HudState {
     TapAction enemy_action{TapAction::none}; ///< what a tap on an enemy gives
     Tip tip{};                               ///< (layout: shown while until_ms is not 0)
     float self_destruct_progress{};          ///< 0..1 while the SELF-DESTRUCT hold runs, else 0
+    PadLook pad{};                           ///< written by the gamepad dispatcher
+    std::optional<BuildRing> build_ring{};   ///< (layout) the open build ring
+    int8_t sheet_focus{-1};                  ///< the SELECT ▾ item the D-pad marks, -1 none
+    bool force_touch{}; ///< a finger holds the FORCE chip (the touch dispatcher writes it)
+    /// An order is armed or a building waits to be placed: the pad's right button takes it back.
+    bool armed_or_placing{};
+    bool right_click_interface{}; ///< the 3.1c right-click interface is chosen
 };
 
 /// What the controls cover, and where the placed regions go on a phone.
 struct Frame {
     std::array<ControlRect, max_controls> controls{}; ///< the first control_count are used
     uint8_t control_count{};                          ///< controls laid out
-    Rect minimap{};     ///< phone: where the minimap region goes (104 pt square)
-    Rect resources{};   ///< phone: the resource strip
-    Rect status{};      ///< phone: the status pill; tablet: empty (the 3.1c bottom bar)
-    Rect banner{};      ///< empty when no banner
-    Rect tip{};         ///< empty when no tip
-    Rect sheet{};       ///< the open sheet's panel, empty when none
-    Rect drawer_grid{}; ///< phone drawer: the area the cells fill
+    Rect minimap{};   ///< phone: where the minimap region goes (104 pt square)
+    Rect resources{}; ///< phone: the resource strip
+    /// The status pill: the phone's, or the pad HUD's at the battlefield's top; empty on a tablet
+    /// with touch controls (the 3.1c bottom bar says it).
+    Rect status{};
+    Rect banner{};                                     ///< empty when no banner
+    Rect tip{};                                        ///< empty when no tip
+    Rect sheet{};                                      ///< the open sheet's panel, empty when none
+    Rect drawer_grid{};                                ///< phone drawer: the area the cells fill
     std::array<Rect, max_drawer_cells> drawer_cells{}; ///< 84 pt cells, 3 across
     uint8_t drawer_cell_count{};                       ///< drawer cells laid out
     Rect more_grid{};                                  ///< MORE: the area the cells fill
@@ -550,5 +650,112 @@ control_label(Control control, uint8_t index, const HudState& state) noexcept;
 /// @param index the item: SelectItem, SpeedItem or PhoneMenuItem by sheet
 /// @return the label, untranslated; empty for another sheet or index
 [[nodiscard]] std::string_view menu_item_label(Sheet sheet, uint8_t index) noexcept;
+
+/// Lays the build ring out at a point, inside the safe area.
+///
+/// @param anchor the pointer where it opens, canvas pixels
+/// @param content what each wedge holds
+/// @param viewport the canvas
+/// @return the laid-out ring
+[[nodiscard]] BuildRing
+make_build_ring(Point anchor, const BuildRingContent& content, const Viewport& viewport) noexcept;
+/// Returns the build ring wedge under a point (the nearest within gadget_pick_points), if any.
+///
+/// @param ring the laid-out ring
+/// @param point canvas pixels
+/// @param viewport the canvas
+/// @return the wedge's slot, or none
+[[nodiscard]] std::optional<uint8_t>
+build_ring_hit(const BuildRing& ring, Point point, const Viewport& viewport) noexcept;
+/// Lays the group ring out for a viewport.
+///
+/// @param viewport the canvas
+/// @return the laid-out ring, with no aim
+[[nodiscard]] GroupRing make_group_ring(const Viewport& viewport) noexcept;
+
+/// One piece of a pad hint: a button's glyphs with the words after them, or words alone.
+struct HintPart {
+    std::optional<oa::ui::pad_controls::Chord> chord{}; ///< the glyphs drawn; none for words
+    std::string text;                                   ///< the words, untranslated
+};
+
+/// The most pieces a pad hint has.
+inline constexpr std::size_t max_hint_parts = 8;
+
+/// A pad hint: glyphs and words, left to right.
+struct PadHint {
+    std::array<HintPart, max_hint_parts> parts{}; ///< the first count are used
+    uint8_t count{};                              ///< pieces in use
+};
+
+/// Returns the pad's status line: what R2 and L2 would do now ("R2 MOVE · ENEMY: ATTACK ·
+/// L2 CANCEL"; right-click interface "R2 SELECT · L2 MOVE").
+///
+/// @param tap what a click gives at the pointer
+/// @param enemy what a click on an enemy gives
+/// @param armed_or_placing an order is armed or a building is being placed
+/// @param right_click_interface the right-click interface is chosen
+/// @param map which buttons give which roles
+/// @return the hint
+[[nodiscard]] PadHint pad_status_hint(
+    TapAction tap,
+    TapAction enemy,
+    bool armed_or_placing,
+    bool right_click_interface,
+    const oa::ui::pad_controls::MapContext& map
+);
+/// Returns a ring's hint: "release R1: give · A: arm · B: close" (build ring: L1).
+///
+/// @param build_ring the build ring, else the order ring
+/// @param map which buttons give which roles
+/// @return the hint
+[[nodiscard]] PadHint ring_hint(bool build_ring, const oa::ui::pad_controls::MapContext& map);
+/// Returns the chord a control's badge shows (QUEUE R4, ADD L4, CLEAR B, SELECT ▾ D-pad ←,
+/// PAUSE View+X, CHAT View+A, CENTRE L3, FOLLOW R3, NEXT D-pad →, INFO View, FORCE R5), or
+/// none.
+///
+/// @param control the control
+/// @param index as ControlRect::index
+/// @param map which buttons give which roles
+/// @return the chord, or none for a control with no badge
+[[nodiscard]] std::optional<oa::ui::pad_controls::Chord>
+control_badge(Control control, uint8_t index, const oa::ui::pad_controls::MapContext& map) noexcept;
+/// Returns a control's help line naming the pad input too ("QUEUE: hold or tap R4").
+///
+/// @param control the control
+/// @param index as ControlRect::index
+/// @param map which buttons give which roles
+/// @param glyphs the glyph set the words name the buttons by
+/// @return the help line, untranslated
+[[nodiscard]] std::string control_help_with_pad(
+    Control control,
+    uint8_t index,
+    const oa::ui::pad_controls::MapContext& map,
+    oa::ui::pad_controls::GlyphStyle glyphs
+);
+/// Returns the words a button is called by in a glyph set, for help lines and for hints shown
+/// without glyphs: "R4", "View", "LB", "Cross", "ZR", "D-pad left", "right trackpad".
+///
+/// @param button the physical button
+/// @param glyphs the glyph set
+/// @return the words, untranslated; empty for none
+[[nodiscard]] std::string_view button_name(
+    oa::ui::pad_controls::PadButton button, oa::ui::pad_controls::GlyphStyle glyphs
+) noexcept;
+/// Returns a chord in words: its buttons' names joined by " + " ("View + X"), after "tap " or
+/// "hold " when the chord is a tap or a hold of its button.
+///
+/// @param chord the buttons
+/// @param glyphs the glyph set the buttons are named by
+/// @return the words, untranslated
+[[nodiscard]] std::string
+chord_words(const oa::ui::pad_controls::Chord& chord, oa::ui::pad_controls::GlyphStyle glyphs);
+/// Returns a pad hint as one line of words, each chord in chord_words and every piece apart by a
+/// space: "R2 MOVE · ENEMY: ATTACK · L2 CANCEL".
+///
+/// @param hint the hint
+/// @param glyphs the glyph set the buttons are named by
+/// @return the line, untranslated
+[[nodiscard]] std::string hint_words(const PadHint& hint, oa::ui::pad_controls::GlyphStyle glyphs);
 
 } // namespace oa::ui::touch_hud

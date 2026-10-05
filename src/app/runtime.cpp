@@ -472,6 +472,11 @@ int Runtime::run() {
         flush_preferences();
         return 0;
     }
+    if (options_.check_pad_controls) {
+        check_pad_controls();
+        flush_preferences();
+        return 0;
+    }
     if (options_.check_multiplayer_menu) {
         check_multiplayer_menu();
         flush_preferences();
@@ -546,7 +551,7 @@ void Runtime::dispatch_event(SDL_Event& event, bool& running) {
     // A hardware keyboard's Cmd alternates stand for their keys while touch
     // controls are on; the app lifecycle's events, which the watch acted on,
     // reach no screen; the touch controls take fingers and the presses on
-    // their controls.
+    // their controls, and the gamepads their own events.
     remap_command_key(event);
     // Each key press, whichever screen takes it, forgets the quick key the
     // last one answered a panel with; the press records its own again.
@@ -555,6 +560,10 @@ void Runtime::dispatch_event(SDL_Event& event, bool& running) {
     if (take_lifecycle_event(event))
         return;
     if (take_touch_event(event, running)) {
+        apply_screen_request();
+        return;
+    }
+    if (take_pad_event(event, running)) {
         apply_screen_request();
         return;
     }
@@ -595,7 +604,9 @@ void Runtime::idle_tick() {
     if (screen_ == Screen::briefing && !briefing_from_pause_)
         tick_mission_briefing();
     move_match_camera();
-    // The touch controls' timers, camera and layout.
+    // The gamepads' sticks, timers and looks, then the touch controls'
+    // timers, camera and layout.
+    tick_pad();
     tick_touch();
     // Each game frame opens a profile window, and the pump, the
     // ticks and the drawing are charged as they end.
@@ -627,10 +638,11 @@ void Runtime::idle_tick() {
     frame_draws_.units_between_ticks = 0;
     frame_draws_.probe_drawn = false;
     // A new renderer record is told of once the main menu shows, the saved
-    // games' move once that notice is closed, and a mod that cannot start a
-    // game once both are.
+    // games' move once that notice is closed, where the game folder was
+    // found after that, and a mod that cannot start a game once both are.
     tell_renderer_records();
     tell_saves_moved();
+    tell_found_install();
     tell_incomplete_mod();
     render();
     presentation_alpha_ = 1.0F;

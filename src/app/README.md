@@ -1276,7 +1276,11 @@ logs it.
   (`oa/platform/machine.hpp`): the Screen size, the window opened at that
   size and full screen given the display mode nearest it, and Hardware
   acceleration, which either flag decides over
-  (`hardware_acceleration_asked`).
+  (`hardware_acceleration_asked`). With no size named the window opens at
+  the default, held to the desktop in Steam's Game Mode, where gamescope's
+  pointer reaches no further (`default_window_size`); the log says the size
+  it opened at, the desktop's and whether the run is in Game Mode
+  (`report_window_size`).
 - `render_host.hpp`, `render_host.cpp` (`oa-app-render-host`, with
   `graphics_report.cpp`): the game's renderer. `walk_render_drivers` acts
   on the render policy's walk through hooks (`CreationHooks`): it sets the
@@ -1550,6 +1554,63 @@ alone), and saves the preferences; the system's low-memory warning lets the
 cached model images go. `take_lifecycle_event` keeps every lifecycle event
 from reaching a screen.
 
+## Gamepads
+
+The gamepad controls (described in docs/controllers.md) are
+a way to play added beside the mouse, the keyboard and touch, laid out for
+the Steam Deck and working with every gamepad SDL knows. They switch on when
+a gamepad sends input, or when `--check-pad-controls` forces them, and then
+stay on for the run (`pad_used`). Until then nothing of theirs draws, lays
+out or takes a key, so a desktop without a gamepad plays as before. Every
+order a pad gives goes through the Runtime functions a mouse, a key or a
+finger reaches, so saves, recordings and network games are unaffected.
+`start_gamepad_subsystem` (`pad_state.hpp`) starts SDL's gamepads right
+after video starts, in `main.cpp` and in `runtime_present.cpp`; a failure
+leaves the game without gamepads.
+
+- `runtime_pad.cpp` is the dispatcher, and logs each gamepad it opens,
+  with its ids and whether Steam Input gives it. `dispatch_event` hands it
+  every event the touch controls did not take (`take_pad_event`): gamepads
+  added and removed, buttons, axes, touchpads and sensors, and, while a
+  gamepad is open, the F13–F16 keys Open Annihilation's Steam Input layout
+  sends for the back grips. `tick_pad`, from `idle_tick` before
+  `tick_touch`, runs the sticks, glide, gyro, hold timers, menu repeat and
+  ring aim, and writes the pad's looks into the touch HUD state.
+  `pad_screen_changed` lets go of held buttons when the screen changes;
+  `pad_force_held`, `pad_steam_input` and `pad_settings` answer the rest of
+  the engine.
+- `runtime_pad_actions.cpp` holds what each button does in each layer
+  (the grips' latches and FORCE, the order and build rings, the groups,
+  game and standing orders layers, SELECT ▾ and the menus, where A and Menu
+  send Return, which presses a 640×480 menu's focused button or, with none,
+  focuses its first, `press_frontend_focus_key`);
+  `runtime_pad_pointer.cpp` the pad's pointer (the right trackpad, the
+  stick cursor and the gyro, sent as synthetic mouse events of the pad's own
+  mouse, `pad_mouse_id`) and the camera the sticks and the left trackpad
+  move; `runtime_pad_haptics.cpp` `play_pad_feel`, a trackpad pulse where
+  the driver takes it, else a rumble.
+- `runtime_pad_check.cpp` is `--check-pad-controls`
+  ([testing.md](../../docs/development/testing.md#gamepad-controls)).
+- `pad_glyphs.*` (in `oa-app-touch-paint`) paint the button glyphs of the
+  Steam Deck, Xbox, PlayStation and Nintendo styles with the touch layer's
+  painter: the project's own shapes and letters.
+
+`pad_state.hpp` defines `Runtime::PadState`, made on first use and null on
+a desktop that never sees a gamepad (`pad_`): the open pads and what each
+has, the pad that last sent input, whether the layer is on, the grips' keys
+seen, FORCE, and the check's clock. `runtime.hpp` declares every gamepad
+member once; the dispatcher's private helpers live in `PadAccess` and the
+check's in `PadCheckAccess`, friend structs whose static functions take
+`Runtime&`. The pure model the dispatcher drives (the maps from buttons to
+actions, the timing pieces, the pointer, the stick cursor, haptics and
+glyphs) is the module in src/ui/pad-controls.
+
+`touch_control_scale` (`runtime_touch.cpp`) is the touch layer's points
+scale from the Control size setting. `runtime_text_input.cpp`
+(`start_text_input`, `stop_text_input`) starts text input with the field's
+place given to the system, so that an on-screen keyboard, Steam's in Game
+Mode among them, opens clear of it.
+
 ## Game folder
 
 `game_directory.cpp` finds the installation: `--game-dir`, else the
@@ -1577,6 +1638,22 @@ not the release the engine recognises, and a failed unpacking or a full disk
 is reported the same way.
 `DemoRelease` holds everything that identifies the release, in one place, so
 that the tests (`demo_installer_test.cpp`) substitute a synthetic one.
+
+Where the system's folder dialog cannot show, as in Steam's Game Mode, or
+when several folders are found or the remembered one has gone, the
+in-engine folder chooser picks the folder (`folder_chooser_screen.*`, over
+the model of the module in src/ui/folder-chooser): the folders
+found on this machine, a folder browser driven by touch, a gamepad, the keys
+or the pointer, the 1997 demo's folder and, outside Game Mode, the
+desktop's dialog. `folder_chooser_offered` says whether it may show, and
+`run_folder_chooser_until_resolved` runs it from `main.cpp` before the Game
+files screen. Resolution looks for folders where Steam, Heroic and Lutris
+put Total Annihilation (the module in src/platform/game-installs)
+after the remembered folder; one usable folder is used and remembered
+(`GameDirectorySource::found`), and the main menu says once where it was
+found (`found_install_notice`, `runtime_found_install.cpp`,
+`tell_found_install`). A folder the chooser picks is inspected by
+`take_chosen_folder`.
 
 ## Game files screen
 

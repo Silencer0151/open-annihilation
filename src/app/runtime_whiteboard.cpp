@@ -6,6 +6,7 @@
 // received marker, drawing the marks, and the batches network play carries.
 
 #include "oa/app/runtime.hpp"
+#include "oa/formats/fnt.hpp"
 #include "oa/present/game_text.hpp"
 #include "oa/sim/messages.hpp"
 #include "oa/ui/hud/shared_views.hpp"
@@ -13,6 +14,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <string>
@@ -30,6 +32,9 @@ constexpr SDL_Scancode kWhiteboardScancode = SDL_SCANCODE_BACKSLASH;
 constexpr int32_t kLineMargin = 75;
 /// Bytes a marker's game text holds.
 constexpr std::size_t kMarkerTextLimit = 64;
+/// The rows a marker's text line takes where the game's label font has not
+/// loaded.
+constexpr int32_t kMarkerTextFallbackRows = 12;
 
 bool whiteboard_key_held() {
     int count = 0;
@@ -112,8 +117,24 @@ bool Runtime::whiteboard_pointer(const SDL_Event& event, float x, float y) {
                                             game_text_utf8()
                                         )
                                       : "";
-                if (sdl_.window != nullptr)
-                    SDL_StartTextInput(sdl_.window);
+                // The marker's text box: from the dot's corner, a line of
+                // the label font tall with the dot, across the rest of the
+                // overlays' area.
+                const oa::formats::fnt::Font* font = match_label_font();
+                const int32_t text_rows =
+                    font != nullptr ? static_cast<int32_t>(oa::formats::fnt::line_height(*font))
+                                    : kMarkerTextFallbackRows;
+                const int32_t half = hud::kWhiteboardDotSide / 2;
+                const auto box_left = static_cast<int32_t>(x) - half;
+                const auto box_top = static_cast<int32_t>(y) - half;
+                start_text_input(
+                    oa::ui::display_layout::Rect{
+                        box_left,
+                        box_top,
+                        std::max(area.x + area.width - box_left, hud::kWhiteboardDotSide),
+                        text_rows + hud::kWhiteboardDotSide,
+                    }
+                );
                 return true;
             }
             const auto at = hud::whiteboard_marker_at(whiteboard_, point[0], point[1]);
@@ -171,8 +192,7 @@ bool Runtime::whiteboard_key(const SDL_KeyboardEvent& key) {
     if (input.editing) {
         if (key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER || key.key == SDLK_ESCAPE) {
             input.editing = false;
-            if (sdl_.window != nullptr)
-                SDL_StopTextInput(sdl_.window);
+            stop_text_input();
             const auto color = hud::player_dot_color(match_->state(), match_local_player_);
             // The typed text is placed, and sent, as game text.
             const std::string text = typed_game_text(input.edit_text);

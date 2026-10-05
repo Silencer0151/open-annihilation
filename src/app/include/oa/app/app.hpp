@@ -197,6 +197,10 @@ struct Options {
     // game_dir when it held the installer of the Total Annihilation demo
     // (1997), whose unpacked archive's folder is game_dir.
     fs::path remember_game_dir;
+    /// The main menu's notice of where the game folder was found, shown once
+    /// (found_install_notice, Runtime::tell_found_install); empty when the folder was not
+    /// found on this machine.
+    std::string found_install_notice{};
     // Where data the engine unpacks is kept (--data-dir); unset: the
     // platform's per-user data folder.
     std::optional<fs::path> data_dir;
@@ -382,6 +386,8 @@ struct Options {
     bool check_pointer_interfaces = false;
     /// --check-touch-controls: the touch controls, driven by finger events, on a skirmish.
     bool check_touch_controls = false;
+    /// --check-pad-controls: the gamepad controls, driven by SDL virtual pads, on a skirmish.
+    bool check_pad_controls = false;
     /// --touch-controls: touch controls on with no touch screen, to check their layout.
     bool touch_controls = false;
     /// --check-game-files: the Game files screen driven through a route by scripted hooks.

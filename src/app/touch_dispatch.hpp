@@ -106,6 +106,9 @@ struct TouchDispatch {
     float drag_last_x{};       ///< the scrolling finger's previous canvas point
     float drag_last_y{};       ///< the scrolling finger's previous canvas point
     bool placement_touch{};    ///< the pending building is placed by touch (ghost anchored)
+    /// The pad started the pending building's placement: the ghost follows the pointer until a
+    /// finger lands on the battlefield.
+    bool placement_by_pad{};
     bool hold_placed{};        ///< the battlefield finger's hold placed a building: no radial
     uint16_t drawer_unit{};    ///< the unit the drawer's page belongs to
     uint64_t look_signature{}; ///< what the controls showed last frame (bumps the revision)
@@ -282,6 +285,20 @@ struct TouchDispatchAccess {
     /// @return whether the hold acted, so the lift does nothing more
     static bool
     control_hold(Runtime& runtime, const oa::ui::touch_hud::ControlRect& control, uint64_t now);
+    /// Runs a finger's tap on a build ring wedge: a press on its gadget (a building armed, one
+    /// more queued, a page turned, a standing order stepped), INFO, or the self-destruct hint.
+    ///
+    /// @param runtime the runtime
+    /// @param control the wedge
+    /// @param now nanoseconds
+    static void
+    build_wedge_tap(Runtime& runtime, const oa::ui::touch_hud::ControlRect& control, uint64_t now);
+    /// Runs a finger's hold on a build ring wedge: a build picture's right button.
+    ///
+    /// @param runtime the runtime
+    /// @param control the wedge
+    /// @return whether the hold acted, so the lift does nothing more
+    static bool build_wedge_hold(Runtime& runtime, const oa::ui::touch_hud::ControlRect& control);
     /// Returns the latch a control is, if it is QUEUE, ADD or x5.
     ///
     /// @param control the control
@@ -318,10 +335,24 @@ struct TouchDispatchAccess {
     /// @param now nanoseconds
     static void show_tip(Runtime& runtime, std::string text, float x, float y, uint64_t now);
     /// Re-applies the ghost anchor, its legality and its header each frame while a building is
-    /// placed by touch, and starts or ends touch placement as the engine arms or ends it.
+    /// placed by touch, and starts or ends touch placement as the engine arms or ends it. A
+    /// building the pad started placing (TouchDispatch::placement_by_pad) is left to the
+    /// pointer until a finger lands on the battlefield; an ended placement clears the flag.
     ///
     /// @param runtime the runtime
     static void refresh_placement(Runtime& runtime);
+    /// Hands the building the pad started placing to the touch model: the ghost is anchored
+    /// where the pointer left it (on the battlefield), and a tap moves it from then on. Clears
+    /// TouchDispatch::placement_by_pad.
+    ///
+    /// @param runtime the runtime
+    static void hand_placement_to_touch(Runtime& runtime);
+    /// Holds FORCE while a finger or pointer rests on its chip, or lets it go: writes
+    /// HudState::force_touch and gives the order modifiers again when it changes.
+    ///
+    /// @param runtime the runtime
+    /// @param held whether the chip is held now
+    static void hold_force(Runtime& runtime, bool held);
     /// Runs the hold timers: self-destruct gadgets' clicks, SELF-DESTRUCT · HOLD's progress.
     ///
     /// @param runtime the runtime

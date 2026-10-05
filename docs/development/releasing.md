@@ -5,7 +5,10 @@ packages it and checks the packages. The maintainer runs it on the Mac that
 holds the project's signing keys. Continuous integration builds and tests
 the game unsigned and never signs or notarizes anything, and no key,
 password or signing identity is kept in the repository or on GitHub. The
-other platforms' packages are not built by a script in this repository yet.
+other platforms' packages are not built by a script in this repository yet;
+the folder the Linux x86_64 package carries for the Steam Deck is described
+at the end ([Linux x86_64 package: the steam-deck
+folder](#linux-x86_64-package-the-steam-deck-folder)).
 
 ## What it makes
 
@@ -255,3 +258,42 @@ for it, and the checks hold the build to it. Supporting an older release
 on Intel Macs is a change of its own: the dependencies rebuilt for it, that
 value and the release notes changed, and a run on that release of macOS. Apple silicon needs
 macOS 11.0 in any case.
+
+## Linux x86_64 package: the steam-deck folder
+
+The Linux packages are not built by a script in this repository yet, but
+the Linux x86_64 package carries one folder more than the others,
+`steam-deck`, beside `open-annihilation`. It holds the Steam Input
+templates and the library artwork that the Steam Deck guide
+([steam-deck.md](../installation/steam-deck.md)) has the player install by
+hand, on a Steam Deck or any Linux computer with Steam; nothing in it adds
+the game to Steam. Make it in the build tree the package's game comes
+from:
+
+```sh
+cmake --build build --target oa-steam-deck-files
+```
+
+This writes `build/steam-deck`, made afresh each time:
+
+| File | What it is |
+|---|---|
+| `artwork/portrait.png`, `wide.png`, `hero.png`, `logo.png`, `icon.png` | Steam's library pictures, which `oa-steam-artwork` makes from `branding/open-annihilation-icon.png` and the bundled fonts at that moment: 600×900, 920×430, 1920×620, the logo as wide as the icon and the name need, and 256×256 |
+| `open-annihilation.vdf`, `open-annihilation-keyboard-mouse.vdf` | The two Steam Input templates |
+| `README.md` | What the folder holds, and how to install the templates and the artwork by hand |
+
+Copy the folder into the package's folder, next to `open-annihilation`,
+`LICENSE`, `ATTRIBUTIONS.md` and `licenses/`, and zip it with the rest.
+The artwork is the Open Annihilation branding, under the terms of
+`licenses/LicenseRef-OpenAnnihilation-Branding.txt`, which the package
+already carries; it is made at packaging time and never committed.
+
+Before a release, check the folder: each picture has the size above, and
+both templates and the README are there. The other Linux packages have no
+`steam-deck` folder.
+
+The SDL in the Linux package, as in every package, is the pinned release
+with the patches in [tools/sdl-patches](../../tools/sdl-patches/README.md) applied, which
+`tools/bootstrap_sdl.py` applies when it unpacks the release;
+[ATTRIBUTIONS.md](../../ATTRIBUTIONS.md) says so. One of them lets the
+game play its light ticks on the Steam Deck's trackpads.

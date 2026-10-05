@@ -34,8 +34,11 @@ line.
   letterboxed to fill the window (`letterbox_dest`). Height modes 2 and 4
   double the shown height; in mode 2 the odd rows repeat the decoded row on
   screen and take palette colour 0 in a snapshot.
-- **Skipping.** Escape, a quit event or closing the window ends the movie
-  as skipped; other window events go to `PlaybackHooks`.
+- **Skipping.** Escape, a quit event, closing the window, a mouse button, a
+  touch, or a gamepad's A, B or Start (Menu on the Steam Deck) ends the
+  movie as skipped (`skips_movie`); every gamepad is open while a movie
+  plays, since SDL sends only an open gamepad's buttons. Other window
+  events go to `PlaybackHooks`.
 - **Memory.** One movie keeps its frame tables, its four Huffman tables,
   one frame of palette indices, one RGB frame (and a doubled one in height
   mode 2), the largest frame payload and one audio chunk's samples: at most

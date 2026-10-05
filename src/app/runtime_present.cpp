@@ -4,6 +4,7 @@
 // SDL output textures, viewport sizing and frame presentation.
 #include "oa/app/runtime.hpp"
 #include "graphics_report.hpp"
+#include "pad_state.hpp"
 #include "render_host.hpp"
 #include "render_run.hpp"
 #include "oa/app/input_hints.hpp"
@@ -225,6 +226,7 @@ void Runtime::initialize_sdl() {
             throw std::runtime_error("SDL last-window quit hint was rejected");
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO))
             throw std::runtime_error(std::string("SDL_Init: ") + SDL_GetError());
+        start_gamepad_subsystem();
         // A window the runtime makes itself has no renderer host, and opens
         // at the window system's density.
         sdl_.window = SDL_CreateWindow(

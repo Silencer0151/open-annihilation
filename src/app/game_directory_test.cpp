@@ -3,6 +3,7 @@
 
 // Game directory resolution order with a scripted dialog host, with and
 // without the platform's default folder and advice and with no dialog at all,
+// the folders found on this machine and the in-engine chooser's hand-off,
 // installation checks on synthetic installs, and the stored folder's
 // preference round trip.
 // With --install it checks that the installation OA_GAME_DIR names is usable.
@@ -1007,6 +1008,315 @@ void check_game_files_offered() {
     }
 }
 
+// Folders found where Steam, Heroic, Lutris or Bottles put the game, after
+// the stored folder, and the in-engine chooser resolution hands over to.
+void check_found_installs() {
+    using oa::platform::game_installs::Source;
+    const fs::path steam = "/home/deck/.local/share/Steam/steamapps/common/Total Annihilation";
+    const fs::path sd_card = "/run/media/mmcblk0p1/steamapps/common/Total Annihilation";
+    const fs::path heroic = "/home/deck/Games/Heroic/Total Annihilation";
+    const fs::path broken = "/home/deck/Games/ta/drive_c/GOG Games/Total Annihilation";
+    const FoundInstall from_steam{steam, Source::steam, false};
+    const FoundInstall from_sd_card{sd_card, Source::steam, true};
+    const FoundInstall from_heroic{heroic, Source::heroic, false};
+    const FoundInstall from_broken{broken, Source::lutris, false};
+    const auto found_host = [&]() {
+        auto host = with_installs();
+        host.installs[steam] = true;
+        host.installs[sd_card] = true;
+        host.installs[heroic] = true;
+        host.installs[broken] = false;
+        return host;
+    };
+    const auto found_request = [&](std::optional<std::string> stored,
+                                   std::vector<FoundInstall> found) {
+        GameDirectoryRequest request;
+        request.stored = std::move(stored);
+        request.found = std::move(found);
+        request.chooser_offered = true;
+        return request;
+    };
+    {
+        auto host = found_host();
+        auto h = host.host();
+        GameFilesNeeded needed;
+        const auto result = resolve_game_directory(
+            found_request(path_to_utf8(kGog), {from_steam, from_heroic}), h, &needed
+        );
+        expect(
+            result && result->path == kGog && result->source == GameDirectorySource::stored &&
+                host.inspections == 1 && !needed.needed && host.notices.empty(),
+            "a usable remembered folder wins over the folders found, which are not looked at"
+        );
+    }
+    {
+        auto host = found_host();
+        auto h = host.host();
+        GameFilesNeeded needed;
+        auto request = found_request(std::nullopt, {from_steam, from_heroic});
+        request.argument = kCd;
+        const auto result = resolve_game_directory(request, h, &needed);
+        expect(
+            result && result->source == GameDirectorySource::argument && host.inspections == 1 &&
+                !needed.needed,
+            "--game-dir wins over the folders found"
+        );
+    }
+    {
+        auto host = found_host();
+        auto h = host.host();
+        GameFilesNeeded needed;
+        const auto result = resolve_game_directory(
+            found_request(std::nullopt, {from_broken, from_sd_card}), h, &needed
+        );
+        expect(
+            result && result->path == sd_card && result->installation == sd_card &&
+                result->source == GameDirectorySource::found && result->found_from &&
+                result->found_from->folder == sd_card && result->found_from->removable &&
+                result->archives.size() == 1,
+            "the one usable folder found is played, and says where it was found"
+        );
+        expect(
+            host.starts.empty() && host.notices.empty() && !needed.needed,
+            "the one usable folder found is played without asking"
+        );
+        expect(
+            found_install_notice(*result->found_from) ==
+                "Playing Total Annihilation from your Steam library on the SD card:\n" +
+                    path_to_utf8(sd_card),
+            "the main menu's notice says where the folder was found, the folder on the next line"
+        );
+        expect(
+            found_install_notice(from_heroic) ==
+                "Playing Total Annihilation from Heroic:\n" + path_to_utf8(heroic),
+            "the notice names Heroic"
+        );
+    }
+    {
+        // Without the chooser the one folder found is still played.
+        auto host = found_host();
+        auto h = host.host();
+        auto request = found_request(std::nullopt, {from_steam});
+        request.chooser_offered = false;
+        const auto result = resolve_game_directory(request, h);
+        expect(
+            result && result->source == GameDirectorySource::found && host.notices.empty(),
+            "the one folder found is played where the chooser is not offered"
+        );
+    }
+    {
+        // In Game Mode the one folder found is played too.
+        auto host = found_host();
+        auto h = host.host();
+        GameFilesNeeded needed;
+        auto request = found_request(std::nullopt, {from_heroic});
+        request.chooser_first = true;
+        const auto result = resolve_game_directory(request, h, &needed);
+        expect(
+            result && result->source == GameDirectorySource::found && !needed.needed,
+            "the one folder found is played in Game Mode"
+        );
+    }
+    {
+        auto host = found_host();
+        auto h = host.host();
+        GameFilesNeeded needed;
+        const auto result = resolve_game_directory(
+            found_request(std::nullopt, {from_steam, from_broken, from_heroic}), h, &needed
+        );
+        expect(
+            !result && needed.needed && needed.chooser && needed.found.size() == 2 &&
+                needed.found[0].folder == steam && needed.found[1].folder == heroic &&
+                needed.stored_folder.empty() && needed.stored_problem.empty() &&
+                needed.dialog_offered && needed.dialog_problem.empty(),
+            "several usable folders found open the chooser with the usable ones, in order"
+        );
+        expect(
+            host.starts.empty() && host.notices.empty(),
+            "the chooser opens without a notice or the dialog"
+        );
+    }
+    {
+        auto host = found_host();
+        auto h = host.host();
+        GameFilesNeeded needed;
+        const auto result =
+            resolve_game_directory(found_request(path_to_utf8(kMoved), {from_heroic}), h, &needed);
+        expect(
+            !result && needed.needed && needed.chooser && needed.stored_folder == kMoved &&
+                needed.stored_problem == "The folder does not exist." && needed.found.size() == 1 &&
+                needed.found[0].folder == heroic && host.notices.empty() && host.starts.empty(),
+            "a remembered folder that has gone opens the chooser with why, then the list"
+        );
+    }
+    {
+        // A remembered folder that has gone, with nothing found and a dialog that works,
+        // resolves as it always has.
+        auto host = found_host();
+        host.picks = {{FolderPick::chosen, kCd, {}}};
+        auto h = host.host();
+        GameFilesNeeded needed;
+        const auto result =
+            resolve_game_directory(found_request(path_to_utf8(kMoved), {from_broken}), h, &needed);
+        expect(
+            result && result->path == kCd && result->source == GameDirectorySource::chosen &&
+                !needed.needed && host.notices.size() == 1 &&
+                contains(host.notices[0], "chosen earlier") && host.starts.size() == 1 &&
+                host.starts[0] == kMoved,
+            "a remembered folder that has gone with nothing usable found asks with the dialog"
+        );
+    }
+    {
+        // A first start with nothing found on a desktop whose dialog works is unchanged.
+        auto host = found_host();
+        host.picks = {{FolderPick::chosen, kCd, {}}};
+        auto h = host.host();
+        GameFilesNeeded needed;
+        const auto result = resolve_game_directory(found_request(std::nullopt, {}), h, &needed);
+        expect(
+            result && result->source == GameDirectorySource::chosen && !needed.needed &&
+                host.notices.size() == 1 &&
+                contains(host.notices[0], "needs your Total Annihilation installation") &&
+                host.starts.size() == 1,
+            "nothing found on a desktop with a dialog asks with the dialog, as before"
+        );
+    }
+    {
+        auto host = found_host();
+        host.picks = {{FolderPick::chosen, kCd, {}}};
+        auto h = host.host();
+        GameFilesNeeded needed;
+        auto request = found_request(std::nullopt, {from_broken});
+        request.chooser_first = true;
+        const auto result = resolve_game_directory(request, h, &needed);
+        expect(
+            !result && needed.needed && needed.chooser && needed.found.empty() &&
+                !needed.dialog_offered && host.starts.empty() && host.notices.empty(),
+            "in Game Mode with nothing usable found the chooser comes first, without the dialog"
+        );
+    }
+    {
+        auto host = found_host();
+        auto h = without_dialog(host);
+        GameFilesNeeded needed;
+        const auto result = resolve_game_directory(found_request(std::nullopt, {}), h, &needed);
+        expect(
+            !result && needed.needed && needed.chooser && !needed.dialog_offered &&
+                host.notices.empty(),
+            "with no dialog in the build and nothing found the chooser opens"
+        );
+    }
+    {
+        auto host = found_host();
+        host.picks = {
+            {FolderPick::unavailable, {}, "no portal"}, {FolderPick::unavailable, {}, "no portal"}
+        };
+        auto h = host.host();
+        GameFilesNeeded needed;
+        const auto result = resolve_game_directory(found_request(std::nullopt, {}), h, &needed);
+        expect(
+            !result && needed.needed && needed.chooser && !needed.dialog_offered &&
+                needed.dialog_problem == "no portal" && host.starts.size() == 2 &&
+                host.notices.size() == 1,
+            "a dialog that cannot open hands over to the chooser with its reason"
+        );
+    }
+    {
+        // Without the chooser a dialog that cannot open is told about, as before.
+        auto host = found_host();
+        host.picks = {
+            {FolderPick::unavailable, {}, "no portal"}, {FolderPick::unavailable, {}, "no portal"}
+        };
+        auto h = host.host();
+        GameFilesNeeded needed;
+        auto request = found_request(std::nullopt, {});
+        request.chooser_offered = false;
+        const auto result = resolve_game_directory(request, h, &needed);
+        expect(
+            !result && !needed.needed && host.notices.size() == 2 &&
+                contains(host.notices[1], "no portal"),
+            "without the chooser a dialog that cannot open is told about"
+        );
+    }
+    {
+        // Several found without the chooser: the dialog asks, as before.
+        auto host = found_host();
+        host.picks = {{FolderPick::chosen, kCd, {}}};
+        auto h = host.host();
+        const auto result =
+            resolve_game_directory(found_request(std::nullopt, {from_steam, from_heroic}), h);
+        expect(
+            result && result->source == GameDirectorySource::chosen && host.starts.size() == 1,
+            "several found without the chooser ask with the dialog"
+        );
+    }
+    {
+        // --choose-game-dir in Game Mode opens the chooser in place of the dialog.
+        auto host = found_host();
+        auto h = host.host();
+        GameFilesNeeded needed;
+        auto request = found_request(path_to_utf8(kGog), {from_steam});
+        request.choose = true;
+        request.chooser_first = true;
+        const auto result = resolve_game_directory(request, h, &needed);
+        expect(
+            !result && needed.needed && needed.chooser && needed.found.size() == 1 &&
+                host.starts.empty(),
+            "--choose-game-dir in Game Mode opens the chooser"
+        );
+    }
+    {
+        // --choose-game-dir elsewhere still opens the dialog, never the one folder found.
+        auto host = found_host();
+        host.picks = {{FolderPick::chosen, kCd, {}}};
+        auto h = host.host();
+        GameFilesNeeded needed;
+        auto request = found_request(path_to_utf8(kGog), {from_steam});
+        request.choose = true;
+        const auto result = resolve_game_directory(request, h, &needed);
+        expect(
+            result && result->source == GameDirectorySource::chosen && result->path == kCd &&
+                host.starts.size() == 1,
+            "--choose-game-dir opens the dialog over the one folder found"
+        );
+    }
+    {
+        // Unattended runs resolve as they always have.
+        auto host = found_host();
+        auto h = host.host();
+        GameFilesNeeded needed;
+        auto request = found_request(std::nullopt, {from_steam});
+        request.unattended = true;
+        std::string refusal;
+        try {
+            (void)resolve_game_directory(request, h, &needed);
+        } catch (const std::runtime_error& error) {
+            refusal = error.what();
+        }
+        expect(
+            contains(refusal, "--game-dir") && !needed.needed && host.inspections == 0,
+            "an unattended run ignores the folders found"
+        );
+    }
+    {
+        auto host = found_host();
+        auto h = host.host();
+        std::string problem;
+        const auto taken = take_picked_folder(h, heroic, &problem);
+        expect(
+            taken && taken->path == heroic && taken->source == GameDirectorySource::chosen &&
+                problem.empty(),
+            "a folder the chooser picked is taken as chosen"
+        );
+        const auto refused = take_picked_folder(h, broken, &problem);
+        expect(
+            !refused && contains(problem, "no Total Annihilation archives"),
+            "a folder the chooser picked that cannot be played says why"
+        );
+        expect(!take_picked_folder(h, broken, nullptr), "the reason may be left out");
+    }
+}
+
 // The texts resolution shows for a folder that cannot be played.
 void check_problem_texts() {
     GameInstall install;
@@ -1501,6 +1811,7 @@ int main(int argc, char** argv) {
     check_without_dialog();
     check_look_again();
     check_game_files_offered();
+    check_found_installs();
     check_problem_texts();
     check_environment();
     try {

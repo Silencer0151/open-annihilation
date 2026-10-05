@@ -642,7 +642,8 @@ void draw_list(
     );
     if (dialog.kind == DialogKind::engine)
         renderer::fill_source_rect(target, placement, layout::list_divider(), kRuleColor);
-    for (const Page page : dialog_pages(dialog.kind, dialog.touch, dialog.game_files)) {
+    for (const Page page :
+         dialog_pages(dialog.kind, dialog.touch, dialog.game_files, dialog.controller)) {
         const SourceRect item = layout::dialog_list_item(dialog, page);
         const int32_t control = page_control(page);
         const bool selected = page == dialog.page;

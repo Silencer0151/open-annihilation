@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // The touch controls' actions: what each control, radial pick, placement
-// step, group chip, SELECT ▾ item and rail slot does, each through the
-// engine's own functions, so replays, saves and shared games see the orders
-// a mouse would give (docs/touch-controls.md).
+// step, group chip, SELECT ▾ item, rail slot, FORCE chip and ring wedge
+// does, each through the engine's own functions, so replays, saves and
+// shared games see the orders a mouse would give (docs/touch-controls.md).
 #include "oa/app/runtime.hpp"
 #include "touch_state.hpp"
 #include "oa/app/extension.hpp"
@@ -465,6 +465,8 @@ void TouchDispatchAccess::refresh_placement(Runtime& runtime) {
                          runtime.pending_build_type_ != 0;
     // A placement ended, or a mouse took it over.
     if (!pending || (dispatch.placement_touch && dispatch.pointer_seen)) {
+        if (!pending)
+            dispatch.placement_by_pad = false;
         if (dispatch.placement_touch || placement.active) {
             placement = {};
             dispatch.placement_touch = false;
@@ -473,8 +475,9 @@ void TouchDispatchAccess::refresh_placement(Runtime& runtime) {
         return;
     }
     if (!dispatch.placement_touch) {
-        // Armed by a mouse, a mouse places it.
-        if (dispatch.pointer_seen)
+        // Armed by a mouse, a mouse places it; started by the pad, the ghost follows the pad's
+        // pointer until a finger lands on the battlefield (hand_placement_to_touch).
+        if (dispatch.pointer_seen || dispatch.placement_by_pad)
             return;
         dispatch.placement_touch = true;
         placement.active = true;
@@ -497,6 +500,38 @@ void TouchDispatchAccess::refresh_placement(Runtime& runtime) {
         placement.name =
             !definition.display_name.empty() ? definition.display_name : definition.unit_name;
     }
+}
+
+void TouchDispatchAccess::hand_placement_to_touch(Runtime& runtime) {
+    auto& state = runtime.touch_state();
+    auto& dispatch = state.dispatch;
+    dispatch.placement_by_pad = false;
+    const bool pending = runtime.match_ && runtime.match_command_ == MatchCommand::build &&
+                         runtime.pending_build_type_ != 0;
+    if (!pending || dispatch.placement_touch)
+        return;
+    // The ghost stays where the pad's pointer left it, when that is on the battlefield.
+    const auto& layout = runtime.match_layout_;
+    float x = static_cast<float>(layout.left + layout.battlefield_width() / 2);
+    float y = static_cast<float>(layout.top + layout.battlefield_height() / 2);
+    if (runtime.battlefield_contains(runtime.match_pointer_x_, runtime.match_pointer_y_) &&
+        !runtime.placed_hud_covers(runtime.match_pointer_x_, runtime.match_pointer_y_)) {
+        x = runtime.match_pointer_x_;
+        y = runtime.match_pointer_y_;
+    }
+    dispatch.placement_touch = true;
+    state.hud.placement.active = true;
+    state.hud.placement.anchor = {
+        static_cast<int>(std::lround(x)), static_cast<int>(std::lround(y))
+    };
+}
+
+void TouchDispatchAccess::hold_force(Runtime& runtime, bool held) {
+    auto& look = runtime.touch_state().hud;
+    if (look.force_touch == held)
+        return;
+    look.force_touch = held;
+    runtime.refresh_pointer_modifiers();
 }
 
 void TouchDispatchAccess::open_radial(Runtime& runtime, float x, float y) {
@@ -614,6 +649,9 @@ void TouchDispatchAccess::finger_landed(Runtime& runtime, std::size_t slot, uint
         if (const auto latch = control_latch(finger.control.control)) {
             state.hud.latches.press(*latch, now / kNanosecondsPerMillisecond);
             runtime.refresh_pointer_modifiers();
+        } else if (finger.control.control == hud::Control::force) {
+            // FORCE holds while the finger rests.
+            hold_force(runtime, true);
         }
         return;
     }
@@ -657,6 +695,8 @@ void TouchDispatchAccess::finger_moved(Runtime& runtime, std::size_t slot, uint6
             state.hud.latches.cancel(*latch);
             runtime.refresh_pointer_modifiers();
         }
+        if (finger.control.control == hud::Control::force)
+            hold_force(runtime, false);
         if (finger.control.control == hud::Control::more_item &&
             finger.control.index == static_cast<uint8_t>(hud::MoreItem::self_destruct))
             state.hud.self_destruct_progress = 0.0F;
@@ -699,6 +739,10 @@ void TouchDispatchAccess::finger_lifted(
     switch (finger.target) {
     case TouchTarget::control: {
         release_look(runtime, finger.control);
+        if (finger.control.control == hud::Control::force) {
+            hold_force(runtime, false);
+            return;
+        }
         if (finger.control.control == hud::Control::more_item &&
             finger.control.index == static_cast<uint8_t>(hud::MoreItem::self_destruct))
             state.hud.self_destruct_progress = 0.0F;
@@ -992,6 +1036,19 @@ void TouchDispatchAccess::control_tap(
     case hud::Control::add:
     case hud::Control::times_five:
     case hud::Control::sheet_outside:
+    case hud::Control::force:
+        return;
+    case hud::Control::build_wedge:
+        build_wedge_tap(runtime, control, now);
+        return;
+    case hud::Control::group_wedge:
+        // A wedge of the group ring the pad shows: as the group's chip.
+        if (control.index >= 1 && control.index <= hud::group_ring_slot_count) {
+            runtime.select_squad(control.index, state.hud.latches.active(hud::Latch::add));
+            auto& look = runtime.touch_state().hud;
+            look.latches.used(hud::ActionClass::selection, look.latch_mode);
+            runtime.refresh_pointer_modifiers();
+        }
         return;
     case hud::Control::clear:
     case hud::Control::place_cancel:
@@ -1174,10 +1231,16 @@ bool TouchDispatchAccess::control_hold(
         // A held latch is active while the finger rests; its lift decides.
         runtime.play_haptic(Haptic::hold_started);
         return false;
+    case hud::Control::force:
+        // FORCE is held while the finger rests; its lift lets go.
+        return false;
     case hud::Control::group_chip:
+    case hud::Control::group_wedge:
         runtime.play_haptic(Haptic::hold_started);
         runtime.assign_squad(control.index);
         return true;
+    case hud::Control::build_wedge:
+        return build_wedge_hold(runtime, control);
     case hud::Control::more_item:
         // SELF-DESTRUCT · HOLD runs its own timer.
         if (control.index == static_cast<uint8_t>(hud::MoreItem::self_destruct))
@@ -1204,13 +1267,81 @@ bool TouchDispatchAccess::control_hold(
         return false;
     }
     runtime.play_haptic(Haptic::hold_started);
+    // Once a pad was used, the help names its input too.
+    const auto& pad = runtime.touch_state().hud.pad;
     show_tip(
         runtime,
-        std::string(hud::control_help(control.control, control.index)),
+        pad.badges ? hud::control_help_with_pad(control.control, control.index, pad.map, pad.glyphs)
+                   : std::string(hud::control_help(control.control, control.index)),
         static_cast<float>(control.rect.x + control.rect.width / 2),
         static_cast<float>(control.rect.y),
         now
     );
+    return true;
+}
+
+void TouchDispatchAccess::build_wedge_tap(
+    Runtime& runtime, const hud::ControlRect& control, uint64_t now
+) {
+    const auto& ring = runtime.touch_state().hud.build_ring;
+    if (!ring || control.index >= hud::build_ring_slot_count)
+        return;
+    const hud::BuildWedge wedge = ring->wedges[control.index];
+    if (!wedge.available)
+        return;
+    switch (wedge.kind) {
+    case hud::BuildWedgeKind::empty:
+        return;
+    case hud::BuildWedgeKind::info:
+        show_unit_info(runtime);
+        return;
+    case hud::BuildWedgeKind::self_destruct:
+        // The pad's hold gives it; a finger's tap says how.
+        show_tip(
+            runtime,
+            std::string(kSelfDestructHint),
+            static_cast<float>(control.rect.x + control.rect.width / 2),
+            static_cast<float>(control.rect.y),
+            now
+        );
+        return;
+    case hud::BuildWedgeKind::build:
+    case hud::BuildWedgeKind::prev:
+    case hud::BuildWedgeKind::next:
+    case hud::BuildWedgeKind::fire_orders:
+    case hud::BuildWedgeKind::move_orders:
+    case hud::BuildWedgeKind::on_off:
+    case hud::BuildWedgeKind::cloak:
+        break;
+    }
+    if (wedge.gadget < 0 || !runtime.match_hud_ ||
+        static_cast<std::size_t>(wedge.gadget) >= runtime.match_hud_->layout.gadgets.size())
+        return;
+    // A press on the wedge is a press on its gadget, as the side panel's.
+    runtime.activate_match_hud(static_cast<std::size_t>(wedge.gadget), true);
+    if (wedge.kind == hud::BuildWedgeKind::build) {
+        auto& look = runtime.touch_state().hud;
+        look.latches.used(hud::ActionClass::build_button, look.latch_mode);
+        runtime.refresh_pointer_modifiers();
+    }
+}
+
+bool TouchDispatchAccess::build_wedge_hold(Runtime& runtime, const hud::ControlRect& control) {
+    const auto& ring = runtime.touch_state().hud.build_ring;
+    if (!ring || control.index >= hud::build_ring_slot_count)
+        return false;
+    const hud::BuildWedge wedge = ring->wedges[control.index];
+    if (!wedge.available || wedge.kind != hud::BuildWedgeKind::build || wedge.gadget < 0 ||
+        !runtime.match_hud_ ||
+        static_cast<std::size_t>(wedge.gadget) >= runtime.match_hud_->layout.gadgets.size())
+        return false;
+    // A build picture's hold is its right button, as on the side panel: one off the queue
+    // (five with x5).
+    runtime.activate_match_hud(static_cast<std::size_t>(wedge.gadget), false);
+    runtime.play_haptic(Haptic::queue_reduced);
+    auto& look = runtime.touch_state().hud;
+    look.latches.used(hud::ActionClass::build_button, look.latch_mode);
+    runtime.refresh_pointer_modifiers();
     return true;
 }
 

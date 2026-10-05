@@ -11,7 +11,11 @@
 // section's settings: their keys, defaults, words, the hold delay's range
 // and stops, unknown values, and the round trip. The Game files section's
 // backups switch: Off by default everywhere, read, written and restored as
-// every switch.
+// every switch. A Steam Deck's defaults: its screen's frame rate and Control
+// size Larger, a stored value winning and Restore defaults bringing them
+// back. Control size and the Controller section's settings: their keys,
+// defaults, words, the speeds' ranges and stops, unknown values, and the
+// round trip.
 
 #include "oa/ui/engine_settings.hpp"
 
@@ -1411,6 +1415,358 @@ void a_folder_without_a_profile_keeps_its_overrides_under_its_own_id() {
     CHECK(base_read.hack_overrides.front().hack == "ai.attack-wave-size");
 }
 
+void a_steam_deck_starts_at_its_screens_rate_with_larger_controls() {
+    settings::Inputs lcd = players_own_on_linux;
+    lcd.steam_deck_panel_hz = 60;
+    settings::Inputs oled = players_own_on_linux;
+    oled.steam_deck_panel_hz = 90;
+    const auto plain = settings::default_settings(players_own_on_linux);
+    CHECK(plain.max_frame_rate == settings::highest_frame_rate);
+    CHECK(plain.touch_control_size == settings::ControlSize::standard);
+    CHECK(settings::steam_deck_control_size == settings::ControlSize::larger);
+    for (const auto& [inputs, rate] : {std::pair{lcd, 60U}, std::pair{oled, 90U}}) {
+        const auto defaults = settings::default_settings(inputs);
+        CHECK(defaults.max_frame_rate == rate);
+        CHECK(defaults.touch_control_size == settings::ControlSize::larger);
+        // Nothing else moves.
+        auto others = defaults;
+        others.max_frame_rate = plain.max_frame_rate;
+        others.touch_control_size = plain.touch_control_size;
+        CHECK(others == plain);
+        // A named preferences file plays as the game does everywhere.
+        settings::Inputs named = inputs;
+        named.players_own_profile = false;
+        CHECK(settings::default_settings(named) == settings::default_settings({}));
+
+        // Without stored values the Deck's defaults hold; a stored value wins.
+        CHECK(settings::read_settings({}, inputs, false) == defaults);
+        const auto faster =
+            settings::read_settings(one_key(settings::key::max_frame_rate, "120"), inputs, false);
+        CHECK(faster.max_frame_rate == 120);
+        CHECK(faster.touch_control_size == settings::ControlSize::larger);
+        const auto smaller = settings::read_settings(
+            one_key(settings::key::touch_control_size, "standard"), inputs, false
+        );
+        CHECK(smaller.touch_control_size == settings::ControlSize::standard);
+        CHECK(smaller.max_frame_rate == rate);
+
+        // The player's choices are stored; Restore defaults puts the Deck's back.
+        auto chosen = defaults;
+        chosen.max_frame_rate = 45;
+        chosen.touch_control_size = settings::ControlSize::standard;
+        Values values;
+        settings::write_settings(values, defaults, chosen, defaults, false);
+        CHECK(values.size() == 2);
+        CHECK(values.at(std::string{settings::key::max_frame_rate}) == "45");
+        CHECK(values.at(std::string{settings::key::touch_control_size}) == "standard");
+        CHECK(settings::read_settings(values, inputs, false) == chosen);
+        settings::write_settings(values, chosen, defaults, defaults, true);
+        CHECK(values.empty());
+        CHECK(settings::read_settings(values, inputs, false) == defaults);
+        // Chosen by hand, the Deck's own values are kept as stored ones.
+        settings::write_settings(values, chosen, defaults, defaults, false);
+        CHECK(values.at(std::string{settings::key::max_frame_rate}) == std::to_string(rate));
+        CHECK(values.at(std::string{settings::key::touch_control_size}) == "larger");
+        CHECK(settings::read_settings(values, inputs, false) == defaults);
+    }
+    // A screen's rate is held to the setting's range and put on its nearest stop.
+    const auto rate_for = [](uint32_t hz) {
+        settings::Inputs deck = players_own_on_linux;
+        deck.steam_deck_panel_hz = hz;
+        return settings::default_settings(deck).max_frame_rate;
+    };
+    CHECK(rate_for(144) == settings::highest_frame_rate);
+    CHECK(rate_for(20) == settings::lowest_frame_rate);
+    CHECK(rate_for(62) == 60);
+    CHECK(rate_for(63) == 65);
+    CHECK(rate_for(0) == settings::highest_frame_rate);
+    // A Raspberry Pi's or a light machine's defaults are as before.
+    settings::Inputs pi = players_own_on_linux;
+    pi.raspberry_pi = true;
+    CHECK(settings::default_settings(pi).touch_control_size == settings::ControlSize::standard);
+}
+
+void the_controller_settings_default_alike_everywhere() {
+    namespace pad = oa::ui::pad_controls;
+    CHECK(settings::key::touch_control_size == "open-annihilation.touch-control-size");
+    CHECK(settings::key::pad_scheme == "open-annihilation.pad-scheme");
+    CHECK(settings::key::pad_right_trackpad == "open-annihilation.pad-right-trackpad");
+    CHECK(settings::key::pad_pointer_speed == "open-annihilation.pad-pointer-speed");
+    CHECK(settings::key::pad_acceleration == "open-annihilation.pad-acceleration");
+    CHECK(settings::key::pad_glide == "open-annihilation.pad-glide");
+    CHECK(settings::key::pad_right_stick == "open-annihilation.pad-right-stick");
+    CHECK(settings::key::pad_magnetism == "open-annihilation.pad-magnetism");
+    CHECK(settings::key::pad_gyro == "open-annihilation.pad-gyro");
+    CHECK(settings::key::pad_gyro_speed == "open-annihilation.pad-gyro-speed");
+    CHECK(settings::key::pad_haptics == "open-annihilation.pad-haptics");
+    CHECK(settings::key::pad_prompts == "open-annihilation.pad-prompts");
+    CHECK(settings::key::pad_left_handed == "open-annihilation.pad-left-handed");
+    CHECK(settings::control_size_scale(settings::ControlSize::standard) == 1.0F);
+    CHECK(settings::control_size_scale(settings::ControlSize::large) == 1.25F);
+    CHECK(settings::control_size_scale(settings::ControlSize::larger) == 1.5F);
+    settings::Inputs own_mac = players_own_on_linux;
+    own_mac.macos = true;
+    settings::Inputs pi = players_own_on_linux;
+    pi.raspberry_pi = true;
+    settings::Inputs deck = players_own_on_linux;
+    deck.steam_deck_panel_hz = 90;
+    for (const auto& inputs : {settings::Inputs{}, players_own_on_linux, own_mac, pi, deck}) {
+        const auto defaults = settings::default_settings(inputs);
+        CHECK(defaults.pad_scheme == pad::Scheme::trackpads);
+        CHECK(defaults.pad_right_trackpad == pad::RightTrackpad::relative);
+        CHECK(defaults.pad_pointer_speed == pad::default_pointer_speed);
+        CHECK(defaults.pad_pointer_speed == 100);
+        CHECK(defaults.pad_acceleration == pad::Acceleration::low);
+        CHECK(!defaults.pad_glide);
+        CHECK(defaults.pad_right_stick == pad::RightStick::zoom_and_pages);
+        CHECK(defaults.pad_magnetism);
+        CHECK(defaults.pad_gyro == pad::Gyro::off);
+        CHECK(defaults.pad_gyro_speed == pad::default_gyro_speed);
+        CHECK(defaults.pad_haptics == pad::Haptics::light);
+        CHECK(defaults.pad_prompts == pad::Prompts::automatic);
+        CHECK(!defaults.pad_left_handed);
+        CHECK(settings::read_settings({}, inputs, false) == defaults);
+    }
+}
+
+void the_controller_settings_read_their_words_and_drop_others() {
+    namespace pad = oa::ui::pad_controls;
+    const auto defaults = settings::read_settings({}, {}, false);
+    // Each word reads as its choice; one key changes its own setting alone.
+    const auto read_word = [](std::string_view key, const char* text) {
+        return read_one(key, text);
+    };
+    auto expected = defaults;
+    expected.touch_control_size = settings::ControlSize::large;
+    CHECK(read_word(settings::key::touch_control_size, "large") == expected);
+    CHECK(
+        read_word(settings::key::touch_control_size, "larger").touch_control_size ==
+        settings::ControlSize::larger
+    );
+    CHECK(
+        read_word(settings::key::touch_control_size, "standard").touch_control_size ==
+        settings::ControlSize::standard
+    );
+    CHECK(read_word(settings::key::pad_scheme, "sticks").pad_scheme == pad::Scheme::sticks);
+    CHECK(read_word(settings::key::pad_scheme, "trackpads").pad_scheme == pad::Scheme::trackpads);
+    CHECK(
+        read_word(settings::key::pad_right_trackpad, "absolute").pad_right_trackpad ==
+        pad::RightTrackpad::absolute
+    );
+    CHECK(
+        read_word(settings::key::pad_acceleration, "off").pad_acceleration == pad::Acceleration::off
+    );
+    CHECK(
+        read_word(settings::key::pad_acceleration, "high").pad_acceleration ==
+        pad::Acceleration::high
+    );
+    CHECK(
+        read_word(settings::key::pad_right_stick, "pointer").pad_right_stick ==
+        pad::RightStick::pointer
+    );
+    CHECK(
+        read_word(settings::key::pad_right_stick, "nothing").pad_right_stick ==
+        pad::RightStick::nothing
+    );
+    CHECK(
+        read_word(settings::key::pad_right_stick, "zoom").pad_right_stick ==
+        pad::RightStick::zoom_and_pages
+    );
+    CHECK(read_word(settings::key::pad_gyro, "right-pad").pad_gyro == pad::Gyro::right_pad_touched);
+    CHECK(
+        read_word(settings::key::pad_gyro, "right-stick").pad_gyro == pad::Gyro::right_stick_touched
+    );
+    CHECK(read_word(settings::key::pad_gyro, "always").pad_gyro == pad::Gyro::always);
+    CHECK(read_word(settings::key::pad_haptics, "off").pad_haptics == pad::Haptics::off);
+    CHECK(read_word(settings::key::pad_haptics, "strong").pad_haptics == pad::Haptics::strong);
+    CHECK(
+        read_word(settings::key::pad_prompts, "steam-deck").pad_prompts == pad::Prompts::steam_deck
+    );
+    CHECK(read_word(settings::key::pad_prompts, "xbox").pad_prompts == pad::Prompts::xbox);
+    CHECK(
+        read_word(settings::key::pad_prompts, "playstation").pad_prompts ==
+        pad::Prompts::playstation
+    );
+    CHECK(read_word(settings::key::pad_prompts, "nintendo").pad_prompts == pad::Prompts::nintendo);
+    CHECK(read_word(settings::key::pad_prompts, "off").pad_prompts == pad::Prompts::off);
+    // Any other text gives the default: words match letter for letter.
+    for (const char* text : {"", "Larger", "LARGE", " large", "larger ", "2", "huge"})
+        CHECK(read_word(settings::key::touch_control_size, text) == defaults);
+    for (const char* text : {"", "Sticks", "stick", "1"})
+        CHECK(read_word(settings::key::pad_scheme, text) == defaults);
+    for (const char* text : {"", "Absolute", "pointer", "1"})
+        CHECK(read_word(settings::key::pad_right_trackpad, text) == defaults);
+    for (const char* text : {"", "medium", "0", "HIGH"})
+        CHECK(read_word(settings::key::pad_acceleration, text) == defaults);
+    for (const char* text : {"", "zoom-and-pages", "Pointer", "none"})
+        CHECK(read_word(settings::key::pad_right_stick, text) == defaults);
+    for (const char* text : {"", "right_pad", "on", "1", "Always"})
+        CHECK(read_word(settings::key::pad_gyro, text) == defaults);
+    for (const char* text : {"", "medium", "0", "Strong"})
+        CHECK(read_word(settings::key::pad_haptics, text) == defaults);
+    for (const char* text : {"", "steam_deck", "deck", "Xbox", "auto"})
+        CHECK(read_word(settings::key::pad_prompts, text) == defaults);
+    // The switches read as every switch does.
+    CHECK(read_one(settings::key::pad_glide, "1").pad_glide);
+    CHECK(!read_one(settings::key::pad_glide, "0").pad_glide);
+    CHECK(!read_one(settings::key::pad_glide, "on").pad_glide);
+    CHECK(!read_one(settings::key::pad_magnetism, "0").pad_magnetism);
+    CHECK(read_one(settings::key::pad_magnetism, "off").pad_magnetism);
+    CHECK(read_one(settings::key::pad_left_handed, "3").pad_left_handed);
+    CHECK(!read_one(settings::key::pad_left_handed, "-1").pad_left_handed);
+}
+
+void the_controller_speeds_are_held_to_their_ranges_and_stops() {
+    namespace pad = oa::ui::pad_controls;
+    const auto pointer = [](const char* text) {
+        return read_one(settings::key::pad_pointer_speed, text).pad_pointer_speed;
+    };
+    const auto gyro = [](const char* text) {
+        return read_one(settings::key::pad_gyro_speed, text).pad_gyro_speed;
+    };
+    CHECK(pad::lowest_pointer_speed == 50 && pad::highest_pointer_speed == 300);
+    CHECK(pad::lowest_gyro_speed == 50 && pad::highest_gyro_speed == 400);
+    for (uint32_t percent = 50; percent <= 300; percent += 10)
+        CHECK(pointer(std::to_string(percent).c_str()) == percent);
+    for (uint32_t percent = 50; percent <= 400; percent += 10)
+        CHECK(gyro(std::to_string(percent).c_str()) == percent);
+    CHECK(pointer("0") == 50 && pointer("-30") == 50 && pointer("49") == 50);
+    CHECK(pointer("301") == 300 && pointer("99999999999") == 300);
+    CHECK(pointer("54") == 50 && pointer("55") == 60 && pointer("124") == 120);
+    CHECK(gyro("401") == 400 && gyro("10") == 50 && gyro("395") == 400 && gyro("394") == 390);
+    CHECK(pointer("+150") == 150);
+    for (const char* text : {"", "fast", "100%", " 100", "1.5"}) {
+        CHECK(pointer(text) == pad::default_pointer_speed);
+        CHECK(gyro(text) == pad::default_gyro_speed);
+    }
+}
+
+void the_controller_settings_round_trip_and_restore() {
+    namespace pad = oa::ui::pad_controls;
+    const auto defaults = settings::default_settings(players_own_on_linux);
+
+    struct Change {
+        std::string_view key;
+        std::string_view text;
+        void (*apply)(settings::EngineSettings&);
+    };
+
+    const std::array<Change, 14> changes{{
+        {settings::key::touch_control_size,
+         "large",
+         [](settings::EngineSettings& chosen) {
+             chosen.touch_control_size = settings::ControlSize::large;
+         }},
+        {settings::key::pad_scheme,
+         "sticks",
+         [](settings::EngineSettings& chosen) { chosen.pad_scheme = pad::Scheme::sticks; }},
+        {settings::key::pad_right_trackpad,
+         "absolute",
+         [](settings::EngineSettings& chosen) {
+             chosen.pad_right_trackpad = pad::RightTrackpad::absolute;
+         }},
+        {settings::key::pad_pointer_speed,
+         "250",
+         [](settings::EngineSettings& chosen) { chosen.pad_pointer_speed = 250; }},
+        {settings::key::pad_acceleration,
+         "high",
+         [](settings::EngineSettings& chosen) {
+             chosen.pad_acceleration = pad::Acceleration::high;
+         }},
+        {settings::key::pad_glide,
+         "1",
+         [](settings::EngineSettings& chosen) { chosen.pad_glide = true; }},
+        {settings::key::pad_right_stick,
+         "pointer",
+         [](settings::EngineSettings& chosen) {
+             chosen.pad_right_stick = pad::RightStick::pointer;
+         }},
+        {settings::key::pad_magnetism,
+         "0",
+         [](settings::EngineSettings& chosen) { chosen.pad_magnetism = false; }},
+        {settings::key::pad_gyro,
+         "right-stick",
+         [](settings::EngineSettings& chosen) {
+             chosen.pad_gyro = pad::Gyro::right_stick_touched;
+         }},
+        {settings::key::pad_gyro_speed,
+         "320",
+         [](settings::EngineSettings& chosen) { chosen.pad_gyro_speed = 320; }},
+        {settings::key::pad_haptics,
+         "strong",
+         [](settings::EngineSettings& chosen) { chosen.pad_haptics = pad::Haptics::strong; }},
+        {settings::key::pad_prompts,
+         "playstation",
+         [](settings::EngineSettings& chosen) { chosen.pad_prompts = pad::Prompts::playstation; }},
+        {settings::key::pad_left_handed,
+         "1",
+         [](settings::EngineSettings& chosen) { chosen.pad_left_handed = true; }},
+        {settings::key::pad_prompts, "off", [](settings::EngineSettings& chosen) {
+             chosen.pad_prompts = pad::Prompts::off;
+         }},
+    }};
+    // Each change alone writes its key alone, reads back, and Restore
+    // defaults then OK erases it.
+    for (const Change& change : changes) {
+        auto chosen = defaults;
+        change.apply(chosen);
+        Values values;
+        settings::write_settings(values, defaults, chosen, defaults, false);
+        CHECK(values.size() == 1);
+        CHECK(values.at(std::string{change.key}) == change.text);
+        CHECK(settings::read_settings(values, players_own_on_linux, false) == chosen);
+        settings::write_settings(values, chosen, defaults, defaults, true);
+        CHECK(values.empty());
+    }
+    // All of them at once: thirteen keys, read back alike.
+    auto chosen = defaults;
+    for (const Change& change : changes)
+        change.apply(chosen);
+    Values values;
+    settings::write_settings(values, defaults, chosen, defaults, false);
+    CHECK(values.size() == 13);
+    CHECK(settings::read_settings(values, players_own_on_linux, false) == chosen);
+    // An unchanged setting is never written, even away from its default.
+    Values again;
+    settings::write_settings(again, chosen, chosen, defaults, false);
+    CHECK(again.empty());
+    // Back to the defaults by hand keeps keys, written as the defaults.
+    settings::write_settings(values, chosen, defaults, defaults, false);
+    CHECK(values.at(std::string{settings::key::touch_control_size}) == "standard");
+    CHECK(values.at(std::string{settings::key::pad_scheme}) == "trackpads");
+    CHECK(values.at(std::string{settings::key::pad_right_trackpad}) == "relative");
+    CHECK(values.at(std::string{settings::key::pad_pointer_speed}) == "100");
+    CHECK(values.at(std::string{settings::key::pad_acceleration}) == "low");
+    CHECK(values.at(std::string{settings::key::pad_glide}) == "0");
+    CHECK(values.at(std::string{settings::key::pad_right_stick}) == "zoom");
+    CHECK(values.at(std::string{settings::key::pad_magnetism}) == "1");
+    CHECK(values.at(std::string{settings::key::pad_gyro}) == "off");
+    CHECK(values.at(std::string{settings::key::pad_gyro_speed}) == "100");
+    CHECK(values.at(std::string{settings::key::pad_haptics}) == "light");
+    CHECK(values.at(std::string{settings::key::pad_prompts}) == "automatic");
+    CHECK(values.at(std::string{settings::key::pad_left_handed}) == "0");
+    CHECK(settings::read_settings(values, players_own_on_linux, false) == defaults);
+    // Every other choice's word reads back as it.
+    for (const auto gyro_choice :
+         {pad::Gyro::off,
+          pad::Gyro::right_pad_touched,
+          pad::Gyro::right_stick_touched,
+          pad::Gyro::always}) {
+        auto one = defaults;
+        one.pad_gyro = gyro_choice;
+        Values written;
+        settings::write_settings(written, defaults, one, defaults, false);
+        CHECK(settings::read_settings(written, players_own_on_linux, false) == one);
+    }
+    for (const auto size : settings::control_size_choices) {
+        auto one = defaults;
+        one.touch_control_size = size;
+        Values written;
+        settings::write_settings(written, defaults, one, defaults, false);
+        CHECK(settings::read_settings(written, players_own_on_linux, false) == one);
+    }
+}
+
 void menu_scaling_and_native_density_default_read_and_round_trip() {
     CHECK(settings::key::menu_scaling == "open-annihilation.menu-scaling");
     CHECK(settings::key::native_density == "open-annihilation.native-density");
@@ -1559,6 +1915,11 @@ int main() {
     the_hold_delay_is_held_to_its_range_and_stops();
     the_touch_settings_round_trip_and_restore();
     the_backups_switch_is_off_by_default_and_round_trips();
+    a_steam_deck_starts_at_its_screens_rate_with_larger_controls();
+    the_controller_settings_default_alike_everywhere();
+    the_controller_settings_read_their_words_and_drop_others();
+    the_controller_speeds_are_held_to_their_ranges_and_stops();
+    the_controller_settings_round_trip_and_restore();
     menu_scaling_and_native_density_default_read_and_round_trip();
     if (failures != 0)
         return 1;

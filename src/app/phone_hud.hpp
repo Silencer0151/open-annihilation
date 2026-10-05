@@ -2,11 +2,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // The phone layout's own state, kept in Runtime::TouchState, and its access
-// to the runtime (docs/touch-controls.md).
+// to the runtime: the placed regions, and the 3.1c pictures the pad's build
+// ring shows on every layout (docs/touch-controls.md).
 #pragma once
 
 #include "oa/ui/display_layout.hpp"
 #include "oa/ui/touch_hud.hpp"
+
+#include <array>
+#include <stdint.h>
 
 namespace oa::ui::frontend_renderer {
 struct Surface;
@@ -24,9 +28,34 @@ struct PhoneHud {
     oa::ui::display_layout::Rect unit_info_source{};
 };
 
+/// Where a build ring wedge's 3.1c picture comes from and where it goes: the source rectangle
+/// a placed region of the phone's drawer would show, fitted whole into the wedge's picture.
+struct RingPicture {
+    oa::ui::display_layout::Rect source{}; ///< the gadget in the 640x480 HUD layer; empty for none
+    oa::ui::display_layout::Rect canvas{}; ///< canvas pixels it is drawn at
+};
+
 /// The phone layout's helpers that reach the runtime's private members: static functions that
 /// take Runtime&.
 struct PhoneHudAccess {
+    /// Returns where each build ring wedge's 3.1c picture comes from in the HUD layer and where
+    /// it is drawn, by the placed regions' rule (display_layout::fit_inside), on any layout.
+    ///
+    /// @param runtime the runtime
+    /// @param ring the open build ring
+    /// @return the pictures by slot; an empty source for a wedge with no gadget
+    [[nodiscard]] static std::array<RingPicture, oa::ui::touch_hud::build_ring_slot_count>
+    build_ring_pictures(const Runtime& runtime, const oa::ui::touch_hud::BuildRing& ring);
+
+    /// Returns a signature of the HUD layer's pixels under the build ring's pictures, so the
+    /// touch layer is drawn again when the 3.1c panel redraws one (a queue count).
+    ///
+    /// @param runtime the runtime
+    /// @param ring the open build ring
+    /// @return the signature; 0 when no picture shows
+    [[nodiscard]] static uint64_t
+    build_ring_picture_signature(const Runtime& runtime, const oa::ui::touch_hud::BuildRing& ring);
+
     /// Returns the touch frame the placed regions go in: the dispatcher's frame while it was
     /// laid out for the canvas the match layout has, else one laid out here from the match
     /// layout, the Touch settings and the touch state, so the regions never wait on the

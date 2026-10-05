@@ -36,6 +36,10 @@ struct Runtime::EngineSettingsState {
     bool light_machine{};
     /// The desktop's size, as read once at start; zero by zero when unknown.
     oa::ui::engine_settings::ScreenSize desktop{};
+    /// The game runs on a Steam Deck whose screen refreshes this many times
+    /// a second (Inputs::steam_deck_panel_hz), as read once at start; 0 on
+    /// every other machine.
+    uint32_t steam_deck_panel_hz{};
     /// The mod folders Mods lists, as absolute UTF-8 paths, read once at
     /// start: the game folder's mods folder's (list_mod_folders), the
     /// player's own Mods folder's, the folder an earlier Pick Folder...
@@ -131,7 +135,8 @@ struct Runtime::EngineSettingsState {
     /// @param runtime the runtime
     /// @return the platform, whether the preferences file is the player's
     ///     own, the installation's totala.ini, whether the machine is a
-    ///     Raspberry Pi or a light machine, and the desktop's size
+    ///     Raspberry Pi, a light machine or a Steam Deck (and its screen's
+    ///     rate), and the desktop's size
     [[nodiscard]] static oa::ui::engine_settings::Inputs inputs(const Runtime& runtime);
 
     /// Reads the installation's totala.ini, its name matched without regard

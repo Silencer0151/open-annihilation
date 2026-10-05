@@ -103,6 +103,12 @@ inline constexpr int32_t hint_gap = 2;
 inline constexpr int32_t hint_line_height = 12;
 /// The most lines a hint takes.
 inline constexpr std::size_t most_hint_lines = 2;
+/// The most lines a notice row's text takes under its label: Controller's
+/// Steam Input notice.
+inline constexpr std::size_t most_notice_lines = 4;
+/// The most lines under any row's label: a hint's, or a notice's.
+inline constexpr std::size_t most_row_lines =
+    most_notice_lines > most_hint_lines ? most_notice_lines : most_hint_lines;
 /// The rows between the last hint line and a slider.
 inline constexpr int32_t slider_gap = 4;
 /// A slider line's height: the track with its knob and stops, and the value.
@@ -131,6 +137,26 @@ inline constexpr int32_t touch_drag_level_width = 59;
 /// border: room for One action, its widest caption, with three clear
 /// columns each side.
 inline constexpr int32_t touch_latches_level_width = 64;
+/// Control size's level strip's segment width, inside the strip's 1-pixel
+/// border: room for Standard, its widest caption, with three clear columns
+/// each side.
+inline constexpr int32_t control_size_level_width = 53;
+/// Scheme's level strip's segment width: room for Trackpads, its widest
+/// caption, with three clear columns each side.
+inline constexpr int32_t scheme_level_width = 60;
+/// Right trackpad's level strip's segment width: room for Absolute, its
+/// widest caption, with three clear columns each side.
+inline constexpr int32_t right_trackpad_level_width = 51;
+/// Pointer acceleration's level strip's segment width: Hardware
+/// acceleration's, so that the two strips of three levels from Off look
+/// alike; High, its widest caption, fits with room to spare.
+inline constexpr int32_t pad_acceleration_level_width = acceleration_level_width;
+/// Right stick's level strip's segment width: room for Nothing, its widest
+/// caption, with three clear columns each side.
+inline constexpr int32_t right_stick_level_width = 46;
+/// The Controller section's Haptics' level strip's segment width: room for
+/// Strong, its widest caption, with three clear columns each side.
+inline constexpr int32_t pad_haptics_level_width = 41;
 /// Menu scaling's level strip's segment width, inside the strip's 1-pixel
 /// border: room for Whole steps, its widest caption, with three clear
 /// columns each side.
@@ -416,6 +442,10 @@ inline constexpr std::size_t summary_line_characters = 45;
 /// A drop-down's field: its width. It stands on its own line under the
 /// hint, as a slider's track does.
 inline constexpr int32_t choice_width = 200;
+/// A wide drop-down's field: room for Gyro pointer's longest choice, While
+/// the right stick is touched, in the regular font with the field's inset
+/// and arrow.
+inline constexpr int32_t wide_choice_width = 248;
 /// A drop-down field's height.
 inline constexpr int32_t choice_line_height = label_line_height;
 /// The columns between a drop-down field's left edge and its text.
@@ -462,8 +492,8 @@ struct Row {
     int32_t height{};            ///< rows from its line to the next row's
     SourceRect label{};          ///< its label
     SourceRect lock_area{};      ///< its padlock and lock text; empty when unlocked
-    std::array<SourceRect, most_hint_lines> hints{}; ///< its hint's lines
-    std::size_t hint_lines{};                        ///< the lines its hint takes
+    std::array<SourceRect, most_row_lines> hints{}; ///< its hint's or notice's lines
+    std::size_t hint_lines{};                       ///< the lines its hint takes
     /// Its switch, level strip or slider track; empty for a locked row
     /// whose hint lines are its status, which shows its lock there.
     SourceRect control_area{};
@@ -912,6 +942,27 @@ void set_switch(EngineSettings& settings, Setting setting, bool on) noexcept;
 /// @return why it cannot be changed now
 [[nodiscard]] Lock lock_of(const Locks& locks, Setting setting) noexcept;
 
+/// Returns a drop-down's field width.
+///
+/// @param setting a drop-down's setting
+/// @return wide_choice_width for Gyro pointer, else choice_width
+[[nodiscard]] int32_t choice_field_width(Setting setting) noexcept;
+
+/// What a dialog shows beyond each setting's own rows and lines.
+struct RowContext {
+    /// Controller's first row is the Steam Input notice (Dialog::steam_input).
+    bool steam_input{};
+    /// Maximum frame rate's hint has a second line naming a Steam Deck's
+    /// screen rate (Dialog::steam_deck_panel_hz); 0 for none.
+    uint32_t steam_deck_panel_hz{};
+};
+
+/// Returns what a dialog shows beyond each setting's own rows and lines.
+///
+/// @param dialog the dialog
+/// @return its Steam Input notice and its Steam Deck's screen rate
+[[nodiscard]] RowContext row_context(const Dialog& dialog) noexcept;
+
 /// Tells whether a setting's hint lines are its status: such a row, locked,
 /// shows its lock where its control was, and only its label line fades.
 ///
@@ -923,8 +974,11 @@ void set_switch(EngineSettings& settings, Setting setting, bool on) noexcept;
 ///
 /// @param page the section
 /// @param section a check's own section; null for the dialog's
+/// @param context what the dialog shows beyond each setting's rows:
+///     Controller starts with the Steam Input notice while it applies
 /// @return its settings, top to bottom
-[[nodiscard]] std::span<const Setting> section_settings(Page page, const SectionHooks* section);
+[[nodiscard]] std::span<const Setting>
+section_settings(Page page, const SectionHooks* section, const RowContext& context = {});
 
 /// Places the rows of a section; Developer's own, over its list, with
 /// developer_row_padding.
@@ -937,9 +991,15 @@ void set_switch(EngineSettings& settings, Setting setting, bool on) noexcept;
 /// @param locks the dialog's locks
 /// @param scroll the rows the section is scrolled by from its top; not clamped
 /// @param section a check's own section; null for the dialog's
+/// @param context what the dialog shows beyond each setting's rows and
+///     lines (row_context)
 /// @return its rows
 [[nodiscard]] Rows place_rows(
-    Page page, const Locks& locks, int32_t scroll = 0, const SectionHooks* section = nullptr
+    Page page,
+    const Locks& locks,
+    int32_t scroll = 0,
+    const SectionHooks* section = nullptr,
+    const RowContext& context = {}
 );
 
 /// Moves placed rows up: each row's line and every part it has, and the
@@ -1100,8 +1160,10 @@ scroll_thumb(int32_t scroll, int32_t limit, int32_t content_height) noexcept;
 /// @param page the section
 /// @param touch the dialog lists Touch (Dialog::touch)
 /// @param game_files the dialog lists Game files (Dialog::game_files)
+/// @param controller the dialog lists Controller (Dialog::controller)
 /// @return its rectangle
-[[nodiscard]] SourceRect list_item(Page page, bool touch = false, bool game_files = false) noexcept;
+[[nodiscard]] SourceRect
+list_item(Page page, bool touch = false, bool game_files = false, bool controller = false) noexcept;
 
 /// Returns the line before the Developer section in the list.
 ///
@@ -1222,16 +1284,37 @@ status_line(const AccelerationStatus& acceleration, std::size_t line) noexcept;
 /// Returns the lines a setting's hint takes.
 ///
 /// @param setting the setting
-/// @return 1 or 2
+/// @return 1 or 2; most_notice_lines for the Steam Input notice
 [[nodiscard]] std::size_t hint_line_count(Setting setting) noexcept;
+
+/// Returns the lines a row's hint takes in a dialog: hint_line_count, and
+/// on a Steam Deck one more for Maximum frame rate, which names the rate it
+/// starts at.
+///
+/// @param setting the setting
+/// @param context what the dialog shows beyond each setting's lines
+/// @return 1 or 2; most_notice_lines for the Steam Input notice
+[[nodiscard]] std::size_t hint_line_count(Setting setting, const RowContext& context) noexcept;
+
+/// The text of Controller's Steam Input notice, which its row breaks into
+/// lines between words.
+inline constexpr std::string_view steam_input_notice_text =
+    "Steam Input is on: the trackpads and back grips reach the game as Steam's mouse and keys. "
+    "Turn Steam Input off for Open Annihilation in Steam's controller settings to use them here.";
+/// Maximum frame rate's second hint line on a Steam Deck: the screen's
+/// rate, which the setting starts at, in place of {rate}.
+inline constexpr std::string_view steam_deck_rate_text =
+    "Steam Deck: starts at the screen's {rate} fps.";
 
 /// Returns a line of the text under a row as the dialog shows it: the
 /// hint's (hint_line); for the Game files rows the host's texts: the
 /// summary and its sizes line, the backups hint with the device's name
 /// (Dialog::game_files_device, "device" without one), and where the files
-/// are, broken into lines between words (break_lines); and for Your files
+/// are, broken into lines between words (break_lines); for Your files
 /// the player's own folder, then why the last folder asked for could not be
-/// opened, as a notice.
+/// opened, as a notice; for the Steam Input notice its text, broken into
+/// lines between words, as a notice; and on a Steam Deck Maximum frame
+/// rate's second line, naming the rate it starts at.
 ///
 /// @param dialog the dialog
 /// @param setting the row's setting

@@ -53,6 +53,33 @@ start_settings(const Options& options, oa::ui::engine_settings::ScreenSize deskt
     const Options& options, const oa::ui::engine_settings::EngineSettings& start
 ) noexcept;
 
+/// Returns the size the game's window opens at when neither --resolution nor
+/// the Screen size setting names one: kDefaultWindowWidth by
+/// kDefaultWindowHeight, each side held to the desktop's in Steam's Game
+/// Mode. gamescope shows the whole of a larger window shrunk to the screen,
+/// but its X server keeps the pointer within the desktop's size, which would
+/// leave the window's lower and right parts out of the pointer's reach.
+///
+/// @param desktop the desktop's size (desktop_size); desktop_screen_size when
+///     SDL does not report it, which leaves the default as it is
+/// @param steam_game_mode whether the run is in Steam's Game Mode
+///     (oa::platform::running_in_steam_game_mode)
+/// @return the size
+[[nodiscard]] oa::ui::engine_settings::ScreenSize
+default_window_size(oa::ui::engine_settings::ScreenSize desktop, bool steam_game_mode) noexcept;
+
+/// Logs on stdout the size the game's window opened at, the desktop's size
+/// and whether the run is in Steam's Game Mode, for example
+/// "open-annihilation: window: 1280x800 on a 1280x800 desktop, in Steam's
+/// Game Mode". A window whose size SDL does not report logs nothing.
+///
+/// @param window the game's window
+/// @param desktop the desktop's size (desktop_size)
+/// @param steam_game_mode whether the run is in Steam's Game Mode
+void report_window_size(
+    SDL_Window* window, oa::ui::engine_settings::ScreenSize desktop, bool steam_game_mode
+);
+
 /// Sets the display mode a window takes in full screen to the one nearest a
 /// screen size, and puts the window in full screen when asked.
 ///

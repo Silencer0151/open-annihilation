@@ -21,7 +21,7 @@ inline constexpr std::size_t side_panel_gaf_capacity = 0x1e;
 inline constexpr std::size_t side_font_name_capacity = 0x100;
 
 struct SideTable {
-    Side sides[OA_SIDE_COUNT];
+    Side sides[OA_SIDE_COUNT]{};
     uint32_t count{};
     char error[side_error_capacity]{}; // set when a required rectangle is missing
     // Each side's intgaf: the GAF in anims/ that holds its PANELTOP,

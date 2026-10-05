@@ -240,6 +240,24 @@ OpenPlayerResult IntroPlayer::open(const std::filesystem::path& path, const Play
     return OpenPlayerResult{std::optional<IntroPlayer>(std::move(player)), {}};
 }
 
+bool skips_movie(const SDL_Event& event) noexcept {
+    switch (event.type) {
+    case SDL_EVENT_QUIT:
+    case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_FINGER_DOWN:
+        return true;
+    case SDL_EVENT_KEY_DOWN:
+        return event.key.key == SDLK_ESCAPE;
+    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+        return event.gbutton.button == SDL_GAMEPAD_BUTTON_SOUTH ||
+               event.gbutton.button == SDL_GAMEPAD_BUTTON_EAST ||
+               event.gbutton.button == SDL_GAMEPAD_BUTTON_START;
+    default:
+        return false;
+    }
+}
+
 PlaybackResult IntroPlayer::play(const PlaybackOptions& options) {
     PlaybackResult playback;
     if (implementation_ == nullptr) {
@@ -258,6 +276,15 @@ PlaybackResult IntroPlayer::play(const PlaybackOptions& options) {
     std::unique_ptr<oa::audio::OutputStream> audio_stream;
     bool sound_started = false;
     bool sdl_initialized = false;
+    // The application may have no gamepad open yet, as before the game
+    // starts, and SDL sends a gamepad's buttons only while it is open: the
+    // movie opens every gamepad for its length. SDL counts the opens, so
+    // the application's own stay open after.
+    std::vector<SDL_Gamepad*> gamepads;
+    const auto open_gamepad = [&](SDL_JoystickID id) {
+        if (SDL_Gamepad* gamepad = SDL_OpenGamepad(id); gamepad != nullptr)
+            gamepads.push_back(gamepad);
+    };
     const auto canvas_width = std::max(kGamePresentationWidth, impl.width);
     const auto canvas_height = std::max(kGamePresentationHeight, impl.presentation_height);
     const SDL_FRect presentation_rect{
@@ -267,6 +294,9 @@ PlaybackResult IntroPlayer::play(const PlaybackOptions& options) {
         static_cast<float>(impl.presentation_height)
     };
     auto cleanup = [&] {
+        for (SDL_Gamepad* gamepad : gamepads)
+            SDL_CloseGamepad(gamepad);
+        gamepads.clear();
         audio_stream.reset();
         if (sound_started)
             oa::audio::sound_output().stop();
@@ -318,6 +348,14 @@ PlaybackResult IntroPlayer::play(const PlaybackOptions& options) {
             cleanup();
             return playback;
         }
+        if (SDL_WasInit(SDL_INIT_GAMEPAD) == SDL_INIT_GAMEPAD) {
+            int count = 0;
+            if (SDL_JoystickID* ids = SDL_GetGamepads(&count); ids != nullptr) {
+                for (int index = 0; index < count; ++index)
+                    open_gamepad(ids[index]);
+                SDL_free(ids);
+            }
+        }
         // A movie whose sound cannot play, as on a computer with no sound
         // device, is shown without it.
         if (options.play_audio && impl.has_audio()) {
@@ -350,12 +388,13 @@ PlaybackResult IntroPlayer::play(const PlaybackOptions& options) {
             return true;
         SDL_Event event{};
         while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED ||
-                (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE)) {
+            if (skips_movie(event)) {
                 playback.skipped = true;
                 stop = true;
                 return false;
             }
+            if (event.type == SDL_EVENT_GAMEPAD_ADDED)
+                open_gamepad(event.gdevice.which);
             if (options.hooks.window_event != nullptr)
                 options.hooks.window_event(options.hooks.context, event);
         }

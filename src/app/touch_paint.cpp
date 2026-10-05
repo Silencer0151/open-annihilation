@@ -554,6 +554,56 @@ void Painter::draw_coverage(
     note_painted(touched);
 }
 
+void Painter::draw_rgb(
+    std::span<const uint8_t> rgb, int width, int height, Box source, Area area, float opacity
+) noexcept {
+    constexpr std::size_t bytes_per_pixel = 3;
+    if (width <= 0 || height <= 0 || area.width <= 0.0F || area.height <= 0.0F ||
+        rgb.size() <
+            static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * bytes_per_pixel)
+        return;
+    const Box part = intersect(source, Box{0, 0, width, height});
+    const auto alpha = static_cast<uint8_t>(std::lround(std::clamp(opacity, 0.0F, 1.0F) * 255.0F));
+    if (part.empty() || alpha == 0)
+        return;
+    // The source is scaled to the area as a whole, so a part cut off the picture keeps its place.
+    const float across = static_cast<float>(source.width) / area.width;
+    const float down = static_cast<float>(source.height) / area.height;
+    const Box target = intersect(bounds_of(area), clip_);
+    Box touched{};
+    for (int row = target.y; row < target.y + target.height; ++row) {
+        const float centre_y = static_cast<float>(row) + 0.5F;
+        if (centre_y < area.y || centre_y >= area.y + area.height)
+            continue;
+        const int from_y = source.y + static_cast<int>(std::floor((centre_y - area.y) * down));
+        if (from_y < part.y || from_y >= part.y + part.height)
+            continue;
+        int first = -1;
+        int last = -1;
+        auto* pixel =
+            canvas_->rgba.data() + (static_cast<std::size_t>(row) * canvas_->width + target.x) * 4U;
+        for (int column = target.x; column < target.x + target.width; ++column, pixel += 4) {
+            const float centre_x = static_cast<float>(column) + 0.5F;
+            if (centre_x < area.x || centre_x >= area.x + area.width)
+                continue;
+            const int from_x =
+                source.x + static_cast<int>(std::floor((centre_x - area.x) * across));
+            if (from_x < part.x || from_x >= part.x + part.width)
+                continue;
+            const uint8_t* from = rgb.data() + (static_cast<std::size_t>(from_y) * width +
+                                                static_cast<std::size_t>(from_x)) *
+                                                   bytes_per_pixel;
+            blend_pixel(pixel, Rgba{from[0], from[1], from[2], alpha}, 255U);
+            if (first < 0)
+                first = column;
+            last = column;
+        }
+        if (first >= 0)
+            touched = unite(touched, Box{first, row, last - first + 1, 1});
+    }
+    note_painted(touched);
+}
+
 void Painter::draw_icon(Icon icon, Area box, Rgba colour) noexcept {
     const float size = std::min(box.width, box.height);
     if (icon == Icon::none || size <= 0.0F)

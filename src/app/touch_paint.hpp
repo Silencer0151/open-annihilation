@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // Painting for the touch controls' layer: RGBA rectangles, rounded panels,
-// circles, the radial menu's wedges, the controls' icon marks and their text,
-// blended with straight alpha into a buffer of the layer's own, every edge
-// smoothed by how much of each pixel the shape covers (docs/touch-controls.md).
+// circles, the radial menu's wedges, the controls' icon marks, their text
+// and the 3.1c pictures the pad's build ring shows, blended with straight
+// alpha into a buffer of the layer's own, every shape's edge smoothed by how
+// much of each pixel the shape covers (docs/touch-controls.md).
 #pragma once
 
 #include "oa/platform/text_font.hpp"
@@ -307,6 +308,20 @@ class Painter {
     /// @param colour the colour
     void draw_coverage(
         std::span<const uint8_t> alpha, int width, int height, int x, int y, Rgba colour
+    ) noexcept;
+
+    /// Blends part of an RGB picture scaled into an area: each canvas pixel whose centre lies in
+    /// the area takes the picture's pixel under it (no smoothing, so pixel art stays sharp), at
+    /// an opacity.
+    ///
+    /// @param rgb the picture, three bytes a pixel, rows top to bottom
+    /// @param width the picture's width in pixels
+    /// @param height the picture's height in pixels
+    /// @param source the part drawn, picture pixels; the part outside the picture is left out
+    /// @param area where it goes on the canvas
+    /// @param opacity 0 to 1; values outside are clamped
+    void draw_rgb(
+        std::span<const uint8_t> rgb, int width, int height, Box source, Area area, float opacity
     ) noexcept;
 
     /// Blends an icon centred in a box, as large as the box's shorter side allows.

@@ -4,7 +4,8 @@
 // The match's layout for the window: the 3.1c layout, or with touch
 // controls on a phone the full-bleed battlefield with the HUD's pieces in
 // placed regions; the safe area; where the battlefield overlays go; the
-// regions' drawing (docs/touch-controls.md).
+// regions' drawing, and the 3.1c pictures the pad's build ring shows
+// (docs/touch-controls.md).
 #include "oa/app/runtime.hpp"
 #include "touch_state.hpp"
 #include "oa/app/scaled_world.hpp"
@@ -155,9 +156,12 @@ struct FallbackRects {
 ///
 /// @param laid_out the phone layout
 /// @param left_handed whether the left-handed layout mirrors them
+/// @param control_scale the touch layer's points in window points (the Control size)
 /// @return the places, in canvas pixels
-FallbackRects fallback_rects(const layout::MatchLayout& laid_out, bool left_handed) {
-    const double density = laid_out.px_per_point > 0.0 ? laid_out.px_per_point : 1.0;
+FallbackRects
+fallback_rects(const layout::MatchLayout& laid_out, bool left_handed, double control_scale) {
+    const double density =
+        (laid_out.px_per_point > 0.0 ? laid_out.px_per_point : 1.0) * control_scale;
     const auto points = [density](double value) {
         return static_cast<int>(std::lround(value * density));
     };
@@ -227,10 +231,15 @@ layout::MatchLayout Runtime::make_window_match_layout(
     canvas_safe.bottom = to_canvas(safe.bottom);
     layout::MatchLayout laid_out{};
     if (touch_controls_active()) {
+        // The class comes from the window's size in the touch layer's points, the Control size
+        // making them larger; the 3.1c chrome keeps the window's points.
+        const float scale = std::max(touch_control_scale(), 0.001F);
         const int width_points = window_width > 0 ? window_width : width;
         const int height_points = window_height > 0 ? window_height : height;
-        if (touch_hud::classify_device(width_points, height_points) ==
-            touch_hud::DeviceClass::phone)
+        if (touch_hud::classify_device(
+                static_cast<int>(static_cast<float>(width_points) / scale),
+                static_cast<int>(static_cast<float>(height_points) / scale)
+            ) == touch_hud::DeviceClass::phone)
             return layout::make_phone_layout(width, height, px_per_point, canvas_safe);
         // On a canvas of device pixels the chrome keeps its size in points.
         laid_out =
@@ -265,12 +274,11 @@ layout::Insets Runtime::window_safe_insets() const {
 }
 
 layout::Rect Runtime::overlay_area() const {
-    if (touch_controls_active()) {
-        const auto* state = touch_state_if_made();
-        if (state != nullptr && state->frame_ready && state->frame.clear.width > 0 &&
-            state->frame.clear.height > 0)
-            return state->frame.clear;
-    }
+    // The touch controls' clear area, or the pad HUD's: the battlefield less what they cover.
+    const auto* state = touch_state_if_made();
+    if (state != nullptr && (touch_controls_active() || state->hud.pad.hud) && state->frame_ready &&
+        state->frame.clear.width > 0 && state->frame.clear.height > 0)
+        return state->frame.clear;
     layout::Rect area{};
     area.x = match_layout_.battlefield_x();
     area.y = match_layout_.battlefield_y();
@@ -380,12 +388,15 @@ touch_hud::Frame PhoneHudAccess::touch_frame(Runtime& runtime, touch_hud::HudSta
     const auto* state = runtime.touch_state_if_made();
     hud = state != nullptr ? state->hud : touch_hud::HudState{};
     const bool left_handed = runtime.engine_settings().touch_left_handed;
+    // The touch layer's points: the window's times the Control size.
+    const float px_per_point =
+        static_cast<float>(laid_out.px_per_point) * runtime.touch_control_scale();
     // The dispatcher's frame, while it was laid out for this canvas, safe area and hand.
     if (state != nullptr && state->frame_ready) {
         const auto& seen = state->viewport;
         if (seen.width == laid_out.width && seen.height == laid_out.height &&
             seen.device == touch_hud::DeviceClass::phone &&
-            std::abs(seen.px_per_point - static_cast<float>(laid_out.px_per_point)) < 1.0e-4F &&
+            std::abs(seen.px_per_point - px_per_point) < 1.0e-4F &&
             seen.safe.left == laid_out.safe.left && seen.safe.top == laid_out.safe.top &&
             seen.safe.right == laid_out.safe.right && seen.safe.bottom == laid_out.safe.bottom &&
             seen.left_handed == left_handed)
@@ -394,7 +405,7 @@ touch_hud::Frame PhoneHudAccess::touch_frame(Runtime& runtime, touch_hud::HudSta
     touch_hud::Viewport viewport{};
     viewport.width = laid_out.width;
     viewport.height = laid_out.height;
-    viewport.px_per_point = static_cast<float>(laid_out.px_per_point);
+    viewport.px_per_point = px_per_point;
     viewport.safe = laid_out.safe;
     viewport.device = touch_hud::DeviceClass::phone;
     viewport.left_handed = left_handed;
@@ -416,9 +427,11 @@ layout::Rect PhoneHudAccess::sheet_area(
     const Runtime& runtime, const touch_hud::Frame& frame, int source_width, int source_height
 ) {
     // A frame with no controls was not laid out for a phone.
-    const auto area = frame.control_count > 0
-                          ? frame.panel_sheet
-                          : fallback_rects(runtime.match_layout_, false).panel_sheet;
+    const auto area =
+        frame.control_count > 0
+            ? frame.panel_sheet
+            : fallback_rects(runtime.match_layout_, false, runtime.touch_control_scale())
+                  .panel_sheet;
     // A small panel grows to at most kSheetMaxScale points per source pixel, so it leaves the
     // battlefield in view.
     const double density =
@@ -435,7 +448,8 @@ void Runtime::refresh_placed_hud_regions() {
     phone.unit_info_source = {};
     touch_hud::HudState hud{};
     const auto frame = PhoneHudAccess::touch_frame(*this, hud);
-    const auto fallback = fallback_rects(match_layout_, engine_settings().touch_left_handed);
+    const auto fallback =
+        fallback_rects(match_layout_, engine_settings().touch_left_handed, touch_control_scale());
     const auto add = [this](
                          const layout::Rect& source,
                          const layout::Rect& canvas,
@@ -522,6 +536,68 @@ void Runtime::refresh_placed_hud_regions() {
     match_layout_.chrome_scale = layout::largest_region_scale(match_layout_);
 }
 
+std::array<RingPicture, touch_hud::build_ring_slot_count>
+PhoneHudAccess::build_ring_pictures(const Runtime& runtime, const touch_hud::BuildRing& ring) {
+    std::array<RingPicture, touch_hud::build_ring_slot_count> pictures{};
+    constexpr std::size_t bytes_per_pixel = 3;
+    const auto& hud = runtime.match_hud_cpu_;
+    if (!runtime.match_hud_ || hud.rgb.empty() ||
+        hud.rgb.size() < static_cast<std::size_t>(hud.width) * hud.height * bytes_per_pixel)
+        return pictures;
+    const auto& gadgets = runtime.match_hud_->layout.gadgets;
+    const int hud_width = static_cast<int>(runtime.match_hud_cpu_.width);
+    const int hud_height = static_cast<int>(runtime.match_hud_cpu_.height);
+    for (std::size_t slot = 0; slot < pictures.size(); ++slot) {
+        const auto& wedge = ring.wedges[slot];
+        if (wedge.gadget < 0 || static_cast<std::size_t>(wedge.gadget) >= gadgets.size())
+            continue;
+        // The gadget's own pixels, as the drawer's placed region shows them: a gadget that lies
+        // partly off the HUD layer shows none.
+        const auto& common = gadgets[static_cast<std::size_t>(wedge.gadget)].common;
+        const layout::Rect whole{common.x, common.y, common.width, common.height};
+        const auto source = clipped(whole, hud_width, hud_height);
+        if (empty(source) || source.width != whole.width || source.height != whole.height)
+            continue;
+        pictures[slot].source = source;
+        pictures[slot].canvas = layout::fit_inside(wedge.picture, source.width, source.height);
+    }
+    return pictures;
+}
+
+uint64_t PhoneHudAccess::build_ring_picture_signature(
+    const Runtime& runtime, const touch_hud::BuildRing& ring
+) {
+    // FNV-1a over each picture's place and pixels.
+    constexpr uint64_t offset = 14695981039346656037ULL;
+    constexpr uint64_t prime = 1099511628211ULL;
+    constexpr std::size_t bytes_per_pixel = 3;
+    uint64_t hash = offset;
+    bool any = false;
+    const auto& hud = runtime.match_hud_cpu_;
+    for (const auto& picture : build_ring_pictures(runtime, ring)) {
+        if (empty(picture.source))
+            continue;
+        any = true;
+        for (const int value :
+             {picture.source.x, picture.source.y, picture.source.width, picture.source.height}) {
+            hash ^= static_cast<uint32_t>(value);
+            hash *= prime;
+        }
+        for (int row = picture.source.y; row < picture.source.y + picture.source.height; ++row) {
+            const uint8_t* pixel = hud.rgb.data() + (static_cast<std::size_t>(row) * hud.width +
+                                                     static_cast<std::size_t>(picture.source.x)) *
+                                                        bytes_per_pixel;
+            const std::size_t count =
+                static_cast<std::size_t>(picture.source.width) * bytes_per_pixel;
+            for (std::size_t at = 0; at < count; ++at) {
+                hash ^= pixel[at];
+                hash *= prime;
+            }
+        }
+    }
+    return any ? hash : 0U;
+}
+
 void PhoneHudAccess::prepare_frame(Runtime& runtime) {
     if (!runtime.match_layout_.phone)
         return;
@@ -571,9 +647,9 @@ bool Runtime::placed_hud_covers(float x, float y) const {
     const auto canvas_y = static_cast<int>(std::floor(y));
     if (layout::hud_covers(match_layout_, canvas_x, canvas_y))
         return true;
-    if (!touch_controls_active())
-        return false;
     const auto* state = touch_state_if_made();
+    if (!touch_controls_active() && (state == nullptr || !state->hud.pad.hud))
+        return false;
     return state != nullptr && state->frame_ready &&
            touch_hud::covers(state->frame, layout::Point{canvas_x, canvas_y});
 }

@@ -2,9 +2,13 @@
 
 The touch controls' model (`oa/ui/touch_hud.hpp`, `oa::ui::touch_hud`): what
 the controls are, where they go and what a finger on them means, with no SDL
-and no runtime. The app writes a `HudState` (what the controls show), lays
-it out with `lay_out` into a `Frame` (canvas rectangles) and hit-tests
-fingers against it; the drawing reads both.
+and no runtime, and the gamepad's part of the same layer: the slim pad HUD,
+the FORCE chip, button badges, the build and group rings and the pad's
+hints. The app writes a `HudState` (what the controls show), lays it out
+with `lay_out` into a `Frame` (canvas rectangles) and hit-tests fingers
+against it; the drawing reads both. The gamepad dispatcher writes
+`HudState::pad`, `build_ring` and `sheet_focus`; the touch dispatcher writes
+`force_touch`.
 
 ## Entry points
 
@@ -52,6 +56,32 @@ fingers against it; the drawing reads both.
   in-game panels no help text): the order buttons, the standing-order
   toggles, ORDERS, BUILD, PREV and NEXT, found by the word the gadget's
   name holds.
+- With `HudState::pad.hud` (a gamepad sent input and no finger has landed)
+  `lay_out` gives the **slim pad HUD** over the 3.1c screen's battlefield
+  instead: the status pill (`Frame::status`) at its top, the QUEUE, ADD and
+  (with `pad.force_shown`) FORCE chips under it, the stored groups' chips
+  from its bottom left, an open SELECT ▾ centred on it, and `Frame::clear`
+  between them. With touch controls, `pad.force_shown` puts FORCE at the
+  top of the tablet's thumb column.
+- `make_build_ring` and `build_ring_hit` lay out and hit-test the pad's
+  build ring: eight slots clockwise from the top (build buttons at N, NE,
+  SE, S, SW and NW, NEXT at E, PREV at W), inner radius 44 pt, outer
+  128 pt, 56 pt pictures midway across, the ring kept inside the radial's
+  area. `make_group_ring` places the ring of the nine groups beside the
+  thumb column's place above the group bar's row (a phone: right of its
+  column, above its chips), mirrored for a left-handed viewport. `lay_out`
+  lays out a `build_wedge` per filled slot and nine `group_wedge`s while
+  they show, over the controls under them.
+- `pad_status_hint` and `ring_hint` give the pad's lines as pieces of
+  glyphs and words ("R2 MOVE · ENEMY: ATTACK · L2 CANCEL"; "RELEASE R1 GIVE
+  · A ARM · B CLOSE"), the buttons found by `pad_controls::chord_for`, so
+  the fallback and left-handed maps name the right ones. `control_badge`
+  gives a control's badge (QUEUE R4, ADD L4, CLEAR B, SELECT ▾ D-pad left,
+  PAUSE View+X, CHAT View+A, CENTRE L3, FOLLOW R3, NEXT D-pad right, INFO
+  View, FORCE R5, a group chip's groups-layer button), and
+  `control_help_with_pad` the help line naming it. `button_name`,
+  `chord_words` and `hint_words` say buttons, chords and hints in words, by
+  glyph set (Deck, Xbox, PlayStation, Nintendo by place).
 
 ## Layout rules
 
@@ -97,16 +127,17 @@ fingers against it; the drawing reads both.
 
 - `lay_out` reads only the `HudState` fields marked (layout), plus the
   tip's anchor while it shows; the pressed, lit, progress, text and rail
-  order fields change how controls look, never where they are. The last
-  rail slot laid out is always MORE.
+  order fields change how controls look, never where they are, and so do
+  the pad's badges, glyphs, maps, aims and hints. The last rail slot laid
+  out is always MORE.
 - Every rectangle is in canvas pixels, computed from points with
   `Viewport::px_per_point`; positions are rounded in whole points, so at
   3 pixels a point every phone rectangle is exactly three times its size at
   1. Every control lies inside the safe area; a control that cannot fit is
   left out.
-- No two controls overlap (only the radial's wedge rectangles may share
+- No two controls overlap (only a ring's own wedge rectangles may share
   corners), and `Frame::clear` overlaps no control outside an open sheet or
-  the radial.
+  a ring.
 - The left-handed layout mirrors every control, the phone's regions and
   `Frame::clear`: on a phone about the safe area, on a tablet about the
   battlefield, so the 3.1c panel and MENU in its top bar stay. The banner,
@@ -127,7 +158,12 @@ large phones, canvases at 2 and 3 pixels a point) in both hands with every
 sheet and the radial, the scaling at
 3 pixels a point, the same frame for states that differ only in looks, the
 left-handed mirror, the latches, the radial, the hit tests and every
-control's texts.
+control's texts. With a gamepad it checks the Steam Deck's 1280x800 screen
+at Control size 1, 1.25 and 1.5 (always the tablet layout, nothing off the
+screen), the slim pad HUD's pinned places, FORCE in the thumb column, that
+the pad's looks never move a control, the build ring's slots, hit test,
+clamp and scale, the group ring's place, and the hints, badges, help lines
+and button names through each map.
 
 ## Limitations
 

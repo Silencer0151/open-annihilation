@@ -12,6 +12,7 @@
 #include "oa/data/mod_profile/overrides.hpp"
 #include "oa/platform/preferences.hpp"
 #include "oa/present/text_style.hpp"
+#include "oa/ui/pad_controls.hpp"
 
 #include <array>
 #include <cstddef>
@@ -87,6 +88,33 @@ inline constexpr std::string_view touch_latches = "open-annihilation.touch-latch
 inline constexpr std::string_view touch_haptics = "open-annihilation.touch-haptics";
 /// 1 or 0 (EngineSettings::touch_left_handed).
 inline constexpr std::string_view touch_left_handed = "open-annihilation.touch-left-handed";
+/// "standard", "large" or "larger" (EngineSettings::touch_control_size).
+inline constexpr std::string_view touch_control_size = "open-annihilation.touch-control-size";
+/// "trackpads" or "sticks" (EngineSettings::pad_scheme).
+inline constexpr std::string_view pad_scheme = "open-annihilation.pad-scheme";
+/// "relative" or "absolute" (EngineSettings::pad_right_trackpad).
+inline constexpr std::string_view pad_right_trackpad = "open-annihilation.pad-right-trackpad";
+/// Percent, decimal (EngineSettings::pad_pointer_speed).
+inline constexpr std::string_view pad_pointer_speed = "open-annihilation.pad-pointer-speed";
+/// "off", "low" or "high" (EngineSettings::pad_acceleration).
+inline constexpr std::string_view pad_acceleration = "open-annihilation.pad-acceleration";
+/// 1 or 0 (EngineSettings::pad_glide).
+inline constexpr std::string_view pad_glide = "open-annihilation.pad-glide";
+/// "zoom", "pointer" or "nothing" (EngineSettings::pad_right_stick).
+inline constexpr std::string_view pad_right_stick = "open-annihilation.pad-right-stick";
+/// 1 or 0 (EngineSettings::pad_magnetism).
+inline constexpr std::string_view pad_magnetism = "open-annihilation.pad-magnetism";
+/// "off", "right-pad", "right-stick" or "always" (EngineSettings::pad_gyro).
+inline constexpr std::string_view pad_gyro = "open-annihilation.pad-gyro";
+/// Percent, decimal (EngineSettings::pad_gyro_speed).
+inline constexpr std::string_view pad_gyro_speed = "open-annihilation.pad-gyro-speed";
+/// "off", "light" or "strong" (EngineSettings::pad_haptics).
+inline constexpr std::string_view pad_haptics = "open-annihilation.pad-haptics";
+/// "automatic", "steam-deck", "xbox", "playstation", "nintendo" or "off"
+/// (EngineSettings::pad_prompts).
+inline constexpr std::string_view pad_prompts = "open-annihilation.pad-prompts";
+/// 1 or 0 (EngineSettings::pad_left_handed).
+inline constexpr std::string_view pad_left_handed = "open-annihilation.pad-left-handed";
 /// 1 or 0 (EngineSettings::game_files_backed_up).
 inline constexpr std::string_view game_files_backed_up = "open-annihilation.game-files-backed-up";
 /// The start of the key a profile's overrides of its standard hacks are
@@ -334,6 +362,30 @@ inline constexpr std::array<TouchLatches, 2> touch_latches_choices{
     TouchLatches::one_action,
 };
 
+/// The touch layer's size on a dense screen (the Touch and Controller sections' Control size).
+enum class ControlSize : uint8_t {
+    standard, ///< the touch layer's own sizes
+    large,    ///< a quarter larger
+    larger,   ///< half as large again
+};
+
+/// The Control sizes, in the order the dialog offers them.
+inline constexpr std::array<ControlSize, 3> control_size_choices{
+    ControlSize::standard,
+    ControlSize::large,
+    ControlSize::larger,
+};
+
+/// The Control size a Steam Deck starts with: its screen is small and dense,
+/// so the touch controls come close to a tablet's in size.
+inline constexpr ControlSize steam_deck_control_size = ControlSize::larger;
+
+/// Returns the points scale of a Control size.
+///
+/// @param size the Control size
+/// @return 1, 1.25 or 1.5
+[[nodiscard]] float control_size_scale(ControlSize size) noexcept;
+
 /// Returns a hold delay as the setting keeps it: held to its range and put
 /// on its nearest stop.
 ///
@@ -362,11 +414,37 @@ struct EngineSettings {
     uint32_t max_frame_rate{highest_frame_rate};   ///< frames a second
     AntiAliasing anti_aliasing{AntiAliasing::off}; ///< enhanced anti-aliasing of units
     bool frame_stats{}; ///< the frame and tick times over the battlefield (+stats)
-    TouchDrag touch_drag{TouchDrag::automatic};        ///< One-finger drag
-    uint32_t touch_hold_ms{default_touch_hold_ms};     ///< Hold delay, ms
-    TouchLatches touch_latches{TouchLatches::stay_on}; ///< QUEUE and ADD
-    bool touch_haptics{true};                          ///< Haptics
-    bool touch_left_handed{};                          ///< Left-handed layout
+    TouchDrag touch_drag{TouchDrag::automatic};            ///< One-finger drag
+    uint32_t touch_hold_ms{default_touch_hold_ms};         ///< Hold delay, ms
+    TouchLatches touch_latches{TouchLatches::stay_on};     ///< QUEUE and ADD
+    bool touch_haptics{true};                              ///< Haptics
+    bool touch_left_handed{};                              ///< Left-handed layout
+    ControlSize touch_control_size{ControlSize::standard}; ///< Control size
+    /// Scheme (Controller).
+    oa::ui::pad_controls::Scheme pad_scheme{oa::ui::pad_controls::Scheme::trackpads};
+    /// Right trackpad (Controller).
+    oa::ui::pad_controls::RightTrackpad pad_right_trackpad{
+        oa::ui::pad_controls::RightTrackpad::relative
+    };
+    /// Pointer speed, percent (Controller).
+    uint32_t pad_pointer_speed{oa::ui::pad_controls::default_pointer_speed};
+    /// Pointer acceleration (Controller).
+    oa::ui::pad_controls::Acceleration pad_acceleration{oa::ui::pad_controls::Acceleration::low};
+    bool pad_glide{}; ///< Trackpad glide (Controller)
+    /// Right stick (Controller).
+    oa::ui::pad_controls::RightStick pad_right_stick{
+        oa::ui::pad_controls::RightStick::zoom_and_pages
+    };
+    bool pad_magnetism{true}; ///< Magnetism (stick pointer) (Controller)
+    /// Gyro pointer (Controller).
+    oa::ui::pad_controls::Gyro pad_gyro{oa::ui::pad_controls::Gyro::off};
+    /// Gyro speed, percent (Controller).
+    uint32_t pad_gyro_speed{oa::ui::pad_controls::default_gyro_speed};
+    /// Haptics (Controller).
+    oa::ui::pad_controls::Haptics pad_haptics{oa::ui::pad_controls::Haptics::light};
+    /// Button prompts (Controller).
+    oa::ui::pad_controls::Prompts pad_prompts{oa::ui::pad_controls::Prompts::automatic};
+    bool pad_left_handed{}; ///< Left-handed (Controller)
     /// The game files are kept in the device's backups (only where the platform keeps them).
     bool game_files_backed_up{};
     /// The window's size, and the screen's in full screen, from the next start.
@@ -457,6 +535,9 @@ struct Inputs {
     /// oa::data::mod_profile::base_game_id without a mod. Empty reads no
     /// overrides.
     std::string_view profile_id{};
+    /// The game runs on a Steam Deck whose screen refreshes this many times a second (60 on
+    /// the LCD model, 90 on the OLED); 0 on every other machine.
+    uint32_t steam_deck_panel_hz{};
     /// The platform the game is built for opens every window at the
     /// display's own pixel density, so that Native pixel density is always
     /// on.
@@ -494,8 +575,17 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// system's choice with the player's own file and English, the game's own
 /// default, with a named one. Developer Mode is Off, with no overrides. The
 /// Touch section is the same everywhere: One-finger drag Automatic, Hold
-/// delay default_touch_hold_ms, QUEUE and ADD Stay on, Haptics On and
-/// Left-handed layout Off.
+/// delay default_touch_hold_ms, QUEUE and ADD Stay on, Haptics On,
+/// Left-handed layout Off and Control size Standard. On a Steam Deck
+/// (Inputs::steam_deck_panel_hz above 0) with the player's own file the
+/// maximum frame rate is the screen's rate, held to lowest_frame_rate to
+/// highest_frame_rate and put on its nearest stop, and Control size is
+/// steam_deck_control_size; nothing else changes there. The Controller
+/// section is the same everywhere: Scheme Trackpads, Right trackpad
+/// relative, Pointer speed default_pointer_speed, Pointer acceleration Low,
+/// Trackpad glide Off, Right stick Zoom and build pages, Magnetism On, Gyro
+/// pointer Off, Gyro speed default_gyro_speed, Haptics Light, Button prompts
+/// Automatic and Left-handed Off (oa/ui/pad_controls.hpp).
 ///
 /// @param inputs the platform, the preferences file and the installation
 /// @return the defaults
@@ -534,7 +624,16 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// read as every switch does. Menu scaling reads the words
 /// menu_scaling_text writes, and any other value gives the default; Native
 /// pixel density reads as every switch does, but stays on where the
-/// platform opens every window at native density.
+/// platform opens every window at native density. Control size and the
+/// Controller section's choices read the words their keys name ("standard",
+/// "large", "larger"; "trackpads", "sticks"; "relative", "absolute"; "off",
+/// "low", "high"; "zoom", "pointer", "nothing"; "off", "right-pad",
+/// "right-stick", "always"; "off", "light", "strong"; "automatic",
+/// "steam-deck", "xbox", "playstation", "nintendo", "off"), and any other
+/// value gives the default; Pointer speed and Gyro speed read as numbers,
+/// held to their ranges and put on their nearest stops (half a step rounds
+/// up); Trackpad glide, Magnetism and Left-handed read as every switch does.
+/// A stored value always wins over a Steam Deck's defaults.
 ///
 /// @param values the preferences
 /// @param inputs the platform, the preferences file and the installation
@@ -552,8 +651,10 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// 0, the screen size as "desktop" or "WIDTHxHEIGHT", hardware
 /// acceleration as "off", "basic" or "full", Menu scaling, One-finger drag
 /// and QUEUE and ADD as their words (menu_scaling_text, touch_drag_text,
-/// touch_latches_text), the hold delay
-/// in milliseconds, the mod and the picked folder as their paths, or erased
+/// touch_latches_text), the hold delay in milliseconds, Control size and the
+/// Controller section's choices as the words read_settings reads, Pointer
+/// speed and Gyro speed in percent, the mod and the picked folder as their
+/// paths, or erased
 /// for none; Restore defaults leaves the picked folder as it is. The picked
 /// folder's key is then erased unless the mod key names the same folder,
 /// a key an earlier save left included: once another mod or No Mod is

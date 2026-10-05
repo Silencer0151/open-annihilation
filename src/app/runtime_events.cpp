@@ -118,6 +118,12 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
         if (key >= 0x20 && key < 0x7f)
             record_typed_key(static_cast<uint8_t>(std::toupper(static_cast<int>(key))));
     }
+    // A held Enter's repeats press nothing on these screens: the press that
+    // opened one may have come from the same key.
+    if (event.type == SDL_EVENT_KEY_DOWN && event.key.repeat &&
+        (screen_ == Screen::campaign_end || screen_ == Screen::briefing) &&
+        (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER))
+        return;
     if (event.type == SDL_EVENT_KEY_DOWN && screen_ == Screen::campaign_end &&
         (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER)) {
         activate_end_panel_default();
@@ -161,6 +167,10 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
             rebuild_surface();
             return;
         }
+        // Return and Space press the focused button; a gamepad's A and Menu
+        // send Return.
+        if (press_frontend_focus_key(event.key))
+            return;
     }
     if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
         if (screen_ == Screen::main_menu) {
@@ -462,22 +472,50 @@ bool Runtime::press_frontend_quick_key(const SDL_KeyboardEvent& key) {
             button->quick_key == 0 ||
             std::tolower(static_cast<unsigned char>(button->quick_key)) != typed)
             continue;
-        // The screens' handlers read the selected gadget or the one under the
-        // pointer; a screen that stays up then has the gadget under the
-        // pointer hovered again, with its help.
-        const auto pointer_hover = hovered_;
-        event_button_ = 1;
-        selected_ = static_cast<int32_t>(index);
-        hovered_ = index;
-        click_selected_frontend_gadget();
-        selected_ = -1;
-        if (hovered_ == index) {
-            hovered_ = pointer_hover;
-            refresh_help_text();
-        }
+        press_frontend_button(index);
         return true;
     }
     return false;
+}
+
+bool Runtime::press_frontend_focus_key(const SDL_KeyboardEvent& key) {
+    const bool enter = key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER;
+    if ((!enter && key.key != SDLK_SPACE) || key.repeat ||
+        (key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) != 0)
+        return false;
+    const auto focus = frontend_focus();
+    if (focus < 0) {
+        // A panel with no record focused, as the main menu opens, takes its
+        // first from Return, ringed, for the next press to press.
+        if (!enter)
+            return false;
+        move_frontend_focus(oa::ui::gui_input::FocusDirection::next);
+        rebuild_surface();
+        return true;
+    }
+    const auto index = static_cast<std::size_t>(focus);
+    const auto& gadget = resources_.layout.gadgets[index];
+    const auto* button = std::get_if<oa::ui::gui_layout::ButtonFields>(&gadget.fields);
+    if (gadget.common.active == 0 || button == nullptr || button->grayed_out)
+        return false;
+    press_frontend_button(index);
+    return true;
+}
+
+void Runtime::press_frontend_button(std::size_t index) {
+    // The screens' handlers read the selected gadget or the one under the
+    // pointer; a screen that stays up then has the gadget under the pointer
+    // hovered again, with its help.
+    const auto pointer_hover = hovered_;
+    event_button_ = 1;
+    selected_ = static_cast<int32_t>(index);
+    hovered_ = index;
+    click_selected_frontend_gadget();
+    selected_ = -1;
+    if (hovered_ == index) {
+        hovered_ = pointer_hover;
+        refresh_help_text();
+    }
 }
 
 bool Runtime::frontend_gadget_pressable(std::size_t index) const {

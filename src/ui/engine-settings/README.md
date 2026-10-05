@@ -28,7 +28,7 @@ the locks a running game puts on them (`settings_locks`).
 | | Font outline | Off, On | On | `open-annihilation.text-outline` |
 | | Font shadow | Off, On | On | `open-annihilation.text-shadow` |
 | | Game text background | Off, On | Off | `open-annihilation.text-background` |
-| Graphics | Maximum frame rate | 30 to 120, steps of 5 | 120; 60 on a Raspberry Pi or a light machine with the player's own preferences file | `open-annihilation.max-fps` |
+| Graphics | Maximum frame rate | 30 to 120, steps of 5 | 120; 60 on a Raspberry Pi or a light machine with the player's own preferences file; a Steam Deck's screen rate (60 on the LCD model, 90 on the OLED) on a Deck with the player's own preferences file | `open-annihilation.max-fps` |
 | | Enhanced anti-aliasing | Off, 2×, 4×, 8×, 16×; a stored level between reads as the one below it, a stored 3 as 2× | Off, a Raspberry Pi and a light machine included | `open-annihilation.anti-aliasing` |
 | | Screen size, from the next start | Desktop, 640×480, 800×600, 1024×768, 1280×1024 | Desktop; 800×600 on a light machine with the player's own preferences file, 640×480 when its desktop is smaller | `open-annihilation.screen-size` (`desktop` or `800x600`) |
 | | Hardware acceleration | Off, Basic, Full | Full with the player's own preferences file on every machine; Off with `--preferences-file` | `open-annihilation.hardware-acceleration` (`off`, `basic` or `full`) |
@@ -40,6 +40,20 @@ the locks a running game puts on them (`settings_locks`).
 | | QUEUE and ADD | Stay on, One action | Stay on | `open-annihilation.touch-latches` (`stay-on` or `one-action`) |
 | | Haptics | Off, On | On | `open-annihilation.touch-haptics` |
 | | Left-handed layout | Off, On | Off | `open-annihilation.touch-left-handed` |
+| | Control size, also in Controller | Standard, Large, Larger (the touch layer's points 1, 1.25 or 1.5 times) | Standard; Larger on a Steam Deck with the player's own preferences file | `open-annihilation.touch-control-size` (`standard`, `large` or `larger`) |
+| Controller, listed only once a gamepad has sent input in the run | Scheme | Trackpads, Sticks | Trackpads | `open-annihilation.pad-scheme` (`trackpads` or `sticks`) |
+| | Right trackpad | Relative, Absolute (the pointer's two ways) | Relative | `open-annihilation.pad-right-trackpad` (`relative` or `absolute`) |
+| | Pointer speed | 50% to 300%, steps of 10% | 100% | `open-annihilation.pad-pointer-speed` |
+| | Pointer acceleration | Off, Low, High | Low | `open-annihilation.pad-acceleration` (`off`, `low` or `high`) |
+| | Trackpad glide | Off, On | Off | `open-annihilation.pad-glide` |
+| | Right stick | Zoom (zoom and build pages), Pointer, Nothing | Zoom | `open-annihilation.pad-right-stick` (`zoom`, `pointer` or `nothing`) |
+| | Magnetism (stick pointer) | Off, On | On | `open-annihilation.pad-magnetism` |
+| | Gyro pointer | Off, While the right pad is touched, While the right stick is touched, Always | Off | `open-annihilation.pad-gyro` (`off`, `right-pad`, `right-stick` or `always`) |
+| | Gyro speed | 50% to 400%, steps of 10% | 100% | `open-annihilation.pad-gyro-speed` |
+| | Haptics | Off, Light, Strong | Light | `open-annihilation.pad-haptics` (`off`, `light` or `strong`) |
+| | Button prompts | Automatic, Steam Deck, Xbox, PlayStation, Nintendo, Off | Automatic | `open-annihilation.pad-prompts` (`automatic`, `steam-deck`, `xbox`, `playstation`, `nintendo` or `off`) |
+| | Left-handed | Off, On | Off | `open-annihilation.pad-left-handed` |
+| | Control size, Hold delay, QUEUE and ADD | Touch's own rows, shared | | as in Touch |
 | Game files, listed only in the main menu's dialog where the platform brings game files in | Include in device backups | Off, On | Off | `open-annihilation.game-files-backed-up` |
 | Developer | Enable Developer Mode | Off, On | Off | `open-annihilation.developer-mode` |
 | | Show performance statistics | Off, On | Off | `open-annihilation.frame-stats` |
@@ -56,6 +70,25 @@ hold delay is how long a finger stays down before it counts as a hold, which
 opens the order menu, gives a build button's right press or shows a
 control's help. QUEUE and ADD says whether a tapped QUEUE, ADD or x5 stays on
 until it is tapped again or turns off after the next order or selection.
+
+The Controller section is the same everywhere too. A stored choice that is
+none of its words reads as the default; Pointer speed and Gyro speed are
+held to their ranges and put on their nearest steps, half a step up. The
+gamepad reads the settings in effect every frame, so a change takes effect
+at once. While the gamepad reaches the game through Steam Input, the
+section's first row says so in amber: "Steam Input is on: the trackpads and
+back grips reach the game as Steam's mouse and keys. Turn Steam Input off
+for Open Annihilation in Steam's controller settings to use them here."
+
+A Steam Deck (`oa/platform/machine.hpp`, `running_steam_deck_model`: Linux
+names the maker Valve and the product Jupiter, the LCD model, or Galileo,
+the OLED, in `/sys/class/dmi/id`) starts, with the player's own preferences
+file, at its screen's rate, 60 or 90 frames a second, with Control size
+Larger, so that the touch controls come close to a tablet's in size; nothing
+else changes there. Maximum frame rate's hint has a second line on a Deck,
+"Steam Deck: starts at the screen's 90 fps." (`Dialog::steam_deck_panel_hz`,
+`Inputs::steam_deck_panel_hz`). A stored value always wins, and Restore
+defaults puts the Deck's defaults back.
 
 A mod's limits (`oa::data::limits`, handed in through `Inputs::units_per_player`
 and `match_path_search_nodes`) change three things: the unit limit a player
@@ -283,16 +316,21 @@ edge and hairline rules, and one green accent for what is selected:
   ANNIHILATION SETTINGS" and the version, with "Shared game - still
   running" in amber while a shared game keeps running;
 - the sections down the left (Mods, Controls, Common Tweaks, Language,
-  Graphics, Touch while the game has touch controls, and Game files where
-  the host lists it), Developer at the foot after a line, the open one
-  marked;
+  Graphics, Touch while the game has touch controls, Controller once a
+  gamepad has sent input, and Game files where the host lists it),
+  Developer at the foot after a line, the open one marked;
 - the open section's heading and rows: a label, a hint of one or two lines,
   and an Off/On switch, a level strip (Off, 2x, 4x, 8x, 16x for Enhanced
   anti-aliasing; Off, Basic, Full for Hardware acceleration; Automatic,
-  Box, Scroll for One-finger drag; Stay on, One action for QUEUE and ADD),
+  Box, Scroll for One-finger drag; Stay on, One action for QUEUE and ADD;
+  Standard, Large, Larger for Control size; and the Controller section's
+  Scheme, Right trackpad, Pointer acceleration, Right stick and Haptics),
   a slider with stops and its value under the hint, or a drop-down under
-  the hint (Language): a field showing the choice, with an arrow at its
-  right; Mods shows its list of mods in their place;
+  the hint (Language, Gyro pointer, whose field is wider for its longest
+  choice, and Button prompts): a field showing the choice, with an arrow at
+  its right; a text row shows only text under its label (Where the files
+  are, and Controller's Steam Input notice of up to four lines); Mods shows
+  its list of mods in their place;
 - Restore defaults, Cancel and OK along the bottom.
 
 A section holds any number of rows. They lie in a view under the section's
@@ -304,8 +342,8 @@ pixels, and shows a scroll bar in the margin right of its rows: a well like
 a switch's, its thumb as tall as the view's share of the section and never
 under 16 pixels. Graphics, with seven rows, is taller than its view by 198
 pixels, Language, with the Language drop-down, four switches and the
-Text size slider, by 129, and Touch, with its two strips, the Hold delay
-slider and two switches, by 62; Controls and Common Tweaks fit, Common
+Text size slider, by 129, and Touch, with its three strips, the Hold delay
+slider and two switches, by 121; Controls and Common Tweaks fit, Common
 Tweaks' Your files and two sliders in 210 pixels, and draw as if there were
 no scrolling,
 with no bar. Each section keeps its offset while the
@@ -325,15 +363,16 @@ focus, and a press on it leaves the focus where it is. While a press is held
 the wheel and the scroll keys do nothing, so only a drag of the scroll bar
 scrolls then. No scroll changes a setting or moves the focus.
 
-Controls are numbered: the sections' entries 0 to 7, each its place in the
-list with Touch whether or not Touch is listed (Touch 5, Developer 6, so a
-dialog without Touch has no control 5), and Game files 7 after Developer,
-so that Touch and Developer keep their numbers in every dialog (a mod's
-options' 0 to 4); Restore defaults 8, Cancel 9, OK 10, the scroll bar 11,
-and the open section's rows from 12, with no upper end. The list draws its
-entries by their place in the list it shows, and the focus walks that list,
-so the dialog without Touch or Game files draws and answers exactly as it
-did before they were added.
+Controls are numbered: the sections' entries 0 to 8, each its place in the
+list with Touch and Controller whether or not they are listed (Touch 5,
+Controller 6, Developer 7, so a dialog without Touch has no control 5 and
+one without Controller no control 6), and Game files 8 after Developer, so
+that Touch, Controller and Developer keep their numbers in every dialog (a
+mod's options' 0 to 4); Restore defaults 9, Cancel 10, OK 11, the scroll bar
+12, and the open section's rows from 13, with no upper end. The list draws
+its entries by their place in the list it shows, and the focus walks that
+list, so the dialog without Touch, Controller or Game files draws and
+answers exactly as it did before they were added.
 
 The Touch section is listed only while the game has touch controls:
 `Dialog::touch`, which the host gives `open_dialog` and keeps with
@@ -341,8 +380,22 @@ The Touch section is listed only while the game has touch controls:
 finger turns the touch controls on (`dialog_pages(kind, touch)`). A dialog
 asked to open on Touch without them opens on its first section, Mods.
 
-The Game files section is listed, between Touch (or Graphics) and
-Developer, only where the host says so (`Dialog::game_files`, given to
+The Controller section is listed only once a gamepad has sent input in the
+run: `Dialog::controller`, which the host gives `open_dialog` and keeps with
+`set_controller_section` each frame, beside `Dialog::steam_input`, so that
+Controller shows from the moment a gamepad is used and its Steam Input
+notice while it applies (`dialog_pages(kind, touch, game_files,
+controller)`). It stands after Touch and before Game files. A dialog asked
+to open on Controller without it opens on its first section, Mods; one that
+stops listing it while it shows it shows Mods, and the focus leaves its
+controls. The notice coming or going while Controller shows moves each row
+by one, and the focus with its row. Its rows: Scheme, Right trackpad,
+Pointer speed, Pointer acceleration, Trackpad glide, Right stick, Magnetism
+(stick pointer), Gyro pointer, Gyro speed, Haptics, Button prompts,
+Left-handed, then Touch's own Control size, Hold delay and QUEUE and ADD.
+
+The Game files section is listed, between Controller (or Touch, or
+Graphics) and Developer, only where the host says so (`Dialog::game_files`, given to
 `open_dialog`): the main menu's dialog of a game whose platform brings game
 files in. A dialog asked to open on Game files without it opens on its
 first section, Mods. Its three rows:
@@ -612,9 +665,15 @@ them, the overrides kept under each profile's id and read back, erased
 when none are left, and kept by Restore defaults; and the Touch section's
 keys, its defaults on every machine, its words read and others dropped, the
 hold delay held to its range and put on its nearest step, and its round
-trip and Restore defaults; and the backups switch: Off by default on every
+trip and Restore defaults; the backups switch: Off by default on every
 machine, read as every switch, written alone and erased by Restore
-defaults;
+defaults; a Steam Deck's defaults at 60 and 90 frames a second with
+Control size Larger, nothing else moved, a named file without them, a
+screen's rate held to the range and put on a step, a stored value winning
+and Restore defaults bringing them back; and Control size and the
+Controller section: their keys, defaults on every machine, words read and
+others dropped, the speeds held to their ranges and steps, and the round
+trip and Restore defaults;
 `ui-engine-settings-dialog` the dialog's layout (every part inside the
 panel and none overlapping), its sections, switches and their one table,
 slider stops, both level strips, keys, footer buttons, locks and the faces
@@ -657,7 +716,17 @@ while Off, a hack turned on and off, a switch, a slider and a set's value
 set through the pointer and the keys, the overrides kept and dropped as
 the profile's own values come back, Restore profile values, Show Active
 Only and its count, the list's scrolling and focus, and its summaries'
-lines; Touch: listed only with touch controls, at its place in the list
+lines; Controller: listed only once a gamepad has sent input, after
+Graphics and Touch and before Game files, each entry's number kept, the
+focus walking it, `set_controller_section` listing and unlisting it, its
+fifteen rows with their strips, sliders (26 and 36 stops), switches and
+drop-downs by pointer and keys, Control size, Hold delay and QUEUE and ADD
+as Touch's own settings, Restore defaults (a Steam Deck's frame rate and
+Control size Larger included) and Cancel, the Steam Input notice's exact
+text in amber taking no press or focus, the focus kept on its row as the
+notice comes and goes, the dialog with Controller drawn alike but for the
+list from its entry down and without it as ever, and Maximum frame rate's
+Steam Deck line; Touch: listed only with touch controls, at its place in the list
 with the line and Developer under it, the list without it where it always
 was, each entry's number the same with and without it, the focus walking
 it, its rows, their texts, strips, slider stops and switches, Restore
@@ -667,7 +736,8 @@ reach (15 points off a switch takes it, 30 points off nothing, a mouse
 press 15 points off nothing) at several scales, a slider dragged from under
 its track and an open list's nearest item; Game files: listed only with
 its flag, between Touch or Graphics and Developer, the line and
-Developer under it, its entry numbered 7 with Touch 5 and Developer 6, the
+Developer under it, its entry numbered 8 with Touch 5, Controller 6 and
+Developer 7, the
 focus walking it, its three rows and their texts, MANAGE… returning
 `manage_game_files` to a click, to Space and to a finger beside it, the
 switch by either half and the keys, Restore defaults and Cancel, where the
@@ -681,7 +751,9 @@ its text wrapped and its path broken at its separators, its parts kept
 apart, its buttons, keys and colours; and
 `ui-engine-settings-dialog-data` its fonts, and every text
 fitting its place in them, a scrolled section's at every offset included,
-Touch's with each way of its strips, every status line in the 309 columns
+Touch's with each way of its strips, Controller's with each way of its
+strips and drop-downs, with and without the notice and with its lists
+open, Graphics on a Steam Deck, every status line in the 309 columns
 of a hint, the Game files section with a host's usual texts and the
 Language dialog, Mods under each lock and with a notice, the Switch Mod
 question for every mod, a long title's among them, and its note for a

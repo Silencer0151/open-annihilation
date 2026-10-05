@@ -7,11 +7,15 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
+#include <optional>
 #include <string>
+#include <string_view>
 
 namespace oa::ui::engine_settings {
 
 namespace mod_profile = oa::data::mod_profile;
+namespace pad_controls = oa::ui::pad_controls;
 
 static_assert(default_unit_limit == oa::sim::session::kDefaultUnitLimit);
 static_assert(lowest_stored_unit_limit == oa::sim::session::kMinUnitLimit);
@@ -187,8 +191,8 @@ std::optional<HardwareAcceleration> stored_acceleration(std::string_view text) {
     return number->value > 0 ? HardwareAcceleration::full : HardwareAcceleration::off;
 }
 
-/// A switch of the Language, the Touch or the Game files section: its key
-/// and the member of EngineSettings it is.
+/// A switch of the Language, the Touch, the Controller or the Game files
+/// section: its key and the member of EngineSettings it is.
 struct TextSwitch {
     std::string_view key;            ///< its preferences key
     bool EngineSettings::* member{}; ///< its value
@@ -217,6 +221,182 @@ constexpr std::array<TextSwitch, 3> touch_switches{{
 std::string overrides_key(std::string_view profile_id) {
     return std::string{key::hack_overrides} + std::string{profile_id};
 }
+
+/// The Controller section's switches, read and written as the Touch ones.
+constexpr std::array<TextSwitch, 3> pad_switches{{
+    {key::pad_glide, &EngineSettings::pad_glide},
+    {key::pad_magnetism, &EngineSettings::pad_magnetism},
+    {key::pad_left_handed, &EngineSettings::pad_left_handed},
+}};
+
+/// A choice of a setting and the word the preferences keep it as.
+template <typename Choice>
+struct ChoiceWord {
+    Choice choice{};       ///< the choice
+    std::string_view word; ///< its word, in lower case
+};
+
+/// Control size's words, in control_size_choices' order.
+constexpr std::array<ChoiceWord<ControlSize>, 3> control_size_words{{
+    {ControlSize::standard, "standard"},
+    {ControlSize::large, "large"},
+    {ControlSize::larger, "larger"},
+}};
+/// Scheme's words.
+constexpr std::array<ChoiceWord<pad_controls::Scheme>, 2> scheme_words{{
+    {pad_controls::Scheme::trackpads, "trackpads"},
+    {pad_controls::Scheme::sticks, "sticks"},
+}};
+/// Right trackpad's words.
+constexpr std::array<ChoiceWord<pad_controls::RightTrackpad>, 2> right_trackpad_words{{
+    {pad_controls::RightTrackpad::relative, "relative"},
+    {pad_controls::RightTrackpad::absolute, "absolute"},
+}};
+/// Pointer acceleration's words.
+constexpr std::array<ChoiceWord<pad_controls::Acceleration>, 3> acceleration_words{{
+    {pad_controls::Acceleration::off, "off"},
+    {pad_controls::Acceleration::low, "low"},
+    {pad_controls::Acceleration::high, "high"},
+}};
+/// Right stick's words.
+constexpr std::array<ChoiceWord<pad_controls::RightStick>, 3> right_stick_words{{
+    {pad_controls::RightStick::zoom_and_pages, "zoom"},
+    {pad_controls::RightStick::pointer, "pointer"},
+    {pad_controls::RightStick::nothing, "nothing"},
+}};
+/// Gyro pointer's words.
+constexpr std::array<ChoiceWord<pad_controls::Gyro>, 4> gyro_words{{
+    {pad_controls::Gyro::off, "off"},
+    {pad_controls::Gyro::right_pad_touched, "right-pad"},
+    {pad_controls::Gyro::right_stick_touched, "right-stick"},
+    {pad_controls::Gyro::always, "always"},
+}};
+/// Haptics' words.
+constexpr std::array<ChoiceWord<pad_controls::Haptics>, 3> haptics_words{{
+    {pad_controls::Haptics::off, "off"},
+    {pad_controls::Haptics::light, "light"},
+    {pad_controls::Haptics::strong, "strong"},
+}};
+/// Button prompts' words.
+constexpr std::array<ChoiceWord<pad_controls::Prompts>, 6> prompts_words{{
+    {pad_controls::Prompts::automatic, "automatic"},
+    {pad_controls::Prompts::steam_deck, "steam-deck"},
+    {pad_controls::Prompts::xbox, "xbox"},
+    {pad_controls::Prompts::playstation, "playstation"},
+    {pad_controls::Prompts::nintendo, "nintendo"},
+    {pad_controls::Prompts::off, "off"},
+}};
+
+/// Returns the word the preferences keep a choice as.
+///
+/// @param words the setting's choices and words
+/// @param choice the choice
+/// @return its word; empty for a choice the table does not hold
+template <typename Choice, std::size_t Count>
+std::string_view
+word_of(const std::array<ChoiceWord<Choice>, Count>& words, Choice choice) noexcept {
+    for (const ChoiceWord<Choice>& entry : words)
+        if (entry.choice == choice)
+            return entry.word;
+    return {};
+}
+
+/// Returns the choice a stored word names.
+///
+/// @param words the setting's choices and words
+/// @param text the stored word
+/// @return the choice; nothing for any other text
+template <typename Choice, std::size_t Count>
+std::optional<Choice>
+choice_of_word(const std::array<ChoiceWord<Choice>, Count>& words, std::string_view text) noexcept {
+    for (const ChoiceWord<Choice>& entry : words)
+        if (entry.word == text)
+            return entry.choice;
+    return std::nullopt;
+}
+
+/// Reads a stored word into a setting, leaving it as it is when the key is
+/// absent or holds any other text.
+///
+/// @param values the preferences
+/// @param key the setting's key
+/// @param words the setting's choices and words
+/// @param[in,out] setting the setting
+template <typename Choice, std::size_t Count>
+void read_word(
+    const Values& values,
+    std::string_view key,
+    const std::array<ChoiceWord<Choice>, Count>& words,
+    Choice& setting
+) {
+    if (const auto found = values.find(std::string{key}); found != values.end())
+        setting = choice_of_word(words, found->second).value_or(setting);
+}
+
+/// Writes or erases a setting kept as a word, as write_settings describes.
+///
+/// @param[in,out] values the preferences
+/// @param key the setting's key
+/// @param words the setting's choices and words
+/// @param opened the setting when the dialog opened
+/// @param chosen the setting the player keeps
+/// @param at_default the default
+/// @param restored Restore defaults was pressed
+template <typename Choice, std::size_t Count>
+void store_word(
+    Values& values,
+    std::string_view key,
+    const std::array<ChoiceWord<Choice>, Count>& words,
+    Choice opened,
+    Choice chosen,
+    Choice at_default,
+    bool restored
+) {
+    store(
+        values,
+        key,
+        std::string{word_of(words, chosen)},
+        chosen != opened,
+        chosen == at_default,
+        restored
+    );
+}
+
+/// Returns a stored number held to a setting's range and put on its nearest stop.
+///
+/// @param number the stored number
+/// @param lowest the setting's lowest value, its first stop
+/// @param highest the setting's highest value, a stop
+/// @param step the stops' spacing
+/// @return lowest to highest, a whole number of steps above lowest; half a step rounds up
+constexpr uint32_t
+on_stop(int64_t number, uint32_t lowest, uint32_t highest, uint32_t step) noexcept {
+    const int64_t held = std::clamp(number, int64_t{lowest}, int64_t{highest});
+    const int64_t steps = (held - lowest + step / 2) / step;
+    return static_cast<uint32_t>(std::min(int64_t{lowest} + steps * step, int64_t{highest}));
+}
+
+static_assert(
+    (pad_controls::highest_pointer_speed - pad_controls::lowest_pointer_speed) %
+                pad_controls::pointer_speed_step ==
+            0 &&
+        (pad_controls::default_pointer_speed - pad_controls::lowest_pointer_speed) %
+                pad_controls::pointer_speed_step ==
+            0,
+    "Pointer speed's stops run from its lowest to its highest, its default among them"
+);
+static_assert(
+    (pad_controls::highest_gyro_speed - pad_controls::lowest_gyro_speed) %
+                pad_controls::gyro_speed_step ==
+            0 &&
+        (pad_controls::default_gyro_speed - pad_controls::lowest_gyro_speed) %
+                pad_controls::gyro_speed_step ==
+            0,
+    "Gyro speed's stops run from its lowest to its highest, its default among them"
+);
+static_assert(on_stop(62, lowest_frame_rate, highest_frame_rate, frame_rate_step) == 60);
+static_assert(on_stop(63, lowest_frame_rate, highest_frame_rate, frame_rate_step) == 65);
+static_assert(on_stop(240, lowest_frame_rate, highest_frame_rate, frame_rate_step) == 120);
 
 } // namespace
 
@@ -255,6 +435,14 @@ EngineSettings default_settings(const Inputs& inputs) {
                                     inputs.desktop.height < light_machine_screen_size.height);
         settings.screen_size =
             small_desktop ? small_desktop_screen_size : light_machine_screen_size;
+    }
+    // A Steam Deck starts at its screen's own rate, with the touch controls
+    // at the size that suits its small, dense screen.
+    if (inputs.players_own_profile && inputs.steam_deck_panel_hz != 0) {
+        settings.max_frame_rate = on_stop(
+            inputs.steam_deck_panel_hz, lowest_frame_rate, highest_frame_rate, frame_rate_step
+        );
+        settings.touch_control_size = steam_deck_control_size;
     }
     return settings;
 }
@@ -410,6 +598,31 @@ EngineSettings read_settings(
         settings.touch_latches =
             touch_latches_from_text(found->second).value_or(settings.touch_latches);
     for (const TextSwitch& entry : touch_switches)
+        if (const auto number = stored_number(values, entry.key))
+            settings.*entry.member = *number > 0;
+    read_word(values, key::touch_control_size, control_size_words, settings.touch_control_size);
+    read_word(values, key::pad_scheme, scheme_words, settings.pad_scheme);
+    read_word(values, key::pad_right_trackpad, right_trackpad_words, settings.pad_right_trackpad);
+    if (const auto number = stored_number(values, key::pad_pointer_speed))
+        settings.pad_pointer_speed = on_stop(
+            *number,
+            pad_controls::lowest_pointer_speed,
+            pad_controls::highest_pointer_speed,
+            pad_controls::pointer_speed_step
+        );
+    read_word(values, key::pad_acceleration, acceleration_words, settings.pad_acceleration);
+    read_word(values, key::pad_right_stick, right_stick_words, settings.pad_right_stick);
+    read_word(values, key::pad_gyro, gyro_words, settings.pad_gyro);
+    if (const auto number = stored_number(values, key::pad_gyro_speed))
+        settings.pad_gyro_speed = on_stop(
+            *number,
+            pad_controls::lowest_gyro_speed,
+            pad_controls::highest_gyro_speed,
+            pad_controls::gyro_speed_step
+        );
+    read_word(values, key::pad_haptics, haptics_words, settings.pad_haptics);
+    read_word(values, key::pad_prompts, prompts_words, settings.pad_prompts);
+    for (const TextSwitch& entry : pad_switches)
         if (const auto number = stored_number(values, entry.key))
             settings.*entry.member = *number > 0;
     if (!inputs.profile_id.empty())
@@ -604,6 +817,103 @@ void write_settings(
             chosen.*entry.member == defaults.*entry.member,
             restored
         );
+    store_word(
+        values,
+        key::touch_control_size,
+        control_size_words,
+        opened.touch_control_size,
+        chosen.touch_control_size,
+        defaults.touch_control_size,
+        restored
+    );
+    store_word(
+        values,
+        key::pad_scheme,
+        scheme_words,
+        opened.pad_scheme,
+        chosen.pad_scheme,
+        defaults.pad_scheme,
+        restored
+    );
+    store_word(
+        values,
+        key::pad_right_trackpad,
+        right_trackpad_words,
+        opened.pad_right_trackpad,
+        chosen.pad_right_trackpad,
+        defaults.pad_right_trackpad,
+        restored
+    );
+    store(
+        values,
+        key::pad_pointer_speed,
+        std::to_string(chosen.pad_pointer_speed),
+        chosen.pad_pointer_speed != opened.pad_pointer_speed,
+        chosen.pad_pointer_speed == defaults.pad_pointer_speed,
+        restored
+    );
+    store_word(
+        values,
+        key::pad_acceleration,
+        acceleration_words,
+        opened.pad_acceleration,
+        chosen.pad_acceleration,
+        defaults.pad_acceleration,
+        restored
+    );
+    store_word(
+        values,
+        key::pad_right_stick,
+        right_stick_words,
+        opened.pad_right_stick,
+        chosen.pad_right_stick,
+        defaults.pad_right_stick,
+        restored
+    );
+    store_word(
+        values,
+        key::pad_gyro,
+        gyro_words,
+        opened.pad_gyro,
+        chosen.pad_gyro,
+        defaults.pad_gyro,
+        restored
+    );
+    store(
+        values,
+        key::pad_gyro_speed,
+        std::to_string(chosen.pad_gyro_speed),
+        chosen.pad_gyro_speed != opened.pad_gyro_speed,
+        chosen.pad_gyro_speed == defaults.pad_gyro_speed,
+        restored
+    );
+    store_word(
+        values,
+        key::pad_haptics,
+        haptics_words,
+        opened.pad_haptics,
+        chosen.pad_haptics,
+        defaults.pad_haptics,
+        restored
+    );
+    store_word(
+        values,
+        key::pad_prompts,
+        prompts_words,
+        opened.pad_prompts,
+        chosen.pad_prompts,
+        defaults.pad_prompts,
+        restored
+    );
+    for (const TextSwitch& entry : pad_switches)
+        store(
+            values,
+            entry.key,
+            switch_text(chosen.*entry.member),
+            chosen.*entry.member != opened.*entry.member,
+            chosen.*entry.member == defaults.*entry.member,
+            restored
+        );
     // Restore defaults keeps the overrides: Restore profile values clears them.
     if (!profile_id.empty() && chosen.hack_overrides != opened.hack_overrides) {
         if (chosen.hack_overrides.empty())
@@ -720,6 +1030,27 @@ Locks settings_locks(const GameState& state) noexcept {
                 : state.in_game             ? Lock::in_game
                                             : Lock::none;
     return locks;
+}
+
+static_assert(
+    oa::ui::pad_controls::default_hold_ms == default_touch_hold_ms,
+    "the gamepad's hold delay defaults to the touch controls' own"
+);
+
+float control_size_scale(ControlSize size) noexcept {
+    // The points scale of each Control size.
+    constexpr float standard_scale = 1.0F;
+    constexpr float large_scale = 1.25F;
+    constexpr float larger_scale = 1.5F;
+    switch (size) {
+    case ControlSize::standard:
+        break;
+    case ControlSize::large:
+        return large_scale;
+    case ControlSize::larger:
+        return larger_scale;
+    }
+    return standard_scale;
 }
 
 } // namespace oa::ui::engine_settings

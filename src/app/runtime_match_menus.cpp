@@ -3934,6 +3934,9 @@ void Runtime::activate_options_gadget() {
         // authored foreground colour the renderer draws the frame through.
         // Only a loaded panel's first draw clears it.
         bind_frontend_scrolls(oa::data::defs::gui_path("startopt.gui"), "anims/commongui.gaf");
+        // load() gave the focus a record of the sub-panel's file alone, which
+        // the merged records no longer number so.
+        frontend_focus_ = -1;
         widget_gaf_frames_.clear();
         widget_text_stages_.clear();
         session.kind = which;

@@ -31,7 +31,9 @@ measures windows in, not pixels): a window whose shorter side is under 460
 points gets the **phone** layout, every other window the **tablet** layout.
 Every iPhone held sideways is a phone; every iPad is a tablet. Both layouts
 keep every control inside the screen's safe area, clear of rounded corners,
-the camera and the home indicator.
+the camera and the home indicator. A larger **Control size** (below) makes
+the window that many times fewer points: a Steam Deck's 1280×800 screen at
+Larger is 853×533 points and keeps the tablet layout.
 
 ### Tablet (iPad)
 
@@ -193,6 +195,37 @@ corner, BUILD again or a tap outside closes it.
 - **Help.** A long press on a touch control, or on a button of the side
   panel other than a build button, shows what it does.
 
+## With a gamepad
+
+Once a gamepad has sent input, the touch layer shows the pad's part too
+(the gamepad's own controls are described in docs/controllers.md):
+
+- Before the first finger lands, a **slim pad HUD** goes over the 3.1c
+  screen's battlefield: a pill at its top saying what R2 and L2 would do
+  now ("R2 MOVE · ENEMY: ATTACK · L2 CANCEL"; with the right-click
+  interface "R2 SELECT · L2 MOVE"), the **QUEUE**, **ADD** and **FORCE**
+  chips under it, lit while held or latched (QUEUE reads **x5** while the
+  pointer is on a build button), and the stored groups' chips along its
+  bottom. Once a finger lands, the full touch layout takes its place.
+- With the touch controls on, each control gains a small **badge** naming
+  the pad buttons that give it: QUEUE R4, ADD L4, CLEAR B, SELECT ▾ D-pad
+  left, PAUSE View+X, CHAT View+A, CENTRE L3, FOLLOW R3, NEXT D-pad right,
+  INFO View and FORCE R5; a group chip shows its button while L5 is held.
+  Badges change how controls look, never where they are, and are drawn in
+  the glyph set the **Button prompts** setting chooses (Off hides them). A
+  long press's help names the pad input too ("On the pad: hold or tap R4").
+- **FORCE** tops the tablet's thumb column while the pad has back grips: Ctrl
+  for orders and selecting for as long as a finger (or R5) holds it, so a
+  click forces fire. QUEUE and ADD are one set of latches for fingers and
+  grips: a tap on QUEUE and then a tap of R4 turns it off.
+- The pad's rings are drawn by the touch layer: the order wheel with the
+  pad's aim dot and a line saying how to give, arm or close it; the build
+  ring with the build page's own pictures and counts, PREV and NEXT; and the
+  ring of the nine groups at the battlefield's lower left while the groups
+  layer is held. A finger can tap any of their wedges too.
+- A building the pad started placing follows the pad's pointer until a
+  finger lands on the battlefield; from then the ghost is placed by touch.
+
 ## Touch settings
 
 The OA settings gain a **Touch** section while the touch controls are on:
@@ -204,6 +237,7 @@ The OA settings gain a **Touch** section while the touch controls are on:
 | QUEUE and ADD | Stay on, or One action | `open-annihilation.touch-latches` |
 | Haptics | On or off: a tap of the device's haptics as a hold starts, a box starts, a site is refused or a factory's queue goes down | `open-annihilation.touch-haptics` |
 | Left-handed layout | Mirrors the touch controls left to right; the tablet's side panel stays | `open-annihilation.touch-left-handed` |
+| Control size | Standard, Large or Larger: the touch controls at 1, 1.25 or 1.5 times their size in points, the 3.1c screen kept as it is; a Steam Deck starts at Larger | `open-annihilation.touch-control-size` |
 
 Each takes effect at once.
 

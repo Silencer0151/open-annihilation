@@ -181,6 +181,43 @@ resolved(const fs::path& folder, GameInstall&& install, GameDirectorySource sour
     };
 }
 
+/// Reports that the in-engine chooser should open: the usable folders found, the remembered
+/// folder that has gone and why, the platform's folder and why, whether the system's dialog
+/// may be offered beside it and why it failed.
+///
+/// @param request whether the chooser comes before the dialog (Game Mode)
+/// @param platform the platform's default folder and why it cannot be played; none when it is
+///     not there
+/// @param stored the folder chosen earlier and why it can no longer be used; none when there is
+///     none
+/// @param found the usable folders found on this machine
+/// @param dialog the build offers the system's folder dialog
+/// @param dialog_problem why the dialog gave no folder; empty when it did not fail
+/// @param[out] needed the report
+void ask_for_chooser(
+    const GameDirectoryRequest& request,
+    const std::optional<RefusedFolder>& platform,
+    const std::optional<RefusedFolder>& stored,
+    std::vector<FoundInstall> found,
+    bool dialog,
+    std::string dialog_problem,
+    GameFilesNeeded& needed
+) {
+    needed.needed = true;
+    needed.chooser = true;
+    needed.found = std::move(found);
+    if (platform && platform->there) {
+        needed.folder = platform->folder;
+        needed.problem = platform->problem;
+    }
+    if (stored) {
+        needed.stored_folder = stored->folder;
+        needed.stored_problem = stored->problem;
+    }
+    needed.dialog_offered = dialog && !request.chooser_first && dialog_problem.empty();
+    needed.dialog_problem = std::move(dialog_problem);
+}
+
 // Records a probe store's archives as the installation's, and the required
 // resources neither they nor the loose files in its folders hold, named in
 // the layout of the installation's profile.
@@ -524,33 +561,63 @@ std::optional<GameDirectory> resolve_game_directory(
         return resolved(stored, std::move(install), GameDirectorySource::stored);
     }
     fs::path start;
+    std::optional<RefusedFolder> stored_refused;
     if (request.stored && !request.stored->empty()) {
         start = path_from_utf8(*request.stored);
         if (!request.choose) {
             auto install = inspect_folder(host, start);
             if (usable(install))
                 return resolved(start, std::move(install), GameDirectorySource::stored);
-            if (!dialog) {
-                const RefusedFolder stored{
-                    start,
-                    describe_install_problem(install),
-                    install.folder || !install.problem.empty()
-                };
-                // The platform's look-again button keeps the notice up until
-                // a folder can be played.
-                if (looks_again(host, request))
-                    return ask_until_usable(host, request, platform_refused, stored);
-                tell_no_folder(host, request, platform_refused, stored);
-                return std::nullopt;
-            }
-            host.tell_user(
-                host.context,
-                Notice::information,
-                "The Total Annihilation folder chosen earlier can no longer be used:\n\n" +
-                    path_to_utf8(start) + "\n\n" + describe_install_problem(install) +
-                    "\n\nChoose the folder again."
-            );
+            stored_refused = RefusedFolder{
+                start, describe_install_problem(install), install.folder || !install.problem.empty()
+            };
         }
+    }
+    // The folders found on this machine fill the gap the dialog fills: one
+    // usable folder is played and remembered; several, or a remembered one
+    // that has gone, are offered in the in-engine chooser, as is a start
+    // where the system's dialog may not show (Game Mode) or does not exist.
+    const bool chooser = request.chooser_offered && needed != nullptr;
+    std::vector<FoundInstall> usable_found;
+    std::optional<GameDirectory> only_found;
+    if (!request.choose || chooser) {
+        for (const FoundInstall& candidate : request.found) {
+            auto install = inspect_folder(host, candidate.folder);
+            if (!usable(install))
+                continue;
+            if (usable_found.empty()) {
+                only_found =
+                    resolved(candidate.folder, std::move(install), GameDirectorySource::found);
+                only_found->found_from = candidate;
+            }
+            usable_found.push_back(candidate);
+        }
+    }
+    if (!request.choose && usable_found.size() == 1 && !stored_refused)
+        return only_found;
+    if (chooser && (request.chooser_first || !dialog || usable_found.size() > 1 ||
+                    (stored_refused && !usable_found.empty()))) {
+        ask_for_chooser(
+            request, platform_refused, stored_refused, std::move(usable_found), dialog, {}, *needed
+        );
+        return std::nullopt;
+    }
+    if (stored_refused) {
+        if (!dialog) {
+            // The platform's look-again button keeps the notice up until
+            // a folder can be played.
+            if (looks_again(host, request))
+                return ask_until_usable(host, request, platform_refused, *stored_refused);
+            tell_no_folder(host, request, platform_refused, stored_refused);
+            return std::nullopt;
+        }
+        host.tell_user(
+            host.context,
+            Notice::information,
+            "The Total Annihilation folder chosen earlier can no longer be used:\n\n" +
+                path_to_utf8(start) + "\n\n" + stored_refused->problem +
+                "\n\nChoose the folder again."
+        );
     } else if (!request.choose) {
         if (!dialog) {
             if (looks_again(host, request))
@@ -610,6 +677,20 @@ std::optional<GameDirectory> resolve_game_directory(
             );
             return std::nullopt;
         case FolderPick::unavailable:
+            // Where the in-engine chooser can be shown, it takes over from
+            // a dialog that cannot open, and says why.
+            if (chooser) {
+                ask_for_chooser(
+                    request,
+                    platform_refused,
+                    stored_refused,
+                    std::move(usable_found),
+                    dialog,
+                    error.empty() ? std::string("it gave no reason") : error,
+                    *needed
+                );
+                return std::nullopt;
+            }
             host.tell_user(
                 host.context,
                 Notice::warning,
@@ -683,6 +764,24 @@ void remember_mod_directory(oa::platform::preferences::Values& values, const fs:
     }
     values[std::string(mod_directory_preference)] =
         path_to_utf8(fs::absolute(folder).lexically_normal());
+}
+
+std::optional<GameDirectory>
+take_picked_folder(const GameDirectoryHost& host, const fs::path& folder, std::string* problem) {
+    auto install = inspect_folder(host, folder);
+    if (usable(install))
+        return resolved(folder, std::move(install), GameDirectorySource::chosen);
+    if (problem != nullptr)
+        *problem = describe_install_problem(install);
+    return std::nullopt;
+}
+
+std::string found_install_notice(const FoundInstall& install) {
+    return "Playing Total Annihilation from " +
+           std::string(
+               oa::platform::game_installs::source_words(install.source, install.removable)
+           ) +
+           ":\n" + path_to_utf8(install.folder);
 }
 
 } // namespace oa::app

@@ -4,10 +4,11 @@
 // Painting for the touch controls' layer: blending with straight alpha,
 // rectangles clipped to the canvas and the clip, rounded corners left clear,
 // discs, the radial menu's wedges, every icon inside its box, coverage maps
-// in their colour, and lines of text from the bundled fonts when they lie
-// beside the test.
+// in their colour, lines of text from the bundled fonts when they lie
+// beside the test, and a gamepad glyph of every shape inside its box.
 #include "touch_paint.hpp"
 #include "oa/test/check.hpp"
+#include "pad_glyphs.hpp"
 
 #include <array>
 #include <cmath>
@@ -15,6 +16,7 @@
 #include <cstdlib>
 #include <numbers>
 #include <span>
+#include <vector>
 
 namespace {
 
@@ -338,6 +340,163 @@ void text_paints_in_its_colour() {
     OA_CHECK(paint::wrap_text(*fonts, "", 16, true, 120).empty());
 }
 
+/// Checks that an RGB picture's part is drawn scaled into its area, each pixel taking the
+/// picture's pixel under its centre, at its opacity, and nothing outside the area or the part.
+void pictures_scale_into_their_area() {
+    // A 4x2 picture: red, green, blue, white on the top row; black below.
+    const std::array<uint8_t, 24> rgb{
+        255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    };
+    auto canvas = paint::make_canvas(20, 20);
+    paint::Painter painter(canvas);
+    // The top row's middle two pixels, each drawn 4 wide and 4 tall at (2, 3).
+    painter.draw_rgb(rgb, 4, 2, {1, 0, 2, 1}, {2.0F, 3.0F, 8.0F, 4.0F}, 1.0F);
+    OA_CHECK(paint::pixel_at(canvas, 2, 3) == (paint::Rgba{0, 255, 0, 255}));
+    OA_CHECK(paint::pixel_at(canvas, 5, 6) == (paint::Rgba{0, 255, 0, 255}));
+    OA_CHECK(paint::pixel_at(canvas, 6, 3) == (paint::Rgba{0, 0, 255, 255}));
+    OA_CHECK(paint::pixel_at(canvas, 9, 6) == (paint::Rgba{0, 0, 255, 255}));
+    OA_CHECK(paint::pixel_at(canvas, 1, 3).a == 0);
+    OA_CHECK(paint::pixel_at(canvas, 10, 3).a == 0);
+    OA_CHECK(paint::pixel_at(canvas, 2, 7).a == 0);
+    OA_CHECK(painter.painted() == (paint::Box{2, 3, 8, 4}));
+    // At half opacity over a clear canvas the picture is half opaque.
+    auto faint = paint::make_canvas(4, 2);
+    paint::Painter faint_painter(faint);
+    faint_painter.draw_rgb(rgb, 4, 2, {0, 0, 4, 2}, {0.0F, 0.0F, 4.0F, 2.0F}, 0.5F);
+    OA_CHECK(paint::pixel_at(faint, 0, 0).r == 255);
+    OA_CHECK(near(paint::pixel_at(faint, 0, 0).a, 128));
+    OA_CHECK(near(paint::pixel_at(faint, 0, 1).a, 128));
+    // A picture shorter than its size says, or an empty area, draws nothing.
+    faint_painter.forget_painted();
+    faint_painter.draw_rgb(
+        std::span<const uint8_t>(rgb.data(), 12), 4, 2, {0, 0, 4, 2}, {0.0F, 0.0F, 4.0F, 2.0F}, 1.0F
+    );
+    faint_painter.draw_rgb(rgb, 4, 2, {0, 0, 4, 2}, {0.0F, 0.0F, 0.0F, 2.0F}, 1.0F);
+    faint_painter.draw_rgb(rgb, 4, 2, {0, 0, 4, 2}, {0.0F, 0.0F, 4.0F, 2.0F}, 0.0F);
+    OA_CHECK(faint_painter.painted().empty());
+}
+
+/// Counts a canvas's painted pixels and tells whether any lies outside a box, a pixel of
+/// smoothing beyond its edge allowed.
+///
+/// @param canvas the canvas
+/// @param box the box the painting should keep to
+/// @param[out] outside whether a painted pixel lies outside it
+/// @return the painted pixels
+int painted_inside(const paint::Canvas& canvas, paint::Area box, bool& outside) {
+    int painted = 0;
+    outside = false;
+    for (int y = 0; y < canvas.height; ++y)
+        for (int x = 0; x < canvas.width; ++x) {
+            if (paint::pixel_at(canvas, x, y).a == 0)
+                continue;
+            ++painted;
+            outside = outside || static_cast<float>(x) < box.x - 1.0F ||
+                      static_cast<float>(x) > box.x + box.width ||
+                      static_cast<float>(y) < box.y - 1.0F ||
+                      static_cast<float>(y) > box.y + box.height;
+        }
+    return painted;
+}
+
+/// Checks that a gamepad glyph of every shape paints its body and marks inside its box, with
+/// and without letters, that pills widen with their labels, and that a chord's glyphs and plus
+/// stay inside the width chord_width gives.
+void pad_glyphs_paint_inside_their_boxes() {
+    namespace pad = oa::ui::pad_controls;
+    namespace glyphs = oa::app::pad_glyphs;
+    auto fonts = text_font::FontStack::open(text_font::bundled_font_directory());
+    const paint::Rgba ink{0x1b, 0x1e, 0x19, 255};
+    const paint::Rgba fill{0xf2, 0xf4, 0xee, 255};
+    std::vector<pad::GlyphSpec> specs{
+        {pad::GlyphShape::letter_circle, "A"},
+        {pad::GlyphShape::pill, "R4"},
+        {pad::GlyphShape::cross},
+        {pad::GlyphShape::circle},
+        {pad::GlyphShape::square},
+        {pad::GlyphShape::triangle},
+        {pad::GlyphShape::dpad, {}, 3},
+        {pad::GlyphShape::trackpad, {}, 0, pad::Side::right, true},
+        {pad::GlyphShape::stick, {}, 0, pad::Side::left, false},
+        {pad::GlyphShape::stick, {}, 0, pad::Side::right, true},
+        {pad::GlyphShape::view},
+        {pad::GlyphShape::view, "-"},
+        {pad::GlyphShape::menu},
+        {pad::GlyphShape::menu, "+"},
+    };
+    for (oa::platform::text_font::FontStack* stack :
+         {fonts.get(), static_cast<text_font::FontStack*>(nullptr)}) {
+        for (const auto& spec : specs) {
+            constexpr float height = 24.0F;
+            const float width = glyphs::spec_width(spec, height);
+            OA_CHECK(width >= height);
+            auto canvas = paint::make_canvas(80, 48);
+            paint::Painter painter(canvas);
+            const paint::Area box{10.0F, 12.0F, width, height};
+            glyphs::draw_spec(painter, stack, spec, box, ink, fill);
+            bool outside = false;
+            const int painted = painted_inside(canvas, box, outside);
+            if (painted < 60 || outside)
+                std::fprintf(
+                    stderr,
+                    "glyph shape %d: %d pixels painted%s\n",
+                    static_cast<int>(spec.shape),
+                    painted,
+                    outside ? ", some outside its box" : ""
+                );
+            OA_CHECK(painted >= 60);
+            OA_CHECK(!outside);
+            // The marks show in the ink: some pixel is nearer the ink than the body.
+            bool marked = false;
+            for (int y = 0; y < canvas.height && !marked; ++y)
+                for (int x = 0; x < canvas.width && !marked; ++x) {
+                    const auto pixel = paint::pixel_at(canvas, x, y);
+                    marked = pixel.a == 255 && pixel.r < 0x60;
+                }
+            const bool letters_only =
+                spec.shape == pad::GlyphShape::letter_circle || spec.shape == pad::GlyphShape::pill;
+            OA_CHECK(marked || (letters_only && stack == nullptr));
+        }
+    }
+    // Pills widen with their labels; every other shape is square.
+    OA_CHECK(
+        glyphs::spec_width({pad::GlyphShape::pill, "R4"}, 20.0F) >
+        glyphs::spec_width({pad::GlyphShape::pill, "L"}, 20.0F)
+    );
+    OA_CHECK(glyphs::spec_width({pad::GlyphShape::dpad}, 20.0F) == 20.0F);
+    OA_CHECK(glyphs::spec_width({pad::GlyphShape::pill, "L"}, 0.0F) == 0.0F);
+    // A chord: View and X with a plus between, inside its width.
+    pad::Chord chord{};
+    chord.held = pad::PadButton::view;
+    chord.button = pad::PadButton::x;
+    constexpr float height = 20.0F;
+    const float width = glyphs::chord_width(chord, pad::GlyphStyle::steam_deck, height);
+    OA_CHECK(
+        width > glyphs::glyph_width(pad::PadButton::view, pad::GlyphStyle::steam_deck, height) +
+                    glyphs::glyph_width(pad::PadButton::x, pad::GlyphStyle::steam_deck, height)
+    );
+    auto canvas = paint::make_canvas(100, 40);
+    paint::Painter painter(canvas);
+    const paint::Area box{6.0F, 10.0F, width, height};
+    glyphs::draw_chord(painter, fonts.get(), chord, pad::GlyphStyle::steam_deck, box, ink, fill);
+    bool outside = false;
+    OA_CHECK(painted_inside(canvas, box, outside) >= 100);
+    OA_CHECK(!outside);
+    // No button, no glyph.
+    OA_CHECK(glyphs::glyph_width(pad::PadButton::none, pad::GlyphStyle::xbox, height) == 0.0F);
+    auto blank = paint::make_canvas(20, 20);
+    paint::Painter blank_painter(blank);
+    glyphs::draw_glyph(
+        blank_painter,
+        fonts.get(),
+        pad::PadButton::none,
+        pad::GlyphStyle::xbox,
+        {0.0F, 0.0F, 20.0F, 20.0F},
+        ink,
+        fill
+    );
+    OA_CHECK(blank_painter.painted().empty());
+}
 } // namespace
 
 int main() {
@@ -352,5 +511,7 @@ int main() {
     icons_stay_inside_their_boxes();
     coverage_paints_in_its_colour();
     text_paints_in_its_colour();
+    pictures_scale_into_their_area();
+    pad_glyphs_paint_inside_their_boxes();
     return oa::test::check_exit_status();
 }

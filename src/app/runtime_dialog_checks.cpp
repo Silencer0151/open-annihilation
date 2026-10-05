@@ -768,8 +768,55 @@ void Runtime::check_frontend_keyboard() {
     check_focus("Tab", gadgets[static_cast<std::size_t>(frontend_focus())].common.name);
     key(SDLK_TAB, SDL_KMOD_LSHIFT);
     check_focus("Shift+Tab", "NewCamp");
-    std::cout << "frontend keyboard check: Single Player rings its focus, which Tab moves, and "
-                 "underlines its quick keys\n";
+    // Return and Space press the focused button as a click released on it
+    // does (a gamepad's A and Menu send Return), through the event dispatch
+    // a gamepad's keys take, and a held key's repeat presses nothing: NewCamp
+    // leaves Single Player, or says over it why it cannot, and Single Player
+    // then comes back as it was. With no record focused Return rings the
+    // first and presses nothing.
+    namespace dialogs = oa::ui::frontend_dialogs;
+    const auto entry_state = state_;
+    const auto press = [&](SDL_Keycode code, bool repeat = false) {
+        SDL_Event event{};
+        event.type = SDL_EVENT_KEY_DOWN;
+        event.key.scancode = SDL_GetScancodeFromKey(code, nullptr);
+        event.key.key = code;
+        event.key.down = true;
+        event.key.repeat = repeat;
+        dispatch_event(event, running);
+    };
+    const auto on_single_player = [&] {
+        return screen_ == Screen::single_player && dialogs::dialog_count() == 0;
+    };
+    const auto pressed_new_camp = [&](const std::string& what) {
+        const bool told = dialogs::dialog_count() != 0;
+        require(screen_ != Screen::single_player || told, what + " did not press NewCamp");
+        if (told) {
+            auto context = screen_context();
+            require(dialogs::dialog_click(&context, "OK"), "NewCamp's notice has no OK");
+        }
+        state_ = entry_state;
+        load(Screen::single_player);
+        require(on_single_player(), "Single Player did not come back after " + what);
+    };
+    frontend_focus_ = -1;
+    rebuild_surface();
+    press(SDLK_RETURN);
+    require(
+        on_single_player() && frontend_focus() > 0,
+        "Return with no record focused did not focus one"
+    );
+    check_focus("Return", gadgets[static_cast<std::size_t>(frontend_focus())].common.name);
+    frontend_focus_ = record_index("NewCamp");
+    press(SDLK_RETURN, true);
+    require(on_single_player(), "a held Return's repeat pressed NewCamp");
+    press(SDLK_RETURN);
+    pressed_new_camp("Return");
+    check_focus("Single Player again", "NewCamp");
+    press(SDLK_SPACE);
+    pressed_new_camp("Space");
+    std::cout << "frontend keyboard check: Single Player rings its focus, which Tab moves and "
+                 "Return gives, underlines its quick keys, and Return and Space press NewCamp\n";
 }
 
 void Runtime::check_match_dialogs() {

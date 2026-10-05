@@ -5,8 +5,10 @@
 // folder is missing and the platform brings game files in, intro playback
 // and runtime launch.
 #include "oa/app/runtime.hpp"
+#include "folder_chooser_screen.hpp"
 #include "game_files_check.hpp"
 #include "game_files_screen.hpp"
+#include "pad_state.hpp"
 #include "render_host.hpp"
 #include "screen_size.hpp"
 #include "oa/app/extension_list.hpp"
@@ -23,6 +25,7 @@
 #include "oa/base/threads.hpp"
 #include "oa/data/defs/layout.hpp"
 #include "oa/media/intro_player.hpp"
+#include "oa/platform/machine.hpp"
 #include "oa/platform/memory_status.hpp"
 #include "oa/platform/log_files.hpp"
 #include "oa/platform/preferences.hpp"
@@ -212,7 +215,9 @@ struct HostDisplay {
 
     /// Starts SDL's video and sound and opens the window, at the size
     /// --resolution gives when it is given, else at the Screen size setting's
-    /// (start_settings, starting_screen_size), at the display's own pixel
+    /// (start_settings, starting_screen_size), else at the default, held to
+    /// the desktop in Steam's Game Mode (default_window_size), and logs the
+    /// size it opened at (report_window_size); at the display's own pixel
     /// density only where decide_window_density allows it, with the
     /// renderer records read first (records_place,
     /// RendererHost::open_records), and its renderer
@@ -255,11 +260,18 @@ struct HostDisplay {
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO))
             throw std::runtime_error(std::string("SDL_Init: ") + SDL_GetError());
         active = true;
+        // Gamepads reach the folder chooser and the Game files screen too.
+        start_gamepad_subsystem();
         // The settings the window and its renderer start with, read before
         // either exists.
-        const auto start = start_settings(options, desktop_size());
+        const auto desktop = desktop_size();
+        const auto start = start_settings(options, desktop);
         const auto screen = starting_screen_size(options, start);
         const bool sized = screen != oa::ui::engine_settings::desktop_screen_size;
+        // With no size named, Steam's Game Mode holds the window to the
+        // desktop, the most of it gamescope's pointer reaches.
+        const bool steam_game_mode = oa::platform::running_in_steam_game_mode();
+        const auto fallback = default_window_size(desktop, steam_game_mode);
         // The renderer records, read before the window opens so that their
         // native-density key reaches the window's density, and kept for the
         // walk of the render drivers.
@@ -286,10 +298,10 @@ struct HostDisplay {
             "Open Annihilation",
             options.window_resolution ? options.match_width
             : sized                   ? screen.width
-                                      : kDefaultWindowWidth,
+                                      : fallback.width,
             options.window_resolution ? options.match_height
             : sized                   ? screen.height
-                                      : kDefaultWindowHeight,
+                                      : fallback.height,
             game_window_flags(
                 options.start_full_screen && !sized, decide_window_density(density).native
             )
@@ -298,6 +310,7 @@ struct HostDisplay {
             throw std::runtime_error(std::string("SDL_CreateWindow: ") + SDL_GetError());
         if (sized)
             take_screen_size(window, screen, options.start_full_screen);
+        report_window_size(window, desktop, steam_game_mode);
         set_window_icon(window);
         renderer_host.create(window, start_faults(options));
         TierRequest request;
@@ -492,6 +505,41 @@ GameFilesStart start_game_files(const Options& options) {
     return start;
 }
 
+/// The game's display and command line, as the folder chooser's hooks reach them.
+struct ChooserDisplay {
+    HostDisplay* display{};   ///< the game's display, opened on first use
+    const Options* options{}; ///< the parsed command line the display opens with
+};
+
+/// Returns the folder chooser's hooks over the game's display: the window opens on first use
+/// (HostDisplay::initialize), and one that cannot open is reported and gives no window.
+///
+/// @param chooser the display and command line; outlives the hooks
+/// @return the hooks
+FolderChooserDisplayHooks display_hooks(ChooserDisplay& chooser) {
+    FolderChooserDisplayHooks hooks;
+    hooks.context = &chooser;
+    hooks.window = [](void* context) -> SDL_Window* {
+        auto& place = *static_cast<ChooserDisplay*>(context);
+        if (!place.display->initialized) {
+            try {
+                place.display->initialize(*place.options);
+            } catch (const std::exception& error) {
+                std::cerr << "open-annihilation: the window cannot open: " << error.what() << '\n';
+                return nullptr;
+            }
+        }
+        return place.display->window;
+    };
+    hooks.renderer = [](void* context) -> SDL_Renderer* {
+        return static_cast<ChooserDisplay*>(context)->display->renderer_host.renderer();
+    };
+    hooks.host = [](void* context) -> RendererHost* {
+        return &static_cast<ChooserDisplay*>(context)->display->renderer_host;
+    };
+    return hooks;
+}
+
 /// Runs the Game files screen until the game folder resolves: the window
 /// opens first, once, and stays for the game. Each PLAY resolves the folder
 /// again; a refused folder opens the screen again with the reason.
@@ -509,7 +557,7 @@ bool run_game_files_until_resolved(
     GameFilesNeeded& needed,
     std::optional<GameDirectory>& game_directory
 ) {
-    while (!game_directory && needed.needed) {
+    while (!game_directory && needed.needed && !needed.chooser) {
         if (!display.initialized)
             display.initialize(options);
         GameFilesScreenRequest request;
@@ -652,7 +700,16 @@ int run_once(
     // mounted, so that one the engine cannot use stops the run with its
     // errors.
     GameFilesNeeded needed;
-    auto game_directory = find_game_directory(options, game_files.offered ? &needed : nullptr);
+    auto game_directory = find_game_directory(
+        options, (game_files.offered || folder_chooser_offered(options)) ? &needed : nullptr
+    );
+    // Without a usable folder where the in-engine chooser is asked for, it picks one.
+    if (!game_directory && needed.needed && needed.chooser) {
+        ChooserDisplay chooser{&display, &options};
+        const FolderChooserDisplayHooks hooks = display_hooks(chooser);
+        if (!run_folder_chooser_until_resolved(options, hooks, needed, game_directory))
+            return 0;
+    }
     // Without a usable folder, the Game files screen brings one in.
     if (!run_game_files_until_resolved(options, display, game_files, needed, game_directory))
         return options.check_game_files ? finish_game_files_check(options, 0) : 0;
@@ -665,10 +722,15 @@ int run_once(
             game_files_hooks(), game_files.paths, game_files.backed_up
         );
     // A folder that held the demo's installer is played from the folder
-    // its archive was unpacked to, and remembered as chosen.
+    // its archive was unpacked to, and remembered as chosen. A folder found
+    // on this machine is remembered too, and the main menu says where it was
+    // found.
     options.game_dir = game_directory->installation;
-    if (game_directory->source == GameDirectorySource::chosen)
+    if (game_directory->source == GameDirectorySource::chosen ||
+        game_directory->source == GameDirectorySource::found)
         options.remember_game_dir = game_directory->path;
+    if (game_directory->source == GameDirectorySource::found && game_directory->found_from)
+        options.found_install_notice = found_install_notice(*game_directory->found_from);
     if (!fs::is_directory(options.game_dir))
         throw std::runtime_error(
             "game directory does not exist: " + path_to_utf8(options.game_dir) +

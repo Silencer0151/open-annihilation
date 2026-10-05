@@ -106,6 +106,7 @@ settings::Inputs Runtime::EngineSettingsState::inputs(const Runtime& runtime) {
         inputs.raspberry_pi = runtime.engine_settings_->raspberry_pi;
         inputs.light_machine = runtime.engine_settings_->light_machine;
         inputs.desktop = runtime.engine_settings_->desktop;
+        inputs.steam_deck_panel_hz = runtime.engine_settings_->steam_deck_panel_hz;
     }
     inputs.units_per_player = runtime.limits_.units_per_player;
     inputs.native_density_windows = runtime.options_.native_density_windows;
@@ -276,6 +277,7 @@ void Runtime::load_engine_settings() {
     state.raspberry_pi = start.raspberry_pi;
     state.light_machine = start.light_machine;
     state.desktop = start.desktop;
+    state.steam_deck_panel_hz = start.steam_deck_panel_hz;
     // A picked folder that is no longer the mod stored is forgotten; the
     // file loses its key with the next save.
     if (settings::remembered_picked_folder(preference_values_).empty() &&
@@ -780,8 +782,13 @@ settings::Dialog& Runtime::open_engine_settings_dialog(settings::DialogKind kind
         state.profile_hacks,
         &system_language(),
         touch_controls_active(),
-        game_files
+        game_files,
+        pad_used()
     );
+    // Controller's Steam Input notice, and Maximum frame rate's line naming
+    // a Steam Deck's screen rate.
+    dialog.steam_input = pad_steam_input();
+    dialog.steam_deck_panel_hz = state.steam_deck_panel_hz;
     fill_game_files_rows(dialog);
     // Your files shows the player's own folder.
     dialog.user_folder = path_to_utf8(user_folder_);

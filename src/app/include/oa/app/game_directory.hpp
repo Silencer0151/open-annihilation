@@ -3,9 +3,11 @@
 
 // Where oa-game finds the Total Annihilation installation: --game-dir, the
 // platform's default folder, the folder remembered in the user preferences,
-// or a native folder dialog. A folder that holds the installer of the Total
-// Annihilation demo (1997) instead of game archives is played from the
-// archive unpacked from it. A mod plays from a mod folder layered over the
+// the one folder found where Steam, Heroic, Lutris or Bottles put it, the
+// in-engine folder chooser, or a native folder dialog. A folder that holds
+// the installer of the Total Annihilation demo (1997) instead of game
+// archives is played from the archive unpacked from it. A mod plays from a
+// mod folder layered over the
 // game folder (--mod-dir, or the one remembered), or from a copied install
 // whose folder holds the mod's oamod.yaml; the profile is resolved before
 // any archive is mounted, and one the engine cannot use makes the folder
@@ -14,6 +16,7 @@
 
 #include "oa/app/demo_installer.hpp"
 #include "oa/app/mod_profile_loader.hpp"
+#include "oa/platform/game_installs.hpp"
 #include "oa/platform/preferences.hpp"
 #include <cstdint>
 #include <filesystem>
@@ -177,6 +180,9 @@ inline constexpr std::size_t file_name_room = 13;
 ///     required resource and its mod profile can be used
 [[nodiscard]] bool usable(const GameInstall& install);
 
+/// A Total Annihilation folder found where Steam, Heroic, Lutris or Bottles put it.
+using FoundInstall = oa::platform::game_installs::Candidate;
+
 enum class FolderPick : uint8_t { chosen, cancelled, unavailable };
 enum class Notice : uint8_t { information, warning };
 
@@ -224,6 +230,14 @@ struct GameDirectoryRequest {
     /// The label of the missing-folder notice's look-again button
     /// (PlatformHooks::game_folder_check_again); empty: none.
     std::string check_again_label{};
+    /// Folders found on this machine (find_candidates), in the order found; resolution
+    /// inspects each and offers only usable ones. Unattended runs leave it empty.
+    std::vector<FoundInstall> found{};
+    /// The in-engine folder chooser can be shown (folder_chooser_offered).
+    bool chooser_offered = false;
+    /// The chooser comes before the system's folder dialog (Steam's Game Mode, where the
+    /// dialog may not show).
+    bool chooser_first = false;
 };
 
 /// Why resolution found no folder to play when the Game files screen is offered.
@@ -232,6 +246,20 @@ struct GameFilesNeeded {
     fs::path
         folder{}; ///< the folder looked at first (the platform default), empty when none existed
     std::string problem{}; ///< describe_install_problem of that folder; empty when none existed
+    /// Open the in-engine folder chooser, not the Game files screen.
+    bool chooser = false;
+    /// The usable folders found, for the chooser's list.
+    std::vector<FoundInstall> found{};
+    /// A remembered folder that can no longer be used; empty when none.
+    fs::path stored_folder{};
+    /// Why the remembered folder can no longer be used; empty when none.
+    std::string stored_problem{};
+    /// The chooser may offer the system's folder dialog: the build has one, this is not Steam's
+    /// Game Mode and it has not failed.
+    bool dialog_offered{};
+    /// Why the system's folder dialog gave no folder, for the chooser's notice; empty when it
+    /// did not fail.
+    std::string dialog_problem{};
 };
 
 /// How the game folder was found.
@@ -240,6 +268,7 @@ enum class GameDirectorySource : uint8_t {
     stored,   ///< the preferences remembered it
     chosen,   ///< the player chose it in the folder dialog; it is remembered
     platform, ///< the platform's default folder, which is not remembered
+    found,    ///< the one usable folder found on this machine; it is remembered
 };
 
 struct GameDirectory {
@@ -260,13 +289,24 @@ struct GameDirectory {
     std::shared_ptr<const data::mod_profile::ModProfile> profile;
     /// The mod profile's warnings, one line each.
     std::vector<std::string> profile_warnings;
+    /// Where the folder was found, for GameDirectorySource::found.
+    std::optional<FoundInstall> found_from{};
 };
 
 /// Resolves the game folder.
 ///
 /// --game-dir, else the platform's default folder while it is usable, else
 /// the stored folder while it is still usable (neither when `choose`), else
-/// the folder dialog until the user picks a usable folder. An unattended run
+/// the one usable folder found on this machine (request.found) when no stored
+/// folder has gone, else the folder dialog until the user picks a usable
+/// folder. Where the in-engine chooser is offered (request.chooser_offered,
+/// with `needed`), it opens instead (`needed` says so, with the usable
+/// folders found) for several usable folders found, for a stored folder that
+/// has gone while a usable one was found, for a start with no usable folder
+/// in Steam's Game Mode (request.chooser_first, which --choose-game-dir
+/// follows too) or with no dialog in the build, and when the dialog cannot
+/// open (with its reason); otherwise a desktop whose dialog works resolves
+/// as without the chooser. An unattended run
 /// never opens the dialog: without --game-dir it takes a usable platform
 /// default, else a usable stored folder. --game-dir is inspected too, unless
 /// --archive names the archives, and refused when it names no folder or one
@@ -290,7 +330,8 @@ struct GameDirectory {
 /// @param request the argument, the platform's default and advice, the
 ///     stored folder and the run's mode
 /// @param host dialogs, notices and folder inspection
-/// @param[out] needed filled when request.import_offered and no folder is usable; may be null
+/// @param[out] needed filled when request.import_offered and no folder is usable, or when the
+///     in-engine chooser should open; may be null
 /// @return the folder and how it was found; nullopt after the user was told
 ///     why the game cannot start (cancelled, or no dialog on this platform),
 ///     when the look-again notice could not be shown, or when `needed` was
@@ -374,7 +415,12 @@ void remember_mod_directory(oa::platform::preferences::Values& values, const fs:
 /// message box with that one button. The Game files screen is offered when
 /// `needed` is given, the platform brings game files in
 /// (game_files_import_offered), --no-game-files-screen was not given, and
-/// the run is not unattended unless it is --check-game-files.
+/// the run is not unattended unless it is --check-game-files. A run that is
+/// not unattended and names no folder carries the folders found on this
+/// machine (oa::platform::game_installs::find_candidates); the in-engine
+/// chooser is offered when `needed` is given and folder_chooser_offered()
+/// says so, and comes before the dialog in Steam's Game Mode
+/// (oa::platform::running_in_steam_game_mode).
 ///
 /// @param options parsed command line
 /// @param[out] needed non-null: the Game files screen may be offered, and is
@@ -382,5 +428,43 @@ void remember_mod_directory(oa::platform::preferences::Values& values, const fs:
 /// @return as resolve_game_directory()
 [[nodiscard]] std::optional<GameDirectory>
 find_game_directory(const Options& options, GameFilesNeeded* needed = nullptr);
+
+/// Inspects a folder the in-engine chooser picked with a host's inspection and returns it as
+/// chosen (it is remembered) when it can be played.
+///
+/// @param host the inspection
+/// @param folder the folder
+/// @param[out] problem why it cannot be played, in words for the player; may be null
+/// @return the folder, or none
+[[nodiscard]] std::optional<GameDirectory>
+take_picked_folder(const GameDirectoryHost& host, const fs::path& folder, std::string* problem);
+
+/// Opens the system's folder dialog for the in-engine chooser, a second time when the first
+/// fails, as resolution does (game_directory_dialog.cpp).
+///
+/// @param start the folder it opens at; empty: the system's choice
+/// @param[out] chosen the folder picked
+/// @param[out] error why no folder came back, for FolderPick::unavailable
+/// @return what the dialog gave; unavailable where the build offers none
+[[nodiscard]] FolderPick
+pick_game_folder_with_dialog(const fs::path& start, fs::path* chosen, std::string* error);
+
+/// Inspects a folder the chooser picked and returns it as chosen (it is remembered) when it
+/// can be played (game_directory_dialog.cpp), with the mod folder and the data folder
+/// find_game_directory() inspects with.
+///
+/// @param options the parsed command line (mod, data folder)
+/// @param folder the folder
+/// @param[out] problem why it cannot be played, in words for the player; may be null
+/// @return the folder, or none
+[[nodiscard]] std::optional<GameDirectory>
+take_chosen_folder(const Options& options, const fs::path& folder, std::string* problem);
+
+/// Returns the main menu's words for a found folder: "Playing Total Annihilation from your
+/// Steam library:" and the folder on the next line.
+///
+/// @param install where the folder was found
+/// @return the notice's text, UTF-8
+[[nodiscard]] std::string found_install_notice(const FoundInstall& install);
 
 } // namespace oa::app

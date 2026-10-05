@@ -3,11 +3,17 @@
 
 // The touch controls' model: the device class, the layouts at 1180x820,
 // 852x393 and 956x440, the latches, the radial, the hit tests and the
-// left-handed mirror.
+// left-handed mirror; with a gamepad, the Steam Deck's 1280x800 screen at
+// each Control size, the slim pad HUD, the FORCE chip, badges that never
+// move a control, the build and group rings, and the pad's hints, badges and
+// help lines.
 #include "oa/test/check.hpp"
 #include "oa/ui/touch_hud.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -114,13 +120,20 @@ int count_of(const hud::Frame& frame, Control control) {
     return total;
 }
 
-/// Returns whether no two controls overlap (wedges of the radial may share corners).
+/// Returns whether a control is a ring's wedge, whose rectangle may share corners with its
+/// neighbours'.
+bool wedge(Control control) {
+    return control == Control::radial_item || control == Control::build_wedge ||
+           control == Control::group_wedge;
+}
+
+/// Returns whether no two controls overlap (wedges of one ring may share corners).
 bool no_overlaps(const hud::Frame& frame) {
     for (uint8_t a = 0; a < frame.control_count; ++a) {
         for (uint8_t b = a + 1; b < frame.control_count; ++b) {
             const auto& first = frame.controls[a];
             const auto& second = frame.controls[b];
-            if (first.control == Control::radial_item && second.control == Control::radial_item)
+            if (wedge(first.control) && first.control == second.control)
                 continue;
             if (overlap(first.rect, second.rect)) {
                 std::fprintf(
@@ -1129,7 +1142,7 @@ void order_panel_gadgets_have_help() {
 void every_control_has_its_texts() {
     const hud::HudState state = match_state();
     for (int value = static_cast<int>(Control::queue);
-         value <= static_cast<int>(Control::sheet_outside);
+         value <= static_cast<int>(Control::group_wedge);
          ++value) {
         const auto control = static_cast<Control>(value);
         OA_CHECK(!hud::control_help(control, 0).empty());
@@ -1184,6 +1197,692 @@ void every_control_has_its_texts() {
     OA_CHECK(hud::control_label(Control::menu_item, 1, menu) == "FASTER");
 }
 
+namespace pad = oa::ui::pad_controls;
+
+/// Returns the Steam Deck's screen at a Control size, as the runtime lays it out: 1280x800
+/// window points of one canvas pixel each, the 3.1c chrome for that canvas, the touch layer's
+/// points scaled, and the class from the window's points over the scale.
+hud::Viewport deck_viewport(float scale) {
+    hud::Viewport viewport{};
+    viewport.width = 1280;
+    viewport.height = 800;
+    viewport.px_per_point = scale;
+    viewport.device =
+        hud::classify_device(static_cast<int>(1280.0f / scale), static_cast<int>(800.0f / scale));
+    viewport.chrome = layout::make_match_layout(1280, 800);
+    return viewport;
+}
+
+/// Returns a tablet viewport's battlefield inside its safe area, above the 3.1c bottom bar.
+Rect battlefield_of(const hud::Viewport& viewport) {
+    const Rect safe = safe_rect(viewport);
+    const int left = std::max(viewport.chrome.left, safe.x);
+    const int top = std::max(viewport.chrome.top, safe.y);
+    const int bottom = std::min(viewport.chrome.bottom_bar_y(), safe.y + safe.height);
+    return {left, top, safe.x + safe.width - left, bottom - top};
+}
+
+/// Returns the map of a Steam Deck with Steam Input off: trackpads and grips, right-handed.
+pad::MapContext deck_map() {
+    pad::MapContext map{};
+    map.scheme = pad::Scheme::trackpads;
+    map.trackpads = true;
+    return map;
+}
+
+/// Returns the map of a pad with no grips and no trackpads: the fallback, sticks scheme.
+pad::MapContext fallback_map() {
+    pad::MapContext map{};
+    map.scheme = pad::Scheme::sticks;
+    map.fallback = true;
+    return map;
+}
+
+/// Returns a rectangle's centre.
+hud::Point middle_of(const Rect& rect) {
+    return {rect.x + rect.width / 2, rect.y + rect.height / 2};
+}
+
+/// Returns a builder's build ring content: six build buttons, NEXT at E and PREV at W, a
+/// factory's count on one and one greyed.
+hud::BuildRingContent builder_ring_content() {
+    hud::BuildRingContent content{};
+    for (std::size_t slot = 0; slot < hud::build_ring_slot_count; ++slot) {
+        content.kinds[slot] = hud::BuildWedgeKind::build;
+        content.gadgets[slot] = static_cast<int16_t>(10 + slot);
+        content.available[slot] = true;
+    }
+    content.kinds[hud::build_ring_next_slot] = hud::BuildWedgeKind::next;
+    content.kinds[hud::build_ring_prev_slot] = hud::BuildWedgeKind::prev;
+    content.queued[1] = 5;
+    content.available[3] = false;
+    return content;
+}
+
+/// Checks the Steam Deck's 1280x800 screen at Control size Standard, Large and Larger: always
+/// the tablet layout (at Larger the window is 853x533 points), every control on the screen and
+/// inside the safe area, none overlapping, whatever the controls show.
+void deck_screen_keeps_the_tablet_layout() {
+    OA_CHECK(hud::classify_device(853, 533) == hud::DeviceClass::tablet);
+    const Rect screen{0, 0, 1280, 800};
+    hud::RadialAvailability availability{};
+    availability.orders.fill(true);
+    for (const float scale : {1.0f, 1.25f, 1.5f}) {
+        const hud::Viewport viewport = deck_viewport(scale);
+        OA_CHECK(viewport.device == hud::DeviceClass::tablet);
+        hud::HudState busy = match_state();
+        busy.build_page_loaded = true;
+        busy.shared_game = true;
+        busy.pad.force_shown = true;
+        for (std::size_t group = 1; group <= 9; ++group)
+            busy.group_counts[group] = 3;
+        std::vector<hud::HudState> states{match_state(), busy};
+        hud::HudState marked = busy;
+        marked.banner.shown = true;
+        marked.placement.active = true;
+        states.push_back(marked);
+        for (const hud::Sheet sheet :
+             {hud::Sheet::select_menu, hud::Sheet::speed, hud::Sheet::phone_menu}) {
+            hud::HudState open = busy;
+            open.sheet = sheet;
+            states.push_back(open);
+        }
+        hud::HudState rings = busy;
+        rings.radial = hud::make_radial({640, 400}, availability, viewport);
+        states.push_back(rings);
+        rings.radial.reset();
+        rings.build_ring = hud::make_build_ring({640, 400}, builder_ring_content(), viewport);
+        states.push_back(rings);
+        rings.build_ring.reset();
+        rings.pad.group_ring = hud::make_group_ring(viewport);
+        states.push_back(rings);
+        hud::HudState slim = busy;
+        slim.pad.hud = true;
+        states.push_back(slim);
+        slim.pad.group_ring = hud::make_group_ring(viewport);
+        slim.sheet = hud::Sheet::select_menu;
+        states.push_back(slim);
+        for (const hud::HudState& state : states) {
+            const hud::Frame frame = hud::lay_out(viewport, state);
+            OA_CHECK(no_overlaps(frame));
+            OA_CHECK(all_inside_safe(frame, viewport));
+            for (uint8_t slot = 0; slot < frame.control_count; ++slot)
+                OA_CHECK(inside(frame.controls[slot].rect, screen));
+            OA_CHECK(inside(frame.clear, screen));
+        }
+        // The touch layer's controls grow with the scale; the 3.1c chrome does not.
+        const hud::Frame plain = hud::lay_out(viewport, match_state());
+        OA_CHECK(find(plain, Control::queue).width == static_cast<int>(std::lround(76 * scale)));
+        OA_CHECK(find(plain, Control::queue).x == viewport.chrome.left + std::lround(12 * scale));
+        OA_CHECK(viewport.chrome.left == deck_viewport(1.0f).chrome.left);
+        OA_CHECK(count_of(plain, Control::pause) == 1 && count_of(plain, Control::menu) == 1);
+    }
+}
+
+/// Checks the slim pad HUD: the status pill at the battlefield's top, QUEUE, ADD and FORCE
+/// under it, the stored groups' chips near its bottom, all inside the battlefield, nothing of
+/// the touch layout; x5 takes QUEUE's label over a build button without moving anything.
+void pad_hud_lays_out_the_slim_frame() {
+    const hud::Viewport viewport = deck_viewport(1.5f);
+    const Rect field = battlefield_of(viewport);
+    hud::HudState state = match_state();
+    state.pad.hud = true;
+    state.pad.force_shown = true;
+    state.group_counts[1] = 4;
+    state.group_counts[2] = 12;
+    state.group_counts[5] = 1;
+    const hud::Frame frame = hud::lay_out(viewport, state);
+    // The pill: 420x28 pt, 8 pt under the battlefield's top, centred on it.
+    const Rect pill = frame.status;
+    OA_CHECK(pill.width == 630 && pill.height == 42);
+    OA_CHECK(pill.y == field.y + 12);
+    OA_CHECK(std::abs(middle_of(pill).x - middle_of(field).x) <= 2);
+    OA_CHECK(inside(pill, field));
+    // QUEUE, ADD and FORCE: 88x30 pt, 4 pt under the pill, 6 pt apart, centred.
+    const Rect queue = find(frame, Control::queue);
+    const Rect add = find(frame, Control::add);
+    const Rect force = find(frame, Control::force);
+    OA_CHECK(queue.width == 132 && queue.height == 45);
+    OA_CHECK(queue.y == pill.y + pill.height + 6);
+    OA_CHECK(add.y == queue.y && force.y == queue.y);
+    OA_CHECK(add.x == queue.x + 141 && force.x == add.x + 141);
+    OA_CHECK(std::abs((queue.x + force.x + force.width) / 2 - middle_of(field).x) <= 2);
+    // The group chips: 52x40 pt from 12 pt inside the battlefield's left, on its bottom line.
+    OA_CHECK(count_of(frame, Control::group_chip) == 3);
+    const Rect first = find(frame, Control::group_chip, 1);
+    OA_CHECK(same(first, {field.x + 18, field.y + field.height - 12 - 60, 78, 60}));
+    OA_CHECK(find(frame, Control::group_chip, 2).x == first.x + 84);
+    OA_CHECK(find(frame, Control::group_chip, 5).x == first.x + 168);
+    // Nothing of the touch layout, everything on the battlefield.
+    for (const Control control :
+         {Control::clear,
+          Control::select_menu,
+          Control::group_store,
+          Control::times_five,
+          Control::pause,
+          Control::speed,
+          Control::centre,
+          Control::follow,
+          Control::next_unit,
+          Control::info,
+          Control::menu})
+        OA_CHECK(count_of(frame, control) == 0);
+    OA_CHECK(frame.control_count == 6);
+    for (uint8_t slot = 0; slot < frame.control_count; ++slot)
+        OA_CHECK(inside(frame.controls[slot].rect, field));
+    OA_CHECK(no_overlaps(frame));
+    OA_CHECK(all_inside_safe(frame, viewport));
+    // The overlays' area: under the chips, above the group chips.
+    OA_CHECK(inside(frame.clear, field));
+    OA_CHECK(overlaps_no_control(frame, frame.clear));
+    OA_CHECK(frame.clear.y == queue.y + queue.height + 12);
+    OA_CHECK(frame.clear.y + frame.clear.height == first.y - 12);
+    OA_CHECK(!hud::covers(frame, middle_of(frame.clear)));
+    OA_CHECK(hud::covers(frame, middle_of(pill)));
+
+    // Without grips there is no FORCE; QUEUE and ADD stay centred.
+    state.pad.force_shown = false;
+    const hud::Frame two = hud::lay_out(viewport, state);
+    OA_CHECK(count_of(two, Control::force) == 0);
+    const Rect two_queue = find(two, Control::queue);
+    const Rect two_add = find(two, Control::add);
+    OA_CHECK(std::abs((two_queue.x + two_add.x + two_add.width) / 2 - middle_of(field).x) <= 2);
+    // Over a build button QUEUE reads x5, in place.
+    OA_CHECK(hud::control_label(Control::queue, 0, state) == "QUEUE");
+    state.pad.over_build_button = true;
+    OA_CHECK(hud::control_label(Control::queue, 0, state) == "x5");
+    OA_CHECK(same_frame(hud::lay_out(viewport, state), two));
+    OA_CHECK(hud::control_label(Control::force, 0, state) == "FORCE");
+    // With touch controls the tablet's QUEUE keeps its label: x5 has a control of its own.
+    hud::HudState touch = state;
+    touch.pad.hud = false;
+    OA_CHECK(hud::control_label(Control::queue, 0, touch) == "QUEUE");
+
+    // SELECT ▾, opened by the D-pad, centred on the battlefield under the chips.
+    state.sheet = hud::Sheet::select_menu;
+    const hud::Frame menu = hud::lay_out(viewport, state);
+    OA_CHECK(count_of(menu, Control::menu_item) == static_cast<int>(hud::select_item_count));
+    OA_CHECK(inside(menu.sheet, field));
+    OA_CHECK(menu.sheet.y > two_queue.y + two_queue.height);
+    OA_CHECK(std::abs(middle_of(menu.sheet).x - middle_of(field).x) <= 2);
+    OA_CHECK(no_overlaps(menu));
+    OA_CHECK(all_inside_safe(menu, viewport));
+
+    // Left-handed, the group chips start from the battlefield's right; the pill stays centred.
+    hud::Viewport left = viewport;
+    left.left_handed = true;
+    state.sheet = hud::Sheet::none;
+    const hud::Frame mirrored = hud::lay_out(left, state);
+    const Rect last = find(mirrored, Control::group_chip, 1);
+    OA_CHECK(last.x + last.width == field.x + field.width - 18);
+    OA_CHECK(std::abs(middle_of(mirrored.status).x - middle_of(two.status).x) <= 2);
+    OA_CHECK(mirrored.status.y == two.status.y && mirrored.status.width == two.status.width);
+    OA_CHECK(no_overlaps(mirrored));
+    OA_CHECK(all_inside_safe(mirrored, left));
+
+    // Every window keeps the rules with the pad HUD, in both hands.
+    for (hud::Viewport other :
+         {tablet_viewport(),
+          tablet_viewport_of(640, 480, {0, 0, 0, 0}),
+          tablet_viewport_of(820, 1180, {0, 24, 0, 20}),
+          tablet_viewport_of(2732, 2048, {0, 0, 0, 40}, 2.0f),
+          phone_852(),
+          deck_viewport(1.0f)}) {
+        for (const bool left_handed : {false, true}) {
+            other.left_handed = left_handed;
+            hud::HudState slim = match_state();
+            slim.pad.hud = true;
+            slim.pad.force_shown = true;
+            for (std::size_t group = 1; group <= 9; ++group)
+                slim.group_counts[group] = 7;
+            for (const hud::Sheet sheet : {hud::Sheet::none, hud::Sheet::select_menu}) {
+                slim.sheet = sheet;
+                slim.pad.group_ring.reset();
+                const hud::Frame laid = hud::lay_out(other, slim);
+                OA_CHECK(no_overlaps(laid));
+                OA_CHECK(all_inside_safe(laid, other));
+                OA_CHECK(inside(laid.clear, safe_rect(other)));
+                OA_CHECK(count_of(laid, Control::queue) == 1);
+                if (sheet == hud::Sheet::none)
+                    OA_CHECK(overlaps_no_control(laid, laid.clear));
+                // The group ring, while the groups layer is held (never with SELECT ▾ open),
+                // covers nothing of the HUD.
+                slim.pad.group_ring = hud::make_group_ring(other);
+                const hud::Frame ringed = hud::lay_out(other, slim);
+                OA_CHECK(no_overlaps(ringed));
+                OA_CHECK(all_inside_safe(ringed, other));
+                OA_CHECK(count_of(ringed, Control::group_wedge) == 9);
+                if (sheet == hud::Sheet::none)
+                    OA_CHECK(ringed.control_count == laid.control_count + 9);
+            }
+        }
+    }
+}
+
+/// Checks that FORCE joins the tablet's thumb column above QUEUE (and above x5) while the pad
+/// has grips, the rest of the column staying where it was.
+void tablet_force_joins_the_thumb_column() {
+    const hud::Viewport viewport = tablet_viewport();
+    hud::HudState state = match_state();
+    const hud::Frame without = hud::lay_out(viewport, state);
+    OA_CHECK(count_of(without, Control::force) == 0);
+    state.pad.force_shown = true;
+    const hud::Frame with = hud::lay_out(viewport, state);
+    OA_CHECK(same(find(with, Control::force), {231, 529, 76, 44}));
+    for (const Control control :
+         {Control::queue, Control::add, Control::clear, Control::select_menu, Control::pause})
+        OA_CHECK(same(find(with, control), find(without, control)));
+    OA_CHECK(same(with.clear, {219, 55, 885, 466}));
+    OA_CHECK(no_overlaps(with));
+    OA_CHECK(overlaps_no_control(with, with.clear));
+    state.build_page_loaded = true;
+    const hud::Frame page = hud::lay_out(viewport, state);
+    OA_CHECK(same(find(page, Control::times_five), {231, 529, 76, 44}));
+    OA_CHECK(same(find(page, Control::force), {231, 479, 76, 44}));
+    OA_CHECK(no_overlaps(page));
+    // A finger holds FORCE: its help says so.
+    OA_CHECK(!hud::control_help(Control::force, 0).empty());
+    const auto found = hud::hit(with, middle_of(find(with, Control::force)), 22);
+    OA_CHECK(found.has_value() && found->control == Control::force);
+    // The phone has no room in its column for FORCE.
+    hud::HudState phone = match_state();
+    phone.pad.force_shown = true;
+    OA_CHECK(count_of(hud::lay_out(phone_852(), phone), Control::force) == 0);
+}
+
+/// Checks that the pad's looks (badges, glyphs, maps, lit chips, aims, hint lines, hold
+/// progress, the SELECT ▾ focus, a finger on FORCE) never move a control: frames are equal with
+/// them on and off.
+void pad_looks_never_move_controls() {
+    for (const hud::Viewport& viewport : {tablet_viewport(), phone_852(), deck_viewport(1.5f)}) {
+        for (const bool slim : {false, true}) {
+            hud::HudState state = match_state();
+            state.pad.hud = slim;
+            state.pad.force_shown = true;
+            state.build_page_loaded = true;
+            state.group_counts[3] = 2;
+            state.group_counts[6] = 9;
+            hud::HudState other = state;
+            other.pad.badges = true;
+            other.pad.glyphs = pad::GlyphStyle::playstation;
+            other.pad.map.left_handed = true;
+            other.pad.map.fallback = true;
+            other.pad.map.scheme = pad::Scheme::sticks;
+            other.pad.force_active = true;
+            other.pad.groups_layer = true;
+            other.pad.over_build_button = true;
+            other.pad.radial_aim = 3;
+            other.pad.build_aim = 2;
+            other.pad.aim_dot = {400, 300};
+            other.pad.ring_by_pad = true;
+            other.pad.hold_progress = 0.5f;
+            other.pad.hold_point = {20, 30};
+            other.sheet_focus = 4;
+            other.force_touch = true;
+            other.armed_or_placing = true;
+            other.right_click_interface = true;
+            OA_CHECK(same_frame(hud::lay_out(viewport, state), hud::lay_out(viewport, other)));
+        }
+    }
+}
+
+/// Checks the build ring: eight wedges clockwise from the top with NEXT at E and PREV at W,
+/// 44 and 128 pt radii, 56 pt pictures, the hit test, the safe area and the scale.
+void build_ring_lays_out_its_wedges() {
+    const hud::Viewport viewport = tablet_viewport();
+    const hud::BuildRingContent content = builder_ring_content();
+    const hud::BuildRing ring = hud::make_build_ring({700, 400}, content, viewport);
+    OA_CHECK(ring.anchor.x == 700 && ring.anchor.y == 400);
+    OA_CHECK(ring.centre.x == 700 && ring.centre.y == 400);
+    OA_CHECK(ring.inner_radius == 44 && ring.outer_radius == 128);
+    OA_CHECK(!ring.standing_orders);
+    for (std::size_t slot = 0; slot < hud::build_ring_slot_count; ++slot) {
+        const hud::BuildWedge& wedge = ring.wedges[slot];
+        OA_CHECK(wedge.kind == content.kinds[slot]);
+        OA_CHECK(wedge.gadget == content.gadgets[slot]);
+        OA_CHECK(wedge.queued == content.queued[slot]);
+        OA_CHECK(wedge.available == content.available[slot]);
+        OA_CHECK(wedge.picture.width == 56 && wedge.picture.height == 56);
+        OA_CHECK(same(wedge.hit, wedge.picture));
+        const auto slot_hit = hud::build_ring_hit(ring, middle_of(wedge.picture), viewport);
+        OA_CHECK(slot_hit.has_value() && *slot_hit == slot);
+    }
+    // Clockwise from the top: N above, NEXT at E, S below, PREV at W.
+    const auto at = [&](std::size_t slot) { return middle_of(ring.wedges[slot].picture); };
+    OA_CHECK(at(0).x == 700 && at(0).y == 400 - 86);
+    OA_CHECK(at(hud::build_ring_next_slot).x == 700 + 86 && at(hud::build_ring_next_slot).y == 400);
+    OA_CHECK(ring.wedges[hud::build_ring_next_slot].kind == hud::BuildWedgeKind::next);
+    OA_CHECK(at(4).x == 700 && at(4).y == 400 + 86);
+    OA_CHECK(at(hud::build_ring_prev_slot).x == 700 - 86 && at(hud::build_ring_prev_slot).y == 400);
+    OA_CHECK(ring.wedges[hud::build_ring_prev_slot].kind == hud::BuildWedgeKind::prev);
+    OA_CHECK(at(1).x > 700 && at(1).y < 400 && at(7).x < 700 && at(7).y < 400);
+    // The hub and far off give nothing; just past the ring's edge still picks.
+    OA_CHECK(!hud::build_ring_hit(ring, ring.centre, viewport).has_value());
+    const auto edge = hud::build_ring_hit(ring, {700, 400 - 128 - 15}, viewport);
+    OA_CHECK(edge.has_value() && *edge == 0);
+    OA_CHECK(!hud::build_ring_hit(ring, {700, 400 - 128 - 30}, viewport).has_value());
+    // An empty wedge gives nothing.
+    hud::BuildRingContent gap = content;
+    gap.kinds[7] = hud::BuildWedgeKind::empty;
+    const hud::BuildRing gapped = hud::make_build_ring({700, 400}, gap, viewport);
+    OA_CHECK(!gapped.wedges[7].available);
+    OA_CHECK(!hud::build_ring_hit(gapped, middle_of(gapped.wedges[7].picture), viewport));
+    // A corner anchor keeps the ring inside the battlefield and the anchor where it opened.
+    const Rect field = battlefield_of(viewport);
+    for (const hud::Point corner :
+         {hud::Point{0, 0}, hud::Point{1179, 819}, hud::Point{230, 760}}) {
+        const hud::BuildRing clamped = hud::make_build_ring(corner, content, viewport);
+        OA_CHECK(clamped.anchor.x == corner.x && clamped.anchor.y == corner.y);
+        const Rect box{
+            clamped.centre.x - clamped.outer_radius,
+            clamped.centre.y - clamped.outer_radius,
+            2 * clamped.outer_radius,
+            2 * clamped.outer_radius
+        };
+        OA_CHECK(inside(box, field));
+        for (const auto& wedge : clamped.wedges)
+            OA_CHECK(inside(wedge.hit, field));
+    }
+    // Twice the pixels a point, twice the sizes.
+    const hud::Viewport dense = tablet_viewport_of(2360, 1640, {0, 0, 0, 40}, 2.0f);
+    const hud::BuildRing large = hud::make_build_ring({1400, 800}, content, dense);
+    OA_CHECK(large.inner_radius == 88 && large.outer_radius == 256);
+    OA_CHECK(large.wedges[0].picture.width == 112);
+    OA_CHECK(middle_of(large.wedges[0].picture).y == large.centre.y - 172);
+    // The standing-orders ring keeps its kinds and says what it is.
+    hud::BuildRingContent standing{};
+    standing.standing_orders = true;
+    standing.kinds[0] = hud::BuildWedgeKind::fire_orders;
+    standing.kinds[1] = hud::BuildWedgeKind::move_orders;
+    standing.kinds[3] = hud::BuildWedgeKind::on_off;
+    standing.kinds[4] = hud::BuildWedgeKind::self_destruct;
+    standing.kinds[5] = hud::BuildWedgeKind::cloak;
+    standing.kinds[7] = hud::BuildWedgeKind::info;
+    standing.available.fill(true);
+    standing.gadgets.fill(-1);
+    const hud::BuildRing orders = hud::make_build_ring({700, 400}, standing, viewport);
+    OA_CHECK(orders.standing_orders);
+    OA_CHECK(orders.wedges[4].kind == hud::BuildWedgeKind::self_destruct);
+    OA_CHECK(!orders.wedges[2].available);
+    // In the frame: a control for each wedge that holds something, over the controls under it.
+    hud::HudState state = match_state();
+    state.build_ring = ring;
+    const hud::Frame frame = hud::lay_out(viewport, state);
+    OA_CHECK(count_of(frame, Control::build_wedge) == 8);
+    const auto found = hud::hit(frame, at(5), 22);
+    OA_CHECK(found.has_value() && found->control == Control::build_wedge && found->index == 5);
+    OA_CHECK(no_overlaps(frame));
+    OA_CHECK(hud::control_label(Control::build_wedge, hud::build_ring_next_slot, state) == "NEXT");
+    OA_CHECK(hud::control_label(Control::build_wedge, hud::build_ring_prev_slot, state) == "PREV");
+    OA_CHECK(hud::control_label(Control::build_wedge, 0, state).empty());
+    state.build_ring = orders;
+    OA_CHECK(count_of(hud::lay_out(viewport, state), Control::build_wedge) == 6);
+    OA_CHECK(hud::control_label(Control::build_wedge, 7, state) == "INFO");
+    state.build_ring = gapped;
+    OA_CHECK(count_of(hud::lay_out(viewport, state), Control::build_wedge) == 7);
+}
+
+/// Checks the group ring: at the battlefield's lower left, clear of the touch controls and the
+/// pad HUD's chips, nine wedges with group 1 at the top, mirrored for the left hand.
+void group_ring_sits_at_the_lower_left() {
+    const hud::Viewport viewport = deck_viewport(1.5f);
+    const Rect field = battlefield_of(viewport);
+    const hud::GroupRing ring = hud::make_group_ring(viewport);
+    OA_CHECK(ring.inner_radius == 42 && ring.outer_radius == 126);
+    OA_CHECK(!ring.aim.has_value());
+    const Rect box{
+        ring.centre.x - ring.outer_radius,
+        ring.centre.y - ring.outer_radius,
+        2 * ring.outer_radius,
+        2 * ring.outer_radius
+    };
+    OA_CHECK(inside(box, field));
+    OA_CHECK(ring.centre.x < middle_of(field).x && ring.centre.y > middle_of(field).y);
+    // Clear of the pad HUD's group chips: none is left out under it.
+    hud::HudState slim = match_state();
+    slim.pad.hud = true;
+    slim.pad.force_shown = true;
+    for (std::size_t group = 1; group <= 9; ++group)
+        slim.group_counts[group] = 2;
+    const int chips = count_of(hud::lay_out(viewport, slim), Control::group_chip);
+    slim.pad.group_ring = ring;
+    const hud::Frame frame = hud::lay_out(viewport, slim);
+    OA_CHECK(count_of(frame, Control::group_wedge) == 9);
+    OA_CHECK(count_of(frame, Control::group_chip) == chips);
+    OA_CHECK(no_overlaps(frame));
+    const Rect one = find(frame, Control::group_wedge, 1);
+    OA_CHECK(middle_of(one).x == ring.centre.x && middle_of(one).y < ring.centre.y);
+    const auto found = hud::hit(frame, middle_of(one), 22);
+    OA_CHECK(found.has_value() && found->control == Control::group_wedge && found->index == 1);
+    OA_CHECK(hud::control_label(Control::group_wedge, 7, slim) == "7");
+    // Clear of the touch layout's thumb column and group bar.
+    hud::HudState touch = slim;
+    touch.pad.hud = false;
+    touch.build_page_loaded = true;
+    touch.pad.group_ring.reset();
+    const hud::Frame plain = hud::lay_out(viewport, touch);
+    touch.pad.group_ring = ring;
+    const hud::Frame ringed = hud::lay_out(viewport, touch);
+    OA_CHECK(ringed.control_count == plain.control_count + 9);
+    OA_CHECK(no_overlaps(ringed));
+    // Left-handed: the lower right, mirrored about the battlefield.
+    hud::Viewport left = viewport;
+    left.left_handed = true;
+    const hud::GroupRing mirrored = hud::make_group_ring(left);
+    OA_CHECK(mirrored.centre.y == ring.centre.y);
+    OA_CHECK(
+        std::abs((ring.centre.x - field.x) - (field.x + field.width - mirrored.centre.x)) <= 1
+    );
+    // A phone keeps it beside its left column, inside the safe area.
+    const hud::Viewport phone = phone_852();
+    const hud::GroupRing small = hud::make_group_ring(phone);
+    const Rect phone_box{
+        small.centre.x - small.outer_radius,
+        small.centre.y - small.outer_radius,
+        2 * small.outer_radius,
+        2 * small.outer_radius
+    };
+    OA_CHECK(inside(phone_box, safe_rect(phone)));
+}
+
+/// Checks the pad's status line and ring hints: what R2 and L2 do in both interface types, in
+/// each glyph set, mirrored for the left hand, and the rings' release, A and B.
+void pad_hints_name_the_buttons() {
+    using hud::TapAction;
+    const pad::MapContext map = deck_map();
+    const auto words = [](const hud::PadHint& hint,
+                          pad::GlyphStyle style = pad::GlyphStyle::steam_deck) {
+        return hud::hint_words(hint, style);
+    };
+    const hud::PadHint armed =
+        hud::pad_status_hint(TapAction::move, TapAction::attack, true, false, map);
+    OA_CHECK(words(armed) == "R2 MOVE · ENEMY: ATTACK · L2 CANCEL");
+    OA_CHECK(armed.count == 5);
+    OA_CHECK(armed.parts[0].chord.has_value() && armed.parts[0].text == "MOVE");
+    OA_CHECK(armed.parts[0].chord && armed.parts[0].chord->button == pad::PadButton::r2);
+    OA_CHECK(!armed.parts[1].chord.has_value() && armed.parts[1].text == "·");
+    OA_CHECK(!armed.parts[2].chord.has_value() && armed.parts[2].text == "ENEMY: ATTACK");
+    OA_CHECK(armed.parts[4].chord && armed.parts[4].chord->button == pad::PadButton::l2);
+    OA_CHECK(armed.parts[4].text == "CANCEL");
+    OA_CHECK(
+        words(hud::pad_status_hint(TapAction::move, TapAction::attack, false, false, map)) ==
+        "R2 MOVE · ENEMY: ATTACK · L2 CLEAR"
+    );
+    OA_CHECK(
+        words(hud::pad_status_hint(TapAction::attack, TapAction::attack, true, false, map)) ==
+        "R2 ATTACK · L2 CANCEL"
+    );
+    OA_CHECK(
+        words(hud::pad_status_hint(TapAction::build, TapAction::none, true, false, map)) ==
+        "R2 BUILD · L2 CANCEL"
+    );
+    // The right-click interface: R2 selects, L2 gives the order.
+    OA_CHECK(
+        words(hud::pad_status_hint(TapAction::move, TapAction::attack, false, true, map)) ==
+        "R2 SELECT · L2 MOVE · ENEMY: ATTACK"
+    );
+    OA_CHECK(
+        words(hud::pad_status_hint(TapAction::move, TapAction::none, false, true, map)) ==
+        "R2 SELECT · L2 MOVE"
+    );
+    OA_CHECK(
+        words(hud::pad_status_hint(TapAction::select, TapAction::none, false, true, map)) ==
+        "R2 SELECT"
+    );
+    OA_CHECK(
+        words(hud::pad_status_hint(TapAction::patrol, TapAction::patrol, true, true, map)) ==
+        "R2 PATROL · L2 CANCEL"
+    );
+    // Each glyph set names the same places.
+    OA_CHECK(words(armed, pad::GlyphStyle::xbox) == "RT MOVE · ENEMY: ATTACK · LT CANCEL");
+    OA_CHECK(words(armed, pad::GlyphStyle::nintendo) == "ZR MOVE · ENEMY: ATTACK · ZL CANCEL");
+    OA_CHECK(words(armed, pad::GlyphStyle::playstation) == "R2 MOVE · ENEMY: ATTACK · L2 CANCEL");
+    // Left-handed, the triggers trade places.
+    pad::MapContext left = map;
+    left.left_handed = true;
+    OA_CHECK(
+        words(hud::pad_status_hint(TapAction::move, TapAction::attack, true, false, left)) ==
+        "L2 MOVE · ENEMY: ATTACK · R2 CANCEL"
+    );
+    // The rings.
+    OA_CHECK(words(hud::ring_hint(false, map)) == "RELEASE R1 GIVE · A ARM · B CLOSE");
+    OA_CHECK(words(hud::ring_hint(true, map)) == "RELEASE L1 GIVE · A ARM · B CLOSE");
+    OA_CHECK(words(hud::ring_hint(false, left)) == "RELEASE L1 GIVE · A ARM · B CLOSE");
+    // The fallback holds a bumper for a ring; the hint names the bumper alone.
+    OA_CHECK(
+        words(hud::ring_hint(false, fallback_map()), pad::GlyphStyle::xbox) ==
+        "RELEASE RB GIVE · A ARM · B CLOSE"
+    );
+    for (std::size_t part = 0; part < hud::ring_hint(false, fallback_map()).count; ++part) {
+        const auto& chord = hud::ring_hint(false, fallback_map()).parts[part].chord;
+        OA_CHECK(!chord || (!chord->tap && !chord->hold));
+    }
+}
+
+/// Checks the badges the touch controls show once a pad was used, through each map, and the
+/// help lines and button names that go with them.
+void badges_name_the_pad_buttons() {
+    using pad::PadButton;
+    const pad::MapContext map = deck_map();
+    const auto badge = [](Control control, const pad::MapContext& context, uint8_t index = 0) {
+        return hud::control_badge(control, index, context);
+    };
+    const auto is = [&](Control control,
+                        const pad::MapContext& context,
+                        PadButton button,
+                        PadButton held = PadButton::none,
+                        uint8_t index = 0) {
+        const auto chord = badge(control, context, index);
+        if (!chord || chord->button != button || chord->held != held) {
+            std::fprintf(
+                stderr,
+                "badge of control %d.%d: %s\n",
+                static_cast<int>(control),
+                index,
+                chord ? hud::chord_words(*chord, pad::GlyphStyle::steam_deck).c_str() : "none"
+            );
+            return false;
+        }
+        return true;
+    };
+    OA_CHECK(is(Control::queue, map, PadButton::r4));
+    OA_CHECK(is(Control::add, map, PadButton::l4));
+    OA_CHECK(is(Control::clear, map, PadButton::b));
+    OA_CHECK(is(Control::select_menu, map, PadButton::dpad_left));
+    OA_CHECK(is(Control::pause, map, PadButton::x, PadButton::view));
+    OA_CHECK(is(Control::chat, map, PadButton::a, PadButton::view));
+    OA_CHECK(is(Control::centre, map, PadButton::l3));
+    OA_CHECK(is(Control::follow, map, PadButton::r3));
+    OA_CHECK(is(Control::next_unit, map, PadButton::dpad_right));
+    OA_CHECK(is(Control::info, map, PadButton::view));
+    OA_CHECK(is(Control::force, map, PadButton::r5));
+    OA_CHECK(is(Control::group_chip, map, PadButton::dpad_up, PadButton::l5, 1));
+    OA_CHECK(is(Control::group_chip, map, PadButton::y, PadButton::l5, 5));
+    OA_CHECK(is(Control::group_chip, map, PadButton::x, PadButton::l5, 8));
+    OA_CHECK(!badge(Control::group_chip, map, 9).has_value());
+    for (const Control control :
+         {Control::menu,
+          Control::speed,
+          Control::group_store,
+          Control::times_five,
+          Control::order_slot,
+          Control::radial_hub,
+          Control::none})
+        OA_CHECK(!badge(control, map).has_value());
+    // Left-handed, the grips, bumpers and stick clicks trade sides; B stays.
+    pad::MapContext left = map;
+    left.left_handed = true;
+    OA_CHECK(is(Control::queue, left, PadButton::l4));
+    OA_CHECK(is(Control::add, left, PadButton::r4));
+    OA_CHECK(is(Control::force, left, PadButton::l5));
+    OA_CHECK(is(Control::centre, left, PadButton::r3));
+    OA_CHECK(is(Control::clear, left, PadButton::b));
+    // With no grips QUEUE and ADD are taps of the bumpers, and there is no FORCE.
+    const pad::MapContext fallback = fallback_map();
+    const auto queue = badge(Control::queue, fallback);
+    OA_CHECK(queue && queue->button == PadButton::r1 && queue->tap);
+    const auto add = badge(Control::add, fallback);
+    OA_CHECK(add && add->button == PadButton::l1 && add->tap);
+    OA_CHECK(!badge(Control::force, fallback).has_value());
+    // Help lines name the pad input too.
+    const std::string queue_help =
+        hud::control_help_with_pad(Control::queue, 0, map, pad::GlyphStyle::steam_deck);
+    OA_CHECK(queue_help.find(std::string(hud::control_help(Control::queue, 0))) == 0);
+    OA_CHECK(queue_help.ends_with(" On the pad: hold or tap R4."));
+    OA_CHECK(
+        hud::control_help_with_pad(Control::queue, 0, fallback, pad::GlyphStyle::xbox)
+            .ends_with(" On the pad: tap RB.")
+    );
+    OA_CHECK(
+        hud::control_help_with_pad(Control::pause, 0, map, pad::GlyphStyle::steam_deck)
+            .ends_with(" On the pad: View + X.")
+    );
+    OA_CHECK(
+        hud::control_help_with_pad(Control::force, 0, map, pad::GlyphStyle::steam_deck)
+            .ends_with(" On the pad: hold R5.")
+    );
+    OA_CHECK(
+        hud::control_help_with_pad(Control::group_chip, 2, map, pad::GlyphStyle::playstation)
+            .ends_with(" On the pad: L5 + D-pad right.")
+    );
+    OA_CHECK(
+        hud::control_help_with_pad(Control::menu, 0, map, pad::GlyphStyle::steam_deck) ==
+        hud::control_help(Control::menu, 0)
+    );
+    // Button names by glyph set, the face buttons by place.
+    OA_CHECK(hud::button_name(PadButton::a, pad::GlyphStyle::steam_deck) == "A");
+    OA_CHECK(hud::button_name(PadButton::a, pad::GlyphStyle::playstation) == "Cross");
+    OA_CHECK(hud::button_name(PadButton::a, pad::GlyphStyle::nintendo) == "B");
+    OA_CHECK(hud::button_name(PadButton::b, pad::GlyphStyle::nintendo) == "A");
+    OA_CHECK(hud::button_name(PadButton::y, pad::GlyphStyle::playstation) == "Triangle");
+    OA_CHECK(hud::button_name(PadButton::l1, pad::GlyphStyle::xbox) == "LB");
+    OA_CHECK(hud::button_name(PadButton::r2, pad::GlyphStyle::nintendo) == "ZR");
+    OA_CHECK(hud::button_name(PadButton::view, pad::GlyphStyle::nintendo) == "Minus");
+    OA_CHECK(hud::button_name(PadButton::menu, pad::GlyphStyle::playstation) == "Options");
+    OA_CHECK(hud::button_name(PadButton::dpad_left, pad::GlyphStyle::xbox) == "D-pad left");
+    OA_CHECK(hud::button_name(PadButton::r4, pad::GlyphStyle::steam_deck) == "R4");
+    OA_CHECK(hud::button_name(PadButton::r4, pad::GlyphStyle::xbox) == "P1");
+    OA_CHECK(hud::button_name(PadButton::none, pad::GlyphStyle::steam_deck).empty());
+    for (std::size_t value = 1; value < pad::pad_button_count; ++value)
+        for (const auto style :
+             {pad::GlyphStyle::steam_deck,
+              pad::GlyphStyle::xbox,
+              pad::GlyphStyle::playstation,
+              pad::GlyphStyle::nintendo})
+            OA_CHECK(!hud::button_name(static_cast<PadButton>(value), style).empty());
+    pad::Chord chord{};
+    chord.held = PadButton::view;
+    chord.button = PadButton::x;
+    OA_CHECK(hud::chord_words(chord, pad::GlyphStyle::steam_deck) == "View + X");
+    OA_CHECK(hud::chord_words(chord, pad::GlyphStyle::playstation) == "Create + Square");
+    chord = {};
+    chord.button = PadButton::r1;
+    chord.tap = true;
+    OA_CHECK(hud::chord_words(chord, pad::GlyphStyle::steam_deck) == "tap R1");
+    chord.tap = false;
+    chord.hold = true;
+    OA_CHECK(hud::chord_words(chord, pad::GlyphStyle::xbox) == "hold RB");
+}
 } // namespace
 
 int main() {
@@ -1210,5 +1909,13 @@ int main() {
     every_window_keeps_the_rules();
     every_control_has_its_texts();
     order_panel_gadgets_have_help();
+    deck_screen_keeps_the_tablet_layout();
+    pad_hud_lays_out_the_slim_frame();
+    tablet_force_joins_the_thumb_column();
+    pad_looks_never_move_controls();
+    build_ring_lays_out_its_wedges();
+    group_ring_sits_at_the_lower_left();
+    pad_hints_name_the_buttons();
+    badges_name_the_pad_buttons();
     return oa::test::check_exit_status();
 }

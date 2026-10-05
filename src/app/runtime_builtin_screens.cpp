@@ -112,15 +112,17 @@ struct BuiltinScreens {
         runtime.hovered_.reset();
     }
 
-    // The match chat line keeps text input while it is open.
+    // The match chat line keeps text input while it is open. The screens
+    // name no text box when they turn text input on, so no field's place
+    // goes with it and the system places an on-screen keyboard as it would.
     static void set_text_input(void* host, int enabled) {
         auto& runtime = *static_cast<Runtime*>(host);
         if (runtime.sdl_.window == nullptr)
             return;
         if (enabled != 0)
-            SDL_StartTextInput(runtime.sdl_.window);
+            runtime.start_text_input(std::nullopt);
         else if (!runtime.chat_composing_)
-            SDL_StopTextInput(runtime.sdl_.window);
+            runtime.stop_text_input();
     }
 
     static uint32_t current_tick(void* host) {

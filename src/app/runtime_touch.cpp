@@ -3,9 +3,11 @@
 
 // The touch controls' dispatcher: finger events claimed by what they land on
 // and turned into gestures and the engine's own actions, the touch state,
-// whether touch controls are on, the cursor they draw, and the window's
-// density and class in points (docs/touch-controls.md).
+// whether touch controls are on, the cursor they draw, the window's density
+// and class in points, the Control size, and the frame the slim pad HUD
+// shows once a gamepad sent input (docs/touch-controls.md).
 #include "oa/app/runtime.hpp"
+#include "engine_settings_state.hpp"
 #include "touch_state.hpp"
 #include "oa/app/extension.hpp"
 #include "oa/app/input_hints.hpp"
@@ -220,12 +222,73 @@ class LookSignature {
     uint64_t hash_{kOffset};
 };
 
+/// Folds a point into a signature.
+///
+/// @param[in,out] look the signature
+/// @param point canvas pixels
+void add_point(LookSignature& look, hud::Point point) noexcept {
+    look.add(hud::Rect{point.x, point.y, 0, 0});
+}
+
+/// Folds the gamepad's looks into a signature: the pad HUD, badges, glyphs and map, the chips'
+/// lit looks, the rings' aims, the hold, the open build ring and the SELECT ▾ focus.
+///
+/// @param[in,out] look the signature
+/// @param state the HUD state
+void add_pad_looks(LookSignature& look, const hud::HudState& state) noexcept {
+    const auto& pad = state.pad;
+    const uint64_t flags = (static_cast<uint64_t>(pad.hud) << 0U) |
+                           (static_cast<uint64_t>(pad.badges) << 1U) |
+                           (static_cast<uint64_t>(pad.map.fallback) << 2U) |
+                           (static_cast<uint64_t>(pad.map.trackpads) << 3U) |
+                           (static_cast<uint64_t>(pad.map.left_handed) << 4U) |
+                           (static_cast<uint64_t>(pad.force_shown) << 5U) |
+                           (static_cast<uint64_t>(pad.force_active) << 6U) |
+                           (static_cast<uint64_t>(pad.groups_layer) << 7U) |
+                           (static_cast<uint64_t>(pad.over_build_button) << 8U) |
+                           (static_cast<uint64_t>(pad.ring_by_pad) << 9U) |
+                           (static_cast<uint64_t>(state.force_touch) << 10U) |
+                           (static_cast<uint64_t>(state.armed_or_placing) << 11U) |
+                           (static_cast<uint64_t>(state.right_click_interface) << 12U);
+    look.add(flags);
+    look.add((static_cast<uint64_t>(pad.glyphs) << 8U) | static_cast<uint64_t>(pad.map.scheme));
+    look.add(pad.radial_aim ? uint64_t{*pad.radial_aim} + 1U : 0U);
+    look.add(pad.build_aim ? uint64_t{*pad.build_aim} + 1U : 0U);
+    add_point(look, pad.aim_dot);
+    look.add(static_cast<uint64_t>(pad.group_ring.has_value()));
+    if (pad.group_ring) {
+        const auto& ring = *pad.group_ring;
+        look.add(hud::Rect{ring.centre.x, ring.centre.y, ring.inner_radius, ring.outer_radius});
+        look.add(ring.aim ? uint64_t{*ring.aim} + 1U : 0U);
+    }
+    look.add(static_cast<uint64_t>(std::lround(pad.hold_progress * 1000.0F)));
+    add_point(look, pad.hold_point);
+    look.add(static_cast<uint64_t>(static_cast<uint8_t>(state.sheet_focus)));
+    look.add(static_cast<uint64_t>(state.build_ring.has_value()));
+    if (state.build_ring) {
+        const auto& ring = *state.build_ring;
+        look.add(hud::Rect{ring.anchor.x, ring.anchor.y, ring.centre.x, ring.centre.y});
+        look.add(hud::Rect{ring.inner_radius, ring.outer_radius, 0, 0});
+        look.add(static_cast<uint64_t>(ring.standing_orders));
+        for (const auto& wedge : ring.wedges) {
+            look.add(
+                (static_cast<uint64_t>(wedge.kind) << 40U) |
+                (static_cast<uint64_t>(static_cast<uint16_t>(wedge.gadget)) << 24U) |
+                (static_cast<uint64_t>(wedge.queued) << 8U) | static_cast<uint64_t>(wedge.available)
+            );
+            look.add(wedge.picture);
+        }
+    }
+}
+
 /// Returns the signature of everything the controls draw from the HUD state and the viewport.
 ///
 /// @param state the HUD state
 /// @param viewport the viewport
+/// @param pictures the signature of the 3.1c pictures the build ring copies (0 without one)
 /// @return the signature
-uint64_t look_signature(const hud::HudState& state, const hud::Viewport& viewport) {
+uint64_t
+look_signature(const hud::HudState& state, const hud::Viewport& viewport, uint64_t pictures) {
     LookSignature look;
     look.add(static_cast<uint64_t>(viewport.width));
     look.add(static_cast<uint64_t>(viewport.height));
@@ -300,6 +363,8 @@ uint64_t look_signature(const hud::HudState& state, const hud::Viewport& viewpor
     look.add(hud::Rect{state.tip.anchor.x, state.tip.anchor.y, 0, 0});
     look.add(static_cast<uint64_t>(state.tip.until_ms != 0));
     look.add(static_cast<uint64_t>(std::lround(state.self_destruct_progress * 1000.0F)));
+    add_pad_looks(look, state);
+    look.add(pictures);
     return look.value();
 }
 
@@ -432,6 +497,9 @@ bool TouchDispatchAccess::take_finger(Runtime& runtime, const SDL_Event& event, 
             claim(runtime, claimed);
             recount(runtime);
             if (claimed.target == TouchTarget::battlefield) {
+                // A building the pad started placing is the touch model's from now on.
+                if (dispatch.placement_by_pad)
+                    hand_placement_to_touch(runtime);
                 dispatch.inertia_x = 0.0F;
                 dispatch.inertia_y = 0.0F;
                 if (dispatch.battlefield.fingers_down() == 0)
@@ -510,8 +578,10 @@ bool TouchDispatchAccess::take_finger(Runtime& runtime, const SDL_Event& event, 
 }
 
 bool TouchDispatchAccess::take_pointer(Runtime& runtime, const SDL_Event& event) {
-    // A desktop without touch controls keeps every mouse event as it is.
-    if (!runtime.touch_controls_active())
+    // A desktop without touch controls keeps every mouse event as it is; the
+    // slim pad HUD's chips take a pointer's clicks as the touch controls do.
+    const auto* shown = runtime.touch_state_if_made();
+    if (!runtime.touch_controls_active() && (shown == nullptr || !shown->hud.pad.hud))
         return false;
     const bool motion = event.type == SDL_EVENT_MOUSE_MOTION;
     const SDL_MouseID which = motion ? event.motion.which : event.button.which;
@@ -558,6 +628,8 @@ bool TouchDispatchAccess::take_pointer(Runtime& runtime, const SDL_Event& event)
         if (const auto latch = control_latch(control->control)) {
             state.hud.latches.press(*latch, now_ms);
             runtime.refresh_pointer_modifiers();
+        } else if (control->control == hud::Control::force) {
+            hold_force(runtime, true);
         }
         return true;
     }
@@ -566,6 +638,10 @@ bool TouchDispatchAccess::take_pointer(Runtime& runtime, const SDL_Event& event)
     release_look(runtime, pressed);
     if (pressed.control == hud::Control::sheet_outside)
         return true;
+    if (pressed.control == hud::Control::force) {
+        hold_force(runtime, false);
+        return true;
+    }
     const auto released = hud::hit(state.frame, point, 0);
     const bool same =
         released && released->control == pressed.control && released->index == pressed.index;
@@ -982,10 +1058,16 @@ void TouchDispatchAccess::reset_fingers(Runtime& runtime) {
     state.hud.sheet = hud::Sheet::none;
     state.hud.radial.reset();
     state.hud.self_destruct_progress = 0.0F;
+    // A finger that held FORCE is gone.
+    if (state.hud.force_touch)
+        hold_force(runtime, false);
 }
 
 void Runtime::tick_touch() {
-    if (!touch_controls_active())
+    // The touch controls' frame, or with a gamepad used and no touch the pad HUD's alone;
+    // without either nothing runs.
+    const bool touch = touch_controls_active();
+    if (!touch && !pad_used())
         return;
     auto& state = touch_state();
     auto& dispatch = state.dispatch;
@@ -995,6 +1077,17 @@ void Runtime::tick_touch() {
                                  ? std::min(now - dispatch.tick_ns, kLongestFrameStepNs)
                                  : 0;
     dispatch.tick_ns = now;
+    if (!touch) {
+        // No finger has landed: no recogniser, touch placement or finger hover runs, so a
+        // building the mouse or the pad armed stays the pointer's to place.
+        if (screen_ != Screen::match || !match_) {
+            state.hud.in_match = false;
+            state.frame_ready = false;
+            return;
+        }
+        TouchDispatchAccess::refresh_hud(*this, now);
+        return;
+    }
     // Holds come due with no finger event.
     if (dispatch.battlefield.fingers_down() == 0)
         dispatch.battlefield.set_thresholds(TouchDispatchAccess::thresholds(*this, true));
@@ -1034,16 +1127,20 @@ void TouchDispatchAccess::refresh_hud(Runtime& runtime, uint64_t now) {
     auto& look = state.hud;
     const auto& layout = runtime.match_layout_;
     const uint64_t now_ms = now / kNanosecondsPerMillisecond;
-    // The viewport the controls are laid out on.
+    // The viewport the controls are laid out on: the window's points times the Control size.
+    // Without touch controls the match keeps the 3.1c layout, which the pad HUD goes over,
+    // mirrored for a left-handed pad.
+    const bool touch = runtime.touch_controls_active();
     hud::Viewport viewport{};
     viewport.width = layout.width;
     viewport.height = layout.height;
     viewport.px_per_point =
-        layout.px_per_point > 0.0 ? static_cast<float>(layout.px_per_point) : 1.0F;
+        (layout.px_per_point > 0.0 ? static_cast<float>(layout.px_per_point) : 1.0F) *
+        runtime.touch_control_scale();
     viewport.safe = layout.safe;
     viewport.device =
-        runtime.touch_phone_class() ? hud::DeviceClass::phone : hud::DeviceClass::tablet;
-    viewport.left_handed = dispatch.settings.left_handed;
+        touch && runtime.touch_phone_class() ? hud::DeviceClass::phone : hud::DeviceClass::tablet;
+    viewport.left_handed = touch ? dispatch.settings.left_handed : look.pad.map.left_handed;
     viewport.chrome = layout;
     state.viewport = viewport;
     look.in_match = true;
@@ -1086,13 +1183,25 @@ void TouchDispatchAccess::refresh_hud(Runtime& runtime, uint64_t now) {
     const bool placing =
         runtime.match_command_ == MatchCommand::build && runtime.pending_build_type_ != 0;
     const auto armed = armed_action(runtime.match_command_);
+    const bool finger_resting = dispatch.finger_point && dispatch.battlefield.fingers_down() == 1 &&
+                                !dispatch.box_active && !dispatch.scroll_active;
+    // With a gamepad's pointer on the match and no finger resting, a click at the pointer: the
+    // cursor's on the battlefield, nothing of the battlefield's over the 3.1c panel.
+    const bool pad_pointer = !finger_resting && runtime.pad_used() && runtime.match_pointer_known_;
+    const bool pad_on_field =
+        pad_pointer &&
+        runtime.battlefield_contains(runtime.match_pointer_x_, runtime.match_pointer_y_) &&
+        !runtime.placed_hud_covers(runtime.match_pointer_x_, runtime.match_pointer_y_);
+    const auto pointer_action =
+        pad_on_field ? tap_action_of(runtime.pick_match_cursor()) : hud::TapAction::none;
     if (placing)
         look.tap_action = look.placement.active ? hud::TapAction::place : hud::TapAction::build;
-    else if (
-        dispatch.finger_point && dispatch.battlefield.fingers_down() == 1 && !dispatch.box_active &&
-        !dispatch.scroll_active
-    )
+    else if (finger_resting)
         look.tap_action = tap_action_of(runtime.pick_match_cursor());
+    else if (pointer_action != hud::TapAction::none)
+        look.tap_action = pointer_action;
+    else if (pad_pointer && !pad_on_field)
+        look.tap_action = hud::TapAction::none;
     else if (runtime.match_command_ != MatchCommand::none)
         look.tap_action = armed;
     else if (look.has_selection && runtime.order_command_available("MOVE"))
@@ -1105,6 +1214,8 @@ void TouchDispatchAccess::refresh_hud(Runtime& runtime, uint64_t now) {
         look.enemy_action = hud::TapAction::attack;
     else
         look.enemy_action = hud::TapAction::none;
+    look.armed_or_placing = runtime.match_command_ != MatchCommand::none;
+    look.right_click_interface = runtime.match_->state().game.interface_type != 0;
     // The banner: an armed order, or the building being placed.
     const bool queue_on = look.latches.active(hud::Latch::queue);
     look.banner = {};
@@ -1183,7 +1294,10 @@ void TouchDispatchAccess::refresh_hud(Runtime& runtime, uint64_t now) {
         look.tip = {};
     state.frame = hud::lay_out(viewport, look);
     state.frame_ready = true;
-    if (const auto signature = look_signature(look, viewport);
+    const uint64_t pictures =
+        look.build_ring ? PhoneHudAccess::build_ring_picture_signature(runtime, *look.build_ring)
+                        : 0U;
+    if (const auto signature = look_signature(look, viewport, pictures);
         signature != dispatch.look_signature) {
         dispatch.look_signature = signature;
         ++look.revision;
@@ -1198,10 +1312,13 @@ void Runtime::touch_screen_changed() {
     state.frame_ready = false;
     state.hud.placement = {};
     state.dispatch.placement_touch = false;
+    state.dispatch.placement_by_pad = false;
 }
 
 void Runtime::touch_match_started() {
-    if (!touch_controls_active())
+    // The latches start off in every match, the gamepad's grips sharing them.
+    const bool touch = touch_controls_active();
+    if (!touch && !pad_used())
         return;
     touch_screen_changed();
     auto& state = touch_state();
@@ -1212,9 +1329,9 @@ void Runtime::touch_match_started() {
     state.dispatch.drawer_unit = 0;
     state.dispatch.pan_carry_x = 0.0;
     state.dispatch.pan_carry_y = 0.0;
-    // A phone starts nearer the ground unless the command line chose a
-    // zoom; the player zooms freely from there.
-    if (!touch_phone_class() || options_.match_zoom != kDefaultBattlefieldZoom)
+    // A phone with touch controls starts nearer the ground unless the
+    // command line chose a zoom; the player zooms freely from there.
+    if (!touch || !touch_phone_class() || options_.match_zoom != kDefaultBattlefieldZoom)
         return;
     const float start = std::clamp(kPhoneStartZoom, least_match_zoom(), kMaxBattlefieldZoom);
     const float current = match_zoom_ > 0.0F ? match_zoom_ : kDefaultBattlefieldZoom;
@@ -1240,8 +1357,9 @@ uint8_t Runtime::touch_finger_count() const {
 }
 
 float Runtime::touch_px_per_point() const {
+    // On the match the touch layer's points are the window's times the Control size.
     if (screen_ == Screen::match && match_layout_.px_per_point > 0.0)
-        return static_cast<float>(match_layout_.px_per_point);
+        return static_cast<float>(match_layout_.px_per_point) * touch_control_scale();
     if (sdl_.window == nullptr)
         return 1.0f;
     int window_width = 0;
@@ -1266,6 +1384,16 @@ float Runtime::touch_px_per_point() const {
     return static_cast<float>(canvas_width) / shown_points;
 }
 
+float Runtime::touch_control_scale() const {
+    namespace settings = oa::ui::engine_settings;
+    // The stored choice, else the defaults for this machine (Larger on a Steam Deck).
+    const settings::ControlSize size =
+        engine_settings_ != nullptr
+            ? engine_settings_->current.touch_control_size
+            : settings::default_settings(EngineSettingsState::inputs(*this)).touch_control_size;
+    return settings::control_size_scale(size);
+}
+
 bool Runtime::touch_phone_class() const {
     int width_points = 0;
     int height_points = 0;
@@ -1283,9 +1411,16 @@ bool Runtime::touch_phone_class() const {
         const float px_per_point = std::max(touch_px_per_point(), 0.001f);
         width_points = static_cast<int>(static_cast<float>(canvas_width) / px_per_point);
         height_points = static_cast<int>(static_cast<float>(canvas_height) / px_per_point);
+        return oa::ui::touch_hud::classify_device(width_points, height_points) ==
+               oa::ui::touch_hud::DeviceClass::phone;
     }
-    return oa::ui::touch_hud::classify_device(width_points, height_points) ==
-           oa::ui::touch_hud::DeviceClass::phone;
+    // The window's points in the touch layer's points: a larger Control size makes the window
+    // smaller in them (1280x800 at Larger is 853x533, still a tablet).
+    const float scale = std::max(touch_control_scale(), 0.001F);
+    return oa::ui::touch_hud::classify_device(
+               static_cast<int>(static_cast<float>(width_points) / scale),
+               static_cast<int>(static_cast<float>(height_points) / scale)
+           ) == oa::ui::touch_hud::DeviceClass::phone;
 }
 
 Runtime::TouchCursor Runtime::touch_cursor() const {

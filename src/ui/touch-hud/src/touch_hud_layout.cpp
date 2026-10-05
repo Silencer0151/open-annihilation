@@ -1,16 +1,18 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// The tablet and phone layouts, the phone rail's capacity, the clear area
-// and the left-handed mirror (touch_hud.hpp). Every size is in points,
-// turned into canvas pixels with Viewport::px_per_point; every control lies
-// inside the safe area.
+// The tablet and phone layouts, the slim pad HUD, the phone rail's
+// capacity, the clear area, the rings' controls, the group ring's place and
+// the left-handed mirror (touch_hud.hpp). Every size is in points, turned
+// into canvas pixels with Viewport::px_per_point; every control lies inside
+// the safe area.
 #include "oa/ui/touch_hud.hpp"
 
 #include "touch_hud_rects.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <tuple>
 
 namespace oa::ui::touch_hud {
 
@@ -44,6 +46,7 @@ constexpr float clear_height = 52.0f;           ///< CLEAR
 constexpr float add_height = 52.0f;             ///< ADD
 constexpr float queue_height = 62.0f;           ///< QUEUE
 constexpr float times_five_height = 44.0f;      ///< x5
+constexpr float force_height = 44.0f;           ///< FORCE, at the column's top with a pad
 constexpr float group_bar_inset = 12.0f;        ///< the group bar from the thumb column
 constexpr float tablet_chip_width = 70.0f;      ///< a stored group's chip
 constexpr float tablet_chip_height = 52.0f;     ///< the group bar
@@ -92,6 +95,23 @@ constexpr int more_button_columns = 3;           ///< button cells across
 constexpr float more_last_row = 48.0f;           ///< INFO and SELF-DESTRUCT · HOLD
 constexpr float more_info_width = 132.0f;        ///< INFO
 constexpr float more_section_gap = 8.0f;         ///< between the toggles, buttons and last row
+
+// Pad HUD sizes, in points.
+constexpr float pad_pill_height = 28.0f;     ///< the pad's status pill
+constexpr float pad_pill_max_width = 420.0f; ///< the pad's status pill
+constexpr float pad_row_gap = 4.0f;          ///< between the pill and the chips under it
+constexpr float pad_chip_width = 88.0f;      ///< QUEUE, ADD and FORCE with their buttons
+constexpr float pad_chip_height = 30.0f;     ///< QUEUE, ADD and FORCE with their buttons
+constexpr float pad_chip_gap = 6.0f;         ///< between QUEUE, ADD and FORCE
+constexpr float pad_group_width = 52.0f;     ///< a stored group's chip
+constexpr float pad_group_height = 40.0f;    ///< a stored group's chip
+constexpr float pad_group_gap = 4.0f;        ///< between group chips
+constexpr float pad_inset = 12.0f;           ///< the group chips from the battlefield's sides
+
+// Group ring sizes, in points.
+constexpr float group_ring_inner = 28.0f; ///< the ring's hub
+constexpr float group_ring_outer = 84.0f; ///< the ring's outer edge
+constexpr float group_wedge_side = 32.0f; ///< a wedge's rectangle, round its number
 
 /// How the left-handed layout moves a control.
 enum class Layer : uint8_t {
@@ -617,6 +637,20 @@ void lay_out_tablet(
         builder.add(Control::times_five, 0, times_five, Layer::base);
         column_top = times_five.y;
     }
+    // FORCE tops the column while the pad in use has grips, when it fits under the banner's row.
+    if (state.pad.force_shown) {
+        const Rect force{
+            column_x,
+            column_top - builder.px(tablet_gap) - builder.px(force_height),
+            column_width,
+            builder.px(force_height)
+        };
+        const int highest = field_top + 2 * builder.px(edge_points) + builder.px(banner_height);
+        if (force.y >= highest) {
+            builder.add(Control::force, 0, force, Layer::base);
+            column_top = force.y;
+        }
+    }
     builder.add(Control::queue, 0, queue, Layer::base);
     builder.add(Control::add, 0, add, Layer::base);
     builder.add(Control::clear, 0, clear, Layer::base);
@@ -1114,6 +1148,161 @@ void lay_out_phone(
     }
 }
 
+/// Lays out a menu sheet centred on a span: SELECT ▾ in as many columns as its height needs,
+/// the speed and phone menus in one.
+///
+/// @param[in,out] builder receives the panel and its items
+/// @param sheet the open sheet
+/// @param left the span's left edge
+/// @param top the span's top
+/// @param right the span's right edge
+/// @param bottom the span's bottom
+void add_centred_menu(
+    Builder& builder, Sheet sheet, int left, int top, int right, int bottom
+) noexcept {
+    const int items = menu_item_count(sheet);
+    if (items == 0)
+        return;
+    const int columns =
+        sheet == Sheet::select_menu ? menu_columns_for(builder, items, bottom - top) : 1;
+    Rect panel = menu_panel_size(builder, items, columns);
+    panel.x = left + builder.centred(right - left, panel.width);
+    panel.y = clamp_low_first(
+        top + builder.centred(bottom - top, panel.height), top, bottom - panel.height
+    );
+    builder.frame.sheet = panel;
+    add_menu_items(builder, panel, items, columns);
+}
+
+/// Lays out the slim pad HUD over the 3.1c screen's battlefield: the status pill at its top, the
+/// QUEUE, ADD and FORCE chips under it, the stored groups' chips near its bottom, and an open
+/// menu sheet centred on it.
+///
+/// @param[in,out] builder receives the frame
+/// @param state what the controls show
+/// @param[out] span_left the left edge the left-handed layout mirrors about
+/// @param[out] span_right the right edge the left-handed layout mirrors about
+void lay_out_pad(
+    Builder& builder, const HudState& state, int& span_left, int& span_right
+) noexcept {
+    const Viewport& viewport = builder.viewport;
+    const MatchLayout& chrome = viewport.chrome;
+    const Rect safe = rects::safe_area(viewport);
+    const int field_left = std::max(chrome.left, safe.x);
+    const int field_top = std::max(chrome.top, safe.y);
+    const int field_right = right_of(safe);
+    const int bottom_line =
+        std::min(chrome.bottom_bar_y(), bottom_of(safe)) - builder.px(edge_points);
+    span_left = field_left;
+    span_right = field_right;
+    const int field_width = field_right - field_left;
+
+    // The status pill, centred at the battlefield's top.
+    const int top = field_top + builder.px(edge_points);
+    const int pill_width =
+        std::min(builder.px(pad_pill_max_width), field_width - 2 * builder.px(edge_points));
+    const Rect pill{
+        field_left + builder.centred(field_width, pill_width),
+        top,
+        pill_width,
+        builder.px(pad_pill_height)
+    };
+    builder.frame.status = pill;
+
+    // QUEUE, ADD and (with grips) FORCE, centred under it.
+    const int chips = state.pad.force_shown ? 3 : 2;
+    const int chip_width = builder.px(pad_chip_width);
+    const int chip_gap = builder.px(pad_chip_gap);
+    const int row_width = chips * chip_width + (chips - 1) * chip_gap;
+    const int chip_y = bottom_of(pill) + builder.px(pad_row_gap);
+    int x = field_left + builder.centred(field_width, row_width);
+    for (const Control control : {Control::queue, Control::add, Control::force}) {
+        if (control == Control::force && !state.pad.force_shown)
+            continue;
+        builder.add(control, 0, {x, chip_y, chip_width, builder.px(pad_chip_height)}, Layer::base);
+        x += chip_width + chip_gap;
+    }
+    const int band_bottom = chip_y + builder.px(pad_chip_height);
+
+    // The stored groups' chips with their sizes, from the battlefield's left near its bottom.
+    const int group_y = bottom_line - builder.px(pad_group_height);
+    int group_width = 0;
+    const int shown = fitting_chips(
+        builder,
+        state,
+        field_left + builder.px(pad_inset),
+        field_right - builder.px(pad_inset),
+        builder.px(pad_group_width),
+        builder.px(pad_group_gap),
+        0,
+        group_width
+    );
+    std::ignore = add_chips(
+        builder,
+        state,
+        field_left + builder.px(pad_inset),
+        group_y,
+        group_width,
+        builder.px(pad_group_height),
+        builder.px(pad_group_gap),
+        shown
+    );
+
+    // Clear area: the battlefield under the chips and above the group chips.
+    const int clear_bottom = shown > 0 ? group_y - builder.px(edge_points) : bottom_line;
+    builder.frame.clear =
+        from_edges(field_left, band_bottom + builder.px(edge_points), field_right, clear_bottom);
+    add_centred_menu(
+        builder,
+        state.sheet,
+        field_left,
+        band_bottom + builder.px(edge_points),
+        field_right,
+        bottom_line
+    );
+}
+
+/// Lays out the open build ring's wedges.
+///
+/// @param[in,out] builder receives a build_wedge control for every wedge that holds something
+/// @param state the open build ring
+void add_build_ring(Builder& builder, const HudState& state) noexcept {
+    if (!state.build_ring.has_value())
+        return;
+    for (std::size_t slot = 0; slot < build_ring_slot_count; ++slot) {
+        const BuildWedge& wedge = state.build_ring->wedges[slot];
+        if (wedge.kind != BuildWedgeKind::empty)
+            builder.add(Control::build_wedge, static_cast<uint8_t>(slot), wedge.hit, Layer::radial);
+    }
+}
+
+/// Lays out the group ring's nine wedges, a rectangle round each number midway across the ring.
+///
+/// @param[in,out] builder receives a group_wedge control for each group
+/// @param state the group ring
+void add_group_ring(Builder& builder, const HudState& state) noexcept {
+    if (!state.pad.group_ring.has_value())
+        return;
+    const GroupRing& ring = *state.pad.group_ring;
+    if (ring.outer_radius <= ring.inner_radius)
+        return;
+    constexpr double pi = 3.14159265358979323846;
+    const double middle = static_cast<double>(ring.inner_radius + ring.outer_radius) / 2.0;
+    const int side = builder.px(group_wedge_side);
+    for (std::size_t slot = 0; slot < group_ring_slot_count; ++slot) {
+        const double angle =
+            2.0 * pi * static_cast<double>(slot) / static_cast<double>(group_ring_slot_count);
+        const int x = ring.centre.x + static_cast<int>(std::lround(middle * std::sin(angle)));
+        const int y = ring.centre.y - static_cast<int>(std::lround(middle * std::cos(angle)));
+        builder.add(
+            Control::group_wedge,
+            static_cast<uint8_t>(slot + 1),
+            {x - side / 2, y - side / 2, side, side},
+            Layer::radial
+        );
+    }
+}
+
 /// Leaves out every control a higher layer covers (a sheet's panel, the radial's wedges and
 /// hub): they are hidden under it and cannot be touched while it is open.
 ///
@@ -1251,18 +1440,72 @@ Frame lay_out(const Viewport& viewport, const HudState& state) noexcept {
         return builder.frame;
     int span_left = 0;
     int span_right = viewport.width;
-    if (viewport.device == DeviceClass::phone)
+    if (state.pad.hud)
+        lay_out_pad(builder, state, span_left, span_right);
+    else if (viewport.device == DeviceClass::phone)
         lay_out_phone(builder, state, span_left, span_right);
     else
         lay_out_tablet(builder, state, span_left, span_right);
-    // The radial is laid out in canvas pixels as shown, so the leave-out runs on the mirrored
+    // The rings are laid out in canvas pixels as shown, so the leave-out runs on the mirrored
     // frame.
     add_radial(builder, state);
+    add_build_ring(builder, state);
+    add_group_ring(builder, state);
     if (viewport.left_handed)
         mirror_frame(builder, span_left, span_right);
     leave_out_covered(builder);
     add_tip(builder, state);
     return builder.frame;
+}
+
+GroupRing make_group_ring(const Viewport& viewport) noexcept {
+    const Builder builder = make_builder(viewport);
+    GroupRing ring{};
+    ring.inner_radius = builder.px(group_ring_inner);
+    ring.outer_radius = builder.px(group_ring_outer);
+    const Rect safe = rects::safe_area(viewport);
+    Point centre{};
+    int mirror_left = 0;
+    int mirror_right = 0;
+    if (viewport.device == DeviceClass::phone) {
+        // Right of the left column, above the group chips.
+        const PhoneGeometry geometry = phone_geometry(builder, false);
+        centre = {
+            geometry.column_right + builder.px(strip_inset) + ring.outer_radius,
+            geometry.chips_y - builder.px(edge_points) - ring.outer_radius
+        };
+        mirror_left = geometry.left;
+        mirror_right = geometry.right;
+    } else {
+        // Beside the thumb column's place, above the group bar's row: clear of the touch
+        // controls when they show, and of the pad HUD's group chips.
+        const MatchLayout& chrome = viewport.chrome;
+        const int field_left = std::max(chrome.left, safe.x);
+        const int bottom_line =
+            std::min(chrome.bottom_bar_y(), bottom_of(safe)) - builder.px(edge_points);
+        centre = {
+            field_left + builder.px(tablet_inset + thumb_width + group_bar_inset) +
+                ring.outer_radius,
+            bottom_line - builder.px(tablet_chip_height) - builder.px(edge_points) -
+                ring.outer_radius
+        };
+        mirror_left = field_left;
+        mirror_right = right_of(safe);
+    }
+    if (viewport.left_handed)
+        centre.x = mirror_left + mirror_right - centre.x;
+    // The ring stays inside the battlefield's part of the safe area.
+    Rect area = rects::radial_area(viewport);
+    if (area.width < 2 * ring.outer_radius || area.height < 2 * ring.outer_radius)
+        area = safe;
+    const auto keep = [](int value, int low, int high) {
+        return low > high ? (low + high) / 2 : std::clamp(value, low, high);
+    };
+    ring.centre = {
+        keep(centre.x, area.x + ring.outer_radius, right_of(area) - ring.outer_radius),
+        keep(centre.y, area.y + ring.outer_radius, bottom_of(area) - ring.outer_radius)
+    };
+    return ring;
 }
 
 Rect mirrored(const Rect& rect, const Viewport& viewport) noexcept {

@@ -60,6 +60,7 @@
 #include "oa/ui/frontend/resource_palette.hpp"
 #include "oa/ui/engine_settings.hpp"
 #include "oa/ui/engine_settings/dialog.hpp"
+#include "oa/ui/pad_controls.hpp"
 #include "oa/app/acceleration_status.hpp"
 #include "oa/app/renderer_records.hpp"
 #include "oa/ui/frontend_renderer/scroll_bars.hpp"
@@ -1745,13 +1746,16 @@ class Runtime final : public menu::Host,
     bool take_touch_event(SDL_Event& event, bool& running);
 
     /// Runs the touch controls' frame: hold timers, inertia, auto-scroll, the ghost anchor, the
-    /// hover point, the status text and the layout. Called from idle_tick. [runtime_touch.cpp]
+    /// hover point, the status text and the layout. With a gamepad used and touch controls off
+    /// only the layout runs (the pad HUD's frame); without either nothing runs. Called from
+    /// idle_tick. [runtime_touch.cpp]
     void tick_touch();
 
     /// Drops every finger: the screen changed and its events were flushed. [runtime_touch.cpp]
     void touch_screen_changed();
 
-    /// Prepares the touch controls for a match that just started. [runtime_touch.cpp]
+    /// Prepares the touch controls, or the pad HUD when a gamepad was used, for a match that
+    /// just started. [runtime_touch.cpp]
     void touch_match_started();
 
     /// Returns whether touch controls are on.
@@ -1772,7 +1776,7 @@ class Runtime final : public menu::Host,
 
     /// Returns canvas pixels per window point on the current screen.
     ///
-    /// On the match it is match_layout_.px_per_point; on frontend screens the canvas width over
+    /// On the match it is match_layout_.px_per_point times touch_control_scale(); on frontend screens the canvas width over
     /// the width, in window points, of the logical presentation rectangle
     /// (SDL_GetRenderLogicalPresentationRect, converted from output pixels with the render output
     /// size over the window size); 1 without a window, and the canvas width over the window width
@@ -1782,7 +1786,8 @@ class Runtime final : public menu::Host,
     [[nodiscard]] float touch_px_per_point() const;
 
     /// Returns whether the window is phone class: oa::ui::touch_hud::classify_device on the
-    /// window's size in points (the canvas size over touch_px_per_point() without a window).
+    /// window's size in points divided by touch_control_scale() (the canvas size over
+    /// touch_px_per_point() without a window).
     /// [runtime_touch.cpp; real body by the Interfaces stage]
     ///
     /// @return whether the phone layout applies
@@ -1899,9 +1904,9 @@ class Runtime final : public menu::Host,
     /// Returns where battlefield overlays (message log, chat line, kill board, megamap,
     /// whiteboard, commander placement) go, in canvas pixels.
     ///
-    /// TouchState::frame.clear while touch controls are on and the frame is ready, else the
-    /// battlefield rectangle of match_layout_. [runtime_phone_hud.cpp; real body by the
-    /// Interfaces stage]
+    /// TouchState::frame.clear while touch controls are on, or the pad HUD shows, and the frame
+    /// is ready, else the battlefield rectangle of match_layout_. [runtime_phone_hud.cpp; real
+    /// body by the Interfaces stage]
     ///
     /// @return canvas pixels
     [[nodiscard]] oa::ui::display_layout::Rect overlay_area() const;
@@ -1935,7 +1940,8 @@ class Runtime final : public menu::Host,
     void refresh_placed_hud_regions();
 
     /// Returns whether a canvas point lies on a placed HUD region or a touch control, so the
-    /// battlefield must not take it. False on a desktop without touch. [runtime_phone_hud.cpp]
+    /// battlefield must not take it. False on a desktop without touch controls or the pad HUD.
+    /// [runtime_phone_hud.cpp]
     ///
     /// @param x canvas x in pixels
     /// @param y canvas y in pixels
@@ -1983,6 +1989,98 @@ class Runtime final : public menu::Host,
     friend struct OverlayAccess;       // the battlefield overlays (runtime_messages.cpp)
     friend struct TouchCheckAccess;    // the touch check (runtime_touch_check.cpp)
     friend struct LifecycleAccess;     // the app lifecycle (runtime_lifecycle.cpp)
+
+    // ---- Gamepads (docs/controllers.md) ----------------------------------------------
+
+    /// The gamepad dispatcher's state (pad_state.hpp).
+    struct PadState;
+
+    /// Frees the pad state. [runtime_pad.cpp]
+    ///
+    /// @param state state to free; null is allowed
+    static void destroy_pad_state(PadState* state) noexcept;
+
+    /// Returns the pad state, made on first use. [runtime_pad.cpp]
+    ///
+    /// @return the state
+    PadState& pad_state();
+
+    /// Returns the pad state, or null when none was made. [runtime_pad.cpp]
+    ///
+    /// @return the state, or null
+    [[nodiscard]] const PadState* pad_state_if_made() const;
+
+    /// Takes gamepad events (added, removed, buttons, axes, touchpads, sensors) and, while a
+    /// gamepad is open, the F13–F16 keys of Steam Input's grips. Takes nothing else, so the
+    /// desktop without a gamepad is unchanged. [runtime_pad.cpp]
+    ///
+    /// @param[in,out] event the event dispatch_event is given
+    /// @param[in,out] running cleared when the event ends the run
+    /// @return whether the event was taken
+    bool take_pad_event(SDL_Event& event, bool& running);
+
+    /// Runs the gamepads' frame: sticks, glide, gyro, hold timers, menu repeat, ring aim, the
+    /// pad's looks in the touch HUD state. Called from idle_tick before tick_touch.
+    /// [runtime_pad.cpp]
+    void tick_pad();
+
+    /// Lets go of held pad buttons, rings and repeats: the screen changed. [runtime_pad.cpp]
+    void pad_screen_changed();
+
+    /// Returns whether a gamepad has sent input in this run (or the pad check forced it); once
+    /// true it stays true for the run. [runtime_pad.cpp]
+    ///
+    /// @return whether the pad layer is on
+    [[nodiscard]] bool pad_used() const;
+
+    /// Returns whether FORCE gives Ctrl now: R5 or its key held, or a finger on the FORCE
+    /// chip. [runtime_pad.cpp]
+    ///
+    /// @return whether FORCE is held
+    [[nodiscard]] bool pad_force_held() const;
+
+    /// Returns whether the pad in use reaches the game through Steam Input. [runtime_pad.cpp]
+    ///
+    /// @return whether the pad in use has a Steam handle; false without a pad
+    [[nodiscard]] bool pad_steam_input() const;
+
+    /// Returns the Controller section's settings with the shared hold delay. [runtime_pad.cpp]
+    ///
+    /// @return the settings the pad reads
+    [[nodiscard]] oa::ui::pad_controls::PadSettings pad_settings() const;
+
+    /// Plays a feel on the pad in use: a trackpad pulse where the driver takes it, else a
+    /// rumble; nothing with Haptics Off or no pad. [runtime_pad_haptics.cpp]
+    ///
+    /// @param feel the moment the feel marks
+    void play_pad_feel(oa::ui::pad_controls::Feel feel) const;
+
+    /// Checks the gamepad controls with SDL virtual pads imitating a Steam Deck and an Xbox
+    /// pad, through the event path, on a skirmish (--check-pad-controls). Throws
+    /// std::runtime_error on a failure. [runtime_pad_check.cpp]
+    void check_pad_controls();
+
+    /// Returns the touch layer's points scale from the Control size setting: 1, 1.25 or 1.5.
+    /// [runtime_touch.cpp]
+    ///
+    /// @return the factor the touch layer's points are multiplied by, >= 1
+    [[nodiscard]] float touch_control_scale() const;
+
+    /// Starts text input with the field's place given to the system, so that an on-screen
+    /// keyboard (Steam's in Game Mode) opens clear of it. [runtime_text_input.cpp]
+    ///
+    /// @param field the field in canvas pixels; none gives no place
+    void start_text_input(std::optional<oa::ui::display_layout::Rect> field);
+
+    /// Stops text input. [runtime_text_input.cpp]
+    void stop_text_input();
+
+    /// Shows, once, the main menu's notice of where the game folder was found
+    /// (Options::found_install_notice). [runtime_found_install.cpp]
+    void tell_found_install();
+
+    friend struct PadAccess;      // the gamepad dispatcher (pad_state.hpp)
+    friend struct PadCheckAccess; // the pad check (runtime_pad_check.cpp)
 
     /// Registers the screen packages of screens.inc and the extension's.
     ///
@@ -6910,14 +7008,17 @@ class Runtime final : public menu::Host,
     /// loader gives it (the record its root names as its default focus,
     /// else the one nearest after the root's corner, passed on to the next
     /// when its setup hides it), moved by the GUI keyboard's keys
-    /// (move_frontend_focus) and given to a list pressed.
+    /// (move_frontend_focus), given by Return to a panel with none
+    /// (press_frontend_focus_key) and given to a list pressed.
     ///
     /// @return the record, or -1 for none
     [[nodiscard]] int32_t frontend_focus() const;
 
     /// Checks Single Player's GUI keyboard: the focus marker's rings round
     /// NewCamp, its loader's focus, then round the records Tab and Shift+Tab
-    /// move the focus to, and its buttons' quick keys underlined.
+    /// move the focus to, and its buttons' quick keys underlined; Return with
+    /// no record focused rings the first, and Return and Space press NewCamp
+    /// once focused, a held key's repeat nothing.
     ///
     /// @throws std::runtime_error naming the first difference
     void check_frontend_keyboard();
@@ -6958,6 +7059,27 @@ class Runtime final : public menu::Host,
     /// @param key the key pressed
     /// @return true when the key pressed a button
     bool press_frontend_quick_key(const SDL_KeyboardEvent& key);
+
+    /// Presses the frontend screen's focused button for Return, keypad Enter
+    /// or Space, as a left click released over it does; a gamepad's A and
+    /// Menu send Return.
+    ///
+    /// With no record focused, as the main menu opens, Return and keypad
+    /// Enter give the panel its first focus (move_frontend_focus), ringed,
+    /// and press nothing. A focused record that is no active button, a
+    /// grayed-out button, a key with Ctrl, Alt or the system key down, and a
+    /// held key's repeat press nothing.
+    ///
+    /// @param key the key pressed
+    /// @return true when the key pressed the focused button or gave the focus
+    bool press_frontend_focus_key(const SDL_KeyboardEvent& key);
+
+    /// Presses a button of the frontend screen as a left click released over
+    /// it does (click_selected_frontend_gadget), for a key that names it; a
+    /// screen that stays up has the gadget under the pointer hovered again.
+    ///
+    /// @param index the button's record in the current screen's layout
+    void press_frontend_button(std::size_t index);
 
     /// Steps the stage of the selected button as releasing a click on it does.
     ///
@@ -10390,10 +10512,10 @@ class Runtime final : public menu::Host,
     ///
     /// Quit ends the loop, a resize lays the frame out again, typed text feeds
     /// the chat line, keys go to the match hotkeys, the typed-key hooks and the
-    /// end panel, Escape backs out of the current screen, other keys press the
-    /// frontend screen's buttons whose quick keys they are, the wheel zooms the
-    /// match or scrolls a list, and pointer events drive the frontend screens
-    /// or the match.
+    /// end panel, Escape backs out of the current screen, Return and Space
+    /// press the frontend screen's focused button and other keys its buttons
+    /// whose quick keys they are, the wheel zooms the match or scrolls a list,
+    /// and pointer events drive the frontend screens or the match.
     ///
     /// @param event event to handle
     /// @param[in,out] running loop flag; cleared on quit
@@ -12686,6 +12808,8 @@ class Runtime final : public menu::Host,
     std::unique_ptr<TouchState, void (*)(TouchState*) noexcept> touch_{
         nullptr, destroy_touch_state
     };
+    // The gamepads' state; null until a gamepad or the pad check needs it.
+    std::unique_ptr<PadState, void (*)(PadState*) noexcept> pad_{nullptr, destroy_pad_state};
     bool lifecycle_watch_installed_ = false; // install_lifecycle_watch ran
     // The SDL event type the macOS Settings… item posts; 0 while none is registered.
     uint32_t engine_settings_menu_event_{};

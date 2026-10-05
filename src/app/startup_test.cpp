@@ -298,6 +298,7 @@ void game_files_options() {
         {{"--showcase", "arm-first-mission"}, "--showcase"},
         {{"--benchmark", "10"}, "--benchmark"},
         {{"--check-touch-controls"}, "--check-touch-controls"},
+        {{"--check-pad-controls"}, "--check-pad-controls"},
         {{"--check-engine-settings"}, "--check-engine-settings"},
         {{"--check-mod-switch"}, "--check-mod-switch"},
         {{"--check-navigation"}, "--check-navigation"},
@@ -344,6 +345,11 @@ void check_help_at_exit() {
     expect(
         at("[--check-touch-controls] [--check-game-files] ") != absent,
         "--help lists --check-game-files with the other checks, after --check-touch-controls"
+    );
+    expect(
+        at("[--check-pointer-interfaces] [--check-pad-controls] [--check-touch-controls] ") !=
+            absent,
+        "--help lists --check-pad-controls between the pointer and touch checks"
     );
     expect(
         at("[--touch-controls] [--game-files-route folder|demo|copy-yourself|manage] "
@@ -856,6 +862,13 @@ int main() {
         tiers.check_render_tiers && tiers.fixed_clock && tiers.unattended &&
             !tiers.headless_check && !tiers.force_capable,
         "--check-render-tiers is a windowed, fixed-clock and unattended run"
+    );
+    // The pad controls check plays in a window on the fixed clock, with
+    // nobody there.
+    const auto pads = parse({"--check-pad-controls"});
+    expect(
+        pads.check_pad_controls && pads.fixed_clock && pads.unattended && !pads.headless_check,
+        "--check-pad-controls is a windowed, fixed-clock and unattended run"
     );
     expect(
         parse({"--check-render-tiers", "--force-capable"}).force_capable,

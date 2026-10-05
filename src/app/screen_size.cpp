@@ -7,6 +7,7 @@
 #include "oa/platform/machine.hpp"
 #include "oa/platform/preferences.hpp"
 
+#include <algorithm>
 #include <exception>
 #include <filesystem>
 #include <iostream>
@@ -31,6 +32,8 @@ settings::Inputs start_inputs(const Options& options, settings::ScreenSize deskt
     inputs.raspberry_pi = oa::platform::running_on_raspberry_pi();
     inputs.light_machine = oa::platform::light_machine(oa::platform::read_machine_traits());
     inputs.desktop = desktop;
+    inputs.steam_deck_panel_hz =
+        oa::platform::steam_deck_refresh_hz(oa::platform::running_steam_deck_model());
     inputs.native_density_windows = options.native_density_windows;
     return inputs;
 }
@@ -54,6 +57,32 @@ starting_screen_size(const Options& options, const settings::EngineSettings& sta
     if (options.window_resolution)
         return settings::desktop_screen_size;
     return start.screen_size;
+}
+
+settings::ScreenSize
+default_window_size(settings::ScreenSize desktop, bool steam_game_mode) noexcept {
+    settings::ScreenSize size{
+        static_cast<uint16_t>(kDefaultWindowWidth), static_cast<uint16_t>(kDefaultWindowHeight)
+    };
+    if (steam_game_mode && desktop != settings::desktop_screen_size) {
+        size.width = std::min(size.width, desktop.width);
+        size.height = std::min(size.height, desktop.height);
+    }
+    return size;
+}
+
+void report_window_size(SDL_Window* window, settings::ScreenSize desktop, bool steam_game_mode) {
+    int width = 0;
+    int height = 0;
+    if (!SDL_GetWindowSize(window, &width, &height))
+        return;
+    std::cout << "open-annihilation: window: " << width << 'x' << height;
+    if (desktop == settings::desktop_screen_size)
+        std::cout << " on a desktop of unknown size";
+    else
+        std::cout << " on a " << desktop.width << 'x' << desktop.height << " desktop";
+    std::cout << (steam_game_mode ? ", in Steam's Game Mode" : ", outside Steam's Game Mode")
+              << '\n';
 }
 
 void take_screen_size(SDL_Window* window, settings::ScreenSize size, bool full_screen) {

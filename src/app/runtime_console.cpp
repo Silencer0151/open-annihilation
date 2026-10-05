@@ -13,6 +13,7 @@
 #include "oa/app/game_directory.hpp"
 #include "oa/base/text.hpp"
 #include "oa/formats/cob.hpp"
+#include "oa/formats/fnt.hpp"
 
 #include "oa/sim/ai.hpp"
 #include "oa/data/campaign/campaign_file.hpp"
@@ -57,6 +58,13 @@ namespace oa::app {
 namespace console = oa::ui::console;
 
 namespace {
+
+/// The rows the chat line keeps clear above and below its text where it
+/// stands over the battlefield, at the HUD's text scale.
+constexpr int chat_field_margin_rows = 2;
+/// The rows a line of HUD text takes, at the HUD's text scale, where the
+/// game's label font has not loaded.
+constexpr int chat_field_fallback_rows = 12;
 
 constexpr uint8_t kConsolePlacer = 10; // placing player "Feature" records: none
 constexpr uint32_t kCellShift = 20;    // 16.16 world units to 16-pixel map cells
@@ -595,16 +603,33 @@ void Runtime::open_chat_line() {
     chat_buffer_.clear();
     chat_composition_.clear();
     status_ = "Message";
-    if (sdl_.window != nullptr)
-        SDL_StartTextInput(sdl_.window);
+    // The chat line's place: the band at the foot of the overlays' area
+    // where a line rises over the battlefield, one line of HUD text with its
+    // rows above and below, down to the TALK field's foot in the bottom bar
+    // where the line is typed while it fits there.
+    namespace layout = oa::ui::display_layout;
+    const auto area = overlay_area();
+    const int scale = std::max(hud_text_scale(), 1);
+    const oa::formats::fnt::Font* font = match_label_font();
+    const int text_rows = font != nullptr ? static_cast<int>(oa::formats::fnt::line_height(*font))
+                                          : chat_field_fallback_rows;
+    const int band = (text_rows + 2 * chat_field_margin_rows) * scale;
+    const int area_bottom = area.y + area.height;
+    int bottom = area_bottom;
+    if (!touch_controls_active())
+        if (const auto box = chat_text_box()) {
+            const auto foot = layout::source_to_canvas(match_layout_, box->x, box->y + box->height);
+            bottom = std::max(bottom, foot.y);
+        }
+    const int top = std::max(area_bottom - band, area.y);
+    start_text_input(layout::Rect{area.x, top, area.width, bottom - top});
 }
 
 void Runtime::close_chat_line() {
     chat_composing_ = false;
     chat_buffer_.clear();
     chat_composition_.clear();
-    if (sdl_.window != nullptr)
-        SDL_StopTextInput(sdl_.window);
+    stop_text_input();
 }
 
 void Runtime::submit_chat_line() {

@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // The device class, the latches, the orders' names, the hit tests, the help
-// lines, the labels and the status hint (touch_hud.hpp). Every text is
-// English and untranslated; the drawing translates it.
+// lines, the labels, the status hint, and the pad's badges, hints and button
+// names (touch_hud.hpp). Every text is English and untranslated; the drawing
+// translates it.
 #include "oa/ui/touch_hud.hpp"
 
 #include "touch_hud_rects.hpp"
@@ -213,6 +214,45 @@ std::string_view tap_action_word(TapAction action) noexcept {
     return {};
 }
 
+/// Returns whether a control is a wedge of a ring, whose rectangles may share corners with its
+/// neighbours'.
+///
+/// @param control the control
+/// @return whether it is a wedge of the radial, the build ring or the group ring
+bool wedge_control(Control control) noexcept {
+    return control == Control::radial_item || control == Control::build_wedge ||
+           control == Control::group_wedge;
+}
+
+/// Returns the label a build ring wedge shows when it is not a build picture.
+///
+/// @param kind what the wedge is
+/// @return the label, untranslated; empty for a build button or an empty wedge
+std::string_view build_wedge_label(BuildWedgeKind kind) noexcept {
+    switch (kind) {
+    case BuildWedgeKind::empty:
+    case BuildWedgeKind::build:
+        return {};
+    case BuildWedgeKind::prev:
+        return "PREV";
+    case BuildWedgeKind::next:
+        return "NEXT";
+    case BuildWedgeKind::fire_orders:
+        return "FIRE ORDERS";
+    case BuildWedgeKind::move_orders:
+        return "MOVE ORDERS";
+    case BuildWedgeKind::on_off:
+        return "ON/OFF";
+    case BuildWedgeKind::cloak:
+        return "CLOAK";
+    case BuildWedgeKind::info:
+        return "INFO";
+    case BuildWedgeKind::self_destruct:
+        return "SELF-DESTRUCT";
+    }
+    return {};
+}
+
 /// Returns whether a control belongs to the radial menu.
 ///
 /// @param control the control
@@ -311,13 +351,13 @@ std::optional<ControlRect> hit(const Frame& frame, Point point, int radius_px) n
         const ControlRect& control = frame.controls[index - 1];
         if (!rects::contains(control.rect, point))
             continue;
-        if (control.control != Control::radial_item)
+        if (!wedge_control(control.control))
             return control;
         const ControlRect* best = &control;
         int64_t best_distance = INT64_MAX;
         for (std::size_t other = 0; other < count; ++other) {
             const ControlRect& wedge = frame.controls[other];
-            if (wedge.control != Control::radial_item || !rects::contains(wedge.rect, point))
+            if (wedge.control != control.control || !rects::contains(wedge.rect, point))
                 continue;
             const Point middle = rects::centre(wedge.rect);
             const int64_t dx = middle.x - point.x;
@@ -473,6 +513,13 @@ std::string_view control_help(Control control, uint8_t index) noexcept {
         return "QUEUE: the next order picked is queued after the selection's orders.";
     case Control::sheet_outside:
         return "Closes the open menu.";
+    case Control::force:
+        return "FORCE: Ctrl for orders and selecting while held, so a click forces fire on the "
+               "ground or a friend.";
+    case Control::build_wedge:
+        return "Build ring: presses its build button or toggle, or turns the build page.";
+    case Control::group_wedge:
+        return "Group: select it, again to centre on it, hold to store the selection in it.";
     }
     return {};
 }
@@ -489,7 +536,18 @@ std::string_view control_label(Control control, uint8_t index, const HudState& s
     case Control::none:
     case Control::sheet_outside:
         return {};
+    case Control::force:
+        return "FORCE";
+    case Control::build_wedge:
+        if (!state.build_ring.has_value() || index >= build_ring_slot_count)
+            return {};
+        return build_wedge_label(state.build_ring->wedges[index].kind);
+    case Control::group_wedge:
+        return index < group_labels.size() ? group_labels[index] : std::string_view{};
     case Control::queue:
+        // The pad HUD's chip reads x5 while the pointer rests on a build button.
+        if (state.pad.hud && state.pad.over_build_button)
+            return "x5";
         return "QUEUE";
     case Control::add:
         return "ADD";
@@ -597,4 +655,254 @@ std::string_view menu_item_label(Sheet sheet, uint8_t index) noexcept {
     return {};
 }
 
+namespace {
+
+namespace pad = oa::ui::pad_controls;
+
+/// The middle dot that keeps a pad hint's pieces apart.
+constexpr std::string_view hint_separator = "\xC2\xB7";
+
+/// Appends a piece to a pad hint; past max_hint_parts it is left out.
+///
+/// @param[in,out] hint the hint
+/// @param chord the piece's glyphs; none for words alone
+/// @param text the piece's words
+void add_part(PadHint& hint, std::optional<pad::Chord> chord, std::string_view text) {
+    if (hint.count >= max_hint_parts)
+        return;
+    hint.parts[hint.count].chord = chord;
+    hint.parts[hint.count].text = std::string(text);
+    ++hint.count;
+}
+
+/// Appends a piece to a pad hint after the separator when the hint holds a piece already.
+///
+/// @param[in,out] hint the hint
+/// @param chord the piece's glyphs; none for words alone
+/// @param text the piece's words
+void add_separated(PadHint& hint, std::optional<pad::Chord> chord, std::string_view text) {
+    if (hint.count > 0)
+        add_part(hint, std::nullopt, hint_separator);
+    add_part(hint, chord, text);
+}
+
+/// Returns a chord's buttons with neither its tap nor its hold: the glyphs a hint shows beside
+/// words that say how.
+///
+/// @param chord the chord, or none
+/// @return the buttons alone, or none
+std::optional<pad::Chord> bare(std::optional<pad::Chord> chord) noexcept {
+    if (chord) {
+        chord->tap = false;
+        chord->hold = false;
+    }
+    return chord;
+}
+
+/// Returns the chord of the first of two actions the map gives.
+///
+/// @param map which buttons give which roles
+/// @param action the action tried first
+/// @param otherwise the action tried when the map gives the first none
+/// @return the chord, or none
+std::optional<pad::Chord>
+first_chord(const pad::MapContext& map, pad::Action action, pad::Action otherwise) noexcept {
+    if (auto chord = pad::chord_for(map, action))
+        return chord;
+    return pad::chord_for(map, otherwise);
+}
+
+} // namespace
+
+PadHint pad_status_hint(
+    TapAction tap,
+    TapAction enemy,
+    bool armed_or_placing,
+    bool right_click_interface,
+    const pad::MapContext& map
+) {
+    PadHint hint{};
+    const auto left = bare(pad::chord_for(map, pad::Action::left_button));
+    const auto right = bare(pad::chord_for(map, pad::Action::right_button));
+    const std::string_view tap_word = tap_action_word(tap);
+    const std::string_view enemy_word = tap_action_word(enemy);
+    // An enemy's click is named when it gives something else than the click at the pointer.
+    const auto add_enemy = [&] {
+        if (!enemy_word.empty() && enemy != tap)
+            add_separated(hint, std::nullopt, "ENEMY: " + std::string(enemy_word));
+    };
+    if (right_click_interface && !armed_or_placing) {
+        // The left button selects; the right gives the order the cursor shows.
+        add_separated(hint, left, "SELECT");
+        if (!tap_word.empty() && tap != TapAction::select)
+            add_separated(hint, right, tap_word);
+        add_enemy();
+        return hint;
+    }
+    if (!tap_word.empty())
+        add_separated(hint, left, tap_word);
+    add_enemy();
+    add_separated(hint, right, armed_or_placing ? "CANCEL" : "CLEAR");
+    return hint;
+}
+
+PadHint ring_hint(bool build_ring, const pad::MapContext& map) {
+    PadHint hint{};
+    const auto opener =
+        pad::chord_for(map, build_ring ? pad::Action::build_ring : pad::Action::order_ring);
+    add_part(hint, std::nullopt, "RELEASE");
+    add_part(hint, bare(opener), "GIVE");
+    add_separated(hint, bare(pad::chord_for(map, pad::Action::ring_arm)), "ARM");
+    add_separated(hint, bare(pad::chord_for(map, pad::Action::ring_close)), "CLOSE");
+    return hint;
+}
+
+std::optional<pad::Chord>
+control_badge(Control control, uint8_t index, const pad::MapContext& map) noexcept {
+    using pad::Action;
+    switch (control) {
+    case Control::queue:
+        return first_chord(map, Action::queue, Action::queue_toggle);
+    case Control::add:
+        return first_chord(map, Action::add, Action::add_toggle);
+    case Control::clear:
+        return pad::chord_for(map, Action::clear);
+    case Control::select_menu:
+        return pad::chord_for(map, Action::select_menu);
+    case Control::pause:
+        return pad::chord_for(map, Action::pause);
+    case Control::chat:
+        return pad::chord_for(map, Action::chat);
+    case Control::centre:
+        return pad::chord_for(map, Action::centre);
+    case Control::follow:
+        return pad::chord_for(map, Action::follow);
+    case Control::next_unit:
+        return pad::chord_for(map, Action::next_unit);
+    case Control::info:
+        return pad::chord_for(map, Action::unit_info);
+    case Control::force:
+        return first_chord(map, Action::force, Action::standing_layer);
+    case Control::group_chip:
+        // Groups 1 to 8 have a button in the groups layer; the ninth only the group ring.
+        if (index >= 1 && index < group_ring_slot_count)
+            return pad::chord_for(map, Action::group, index);
+        return std::nullopt;
+    default:
+        return std::nullopt;
+    }
+}
+
+std::string control_help_with_pad(
+    Control control, uint8_t index, const pad::MapContext& map, pad::GlyphStyle glyphs
+) {
+    std::string help(control_help(control, index));
+    const auto chord = control_badge(control, index, map);
+    if (!chord || help.empty())
+        return help;
+    // A grip holds QUEUE, ADD or FORCE as a finger does; a fallback latch is a tap.
+    const bool plain = !chord->tap && !chord->hold;
+    std::string words = chord_words(*chord, glyphs);
+    if (plain && (control == Control::queue || control == Control::add))
+        words = "hold or tap " + words;
+    else if (plain && control == Control::force)
+        words = "hold " + words;
+    return help + " On the pad: " + words + ".";
+}
+
+std::string_view button_name(pad::PadButton button, pad::GlyphStyle glyphs) noexcept {
+    using pad::PadButton;
+    const bool xbox = glyphs == pad::GlyphStyle::xbox;
+    const bool playstation = glyphs == pad::GlyphStyle::playstation;
+    const bool nintendo = glyphs == pad::GlyphStyle::nintendo;
+    switch (button) {
+    case PadButton::none:
+        return {};
+    // The face buttons by place: Nintendo's bottom button is labelled B, its right one A.
+    case PadButton::a:
+        return playstation ? "Cross" : nintendo ? "B" : "A";
+    case PadButton::b:
+        return playstation ? "Circle" : nintendo ? "A" : "B";
+    case PadButton::x:
+        return playstation ? "Square" : nintendo ? "Y" : "X";
+    case PadButton::y:
+        return playstation ? "Triangle" : nintendo ? "X" : "Y";
+    case PadButton::view:
+        return playstation ? "Create" : nintendo ? "Minus" : "View";
+    case PadButton::menu:
+        return playstation ? "Options" : nintendo ? "Plus" : "Menu";
+    case PadButton::l1:
+        return xbox ? "LB" : nintendo ? "L" : "L1";
+    case PadButton::r1:
+        return xbox ? "RB" : nintendo ? "R" : "R1";
+    case PadButton::l2:
+        return xbox ? "LT" : nintendo ? "ZL" : "L2";
+    case PadButton::r2:
+        return xbox ? "RT" : nintendo ? "ZR" : "R2";
+    case PadButton::l3:
+        return xbox || nintendo ? "LS" : "L3";
+    case PadButton::r3:
+        return xbox || nintendo ? "RS" : "R3";
+    // The grips; an Xbox pad's back paddles are numbered.
+    case PadButton::l4:
+        return xbox ? "P3" : "L4";
+    case PadButton::l5:
+        return xbox ? "P4" : "L5";
+    case PadButton::r4:
+        return xbox ? "P1" : "R4";
+    case PadButton::r5:
+        return xbox ? "P2" : "R5";
+    case PadButton::dpad_up:
+        return "D-pad up";
+    case PadButton::dpad_right:
+        return "D-pad right";
+    case PadButton::dpad_down:
+        return "D-pad down";
+    case PadButton::dpad_left:
+        return "D-pad left";
+    case PadButton::left_pad:
+        return "left trackpad";
+    case PadButton::right_pad:
+        return "right trackpad";
+    case PadButton::left_stick_touch:
+        return "left stick touch";
+    case PadButton::right_stick_touch:
+        return "right stick touch";
+    }
+    return {};
+}
+
+std::string chord_words(const pad::Chord& chord, pad::GlyphStyle glyphs) {
+    std::string words;
+    if (chord.tap)
+        words = "tap ";
+    else if (chord.hold)
+        words = "hold ";
+    if (chord.held != pad::PadButton::none) {
+        words += button_name(chord.held, glyphs);
+        words += " + ";
+    }
+    words += button_name(chord.button, glyphs);
+    return words;
+}
+
+std::string hint_words(const PadHint& hint, pad::GlyphStyle glyphs) {
+    std::string line;
+    const std::size_t count = std::min<std::size_t>(hint.count, max_hint_parts);
+    for (std::size_t index = 0; index < count; ++index) {
+        const HintPart& part = hint.parts[index];
+        std::string piece = part.chord ? chord_words(*part.chord, glyphs) : std::string{};
+        if (!part.text.empty()) {
+            if (!piece.empty())
+                piece += ' ';
+            piece += part.text;
+        }
+        if (piece.empty())
+            continue;
+        if (!line.empty())
+            line += ' ';
+        line += piece;
+    }
+    return line;
+}
 } // namespace oa::ui::touch_hud

@@ -15,6 +15,8 @@
 #include "smacker_test_movie.hpp"
 #include "oa/test/scratch_directory.hpp"
 
+#include <SDL3/SDL.h>
+
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -375,6 +377,42 @@ void test_stalled_sound(const fs::path& scratch) {
     remove_file(path);
 }
 
+void test_skip_events() {
+    const auto event_of = [](uint32_t type) {
+        SDL_Event event{};
+        event.type = type;
+        return event;
+    };
+    const auto key = [&](SDL_Keycode code) {
+        SDL_Event event = event_of(SDL_EVENT_KEY_DOWN);
+        event.key.key = code;
+        return event;
+    };
+    const auto button = [&](uint8_t which) {
+        SDL_Event event = event_of(SDL_EVENT_GAMEPAD_BUTTON_DOWN);
+        event.gbutton.button = which;
+        return event;
+    };
+    check(oa::media::skips_movie(key(SDLK_ESCAPE)), "Escape skips a movie");
+    check(!oa::media::skips_movie(key(SDLK_RETURN)), "Enter does not skip a movie");
+    check(oa::media::skips_movie(event_of(SDL_EVENT_MOUSE_BUTTON_DOWN)), "a click skips a movie");
+    check(oa::media::skips_movie(event_of(SDL_EVENT_FINGER_DOWN)), "a touch skips a movie");
+    check(!oa::media::skips_movie(event_of(SDL_EVENT_FINGER_UP)), "a lifted finger does not");
+    for (const auto which :
+         {SDL_GAMEPAD_BUTTON_SOUTH, SDL_GAMEPAD_BUTTON_EAST, SDL_GAMEPAD_BUTTON_START})
+        check(
+            oa::media::skips_movie(button(static_cast<uint8_t>(which))),
+            "a gamepad's A, B or Start skips a movie"
+        );
+    check(
+        !oa::media::skips_movie(button(static_cast<uint8_t>(SDL_GAMEPAD_BUTTON_DPAD_UP))),
+        "the D-pad does not skip a movie"
+    );
+    SDL_Event released = button(static_cast<uint8_t>(SDL_GAMEPAD_BUTTON_SOUTH));
+    released.type = SDL_EVENT_GAMEPAD_BUTTON_UP;
+    check(!oa::media::skips_movie(released), "a released button does not skip a movie");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -387,6 +425,7 @@ int main(int argc, char** argv) {
     test_through_sdl(scratch);
     test_without_sound(scratch);
     test_stalled_sound(scratch);
+    test_skip_events();
     if (failures != 0)
         return 1;
     std::printf("intro player plays Smacker movies\n");
