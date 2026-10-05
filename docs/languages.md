@@ -296,6 +296,15 @@ language shown writes them; and the notices about missing skirmish and
 multiplayer maps, the end of the game's missions, the graphics card and
 driver, and settings that were not saved.
 
+The touch and gamepad controls' words come from the same catalogue, after
+3.1c's own table. Where one English word stands for two things, the
+control is looked up by a longer text that says which, and without a
+translation of that text the word shows in English: the right rail's
+NEXT, which centres the next unit, by `NEXT UNIT`, as SELECT ▾'s item is;
+the build pages' NEXT, on the build ring and in the phone's drawer, by
+`NEXT PAGE`; and the rings' ARM, which arms the aimed order, by
+`ARM ORDER`, since 3.1c's table holds `ARM` as the side's name.
+
 ## Adding a language
 
 A language is one entry in `src/data/languages/src/registry.inc`: its tag,

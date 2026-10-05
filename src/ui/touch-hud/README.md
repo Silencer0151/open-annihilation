@@ -50,7 +50,12 @@ against it; the drawing reads both. The gamepad dispatcher writes
   `order_label` and `status_hint` give the texts the controls show,
   untranslated; `order_name` gives the order panel names
   `arm_match_command` takes (MOVE, ATTACK, PATROL, DEFEND, STOP, BLAST,
-  RECLAIM, REPAIR, CAPTURE, LOAD, UNLOAD).
+  RECLAIM, REPAIR, CAPTURE, LOAD, UNLOAD). `control_label_lookup` gives
+  the text a label is translated by, which is the label itself but where
+  one word stands for two things: the rail's NEXT (next unit) is looked up
+  as NEXT UNIT and the build pages' NEXT as NEXT PAGE. `shown_label` draws
+  a label from its lookup text's translation, or in English when the
+  language has none, never from the bare word's.
 - `gadget_help` gives the help line a long press on a 3.1c order panel
   gadget shows when the gadget carries none (the game's GUI files give the
   in-game panels no help text): the order buttons, the standing-order
@@ -75,7 +80,10 @@ against it; the drawing reads both. The gamepad dispatcher writes
 - `pad_status_hint` and `ring_hint` give the pad's lines as pieces of
   glyphs and words ("R2 MOVE · ENEMY: ATTACK · L2 CANCEL"; "RELEASE R1 GIVE
   · A ARM · B CLOSE"), the buttons found by `pad_controls::chord_for`, so
-  the fallback and left-handed maps name the right ones. `control_badge`
+  the fallback and left-handed maps name the right ones. A piece's
+  `lookup` names the text its words are translated by when it is not the
+  words themselves: ARM is looked up as ARM ORDER, since the game's own
+  table holds ARM as the side's name. `control_badge`
   gives a control's badge (QUEUE R4, ADD L4, CLEAR B, SELECT ▾ D-pad left,
   PAUSE View+X, CHAT View+A, CENTRE L3, FOLLOW R3, NEXT D-pad right, INFO
   View, FORCE R5, a group chip's groups-layer button), and
@@ -162,8 +170,9 @@ control's texts. With a gamepad it checks the Steam Deck's 1280x800 screen
 at Control size 1, 1.25 and 1.5 (always the tablet layout, nothing off the
 screen), the slim pad HUD's pinned places, FORCE in the thumb column, that
 the pad's looks never move a control, the build ring's slots, hit test,
-clamp and scale, the group ring's place, and the hints, badges, help lines
-and button names through each map.
+clamp and scale, the group ring's place, the hints, badges, help lines
+and button names through each map, and the texts the two-meaning labels
+are looked up by.
 
 ## Limitations
 

@@ -525,8 +525,9 @@ tested without a touch screen. Three tests need no game data:
   and x5 latches in both modes, the tablet layout at 1180x820 and the phone
   layout at 852x393 and 956x440 with their safe areas, the rail's length,
   the drawer's and the MORE sheet's cells, the overlays' clear area, the
-  left-handed mirror, hit testing with the fat finger's reach, the radial
-  and the help and label texts;
+  left-handed mirror, hit testing with the fat finger's reach, the radial,
+  the help and label texts, and the texts the labels that stand for two
+  things are looked up by;
 - `app-touch-paint` checks the touch layer's drawing primitives: rounded
   rectangles blended over a known background, the icon marks inside their
   boxes, text coverage and clipping at the layer's edges.

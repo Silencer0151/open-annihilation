@@ -3969,7 +3969,7 @@
 	zh-Hans=上一页：显示前一个建造页。;
 	}
 
-[NEXT]
+[NEXT PAGE]
 	{
 	zh-Hans=下一页;
 	}
@@ -4379,7 +4379,7 @@
 	zh-Hans=下达;
 	}
 
-[ARM]
+[ARM ORDER]
 	{
 	zh-Hans=启用;
 	}

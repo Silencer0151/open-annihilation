@@ -12,6 +12,7 @@
 
 #include <array>
 #include <cstddef>
+#include <functional>
 #include <optional>
 #include <stdint.h>
 #include <string>
@@ -638,6 +639,34 @@ nearest_rect(const Rect* rects, std::size_t count, Point point, int radius_px) n
 /// @return the label, untranslated
 [[nodiscard]] std::string_view
 control_label(Control control, uint8_t index, const HudState& state) noexcept;
+/// Returns the text a control's label is translated by.
+///
+/// That is the label itself, except where one word stands for two things: the right rail's
+/// NEXT, which centres the next unit, is looked up as NEXT UNIT, as SELECT ▾'s item is, and the
+/// build pages' NEXT, in the phone's drawer and on the build ring, as NEXT PAGE.
+///
+/// @param control the control
+/// @param index as ControlRect::index
+/// @param state what the controls show (BUILD or ORDERS, the rail's orders)
+/// @return the text, untranslated; empty for a control with no label
+[[nodiscard]] std::string_view
+control_label_lookup(Control control, uint8_t index, const HudState& state) noexcept;
+/// Returns a label as the language shown draws it.
+///
+/// A label looked up by itself is translated. A label with a lookup text of its own shows that
+/// text's translation, or the label in English when the language has none: never the
+/// translation of the word alone, which may mean something else.
+///
+/// @param label the label, untranslated
+/// @param lookup the text it is translated by (control_label_lookup, HintPart::lookup); empty
+///     or the label itself for the label alone
+/// @param translate turns a text into the language shown, or returns it unchanged
+/// @return the words to draw
+[[nodiscard]] std::string shown_label(
+    std::string_view label,
+    std::string_view lookup,
+    const std::function<std::string(std::string_view)>& translate
+);
 /// Returns the status hint for the actions a tap gives: "TAP: MOVE · ENEMY: ATTACK".
 ///
 /// @param tap what a tap gives at the hover point
@@ -677,6 +706,9 @@ build_ring_hit(const BuildRing& ring, Point point, const Viewport& viewport) noe
 struct HintPart {
     std::optional<oa::ui::pad_controls::Chord> chord{}; ///< the glyphs drawn; none for words
     std::string text;                                   ///< the words, untranslated
+    /// the text the words are translated by when it is not the words themselves
+    /// (shown_label); empty for the words
+    std::string lookup;
 };
 
 /// The most pieces a pad hint has.
@@ -705,6 +737,9 @@ struct PadHint {
     const oa::ui::pad_controls::MapContext& map
 );
 /// Returns a ring's hint: "release R1: give · A: arm · B: close" (build ring: L1).
+///
+/// ARM, which arms the aimed wedge, is looked up as ARM ORDER (HintPart::lookup), since the
+/// game's own table of words holds ARM as the side's name.
 ///
 /// @param build_ring the build ring, else the order ring
 /// @param map which buttons give which roles

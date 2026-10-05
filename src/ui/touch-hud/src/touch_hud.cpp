@@ -621,6 +621,36 @@ std::string_view control_label(Control control, uint8_t index, const HudState& s
     return {};
 }
 
+std::string_view
+control_label_lookup(Control control, uint8_t index, const HudState& state) noexcept {
+    switch (control) {
+    case Control::next_unit:
+        // The rail's NEXT presses N, as SELECT ▾'s NEXT UNIT does.
+        return select_labels[static_cast<std::size_t>(SelectItem::next_unit)];
+    case Control::drawer_next:
+        return "NEXT PAGE";
+    case Control::build_wedge:
+        if (state.build_ring.has_value() && index < build_ring_slot_count &&
+            state.build_ring->wedges[index].kind == BuildWedgeKind::next)
+            return "NEXT PAGE";
+        break;
+    default:
+        break;
+    }
+    return control_label(control, index, state);
+}
+
+std::string shown_label(
+    std::string_view label,
+    std::string_view lookup,
+    const std::function<std::string(std::string_view)>& translate
+) {
+    if (lookup.empty() || lookup == label)
+        return translate(label);
+    std::string translated = translate(lookup);
+    return translated == lookup ? std::string(label) : translated;
+}
+
 std::string status_hint(TapAction tap, TapAction enemy) {
     // While placing, the line says how to place.
     if (tap == TapAction::place)
@@ -667,11 +697,18 @@ constexpr std::string_view hint_separator = "\xC2\xB7";
 /// @param[in,out] hint the hint
 /// @param chord the piece's glyphs; none for words alone
 /// @param text the piece's words
-void add_part(PadHint& hint, std::optional<pad::Chord> chord, std::string_view text) {
+/// @param lookup the text the words are translated by when it is not the words themselves
+void add_part(
+    PadHint& hint,
+    std::optional<pad::Chord> chord,
+    std::string_view text,
+    std::string_view lookup = {}
+) {
     if (hint.count >= max_hint_parts)
         return;
     hint.parts[hint.count].chord = chord;
     hint.parts[hint.count].text = std::string(text);
+    hint.parts[hint.count].lookup = std::string(lookup);
     ++hint.count;
 }
 
@@ -680,10 +717,16 @@ void add_part(PadHint& hint, std::optional<pad::Chord> chord, std::string_view t
 /// @param[in,out] hint the hint
 /// @param chord the piece's glyphs; none for words alone
 /// @param text the piece's words
-void add_separated(PadHint& hint, std::optional<pad::Chord> chord, std::string_view text) {
+/// @param lookup the text the words are translated by when it is not the words themselves
+void add_separated(
+    PadHint& hint,
+    std::optional<pad::Chord> chord,
+    std::string_view text,
+    std::string_view lookup = {}
+) {
     if (hint.count > 0)
         add_part(hint, std::nullopt, hint_separator);
-    add_part(hint, chord, text);
+    add_part(hint, chord, text, lookup);
 }
 
 /// Returns a chord's buttons with neither its tap nor its hold: the glyphs a hint shows beside
@@ -752,7 +795,8 @@ PadHint ring_hint(bool build_ring, const pad::MapContext& map) {
         pad::chord_for(map, build_ring ? pad::Action::build_ring : pad::Action::order_ring);
     add_part(hint, std::nullopt, "RELEASE");
     add_part(hint, bare(opener), "GIVE");
-    add_separated(hint, bare(pad::chord_for(map, pad::Action::ring_arm)), "ARM");
+    // ARM arms the aimed wedge; the game's own table holds ARM as the side's name.
+    add_separated(hint, bare(pad::chord_for(map, pad::Action::ring_arm)), "ARM", "ARM ORDER");
     add_separated(hint, bare(pad::chord_for(map, pad::Action::ring_close)), "CLOSE");
     return hint;
 }

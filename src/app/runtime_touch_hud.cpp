@@ -493,6 +493,20 @@ std::string_view control_text(const hud::ControlRect& control, const hud::HudSta
     }
 }
 
+/// Returns a control's label in the language shown: a word that stands for
+/// two things is translated by the text that says which (hud::shown_label).
+///
+/// @param context the painting
+/// @param control the control
+/// @return the words to draw
+std::string label_shown(const PaintContext& context, const hud::ControlRect& control) {
+    return hud::shown_label(
+        control_text(control, context.state),
+        hud::control_label_lookup(control.control, control.index, context.state),
+        context.translate
+    );
+}
+
 /// Returns whether a finger rests on a control.
 ///
 /// @param state what the controls show
@@ -793,7 +807,7 @@ void paint_pill(const PaintContext& context, paint::Area area, paint::Rgba edge,
 /// @param part the piece
 /// @return the words to draw
 std::string piece_words(const PaintContext& context, const hud::HintPart& part) {
-    std::string words = context.translate(part.text);
+    std::string words = hud::shown_label(part.text, part.lookup, context.translate);
     if (part.chord && !context.state.pad.badges) {
         const std::string names = hud::chord_words(*part.chord, context.state.pad.glyphs);
         words = words.empty() ? names : names + " " + words;
@@ -980,7 +994,7 @@ void paint_pad_chip(
     const auto area = area_of(context, control.rect);
     paint_face(context, area, look);
     const auto& pad_look = context.state.pad;
-    const std::string label = context.translate(control_text(control, context.state));
+    const std::string label = label_shown(context, control);
     const auto colour = content_colour(look);
     const auto chord = pad_look.badges
                            ? hud::control_badge(control.control, control.index, pad_look.map)
@@ -1116,7 +1130,7 @@ void paint_self_destruct(
         context.painter.set_clip(saved);
     }
     context.painter.outline_rounded_rect(area, radius, px(context, edge_points), danger_colour);
-    const auto label = context.translate(control_text(control, context.state));
+    const auto label = label_shown(context, control);
     const auto colour = progress > 0.0F ? label_colour : danger_label_colour;
     paint_content(context, area, Arrangement::row, paint::Icon::warning, label, {}, colour, 10.0F);
 }
@@ -1162,7 +1176,7 @@ void paint_control(const PaintContext& context, const hud::ControlRect& control)
     }
     const auto area = area_of(context, control.rect);
     const auto icon = control_icon(control, context.state);
-    auto label = context.translate(control_text(control, context.state));
+    auto label = label_shown(context, control);
     // The drawer slides out (BUILD ▸) and SELECT opens a menu (SELECT ▾), as
     // the mock-ups mark them, where the mark fits beside the label whole.
     const auto mark = control.control == Control::build_drawer  ? std::string_view{"\xE2\x96\xB8"}
@@ -1864,9 +1878,11 @@ void paint_build_ring(const PaintContext& context) {
         );
         if (label.empty() && wedge.queued > 0)
             label = std::to_string(wedge.queued);
+        const auto lookup =
+            hud::control_label_lookup(Control::build_wedge, static_cast<uint8_t>(slot), state);
         text_centred(
             context,
-            context.translate(label),
+            hud::shown_label(label, lookup, context.translate),
             box.x + box.width * 0.5F,
             top + side + gap + cap * 0.5F,
             size_points,

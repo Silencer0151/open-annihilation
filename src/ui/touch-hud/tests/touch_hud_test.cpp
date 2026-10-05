@@ -5,8 +5,8 @@
 // 852x393 and 956x440, the latches, the radial, the hit tests and the
 // left-handed mirror; with a gamepad, the Steam Deck's 1280x800 screen at
 // each Control size, the slim pad HUD, the FORCE chip, badges that never
-// move a control, the build and group rings, and the pad's hints, badges and
-// help lines.
+// move a control, the build and group rings, the pad's hints, badges and
+// help lines, and the texts the two-meaning labels are looked up by.
 #include "oa/test/check.hpp"
 #include "oa/ui/touch_hud.hpp"
 
@@ -14,9 +14,11 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -1157,6 +1159,19 @@ void every_control_has_its_texts() {
         "QUEUE: Shift for orders, building and placement. Tap to latch, hold for one."
     );
     OA_CHECK(hud::control_label(Control::queue, 0, state) == "QUEUE");
+    OA_CHECK(hud::control_label_lookup(Control::queue, 0, state) == "QUEUE");
+    // The rail's NEXT centres the next unit, as SELECT ▾'s NEXT UNIT does, and the drawer's
+    // NEXT shows the next build page: each is looked up by what it means.
+    OA_CHECK(hud::control_label(Control::next_unit, 0, state) == "NEXT");
+    OA_CHECK(hud::control_label_lookup(Control::next_unit, 0, state) == "NEXT UNIT");
+    OA_CHECK(
+        hud::control_label_lookup(Control::next_unit, 0, state) ==
+        hud::menu_item_label(
+            hud::Sheet::select_menu, static_cast<uint8_t>(hud::SelectItem::next_unit)
+        )
+    );
+    OA_CHECK(hud::control_label(Control::drawer_next, 0, state) == "NEXT");
+    OA_CHECK(hud::control_label_lookup(Control::drawer_next, 0, state) == "NEXT PAGE");
     OA_CHECK(hud::control_label(Control::add, 0, state) == "ADD");
     OA_CHECK(hud::control_label(Control::times_five, 0, state) == "x5");
     OA_CHECK(hud::control_label(Control::clear, 0, state) == "CLEAR");
@@ -1614,6 +1629,13 @@ void build_ring_lays_out_its_wedges() {
     OA_CHECK(no_overlaps(frame));
     OA_CHECK(hud::control_label(Control::build_wedge, hud::build_ring_next_slot, state) == "NEXT");
     OA_CHECK(hud::control_label(Control::build_wedge, hud::build_ring_prev_slot, state) == "PREV");
+    OA_CHECK(
+        hud::control_label_lookup(Control::build_wedge, hud::build_ring_next_slot, state) ==
+        "NEXT PAGE"
+    );
+    OA_CHECK(
+        hud::control_label_lookup(Control::build_wedge, hud::build_ring_prev_slot, state) == "PREV"
+    );
     OA_CHECK(hud::control_label(Control::build_wedge, 0, state).empty());
     state.build_ring = orders;
     OA_CHECK(count_of(hud::lay_out(viewport, state), Control::build_wedge) == 6);
@@ -1757,7 +1779,72 @@ void pad_hints_name_the_buttons() {
     for (std::size_t part = 0; part < ring.count; ++part) {
         const auto& chord = ring.parts[part].chord;
         OA_CHECK(!chord || (!chord->tap && !chord->hold));
+        // ARM, which arms the aimed wedge, is looked up by what it means; the other words by
+        // themselves.
+        OA_CHECK(ring.parts[part].lookup == (ring.parts[part].text == "ARM" ? "ARM ORDER" : ""));
     }
+    const hud::PadHint status =
+        hud::pad_status_hint(TapAction::move, TapAction::attack, true, false, map);
+    for (std::size_t part = 0; part < status.count; ++part)
+        OA_CHECK(status.parts[part].lookup.empty());
+}
+
+/// Checks that a label whose word stands for two things is drawn from the text that says
+/// which, and in English where the language has no translation of that text.
+void labels_with_two_meanings_are_told_apart() {
+    using Words = std::vector<std::pair<std::string_view, std::string_view>>;
+    const auto translator = [](Words words) {
+        return [words](std::string_view text) {
+            for (const auto& [english, shown] : words)
+                if (english == text)
+                    return std::string(shown);
+            return std::string(text);
+        };
+    };
+    hud::HudState state = match_state();
+    state.build_ring = hud::make_build_ring({700, 400}, builder_ring_content(), tablet_viewport());
+    const auto shown = [&](Control control, uint8_t index, const auto& translate) {
+        return hud::shown_label(
+            hud::control_label(control, index, state),
+            hud::control_label_lookup(control, index, state),
+            translate
+        );
+    };
+    const auto arm_shown = [&](const auto& translate) {
+        const hud::PadHint ring = hud::ring_hint(false, deck_map());
+        for (std::size_t part = 0; part < ring.count; ++part)
+            if (ring.parts[part].text == "ARM")
+                return hud::shown_label(ring.parts[part].text, ring.parts[part].lookup, translate);
+        return std::string{};
+    };
+    const uint8_t next_wedge = static_cast<uint8_t>(hud::build_ring_next_slot);
+    // A pack that tells the meanings apart.
+    const std::function<std::string(std::string_view)> told_apart = translator(
+        {{"NEXT UNIT", "下一单位"},
+         {"NEXT PAGE", "下一页"},
+         {"NEXT", "下一页"},
+         {"ARM", "CLAN"},
+         {"ARM ORDER", "启用"},
+         {"QUEUE", "排队"}}
+    );
+    OA_CHECK(shown(Control::next_unit, 0, told_apart) == "下一单位");
+    OA_CHECK(shown(Control::build_wedge, next_wedge, told_apart) == "下一页");
+    OA_CHECK(shown(Control::drawer_next, 0, told_apart) == "下一页");
+    OA_CHECK(shown(Control::queue, 0, told_apart) == "排队");
+    OA_CHECK(arm_shown(told_apart) == "启用");
+    // A table that holds the bare words alone, as the game's own does (ARM is the side's name):
+    // the words show in English.
+    const std::function<std::string(std::string_view)> bare_words =
+        translator({{"NEXT", "下一页"}, {"ARM", "CLAN"}});
+    OA_CHECK(shown(Control::next_unit, 0, bare_words) == "NEXT");
+    OA_CHECK(shown(Control::build_wedge, next_wedge, bare_words) == "NEXT");
+    OA_CHECK(arm_shown(bare_words) == "ARM");
+    // No translation at all: English.
+    const std::function<std::string(std::string_view)> english = translator({});
+    OA_CHECK(shown(Control::next_unit, 0, english) == "NEXT");
+    OA_CHECK(shown(Control::drawer_next, 0, english) == "NEXT");
+    OA_CHECK(shown(Control::queue, 0, english) == "QUEUE");
+    OA_CHECK(arm_shown(english) == "ARM");
 }
 
 /// Checks the badges the touch controls show once a pad was used, through each map, and the
@@ -1917,6 +2004,7 @@ int main() {
     build_ring_lays_out_its_wedges();
     group_ring_sits_at_the_lower_left();
     pad_hints_name_the_buttons();
+    labels_with_two_meanings_are_told_apart();
     badges_name_the_pad_buttons();
     return oa::test::check_exit_status();
 }
