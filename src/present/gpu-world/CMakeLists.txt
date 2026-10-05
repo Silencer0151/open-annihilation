@@ -32,6 +32,15 @@ if(BUILD_TESTING)
   set_tests_properties(gpu-world-terrain-atlas PROPERTIES TIMEOUT 300)
   oa_add_game_data_test(gpu-world-terrain-atlas-data oa-gpu-world-terrain-atlas-test --data)
   set_tests_properties(gpu-world-terrain-atlas-data PROPERTIES TIMEOUT 900)
+  # The run builds and checks the atlas of every map of the installed
+  # game, 13.6 GB of texels over 3.1c's 275 maps: about a minute in a
+  # Check build, about 1,130 s in a Debug build, and about 2,500 s in a
+  # Debug build with the sanitizers, which check every read and write.
+  if(OA_SANITIZERS)
+    set_tests_properties(gpu-world-terrain-atlas-data PROPERTIES TIMEOUT 5400)
+  elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set_tests_properties(gpu-world-terrain-atlas-data PROPERTIES TIMEOUT 2700)
+  endif()
 
   # The sprite pages: frames through the palette and gamma in each draw
   # mode, RLE edge cases through the GAF reader, malformed frames refused,
