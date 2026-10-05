@@ -222,7 +222,7 @@ void PadAccess::act_press(
         open_build_ring(runtime, button, now);
         return;
     case pc::Action::centre:
-        match_key(runtime, SDLK_SPACE);
+        match_key(runtime, SDLK_HOME);
         return;
     case pc::Action::follow:
         // With R4 held the next unit of the selection is followed.

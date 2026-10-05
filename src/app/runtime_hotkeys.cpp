@@ -270,7 +270,14 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
         cycle_match_tracking(shift);
         return true;
     }
-    if (sym == SDLK_SPACE || key.scancode == SDL_SCANCODE_HOME) {
+    // Space shows the status strip and the kills board only while it is
+    // held (draw_status_panel, draw_match_kill_board), as 3.1c does: its
+    // press selects nothing and moves no camera.
+    if (sym == SDLK_SPACE || key.scancode == SDL_SCANCODE_SPACE)
+        return true;
+    // Home centres the view on the selected unit, or with none selects the
+    // local commander and centres on it.
+    if (sym == SDLK_HOME || key.scancode == SDL_SCANCODE_HOME) {
         if (selected_match_unit_ != 0)
             center_camera_on_unit(selected_match_unit_);
         else {

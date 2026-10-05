@@ -1435,6 +1435,7 @@ if(OA_BUILD_PLATFORM)
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # F4 in a skirmish slides the kills board in at the battlefield's top
       # right through the SDL presenter, with no dialog, and away again.
+      # Space selects nothing and moves no camera.
       set(oa_kill_board_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/kill-board")
       file(MAKE_DIRECTORY "${oa_kill_board_check_dir}")
       add_test(NAME native-kill-board COMMAND oa-game --game-dir "${OA_GAME_DIR}"

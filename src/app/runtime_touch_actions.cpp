@@ -976,7 +976,7 @@ void TouchDispatchAccess::select_item(Runtime& runtime, uint8_t index) {
         runtime.press_match_key(SDLK_Z, control);
         break;
     case hud::SelectItem::centre:
-        runtime.press_match_key(SDLK_SPACE, SDL_KMOD_NONE);
+        runtime.press_match_key(SDLK_HOME, SDL_KMOD_NONE);
         break;
     case hud::SelectItem::follow:
         runtime.press_match_key(SDLK_T, SDL_KMOD_NONE);
@@ -1086,7 +1086,7 @@ void TouchDispatchAccess::control_tap(
         runtime.open_chat_line();
         return;
     case hud::Control::centre:
-        runtime.press_match_key(SDLK_SPACE, SDL_KMOD_NONE);
+        runtime.press_match_key(SDLK_HOME, SDL_KMOD_NONE);
         return;
     case hud::Control::follow:
         runtime.press_match_key(SDLK_T, SDL_KMOD_NONE);

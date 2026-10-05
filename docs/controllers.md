@@ -90,7 +90,7 @@ pad.
 | **R1** | The order ring at the pointer | Order buttons |
 | **L1** | The build ring for the selected builder; with no builder, the standing-orders ring | Build page, PREV and NEXT |
 | Left stick | Scrolls the map; faster with the square of the push, and with the zoom | Arrow keys |
-| L3 | Centres on the selection, or on the commander with none | Space |
+| L3 | Centres on the selection, or on the commander with none | Home |
 | Left trackpad: slide | Drags the map: the ground follows the thumb, and glides on after a flick | Two-finger drag |
 | Left trackpad: press and hold | **The minimap under the thumb**: the trackpad stands for the whole map, the camera goes to the point under the thumb and follows it while the press is held | Clicking and dragging on the minimap |
 | Right stick ↑ and ↓ | Zooms in and out about the pointer, smoothly (the Mouse wheel zoom setting is honoured) | Wheel |

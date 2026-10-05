@@ -688,10 +688,53 @@ void Runtime::check_kill_board() {
     write_ppm(report_directory / "native-kill-board-gone.ppm", gone);
     if (differing_outside(hidden, gone, {cursor}) != 0)
         throw std::runtime_error("kill board check: the board left pixels behind");
+
+    // Space: from the map's far corner with nothing selected, its press
+    // selects nothing and moves no camera.
+    clear_local_selection();
+    apply_match_hud_for_selection();
+    set_camera_position(
+        std::numeric_limits<int32_t>::max() / 2, std::numeric_limits<int32_t>::max() / 2, 0
+    );
+    const auto selected_count = [&] {
+        int count = 0;
+        for (const auto& slot : match_->world().slots)
+            count += slot.unit != nullptr && slot.owner_index == match_local_player_ &&
+                     (slot.unit->flags & OA_UNIT_FLAG_SELECTED) != 0;
+        return count;
+    };
+    // The frame drawn holds the camera to the map.
+    renderer::Surface still;
+    capture(still);
+    const std::array<int32_t, 2> camera{match_camera_x_, match_camera_z_};
+    const auto unmoved = [&](const char* when) {
+        if (selected_count() != 0 || selected_match_unit_ != 0)
+            throw std::runtime_error(
+                std::string("kill board check: Space selected a unit ") + when
+            );
+        if (match_camera_x_ != camera[0] || match_camera_z_ != camera[1] ||
+            tracked_match_unit_ != 0)
+            throw std::runtime_error(
+                std::string("kill board check: Space moved the camera ") + when
+            );
+    };
+    const auto send_space = [&](bool down) {
+        SDL_Event event{};
+        event.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+        event.key.key = SDLK_SPACE;
+        event.key.scancode = SDL_SCANCODE_SPACE;
+        event.key.down = down;
+        handle_sdl_event(event, running);
+    };
+    send_space(true);
+    unmoved("when pressed");
+    send_space(false);
+    capture(still);
+    unmoved("after it was let go");
     std::cout << "kill board check: " << board.width << 'x' << board.height << " at " << board.x
               << ',' << board.y << " on the " << match_layout_.width << 'x' << match_layout_.height
               << " canvas, shaded by " << (full ? "the card in the full tier" : "the shade table")
-              << '\n';
+              << "; Space selected nothing and moved no camera\n";
 }
 
 } // namespace oa::app

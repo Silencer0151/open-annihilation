@@ -1236,13 +1236,14 @@ class Runtime final : public menu::Host,
     /// @param report_directory directory the frames are written to
     void check_placed_dialogs(const fs::path& report_directory);
 
-    /// Checks the kills board F4 pins in a skirmish.
+    /// Checks the kills board F4 pins in a skirmish, and what Space does.
     ///
     /// The board slides in over the battlefield's top-right corner in 18 frames,
     /// opens no dialog and changes nothing else on the frame. Its margin is the
     /// battlefield through shade row 8, the local player's row starts with the
     /// colour logo and the "Kills" header is drawn. A second F4 slides it away
-    /// again. Throws std::runtime_error on a failure.
+    /// again. A press of Space selects nothing and moves no camera. Throws
+    /// std::runtime_error on a failure.
     void check_kill_board();
 
     /// Checks MULTI on the main menu.

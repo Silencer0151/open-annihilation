@@ -184,7 +184,7 @@ corner, BUILD again or a tap outside closes it.
   clears the selection, as Escape's first two presses do.
 - **PAUSE** pauses and resumes the game, as the Pause key does. **SPEED**
   (tablet) offers Slower and Faster. **CHAT** opens the chat line.
-  **CENTRE**, **FOLLOW** and **NEXT** are Space, T and N.
+  **CENTRE**, **FOLLOW** and **NEXT** are Home, T and N.
 - **INFO** opens the unit info panel for the selected unit.
 - **MORE** (phone) opens a sheet with the rest of the side panel's order
   page: the fire and move orders, on/off and cloak toggles, the orders the

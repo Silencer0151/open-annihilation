@@ -2972,7 +2972,7 @@ struct PadCheckAccess {
             Part::dispatch,
             "D-pad right did not go to the next unit (N)"
         );
-        // L3 is Space: the view centres on the selection, from the map's far corner.
+        // L3 is Home: the view centres on the selection, from the map's far corner.
         select_only(runtime, a);
         const auto look_away = [&] {
             const auto [unit_x, unit_z] = map_of(runtime, a);
@@ -2994,15 +2994,15 @@ struct PadCheckAccess {
         };
         look_away();
         const std::array<int32_t, 2> away{runtime.match_camera_x_, runtime.match_camera_z_};
-        send_key(runtime, run, SDLK_SPACE, SDL_SCANCODE_SPACE, true);
-        send_key(runtime, run, SDLK_SPACE, SDL_SCANCODE_SPACE, false);
+        send_key(runtime, run, SDLK_HOME, SDL_SCANCODE_HOME, true);
+        send_key(runtime, run, SDLK_HOME, SDL_SCANCODE_HOME, false);
         const std::array<int32_t, 2> centred_by_key{
             runtime.match_camera_x_, runtime.match_camera_z_
         };
         require(
             centred_by_key != away,
             Part::check,
-            "Space did not move the camera to the Peewee (camera " + std::to_string(away[0]) + "," +
+            "Home did not move the camera to the Peewee (camera " + std::to_string(away[0]) + "," +
                 std::to_string(away[1]) + ", selected unit " +
                 std::to_string(runtime.selected_match_unit_) + ", followed unit " +
                 std::to_string(runtime.tracked_match_unit_) + ", pad's camera " +
@@ -3011,7 +3011,7 @@ struct PadCheckAccess {
         require(
             centred_by_pad == centred_by_key,
             Part::dispatch,
-            "L3 did not centre the camera as Space does"
+            "L3 did not centre the camera as Home does"
         );
         tap(runtime, run, run.deck, pad::PadButton::r3);
         require(

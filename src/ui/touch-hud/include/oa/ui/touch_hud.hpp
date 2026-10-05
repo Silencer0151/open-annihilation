@@ -290,7 +290,7 @@ enum class SelectItem : uint8_t {
     on_screen,   ///< Ctrl+S
     commander,   ///< Ctrl+C
     same_type,   ///< Ctrl+Z
-    centre,      ///< Space
+    centre,      ///< Home
     follow,      ///< T
     next_unit,   ///< N
     next_report, ///< F3
