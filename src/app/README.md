@@ -2228,13 +2228,22 @@ into the records and decisions of the modules that carry them out, and
   `oa::data::languages::set_translation_hooks` for the GUI files and the
   campaign's files), units' names and descriptions from the table the unit
   loaders fill through `unit_text_sink`, and the engine's own words in the
-  catalogue. `set_language_choice` takes the setting as it changes; the
-  match's definitions, saves and what a shared game sends never see it.
+  catalogue. `set_language_choice` takes the setting as it changes, and
+  `show_language_change` shows it at once where the settings show over:
+  the main menu loads again in it (`reload_main_menu_language`), and in a
+  match the in-game menu opens again, its texts translated and the
+  captions over its pictures drawn afresh; the titles over the battlefield
+  and the chat line's panel load again as they next show. The match's
+  definitions, saves and what a shared game sends never see it.
   `--check-unit-language TAG` (`runtime_language_check.cpp`) checks the
   build menu's bottom bar and the unit panel in a language against the
   unit files themselves, and English after it; the
   `native-unit-language-*` checks run it in each language and in the
-  system's.
+  system's. `--check-language-switch` (`runtime_language_switch_check.cpp`,
+  `native-language-switch`) changes the language in the settings from
+  Simplified Chinese to English, German and back, over the main menu and
+  over a skirmish's in-game menu, and checks each screen shows what it
+  shows opened again in the language.
 - **Picture captions** (`runtime_picture_captions.cpp`): while a language
   other than English is shown, the words its packs' `pictures.tdf` gives
   (`language_pictures`, drawn by `oa/present/picture_captions.hpp`) are

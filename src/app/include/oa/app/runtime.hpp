@@ -6023,7 +6023,8 @@ class Runtime final : public menu::Host,
     void read_interface_catalogue();
 
     /// Takes the setting's choice of language and puts it in effect when it
-    /// changed, readying the modern fonts for it (warm_game_text).
+    /// changed, readying the modern fonts for it (warm_game_text) and
+    /// showing it at once on the screen shown (show_language_change).
     ///
     /// @param choice oa::data::languages::system_choice or a tag
     void set_language_choice(std::string_view choice);
@@ -6032,6 +6033,20 @@ class Runtime final : public menu::Host,
     /// fonts of the game data's word when it changed, and the words the
     /// interface shows units' names and descriptions and its own words in.
     void apply_language();
+
+    /// Shows the language just put in effect at once. The screen or match
+    /// panel the settings showed over is loaded again in it, its texts
+    /// translated, placed and drawn as it draws them and the captions over
+    /// its pictures drawn afresh, or taken off for a language without them;
+    /// the pictures and panels kept for later (the titles over the
+    /// battlefield and the chat line's panel) load again as they next show.
+    void show_language_change();
+
+    /// Loads the main menu shown again in the language in effect: its
+    /// layout's texts translated anew, its picture and the labels its setup
+    /// places, without the music its setup starts. The hovered and pressed
+    /// buttons and the keyboard's focus stay where they were.
+    void reload_main_menu_language();
 
     /// Translates one of the game's own texts through gamedata/translate.tdf in
     /// the language shown, and its fallbacks' tables after it: by the exact
@@ -9540,6 +9555,16 @@ class Runtime final : public menu::Host,
     /// English once the language is put back; throws std::runtime_error
     /// naming what differed.
     void check_unit_language();
+
+    /// Changes the language in the settings over the main menu, and over a
+    /// skirmish's in-game menu, from Simplified Chinese, the language the
+    /// run starts in, to English, German and back, and checks that after
+    /// each change the screen under the settings, closed with OK, shows
+    /// what it shows opened again in the language, and back in Chinese what
+    /// it showed as the run started. Writes each step's frame beside
+    /// --snapshot when one is named; throws std::runtime_error naming what
+    /// differed.
+    void check_language_switch();
 
     /// Checks the commander's build pages against the side column on windows of several sizes.
     ///

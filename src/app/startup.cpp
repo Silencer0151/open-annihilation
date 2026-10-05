@@ -279,6 +279,7 @@ void check_game_files_options(Options& options) {
         {options.check_kill_board, "--check-kill-board"},
         {options.check_paused_save, "--check-paused-save"},
         {!options.check_unit_language.empty(), "--check-unit-language"},
+        {options.check_language_switch, "--check-language-switch"},
         {options.check_patrol_reclaim, "--check-patrol-reclaim"},
         {options.check_reclaim_cursor, "--check-reclaim-cursor"},
         {options.check_pointer_interfaces, "--check-pointer-interfaces"},
@@ -461,6 +462,7 @@ void check_director_options(Options& options) {
         {options.check_kill_board, "--check-kill-board"},
         {options.check_paused_save, "--check-paused-save"},
         {!options.check_unit_language.empty(), "--check-unit-language"},
+        {options.check_language_switch, "--check-language-switch"},
         {options.check_patrol_reclaim, "--check-patrol-reclaim"},
         {options.check_reclaim_cursor, "--check-reclaim-cursor"},
         {options.check_pointer_interfaces, "--check-pointer-interfaces"},
@@ -788,6 +790,8 @@ namespace {
             result.check_paused_save = true;
         else if (argument == "--check-unit-language")
             result.check_unit_language = value(argument);
+        else if (argument == "--check-language-switch")
+            result.check_language_switch = true;
         else if (argument == "--check-patrol-reclaim")
             result.check_patrol_reclaim = true;
         else if (argument == "--check-reclaim-cursor")
@@ -874,6 +878,7 @@ namespace {
                    "[--check-unit-pages whole|scaled:TYPE,...] "
                    "[--check-kill-board] "
                    "[--check-unit-language TAG] "
+                   "[--check-language-switch] "
                    "[--check-patrol-reclaim] [--check-reclaim-cursor] "
                    "[--check-pointer-interfaces] [--check-pad-controls] [--check-touch-controls] "
                    "[--check-game-files] "
@@ -1043,11 +1048,11 @@ namespace {
         result.check_unit_speech || result.check_download_builds || result.check_stockpile_builds ||
         result.check_unit_page_memory || result.check_side_column || result.check_match_bars ||
         !result.check_unit_pages.empty() || result.check_kill_board ||
-        !result.check_unit_language.empty() || result.check_patrol_reclaim ||
-        result.check_reclaim_cursor || result.check_pointer_interfaces ||
-        result.check_touch_controls || result.check_pad_controls || result.check_director_view ||
-        result.check_director_render || result.check_interpolation || result.check_unit_playout ||
-        result.check_paused_save;
+        !result.check_unit_language.empty() || result.check_language_switch ||
+        result.check_patrol_reclaim || result.check_reclaim_cursor ||
+        result.check_pointer_interfaces || result.check_touch_controls ||
+        result.check_pad_controls || result.check_director_view || result.check_director_render ||
+        result.check_interpolation || result.check_unit_playout || result.check_paused_save;
     // A capture and a showcase need the application's own loop and window,
     // which checks and benchmarks do not run.
     const bool check_run = result.fixed_clock || result.check_navigation ||

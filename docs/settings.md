@@ -205,9 +205,10 @@ locks them, and players in different languages play together.
   as "System default (English)". The game's own text and unit names show
   in that language wherever the game data has them; whatever it leaves
   untranslated stays in English. A change shows at once in what is drawn
-  every frame, and in screens and panels as they open again. Choose a
-  language to play in one other than your system's. 3.1c's own command
-  line, such as `open-annihilation german`, decides it for the run.
+  every frame and on the menu under the settings, and in other screens and
+  panels as they open. Choose a language to play in one other than your
+  system's. 3.1c's own command line, such as `open-annihilation german`,
+  decides it for the run.
   [Languages](languages.md) says what the game data and the language packs
   translate.
 - **Use modern fonts for game text**, On by default. The game's text is

@@ -847,6 +847,7 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/runtime_factory_check.cpp src/app/runtime_unit_speech_check.cpp
   src/app/runtime_build_page_check.cpp
   src/app/runtime_language_check.cpp
+  src/app/runtime_language_switch_check.cpp
   src/app/runtime_side_column_check.cpp
   src/app/runtime_match_bars_check.cpp
   src/app/runtime_unit_pages_check.cpp
@@ -1643,6 +1644,22 @@ if(OA_BUILD_PLATFORM)
           WORKING_DIRECTORY "${oa_language_check_dir}"
           ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software;SDL_PREFERRED_LOCALES=fr_CA,de_DE")
       endforeach()
+      # The language changed in the settings over the main menu and over a
+      # skirmish's in-game menu, from Simplified Chinese to English, German
+      # and back: after each change, the settings closed with OK, the screen
+      # under them shows what it shows opened again in the language, and
+      # back in Chinese what it showed as the run started in it. Needs the
+      # engine's Simplified Chinese pack beside the game.
+      set(oa_language_switch_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/language-switch")
+      file(MAKE_DIRECTORY "${oa_language_switch_check_dir}")
+      file(WRITE "${oa_language_switch_check_dir}/language-switch.conf"
+        "open-annihilation-preferences 1\n\"open-annihilation.language\" \"zh-Hans\"\n")
+      add_test(NAME native-language-switch COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-language-switch
+        --preferences-file "${oa_language_switch_check_dir}/language-switch.conf")
+      set_tests_properties(native-language-switch PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_language_switch_check_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # The commander's build pages on windows from 640x480 to 5120x2880,
       # walked with NEXT through SDL input on dummy devices: each fits the
       # side column, the same build buttons are reachable on every window and

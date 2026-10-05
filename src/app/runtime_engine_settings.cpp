@@ -477,8 +477,7 @@ void Runtime::apply_engine_settings(const settings::EngineSettings& chosen) {
     if (chosen.developer_mode != before.developer_mode ||
         chosen.hack_overrides != before.hack_overrides)
         apply_hack_overrides();
-    // The language shows at once in what is drawn each frame; screens and
-    // panels show it once they are opened again.
+    // The language shows at once, on the screen under the settings too.
     set_language_choice(chosen.language);
     // The Touch section takes effect at once too: the touch controls read
     // the settings in effect at every finger and every frame.

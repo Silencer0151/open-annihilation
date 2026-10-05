@@ -373,6 +373,11 @@ struct Options {
     // descriptions in the language this BCP-47 tag names, as the unit files
     // give them there; empty for no check.
     std::string check_unit_language;
+    // Changes the language in the settings over the main menu and over a
+    // skirmish's in-game menu, from Simplified Chinese to English, German
+    // and back, and checks each screen under them shows it as it shows
+    // opened again in it.
+    bool check_language_switch = false;
     // Sends a construction kbot on PATROL through the SDL presenter with the
     // metal store low and checks it reclaims a feature on its way.
     bool check_patrol_reclaim = false;

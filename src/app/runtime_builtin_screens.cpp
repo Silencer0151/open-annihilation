@@ -279,18 +279,21 @@ struct BuiltinScreens {
     }
 
     // Runs the MAINMENU.GUI setup over the loaded records and
-    // writes the version label back to its widget.
-    static void setup_main_menu_panel(Runtime& runtime) {
+    // writes the version label back to its widget; without `starts_music`
+    // the music plays on as it is.
+    static void setup_main_menu_panel(Runtime& runtime, bool starts_music = true) {
         static ui::frontend::MainMenuChecks checks;
         ui::frontend::MainMenuHost menu{};
         menu.context = &runtime;
         menu.translate = Runtime::translation_hook;
-        menu.play_music = [](void* context, const char* sound) {
-            static_cast<Runtime*>(context)->play_menu_voice(sound);
-        };
-        menu.set_music_kind = [](void* context, int32_t) {
-            static_cast<Runtime*>(context)->music_main_menu();
-        };
+        if (starts_music) {
+            menu.play_music = [](void* context, const char* sound) {
+                static_cast<Runtime*>(context)->play_menu_voice(sound);
+            };
+            menu.set_music_kind = [](void* context, int32_t) {
+                static_cast<Runtime*>(context)->music_main_menu();
+            };
+        }
         menu.measure_text = [](void* context, const char* text) {
             return static_cast<int32_t>(oa::formats::fnt::measure_text(
                 static_cast<Runtime*>(context)->resources_.font, text
@@ -735,6 +738,13 @@ void Runtime::register_screens() {
          BuiltinScreens::dialog_hud_strip_width,
          BuiltinScreens::dialog_draws_layer}
     );
+}
+
+void Runtime::reload_main_menu_language() {
+    // The same MAINMENU.GUI, so the hovered and pressed buttons and the
+    // keyboard's focus keep their records.
+    resources_ = BuiltinScreens::load_main_menu(*this);
+    BuiltinScreens::setup_main_menu_panel(*this, false);
 }
 
 void Runtime::set_extension_overlays_aside(bool aside) {

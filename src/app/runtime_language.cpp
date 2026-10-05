@@ -241,6 +241,31 @@ void Runtime::set_language_choice(std::string_view choice) {
     // The modern fonts draw the new language's commonest characters ahead
     // of its first screen.
     warm_game_text();
+    show_language_change();
+}
+
+void Runtime::show_language_change() {
+    // Kept for later, they load again in the language as they next show.
+    match_titles_ = {};
+    talk_layout_.reset();
+    match_talk_ = {};
+    // The settings change the language over the main menu, alone of the
+    // front end's screens, and in a match beside the in-game menu. A main
+    // menu without its panel, not yet loaded or taken off, loads in the
+    // language as it shows.
+    if (screen_ == Screen::main_menu) {
+        if (!resources_.layout.gadgets.empty())
+            reload_main_menu_language();
+        return;
+    }
+    if (screen_ != Screen::match || !match_ || match_finished_)
+        return;
+    // The in-game menu opens again in the language over the page it keeps
+    // darkened below it; the page shows the language as the game resumes.
+    if (ingame_menu_column_shown())
+        show_match_pause_menu();
+    else if (!match_paused_)
+        apply_match_hud_for_selection();
 }
 
 void Runtime::apply_language() {

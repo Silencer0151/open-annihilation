@@ -61,9 +61,11 @@ What 3.1c's data holds:
 
 A new language shows at once in what is drawn each frame: the bottom bar,
 the unit panel, the build menu's lines, the kill board, the loading screen
-and the lines the message log posts from then on. Screens, menus and panels
-that are open keep their texts until they open again, and a campaign's
-lists until they are filled again.
+and the lines the message log posts from then on. The main menu or the
+in-game menu under the settings shows it at once too, with the words over
+the game's pictures, and so do the titles over the battlefield. The other
+menus and panels show it as they open, and a campaign's lists as they are
+filled again.
 
 The language changes only what players read. The simulation, a saved game
 and what a shared game sends are the same in every language: a unit
