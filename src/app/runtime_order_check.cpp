@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -23,6 +24,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace oa::app {
@@ -672,6 +674,30 @@ void Runtime::check_command_buttons(uint16_t peewee, uint16_t commander) {
     expect("MOVE", MatchCommand::none, "", "immediateorders", "MOVE clicked again");
     expect("PATROL", MatchCommand::patrol, "PATROL", "immediateorders", "PATROL");
     expect("STOP", MatchCommand::none, "", "immediateorders", "STOP");
+    // A held order key presses its button once: MOVE, armed by its quick
+    // key's press, stays armed through the repeats that follow, where a
+    // second press takes it back.
+    const auto* move = std::get_if<oa::ui::gui_layout::ButtonFields>(
+        &match_hud_->layout.gadgets[index_of("MOVE")].fields
+    );
+    require(move != nullptr && move->quick_key != 0, "MOVE has no quick key");
+    const auto move_key =
+        static_cast<SDL_Keycode>(std::tolower(static_cast<unsigned char>(move->quick_key)));
+    const auto press_move_key = [&](bool repeat) {
+        SDL_Event event{};
+        event.type = SDL_EVENT_KEY_DOWN;
+        event.key.key = move_key;
+        event.key.down = true;
+        event.key.repeat = repeat;
+        dispatch_event(event, running);
+    };
+    constexpr int kMoveKeyRepeats = 3;
+    press_move_key(false);
+    for (int repeat = 0; repeat < kMoveKeyRepeats; ++repeat)
+        press_move_key(true);
+    require(match_command_ == MatchCommand::move, "a held MOVE key pressed MOVE again");
+    press_move_key(false);
+    require(match_command_ == MatchCommand::none, "MOVE's key pressed again left MOVE armed");
 
     clear_local_selection();
     adopt_selection(commander);

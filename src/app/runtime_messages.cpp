@@ -98,6 +98,17 @@ oa::ui::display_layout::Point message_log_corner(
     return {point.x + area.x - layout.battlefield_x(), point.y + area.y - layout.battlefield_y()};
 }
 
+// The speeds the speed check's stand-in for Extension::speed_changed was
+// told of, in order.
+std::vector<uint16_t>& reported_speeds() {
+    static std::vector<uint16_t> speeds;
+    return speeds;
+}
+
+void report_speed(void* /*context*/, Runtime& /*runtime*/, uint16_t speed) {
+    reported_speeds().push_back(speed);
+}
+
 } // namespace
 
 void Runtime::load_common_fonts() {
@@ -642,6 +653,53 @@ void Runtime::check_game_speed_messages() {
     key(SDLK_EQUALS, SDL_SCANCODE_EQUALS, base - slower);
     if (match_timing_.requested_rate != base)
         throw std::runtime_error("speed check: '+' did not return to the starting speed");
+    // A held '+' raises the speed a step with its press and with each
+    // repeat, each step told to the extensions, which share it with the
+    // other players; at the fastest its repeats change and tell nothing. A
+    // held '-' comes back down the same way.
+    const auto hold = [&](SDL_Keycode code, SDL_Scancode scancode, int repeats) {
+        for (int press = 0; press <= repeats; ++press) {
+            SDL_Event event{};
+            event.type = SDL_EVENT_KEY_DOWN;
+            event.key.key = code;
+            event.key.scancode = scancode;
+            event.key.down = true;
+            event.key.repeat = press > 0;
+            handle_sdl_event(event, running);
+        }
+    };
+    constexpr int kRepeatsAtFastest = 2;
+    const auto range = game_speed_range();
+    std::vector<uint16_t> steps_up;
+    for (int32_t speed = base + 1; speed <= range.fastest; ++speed)
+        steps_up.push_back(static_cast<uint16_t>(speed));
+    std::vector<uint16_t> steps_down(steps_up.rbegin(), steps_up.rend());
+    if (!steps_down.empty()) {
+        steps_down.erase(steps_down.begin());
+        steps_down.push_back(static_cast<uint16_t>(base));
+    }
+    const auto told_speeds = std::exchange(extension_.speed_changed, report_speed);
+    auto& told = reported_speeds();
+    told.clear();
+    hold(
+        SDLK_EQUALS, SDL_SCANCODE_EQUALS, static_cast<int>(steps_up.size()) - 1 + kRepeatsAtFastest
+    );
+    const auto raised = std::exchange(told, {});
+    const auto held_up_to = match_timing_.requested_rate;
+    hold(SDLK_MINUS, SDL_SCANCODE_MINUS, static_cast<int>(steps_down.size()) - 1);
+    const auto lowered = std::exchange(told, {});
+    extension_.speed_changed = told_speeds;
+    if (raised != steps_up || held_up_to != range.fastest)
+        throw std::runtime_error(
+            "speed check: a held '+' set " + std::to_string(raised.size()) + " speeds up to " +
+            std::to_string(held_up_to) + ", not a step a repeat to " + std::to_string(range.fastest)
+        );
+    if (lowered != steps_down || match_timing_.requested_rate != base)
+        throw std::runtime_error(
+            "speed check: a held '-' set " + std::to_string(lowered.size()) + " speeds down to " +
+            std::to_string(match_timing_.requested_rate) + ", not a step a repeat to " +
+            std::to_string(base)
+        );
 
     uint16_t commander = 0;
     for (const auto& slot : match_->world().slots)

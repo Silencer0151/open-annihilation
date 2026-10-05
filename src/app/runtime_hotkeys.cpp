@@ -38,6 +38,21 @@
 #include <vector>
 
 namespace oa::app {
+namespace {
+
+// The game speed step a speed key asks for: 1 for '+', '=' and the keypad's
+// '+', -1 for '-' and the keypad's '-', 0 for any other key.
+int game_speed_key_step(const SDL_KeyboardEvent& key) {
+    if (key.key == SDLK_MINUS || key.key == SDLK_KP_MINUS || key.scancode == SDL_SCANCODE_MINUS ||
+        key.scancode == SDL_SCANCODE_KP_MINUS)
+        return -1;
+    if (key.key == SDLK_EQUALS || key.key == SDLK_PLUS || key.key == SDLK_KP_PLUS ||
+        key.scancode == SDL_SCANCODE_EQUALS || key.scancode == SDL_SCANCODE_KP_PLUS)
+        return 1;
+    return 0;
+}
+
+} // namespace
 
 bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
     if (screen_ != Screen::match || !match_)
@@ -45,11 +60,14 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
     // The surrender confirmation takes the keys ahead of the chat line and
     // a marker's text, which keep what was typed for after it.
     const bool question = match_question_open();
-    // A held key's repeats press no hotkey, but held Backspace goes on
+    // A held key's repeats press no hotkey but the speed keys: held '+' or
+    // '-' goes on changing the game speed, a step with each repeat, as in
+    // 3.1c, and stops at the fastest or the slowest. Held Backspace goes on
     // deleting from the chat line or a marker's text being typed, as held
     // keys go on typing in 3.1c; held letters arrive as repeated text.
-    if (key.repeat &&
-        (question || key.key != SDLK_BACKSPACE || (!chat_composing_ && !whiteboard_input_.editing)))
+    const bool deletes_typed_text =
+        !question && key.key == SDLK_BACKSPACE && (chat_composing_ || whiteboard_input_.editing);
+    if (key.repeat && !deletes_typed_text && game_speed_key_step(key) == 0)
         return false;
     if ((!question && whiteboard_key(key)) || megamap_key(key))
         return true;
@@ -280,16 +298,9 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
         return true;
     }
     // A multiplayer game's watcher changes no speed.
-    if (sym == SDLK_MINUS || sym == SDLK_KP_MINUS || key.scancode == SDL_SCANCODE_MINUS ||
-        key.scancode == SDL_SCANCODE_KP_MINUS) {
+    if (const int step = game_speed_key_step(key); step != 0) {
         if ((current_extension_state() & extension_state::local_watcher) == 0)
-            adjust_game_speed(-1);
-        return true;
-    }
-    if (sym == SDLK_EQUALS || sym == SDLK_PLUS || sym == SDLK_KP_PLUS ||
-        key.scancode == SDL_SCANCODE_EQUALS || key.scancode == SDL_SCANCODE_KP_PLUS) {
-        if ((current_extension_state() & extension_state::local_watcher) == 0)
-            adjust_game_speed(1);
+            adjust_game_speed(step);
         return true;
     }
     // The page keys take the order page into their turn, and sound whether

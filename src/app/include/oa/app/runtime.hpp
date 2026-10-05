@@ -8446,11 +8446,13 @@ class Runtime final : public menu::Host,
     /// F1 opens the unit info panel, whose Enter and Escape press its DONE;
     /// Shift+F1 pins the cursor unit. Ctrl+S selects the local units on
     /// screen and 'n' centres on the next unvisited local unit. Outside a
-    /// multiplayer game 'h' does nothing.
+    /// multiplayer game 'h' does nothing. '+' and '-', and the keypad's,
+    /// raise and lower the game speed a step, as each repeat of a held one
+    /// does too, up to the fastest and down to the slowest.
     ///
-    /// @param key keyboard event; a repeat presses no hotkey, and only
-    ///        Backspace's repeats are taken, by the chat line or a marker's
-    ///        text being typed
+    /// @param key keyboard event; a repeat presses no other hotkey, and
+    ///        Backspace's repeats are taken only by the chat line or a
+    ///        marker's text being typed
     /// @return true when the key was taken
     bool handle_match_hotkey(const SDL_KeyboardEvent& key);
 
@@ -9282,6 +9284,7 @@ class Runtime final : public menu::Host,
     /// A lit command button arms its order, a click on it again turns it off, a
     /// button of the group puts the others out, STOP puts them all out; REPAIR,
     /// RECLAIM, CAPTURE and UNLOAD play specialorders, the rest immediateorders.
+    /// A held MOVE quick key arms MOVE once, its repeats pressing nothing.
     /// Throws std::runtime_error on a failure.
     ///
     /// @param peewee local ARMPW
@@ -9885,7 +9888,9 @@ class Runtime final : public menu::Host,
     /// Checks the game speed keys and the message log.
     ///
     /// '+' and '-' arrive as key events, change how many ticks one second of
-    /// frames runs and post the game's speed lines; a commander's under-attack
+    /// frames runs and post the game's speed lines; a held one steps the
+    /// speed with each repeat as far as the fastest or back, each step told
+    /// to the extensions and none past the fastest; a commander's under-attack
     /// report reaches the log; the log draws over the battlefield. A chat line
     /// posted through the console's host with a sender is stored as another
     /// player's chat from that sender, starts with the logo of the sender's
