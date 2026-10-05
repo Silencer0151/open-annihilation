@@ -247,6 +247,10 @@ In Desktop Mode the window opens as on any Linux desktop, and when the game
 finds no copy of Total Annihilation, the desktop's folder dialog asks for
 the folder instead of the game's own chooser.
 
+Once the game has run, a `.oamod` file opened in Dolphin installs the mod
+it holds ([mods](../mods/README.md#installing-a-oamod-file)). Opened while
+the game runs, the file goes to the running game.
+
 ## Frame rate, Control size and the window
 
 On a Steam Deck the game starts with **Maximum frame rate** at the

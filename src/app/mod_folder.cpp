@@ -12,6 +12,8 @@
 #include <cstdint>
 #include <fstream>
 #include <iterator>
+#include <optional>
+#include <string_view>
 #include <system_error>
 
 namespace oa::app {
@@ -20,9 +22,6 @@ namespace {
 
 namespace fs = std::filesystem;
 namespace mod_profile = data::mod_profile;
-
-/// The largest INI file read; a larger one is not read.
-constexpr uintmax_t max_ini_bytes = 1024U * 1024U;
 
 /// Lower-cases ASCII letters.
 ///
@@ -72,14 +71,14 @@ std::optional<fs::path> entry_named(const fs::path& folder, std::string_view nam
     return std::nullopt;
 }
 
-/// Reads a file of at most max_ini_bytes.
+/// Reads a file of at most mod_ini_most_bytes.
 ///
 /// @param file the file
 /// @return its bytes, or nullopt when it cannot be read or is too large
 std::optional<std::string> read_small_file(const fs::path& file) {
     std::error_code error;
     const auto size = fs::file_size(file, error);
-    if (error || size > max_ini_bytes)
+    if (error || size > mod_ini_most_bytes)
         return std::nullopt;
     std::ifstream in{file, std::ios::binary};
     if (!in)
@@ -123,15 +122,28 @@ mod_profile::Settings mod_settings_of(
     const std::vector<fs::path>& folders,
     const platform::preferences::Values* preferences
 ) {
-    mod_profile::Settings settings{};
     for (const auto& folder : folders) {
         const auto file = entry_named(folder, profile.identity.settings_file);
         if (!file)
             continue;
-        if (const auto text = read_small_file(*file))
-            settings.ini = read_ini_settings(*text);
-        break;
+        const auto text = read_small_file(*file);
+        return mod_settings_from(
+            profile,
+            text ? std::optional<std::string_view>(*text) : std::optional<std::string_view>(),
+            preferences
+        );
     }
+    return mod_settings_from(profile, std::nullopt, preferences);
+}
+
+mod_profile::Settings mod_settings_from(
+    const mod_profile::ModProfile& profile,
+    std::optional<std::string_view> ini_text,
+    const platform::preferences::Values* preferences
+) {
+    mod_profile::Settings settings{};
+    if (ini_text)
+        settings.ini = read_ini_settings(*ini_text);
     if (preferences != nullptr) {
         const auto prefix = registry_key_prefix(profile) + std::string(registry_game_section) + '|';
         for (const auto& [key, value] : *preferences)
@@ -234,8 +246,11 @@ std::vector<fs::path> list_mods_in(const fs::path& mods) {
     std::error_code error;
     for (fs::directory_iterator entry{mods, error}, end; !error && entry != end;
          entry.increment(error)) {
+        // A folder whose name starts with a dot is hidden, as file managers
+        // hide it: the folders a mod's install keeps while it works.
+        const std::string name = utf8(entry->path().filename());
         std::error_code status;
-        if (entry->is_directory(status))
+        if (!name.starts_with('.') && entry->is_directory(status))
             folders.push_back(entry->path());
     }
     std::sort(folders.begin(), folders.end(), [](const fs::path& left, const fs::path& right) {

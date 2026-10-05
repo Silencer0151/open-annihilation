@@ -21,6 +21,58 @@ namespace oa::ui::engine_settings {
 
 namespace notice_geometry {
 
+PlacedText place_text(
+    const std::vector<NoticeParagraph>& paragraphs,
+    std::string_view failure,
+    const std::function<int32_t(std::string_view)>& regular_width,
+    const std::function<int32_t(std::string_view)>& small_width
+) {
+    PlacedText placed{};
+    int32_t row = text_top;
+    bool first = true;
+    const auto add = [&](const std::vector<std::string>& wrapped, bool path, bool is_failure) {
+        if (!first)
+            row += paragraph_gap;
+        first = false;
+        const int32_t line_height = path ? path_line_height : small_line_height;
+        for (const auto& text : wrapped) {
+            placed.lines.push_back(
+                Line{text, path, is_failure, {text_left, row, text_width, line_height}}
+            );
+            row += line_height;
+        }
+    };
+    for (const auto& paragraph : paragraphs)
+        add(paragraph.path ? wrap_path(paragraph.text, text_width, regular_width)
+                           : wrap_text(paragraph.text, text_width, small_width),
+            paragraph.path,
+            false);
+    if (!failure.empty())
+        add(wrap_text(failure, text_width, small_width), false, true);
+    placed.bottom = row;
+    return placed;
+}
+
+int32_t height_for(int32_t text_bottom) noexcept {
+    return std::clamp(
+        text_bottom + text_bottom_gap + 1 + footer_height + edge,
+        least_notice_height,
+        greatest_notice_height
+    );
+}
+
+int32_t footer_rule_of(int32_t height) noexcept {
+    return height - edge - footer_height - 1;
+}
+
+std::vector<Line> lines_that_fit(std::vector<Line> lines, int32_t footer_rule) {
+    std::vector<Line> fitting;
+    for (auto& line : lines)
+        if (line.rect.y + line.rect.height <= footer_rule - text_bottom_gap / 2)
+            fitting.push_back(std::move(line));
+    return fitting;
+}
+
 Placed place_notice(
     const Notice& notice,
     const std::function<int32_t(std::string_view)>& regular_width,
@@ -29,37 +81,11 @@ Placed place_notice(
     Placed placed{};
     const int32_t title_left = icon.x + icon.width + title_gap;
     placed.title = {title_left, edge, notice_width - padding - title_left, header_height};
-    // The lines of the text and the failure, before the height is known.
-    std::vector<Line> lines;
-    int32_t row = text_top;
-    bool first = true;
-    const auto add = [&](const std::vector<std::string>& wrapped, bool path, bool failure) {
-        if (!first)
-            row += paragraph_gap;
-        first = false;
-        const int32_t line_height = path ? path_line_height : small_line_height;
-        for (const auto& text : wrapped) {
-            lines.push_back(Line{text, path, failure, {text_left, row, text_width, line_height}});
-            row += line_height;
-        }
-    };
-    for (const auto& paragraph : notice.paragraphs)
-        add(paragraph.path ? wrap_path(paragraph.text, text_width, regular_width)
-                           : wrap_text(paragraph.text, text_width, small_width),
-            paragraph.path,
-            false);
-    if (!notice.failure.empty())
-        add(wrap_text(notice.failure, text_width, small_width), false, true);
-    placed.height = std::clamp(
-        row + text_bottom_gap + 1 + footer_height + edge,
-        least_notice_height,
-        greatest_notice_height
-    );
-    placed.footer_rule = placed.height - edge - footer_height - 1;
+    PlacedText text = place_text(notice.paragraphs, notice.failure, regular_width, small_width);
+    placed.height = height_for(text.bottom);
+    placed.footer_rule = footer_rule_of(placed.height);
     // A line the height cuts is left out.
-    for (auto& line : lines)
-        if (line.rect.y + line.rect.height <= placed.footer_rule - text_bottom_gap / 2)
-            placed.lines.push_back(std::move(line));
+    placed.lines = lines_that_fit(std::move(text.lines), placed.footer_rule);
     const int32_t button_top = placed.footer_rule + 1 + (footer_height - button_height) / 2;
     placed.ok_button = {notice_width - padding - ok_width, button_top, ok_width, button_height};
     placed.open_button = {

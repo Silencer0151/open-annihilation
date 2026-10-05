@@ -96,26 +96,16 @@ void pointer_pixel(const ScreenInput& input, int32_t& x, int32_t& y) {
 } // namespace
 
 void Runtime::start_user_folder() {
-    namespace platform_preferences = oa::platform::preferences;
     // The folder: --user-folder, the preferences' key, else beside a named
     // preferences file or in the Documents folder.
-    std::error_code error;
-    const fs::path preference_folder =
-        fs::absolute(preference_path_, error).lexically_normal().parent_path();
-    fs::path fallback;
-    if (options_.preferences_file) {
-        fallback = user_folder_beside(*options_.preferences_file);
-    } else {
-        try {
-            fallback = platform_preferences::default_user_folder();
-        } catch (const std::exception& failure) {
-            fallback = preference_folder / std::string(platform_preferences::user_folder_name);
-            std::cerr << "open-annihilation: no Documents folder (" << failure.what()
-                      << "); saved games, screenshots, films and mods go in "
-                      << path_to_utf8(fallback) << '\n';
-        }
-    }
-    user_folder_ = choose_user_folder(options_.user_folder, preference_values_, fallback);
+    std::string note;
+    user_folder_ = own_user_folder(
+        options_.user_folder, options_.preferences_file, preference_path_, preference_values_, note
+    );
+    if (!note.empty())
+        std::cerr << "open-annihilation: no Documents folder (" << note
+                  << "); saved games, screenshots, films and mods go in "
+                  << path_to_utf8(user_folder_) << '\n';
     // Only the player's own preferences file had the saved games the game
     // kept beside it; a named file's folder may hold anything, which stays.
     // They, and those loose in Saves, move only within the folder every

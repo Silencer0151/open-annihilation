@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // SDL output textures, viewport sizing and frame presentation.
+#include "mod_install_watch.hpp"
 #include "oa/app/runtime.hpp"
 #include "graphics_report.hpp"
 #include "pad_state.hpp"
@@ -227,6 +228,7 @@ void Runtime::initialize_sdl() {
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO))
             throw std::runtime_error(std::string("SDL_Init: ") + SDL_GetError());
         start_gamepad_subsystem();
+        watch_opened_files();
         // A window the runtime makes itself has no renderer host, and opens
         // at the window system's density.
         sdl_.window = SDL_CreateWindow(

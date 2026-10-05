@@ -8,6 +8,7 @@
 #include "folder_chooser_screen.hpp"
 #include "game_files_check.hpp"
 #include "game_files_screen.hpp"
+#include "mod_install_watch.hpp"
 #include "pad_state.hpp"
 #include "render_host.hpp"
 #include "screen_size.hpp"
@@ -17,8 +18,12 @@
 #include "oa/app/game_files_hooks.hpp"
 #include "oa/app/game_files_import.hpp"
 #include "oa/app/input_hints.hpp"
+#include "oa/app/mod_install.hpp"
+#include "oa/app/mod_install/handoff.hpp"
+#include "oa/app/mod_install/inbox.hpp"
 #include "oa/app/mod_profile_loader.hpp"
 #include "oa/app/platform_hooks.hpp"
+#include "oa/app/user_folder.hpp"
 #include "oa/app/video_capture.hpp"
 #include "oa/app/window_icon.hpp"
 #include "oa/base/float_precision.hpp"
@@ -27,6 +32,7 @@
 #include "oa/media/intro_player.hpp"
 #include "oa/platform/machine.hpp"
 #include "oa/platform/memory_status.hpp"
+#include "oa/platform/file_types.hpp"
 #include "oa/platform/log_files.hpp"
 #include "oa/platform/preferences.hpp"
 #include "oa/platform/system.hpp"
@@ -52,6 +58,12 @@
 #include <tuple>
 #include <utility>
 #include <vector>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 #include <SDL3/SDL_main.h>
 
 #ifndef OA_ENGINE_VERSION
@@ -262,6 +274,9 @@ struct HostDisplay {
         active = true;
         // Gamepads reach the folder chooser and the Game files screen too.
         start_gamepad_subsystem();
+        // A .oamod file opened in the game, now or later, reaches the inbox
+        // whatever polls SDL's events at that moment.
+        watch_opened_files();
         // The settings the window and its renderer start with, read before
         // either exists.
         const auto desktop = desktop_size();
@@ -857,6 +872,131 @@ void start_log() {
     }
 }
 
+/// The longest a second start waits for the running copy to take the mod
+/// packages it handed over, in milliseconds.
+constexpr uint32_t kHandoffWaitMs = 3000;
+/// How often it looks whether they were taken, in milliseconds.
+constexpr uint32_t kHandoffPollMs = 50;
+/// The slices a wait between renames pumps SDL's events in, in milliseconds.
+constexpr uint32_t kWaitSliceMs = 50;
+
+/// Waits between tries of a rename while the window shows, keeping it
+/// answering: SDL's events are pumped every slice.
+///
+/// @param milliseconds how long
+void wait_pumping(void*, uint32_t milliseconds) {
+    while (milliseconds > 0) {
+        const uint32_t slice = std::min(milliseconds, kWaitSliceMs);
+        SDL_PumpEvents();
+        oa::base::threads::sleep_ms(slice);
+        milliseconds -= slice;
+    }
+}
+
+/// Returns the game's data folder: --data-dir, else the platform's.
+///
+/// @param options the parsed command line
+/// @return the folder; nothing when there is none
+std::optional<fs::path> data_folder_of(const Options& options) {
+    if (options.data_dir)
+        return *options.data_dir;
+    try {
+        return oa::platform::preferences::data_directory();
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+}
+
+/// Settles what a stopped install of a mod package left in the player's
+/// Mods folder, before each run resolves the mod folder: a stop mid-change
+/// may have moved the folder of the mod the settings play. The discard
+/// folders it found are kept for the runtime to delete.
+///
+/// @param options the parsed command line
+void recover_mod_installs(const Options& options) {
+    try {
+        const fs::path preferences = preference_file(options.preferences_file);
+        std::error_code error;
+        const oa::platform::preferences::Values values =
+            fs::exists(preferences, error) ? oa::platform::preferences::load(preferences)
+                                           : oa::platform::preferences::Values{};
+        std::string note;
+        const fs::path folder = own_user_folder(
+            options.user_folder, options.preferences_file, preferences, values, note
+        );
+        const auto recovery =
+            mod_install::recover_changes(folder / std::string(user_mods_folder_name));
+        mod_install::keep_discards(recovery.discards);
+    } catch (const std::exception& error) {
+        std::cerr << "open-annihilation: mod install: nothing settled: " << error.what() << '\n';
+    }
+}
+
+/// Makes this copy of the game the opener of .oamod files for the player,
+/// where the system takes it at run time; only a start someone plays does:
+/// no check, test or unattended run, and none that names its own
+/// preferences, player's or data folder, or draws no window.
+///
+/// @param options the parsed command line
+void register_mod_files(const Options& options) {
+    if (options.headless_check || options.unattended || options.preferences_file ||
+        options.user_folder || options.data_dir)
+        return;
+    if (const auto driver = oa::platform::environment_value("SDL_VIDEO_DRIVER");
+        driver && (*driver == "dummy" || *driver == "offscreen"))
+        return;
+    namespace file_types = oa::platform::file_types;
+    const auto executable = file_types::running_executable();
+    if (!executable)
+        return;
+    const auto done = file_types::register_mod_file_type(*executable, window_icon_png());
+    for (const auto& line : done.lines)
+        std::cerr << "open-annihilation: file types: " << line << '\n';
+    if (!done.error.empty())
+        std::cerr << "open-annihilation: file types: " << done.error << '\n';
+}
+
+/// Hands the mod packages a start carries to the copy of the game already
+/// running, when one holds the instance lock, or takes the lock for this
+/// copy's life and its hand-off folder. Only a start someone plays does.
+///
+/// @param options the parsed command line
+/// @param[out] lock the instance lock, when this copy takes it
+/// @return true when the packages were handed over and this start ends
+bool hand_over_or_lock(const Options& options, std::unique_ptr<mod_install::FileLock>& lock) {
+    if (options.headless_check || options.unattended || options.preferences_file)
+        return false;
+    const auto data = data_folder_of(options);
+    if (!data)
+        return false;
+    const fs::path handoff = *data / std::string(mod_install::handoff_folder_name);
+    lock = mod_install::take_instance_lock(*data / std::string(mod_install::instance_lock_name));
+    if (lock) {
+        mod_install::set_handoff_folder(handoff);
+        return false;
+    }
+    // Another copy runs: a start that carries packages hands them to it.
+    if (options.install_mods.empty())
+        return false;
+    const auto written = mod_install::hand_files_over(handoff, options.install_mods);
+    if (written.empty())
+        return false;
+#ifdef _WIN32
+    // The running copy may bring its window forward.
+    AllowSetForegroundWindow(ASFW_ANY);
+#endif
+    for (uint32_t waited = 0; waited < kHandoffWaitMs; waited += kHandoffPollMs) {
+        std::error_code error;
+        if (std::none_of(written.begin(), written.end(), [&error](const fs::path& request) {
+                return fs::exists(request, error);
+            }))
+            break;
+        oa::base::threads::sleep_ms(kHandoffPollMs);
+    }
+    std::cerr << "open-annihilation: the mod packages went to the copy already running\n";
+    return true;
+}
+
 // A fatal error goes to the log, and to the terminal the game was started
 // from; a game started from the desktop has no terminal, so it shows in an
 // error box instead.
@@ -913,6 +1053,14 @@ int main(int argc, char** argv) {
         if (!parsed.headless_check && !parsed.unattended &&
             !oa::platform::log_files::output_captured())
             start_log();
+        // The mod packages the start carries are installed once the main
+        // menu shows, unless another copy already runs and takes them.
+        std::unique_ptr<mod_install::FileLock> instance_lock;
+        if (hand_over_or_lock(parsed, instance_lock))
+            return 0;
+        for (const auto& file : parsed.install_mods)
+            mod_install::post_mod_file(file);
+        register_mod_files(parsed);
         // Where the platform brings game files in, what a stopped import or
         // a change waiting for this start left is taken up before the
         // folder is looked for.
@@ -928,6 +1076,9 @@ int main(int argc, char** argv) {
             lookup_log = std::make_unique<LookupLog>(parsed.trace_lookups);
         ModSwitchMemory switch_memory;
         for (uint32_t restarts = 0;; ++restarts) {
+            // What a stop, or the change between runs, left in the player's
+            // Mods folder is settled before the mod folder is looked for.
+            recover_mod_installs(parsed);
             auto options = parsed;
             options.restarts = restarts;
             options.native_density_windows = kNativeDensityWindows;
@@ -939,6 +1090,11 @@ int main(int argc, char** argv) {
             );
             if (status != kSoftRestartStatus)
                 return status;
+            // A change to the mod played is made now, with the runtime and
+            // its archives gone, before the next run reads the folder.
+            mod_install::ChangeOptions change{};
+            change.hooks.wait = wait_pumping;
+            mod_install::finish_pending_change(change);
         }
     } catch (const fs::filesystem_error& error) {
         // A path longer than the system opens is reported with its length,

@@ -9,19 +9,23 @@
 // game's view inside a portrait screen), and installs the platform's hooks
 // (oa/app/platform_hooks.hpp): the touch controls' haptics, the game folder in the app's
 // Documents folder (or the copy built into the bundle), the advice shown without one and the
-// label of the button that looks again, the player's folders shown in the Files app, and, once
-// the window is open, the end of the system's three-finger editing gestures, which would
-// otherwise take the fingers of a three-finger touch on the battlefield, and the window handed
-// to the Game files screen's picker. It also installs the Game files screen's hooks
-// (ios_game_files.mm). Nothing here may throw into the game.
+// label of the button that looks again, the player's folders shown in the Files app, the mod
+// packages the system opens in the game brought into the app, and, once the window is open, the
+// end of the system's three-finger editing gestures, which would otherwise take the fingers of a
+// three-finger touch on the battlefield, and the window handed to the Game files screen's
+// picker. It also installs the Game files screen's hooks (ios_game_files.mm). Nothing here may
+// throw into the game.
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
 #include <SDL3/SDL.h>
 
+#include <climits>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <mutex>
 #include <string>
 
 #include "ios_game_files.hpp"
@@ -486,6 +490,346 @@ void install_landscape_window() {
     }
 }
 
+// --- Files the system opens in the game ---------------------------------------------------
+
+/// The folder in the app's temporary folder that holds the mod packages the system opened in
+/// the game, each in a folder of its own, until the game is done with it: a file opened in
+/// place (from iCloud Drive or another app's files) can only be read while the access the
+/// system granted with it lasts, and the system empties its own Inbox folders, where it puts
+/// the copies it makes for the app. Emptied at each start.
+NSString* const kOpenedFilesFolder = @"Opened mods";
+
+/// The file name extension of the files brought in, a mod package's; matched without case.
+NSString* const kModPackageExtension = @"oamod";
+
+/// The name of the Documents folder where the system put the copies it made for the app on
+/// older iOS releases.
+NSString* const kDocumentsInbox = @"Inbox";
+
+/// The end of the name of the folder in the app's temporary folder where the system puts the
+/// copies it makes for the app (<bundle identifier>-Inbox).
+NSString* const kTemporaryInboxSuffix = @"-Inbox";
+
+/// The UTF-8 text of an NSString, empty for nil.
+///
+/// @param text the string
+/// @return its UTF-8 bytes
+std::string utf8_of(NSString* text) {
+    const char* bytes = text != nil ? text.UTF8String : nullptr;
+    return bytes == nullptr ? std::string{} : std::string(bytes);
+}
+
+/// An NSError's description as a clause the engine can put after a colon: its failure reason
+/// when it gives one, else its description, without the final full stop.
+///
+/// @param error the error
+/// @return the clause
+NSString* reason_of(NSError* error) {
+    NSString* text = error.localizedFailureReason;
+    if (text.length == 0)
+        text = error.localizedDescription;
+    while (text.length > 0 && ([text hasSuffix:@"."] || [text hasSuffix:@" "]))
+        text = [text substringToIndex:text.length - 1];
+    return text.length > 0 ? text : @"the system gave no reason";
+}
+
+/// The same path with its links resolved, so that two spellings of one file compare equal
+/// (/var and /private/var); the path as it is when it cannot be resolved.
+///
+/// @param path the path, absolute
+/// @return the resolved path
+NSString* resolved_path(NSString* path) {
+    if (path == nil)
+        return nil;
+    char resolved[PATH_MAX];
+    const char* representation = path.fileSystemRepresentation;
+    if (representation == nullptr || realpath(representation, resolved) == nullptr)
+        return path;
+    return [NSFileManager.defaultManager stringWithFileSystemRepresentation:resolved
+                                                                     length:std::strlen(resolved)];
+}
+
+/// The folder kOpenedFilesFolder names.
+///
+/// @return its path
+NSString* opened_files_folder() {
+    return [NSTemporaryDirectory() stringByAppendingPathComponent:kOpenedFilesFolder];
+}
+
+/// What became of the mod packages brought in: their copies, and why the others could not be
+/// copied, each by the path SDL gives the engine. Written on the main thread; kept under a
+/// lock, since the engine's hooks may be called from any thread.
+struct OpenedFiles {
+    std::mutex mutex;
+    NSMutableSet<NSString*>* copies = nil;                     ///< the copies' paths
+    NSMutableDictionary<NSString*, NSString*>* failures = nil; ///< the reason, by path
+};
+
+/// The run's opened files.
+///
+/// @return the one record
+OpenedFiles& opened_files() {
+    static OpenedFiles files;
+    return files;
+}
+
+/// Whether a URL names a mod package by its extension.
+///
+/// @param url the URL the system opened
+/// @return true for a file URL whose name ends in .oamod, in any case
+bool names_mod_package(NSURL* url) {
+    return url.isFileURL &&
+           [url.pathExtension caseInsensitiveCompare:kModPackageExtension] == NSOrderedSame;
+}
+
+/// Whether a file is a copy the system made for the app in one of its Inbox folders
+/// (Documents/Inbox, or <bundle identifier>-Inbox in the temporary folder), which the app may
+/// move.
+///
+/// @param url the file
+/// @return true when its folder is such an Inbox
+bool in_inbox(NSURL* url) {
+    NSString* folder = resolved_path(url.path.stringByDeletingLastPathComponent);
+    NSArray<NSString*>* documents =
+        NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    if (documents.count > 0 &&
+        [folder isEqualToString:resolved_path([documents.firstObject
+                                    stringByAppendingPathComponent:kDocumentsInbox])])
+        return true;
+    return [folder.stringByDeletingLastPathComponent
+               isEqualToString:resolved_path(NSTemporaryDirectory().stringByStandardizingPath)] &&
+           [folder.lastPathComponent hasSuffix:kTemporaryInboxSuffix];
+}
+
+/// Removes Documents/Inbox once it is empty, so that the Files app shows no empty Inbox
+/// folder among the player's.
+void remove_empty_documents_inbox() {
+    NSArray<NSString*>* documents =
+        NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    if (documents.count == 0)
+        return;
+    NSString* inbox = [documents.firstObject stringByAppendingPathComponent:kDocumentsInbox];
+    NSArray<NSString*>* left = [NSFileManager.defaultManager contentsOfDirectoryAtPath:inbox
+                                                                                 error:nil];
+    if (left != nil && left.count == 0)
+        [NSFileManager.defaultManager removeItemAtPath:inbox error:nil];
+}
+
+/// Brings a mod package the system opened into a folder of its own under
+/// opened_files_folder(): a copy the system made in an Inbox is moved; any other file is
+/// copied inside a coordinated read, under the access its URL grants, which makes the system
+/// download a file a cloud service holds first. Runs on a background queue, since a download
+/// may take long.
+///
+/// @param url the file as the system opened it
+/// @param[out] why why it could not be brought in, when it could not
+/// @return the copy's URL; nil when it could not be brought in
+NSURL* bring_in(NSURL* url, NSString** why) {
+    NSFileManager* files = NSFileManager.defaultManager;
+    NSString* folder =
+        [opened_files_folder() stringByAppendingPathComponent:NSUUID.UUID.UUIDString];
+    NSError* failure = nil;
+    if (![files createDirectoryAtPath:folder
+            withIntermediateDirectories:YES
+                             attributes:nil
+                                  error:&failure]) {
+        *why = reason_of(failure);
+        return nil;
+    }
+    NSURL* kept =
+        [NSURL fileURLWithPath:[folder stringByAppendingPathComponent:url.lastPathComponent]
+                   isDirectory:NO];
+    if (in_inbox(url) && [files moveItemAtURL:url toURL:kept error:nil]) {
+        remove_empty_documents_inbox();
+        return kept;
+    }
+    const BOOL scoped = [url startAccessingSecurityScopedResource];
+    __block BOOL copied = NO;
+    __block NSError* copy_failure = nil;
+    NSFileCoordinator* coordinator = [[NSFileCoordinator alloc] initWithFilePresenter:nil];
+    [coordinator coordinateReadingItemAtURL:url
+                                    options:NSFileCoordinatorReadingWithoutChanges
+                                      error:&failure
+                                 byAccessor:^(NSURL* readable) {
+                                     NSError* problem = nil;
+                                     copied = [files copyItemAtURL:readable
+                                                             toURL:kept
+                                                             error:&problem];
+                                     copy_failure = problem;
+                                 }];
+    if (scoped)
+        [url stopAccessingSecurityScopedResource];
+    if (copied)
+        return kept;
+    [files removeItemAtPath:folder error:nil];
+    *why = reason_of(copy_failure != nil ? copy_failure : failure);
+    return nil;
+}
+
+/// Records what became of a mod package the system opened, on the main thread, before SDL
+/// hands the engine its path.
+///
+/// @param kept the copy; nil when it could not be brought in
+/// @param url the file as the system opened it
+/// @param why why it could not be brought in
+void record_opened_file(NSURL* kept, NSURL* url, NSString* why) {
+    OpenedFiles& files = opened_files();
+    const std::lock_guard<std::mutex> lock(files.mutex);
+    if (files.copies == nil) {
+        files.copies = [NSMutableSet set];
+        files.failures = [NSMutableDictionary dictionary];
+    }
+    if (kept != nil) {
+        [files.copies addObject:kept.path];
+        return;
+    }
+    NSString* path = url.filePathURL.path;
+    if (path != nil)
+        files.failures[path] = why != nil ? why : @"the system gave no reason";
+}
+
+/// Hands an opened URL on to SDL, which sends the engine its path as a dropped file: a mod
+/// package once it is brought into the app (bring_in), as its copy, or as itself with the
+/// reason recorded when it could not be; any other URL at once.
+///
+/// @param url the URL the system opened
+/// @param send SDL's own handling of a URL, run on the main thread
+void send_once_brought_in(NSURL* url, void (^send)(NSURL*)) {
+    if (!names_mod_package(url)) {
+        send(url);
+        return;
+    }
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSURL* kept = nil;
+        NSString* why = nil;
+        @try {
+            @autoreleasepool {
+                kept = bring_in(url, &why);
+            }
+        } @catch (...) {
+            kept = nil;
+            why = @"the system could not copy it";
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            @try {
+                record_opened_file(kept, url, why);
+                send(kept != nil ? kept : url);
+            } @catch (...) {
+            }
+        });
+    });
+}
+
+/// Makes SDL's handling of the URLs the system opens in the game bring mod packages into the
+/// app first (send_once_brought_in): the scene delegate's handleURL:, through which every URL
+/// opened while the game runs, and every one it was started with, reaches SDL, and the older
+/// application delegate's sendDropFileForURL:fromSourceApplication:. A class or method this
+/// SDL does not have is left alone.
+void bring_in_opened_files() {
+    const SEL handle = sel_registerName("handleURL:");
+    const Class scene_delegate = objc_getClass("SDLUIKitSceneDelegate");
+    const Method handled =
+        scene_delegate != nil ? class_getInstanceMethod(scene_delegate, handle) : nullptr;
+    if (handled != nullptr) {
+        using Body = void (*)(id, SEL, NSURL*);
+        const Body before = reinterpret_cast<Body>(method_getImplementation(handled));
+        const IMP replaced = imp_implementationWithBlock(^(id object, NSURL* url) {
+            send_once_brought_in(url, ^(NSURL* sent) {
+                before(object, handle, sent);
+            });
+        });
+        if (!class_addMethod(scene_delegate, handle, replaced, method_getTypeEncoding(handled)))
+            method_setImplementation(handled, replaced);
+    }
+    const SEL send_drop = sel_registerName("sendDropFileForURL:fromSourceApplication:");
+    const Class app_delegate = objc_getClass("SDLUIKitDelegate");
+    const Method sent =
+        app_delegate != nil ? class_getInstanceMethod(app_delegate, send_drop) : nullptr;
+    if (sent != nullptr) {
+        using Body = void (*)(id, SEL, NSURL*, NSString*);
+        const Body before = reinterpret_cast<Body>(method_getImplementation(sent));
+        const IMP replaced =
+            imp_implementationWithBlock(^(id object, NSURL* url, NSString* source) {
+                send_once_brought_in(url, ^(NSURL* brought) {
+                    before(object, send_drop, brought, source);
+                });
+            });
+        if (!class_addMethod(app_delegate, send_drop, replaced, method_getTypeEncoding(sent)))
+            method_setImplementation(sent, replaced);
+    }
+}
+
+/// The take_opened_file hook: the copy of a mod package brought into the app answers with its
+/// own path; a package that could not be brought in answers with why, once; any other path
+/// answers with itself, to be read where it is.
+///
+/// @param path the path SDL gave the engine, absolute, UTF-8
+/// @param copy receives the path to read
+/// @param why receives why the file could not be brought in
+/// @return false only for a package that could not be brought in
+bool take_opened_file(void*, const char* path, std::string* copy, std::string* why) noexcept {
+    if (path == nullptr || copy == nullptr)
+        return false;
+    *copy = path;
+    @try {
+        @autoreleasepool {
+            NSString* key = [NSString stringWithUTF8String:path];
+            if (key == nil)
+                return true;
+            NSString* resolved = resolved_path(key);
+            OpenedFiles& files = opened_files();
+            const std::lock_guard<std::mutex> lock(files.mutex);
+            for (NSString* kept in files.copies)
+                if ([kept isEqualToString:key] || [resolved_path(kept) isEqualToString:resolved]) {
+                    *copy = utf8_of(kept);
+                    return true;
+                }
+            for (NSString* failed in files.failures.allKeys)
+                if ([failed isEqualToString:key] ||
+                    [resolved_path(failed) isEqualToString:resolved]) {
+                    if (why != nullptr)
+                        *why = "it could not be copied into the game: " +
+                               utf8_of(files.failures[failed]);
+                    [files.failures removeObjectForKey:failed];
+                    return false;
+                }
+        }
+    } @catch (...) {
+    }
+    return true;
+}
+
+/// The release_opened_file hook: removes a copy of a mod package brought into the app, with
+/// the folder made for it; leaves any other file alone.
+///
+/// @param path a path take_opened_file answered with, absolute, UTF-8
+void release_opened_file(void*, const char* path) noexcept {
+    if (path == nullptr)
+        return;
+    @try {
+        @autoreleasepool {
+            NSString* key = [NSString stringWithUTF8String:path];
+            if (key == nil)
+                return;
+            NSString* folder = key.stringByDeletingLastPathComponent;
+            {
+                NSString* resolved = resolved_path(key);
+                OpenedFiles& files = opened_files();
+                const std::lock_guard<std::mutex> lock(files.mutex);
+                for (NSString* kept in files.copies.allObjects)
+                    if ([kept isEqualToString:key] ||
+                        [resolved_path(kept) isEqualToString:resolved])
+                        [files.copies removeObject:kept];
+            }
+            // Only a folder of the opened files' own is removed.
+            if ([resolved_path(folder.stringByDeletingLastPathComponent)
+                    isEqualToString:resolved_path(opened_files_folder())])
+                [NSFileManager.defaultManager removeItemAtPath:folder error:nil];
+        }
+    } @catch (...) {
+    }
+}
+
 } // namespace
 
 /// Fills no hooks of the extension table: sets the SDL hints iOS needs and installs the
@@ -514,6 +858,15 @@ void oa_extension_init_ios_platform(oa::app::Extension* table) {
     hooks.window_ready = window_ready;
     hooks.game_folder_check_again = game_folder_check_again;
     hooks.show_folder = show_folder;
+    hooks.take_opened_file = take_opened_file;
+    hooks.release_opened_file = release_opened_file;
     oa::app::set_platform_hooks(hooks);
     install_ios_game_files_hooks();
+    // The copies an earlier run left go before any file is opened in this one: SDL hands the
+    // URLs the app was started with on once the game pumps its events, after this.
+    @try {
+        [NSFileManager.defaultManager removeItemAtPath:opened_files_folder() error:nil];
+        bring_in_opened_files();
+    } @catch (...) {
+    }
 }

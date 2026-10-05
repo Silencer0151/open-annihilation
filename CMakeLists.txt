@@ -42,8 +42,9 @@ include("${CMAKE_CURRENT_LIST_DIR}/cmake/OaGameData.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/OaDemoInstaller.cmake")
 # oa-test-support, the headers test programs share: OA_CHECK, the check a
 # test makes in place of assert(), kept in every build type (oa/test/check.hpp),
-# and make_scratch_directory(), a temporary directory no other run shares
-# (oa/test/scratch_directory.hpp), in tests/support/include.
+# make_scratch_directory(), a temporary directory no other run shares
+# (oa/test/scratch_directory.hpp), and zip archives built field by field
+# (oa/test/raw_zip.hpp, which needs ZLIB::ZLIB), in tests/support/include.
 add_library(oa-test-support INTERFACE)
 add_library(oa::test::support ALIAS oa-test-support)
 target_include_directories(oa-test-support INTERFACE "${CMAKE_CURRENT_LIST_DIR}/tests/support/include")
@@ -132,6 +133,7 @@ add_subdirectory(src/base/game-loop)
 add_subdirectory(src/platform/preferences)
 add_subdirectory(src/app/command-line)
 add_subdirectory(src/app/card)
+add_subdirectory(src/app/mod-install)
 add_subdirectory(src/data/mission-types)
 add_subdirectory(src/data/limits)
 add_subdirectory(src/data/languages)
@@ -153,6 +155,7 @@ add_subdirectory(src/platform/job-pool)
 add_subdirectory(src/platform/render-probe)
 add_subdirectory(src/platform/sound-device)
 add_subdirectory(src/platform/locale)
+add_subdirectory(src/platform/file-types)
 # Total Annihilation folders found where Steam, Heroic, Lutris or Bottles put
 # them (docs/installation/steam-deck.md).
 add_subdirectory(src/platform/game-installs)
@@ -255,7 +258,7 @@ add_library(oa::app::game_options ALIAS oa-app-game-options)
 target_link_libraries(oa-app-game-options PUBLIC oa-app-headers)
 target_link_libraries(oa-app-game-options PUBLIC oa-ui-frontend-renderer oa-ui-frontend-state oa-sim-scenario
   oa-ui-screen-registry oa-app-command-line oa-platform-preferences oa-app-mod-profile
-  PRIVATE oa-platform-job-pool oa-options)
+  PRIVATE oa-app-mod-install oa-platform-job-pool oa-options)
 # oa-game's game folder: --game-dir, the remembered folder, a folder found
 # where Steam, Heroic or Lutris put it, or the folder dialog's choice, the
 # installation checks, and the installer of the Total Annihilation demo
@@ -850,6 +853,7 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/runtime_user_folder.cpp src/app/runtime_user_folder_check.cpp
   src/app/runtime_mod_switch_check.cpp
   src/app/runtime_mod_warning.cpp src/app/runtime_mod_warning_check.cpp
+  src/app/runtime_mod_install.cpp src/app/runtime_mod_install_check.cpp src/app/mod_install_watch.cpp
   src/app/user_folder_open.cpp
   src/app/runtime_mission_orders.cpp src/app/runtime_showcase.cpp src/app/match_clock.cpp
   src/app/world_scaling.cpp
@@ -895,8 +899,8 @@ set(oa_game_libraries oa-formats-hpi oa-app-game-options oa-app-game-directory o
   oa-app-acceleration-status oa-formats-png oa-data-languages oa-platform-locale
   oa-app-full-terrain oa-app-full-supersampling oa-app-full-fog oa-app-card-executor
   oa-present-gpu-world oa-app-full-models oa-app-platform-hooks oa-app-touch-paint
-  oa-ui-touch-gestures oa-ui-touch-hud oa-app-game-files oa-ui-game-files
-  oa-ui-pad-controls oa-ui-folder-chooser oa-platform-game-installs)
+  oa-ui-touch-gestures oa-ui-touch-hud oa-app-game-files oa-ui-game-files oa-app-mod-install
+  oa-ui-pad-controls oa-ui-folder-chooser oa-platform-game-installs oa-platform-file-types)
 # The table that combines the extensions' tables of oa-game
 # (extension_list.hpp); the extensions themselves are registered with
 # oa_add_extension (cmake/OaExtensions.cmake).
@@ -1316,6 +1320,26 @@ if(OA_BUILD_PLATFORM)
         --user-folder "${oa_mod_switch_dir}/Open Annihilation")
       set_tests_properties(native-mod-switch PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         RUN_SERIAL TRUE WORKING_DIRECTORY "${oa_mod_switch_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # Made-up mod packages installed through the game: a missing file
+      # refused, a package the Finder made installed with no question from a
+      # dropped file, an update asked and cancelled then replaced, three
+      # revisions keeping one .backup, a reinstall, an older revision
+      # declined, another version installed alongside, a folder that holds
+      # another mod left as it is, a profile that does not resolve refused,
+      # and a kept version that cannot be played refused; ROLL BACK twice on
+      # the Mods page; then, over soft restarts, PLAY NOW, a replace of the
+      # mod played and its roll back, each put in place between runs, and a
+      # stop mid-replace settled before the mod folder is resolved.
+      set(oa_mod_install_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/mod-install")
+      file(MAKE_DIRECTORY "${oa_mod_install_dir}")
+      add_test(NAME native-mod-install COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-mod-install
+        --install-mod "${oa_mod_install_dir}/missing.oamod"
+        --preferences-file "${oa_mod_install_dir}/mod-install.conf"
+        --user-folder "${oa_mod_install_dir}/Open Annihilation")
+      set_tests_properties(native-mod-install PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_mod_install_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # A folder without a profile whose second side lacks its LOGO: the
       # Mods page refuses it. A folder without a profile, and a profile,
@@ -2130,6 +2154,12 @@ if(BUILD_TESTING)
     # have the sizes the builds and the platforms want.
     add_test(NAME branding-icons COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_icons.py --check)
     set_tests_properties(branding-icons PROPERTIES TIMEOUT 60)
+    # The macOS and iOS bundles declare the .oamod mod package as the game's own type and open
+    # it as its owner, with the icon each system takes (tools/check_bundle_file_types.py).
+    add_test(NAME app-bundle-file-types COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_bundle_file_types.py
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/app/Info.plist.in ${CMAKE_CURRENT_SOURCE_DIR}/platforms/ios/Info.plist.in)
+    set_tests_properties(app-bundle-file-types PROPERTIES TIMEOUT 60)
     # The engine's sources keep to the style rules of tools/check_style.py
     # with exactly the counts per file that tools/style-baseline.json holds,
     # a baseline that may only shrink; the self-test plants a breach of every

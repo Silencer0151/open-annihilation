@@ -3,9 +3,10 @@
 
 // What the platform the game runs on provides beyond SDL: haptics, a default
 // game folder, the advice shown without one and the label of its look-again
-// button, word that the window is open, and its own way of showing a folder
-// in its file manager. A platform's extension init fills the hooks; the
-// desktop leaves them null.
+// button, word that the window is open, its own way of showing a folder in
+// its file manager, and the files the system opened in the game, such as a
+// mod package, brought where the game can read them. A platform's extension
+// init fills the hooks; the desktop leaves them null.
 #pragma once
 
 #include <stdint.h>
@@ -45,6 +46,20 @@ struct PlatformHooks {
     /// cannot. Null: the desktop's own way, or none where the build starts no other programs
     /// (system_folder_opener).
     bool (*show_folder)(void* context, const char* folder, std::string* why){};
+    /// Brings a file the system opened in the game (absolute, UTF-8), such as a mod package
+    /// tapped in the Files app, where the game can read it: writes the path the game reads
+    /// (absolute, UTF-8) into `copy` and returns true; false, writing why into `why` (UTF-8),
+    /// when the platform could not bring the file in. The path written is the platform's own
+    /// copy of the file, or `path` itself when the platform holds none. The game hands the path
+    /// written to release_opened_file once it is done with it, and never deletes it itself.
+    /// Null: the game reads the file where it is.
+    bool (*take_opened_file)(
+        void* context, const char* path, std::string* copy, std::string* why
+    ){};
+    /// Tells the platform the game is done with a file take_opened_file gave (installed,
+    /// refused or cancelled; absolute, UTF-8): the platform removes its own copy, with the
+    /// folder it made for it, and leaves any other file alone. Null does nothing.
+    void (*release_opened_file)(void* context, const char* path){};
 };
 
 /// Installs the platform's hooks (a copy is kept).

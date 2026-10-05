@@ -11,8 +11,10 @@
 #include <algorithm>
 #include <cstddef>
 #include <functional>
+#include <initializer_list>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace oa::ui::engine_settings {
@@ -37,6 +39,53 @@ std::string folded(std::string_view text) {
         if (character >= 'A' && character <= 'Z')
             character = static_cast<char>(character - 'A' + 'a');
     return lowered;
+}
+
+/// Returns a text the dialog shows, looked up in the language shown, with
+/// its places ({name}) filled; the values are not looked up.
+///
+/// @param english the text, in English
+/// @param places each place's name and value
+/// @return the text
+std::string filled(
+    std::string_view english,
+    std::initializer_list<std::pair<std::string_view, std::string_view>> places
+) {
+    const std::string pattern(geometry::shown_text(english));
+    std::string text;
+    std::size_t at = 0;
+    while (at < pattern.size()) {
+        const std::size_t open = pattern.find('{', at);
+        const std::size_t close = open == std::string::npos ? open : pattern.find('}', open);
+        if (close == std::string::npos) {
+            text.append(pattern, at, std::string::npos);
+            break;
+        }
+        text.append(pattern, at, open - at);
+        const std::string_view name(pattern.data() + open + 1, close - open - 1);
+        bool found = false;
+        for (const auto& [place, value] : places)
+            if (place == name) {
+                text += value;
+                found = true;
+                break;
+            }
+        if (!found)
+            text.append(pattern, open, close - open + 1);
+        at = close + 1;
+    }
+    return text;
+}
+
+/// Returns the details of the row the question asks about.
+///
+/// @param dialog the dialog, its question showing
+/// @return the details; null for No Mod
+const ModDetails* question_details(const Dialog& dialog) noexcept {
+    const int32_t offered = dialog.switch_question;
+    if (offered < 0 || static_cast<std::size_t>(offered) >= dialog.mod_details.size())
+        return nullptr;
+    return &dialog.mod_details[static_cast<std::size_t>(offered)];
 }
 
 } // namespace
@@ -77,6 +126,63 @@ bool mods_page(const Dialog& dialog) noexcept {
 
 int32_t mods_folder_control(const Rows& rows) noexcept {
     return first_row_control + static_cast<int32_t>(rows.rows.size());
+}
+
+int32_t roll_back_control(const Rows& rows, std::size_t index) noexcept {
+    return mods_folder_control(rows) + 1 + static_cast<int32_t>(index);
+}
+
+int32_t roll_back_row(const Rows& rows, int32_t control) noexcept {
+    const int32_t first = mods_folder_control(rows) + 1;
+    if (control < first || control - first >= static_cast<int32_t>(rows.rows.size()))
+        return -1;
+    return control - first;
+}
+
+SourceRect roll_back_button(const Row& row) noexcept {
+    const SourceRect& box = row.control_area;
+    return {
+        box.x + box.width - mod_row_inset - mod_roll_back_width,
+        box.y + box.height - mod_row_inset + 1 - mod_roll_back_height,
+        mod_roll_back_width,
+        mod_roll_back_height
+    };
+}
+
+bool offers_roll_back(const Dialog& dialog, const ModRow& row) noexcept {
+    return row.offered >= 0 && static_cast<std::size_t>(row.offered) < dialog.mod_details.size() &&
+           !dialog.mod_details[static_cast<std::size_t>(row.offered)].roll_back_from.empty();
+}
+
+SourceRect question_yes_rect(const Dialog& dialog) noexcept {
+    if (dialog.mod_question != ModQuestion::roll_back)
+        return question_yes_button;
+    return {
+        question_box.x + question_box.width - padding - question_roll_back_width,
+        question_yes_button.y,
+        question_roll_back_width,
+        question_yes_button.height
+    };
+}
+
+SourceRect question_no_rect(const Dialog& dialog) noexcept {
+    const SourceRect yes = question_yes_rect(dialog);
+    return {
+        yes.x - (question_yes_button.x - question_no_button.x - question_no_button.width) -
+            question_no_button.width,
+        yes.y,
+        question_no_button.width,
+        question_no_button.height
+    };
+}
+
+std::string question_version_text(const Dialog& dialog, const ModRowText& offered) {
+    const ModDetails* details = question_details(dialog);
+    if (dialog.mod_question != ModQuestion::roll_back || details == nullptr)
+        return offered.version;
+    return filled(
+        roll_back_versions_text, {{"from", details->roll_back_from}, {"to", details->roll_back_to}}
+    );
 }
 
 Rows place_mod_rows(const Dialog& dialog, int32_t scroll) {
@@ -184,6 +290,30 @@ std::vector<std::string> question_text_lines(
     const Dialog& dialog, const std::function<int32_t(std::string_view)>& text_width
 ) {
     const ModRowText offered = mod_row_text(dialog, ModRow{dialog.switch_question, false});
+    if (const ModDetails* details = question_details(dialog);
+        dialog.mod_question == ModQuestion::roll_back && details != nullptr) {
+        std::string asked = filled(
+            roll_back_ask_text,
+            {{"title", offered.title},
+             {"from", details->roll_back_from},
+             {"to", details->roll_back_to}}
+        );
+        const bool playing =
+            !dialog.playing_mod_folder.empty() &&
+            static_cast<std::size_t>(dialog.switch_question) < dialog.mod_folders.size() &&
+            dialog.mod_folders[static_cast<std::size_t>(dialog.switch_question)] ==
+                dialog.playing_mod_folder;
+        if (playing)
+            asked += " " + std::string(shown_text(roll_back_reload_text));
+        std::vector<std::string> lines = wrap_text(asked, question_first_line.width, text_width);
+        if (lines.size() > question_lines) {
+            lines.resize(question_lines);
+            lines.back() = cut_text(
+                lines.back() + std::string(path_ellipsis), question_first_line.width, text_width
+            );
+        }
+        return lines;
+    }
     const std::string asked =
         std::string(switch_ask_before_text) + offered.title + std::string(switch_ask_after_text);
     std::vector<std::string> lines = wrap_text(asked, question_first_line.width, text_width);

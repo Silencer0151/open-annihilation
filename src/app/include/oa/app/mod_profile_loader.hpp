@@ -103,6 +103,10 @@ folder_profile_source(const std::vector<std::filesystem::path>& folders, const M
 [[nodiscard]] FolderProfile
 resolve_folder_profile(const std::vector<std::filesystem::path>& folders, const ModChoice& choice);
 
+/// The largest INI file a profile's settings are read from, in bytes; a
+/// larger one is not read.
+inline constexpr uintmax_t mod_ini_most_bytes = uintmax_t{1024} * 1024;
+
 /// Reads the settings a profile binds: the INI file it names
 /// (identity.settings-file) from the first folder that holds one, its name
 /// matched without case, read only, and the preferences' registry section,
@@ -118,8 +122,24 @@ resolve_folder_profile(const std::vector<std::filesystem::path>& folders, const 
     const platform::preferences::Values* preferences
 );
 
+/// Builds the settings a profile binds from its INI file's text, wherever it
+/// was read from (a folder, or a mod package), and the preferences' registry
+/// section, which stands in for the mod's registry.
+///
+/// @param profile the profile, resolved without settings
+/// @param ini_text the INI file's text, at most mod_ini_most_bytes; nothing
+///        when there is none
+/// @param preferences the player's preferences; null for none
+/// @return the settings
+[[nodiscard]] data::mod_profile::Settings mod_settings_from(
+    const data::mod_profile::ModProfile& profile,
+    std::optional<std::string_view> ini_text,
+    const platform::preferences::Values* preferences
+);
+
 /// Lists the mod folders a game folder offers: every folder below its mods
-/// folder, with an oamod.yaml or without one, in name order.
+/// folder, with an oamod.yaml or without one, in name order, but those whose
+/// names start with a dot (list_mods_in).
 ///
 /// @param game_folder the game folder
 /// @return each mod folder's path
@@ -128,7 +148,9 @@ list_mod_folders(const std::filesystem::path& game_folder);
 
 /// Lists the mod folders a folder of mods holds, such as the player's own
 /// Mods folder: every folder in it, with an oamod.yaml or without one, in
-/// name order, matched without case.
+/// name order, matched without case. A folder whose name starts with a dot
+/// is hidden, as file managers hide it, and not listed: the folders an
+/// install of a mod package keeps in Mods while it works are named so.
 ///
 /// @param mods the folder of mods; one that is missing holds none
 /// @return each mod folder's path

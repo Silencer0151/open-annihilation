@@ -219,7 +219,9 @@ in the OA settings, and **Open Mods Folder** on the **Mods** page, open the
 Files app at its Saves, Screenshots or Mods folder; the Files app's status
 bar leads back to the game. A mod copied into that Mods folder is offered
 on the Mods page, and choosing it reloads the game for it without leaving
-the app.
+the app. A `.oamod` file installs itself there: tap it in the Files app, or
+share it to Open Annihilation
+([mods](../mods/README.md#installing-a-oamod-file)).
 
 ## Managing the game files
 

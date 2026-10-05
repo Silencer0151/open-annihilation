@@ -480,6 +480,12 @@ struct LookupObserver {
     void (*looked_up)(void* context, std::string_view name){};
 };
 
+/// The folder at the top of a layered folder that the store never reads: no
+/// lookup, listing, search or archive discovery reaches it, whatever the
+/// case of its letters. A mod folder keeps there the version an update
+/// replaced, for one step back.
+inline constexpr std::string_view backup_folder_name = ".backup";
+
 // Open-file handle over a loose file or an archive entry. Its reads and seeks
 // keep 3.1c's position rules, and it caches one decoded block.
 struct ResourceFile;
@@ -493,7 +499,8 @@ struct ResourceFile;
 // copied over the next: a path, compared without case, resolves from the
 // first folder that holds it; listings and discovery merge the folders by
 // name, the earlier folder's file winning and the later folder's spelling
-// kept, as a copy over an existing file keeps its name.
+// kept, as a copy over an existing file keeps its name. A folder named
+// backup_folder_name at the top of any of them is passed over.
 class AssetStore {
   public:
 

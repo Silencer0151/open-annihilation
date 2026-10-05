@@ -612,6 +612,7 @@ bool run_game_files_language_dialog(const GameFilesLanguageRequest& request) {
             case settings::DialogAction::manage_game_files:
             case settings::DialogAction::switch_mod:
             case settings::DialogAction::open_folder:
+            case settings::DialogAction::roll_back_mod:
                 // The Language dialog lists none of the controls that ask
                 // for these.
                 dirty = true;

@@ -3560,6 +3560,79 @@ class Runtime final : public menu::Host,
     /// std::runtime_error on a failure.
     void check_mod_switch();
 
+    /// The mod packages opened in the game: their questions, unpacking and
+    /// what came of them over the main menu (mod_install_state.hpp,
+    /// runtime_mod_install.cpp).
+    struct ModInstallState;
+
+    /// Frees the installs' state, stopping an unpacking under way: its
+    /// staging folder is moved aside to be deleted.
+    ///
+    /// @param state state to free; null is allowed
+    static void destroy_mod_install_state(ModInstallState* state) noexcept;
+
+    /// Returns the installs' state, made on first use with the discard
+    /// folders the start's recovery found.
+    ///
+    /// @return the state
+    ModInstallState& mod_install_state();
+
+    /// Registers the prompt of the installs over the main menu, over the
+    /// notices' overlay.
+    void register_mod_install_overlay();
+
+    /// Tells whether a prompt of the installs shows over the main menu.
+    ///
+    /// @return true while one shows
+    [[nodiscard]] bool mod_install_prompt_shown() const noexcept;
+
+    /// Installs the mod packages opened in the game, one at a time, once the
+    /// main menu, its own and not a screen package's, has shown for two
+    /// frames and stays, with no dialog, notice or settings dialog over it:
+    /// reads the next package, asks what its plan asks, unpacks it, a budget
+    /// at a time each frame with its progress shown, puts it in place and
+    /// tells what came of it; a change to the mod played waits for the run to
+    /// end (request_soft_restart). Also tells what a change that waited did,
+    /// takes the packages a second start handed over, and deletes the
+    /// folders a change dropped, a step a frame. A run nobody watches leaves
+    /// the packages waiting, unless --check-mod-install asks for them.
+    void tell_mod_installs();
+
+    /// Takes the mod packages a second start handed over (handoff.hpp) into
+    /// the inbox, and brings the window forward when it took any.
+    void take_handed_mod_files();
+
+    /// Takes a prompt's answer: CANCEL, OK, REPLACE, INSTALL ALONGSIDE,
+    /// REINSTALL, OPEN FOLDER or PLAY NOW.
+    ///
+    /// @param button the button pressed, from 0
+    void answer_mod_install_prompt(int32_t button);
+
+    /// Switches the game to a mod folder as the Mods page's SWITCH does:
+    /// checks it can be played, stores it as the Mod setting and ends the run
+    /// for main() to start it (PLAY NOW).
+    ///
+    /// @param folder the mod folder
+    /// @param[out] refusal why it cannot be played, in a few words
+    /// @return true when the run ends to play it
+    bool switch_to_mod_folder(const fs::path& folder, std::string& refusal);
+
+    /// Rolls a folder of the player's own Mods folder back to the version
+    /// its .backup keeps, which must be playable: at once, or, for the mod
+    /// played, as the run ends (the Mods page's ROLL BACK). A failure is
+    /// told on the Mods page.
+    ///
+    /// @param dialog the settings dialog, open on Mods
+    /// @return true when the dialog closed
+    bool roll_back_mod_folder(oa::ui::engine_settings::Dialog& dialog);
+
+    /// Installs made-up mod packages through each of the main menu's
+    /// questions, by a dropped file and from the command line, rolls a mod
+    /// back on the Mods page, and replaces and rolls back the mod played
+    /// across soft restarts, checking the player's Mods folder after each
+    /// (--check-mod-install). Each run is one turn.
+    void check_mod_install();
+
     /// The main menu's OA button and dialog (engine_settings_menu_host.hpp).
     struct EngineSettingsMenuHost;
 
@@ -12868,6 +12941,10 @@ class Runtime final : public menu::Host,
     // move; null until first used.
     std::unique_ptr<UserFolderState, void (*)(UserFolderState*) noexcept> user_folder_state_{
         nullptr, destroy_user_folder_state
+    };
+    // The mod packages opened in the game and their prompt; null until first used.
+    std::unique_ptr<ModInstallState, void (*)(ModInstallState*) noexcept> mod_install_state_{
+        nullptr, destroy_mod_install_state
     };
     // The in-game menu's OA button and dialog; null until first used.
     std::unique_ptr<EngineSettingsMatchHost, void (*)(EngineSettingsMatchHost*) noexcept>

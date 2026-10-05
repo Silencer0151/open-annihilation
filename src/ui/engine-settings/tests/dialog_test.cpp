@@ -33,8 +33,9 @@
 // and every text drawn in the modern fonts when its fonts hold no glyphs.
 // Mods: its rows in order, the mod played first, each row's badge, title,
 // version and description, long texts cut, the list scrolling under fixed
-// buttons, the Switch Mod question by pointer and keys, the locks during a
-// game and by the command line, and OPEN MODS FOLDER.
+// buttons, the Switch Mod question by pointer and keys, ROLL BACK on a row
+// whose folder keeps an earlier version and its question, the locks during
+// a game and by the command line, and OPEN MODS FOLDER.
 // With --data, its fonts from the installed game and every text fitting its
 // place.
 
@@ -5026,6 +5027,101 @@ void the_keys_answer_the_switch_mod_question() {
     }
 }
 
+/// Opens the dialog on Mods with kModFolders offered, alpha's folder keeping
+/// an earlier version of the same version.
+///
+/// @param playing the folder played
+/// @param locks what cannot be changed
+/// @return the dialog
+settings::Dialog roll_back_dialog(std::string_view playing, const settings::Locks& locks = {}) {
+    auto details = offered_details();
+    details[1].roll_back_from = "0.9 revision 2";
+    details[1].roll_back_to = "0.9 revision 1";
+    settings::Dialog dialog;
+    settings::open_dialog(
+        dialog,
+        settings::EngineSettings{},
+        settings::EngineSettings{},
+        locks,
+        "v0.2.0",
+        Page::mods,
+        {},
+        settings::highest_unit_limit,
+        settings::ModOffer{kModNames, kModFolders, details, playing}
+    );
+    return dialog;
+}
+
+void a_kept_version_rolls_back_after_a_question() {
+    settings::Dialog dialog = roll_back_dialog(kModFolders[0]);
+    const auto open = geometry::open_rows(dialog);
+    const std::size_t alpha = listed_at(dialog, 1);
+    const int32_t roll_back = geometry::roll_back_control(open.rows, alpha);
+    CHECK(roll_back == geometry::mods_folder_control(open.rows) + 1 + static_cast<int32_t>(alpha));
+    // Only the row whose folder keeps a version shows ROLL BACK, inside it.
+    auto parts = settings::dialog_layout(dialog);
+    int32_t shown = 0;
+    for (const auto& part : parts)
+        if (part.text == geometry::roll_back_text) {
+            ++shown;
+            CHECK(part.control == roll_back);
+            CHECK(inside(part.rect, open.rows.rows[alpha].control_area));
+        }
+    CHECK(shown == 1);
+    // The focus walks the row, then its ROLL BACK, then the next row.
+    dialog.focused = mod_control(dialog, 1);
+    CHECK(settings::dialog_key(dialog, DialogKey::tab) == DialogAction::redraw);
+    CHECK(dialog.focused == roll_back);
+    CHECK(settings::dialog_key(dialog, DialogKey::tab) == DialogAction::redraw);
+    CHECK(dialog.focused == settings::first_row_control + static_cast<int32_t>(alpha) + 1);
+    // A press on ROLL BACK asks, ROLL BACK marked, the versions named.
+    const Point button = centre(geometry::roll_back_button(open.rows.rows[alpha]));
+    const settings::EngineSettings before = dialog.chosen;
+    CHECK(click(dialog, button) == DialogAction::redraw);
+    CHECK(dialog.switch_question == 1 && dialog.mod_question == settings::ModQuestion::roll_back);
+    CHECK(!dialog.question_marks_no);
+    parts = settings::dialog_layout(dialog);
+    CHECK(find_part(parts, geometry::roll_back_heading_text, settings::no_control) != nullptr);
+    CHECK(find_part(parts, "0.9 revision 2 to 0.9 revision 1", settings::no_control) != nullptr);
+    const auto* yes = find_part(parts, {}, settings::question_yes_control);
+    CHECK(yes != nullptr && yes->text == "ROLL BACK");
+    CHECK(yes != nullptr && same_rect(yes->rect, geometry::question_yes_rect(dialog)));
+    const auto* no = find_part(parts, {}, settings::question_no_control);
+    CHECK(no != nullptr && !overlap(no->rect, yes != nullptr ? yes->rect : no->rect));
+    bool asks = false;
+    for (const auto& part : parts)
+        asks = asks || part.text.starts_with("Roll back alpha to 0.9 revision 1?");
+    CHECK(asks);
+    // CANCEL changes nothing; ROLL BACK names the folder to the host.
+    CHECK(settings::dialog_key(dialog, DialogKey::escape) == DialogAction::redraw);
+    CHECK(dialog.switch_question == settings::no_question);
+    CHECK(dialog.mod_question == settings::ModQuestion::switch_mod);
+    CHECK(click(dialog, button) == DialogAction::redraw);
+    CHECK(settings::dialog_key(dialog, DialogKey::enter) == DialogAction::roll_back_mod);
+    CHECK(dialog.roll_back_folder == kModFolders[1]);
+    CHECK(dialog.switch_question == settings::no_question && dialog.chosen == before);
+    // The row itself still asks to switch.
+    CHECK(click(dialog, mod_point(dialog, 1)) == DialogAction::redraw);
+    CHECK(dialog.mod_question == settings::ModQuestion::switch_mod);
+    // A locked page draws it, inert.
+    for (const Lock lock : {Lock::in_game, Lock::command_line}) {
+        settings::Locks locks{};
+        locks.mod = lock;
+        settings::Dialog locked = roll_back_dialog(kModFolders[0], locks);
+        const auto locked_open = geometry::open_rows(locked);
+        const std::size_t row = listed_at(locked, 1);
+        const auto* part = find_part(
+            settings::dialog_layout(locked), geometry::roll_back_text, settings::no_control
+        );
+        CHECK(part != nullptr && part->control == settings::no_control);
+        CHECK(
+            click(locked, centre(geometry::roll_back_button(locked_open.rows.rows[row]))) ==
+            DialogAction::none
+        );
+        CHECK(locked.switch_question == settings::no_question);
+    }
+}
+
 void mods_locks_during_a_game_and_by_the_command_line() {
     const auto fonts = block_fonts();
     const settings::Dialog unlocked = mods_dialog(kModFolders[0]);
@@ -5527,6 +5623,16 @@ void fonts_load_and_every_text_fits_its_place() {
             fits_drawn(dialog);
             dialog.folder_notice = "The file manager could not open it.";
             fits_drawn(dialog);
+        }
+        // ROLL BACK on its row, and its question with the versions it names.
+        for (const Lock lock : {Lock::none, Lock::in_game}) {
+            settings::Locks locks{};
+            locks.mod = lock;
+            settings::Dialog kept = roll_back_dialog(kModFolders[0], locks);
+            fits_drawn(kept);
+            kept.switch_question = 1;
+            kept.mod_question = settings::ModQuestion::roll_back;
+            fits_drawn(kept);
         }
         settings::Dialog dialog = mods_dialog();
         dialog.mod_names[0] = "A Rather Long Mod Title That Runs Past Its Line 3.1";
@@ -7525,6 +7631,7 @@ int main(int argc, char** argv) {
         the_mods_list_scrolls_while_its_button_and_note_stay();
         choosing_another_mod_asks_before_switching();
         the_keys_answer_the_switch_mod_question();
+        a_kept_version_rolls_back_after_a_question();
         mods_locks_during_a_game_and_by_the_command_line();
         open_mods_folder_asks_for_the_mods_folder();
         the_notice_wraps_its_text_and_places_its_buttons();

@@ -17,6 +17,7 @@
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -379,9 +380,57 @@ void check_help_at_exit() {
 
 } // namespace
 
+// --install-mod, a bare .oamod argument, macOS's process serial number and
+// --check-mod-install.
+void mod_install_options() {
+    namespace fs = std::filesystem;
+    const auto opened = parse({"--install-mod", "a.oamod", "B.OAMOD", "-psn_0_123", "german"});
+    expect(opened.install_mods.size() == 2, "--install-mod and a bare .oamod are both packages");
+    expect(
+        opened.install_mods.size() == 2 && opened.install_mods[0].is_absolute() &&
+            opened.install_mods[0].filename() == "a.oamod" &&
+            opened.install_mods[1].filename() == "B.OAMOD",
+        "the packages are absolute, in the order given"
+    );
+    expect(opened.skip_intro, "a package opened with the game skips the movies");
+    expect(
+        std::string_view(opened.launch.language) == "german",
+        "a bare word is still the language, and neither -psn_ nor a package joins it"
+    );
+    expect(!opened.check_mod_install && !opened.unattended, "a package opened is played");
+    expect(
+        rejection({"--install-mod", "a.oamod", "--headless-check"})
+                .find("needs the game's window") != std::string::npos,
+        "--install-mod needs the window"
+    );
+    expect(
+        rejection({"x.oamod", "--headless-check"})
+                .find("a .oamod file to install, after --install-mod or on its own,") !=
+            std::string::npos,
+        "a bare package's refusal names both ways of giving it"
+    );
+    expect(
+        rejection({"x.oamod", "--frames", "10"}).find("is asked about before it installs") !=
+            std::string::npos,
+        "a package in a run nobody watches is refused"
+    );
+    const auto check = parse({"--check-mod-install", "--install-mod", "missing.oamod"});
+    expect(
+        check.check_mod_install && check.fixed_clock && check.unattended &&
+            check.install_mods.size() == 1,
+        "--check-mod-install answers the questions itself"
+    );
+    expect(
+        rejection({"--check-mod-install", "--check-game-files"}).find("--check-mod-install") !=
+            std::string::npos,
+        "--check-game-files runs alone"
+    );
+}
+
 int main() {
     renderer_ladder_options();
     game_files_options();
+    mod_install_options();
     const auto plain = parse({"--headless-check"});
     expect(plain.trace_digest.empty() && plain.trace_units.empty(), "no trace without the flag");
     expect(!plain.seed, "no fixed seed without the flag");

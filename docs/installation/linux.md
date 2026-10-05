@@ -125,6 +125,12 @@ Open Annihilation's own settings open from the **OA** button at the bottom
 right of the main menu, or with **Ctrl+,**. See
 [Settings](../../README.md#settings).
 
+Each start on a desktop makes this copy of the game the opener of `.oamod`
+files for your account, with the game's icon on them: open one from the
+file manager to install the mod it holds
+([mods](../mods/README.md#installing-a-oamod-file)). Opened while the game
+runs, the file goes to the running game.
+
 For multiplayer, a firewall on the computer must let through UDP port
 47624, which other computers use to find a hosted game, TCP ports 2300 to
 2400 and UDP ports 2350 to 2400.
@@ -214,4 +220,11 @@ command, still takes the screenshots and films.
   folder. Your settings are kept.
 - **To remove:** delete the game's folder. To remove your settings and logs
   too, delete the two folders above; your saved games, screenshots, films
-  and mods are in the Open Annihilation folder in Documents.
+  and mods are in the Open Annihilation folder in Documents. To make your
+  desktop forget the game as the opener of `.oamod` files, delete
+  `~/.local/share/mime/packages/net.coreprime.open-annihilation.xml`,
+  `~/.local/share/applications/net.coreprime.open-annihilation.desktop`,
+  the two `net.coreprime.open-annihilation.png` and `application-x-oamod.png`
+  icons under `~/.local/share/icons/hicolor/256x256`, and the hidden empty
+  `.net.coreprime.open-annihilation.updated` files in the `mime`,
+  `applications` and `icons/hicolor` folders there.

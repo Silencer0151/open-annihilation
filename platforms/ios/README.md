@@ -224,8 +224,19 @@ second swipe goes home) and the status bar hidden, plays the touch controls' hap
 game its default folder, the advice shown without one and its **Check again** button, shows the
 player's folders in the Files app (the settings' Your files and Open Mods Folder buttons, and the
 notice of moved saves, open it at the folder through its `shareddocuments` link, as `open` does on
-the Mac), and keeps the system's three-finger editing gestures (undo, copy, paste) from taking
-the fingers of a three-finger touch. The second is the Game files screen's side (see [Game files](#game-files)).
+the Mac), brings the mod packages the system opens in the game into the app, and keeps the
+system's three-finger editing gestures (undo, copy, paste) from taking the fingers of a
+three-finger touch. The second is the Game files screen's side (see [Game files](#game-files)).
+
+A `.oamod` mod package tapped in the Files app, or shared to Open Annihilation, reaches SDL as an
+opened URL, which SDL sends the engine as a dropped file. Before it does, `ios_platform.mm` brings
+the file into `tmp/Opened mods/<UUID>/` on a background queue: a copy the system made in an Inbox
+folder is moved, and any other file (one opened in place from iCloud Drive or another app's
+files) is copied inside a coordinated read under the access its URL grants, which downloads it
+first. SDL then sends the copy's path; the engine reads it through `take_opened_file`, which
+answers with why when the copy failed, installs it into `Documents/Open Annihilation/Mods`, and
+gives it back through `release_opened_file`, which removes the copy. Each start removes the
+copies an earlier run left. Not yet tried on a device or in the simulator: only built.
 The engine offers the Game files screen because these hooks are installed, not because of a build
 option: the desktop installs none.
 
@@ -233,7 +244,10 @@ option: the desktop installs none.
 icon, the distribution keys (see [For distribution](#for-distribution)), shows the Documents
 folder in the Files app and the Finder, reads a mouse or trackpad as a pointer, and declares the
 type of the game's archives (`net.coreprime.open-annihilation.game-archive`: `.hpi`, `.ufo`,
-`.ccx` and `.gp3`), which the picker offers when the player adds archives.
+`.ccx` and `.gp3`), which the picker offers when the player adds archives, and the mod package's
+type (`net.coreprime.open-annihilation.oamod`: `.oamod`), which the app exports and opens as its
+owner, so that the Files app and the share sheet offer Open Annihilation for it, with the app's
+icon. `app-bundle-file-types` checks both bundles' declarations.
 [LaunchScreen.storyboard](LaunchScreen.storyboard) is the black launch screen with the title.
 
 ## Orientation

@@ -93,6 +93,25 @@ and switches the mod ten times through the Mods page's Switch Mod question,
 each a soft restart on the same window: each run plays the mod chosen,
 listed first, and the working set as the last round's runs reach the main
 menu stays level with the round's before; it runs alone.
+`native-mod-install` (`--check-mod-install`) installs made-up mod packages
+(`.oamod`) it writes beside that folder, in five runs on one window: the
+first refuses the command line's missing package, installs a package the
+Finder made from a dropped file with no question, cancels and then accepts
+an update, replaces a third revision keeping one `.backup`, reinstalls,
+declines an older revision, installs another version alongside, leaves a
+folder that holds another mod as it is, refuses a profile that does not
+resolve, rolls a mod back twice on the Mods page, offers no roll back to a
+kept version this build cannot play and refuses, in a prompt over the
+dialog, one that became so while it asked, and plays the mod with PLAY
+NOW; the second replaces the mod played, the change staged until the run
+ends; the third finds it put in place, told, and rolls it back; the fourth
+finds that put in place and leaves the folder as a stop after a replace's
+first rename would; the fifth finds the mod played all the same, put back
+before its folder was resolved. With `--snapshot` it writes the installed notice and
+the Another Version question beside the snapshot. The unit tests of the
+installer are `app-mod-install-package`, `app-mod-install-plan`,
+`app-mod-install-change` and `app-mod-install-handoff`, of the streamed zip
+reader `formats-zip-stream`, and of the prompt `ui-engine-settings-prompt`.
 `native-mod-warning` (`--check-mod-warning`) writes made-up profiles into
 that folder's `Mods`: one whose second side's interface art and font are
 missing, one whose unit files are missing, one whose commander's file the

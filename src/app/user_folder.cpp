@@ -12,6 +12,7 @@
 #include <cctype>
 #include <charconv>
 #include <cstddef>
+#include <exception>
 #include <initializer_list>
 #include <optional>
 #include <string>
@@ -152,6 +153,31 @@ fs::path user_folder_beside(const fs::path& preferences_file) {
     const fs::path absolute = fs::absolute(preferences_file, error);
     const fs::path file = (error ? preferences_file : absolute).lexically_normal();
     return file.parent_path() / std::string(oa::platform::preferences::user_folder_name);
+}
+
+fs::path own_user_folder(
+    const std::optional<fs::path>& user_folder_option,
+    const std::optional<fs::path>& preferences_file_option,
+    const fs::path& preference_path,
+    const platform::preferences::Values& values,
+    std::string& note
+) {
+    namespace platform_preferences = oa::platform::preferences;
+    std::error_code error;
+    const fs::path preference_folder =
+        fs::absolute(preference_path, error).lexically_normal().parent_path();
+    fs::path fallback;
+    if (preferences_file_option) {
+        fallback = user_folder_beside(*preferences_file_option);
+    } else {
+        try {
+            fallback = platform_preferences::default_user_folder();
+        } catch (const std::exception& failure) {
+            fallback = preference_folder / std::string(platform_preferences::user_folder_name);
+            note = failure.what();
+        }
+    }
+    return choose_user_folder(user_folder_option, values, fallback);
 }
 
 fs::path choose_user_folder(

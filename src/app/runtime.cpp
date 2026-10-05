@@ -9,6 +9,7 @@
 #include "oa/app/asset_files.hpp"
 #include "oa/app/game_directory.hpp"
 #include "oa/app/hook_call.hpp"
+#include "oa/app/mod_install/inbox.hpp"
 #include "match_clock.hpp"
 #include "graphics_report.hpp"
 #include "render_host.hpp"
@@ -44,6 +45,10 @@ void Runtime::destroy_render_run(RenderRun* run) noexcept {
 }
 
 namespace {
+
+/// The longest the idle loop waits for an event while it looks for a second
+/// start's mod packages, in milliseconds.
+constexpr int32_t kHandoffWaitMs = 1000;
 
 // Names a built-in screen in the headless check's output.
 [[nodiscard]] std::string_view screen_label(Screen screen) {
@@ -372,6 +377,11 @@ int Runtime::run() {
         flush_preferences();
         return 0;
     }
+    if (options_.check_mod_install) {
+        check_mod_install();
+        flush_preferences();
+        return 0;
+    }
     if (options_.check_renderer_ladder) {
         const int status = check_renderer_ladder();
         flush_preferences();
@@ -508,8 +518,15 @@ int Runtime::run() {
         const bool live = keeps_running_inactive();
         if (!options_.frame_limit &&
             oa::platform::application_waits_for_events(application_active_, live, false)) {
-            if (SDL_WaitEvent(&event))
+            // While this copy takes a second start's mod packages, it looks
+            // for them once a second even in the background.
+            if (mod_install::handoff_folder()) {
+                if (SDL_WaitEventTimeout(&event, kHandoffWaitMs))
+                    dispatch_event(event, running);
+                take_handed_mod_files();
+            } else if (SDL_WaitEvent(&event)) {
                 dispatch_event(event, running);
+            }
             oa::platform::log_files::maintain();
             continue;
         }
@@ -644,6 +661,7 @@ void Runtime::idle_tick() {
     tell_saves_moved();
     tell_found_install();
     tell_incomplete_mod();
+    tell_mod_installs();
     render();
     presentation_alpha_ = 1.0F;
     capture_film_frame();

@@ -25,7 +25,9 @@ mod is installed: a folder without a profile plays exactly as 3.1c.
    folder, `Documents/Open Annihilation/Mods` (where that is on each system:
    "Where it keeps its files" in the
    [installation guides](../installation/macos.md#where-it-keeps-its-files)),
-   or in the game folder's `mods` folder.
+   or in the game folder's `mods` folder. A mod that comes as a `.oamod` file
+   installs itself there when you open the file
+   ([Installing a .oamod file](#installing-a-oamod-file)).
 2. Open the settings (the **OA** button on the main menu), choose the mod on
    **Mods**, and confirm with **Switch**. The game reloads its data for the
    mod and returns to the main menu playing it.
@@ -70,6 +72,74 @@ made for 3.1c itself.
 A profile can give a one-line `description`, and a mod folder can hold an
 `oamod.png` badge beside its `oamod.yaml`; the Mods page shows both.
 [The OAMOD standard](oamod-standard.md) describes them.
+
+### Installing a .oamod file
+
+A `.oamod` file is a mod packed into one file: a zip archive of the mod's
+folder, the one that holds its `oamod.yaml`. Open it in any of these ways
+and Open Annihilation installs it into your Mods folder, in a folder named
+by the mod's id (`Mods/<id>`), whatever the file is called:
+
+- double-click it, or choose Open With and Open Annihilation;
+- drag it onto the game's window;
+- on iOS, tap it in the Files app, or share it to Open Annihilation;
+- start the game with `--install-mod FILE.oamod`, or with the file's path
+  alone.
+
+A file opened during a game waits until you are back at the main menu, and
+several files are installed one at a time. The game reads the whole file
+and checks it before it writes anything; then, depending on what your Mods
+folder holds already:
+
+| Your Mods folder holds | What happens |
+|---|---|
+| no folder of the mod's id | it installs, and says where; **PLAY NOW** plays it |
+| the same mod and version, another revision | **UPDATE MOD**: **REPLACE** or **CANCEL**; it says when the file is the older revision |
+| the same mod, version and revision | **ALREADY INSTALLED**: **REINSTALL** puts its files back as they came, or **CANCEL** |
+| the same mod at another version | **ANOTHER VERSION**: **REPLACE**, **INSTALL ALONGSIDE** in a folder of its own (`Mods/<id>-<version>`), or **CANCEL** |
+| a folder of that name that holds something else | **FOLDER IN USE**: **INSTALL ALONGSIDE**, or **CANCEL**; that folder is never changed |
+
+A version installed alongside is updated in its own folder the next time a
+file of that version and another revision is opened.
+
+**One version back.** Replacing a mod keeps the version it replaced in the
+mod's folder, in `.backup`, and drops the one kept before: after revisions
+1, 2 and 3, the folder holds 3 and keeps 2. **ROLL BACK** on the mod's row
+of the Mods page swaps the two, so a second **ROLL BACK** undoes the first;
+it is offered while the kept version is one the game can still play. A
+reinstall keeps the version kept as it is. The game never reads `.backup`:
+the kept version is not layered over the game folder and the Mods page does
+not list it. Replacing or rolling back the mod the game plays reloads the
+game's data, back on the main menu, once the files are swapped.
+
+What a replace or a reinstall does not carry over: anything you changed or
+added inside the mod's folder, such as its INI file. After a replace, the
+`.backup` folder keeps it until the next replace. Versions installed
+alongside each other share `Saves/<id>`, `Screenshots/<id>`, `Films/<id>`
+and the settings kept under the mod's registry root, since they share an
+id; a saved game loads only under the same sim hash.
+
+**Making a .oamod file.** Zip the mod's folder, the one that holds
+`oamod.yaml`, or the files in it, and rename the `.zip` file to `.oamod`:
+
+- on macOS, choose Compress in the Finder;
+- on Windows, choose Send to › Compressed (zipped) folder;
+- on Linux, `zip -r example-mod-1.0.oamod example-mod`.
+
+Raise `packaging.revision` in `oamod.yaml` for each new package of the same
+version, so that the game offers it as an update.
+
+**What is refused.** A file that is not a zip archive or is damaged; one
+without `oamod.yaml` at its top or in the one folder at its top; a profile
+that the game would refuse to play, with its first errors shown and all of
+them in the log; a name that cannot be unpacked on every system the game
+runs on (`..` and absolute paths, drive letters, characters or names
+Windows refuses, names that differ only in case); links; encrypted entries,
+and entries packed otherwise than stored or deflated; more than 4 GiB
+unpacked or more than 16,384 folders, or far more than the file's own size;
+and too little free space. Nothing is changed when a file is refused or an
+install fails. A file sync or a virus scanner holding the new files can
+delay an install by a few seconds.
 
 ### Choosing a mod
 

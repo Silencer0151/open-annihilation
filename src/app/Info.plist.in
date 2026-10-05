@@ -1,5 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The macOS bundle's properties, configured when the build is configured
+  (cmake/OaGameBundle.cmake). The bundle declares the .oamod mod package as its own type
+  (UTExportedTypeDeclarations) and opens it as the type's owner (CFBundleDocumentTypes), so
+  that opening one in the Finder starts the game, which asks before it installs the mod. The
+  type conforms to public.data, not public.zip-archive, although the file is a zip: as a zip,
+  a browser that opens safe files after downloading them, and archive tools, would unpack it
+  instead of handing it to the game. On macOS 11 and later the file's icon is the one the
+  system draws from the app's icon; before, it is the bundle's icon file.
+-->
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
@@ -30,5 +40,48 @@
 	<string>Open Annihilation keeps your saved games, screenshots, films and mods in the Open Annihilation folder in Documents.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>net.coreprime.open-annihilation.oamod</string>
+			<key>UTTypeDescription</key>
+			<string>Open Annihilation mod</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>oamod</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/x-oamod</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Open Annihilation mod</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>net.coreprime.open-annihilation.oamod</string>
+			</array>
+			<key>CFBundleTypeIconSystemGenerated</key>
+			<integer>1</integer>
+			<key>CFBundleTypeIconFile</key>
+			<string>${MACOSX_BUNDLE_ICON_FILE}</string>
+		</dict>
+	</array>
 </dict>
 </plist>

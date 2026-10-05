@@ -5,6 +5,7 @@
 // with the platform's default folder and advice from its hooks, the folders
 // found on this machine and the in-engine chooser's place.
 #include "folder_chooser_screen.hpp"
+#include "mod_install_watch.hpp"
 #include "oa/app/app.hpp"
 #include "oa/app/game_directory.hpp"
 #include "oa/app/game_files_hooks.hpp"
@@ -94,6 +95,9 @@ bool start_video(NativeDialogs& dialogs) {
         return false;
     }
     dialogs.video_started = true;
+    // A .oamod file the game was opened with arrives in that first event
+    // loop, and the dialog's stop of SDL's video would drop it.
+    watch_opened_files();
     // macOS finishes launching, and brings the app forward, in the first
     // event loop; the panel must not be that loop.
     SDL_PumpEvents();

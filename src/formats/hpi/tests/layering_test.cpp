@@ -3,7 +3,8 @@
 
 // A mod folder layered over a base folder against a copied install of the
 // same files: discovery, every listing and every read must agree, and a
-// discovery plan replaces the revision archive and a group's pattern.
+// discovery plan replaces the revision archive and a group's pattern; a
+// mod's kept version (.backup) is passed over by every lookup.
 
 #include "oa/formats/hpi.hpp"
 
@@ -286,6 +287,43 @@ void plan_replaces_revision_archive_and_patterns() {
     check(mounted == base_order, "the default plan is the base game's");
 }
 
+void backup_folder_is_hidden() {
+    TempDir dir;
+    const auto base = dir.path() / "base";
+    const auto mod = dir.path() / "mod";
+    write_file(base / "rev31.gp3", archive("rev"));
+    write_file(base / "units" / "u.fbi", text("base u"));
+    // The version a mod's update replaced, kept for one step back, in any case.
+    write_file(mod / ".Backup" / "units" / "x.fbi", text("kept x"));
+    write_file(mod / ".Backup" / "x.txt", text("kept"));
+    write_file(mod / ".Backup" / "pack08.hpi", archive("kept pack08"));
+    write_file(mod / "units" / "m.fbi", text("mod m"));
+    oa::AssetStore store(std::vector<fs::path>{mod, base});
+    oa::DiscoveryPlan plan;
+    plan.folders_as_disc = true;
+    for (const auto& found : store.discover(plan))
+        check(
+            found.path.parent_path().filename() != ".Backup",
+            "no archive is discovered in the kept version"
+        );
+    for (const auto& path : store.mount_paths())
+        check(lower(path.parent_path().filename().string()) != ".backup", "nothing mounts from it");
+    check(!store.loose_file(".backup/x.txt"), "no lookup reaches its files");
+    check(!store.loose_file(".BACKUP/units/x.fbi"), "no lookup reaches them in any case");
+    for (const auto& entry : store.find("*"))
+        check(lower(entry.name) != ".backup", "the top's listing leaves it out");
+    check(store.find(".backup\\*").empty(), "a search inside it finds nothing");
+    for (const auto& name : store.list_effective_recursive("", ".fbi"))
+        check(!name.starts_with(".backup"), "a listing from the top does not walk it: " + name);
+    check(store.list_effective(".backup/units", ".fbi").empty(), "a listing of it is empty");
+    check(
+        store.read("units/u.fbi").bytes == text("base u"), "the game folder's files read as before"
+    );
+    check(store.read("units/m.fbi").bytes == text("mod m"), "the mod's own files read as before");
+    const auto units = store.list_effective("units", ".fbi");
+    check(units.size() == 2, "the units folders list as before");
+}
+
 void lookups_are_observed() {
     TempDir dir;
     write_file(dir.path() / "game" / "gamedata" / "x.tdf", text("x"));
@@ -310,6 +348,7 @@ int main() {
     try {
         layered_folders_match_copied_install();
         plan_replaces_revision_archive_and_patterns();
+        backup_folder_is_hidden();
         lookups_are_observed();
     } catch (const std::exception& error) {
         std::cerr << "unexpected exception: " << error.what() << '\n';

@@ -393,6 +393,15 @@ inline constexpr int32_t mod_badge_side = 20;
 /// badge and the text.
 inline constexpr int32_t mod_row_inset = 4;
 
+/// A mod row's ROLL BACK button's width, at the right of its description line.
+inline constexpr int32_t mod_roll_back_width = 60;
+/// Its height.
+inline constexpr int32_t mod_roll_back_height = 12;
+/// The columns between the description and the ROLL BACK button.
+inline constexpr int32_t mod_roll_back_gap = 4;
+/// The Roll Back Mod question's ROLL BACK button's width.
+inline constexpr int32_t question_roll_back_width = 64;
+
 /// Returns where Mods' list scrolls: under the heading, or under the lock
 /// line while the page is locked, down to OPEN MODS FOLDER.
 ///
@@ -589,6 +598,49 @@ struct ScrolledRows {
 /// @return its control
 [[nodiscard]] int32_t mods_folder_control(const Rows& rows) noexcept;
 
+/// Returns the control of a row's ROLL BACK button: OPEN MODS FOLDER's
+/// control and one more for each row before it and itself.
+///
+/// @param rows Mods' rows
+/// @param index the row's place among them
+/// @return its control
+[[nodiscard]] int32_t roll_back_control(const Rows& rows, std::size_t index) noexcept;
+
+/// Returns the row a ROLL BACK control belongs to.
+///
+/// @param rows Mods' rows
+/// @param control the control
+/// @return the row's place; -1 when the control is no row's ROLL BACK
+[[nodiscard]] int32_t roll_back_row(const Rows& rows, int32_t control) noexcept;
+
+/// Returns a mod row's ROLL BACK button: at the right of its description
+/// line.
+///
+/// @param row the row, placed
+/// @return the button's rectangle
+[[nodiscard]] SourceRect roll_back_button(const Row& row) noexcept;
+
+/// Tells whether a row of Mods offers ROLL BACK: its folder keeps an
+/// earlier version (ModDetails::roll_back_from).
+///
+/// @param dialog the dialog
+/// @param row the row
+/// @return true when it does
+[[nodiscard]] bool offers_roll_back(const Dialog& dialog, const ModRow& row) noexcept;
+
+/// Returns the question's answering button: SWITCH, or ROLL BACK, which is
+/// wider.
+///
+/// @param dialog the dialog, its question showing
+/// @return the button's rectangle
+[[nodiscard]] SourceRect question_yes_rect(const Dialog& dialog) noexcept;
+
+/// Returns the question's CANCEL button, left of its answering button.
+///
+/// @param dialog the dialog, its question showing
+/// @return the button's rectangle
+[[nodiscard]] SourceRect question_no_rect(const Dialog& dialog) noexcept;
+
 /// Returns Mods' rows placed in its list at a scroll offset: one for each of
 /// mod_rows, whose control_area is the whole row, label its title, value
 /// its version and hints[0] its description.
@@ -613,6 +665,14 @@ struct ModRowText {
 /// @param row the row
 /// @return its texts
 [[nodiscard]] ModRowText mod_row_text(const Dialog& dialog, const ModRow& row);
+
+/// Returns the question's version line: the mod's version, or for a roll
+/// back the version it rolls back from and the one it rolls back to.
+///
+/// @param dialog the dialog, its question showing
+/// @param offered what the question's row shows
+/// @return the line
+[[nodiscard]] std::string question_version_text(const Dialog& dialog, const ModRowText& offered);
 
 /// Cuts a text to a width, ending it with "..." when it is cut.
 ///
@@ -1407,6 +1467,19 @@ inline constexpr std::string_view switch_no_profile_text =
     "This folder has no oamod.yaml, so the game's own rules apply.";
 /// The question's SWITCH caption.
 inline constexpr std::string_view yes_text = "SWITCH";
+/// A mod row's ROLL BACK caption, and the Roll Back Mod question's.
+inline constexpr std::string_view roll_back_text = "ROLL BACK";
+/// The Roll Back Mod question's heading.
+inline constexpr std::string_view roll_back_heading_text = "ROLL BACK MOD";
+/// The Roll Back Mod question's version line, filled with the versions.
+inline constexpr std::string_view roll_back_versions_text = "{from} to {to}";
+/// What the Roll Back Mod question asks, filled with the mod's title and
+/// the versions.
+inline constexpr std::string_view roll_back_ask_text =
+    "Roll back {title} to {to}? {from} is kept in its place, and ROLL BACK again brings it back.";
+/// What the Roll Back Mod question adds for the mod the game plays.
+inline constexpr std::string_view roll_back_reload_text =
+    "The game reloads its data for the mod and returns to the main menu.";
 /// The question's CANCEL caption.
 inline constexpr std::string_view no_text = "CANCEL";
 /// What Mods says during a game, which keeps the mod it plays.

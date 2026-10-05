@@ -10,6 +10,7 @@
 #include "oa/ui/engine_settings/dialog.hpp"
 #include "oa/data/mod_profile/overrides.hpp"
 #include "oa/ui/engine_settings/notice.hpp"
+#include "oa/ui/engine_settings/prompt.hpp"
 #include "oa/ui/decoded.hpp"
 
 #include "geometry.hpp"
@@ -465,6 +466,7 @@ int32_t draw_face_text(
 /// @param align where the text sits along the box's width
 /// @param color the text's colour
 /// @param tracking extra columns after each glyph but the last
+/// @param look_up look the text up in the interface catalogue; false draws it as given
 void draw_boxed_text(
     renderer::Surface& target,
     const renderer::Placement& placement,
@@ -473,11 +475,12 @@ void draw_boxed_text(
     const SourceRect& box,
     Align align,
     Rgb color,
-    int32_t tracking = 0
+    int32_t tracking = 0,
+    bool look_up = true
 ) {
-    // The interface's own words in the language shown, with the characters
-    // its game font stands in for.
-    const std::string drawn = shown_in(font, layout::shown_text(text));
+    // The interface's own words in the language shown, unless they are given
+    // in it, with the characters its game font stands in for.
+    const std::string drawn = shown_in(font, look_up ? layout::shown_text(text) : text);
     text = drawn;
     const int32_t width = tracked_width(font, text, tracking);
     int32_t pen = box.x;
@@ -1543,15 +1546,52 @@ void draw_mods(
                 Align::left,
                 kAccentColor
             );
+        // A row whose folder keeps an earlier version shows ROLL BACK at
+        // the right of its description, which is cut shorter for it.
+        const bool roll_back = layout::offers_roll_back(dialog, rows[index]);
+        const SourceRect roll_back_box = layout::roll_back_button(row);
+        SourceRect description = row.hints[0];
+        if (roll_back)
+            description.width = roll_back_box.x - layout::mod_roll_back_gap - description.x;
         draw_boxed_text(
             target,
             in_view,
             small_of(fonts),
-            layout::cut_text(shown.description, row.hints[0].width, small_width),
-            row.hints[0],
+            layout::cut_text(shown.description, description.width, small_width),
+            description,
             Align::left,
             shown.has_profile ? kHintColor : kLockColor
         );
+        if (roll_back) {
+            const int32_t control = layout::roll_back_control(open.rows, index);
+            const bool lit = !locked && (dialog.hovered == control || dialog.pressed == control);
+            renderer::fill_source_rect(
+                target,
+                in_view,
+                roll_back_box,
+                lit ? (dialog.pressed == control ? kBandColor : kHoverColor) : kListColor
+            );
+            renderer::draw_outline(
+                target, in_view, roll_back_box, lit ? kControlHoverColor : kControlBorderColor
+            );
+            draw_boxed_text(
+                target,
+                in_view,
+                small_of(fonts),
+                layout::roll_back_text,
+                roll_back_box,
+                Align::centre,
+                lit ? kTextColor : kButtonTextColor
+            );
+            if (locked)
+                renderer::blend_source_rect(
+                    target, in_view, roll_back_box, kPanelColor, kLockedFade
+                );
+            if (dialog.focused == control && !locked)
+                renderer::draw_outline(
+                    target, in_view, grown(roll_back_box, kFocusInset), kAccentColor
+                );
+        }
         if (locked && !playing)
             renderer::blend_source_rect(target, in_view, box, kPanelColor, kLockedFade);
         if (dialog.focused == row.control && !locked)
@@ -1903,11 +1943,14 @@ void draw_question(
 ) {
     renderer::fill_source_rect(target, placement, layout::question_box, kBandColor);
     renderer::draw_outline(target, placement, layout::question_box, kAccentColor);
+    const bool roll_back = dialog.mod_question == ModQuestion::roll_back;
     draw_boxed_text(
         target,
         placement,
         small_of(fonts),
-        layout::shown_text(layout::switch_heading_text),
+        layout::shown_text(
+            roll_back ? layout::roll_back_heading_text : layout::switch_heading_text
+        ),
         layout::question_heading,
         Align::left,
         kQuietColor,
@@ -1934,7 +1977,11 @@ void draw_question(
         target,
         placement,
         small_of(fonts),
-        layout::cut_text(offered.version, layout::question_version.width, small_width),
+        layout::cut_text(
+            layout::question_version_text(dialog, offered),
+            layout::question_version.width,
+            small_width
+        ),
         layout::question_version,
         Align::left,
         kHintColor
@@ -1942,7 +1989,7 @@ void draw_question(
     const auto lines = layout::question_text_lines(dialog, small_width);
     // The note's lines, the last ones, are drawn in the lock's colour.
     const std::size_t note_lines =
-        offered.has_profile
+        offered.has_profile || roll_back
             ? 0
             : layout::wrap_text(
                   layout::switch_no_profile_text, layout::question_first_line.width, small_width
@@ -1964,11 +2011,12 @@ void draw_question(
     }
     const std::array<std::pair<int32_t, std::string_view>, 2> buttons{{
         {question_no_control, layout::no_text},
-        {question_yes_control, layout::yes_text},
+        {question_yes_control, roll_back ? layout::roll_back_text : layout::yes_text},
     }};
     for (const auto& [control, caption] : buttons) {
         const bool yes = control == question_yes_control;
-        const SourceRect button = yes ? layout::question_yes_button : layout::question_no_button;
+        const SourceRect button =
+            yes ? layout::question_yes_rect(dialog) : layout::question_no_rect(dialog);
         const bool held = dialog.pressed == control && dialog.hovered == control;
         const bool hovered = dialog.hovered == control;
         if (yes) {
@@ -2077,19 +2125,36 @@ void draw_dialog(
         draw_question(target, placement, dialog, fonts);
 }
 
-void draw_notice(
+namespace {
+
+/// Draws a notice's or a prompt's box, header, text and footer band: the
+/// panel, the header with the icon (or the OA mark) and the title, the text
+/// with paths in the regular font and the failure in amber, and the footer.
+///
+/// @param[in,out] target the surface
+/// @param placement where the box's top left corner lands
+/// @param height the box's height
+/// @param footer_rule the row of the line over the footer
+/// @param title the title
+/// @param title_rect the title's place
+/// @param lines the text's lines that fit
+/// @param fonts the fonts
+/// @param icon the Open Annihilation icon; an empty picture draws the OA mark
+/// @param look_up look the title and text up in the interface catalogue
+void draw_notice_box(
     renderer::Surface& target,
     const renderer::Placement& placement,
-    const Notice& notice,
+    int32_t height,
+    int32_t footer_rule,
+    std::string_view title,
+    const SourceRect& title_rect,
+    const std::vector<notice_geometry::Line>& lines,
     const DialogFonts& fonts,
-    const renderer::RgbaPicture& icon
+    const renderer::RgbaPicture& icon,
+    bool look_up
 ) {
     namespace place = notice_geometry;
-    const auto placed =
-        place::place_notice(notice, regular_width(fonts), [&fonts](std::string_view text) {
-            return dialog_text_width(fonts, DialogFont::small, text);
-        });
-    const SourceRect whole{0, 0, notice_width, placed.height};
+    const SourceRect whole{0, 0, notice_width, height};
     const int32_t inner = notice_width - 2 * place::edge;
     renderer::fill_source_rect(target, placement, whole, kPanelColor);
     // The header: the icon, or the OA mark, and the title.
@@ -2122,15 +2187,16 @@ void draw_notice(
         target,
         placement,
         regular_of(fonts),
-        notice.title,
-        placed.title,
+        title,
+        title_rect,
         Align::left,
         kTextColor,
-        place::title_tracking
+        place::title_tracking,
+        look_up
     );
     // The text: paths in the regular font, the rest in the small one, the
     // failure in amber.
-    for (const auto& line : placed.lines)
+    for (const auto& line : lines)
         draw_boxed_text(
             target,
             placement,
@@ -2138,59 +2204,193 @@ void draw_notice(
             line.text,
             line.rect,
             Align::left,
-            line.failure ? kLockColor : kTextColor
+            line.failure ? kLockColor : kTextColor,
+            0,
+            look_up
         );
-    // The footer: the open button as Cancel looks and OK, the marked one
-    // ringed in green.
+    renderer::fill_source_rect(target, placement, {place::edge, footer_rule, inner, 1}, kRuleColor);
     renderer::fill_source_rect(
-        target, placement, {place::edge, placed.footer_rule, inner, 1}, kRuleColor
+        target, placement, {place::edge, footer_rule + 1, inner, place::footer_height}, kBandColor
     );
-    renderer::fill_source_rect(
+}
+
+/// Draws a button of a notice or a prompt: an accent one as OK looks, the
+/// others as Cancel, ringed in green when marked.
+///
+/// @param[in,out] target the surface
+/// @param placement where the box's top left corner lands
+/// @param button the button's place
+/// @param caption its caption
+/// @param accent drawn as OK is
+/// @param hovered the pointer is over it
+/// @param held a press on it is held
+/// @param marked the keys mark it
+/// @param fonts the fonts
+/// @param look_up look the caption up in the interface catalogue
+void draw_notice_button(
+    renderer::Surface& target,
+    const renderer::Placement& placement,
+    const SourceRect& button,
+    std::string_view caption,
+    bool accent,
+    bool hovered,
+    bool held,
+    bool marked,
+    const DialogFonts& fonts,
+    bool look_up
+) {
+    if (accent) {
+        Rgb face = kAccentColor;
+        if (held)
+            face = kAccentHeldColor;
+        else if (hovered)
+            face = kAccentLightColor;
+        renderer::fill_source_rect(target, placement, button, face);
+        renderer::draw_outline(target, placement, button, kAccentLightColor);
+        draw_boxed_text(
+            target,
+            placement,
+            small_of(fonts),
+            caption,
+            button,
+            Align::centre,
+            kOnAccentColor,
+            0,
+            look_up
+        );
+    } else {
+        if (held || hovered)
+            renderer::fill_source_rect(target, placement, button, kHoverColor);
+        renderer::draw_outline(
+            target, placement, button, hovered ? kControlHoverColor : kControlBorderColor
+        );
+        draw_boxed_text(
+            target,
+            placement,
+            small_of(fonts),
+            caption,
+            button,
+            Align::centre,
+            hovered ? kTextColor : kButtonTextColor,
+            0,
+            look_up
+        );
+    }
+    if (marked)
+        renderer::draw_outline(target, placement, grown(button, kFocusInset), kAccentColor);
+}
+
+} // namespace
+
+void draw_notice(
+    renderer::Surface& target,
+    const renderer::Placement& placement,
+    const Notice& notice,
+    const DialogFonts& fonts,
+    const renderer::RgbaPicture& icon
+) {
+    const auto placed = notice_geometry::place_notice(
+        notice, regular_width(fonts), [&fonts](std::string_view text) {
+            return dialog_text_width(fonts, DialogFont::small, text);
+        }
+    );
+    draw_notice_box(
         target,
         placement,
-        {place::edge, placed.footer_rule + 1, inner, place::footer_height},
-        kBandColor
+        placed.height,
+        placed.footer_rule,
+        notice.title,
+        placed.title,
+        placed.lines,
+        fonts,
+        icon,
+        true
     );
+    // The footer: the open button as Cancel looks and OK, the marked one
+    // ringed in green.
     const std::array<std::pair<int32_t, std::string_view>, 2> buttons{{
         {notice_open_control, notice.open_caption},
         {notice_ok_control, layout::ok_text},
     }};
     for (const auto& [control, caption] : buttons) {
         const bool ok = control == notice_ok_control;
-        const SourceRect button = ok ? placed.ok_button : placed.open_button;
-        const bool held = notice.pressed == control && notice.hovered == control;
-        const bool hovered = notice.hovered == control;
-        if (ok) {
-            Rgb face = kAccentColor;
-            if (held)
-                face = kAccentHeldColor;
-            else if (hovered)
-                face = kAccentLightColor;
-            renderer::fill_source_rect(target, placement, button, face);
-            renderer::draw_outline(target, placement, button, kAccentLightColor);
-            draw_boxed_text(
-                target, placement, small_of(fonts), caption, button, Align::centre, kOnAccentColor
-            );
-        } else {
-            if (held || hovered)
-                renderer::fill_source_rect(target, placement, button, kHoverColor);
-            renderer::draw_outline(
-                target, placement, button, hovered ? kControlHoverColor : kControlBorderColor
-            );
-            draw_boxed_text(
+        draw_notice_button(
+            target,
+            placement,
+            ok ? placed.ok_button : placed.open_button,
+            caption,
+            ok,
+            notice.hovered == control,
+            notice.pressed == control && notice.hovered == control,
+            notice.marked == control,
+            fonts,
+            true
+        );
+    }
+    renderer::draw_bevel(
+        target, placement, {0, 0, notice_width, placed.height}, kEdgeLightColor, kEdgeDarkColor
+    );
+}
+
+void draw_prompt(
+    renderer::Surface& target,
+    const renderer::Placement& placement,
+    const Prompt& prompt,
+    const DialogFonts& fonts,
+    const renderer::RgbaPicture& icon
+) {
+    const auto placed = notice_geometry::place_prompt(
+        prompt, regular_width(fonts), [&fonts](std::string_view text) {
+            return dialog_text_width(fonts, DialogFont::small, text);
+        }
+    );
+    draw_notice_box(
+        target,
+        placement,
+        placed.height,
+        placed.footer_rule,
+        prompt.title,
+        placed.title,
+        placed.lines,
+        fonts,
+        icon,
+        false
+    );
+    // The progress bar: a well, filled in the accent colour as far as it came.
+    if (placed.bar.width > 0) {
+        renderer::fill_source_rect(target, placement, placed.bar, kWellColor);
+        renderer::draw_outline(target, placement, placed.bar, kControlBorderColor);
+        const int32_t inner = placed.bar.width - 2;
+        const int32_t filled = static_cast<int32_t>(
+            int64_t{inner} * std::clamp(prompt.progress, 0, prompt_progress_whole) /
+            prompt_progress_whole
+        );
+        if (filled > 0)
+            renderer::fill_source_rect(
                 target,
                 placement,
-                small_of(fonts),
-                caption,
-                button,
-                Align::centre,
-                hovered ? kTextColor : kButtonTextColor
+                {placed.bar.x + 1, placed.bar.y + 1, filled, placed.bar.height - 2},
+                kAccentColor
             );
-        }
-        if (notice.marked == control)
-            renderer::draw_outline(target, placement, grown(button, kFocusInset), kAccentColor);
     }
-    renderer::draw_bevel(target, placement, whole, kEdgeLightColor, kEdgeDarkColor);
+    for (std::size_t index = 0; index < placed.buttons.size(); ++index) {
+        const auto control = static_cast<int32_t>(index);
+        draw_notice_button(
+            target,
+            placement,
+            placed.buttons[index],
+            prompt.buttons[index].caption,
+            prompt.buttons[index].accent,
+            prompt.hovered == control,
+            prompt.pressed == control && prompt.hovered == control,
+            prompt.marked == control,
+            fonts,
+            false
+        );
+    }
+    renderer::draw_bevel(
+        target, placement, {0, 0, notice_width, placed.height}, kEdgeLightColor, kEdgeDarkColor
+    );
 }
 
 void draw_oa_button(

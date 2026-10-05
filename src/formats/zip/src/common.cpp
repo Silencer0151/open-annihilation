@@ -92,6 +92,18 @@ const char* zip_status_message(ZipStatus status) noexcept {
         return "an entry's data is not its recorded size";
     case ZipStatus::crc_mismatch:
         return "an entry's CRC-32 is not its recorded one";
+    case ZipStatus::read_failed:
+        return "the archive could not be read";
+    case ZipStatus::write_failed:
+        return "an entry's data could not be written";
+    case ZipStatus::directory_too_large:
+        return "the archive's central directory is too large";
+    case ZipStatus::bad_zip64_record:
+        return "the archive's 64-bit records are missing or disagree";
+    case ZipStatus::overlapping_entries:
+        return "an entry's data overlaps another entry or the central directory";
+    case ZipStatus::bad_name_encoding:
+        return "an entry name marked UTF-8 is not UTF-8";
     }
     return "unknown zip status";
 }

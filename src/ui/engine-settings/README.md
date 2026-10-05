@@ -621,6 +621,21 @@ there resets the mod options alone, and the engine's settings keep their
 values. The application keeps the mod options with the player's other view
 settings; this library neither reads nor writes them.
 
+## ROLL BACK
+
+A row of Mods whose folder keeps an earlier version of its mod
+(`ModDetails::roll_back_from` and `roll_back_to`, which the host fills for
+the player's own Mods folder) shows a ROLL BACK button at the right of its
+description line, which is cut shorter for it. Its control is OPEN MODS
+FOLDER's and one more for each row before it and itself; the focus walks a
+row, then its ROLL BACK. A press, or Space, asks the Roll Back Mod question
+in the Switch Mod question's box (`Dialog::mod_question`): its heading, the
+row's badge and title, the versions "from to to" and what it does, CANCEL
+and ROLL BACK, ROLL BACK marked. ROLL BACK names the folder
+(`Dialog::roll_back_folder`) and asks the host to roll it back
+(`DialogAction::roll_back_mod`); the dialog stays open. A locked page draws
+it dimmed and inert.
+
 ## Your files and the notice
 
 Common Tweaks' first row, Your files (`Setting::user_folder`, `is_buttons`),
@@ -649,9 +664,27 @@ presses it (`notice_finger_down`); Enter and Escape close it; Space
 presses the marked button, OK at first; Left, Right, Up, Down, Tab and
 Shift+Tab move the mark (`notice_pointer_*`, `notice_key`).
 
+`prompt.hpp` is a prompt in the notice's look that asks with one to three
+buttons of its own captions, as a mod package's install does: its text,
+given finished in the language shown and drawn as given, is placed as a
+notice's (`place_text` in `notice_geometry.hpp`), and an optional progress
+bar lies under it. Its buttons stand right-aligned in the footer, five
+columns apart, each as wide as its caption at the estimated character
+width and 16 more, at least 52, so that a press lands where a button is
+drawn whatever the fonts; an accent button is drawn as OK, the others as
+Cancel (`prompt_height`, `prompt_layout`, `prompt_fits`, `draw_prompt`).
+Enter and Space answer the marked button, Escape and N its cancel button, Y
+its primary one; Left, Up and Shift+Tab mark the one before, Right, Down
+and Tab the one after; a finger's press takes the nearest button within
+reach (`prompt_pointer_*`, `prompt_finger_down`, `prompt_key`).
+
 ## Tests
 
-`ui-engine-settings` covers the defaults, a Raspberry Pi's and a light
+The dialog's tests cover ROLL BACK: shown only on a row whose folder keeps
+a version, its control and focus, its question by pointer and keys, and
+inert while locked. `ui-engine-settings-prompt` lays out prompts of one, two and three buttons,
+their keys, a pointer's press and release and a finger's within reach, the
+progress bar's part and a text found cut. `ui-engine-settings` covers the defaults, a Raspberry Pi's and a light
 machine's included, the keys read and written, Hardware acceleration's
 words and the numbers its switch once wrote, words that are no number, and
 the locks of a game, the flags and the renderer, and the Language

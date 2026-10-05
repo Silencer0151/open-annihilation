@@ -459,6 +459,15 @@ struct Options {
     // warning once over the main menu and over a refused Skirmish start,
     // and none for the second.
     bool check_mod_warning = false;
+    // --install-mod FILE, repeated, and the bare arguments that name a
+    // .oamod file, any case: mod packages to install once the main menu
+    // shows, each asked about first; absolute, in the order given.
+    std::vector<fs::path> install_mods;
+    // Installs made-up mod packages through each of the main menu's
+    // questions, by a dropped file and the command line, rolls a mod back on
+    // the Mods page, and replaces and rolls back the mod played across soft
+    // restarts, checking the player's Mods folder after each.
+    bool check_mod_install = false;
     // The soft restarts the process has made before this run: 0 for the
     // first; each switch of the mod from the settings adds one.
     uint32_t restarts = 0;

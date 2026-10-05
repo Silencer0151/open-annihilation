@@ -5,6 +5,8 @@
 // the dialog's session that both hosts share.
 
 #include "engine_settings_state.hpp"
+#include "oa/app/mod_install.hpp"
+#include "oa/app/mod_install/prompts.hpp"
 #include "oa/app/game_directory.hpp"
 #include "oa/app/game_files_hooks.hpp"
 #include "oa/app/mod_profile_loader.hpp"
@@ -343,6 +345,19 @@ void Runtime::list_offered_mods() {
             : std::string{};
     if (options_.game_folders.size() > 1)
         offered.push_back(options_.game_folders.front());
+    // A folder of the player's own Mods folder offers ROLL BACK while its
+    // .backup keeps an earlier version of its mod that the game can play,
+    // checked as a pick is.
+    std::error_code own_error;
+    const fs::path own_mods =
+        user_folder_.empty()
+            ? fs::path()
+            : fs::absolute(user_folder_ / std::string(user_mods_folder_name), own_error)
+                  .lexically_normal();
+    const auto playable = [&](const fs::path& kept) {
+        const ModChoice choice{{}, {}, options_.accept_unimplemented_hacks, &preference_values_};
+        return check_picked_mod_folder(kept, game_folder, choice).refusal.empty();
+    };
     for (const auto& folder : offered) {
         std::error_code error;
         const fs::path absolute = fs::absolute(folder, error);
@@ -360,6 +375,18 @@ void Runtime::list_offered_mods() {
         details.badge_width = summary.badge.width;
         details.badge_height = summary.badge.height;
         details.badge_pixels = std::move(summary.badge.pixels);
+        if (!own_mods.empty() && path_from_utf8(path).parent_path() == own_mods)
+            if (const auto backup = mod_install::read_backup(folder);
+                backup && backup->kind == mod_install::FolderKind::mod &&
+                playable(entry_without_case(folder, mod_install::backup_folder_name)
+                             .value_or(folder / std::string(mod_install::backup_folder_name)))) {
+                const auto now = mod_install::read_installed_mod(folder);
+                const bool same_version = now.version == backup->version;
+                details.roll_back_from =
+                    mod_install::version_label(now.version, now.revision, same_version);
+                details.roll_back_to =
+                    mod_install::version_label(backup->version, backup->revision, same_version);
+            }
         state.mod_folders.push_back(path);
         state.mod_names.push_back(std::move(summary.title));
         state.mod_details.push_back(std::move(details));
@@ -942,6 +969,10 @@ bool Runtime::take_engine_settings_action(settings::DialogAction action) {
         // The dialog stays open under the Game files screen.
         open_game_files_manage();
         return false;
+    case settings::DialogAction::roll_back_mod:
+        // The dialog stays open, unless the mod played rolls back as the
+        // run ends.
+        return roll_back_mod_folder(*dialog);
     }
     return false;
 }

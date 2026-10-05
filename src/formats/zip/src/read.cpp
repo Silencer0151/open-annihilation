@@ -10,8 +10,7 @@
 #include <string>
 #include <vector>
 
-#include <zlib.h>
-
+#include "inflater.hpp"
 #include "oa/formats/zip.hpp"
 #include "records.hpp"
 
@@ -137,26 +136,17 @@ bool locate_data(
 ///         ends before the data does; inflate_failed when the data is not
 ///         deflate or ends before the stream does
 ZipStatus inflate_exactly(std::span<const uint8_t> input, std::vector<uint8_t>& output) {
-    z_stream stream{};
-    if (inflateInit2(&stream, -MAX_WBITS) != Z_OK)
+    Inflater inflater;
+    if (!inflater.start())
         return ZipStatus::inflate_failed;
-    // zlib refuses a null output pointer even when there is no room to fill.
-    uint8_t no_output{};
-    stream.next_in = const_cast<Bytef*>(input.data());
-    stream.avail_in = static_cast<uInt>(input.size());
-    stream.next_out = output.empty() ? &no_output : output.data();
-    stream.avail_out = static_cast<uInt>(output.size());
-    const int result = inflate(&stream, Z_FINISH);
-    const uLong produced = stream.total_out;
-    const uLong consumed = stream.total_in;
-    const uInt room_left = stream.avail_out;
-    inflateEnd(&stream);
-    if (result == Z_STREAM_END)
-        return produced == output.size() && consumed == input.size() ? ZipStatus::ok
-                                                                     : ZipStatus::size_mismatch;
+    const Inflater::Pass pass = inflater.pass(input, output);
+    if (pass.ended)
+        return pass.produced == output.size() && pass.consumed == input.size()
+                   ? ZipStatus::ok
+                   : ZipStatus::size_mismatch;
     // The buffer is full and the stream has not ended: it holds more than
     // recorded. With room left, the data ended before the stream did.
-    if (result == Z_BUF_ERROR && room_left == 0)
+    if (!pass.failed && pass.produced == output.size())
         return ZipStatus::size_mismatch;
     return ZipStatus::inflate_failed;
 }

@@ -249,6 +249,23 @@ std::vector<LooseItem> loose_listing(const std::filesystem::path& directory) {
     return items;
 }
 
+/// Tells whether a name at the top of a layered folder is hidden from the
+/// store: the folder a mod keeps its earlier version in (backup_folder_name).
+///
+/// @param folded_name the name, ASCII lower case
+/// @return true for the hidden folder
+bool hidden_at_top(std::string_view folded_name) noexcept {
+    return folded_name == backup_folder_name;
+}
+
+/// Returns the first '/'-separated part of a folded key.
+///
+/// @param key the key
+/// @return its first part; the key itself without a separator
+std::string_view first_part(std::string_view key) noexcept {
+    return key.substr(0, key.find('/'));
+}
+
 /// Tests whether a listing entry is the "." or ".." entry.
 bool dot_entry(const LooseItem& item) noexcept {
     return item.name == kCurrentDirectory || item.name == kParentDirectory;
@@ -261,10 +278,19 @@ bool dot_entry(const LooseItem& item) noexcept {
 /// One folder is listed as loose_listing() lists it.
 ///
 /// @param folders the folders, highest precedence first; a missing one adds nothing
+/// @param roots the folders are the store's layered folders, whose hidden
+///        folder (hidden_at_top) is left out
 /// @return the entries; empty when no folder exists
-std::vector<LooseItem> merged_listing(std::span<const std::filesystem::path> folders) {
-    if (folders.size() == 1)
-        return loose_listing(folders.front());
+std::vector<LooseItem>
+merged_listing(std::span<const std::filesystem::path> folders, bool roots = false) {
+    if (folders.size() == 1) {
+        auto items = loose_listing(folders.front());
+        if (roots)
+            std::erase_if(items, [](const LooseItem& item) {
+                return hidden_at_top(normalized_path(item.name));
+            });
+        return items;
+    }
     std::unordered_map<std::string, LooseItem> merged;
     bool present = false;
     for (auto folder = folders.rbegin(); folder != folders.rend(); ++folder) {
@@ -273,7 +299,7 @@ std::vector<LooseItem> merged_listing(std::span<const std::filesystem::path> fol
             continue;
         present = true;
         for (auto& item : items) {
-            if (dot_entry(item))
+            if (dot_entry(item) || (roots && hidden_at_top(normalized_path(item.name))))
                 continue;
             auto [slot, inserted] = merged.try_emplace(normalized_path(item.name), item);
             if (!inserted) {
@@ -305,6 +331,8 @@ std::vector<LooseItem> merged_listing(std::span<const std::filesystem::path> fol
 /// @return the host folder, or nullopt when a part is missing or not a folder
 std::optional<std::filesystem::path>
 find_loose_directory(const std::filesystem::path& root, const std::string& key) {
+    if (hidden_at_top(first_part(key)))
+        return std::nullopt;
     auto candidate = root;
     for (std::size_t begin = 0; begin < key.size();) {
         const auto end = key.find('/', begin);
@@ -546,7 +574,7 @@ std::vector<DiscoveredArchive> AssetStore::discover(
                     break;
             }
         };
-    const auto folders = merged_listing(loose_roots_);
+    const auto folders = merged_listing(loose_roots_, true);
     scan(folders, plan.revision_archive, -1);
     scan(folders, plan.ccx_pattern, -1);
     scan(folders, plan.ufo_pattern, -1);
@@ -583,7 +611,9 @@ void AssetStore::mark_loose_directory(
         return;
     for (const auto& item : loose_listing(directory)) {
         if (item.directory) {
-            if (item.name != kCurrentDirectory && item.name != kParentDirectory)
+            // A layered folder's hidden folder shadows nothing.
+            const bool hidden = prefix.empty() && hidden_at_top(normalized_path(item.name));
+            if (item.name != kCurrentDirectory && item.name != kParentDirectory && !hidden)
                 mark_loose_directory(prefix + item.name + "\\", item.path);
             continue;
         }
@@ -615,6 +645,8 @@ std::optional<std::filesystem::path> AssetStore::loose_path(std::string_view res
         resource.find('\0') != std::string_view::npos || resource.size() > kMaxPathLength)
         fail("invalid asset resource path");
     const auto key = normalized_path(resource);
+    if (hidden_at_top(first_part(key)))
+        return std::nullopt;
     for (std::size_t root = 0; root < loose_roots_.size(); ++root)
         if (auto found = loose_path_in(root, key))
             return found;
@@ -812,7 +844,8 @@ std::vector<FoundEntry> AssetStore::find(std::string_view pattern, FindScope sco
         spec = "*";
     if (scope.first_mount < 0) {
         std::vector<std::filesystem::path> folders;
-        if (directory.empty()) {
+        const bool roots = directory.empty();
+        if (roots) {
             folders = loose_roots_;
         } else {
             const std::string trimmed(directory.substr(0, directory.size() - 1));
@@ -824,7 +857,7 @@ std::vector<FoundEntry> AssetStore::find(std::string_view pattern, FindScope sco
             }
         }
         if (!folders.empty())
-            for (const auto& item : merged_listing(folders))
+            for (const auto& item : merged_listing(folders, roots))
                 if (match_host_pattern(item.name, spec))
                     found.push_back(
                         {item.name, item.directory, item.directory ? 0 : item.size, -1}
@@ -1084,6 +1117,8 @@ std::vector<std::string> AssetStore::list_resources(
     // The folder below each layered root that the listing names.
     const auto folder_in = [&](const std::filesystem::path& root) {
         std::optional<std::filesystem::path> loose = root;
+        if (hidden_at_top(first_part(prefix)))
+            return std::optional<std::filesystem::path>{};
         for (std::size_t begin = 0; loose && begin < prefix.size();) {
             const auto end = prefix.find('/', begin);
             const auto part = prefix.substr(begin, end == std::string::npos ? end : end - begin);
@@ -1135,10 +1170,20 @@ std::vector<std::string> AssetStore::list_resources(
                     result.push_back(key);
             }
         };
-        if (recursive)
-            for (const auto& item : std::filesystem::recursive_directory_iterator(loose))
-                append(item);
-        else
+        if (recursive) {
+            // From a layered folder's top, its hidden folder is not walked.
+            const bool at_top = prefix.empty();
+            for (auto item = std::filesystem::recursive_directory_iterator(loose);
+                 item != std::filesystem::recursive_directory_iterator();
+                 ++item) {
+                if (at_top && item.depth() == 0 && item->is_directory() &&
+                    hidden_at_top(normalized_path(item->path().filename().string()))) {
+                    item.disable_recursion_pending();
+                    continue;
+                }
+                append(*item);
+            }
+        } else
             for (const auto& item : std::filesystem::directory_iterator(loose))
                 append(item);
     }

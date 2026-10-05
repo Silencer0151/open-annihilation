@@ -15,6 +15,9 @@
 // the end. Entries that only name a directory (a name ending in '/') are
 // listed and hold nothing.
 //
+// The streamed reader (oa/formats/zip/stream.hpp) reads an archive from a
+// file a piece at a time, the 64-bit extension included.
+//
 // The writer stores its entries uncompressed, with a fixed time (1980-01-01
 // 00:00) and fixed attributes, so the same entries always give the same
 // bytes on every platform.
@@ -41,23 +44,29 @@ inline constexpr uint64_t max_entry_bytes = uint64_t{1} << 30;
 /// Why an archive or entry could not be read or written.
 enum class ZipStatus : uint8_t {
     ok,
-    too_large,          ///< the archive is larger than max_archive_bytes
-    no_end_record,      ///< no end-of-central-directory record in the last 65,557 bytes
-    truncated,          ///< a record or an entry's data runs past the end
-    several_disks,      ///< the archive spans more than one disk
-    too_many_entries,   ///< more than max_entry_count entries
-    bad_central_record, ///< a central directory record without its signature
-    bad_local_record,   ///< a local header without its signature, or unlike its central record
-    name_too_long,      ///< a name longer than max_name_bytes
-    unsafe_name,        ///< a name name_is_safe refuses
-    duplicate_name,     ///< two entries with one name
-    encrypted,          ///< an encrypted entry
-    unsupported_method, ///< a compression method other than stored or deflated
-    zip64,              ///< a size or offset that needs the 64-bit extension
-    entry_too_large,    ///< an entry larger than max_entry_bytes
-    inflate_failed,     ///< deflated data that does not inflate
-    size_mismatch,      ///< an entry whose data is not its recorded size
-    crc_mismatch,       ///< an entry whose CRC-32 is not its recorded one
+    too_large,           ///< the archive is larger than max_archive_bytes
+    no_end_record,       ///< no end-of-central-directory record in the last 65,557 bytes
+    truncated,           ///< a record or an entry's data runs past the end
+    several_disks,       ///< the archive spans more than one disk
+    too_many_entries,    ///< more than max_entry_count entries
+    bad_central_record,  ///< a central directory record without its signature
+    bad_local_record,    ///< a local header without its signature, or unlike its central record
+    name_too_long,       ///< a name longer than max_name_bytes
+    unsafe_name,         ///< a name name_is_safe refuses
+    duplicate_name,      ///< two entries with one name
+    encrypted,           ///< an encrypted entry
+    unsupported_method,  ///< a compression method other than stored or deflated
+    zip64,               ///< a size or offset that needs the 64-bit extension
+    entry_too_large,     ///< an entry larger than max_entry_bytes
+    inflate_failed,      ///< deflated data that does not inflate
+    size_mismatch,       ///< an entry whose data is not its recorded size
+    crc_mismatch,        ///< an entry whose CRC-32 is not its recorded one
+    read_failed,         ///< a streamed archive's bytes could not be read
+    write_failed,        ///< a streamed entry's data could not be handed on
+    directory_too_large, ///< a streamed archive's central directory is larger than its limit
+    bad_zip64_record,    ///< the 64-bit extension's records are missing or disagree
+    overlapping_entries, ///< an entry's data runs into another entry's or the directory
+    bad_name_encoding,   ///< a name marked UTF-8 that is not
 };
 
 /// What went wrong, where, and in which entry.

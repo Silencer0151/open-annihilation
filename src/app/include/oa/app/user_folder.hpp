@@ -109,6 +109,26 @@ user_folder_beside(const std::filesystem::path& preferences_file);
     const std::filesystem::path& fallback
 );
 
+/// Returns the player's own folder a run uses, as the runtime chooses it at
+/// its start: --user-folder, else the preferences' key, else beside a named
+/// preferences file, else the Documents folder, else beside the preferences
+/// file the run reads when there is no Documents folder.
+///
+/// @param user_folder_option the --user-folder value, when given
+/// @param preferences_file_option the --preferences-file value, when given
+/// @param preference_path the preferences file the run reads
+/// @param values the loaded preferences
+/// @param[out] note why the Documents folder was not used, for the log;
+///        left empty when it was, or not needed
+/// @return the folder, as choose_user_folder gives it
+[[nodiscard]] std::filesystem::path own_user_folder(
+    const std::optional<std::filesystem::path>& user_folder_option,
+    const std::optional<std::filesystem::path>& preferences_file_option,
+    const std::filesystem::path& preference_path,
+    const platform::preferences::Values& values,
+    std::string& note
+);
+
 /// Returns the name of the folder of Saves, Screenshots and Films that holds
 /// the files of games played with a mod, or without one.
 ///

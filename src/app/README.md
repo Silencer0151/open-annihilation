@@ -1919,6 +1919,68 @@ under a profile of the same sim hash, which the status line otherwise names
 with the game's, and a save without one, written by 3.1c or by a mod's own
 client, loads under any.
 
+### Mod packages (.oamod)
+
+A mod package is a zip archive of a mod's folder, which the game installs
+into the player's own Mods folder (`src/app/mod-install`,
+`oa-app-mod-install`, says how a package is read, planned, unpacked and put
+in place, and how what a stop leaves is settled). The runtime's part:
+
+- **Opening a package.** `--install-mod FILE`, repeated, and any bare
+  argument ending in `.oamod`, any case, queue packages in the
+  process-wide inbox (`oa/app/mod_install/inbox.hpp`); macOS's `-psn_`
+  argument is skipped. A file the system opens in the game, or one dropped
+  on the window, arrives as SDL's drop event: a watch on SDL's events
+  (`mod_install_watch.cpp`), started right after each start of SDL's video
+  (the window, the folder dialog's and the runtime's own), copies each into
+  the inbox as it is queued, whatever polls the queue then. A platform that
+  brings opened files into its own storage first does so through
+  `PlatformHooks::take_opened_file`, and gets its copy back through
+  `release_opened_file` once the install is done with it. On Windows and
+  Linux a second start that carries only packages, while another copy holds
+  the instance lock, hands them over through the hand-off folder
+  (`oa/app/mod_install/handoff.hpp`) and ends; the running copy looks there
+  once a second, in the background too, and brings its window forward.
+- **At the main menu** (`runtime_mod_install.cpp`,
+  `Runtime::tell_mod_installs`): once the menu has settled for two frames,
+  with no dialog, notice or settings dialog over it, the next package is
+  read; a plan that asks nothing unpacks at once, and the others show their
+  question in a `Prompt` (`oa/ui/engine_settings/prompt.hpp`) over the
+  darkened menu, at z 102. The unpacking runs steps of a 256 KiB budget,
+  each folder or file made costing 16 KiB of it and each step ending after
+  about 4 ms, for up to 15 ms a frame under the progress prompt; then the
+  prompt says
+  the files are being put in place, and the next frame makes the change,
+  pumping events while it waits for files another program holds. What came
+  of it is told: MOD INSTALLED, MOD UPDATED or MOD NOT INSTALLED, with OPEN
+  FOLDER and, where the Mod setting is the player's to change, PLAY NOW
+  (`Runtime::switch_to_mod_folder`, the Mods page's own switch). A run
+  nobody watches leaves packages waiting.
+- **The mod played.** A replace or reinstall of the folder the game plays,
+  once unpacked and checked as the Mods page checks a folder, waits in
+  `set_pending_change`, holding the Mods folder's lock, and the run ends
+  (`request_soft_restart`); `main()` makes the change between runs, once
+  the runtime and its archives are gone, and the next run tells it. Every
+  run starts with `recover_changes` on the player's Mods folder, before the
+  mod folder is resolved, so that a stop mid-change never drops the Mod
+  setting.
+- **ROLL BACK** on the Mods page (`Runtime::roll_back_mod_folder`): a folder
+  of the player's own Mods folder whose `.backup` keeps an earlier version
+  of its mod, one a pick would accept, offers it
+  (`ModDetails::roll_back_from`, filled by `list_offered_mods`). The kept
+  version is checked again first; then the folder is swapped at once, or,
+  for the mod played, as the run ends. A roll back refused, the kept
+  version changed since the page listed it or the swap undone, is told in
+  a prompt over the dialog (MOD NOT ROLLED BACK) whose OK returns to it.
+- **Registering the file type.** A start someone plays makes the game the
+  opener of `.oamod` files for the player where the system registers at run
+  time (`oa/platform/file_types.hpp`); none does with `--preferences-file`,
+  `--user-folder`, `--data-dir`, unattended, headless or on SDL's dummy or
+  offscreen video driver.
+
+`native-mod-install` (`--check-mod-install`, `runtime_mod_install_check.cpp`)
+drives every prompt over five runs.
+
 ### Developer Mode
 
 Developer Mode, in the settings' Developer section

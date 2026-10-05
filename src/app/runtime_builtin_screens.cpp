@@ -703,6 +703,7 @@ void Runtime::register_screens() {
     register_engine_settings_match_overlay();
     // The notice of the saved games' move, over the main menu.
     register_saves_notice_overlay();
+    register_mod_install_overlay();
     // Without screens of the extension's for them, the multiplayer unit
     // headers and a main-menu overlay's steps have nothing to do. The registry
     // refuses a second handler, so these fill only the steps nobody took.

@@ -1,10 +1,12 @@
 # Zip archives
 
-This module reads and writes zip archives in memory. A director bundle
-(`.oamovie`) is a zip archive of one `.oascript` and the recording it names:
-the application opens a bundle with the reader and makes one with the
-writer. The module opens no files itself; the caller hands it the archive's
-bytes.
+This module reads and writes zip archives in memory, and reads them as a
+stream from a file. A director bundle (`.oamovie`) is a zip archive of one
+`.oascript` and the recording it names: the application opens a bundle with
+the in-memory reader and makes one with the writer. A mod package
+(`.oamod`) is a zip archive of a mod's folder, of any size: the application
+unpacks it with the streamed reader. The module opens no files itself; the
+caller hands it the archive's bytes, or a hook that reads them.
 
 ## Entry points
 
@@ -18,6 +20,15 @@ bytes.
 - `write_archive` writes entries stored, in the order given.
 - `name_is_safe` is the name rule both directions apply; `crc32_of` is the
   format's CRC-32; `zip_status_message` describes a status.
+
+`oa/formats/zip/stream.hpp`, the same namespace:
+
+- `read_stream_directory` reads an archive's central directory through a
+  `SourceHooks` read hook, within `StreamLimits`.
+- `EntryStream` reads one entry's data in steps of a budget of archive
+  bytes, handing each piece to a `SinkHooks` write hook, and checks its size
+  and CRC-32 at its end.
+- `read_stream_entry` reads a small entry whole into memory.
 
 Every function returns its errors as values (`ZipError`: a status, the byte
 offset of the record at fault and the entry's name) and leaves its output
@@ -65,6 +76,42 @@ compressed data (`size_mismatch` otherwise), and data that is not deflate
 is `inflate_failed`. The data's CRC-32 must be the recorded one
 (`crc_mismatch`).
 
+## What the streamed reader takes
+
+What the in-memory reader takes, of any size up to `StreamLimits` (64 GiB,
+65,535 entries, an 8 MiB directory, 4 GiB an entry), and the 64-bit
+extension: the 64-bit end record its locator names, whose counts, size and
+offset must equal the end record's own wherever those are not sentinels,
+and each record's 64-bit extra field for exactly the fields that hold their
+sentinel. It holds, besides the directory, about 44 KiB of decoder state and
+two 64 KiB buffers for an open entry, and nothing that grows with an entry's
+size: each step reads at most its budget of the archive and hands on at most
+four times as much, or 256 KiB.
+
+Besides the in-memory reader's refusals it refuses:
+
+- 64-bit records that are missing where a field holds a sentinel, or that
+  disagree with the end record (`bad_zip64_record`);
+- a directory larger than its limit (`directory_too_large`);
+- an entry whose local header, name and data reach the next entry's local
+  header or the directory, as the central record's name gives them and again
+  as the local header's own name and extra field give them
+  (`overlapping_entries`): no two entries share data;
+- a name marked UTF-8 (general purpose bit 11) that is not well-formed UTF-8
+  (`bad_name_encoding`);
+- a read that fails (`read_failed`), and a write hook that refuses the data
+  (`write_failed`).
+
+A name not marked UTF-8 is read as code page 437, the format's default,
+unless a Unicode path extra field (0x7075) whose CRC-32 matches the recorded
+name gives its UTF-8 spelling. The backslashes of an entry made on MS-DOS or
+Windows (hosts 0, 10 and 14) become '/'. An entry made on Unix or macOS
+(hosts 3 and 19) whose external attributes give the link file type is
+marked `symbolic_link`, and one of another file type than a file or a
+folder `special_file`; the reader refuses neither, and the caller decides.
+Inflated data past an entry's recorded size is never handed on: its first
+piece stops the read with `size_mismatch`.
+
 ## What the writer makes
 
 Entries stored uncompressed, each with version 2.0 needed and made by,
@@ -87,10 +134,21 @@ end record comments; every refusal of the reader and the writer; and a
 malformed sweep: every prefix and suffix of two archives, and random byte
 changes under a fixed seed.
 
+`formats-zip-stream` (`tests/stream_test.cpp`): stored and deflated entries
+read in steps of 1, 7 and 65,536 bytes, each step within its budget; small
+entries written with the 64-bit extension, the zip command's archive whose
+local header uses it, and a sparse archive of 5 GiB whose one entry lies
+past 4 GiB; the zip command's other archives read as the in-memory reader
+reads them; names in code page 437, from a Unicode path field and from
+MS-DOS; links and special files marked; every refusal; and a malformed sweep
+in which no allocation exceeds 1 MiB. `oa/test/raw_zip.hpp` (in
+`tests/support/include`) builds the archives field by field, as the mod
+packages' tests do too.
+
 ## Limitations
 
-The reader keeps the whole archive and each entry in memory, which the
-limits bound to 1 GiB each. It does not read archives with data before the
-first entry (self-extracting archives), split archives or the 64-bit
-extension, and it ignores the extended time and attribute fields, since a
-bundle carries neither.
+The in-memory reader keeps the whole archive and each entry in memory, which
+the limits bound to 1 GiB each, and refuses the 64-bit extension. Neither
+reader reads archives with data before the first entry (self-extracting
+archives) or split archives, and both ignore the extended time and
+attribute fields, since neither a bundle nor a mod package needs them.

@@ -73,6 +73,9 @@ Open Annihilation's own settings open from the **OA** button at the bottom
 right of the main menu, or with **Cmd+,**. See
 [Settings](../../README.md#settings).
 
+Double-click a `.oamod` file to install the mod it holds in Open
+Annihilation ([mods](../mods/README.md#installing-a-oamod-file)).
+
 With the macOS firewall on, the first time you host or join a multiplayer
 game macOS asks whether Open Annihilation may accept incoming network
 connections: click **Allow**. A firewall between the players must let

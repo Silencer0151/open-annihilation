@@ -335,6 +335,14 @@ void test_mod_folders(const fs::path& scratch) {
     const auto own = list_mods_in(game / "MODS");
     OA_CHECK(own == offered);
     OA_CHECK(list_mods_in(scratch / "nothing" / "Mods").empty());
+    // A folder whose name starts with a dot is hidden: an install's own
+    // folders in Mods, and any other.
+    const fs::path hidden = scratch / "hidden-mods";
+    fs::create_directories(hidden / ".oamod-staging-example-mod");
+    fs::create_directories(hidden / ".hidden");
+    fs::create_directories(hidden / "example-mod");
+    const auto listed = list_mods_in(hidden);
+    OA_CHECK(listed.size() == 1 && listed[0].filename() == "example-mod");
 
     // A mod folder without a profile is no error: it plays with none, by
     // 3.1c's own rules; a --mod file replaces its missing profile.

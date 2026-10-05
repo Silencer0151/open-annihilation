@@ -18,6 +18,14 @@ namespace oa::formats::zip::detail {
 using base::bytes::load_le16;
 using base::bytes::load_le32;
 
+/// Reads a 64-bit little-endian value; the caller guarantees eight bytes.
+///
+/// @param bytes the first of eight bytes
+/// @return the value
+[[nodiscard]] constexpr uint64_t load_le64(const uint8_t* bytes) noexcept {
+    return uint64_t{load_le32(bytes)} | (uint64_t{load_le32(bytes + 4)} << 32U);
+}
+
 /// The four bytes that open a record: 'P', 'K' and two record bytes.
 using Signature = std::array<uint8_t, 4>;
 
@@ -78,6 +86,47 @@ inline constexpr size_t end_directory_offset = 16;
 inline constexpr size_t end_comment_length = 20;
 /// The longest end record comment.
 inline constexpr size_t max_comment_bytes = 65535;
+
+// The 64-bit extension's end-of-central-directory locator: signature, the
+// disk the 64-bit end record is on, that record's offset, and the number of
+// disks. It lies just before the end record.
+inline constexpr Signature zip64_locator_signature{'P', 'K', 6, 7};
+inline constexpr size_t zip64_locator_bytes = 20;
+inline constexpr size_t zip64_locator_disk = 4;
+inline constexpr size_t zip64_locator_end_offset = 8;
+inline constexpr size_t zip64_locator_disk_count = 16;
+
+// The 64-bit end record: signature, the size of what follows that field,
+// version made by and needed, this disk's number, the disk the directory
+// starts on, the entries on this disk, all entries, the directory's size
+// and offset, then an extensible part.
+inline constexpr Signature zip64_end_signature{'P', 'K', 6, 6};
+inline constexpr size_t zip64_end_bytes = 56;
+inline constexpr size_t zip64_end_disk = 16;
+inline constexpr size_t zip64_end_directory_disk = 20;
+inline constexpr size_t zip64_end_disk_entry_count = 24;
+inline constexpr size_t zip64_end_entry_count = 32;
+inline constexpr size_t zip64_end_directory_bytes = 40;
+inline constexpr size_t zip64_end_directory_offset = 48;
+
+/// The extra field that holds an entry's 64-bit sizes, offset and disk.
+inline constexpr uint16_t zip64_extra_id = 0x0001;
+/// An extra field's header: its id and the length of its data.
+inline constexpr size_t extra_header_bytes = 4;
+
+// The system an entry was made on: the high byte of "version made by".
+inline constexpr uint8_t host_ms_dos = 0;
+inline constexpr uint8_t host_unix = 3;
+inline constexpr uint8_t host_windows_ntfs = 10;
+inline constexpr uint8_t host_vfat = 14;
+inline constexpr uint8_t host_macos = 19;
+
+// A Unix file type, in the high 16 bits of a Unix-made entry's external
+// attributes.
+inline constexpr uint32_t unix_type_mask = 0170000;
+inline constexpr uint32_t unix_type_link = 0120000;
+inline constexpr uint32_t unix_type_regular = 0100000;
+inline constexpr uint32_t unix_type_directory = 0040000;
 
 /// A 16-bit field that holds this value is found in the 64-bit extension.
 inline constexpr uint16_t zip64_sentinel_16 = UINT16_MAX;

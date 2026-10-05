@@ -87,6 +87,13 @@ Open Annihilation's own settings open from the **OA** button at the bottom
 right of the main menu, or with **Ctrl+,**. See
 [Settings](../../README.md#settings).
 
+Each start makes this copy of the game the opener of `.oamod` files for
+your Windows account, with the game's icon on them: double-click one to
+install the mod it holds ([mods](../mods/README.md#installing-a-oamod-file)).
+Opened while the game runs, the file goes to the running game. A file
+sync, such as OneDrive's of Documents, or a virus scanner can hold a new
+mod's files for a few seconds, and the install waits for them.
+
 The first time you host or join a multiplayer game, Windows Defender
 Firewall may ask whether Open Annihilation may communicate on networks:
 allow it, at least on private networks. On Windows XP, a security alert
@@ -111,6 +118,8 @@ game, TCP ports 2300 to 2400 and UDP ports 2350 to 2400.
 
   On a newer Windows that plays no sound, `set OA_SOUND_OUTPUT=waveout`
   chooses the game's own output in the same way.
+- Windows XP draws no icon stored the way the game's is, so the program and
+  `.oamod` files show Windows' plain icons there.
 
 ## Where it keeps its files
 
@@ -165,4 +174,7 @@ command, still takes the screenshots and films.
 - **To remove:** delete the game's folder. To remove your settings and logs
   too, delete the Local AppData folder above; your saved games,
   screenshots, films and mods are in the Open Annihilation folder in
-  Documents.
+  Documents. To make Windows forget the game as the opener of `.oamod`
+  files, delete the keys `HKEY_CURRENT_USER\Software\Classes\.oamod` and
+  `HKEY_CURRENT_USER\Software\Classes\OpenAnnihilation.Mod` with the
+  Registry Editor.

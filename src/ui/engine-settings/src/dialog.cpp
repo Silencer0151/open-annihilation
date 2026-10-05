@@ -2382,6 +2382,21 @@ bool list_row_takes_input(const layout::ListRow& row) noexcept {
            !row.locked;
 }
 
+/// Returns the rows of Mods that offer ROLL BACK, by their places.
+///
+/// @param dialog the dialog
+/// @param open Mods' rows
+/// @return for each placed row, whether it shows ROLL BACK
+std::vector<bool> roll_back_rows(const Dialog& dialog, const layout::ScrolledRows& open) {
+    std::vector<bool> shown(open.rows.rows.size(), false);
+    if (!layout::mods_page(dialog))
+        return shown;
+    const auto rows = mod_rows(dialog);
+    for (std::size_t index = 0; index < shown.size() && index < rows.size(); ++index)
+        shown[index] = layout::offers_roll_back(dialog, rows[index]);
+    return shown;
+}
+
 /// Returns the control under a point that a press can act on.
 ///
 /// A row's control answers only on the part the view shows, and a locked
@@ -2412,6 +2427,14 @@ control_at(const Dialog& dialog, const layout::ScrolledRows& open, int32_t x, in
     // Mods' rows answer in its list's own view; every other section's rows,
     // Developer's above its list among them, in the view under the heading.
     if (contains(layout::mods_page(dialog) ? open.area.view : layout::view, x, y)) {
+        // A row's ROLL BACK lies inside the row and answers first.
+        const std::vector<bool> roll_backs = roll_back_rows(dialog, open);
+        for (std::size_t index = 0; index < roll_backs.size(); ++index) {
+            const layout::Row& row = open.rows.rows[index];
+            if (roll_backs[index] && row.lock == Lock::none &&
+                contains(layout::roll_back_button(row), x, y))
+                return layout::roll_back_control(open.rows, index);
+        }
         for (const layout::Row& row : open.rows.rows) {
             if (row.lock == Lock::none && contains(row.control_area, x, y))
                 return row.control;
@@ -2444,10 +2467,15 @@ control_at(const Dialog& dialog, const layout::ScrolledRows& open, int32_t x, in
 /// @return the controls
 std::vector<int32_t> focus_order(const Dialog& dialog, const layout::ScrolledRows& open) {
     std::vector<int32_t> order;
-    // A row that only shows text takes no focus.
-    for (const layout::Row& row : open.rows.rows) {
+    // A row that only shows text takes no focus; a row of Mods is followed
+    // by its ROLL BACK.
+    const std::vector<bool> roll_backs = roll_back_rows(dialog, open);
+    for (std::size_t index = 0; index < open.rows.rows.size(); ++index) {
+        const layout::Row& row = open.rows.rows[index];
         if (row.lock == Lock::none && row.control_area.width > 0)
             order.push_back(row.control);
+        if (row.lock == Lock::none && roll_backs[index])
+            order.push_back(layout::roll_back_control(open.rows, index));
     }
     if (layout::developer_page(dialog)) {
         for (const layout::ListRow& row : open.list.rows) {
@@ -2530,8 +2558,13 @@ DialogAction show_row(Dialog& dialog, layout::ScrolledRows& open, int32_t contro
         return control < first_hack_list_control
                    ? DialogAction::none
                    : scroll_to(dialog, open, layout::list_scroll_showing(open, control));
-    if (layout::mods_page(dialog) && control >= layout::mods_folder_control(open.rows))
-        return DialogAction::none;
+    if (layout::mods_page(dialog) && control >= layout::mods_folder_control(open.rows)) {
+        // A row's ROLL BACK brings its row into view.
+        const int32_t row = layout::roll_back_row(open.rows, control);
+        if (row < 0)
+            return DialogAction::none;
+        return scroll_to(dialog, open, layout::scroll_showing(open, static_cast<std::size_t>(row)));
+    }
     return scroll_to(
         dialog,
         open,
@@ -2792,32 +2825,43 @@ list_key(Dialog& dialog, layout::ScrolledRows& open, const OpenList& list, Dialo
 
 /// Returns the question's button under a point.
 ///
+/// @param dialog the dialog, its question showing
 /// @param x the point's column
 /// @param y the point's row
 /// @return question_yes_control, question_no_control, or no_control for neither
-int32_t question_button_at(int32_t x, int32_t y) noexcept {
-    if (contains(layout::question_yes_button, x, y))
+int32_t question_button_at(const Dialog& dialog, int32_t x, int32_t y) noexcept {
+    if (contains(layout::question_yes_rect(dialog), x, y))
         return question_yes_control;
-    if (contains(layout::question_no_button, x, y))
+    if (contains(layout::question_no_rect(dialog), x, y))
         return question_no_control;
     return no_control;
 }
 
-/// Answers the Switch Mod question and puts it away: SWITCH makes the mod
-/// offered the Mod setting and asks the host to switch to it; CANCEL leaves
-/// everything as it was.
+/// Answers the question over Mods and puts it away: SWITCH makes the mod
+/// offered the Mod setting and asks the host to switch to it; ROLL BACK asks
+/// the host to roll the row's folder back; CANCEL leaves everything as it
+/// was.
 ///
 /// @param[in,out] dialog the dialog
 /// @param yes the answer: SWITCH
-/// @return DialogAction::switch_mod for SWITCH, else DialogAction::redraw
+/// @return DialogAction::switch_mod for SWITCH, roll_back_mod for ROLL BACK,
+///         else DialogAction::redraw
 DialogAction answer_question(Dialog& dialog, bool yes) {
     const int32_t offered = dialog.switch_question;
+    const ModQuestion asked = dialog.mod_question;
     dialog.switch_question = no_question;
+    dialog.mod_question = ModQuestion::switch_mod;
     dialog.question_marks_no = false;
     dialog.hovered = no_control;
     dialog.pressed = no_control;
     if (!yes)
         return DialogAction::redraw;
+    if (asked == ModQuestion::roll_back) {
+        if (offered < 0 || static_cast<std::size_t>(offered) >= dialog.mod_folders.size())
+            return DialogAction::redraw;
+        dialog.roll_back_folder = dialog.mod_folders[static_cast<std::size_t>(offered)];
+        return DialogAction::roll_back_mod;
+    }
     if (offered >= 0 && static_cast<std::size_t>(offered) < dialog.mod_folders.size())
         dialog.chosen.mod_folder = dialog.mod_folders[static_cast<std::size_t>(offered)];
     else
@@ -2841,6 +2885,29 @@ DialogAction ask_to_switch(Dialog& dialog, const layout::ScrolledRows& open, int
     if (index >= rows.size() || rows[index].playing)
         return DialogAction::none;
     dialog.switch_question = rows[index].offered;
+    dialog.mod_question = ModQuestion::switch_mod;
+    dialog.question_marks_no = false;
+    dialog.hovered = no_control;
+    dialog.pressed = no_control;
+    dialog.dragging = false;
+    return DialogAction::redraw;
+}
+
+/// Asks the Roll Back Mod question for a row of Mods whose folder keeps an
+/// earlier version; every row while the page is locked asks nothing.
+///
+/// @param[in,out] dialog the dialog
+/// @param open Mods' rows
+/// @param index the row's place
+/// @return DialogAction::redraw when the question shows, else DialogAction::none
+DialogAction ask_to_roll_back(Dialog& dialog, const layout::ScrolledRows& open, std::size_t index) {
+    if (index >= open.rows.rows.size() || open.rows.rows[index].lock != Lock::none)
+        return DialogAction::none;
+    const auto rows = mod_rows(dialog);
+    if (index >= rows.size() || !layout::offers_roll_back(dialog, rows[index]))
+        return DialogAction::none;
+    dialog.switch_question = rows[index].offered;
+    dialog.mod_question = ModQuestion::roll_back;
     dialog.question_marks_no = false;
     dialog.hovered = no_control;
     dialog.pressed = no_control;
@@ -3202,6 +3269,8 @@ DialogAction activate(Dialog& dialog, const layout::ScrolledRows& open, int32_t 
         if (control == layout::mods_folder_control(open.rows))
             return dialog.locks.mod == Lock::none ? open_folder(dialog, FolderButton::mods)
                                                   : DialogAction::none;
+        if (const int32_t row = layout::roll_back_row(open.rows, control); row >= 0)
+            return ask_to_roll_back(dialog, open, static_cast<std::size_t>(row));
         return ask_to_switch(dialog, open, control);
     }
     const layout::Row* row = row_of(open.rows, control);
@@ -3285,6 +3354,11 @@ std::vector<PressArea> press_areas(const Dialog& dialog, const layout::ScrolledR
     // FOLDER stands; every other section's rows in the view under the
     // heading.
     const layout::SourceRect& rows_view = layout::mods_page(dialog) ? open.area.view : layout::view;
+    const std::vector<bool> roll_backs = roll_back_rows(dialog, open);
+    for (std::size_t index = 0; index < roll_backs.size(); ++index)
+        if (roll_backs[index] && open.rows.rows[index].lock == Lock::none)
+            add(layout::roll_back_control(open.rows, index),
+                common_part(layout::roll_back_button(open.rows.rows[index]), rows_view));
     for (const layout::Row& row : open.rows.rows)
         if (row.lock == Lock::none)
             add(row.control, common_part(row.control_area, rows_view));
@@ -3361,10 +3435,10 @@ SourcePoint finger_target(
     // The Switch Mod question takes every press: the finger's point over one
     // of its buttons, else the nearest point of the nearer within reach.
     if (dialog.switch_question != no_question) {
-        if (question_button_at(x, y) != no_control)
+        if (question_button_at(dialog, x, y) != no_control)
             return finger;
-        consider(nearest_pixel(layout::question_yes_button, x, y));
-        consider(nearest_pixel(layout::question_no_button, x, y));
+        consider(nearest_pixel(layout::question_yes_rect(dialog), x, y));
+        consider(nearest_pixel(layout::question_no_rect(dialog), x, y));
         return best.value_or(finger);
     }
     if (const auto list = open_list(dialog, open)) {
@@ -3604,7 +3678,7 @@ DialogAction dialog_pointer_move(Dialog& dialog, int32_t x, int32_t y) {
     note_pointer(dialog, x, y);
     // The question hovers its own buttons only.
     if (dialog.switch_question != no_question) {
-        const int32_t button = question_button_at(x, y);
+        const int32_t button = question_button_at(dialog, x, y);
         if (button == dialog.hovered)
             return DialogAction::none;
         dialog.hovered = button;
@@ -3654,7 +3728,7 @@ DialogAction dialog_pointer_down(Dialog& dialog, int32_t x, int32_t y) {
     note_pointer(dialog, x, y);
     // The question takes the press: on a button it holds the button.
     if (dialog.switch_question != no_question) {
-        const int32_t button = question_button_at(x, y);
+        const int32_t button = question_button_at(dialog, x, y);
         dialog.hovered = button;
         dialog.pressed = button;
         dialog.dragging = false;
@@ -3745,7 +3819,7 @@ DialogAction dialog_pointer_up(Dialog& dialog, int32_t x, int32_t y) {
     // A release over the question's button the press held answers it.
     if (dialog.switch_question != no_question) {
         const int32_t pressed = dialog.pressed;
-        const int32_t button = question_button_at(x, y);
+        const int32_t button = question_button_at(dialog, x, y);
         dialog.pressed = no_control;
         dialog.hovered = button;
         if (pressed == no_control)
@@ -4155,9 +4229,21 @@ void mods_layout(
             }
         );
         // The row's own parts lie inside it; only the row is listed as its
-        // control, and its texts and badge as texts and a mark.
+        // control, and its texts and badge as texts and a mark, and its ROLL
+        // BACK as a control of its own.
         static_cast<void>(text_width);
         static_cast<void>(small_text_width);
+        if (layout::offers_roll_back(dialog, rows[index]))
+            parts.push_back(
+                LayoutPart{
+                    layout::roll_back_button(row),
+                    std::string(layout::shown_text(layout::roll_back_text)),
+                    DialogFont::small,
+                    0,
+                    row.lock == Lock::none ? layout::roll_back_control(open.rows, index)
+                                           : no_control
+                }
+            );
     }
     parts.push_back(
         LayoutPart{
@@ -4471,7 +4557,12 @@ std::vector<LayoutPart> dialog_layout(const Dialog& dialog, const DialogFonts* f
                    b.y < a.y + a.height;
         };
         parts.erase(std::remove_if(parts.begin(), parts.end(), under_question), parts.end());
-        text_part(layout::question_heading, layout::switch_heading_text, DialogFont::small);
+        text_part(
+            layout::question_heading,
+            dialog.mod_question == ModQuestion::roll_back ? layout::roll_back_heading_text
+                                                          : layout::switch_heading_text,
+            DialogFont::small
+        );
         control_part(layout::question_badge, no_control);
         const layout::ModRowText offered =
             layout::mod_row_text(dialog, ModRow{dialog.switch_question, false});
@@ -4487,7 +4578,11 @@ std::vector<LayoutPart> dialog_layout(const Dialog& dialog, const DialogFonts* f
         parts.push_back(
             LayoutPart{
                 layout::question_version,
-                layout::cut_text(offered.version, layout::question_version.width, small_text_width),
+                layout::cut_text(
+                    layout::question_version_text(dialog, offered),
+                    layout::question_version.width,
+                    small_text_width
+                ),
                 DialogFont::small,
                 0,
                 no_control,
@@ -4501,7 +4596,7 @@ std::vector<LayoutPart> dialog_layout(const Dialog& dialog, const DialogFonts* f
         }
         parts.push_back(
             LayoutPart{
-                layout::question_no_button,
+                layout::question_no_rect(dialog),
                 std::string(layout::shown_text(layout::no_text)),
                 DialogFont::small,
                 0,
@@ -4510,8 +4605,13 @@ std::vector<LayoutPart> dialog_layout(const Dialog& dialog, const DialogFonts* f
         );
         parts.push_back(
             LayoutPart{
-                layout::question_yes_button,
-                std::string(layout::shown_text(layout::yes_text)),
+                layout::question_yes_rect(dialog),
+                std::string(
+                    layout::shown_text(
+                        dialog.mod_question == ModQuestion::roll_back ? layout::roll_back_text
+                                                                      : layout::yes_text
+                    )
+                ),
                 DialogFont::small,
                 0,
                 question_yes_control,

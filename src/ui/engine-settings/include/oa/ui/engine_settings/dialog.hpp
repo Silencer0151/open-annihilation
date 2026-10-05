@@ -218,8 +218,8 @@ enum class Setting : uint8_t {
 
 /// No control: what Dialog::hovered, pressed and focused hold when they name none.
 inline constexpr int32_t no_control = -1;
-/// The Switch Mod question's SWITCH button, while the question shows
-/// (Dialog::switch_question). The question's buttons count down from
+/// The Switch Mod question's SWITCH button, or the Roll Back Mod question's
+/// ROLL BACK, while the question shows (Dialog::switch_question). The question's buttons count down from
 /// no_control, where no section, row or button of the dialog takes a number.
 inline constexpr int32_t question_yes_control = no_control - 1;
 /// The question's CANCEL button, while the question shows.
@@ -426,6 +426,10 @@ enum class DialogAction : uint8_t {
     /// first when it is missing; the dialog stays open. A folder that cannot
     /// be opened is told to the dialog with set_folder_notice.
     open_folder,
+    /// ROLL BACK on the Roll Back Mod question: swap the folder
+    /// Dialog::roll_back_folder names with the version its .backup keeps;
+    /// the dialog stays open, and a failure is told with set_folder_notice
+    roll_back_mod,
 };
 
 /// How the OA button looks.
@@ -503,6 +507,19 @@ struct ModDetails {
     uint32_t badge_width{};            ///< the badge's columns; 0 shows the blank placeholder
     uint32_t badge_height{};           ///< the badge's rows
     std::vector<uint8_t> badge_pixels; ///< RGBA, top row first
+    /// The version the folder holds now, as a roll back names it ("1.0", or
+    /// "1.0 revision 3" beside a kept version of the same version); empty
+    /// when the folder keeps no earlier version, and its row shows no ROLL
+    /// BACK.
+    std::string roll_back_from{};
+    /// The version its .backup keeps, named as roll_back_from is.
+    std::string roll_back_to{};
+};
+
+/// What the question over Mods asks about its row.
+enum class ModQuestion : uint8_t {
+    switch_mod, ///< Switch Mod: SWITCH plays the row's mod
+    roll_back,  ///< Roll Back Mod: ROLL BACK swaps the row's folder and its .backup
 };
 
 /// One row of Mods, in the order Mods lists them: the mod played, then No
@@ -580,14 +597,23 @@ struct Dialog {
     /// The mod folder the game plays now, as an absolute UTF-8 path; empty
     /// for none. Mods lists it first, marked PLAYING.
     std::string playing_mod_folder;
-    /// The mod the Switch Mod question offers to switch to, as
-    /// ModRow::offered names it (no_mod_row for No Mod); no_question while
-    /// no question shows. The question lies over the dialog and takes every
-    /// pointer event and key.
+    /// The mod the question over Mods asks about (mod_question), as
+    /// ModRow::offered names it (no_mod_row for No Mod): the one the Switch
+    /// Mod question offers to switch to, or the one the Roll Back Mod
+    /// question offers to roll back; no_question while no question shows.
+    /// The question lies over the dialog and takes every pointer event and
+    /// key. A row of Mods whose ModDetails::roll_back_from is set shows a
+    /// ROLL BACK button, whose control is OPEN MODS FOLDER's and one more
+    /// for each row before it and itself.
     int32_t switch_question{no_question};
     /// The question's button the keys mark, which Enter and Space press:
-    /// CANCEL when set, else SWITCH.
+    /// CANCEL when set, else SWITCH or ROLL BACK.
     bool question_marks_no{};
+    /// What the question asks about the row switch_question names.
+    ModQuestion mod_question{ModQuestion::switch_mod};
+    /// The folder the last DialogAction::roll_back_mod asks to roll back, as
+    /// an absolute UTF-8 path, the row's in mod_folders.
+    std::string roll_back_folder;
     /// The player's own folder, as an absolute UTF-8 path, which the Your
     /// files row shows; the host sets it once the dialog has opened. Empty
     /// shows no path.

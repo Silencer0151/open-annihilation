@@ -29,7 +29,8 @@ The standard hacks themselves are listed in the
     [4.2 Choosing a mod](#42-choosing-a-mod) ·
     [4.3 Command-line options](#43-command-line-options) ·
     [4.4 Saves and settings](#44-saves-and-settings) ·
-    [4.5 The badge](#45-the-badge)
+    [4.5 The badge](#45-the-badge) ·
+    [4.6 The .oamod package](#46-the-oamod-package)
 - [5. Parameters, defaults and presets](#5-parameters-defaults-and-presets)
   - [5.1 What the registry declares](#51-what-the-registry-declares) ·
     [5.2 Ways to write a limit or hack](#52-ways-to-write-a-limit-or-hack) ·
@@ -356,6 +357,9 @@ the same files would give:
   it.
 - The game folder under a mod folder must be plain 3.1c: a game folder that
   holds its own `oamod.yaml` cannot carry a mod folder.
+- A folder named `.backup`, in any case, at the top of the mod folder or the
+  game folder is never layered, searched or mounted from: a mod folder keeps
+  the version an update replaced there ([4.6](#46-the-oamod-package)).
 
 ### 4.2 Choosing a mod
 
@@ -378,6 +382,10 @@ and the choice is remembered for later starts. A remembered mod folder that
 is gone is dropped with a notice. There is no detection of installed mods
 and no built-in list of mods. The [mod support overview](README.md#choosing-a-mod)
 describes the page.
+
+The page lists no folder whose name starts with a dot, as file managers
+hide such folders: the folders an install of a `.oamod` package keeps in
+`Mods` while it works are named so.
 
 ### 4.3 Command-line options
 
@@ -431,6 +439,73 @@ pixels across, at the left of the mod's row.
 
 The badge is not part of the profile: it never changes the profile's hashes
 and is never checked when the mod is played.
+
+### 4.6 The .oamod package
+
+A mod is shipped as one file, a `.oamod` package: a zip archive of the
+mod's folder, which the game installs into the player's own
+`Documents/Open Annihilation/Mods` folder ([installing one](README.md#installing-a-oamod-file)).
+
+**The format.** A zip archive on one disk, its entries stored (method 0) or
+deflated (method 8). The 64-bit extension is read too, which some tools
+write for any archive; it does not raise the limit below, of 4 GiB
+unpacked in all. `oamod.yaml`, its name matched without case, lies at the
+archive's top, or in the one folder the top holds, which is stripped: the
+Finder's Compress makes such a package. `__MACOSX` folders, `.DS_Store`
+files, AppleDouble files (a last part starting `._`) and a `.backup` folder
+of the package's own are ignored. Names are UTF-8 when an entry says so, else code page 437, or the
+UTF-8 a Unicode path extra field gives; the backslashes of an entry made on
+MS-DOS or Windows are folder separators.
+
+Every name must unpack alike on every system the game runs on: no absolute
+path, drive letter or `..`; each part 1 to 255 bytes of UTF-8, without
+control characters or `< > : " | ? * \`, not ending in a dot or a space,
+and not a name Windows keeps for a device (`CON`, `PRN`, `AUX`, `NUL`,
+`COM0` to `COM9`, `LPT0` to `LPT9` and the like, before any extension, in
+any case); no two names that differ only in the case of their ASCII
+letters, as the game matches names, and no file and folder of one name.
+Links, special files and encrypted entries are refused. A package may
+unpack to at most 4 GiB and 16,384 folders, and, past 64 MiB, to at most
+200 times its own size. The profile must pass the validation of [3.6](#36-validation-and-diagnostics)
+as a load of the mod would: resolved twice, the second time with the INI
+file the package holds, or the game folder's, and the player's registry
+settings. Its id must not name a device on Windows. Everything is checked
+before anything is written.
+
+**Where it installs.** Into `Mods/<id>`, by the profile's `id`, never by
+the file's name:
+
+- no folder of that name: it installs there, with no question;
+- the same id and `version`, another `packaging.revision`: it replaces the
+  folder once the player agrees, which is told when the package is the
+  older revision;
+- the same id, version and revision: it reinstalls, once the player agrees;
+- the same id at another version: the player chooses to replace it, or to
+  install it alongside in `Mods/<id>-<version>`, the version made safe for
+  a folder's name (lower case letters, digits, `.`, `_` and `-`), then
+  `-2` and so on while that name is taken; a later revision of that
+  version updates the folder made alongside;
+- a folder of that name that holds something else is never replaced: the
+  package can be installed alongside.
+
+**One version back.** A replace keeps the version it replaced in the mod's
+folder, in `.backup`, and drops what `.backup` held: three installs of
+revisions 1, 2 and 3 leave 3 in the folder and 2 in `.backup`. A reinstall
+leaves `.backup` as it is. Rolling back swaps the folder's version and the
+one in `.backup`, so it can be undone, one version deep. `.backup` is
+invisible to the game: never layered over the game folder, never searched
+for archives, never listed on the Mods page.
+
+**How it is put in place.** The files are unpacked into a staging folder
+inside `Mods`, a little at a time, each made anew and synced to storage,
+its size and CRC-32 checked; the change is then made by renames on that
+volume, each refusing a name that exists. A `.backup` or other folder an
+install drops that is a link to a folder elsewhere loses only the link. A
+stop at any point leaves folders that the next start settles to the state
+before the change or after it; a change to the mod the game plays is made
+between two runs, once its archives are closed. The folders an install
+keeps in `Mods` while it works start with `.oamod-`; `Mods/.oamod-lock`
+keeps a second copy of the game from changing the folder at the same time.
 
 ## 5. Parameters, defaults and presets
 
