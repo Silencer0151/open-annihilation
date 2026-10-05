@@ -276,6 +276,14 @@ struct DemoSession {
     /// demo_session_begin passes it to the match; set it again while bound
     /// through net.unicode_chat.
     bool unicode_chat{};
+    /// The context `translate_game_text` takes back.
+    void* game_text_context{};
+    /// Translates one of the game's own texts into the language shown, as
+    /// netgame::match::NetMatchHooks::translate_game_text does:
+    /// demo_session_begin passes it to the match, which builds the recorded
+    /// game's notices from such texts. Null, or a null return, shows the
+    /// English.
+    const char* (*translate_game_text)(void* context, const char* english){};
     FullRecordStats full_records;
     std::vector<uint16_t> placed_type; // by unit slot: type at its last full record
     std::vector<FixedVec3> placed_at;  // by unit slot: position of that record

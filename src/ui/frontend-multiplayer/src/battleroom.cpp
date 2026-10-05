@@ -1571,7 +1571,8 @@ void lobby_update_status(Lobby& lobby, Panel& panel) noexcept {
             if (!lobby_has_host_map(lobby)) {
                 map_label->color = ((now(lobby) / 30) & 1U) != 0 ? kWarningColor : 0;
                 if (changed) {
-                    lobby_say(lobby, me, "does not have this map");
+                    // Said in the language shown, as 3.1c says it.
+                    lobby_say(lobby, me, lobby_translated(lobby, "does not have this map"));
                     info_of(lobby, me).options &= static_cast<uint16_t>(~option::ready);
                     set_group(panel, "READY%d", local, 0);
                     lobby_send_player_info(lobby);
@@ -2051,12 +2052,13 @@ LobbyAction handle_panel_event(Lobby& lobby, Panel& panel) noexcept {
                 }
                 const bool quiet = value == 0 && lobby_player_allied_back(me)[slot] * 2U != 3U;
                 play(lobby, quiet ? "Multi" : "Ally");
+                // Said in the language shown, as 3.1c says it.
                 char line[96];
                 std::snprintf(
                     line,
                     sizeof(line),
                     " %s %s",
-                    value == 0 ? "broke alliance with" : "allied with",
+                    lobby_translated(lobby, value == 0 ? "broke alliance with" : "allied with"),
                     std::string(text_view(player.name, sizeof(player.name))).c_str()
                 );
                 lobby_say(lobby, me, line);

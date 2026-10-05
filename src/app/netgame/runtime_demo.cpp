@@ -136,6 +136,9 @@ void NetworkPlay::start_demo_playback() {
         );
     demo_unit_table_differs_ = !check.identical;
     session->unicode_chat = unicode_chat();
+    // The recorded game's notices read in the language shown.
+    session->game_text_context = this;
+    session->translate_game_text = translate_text;
     if (!demo::demo_session_begin(session.get(), runtime_.match_.get(), &error))
         throw std::runtime_error("demo playback: " + error);
     // Mission start rebuilds the sight grids once the players are seated.

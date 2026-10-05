@@ -19,6 +19,8 @@
 #include "oa/netgame/unit_state.hpp"
 #include "oa/ui/frontend_multiplayer/connect.hpp"
 #include "oa/base/text.hpp"
+#include "oa/data/languages.hpp"
+#include "oa/data/languages/interface_text.hpp"
 
 #include <algorithm>
 #include <array>
@@ -28,6 +30,7 @@
 #include <cstring>
 #include <deque>
 #include <initializer_list>
+#include <map>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -752,6 +755,32 @@ void loading_screen_progress() {
     CHECK(status.bars[0].filled == 11 + 119 && status.bars[1].filled == 166 + 119);
     CHECK(status.bars[2].filled == status.bars[2].left);
     CHECK(std::strcmp(status.text, "Waiting for other players.  0 players ready") == 0);
+    // The line's texts are the game's own, in the language shown.
+    {
+        std::map<std::string, std::string> german{
+            {"Waiting for other players", "Warte auf andere Spieler"},
+            {"player ready", "Spieler bereit"},
+            {"players ready", "Spieler bereit"},
+            {"Synchronization complete", "Synchronisation abgeschlossen"}
+        };
+        NetMatchHooks hooks{};
+        hooks.context = &german;
+        hooks.translate_game_text = [](void* c, const char* text) -> const char* {
+            const auto& words = *static_cast<std::map<std::string, std::string>*>(c);
+            const auto found = words.find(text);
+            return found != words.end() ? found->second.c_str() : nullptr;
+        };
+        const auto english = receiver->hooks;
+        receiver->hooks = hooks;
+        LoadingScreenStatus shown{};
+        net_match_loading_screen_status(receiver.get(), &shown);
+        CHECK(std::strcmp(shown.text, "Warte auf andere Spieler.  0 Spieler bereit") == 0);
+        receiver_world->game.load_flags |= load_flag_barrier_passed;
+        net_match_loading_screen_status(receiver.get(), &shown);
+        CHECK(std::strcmp(shown.text, "Synchronisation abgeschlossen") == 0);
+        receiver_world->game.load_flags &= ~load_flag_barrier_passed;
+        receiver->hooks = english;
+    }
 
     // At 100 only the slot whose "loaded" record arrived counts; a closed
     // slot takes no share.
@@ -895,6 +924,9 @@ struct SeatedMachine {
 
     std::vector<std::string> chats;   // chat lines the chat hook showed
     std::vector<std::string> notices; // lines the notice hook showed
+    // What the translate hook gives, by the game's English; a text not here
+    // has no translation.
+    std::map<std::string, std::string> translations;
     // What the record_seen hook saw, sender id and type byte.
     std::vector<std::pair<uint32_t, uint8_t>> seen;
     // The text of each chat record the record_seen hook saw.
@@ -923,6 +955,11 @@ struct SeatedMachine {
         };
         hooks.notice = [](void* c, const char* text) {
             static_cast<SeatedMachine*>(c)->notices.emplace_back(text);
+        };
+        hooks.translate_game_text = [](void* c, const char* text) -> const char* {
+            const auto& translations = static_cast<SeatedMachine*>(c)->translations;
+            const auto found = translations.find(text);
+            return found != translations.end() ? found->second.c_str() : nullptr;
         };
         hooks.record_seen = [](void* c, uint32_t sender, const uint8_t* record, std::size_t size) {
             auto* self = static_cast<SeatedMachine*>(c);
@@ -3778,6 +3815,124 @@ void autopause_holds_for_the_host() {
     CHECK(!b.match->recorder.autopause_holding);
 }
 
+// Each machine builds the notices about another machine from the game's own
+// texts in the language it shows, as 3.1c builds them where it shows them.
+// A received speed reads as the speed keys' own line; the disconnection
+// line puts the name where its translation's %s stands, or leaves it out;
+// the integrity line puts the name first. The engine's own words, as the
+// autopause lines, come from the interface catalogue.
+void notices_follow_the_language() {
+    start_case("notices_follow_the_language");
+    constexpr uint32_t kSender = 7, kLocal = 9, kThird = 11;
+    const Seat a_view[4] = {
+        {kSender, OA_PLAYER_STATUS_LOCAL, 1},
+        {kLocal, OA_PLAYER_STATUS_MIRRORED, 2},
+        {kThird, OA_PLAYER_STATUS_MIRRORED, 3},
+        {}
+    };
+    const Seat b_view[4] = {
+        {kSender, OA_PLAYER_STATUS_MIRRORED, 1},
+        {kLocal, OA_PLAYER_STATUS_LOCAL, 2},
+        {kThird, OA_PLAYER_STATUS_MIRRORED, 3},
+        {}
+    };
+    {
+        SeatedMachine a(a_view, 0);
+        SeatedMachine b(b_view, 1);
+        join(a, b);
+        PauseSpeedRecord speed{};
+        speed.kind = 1;
+        speed.value = 11;
+        deliver(a, b, kSender, broadcast_destination_id, speed);
+        CHECK(!b.notices.empty() && b.notices.back() == "Game Speed  +1\n");
+        speed.value = 7;
+        deliver(a, b, kSender, broadcast_destination_id, speed);
+        CHECK(!b.notices.empty() && b.notices.back() == "Game Speed   -3\n");
+        b.translations = {{"Game Speed", "Tempo"}, {"Game Speed Normal", "Tempo Normal"}};
+        speed.value = 12;
+        deliver(a, b, kSender, broadcast_destination_id, speed);
+        CHECK(!b.notices.empty() && b.notices.back() == "Tempo  +2\n");
+        speed.value = 10;
+        deliver(a, b, kSender, broadcast_destination_id, speed);
+        CHECK(!b.notices.empty() && b.notices.back() == "Tempo Normal");
+    }
+    // The last notice a machine shows for a record about the third player,
+    // with the third player's line translated as given (null: none).
+    const auto shown_for = [&](const auto& record, const char* english, const char* translation) {
+        SeatedMachine a(a_view, 0);
+        SeatedMachine b(b_view, 1);
+        join(a, b);
+        std::snprintf(b.player(2).name, sizeof b.player(2).name, "%s", "Third");
+        if (translation != nullptr)
+            b.translations[english] = translation;
+        deliver(a, b, kSender, broadcast_destination_id, record);
+        return b.notices.empty() ? std::string{} : b.notices.back();
+    };
+    DisconnectNoticeRecord left{};
+    left.player_id = kThird;
+    const char* disconnected = "Player %s has disconnected";
+    CHECK(shown_for(left, disconnected, nullptr) == "Player Third has disconnected");
+    // 3.1c's German line has no place for the name, and shows none.
+    CHECK(
+        shown_for(left, disconnected, "Spieler hat die Verbindung gelöst") ==
+        "Spieler hat die Verbindung gelöst"
+    );
+    CHECK(
+        shown_for(left, disconnected, "Il giocatore %s si è scollegato") ==
+        "Il giocatore Third si è scollegato"
+    );
+    // The translation is never read as a format: "%%" shows one '%', the
+    // first "%s" the name, and any other sequence as it is written.
+    CHECK(shown_for(left, disconnected, "100%% %s %d %s") == "100% Third %d %s");
+    IntegrityNoticeRecord modified{};
+    modified.player_id = kThird;
+    const char* breached = "has modified his executable.  Game integrity breached.";
+    CHECK(
+        shown_for(modified, breached, nullptr) ==
+        "Third has modified his executable.  Game integrity breached."
+    );
+    CHECK(shown_for(modified, breached, "修改了游戏程序") == "Third 修改了游戏程序");
+
+    // The autopause lines in Simplified Chinese, with the name filled in.
+    oa::data::languages::InterfaceText catalogue;
+    CHECK(catalogue.add(
+        "[Autopause: only the host can unpause]\n{\nzh-Hans=自动暂停：只有主持者可以继续游戏;\n}\n"
+        "[{player} tried to unpause.]\n{\nzh-Hans={player}试图继续游戏。;\n}\n"
+    ));
+    const auto* chinese = oa::data::languages::find_by_tag("zh-Hans");
+    CHECK(chinese != nullptr);
+    if (chinese == nullptr)
+        return;
+    oa::data::languages::set_interface_language(&catalogue, *chinese);
+    constexpr uint32_t kHost = 7, kB = 9, kC = 11;
+    const Seat b_seats[4] = {
+        {kHost, OA_PLAYER_STATUS_MIRRORED, 1},
+        {kB, OA_PLAYER_STATUS_LOCAL, 2},
+        {kC, OA_PLAYER_STATUS_MIRRORED, 3}
+    };
+    const Seat c_seats[4] = {
+        {kHost, OA_PLAYER_STATUS_MIRRORED, 1},
+        {kB, OA_PLAYER_STATUS_MIRRORED, 2},
+        {kC, OA_PLAYER_STATUS_LOCAL, 3}
+    };
+    SeatedMachine b(b_seats, 1, recorder_rules());
+    SeatedMachine c(c_seats, 2, recorder_rules());
+    for (auto* m : {&b, &c})
+        m->info(0).role = 1;
+    std::snprintf(b.player(2).name, sizeof b.player(2).name, "%s", "Gamma");
+    b.match->recorder.options.autopause = 1;
+    net_match_recorder_start(b.match.get());
+    b.world->game.sim_run_flags =
+        static_cast<uint16_t>(b.world->game.sim_run_flags & ~run_flag_paused);
+    net_match_set_pause(b.match.get(), false);
+    CHECK(!b.notices.empty() && b.notices.back() == "自动暂停：只有主持者可以继续游戏");
+    join(c, b);
+    PauseSpeedRecord unpause{};
+    deliver(c, b, kC, broadcast_destination_id, unpause);
+    CHECK(!b.notices.empty() && b.notices.back() == "Gamma试图继续游戏。");
+    oa::data::languages::set_interface_language(nullptr, oa::data::languages::english());
+}
+
 // The recorder's speed lock removes received speeds outside it; speed 0 is
 // a speed when the rules allow it.
 void speed_lock_and_speed_zero() {
@@ -4439,6 +4594,7 @@ int main() {
     whiteboard_marks_reach_allies();
     recorder_cameras_are_shared();
     autopause_holds_for_the_host();
+    notices_follow_the_language();
     speed_lock_and_speed_zero();
     hosts_speed_lock_narrows_the_range();
     commander_start_sync_places_the_commander();

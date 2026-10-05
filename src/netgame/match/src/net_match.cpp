@@ -6,14 +6,19 @@
 #include "oa/netgame/player_slots.hpp"
 #include "oa/netgame/unicode_chat.hpp"
 #include "oa/base/text.hpp"
+#include "oa/data/languages/interface_text.hpp"
+#include "oa/sim/speed.hpp"
 #include "oa/ui/frontend_multiplayer/team_rules.hpp"
 
 #include <algorithm>
 #include <bit>
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
 #include <span>
 #include <string>
+#include <string_view>
+#include <utility>
 
 namespace oa::netgame::match {
 namespace {
@@ -780,6 +785,78 @@ std::size_t chat_bytes_within(const char* line, std::size_t limit) {
 // The most bytes of a line Unicode chat reads: more than four records hold.
 constexpr std::size_t chat_line_read_bytes = 512;
 
+/// Returns one of the game's own texts in the language shown (NetMatchHooks::translate_game_text).
+///
+/// @param m Running match.
+/// @param english The text as the game's translate.tdf keys it.
+/// @return The translation, valid until the next lookup; or the English.
+const char* game_text(const NetMatch* m, const char* english) {
+    const char* translated = m->hooks.translate_game_text != nullptr
+                                 ? m->hooks.translate_game_text(m->hooks.context, english)
+                                 : nullptr;
+    return translated != nullptr ? translated : english;
+}
+
+/// Puts a player's name into a translated line where its "%s" stands.
+///
+/// The line is copied as written, except that its first "%s" becomes the
+/// name and each "%%" a '%'; any other '%' sequence shows as written, so
+/// the line is never read as a format.
+///
+/// @param text The line, as its translation writes it.
+/// @param name The player's name.
+/// @return The line with the name in it.
+/// @quirk A line without "%s" leaves the name out, as 3.1c's German and
+///        French disconnection lines do.
+std::string with_name(const char* text, std::string_view name) {
+    std::string line;
+    bool named = false;
+    for (const char* at = text; *at != '\0'; ++at) {
+        if (at[0] == '%' && at[1] == '%') {
+            line += '%';
+            ++at;
+        } else if (!named && at[0] == '%' && at[1] == 's') {
+            line += name;
+            named = true;
+            ++at;
+        } else {
+            line += *at;
+        }
+    }
+    return line;
+}
+
+/// Returns one of the engine's own notices in the language shown, from the
+/// interface catalogue, with each "{field}" filled in.
+///
+/// The line keeps the most bytes a notice holds, cut between whole
+/// characters.
+///
+/// @param english The notice in English, with its fields in braces.
+/// @param fields Each field's name and text.
+/// @return The notice.
+std::string own_words(
+    std::string_view english, std::initializer_list<std::pair<std::string_view, std::string>> fields
+) {
+    std::string line(oa::data::languages::interface_text(english));
+    for (const auto& [name, value] : fields) {
+        const std::string field = "{" + std::string(name) + "}";
+        for (std::size_t at = line.find(field); at != std::string::npos;
+             at = line.find(field, at + value.size()))
+            line.replace(at, field.size(), value);
+    }
+    line.resize(oa::base::text::whole_characters(line, notice_bytes - 1));
+    return line;
+}
+
+/// Returns a player's name as a string.
+///
+/// @param p Player record.
+/// @return The name, at most the field's size.
+std::string name_of(const Player& p) {
+    return std::string(p.name, ::strnlen(p.name, sizeof p.name));
+}
+
 /// Tells whether a player's machine reads chat as UTF-8: its setup block says so.
 ///
 /// @param world Match world.
@@ -1039,6 +1116,14 @@ void integrity_report(NetMatch* m) {
     const auto* self = first_local_human(m->world);
     if (self == nullptr)
         return;
+    // The notice is in the language shown; the chat line goes out in English.
+    notice(
+        m,
+        own_words(
+            "{player} reports VerCheck issues with {count} other players",
+            {{"player", name_of(*self)}, {"count", std::to_string(issues)}}
+        ).c_str()
+    );
     char line[notice_bytes];
     std::snprintf(
         line,
@@ -1048,7 +1133,6 @@ void integrity_report(NetMatch* m) {
         self->name,
         issues
     );
-    notice(m, line);
     say_to_all(m, line);
 }
 
@@ -1102,20 +1186,19 @@ void show_vote(NetMatch* m, const Vote& vote) {
     const auto needed = vote_needed(vote, electorate.count);
     if (m->hooks.vote_shown != nullptr)
         m->hooks.vote_shown(m->hooks.context, vote, target->index, needed, electorate.count);
-    char line[notice_bytes];
-    std::snprintf(
-        line,
-        sizeof line,
-        "%s: reject %.*s (%d yes/%d no/%d, %us)",
-        vote.flag == vote_flag_timeout ? "Timeout" : "Vote",
-        name_length(*target),
-        target->name,
-        std::popcount(vote.yes),
-        std::popcount(vote.no),
-        static_cast<int>(electorate.count),
-        vote_seconds_left(vote, now_time(m))
+    notice(
+        m,
+        own_words(
+            vote.flag == vote_flag_timeout
+                ? "Timeout: reject {player} ({yes} yes/{no} no/{voters}, {seconds}s)"
+                : "Vote: reject {player} ({yes} yes/{no} no/{voters}, {seconds}s)",
+            {{"player", name_of(*target)},
+             {"yes", std::to_string(std::popcount(vote.yes))},
+             {"no", std::to_string(std::popcount(vote.no))},
+             {"voters", std::to_string(static_cast<int>(electorate.count))},
+             {"seconds", std::to_string(vote_seconds_left(vote, now_time(m)))}}
+        ).c_str()
     );
-    notice(m, line);
 }
 
 /// Opens a vote on a player and asks every machine to vote.
@@ -1191,16 +1274,12 @@ void tally_votes(NetMatch* m) {
             continue;
         const auto target_id = vote.target_id;
         const auto reason = vote.flag;
-        char line[notice_bytes];
-        std::snprintf(
-            line,
-            sizeof line,
-            result == VoteResult::passed ? "%.*s rejected" : "%.*s stays in the game",
-            name_length(*target),
-            target->name
+        const std::string line = own_words(
+            result == VoteResult::passed ? "{player} rejected" : "{player} stays in the game",
+            {{"player", name_of(*target)}}
         );
         vote_close(m->votes, vote, result, now);
-        notice(m, line);
+        notice(m, line.c_str());
         if (result == VoteResult::passed)
             reject_player(m, target_id, reason);
     }
@@ -1321,13 +1400,10 @@ void handle_recorder_record(
             }
         } else if (message.kind == RecorderMessageKind::cheat_mask && message.size >= 4) {
             const auto mask = load_u32(message.payload);
-            if (mask != 0 && m->recorder.cheat_mask[slot] == 0 && m->rules.recorder_cheat_notices) {
-                char line[notice_bytes];
-                std::snprintf(
-                    line, sizeof line, "%.*s has cheats enabled", name_length(from), from.name
+            if (mask != 0 && m->recorder.cheat_mask[slot] == 0 && m->rules.recorder_cheat_notices)
+                notice(
+                    m, own_words("{player} has cheats enabled", {{"player", name_of(from)}}).c_str()
                 );
-                notice(m, line);
-            }
             m->recorder.cheat_mask[slot] = mask;
         }
         break;
@@ -2258,11 +2334,10 @@ bool dispatch_record(NetMatch* m, Player& from, Player& to, const Packet& packet
             // other is undone and announced, as every recorder does.
             if (m->recorder.autopause_holding && (r.value & run_flag_paused) == 0) {
                 if (host_slot(world) != from.index) {
-                    char line[notice_bytes];
-                    std::snprintf(
-                        line, sizeof line, "%.*s tried to unpause.", name_length(from), from.name
+                    notice(
+                        m,
+                        own_words("{player} tried to unpause.", {{"player", name_of(from)}}).c_str()
                     );
-                    notice(m, line);
                     break;
                 }
                 m->recorder.autopause_holding = false;
@@ -2291,9 +2366,9 @@ bool dispatch_record(NetMatch* m, Player& from, Player& to, const Packet& packet
         if (decode_record(data, size, &r) != WireError::ok)
             break;
         if (const auto* p = player_of(world, r.player_id)) {
-            char line[80];
-            std::snprintf(line, sizeof line, "Player %.30s has disconnected", p->name);
-            notice(m, line);
+            // The whole line is the game's own text, translated, with the
+            // name where its translation puts it, as 3.1c shows it.
+            notice(m, with_name(game_text(m, "Player %s has disconnected"), name_of(*p)).c_str());
             disconnect_notice(m, r.player_id);
         }
         break;
@@ -2396,14 +2471,12 @@ bool dispatch_record(NetMatch* m, Player& from, Player& to, const Packet& packet
         IntegrityNoticeRecord r{};
         if (decode_record(data, size, &r) == WireError::ok)
             if (const auto* p = player_of(world, r.player_id)) {
-                char line[96];
-                std::snprintf(
-                    line,
-                    sizeof line,
-                    "%.30s has modified his executable. Game integrity breached.",
-                    p->name
-                );
-                notice(m, line);
+                // The name, then the game's own text, translated, two spaces
+                // inside it as the game's table keys it.
+                std::string line = name_of(*p);
+                line += ' ';
+                line += game_text(m, "has modified his executable.  Game integrity breached.");
+                notice(m, line.c_str());
             }
         break;
     }
@@ -2809,7 +2882,7 @@ void net_match_loading_screen_status(const NetMatch* m, LoadingScreenStatus* out
     *out = LoadingScreenStatus{};
     auto& game = m->world->game;
     if ((game.load_flags & load_flag_barrier_passed) != 0) {
-        std::snprintf(out->text, sizeof out->text, "%s", "Synchronization complete");
+        std::snprintf(out->text, sizeof out->text, "%s", game_text(m, "Synchronization complete"));
         return;
     }
     int32_t active = 0;
@@ -2836,13 +2909,15 @@ void net_match_loading_screen_status(const NetMatch* m, LoadingScreenStatus* out
         bar.filled = left + load_progress(p) * width / int32_t{load_progress_complete};
         left += share;
     }
+    // A translation holds only until the next one: the first is copied.
+    const std::string waiting = game_text(m, "Waiting for other players");
     std::snprintf(
         out->text,
         sizeof out->text,
         "%s.  %i %s",
-        "Waiting for other players",
+        waiting.c_str(),
         out->ready,
-        out->ready == 1 ? "player ready" : "players ready"
+        game_text(m, out->ready == 1 ? "player ready" : "players ready")
     );
 }
 
@@ -3426,7 +3501,7 @@ void net_match_set_pause(NetMatch* m, bool paused) noexcept {
         // Under autopause only the host starts the game.
         if (host_slot(m->world) != game.local_player_index) {
             game.sim_run_flags = static_cast<uint16_t>(game.sim_run_flags | run_flag_paused);
-            notice(m, "Autopause: only the host can unpause");
+            notice(m, own_words("Autopause: only the host can unpause", {}).c_str());
             return;
         }
         m->recorder.autopause_holding = false;
@@ -3470,18 +3545,16 @@ void net_match_set_speed(NetMatch* m, int32_t speed, bool broadcast) noexcept {
     if (speed < m->rules.speed_min)
         speed = m->rules.speed_min;
     if (static_cast<uint16_t>(speed) != game.requested_speed) {
-        char line[40];
-        if (speed == 10)
-            std::snprintf(line, sizeof line, "Game Speed Normal");
-        else
-            std::snprintf(
-                line,
-                sizeof line,
-                "%s  %c%d",
-                "Game Speed",
-                speed > 10 ? '+' : '-',
-                speed > 10 ? speed - 10 : 10 - speed
-            );
+        // The line is the speed keys' own, in the language shown, for a
+        // speed another machine set as for one set here, as in 3.1c.
+        oa::sim::messages::Hooks words{};
+        words.context = m;
+        if (m->hooks.translate_game_text != nullptr)
+            words.translate = [](void* context, const char* text) {
+                return game_text(static_cast<const NetMatch*>(context), text);
+            };
+        char line[oa::sim::speed::message_bytes];
+        oa::sim::speed::format_message(line, speed, words);
         notice(m, line);
     }
     game.requested_speed = static_cast<uint16_t>(speed);

@@ -341,6 +341,34 @@ void test_teams_and_alliances(const oa::ui::gui_layout::Layout& lounge) {
     );
     (void)f.press("ALLY1");
     expect(me.alliance[1] == 0, "ally toggles off");
+    // In another language the line says the alliance as the language shown
+    // says it, and goes to the others so, as in 3.1c.
+    f.lobby.services.translate = [](void*, const char* text) -> const char* {
+        return std::string_view(text) == "allied with" ? "Verbuendet mit" : nullptr;
+    };
+    (void)f.press("ALLY1");
+    expect(me.alliance[1] == 1, "ally toggles on again");
+    {
+        const auto head = mp::lobby_chat_head(*f.game);
+        const std::string shown =
+            mp::lobby_chat_line(*f.game, static_cast<std::size_t>(head + mp::kChatLines - 1));
+        expect(shown.find("Verbuendet mit Guest") != std::string::npos, "alliance said in German");
+        bool said = false;
+        for (int32_t index = 0; index < f.loopback.sent_count; ++index) {
+            const auto* record = f.loopback.sent[index];
+            if (record[0] != static_cast<uint8_t>(oa::netgame::RecordType::chat))
+                continue;
+            const std::string_view text(
+                reinterpret_cast<const char*>(record + 1),
+                ::strnlen(reinterpret_cast<const char*>(record + 1), mp::kLobbyRecordBytes - 1)
+            );
+            said = said || text.find("Verbuendet mit Guest") != std::string_view::npos;
+        }
+        expect(said, "the German alliance line goes to the others");
+    }
+    f.lobby.services.translate = nullptr;
+    (void)f.press("ALLY1");
+    expect(me.alliance[1] == 0, "ally toggles off again");
 
     expect(f.press("TEAMICONS0"), "TEAMICONS0 clickable");
     expect(mp::lobby_player_team(me) == 0, "no team -> team 0 wraps from 5");

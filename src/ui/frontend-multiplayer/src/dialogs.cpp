@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <string>
 #include <utility>
 
 namespace oa::ui::frontend_multiplayer {
@@ -86,6 +87,33 @@ Control* control_at(Panel& panel, const char* pattern, int32_t index) noexcept {
     char name[32];
     std::snprintf(name, sizeof(name), pattern, static_cast<int>(index));
     return panel_control(panel, name);
+}
+
+/// Puts a number into a translated line where its "%d" stands.
+///
+/// The line is copied as written, except that its first "%d" becomes the
+/// number and each "%%" a '%'; any other '%' sequence shows as written, so
+/// the line is never read as a format. A line without "%d" shows no number.
+///
+/// @param text the line, as its translation writes it
+/// @param number the number
+/// @return the line with the number in it
+std::string with_number(const char* text, int number) {
+    std::string line;
+    bool numbered = false;
+    for (const char* at = text; *at != '\0'; ++at) {
+        if (at[0] == '%' && at[1] == '%') {
+            line += '%';
+            ++at;
+        } else if (!numbered && at[0] == '%' && at[1] == 'd') {
+            line += std::to_string(number);
+            numbered = true;
+            ++at;
+        } else {
+            line += *at;
+        }
+    }
+    return line;
 }
 
 } // namespace
@@ -201,14 +229,16 @@ bool timeout_tick(Lobby& lobby, Panel& panel) noexcept {
     const auto silent = base::game_loop::scaled_clock_elapsed(now(lobby), player.last_update_time) /
                         kTicksPerSecond;
     const auto limit = static_cast<uint32_t>(timeout_seconds(game)) + kTimeoutGraceSeconds;
-    char text[200];
-    std::snprintf(
-        text,
-        sizeof(text),
-        "will be rejected in %d seconds",
-        static_cast<int>(limit > silent ? limit - silent : 0)
+    // The countdown is the game's own text in the language shown, as in 3.1c.
+    panel_set_text(
+        panel,
+        "TIMETEXT",
+        with_number(
+            lobby_translated(lobby, "will be rejected in %d seconds"),
+            static_cast<int>(limit > silent ? limit - silent : 0)
+        )
+            .c_str()
     );
-    panel_set_text(panel, "TIMETEXT", text);
     if (limit <= silent) {
         lobby_reject(lobby, lobby.timeout_player, kRejectTimedOut);
         return true;
@@ -619,12 +649,13 @@ bool allies_handle_event(Lobby& lobby, Panel& panel) noexcept {
         const auto value = static_cast<uint8_t>(me.alliance[slot] ^ 1U);
         me.alliance[slot] = value;
         lobby_set_alliance(lobby, me, player, value, false);
+        // Said in the language shown, as 3.1c says it.
         char line[96];
         std::snprintf(
             line,
             sizeof(line),
             " %s %s",
-            value == 0 ? "broke alliance with" : "allied with",
+            lobby_translated(lobby, value == 0 ? "broke alliance with" : "allied with"),
             name_of(player).c_str()
         );
         lobby_say(lobby, me, line);

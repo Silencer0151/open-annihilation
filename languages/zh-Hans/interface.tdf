@@ -4529,6 +4529,44 @@
 	zh-Hans=打开（由{language}设定）;
 	}
 
+// Network play's notices in the message log, with {slots} where the values go.
+[Autopause: only the host can unpause]
+	{
+	zh-Hans=自动暂停：只有主持者可以继续游戏;
+	}
+[{player} tried to unpause.]
+	{
+	zh-Hans={player}试图继续游戏。;
+	}
+[{player} has cheats enabled]
+	{
+	zh-Hans={player}开启了作弊;
+	}
+[{player} reports VerCheck issues with {count} other players]
+	{
+	zh-Hans={player}报告{count}名其他玩家版本检查异常;
+	}
+[Vote: reject {player} ({yes} yes/{no} no/{voters}, {seconds}s)]
+	{
+	zh-Hans=投票：拒绝{player}（{yes}赞成/{no}反对/{voters}，{seconds}秒）;
+	}
+[Timeout: reject {player} ({yes} yes/{no} no/{voters}, {seconds}s)]
+	{
+	zh-Hans=超时：拒绝{player}（{yes}赞成/{no}反对/{voters}，{seconds}秒）;
+	}
+[{player} rejected]
+	{
+	zh-Hans={player}已被拒绝;
+	}
+[{player} stays in the game]
+	{
+	zh-Hans={player}留在游戏中;
+	}
+[Vote Yes or Vote No in the console answers the vote]
+	{
+	zh-Hans=在控制台输入Vote Yes或Vote No进行投票;
+	}
+
 // Whole sentences the engine fills in, with {slots} where the values go.
 [Item {n}]
 	{

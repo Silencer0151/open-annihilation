@@ -1374,6 +1374,42 @@ void recorded_unicode_chat_plays_back() {
     }
 }
 
+// A recorded speed change reads as the viewer's language says it: the
+// session's translation reaches the match, which builds the line from the
+// game's own words.
+void recorded_speed_reads_in_the_language_shown() {
+    auto recording = make_recording(kUnitsPerPlayer, 1);
+    std::vector<uint8_t> payload{formats::tad::payload_marker};
+    PauseSpeedRecord speed{};
+    speed.kind = 1;
+    speed.value = 11;
+    append_record(&payload, speed);
+    recording.add(1, 33, payload);
+    recording.add(9, 33, probe_payload());
+    const auto release = [](DemoSession* session) {
+        demo_session_end(session);
+        delete session;
+    };
+    std::unique_ptr<DemoSession, decltype(release)> session(new DemoSession(), release);
+    std::string error;
+    CHECK(demo_load(&session->playback, recording.bytes(), &error));
+    static const std::string tempo = "Tempo";
+    session->translate_game_text = [](void*, const char* english) -> const char* {
+        return std::string_view(english) == "Game Speed" ? tempo.c_str() : nullptr;
+    };
+    Machine replay;
+    replay.build(1);
+    std::array<uint8_t, OA_PLAYER_COUNT> watcher_allies{};
+    watcher_allies[1] = 1;
+    replay.match->configure_outcomes(1, watcher_allies, false);
+    CHECK(demo_session_begin(session.get(), replay.match.get(), &error));
+    if (session->match == nullptr)
+        return;
+    for (int t = 0; t < 10; ++t)
+        demo_session_frame(session.get());
+    CHECK(std::count(session->lines.begin(), session->lines.end(), "Tempo  +1\n") == 1);
+}
+
 // Economy records give a player simulated elsewhere the production and use
 // per settlement its running totals imply, from the second record on.
 void economy_records_give_income_figures() {
@@ -1423,6 +1459,7 @@ int main() {
     ten_players_watch_without_a_slot();
     slotless_viewer_watches_the_recording();
     recorded_unicode_chat_plays_back();
+    recorded_speed_reads_in_the_language_shown();
     economy_records_give_income_figures();
     if (failures != 0) {
         std::fprintf(stderr, "%d failure(s)\n", failures);

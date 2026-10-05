@@ -489,7 +489,7 @@ bool game_list_open(Lobby& lobby, ConnectState& state, Panel& panel) noexcept {
     // A player who left by itself (reason 2) is told nothing.
     auto& me = local_player(lobby);
     if (me.reject_reason != 0 && me.reject_reason != kRejectLeaving)
-        message(lobby, reject_reason_text(me.reject_reason));
+        message(lobby, lobby_translated(lobby, reject_reason_text(me.reject_reason)));
     me.reject_reason = 0;
     return true;
 }
@@ -828,7 +828,7 @@ bool connect_join(Lobby& lobby, ConnectState& state, bool watch) noexcept {
     uint32_t id = 0;
     const auto result = lobby.net.join(lobby.net.context, &request, &id);
     if (result != LobbyResult::ok) {
-        message(lobby, reject_reason_text(static_cast<uint8_t>(result)));
+        message(lobby, lobby_translated(lobby, reject_reason_text(static_cast<uint8_t>(result))));
         return false;
     }
     const auto watcher = local_info(lobby).options & option::watcher;

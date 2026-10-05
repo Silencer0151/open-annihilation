@@ -1316,6 +1316,22 @@ bool check_player_timeout(Driver& d) {
     );
     expect(d.drawn(), "TIMEOUT.GUI drawn");
     d.snapshot("battleroom-timeout");
+    // The countdown is the game's own text in the language shown, the
+    // seconds where its %d stands.
+    mp::multiplayer_bind_translation({nullptr, [](void*, std::string_view text) {
+                                          return std::string(
+                                              text == "will be rejected in %d seconds"
+                                                  ? "wirn in %d Sekunden ausgeschlossen"
+                                                  : text
+                                          );
+                                      }});
+    d.frame();
+    expect(
+        dialog != nullptr &&
+            mp::panel_text(*dialog, "TIMETEXT") == "wirn in 120 Sekunden ausgeschlossen",
+        "the countdown follows the language shown"
+    );
+    mp::multiplayer_bind_translation({});
     hear_from(kSilent);
     d.frame();
     expect(

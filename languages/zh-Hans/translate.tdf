@@ -3993,7 +3993,7 @@
 	Chinese=好的，能量超过 %d 时将共享;
 	}
 
-// Not in 3.1c's table: GUI captions that 3.1c's own translate.tdf does not key
+// Not in 3.1c's table: GUI captions and messages that 3.1c's own translate.tdf does not key
 
 [Begin Mission]
 	{
@@ -4006,6 +4006,10 @@
 [CREDITS]
 	{
 	Chinese=制作人员;
+	}
+[has modified his executable.  Game integrity breached.]
+	{
+	Chinese=修改了游戏程序，完整性遭破坏;
 	}
 [has not responded for %d seconds]
 	{

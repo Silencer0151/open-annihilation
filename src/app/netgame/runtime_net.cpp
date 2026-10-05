@@ -29,6 +29,7 @@
 #include "oa/app/netgame/extension_api.hpp"
 #include "oa/base/sha256.hpp"
 #include "oa/base/text.hpp"
+#include "oa/data/languages/interface_text.hpp"
 #include "oa/present/game_text.hpp"
 #include "oa/sim/ai.hpp"
 #include "oa/sim/match_runtime.hpp"
@@ -591,6 +592,16 @@ struct LoopbackSide {
 
 } // namespace
 
+const char* NetworkPlay::translate_text(void* play, const char* english) noexcept {
+    auto& self = *static_cast<NetworkPlay*>(play);
+    try {
+        self.translated_text_ = self.runtime_.translate_ui(english);
+    } catch (...) {
+        return nullptr;
+    }
+    return self.translated_text_.c_str();
+}
+
 // C-style callbacks handed to the multiplayer screens and the net match, and
 // the launch steps they drive.
 struct NetworkPlay::NetHost {
@@ -627,6 +638,7 @@ struct NetworkPlay::NetHost {
         hooks.context = &play;
         hooks.chat = chat;
         hooks.notice = notice;
+        hooks.translate_game_text = translate_text;
         hooks.rand15 = rand15;
         hooks.credit = [](void*, World* world, uint8_t to, bool metal, float amount) {
             nm::credit_player_resource(world, to, metal, amount);
@@ -667,7 +679,15 @@ struct NetworkPlay::NetHost {
                 auto& play = self(context);
                 play.net_->vote_target = vote.target_id;
                 if (target < OA_PLAYER_COUNT)
-                    notice(context, "Vote Yes or Vote No in the console answers the vote");
+                    notice(
+                        context,
+                        std::string(
+                            oa::data::languages::interface_text(
+                                "Vote Yes or Vote No in the console answers the vote"
+                            )
+                        )
+                            .c_str()
+                    );
             };
         hooks.speed_lock_changed =
             [](void* context, bool locked, uint8_t slowest, uint8_t fastest) {

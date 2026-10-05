@@ -14,7 +14,7 @@ add_library(oa::netgame::match ALIAS oa-netgame-match)
 target_include_directories(oa-netgame-match PUBLIC include)
 target_link_libraries(oa-netgame-match
   PUBLIC oa-netgame oa-netgame-replication oa-ui-frontend-multiplayer oa-base-game-loop
-  PRIVATE oa-sim-visibility-state oa-base-sha256 oa-base-text)
+  PRIVATE oa-sim-visibility-state oa-sim-speed oa-data-languages oa-base-sha256 oa-base-text)
 
 # Records built from the simulation's shared events, and ground route deltas.
 add_library(oa-netgame-match-sim-records src/sim_records.cpp src/route_delta.cpp)
@@ -28,7 +28,7 @@ target_link_libraries(oa-netgame-match-runtime PUBLIC oa-netgame-match oa-sim-ma
 
 if(BUILD_TESTING)
   add_executable(oa-netgame-match-test tests/net_match_test.cpp)
-  target_link_libraries(oa-netgame-match-test PRIVATE oa-base-text oa-netgame-match)
+  target_link_libraries(oa-netgame-match-test PRIVATE oa-base-text oa-data-languages oa-netgame-match)
   add_test(NAME net-match COMMAND oa-netgame-match-test)
   set_tests_properties(net-match PROPERTIES TIMEOUT 120)
   add_executable(oa-netgame-match-rules-test tests/net_match_rules_test.cpp)

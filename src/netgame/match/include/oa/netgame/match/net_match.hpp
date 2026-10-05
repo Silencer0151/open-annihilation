@@ -78,6 +78,16 @@ struct NetMatchHooks {
     /// @param text NUL-terminated line.
     void (*notice)(void* context, const char* text){};
 
+    /// Translates one of the game's own texts into the language shown, as
+    /// the game's translate.tdf keys it: by its English exactly. The match
+    /// builds each notice about another machine from such texts as it shows
+    /// the notice, as 3.1c does. Null, or a null return, shows the English.
+    ///
+    /// @param context NetMatchHooks.context.
+    /// @param english NUL-terminated English text.
+    /// @return The translation, valid until the next call; or null.
+    const char* (*translate_game_text)(void* context, const char* english){};
+
     /// Credits a receiving player's economy for 0x16 subtypes 1 (energy) and 2 (metal) and local gives.
     ///
     /// @param context NetMatchHooks.context.
@@ -493,6 +503,9 @@ struct LoadingScreenStatus {
 
 /// Lays out the multiplayer loading screen's player bars and status line.
 ///
+/// The line's texts are the game's own, in the language shown
+/// (NetMatchHooks::translate_game_text).
+///
 /// @param match Running match.
 /// @param[out] out Bars for every active player in slot order and the line counting the players ready;
 ///        "Synchronization complete" alone once the barrier passed.
@@ -694,7 +707,10 @@ bool net_match_speed_range(const NetMatch* match, uint8_t* slowest, uint8_t* fas
 /// Changes the game speed, shows a notice when it changed and optionally broadcasts it as 0x19.
 ///
 /// The speed is clamped to the rules' range (1..20 in 3.1c). A local change
-/// outside the host's speed lock (net_match_speed_range) is not made.
+/// outside the host's speed lock (net_match_speed_range) is not made. The
+/// notice is the speed keys' own line (sim::speed::format_message), in the
+/// language shown (NetMatchHooks::translate_game_text), for a received speed as for
+/// a local one, as in 3.1c.
 ///
 /// @param[in,out] match Running match.
 /// @param speed Requested speed, clamped first to WireRules::speed_max and then to

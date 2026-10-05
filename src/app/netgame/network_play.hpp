@@ -444,6 +444,18 @@ class NetworkPlay {
     // The callbacks handed to the multiplayer screens and the net match, and
     // the launch steps they drive (runtime_net.cpp).
     struct NetHost;
+
+    /// Translates one of the game's own texts into the language shown, for the
+    /// net match and a recorded game's playback
+    /// (NetMatchHooks::translate_game_text).
+    ///
+    /// Never throws: a failed translation gives null, which shows the English.
+    ///
+    /// @param play this network play
+    /// @param english the English text, as the game's translate.tdf keys it
+    /// @return the translation, valid until the next call; or null
+    static const char* translate_text(void* play, const char* english) noexcept;
+
     // Network play's hooks (extension.cpp), which reach this state.
     friend struct RuntimeExtension;
 
@@ -455,6 +467,8 @@ class NetworkPlay {
     std::unique_ptr<DemoState, void (*)(DemoState*) noexcept> demo_{nullptr, destroy_demo_session};
     // The last chat line handed to the match report.
     std::string reported_chat_;
+    // The last text translate_text gave.
+    std::string translated_text_;
     // The profile whose rules are bound (bind_profile_rules), null for
     // 3.1c's, its sim hash, and the battle room buttons bound.
     const oa::data::mod_profile::ModProfile* bound_profile_ = nullptr;

@@ -652,6 +652,11 @@ bool demo_session_begin(
     hooks.context = session;
     hooks.chat = note_chat;
     hooks.notice = note_notice;
+    if (session->translate_game_text != nullptr)
+        hooks.translate_game_text = [](void* context, const char* english) {
+            const auto& viewer = session_of(context);
+            return viewer.translate_game_text(viewer.game_text_context, english);
+        };
     hooks.record_seen = note_record;
     hooks.destroy_player_units = [](void* context, World*, uint8_t slot) {
         netgame::match::match_binding_destroy_player_units(&session_of(context).binding, slot);

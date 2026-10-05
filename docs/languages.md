@@ -43,7 +43,7 @@ language; whatever the data leaves untranslated shows in English.
 | What | Where the game data holds it |
 |---|---|
 | Units' names and descriptions: the build menu's buttons and the bottom bar, the unit panel, the F1 panel, the unit restrictions list, the units' spoken lines in the message log | each unit file's `GermanName` and `GermanDescription` (`FrenchName`, …), else `Name` and `Description` |
-| Menus, dialogs, message boxes, panels' texts, the kill board, the loading screen, the F1 panel's labels, the units' spoken words, the message log's own phrases, features' descriptions, a chosen map's name and its description | `gamedata\translate.tdf`: a section names the English text, and its key for the language holds the translation |
+| Menus, dialogs, message boxes, panels' texts, the kill board, the loading screen, the F1 panel's labels, the units' spoken words, the message log's own phrases, a shared game's notices (speed changes, a player's disconnection, a modified program), the network loading screen's line, the battle room's TIMEOUT dialog and rejection messages, features' descriptions, a chosen map's name and its description | `gamedata\translate.tdf`: a section names the English text, and its key for the language holds the translation |
 | Campaign missions' names, briefings, hints and narration | a mission's `<Language>missionname` (also `brief`, `narration`, `missionhint`), and the `camps\briefs-<Language>` and `camps\hints-<Language>` folders |
 | Pictures with words drawn in them | `bitmaps-<Language>`, as the battle room's `battleroom.pcx`; `unitpics-<Language>` |
 | Fonts | `fonts-<Language>` |
@@ -73,6 +73,12 @@ keeps its own name in its definition and in saves, a mission is saved under
 its own name, and the rules (units, weapons, maps, missions, the computer
 players' scripts) are read from their own folders, never from a language's,
 though 3.1c looks there too. Players in different languages play together.
+The only lines a machine sends in the language shown are those 3.1c says
+in it too: the alliance lines, "allied with" or "broke alliance with" and
+a name, and the battle room's "does not have this map". The notices about
+another machine (a speed it set, a player's disconnection, a modified
+program) are built on each machine in its own language, as 3.1c builds
+them.
 
 ## Language packs
 
@@ -157,8 +163,9 @@ For a text in a language, the game tries, in order:
 
 An absent or empty value falls through to the next, so the player never
 sees a blank. Packs change only what players read: they are in no mod
-profile's hash and change nothing a shared game sends, and 3.1c's German,
-French, Italian and Spanish show exactly as 3.1c shows them.
+profile's hash and change nothing a shared game sends but the alliance
+and missing-map lines above, and 3.1c's German, French, Italian and
+Spanish show exactly as 3.1c shows them.
 
 `python3 tools/language_pack_check.py PACK --game-dir GAME --oa-tool OA_TOOL`
 checks a pack: its manifest and tables read, and it tells which of the
@@ -238,9 +245,10 @@ mod profile that sets
   to all of them; when they differ, one copy goes to each machine. A
   record all in ASCII reads the same in both forms and goes once, so a
   line all in ASCII that fits one record goes as it would with the
-  setting off. The line the ALLIES panel says in a game, "allied with"
-  or "broke alliance with" and a name, is in the language shown, as
-  3.1c says it, and goes in these forms too.
+  setting off. The line the ALLIES panel and the battle room's ALLY
+  buttons say, "allied with" or "broke alliance with" and a name, and the
+  battle room's "does not have this map", are in the language shown, as
+  3.1c says them, and go in these forms too.
 - **Long lines.** A line longer than one record goes as up to four
   records, each the speaker's `<Name> ` and a part of the line, cut
   between whole characters, at a space when one lies within the part's
@@ -292,9 +300,14 @@ Hardware acceleration's status lines, the footer's buttons, `System default`
 and the header's title; the names of the standard hacks and their areas
 in Developer Mode's list (`Deterministic Wind`, `Interface`: each hack's
 and area's title in the mod registry), which the list sorts as the
-language shown writes them; and the notices about missing skirmish and
+language shown writes them; the notices about missing skirmish and
 multiplayer maps, the end of the game's missions, the graphics card and
-driver, and settings that were not saved.
+driver, and settings that were not saved; and network play's own notices
+in the message log, which 3.1c does not have: the autopause lines, a
+player who tried to unpause, cheats enabled, VerCheck reports and the
+votes to reject a player. A line the host's recorder sends as chat, such
+as the battle room's autopause line, shows as it arrives, as all chat
+does.
 
 The touch and gamepad controls' words come from the same catalogue, after
 3.1c's own table. Where one English word stands for two things, the
