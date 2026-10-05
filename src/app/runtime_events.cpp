@@ -299,7 +299,18 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
         // one, belong to the bar alone.
         if (route_scroll_pointer(event, x, y))
             return;
-        if (screen_ == Screen::match && !match_paused_ && !match_finished_) {
+        // Beside the open in-game menu the right button is still the
+        // battlefield's, as in 3.1c, and a radar scroll or mouse look its
+        // press starts follows the pointer until the button comes up.
+        const bool beside_menu = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
+                                 event.button.button == SDL_BUTTON_RIGHT &&
+                                 right_press_beside_menu(x, y);
+        const bool pointer_mode =
+            match_ && (match_->state().game.mouse_look_active != 0 ||
+                       (oa::sim::gameplay_input::pointer_flags(match_->state().game) &
+                        oa::sim::gameplay_input::pointer_radar_scroll) != 0);
+        if (screen_ == Screen::match && !match_finished_ &&
+            (!match_paused_ || beside_menu || pointer_mode)) {
             record_pointer_event(event);
             if (follow_pointer_modes(event))
                 return;
@@ -307,7 +318,8 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
         // A press on a placed HUD region or a touch control is not the
         // battlefield's.
         if (screen_ == Screen::match && event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
-            !match_paused_ && !match_finished_ && !hovered_ && match_ && !placed_hud_covers(x, y)) {
+            (!match_paused_ || beside_menu) && !match_finished_ && !hovered_ && match_ &&
+            !placed_hud_covers(x, y)) {
             if (event.button.button == SDL_BUTTON_RIGHT) {
                 // ui.selection-shortcuts takes a right double-click too.
                 if (!selection_shortcut_double_click(x, y, event.button.clicks))

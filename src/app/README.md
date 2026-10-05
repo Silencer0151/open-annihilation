@@ -784,7 +784,11 @@ logs it.
   dialog centred on the whole screen is drawn at the canvas's pixels over
   the side column too (`match_dialog_side_`); while
   the in-game menu or the tab menu is open the panels show their keyboard
-  focus. The load and save dialogs darken the panel below with the frontend
+  focus. Beside the in-game menu and the pages it opens the right button is
+  still the battlefield's and the radar's, as in 3.1c
+  (`right_press_beside_menu`): a press acts as in play, and one that drops
+  the selection also closes the menu, which resumes a match the menu held,
+  as F2 does; the Pause key's pause is left as it is. The load and save dialogs darken the panel below with the frontend
   renderer's `shade_panel_below`, as the frontend dialogs do. Over a match
   both open centred on the screen, at every window size and interface
   scale (the save dialog's centring is in [VARIANCES.md](../../VARIANCES.md));

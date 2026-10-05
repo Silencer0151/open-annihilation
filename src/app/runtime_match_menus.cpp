@@ -3664,6 +3664,24 @@ bool Runtime::ingame_menu_column_shown() const {
            !team_panel_open() && oa::ui::frontend_dialogs::dialog_count() == 0;
 }
 
+bool Runtime::right_press_beside_menu(float x, float y) const {
+    if (screen_ != Screen::match || !match_ || match_finished_ || !match_paused_ || !match_hud_ ||
+        match_hud_->layout.gadgets.empty() || match_menu_session().close_confirm ||
+        team_panel_open() || oa::ui::frontend_dialogs::dialog_count() != 0 || hovered_ ||
+        placed_hud_covers(x, y))
+        return false;
+    // A press on the panel shown, on a button or on its face, is the panel's.
+    if (const auto area = placed_panel_area(); area && x >= static_cast<float>(area->x) &&
+                                               y >= static_cast<float>(area->y) &&
+                                               x < static_cast<float>(area->x + area->width) &&
+                                               y < static_cast<float>(area->y + area->height))
+        return false;
+    const auto& root = match_hud_->layout.gadgets.front().common;
+    const auto point = hud_source_point(x, y);
+    return point.x < root.x || point.y < root.y || point.x >= root.x + root.width ||
+           point.y >= root.y + root.height;
+}
+
 void Runtime::sync_visual_option_widgets() {
     const auto flags = preferences_.graphics_flags;
     set_button_stage("SHADING", (flags & init::preference_flags::shading) != 0 ? 1 : 0);

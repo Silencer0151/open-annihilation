@@ -182,9 +182,14 @@ void Runtime::handle_match_right_press(float x, float y) {
         drive_mouse_look(true);
         return;
     case input::RightPress::clear_selection:
-        // The selection marks drop, then the order panel is rebuilt.
+        // The selection marks drop, then the order panel is rebuilt. Every
+        // panel over it closes first: an open in-game menu closes and the
+        // match it held runs again, as F2 resumes it, as in 3.1c.
         clear_local_selection();
-        apply_match_hud_for_selection();
+        if (match_paused_)
+            resume_match_pause();
+        else
+            apply_match_hud_for_selection();
         return;
     case input::RightPress::radar_scroll:
         // The view goes to the point at once, then follows the pointer until

@@ -8030,11 +8030,24 @@ class Runtime final : public menu::Host,
     /// command, starts mouse look, drops the selection, moves the view to the
     /// point under it on the radar (starting a radar scroll in the left-click
     /// interface) or gives the default order to the unit and ground under the
-    /// pointer.
+    /// pointer. Dropping the selection also closes an open in-game menu, which
+    /// resumes a match it held, as F2 does.
     ///
     /// @param x canvas column
     /// @param y canvas row
     void handle_match_right_press(float x, float y);
+
+    /// Tells whether a right press beside the open in-game menu is the battlefield's.
+    ///
+    /// While the in-game menu, or a page it opens, shows over a running match
+    /// with no team panel, dialog or close confirmation over it, the right
+    /// button still reaches the battlefield and the radar, as in 3.1c; a press
+    /// on the panel shown, its buttons or its face, is the panel's.
+    ///
+    /// @param x canvas column
+    /// @param y canvas row
+    /// @return true when the press goes to handle_match_right_press
+    [[nodiscard]] bool right_press_beside_menu(float x, float y) const;
 
     /// Sends the pointer events to a running radar scroll or mouse look alone.
     ///

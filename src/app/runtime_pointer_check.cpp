@@ -9,6 +9,7 @@
 #include "oa/app/runtime.hpp"
 #include "oa/data/defs/layout.hpp"
 #include "oa/core/map_plot.h"
+#include "oa/ui/console/game_fields.hpp"
 #include "oa/ui/decoded.hpp"
 #include "oa/sim/messages.hpp"
 #include "oa/ui/hud/camera_scroll.hpp"
@@ -490,6 +491,78 @@ void Runtime::check_pointer_interfaces() {
         "right-click interface: a right click on the radar did not move the view there alone"
     );
 
+    // Beside the open in-game menu the right button is the battlefield's. In
+    // the right-click interface a right click on open ground gives the
+    // default order, and the menu stays open over the held skirmish.
+    centre_on(peewee);
+    std::tie(px, py) = screen_of(peewee);
+    const auto g = open_ground(px + kPointOffset, py);
+    tap(SDLK_F2);
+    require(match_paused_ && !match_clock_steps(), "F2 did not open the menu holding the game");
+    click(SDL_BUTTON_RIGHT, px + kPointOffset, py);
+    require(
+        match_paused_ && !match_clock_steps() && moves_to(peewee, {g}) && selected(peewee),
+        "right-click interface: a right click beside the in-game menu did not give the default "
+        "order alone"
+    );
+    tap(SDLK_F2);
+    require(!match_paused_, "F2 did not close the in-game menu");
+    // In the left-click interface a right press on the menu's panel does
+    // nothing, and one on the radar moves the view with the menu kept open;
+    // a right click on open ground drops the selection and closes the menu,
+    // and the skirmish runs again.
+    set_interface(input::interface_left_click);
+    match_->stop_orders(peewee);
+    tap(SDLK_F2);
+    require(match_paused_ && match_hud_.has_value(), "F2 did not open the in-game menu");
+    const auto& menu_root = match_hud_->layout.gadgets.front().common;
+    const auto on_menu =
+        oa::ui::display_layout::source_to_canvas(match_layout_, menu_root.x + 2, menu_root.y + 2);
+    click(SDL_BUTTON_RIGHT, static_cast<float>(on_menu.x), static_cast<float>(on_menu.y));
+    require(
+        match_paused_ && selected(peewee) && queue_of(peewee).empty(),
+        "a right click on the in-game menu's panel closed it or acted"
+    );
+    require(!viewing(radar_view(lx, ly)), "the view already showed the radar's middle");
+    press(SDL_BUTTON_RIGHT, lx, ly);
+    require(
+        match_paused_ && viewing(radar_view(lx, ly)) && selected(peewee) &&
+            (input::pointer_flags(world.game) & input::pointer_radar_scroll) != 0,
+        "left-click interface: a right press on the radar beside the in-game menu did not move "
+        "the view there alone"
+    );
+    release(SDL_BUTTON_RIGHT, lx, ly);
+    require(
+        match_paused_ && (input::pointer_flags(world.game) & input::pointer_radar_scroll) == 0,
+        "the right release beside the in-game menu did not end the radar scroll"
+    );
+    centre_on(peewee);
+    std::tie(px, py) = screen_of(peewee);
+    std::ignore = open_ground(px + kPointOffset, py);
+    click(SDL_BUTTON_RIGHT, px + kPointOffset, py);
+    require(
+        !match_paused_ && match_clock_steps() && !selected(peewee) && !has_local_selection() &&
+            queue_of(peewee).empty(),
+        "left-click interface: a right click beside the in-game menu did not drop the selection, "
+        "close the menu and resume the game"
+    );
+    // The Pause key's pause stays: the right click only drops the selection.
+    const auto pause_bit = [&] {
+        return (world.game.sim_run_flags & oa::ui::console::kSimRunPaused) != 0;
+    };
+    select_only(peewee);
+    std::tie(px, py) = screen_of(peewee);
+    tap(SDLK_PAUSE);
+    require(pause_bit(), "Pause did not pause the game");
+    click(SDL_BUTTON_RIGHT, px + kPointOffset, py);
+    require(
+        pause_bit() && !match_paused_ && !selected(peewee) && queue_of(peewee).empty(),
+        "left-click interface: a right click lifted the Pause key's pause or did not deselect"
+    );
+    tap(SDLK_PAUSE);
+    require(!pause_bit(), "Pause again did not resume the game");
+    set_interface(input::interface_right_click);
+
     // A group keeps its shape: three kbots and a fighter near one another
     // are each sent to their own point around the ordered one, their
     // displacement from the centre of the selection's whole map pixels
@@ -707,7 +780,10 @@ void Runtime::check_pointer_interfaces() {
                  "showed the system's; left-click interface clicks, shift cancels, right "
                  "press deselect/cancel/radar scroll/mouse look and build-site cancel; "
                  "right-click interface deselect, default orders, guard, cancels and radar; "
-                 "a group's moves, patrol and cancels in its shape, and a patrol clicked on "
+                 "right clicks beside the in-game menu: an order with it kept open, nothing on "
+                 "its panel, the radar's view, and a deselect closing it and resuming, and "
+                 "the Pause key's pause kept; a group's moves, patrol and cancels in its shape, "
+                 "and a patrol clicked on "
                  "one of a block left it out; "
                  "factory right click took ARMPW off ahead of ARMCK\n";
     check_pointer_picks();
