@@ -11,7 +11,7 @@
 | Scope | sim: part of the profile's sim hash; every machine must mount it at the same index |
 | Runs on | Every machine in the game. |
 | Same answer on every machine | Yes: every machine of a multiplayer game records the host's unit limit. |
-| Fidelity | Not affected. `unit.is-local`, and under `exact` also `unit.owner-of` and `unit.allied-with`, answer 0 when the low 16 bits of their argument name an id past it. |
+| Fidelity | Not affected. Under `exact`, `unit.owner-of`, `unit.allied-with` and `unit.is-local` answer 0 when the low 16 bits of their argument name an id past it. |
 <!-- END GENERATED: facts -->
 
 ## Description
@@ -99,10 +99,10 @@ script-extensions:
 **Which limit.** The value is 10 times the unit limit the game recorded when it started:
 
 - A skirmish, or a multiplayer game, records the limit it plays at: the value is the last id of the table.
-- A campaign mission plays at its own unit limit but records the player's Unit limit setting. There the value can lie past the table's last id, and those ids read 0; or it can fall short of it, and then the ids past the value read 0 in `unit.is-local`, and in `unit.owner-of` and `unit.allied-with` under `exact` fidelity, though the table holds them.
+- A campaign mission plays at its own unit limit but records the player's Unit limit setting. There the value can lie past the table's last id, and those ids read 0; or it can fall short of it, and then the ids past the value read 0 in `unit.owner-of`, `unit.allied-with` and `unit.is-local` under `exact` fidelity, though the table holds them.
 - A loaded game records the limit its save holds.
 
-**Fidelity.** Neither `exact` nor `safe` changes the value. Under `exact`, [`unit.owner-of`](unit.owner-of.md) and [`unit.allied-with`](unit.allied-with.md) answer 0 for an id past it, and [`unit.is-local`](unit.is-local.md) does under either fidelity. Those three read only the low 16 bits of their argument, so they take an argument of 65,536 or more as the id its low 16 bits give: given 65,539, they read id 3, though 65,539 lies past this value. [`unit.build-percent-left-of`](unit.build-percent-left-of.md) is bounded by the table instead.
+**Fidelity.** Neither `exact` nor `safe` changes the value. Under `exact`, [`unit.owner-of`](unit.owner-of.md), [`unit.allied-with`](unit.allied-with.md) and [`unit.is-local`](unit.is-local.md) answer 0 for an id past it. Those three read only the low 16 bits of their argument, so they take an argument of 65,536 or more as the id its low 16 bits give: given 65,539, they read id 3, though 65,539 lies past this value. [`unit.build-percent-left-of`](unit.build-percent-left-of.md) is bounded by the table instead.
 
 **Network play.** In a multiplayer game every machine records the host's unit limit, so every machine reads the same value. Each machine simulates its own players' units and sends the results to the others, so what happens to another machine's unit, such as its creation or its death, reaches a machine a moment after it happens on the owner's. So a walk that counts live units, as above, can count differently on two machines for a moment. The mount is part of the sim hash: every machine must mount the extension at the same index.
 

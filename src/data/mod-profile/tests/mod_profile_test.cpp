@@ -378,7 +378,7 @@ void test_blocks() {
         "strings:\n"
         "  status: {nanolathing: Building}\n"
         "media:\n"
-        "  movies: {intro: \"\"}\n"
+        "  movies: {intro: \"\", credits: intro.smk}\n"
         "limits:\n"
         "  units-per-player: {limits-screen-fallback: 1000}\n"
         "script-extensions:\n"
@@ -429,6 +429,7 @@ void test_blocks() {
     OA_CHECK(profile.strings.status.nanolathing == "Building");
     OA_CHECK(profile.strings.status.paralyzed == "Paralyzed");
     OA_CHECK(profile.media.movies.intro.empty() && profile.media.movies.logo == "1.zrb");
+    OA_CHECK(profile.media.movies.credits == "intro.smk");
     OA_CHECK(profile.limits.units_per_player.limits_screen_fallback == 1000);
     OA_CHECK(profile.limits.units_per_player.default_limit == 1500);
     OA_CHECK(profile.data_keys.veterancy_thresholds == "Thresholds");
@@ -588,6 +589,11 @@ void test_refusals() {
         {"identity: {display-version: 3.1}", "expected a string"},
         {"layout: {directories: {maps: maps}}", "unknown key"},
         {"layout: {archive-patterns: {ufo: SWX}}", "does not match"},
+        {"layout: {directories: {units: \"..\"}}", "does not match"},
+        {"layout: {directories: {units: \"units/x\"}}", "does not match"},
+        {"media: {movies: {intro: \"../x.zrb\"}}", "does not match"},
+        {"media: {movies: {logo: \"C:x.zrb\"}}", "does not match"},
+        {"media: {movies: {credits: \"a\\\\b.zrb\"}}", "does not match"},
         {"layout: [a]", "layout must be an object"},
         {"colour: red", "unknown top-level"},
         {"extends: [base]", "unknown top-level"},

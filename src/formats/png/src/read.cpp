@@ -1149,8 +1149,13 @@ Progress read_image(
     const std::size_t out_row_bytes = row_bytes(info.header, transforms);
     // Rows sized other than by row_bytes are a caller error, reported with the
     // message for misplaced row reads.
-    if (out_row_bytes == 0 || rows.size() / out_row_bytes < info.header.height ||
-        packed_bytes(info.header.width, bits_per_pixel(info.header)) >= k_max_dimension) {
+    // The raw and the converted rows are sized at 64 bits before anything
+    // is sized from them.
+    const uint32_t out_bits =
+        output_bit_depth(info.header, transforms) * channel_count(info.header.color_type);
+    if (!row_size_decodable(info.header.width, bits_per_pixel(info.header)) ||
+        !row_size_decodable(info.header.width, out_bits) || out_row_bytes == 0 ||
+        rows.size() / out_row_bytes < info.header.height) {
         fail(r, "Row read request is not permitted");
         return Progress::none;
     }

@@ -11,7 +11,7 @@
 | Scope | sim: part of the profile's sim hash; every machine must mount it at the same index |
 | Runs on | Every machine in the game. |
 | Same answer on every machine | No, on purpose: each machine answers 1 only for the players it plays itself. |
-| Fidelity | Not affected: it reads every id as under `exact`. |
+| Fidelity | `exact`: any id up to `unit.max-id` answers for the player whose range holds its slot, whether or not a unit lives there. `safe`: 0 unless a live unit has the id. |
 <!-- END GENERATED: facts -->
 
 ## Description
@@ -82,10 +82,10 @@ script-extensions:
 
 **Ids.** The extension reads the low 16 bits of its argument, as 3.1c's own values that take a unit id do.
 
-**Fidelity.** It reads every id as under `exact` fidelity, whichever fidelity the profile chooses:
+**Fidelity.** It reads ids as the profile's fidelity says:
 
-- an id with no unit at the moment answers for the player whose range holds it, so an empty place in the range of a player this machine plays answers 1;
-- id 0, and any id past [`unit.max-id`](unit.max-id.md) or past the table's last id, answers 0.
+- under `exact`, an id with no unit at the moment answers for the player whose range holds it, so an empty place in the range of a player this machine plays answers 1; id 0, and any id past [`unit.max-id`](unit.max-id.md) or past the table's last id, answers 0;
+- under `safe`, only an id that names a live unit answers for that unit's owner; any other id answers 0.
 
 **Network play.** The extension is mounted the same way on every machine, and the mount is part of the sim hash, but its answer differs between machines by design. That is safe only while the answer changes nothing but what one machine draws, as the warning above says. The other extensions answer alike on every machine, apart from the moment news of another machine's units takes to arrive; their pages say when.
 
@@ -93,7 +93,7 @@ script-extensions:
 
 - `unit_script_get_value` in `src/sim/unit-script/src/unit_value.cpp` answers 1 when the status of the owner (`Player.status`) of the slot the id names is local or computer.
 - Tests:
-  - `unit-script-extensions` (`is_local_reads_the_owner_status`: a local human, a computer player on an empty slot, another machine's player, an empty player place, id 0, past the table, and `safe` fidelity; `a_script_walks_every_unit_id`: a walk in the interpreter that counts the ids this machine plays);
+  - `unit-script-extensions` (`is_local_reads_the_owner_status`: a local human, a computer player on an empty slot, another machine's player, an empty player place, id 0, past the table, and under `safe` fidelity a live unit and an empty slot; `a_script_walks_every_unit_id`: a walk in the interpreter that counts the ids this machine plays);
   - `unit-script-extensions-mod-install` (an installed mod's own scripts read every mounted extension as the table says; it skips without a mod installation).
 
 ## Related

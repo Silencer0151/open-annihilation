@@ -315,7 +315,9 @@ struct MapFileReader {
 
 /// Reads a map file's header and, when its minimap flag is set, the minimap.
 ///
-/// Minimaps larger than limit::minimap_dimension on a side are refused.
+/// Minimaps larger than limit::minimap_dimension on a side are refused, and
+/// so is one whose pixels, after its 8-byte header, would end past the
+/// 32-bit offsets a map file is read at.
 ///
 /// @param file reader over the open map file
 /// @param[out] picture the minimap's size and pixels; empty when none loaded

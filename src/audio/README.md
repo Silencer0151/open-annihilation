@@ -31,7 +31,9 @@ plays giving way first; a buffer plays on a stream it holds while it plays,
 and up to eight idle streams are kept for the next starts. A placed start
 weighs the stream's sides with `spatial_stereo_gain`'s levels
 (`set_side_gains`) rather than converting its samples. The loop and the
-stream are converted once in the same way. `effect_voices` counts the
+stream are converted once in the same way. A file whose converted samples
+would take more than 8 MiB as an effect or the loop, or more than 32 MiB as
+the stream, is refused before it is converted (`converted_bytes`). `effect_voices` counts the
 voices.
 
 Besides its effects and its one looping sound, the WAV player keeps one

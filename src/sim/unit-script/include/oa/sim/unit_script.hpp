@@ -379,13 +379,13 @@ struct UnitValueServices {
 ///   this machine (Player.status local or computer), else 0; this differs
 ///   between machines by design.
 ///
-/// Under exact fidelity owner-of, build-percent-left-of and allied-with read a
-/// slot whether or not a unit lives there, so a free slot gives what its
-/// record still holds. A slot past the unit table, or past the highest id
-/// unit.max-id reports, reads 0 (is-local too). build-percent-left-of reads
+/// Under exact fidelity owner-of, build-percent-left-of, allied-with and
+/// is-local read a slot whether or not a unit lives there, so a free slot
+/// gives what its record still holds. A slot past the unit table, or past
+/// the highest id unit.max-id reports, reads 0. build-percent-left-of reads
 /// the slot the argument times the record size (0x118 bytes), wrapped to 32
 /// bits, lands on, and 0 when that is not a whole record before the table's
-/// last slot. Under safe fidelity those three read 0 for any slot without a
+/// last slot. Under safe fidelity those four read 0 for any slot without a
 /// live unit, and build-percent-left-of takes the argument as the slot.
 ///
 /// @param world World the unit belongs to

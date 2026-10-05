@@ -27,6 +27,31 @@ bool is_ascii_letter(char c) noexcept {
     return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
 }
 
+/// Tells whether a name is one Windows keeps for a device: CON, PRN, AUX,
+/// NUL, COM1 to COM9 or LPT1 to LPT9, in any case, with any extension, and
+/// with the dots and spaces at its end that Windows sets aside.
+///
+/// @param component one '/'-separated part of an entry name
+/// @return true when Windows would take it for a device
+bool names_device(std::string_view component) noexcept {
+    while (!component.empty() && (component.back() == '.' || component.back() == ' '))
+        component.remove_suffix(1);
+    component = component.substr(0, component.find('.'));
+    while (!component.empty() && component.back() == ' ')
+        component.remove_suffix(1);
+    if (component.size() != 3 && component.size() != 4)
+        return false;
+    char stem_letters[3]{};
+    for (size_t i = 0; i < 3; ++i) {
+        const char c = component[i];
+        stem_letters[i] = c >= 'a' && c <= 'z' ? static_cast<char>(c - ('a' - 'A')) : c;
+    }
+    const std::string_view stem(stem_letters, 3);
+    if (component.size() == 3)
+        return stem == "CON" || stem == "PRN" || stem == "AUX" || stem == "NUL";
+    return (stem == "COM" || stem == "LPT") && component[3] >= '1' && component[3] <= '9';
+}
+
 } // namespace
 
 const char* zip_status_message(ZipStatus status) noexcept {
@@ -86,8 +111,9 @@ bool name_is_safe(std::string_view name) noexcept {
         const std::string_view component = rest.substr(0, separator);
         if (component.empty() || component == "." || component == "..")
             return false;
+        // The last part, the name the entry is written under, is no device.
         if (separator == std::string_view::npos)
-            return true;
+            return !names_device(component);
         rest.remove_prefix(separator + 1);
     }
 }

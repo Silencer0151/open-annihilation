@@ -170,8 +170,14 @@ GafStatus relocate_header(Relocation& r, uint32_t at, bool child, Sprite*& out) 
         sprite->child_draw_mode = file[at + frame_child_draw_mode];
         sprite->reserved_after_child_draw_mode =
             u32_at(file, at + frame_reserved_after_child_draw_mode);
-        sprite->data = child_count != 0 ? static_cast<void*>(&r.gaf->children[first_child])
-                                        : static_cast<void*>(r.gaf->bytes.data() + data);
+        // A frame with no rows checks no data offset, and one past the file
+        // points nowhere.
+        if (child_count != 0)
+            sprite->data = &r.gaf->children[first_child];
+        else if (data <= r.gaf->bytes.size())
+            sprite->data = r.gaf->bytes.data() + data;
+        else
+            sprite->data = nullptr;
         sprite->aux = nullptr;
         out = sprite;
     }

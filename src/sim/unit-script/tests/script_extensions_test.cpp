@@ -199,7 +199,10 @@ void is_local_reads_the_owner_status() {
     OA_CHECK(get(ranges, 1, 75, 7, &table) == 0); // a free player slot
     OA_CHECK(get(ranges, 1, 75, 0, &table) == 0);
     OA_CHECK(get(ranges, 1, 75, 21, &table) == 0);
-    OA_CHECK(get(ranges, 1, 75, 4, &table, mr::ScriptFidelity::safe) == 1);
+    // Under safe fidelity only a live unit answers: the computer's live unit
+    // does, and the free place beside it does not.
+    OA_CHECK(get(ranges, 1, 75, 3, &table, mr::ScriptFidelity::safe) == 1);
+    OA_CHECK(get(ranges, 1, 75, 4, &table, mr::ScriptFidelity::safe) == 0);
 }
 
 void health_ignores_its_argument() {

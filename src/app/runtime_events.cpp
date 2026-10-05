@@ -614,6 +614,13 @@ void Runtime::take_movie_event(void* context, const SDL_Event& event) {
 }
 
 void Runtime::play_movie_resource(std::string_view filename) {
+    // A movie is a plain file name in the Data folder: one that names a
+    // folder, a drive or a parent is not opened.
+    if (filename.empty() || filename == "." || filename == ".." ||
+        filename.find_first_of("/\\:") != std::string_view::npos) {
+        status_ = "movie unavailable: " + std::string(filename) + " is not a file name";
+        return;
+    }
     // A mod folder's movie replaces the game folder's.
     const auto found = game_path("Data/" + std::string(filename));
     const auto path = found ? *found : options_.game_dir / "Data" / filename;

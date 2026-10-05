@@ -292,6 +292,8 @@ bool write_surface_rows(ByteStream& stream, const Surface& surface) noexcept;
 
 /// Reads a surface written by write_surface_rows.
 ///
+/// A width or height of 0 reads as an empty surface, with no rows read.
+///
 /// @param[in,out] stream seekable input stream; read from its first byte
 /// @param[out] surface new surface; empty on a short row
 /// @return false without seek or read callbacks, on a short header or row, or

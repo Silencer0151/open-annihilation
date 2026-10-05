@@ -379,6 +379,19 @@ void test_width_warnings() {
     const Header shown = header_of(info, messages_for(&log));
     CHECK(shown.width == 0x10000002u && log.warnings.size() == 2);
     CHECK(log.warnings[1] == "Width too large for libpng to process image data.");
+    // Its rows are refused before anything is sized from them.
+    std::vector<uint8_t> small_rows(64);
+    log = {};
+    CHECK(
+        read_image(join(chunks), info, {}, messages_for(&log), small_rows) == Progress::none &&
+        log.errors == std::vector<std::string>{"Row read request is not permitted"}
+    );
+    // A row's bytes are counted at 64 bits: empty, at k_max_dimension, or
+    // past what 32 bits hold, they are refused.
+    CHECK(detail::row_size_decodable(1, 1) && detail::row_size_decodable(0x7ffffffeu / 8, 64));
+    CHECK(!detail::row_size_decodable(0, 8));
+    CHECK(!detail::row_size_decodable(0x10000002u, 64));
+    CHECK(!detail::row_size_decodable(0x7fffffffu, 64));
     log = {};
     Info narrow;
     CHECK(read_info(encode(header, noise(16, 4)), messages_for(&log), &narrow));

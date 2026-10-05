@@ -53,7 +53,8 @@ other comparison is the game's case-sensitive exact match, bounded by the
 supplied script count. Every stack access, inline operand, static/local index,
 jump, signed division and per-tick instruction count is checked. An
 unsupported instruction returns `unsupported_opcode` without changing state
-for that instruction.
+for that instruction; in a tick it stops its context, and the tick goes on
+with the other contexts and the pieces' motion.
 
 Implemented: immediate/local/static push, allocation, local/static/discard
 pop, wrapping 32-bit add/subtract/multiply, checked signed divide,

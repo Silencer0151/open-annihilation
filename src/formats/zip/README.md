@@ -43,7 +43,8 @@ It refuses, with the status named:
 - the encryption flags, in either record (`encrypted`);
 - methods other than stored and deflated (`unsupported_method`);
 - names `name_is_safe` refuses: empty, starting with '/' or a drive letter
-  and colon, holding NUL or '\\', or with an empty, "." or ".." component
+  and colon, holding NUL or '\\', with an empty, "." or ".." component, or
+  ending in a name Windows keeps for a device, such as `con.txt` or `NUL`
   (`unsafe_name`); names longer than `max_name_bytes` (`name_too_long`); a
   name given twice, compared byte for byte (`duplicate_name`);
 - a local header without its signature, or whose name, method, CRC-32 or

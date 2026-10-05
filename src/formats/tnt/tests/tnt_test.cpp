@@ -333,6 +333,31 @@ void radar_picture_from_header() {
     require(
         !tnt::load_radar_picture(reader, picture, nullptr, nullptr), "short pixels load nothing"
     );
+
+    // A minimap header that reads at an offset whose pixels would end past
+    // the 32-bit offsets loads nothing, whatever a reader answers there.
+    auto far = current_fixture();
+    put32(far, 0x28, 0xFFFFFFFAu);
+    const tnt::MapFileReader far_reader{
+        &far, [](void* context, uint32_t offset, void* out, uint32_t size) {
+            const auto& file = *static_cast<std::vector<uint8_t>*>(context);
+            if (offset >= 0xFFFFFFF0u) {
+                const uint8_t extent[8] = {2, 0, 0, 0, 2, 0, 0, 0};
+                if (size != sizeof extent)
+                    return false;
+                std::copy_n(extent, sizeof extent, static_cast<uint8_t*>(out));
+                return true;
+            }
+            if (offset > file.size() || size > file.size() - offset)
+                return false;
+            std::copy_n(file.begin() + offset, size, static_cast<uint8_t*>(out));
+            return true;
+        }
+    };
+    require(
+        !tnt::load_radar_picture(far_reader, picture, nullptr, nullptr) && picture.pixels.empty(),
+        "a minimap whose pixels end past 32 bits loads nothing"
+    );
 }
 
 int main() {

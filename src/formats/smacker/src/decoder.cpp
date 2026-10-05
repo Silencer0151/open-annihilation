@@ -617,6 +617,13 @@ VideoDecoder::create(const Header& header, std::span<const uint8_t> trees, std::
         error = "Smacker frame is empty";
         return std::nullopt;
     }
+    // The frame's pixels are counted at 64 bits, so no size wraps to a
+    // smaller buffer than the frame.
+    const uint64_t frame_pixels = uint64_t{header.width} * header.height;
+    if (static_cast<std::size_t>(frame_pixels) != frame_pixels) {
+        error = "Smacker frame is larger than memory can hold";
+        return std::nullopt;
+    }
     VideoDecoder decoder;
     BitReader bits(trees);
     const std::array<std::pair<CodeTree*, uint32_t>, 4> tables = {{
@@ -638,7 +645,7 @@ VideoDecoder::create(const Header& header, std::span<const uint8_t> trees, std::
     }
     decoder.width_ = header.width;
     decoder.height_ = header.height;
-    decoder.pixels_.assign(static_cast<std::size_t>(header.width) * header.height, 0);
+    decoder.pixels_.assign(static_cast<std::size_t>(frame_pixels), 0);
     return decoder;
 }
 
@@ -672,9 +679,13 @@ bool VideoDecoder::decode(std::span<const uint8_t> chunk, std::string& error) {
             continue;
         }
         for (; block < end; ++block) {
-            auto* out = pixels_.data() +
-                        static_cast<std::size_t>(block / blocks_wide) * stride * kBlockSide +
-                        static_cast<std::size_t>(block % blocks_wide) * kBlockSide;
+            // Each row of the block is found from its own y and x, so no
+            // pointer is formed past the frame's last row.
+            const auto top = static_cast<std::size_t>(block / blocks_wide) * kBlockSide;
+            const auto left_column = static_cast<std::size_t>(block % blocks_wide) * kBlockSide;
+            const auto row_at = [&](uint32_t row) {
+                return pixels_.data() + (top + row) * stride + left_column;
+            };
             if (kind == BlockKind::mono) {
                 uint32_t colours = 0;
                 uint32_t mask = 0;
@@ -682,17 +693,19 @@ bool VideoDecoder::decode(std::span<const uint8_t> chunk, std::string& error) {
                     return truncated();
                 const auto high = static_cast<uint8_t>(colours >> kByteBits);
                 const auto low = static_cast<uint8_t>(colours);
-                for (uint32_t row = 0; row < kBlockSide; ++row, out += stride) {
+                for (uint32_t row = 0; row < kBlockSide; ++row) {
+                    uint8_t* const out = row_at(row);
                     for (uint32_t column = 0; column < kBlockSide; ++column, mask >>= 1)
                         out[column] = (mask & 1U) != 0U ? high : low;
                 }
             } else if (kind == BlockKind::full) {
-                for (uint32_t row = 0; row < kBlockSide; ++row, out += stride) {
+                for (uint32_t row = 0; row < kBlockSide; ++row) {
                     uint32_t right = 0;
                     uint32_t left = 0;
                     if (!read_code(bits, full_pixels_, right) ||
                         !read_code(bits, full_pixels_, left))
                         return truncated();
+                    uint8_t* const out = row_at(row);
                     out[0] = static_cast<uint8_t>(left);
                     out[1] = static_cast<uint8_t>(left >> kByteBits);
                     out[2] = static_cast<uint8_t>(right);
@@ -700,8 +713,8 @@ bool VideoDecoder::decode(std::span<const uint8_t> chunk, std::string& error) {
                 }
             } else {
                 const auto colour = static_cast<uint8_t>(type >> kBlockFillColourShift);
-                for (uint32_t row = 0; row < kBlockSide; ++row, out += stride)
-                    std::memset(out, colour, kBlockSide);
+                for (uint32_t row = 0; row < kBlockSide; ++row)
+                    std::memset(row_at(row), colour, kBlockSide);
             }
         }
     }

@@ -48,8 +48,15 @@ void refill_loop(void* userdata, OutputStream& stream, int32_t additional) {
 }
 
 /// The most bytes of decoded sound files the player keeps, as 16-bit samples
-/// at the mixer's rate: about a minute and a half of one channel.
+/// at the mixer's rate: about a minute and a half of one channel. A sound
+/// played or looped from the cache converts to no more than this; the
+/// largest effect of the game and the mods it was measured against converts
+/// to 6.3 MB.
 constexpr std::size_t max_cached_sound_bytes = std::size_t{8} << 20;
+/// The most bytes a streamed sound, such as a briefing's narration,
+/// converts to: about three minutes of two channels. The longest narration
+/// of the game converts to 9.0 MB.
+constexpr std::size_t max_streamed_sound_bytes = std::size_t{32} << 20;
 /// The most streams the player keeps open for its effects while none plays on them.
 constexpr std::size_t max_idle_streams = 8;
 
@@ -240,8 +247,12 @@ bool load_wav(
 /// at half its level (convert_for_mixer), so that it plays with no
 /// conversion as it plays.
 ///
+/// A WAV whose converted samples would pass `largest` bytes is refused
+/// before it is converted.
+///
 /// @param assets the asset store
 /// @param resource the WAV's archive path
+/// @param largest the most bytes the converted samples may take
 /// @param[out] format the converted samples' format
 /// @param[out] samples the converted samples
 /// @param[out] error why the WAV cannot be played; untouched on success
@@ -249,6 +260,7 @@ bool load_wav(
 bool load_converted(
     const oa::AssetStore& assets,
     std::string_view resource,
+    std::size_t largest,
     StreamFormat& format,
     std::vector<int16_t>& samples,
     std::string& error
@@ -260,6 +272,12 @@ bool load_converted(
         return false;
     StreamFormat decoded{};
     const bool known = stream_format(spec, decoded, error);
+    if (known && converted_bytes(decoded, length) > largest) {
+        SDL_free(wav);
+        error = "the sound is too long to play: it converts to more than " +
+                std::to_string(largest) + " bytes";
+        return false;
+    }
     const uint32_t channels =
         known ? convert_for_mixer(decoded, std::span<const uint8_t>(wav, length), samples) : 0;
     SDL_free(wav);
@@ -339,7 +357,7 @@ bool SdlWavPlayer::play_placed(
     if (found == impl.sounds.end()) {
         StreamFormat format{};
         std::vector<int16_t> samples;
-        if (!load_converted(impl.assets, resource, format, samples, error))
+        if (!load_converted(impl.assets, resource, max_cached_sound_bytes, format, samples, error))
             return false;
         const std::size_t length = sample_bytes_of(samples);
         // The least recently started sounds that no buffer plays make room.
@@ -459,7 +477,7 @@ bool SdlWavPlayer::start_loop_resource(std::string_view resource, std::string& e
     stop_loop();
     StreamFormat format{};
     std::vector<int16_t> samples;
-    if (!load_converted(impl_->assets, resource, format, samples, error))
+    if (!load_converted(impl_->assets, resource, max_cached_sound_bytes, format, samples, error))
         return false;
     const auto* first = reinterpret_cast<const uint8_t*>(samples.data());
     impl_->loop_track.pcm.assign(first, first + sample_bytes_of(samples));
@@ -489,7 +507,7 @@ bool SdlWavPlayer::play_stream(std::string_view resource, uint32_t delay_ms, std
     stop_stream();
     StreamFormat format{};
     std::vector<int16_t> samples;
-    if (!load_converted(impl_->assets, resource, format, samples, error))
+    if (!load_converted(impl_->assets, resource, max_streamed_sound_bytes, format, samples, error))
         return false;
     SoundOutput& output = sound_output();
     auto stream = output.open_stream(format, nullptr, nullptr, error);

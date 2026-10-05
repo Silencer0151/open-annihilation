@@ -137,7 +137,7 @@ int32_t extension_value(
         break;
     }
     case ScriptExtension::unit_is_local:
-        if (const Unit* target = extension_slot(world, argument, ScriptFidelity::exact))
+        if (const Unit* target = extension_slot(world, argument, fidelity))
             if (const Player* owner = owner_player(world, target->owner_index))
                 value = owner->status == OA_PLAYER_STATUS_LOCAL ||
                                 owner->status == OA_PLAYER_STATUS_COMPUTER

@@ -298,8 +298,8 @@ SCRIPT_EXTENSIONS = {
         "returns": "The unit limit the game recorded, times 10. A skirmish or multiplayer game records its own "
                    "limit, so this is the last id of the unit table; a campaign mission records the player's "
                    "Unit limit setting.",
-        "fidelity": "Not affected. `unit.is-local`, and under `exact` also `unit.owner-of` and "
-                    "`unit.allied-with`, answer 0 when the low 16 bits of their argument name an id past it.",
+        "fidelity": "Not affected. Under `exact`, `unit.owner-of`, `unit.allied-with` and `unit.is-local` "
+                    "answer 0 when the low 16 bits of their argument name an id past it.",
         "same-on-every-machine": "Yes: every machine of a multiplayer game records the host's unit limit.",
     },
     "unit.my-id": {
@@ -348,7 +348,8 @@ SCRIPT_EXTENSIONS = {
         "title": "Unit Played on This Machine",
         "takes-unit-id": True,
         "returns": "1 when the owner of that unit's slot is a human or computer player on this machine, else 0.",
-        "fidelity": "Not affected: it reads every id as under `exact`.",
+        "fidelity": "`exact`: any id up to `unit.max-id` answers for the player whose range holds its slot, "
+                    "whether or not a unit lives there. `safe`: 0 unless a live unit has the id.",
         "same-on-every-machine": "No, on purpose: each machine answers 1 only for the players it plays itself.",
     },
 }

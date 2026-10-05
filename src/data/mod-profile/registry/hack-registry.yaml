@@ -138,7 +138,7 @@ entries:
     ownership: all-machines
     scope: sim
     key: directories.gamedata
-    value: {type: string, max-length: 32, baseline: gamedata, scope: sim}
+    value: {type: string, max-length: 32, pattern: '^(?!\.\.?$)[^/\\:]*$', baseline: gamedata, scope: sim}
   layout.directories.guis:
     kind: layout
     area: paths
@@ -146,7 +146,7 @@ entries:
     ownership: all-machines
     scope: sim
     key: directories.guis
-    value: {type: string, max-length: 32, baseline: guis, scope: sim}
+    value: {type: string, max-length: 32, pattern: '^(?!\.\.?$)[^/\\:]*$', baseline: guis, scope: sim}
   layout.directories.unitpics:
     kind: layout
     area: paths
@@ -154,7 +154,7 @@ entries:
     ownership: all-machines
     scope: sim
     key: directories.unitpics
-    value: {type: string, max-length: 32, baseline: unitpics, scope: sim}
+    value: {type: string, max-length: 32, pattern: '^(?!\.\.?$)[^/\\:]*$', baseline: unitpics, scope: sim}
   layout.directories.weapons:
     kind: layout
     area: paths
@@ -162,7 +162,7 @@ entries:
     ownership: all-machines
     scope: sim
     key: directories.weapons
-    value: {type: string, max-length: 32, baseline: Weapons, scope: sim}
+    value: {type: string, max-length: 32, pattern: '^(?!\.\.?$)[^/\\:]*$', baseline: Weapons, scope: sim}
   layout.directories.download:
     kind: layout
     area: paths
@@ -170,7 +170,7 @@ entries:
     ownership: all-machines
     scope: sim
     key: directories.download
-    value: {type: string, max-length: 32, baseline: download, scope: sim}
+    value: {type: string, max-length: 32, pattern: '^(?!\.\.?$)[^/\\:]*$', baseline: download, scope: sim}
   layout.directories.units:
     kind: layout
     area: paths
@@ -178,7 +178,7 @@ entries:
     ownership: all-machines
     scope: sim
     key: directories.units
-    value: {type: string, max-length: 32, baseline: units, scope: sim}
+    value: {type: string, max-length: 32, pattern: '^(?!\.\.?$)[^/\\:]*$', baseline: units, scope: sim}
   layout.directories.ai:
     kind: layout
     area: paths
@@ -186,7 +186,7 @@ entries:
     ownership: all-machines
     scope: sim
     key: directories.ai
-    value: {type: string, max-length: 32, baseline: ai, scope: sim}
+    value: {type: string, max-length: 32, pattern: '^(?!\.\.?$)[^/\\:]*$', baseline: ai, scope: sim}
   layout.cd-check:
     kind: layout
     area: paths
@@ -1619,7 +1619,7 @@ entries:
     ownership: local-view
     scope: view
     key: movies.logo
-    value: {type: string, max-length: 12, baseline: 1.zrb, scope: view}
+    value: {type: string, max-length: 12, pattern: '^(?!\.\.?$)[^/\\:]*$', baseline: 1.zrb, scope: view}
   media.movies.intro:
     kind: media
     area: ui
@@ -1627,7 +1627,7 @@ entries:
     ownership: local-view
     scope: view
     key: movies.intro
-    value: {type: string, max-length: 12, baseline: 2.zrb, scope: view}
+    value: {type: string, max-length: 12, pattern: '^(?!\.\.?$)[^/\\:]*$', baseline: 2.zrb, scope: view}
   media.movies.ending-a:
     kind: media
     area: ui
@@ -1635,7 +1635,7 @@ entries:
     ownership: local-view
     scope: view
     key: movies.ending-a
-    value: {type: string, max-length: 12, baseline: 3.zrb, scope: view}
+    value: {type: string, max-length: 12, pattern: '^(?!\.\.?$)[^/\\:]*$', baseline: 3.zrb, scope: view}
   media.movies.ending-b:
     kind: media
     area: ui
@@ -1643,7 +1643,7 @@ entries:
     ownership: local-view
     scope: view
     key: movies.ending-b
-    value: {type: string, max-length: 12, baseline: 4.zrb, scope: view}
+    value: {type: string, max-length: 12, pattern: '^(?!\.\.?$)[^/\\:]*$', baseline: 4.zrb, scope: view}
   media.movies.credits:
     kind: media
     area: ui
@@ -1651,4 +1651,4 @@ entries:
     ownership: local-view
     scope: view
     key: movies.credits
-    value: {type: string, max-length: 12, baseline: 5.zrb, scope: view}
+    value: {type: string, max-length: 12, pattern: '^(?!\.\.?$)[^/\\:]*$', baseline: 5.zrb, scope: view}

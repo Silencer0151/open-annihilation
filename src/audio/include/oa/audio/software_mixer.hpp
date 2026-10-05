@@ -129,4 +129,16 @@ class SoftwareMixer {
     const StreamFormat& format, std::span<const uint8_t> bytes, std::vector<int16_t>& samples
 );
 
+/// Returns the bytes convert_for_mixer's samples would take, without
+/// converting anything: the converted frames, one more than the input's
+/// frames take at mixer_output_rate rounded up, of 16-bit samples on its
+/// one or two channels.
+///
+/// @param format the samples' format
+/// @param input_bytes bytes of samples; a trailing partial frame is ignored
+/// @return the converted bytes, counted at 64 bits; 0 for a format
+///         convert_for_mixer refuses
+[[nodiscard]] uint64_t
+converted_bytes(const StreamFormat& format, std::size_t input_bytes) noexcept;
+
 } // namespace oa::audio

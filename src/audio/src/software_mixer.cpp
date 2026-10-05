@@ -404,6 +404,15 @@ void SoftwareMixer::unlock() const {
         lock_.unlock(lock_.context);
 }
 
+uint64_t converted_bytes(const StreamFormat& format, std::size_t input_bytes) noexcept {
+    if (!mixable(format))
+        return 0;
+    const uint32_t channels = std::min<uint32_t>(format.channels, mixed_channels_max);
+    const uint64_t frames = input_bytes / frame_bytes(format);
+    const uint64_t converted = (frames * mixer_output_rate + format.rate - 1) / format.rate + 1;
+    return converted * channels * sizeof(int16_t);
+}
+
 uint32_t convert_for_mixer(
     const StreamFormat& format, std::span<const uint8_t> bytes, std::vector<int16_t>& samples
 ) {

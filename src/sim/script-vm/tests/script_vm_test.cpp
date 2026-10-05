@@ -1245,10 +1245,36 @@ void unsupported_is_side_effect_free_at_fault() {
     const auto second = machine.tick(0);
     const auto after = machine.context(started.context);
     require(
-        !second.ok() && after.pc == before.pc && after.stack_pointer == before.stack_pointer &&
-            after.slots == before.slots,
-        "unsupported opcode changed context state before rejection"
+        second.ok() && after.pc == before.pc && after.stack_pointer == before.stack_pointer &&
+            after.slots == before.slots && machine.active_count() == 0,
+        "an unsupported opcode did not stop its context, or changed its state"
     );
+}
+
+// An unknown instruction in one context stops that context alone: a later
+// context runs in the same tick.
+void unsupported_stops_only_its_context() {
+    constexpr uint32_t unhandled_extension_opcode = 0x10039000U;
+    auto machine = make_vm(
+        {
+            unhandled_extension_opcode,
+            vm::opcode::push_constant,
+            5,
+            vm::opcode::pop_static,
+            0,
+            vm::opcode::return_,
+        },
+        {0, 1}
+    );
+    require(machine.start(0).ok() && machine.start(1).ok(), "both scripts did not start");
+    const auto run = machine.tick(0);
+    require(
+        !run.ok() && run.error->code == vm::ErrorCode::unsupported_opcode,
+        "the unknown instruction was not reported"
+    );
+    require(machine.static_value(0) == 5, "the later context did not run in the same tick");
+    require(machine.active_count() == 0, "a context stayed active");
+    require(machine.tick(0).ok(), "the stopped context faulted again");
 }
 
 void faults_do_not_consume_operands() {
@@ -1426,6 +1452,7 @@ int main() {
         state_restore_clears_return_callback();
         state_import_rejects_invalid_context_before_mutation();
         unsupported_is_side_effect_free_at_fault();
+        unsupported_stops_only_its_context();
         faults_do_not_consume_operands();
         synchronous_local_query();
         script_name_lookup();

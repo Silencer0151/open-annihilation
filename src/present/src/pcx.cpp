@@ -520,6 +520,11 @@ bool read_surface_rows(ByteStream& stream, SurfaceBuffer& surface) {
     if (width < 0 || height < 0 || static_cast<int64_t>(width) * height > pcx_max_pixels) {
         return false;
     }
+    // An image with no pixels is empty, whatever its other side claims.
+    if (width == 0 || height == 0) {
+        surface = SurfaceBuffer{};
+        return true;
+    }
     surface = create_surface(width, height);
     for (int32_t row = 0; row < height; ++row) {
         uint8_t* pixels =

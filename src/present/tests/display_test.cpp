@@ -420,6 +420,16 @@ void test_surface_rows_stream() {
     oa::present::MemoryReader truncated{std::span(writer.bytes).first(10)};
     auto short_in = oa::present::memory_reader_stream(truncated);
     check(!oa::present::read_surface_rows(short_in, loaded), "short surface rows rejected");
+    // A width of 0 with the most rows a header can name reads at once as
+    // an empty surface.
+    const std::vector<uint8_t> no_width{0, 0, 0, 0, 0xff, 0xff, 0xff, 0x7f};
+    oa::present::MemoryReader empty{no_width};
+    auto empty_in = oa::present::memory_reader_stream(empty);
+    check(
+        oa::present::read_surface_rows(empty_in, loaded) && loaded.pixels.empty() &&
+            loaded.surface.width == 0 && loaded.surface.height == 0,
+        "a surface with no width reads as empty"
+    );
 }
 
 void test_start_display() {

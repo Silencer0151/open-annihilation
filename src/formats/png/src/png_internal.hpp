@@ -98,6 +98,19 @@ inline std::size_t packed_bytes(uint64_t pixels, uint32_t bits) {
     return static_cast<std::size_t>((pixels * bits + 7) / 8);
 }
 
+/// Tells whether rows of an image can be held: a row of `width` pixels of
+/// `bits` each, counted at 64 bits, is not empty, is below k_max_dimension
+/// bytes and fits in a size_t, so packed_bytes gives every such row and pass
+/// exactly.
+///
+/// @param width pixels in a row
+/// @param bits bits per pixel
+/// @return true when a row's bytes are in range
+inline bool row_size_decodable(uint32_t width, uint32_t bits) {
+    const uint64_t row = (uint64_t{width} * bits + 7) / 8;
+    return row != 0 && row < k_max_dimension && static_cast<std::size_t>(row) == row;
+}
+
 /// Returns the pixels an interlace pass covers along one axis.
 ///
 /// @param size pixels along the axis

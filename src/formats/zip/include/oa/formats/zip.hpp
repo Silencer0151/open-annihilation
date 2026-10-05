@@ -99,7 +99,10 @@ struct CentralDirectory {
 ///
 /// A safe name is not empty, holds no NUL and no backslash, does not start
 /// with '/' or a drive letter and colon, and has no empty, "." or ".."
-/// component between its '/' separators, a trailing '/' excepted.
+/// component between its '/' separators, a trailing '/' excepted. Its last
+/// component is no name Windows keeps for a device (CON, PRN, AUX, NUL,
+/// COM1 to COM9, LPT1 to LPT9, in any case and with any extension or
+/// trailing dots and spaces), on every system alike.
 ///
 /// @param name the entry name
 /// @return true when the name is safe

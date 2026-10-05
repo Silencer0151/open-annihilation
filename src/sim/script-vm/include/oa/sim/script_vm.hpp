@@ -408,9 +408,13 @@ class Vm {
     query(uint32_t script_index, const std::array<int32_t*, 4>& arguments);
     /// Steps every context in ascending order, then integrates piece motion.
     ///
+    /// A context that meets an instruction outside the machine's set stops
+    /// there, with that instruction's state unchanged, and the tick goes on.
+    ///
     /// @param elapsed scheduler ticks since the previous tick
     /// @param instruction_budget instructions allowed across all contexts; 0 is an error
-    /// @return instructions executed, and the first fault, which stops the tick
+    /// @return instructions executed, and the first fault: an unknown
+    ///         instruction's, or any other, which stops the tick
     [[nodiscard]] TickResult
     tick(uint32_t elapsed, std::size_t instruction_budget = limit::instructions_per_tick);
 

@@ -49,6 +49,18 @@ void write_tone(const std::filesystem::path& path, uint32_t milliseconds) {
         );
 }
 
+// Writes an 8-bit mono WAV of `count` samples at `rate`.
+void write_slow(const std::filesystem::path& path, uint32_t rate, uint32_t count) {
+    auto riff = audio_test::make_riff(rate, 8, 1, std::vector<uint8_t>(count, 0x90));
+    const auto riff_size = static_cast<uint32_t>(riff.size()) - kHeaderBytes;
+    for (uint32_t byte = 0; byte < 4; ++byte)
+        riff[4 + byte] = static_cast<uint8_t>(riff_size >> (8 * byte));
+    std::ofstream(path, std::ios::binary)
+        .write(
+            reinterpret_cast<const char*>(riff.data()), static_cast<std::streamsize>(riff.size())
+        );
+}
+
 // A sound output whose mixer the test runs by hand.
 class HandMixedOutput final : public oa::audio::SoundOutput {
   public:
@@ -145,6 +157,12 @@ int main() {
     write_tone(root / "sounds" / "short.wav", 100);
     for (int other = 0; other < 6; ++other)
         write_tone(root / "sounds" / ("other" + std::to_string(other) + ".wav"), 5000);
+    // At 1000 Hz, 200,000 samples convert to 17.6 MB, past the cache's
+    // 8 MiB, and 400,000 to 35.3 MB, past a stream's 32 MiB; an 11025 Hz
+    // effect of a second converts to 88 KB.
+    write_slow(root / "sounds" / "slow.wav", 1000, 200000);
+    write_slow(root / "sounds" / "slower.wav", 1000, 400000);
+    write_slow(root / "sounds" / "effect.wav", 11025, 11025);
     {
         const oa::AssetStore assets(root);
         SdlWavPlayer player(assets);
@@ -233,6 +251,27 @@ int main() {
         require(player.playing(), "the newest sounds play on");
         player.stop_all();
         require(player.effect_voices() == 0 && !player.playing(), "stop_all ends them all");
+
+        // A sound that converts to more than the cache holds is refused
+        // before it is converted, as an effect and as a loop; as a stream it
+        // plays up to a stream's own bound.
+        error.clear();
+        require(
+            !player.play_resource("sounds/slow.wav", error) &&
+                error.find("too long") != std::string::npos,
+            "an effect past the cache is refused"
+        );
+        require(
+            !player.start_loop_resource("sounds/slow.wav", error),
+            "a loop past the cache is refused"
+        );
+        require(player.play_stream("sounds/slow.wav", 0, error), "a stream past the cache plays");
+        player.stop_stream();
+        require(
+            !player.play_stream("sounds/slower.wav", 0, error), "a stream past its bound is refused"
+        );
+        require(player.play_resource("sounds/effect.wav", error), "an 11025 Hz effect plays");
+        player.stop_all();
     }
     placed_sides(root);
     std::filesystem::remove_all(root);

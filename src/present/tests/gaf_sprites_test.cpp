@@ -296,6 +296,15 @@ void test_rejected_files() {
     put_u16(bytes, child_rle_stream, 0);
     CHECK(relocate(bytes, gaf) == GafStatus::ok);
 
+    // A row-RLE frame of no rows loads whatever its data offset, which
+    // points nowhere when it lies past the file.
+    bytes = sample_gaf();
+    put_u16(bytes, frame_rle + 2, 0);
+    put_u32(bytes, frame_rle + 0x10, 0xFFFFFFF0u);
+    CHECK(relocate(bytes, gaf) == GafStatus::ok);
+    const Sprite* empty = oa::present::gaf_frame(&gaf.sequences[0], 1);
+    CHECK(empty != nullptr && empty->height == 0 && empty->data == nullptr);
+
     std::vector<uint8_t> huge(oa::present::gaf_max_bytes + 1, 0);
     CHECK(relocate(huge, gaf) == GafStatus::too_large);
     CHECK(

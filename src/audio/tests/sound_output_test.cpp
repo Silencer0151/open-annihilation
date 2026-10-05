@@ -402,6 +402,14 @@ void conversion_for_the_mixer() {
     // A format the mixer does not take converts nothing.
     CHECK(convert_for_mixer({SampleFormat::s16, 1, 10}, wide, samples) == 0 && samples.empty());
     CHECK(convert_for_mixer({SampleFormat::s16, 0, 44100}, wide, samples) == 0 && samples.empty());
+    // The converted size is known before converting, and holds what
+    // converting gives.
+    CHECK(converted_bytes({SampleFormat::u8, 1, 11025}, eight.size()) == 4001 * 2);
+    CHECK(convert_for_mixer({SampleFormat::u8, 1, 11025}, eight, samples) == 1);
+    CHECK(samples.size() * 2 <= converted_bytes({SampleFormat::u8, 1, 11025}, eight.size()));
+    CHECK(converted_bytes({SampleFormat::s16, 3, 44100}, wide.size()) == 3 * 2 * 2);
+    CHECK(converted_bytes({SampleFormat::u8, 1, 1000}, 200000) == 8820001 * 2);
+    CHECK(converted_bytes({SampleFormat::s16, 1, 10}, wide.size()) == 0);
 }
 
 // A device the test plays by hand: queued buffers stay busy until played.

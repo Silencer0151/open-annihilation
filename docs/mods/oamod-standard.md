@@ -755,8 +755,6 @@ a `safe` machine never share a game.
   not name a live unit directly. It suits games where every machine runs
   this engine and no script relies on reading empty slots.
 
-`unit.is-local` reads slots as under `exact` whatever the fidelity.
-
 `unit.is-local` differs between machines by design: a script uses it to run
 something, such as a muzzle flash, only on the owner's machine. A script
 that decides anything every machine must agree on from it breaks the game.

@@ -362,10 +362,15 @@ bool load_radar_picture(
             load_le32(extent + offsetof(MinimapHeader, width)),
             load_le32(extent + offsetof(MinimapHeader, height))
         };
-        if (size.width <= limit::minimap_dimension && size.height <= limit::minimap_dimension) {
+        // The pixels follow the minimap's 8-byte header: the whole of them
+        // must lie within the 32-bit offsets a map file is read at.
+        const uint64_t pixel_count = uint64_t{size.width} * size.height;
+        const uint64_t pixels_end = uint64_t{header.minimap_offset} + sizeof extent + pixel_count;
+        if (size.width <= limit::minimap_dimension && size.height <= limit::minimap_dimension &&
+            pixels_end <= UINT32_MAX) {
             picture.width = static_cast<int32_t>(size.width);
             picture.height = static_cast<int32_t>(size.height);
-            picture.pixels.resize(static_cast<std::size_t>(size.width) * size.height);
+            picture.pixels.resize(static_cast<std::size_t>(pixel_count));
             loaded = picture.pixels.empty() ||
                      file.read(
                          file.context,

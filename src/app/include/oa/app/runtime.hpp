@@ -10772,7 +10772,9 @@ class Runtime final : public menu::Host,
 
     /// Plays a movie of the game's Data directory in the window, then lays the frame out again.
     ///
-    /// A missing or failed movie is shown on the status line.
+    /// A missing or failed movie is shown on the status line, and so is a
+    /// name that is not a plain file name: empty, "." or "..", or holding
+    /// '/', '\' or ':', which is not opened.
     ///
     /// @param filename the movie's file in the Data folder (1.zrb .. 5.zrb in 3.1c)
     void play_movie_resource(std::string_view filename);

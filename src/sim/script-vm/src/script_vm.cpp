@@ -796,10 +796,19 @@ TickResult Vm::tick(uint32_t elapsed, std::size_t instruction_budget) {
     for (std::size_t i = 0; i < contexts_.size(); ++i) {
         auto step = tick_context(i, elapsed, instruction_budget - result.instructions);
         result.instructions += step.instructions;
-        if (step.error) {
-            result.error = std::move(step.error);
-            return result;
+        if (!step.error)
+            continue;
+        // An instruction outside the machine's set stops its context, and
+        // the tick goes on with the other contexts and the pieces' motion;
+        // the tick still reports it.
+        if (step.error->code == ErrorCode::unsupported_opcode) {
+            stop_context(i);
+            if (!result.error)
+                result.error = std::move(step.error);
+            continue;
         }
+        result.error = std::move(step.error);
+        return result;
     }
     advance_motions(elapsed);
     return result;
