@@ -125,6 +125,122 @@ hacks it names, with no code for any particular mod. See
 [Mod support](docs/mods/README.md) for installing and choosing a mod, the
 profile format and every standard hack.
 
+## Demo Recorder
+
+The demo recorder that recorded multiplayer games for 3.1c kept each game
+in a `.tad` file: the map, the players and every message the recording
+machine sent and received. Open Annihilation plays these recordings back
+from the command line, and can record its own network games in the same
+format. (The free 1997 demo of the game is something else: see
+[Playing the demo](#playing-the-demo).)
+
+### Playing a recording
+
+Start the game with `--play-demo` and the recording's file:
+
+- **macOS:** `open` passes the options only while the game is not already
+  running, and needs the recording's full path:
+
+  ```sh
+  open -a "Open Annihilation" --args --play-demo ~/Downloads/game.tad
+  ```
+
+  The program inside the application also takes a path from Terminal's
+  folder:
+
+  ```sh
+  "/Applications/Open Annihilation.app/Contents/MacOS/open-annihilation" --play-demo game.tad
+  ```
+
+- **Windows,** in a Command Prompt in the game's folder:
+
+  ```bat
+  open-annihilation.exe --play-demo "%USERPROFILE%\Downloads\game.tad"
+  ```
+
+- **Linux,** in the game's folder:
+
+  ```sh
+  ./open-annihilation --play-demo ~/Downloads/game.tad
+  ```
+
+- **From source:** `./run.sh --play-demo game.tad`.
+
+After the opening movies (`--skip-intro` skips them), the recorded game
+plays from its start, at the speeds its players set. You watch it as a
+watcher of the game would: you move the camera anywhere on the map, but
+give no orders and type no chat. **+** and **-** change the speed until
+the recording changes it again, **Pause** holds the playback, and you
+leave it from the in-game menu (**F2**). A recording that cannot play stops
+the game and says why, in the terminal or in an error box. A recording
+plays when:
+
+- it is in version 5 of the recorder's format; other versions are refused;
+- its map is installed;
+- the game has the recorded game's units. Play a game recorded with a mod
+  under that mod: the one chosen in the settings, or one named for a single
+  run with `--mod-dir PATH` (`--base-game` plays 3.1c instead of the chosen
+  mod). Otherwise the recording is refused, with a count of its unit types
+  that match. `--demo-unit-table ignore` skips that check, for diagnosis
+  only: units may then show as the wrong types, and the recording is still
+  refused when the game's count of unit types needs unit numbers of a
+  different size from the recording's. `--demo-unit-table strict`, the
+  default, keeps the check;
+- it has fewer than ten players, since the viewer needs a slot of its own,
+  unless the mod's profile turns on
+  [recorder.ten-player-replay](docs/mods/standard-hacks/recorder.ten-player-replay.md).
+
+With `--headless-check --game-dir PATH --match-ticks N`, the game plays up
+to N ticks of a recording without a window and prints a summary of the
+replay ([testing guide](docs/development/testing.md#network-play)). To make a
+video of a recording, [director scripts](docs/director.md) plan camera
+shots over it and render them with the game's sound;
+[capturing video](docs/capture.md) records what the window shows.
+
+### Recording a game
+
+3.1c records nothing. A network game is recorded when the mod's profile
+turns on the game recorder
+([recorder.ta-demo-recorder](docs/mods/standard-hacks/recorder.ta-demo-recorder.md)),
+or when the game was started with `--net-record FILE`, which records the
+next network game to `FILE`, replacing it, whatever the profile says. The
+file is written when the game ends or you leave it, and the log names it.
+
+The recorder saves each game in the `Recordings` folder of your Open
+Annihilation folder, the one that holds your saved games, screenshots and
+films. As in `Saves`, `Recordings` holds a folder for each mod, named after
+its id (`Recordings/<mod id>`), and `Recordings/default` for games without
+a mod:
+
+- **macOS:** `~/Documents/Open Annihilation/Recordings`
+- **Windows:** `Open Annihilation\Recordings` in your Documents folder
+  (My Documents on Windows XP)
+- **Linux:** `Open Annihilation/Recordings` in your Documents folder,
+  usually `~/Documents`
+- **iPhone and iPad:** in the Files app, On My iPhone (or On My iPad) ›
+  Open Annihilation › Open Annihilation › Recordings
+
+`--user-folder PATH` puts the Open Annihilation folder at `PATH` instead,
+and with `--preferences-file FILE` it is the Open Annihilation folder
+beside `FILE`. Recordings that earlier versions kept in a `demos` folder
+beside the preferences file, and a mod's in `mods/<mod id>/demos` there,
+move into `Recordings` once, as the installation guides describe
+([macOS](docs/installation/macos.md#where-it-keeps-its-files),
+[Windows](docs/installation/windows.md#where-it-keeps-its-files),
+[Linux](docs/installation/linux.md#where-it-keeps-its-files)).
+
+A file is named after the date, time and map, such as
+`2026-10-05 1432 Coast To Coast.tad`; `.record NAME`, typed in the battle
+room's chat, names it `NAME.tad` instead (a profile may set other
+extensions). A name already taken gets ` (2)`, and so on. The recorder's
+other chat commands work as the demo recorder's did:
+[network.recorder-session-commands](docs/mods/standard-hacks/network.recorder-session-commands.md)
+describes them and the hacks they belong to.
+
+`--replay-viewer` is for joining a network game in which another player's
+replayer plays a recording to those who join: the game presents the replay
+version of the mod's profile in place of its network version.
+
 ## Playing the demo
 
 The Total Annihilation demo, released free in 1997, is enough to try Open

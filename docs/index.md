@@ -42,6 +42,9 @@ Every document in the repository, by what you want to do.
   how it is chosen (3.1c's command line, the Language setting, the
   operating system), what the game data translates in German, French,
   Italian and Spanish, the engine's own words, and adding a language.
+- [Demo Recorder](../README.md#demo-recorder) in the README: playing back a
+  recorded game (`.tad`) from the command line with `--play-demo`, what a
+  recording needs to play, and recording network games.
 - [capture.md](capture.md): capturing the game as an MP4 video with
   `--capture-video` (it needs the `ffmpeg` program), and the scripted run
   `--showcase` plays for showcase videos.
