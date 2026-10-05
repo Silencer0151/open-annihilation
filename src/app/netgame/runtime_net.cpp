@@ -94,7 +94,18 @@ constexpr int32_t kComputerGiftSpacing = 40;
 // how far a copy may stand from its owner: a pixel, in 16.16.
 constexpr std::size_t kComputerPoseTicks = 128;
 constexpr uint32_t kCopyOffsetLimit = 1u << 16;
+// The loopback checks wait on the other machine in rounds, each of which
+// serves both machines once: a pump, a frame or a tick. A wait gives up
+// only once it has gone kLoopbackWaitRounds rounds and kLoopbackWaitMs of
+// the wall clock without progress. A machine under load runs the same
+// rounds more slowly and waits for them, and on a quick machine a step the
+// wall clock paces, such as the load barrier, still has its time. A wait
+// that shows progress, such as the unit sync's records, counts again from
+// each step. kLoopbackBackstopMs of the wall clock (ten minutes) ends any
+// wait.
+constexpr uint32_t kLoopbackWaitRounds = 200;
 constexpr uint32_t kLoopbackWaitMs = 15000;
+constexpr uint32_t kLoopbackBackstopMs = 10 * 60 * 1000;
 // Milliseconds a networked tick of the loopback checks waits for the other
 // machine's records. None: loopback hands them over at once, and a record
 // applies at the tick it names however late it arrives, so the checks
@@ -121,6 +132,41 @@ constexpr uint32_t kLoopbackVictoryTicks = 180;
 // panel font's.
 constexpr int kLoopbackOverlayBottom = 480 - 32 - 32;
 constexpr uint8_t kLoopbackOverlayFontHeight = 11;
+
+// A loopback check's wait on the other machine, counted in rounds and in
+// the wall clock since its last progress (kLoopbackWaitRounds).
+class LoopbackWait {
+  public:
+
+    /// Counts one round of the wait.
+    ///
+    /// @param progress a figure that grows only while the wait gets somewhere, such as the
+    ///        unit sync's records; 0 for a wait that shows none
+    /// @return whether the wait may go on
+    bool next_round(uint64_t progress = 0) {
+        const auto now = Clock::now();
+        if (progress > most_progress_) {
+            most_progress_ = progress;
+            rounds_since_progress_ = 0;
+            progressed_at_ = now;
+        }
+        ++rounds_since_progress_;
+        const auto since = [now](Clock::time_point from) {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(now - from).count();
+        };
+        return since(started_at_) < kLoopbackBackstopMs &&
+               (rounds_since_progress_ <= kLoopbackWaitRounds ||
+                since(progressed_at_) < kLoopbackWaitMs);
+    }
+
+  private:
+
+    using Clock = std::chrono::steady_clock;
+    Clock::time_point started_at_{Clock::now()};   ///< when the wait began
+    Clock::time_point progressed_at_{started_at_}; ///< when its progress last grew
+    uint64_t most_progress_{};                     ///< the highest progress figure seen
+    uint32_t rounds_since_progress_{};             ///< rounds since its progress last grew
+};
 
 // A unit's movement as its owner's record for one tick leaves it.
 struct UnitPose {
@@ -1560,14 +1606,9 @@ struct NetworkPlay::NetHost {
                     computer_copy.metal_produced_total == 0.0,
                 "the joiner had economy figures for the computer player before its final economy"
             );
-            const auto started = std::chrono::steady_clock::now();
+            LoopbackWait settle_wait;
             while (!host.net_final_economy_settled()) {
-                const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - started
-                );
-                require(
-                    waited.count() < kLoopbackWaitMs, "the host's final economy did not settle"
-                );
+                require(settle_wait.next_round(), "the host's final economy did not settle");
                 joiner.net_frame();
                 loopback_step(joiner);
                 loopback_pump(joiner, 1);
@@ -1576,14 +1617,9 @@ struct NetworkPlay::NetHost {
         // The host leaves; the joiner retires its machine group, the host's
         // player and its computer player, as departed.
         host.net_leave();
-        const auto started = std::chrono::steady_clock::now();
+        LoopbackWait retire_wait;
         while (computer_copy.in_use != 0 || client_world.game.players[host_on_client].in_use != 0) {
-            const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - started
-            );
-            require(
-                waited.count() < kLoopbackWaitMs, "the joiner did not retire the host's machine"
-            );
+            require(retire_wait.next_round(), "the joiner did not retire the host's machine");
             joiner.net_frame();
             loopback_step(joiner);
             loopback_pump(joiner, 1);
@@ -2014,15 +2050,17 @@ int NetworkPlay::run_net_loopback_check(std::size_t ticks) {
         NetHost::loopback_pump(*this, wait_ms);
         NetHost::loopback_pump(joiner_play, wait_ms);
     };
-    const auto wait_until = [&](auto done, const char* what) {
-        const auto started = std::chrono::steady_clock::now();
+    // Pumps both machines until done() holds; progress() is the wait's
+    // progress figure (LoopbackWait::next_round).
+    const auto wait_progressing = [&](auto done, auto progress, const char* what) {
+        LoopbackWait wait;
         while (!done()) {
-            const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - started
-            );
-            require(waited.count() < kLoopbackWaitMs, what);
+            require(wait.next_round(progress()), what);
             pump_both(2);
         }
+    };
+    const auto wait_until = [&](auto done, const char* what) {
+        wait_progressing(done, [] { return uint64_t{0}; }, what);
     };
     const auto drain = [](LoopbackSide& side) {
         mp::LobbyEvent event{};
@@ -2207,7 +2245,21 @@ int NetworkPlay::run_net_loopback_check(std::size_t ticks) {
         }
         mp::unit_sync_create(*host.lobby, true);
         mp::unit_sync_create(*client.lobby, false);
-        wait_until(
+        // The sync's progress: the records the joiner handled, and the unit
+        // count, checksums and acknowledgements the host has from it. The
+        // joiner works out and sends four checksums a round, so a loaded
+        // machine takes longer over them but keeps showing progress.
+        const auto sync_progress = [&] {
+            uint64_t figure = client.lobby->sync.records_handled;
+            const auto& host_sync = host.lobby->sync;
+            for (int32_t index = 0; index < host_sync.peer_count; ++index) {
+                const auto& peer = host_sync.peers[index];
+                figure +=
+                    uint64_t{peer.received} + peer.acknowledged + (peer.expected != 0 ? 1 : 0);
+            }
+            return figure;
+        };
+        wait_progressing(
             [&] {
                 mp::unit_sync_tick(*host.lobby);
                 mp::unit_sync_tick(*client.lobby);
@@ -2215,6 +2267,7 @@ int NetworkPlay::run_net_loopback_check(std::size_t ticks) {
                 drain(client);
                 return mp::unit_sync_complete(*host.lobby);
             },
+            sync_progress,
             "the unit sync did not finish"
         );
         mp::UnitSyncRecord record{};
@@ -3470,15 +3523,12 @@ int NetworkPlay::run_net_loopback_check(std::size_t ticks) {
         const auto tick_before = host_world.game.tick;
         uint32_t probes_held = 0;
         uint32_t tick_held = 0;
-        const auto started = std::chrono::steady_clock::now();
+        LoopbackWait wait;
         for (;;) {
             runtime_.finish_match_outcome();
             if (!net_->active)
                 break;
-            const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - started
-            );
-            require(waited.count() < kLoopbackWaitMs, what);
+            require(wait.next_round(), what);
             ++held;
             between_frames();
             net_frame();

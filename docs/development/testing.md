@@ -399,7 +399,10 @@ names, these run the game headless:
   `native-net-loopback-watcher` has the joiner watch, and
   `native-net-loopback-computer` and `native-net-loopback-computer-watcher`
   have the host seat a computer player that builds, is given a squad and
-  attacks;
+  attacks. Each wait on the other machine counts rounds, each serving both
+  machines once, and gives up only after 200 rounds and 15 s with no
+  progress (the unit sync shows its records as progress), so a machine
+  under load takes longer over the checks without failing them;
 - `native-multiplayer-menu` (`--check-multiplayer-menu`) clicks MULTI and
   checks the multiplayer screens;
 - `native-recording-hook` (`--check-recording-hook`) checks that the game
