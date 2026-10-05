@@ -774,6 +774,79 @@ void malformed_unit_states_change_nothing() {
     CHECK(other.type_index == other_before.type_index && other.health == other_before.health);
 }
 
+// A unit state whose unit changes def: cut short anywhere in the unit's
+// delta or in its full record, the speed word included, it recreates
+// nothing and leaves the slot's unit; whole, it recreates the unit, then
+// applies.
+void short_body_recreates_nothing() {
+    for (const bool routed : {true, false}) {
+        TestWorld local(
+            small_units_per_player, small_def_bits, small_classes, nullptr, std::size(small_classes)
+        );
+        TestWorld remote(
+            small_units_per_player, small_def_bits, small_classes, nullptr, std::size(small_classes)
+        );
+        local.world->game.players[0].status = OA_PLAYER_STATUS_LOCAL;
+        Unit* sent = local.spawn(&local.units[1], 1, false);
+        sent->health = 250;
+        if (routed) {
+            // A route lists the unit among the deltas; without one only its
+            // full record carries it.
+            MovementRecord& route = local.movement[sent->id];
+            route.ground.flags = ground_driver_path_set | ground_driver_resend;
+            route.ground.path_count = 1;
+            route.ground.path[0][0] = 210;
+            route.ground.path[0][1] = 300;
+        }
+        Unit* held = remote.spawn(&remote.units[1], 4, true);
+        held->health = 10;
+        local.world->game.tick = 0; // the full record is the first unit's
+        const auto bytes = pack(local, 0);
+        // Where the unit's delta ends: a cut past it may stop later in the
+        // record, after the delta has applied and recreated the unit.
+        std::size_t delta_end_bits = bytes.size() * 8;
+        if (routed) {
+            UnitDelta deltas[4]{};
+            DeltaCodecState state{};
+            state.classes = {small_classes, std::size(small_classes)};
+            state.deltas = deltas;
+            state.capacity = std::size(deltas);
+            const auto codec = delta_codec(&state);
+            UnitStateDecodeOptions options{};
+            options.def_index_bits = small_def_bits;
+            options.full_record_object_word_present = true;
+            options.delta_codec = &codec;
+            UnitStateBody body{};
+            CHECK(decode_unit_state(bytes.data(), bytes.size(), options, &body) == WireError::ok);
+            CHECK(body.entry_count == 1);
+            delta_end_bits = body.entries[0].delta_bit_offset + body.entries[0].delta_bit_count;
+        }
+        for (std::size_t n = unit_state_header_bytes; n < bytes.size(); ++n) {
+            Bytes cut(bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(n));
+            cut[1] = static_cast<uint8_t>(n);
+            cut[2] = static_cast<uint8_t>(n >> 8);
+            CHECK(
+                replication_apply_unit_state(
+                    remote.world.get(), &remote.sim, 0, cut.data(), cut.size()
+                ) == WireError::truncated
+            );
+            if (n * 8 < delta_end_bits)
+                CHECK(remote.creates == 0 && held->type_index == 4 && held->health == 10);
+        }
+        if (routed) {
+            // The delta whole and the record cut later: the unit was recreated.
+            CHECK(remote.creates <= 1);
+            remote.creates = 0;
+        }
+        CHECK(
+            replication_apply_unit_state(
+                remote.world.get(), &remote.sim, 0, bytes.data(), bytes.size()
+            ) == WireError::ok
+        );
+        CHECK(held->type_index == 1 && held->health == 250 && (routed || remote.creates == 1));
+    }
+}
+
 } // namespace
 
 int main() {
@@ -791,6 +864,7 @@ int main() {
         {"receiver_calls_follow_the_record", receiver_calls_follow_the_record},
         {"event_records_follow_pump_rules", event_records_follow_pump_rules},
         {"malformed_unit_states_change_nothing", malformed_unit_states_change_nothing},
+        {"short_body_recreates_nothing", short_body_recreates_nothing},
     };
     for (const auto& test : tests) {
         current_test = test.name;

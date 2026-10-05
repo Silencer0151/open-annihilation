@@ -66,6 +66,17 @@ delta_layout(World* world, const MovementRecord* movement, uint16_t def_index) n
     return movement_class_for_def(world->unit_defs[def_index]);
 }
 
+/// Tells whether a unit of a def has a movement object once it is created:
+/// only a mobile def's units have one.
+///
+/// @param world the world whose unit table holds the def
+/// @param def_index the def's index
+/// @return true for a mobile def in the table
+bool def_has_movement(const World* world, uint16_t def_index) noexcept {
+    return world->unit_defs != nullptr && def_index < world->unit_def_count &&
+           world->unit_defs[def_index].bm_code == unit_def_bm_code_mobile;
+}
+
 Player* player_by_id(World* world, uint32_t net_id) noexcept {
     if (net_id == 0xffffffffu)
         return nullptr;
@@ -271,8 +282,18 @@ WireError replication_apply_full_record(
         *reader = record_reader;
         return WireError::ok;
     }
-    if (unit->type_index != record.unit_def_index)
+    if (unit->type_index != record.unit_def_index) {
+        // A recreated unit's speed word, there when its def has movement, is
+        // checked to be in the record before the unit is recreated, so a
+        // record cut short leaves the slot's unit as it was.
+        if (!record.attached && def_has_movement(world, record.unit_def_index)) {
+            BitReader ahead = record_reader;
+            (void)bit_reader_read(&ahead, 32);
+            if (bit_reader_overrun(&ahead))
+                return WireError::truncated;
+        }
         create_from_stream(world, sim, unit, record.unit_def_index);
+    }
     const bool has_speed_word = !record.attached && unit->movement != 0;
     uint32_t speed_word = 0;
     if (has_speed_word) {
@@ -367,8 +388,18 @@ WireError replication_apply_unit_state(
         const auto def_index = static_cast<uint16_t>(bit_reader_read(&reader, def_bits));
         if (bit_reader_overrun(&reader))
             return WireError::truncated;
-        if (unit->type_index != def_index)
+        if (unit->type_index != def_index) {
+            // The delta is read to its end, in the layout the recreated
+            // unit's driver takes, before the unit is recreated, so a body
+            // cut short leaves the slot's unit as it was.
+            BitReader ahead = reader;
+            UnitDelta read_ahead{};
+            const auto error =
+                read_unit_delta(&ahead, delta_layout(world, nullptr, def_index), &read_ahead);
+            if (error != WireError::ok)
+                return error;
             create_from_stream(world, sim, unit, def_index);
+        }
         MovementRecord* m = movement_of(world, sim, unit);
         const auto layout = delta_layout(world, m, def_index);
         if (layout == MovementClass::none)

@@ -375,9 +375,9 @@ void movement_apply_delta(
 /// A zero def index marks a live unit for death. A changed def index first
 /// recreates the unit through create_unit. Health, build fraction, state
 /// flags and either the attachment or the position, angles and speed follow.
-/// The record is read whole before any of it applies: a truncated record
-/// changes nothing, except that a recreate has already happened when only
-/// the speed word, which the recreated unit's movement calls for, is missing.
+/// The record is read whole before any of it applies, and a recreated
+/// unit's speed word, there when its def is mobile, before the unit is
+/// recreated: a truncated record changes nothing.
 ///
 /// @param world Receiving world.
 /// @param sim Receiver hooks, or null.
@@ -392,7 +392,10 @@ void movement_apply_delta(
 ///
 /// Sets the sender's last_sim_tick, applies each listed delta, steps every
 /// live mobile sender unit, then applies the full record when present.
-/// Units outside the sender's range are rejected.
+/// Units outside the sender's range are rejected. A listed unit whose def
+/// index changed is recreated only once its delta, in the layout its new
+/// def's driver takes, has been read in full, so a body cut short recreates
+/// nothing.
 ///
 /// @param world Receiving world.
 /// @param sim Receiver hooks, or null.
