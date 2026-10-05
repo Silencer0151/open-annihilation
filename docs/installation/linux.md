@@ -32,10 +32,10 @@ system has.
 Open the latest release on GitHub,
 [github.com/open-annihilation/open-annihilation/releases/latest](https://github.com/open-annihilation/open-annihilation/releases/latest),
 and download your package under **Assets**. Or download it in a terminal,
-with the release's version in place of `v0.7.0`:
+with the release's version in place of `v0.7.1`:
 
 ```sh
-curl -LO https://github.com/open-annihilation/open-annihilation/releases/download/v0.7.0/open-annihilation-v0.7.0-linux-x86_64.zip
+curl -LO https://github.com/open-annihilation/open-annihilation/releases/download/v0.7.1/open-annihilation-v0.7.1-linux-x86_64.zip
 ```
 
 ## 3. Unzip it
