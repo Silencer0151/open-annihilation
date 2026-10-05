@@ -21,7 +21,7 @@ only the footprint and builds every building facing south.
 
 ![Placing a light laser tower near a small Arm base: the tower is drawn as green nanoframe lines inside a green footprint square on open ground.](images/ui.build-preview-nanoframe.png)
 
-*Placing a Light Laser Tower: the tower is drawn at its site as the player's shimmering nanoframe, inside its footprint outline.*
+*Placing a Light Laser Tower: the tower is drawn at its site as the player's pulsing nanoframe, inside its footprint outline.*
 
 ![Two enlarged views of a vehicle plant being placed: on the left a wide green footprint with the letter S and the hint "Press /, or Left Alt+wheel, to rotate"; on the right a tall footprint with the letter E and no hint.](images/ui.build-preview-rotated.png)
 
