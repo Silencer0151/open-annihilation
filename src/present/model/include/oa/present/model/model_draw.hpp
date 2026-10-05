@@ -25,6 +25,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace oa::present::model {
@@ -99,6 +100,20 @@ struct ModelBounds {
 
 struct FinerModel;
 
+/// A build effect drawn in place of the one a unit's build progress and
+/// pulse give it (apply_build_effect): the image's depths from band_low up
+/// to band_end take `band`, those below `below` and those from band_end up
+/// `above`, each a colour, remap_keep or remap_clear; then the model is
+/// outlined in `outline`.
+struct BuildEffectBands {
+    uint8_t band_low{};
+    uint8_t band_end{};
+    int32_t below{remap_keep};
+    int32_t band{remap_keep};
+    int32_t above{remap_keep};
+    uint8_t outline{}; ///< palette entry
+};
+
 // Draw state kept with a model instance; the pieces themselves live in
 // sim::model_runtime::Instance.
 struct ModelState {
@@ -126,6 +141,11 @@ struct ModelState {
     /// The model drawn finer than the game's pixels (enhanced
     /// anti-aliasing); null until it first is.
     std::unique_ptr<FinerModel> finer{};
+    /// The build effect the model's image is drawn with while its unit is
+    /// unfinished, in place of the one its build progress and pulse give
+    /// it: the building being placed (ui.build-preview). Empty draws the
+    /// unit's own.
+    std::optional<BuildEffectBands> build_bands{};
 };
 
 /// A model's draw state for draws finer than the game's pixels (enhanced
@@ -420,6 +440,20 @@ void remap_depth_bands(
     Sprite& image, uint8_t threshold, int32_t above, int32_t below, int32_t band
 ) noexcept;
 
+/// Remaps every opaque pixel of a depth image by where its depth lies:
+/// below `low` it takes `below`, from `low` up to `end` `band`, and from
+/// `end` up `above`. Each value is a colour, remap_keep or remap_clear.
+///
+/// @param[in,out] image image with a depth plane
+/// @param low the band's lowest depth
+/// @param end the depth past the band's highest
+/// @param above value above the band
+/// @param below value below the band
+/// @param band value inside the band
+void remap_depth_range(
+    Sprite& image, uint8_t low, uint8_t end, int32_t above, int32_t below, int32_t band
+) noexcept;
+
 /// The two colours the build effect pulses an unfinished unit with.
 struct BuildPulseColours {
     uint8_t first{};  ///< the slower colour, which fills the bands early and late in the build
@@ -489,7 +523,9 @@ uint32_t advance_build_pulse(BuildPulseClock& clock, uint32_t game_tick, float z
 /// Applies the build (nanoframe) effect to an unfinished unit's depth image.
 ///
 /// A pulsing band of nano colours (palette 0xa0..0xaf, build_pulse_colours)
-/// sweeps up the model with the build progress, then the model is outlined.
+/// sweeps up the model with the build progress, then the model is outlined;
+/// a model whose draw state holds build bands (ModelState::build_bands) is
+/// drawn with those instead.
 ///
 /// @param renderer drawing context; its tick less its build_pulse_lag drives the pulse
 /// @param[in,out] image model image with a depth plane

@@ -551,12 +551,16 @@ int main() {
         "--force-capable goes with --check-kill-board"
     );
     expect(
+        parse({"--check-build-preview", "--force-capable"}).force_capable,
+        "--force-capable goes with --check-build-preview"
+    );
+    expect(
         rejection({"--force-capable"}) ==
                 "--force-capable is accepted only with --check-render-tiers, "
-                "--check-engine-settings and --check-kill-board" &&
+                "--check-build-preview, --check-engine-settings and --check-kill-board" &&
             rejection({"--force-capable", "--check-navigation"}) ==
                 "--force-capable is accepted only with --check-render-tiers, "
-                "--check-engine-settings and --check-kill-board",
+                "--check-build-preview, --check-engine-settings and --check-kill-board",
         "--force-capable is refused without a check that takes it"
     );
     expect(
@@ -943,13 +947,13 @@ int main() {
     expect(
         rejection({"--force-capable"}) ==
             "--force-capable is accepted only with --check-render-tiers, "
-            "--check-engine-settings and --check-kill-board",
+            "--check-build-preview, --check-engine-settings and --check-kill-board",
         "--force-capable alone is refused"
     );
     expect(
         rejection({"--check-match-layers", "--force-capable"}) ==
             "--force-capable is accepted only with --check-render-tiers, "
-            "--check-engine-settings and --check-kill-board",
+            "--check-build-preview, --check-engine-settings and --check-kill-board",
         "--force-capable with another check is refused"
     );
     // --native-density opens the window at the display's own density for

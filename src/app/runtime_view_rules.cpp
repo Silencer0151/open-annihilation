@@ -37,6 +37,9 @@ namespace {
 
 /// A quarter turn in angle words: the heading a facing adds to a building.
 constexpr uint32_t quarter_turn = 0x4000;
+/// The heading a building is built at before its facing turns it: half a
+/// turn, give or take half its type's build angle.
+constexpr uint32_t building_heading = 0x8000;
 /// The interface sound a change of build facing plays.
 constexpr std::string_view rotate_sound = "MORE";
 /// The preferences section the player's display-rule settings are kept in.
@@ -390,6 +393,8 @@ bool Runtime::rotate_pending_build(int32_t direction) {
     if (next == pending_build_facing())
         return false;
     build_facing_ = next;
+    // The preview's pulse starts again.
+    build_turn_phase_ = match_->simulation().tick % view_rules::build_preview_pulse_ticks;
     play_match_interface_sound(rotate_sound);
     if (!view_settings_.rotate_key_discovered) {
         view_settings_.rotate_key_discovered = true;
@@ -410,7 +415,8 @@ bool Runtime::ready_build_preview(MatchModels& models) {
     if (auto snapped = snapped_build_site(match_pointer_x_, match_pointer_y_))
         site = snapped;
     const auto& loaded = loaded_commander_types_[pending_build_type_];
-    if (!site || !loaded.model)
+    // Over a site the game refuses the footprint's outline shows alone.
+    if (!site || !site->legal || !loaded.model)
         return false;
     auto facing = pending_build_facing();
     // A type that faces its opponent is drawn turned toward the nearest
@@ -460,17 +466,20 @@ bool Runtime::ready_build_preview(MatchModels& models) {
             list = by_facing[0] != '\0' ? std::string_view(by_facing.data())
                                         : std::string_view(keys.pieces.data());
         }
-        if (!list.empty()) {
-            const auto& objects = preview.instance.model().objects;
-            for (auto& piece : preview.instance.pieces()) {
-                const bool listed =
-                    piece.object_index < objects.size() &&
-                    view_rules::preview_lists_piece(list, objects[piece.object_index].name);
-                if (!listed)
-                    piece.flags &= static_cast<uint16_t>(
-                        ~static_cast<uint16_t>(oa::sim::model_runtime::PieceFlag::visible)
-                    );
-            }
+        // Without a list, every piece but the muzzle flashes and wakes the
+        // unit's script would hide.
+        const auto& objects = preview.instance.model().objects;
+        for (auto& piece : preview.instance.pieces()) {
+            const bool known = piece.object_index < objects.size();
+            const bool shown =
+                list.empty()
+                    ? !known || !view_rules::preview_skips_piece(objects[piece.object_index].name)
+                    : known &&
+                          view_rules::preview_lists_piece(list, objects[piece.object_index].name);
+            if (!shown)
+                piece.flags &= static_cast<uint16_t>(
+                    ~static_cast<uint16_t>(oa::sim::model_runtime::PieceFlag::visible)
+                );
         }
     }
     auto& unit = preview.unit;
@@ -480,8 +489,12 @@ bool Runtime::ready_build_preview(MatchModels& models) {
     unit.def = oa::oa_ref_from_index(pending_build_type_);
     unit.owner_index = match_local_player_;
     unit.position = {site->world[0], site->world[1], site->world[2]};
-    unit.heading = static_cast<oa_angle>(static_cast<uint32_t>(facing) * quarter_turn);
-    unit.build_remaining = view_rules::build_preview_remaining(rules.fill, SDL_GetTicks());
+    // Facing the way the building is built: half a turn from heading 0,
+    // then the facing's quarter turns. Its look comes from its pulse
+    // (build_preview_bands); it counts as just begun.
+    unit.heading =
+        static_cast<oa_angle>(building_heading + static_cast<uint32_t>(facing) * quarter_turn);
+    unit.build_remaining = 1.0F;
     return true;
 }
 

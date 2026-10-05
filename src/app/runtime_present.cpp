@@ -769,7 +769,7 @@ void Runtime::capture_render_target() {
 }
 
 void Runtime::present_software_cursor(bool match_layers) {
-    if (!cursors_loaded_ || cursor_image_ == nullptr)
+    if (!cursors_loaded_ || cursor_image_ == nullptr || frame_without_cursor_)
         return;
     // With touch controls the cursor is hidden while no finger rests, or
     // lifted above the finger on the battlefield.

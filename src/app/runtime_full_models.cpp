@@ -219,10 +219,11 @@ struct Placement {
     int32_t depth_base{};
 };
 
-/// The build effect's bands for one unit, as remap_depth_bands takes them.
+/// The build effect's bands for one unit, as remap_depth_range takes them.
 struct NanoBands {
     bool active{};
-    uint8_t threshold{};
+    uint8_t low{};       ///< the band's lowest depth
+    uint8_t threshold{}; ///< the depth past the band's highest
     int32_t above{};
     int32_t below{};
     int32_t band{};
@@ -328,16 +329,35 @@ NanoBands nano_bands(uint32_t pulse_tick, const Unit& unit) {
         bands.below = draw::remap_keep;
         bands.band = color_a;
     }
+    // The band takes the 4 depths below the threshold.
+    bands.low = bands.threshold < nano_band_depth
+                    ? 0
+                    : static_cast<uint8_t>(bands.threshold - nano_band_depth);
+    return bands;
+}
+
+/// The bands of a model drawn with build bands of its own
+/// (ModelState::build_bands), else its unit's (nano_bands).
+NanoBands bands_of(uint32_t pulse_tick, const draw::ModelRef& model) {
+    if (model.state == nullptr || !model.state->build_bands || model.unit == nullptr ||
+        model.unit->build_remaining == 0.0F)
+        return model.unit != nullptr ? nano_bands(pulse_tick, *model.unit) : NanoBands{};
+    const draw::BuildEffectBands& own = *model.state->build_bands;
+    NanoBands bands;
+    bands.active = true;
+    bands.low = own.band_low;
+    bands.threshold = own.band_end;
+    bands.above = own.above;
+    bands.below = own.below;
+    bands.band = own.band;
+    bands.outline = own.outline;
     return bands;
 }
 
 /// What the bands make of a depth: remap_keep, remap_clear or a colour.
 int32_t classify_depth(const NanoBands& bands, uint8_t depth) noexcept {
-    const uint8_t low = bands.threshold < nano_band_depth
-                            ? 0
-                            : static_cast<uint8_t>(bands.threshold - nano_band_depth);
     int32_t value = bands.below;
-    if (low <= depth) {
+    if (bands.low <= depth) {
         value = bands.above;
         if (depth < bands.threshold)
             value = bands.band;
@@ -2081,7 +2101,7 @@ void Emitter::draw_model(const ModelDraw& drawn) {
             false
         );
         if (framed)
-            apply_nanoframe(nano_bands(in_.build_pulse_tick, unit), 0, model, image_placement);
+            apply_nanoframe(bands_of(in_.build_pulse_tick, model), 0, model, image_placement);
     } else {
         add_unit_pieces(
             model, *mesh, image_placement, true, false, true, team, image_shading, body_alpha, false
@@ -2139,7 +2159,7 @@ void Emitter::draw_model(const ModelDraw& drawn) {
             false
         );
         apply_nanoframe(
-            nano_bands(in_.build_pulse_tick, child), first_polygon, carried.model, composed
+            bands_of(in_.build_pulse_tick, carried.model), first_polygon, carried.model, composed
         );
     }
     const int32_t lift = static_cast<int32_t>(game.sea_level) - hi(unit.position.y);

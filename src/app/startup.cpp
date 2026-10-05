@@ -282,6 +282,7 @@ void check_game_files_options(Options& options) {
         {options.check_language_switch, "--check-language-switch"},
         {options.check_patrol_reclaim, "--check-patrol-reclaim"},
         {options.check_reclaim_cursor, "--check-reclaim-cursor"},
+        {options.check_build_preview, "--check-build-preview"},
         {options.check_pointer_interfaces, "--check-pointer-interfaces"},
         {options.check_touch_controls, "--check-touch-controls"},
         {options.check_pad_controls, "--check-pad-controls"},
@@ -465,6 +466,7 @@ void check_director_options(Options& options) {
         {options.check_language_switch, "--check-language-switch"},
         {options.check_patrol_reclaim, "--check-patrol-reclaim"},
         {options.check_reclaim_cursor, "--check-reclaim-cursor"},
+        {options.check_build_preview, "--check-build-preview"},
         {options.check_pointer_interfaces, "--check-pointer-interfaces"},
         {options.check_touch_controls, "--check-touch-controls"},
         {options.check_pad_controls, "--check-pad-controls"},
@@ -796,6 +798,8 @@ namespace {
             result.check_patrol_reclaim = true;
         else if (argument == "--check-reclaim-cursor")
             result.check_reclaim_cursor = true;
+        else if (argument == "--check-build-preview")
+            result.check_build_preview = true;
         else if (argument == "--check-pointer-interfaces")
             result.check_pointer_interfaces = true;
         else if (argument == "--check-touch-controls")
@@ -879,7 +883,7 @@ namespace {
                    "[--check-kill-board] "
                    "[--check-unit-language TAG] "
                    "[--check-language-switch] "
-                   "[--check-patrol-reclaim] [--check-reclaim-cursor] "
+                   "[--check-patrol-reclaim] [--check-reclaim-cursor] [--check-build-preview] "
                    "[--check-pointer-interfaces] [--check-pad-controls] [--check-touch-controls] "
                    "[--check-game-files] "
                    "[--check-multiplayer-menu] "
@@ -1030,11 +1034,11 @@ namespace {
         throw std::runtime_error(
             "--check-render-tiers draws in a window and cannot be used with --headless-check"
         );
-    if (result.force_capable && !result.check_render_tiers && !result.check_engine_settings &&
-        !result.check_kill_board)
+    if (result.force_capable && !result.check_render_tiers && !result.check_build_preview &&
+        !result.check_engine_settings && !result.check_kill_board)
         throw std::runtime_error(
             "--force-capable is accepted only with --check-render-tiers, "
-            "--check-engine-settings and --check-kill-board"
+            "--check-build-preview, --check-engine-settings and --check-kill-board"
         );
     if (result.render_fault && !result.check_renderer_ladder)
         throw std::runtime_error("--render-fault needs --check-renderer-ladder");
@@ -1049,7 +1053,7 @@ namespace {
         result.check_unit_page_memory || result.check_side_column || result.check_match_bars ||
         !result.check_unit_pages.empty() || result.check_kill_board ||
         !result.check_unit_language.empty() || result.check_language_switch ||
-        result.check_patrol_reclaim || result.check_reclaim_cursor ||
+        result.check_patrol_reclaim || result.check_reclaim_cursor || result.check_build_preview ||
         result.check_pointer_interfaces || result.check_touch_controls ||
         result.check_pad_controls || result.check_director_view || result.check_director_render ||
         result.check_interpolation || result.check_unit_playout || result.check_paused_save;

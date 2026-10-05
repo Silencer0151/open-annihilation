@@ -874,7 +874,7 @@ data-keys:
 | weapon | `surfacefire` | `weapons.surface-fire`: a water weapon fires at the surface | Integer; the low bit counts | 0 | — |
 | weapon | `nottounderwater` | `weapons.not-to-underwater`: a water weapon refuses submerged targets | Integer; the low bit counts | 0 | — |
 | weapon | `nomapweaponalert` | `weapons.no-map-alert`: an ownerless shot that does no damage raises no alert | Integer; the low bit counts | 0 | — |
-| unit | `PreviewPieces` | `ui.preview-pieces`: pieces the build preview draws | String | All pieces | `ui.build-preview` |
+| unit | `PreviewPieces` | `ui.preview-pieces`: pieces the build preview draws | String | All pieces but the muzzle flashes and wakes (`flare`, `flash`, `muzzle`, `fire`, `flame`, `wake`) | `ui.build-preview` |
 | unit | `PreviewPiecesS`, `E`, `N`, `W` | `ui.preview-pieces-by-facing`: pieces drawn in each facing; the profile binds the stem | String | `PreviewPieces` | `ui.build-preview` |
 | unit | `PreviewObject3D` | `ui.preview-object`: a model drawn in place of the unit's own | String | The unit's model | `ui.build-preview` |
 | unit | `PreviewFaceOpponent` | `ui.preview-face-opponent`: while the site lies within build distance of one of the player's selected, finished builders, the preview is drawn turned toward the nearest enemy player's first unit, usually its commander; the building is still placed in the facing the player chose | 0 or 1 | 0 | `ui.build-preview` |

@@ -888,6 +888,12 @@ void remap_depth_bands(
     Sprite& image, uint8_t threshold, int32_t above, int32_t below, int32_t band
 ) noexcept {
     const uint8_t low = threshold < 4 ? 0 : static_cast<uint8_t>(threshold - 4);
+    remap_depth_range(image, low, threshold, above, below, band);
+}
+
+void remap_depth_range(
+    Sprite& image, uint8_t low, uint8_t end, int32_t above, int32_t below, int32_t band
+) noexcept {
     auto* pixels = static_cast<uint8_t*>(image.data);
     const auto* depth = static_cast<const uint8_t*>(image.aux);
     const int32_t count = static_cast<int32_t>(image.width) * image.height;
@@ -897,7 +903,7 @@ void remap_depth_bands(
         int32_t value = below;
         if (low <= depth[i]) {
             value = above;
-            if (depth[i] < threshold)
+            if (depth[i] < end)
                 value = band;
         }
         if (value == remap_clear)
@@ -952,6 +958,14 @@ bool apply_build_effect(const ModelRenderer& renderer, Sprite& image, const Mode
     const Unit& unit = *model.unit;
     if (image.aux == nullptr || unit.build_remaining == 0.0F)
         return false;
+    if (model.state != nullptr && model.state->build_bands) {
+        const BuildEffectBands& bands = *model.state->build_bands;
+        remap_depth_range(
+            image, bands.band_low, bands.band_end, bands.above, bands.below, bands.band
+        );
+        outline_at(image, model, bands.outline, renderer.samples);
+        return true;
+    }
     const BuildPulseColours colours =
         build_pulse_colours(renderer.tick - renderer.build_pulse_lag, unit.id);
     const int32_t color_a = colours.first;

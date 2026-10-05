@@ -338,18 +338,56 @@ opponent_facing(const oa::World& world, int32_t site_x, int32_t site_z) noexcept
 /// @return true when the list names it
 [[nodiscard]] bool preview_lists_piece(std::string_view list, std::string_view piece) noexcept;
 
-/// Returns how far from finished a build preview draws its building, as a
-/// nanoframe's build_remaining: the build sweeps again every
-/// build_preview_sweep_ms milliseconds, over the whole model with the
-/// preview's fill, else over its top fifth, leaving the outline.
+/// Tells whether a build preview leaves a piece out when its type names no
+/// pieces to draw: a muzzle flash or a wake, a piece named flare, flash,
+/// muzzle, fire, flame or wake, matched without case, which the unit's
+/// script would hide (ui.build-preview).
 ///
-/// @param fill the preview fills the model (ui.build-preview fill)
-/// @param milliseconds a clock in milliseconds
-/// @return the build left, from 1 down
-[[nodiscard]] float build_preview_remaining(bool fill, uint64_t milliseconds) noexcept;
+/// @param piece the piece's name
+/// @return true when the preview leaves it out
+[[nodiscard]] bool preview_skips_piece(std::string_view piece) noexcept;
 
-/// Milliseconds a build preview's sweep takes.
-inline constexpr uint64_t build_preview_sweep_ms = 1000;
+/// Ticks of the match each pulse of a build preview takes: a second at
+/// the game's normal speed (ui.build-preview).
+inline constexpr uint32_t build_preview_pulse_ticks = 30;
+/// Ticks at the start of each pulse its scanline takes to climb the model.
+inline constexpr uint32_t build_preview_scan_ticks = 15;
+/// The palette entry of a build preview's scanline: bright green.
+inline constexpr uint8_t build_preview_scan_colour = 0xfa;
+
+/// How a build preview draws its building at a tick of its pulse.
+struct BuildPreviewLook {
+    uint8_t outline{}; ///< palette entry of the model's outline
+    /// Palette entry the model is filled with; none without the fill.
+    std::optional<uint8_t> fill{};
+    /// The heights the scanline lights, in pixels above the model's lowest
+    /// point, from scan_low through scan_high; none between climbs.
+    bool scanning{};
+    int32_t scan_low{};
+    int32_t scan_high{};
+};
+
+/// Returns how a build preview draws its building at a tick of its pulse
+/// (ui.build-preview).
+///
+/// The pulse starts again whenever the player turns the building and
+/// repeats every build_preview_pulse_ticks. Its colours walk palette
+/// 0xa0..0xaf, bright green to black, and back, once each pulse, in 32
+/// steps every 30 ticks: the outline starts 24 steps into the walk, on its
+/// way back from black, and the fill, with the profile's fill, half a walk
+/// away from the outline. For the first build_preview_scan_ticks of each
+/// pulse the scanline climbs the model from its lowest point to its
+/// highest: on tick k of the pulse it lights the heights whose place up
+/// the model, counted from 1 at the lowest point to 255 at the highest and
+/// rounded, lies within 2 of 1 + 254 k / 14, rounded down.
+///
+/// @param pulse_tick ticks since the pulse started
+/// @param fill the preview fills the model (ui.build-preview fill)
+/// @param height the model's height, its highest point less its lowest,
+///     in pixels
+/// @return the look
+[[nodiscard]] BuildPreviewLook
+build_preview_look(uint32_t pulse_tick, bool fill, int32_t height) noexcept;
 
 /// A rectangle in the game's 640 by 480 source pixels.
 struct SourceBox {

@@ -832,7 +832,7 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/runtime_full.cpp src/app/runtime_full_sprites.cpp src/app/runtime_full_overlays.cpp
   src/app/runtime_render_tiers_check.cpp src/app/runtime_smooth_pan_check.cpp
   src/app/runtime_terrain_filter.cpp src/app/runtime_reclaim_check.cpp src/app/runtime_patrol_check.cpp src/app/runtime_fog.cpp
-  src/app/runtime_reclaim_cursor_check.cpp
+  src/app/runtime_reclaim_cursor_check.cpp src/app/runtime_build_preview_check.cpp
   src/app/runtime_pointer_press.cpp src/app/runtime_pointer_check.cpp
   src/app/runtime_dgun_check.cpp src/app/runtime_attack_command_check.cpp
   src/app/runtime_tracking_zoom_check.cpp
@@ -1724,6 +1724,31 @@ if(OA_BUILD_PLATFORM)
         --preferences-file "${oa_reclaim_cursor_dir}/reclaim-cursor.conf")
       set_tests_properties(native-reclaim-cursor PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_reclaim_cursor_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # A tower placed under the build cursor with ui.build-preview on, in
+      # the standard, Basic and Full tiers at zoom 0.5, 1 and 2: drawn at
+      # every tick of two of its pulses, each frame twice, its pictures
+      # repeat every pulse and at no shorter period, a frame drawn again
+      # shows the same, and it lies within the finished tower's picture at
+      # its site, reaching the same top. Skips under 2 GiB.
+      set(oa_build_preview_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/build-preview")
+      file(MAKE_DIRECTORY "${oa_build_preview_dir}")
+      file(WRITE "${oa_build_preview_dir}/build-preview.oamod.yaml"
+        "oamod: 1\n"
+        "id: build-preview\n"
+        "name: Build preview\n"
+        "version: \"1.0\"\n"
+        "requires: {base: ta-3.1c, catalogue: 1}\n"
+        "author: {name: unknown}\n"
+        "packaging: {revision: 1, date: 2026-10-06, packager: Open Annihilation}\n"
+        "hacks:\n"
+        "  ui.build-preview: true\n")
+      add_test(NAME native-build-preview COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-build-preview --hardware-acceleration=full --force-capable
+        --mod "${oa_build_preview_dir}/build-preview.oamod.yaml"
+        --preferences-file "${oa_build_preview_dir}/build-preview.conf")
+      set_tests_properties(native-build-preview PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_build_preview_dir}" SKIP_RETURN_CODE 77
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # The screen's edges scrolling the camera, in full screen and in a
       # window, and both interface types' pointer buttons, through SDL input:

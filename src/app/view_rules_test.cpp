@@ -435,12 +435,38 @@ void build_preview_helpers() {
     OA_CHECK(!vr::preview_lists_piece("body2, turret2", "turret"));
     OA_CHECK(!vr::preview_lists_piece("", "base"));
     OA_CHECK(!vr::preview_lists_piece(", ,", ""));
-    OA_CHECK(vr::build_preview_remaining(false, 0) == 1.0F);
-    OA_CHECK(vr::build_preview_remaining(true, 0) == 1.0F);
-    OA_CHECK(vr::build_preview_remaining(true, 500) == 0.5F);
-    OA_CHECK(vr::build_preview_remaining(false, 500) == 0.9F);
-    OA_CHECK(vr::build_preview_remaining(false, 1500) == vr::build_preview_remaining(false, 500));
-    OA_CHECK(vr::build_preview_remaining(false, 999) > 0.79F);
+    // Without a piece list the muzzle flashes and wakes are left out.
+    OA_CHECK(vr::preview_skips_piece("FLARE"));
+    OA_CHECK(vr::preview_skips_piece("Wake"));
+    OA_CHECK(!vr::preview_skips_piece("flare1"));
+    OA_CHECK(!vr::preview_skips_piece("base"));
+    // The outline walks bright green to black and back once each pulse of
+    // 30 ticks, from 24 steps into the walk; the fill half a walk away.
+    const auto start = vr::build_preview_look(0, true, 40);
+    OA_CHECK(start.outline == 0xa7);
+    OA_CHECK(start.fill == uint8_t{0xa8});
+    OA_CHECK(vr::build_preview_look(7, false, 40).outline == 0xa0);
+    OA_CHECK(vr::build_preview_look(22, false, 40).outline == 0xaf);
+    OA_CHECK(!vr::build_preview_look(22, false, 40).fill);
+    for (uint32_t tick = 0; tick < vr::build_preview_pulse_ticks; ++tick) {
+        const auto look = vr::build_preview_look(tick, true, 40);
+        const auto later = vr::build_preview_look(tick + vr::build_preview_pulse_ticks, true, 40);
+        OA_CHECK(look.outline == later.outline && look.fill == later.fill);
+        OA_CHECK(look.scanning == later.scanning && look.scan_low == later.scan_low);
+    }
+    // The scanline climbs a model 254 pixels tall from its foot to its top
+    // over the first 15 ticks of the pulse, lighting 5 heights a tick.
+    const auto foot = vr::build_preview_look(0, false, 254);
+    OA_CHECK(foot.scanning && foot.scan_low == 0 && foot.scan_high == 2);
+    const auto top = vr::build_preview_look(14, false, 254);
+    OA_CHECK(top.scanning && top.scan_low == 252 && top.scan_high == 254);
+    const auto middle = vr::build_preview_look(7, false, 254);
+    OA_CHECK(middle.scanning && middle.scan_low == 125 && middle.scan_high == 129);
+    OA_CHECK(!vr::build_preview_look(15, false, 254).scanning);
+    OA_CHECK(!vr::build_preview_look(29, false, 254).scanning);
+    // A flat model is lit on the climb's first tick only.
+    OA_CHECK(vr::build_preview_look(0, false, 0).scanning);
+    OA_CHECK(!vr::build_preview_look(1, false, 0).scanning);
 }
 
 void chat_helpers() {

@@ -74,8 +74,11 @@ constexpr int32_t line_buildings = 3;
 constexpr std::array<std::string_view, 4> line_types{
     "ARMSOLAR", "CORSOLAR", "ARMMSTOR", "CORMSTOR"
 };
-/// Cells right of the check's unit the pointer places the previewed building at.
+/// Cells right of the check's unit the pointer places the previewed
+/// building at: the first of preview_search_cells from preview_cells on
+/// whose site the game accepts, where alone the preview shows.
 constexpr int32_t preview_cells = 8;
+constexpr int32_t preview_search_cells = 24;
 /// A chat line with characters the 8-bit fonts lack, which the modern
 /// fonts draw.
 constexpr std::string_view modern_text_line = "Gr\xc3\xbc\xc3\x9f"
@@ -642,6 +645,34 @@ void Runtime::check_visual_rule_overlays(
     // at the scene's own draw scale, over the site the pointer is on; in
     // the Full tier the card draws it, at the zoom.
     if (rules.build_preview.enabled && type != 0) {
+        // The pointer over a site the game accepts, found once: a site is
+        // the same at every tier and zoom.
+        std::optional<int32_t> preview_x;
+        switch_to(levels.front());
+        at_zoom(1.0F);
+        match_command_ = MatchCommand::build;
+        pending_build_type_ = type;
+        build_tool_ = {};
+        for (int32_t cells = preview_cells;
+             cells < preview_cells + preview_search_cells && !preview_x;
+             ++cells) {
+            const int32_t x = unit_x + cells * OA_MAP_CELL_PIXELS;
+            const auto pointed = project_match_point(
+                painted_view(),
+                {static_cast<uint32_t>(x) << 16, 0, static_cast<uint32_t>(unit_z) << 16}
+            );
+            update_pointer(
+                static_cast<float>(match_layout_.left + pointed.x),
+                static_cast<float>(match_layout_.top + pointed.y)
+            );
+            if (const auto site = build_site_under(match_pointer_x_, match_pointer_y_);
+                site && site->legal)
+                preview_x = x;
+        }
+        match_command_ = MatchCommand::none;
+        pending_build_type_ = 0;
+        if (!preview_x)
+            fail("found no site the game accepts for the build preview");
         for (const auto level : levels)
             for (const float zoom : zooms_of(level)) {
                 switch_to(level);
@@ -650,7 +681,7 @@ void Runtime::check_visual_rule_overlays(
                 const std::string which = tier_name(level) + " at zoom " + zoom_name(zoom);
                 const auto pointed = project_match_point(
                     painted_view(),
-                    {static_cast<uint32_t>(unit_x + preview_cells * OA_MAP_CELL_PIXELS) << 16,
+                    {static_cast<uint32_t>(*preview_x) << 16,
                      0,
                      static_cast<uint32_t>(unit_z) << 16}
                 );

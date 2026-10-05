@@ -402,6 +402,11 @@ int Runtime::run() {
         flush_preferences();
         return status;
     }
+    if (options_.check_build_preview) {
+        const int status = check_build_preview();
+        flush_preferences();
+        return status;
+    }
     if (options_.check_match_orders) {
         check_match_orders();
         flush_preferences();

@@ -503,11 +503,13 @@ class Runtime final : public menu::Host,
     bool rotate_pending_build(int32_t direction);
 
     /// Readies the building being placed for its frame as the profile's build
-    /// preview draws it (ui.build-preview): its type's model at its site,
-    /// turned to its facing, showing only the pieces the type's preview keys
-    /// name, and drawn as a nanoframe whose build sweeps again every
-    /// second; with the preview's fill the sweep fills the model, else it
-    /// keeps to its outline and a band near its top.
+    /// preview draws it (ui.build-preview), over a site the game accepts:
+    /// its type's model at its site, facing the way the building is built
+    /// in its facing, showing only the pieces the type's preview keys name,
+    /// or without them every piece but its muzzle flashes and wakes, as a
+    /// building just begun. Its look at each tick (the outline, the fill
+    /// and the scanline of view_rules::build_preview_look) is set as it is
+    /// drawn.
     ///
     /// @param[in,out] models the match's renderer state
     /// @return true when the preview is drawn this frame
@@ -7220,7 +7222,8 @@ class Runtime final : public menu::Host,
     void ensure_screen_world();
 
     /// Presents the software cursor at the pointer, unless the system's
-    /// pointer shows instead (pointer_shows_cursor).
+    /// pointer shows instead (pointer_shows_cursor) or the frame is drawn
+    /// without the cursor (frame_without_cursor_).
     ///
     /// On a window at native density the cursor over the match's layers is
     /// drawn with them at the display's pixels (one_to_one_scale_mode), and
@@ -9643,6 +9646,18 @@ class Runtime final : public menu::Host,
     /// RECLAIM armed on the first tree must then give the commander Reclaim
     /// there. Throws std::runtime_error on a failure.
     void check_reclaim_cursor();
+
+    /// Checks the building drawn under the build cursor (ui.build-preview)
+    /// in the standard, Basic and Full tiers at several zooms: a tower is
+    /// placed over a site near the commander and drawn at every tick of two
+    /// of its pulses, each frame twice. Its pictures must repeat every
+    /// view_rules::build_preview_pulse_ticks and at no shorter period, a
+    /// frame drawn again must show the same, and it must lie within the
+    /// finished tower's picture at its site, reaching the same top. Writes
+    /// pictures at zoom 1 to local/reports.
+    ///
+    /// @return 0, or 77 where the machine cannot run the accelerated tiers
+    int check_build_preview();
     // Chat line and "+command" console (runtime_console.cpp).
 
     /// Returns the match's console, binding it to the running match's world on first use.
@@ -12574,7 +12589,8 @@ class Runtime final : public menu::Host,
     oa::PaletteBytes load_game_palette_{};
     // The paused match frame the in-game briefing is drawn over.
     renderer::Surface in_game_briefing_parent_;
-    // Set while a parent frame is rebuilt for a dialog: no software cursor.
+    // Set while a frame is drawn without the software cursor: a parent frame
+    // rebuilt for a dialog, or a check's frames presented and read back.
     bool frame_without_cursor_ = false;
     Screen screen_ = Screen::main_menu;
     std::optional<std::size_t> hovered_;
@@ -13154,6 +13170,9 @@ class Runtime final : public menu::Host,
     uint16_t order_drag_unit_{};
     // The facing chosen for the building being placed (ui.build-preview).
     view_rules::BuildFacing build_facing_{view_rules::BuildFacing::south};
+    // Where in its pulse the match's tick stood when the player last turned
+    // the building being placed: its pulse starts again there.
+    uint32_t build_turn_phase_{};
     // The reclaim click being given was snapped onto a feature: a queued
     // order cancels only within 8 pixels of it.
     bool reclaim_click_snapped_ = false;

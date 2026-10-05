@@ -385,6 +385,10 @@ struct Options {
     // reclaimable feature and a wreck through the SDL presenter and checks
     // the cursor it shows.
     bool check_reclaim_cursor = false;
+    // Places a tower under the build cursor in every tier and checks the
+    // building drawn there (ui.build-preview): its pulse, the same at every
+    // zoom and frame rate, and that it is drawn the right way up.
+    bool check_build_preview = false;
     // Drives both interface types' pointer buttons through the SDL presenter:
     // clicks and right presses, shift cancels, radar scrolls, mouse look and a
     // factory build button's right click.
@@ -522,12 +526,12 @@ struct Options {
     // setting for the run whatever the settings say, and is never saved;
     // empty when no flag was given.
     std::optional<oa::ui::engine_settings::HardwareAcceleration> hardware_acceleration;
-    // --force-capable, which only --check-render-tiers and
-    // --check-engine-settings take: the renderer counts as one the graphics
-    // card could scale the frames on, so that the accelerated tier runs on
-    // SDL's software renderer, and neither the environment's render driver
-    // nor SDL's software renderer locks Hardware acceleration or Vertical
-    // sync. It never lifts the 2 GiB rule.
+    // --force-capable, which only --check-render-tiers, --check-build-preview,
+    // --check-engine-settings and --check-kill-board take: the renderer
+    // counts as one the graphics card could scale the frames on, so that the
+    // accelerated tier runs on SDL's software renderer, and neither the
+    // environment's render driver nor SDL's software renderer locks Hardware
+    // acceleration or Vertical sync. It never lifts the 2 GiB rule.
     bool force_capable = false;
     // --native-density: for this run the window opens at the display's own
     // pixel density whatever the Native pixel density setting and the rule

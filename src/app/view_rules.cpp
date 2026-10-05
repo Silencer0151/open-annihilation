@@ -7,7 +7,9 @@
 #include "oa/ui/frontend_state/main_menu.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <cstdlib>
 #include <string>
 #include <utility>
 #include <cstddef>
@@ -414,13 +416,61 @@ bool preview_lists_piece(std::string_view list, std::string_view piece) noexcept
     return false;
 }
 
-float build_preview_remaining(bool fill, uint64_t milliseconds) noexcept {
-    // The share of the sweep done, 0 to just below 1.
-    const auto done = static_cast<float>(milliseconds % build_preview_sweep_ms) /
-                      static_cast<float>(build_preview_sweep_ms);
-    // Without the fill the band keeps to the top: a nanoframe barely begun.
-    const float reach = fill ? 1.0F : 0.2F;
-    return 1.0F - done * reach;
+bool preview_skips_piece(std::string_view piece) noexcept {
+    constexpr std::array<std::string_view, 6> flashes{
+        "flare", "flash", "muzzle", "fire", "flame", "wake"
+    };
+    return std::any_of(flashes.begin(), flashes.end(), [&](std::string_view name) {
+        return name.size() == piece.size() &&
+               std::equal(name.begin(), name.end(), piece.begin(), [](char a, char b) {
+                   return a == std::tolower(static_cast<unsigned char>(b));
+               });
+    });
+}
+
+BuildPreviewLook build_preview_look(uint32_t pulse_tick, bool fill, int32_t height) noexcept {
+    // The walk takes 32 steps over the pulse; at the pulse's start the
+    // outline is 23 ticks of it on, 24 steps into it.
+    constexpr uint32_t walk_steps = 32;
+    constexpr uint32_t walk_start = 23;
+    constexpr uint32_t half_walk = walk_steps / 2;
+    const auto shade = [](uint32_t step) {
+        constexpr uint8_t bright = 0xa0;
+        constexpr uint8_t dark = 0xaf;
+        constexpr uint32_t steps_one_way = 0xf;
+        return static_cast<uint8_t>(
+            (step & half_walk) != 0 ? dark - (step & steps_one_way)
+                                    : bright + (step & steps_one_way)
+        );
+    };
+    const uint32_t at = pulse_tick % build_preview_pulse_ticks;
+    const uint32_t step =
+        (at + walk_start) % build_preview_pulse_ticks * walk_steps / build_preview_pulse_ticks;
+    BuildPreviewLook look;
+    look.outline = shade(step);
+    if (fill)
+        look.fill = shade(step + half_walk);
+    if (at >= build_preview_scan_ticks)
+        return look;
+    // Places up the model run from 1 at its lowest point to 255 at its
+    // highest; the scanline is at 1 on the climb's first tick and at 255 on
+    // its last.
+    constexpr int32_t places = 254;
+    constexpr int32_t reach = 2;
+    const auto climb = static_cast<int32_t>(build_preview_scan_ticks - 1);
+    const int32_t scan = 1 + static_cast<int32_t>(at) * places / climb;
+    const int32_t span = std::max(height, 1);
+    for (int32_t up = 0; up <= std::max(height, 0); ++up) {
+        const int32_t place = (up * places + span / 2) / span + 1;
+        if (std::abs(place - scan) > reach)
+            continue;
+        if (!look.scanning) {
+            look.scanning = true;
+            look.scan_low = up;
+        }
+        look.scan_high = up;
+    }
+    return look;
 }
 
 SourceBox

@@ -2128,13 +2128,27 @@ into the records and decisions of the modules that carry them out, and
   (`order_drag_pointer`, `Match::send_ahead_of_orders`): its first order
   waits behind the move, or starts again from its beginning behind it, and
   its later orders are kept, as the kickout sends a unit off a site.
-- **Build preview** (ui.build-preview): the building being placed is drawn
-  at its site through a stand-in unit record as a nanoframe
-  (`ready_build_preview`), its build sweeping again every second
-  (`build_preview_remaining`): with `fill` over the whole model, else over
-  its top fifth, which leaves its outline shimmering. A type's preview keys
-  pick the pieces drawn (`preview_lists_piece`, per facing first) or another
-  model (`objects3d/<name>.3DO`). The rotate key (/, without Ctrl) or the
+- **Build preview** (ui.build-preview): over a site the game accepts, the
+  building being placed is drawn at its site through a stand-in unit
+  record (`ready_build_preview`), facing the way the building is built:
+  half a turn from heading 0, then its facing's quarter turns. It is drawn
+  with build bands of its own (`ModelState::build_bands`, which the
+  processor's `apply_build_effect` and the Full tier's nanoframe take in
+  place of the unit's), set for each frame from its pulse
+  (`build_preview_look`, `build_preview_bands`): every 30 ticks of the
+  match, restarting as the player turns it, its outline walks the nano
+  greens from bright to black and back, with `fill` the model is filled
+  half a walk away, and for the first 15 ticks a bright green scanline
+  climbs the model from its foot to its top. The pulse follows the match's
+  ticks alone, at every zoom and frame rate. A type's preview keys pick
+  the pieces drawn (`preview_lists_piece`, per facing first) or another
+  model (`objects3d/<name>.3DO`); without them every piece is drawn but
+  the muzzle flashes and wakes (`preview_skips_piece`).
+  `--check-build-preview` (`runtime_build_preview_check.cpp`,
+  `native-build-preview`) places a tower in the standard, Basic and Full
+  tiers at three zooms and checks the pulse's period, that a frame drawn
+  again matches, that nothing is drawn over a refused site, and that the
+  tower lies over a finished one at its site. The rotate key (/, without Ctrl) or the
   snap override key with the wheel turns a type that may face more than
   one way to its next facing (`next_build_facing`), playing MORE; the
   footprint's sides swap for east and west, the facing's letter shows at

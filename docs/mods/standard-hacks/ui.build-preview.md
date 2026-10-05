@@ -14,7 +14,7 @@
 ## Description
 
 While the player places a building, it is drawn at its site as a
-shimmering nanoframe. A building type that may face more than one way can
+pulsing nanoframe. A building type that may face more than one way can
 be turned before it is placed, and is then built facing that way; a type
 may also have its preview turned toward the nearest enemy. 3.1c shows
 only the footprint and builds every building facing south.
@@ -56,18 +56,33 @@ hacks:
 
 - In build mode, the building being placed is drawn at the site the cursor
   points to, or at the snapped site when [ui.click-snap](ui.click-snap.md)
-  moves the click. It is drawn as the local player's nanoframe, facing the
-  chosen way.
-- The nanoframe's build sweeps again every second. With `fill` the sweep
-  covers the whole model; without it only the model's top fifth, which
-  leaves its outline shimmering.
+  moves the click, while the game accepts the site. Over a site it refuses
+  only the red footprint shows.
+- It faces the way the building will be built in the chosen facing: a
+  building is built half a turn from heading 0, give or take half its
+  type's build angle, then turned by the facing's quarter turns, and the
+  preview stands at the middle of that.
+- It is drawn as a pulsing nanoframe. Each pulse takes 30 ticks of the
+  match, a second at normal speed, and starts again whenever the player
+  turns the building:
+  - its outline walks the nano greens, palette 0xa0 to 0xaf, from bright
+    green to black and back, starting 24 of the walk's 32 steps in;
+  - with `fill` the model is filled in the same greens, half a walk away
+    from the outline;
+  - for the first 15 ticks a bright green scanline climbs the model from
+    its lowest point to its highest; the last 15 have none.
+- The pulse follows the match's ticks alone: every frame drawn during a
+  tick shows the same, at every zoom and however many frames a second are
+  drawn.
 - No preview is drawn while the line or ring tool of
   [ui.build-tools](ui.build-tools.md) is laying buildings.
 - A unit type's preview keys choose what is drawn:
   - `PreviewPieces` lists the pieces drawn, separated by commas and matched
     without case; `PreviewPiecesS`, `PreviewPiecesE`, `PreviewPiecesN` and
     `PreviewPiecesW` give the list for one facing and come first. Without
-    either, every piece is drawn.
+    either, every piece is drawn but the muzzle flashes and wakes the
+    unit's script would hide: pieces named `flare`, `flash`, `muzzle`,
+    `fire`, `flame` or `wake`, matched without case.
   - `PreviewObject3D` names another model, `objects3d/<name>.3DO`, drawn
     instead of the type's own. A model that cannot be read leaves the type's
     own.
@@ -153,15 +168,18 @@ must agree on, and the other machines read it from the building's heading.
   prepare the preview, turn the building and give its turned footprint.
   `Runtime::render_match_surface`
   ([src/app/runtime_match_render.cpp](../../../src/app/runtime_match_render.cpp))
-  draws the preview. `Runtime::pending_build_site`, `Runtime::draw_build_ghost`
+  draws the preview, its look for the tick (`build_preview_bands`) held as
+  the build bands of its draw state (`ModelState::build_bands`), which the
+  processor's `apply_build_effect` and the Full tier's nanoframe draw in
+  place of a unit's own build effect. `Runtime::pending_build_site`, `Runtime::draw_build_ghost`
   and `Runtime::draw_build_facing` in
   [src/app/runtime_world_draw.cpp](../../../src/app/runtime_world_draw.cpp)
   test the site turned (`BuildSiteOptions::facing`) and draw its outline,
   letter and hint.
 - The decisions are in [src/app/view_rules.cpp](../../../src/app/view_rules.cpp):
   `facing_allowed`, `next_build_facing`, `facing_letter`, `rotate_hint`,
-  `preview_lists_piece`, `build_preview_remaining`, `facing_toward` and
-  `opponent_facing`.
+  `preview_lists_piece`, `preview_skips_piece`, `build_preview_look`,
+  `facing_toward` and `opponent_facing`.
 - The build click, `Runtime::place_pending_build_at`
   ([src/app/runtime_match_hud.cpp](../../../src/app/runtime_match_hud.cpp)),
   passes the facing to `Match::issue_mobile_build`
@@ -170,8 +188,9 @@ must agree on, and the other machines read it from the building's heading.
 - Tests:
   - `app-view-rules` (`build_facings`, `build_preview_helpers`,
     `facing_toward_points` and `opponent_facings` in
-    `src/app/view_rules_test.cpp`): the facings and the hint, the sweep
-    and the piece lists, and the opponent's facing: build distance,
+    `src/app/view_rules_test.cpp`): the facings and the hint, the pulse's
+    colours, period and scanline, the piece lists and the pieces left out
+    without one, and the opponent's facing: build distance,
     selected and finished builders, the last unit slot, watchers, allies
     and enemies without a movement object.
   - `defs-rule-keys` (`preview_keys_are_kept_as_text` in
@@ -183,8 +202,17 @@ must agree on, and the other machines read it from the building's heading.
     facings a type may take are offered.
   - `native-render-tiers-visual-rules`, which needs the game's data
     (`Runtime::check_visual_rule_overlays`): in both render tiers, at
-    several zooms, the building being placed is drawn into the scene
-    around its site's middle at the scene's draw scale.
+    several zooms, the building being placed over a site the game accepts
+    is drawn into the scene around its site's middle at the scene's draw
+    scale.
+  - `native-build-preview`, which needs the game's data
+    (`Runtime::check_build_preview`): a Light Laser Tower placed near the
+    commander in the standard, Basic and Full tiers, at zoom 0.5, 1 and 2,
+    drawn at every tick of two pulses, each frame twice. Its pictures
+    repeat every 30 ticks and at no shorter period, a frame drawn again
+    shows the same, nothing is drawn over the site once a tower stands
+    there, and it lies over that finished tower, built facing south,
+    reaching the same top.
 
 ## Full configuration schema
 
