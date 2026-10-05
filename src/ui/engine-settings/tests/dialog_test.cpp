@@ -5110,9 +5110,8 @@ void a_kept_version_rolls_back_after_a_question() {
         settings::Dialog locked = roll_back_dialog(kModFolders[0], locks);
         const auto locked_open = geometry::open_rows(locked);
         const std::size_t row = listed_at(locked, 1);
-        const auto* part = find_part(
-            settings::dialog_layout(locked), geometry::roll_back_text, settings::no_control
-        );
+        const auto locked_parts = settings::dialog_layout(locked);
+        const auto* part = find_part(locked_parts, geometry::roll_back_text, settings::no_control);
         CHECK(part != nullptr && part->control == settings::no_control);
         CHECK(
             click(locked, centre(geometry::roll_back_button(locked_open.rows.rows[row]))) ==
