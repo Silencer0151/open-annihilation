@@ -107,7 +107,13 @@ does, so it hides the copy beneath it and contributes nothing.
 
 The portable store resolves each loose path component without ASCII case,
 accepts either slash, and reports the winning source. Case collisions and
-relative traversal are rejected as explicit portable policies. A corrupt
+relative traversal are rejected as explicit portable policies. A loose file
+counts only while, every link followed, it lies inside the folder it was
+found in: a link to a file or folder inside that folder works, and one that
+leads outside it is no loose file, so the archives' copy is read instead.
+The walk that marks the archive files loose files hide takes each folder
+once, so a link to a folder above it cannot recurse. Archives discovered in
+a folder are mounted wherever their links lead. A corrupt
 winning archive entry raises an error rather than selecting a different copy.
 Archives can disagree: an installation's overlay CCX may hold a 2308-byte
 main-menu layout where `totala1.hpi` holds a 2310-byte one.

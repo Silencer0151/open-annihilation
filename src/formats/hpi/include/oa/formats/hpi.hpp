@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -840,6 +841,10 @@ class AssetStore {
     void drop_vanished_mounts();
     /// Walks the loose tree, marking each archive file a loose file hides.
     ///
+    /// A folder is walked once however many links lead to it, and a folder
+    /// or a file a link leads to outside the root the walk started from is
+    /// passed over.
+    ///
     /// @param prefix resource path of directory, with a trailing '\\'
     /// @param directory host directory walked
     void mark_loose_directory(const std::string& prefix, const std::filesystem::path& directory);
@@ -871,6 +876,10 @@ class AssetStore {
     // Folder listings kept by loose-file lookups; null in a moved-from store.
     struct LooseIndex;
     std::unique_ptr<LooseIndex> loose_index_;
+    // The root mark_loose_shadows walks, and the folders it has walked, each
+    // by its path with every link followed.
+    std::filesystem::path walk_root_;
+    std::set<std::filesystem::path> walked_folders_;
 };
 
 /// Opens an archive file and validates it.

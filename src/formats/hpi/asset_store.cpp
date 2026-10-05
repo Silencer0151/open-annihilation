@@ -111,6 +111,40 @@ std::string full_path_key(const std::filesystem::path& path) {
     return text;
 }
 
+/// Returns a host path with every link followed, or the path as given when
+/// it cannot be resolved.
+///
+/// @param path the path
+/// @return the resolved path
+std::filesystem::path resolved(const std::filesystem::path& path) {
+    std::error_code error;
+    auto canonical = std::filesystem::weakly_canonical(path, error);
+    return error ? path : canonical;
+}
+
+/// Tells whether a host path, every link followed, is a folder or lies
+/// inside it, the folder's own links followed too.
+///
+/// The folder is matched by identity, not by how its path is spelled, so
+/// the case of its letters and the system's spelling of long paths do not
+/// matter.
+///
+/// @param root the folder
+/// @param path a path found below it
+/// @return true when the resolved path is the folder or lies inside it
+bool stays_inside(const std::filesystem::path& root, const std::filesystem::path& path) {
+    std::error_code error;
+    const auto canonical = std::filesystem::weakly_canonical(path, error);
+    if (error)
+        return false;
+    for (auto at = canonical;; at = at.parent_path()) {
+        if (std::filesystem::equivalent(at, root, error))
+            return true;
+        if (!at.has_relative_path())
+            return false;
+    }
+}
+
 std::vector<uint8_t> read_loose(const std::filesystem::path& path) {
     const auto size = std::filesystem::file_size(path);
     if (!formats::hpi::entry_size_allowed(size))
@@ -288,6 +322,9 @@ find_loose_directory(const std::filesystem::path& root, const std::string& key) 
             break;
         begin = end + 1;
     }
+    // A folder a link leads to outside the root is not the root's.
+    if (!key.empty() && !stays_inside(root, candidate))
+        return std::nullopt;
     return candidate;
 }
 
@@ -528,19 +565,32 @@ void AssetStore::mark_loose_shadows() {
     for (auto& mounted : mounts_)
         mounted.marks.assign(mounted.archive.nodes().size(), 0);
     if (!mounts_.empty())
-        for (const auto& root : loose_roots_)
+        for (const auto& root : loose_roots_) {
+            walk_root_ = root;
+            walked_folders_.clear();
             mark_loose_directory("", root);
+        }
+    walked_folders_.clear();
 }
 
 void AssetStore::mark_loose_directory(
     const std::string& prefix, const std::filesystem::path& directory
 ) {
+    // A folder reached again through a link, or one a link leads to outside
+    // the root, is not walked: a link to a folder above it cannot recurse.
+    if (!walked_folders_.insert(resolved(directory)).second ||
+        (!prefix.empty() && !stays_inside(walk_root_, directory)))
+        return;
     for (const auto& item : loose_listing(directory)) {
         if (item.directory) {
             if (item.name != kCurrentDirectory && item.name != kParentDirectory)
                 mark_loose_directory(prefix + item.name + "\\", item.path);
             continue;
         }
+        std::error_code link_error;
+        if (std::filesystem::is_symlink(std::filesystem::symlink_status(item.path, link_error)) &&
+            !stays_inside(walk_root_, item.path))
+            continue;
         const std::string resource = prefix + item.name;
         for (auto& mounted : mounts_) {
             const auto node = mounted.archive.lookup(resource);
@@ -595,7 +645,9 @@ AssetStore::loose_path_in(std::size_t root, const std::string& key) const {
         if (child->second.ambiguous)
             fail("ambiguous loose asset case: " + key);
         if (end == std::string::npos)
-            return child->second.regular ? std::optional(child->second.path) : std::nullopt;
+            return child->second.regular && stays_inside(loose_roots_[root], child->second.path)
+                       ? std::optional(child->second.path)
+                       : std::nullopt;
         if (!child->second.directory)
             return std::nullopt;
         loose = child->second.path;
@@ -634,7 +686,7 @@ AssetStore::loose_path_listed_in(std::size_t root, const std::string& key) const
         begin = end + 1;
     }
     std::error_code error;
-    if (!std::filesystem::is_regular_file(loose, error))
+    if (!std::filesystem::is_regular_file(loose, error) || !stays_inside(loose_roots_[root], loose))
         return std::nullopt;
     return loose;
 }
@@ -1062,14 +1114,17 @@ std::vector<std::string> AssetStore::list_resources(
     std::vector<std::string> result;
     for (const auto& root : loose_roots_) {
         const auto found = folder_in(root);
-        if (!found || !std::filesystem::is_directory(*found))
+        if (!found || !std::filesystem::is_directory(*found) ||
+            (!prefix.empty() && !stays_inside(root, *found)))
             continue;
         const auto& loose = *found;
         // Names that differ only in case are ambiguous within one folder;
         // across layered folders they are one file.
         std::set<std::string> folder_keys;
         const auto append = [&](const auto& item) {
-            if (!item.is_regular_file())
+            std::error_code link_error;
+            if (!item.is_regular_file() ||
+                (item.is_symlink(link_error) && !stays_inside(root, item.path())))
                 return;
             const auto key =
                 prefix + normalized_path(item.path().lexically_relative(loose).generic_string());

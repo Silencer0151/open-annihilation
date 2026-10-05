@@ -804,6 +804,59 @@ void resource_file_semantics() {
     );
 }
 
+/// Links in a loose folder: one that stays inside the folder works, mixed
+/// case and spaces included, and still wins over an archive; one that
+/// leads outside is not read, so the archive's file is; a link to a folder
+/// above it is walked once, and the store keeps working.
+void asset_store_loose_links() {
+    TempDir dir;
+    dir.write("game/Units/Real File.FBI", text("loose"));
+    dir.write("game/Units/inside.fbi", text("inside"));
+    dir.write("outside/secret.fbi", text("secret"));
+    dir.write("outside/maps/far.tnt", text("far"));
+    const auto archive =
+        dir.write("game.hpi", archive_of({{"units/out.fbi", text("archived"), 0}}));
+    std::error_code error;
+    const auto game = dir.path() / "game";
+    fs::create_symlink("Real File.FBI", game / "Units" / "Alias Name.fbi", error);
+    if (!error)
+        fs::create_symlink(
+            dir.path() / "outside" / "secret.fbi", game / "Units" / "out.fbi", error
+        );
+    if (!error)
+        fs::create_directory_symlink(dir.path() / "outside" / "maps", game / "maps", error);
+    if (!error)
+        fs::create_directory_symlink(game, game / "Units" / "loop", error);
+    if (!error)
+        fs::create_directory_symlink(game / "Units", game / "units2", error);
+    if (error) {
+        std::cout << "skipped the loose link cases: " << error.message() << '\n';
+        return;
+    }
+    oa::AssetStore store(game);
+    store.mount(archive);
+    store.mark_loose_shadows();
+    check(store.read("units/alias name.FBI").bytes == text("loose"), "a link inside the folder");
+    check(
+        store.read("UNITS2/Inside.fbi").bytes == text("inside"), "a folder link inside the folder"
+    );
+    check(store.read("units/out.fbi").bytes == text("archived"), "a link outside gives way");
+    check(!store.loose_file("units/out.fbi").has_value(), "a link outside is no loose file");
+    check(
+        throws([&] { (void)store.read("maps/far.tnt"); }, "asset not found"),
+        "a folder link outside is not read"
+    );
+    check(store.list_effective("maps", ".tnt").empty(), "a folder link outside is not listed");
+    const auto found = store.find("units\\*.fbi", {});
+    const auto listed = [&](std::string_view name) {
+        return std::any_of(found.begin(), found.end(), [&](const oa::FoundEntry& entry) {
+            return entry.name == name && entry.mount < 0;
+        });
+    };
+    check(listed("inside.fbi") && listed("Alias Name.fbi"), "links inside the folder are listed");
+    check(store.read("units/loop/units/inside.fbi").bytes == text("inside"), "a loop resolves");
+}
+
 /// A file over the entry limit is refused before its buffer is made, by
 /// every way the store reads a whole file; one at the limit's size is not.
 void asset_store_refuses_files_over_the_entry_limit() {
@@ -907,6 +960,7 @@ int main(int argc, char** argv) {
         asset_store_discover_order_and_hpi_limit();
         asset_store_discover_pins_install_layout();
         asset_store_loose_listings();
+        asset_store_loose_links();
         asset_store_refuses_files_over_the_entry_limit();
         resource_file_semantics();
     } catch (const std::exception& error) {

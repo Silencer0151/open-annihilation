@@ -154,6 +154,41 @@ void test_unpacks_and_reuses(const fs::path& temporary, const Synthetic& synthet
     CHECK(names_in(data / "demo-test") == std::set<std::string>{"TADemo.hpi"});
 }
 
+// A data folder whose demo folder is a link to a folder elsewhere: the
+// unpacking fails, and nothing is written, removed or reused through it; the
+// same for an archive name that is a link.
+void test_links_are_not_followed(const fs::path& temporary, const Synthetic& synthetic) {
+    const auto folder = temporary / "links" / "Downloads";
+    const auto data = temporary / "links" / "data";
+    const auto elsewhere = temporary / "links" / "elsewhere";
+    fs::create_directories(folder);
+    fs::create_directories(data);
+    fs::create_directories(elsewhere);
+    write_bytes(folder / "setup.exe", synthetic.installer);
+    write_bytes(elsewhere / "TADemo.hpi", synthetic.archive);
+    std::error_code error;
+    fs::create_directory_symlink(elsewhere, data / "demo-test", error);
+    if (error) {
+        std::printf("skipped the link case: %s\n", error.message().c_str());
+        return;
+    }
+    const auto through = set_up_demo(folder, data, synthetic.release);
+    CHECK(through.outcome == DemoOutcome::unpack_failed && !through.unpacked);
+    CHECK(contains(through.problem, "link"));
+    CHECK(names_in(elsewhere) == std::set<std::string>{"TADemo.hpi"});
+
+    fs::remove(data / "demo-test");
+    fs::create_directories(data / "demo-test");
+    fs::create_symlink(elsewhere / "TADemo.hpi", data / "demo-test" / "TADemo.hpi", error);
+    if (error) {
+        std::printf("skipped the archive link case: %s\n", error.message().c_str());
+        return;
+    }
+    const auto named = set_up_demo(folder, data, synthetic.release);
+    CHECK(named.outcome == DemoOutcome::unpack_failed && !named.unpacked);
+    CHECK(read_bytes(elsewhere / "TADemo.hpi") == synthetic.archive);
+}
+
 // Temporary files left by unpackings that stopped part way are removed once
 // they have gone unwritten for a minute, whether the archive is reused or
 // unpacked again; a fresher one may belong to an unpacking under way and
@@ -548,6 +583,7 @@ int main(int argc, char** argv) {
             const auto temporary = fresh_temporary("oa-demo-installer-test");
             const auto synthetic = synthetic_release();
             test_unpacks_and_reuses(temporary, synthetic);
+            test_links_are_not_followed(temporary, synthetic);
             test_abandoned_temporaries(temporary, synthetic);
             test_installer_by_size(temporary, synthetic);
             test_other_files(temporary, synthetic);

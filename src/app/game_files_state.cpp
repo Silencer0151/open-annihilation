@@ -324,7 +324,8 @@ bool apply_removals(
                 continue;
             bool found = false;
             const auto target = find_without_case(paths.game_folder, removal, found);
-            if (!found)
+            // A link itself may go, but nothing is removed through one.
+            if (!found || passes_through_link(paths.game_folder, target.parent_path()))
                 continue;
             fs::remove_all(target, failure);
             if (!failure)
@@ -503,7 +504,9 @@ CommitResult commit_addition(
             continue;
         bool found = false;
         const auto target = find_without_case(paths.game_folder, relative, found);
-        if (found)
+        // A file already there stays, and one whose place lies through a
+        // link is left out, so that nothing is written outside the folder.
+        if (found || passes_through_link(paths.game_folder, target))
             continue;
         fs::create_directories(target.parent_path(), error);
         error.clear();

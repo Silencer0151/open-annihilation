@@ -983,6 +983,26 @@ SpaceNeed space_need(
     return need;
 }
 
+bool passes_through_link(const fs::path& root, const fs::path& path) {
+    const fs::path relative = path.lexically_relative(root);
+    if (relative.empty() || *relative.begin() == "..")
+        return true;
+    fs::path at = root;
+    for (const auto& part : relative) {
+        if (part == ".")
+            continue;
+        at /= part;
+        std::error_code error;
+        const auto status = fs::symlink_status(at, error);
+        if (!fs::exists(status))
+            return false;
+        // A link, or a junction or other entry no folder or file is.
+        if (!fs::is_directory(status) && !fs::is_regular_file(status))
+            return true;
+    }
+    return false;
+}
+
 bool staged_matches(const fs::path& staged, const PlannedFile& file) noexcept {
     if (!file.size_known)
         return false;

@@ -1410,6 +1410,44 @@ void additions(const fs::path& scratch) {
     }
 }
 
+/// A link in the game folder: nothing is written through it, and a path through one counts as
+/// leading out of the folder.
+void links_in_the_game_folder(const fs::path& scratch) {
+    const auto root = scratch / "links";
+    const auto paths = case_paths(root);
+    Script script;
+    const auto hooks = hooks_of(script);
+    write_bytes(paths.game_folder / "TOTALA1.HPI", playable_archive());
+    write_text(paths.game_folder / "Music" / "1.mp3", "one");
+    const auto source = root / "Expansion";
+    write_text(source / "music" / "20.mp3", "twenty");
+    write_bytes(source / "newmap.ufo", archive_of({"maps/new.tnt"}));
+    const auto plan = scan_plan(hooks, paths, source, SourceKind::additions_folder, nullptr);
+    OA_CHECK(plan && planned(*plan, "music/20.mp3"));
+    if (!plan)
+        return;
+    const auto run = run_plan(hooks, paths, plan, ImportMode::add, &script);
+    OA_CHECK(run.stage == RunStage::checked && run.failure == RunFailure::none);
+    // The music folder became a link to a folder outside the game folder.
+    const auto elsewhere = root / "elsewhere";
+    fs::create_directories(elsewhere);
+    fs::remove_all(paths.game_folder / "Music");
+    std::error_code error;
+    fs::create_directory_symlink(elsewhere, paths.game_folder / "Music", error);
+    if (error) {
+        std::printf("skipped the link case: %s\n", error.message().c_str());
+        return;
+    }
+    OA_CHECK(passes_through_link(paths.game_folder, paths.game_folder / "Music" / "20.mp3"));
+    OA_CHECK(passes_through_link(paths.game_folder, paths.game_folder / "Music"));
+    OA_CHECK(!passes_through_link(paths.game_folder, paths.game_folder / "TOTALA1.HPI"));
+    OA_CHECK(!passes_through_link(paths.game_folder, paths.game_folder / "maps" / "new.tnt"));
+    OA_CHECK(passes_through_link(paths.game_folder, root / "elsewhere" / "20.mp3"));
+    OA_CHECK(commit_import(hooks, paths, ImportMode::add, false).ok);
+    OA_CHECK(!there(elsewhere / "20.mp3"));
+    OA_CHECK(there(paths.game_folder / "newmap.ufo"));
+}
+
 /// Removals waiting for the next start merge, and a waiting replacement holds back other
 /// changes until it is cancelled.
 void scheduling(const fs::path& scratch) {
@@ -1848,6 +1886,7 @@ int main(int argc, char** argv) {
         state_file(scratch);
         adopting(scratch);
         additions(scratch);
+        links_in_the_game_folder(scratch);
         scheduling(scratch);
         installed_summary(scratch);
         scans(scratch);

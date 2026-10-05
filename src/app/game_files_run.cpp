@@ -450,6 +450,17 @@ void copy_and_check(RunState& run) {
                 finished(file, file.size, true);
                 continue;
             }
+            // Nothing is written through a link in the staging folder.
+            if (passes_through_link(paths.staging, staged)) {
+                fail_run(
+                    run,
+                    RunFailure::staging_unwritable,
+                    file.target,
+                    "a part of its path in the staging folder is a link"
+                );
+                stopped = true;
+                break;
+            }
             fs::create_directories(staged.parent_path(), error);
             if (error) {
                 fail_run(run, RunFailure::staging_unwritable, file.target, error.message());

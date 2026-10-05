@@ -102,7 +102,9 @@ struct DemoSetup {
 /// archive, whose size and SHA-256 are checked before it is renamed into
 /// place, and a failed attempt leaves no temporary file. Temporary files an
 /// unpacking that stopped part way left there, unwritten for a minute or
-/// more, are removed first. Nothing in `folder` changes.
+/// more, are removed first. Nothing in `folder` changes. When the archive's
+/// folder or the archive's name in it is a link, nothing is read, removed or
+/// written through it, and the unpacking fails.
 ///
 /// @param folder the game folder the player named or chose
 /// @param data_folder the per-user data folder; empty when none is known,

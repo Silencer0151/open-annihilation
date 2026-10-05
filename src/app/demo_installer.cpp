@@ -196,6 +196,22 @@ void remove_abandoned_temporaries(const fs::path& folder, const DemoRelease& rel
     return space.available >= size;
 }
 
+/// Tells whether the folder the archive goes to, or the archive's own name
+/// in it, is a symbolic link or another entry that is not a plain folder or
+/// file, which writing there would follow elsewhere.
+///
+/// @param folder the folder named release.folder_name
+/// @param archive the archive named release.archive_name in it
+/// @return true when either is such an entry
+[[nodiscard]] bool leads_elsewhere(const fs::path& folder, const fs::path& archive) {
+    std::error_code error;
+    const auto folder_status = fs::symlink_status(folder, error);
+    if (fs::exists(folder_status) && !fs::is_directory(folder_status))
+        return true;
+    const auto archive_status = fs::symlink_status(archive, error);
+    return fs::exists(archive_status) && !fs::is_regular_file(archive_status);
+}
+
 /// Unpacks the installer's archive resource into setup.archive, checking it on the way.
 ///
 /// @param bytes the recognised installer
@@ -316,7 +332,8 @@ set_up_demo(const fs::path& folder, const fs::path& data_folder, const DemoRelea
     const auto unpacked_folder =
         data_folder.empty() ? fs::path{} : data_folder / fs::path(std::string(release.folder_name));
     const auto archive = unpacked_folder / fs::path(std::string(release.archive_name));
-    if (!data_folder.empty()) {
+    const bool linked = !data_folder.empty() && leads_elsewhere(unpacked_folder, archive);
+    if (!data_folder.empty() && !linked) {
         remove_abandoned_temporaries(unpacked_folder, release);
         // An archive unpacked before that passes its check needs nothing
         // from the installer: the first file of its size is taken for it
@@ -344,6 +361,13 @@ set_up_demo(const fs::path& folder, const fs::path& data_folder, const DemoRelea
     }
     setup.folder = unpacked_folder;
     setup.archive = archive;
+    if (linked) {
+        setup.outcome = DemoOutcome::unpack_failed;
+        setup.problem = path_to_utf8(unpacked_folder) +
+                        " or the archive in it is a link, and its game data is not written "
+                        "through one";
+        return setup;
+    }
     unpack(search.bytes, release, setup);
     return setup;
 }

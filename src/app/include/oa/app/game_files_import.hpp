@@ -298,6 +298,16 @@ struct SpaceNeed {
     const Switches& switches
 );
 
+/// Tells whether a path below a folder leads through something that is not
+/// a plain folder: a part of it below `root`, `path` itself included, that
+/// is a symbolic link or another kind of entry that is neither a folder nor
+/// a file. Writing or removing there could reach outside `root`.
+///
+/// @param root the folder
+/// @param path a path below `root`; one not below it counts as leading out
+/// @return true when a part of `path` below `root` is such an entry
+[[nodiscard]] bool passes_through_link(const fs::path& root, const fs::path& path);
+
 /// Tells whether a staged file matches its planned source (size and modified time).
 ///
 /// @param staged the staged file
