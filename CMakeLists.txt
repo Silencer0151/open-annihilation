@@ -1600,9 +1600,9 @@ if(OA_BUILD_PLATFORM)
       # Through SDL input on dummy devices, ORDERS, BUILD and the page buttons
       # and keys change the page the commander keeps: selecting a lab and the
       # commander again reopens it, the keys turn through the order page, a
-      # save and a load keep it, a unit with no build pages keeps its general
-      # page, and with two selected the panel shows the general page and
-      # turns no unit's page.
+      # page with each repeat of a held one, a save and a load keep it, a unit
+      # with no build pages keeps its general page, and with two selected the
+      # panel shows the general page and turns no unit's page.
       set(oa_unit_page_memory_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/unit-page-memory")
       file(MAKE_DIRECTORY "${oa_unit_page_memory_check_dir}")
       add_test(NAME native-unit-page-memory COMMAND oa-game --game-dir "${OA_GAME_DIR}"

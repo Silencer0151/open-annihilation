@@ -470,11 +470,16 @@ void Runtime::check_pointer_interfaces() {
         "guard back"
     );
 
+    // A left press on the radar moves the view to the point under it at
+    // once, with no pointer motion, and scrolls with it until its release.
     const auto [lx, ly] = radar_centre();
+    require(!viewing(radar_view(lx, ly)), "the view already showed the radar's middle");
     press(SDL_BUTTON_LEFT, lx, ly);
     require(
-        (input::pointer_flags(world.game) & input::pointer_radar_scroll) != 0,
-        "right-click interface: a left press over the radar did not scroll with it"
+        (input::pointer_flags(world.game) & input::pointer_radar_scroll) != 0 &&
+            viewing(radar_view(lx, ly)),
+        "right-click interface: a left press over the radar did not move the view there and "
+        "scroll with it"
     );
     release(SDL_BUTTON_LEFT, lx, ly);
     require(
@@ -484,6 +489,7 @@ void Runtime::check_pointer_interfaces() {
     );
     // A right click on the radar moves the view there and gives the selected
     // Peewee no order.
+    centre_on(peewee);
     require(!viewing(radar_view(lx, ly)), "the view already showed the radar's middle");
     click(SDL_BUTTON_RIGHT, lx, ly);
     require(

@@ -578,12 +578,14 @@ void Runtime::check_unit_page_memory() {
             SDL_BUTTON_LEFT
         );
     };
-    const auto key = [&](SDL_Keycode code) {
+    // Presses a key; with `repeat`, the press is a held key's repeat.
+    const auto key = [&](SDL_Keycode code, bool repeat = false) {
         SDL_Event event{};
         event.type = SDL_EVENT_KEY_DOWN;
         event.key.windowID = SDL_GetWindowID(sdl_.window);
         event.key.key = code;
         event.key.down = true;
+        event.key.repeat = repeat;
         bool running = true;
         dispatch_event(event, running);
     };
@@ -649,9 +651,9 @@ void Runtime::check_unit_page_memory() {
         ~StopListening() { runtime.heard_interface_sounds_ = nullptr; }
     } stop_listening{*this};
 
-    const auto page_key = [&](SDL_Keycode code, std::string_view step) {
+    const auto page_key = [&](SDL_Keycode code, std::string_view step, bool repeat = false) {
         const auto sounds = std::count(heard.begin(), heard.end(), "nextbuildmenu");
-        key(code);
+        key(code, repeat);
         if (std::count(heard.begin(), heard.end(), "nextbuildmenu") != sounds + 1)
             page_memory_fail(std::string(step) + ":", "the key did not play nextbuildmenu once");
     };
@@ -706,6 +708,21 @@ void Runtime::check_unit_page_memory() {
     expect(commander, 1, "the next-page key on the order page");
     page_key(SDLK_PERIOD, "the next-page key on the first page");
     expect(commander, 2, "the next-page key on the first page");
+
+    // A held page key goes on turning: each repeat turns a page and plays
+    // nextbuildmenu, through the order page as its press does. Once round
+    // each way ends on the page it started from.
+    const auto hold_page_key = [&](SDL_Keycode code, int step, std::string_view name) {
+        const int pages = last_page + 1;
+        int page = kept_page(commander);
+        for (int repeat = 0; repeat < pages; ++repeat) {
+            page_key(code, name, true);
+            page = (page + step + pages) % pages;
+            expect(commander, page, name);
+        }
+    };
+    hold_page_key(SDLK_PERIOD, 1, "a repeat of the held next-page key");
+    hold_page_key(SDLK_COMMA, -1, "a repeat of the held previous-page key");
 
     select(lab, false);
     expect(lab, 1, "selecting the lab again");
@@ -790,7 +807,7 @@ void Runtime::check_unit_page_memory() {
     std::cout << "unit page memory check: " << name_of(commander) << " and " << name_of(lab)
               << " kept the pages ORDERS, BUILD, PREV, NEXT and the page keys chose through "
                  "reselection and a save and a load; the keys turned through the order page "
-                 "with nextbuildmenu, "
+                 "with nextbuildmenu, a held key a page with each repeat, "
               << name_of(peewee)
               << " kept its general page, and two selected showed the general page with BUILD "
                  "and ORDERS greyed and turned no page\n";

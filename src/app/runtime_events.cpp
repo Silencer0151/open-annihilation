@@ -325,8 +325,10 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
                     handle_match_right_press(x, y);
                 return;
             }
-            // In the right-click interface a left press over the
-            // radar scrolls the view with it until the button comes up.
+            // In the right-click interface a left press over the radar
+            // moves the view to the point under it at once, then scrolls
+            // the view with the pointer until the button comes up, as the
+            // left-click interface's right press does.
             namespace input = oa::sim::gameplay_input;
             if (event.button.button == SDL_BUTTON_LEFT) {
                 // The pick is wanted for what it writes into the Game block
@@ -335,6 +337,7 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
                 std::ignore = pick_match_cursor();
                 if (input::start_left_radar_scroll(match_->state().game)) {
                     select_game_cursor(static_cast<uint8_t>(input::OrderCursor::normal));
+                    center_camera_on_radar_point(x, y);
                     return;
                 }
             }

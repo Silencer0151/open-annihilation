@@ -4557,8 +4557,8 @@ class Runtime final : public menu::Host,
     /// ORDERS shows the order page and BUILD the unit's build page again.
     /// PREV and NEXT turn the unit's page among its type's pages, from the
     /// last to the first and back; from the order page they turn the page
-    /// the unit kept. With `cycle`, as the ',' and '.' keys turn it, the order
-    /// page takes its turn between the last page and the first, so from the
+    /// the unit kept. With `cycle`, as the ',' and '.' keys turn it, a turn
+    /// for each repeat of a held one, the order page takes its turn between the last page and the first, so from the
     /// order page '.' opens the first page and ',' the last. On a page taller
     /// than the side column the turn steps through its parts first, which the
     /// unit does not keep, and a page turned back to opens at its last part.
@@ -8227,7 +8227,8 @@ class Runtime final : public menu::Host,
     /// click on a queued build site takes the MobileBuild back. Right-click
     /// interface: a left click on open ground deselects, the right press gives
     /// the default order (move, guard on an own unit) with the same shift cancel,
-    /// the left button scrolls with the radar. A group sent by the right press,
+    /// a left press on the radar moves the view there and the left button
+    /// scrolls with it until its release. A group sent by the right press,
     /// shift right presses, an armed MOVE or PATROL and a radar click keeps its
     /// shape around the point, a unit far from it going to the point itself; an
     /// armed PATROL clicked on one unit of a block gives that unit no order and
@@ -8530,7 +8531,9 @@ class Runtime final : public menu::Host,
     /// screen and 'n' centres on the next unvisited local unit. Outside a
     /// multiplayer game 'h' does nothing. '+' and '-', and the keypad's,
     /// raise and lower the game speed a step, as each repeat of a held one
-    /// does too, up to the fastest and down to the slowest.
+    /// does too, up to the fastest and down to the slowest. ',' and '.' turn
+    /// the order panel's page back and on, the order page taking its turn, as
+    /// each repeat of a held one does too.
     ///
     /// @param key keyboard event; a repeat presses no other hotkey, and
     ///        Backspace's repeats are taken only by the chat line or a
@@ -9578,7 +9581,9 @@ class Runtime final : public menu::Host,
     /// press, from the first page to the last and back. The ',' and '.' keys
     /// must play nextbuildmenu and take the order page into their turn: back
     /// from the first page, on from the last, and from the order page to the
-    /// last page and the first. Each step must leave that page in the unit's
+    /// last page and the first. A held '.' and ',' must turn a page and play
+    /// nextbuildmenu with each repeat, once round the commander's pages and
+    /// its order page each way. Each step must leave that page in the unit's
     /// flags. A save and a load keep the commander's build page and the lab's
     /// order page. The PeeWee, whose type has no build pages, keeps its
     /// general page after '.', which turns the page in its flags, and after

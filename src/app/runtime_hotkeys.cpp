@@ -52,6 +52,15 @@ int game_speed_key_step(const SDL_KeyboardEvent& key) {
     return 0;
 }
 
+// The page a build-page key turns: 1 for '.', -1 for ',', 0 for any other key.
+int page_key_step(const SDL_KeyboardEvent& key) {
+    if (key.key == SDLK_PERIOD)
+        return 1;
+    if (key.key == SDLK_COMMA)
+        return -1;
+    return 0;
+}
+
 } // namespace
 
 bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
@@ -60,14 +69,18 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
     // The surrender confirmation takes the keys ahead of the chat line and
     // a marker's text, which keep what was typed for after it.
     const bool question = match_question_open();
-    // A held key's repeats press no hotkey but the speed keys: held '+' or
-    // '-' goes on changing the game speed, a step with each repeat, as in
-    // 3.1c, and stops at the fastest or the slowest. Held Backspace goes on
-    // deleting from the chat line or a marker's text being typed, as held
-    // keys go on typing in 3.1c; held letters arrive as repeated text.
+    // A held key's repeats press no hotkey but the speed keys and the page
+    // keys: held '+' or '-' goes on changing the game speed, a step with each
+    // repeat, as in 3.1c, and stops at the fastest or the slowest; held ','
+    // or '.' goes on turning the order panel's page, a page and a
+    // nextbuildmenu with each repeat, as in 3.1c, taking the order page into
+    // its turn as a press does. Held Backspace goes on deleting from the chat
+    // line or a marker's text being typed, as held keys go on typing in 3.1c;
+    // held letters arrive as repeated text.
     const bool deletes_typed_text =
         !question && key.key == SDLK_BACKSPACE && (chat_composing_ || whiteboard_input_.editing);
-    if (key.repeat && !deletes_typed_text && game_speed_key_step(key) == 0)
+    if (key.repeat && !deletes_typed_text && game_speed_key_step(key) == 0 &&
+        page_key_step(key) == 0)
         return false;
     if ((!question && whiteboard_key(key)) || megamap_key(key))
         return true;
@@ -310,15 +323,14 @@ bool Runtime::handle_match_hotkey(const SDL_KeyboardEvent& key) {
         return true;
     }
     // The page keys take the order page into their turn, and sound whether
-    // or not a page turns.
-    if (sym == SDLK_COMMA) {
+    // or not a page turns; each repeat of a held one turns again.
+    if (const int step = page_key_step(key); step != 0) {
         play_match_interface_sound("nextbuildmenu");
-        press_match_panel_page(oa::ui::hud::BuildPanelClick::page_back, true);
-        return true;
-    }
-    if (sym == SDLK_PERIOD) {
-        play_match_interface_sound("nextbuildmenu");
-        press_match_panel_page(oa::ui::hud::BuildPanelClick::page_forward, true);
+        press_match_panel_page(
+            step > 0 ? oa::ui::hud::BuildPanelClick::page_forward
+                     : oa::ui::hud::BuildPanelClick::page_back,
+            true
+        );
         return true;
     }
     if (sym == SDLK_RETURN || key.scancode == SDL_SCANCODE_RETURN) {
