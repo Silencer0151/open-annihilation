@@ -1346,11 +1346,18 @@ bool Runtime::present_full_match_layers(bool dialogs) {
         const bool pixel_art = accelerated_.rung.card == render_policy::CardFilter::pixelart &&
                                full.executor.capabilities().pixel_art_sampling;
         full.plan = ft::plan_terrain_draw(zoom, pixel_art);
+        // A view drawn between map pixels lands that far before the
+        // battlefield's corner, the terrain and the fog with the stages.
+        const auto& offset = accelerated_.frame_offset;
         ft::TerrainView view;
         view.camera_x = full.frame_camera_x;
         view.camera_y = full.frame_camera_y;
-        view.origin_x = static_cast<float>(match_layout_.left);
-        view.origin_y = static_cast<float>(match_layout_.top);
+        view.origin_x = static_cast<float>(
+            static_cast<double>(match_layout_.left) - offset.x * static_cast<double>(zoom)
+        );
+        view.origin_y = static_cast<float>(
+            static_cast<double>(match_layout_.top) - offset.y * static_cast<double>(zoom)
+        );
         view.scale = zoom;
         view.width = bf_w;
         view.height = bf_h;
@@ -1542,9 +1549,11 @@ bool Runtime::present_full_match_layers(bool dialogs) {
             clear.colour = card::Colour{0.0F, 0.0F, 0.0F, 1.0F};
             frame.batches.push_back(clear);
             ft::TerrainView target_view = view;
-            target_view.origin_x = 0.0F;
-            target_view.origin_y = 0.0F;
             target_view.scale = supersampled.draw_scale;
+            target_view.origin_x =
+                static_cast<float>(-offset.x * static_cast<double>(target_view.scale));
+            target_view.origin_y =
+                static_cast<float>(-offset.y * static_cast<double>(target_view.scale));
             target_view.width =
                 static_cast<uint32_t>(supersampled.source_part.width) / supersampled.factor;
             target_view.height =
@@ -1587,9 +1596,11 @@ bool Runtime::present_full_match_layers(bool dialogs) {
                 clear.colour = card::Colour{0.0F, 0.0F, 0.0F, 1.0F};
                 frame.batches.push_back(clear);
                 ft::TerrainView target_view = view;
-                target_view.origin_x = 0.0F;
-                target_view.origin_y = 0.0F;
                 target_view.scale = static_cast<float>(factor);
+                target_view.origin_x =
+                    static_cast<float>(-offset.x * static_cast<double>(target_view.scale));
+                target_view.origin_y =
+                    static_cast<float>(-offset.y * static_cast<double>(target_view.scale));
                 target_view.width = full.target_width;
                 target_view.height = full.target_height;
                 const ft::TerrainPass& pass = full.plan.passes[0];

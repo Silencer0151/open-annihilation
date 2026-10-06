@@ -532,10 +532,7 @@ void Runtime::area_order_units(int x0, int y0, int x1, int y1, std::string_view 
         std::swap(x0, x1);
     if (y0 > y1)
         std::swap(y0, y1);
-    const auto viewport = live_viewport(
-        static_cast<uint32_t>(std::max(0, match_camera_x_)),
-        static_cast<uint32_t>(std::max(0, match_camera_z_))
-    );
+    const auto viewport = live_viewport(match_camera_x_, match_camera_z_);
     int count = 0;
     // Each selected unit takes the box's first order in place of its orders
     // (or after them, with shift held) and queues the rest behind it.
@@ -1296,9 +1293,7 @@ constexpr uint8_t kDragBoxInnerColor = 0;
 std::optional<std::array<int32_t, 3>> Runtime::match_pointer_ground(float x, float y) {
     if (!match_ || !selected_tnt_)
         return std::nullopt;
-    const auto viewport = live_viewport(
-        static_cast<uint32_t>(match_camera_x_), static_cast<uint32_t>(match_camera_z_)
-    );
+    const auto viewport = live_viewport(match_camera_x_, match_camera_z_);
     const oa::present::world_renderer::ScreenPoint pointer{
         std::clamp(
             static_cast<int32_t>(x),

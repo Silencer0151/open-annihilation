@@ -17,8 +17,9 @@ camera, view size and battlefield rectangle from the Game block. Its test
 compares the installation's maps with `render_viewport` through a palette
 whose red channel is the index.
 
-Out-of-map crops are rejected; the camera limits keep a crop on the map.
-Output is capped at 64 million pixels.
+Out-of-map crops are rejected: `render_viewport` and
+`render_battlefield_viewport` take a camera on the map. Output is capped at
+64 million pixels.
 
 `BattlefieldViewport` carries the camera crop and destination clip together.
 `render_battlefield_viewport` copies the TNT mosaic directly into that clip;
@@ -28,9 +29,11 @@ space the radar sampler reads as well. The default destination is
 128-pixel command panel, 32-pixel top bar, and 32-pixel bottom strip,
 producing a `512x416` battlefield on the `640x480` surface.
 `unit_projection_for_viewport`, `map_pixel_to_screen`, and
-`screen_to_map_pixel` use the same origin and camera values. A zero-height
-unit projects to `(map_x-camera_x+128, map_y-camera_y+32)`; unit height alone
-supplies the additional `-height/2` vertical displacement. A view drawn
+`screen_to_map_pixel` use the same origin and camera values, all signed: a
+camera, and a map pixel, may lie left of or above the map, where the view
+shows past its edges. A zero-height unit projects to
+`(map_x-camera_x+128, map_y-camera_y+32)`; unit height alone supplies the
+additional `-height/2` vertical displacement. A view drawn
 between map pixels, as the accelerated tier draws it while it scrolls, lies
 a `ViewOffset` past the camera's map pixel, from 0 to 1 along each axis;
 `screen_to_map_pixel` given that offset maps a screen point to the whole map
@@ -50,7 +53,9 @@ The match's terrain fill (`fill_scaled_viewport`, the destination-sized
 sample of the mosaic at any zoom, within the map the view shows: the fill
 takes the shown width and height, the mosaic's or less where the game never
 shows a map's last columns and rows, and is black past them as past the
-mosaic) and its fog (`draw_fog_grid`) take an
+mosaic, and before the map's left and top edges) and its fog
+(`draw_fog_grid`, whose grid counts its cells toward negative infinity for
+a camera before the map, as it counts them on the map) take an
 optional [job pool](../../platform/job-pool/README.md) and split their rows
 into bands by the data: the fill by `terrain_band_rows` (32) destination
 rows, each band finding its first map row and fraction from its first row's

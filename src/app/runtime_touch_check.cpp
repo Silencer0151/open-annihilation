@@ -769,10 +769,8 @@ struct TouchCheckAccess {
     /// @return canvas point
     static CanvasPoint canvas_of(Runtime& runtime, uint16_t id) {
         const auto& slots = runtime.match_->world().slots;
-        const auto viewport = runtime.live_viewport(
-            static_cast<uint32_t>(std::max(0, runtime.match_camera_x_)),
-            static_cast<uint32_t>(std::max(0, runtime.match_camera_z_))
-        );
+        const auto viewport =
+            runtime.live_viewport(runtime.match_camera_x_, runtime.match_camera_z_);
         const auto point = runtime.project_match_point(viewport, slots[id].unit->position);
         return {static_cast<float>(point.x), static_cast<float>(point.y)};
     }
@@ -1108,10 +1106,8 @@ struct TouchCheckAccess {
         const int32_t cell_x = unit_x / 16;
         const int32_t cell_z = unit_z / 16;
         const auto& building = runtime.spawn_types_[type];
-        const auto viewport = runtime.live_viewport(
-            static_cast<uint32_t>(std::max(0, runtime.match_camera_x_)),
-            static_cast<uint32_t>(std::max(0, runtime.match_camera_z_))
-        );
+        const auto viewport =
+            runtime.live_viewport(runtime.match_camera_x_, runtime.match_camera_z_);
         std::optional<CanvasPoint> found;
         for (int32_t ring = 4; ring < 24 && !found; ++ring)
             for (int32_t dz = -ring; dz <= ring && !found; dz += 2)
@@ -1345,7 +1341,7 @@ struct TouchCheckAccess {
         runtime.apply_match_hud_for_selection();
         runtime.match_zoom_ = run.start_zoom_target;
         runtime.match_zoom_target_ = run.start_zoom_target;
-        runtime.zoom_anchored_ = false;
+        runtime.zoom_focus_ = {};
         runtime.match_pointer_known_ = false;
         SDL_SetModState(SDL_KMOD_NONE);
         look_at_units(runtime, {run.commander});

@@ -423,17 +423,7 @@ oa::present::world_renderer::ScreenPoint project_world_point(
     const auto map_x = static_cast<int32_t>(position[0]) >> 16;
     const auto map_z = static_cast<int32_t>(position[2]) >> 16;
     const auto height = static_cast<int32_t>(position[1]) >> 16;
-    // A map pixel is unsigned, and a point's place on the frame hangs only on
-    // its offset from the camera, so a point left of or above the map is
-    // moved onto it together with the camera.
-    auto shifted = viewport;
-    const auto lift_x = static_cast<uint32_t>(std::max(0, -map_x));
-    const auto lift_z = static_cast<uint32_t>(std::max(0, -map_z));
-    shifted.source_x += lift_x;
-    shifted.source_y += lift_z;
-    auto screen = oa::present::world_renderer::map_pixel_to_screen(
-        shifted, {static_cast<uint32_t>(map_x) + lift_x, static_cast<uint32_t>(map_z) + lift_z}
-    );
+    auto screen = oa::present::world_renderer::map_pixel_to_screen(viewport, {map_x, map_z});
     const auto scale = viewport.scale == 0.0F ? 1.0F : viewport.scale;
     if (lift == HeightLift::down) {
         const int32_t half = height >> 1;

@@ -22,7 +22,11 @@ bool feature_stands(int8_t height) noexcept {
 
 int32_t unit_draw_row(int32_t position_z, int32_t camera_y) noexcept {
     const int32_t whole = static_cast<int16_t>(static_cast<uint32_t>(position_z) >> 16);
-    return camera_y / draw_row_depth + (whole - camera_y) / draw_row_depth;
+    // A camera above the map counts its row toward negative infinity, so
+    // that its rows run on from the map's as a camera's on the map do.
+    const int32_t camera_row = camera_y >= 0 ? camera_y / draw_row_depth
+                                             : -((draw_row_depth - 1 - camera_y) / draw_row_depth);
+    return camera_row + (whole - camera_y) / draw_row_depth;
 }
 
 void plan_battlefield_draws(

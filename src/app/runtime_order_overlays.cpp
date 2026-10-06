@@ -263,9 +263,7 @@ void Runtime::check_console_range_overlays(const std::function<void(const char*)
         oa::present::world_renderer::Surface surface{
             match_world_cpu_.width, match_world_cpu_.height, match_world_cpu_.rgb
         };
-        auto viewport = live_viewport(
-            static_cast<uint32_t>(match_camera_x_), static_cast<uint32_t>(match_camera_z_)
-        );
+        auto viewport = live_viewport(match_camera_x_, match_camera_z_);
         viewport.destination_x = 0;
         viewport.destination_y = 0;
         viewport.surface_width = surface.width;

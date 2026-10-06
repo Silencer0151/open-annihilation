@@ -260,8 +260,9 @@ tile_rect(const TerrainAtlas& atlas, uint32_t slot, uint32_t level) noexcept;
 ///
 /// Texel (x, y) of the view shows map pixel (camera_x + x * 2^level,
 /// camera_y + y * 2^level) and the 2^level by 2^level pixels from it,
-/// averaged as the level holds them; past the map's edge it is opaque
-/// black, as today's fill paints ground beyond the terrain. The camera lies
+/// averaged as the level holds them; past the map's edges, and before its
+/// left and top edges, it is opaque black, as today's fill paints ground
+/// beyond the terrain. The camera lies
 /// on a multiple of 2^level along each axis: today's zoomed-out filter
 /// takes a camera on any map pixel, and a level holds no texel for one
 /// between its own, so a renderer snaps the camera to the level's grid or
@@ -269,8 +270,8 @@ tile_rect(const TerrainAtlas& atlas, uint32_t slot, uint32_t level) noexcept;
 ///
 /// @param atlas the atlas
 /// @param level level below tile_level_count
-/// @param camera_x map pixel of the view's left column
-/// @param camera_y map pixel of the view's top row
+/// @param camera_x map pixel of the view's left column; below 0 left of the map
+/// @param camera_y map pixel of the view's top row; below 0 above the map
 /// @param width view texels across
 /// @param height view texels down
 /// @param[out] rgba height rows of width texels, texel_bytes each
@@ -279,8 +280,8 @@ tile_rect(const TerrainAtlas& atlas, uint32_t slot, uint32_t level) noexcept;
 [[nodiscard]] TerrainAtlasError read_terrain_view(
     const TerrainAtlas& atlas,
     uint32_t level,
-    uint32_t camera_x,
-    uint32_t camera_y,
+    int32_t camera_x,
+    int32_t camera_y,
     uint32_t width,
     uint32_t height,
     uint8_t* rgba,

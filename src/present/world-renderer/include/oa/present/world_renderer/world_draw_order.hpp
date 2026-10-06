@@ -71,8 +71,10 @@ struct BattlefieldDrawPlan {
 /// Returns the plot row a unit draws with.
 ///
 /// @param position_z Unit.position.z, 16.16 map pixels
-/// @param camera_y Game.camera_y, map pixels at the top of the view
-/// @return the camera's plot row plus the whole rows, truncated toward zero,
+/// @param camera_y Game.camera_y, map pixels at the top of the view; below 0
+///     above the map
+/// @return the camera's plot row, rounded toward negative infinity for a
+///     camera above the map, plus the whole rows, truncated toward zero,
 ///     between the camera and the unit's whole-pixel depth
 /// @quirk Rows are counted from the camera rather than from the map edge, so
 ///     while the view is part-way into a plot a unit up to 15 pixels into the

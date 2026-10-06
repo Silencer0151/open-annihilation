@@ -52,21 +52,22 @@ static_assert((tile_edge >> last_pyramid_level) == 1U, "the last level holds a t
 /// fill's steps give the column, at 16.16 screen pixels per map pixel.
 ///
 /// @param[out] bounds `count` + 1 texel coordinates
-/// @param start map coordinate of the first destination pixel
+/// @param start map coordinate of the first destination pixel; below 0
+///        before the map, where every column (or row) holds no texel
 /// @param count destination pixels
 /// @param scale_fp the zoom in 16.16, at least 1
 /// @param level the pyramid level
 void texel_bounds(
-    std::vector<uint32_t>& bounds, uint32_t start, int32_t count, uint32_t scale_fp, uint32_t level
+    std::vector<uint32_t>& bounds, int32_t start, int32_t count, uint32_t scale_fp, uint32_t level
 ) {
     bounds.resize(static_cast<std::size_t>(count) + 1U);
-    const uint64_t half = uint64_t{1} << (level - 1U);
-    uint64_t position = start;
+    const int64_t half = int64_t{1} << (level - 1U);
+    int64_t position = start;
     uint32_t fraction = 0;
     for (auto& bound : bounds) {
         // The first texel whose centre, at (texel + 1/2) * 2^level, is at or
-        // past the map pixel.
-        bound = static_cast<uint32_t>((position + half - 1U) >> level);
+        // past the map pixel; the map's first texel for a pixel before it.
+        bound = static_cast<uint32_t>(std::max<int64_t>((position + half - 1) >> level, 0));
         fraction += fixed_one;
         while (fraction >= scale_fp) {
             fraction -= scale_fp;
@@ -180,6 +181,36 @@ float least_battlefield_zoom(
     return std::min(1.0F, std::max({*share, fit, furthest_battlefield_zoom}));
 }
 
+ViewCentreSpan view_centre_span(double map, double visible) noexcept {
+    const double middle = map / 2.0;
+    const double half_view = visible / 2.0;
+    return {std::min(0.0, middle - half_view), std::max(map, middle + half_view)};
+}
+
+double held_view(double view, double visible, double map, std::optional<double> from) noexcept {
+    auto span = view_centre_span(map, visible);
+    if (from) {
+        span.least = std::min(span.least, *from);
+        span.most = std::max(span.most, *from);
+    }
+    const double half_view = visible / 2.0;
+    return std::clamp(view + half_view, span.least, span.most) - half_view;
+}
+
+int32_t
+held_camera(int32_t camera, double visible, double map, std::optional<double> from) noexcept {
+    const auto exact = static_cast<double>(camera);
+    const double held = held_view(exact, visible, map, from);
+    // A camera is taken from the view's exact place, to the nearest whole
+    // map pixel or the one before it: within a map pixel of a place the
+    // limits hold, it is held already.
+    if (std::abs(held - exact) < 1.0)
+        return camera;
+    // Rounded toward the inside of the limits, so that the camera stays
+    // within them.
+    return static_cast<int32_t>(held > exact ? std::ceil(held) : std::floor(held));
+}
+
 TerrainPyramid
 build_terrain_pyramid(const oa::formats::tnt::Map& map, const oa::PaletteBytes& palette) {
     TerrainPyramid pyramid;
@@ -236,8 +267,8 @@ uint8_t far_terrain_level(float zoom) noexcept {
 bool filter_far_terrain(
     const oa::formats::tnt::Map& map,
     const TerrainPyramid& pyramid,
-    uint32_t source_x,
-    uint32_t source_y,
+    int32_t source_x,
+    int32_t source_y,
     uint32_t shown_width,
     uint32_t shown_height,
     int32_t dest_width,

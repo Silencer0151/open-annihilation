@@ -83,9 +83,20 @@ int main() {
     OA_CHECK(!oa::present::world_renderer::game_battlefield_viewport(0, 0, 127, 480));
     OA_CHECK(!oa::present::world_renderer::game_battlefield_viewport(0, 0, 640, 63));
     const oa::present::world_renderer::BattlefieldViewport overflowing_pick{
-        std::numeric_limits<uint32_t>::max(), 0, 0, 0, 2, 1, 2, 1
+        std::numeric_limits<int32_t>::max(), 0, 0, 0, 2, 1, 2, 1
     };
     OA_CHECK(!oa::present::world_renderer::screen_to_map_pixel(overflowing_pick, {1, 0}));
+    // A camera left of and above the map maps the battlefield's corner to a
+    // map pixel before the map, and back.
+    const oa::present::world_renderer::BattlefieldViewport before_map{-2, -1, 4, 2, 6, 6, 10, 8};
+    const auto corner = oa::present::world_renderer::screen_to_map_pixel(before_map, {4, 2});
+    OA_CHECK(corner && corner->x == -2 && corner->y == -1);
+    const auto first = oa::present::world_renderer::map_pixel_to_screen(before_map, {0, 0});
+    OA_CHECK(first.x == 6 && first.y == 3);
+    // The battlefield draws nothing of a camera before the map.
+    OA_CHECK(
+        !oa::present::world_renderer::render_battlefield_viewport(map, palette, before_map).ok()
+    );
     const auto composed =
         oa::present::world_renderer::render_battlefield_viewport(map, palette, battlefield);
     OA_CHECK(composed.ok());
@@ -150,6 +161,32 @@ int main() {
     OA_CHECK(red_at(*scaled_two.surface, 0, 0) == red_at(*crop.surface, 0, 0));
     OA_CHECK(red_at(*scaled_two.surface, 1, 0) == red_at(*crop.surface, 0, 0));
     OA_CHECK(red_at(*scaled_two.surface, 2, 0) == red_at(*crop.surface, 1, 0));
+    // Before the map's left and top edges the terrain is black, at 1:1 and
+    // scaled, and the map's first pixels follow it.
+    const auto corner_one =
+        oa::present::world_renderer::render_scaled_viewport(map, palette, 0, 0, 2, 2, 1.0F);
+    const auto before_one =
+        oa::present::world_renderer::render_scaled_viewport(map, palette, -2, -1, 4, 3, 1.0F);
+    const auto before_two =
+        oa::present::world_renderer::render_scaled_viewport(map, palette, -1, -1, 4, 4, 2.0F);
+    OA_CHECK(corner_one.ok() && before_one.ok() && before_two.ok());
+    for (uint32_t x = 0; x < 4; ++x)
+        OA_CHECK(red_at(*before_one.surface, x, 0) == 0);
+    for (uint32_t y = 1; y < 3; ++y) {
+        OA_CHECK(red_at(*before_one.surface, 0, y) == 0 && red_at(*before_one.surface, 1, y) == 0);
+        OA_CHECK(red_at(*before_one.surface, 2, y) == red_at(*corner_one.surface, 0, y - 1));
+        OA_CHECK(red_at(*before_one.surface, 3, y) == red_at(*corner_one.surface, 1, y - 1));
+    }
+    for (uint32_t at = 0; at < 4; ++at) {
+        OA_CHECK(
+            red_at(*before_two.surface, at, 0) == 0 && red_at(*before_two.surface, at, 1) == 0
+        );
+        OA_CHECK(
+            red_at(*before_two.surface, 0, at) == 0 && red_at(*before_two.surface, 1, at) == 0
+        );
+    }
+    OA_CHECK(red_at(*before_two.surface, 2, 2) == red_at(*corner_one.surface, 0, 0));
+    OA_CHECK(red_at(*before_two.surface, 3, 3) == red_at(*corner_one.surface, 0, 0));
     const auto outside_destination = oa::present::world_renderer::render_battlefield_viewport(
         map, palette, {0, 0, 8, 7, 3, 3, 10, 8}
     );

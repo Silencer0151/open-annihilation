@@ -595,7 +595,7 @@ void Runtime::set_camera_position(int32_t x, int32_t z, uint32_t flags) {
     match_camera_z_ = z;
     match_camera_flags_ = flags;
     // A camera put in place shows its own map pixel.
-    smooth_view_.offset = {};
+    exact_view_.held = false;
 }
 
 } // namespace oa::app

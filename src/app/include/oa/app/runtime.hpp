@@ -824,7 +824,9 @@ class Runtime final : public menu::Host,
     [[nodiscard]] bool match_running() const;
 
     /// Returns the centre of this machine's camera in map pixels, which
-    /// network play shares with the other players (ui.camera-sharing).
+    /// network play shares with the other players (ui.camera-sharing): the
+    /// camera held on the map as the game holds it (on_map_camera), so that
+    /// a view past the map's edges is shared at the edge.
     ///
     /// @return x and y; nothing without a running match
     [[nodiscard]] std::optional<std::array<int32_t, 2>> camera_centre() const;
@@ -1919,12 +1921,11 @@ class Runtime final : public menu::Host,
     /// @return where to draw the cursor; replaces_pointer false without touch controls
     [[nodiscard]] TouchCursor touch_cursor() const;
 
-    /// Moves the camera by a canvas delta, as a finger drags the map under it.
+    /// Moves the view by a canvas delta, as a finger drags the map under it.
     ///
-    /// The map follows the finger: pass the finger's motion negated. Divides by match_zoom(),
-    /// carries the fractions, stops tracking, drops an eased zoom's anchor (zoom_anchored_ =
-    /// false: a pinch never leaves one, see zoom_match_about), sets camera_moved_ and clamps the
-    /// stored camera to the map as view_camera does. [runtime_touch_camera.cpp]
+    /// The map follows the finger: pass the finger's motion negated. Moves the view's exact
+    /// place (place_match_view) by the delta over match_zoom(), held within the view's limits
+    /// as a scroll is (held_view), and stops tracking. [runtime_touch_camera.cpp]
     ///
     /// @param dx canvas pixels, positive moves the view right
     /// @param dy canvas pixels, positive moves the view down
@@ -1932,11 +1933,11 @@ class Runtime final : public menu::Host,
 
     /// Zooms the battlefield by a factor about a canvas point at once, as a pinch does.
     ///
-    /// Anchors the map pixel under the point as handle_match_zoom does, sets match_zoom_ and
-    /// match_zoom_target_ together to the clamped product (no easing), applies the anchor
-    /// (apply_zoom_anchor), clears zoom_anchored_, sets camera_moved_ and stops tracking. The
-    /// map pixel under the point stays under it. The wheel and the zoom −/+ buttons keep the
-    /// eased handle_match_zoom. [runtime_touch_camera.cpp]
+    /// Sets match_zoom_ and match_zoom_target_ together to the product within the zoom's
+    /// limits (no easing) and keeps the exact map point under the point there
+    /// (zoom_view_about); a point off the battlefield zooms about the nearest point on it.
+    /// Stops tracking. The wheel and the zoom −/+ buttons keep the eased handle_match_zoom.
+    /// [runtime_touch_camera.cpp]
     ///
     /// @param factor the zoom now over the zoom before, > 0
     /// @param x canvas x of the point, pixels
@@ -5008,8 +5009,8 @@ class Runtime final : public menu::Host,
     /// applied apart, give the pixels both give in one draw.
     ///
     /// @param[in,out] destination battlefield frame, or the scene it is drawn from
-    /// @param camera_x camera column in map pixels
-    /// @param camera_y camera row in map pixels
+    /// @param camera_x camera column in map pixels; below 0 left of the map
+    /// @param camera_y camera row in map pixels; below 0 above the map
     /// @param dest_x frame column of the battlefield
     /// @param dest_y frame row of the battlefield
     /// @param dest_w battlefield width in frame pixels
@@ -5018,8 +5019,8 @@ class Runtime final : public menu::Host,
     /// @param passes the passes applied
     void apply_match_fog(
         oa::present::world_renderer::Surface& destination,
-        uint32_t camera_x,
-        uint32_t camera_y,
+        int32_t camera_x,
+        int32_t camera_y,
         int dest_x,
         int dest_y,
         int dest_w,
@@ -6400,11 +6401,11 @@ class Runtime final : public menu::Host,
 
     /// Returns the battlefield viewport for a camera position with the live layout and zoom.
     ///
-    /// @param camera_x camera column in map pixels
-    /// @param camera_y camera row in map pixels
+    /// @param camera_x camera column in map pixels; below 0 left of the map
+    /// @param camera_y camera row in map pixels; below 0 above the map
     /// @return the viewport
     [[nodiscard]] oa::present::world_renderer::BattlefieldViewport
-    live_viewport(uint32_t camera_x, uint32_t camera_y) const;
+    live_viewport(int32_t camera_x, int32_t camera_y) const;
 
     /// Returns how the frame draws the battlefield (oa::app::world_scaling).
     ///
@@ -7082,10 +7083,10 @@ class Runtime final : public menu::Host,
     /// frame before.
     ///
     /// @param canvas true when the card draws the world and the layer is the canvas
-    /// @param camera_x map pixel at the view's left edge
-    /// @param camera_y map pixel at the view's top edge
+    /// @param camera_x map pixel at the view's left edge; below 0 left of the map
+    /// @param camera_y map pixel at the view's top edge; below 0 above the map
     /// @param zoom screen pixels per map pixel
-    void note_full_canvas(bool canvas, uint32_t camera_x, uint32_t camera_y, float zoom);
+    void note_full_canvas(bool canvas, int32_t camera_x, int32_t camera_y, float zoom);
 
     /// Notes where a canvas frame's overlay canvas holds its pixels once it
     /// is cleared to the key colour, so that a painter after the fog that
@@ -8247,8 +8248,12 @@ class Runtime final : public menu::Host,
 
     /// Runs mouse look through the platform cursor.
     ///
-    /// The pointer is read in screen pixels, warped back to the anchor, and the
-    /// view follows the Game camera.
+    /// The pointer is read in screen pixels and warped back to the anchor, as
+    /// the game's look does; the view moves a map cell for each
+    /// oa::present::world_renderer::mouse_look_pixels_per_cell pixels the
+    /// pointer travelled, held within the view's limits (view_camera) rather
+    /// than on the map, and the cells count on past the map's left and top
+    /// edges.
     ///
     /// @param begin true when the look starts
     void drive_mouse_look(bool begin);
@@ -8567,83 +8572,99 @@ class Runtime final : public menu::Host,
     /// std::runtime_error on a failure.
     void check_attack_command();
 
-    /// Checks that zooming keeps a camera tracking a unit.
+    /// Checks the battlefield's zoom, the view past the map's edges and a
+    /// zoom's end of the follow of a unit, in a new skirmish.
     ///
-    /// In a new skirmish the camera tracks the local commander as it walks;
-    /// the wheel, turned at a point away from the centre, zooms in to the
-    /// nearest zoom, out to the farthest and back, and the settings dialog's
-    /// ease zooms in play and under a menu. On every frame the tracking goes
-    /// on and the commander stays at the centre. A unit in the map's corner
-    /// is tracked with the camera held at the map's edges at every zoom. A
-    /// scroll and moving the view from the minimap still end the tracking.
-    /// Returns to the skirmish menu; throws std::runtime_error on a failure.
+    /// Runs check_zoom_about_pointer, check_zoom_limit_choices and
+    /// check_view_past_map. Then Ctrl+C follows the walking commander, or
+    /// T where the side's commander is not in Ctrl+C's category, and the
+    /// wheel turned at a point away from it ends the follow and zooms
+    /// about the point, every frame keeping the map point under the pointer
+    /// there. The settings dialog's ease about the centre keeps the follow,
+    /// in play and under a menu, with the unit at the centre on every frame,
+    /// and so for a unit in the map's corner, past the map's edges. A
+    /// scroll and moving the view from the minimap end the follow. Returns
+    /// to the skirmish menu; throws std::runtime_error on a failure.
+    /// [runtime_tracking_zoom_check.cpp]
     void check_tracking_zoom();
-    /// Checks the wheel's zoom about the pointer as far as the map's edges allow.
+
+    /// Checks that every frame of a zoom keeps the map point under the
+    /// pointer there, on the game's screen.
     ///
-    /// On the game's screen, with the camera at each of the map's corners,
-    /// the middle of each of its edges and its middle: wheel steps out, in
-    /// and out again with the pointer resting at the battlefield's centre
-    /// and beside the edge, creeping toward the edge and moving across the
-    /// battlefield, a trackpad's small steps with the pointer creeping, and
-    /// a pinch or the pad's zoom held out, in and out. After each step, on
-    /// each axis, the map point under the pointer before it is under it
-    /// still, to within a map pixel, or, where the camera's limits stop the
-    /// camera short of that, the camera sits at the limit; the zoom comes
-    /// back exactly, and the camera too where the pointer rested and no
-    /// limit stopped a step. From a camera short of the map's far corner,
-    /// steps out about the battlefield's centre take the camera to the
-    /// corner, and steps in on to the nearest zoom with the pointer on the
-    /// battlefield's last column and row keep it within three map pixels of
-    /// it. At the nearest zoom, with the pointer halfway between two map
-    /// pixels, steps in and a pinch or the pad's zoom held in leave the
-    /// camera where it is, and steps out and as many back return it; at a
-    /// zoom off the wheel's steps, as a pinch leaves, so do steps out and
-    /// as many back. From the default zoom, the steps that reach the
-    /// farthest zoom, and the nearest, with one past it, and as many back
-    /// as reached it return the zoom exactly and the camera. On a
-    /// battlefield wider and taller than the map at the farthest zoom,
-    /// steps in and back out about its centre and the map's far corner keep
-    /// to the same rule. A frame runs after each step, and one is drawn.
-    /// Leaves the layout as it was and the default zoom; throws
-    /// std::runtime_error on a failure. [runtime_tracking_zoom_check.cpp]
+    /// With the view at each of the map's corners, the middle of each of
+    /// its edges and its middle, and past its top left corner and its left
+    /// edge: the wheel's notches out, in and out again with the pointer
+    /// resting at the battlefield's centre and beside the edge, creeping
+    /// toward the edge and moving across the battlefield; a trackpad's
+    /// small steps with the pointer creeping; and a pinch or the pad's zoom
+    /// held out and in. After every frame, drawn, the exact map point that
+    /// was under the pointer before it is under it still to a millionth of
+    /// a map pixel, wherever it lies on the map, and the camera is the
+    /// nearest whole map pixel to the view's exact place; where the
+    /// pointer rested, the steps return the zoom exactly and the view. At
+    /// the nearest zoom steps in and a zoom held in move nothing; at a zoom
+    /// off the wheel's steps and from the default to either end of the
+    /// range and back, the steps return the zoom and the view. Leaves the
+    /// layout as it was and the default zoom; throws std::runtime_error on
+    /// a failure. [runtime_tracking_zoom_check.cpp]
     ///
     /// @param frame runs a frame of the match: the zoom eases and the camera moves
-    void check_wheel_zoom_limits(const std::function<void()>& frame);
-    /// Checks the zoom's limits as the Maximum zoom out and Maximum zoom in
-    /// settings set them.
+    void check_zoom_about_pointer(const std::function<void()>& frame);
+
+    /// Checks the zoom's limits at each Maximum zoom out and Maximum zoom in
+    /// choice, on the game's screen and three windows.
     ///
-    /// On the game's screen and on windows of 1366x768, 1920x1080 and
-    /// 2560x1440: the wheel turned out stops at each Maximum zoom out
+    /// The wheel turned out from the middle of the map stops at each
     /// choice's floor (least_battlefield_zoom), Automatic's the drawing's
-    /// floor, and Whole map's shows the whole map with the camera at its
-    /// corner, filling the battlefield one way and fitting within it the
-    /// other; past the drawing's floor the frame is the far view, which
-    /// draws no model. The wheel turned in stops at each Maximum zoom in
-    /// choice's ceiling, and a pinch or the pad's zoom held out and in
-    /// stops at both. With Whole map, from the middle of the map out to the
-    /// whole map and back in, and from the whole map in about its far
-    /// corner and a point past its edge, each step keeps the map point
-    /// under the pointer before it there, or the camera at the limit that
-    /// stops it. A choice changed in play brings a view past the new limits
-    /// within them at once. Then checks presses on the far view
-    /// (check_far_view_presses).
-    /// Puts the settings, the layout and the default zoom back; throws
-    /// std::runtime_error on a failure.
-    /// [runtime_tracking_zoom_check.cpp]
+    /// floor, and Whole map's shows the whole map about the map's middle,
+    /// filling the battlefield one way and fitting within it the other;
+    /// past the drawing's floor the frame is the far view. The wheel turned
+    /// in stops at each Maximum zoom in choice's ceiling, and a pinch or the
+    /// pad's zoom held out and in stops at both. With Whole map, from the
+    /// middle of the map out to the whole map and back in, and from the
+    /// whole map in about its far corner, about a point past its edge and
+    /// at points across it, each step keeps the map point under the
+    /// pointer, or, past the map's edge, the view within its limits or no
+    /// further from them. A choice changed in play eases a view past the
+    /// new limits within them about the battlefield's centre. Then checks
+    /// presses on the far view (check_far_view_presses). Puts the settings,
+    /// the layout and the default zoom back; throws std::runtime_error on a
+    /// failure. [runtime_tracking_zoom_check.cpp]
     ///
     /// @param frame runs a frame of the match: the zoom eases and the camera moves
     void check_zoom_limit_choices(const std::function<void()>& frame);
+
+    /// Checks the view past the map's edges on the game's screen.
+    ///
+    /// A scroll each way stops where the view's centre reaches the end of
+    /// view_centre_span: at zoom 1 with the map's edge at the battlefield's
+    /// middle, and at the whole map with the map's centre at the view's
+    /// edge. A press on the minimap's corner brings the map's corner to the
+    /// battlefield's middle. A zoom out about a point of the map near the
+    /// battlefield's edge leaves the view past its limits, and a scroll then
+    /// goes no further from the map but back toward it at once. An aircraft
+    /// put past the map's left edge, with the view past that edge, is on
+    /// screen, drawn over the black, hovered and selected, as a model at
+    /// zoom 1 and as a dot in the far view. A view past the map's edges
+    /// gives the match's digest of the view at the map's corner, the camera
+    /// held on the map (on_map_camera). Puts the settings, the layout and
+    /// the default zoom back; throws std::runtime_error on a failure.
+    /// [runtime_tracking_zoom_check.cpp]
+    ///
+    /// @param frame runs a frame of the match: the zoom eases and the camera moves
+    void check_view_past_map(const std::function<void()>& frame);
+
     /// Checks presses on the far view at Whole map on the game's screen.
     ///
     /// A click on every pixel of the local commander's dot selects it, as
     /// small as its box is there; with it selected, a click on the dot of
     /// an enemy spawned beside it attacks the enemy, and a click on the
-    /// black past the map moves it to the ground at the shown map's
-    /// nearest edge, never into the edges the game never shows. Leaves the
-    /// layout, the zoom and the settings for check_zoom_limit_choices to put
-    /// back, the enemy dismissed, the commander without orders and nothing
-    /// selected; throws std::runtime_error on a failure.
-    /// [runtime_tracking_zoom_check.cpp]
+    /// black right of the map, and left of it with the map in the middle,
+    /// moves it to the ground at the nearest point of the shown map, never
+    /// into the edges the game never shows. Leaves the layout, the zoom and
+    /// the settings for check_zoom_limit_choices to put back, the enemy
+    /// dismissed, the commander without orders and nothing selected; throws
+    /// std::runtime_error on a failure. [runtime_tracking_zoom_check.cpp]
     void check_far_view_presses();
 
     /// Checks that a turret built during the match draws its current pieces as it turns.
@@ -11223,42 +11244,54 @@ class Runtime final : public menu::Host,
     /// @return false off the radar
     bool pan_camera_from_radar(float x, float y);
 
-    /// Keeps the map point under the zoom anchor at its screen position while zooming.
+    /// Eases the battlefield zoom toward its target by frame time, about its focus.
     ///
-    /// The camera is the one that shows the anchor's map pixel there as
-    /// screen_to_map_pixel finds it, so a step that leaves the zoom as it
-    /// was, as a step past the nearest or farthest zoom does, leaves the
-    /// camera where it was. Where the camera's limits stop it short of
-    /// that, the stored camera sits at the limit (view_camera).
-    void apply_zoom_anchor();
-
-    /// Anchors a zoom at a battlefield point: the map point the view as
-    /// drawn shows there, so that each step zooms about what is under the
-    /// pointer at that step, wherever the camera's limits stopped the last.
-    ///
-    /// @param px canvas column, within the battlefield
-    /// @param py canvas row, within the battlefield
-    void anchor_zoom_at(int px, int py);
-
-    /// Eases the battlefield zoom toward its target by frame time, keeping the anchor in place.
-    ///
-    /// The time is the frame's (frame_time_ns_), so a --frame-rate run eases
-    /// on its own clock as a player's frames do. A camera tracking a unit
-    /// keeps the unit at the centre at every scale, as far as the map's
-    /// edges let it, while a menu holds the match too.
+    /// Each frame moves the zoom's logarithm toward the target's by the
+    /// share 1 - e^(-kZoomLerpHz t) of the way, t the frame's seconds since
+    /// the last (frame_time_ns_, at most kLongestZoomStep), so the zoom
+    /// eases on the frames' clock whatever the game's speed and while the
+    /// match is paused, and a --frame-rate run eases on its own clock as a
+    /// player's frames do; within a ten-thousandth of the target's
+    /// logarithm it takes the target. Every frame keeps the exact map point
+    /// under the focus there (zoom_view_about): the pointer where it is now
+    /// while the wheel zooms about it, else the point the zoom was given. A
+    /// zoom outside the limits, as a change of the limits leaves it, eases
+    /// back within them about the battlefield's centre. A followed unit,
+    /// which only the settings dialog's ease and a change of the limits
+    /// leave followed, stays at the centre at every frame of the ease, while
+    /// a menu holds the match too.
     void step_match_zoom();
 
-    /// Zooms the battlefield with the mouse wheel about the pointer.
+    /// Zooms the view to a zoom about a battlefield point at once.
     ///
-    /// At each step the map point under the pointer stays there as far as
-    /// the camera's limits allow, and where they stop the camera it sits at
-    /// the limit (anchor_zoom_at). A camera tracking a unit zooms about the
-    /// unit instead and goes on tracking it: the wheel changes only the scale.
+    /// The exact map point under the point before the zoom is under it
+    /// after, the view's exact place moving with it (place_match_view).
+    /// Along an axis on which that map point lies on the shown map, the
+    /// view goes wherever that takes it, so that a zoom never slides the
+    /// point under the pointer and the map stays in view; along an axis on
+    /// which it lies past the map's edge, the view is held within its
+    /// limits as a scroll is (held_view). The limits hold from the view
+    /// placed (view_hold_).
+    ///
+    /// @param zoom the zoom to take, screen pixels per map pixel, above 0
+    /// @param focus_x the point's column from the battlefield's left edge, screen pixels
+    /// @param focus_y the point's row from the battlefield's top edge, screen pixels
+    void zoom_view_about(float zoom, double focus_x, double focus_y);
+
+    /// Zooms the battlefield by wheel steps about a battlefield point.
+    ///
+    /// Sets the zoom's target (wheel_zoom_target), which step_match_zoom
+    /// eases toward about the point: the pointer as it moves while
+    /// `follow_pointer`, so that the map point under the pointer stays under
+    /// it on every frame, else the point itself. Ends a follow of a unit,
+    /// as a scroll does. A point off the battlefield does nothing.
     ///
     /// @param wheel_y wheel steps; positive zooms in
-    /// @param pointer_x canvas column of the pointer
-    /// @param pointer_y canvas row of the pointer
-    void handle_match_zoom(float wheel_y, float pointer_x, float pointer_y);
+    /// @param pointer_x canvas column of the point
+    /// @param pointer_y canvas row of the point
+    /// @param follow_pointer the zoom follows the pointer as it moves: the
+    ///        wheel's; the touch buttons zoom about the point alone
+    void handle_match_zoom(float wheel_y, float pointer_x, float pointer_y, bool follow_pointer);
 
     /// Returns the zoom's target after wheel steps (zoom_wheel_).
     ///
@@ -11287,74 +11320,84 @@ class Runtime final : public menu::Host,
     /// clock unit as in 3.1c, times the clock units the frame's real time is
     /// worth (scroll_distance), so a second of scrolling covers the same
     /// ground at any frame rate, at the match record's speed (the preference,
-    /// or the console's ScrollSpeed), and the camera moves by a steady amount
+    /// or the console's ScrollSpeed), and the view moves by a steady amount
     /// each frame instead of a whole step each clock unit. Zoom keeps the
-    /// on-screen rate constant; the carried fraction keeps the world rate
-    /// exact. A --frame-rate run's held scroll (frame_run_scroll_) counts as
-    /// an arrow key. The scroll itself is scroll_match_view's.
+    /// on-screen rate constant. A --frame-rate run's held scroll
+    /// (frame_run_scroll_) counts as an arrow key. The scroll itself is
+    /// scroll_match_view's.
     void pan_match_camera();
 
-    /// Scrolls the camera one frame's distance: the map pixels the frame
-    /// moves are the screen pixels over the zoom, with the fraction carried
-    /// to the next frame (scroll_zoom_carry_), so the camera steps whole map
-    /// pixels at the scroll's exact rate; a step stops tracking a unit and
-    /// drops the zoom's anchor. While the accelerated tier draws the view
-    /// between map pixels (view_offset), the view follows the scroll's exact
-    /// travel within the camera's map pixel (scrolled_view_offset), unless a
-    /// zoom eased about its anchor places it; both axes step on the one
-    /// carry, and an axis joining a scroll already under way catches up
-    /// with it over the frames before its camera's first step. The camera,
-    /// and so Game's, moves exactly as in the standard tier.
+    /// Scrolls the view one frame's distance: the map pixels the frame moves
+    /// are the screen pixels over the zoom, added to the view's exact place
+    /// (place_match_view), whose camera steps whole map pixels at the
+    /// scroll's exact rate; the view is held within its limits (held_view),
+    /// so that it may go past the map's edges until the map's edge reaches
+    /// the middle of the battlefield. A scroll that moves the view stops
+    /// tracking a unit.
     ///
     /// @param way_x -1 left, 1 right, 0 neither; held to that range
     /// @param way_z -1 up, 1 down, 0 neither; held to that range
     /// @param step screen pixels the frame scrolls, at or above 0
     void scroll_match_view(int32_t way_x, int32_t way_z, double step);
 
-    /// Returns the camera as a frame draws it: held on the map, at most the
-    /// map's pixels less those the battlefield shows.
+    /// Returns the camera as the next frame draws it: held within the
+    /// view's limits (held_camera), which let the view go past the map's
+    /// edges as far as view_centre_span allows, or as far as the view the
+    /// limits held last lay past them (view_hold_), whichever is further.
     ///
     /// @return the camera's column and row in map pixels; the camera as it
     ///         is without a map
     [[nodiscard]] std::array<int32_t, 2> view_camera() const;
 
-    /// Returns the most a view drawn between map pixels may lie past a
-    /// camera (most_view_offset), before the camera's farthest place at the
-    /// live zoom and layout.
+    /// Returns the camera held on the map as the game holds it: from 0 to
+    /// the shown map's size less the map pixels the battlefield shows on
+    /// each axis, or 0 where the view shows more than the map. Saves, the
+    /// match's digest, a meteor strike and the camera network play shares
+    /// take it, so that a view past the map's edges reaches none of them.
     ///
-    /// @param camera_x the camera's column, on the map
-    /// @param camera_z the camera's row, on the map
-    /// @return map pixels along each axis, from 0 to 1; none without a map
-    [[nodiscard]] oa::present::world_renderer::ViewOffset
-    most_view_offsets(int32_t camera_x, int32_t camera_z) const;
+    /// @return the camera's column and row in map pixels
+    [[nodiscard]] std::array<int32_t, 2> on_map_camera() const;
+
+    /// Returns the view's exact place: the map point at the battlefield's
+    /// top-left corner while the camera is the one taken from it
+    /// (exact_view_), else the camera's own map pixel.
+    ///
+    /// @return the map column and row, which may lie past the map's edges
+    [[nodiscard]] std::array<double, 2> match_view_place() const;
+
+    /// Puts the view at an exact place and takes the camera from it: the
+    /// whole map pixel at or before it while the frames draw the view
+    /// between map pixels (view_between_pixels_), else the nearest.
+    /// Marks the camera moved.
+    ///
+    /// @param x the map column at the battlefield's left edge
+    /// @param z the map row at its top edge
+    void place_match_view(double x, double z);
 
     /// Returns how far past the camera's map pixel the view is drawn, which
     /// hover, picking, orders' map pixels and the painters after the fog
     /// take, so that what the pointer is over is what is drawn under it.
     ///
     /// The view lies between map pixels only while the accelerated tier's
-    /// match frames draw it so (smooth_view_) and the camera is the one the
-    /// offset lies past; otherwise, and always in the standard tier, it is
-    /// drawn on the camera's map pixel and the offset is none.
+    /// match frames draw it so (view_between_pixels_) and the camera is the
+    /// one taken from the view's exact place (exact_view_); otherwise, and
+    /// always in the standard tier, it is drawn on the camera's map pixel
+    /// and the offset is none.
     ///
     /// @return map pixels along each axis, from 0 to 1
     [[nodiscard]] oa::present::world_renderer::ViewOffset view_offset() const;
 
     /// Settles how far between map pixels a match frame draws the view: an
     /// accelerated frame whose card magnifies the scene or whose area pass
-    /// reduces it keeps the offset the scroll or the zoom left, past the
-    /// camera it lies past, held within what the map allows; a new camera
-    /// starts it at none. Every other frame, the standard tier's, the
-    /// director's and those at a method of neither, draws the view on the
-    /// camera's map pixel and forgets the offset. A frame drawn for a reader
-    /// that keeps a picture leaves it as the frame before left it.
+    /// reduces it draws the view at its exact place (view_offset), and the
+    /// view's camera is then taken at or before that place; every other
+    /// frame, the standard tier's, the director's and those at a method of
+    /// neither, draws the view on the camera's map pixel. A frame drawn for
+    /// a reader that keeps a picture leaves it as the frame before left it.
     ///
-    /// @param camera_x the frame's camera column, held on the map
-    /// @param camera_y the frame's camera row, held on the map
     /// @param between the frame may draw the view between map pixels
     /// @return the offset the frame draws the view at
-    oa::present::world_renderer::ViewOffset
-    settle_view_offset(uint32_t camera_x, uint32_t camera_y, bool between);
+    oa::present::world_renderer::ViewOffset settle_view_offset(bool between);
 
     /// Sends the primary selected unit to resume building or repair a unit.
     ///
@@ -13203,13 +13246,16 @@ class Runtime final : public menu::Host,
     uint32_t match_camera_flags_ = 0;
     float match_zoom_ = kDefaultBattlefieldZoom;
     float match_zoom_target_ = kDefaultBattlefieldZoom;
-    bool zoom_anchored_ = false;
-    /// The anchor's whole map pixel, the one the view as drawn shows under
-    /// it (anchor_zoom_at).
-    int32_t zoom_anchor_map_x_{};
-    int32_t zoom_anchor_map_y_{};
-    int zoom_anchor_sx_{};
-    int zoom_anchor_sy_{};
+
+    /// The battlefield point the zoom eases about (step_match_zoom).
+    struct ZoomFocus {
+        /// The point is the pointer's, and moves with it.
+        bool follows_pointer{};
+        float x{}; ///< canvas column
+        float y{}; ///< canvas row
+    };
+
+    ZoomFocus zoom_focus_{};
 
     /// The wheel's steps since the zoom's target was last set by anything
     /// else (wheel_zoom_target).
@@ -13225,28 +13271,39 @@ class Runtime final : public menu::Host,
     uint64_t zoom_clock_{}; ///< the frame time (frame_time_ns_) the zoom last eased at
     bool zoom_clock_valid_ = false;
     uint64_t scroll_clock_{}; ///< the frame time the camera last scrolled at; 0 before
-    double scroll_zoom_carry_ = 0.0;
-    /// The map pixels the zoom's anchor lies past its whole map pixel
-    /// (zoom_anchor_map_x_, zoom_anchor_map_y_), the one under the anchor
-    /// on the camera's map pixel: a view drawn between map pixels keeps the
-    /// exact point under the anchor; from -0.5 to 1.5, its offset among it.
-    double zoom_anchor_fraction_x_{};
-    double zoom_anchor_fraction_y_{};
 
-    /// The view the accelerated tier draws between map pixels as it scrolls
-    /// and zooms, while the camera and Game's stay on whole map pixels.
+    /// The view's exact place, which the zoom, the scroll and a finger's
+    /// pan move and the camera is taken from (place_match_view): the map
+    /// point at the battlefield's top-left corner, past the map's edges
+    /// where the view lies past them. A mover that sets the camera itself
+    /// leaves it, and the view is then the camera's own map pixel.
     /// Presentation only: never in Game, saves, digests or the wire.
-    struct SmoothView {
-        /// The last match frame drew the view between map pixels
-        /// (settle_view_offset), so the scroll and the zoom move the offset.
-        bool on{};
-        int32_t camera_x{}; ///< the camera column the offset lies past
-        int32_t camera_z{}; ///< the camera row the offset lies past
-        /// Map pixels past that camera's map pixel, each from 0 to 1.
-        oa::present::world_renderer::ViewOffset offset{};
+    struct ExactView {
+        /// x and z are the view's place while the camera is camera_x, camera_z.
+        bool held{};
+        double x{};         ///< the map column at the battlefield's left edge
+        double z{};         ///< the map row at its top edge
+        int32_t camera_x{}; ///< the camera column taken from x
+        int32_t camera_z{}; ///< the camera row taken from z
     };
 
-    SmoothView smooth_view_{};
+    ExactView exact_view_{};
+
+    /// The centre of the view the limits last held, which they hold the
+    /// next view from (held_view): the frame's drawn view, or the view a
+    /// zoom placed past the limits about a point of the map.
+    struct ViewHold {
+        bool held{};       ///< false before a match's first frame
+        double centre_x{}; ///< map pixels
+        double centre_z{}; ///< map pixels
+    };
+
+    ViewHold view_hold_{};
+
+    /// The last match frame drew the view between map pixels
+    /// (settle_view_offset), so the camera is taken at or before the view's
+    /// exact place and the offset past it drawn.
+    bool view_between_pixels_ = false;
 
     // The drag box kept while the left button is held on the
     // battlefield (Game.drag_start and drag_end): whole map pixels x,
@@ -13333,12 +13390,12 @@ class Runtime final : public menu::Host,
     // The terrain of the scene, at its size, and the camera and draw scale it
     // was filled for.
     oa::present::world_renderer::Surface match_terrain_cache_{};
-    uint32_t terrain_cache_cam_x_ = ~0u;
-    uint32_t terrain_cache_cam_y_ = ~0u;
+    int32_t terrain_cache_cam_x_ = kUncachedTerrainCamera;
+    int32_t terrain_cache_cam_y_ = kUncachedTerrainCamera;
     float terrain_cache_zoom_ = -1.0F;
     // View of the last box-filtered fill of match_terrain_cache_ (runtime_terrain_filter.cpp).
-    uint32_t terrain_filtered_cam_x_ = ~0u;
-    uint32_t terrain_filtered_cam_y_ = ~0u;
+    int32_t terrain_filtered_cam_x_ = kUncachedTerrainCamera;
+    int32_t terrain_filtered_cam_y_ = kUncachedTerrainCamera;
     float terrain_filtered_zoom_ = -1.0F;
     /// Runs of the box filter (refresh_filtered_terrain) and their time in
     /// nanoseconds, which the render tiers check reads: a Full frame never

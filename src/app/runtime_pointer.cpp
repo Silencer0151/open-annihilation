@@ -334,7 +334,10 @@ oa::sim::selection::Hooks Runtime::selection_hooks() {
             // unit shows in its carrier's dot and has none of its own.
             if (self.far_view_frame() && unit.attach_parent == 0) {
                 const auto dot = self.project_match_point(
-                    self.live_viewport(world.game.camera_x, world.game.camera_y),
+                    self.live_viewport(
+                        static_cast<int32_t>(world.game.camera_x),
+                        static_cast<int32_t>(world.game.camera_y)
+                    ),
                     {std::bit_cast<uint32_t>(candidate.position.x),
                      std::bit_cast<uint32_t>(candidate.position.y),
                      std::bit_cast<uint32_t>(candidate.position.z)}
@@ -424,12 +427,11 @@ void Runtime::rebuild_on_screen_units() {
 void Runtime::refresh_on_screen_view() {
     if (!match_ || !selected_tnt_)
         return;
-    // The view a frame would show: the camera held on the map, bound to the
-    // Game block, and the units on screen in it.
-    const auto [map_width, map_height] = shown_map_size();
-    match_camera_x_ = std::clamp(match_camera_x_, 0, std::max(0, map_width - visible_map_width()));
-    match_camera_z_ =
-        std::clamp(match_camera_z_, 0, std::max(0, map_height - visible_map_height()));
+    // The view a frame would show: the camera held within the view's
+    // limits, bound to the Game block, and the units on screen in it.
+    const auto camera = view_camera();
+    match_camera_x_ = camera[0];
+    match_camera_z_ = camera[1];
     bind_match_view();
     rebuild_on_screen_units();
 }

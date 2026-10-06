@@ -236,10 +236,7 @@ void Runtime::check_builder_orders() {
     match_command_ = MatchCommand::none;
     const auto point_over = [&](uint16_t id) {
         center_camera_on_unit(id);
-        const auto viewport = live_viewport(
-            static_cast<uint32_t>(std::max(0, match_camera_x_)),
-            static_cast<uint32_t>(std::max(0, match_camera_z_))
-        );
+        const auto viewport = live_viewport(match_camera_x_, match_camera_z_);
         const auto screen = project_match_point(viewport, slots[id].unit->position);
         return std::pair{static_cast<float>(screen.x), static_cast<float>(screen.y)};
     };
@@ -315,21 +312,19 @@ std::optional<oa::sim::ground_orders::Point> Runtime::match_world_point(float x,
 std::optional<oa::sim::ground_orders::Point> Runtime::ground_point_under(float x, float y) const {
     if (!selected_tnt_)
         return std::nullopt;
-    const auto viewport = live_viewport(
-        static_cast<uint32_t>(match_camera_x_), static_cast<uint32_t>(match_camera_z_)
-    );
+    const auto viewport = live_viewport(match_camera_x_, match_camera_z_);
     // The map pixel drawn under the point, a whole one as orders take.
     auto screen_map = oa::present::world_renderer::screen_to_map_pixel(
         viewport, {static_cast<int32_t>(x), static_cast<int32_t>(y)}, view_offset()
     );
     if (!screen_map)
         return std::nullopt;
-    // A view wider or taller than the map shows black past it: a point
-    // there takes the shown map's nearest edge.
+    // A view past the map's edges shows black there: a point there takes
+    // the nearest point of the shown map.
     const auto [map_width, map_height] = shown_map_size();
     if (map_width > 0 && map_height > 0) {
-        screen_map->x = std::min(screen_map->x, static_cast<uint32_t>(map_width - 1));
-        screen_map->y = std::min(screen_map->y, static_cast<uint32_t>(map_height - 1));
+        screen_map->x = std::clamp(screen_map->x, 0, map_width - 1);
+        screen_map->y = std::clamp(screen_map->y, 0, map_height - 1);
     }
     const oa::sim::unit_movement::Terrain terrain(*selected_tnt_);
     const auto target = oa::sim::gameplay_input::terrain_intersection(
@@ -422,8 +417,6 @@ std::vector<uint16_t> Runtime::selected_local_ids() const {
 void Runtime::begin_match_tracking(uint16_t id) {
     tracked_match_unit_ = id;
     match_tracking_ = true;
-    // A zoom under way goes on about the unit, not the point it was anchored at.
-    zoom_anchored_ = false;
     if (match_)
         match_->state().game.follow_unit = oa::oa_unit_ref_from_slot(id);
     center_camera_on_unit(id);

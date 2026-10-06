@@ -41,14 +41,30 @@ void extend_corner(FogTile& tile, bool unseen_layer, uint8_t from, uint8_t to) {
         tile.unmapped |= to;
 }
 
+// The fog cell a map pixel lies in, rounded toward negative infinity, so
+// that a camera left of or above the map counts its cells as one on it does.
+int32_t cell_of(int32_t pixel) noexcept {
+    return pixel >= 0
+               ? pixel / fog_cell_pixels
+               : static_cast<int32_t>(
+                     -((-static_cast<int64_t>(pixel) + fog_cell_pixels - 1) / fog_cell_pixels)
+                 );
+}
+
+// How far into its fog cell a map pixel lies, from 0 to fog_cell_pixels - 1.
+int32_t within_cell(int32_t pixel) noexcept {
+    return static_cast<int32_t>(
+        static_cast<int64_t>(pixel) - int64_t{cell_of(pixel)} * fog_cell_pixels
+    );
+}
+
 int32_t first_cell(int32_t camera) noexcept {
-    return camera % fog_cell_pixels < fog_cell_pixels / 2 ? camera / fog_cell_pixels - 1
-                                                          : camera / fog_cell_pixels;
+    return within_cell(camera) < fog_cell_pixels / 2 ? cell_of(camera) - 1 : cell_of(camera);
 }
 
 int32_t tile_offset(int32_t camera) noexcept {
     const auto half = fog_cell_pixels / 2;
-    return (camera % fog_cell_pixels < half ? -half : half) - camera % fog_cell_pixels;
+    return (within_cell(camera) < half ? -half : half) - within_cell(camera);
 }
 
 // First destination pixel of map pixel `map` (relative to the camera) under
@@ -364,8 +380,8 @@ FogGrid build_fog_grid(
     grid.first_cell_z = first_cell(camera_z);
     grid.offset_x = tile_offset(camera_x);
     grid.offset_z = tile_offset(camera_z);
-    grid.variant_phase = (camera_x + fog_cell_pixels / 2) / fog_cell_pixels +
-                         (camera_z + fog_cell_pixels / 2) / fog_cell_pixels;
+    grid.variant_phase =
+        cell_of(camera_x + fog_cell_pixels / 2) + cell_of(camera_z + fog_cell_pixels / 2);
     grid.tiles.assign(
         static_cast<std::size_t>(grid.width) * static_cast<std::size_t>(grid.height), FogTile{}
     );

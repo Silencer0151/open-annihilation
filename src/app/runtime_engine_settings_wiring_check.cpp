@@ -439,16 +439,18 @@ void Runtime::check_engine_settings_wiring() {
     apply_engine_settings(chosen);
     match_zoom_ = kCheckZoom;
     match_zoom_target_ = kCheckZoom;
-    zoom_anchored_ = false;
+    zoom_focus_ = {};
     {
         auto& dialog = open_engine_settings_dialog();
         dialog.chosen.wheel_zoom = false;
         (void)take_engine_settings_action(settings::DialogAction::changed);
     }
     require(
-        match_zoom_target_ == kDefaultBattlefieldZoom && zoom_anchored_ &&
-            zoom_anchor_sx_ == match_layout_.battlefield_width() / 2 &&
-            zoom_anchor_sy_ == match_layout_.battlefield_height() / 2,
+        match_zoom_target_ == kDefaultBattlefieldZoom && !zoom_focus_.follows_pointer &&
+            zoom_focus_.x == static_cast<float>(match_layout_.left) +
+                                 static_cast<float>(match_layout_.battlefield_width()) / 2.0F &&
+            zoom_focus_.y == static_cast<float>(match_layout_.top) +
+                                 static_cast<float>(match_layout_.battlefield_height()) / 2.0F,
         "turning the wheel zoom off did not ease to 1x about the centre"
     );
     SDL_Event wheel{};

@@ -564,8 +564,11 @@ void Runtime::start_meteor_strike() {
     if (!match_ || !selected_tnt_)
         return;
     oa::World& world = match_->state();
+    // The camera held on the map as the game holds it: a view past the
+    // map's edges reaches no save and no strike.
+    const auto camera = on_map_camera();
     const GameBinding binding(
-        world.game, *selected_tnt_, match_camera_x_, match_camera_z_, state_.player_count
+        world.game, *selected_tnt_, camera[0], camera[1], state_.player_count
     );
     environment::MeteorHost host{};
     host.context = this;
@@ -927,8 +930,11 @@ bool Runtime::save_match_game(const fs::path& path, const char* description, int
     auto& state = saveload_state();
     state.save_failures = 0;
     oa::World& world = match_->state();
+    // The camera held on the map as the game holds it: a view past the
+    // map's edges reaches no save and no strike.
+    const auto camera = on_map_camera();
     const GameBinding binding(
-        world.game, *selected_tnt_, match_camera_x_, match_camera_z_, state_.player_count
+        world.game, *selected_tnt_, camera[0], camera[1], state_.player_count
     );
     const LocalClockBinding clock(world.game, match_local_player_, saved_match_timing());
     const SessionRecordBinding session(world.game, state_.mission_results, selected_mission_index_);
@@ -1290,8 +1296,11 @@ bool Runtime::restore_saved_session(persist::Bank* bank) {
     auto& state = saveload_state();
     state.restore_failures = 0;
     oa::World& world = match_->state();
+    // The camera held on the map as the game holds it: a view past the
+    // map's edges reaches no save and no strike.
+    const auto camera = on_map_camera();
     const GameBinding binding(
-        world.game, *selected_tnt_, match_camera_x_, match_camera_z_, state_.player_count
+        world.game, *selected_tnt_, camera[0], camera[1], state_.player_count
     );
     SaveLoadState::stage_sight(*this, state);
     SaveLoadState::Bindings bindings{this, &state, &world};
@@ -1609,12 +1618,10 @@ void Runtime::finish_saved_game_start(bool restored_players) {
 uint64_t Runtime::match_world_digest() const {
     if (!match_)
         return oa::sim::trace::digest_basis;
+    // The camera as saves hold it, on the map.
+    const auto camera = on_map_camera();
     return oa::sim::trace::match_state_hash(
-        *match_,
-        match_timing_,
-        match_camera_x_,
-        match_camera_z_,
-        saveload_ ? &saveload_->meteor : nullptr
+        *match_, match_timing_, camera[0], camera[1], saveload_ ? &saveload_->meteor : nullptr
     );
 }
 
@@ -1857,8 +1864,11 @@ void Runtime::give_saveload_feature_events() {
 void Runtime::print_saved_features() {
     namespace features = oa::sim::feature_runtime;
     oa::World& world = match_->state();
+    // The camera held on the map as the game holds it: a view past the
+    // map's edges reaches no save and no strike.
+    const auto camera = on_map_camera();
     const GameBinding binding(
-        world.game, *selected_tnt_, match_camera_x_, match_camera_z_, state_.player_count
+        world.game, *selected_tnt_, camera[0], camera[1], state_.player_count
     );
     const auto width = world.game.map_width;
     const auto height = world.game.map_height;

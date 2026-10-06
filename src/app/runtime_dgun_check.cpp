@@ -94,9 +94,7 @@ void Runtime::check_dgun_order() {
         render_match_surface();
     };
     const auto point_at = [&](uint16_t id) {
-        const auto viewport = live_viewport(
-            static_cast<uint32_t>(match_camera_x_), static_cast<uint32_t>(match_camera_z_)
-        );
+        const auto viewport = live_viewport(match_camera_x_, match_camera_z_);
         const auto screen = project_match_point(viewport, slots[id].unit->position);
         const auto x = static_cast<float>(screen.x);
         const auto y = static_cast<float>(screen.y);

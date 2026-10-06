@@ -352,10 +352,7 @@ void Runtime::check_visual_rule_overlays(
     // offset to the nearest screen pixel.
     const auto painted_view = [&]() {
         const auto zoom = static_cast<double>(match_zoom());
-        auto viewport = live_viewport(
-            static_cast<uint32_t>(std::max(0, match_camera_x_)),
-            static_cast<uint32_t>(std::max(0, match_camera_z_))
-        );
+        auto viewport = live_viewport(match_camera_x_, match_camera_z_);
         viewport.destination_x =
             -static_cast<int32_t>(std::lround(accelerated_.frame_offset.x * zoom));
         viewport.destination_y =
@@ -385,7 +382,6 @@ void Runtime::check_visual_rule_overlays(
     // slow scroll leaves it; false, said so, where the map leaves no room.
     const auto between_pixels = [&]() {
         at_zoom(between_zoom);
-        scroll_zoom_carry_ = 0.0;
         std::ignore = drawn();
         const auto camera = view_camera();
         scroll_match_view(1, 0, between_offset * static_cast<double>(between_zoom));
@@ -713,10 +709,7 @@ void Runtime::check_visual_rule_overlays(
                     fail("the pointer is over no site " + which);
                 // The site's middle in the scene: from the camera's map pixel
                 // at the scene's draw scale.
-                auto scene_view = live_viewport(
-                    static_cast<uint32_t>(std::max(0, match_camera_x_)),
-                    static_cast<uint32_t>(std::max(0, match_camera_z_))
-                );
+                auto scene_view = live_viewport(match_camera_x_, match_camera_z_);
                 scene_view.destination_x = 0;
                 scene_view.destination_y = 0;
                 scene_view.scale = accelerated_.frame.draw_scale;

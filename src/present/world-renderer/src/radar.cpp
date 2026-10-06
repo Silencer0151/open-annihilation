@@ -9,6 +9,7 @@
 #include "oa/present/raster.hpp"
 #include "oa/present/world_renderer/world_camera.hpp"
 
+#include <algorithm>
 #include <cstdint>
 
 namespace oa::present::world_renderer {
@@ -345,9 +346,18 @@ void radar_draw(Game& game, const RadarSurfaces& surfaces, ::oa::Surface& target
     ::oa::present::blit_surface(
         &target, surfaces.final_image, game.radar_offset_x, game.radar_offset_y
     );
-    ::oa::present::draw_rect_outline(
-        &target, game.radar_view_rect, game_ui_color(game, ui_color_radar_marks)
-    );
+    // A view past the map's edges, or wider than the map, is marked as far
+    // as the radar's picture reaches.
+    Rect32 marked = game.radar_view_rect;
+    const int32_t left = game.radar_offset_x;
+    const int32_t top = game.radar_offset_y;
+    const int32_t right = left + std::max<int32_t>(game.radar_width, 1) - 1;
+    const int32_t bottom = top + std::max<int32_t>(game.radar_height, 1) - 1;
+    marked.x1 = std::clamp(marked.x1, left, right);
+    marked.x2 = std::clamp(marked.x2, left, right);
+    marked.y1 = std::clamp(marked.y1, top, bottom);
+    marked.y2 = std::clamp(marked.y2, top, bottom);
+    ::oa::present::draw_rect_outline(&target, marked, game_ui_color(game, ui_color_radar_marks));
 }
 
 void radar_step_blink(Game& game) noexcept {

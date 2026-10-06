@@ -173,7 +173,7 @@ void Runtime::free_accelerated_presentation() noexcept {
 void Runtime::free_accelerated_scene_buffers() noexcept {
     match_scene_cpu_ = {};
     match_terrain_cache_ = {};
-    terrain_cache_cam_x_ = ~0u;
+    terrain_cache_cam_x_ = kUncachedTerrainCamera;
     terrain_cache_zoom_ = -1.0F;
 }
 

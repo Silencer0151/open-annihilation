@@ -70,13 +70,13 @@ inline constexpr uint8_t far_level = 1;
 
 /// Where a view of the map lands in a target and at what scale.
 struct TerrainView {
-    uint32_t camera_x{}; ///< map pixel at the view's left edge
-    uint32_t camera_y{}; ///< map pixel at the view's top edge
-    float origin_x{};    ///< target pixel the view's left edge lands on
-    float origin_y{};    ///< target pixel the view's top edge lands on
-    float scale{1.0F};   ///< target pixels per map pixel, above 0
-    uint32_t width{};    ///< target pixels the view spans across
-    uint32_t height{};   ///< target pixels the view spans down
+    int32_t camera_x{}; ///< map pixel at the view's left edge; below 0 left of the map
+    int32_t camera_y{}; ///< map pixel at the view's top edge; below 0 above the map
+    float origin_x{};   ///< target pixel the view's left edge lands on
+    float origin_y{};   ///< target pixel the view's top edge lands on
+    float scale{1.0F};  ///< target pixels per map pixel, above 0
+    uint32_t width{};   ///< target pixels the view spans across
+    uint32_t height{};  ///< target pixels the view spans down
     /// Every tile's edges on whole target pixels, each edge where its map
     /// pixel lands rounded to the nearest, so that the tiles of a zoom
     /// whose tiles span a fraction of a pixel meet on every renderer.
@@ -85,7 +85,7 @@ struct TerrainView {
 
 /// The tiles of the grid a view shows: columns first_column to end_column
 /// less one, rows first_row to end_row less one; empty when the view lies
-/// past the map.
+/// wholly before or past the map.
 struct TileRange {
     uint32_t first_column{};
     uint32_t end_column{};
@@ -94,11 +94,12 @@ struct TileRange {
 };
 
 /// Returns the tiles a view shows: from the tile under the camera to the
-/// tile under the view's far edge, within the grid.
+/// tile under the view's far edge, within the grid; a camera before the
+/// map starts at the grid's first tile.
 ///
 /// @param atlas the map's atlas, whose grid is the map's tiles
 /// @param view the view
-/// @return the range; empty past the map's edges
+/// @return the range; empty wholly before or past the map's edges
 [[nodiscard]] TileRange
 visible_tiles(const oa::present::gpu_world::TerrainAtlas& atlas, const TerrainView& view) noexcept;
 

@@ -105,10 +105,7 @@ void Runtime::check_side_column() {
         if (commander == 0)
             throw std::runtime_error("side column check: found no local commander");
         center_camera_on_unit(commander);
-        const auto viewport = live_viewport(
-            static_cast<uint32_t>(std::max(0, match_camera_x_)),
-            static_cast<uint32_t>(std::max(0, match_camera_z_))
-        );
+        const auto viewport = live_viewport(match_camera_x_, match_camera_z_);
         const auto on_screen = project_match_point(viewport, slots[commander].unit->position);
         click(static_cast<float>(on_screen.x), static_cast<float>(on_screen.y));
         if (selected_match_unit_ != commander)

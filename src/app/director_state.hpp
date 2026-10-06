@@ -52,7 +52,6 @@ struct Runtime::DirectorState {
     int32_t camera_z{};
     float zoom{};
     float zoom_target{};
-    bool zoom_anchored{};
     bool tracking{};
     uint16_t tracked_unit{};
     oa::sim::match_runtime::Match::PointSoundHook point_sound{};

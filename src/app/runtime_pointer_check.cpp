@@ -222,12 +222,7 @@ void Runtime::check_pointer_interfaces() {
         release(button, x, y, mods);
     };
     const auto set_interface = [&](int32_t type) { world.game.interface_type = type; };
-    const auto viewport = [&] {
-        return live_viewport(
-            static_cast<uint32_t>(std::max(0, match_camera_x_)),
-            static_cast<uint32_t>(std::max(0, match_camera_z_))
-        );
-    };
+    const auto viewport = [&] { return live_viewport(match_camera_x_, match_camera_z_); };
     const auto screen_of = [&](uint16_t id) {
         const auto point = project_match_point(viewport(), slots[id].unit->position);
         return std::pair{static_cast<float>(point.x), static_cast<float>(point.y)};
@@ -359,7 +354,10 @@ void Runtime::check_pointer_interfaces() {
     const auto look_from = static_cast<int32_t>(world.game.camera_x);
     const auto travel = game_screen_canvas(anchor_x + kLookTravel, anchor_y);
     move_to(static_cast<float>(travel.x), static_cast<float>(travel.y));
-    const auto looked = (kLookTravel / 4 + look_from / 16) * 16;
+    // The cells counted on from the cell the view's edge lies in, past the
+    // map's left edge too.
+    const auto look_cell = look_from >= 0 ? look_from / 16 : -((15 - look_from) / 16);
+    const auto looked = (kLookTravel / 4 + look_cell) * 16;
     require(
         match_camera_x_ == looked && static_cast<int32_t>(world.game.camera_x) == looked,
         "mouse look did not move the view by the pointer's travel"
@@ -1017,7 +1015,6 @@ void Runtime::check_pointer_picks() {
     const auto set_zoom = [&](float zoom) {
         match_zoom_ = zoom;
         match_zoom_target_ = zoom;
-        zoom_anchored_ = false;
     };
     // A frame: the view held on the map, drawn, and the list it builds.
     const auto frame = [&] { render_match_surface(); };
@@ -1027,10 +1024,7 @@ void Runtime::check_pointer_picks() {
     };
     const auto centre_on = [&](uint16_t id) { look_at(map_x(id), map_z(id)); };
     const auto canvas_of = [&](uint16_t id) {
-        const auto viewport = live_viewport(
-            static_cast<uint32_t>(std::max(0, match_camera_x_)),
-            static_cast<uint32_t>(std::max(0, match_camera_z_))
-        );
+        const auto viewport = live_viewport(match_camera_x_, match_camera_z_);
         const auto point = project_match_point(viewport, slots[id].unit->position);
         return std::pair{static_cast<float>(point.x), static_cast<float>(point.y)};
     };
@@ -2155,7 +2149,6 @@ void Runtime::check_edge_scroll() {
     );
     frame_time_ns_ = saved_frame_time;
     scroll_clock_ = saved_scroll_clock;
-    scroll_zoom_carry_ = 0.0;
     std::cout << "edge scroll check: each edge and corner scrolls toward itself over the side "
                  "column, the bars and the battlefield, a point further in and the middle do "
                  "not, nor the pointer before it moved, outside the window or on a screen laid "

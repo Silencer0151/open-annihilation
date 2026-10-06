@@ -131,7 +131,6 @@ void Runtime::enter_director_mode(
     state->camera_z = match_camera_z_;
     state->zoom = match_zoom_;
     state->zoom_target = match_zoom_target_;
-    state->zoom_anchored = zoom_anchored_;
     state->tracking = match_tracking_;
     state->tracked_unit = tracked_match_unit_;
     state->point_sound = match_->point_sound;
@@ -148,10 +147,9 @@ void Runtime::enter_director_mode(
     const auto height = static_cast<int>(presentation.height);
     match_layout_ = presentation.show_interface ? lay_out_match(width, height)
                                                 : layout::make_battlefield_layout(width, height);
-    zoom_anchored_ = false;
     match_tracking_ = false;
     tracked_match_unit_ = 0;
-    terrain_cache_cam_x_ = ~0U;
+    terrain_cache_cam_x_ = kUncachedTerrainCamera;
     // Every point sound is placed, as with 3D sound on, and heard through
     // the hooks (play_point_sound).
     match_->point_sound = {
@@ -237,10 +235,10 @@ void Runtime::leave_director_mode() noexcept {
     match_camera_z_ = state->camera_z;
     match_zoom_ = state->zoom;
     match_zoom_target_ = state->zoom_target;
-    zoom_anchored_ = state->zoom_anchored;
+    exact_view_.held = false;
     match_tracking_ = state->tracking;
     tracked_match_unit_ = state->tracked_unit;
-    terrain_cache_cam_x_ = ~0U;
+    terrain_cache_cam_x_ = kUncachedTerrainCamera;
     offline_services_.set_announcement_hooks({});
     if (!match_)
         return;
@@ -273,7 +271,7 @@ void Runtime::set_director_view(const EngineView& view) {
     match_camera_z_ = view.top;
     match_zoom_ = static_cast<float>(view.zoom);
     match_zoom_target_ = match_zoom_;
-    zoom_anchored_ = false;
+    exact_view_.held = false;
     match_tracking_ = false;
     tracked_match_unit_ = 0;
 }

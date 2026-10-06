@@ -148,10 +148,7 @@ void Runtime::check_unit_speech() {
         play(ticks_before + kSpeechWindowTicks);
         center_camera_on_unit(commander);
         const auto canvas_of_commander = [&] {
-            const auto viewport = live_viewport(
-                static_cast<uint32_t>(std::max(0, match_camera_x_)),
-                static_cast<uint32_t>(std::max(0, match_camera_z_))
-            );
+            const auto viewport = live_viewport(match_camera_x_, match_camera_z_);
             const auto point =
                 project_match_point(viewport, match_->world().slots[commander].unit->position);
             return std::pair{static_cast<float>(point.x), static_cast<float>(point.y)};
@@ -196,10 +193,7 @@ void Runtime::check_unit_speech() {
     // "+Sing": the select line sings instead.
     toggle_novelty_voice();
     play(kSpeechWindowTicks);
-    const auto viewport = live_viewport(
-        static_cast<uint32_t>(std::max(0, match_camera_x_)),
-        static_cast<uint32_t>(std::max(0, match_camera_z_))
-    );
+    const auto viewport = live_viewport(match_camera_x_, match_camera_z_);
     const auto point =
         project_match_point(viewport, match_->world().slots[commander].unit->position);
     const std::size_t from = heard.size();

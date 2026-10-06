@@ -27,10 +27,11 @@ struct Viewport {
 
 // Battlefield clip and camera state. The game initializes the destination at
 // (128,32) and draws the TNT pixels there without an additional map
-// projection.
+// projection. The camera may lie left of or above the map, where the view
+// shows past its edges.
 struct BattlefieldViewport {
-    uint32_t source_x = 0;
-    uint32_t source_y = 0;
+    int32_t source_x = 0; ///< the camera's map column; below 0 left of the map
+    int32_t source_y = 0; ///< the camera's map row; below 0 above the map
     int32_t destination_x = 128;
     int32_t destination_y = 32;
     uint32_t width = 0;
@@ -45,9 +46,10 @@ struct ScreenPoint {
     int32_t y = 0;
 };
 
+// A map pixel; below 0 left of or above the map.
 struct MapPixel {
-    uint32_t x = 0;
-    uint32_t y = 0;
+    int32_t x = 0;
+    int32_t y = 0;
 };
 
 /// Returns the game's battlefield rectangle on a surface.
@@ -62,7 +64,7 @@ struct MapPixel {
 /// @param surface_height presentation surface height in pixels
 /// @return the viewport, or nullopt for a surface too small to hold the panels
 [[nodiscard]] std::optional<BattlefieldViewport> game_battlefield_viewport(
-    uint32_t source_x, uint32_t source_y, uint32_t surface_width, uint32_t surface_height
+    int32_t source_x, int32_t source_y, uint32_t surface_width, uint32_t surface_height
 ) noexcept;
 
 struct Surface {
@@ -108,12 +110,12 @@ struct RenderResult {
 ///
 /// Destination pixel (x,y) reads map (source_x + x/scale, source_y + y/scale);
 /// cost is dest_width*dest_height regardless of zoom, unlike render_viewport of
-/// the visible map crop. Map pixels past the mosaic are black.
+/// the visible map crop. Map pixels before or past the mosaic are black.
 ///
 /// @param map parsed TNT
 /// @param game_palette the game palette
-/// @param source_x map-pixel X of the top-left sample
-/// @param source_y map-pixel Y of the top-left sample
+/// @param source_x map-pixel X of the top-left sample; below 0 left of the map
+/// @param source_y map-pixel Y of the top-left sample; below 0 above the map
 /// @param dest_width output width in pixels
 /// @param dest_height output height in pixels
 /// @param scale screen pixels per map pixel; non-positive means 1
@@ -121,8 +123,8 @@ struct RenderResult {
 [[nodiscard]] RenderResult render_scaled_viewport(
     const formats::tnt::Map& map,
     const PaletteBytes& game_palette,
-    uint32_t source_x,
-    uint32_t source_y,
+    int32_t source_x,
+    int32_t source_y,
     uint32_t dest_width,
     uint32_t dest_height,
     float scale
@@ -136,15 +138,16 @@ inline constexpr uint32_t terrain_band_rows = 32;
 /// Samples as render_scaled_viewport does, within the map the view shows:
 /// the mosaic ends for the fill at shown_width across and shown_height
 /// down, where the game never shows a map's last columns and rows, and the
-/// pixels past them are black as those past the mosaic are. The rows are
+/// pixels past them are black as those past the mosaic, and those left of
+/// it and above it, are. The rows are
 /// filled in bands of terrain_band_rows rows, on the pool's threads when one
 /// is given; every row is the same whichever thread fills it. After an
 /// error, which rows were written is not specified.
 ///
 /// @param map parsed TNT
 /// @param game_palette the game palette
-/// @param source_x map-pixel X of the top-left sample
-/// @param source_y map-pixel Y of the top-left sample
+/// @param source_x map-pixel X of the top-left sample; below 0 left of the map
+/// @param source_y map-pixel Y of the top-left sample; below 0 above the map
 /// @param shown_width map pixels across the view may show; the mosaic's width or fewer
 /// @param shown_height map pixels down the view may show; the mosaic's height or fewer
 /// @param dest_width output width in pixels
@@ -157,8 +160,8 @@ inline constexpr uint32_t terrain_band_rows = 32;
 [[nodiscard]] std::optional<Error> fill_scaled_viewport(
     const formats::tnt::Map& map,
     const PaletteBytes& game_palette,
-    uint32_t source_x,
-    uint32_t source_y,
+    int32_t source_x,
+    int32_t source_y,
     uint32_t shown_width,
     uint32_t shown_height,
     uint32_t dest_width,
@@ -176,8 +179,9 @@ inline constexpr uint32_t terrain_band_rows = 32;
 ///
 /// @param map parsed TNT
 /// @param palette the game palette
-/// @param viewport battlefield rectangle, camera and surface size
-/// @return the RGB surface, or an out-of-bounds, output-limit or render_viewport error
+/// @param viewport battlefield rectangle, camera and surface size; the camera on the map
+/// @return the RGB surface, or an out-of-bounds (a camera before the map
+///         among them), output-limit or render_viewport error
 [[nodiscard]] RenderResult render_battlefield_viewport(
     const formats::tnt::Map& map, const PaletteBytes& palette, const BattlefieldViewport& viewport
 );
@@ -193,7 +197,8 @@ map_pixel_to_screen(const BattlefieldViewport& viewport, MapPixel map_pixel) noe
 ///
 /// @param viewport battlefield rectangle, camera and scale
 /// @param screen screen point
-/// @return the map pixel, or nullopt outside the battlefield rectangle or past 32 bits
+/// @return the map pixel, or nullopt outside the battlefield rectangle or
+///         beyond a signed 32-bit map pixel
 [[nodiscard]] std::optional<MapPixel>
 screen_to_map_pixel(const BattlefieldViewport& viewport, ScreenPoint screen) noexcept;
 
@@ -217,7 +222,8 @@ struct ViewOffset {
 /// @param viewport battlefield rectangle, camera and scale
 /// @param screen screen point
 /// @param offset how far past the camera's map pixel the view is drawn, each from 0 to 1
-/// @return the map pixel, or nullopt outside the battlefield rectangle or past 32 bits
+/// @return the map pixel, or nullopt outside the battlefield rectangle or
+///         beyond a signed 32-bit map pixel
 [[nodiscard]] std::optional<MapPixel> screen_to_map_pixel(
     const BattlefieldViewport& viewport, ScreenPoint screen, ViewOffset offset
 ) noexcept;

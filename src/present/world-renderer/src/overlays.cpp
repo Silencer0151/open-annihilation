@@ -11,6 +11,7 @@
 #include "oa/present/polygon.hpp"
 #include "oa/present/raster.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 
@@ -448,13 +449,15 @@ void overlay_debug_grid(
     const ContourStyle contour{sources.contour_spacing, sources.contour_phase, game.sea_level};
     const auto camera_x = static_cast<int32_t>(game.camera_x);
     const auto camera_y = static_cast<int32_t>(game.camera_y);
-    const int32_t first_column = camera_x / OA_MAP_CELL_PIXELS;
-    int32_t end_column = game.view_cells_width + 1 + first_column;
+    // A view left of or above the map starts the grid at the map's first
+    // cell: there are no cells before it.
+    const int32_t first_column = std::max(camera_x, 0) / OA_MAP_CELL_PIXELS;
+    int32_t end_column = game.view_cells_width + 1 + camera_x / OA_MAP_CELL_PIXELS;
     if (game.map_width - 1 <= end_column)
         end_column = game.map_width - 1;
     const int32_t end_row = game.map_height - 1;
     uint8_t step_color = 0;
-    for (int32_t row = camera_y / OA_MAP_CELL_PIXELS; row < end_row; ++row) {
+    for (int32_t row = std::max(camera_y, 0) / OA_MAP_CELL_PIXELS; row < end_row; ++row) {
         if (first_column >= end_column)
             return;
         bool below_screen = true;

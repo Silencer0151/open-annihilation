@@ -774,10 +774,7 @@ void PadAccess::refresh_targets(Runtime& runtime) {
     const auto& world = runtime.match_->state();
     const auto listed = static_cast<std::size_t>(std::max<int32_t>(world.game.hot_unit_count, 0));
     const std::size_t count = std::min(listed, runtime.on_screen_units_.size());
-    const auto viewport = runtime.live_viewport(
-        static_cast<uint32_t>(std::max(0, runtime.match_camera_x_)),
-        static_cast<uint32_t>(std::max(0, runtime.match_camera_z_))
-    );
+    const auto viewport = runtime.live_viewport(runtime.match_camera_x_, runtime.match_camera_z_);
     const auto& slots = runtime.match_->world().slots;
     for (std::size_t index = 0; index < count; ++index) {
         const uint16_t id = runtime.on_screen_units_[index];

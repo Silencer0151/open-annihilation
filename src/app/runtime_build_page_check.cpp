@@ -142,10 +142,7 @@ void Runtime::check_download_builds() {
     };
     const auto select = [&](uint16_t unit) {
         center_camera_on_unit(unit);
-        const auto viewport = live_viewport(
-            static_cast<uint32_t>(std::max(0, match_camera_x_)),
-            static_cast<uint32_t>(std::max(0, match_camera_z_))
-        );
+        const auto viewport = live_viewport(match_camera_x_, match_camera_z_);
         const auto on_screen = project_match_point(viewport, slots[unit].unit->position);
         click(static_cast<float>(on_screen.x), static_cast<float>(on_screen.y), SDL_BUTTON_LEFT);
         if (selected_match_unit_ != unit)
@@ -309,10 +306,7 @@ void Runtime::check_stockpile_builds() {
     };
     const auto select = [&](uint16_t unit) {
         center_camera_on_unit(unit);
-        const auto viewport = live_viewport(
-            static_cast<uint32_t>(std::max(0, match_camera_x_)),
-            static_cast<uint32_t>(std::max(0, match_camera_z_))
-        );
+        const auto viewport = live_viewport(match_camera_x_, match_camera_z_);
         const auto on_screen =
             project_match_point(viewport, match_->world().slots[unit].unit->position);
         click(static_cast<float>(on_screen.x), static_cast<float>(on_screen.y), SDL_BUTTON_LEFT);
@@ -593,10 +587,7 @@ void Runtime::check_unit_page_memory() {
     // click adds it to the selection.
     const auto select = [&](uint16_t unit, bool add) {
         center_camera_on_unit(unit);
-        const auto viewport = live_viewport(
-            static_cast<uint32_t>(std::max(0, match_camera_x_)),
-            static_cast<uint32_t>(std::max(0, match_camera_z_))
-        );
+        const auto viewport = live_viewport(match_camera_x_, match_camera_z_);
         const auto on_screen =
             project_match_point(viewport, match_->world().slots[unit].unit->position);
         if (add)

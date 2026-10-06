@@ -8,10 +8,12 @@
 // keeping the drawing's floor; which frames draw the far view; the terrain
 // pyramid's texels against the means of the map pixels they stand for; the
 // level each zoom reads; the filter against a sum over the texels whose
-// centres each screen pixel covers, black past the shown map, the same on
-// one and on four drawing threads; the units' dots, framed when selected
-// and clipped at the picture's edges; and the pixels a dot covers for the
-// pointer, which are the pixels drawn in its colour.
+// centres each screen pixel covers, black past the shown map and before it,
+// the same on one and on four drawing threads; the units' dots, framed when
+// selected and clipped at the picture's edges; the pixels a dot covers for
+// the pointer, which are the pixels drawn in its colour; and how far past
+// the map's edges the view's centre goes, and how a view and a camera are
+// held there.
 #include "oa/app/far_view.hpp"
 
 #include "oa/platform/job_pool.hpp"
@@ -21,6 +23,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace {
@@ -222,12 +225,12 @@ void each_zoom_reads_its_level() {
 
 /// The filter's picture by a sum over the texels: each pixel's span of map
 /// pixels stepped as the nearest fill steps them, the texels whose centres
-/// lie in it, black past the shown map.
+/// lie in it, black past the shown map and before it.
 std::vector<uint8_t> expected_far_terrain(
     const oa::formats::tnt::Map& map,
     const oa::PaletteBytes& palette,
-    uint32_t source_x,
-    uint32_t source_y,
+    int32_t source_x,
+    int32_t source_y,
     uint32_t shown_width,
     uint32_t shown_height,
     int32_t width,
@@ -237,9 +240,10 @@ std::vector<uint8_t> expected_far_terrain(
     const uint32_t level = oa::app::far_terrain_level(zoom);
     const uint32_t side = 1U << level;
     auto scale_fp = static_cast<uint32_t>(std::lround(static_cast<double>(zoom) * 65536.0));
-    const auto spans = [&](uint32_t start, int32_t count) {
-        std::vector<uint32_t> bounds;
-        uint32_t position = start, fraction = 0;
+    const auto spans = [&](int32_t start, int32_t count) {
+        std::vector<int64_t> bounds;
+        int64_t position = start;
+        uint32_t fraction = 0;
         for (int32_t index = 0; index <= count; ++index) {
             bounds.push_back(position);
             fraction += 65536;
@@ -262,11 +266,11 @@ std::vector<uint8_t> expected_far_terrain(
                 uint32_t count = 0;
                 // Texels whose centres lie in the pixel's spans.
                 for (uint32_t ty = 0; ty * side < rows.back() + side; ++ty) {
-                    const uint32_t centre_y = ty * side + side / 2;
+                    const int64_t centre_y = ty * side + side / 2;
                     if (centre_y < rows[dy] || centre_y >= rows[dy + 1])
                         continue;
                     for (uint32_t tx = 0; tx * side < columns.back() + side; ++tx) {
-                        const uint32_t centre_x = tx * side + side / 2;
+                        const int64_t centre_x = tx * side + side / 2;
                         if (centre_x < columns[dx] || centre_x >= columns[dx + 1])
                             continue;
                         ++count;
@@ -295,19 +299,24 @@ void the_filter_averages_the_texels_each_pixel_covers() {
 
     struct Case {
         float zoom;
-        uint32_t source_x, source_y, shown_width, shown_height;
+        int32_t source_x, source_y;
+        uint32_t shown_width, shown_height;
         int32_t width, height;
     };
 
     // Each level, from the camera at the map's corner and off it, the view
-    // past the shown map's edges on the right and bottom.
-    const std::array<Case, 6> cases{{
+    // past the shown map's edges on the right and bottom, and before its
+    // left and top edges.
+    const std::array<Case, 9> cases{{
         {0.4F, 0, 0, 288, 224, 90, 70},
         {0.3F, 13, 7, 280, 200, 80, 60},
         {0.2F, 37, 5, 288, 224, 60, 48},
         {0.1F, 3, 61, 288, 224, 30, 20},
         {0.05F, 0, 0, 270, 210, 16, 12},
         {1.0F / 40.0F, 17, 0, 288, 224, 9, 7},
+        {0.3F, -13, -7, 280, 200, 80, 60},
+        {0.1F, -150, 20, 288, 224, 40, 20},
+        {0.05F, 9, -333, 270, 210, 16, 30},
     }};
     for (const Case& c : cases) {
         const auto expected = expected_far_terrain(
@@ -416,6 +425,44 @@ void a_dot_covers_the_pixels_drawn_in_its_colour() {
     OA_CHECK(covered == oa::app::far_view_dot_side * oa::app::far_view_dot_side);
 }
 
+void the_view_goes_past_the_map_until_its_edge_reaches_the_middle() {
+    using oa::app::held_camera;
+    using oa::app::held_view;
+    using oa::app::view_centre_span;
+    // A view narrower than the map: its centre stays on the map.
+    auto span = view_centre_span(1000.0, 400.0);
+    OA_CHECK(span.least == 0.0 && span.most == 1000.0);
+    // A view wider than the map: the map's centre stays in the view.
+    span = view_centre_span(1000.0, 3000.0);
+    OA_CHECK(span.least == -1000.0 && span.most == 2000.0);
+    // The two meet at the map's size.
+    span = view_centre_span(1000.0, 1000.0);
+    OA_CHECK(span.least == 0.0 && span.most == 1000.0);
+    // A view within the span stays; one past it comes to its edge.
+    OA_CHECK(held_view(-150.0, 400.0, 1000.0, std::nullopt) == -150.0);
+    OA_CHECK(held_view(-250.0, 400.0, 1000.0, std::nullopt) == -200.0);
+    OA_CHECK(held_view(900.0, 400.0, 1000.0, std::nullopt) == 800.0);
+    OA_CHECK(held_view(-2500.0, 3000.0, 1000.0, std::nullopt) == -2500.0);
+    OA_CHECK(held_view(-2600.0, 3000.0, 1000.0, std::nullopt) == -2500.0);
+    OA_CHECK(held_view(600.0, 3000.0, 1000.0, std::nullopt) == 500.0);
+    // A view held from one past the span goes no further from the map, and
+    // never back toward it.
+    OA_CHECK(held_view(-400.0, 400.0, 1000.0, -150.0) == -350.0);
+    OA_CHECK(held_view(-320.0, 400.0, 1000.0, -150.0) == -320.0);
+    OA_CHECK(held_view(-100.0, 400.0, 1000.0, -150.0) == -100.0);
+    OA_CHECK(held_view(1000.0, 400.0, 1000.0, 1150.0) == 950.0);
+    // A camera within a map pixel of the limits stays; one past them comes
+    // to the nearest whole map pixel within them.
+    OA_CHECK(held_camera(-200, 400.0, 1000.0, std::nullopt) == -200);
+    OA_CHECK(held_camera(-201, 401.0, 1000.0, std::nullopt) == -201);
+    OA_CHECK(held_camera(-210, 400.0, 1000.0, std::nullopt) == -200);
+    OA_CHECK(held_camera(-210, 401.0, 1000.0, std::nullopt) == -200);
+    OA_CHECK(held_camera(-210, 403.0, 1000.0, std::nullopt) == -201);
+    OA_CHECK(held_camera(812, 400.0, 1000.0, std::nullopt) == 800);
+    OA_CHECK(held_camera(812, 401.0, 1000.0, std::nullopt) == 799);
+    OA_CHECK(held_camera(-500, 400.0, 1000.0, -150.0) == -350);
+}
+
 } // namespace
 
 int main() {
@@ -428,5 +475,6 @@ int main() {
     the_filter_averages_the_texels_each_pixel_covers();
     dots_are_framed_when_selected_and_clipped();
     a_dot_covers_the_pixels_drawn_in_its_colour();
+    the_view_goes_past_the_map_until_its_edge_reaches_the_middle();
     return oa::test::check_exit_status();
 }

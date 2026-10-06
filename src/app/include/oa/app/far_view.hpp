@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// How far out the battlefield's view zooms, and how the battlefield is drawn
-// farther out than its units are drawn whole: the far view. The view's zoom
-// floor for each Maximum zoom out choice and the zoom at which the whole map
-// fits the battlefield; the terrain reduced from a pyramid of each tile's
+// How far out the battlefield's view zooms, how far past the map's edges it
+// moves, and how the battlefield is drawn farther out than its units are
+// drawn whole: the far view. The view's zoom floor for each Maximum zoom out
+// choice and the zoom at which the whole map fits the battlefield; the
+// places the view's centre may take; the terrain reduced from a pyramid of each tile's
 // means, so that a frame of the whole map costs about what a frame at the
 // processor's floor costs; and the dots the far view draws for units. Pure:
 // no SDL and no Runtime.
@@ -18,6 +19,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -69,6 +71,60 @@ inline constexpr float furthest_battlefield_zoom = 1.0F / 64.0F;
     int32_t battlefield_width,
     int32_t battlefield_height
 ) noexcept;
+
+// ---------------------------------------------------------------------------
+// How far past the map's edges the view goes
+
+/// The places the centre of the battlefield's view may take along one
+/// axis, in map pixels.
+struct ViewCentreSpan {
+    double least{}; ///< the farthest toward the map's start
+    double most{};  ///< the farthest toward its end
+};
+
+/// Returns how far the centre of the battlefield's view may go along one
+/// axis.
+///
+/// Where the view shows no more of the axis than the map holds, its centre
+/// stays on the map: at least half the view shows the map, and the map's
+/// edges and corners can be brought to the middle of the battlefield.
+/// Where the view shows more than the map holds, the map's centre stays in
+/// the view. The two meet where the view is the map's size, so the span
+/// grows smoothly with the zoom.
+///
+/// @param map map pixels the shown map holds along the axis
+/// @param visible map pixels the view shows along the axis
+/// @return the span, least at most most
+[[nodiscard]] ViewCentreSpan view_centre_span(double map, double visible) noexcept;
+
+/// Returns where a view held within its limits lies along one axis.
+///
+/// The view's centre is held within view_centre_span, widened to take in
+/// `from`: the centre of the view the limits held last, which may lie
+/// past them, as a zoom about a point of the map leaves it. A view held so
+/// never moves back toward the map; it only stops going further from it.
+///
+/// @param view the map pixel at the view's start along the axis, exact
+/// @param visible map pixels the view shows along the axis
+/// @param map map pixels the shown map holds along the axis
+/// @param from the centre of the view held last, in map pixels; none holds
+///        the view within the span alone
+/// @return the view's start, held
+[[nodiscard]] double
+held_view(double view, double visible, double map, std::optional<double> from) noexcept;
+
+/// Returns the whole map pixel a camera held within the view's limits takes
+/// along one axis (held_view): the camera itself when the limits leave it
+/// or hold it by less than a map pixel, as the camera taken from an exact
+/// place within them is, else the nearest whole map pixel within them.
+///
+/// @param camera the camera's map pixel along the axis
+/// @param visible map pixels the view shows along the axis
+/// @param map map pixels the shown map holds along the axis
+/// @param from the centre of the view held last, in map pixels, or none
+/// @return the camera's map pixel, held
+[[nodiscard]] int32_t
+held_camera(int32_t camera, double visible, double map, std::optional<double> from) noexcept;
 
 /// Tells whether a frame at a zoom draws the far view: farther out than the
 /// zoom its units are drawn whole at, which is Automatic's floor for the
@@ -127,14 +183,14 @@ build_terrain_pyramid(const oa::formats::tnt::Map& map, const oa::PaletteBytes& 
 /// Each destination pixel covers the map pixels the nearest fill's steps
 /// give it, at 16.16 screen pixels per map pixel, as the exact box filter's
 /// pixels do; it takes the mean of the level's texels whose centres lie in
-/// that span, rounded to the nearest. Ground past the shown map counts as
-/// black, as the nearest fill paints it. The rows are averaged in bands on
-/// the pool's threads, or in order without one.
+/// that span, rounded to the nearest. Ground past the shown map, and before
+/// it, counts as black, as the nearest fill paints it. The rows are
+/// averaged in bands on the pool's threads, or in order without one.
 ///
 /// @param map the map
 /// @param pyramid the map's pyramid (build_terrain_pyramid)
-/// @param source_x map column of the first destination pixel
-/// @param source_y map row of the first destination pixel
+/// @param source_x map column of the first destination pixel; below 0 left of the map
+/// @param source_y map row of the first destination pixel; below 0 above the map
 /// @param shown_width map pixels across the view may show
 /// @param shown_height map pixels down the view may show
 /// @param dest_width destination pixels across
@@ -147,8 +203,8 @@ build_terrain_pyramid(const oa::formats::tnt::Map& map, const oa::PaletteBytes& 
 [[nodiscard]] bool filter_far_terrain(
     const oa::formats::tnt::Map& map,
     const TerrainPyramid& pyramid,
-    uint32_t source_x,
-    uint32_t source_y,
+    int32_t source_x,
+    int32_t source_y,
     uint32_t shown_width,
     uint32_t shown_height,
     int32_t dest_width,

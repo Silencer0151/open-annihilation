@@ -843,9 +843,7 @@ void Runtime::check_pixel_particles(const fs::path& report_directory) {
         const auto name = "at zoom " + std::to_string(static_cast<int>(zoom));
         if (!drawn || drawn->position.x != nozzle.x || drawn->position.z != nozzle.z)
             throw std::runtime_error("pixel particle check: no spray at the nozzle " + name);
-        auto view = live_viewport(
-            static_cast<uint32_t>(match_camera_x_), static_cast<uint32_t>(match_camera_z_)
-        );
+        auto view = live_viewport(match_camera_x_, match_camera_z_);
         view.destination_x = 0;
         view.destination_y = 0;
         view.surface_width = with.width;
@@ -1197,9 +1195,7 @@ void Runtime::check_selection_visuals(const std::function<void(renderer::Surface
         }
         handle_sdl_event(event, running);
     };
-    const auto viewport = live_viewport(
-        static_cast<uint32_t>(match_camera_x_), static_cast<uint32_t>(match_camera_z_)
-    );
+    const auto viewport = live_viewport(match_camera_x_, match_camera_z_);
     int left = match_layout_.left + match_layout_.battlefield_width();
     int top = match_layout_.top + match_layout_.battlefield_height();
     for (const auto id : group) {

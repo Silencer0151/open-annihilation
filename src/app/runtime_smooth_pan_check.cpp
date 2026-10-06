@@ -6,7 +6,7 @@
 // and 0.5, against the same scroll in the standard tier, and as a second
 // axis joins the scroll; the pointer picking the unit drawn under it, and
 // finding the game view up to the battlefield's edge, when the view lies
-// between map pixels; and the point drawn under a zoom's anchor held there.
+// between map pixels; and the point drawn under a zoom's focus held there.
 #include "oa/app/runtime.hpp"
 
 #include "engine_settings_state.hpp"
@@ -32,8 +32,8 @@ namespace {
 
 /// Frames each scroll is read back over.
 constexpr int scroll_frames = 24;
-/// Frames at a scroll's start left out of its steadiness: scrolling toward
-/// the map's start, the view waits there for the camera's first step.
+/// Frames at a scroll's start left out of its steadiness: the renderer
+/// settles the first frames drawn between map pixels its own way.
 constexpr int scroll_start_frames = 2;
 
 /// The zoom the card magnifies the slow scroll at, and the screen pixels
@@ -45,9 +45,6 @@ constexpr double magnified_scroll_step = 0.575;
 
 /// Frames the slow scroll at zoom 2.5 moves along one axis before the other
 /// joins it, as holding a second arrow key does, and frames both move after.
-/// Two frames in, the carry both axes step on leaves the joining axis three
-/// frames to reach its camera's first step, a whole map pixel on: under a
-/// screen pixel each. Joining later leaves fewer frames for that map pixel.
 constexpr int frames_before_joining = 2;
 constexpr int joined_frames = 16;
 
@@ -73,8 +70,7 @@ constexpr double least_standard_jump = 2.0;
 /// scroll's exact travel puts it: what double arithmetic leaves.
 constexpr double view_tolerance = 1.0e-9;
 /// The most the motion over a run may differ from the scroll's, in screen
-/// pixels; scrolling toward the map's start the view waits for the
-/// camera's first step, a map pixel more.
+/// pixels.
 constexpr double most_run_stray = 1.0;
 
 /// The zoom the pick is checked at, and how far past the camera's map pixel
@@ -87,11 +83,10 @@ constexpr int pick_reach = 96;
 /// pixels: SDL's software renderer places the card's draw at a whole pixel.
 constexpr double most_drawn_stray = 0.5;
 /// How far past the camera's map pixel the view is moved for a zoom about
-/// an anchor, on each axis the map leaves room on.
+/// a focus, on each axis.
 constexpr std::array<double, 2> anchor_offsets{0.3, 0.9};
-/// How many screen pixels past the start of a map pixel the wheel's anchor
-/// is put, at zoom 4: a quarter of a map pixel, so that the camera, rounding
-/// about the anchor, stays where it is, as it always has there.
+/// How many screen pixels past the start of a map pixel the wheel's focus
+/// is put, at zoom 4: a quarter of a map pixel.
 constexpr int wheel_anchor_past = 1;
 /// The wheel's turn toward a nearer zoom, which at zoom 4, the nearest,
 /// leaves the zoom where it is.
@@ -240,6 +235,10 @@ struct ScrollRun {
     double total{};              ///< screen pixels the last frame moved from the first
     int32_t camera_steps{};      ///< whole map pixels the camera moved
     double travel{};             ///< screen pixels the scroll moved the view in all
+    /// The camera the view's exact place gives at the run's end: the whole
+    /// map pixel at or before it where the view is drawn between map
+    /// pixels, else the nearest.
+    bool camera_from_place{};
     /// The most the drawn view's motion in a frame differed from the
     /// scroll's, in map pixels.
     double view_stray{};
@@ -309,7 +308,6 @@ void Runtime::check_smooth_panning(
     // it, one frame's step after another, each frame read back.
     const auto scroll = [&](float zoom, double step) {
         at_zoom(zoom);
-        scroll_zoom_carry_ = 0.0;
         ScrollRun run;
         const double screen_travel = step * (scroll_frames + 1);
         const auto map_travel =
@@ -324,6 +322,7 @@ void Runtime::check_smooth_panning(
         run.ran = true;
         // A frame at the zoom first, which settles how the view is drawn.
         std::ignore = presented();
+        const double place_first = match_view_place()[0];
         // The scroll's first frame moves the view off the camera's map
         // pixel, where the card draws one more column at the same scale:
         // SDL's software renderer, which places draws at whole pixels,
@@ -363,6 +362,12 @@ void Runtime::check_smooth_panning(
         run.spread = *high - *low;
         run.camera_steps = run.way * (view_camera()[0] - camera_first);
         run.travel = step * (scroll_frames + 1);
+        const double place = match_view_place()[0];
+        run.camera_from_place =
+            std::abs(place - (place_first + run.way * run.travel / static_cast<double>(zoom))) <=
+                view_tolerance &&
+            view_camera()[0] ==
+                static_cast<int32_t>(view_between_pixels_ ? std::floor(place) : std::round(place));
         return run;
     };
     const auto report = [](const char* what, float zoom, double step, const ScrollRun& run) {
@@ -373,20 +378,17 @@ void Runtime::check_smooth_panning(
                   << run.view_stray << " map pixels of the scroll's place; " << motions_text(run)
                   << '\n';
     };
-    // Each frame draws the view the scroll's exact travel on, toward the
-    // map's end; toward its start, never back and never further.
+    // Each frame draws the view the scroll's exact travel on, either way.
     const auto view_follows = [](const ScrollRun& run) {
-        return !run.view_turned && (run.way < 0 || run.view_stray <= view_tolerance);
+        return !run.view_turned && run.view_stray <= view_tolerance;
     };
-    // The camera steps the whole map pixels the scroll's exact travel holds.
-    const auto camera_keeps_rate = [](const ScrollRun& run, float zoom) {
-        return run.camera_steps ==
-               static_cast<int32_t>(std::floor(run.travel / static_cast<double>(zoom)));
+    // The camera is the whole map pixel the scroll's exact place gives.
+    const auto camera_keeps_rate = [](const ScrollRun& run, float) {
+        return run.camera_from_place;
     };
     // The view moves the scroll's exact travel over the frames compared.
-    const auto view_keeps_rate = [](const ScrollRun& run, float zoom, double step) {
-        const double stray = most_run_stray + (run.way < 0 ? static_cast<double>(zoom) : 0.0);
-        return std::abs(run.total - step * scroll_frames) <= stray;
+    const auto view_keeps_rate = [](const ScrollRun& run, float, double step) {
+        return std::abs(run.total - step * scroll_frames) <= most_run_stray;
     };
 
     // At zoom 2.5 the card magnifies the scene: the accelerated tier's view
@@ -419,14 +421,12 @@ void Runtime::check_smooth_panning(
             switch_tier(true);
         }
     }
-    // At zoom 2.5, a second axis joining the slow scroll, down the map: both
-    // axes step on one carry, so the joining axis's view catches up with it
-    // before that axis's camera first steps, and from then on is at the
-    // scroll's exact place. Each frame it moves forward by at most a pixel,
-    // where the camera alone would jump it at that step.
+    // At zoom 2.5, a second axis joining the slow scroll, down the map: the
+    // joining axis's view is at the scroll's exact place from its first
+    // frame. Each frame it moves forward by at most a pixel, where the
+    // camera alone would jump it at its step.
     {
         at_zoom(magnified_scroll_zoom);
-        scroll_zoom_carry_ = 0.0;
         const auto map_height = static_cast<int32_t>(selected_tnt_->tile_height * 32U);
         const double travel = magnified_scroll_step / static_cast<double>(magnified_scroll_zoom);
         const auto room =
@@ -463,8 +463,7 @@ void Runtime::check_smooth_panning(
                 run.motions.push_back(motion);
                 run.largest = std::max(run.largest, std::abs(motion));
                 run.view_turned = run.view_turned || moved < -view_tolerance;
-                if (stepped)
-                    run.view_stray = std::max(run.view_stray, std::abs(moved - travel));
+                run.view_stray = std::max(run.view_stray, std::abs(moved - travel));
                 stepped = stepped || view_camera()[1] != joined_at[1];
             }
             std::cout << "render tiers check: a second axis joining the scroll at zoom 2.5 after "
@@ -477,11 +476,7 @@ void Runtime::check_smooth_panning(
                     std::to_string(run.largest) + " screen pixels in a frame"
                 );
             if (!stepped || run.view_stray > view_tolerance)
-                fail("the joining axis did not follow the scroll's place from its camera's step");
-            // The camera steps as it always has: both axes on the one carry.
-            const auto end = view_camera();
-            if (end[1] - joined_at[1] != way * (end[0] - joined_at[0]))
-                fail("the cameras of a scroll on both axes did not step together");
+                fail("the joining axis did not follow the scroll's place from its first frame");
         }
     }
     // At zoom 0.5 the area pass reduces the scene: every frame moves by the
@@ -517,7 +512,6 @@ void Runtime::check_smooth_panning(
     // unit three pixels further left with it.
     {
         at_zoom(pick_zoom);
-        scroll_zoom_carry_ = 0.0;
         // The unit the camera is centred on, unless it has left the match
         // in the ticks the checks before ran, as a campaign mission's may:
         // then the first of the local player's still in it, centred on.
@@ -541,10 +535,8 @@ void Runtime::check_smooth_panning(
         if (placed == nullptr)
             fail("the unit to pick is gone");
         const auto camera = view_camera();
-        const auto drawn = project_match_point(
-            live_viewport(static_cast<uint32_t>(camera[0]), static_cast<uint32_t>(camera[1])),
-            placed->position
-        );
+        const auto drawn =
+            project_match_point(live_viewport(camera[0], camera[1]), placed->position);
         const auto first_hit = [&]() {
             for (int x = drawn.x - pick_reach; x <= drawn.x + pick_reach; ++x) {
                 update_pointer(static_cast<float>(x), static_cast<float>(drawn.y));
@@ -624,17 +616,15 @@ void Runtime::check_smooth_panning(
     // At zoom 4, the nearest, with the view between map pixels: the wheel,
     // which leaves the zoom there, and the menu's ease about the
     // battlefield's centre to the zoom it is at hold the point drawn under
-    // their anchor where it is drawn, the camera staying where its rounding
-    // about the anchor puts it, as it always has.
+    // their focus where it is drawn, and the camera where it is.
     for (const double offset : anchor_offsets) {
         for (const bool wheel : {true, false}) {
             at_zoom(pick_zoom);
-            scroll_zoom_carry_ = 0.0;
             std::ignore = presented();
             const auto camera = view_camera();
-            const int way_down = most_view_offsets(camera[0], camera[1]).y >= offset ? 1 : 0;
+            const int way_down = 1;
             scroll_match_view(1, way_down, offset * static_cast<double>(pick_zoom));
-            if (view_camera() != camera || view_offset().x != offset)
+            if (view_camera() != camera || std::abs(view_offset().x - offset) > view_tolerance)
                 fail("a scroll of under a map pixel did not move the view between map pixels");
             std::ignore = presented();
             const int whole = static_cast<int>(pick_zoom);
@@ -649,7 +639,7 @@ void Runtime::check_smooth_panning(
                             match_layout_.battlefield_width() / 2,
                             match_layout_.battlefield_height() / 2
                         };
-            // The point drawn under the anchor, in map pixels.
+            // The point drawn under the focus, in map pixels.
             const auto drawn_point = [&]() {
                 const auto at = view_camera();
                 return std::array<double, 2>{
@@ -664,7 +654,8 @@ void Runtime::check_smooth_panning(
                 handle_match_zoom(
                     wheel_nearer,
                     static_cast<float>(match_layout_.left + anchor[0]),
-                    static_cast<float>(match_layout_.top + anchor[1])
+                    static_cast<float>(match_layout_.top + anchor[1]),
+                    true
                 );
             else
                 EngineSettingsState::ease_zoom_about_centre(*this, pick_zoom);
@@ -676,29 +667,23 @@ void Runtime::check_smooth_panning(
             const auto moved_to = view_camera();
             const char* what = wheel ? "the wheel" : "the ease about the centre";
             std::cout << "render tiers check: at zoom 4 with the view " << offset
-                      << " map pixels on, " << what << " moved the point under its anchor "
+                      << " map pixels on, " << what << " moved the point under its focus "
                       << (after[0] - before[0]) * static_cast<double>(pick_zoom) << ", "
                       << (after[1] - before[1]) * static_cast<double>(pick_zoom)
                       << " screen pixels\n";
             for (std::size_t axis = 0; axis < 2; ++axis) {
-                // At the battlefield's centre the camera's own rounding may
-                // step it, as the standard tier's does there; the wheel's
-                // anchor is put where it does not.
-                if (moved_to[axis] != camera[axis]) {
-                    if (wheel)
-                        fail(std::string(what) + " at the nearest zoom moved the camera");
-                    continue;
-                }
+                if (moved_to[axis] != camera[axis])
+                    fail(std::string(what) + " at the zoom it was at moved the camera");
                 if (std::abs(after[axis] - before[axis]) * static_cast<double>(pick_zoom) >
                     most_frame_motion)
-                    fail(std::string(what) + " moved the point drawn under its anchor");
+                    fail(std::string(what) + " moved the point drawn under its focus");
             }
         }
     }
     rest_pointer();
     std::cout << "render tiers check: the accelerated tier's view moves at most a pixel a "
                  "frame between map pixels, the pointer picks what is drawn, and a zoom "
-                 "holds what is drawn under its anchor\n";
+                 "holds what is drawn under its focus\n";
 }
 
 } // namespace oa::app

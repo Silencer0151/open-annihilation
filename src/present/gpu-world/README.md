@@ -78,8 +78,8 @@ evicted while a match runs.
   under two per cent of the whole.
 - **Reading back.** `read_terrain_view` reads what the card shows at a tile
   level when the camera lies on a whole texel of that level, black past
-  the map's edge, for checks against the processor's terrain; it refuses a
-  deeper level and a camera between texels.
+  the map's edges and before them, for checks against the processor's
+  terrain; it refuses a deeper level and a camera between texels.
 - **Malformed maps** are refused with the atlas left empty: an empty grid,
   a grid that is not `tile_width` by `tile_height` cells or that exceeds
   `grid_cell_limit`, a grid asked for of no cells or of more columns or

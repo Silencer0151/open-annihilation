@@ -235,10 +235,7 @@ void Runtime::check_megamap_clicks() {
             id != 0 ? std::array<int32_t, 2>{map_x(id), map_z(id)} : open_ground;
         set_camera_position(on[0] - visible_map_width() / 2, on[1] - visible_map_height() / 2, 0);
         render_match_surface();
-        const auto viewport = live_viewport(
-            static_cast<uint32_t>(std::max(0, match_camera_x_)),
-            static_cast<uint32_t>(std::max(0, match_camera_z_))
-        );
+        const auto viewport = live_viewport(match_camera_x_, match_camera_z_);
         std::array<uint32_t, 3> position{};
         if (id != 0) {
             position = slots[id].unit->position;

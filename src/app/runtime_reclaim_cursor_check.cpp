@@ -112,12 +112,7 @@ void Runtime::check_reclaim_cursor() {
         send(SDL_EVENT_MOUSE_BUTTON_DOWN, SDL_BUTTON_LEFT, x, y);
         send(SDL_EVENT_MOUSE_BUTTON_UP, SDL_BUTTON_LEFT, x, y);
     };
-    const auto viewport = [&] {
-        return live_viewport(
-            static_cast<uint32_t>(std::max(0, match_camera_x_)),
-            static_cast<uint32_t>(std::max(0, match_camera_z_))
-        );
-    };
+    const auto viewport = [&] { return live_viewport(match_camera_x_, match_camera_z_); };
 
     center_camera_on_unit(commander);
     render_match_surface();

@@ -273,9 +273,10 @@ struct Runtime::FullPresentation {
     /// picture, until the world is drawn whole again (full_frame_drawn).
     bool canvas_drawn{};
     /// The camera and the zoom the canvas frame was planned at, which the
-    /// card's frame draws from (note_full_canvas).
-    uint32_t frame_camera_x{};
-    uint32_t frame_camera_y{};
+    /// card's frame draws from (note_full_canvas); the camera below 0 left
+    /// of or above the map.
+    int32_t frame_camera_x{};
+    int32_t frame_camera_y{};
     float frame_zoom{};
     /// The canvas frame's pixels, which the painters after the fog reach
     /// through whichever surface holds them while they paint

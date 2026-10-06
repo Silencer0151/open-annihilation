@@ -198,6 +198,9 @@ uint32_t radar_compose_final(
 
 /// Blits the final image and outlines the camera rectangle while the redraw bit is set, then clears the bit.
 ///
+/// The rectangle is outlined within the radar's picture: a view past the
+/// map's edges, or wider than the map, is marked along the picture's edges.
+///
 /// @param[in,out] game game block holding the redraw bit, picture offset and view rectangle
 /// @param surfaces radar surfaces
 /// @param[in,out] target surface to draw on

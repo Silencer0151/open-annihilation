@@ -80,8 +80,6 @@ struct TouchDispatch {
     /// The check's clock in nanoseconds; finger times come from it while set.
     std::optional<uint64_t> check_clock_ns{};
     SDL_Keymod pulse{};    ///< modifiers a synthetic key or radial pick holds for one call
-    double pan_carry_x{};  ///< map pixels a pan moved short of a whole one
-    double pan_carry_y{};  ///< map pixels a pan moved short of a whole one
     float inertia_x{};     ///< pan inertia, canvas pixels per second
     float inertia_y{};     ///< pan inertia, canvas pixels per second
     bool auto_scrolling{}; ///< a box or ghost drag is in the edge band

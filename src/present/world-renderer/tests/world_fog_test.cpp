@@ -55,6 +55,15 @@ void placement_follows_camera() {
     OA_CHECK(shifted.first_cell_x == 0 && shifted.offset_x == -4);
     OA_CHECK(shifted.first_cell_z == 1 && shifted.offset_z == -2);
     OA_CHECK(shifted.variant_phase == 1 + 2);
+    // A camera left of and above the map places the grid as a camera a cell
+    // further on does, a cell before it.
+    const auto before = map.build(-20, -1, 64, 32);
+    const auto on = map.build(12, 31, 64, 32);
+    OA_CHECK(before.first_cell_x == -2 && before.offset_x == -28);
+    OA_CHECK(before.first_cell_z == -1 && before.offset_z == -15);
+    OA_CHECK(before.first_cell_x == on.first_cell_x - 1 && before.offset_x == on.offset_x);
+    OA_CHECK(before.first_cell_z == on.first_cell_z - 1 && before.offset_z == on.offset_z);
+    OA_CHECK(before.variant_phase == on.variant_phase - 2);
 }
 
 void clear_when_everything_is_seen() {

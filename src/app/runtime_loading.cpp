@@ -315,10 +315,12 @@ void Runtime::leave_match() {
     chat_composition_.clear();
     match_zoom_ = kDefaultBattlefieldZoom;
     match_zoom_target_ = kDefaultBattlefieldZoom;
-    zoom_anchored_ = false;
+    zoom_focus_ = {};
+    exact_view_ = {};
+    view_hold_ = {};
     zoom_wheel_ = {};
     zoom_clock_valid_ = false;
-    terrain_cache_cam_x_ = ~0u;
+    terrain_cache_cam_x_ = kUncachedTerrainCamera;
     terrain_cache_zoom_ = -1.0F;
     match_terrain_cache_ = {};
     far_terrain_ = {};

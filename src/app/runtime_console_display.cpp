@@ -275,9 +275,7 @@ void Runtime::check_console_display_commands(const std::function<void(const char
     // battlefield pixel it changes is one a feature's shadow frame covers, and
     // the staged feature's shadow is among them.
     {
-        auto viewport = live_viewport(
-            static_cast<uint32_t>(match_camera_x_), static_cast<uint32_t>(match_camera_z_)
-        );
+        auto viewport = live_viewport(match_camera_x_, match_camera_z_);
         viewport.destination_x = 0;
         viewport.destination_y = 0;
         const double scale = viewport.scale <= 0.0F ? 1.0 : static_cast<double>(viewport.scale);

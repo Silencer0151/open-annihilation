@@ -778,23 +778,31 @@ void Runtime::render_match_surface() {
     // terrain from the map's pyramid and each unit as a dot of its owner's
     // colour, and no model at all.
     const bool far = !directed && far_view_frame();
-    // The map the view shows: the camera is held within it, and the fill
-    // below draws nothing beyond it.
+    // The map the view shows: the fill below draws nothing beyond it. The
+    // player's camera is held within the view's limits, which let it go
+    // past the map's edges (view_camera), and the limits then hold the next
+    // view from it; the director's is held on the map's start.
     const auto [map_width, map_height] = shown_map_size();
     const auto bf_w = match_layout_.battlefield_width();
     const auto bf_h = match_layout_.battlefield_height();
     const auto vis_w = visible_map_width();
     const auto vis_h = visible_map_height();
-    const auto camera_x = static_cast<uint32_t>(
-        directed ? std::max(0, match_camera_x_)
-                 : std::clamp(match_camera_x_, 0, std::max(0, map_width - vis_w))
-    );
-    const auto camera_y = static_cast<uint32_t>(
-        directed ? std::max(0, match_camera_z_)
-                 : std::clamp(match_camera_z_, 0, std::max(0, map_height - vis_h))
-    );
-    match_camera_x_ = static_cast<int32_t>(camera_x);
-    match_camera_z_ = static_cast<int32_t>(camera_y);
+    const auto held = view_camera();
+    const int32_t camera_x = directed ? std::max(0, match_camera_x_) : held[0];
+    const int32_t camera_y = directed ? std::max(0, match_camera_z_) : held[1];
+    match_camera_x_ = camera_x;
+    match_camera_z_ = camera_y;
+    if (!directed) {
+        // The limits hold the next view from this one's exact place, which
+        // its camera is taken from, so that its rounding never moves them.
+        const auto zoom = static_cast<double>(match_zoom() <= 0.0F ? 1.0F : match_zoom());
+        const auto place = match_view_place();
+        view_hold_ = {
+            true,
+            place[0] + static_cast<double>(bf_w) / zoom / 2.0,
+            place[1] + static_cast<double>(bf_h) / zoom / 2.0
+        };
+    }
     // The frame's place between the ticks. Each draw notes the tick the
     // match is on first, so that the poses of the tick before are at hand.
     auto& models = match_models();
@@ -945,13 +953,20 @@ void Runtime::render_match_surface() {
     // What the presentation and the picture-keeping readers learn of the frame.
     accelerated_.frame = scaling;
     accelerated_.frame_alpha = presentation_alpha();
+    // In the Full tier the graphics card draws the whole battlefield: the
+    // terrain is not filled, the bands do not draw and the fog is not
+    // rasterised; the world layer is the overlay canvas, cleared to the key
+    // colour, which the painters after the fog paint. The camera and the
+    // zoom the frame draws at are kept for the card's frame.
+    const bool card_world = full_presentation() && !directed && !far;
     // How far between map pixels the frame draws the view: an accelerated
-    // frame the card magnifies or the area pass reduces may; every other
-    // frame draws it on the camera's map pixel, as the game always has.
-    const bool between_pixels =
-        !directed && accelerated_presentation() &&
-        (scaling.method == SceneMethod::magnify || scaling.method == SceneMethod::area);
-    const auto drawn_offset = settle_view_offset(camera_x, camera_y, between_pixels);
+    // frame the card draws, magnifies or the area pass reduces may; every
+    // other frame draws it on the camera's map pixel, as the game always
+    // has.
+    const bool between_pixels = !directed && accelerated_presentation() &&
+                                (card_world || scaling.method == SceneMethod::magnify ||
+                                 scaling.method == SceneMethod::area);
+    const auto drawn_offset = settle_view_offset(between_pixels);
     accelerated_.frame_offset = drawn_offset;
     ++accelerated_.hud_revision;
     const int32_t scene_w = scaling.scene_width;
@@ -964,21 +979,15 @@ void Runtime::render_match_surface() {
         match_terrain_cache_.width = static_cast<uint32_t>(scene_w);
         match_terrain_cache_.height = static_cast<uint32_t>(scene_h);
         match_terrain_cache_.rgb.resize(terrain_pixels);
-        terrain_cache_cam_x_ = ~0u;
+        terrain_cache_cam_x_ = kUncachedTerrainCamera;
     }
-    // In the Full tier the graphics card draws the whole battlefield: the
-    // terrain is not filled, the bands do not draw and the fog is not
-    // rasterised; the world layer is the overlay canvas, cleared to the key
-    // colour, which the painters after the fog paint. The camera and the
-    // zoom the frame draws at are kept for the card's frame.
-    const bool card_world = full_presentation() && !directed && !far;
     note_full_canvas(card_world, camera_x, camera_y, draw_scale);
     // A director's camera redraws the terrain at any change of zoom, however
     // small, so that what a frame shows never hangs on the frames before it.
     if (card_world) {
         // The cache is not filled for this frame: the next frame drawn
         // whole fills it.
-        terrain_cache_cam_x_ = ~0u;
+        terrain_cache_cam_x_ = kUncachedTerrainCamera;
     } else if (
         terrain_cache_cam_x_ != camera_x || terrain_cache_cam_y_ != camera_y ||
         std::abs(terrain_cache_zoom_ - draw_scale) > 1.0e-4F ||

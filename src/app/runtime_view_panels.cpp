@@ -81,8 +81,10 @@ void Runtime::draw_shared_camera_rectangles() {
 std::optional<std::array<int32_t, 2>> Runtime::camera_centre() const {
     if (!match_)
         return std::nullopt;
+    // Held on the map, so that a view past its edges is shared at the edge.
+    const auto camera = on_map_camera();
     return std::array<int32_t, 2>{
-        match_camera_x_ + visible_map_width() / 2, match_camera_z_ + visible_map_height() / 2
+        camera[0] + visible_map_width() / 2, camera[1] + visible_map_height() / 2
     };
 }
 

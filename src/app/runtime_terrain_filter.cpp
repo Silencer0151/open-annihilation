@@ -24,13 +24,13 @@ constexpr uint32_t kFixedOne = 65536u;
 /// Stepped with the terrain sampler's fixed-point DDA so every footprint
 /// shares the nearest sampler's and the fog's tile boundaries.
 ///
-/// @param[out] bounds `count` + 1 map coordinates
+/// @param[out] bounds `count` + 1 map coordinates; below 0 before the map
 /// @param start map coordinate of the first destination pixel
 /// @param count destination pixels
 /// @param scale_fp zoom in 16.16, at least 1
-void footprint_bounds(std::vector<uint32_t>& bounds, uint32_t start, int count, uint32_t scale_fp) {
+void footprint_bounds(std::vector<int64_t>& bounds, int32_t start, int count, uint32_t scale_fp) {
     bounds.resize(static_cast<std::size_t>(count) + 1U);
-    uint32_t position = start;
+    int64_t position = start;
     uint32_t fraction = 0;
     for (auto& bound : bounds) {
         bound = position;
@@ -44,14 +44,14 @@ void footprint_bounds(std::vector<uint32_t>& bounds, uint32_t start, int count, 
 
 /// Averages every map pixel under each destination pixel's footprint.
 ///
-/// Ground beyond the terrain counts as black, as the nearest sampler paints
-/// it. Each visible map pixel is read once, so the cost is the source area in
-/// view.
+/// Ground beyond the terrain, and before it, counts as black, as the
+/// nearest sampler paints it. Each visible map pixel is read once, so the
+/// cost is the source area in view.
 ///
 /// @param map terrain
 /// @param palette palette the tiles' indices are shown in
-/// @param source_x map column of the first destination pixel
-/// @param source_y map row of the first destination pixel
+/// @param source_x map column of the first destination pixel; below 0 left of the map
+/// @param source_y map row of the first destination pixel; below 0 above the map
 /// @param shown_width map pixels across the view may show, the mosaic's or fewer
 /// @param shown_height map pixels down the view may show, the mosaic's or fewer
 /// @param dest_w destination width
@@ -62,8 +62,8 @@ void footprint_bounds(std::vector<uint32_t>& bounds, uint32_t start, int count, 
 bool box_filter_terrain(
     const oa::formats::tnt::Map& map,
     const oa::PaletteBytes& palette,
-    uint32_t source_x,
-    uint32_t source_y,
+    int32_t source_x,
+    int32_t source_y,
     uint32_t shown_width,
     uint32_t shown_height,
     int dest_w,
@@ -79,45 +79,46 @@ bool box_filter_terrain(
         return false;
     // The map the view shows ends at the shown size, within the mosaic;
     // past it the filter sums nothing, as past the mosaic.
-    const auto terrain_w =
-        std::min<uint64_t>(static_cast<uint64_t>(map.tile_width) * tile_edge, shown_width);
-    const auto terrain_h =
-        std::min<uint64_t>(static_cast<uint64_t>(map.tile_height) * tile_edge, shown_height);
+    const auto terrain_w = std::min<int64_t>(
+        static_cast<int64_t>(map.tile_width) * tile_edge, static_cast<int64_t>(shown_width)
+    );
+    const auto terrain_h = std::min<int64_t>(
+        static_cast<int64_t>(map.tile_height) * tile_edge, static_cast<int64_t>(shown_height)
+    );
     auto scale_fp = static_cast<uint32_t>(std::lround(static_cast<double>(zoom) * kFixedOne));
     if (scale_fp == 0)
         scale_fp = 1;
     std::array<uint8_t, 256U * 3U> lut{};
     for (std::size_t index = 0; index < 256U; ++index)
         std::memcpy(&lut[index * 3U], &palette[index * oa::palette_entry_bytes], 3U);
-    std::vector<uint32_t> columns;
-    std::vector<uint32_t> rows;
+    std::vector<int64_t> columns;
+    std::vector<int64_t> rows;
     footprint_bounds(columns, source_x, dest_w, scale_fp);
     footprint_bounds(rows, source_y, dest_h, scale_fp);
     std::vector<uint32_t> sums(static_cast<std::size_t>(dest_w) * 3U);
     const uint16_t* const grid = map.tile_indices.data();
     const uint8_t* const tiles = map.tile_palette_indices.data();
-    const auto column_end = static_cast<uint32_t>(
-        std::min<uint64_t>(columns[static_cast<std::size_t>(dest_w)], terrain_w)
-    );
+    const int64_t column_end = std::min(columns[static_cast<std::size_t>(dest_w)], terrain_w);
     for (int dy = 0; dy < dest_h; ++dy) {
-        const uint32_t row_begin = rows[static_cast<std::size_t>(dy)];
-        const uint32_t row_end = rows[static_cast<std::size_t>(dy) + 1U];
+        const int64_t row_begin = rows[static_cast<std::size_t>(dy)];
+        const int64_t row_end = rows[static_cast<std::size_t>(dy) + 1U];
         std::fill(sums.begin(), sums.end(), 0u);
-        for (uint32_t sy = row_begin; sy < row_end && sy < terrain_h; ++sy) {
+        // Rows and columns before the map sum nothing, as those past it.
+        for (int64_t sy = std::max<int64_t>(row_begin, 0); sy < row_end && sy < terrain_h; ++sy) {
             const auto row_tiles = static_cast<std::size_t>(sy / tile_edge) * map.tile_width;
             const auto within_y = static_cast<std::size_t>(sy % tile_edge) * tile_edge;
             std::size_t column = 0;
-            uint32_t next_column = columns[1];
+            int64_t next_column = columns[1];
             uint32_t* sum = sums.data();
-            uint32_t sx = columns[0];
+            int64_t sx = std::max<int64_t>(columns[0], 0);
             while (sx < column_end) {
-                const auto tile_index = grid[row_tiles + sx / tile_edge];
+                const auto tile_index = grid[row_tiles + static_cast<std::size_t>(sx / tile_edge)];
                 if (tile_index >= map.tile_count)
                     return false;
-                const uint32_t within_x = sx % tile_edge;
-                const uint32_t run_end = std::min(column_end, sx - within_x + tile_edge);
-                const uint8_t* source =
-                    tiles + static_cast<std::size_t>(tile_index) * tile_bytes + within_y + within_x;
+                const int64_t within_x = sx % tile_edge;
+                const int64_t run_end = std::min<int64_t>(column_end, sx - within_x + tile_edge);
+                const uint8_t* source = tiles + static_cast<std::size_t>(tile_index) * tile_bytes +
+                                        within_y + static_cast<std::size_t>(within_x);
                 for (; sx < run_end; ++sx, ++source) {
                     while (sx >= next_column) {
                         ++column;
@@ -131,13 +132,14 @@ bool box_filter_terrain(
                 }
             }
         }
-        const uint32_t row_count = row_end - row_begin;
+        const auto row_count = static_cast<uint32_t>(row_end - row_begin);
         uint8_t* out =
             dest_rgb + static_cast<std::size_t>(dy) * static_cast<std::size_t>(dest_w) * 3U;
         const uint32_t* sum = sums.data();
         for (int dx = 0; dx < dest_w; ++dx, out += 3, sum += 3) {
             const auto index = static_cast<std::size_t>(dx);
-            const uint32_t count = row_count * (columns[index + 1U] - columns[index]);
+            const uint32_t count =
+                row_count * static_cast<uint32_t>(columns[index + 1U] - columns[index]);
             out[0] = static_cast<uint8_t>((sum[0] + count / 2U) / count);
             out[1] = static_cast<uint8_t>((sum[1] + count / 2U) / count);
             out[2] = static_cast<uint8_t>((sum[2] + count / 2U) / count);
@@ -169,13 +171,8 @@ void Runtime::refresh_filtered_terrain() {
     const int dest_h = scaling.scene_height;
     if (dest_w <= 0 || dest_h <= 0)
         return;
-    // The renderer clamps the camera the same way before it checks its cache.
-    const auto camera_x = static_cast<uint32_t>(
-        std::clamp(match_camera_x_, 0, std::max(0, map_width - visible_map_width()))
-    );
-    const auto camera_y = static_cast<uint32_t>(
-        std::clamp(match_camera_z_, 0, std::max(0, map_height - visible_map_height()))
-    );
+    // The renderer holds the camera the same way before it checks its cache.
+    const auto [camera_x, camera_y] = view_camera();
     auto& cache = match_terrain_cache_;
     const auto pixels = static_cast<std::size_t>(dest_w) * static_cast<std::size_t>(dest_h) * 3U;
     const bool resized = cache.width != static_cast<uint32_t>(dest_w) ||
@@ -186,7 +183,7 @@ void Runtime::refresh_filtered_terrain() {
         cache.height = static_cast<uint32_t>(dest_h);
         cache.rgb.resize(pixels);
     }
-    const auto current = [&](uint32_t cam_x, uint32_t cam_y, float cam_zoom) {
+    const auto current = [&](int32_t cam_x, int32_t cam_y, float cam_zoom) {
         return cam_x == camera_x && cam_y == camera_y && std::abs(cam_zoom - draw_scale) <= 1.0e-4F;
     };
     if (!resized &&

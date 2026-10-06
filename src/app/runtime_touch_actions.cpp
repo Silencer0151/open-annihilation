@@ -1015,10 +1015,8 @@ void TouchDispatchAccess::show_unit_info(Runtime& runtime) {
     if (unit != 0 && unit < slots.size() && slots[unit].unit != nullptr) {
         // The pointer onto the unit, as F1 is pressed over it; a unit off
         // the screen is named to the panel directly.
-        const auto viewport = runtime.live_viewport(
-            static_cast<uint32_t>(std::max(0, runtime.match_camera_x_)),
-            static_cast<uint32_t>(std::max(0, runtime.match_camera_z_))
-        );
+        const auto viewport =
+            runtime.live_viewport(runtime.match_camera_x_, runtime.match_camera_z_);
         const auto point = runtime.project_match_point(viewport, slots[unit].unit->position);
         runtime.update_pointer(static_cast<float>(point.x), static_cast<float>(point.y));
         if (runtime.hovered_match_unit_ != unit) {
@@ -1127,10 +1125,10 @@ void TouchDispatchAccess::control_tap(
             open_drawer(runtime);
         return;
     case hud::Control::zoom_out:
-        runtime.handle_match_zoom(-1.0F, centre_x, centre_y);
+        runtime.handle_match_zoom(-1.0F, centre_x, centre_y, false);
         return;
     case hud::Control::zoom_in:
-        runtime.handle_match_zoom(1.0F, centre_x, centre_y);
+        runtime.handle_match_zoom(1.0F, centre_x, centre_y, false);
         return;
     case hud::Control::order_slot: {
         if (control.index >= state.hud.rail_count || control.index >= state.hud.rail.size())

@@ -191,7 +191,7 @@ void Runtime::apply_output_mode() {
 }
 
 [[nodiscard]] oa::present::world_renderer::BattlefieldViewport
-Runtime::live_viewport(uint32_t camera_x, uint32_t camera_y) const {
+Runtime::live_viewport(int32_t camera_x, int32_t camera_y) const {
     return {
         camera_x,
         camera_y,

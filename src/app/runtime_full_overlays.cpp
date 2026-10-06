@@ -151,7 +151,7 @@ bool Runtime::full_frame_drawn() const noexcept {
     return full_ && full_->canvas_drawn;
 }
 
-void Runtime::note_full_canvas(bool canvas, uint32_t camera_x, uint32_t camera_y, float zoom) {
+void Runtime::note_full_canvas(bool canvas, int32_t camera_x, int32_t camera_y, float zoom) {
     if (!full_)
         return;
     full_->canvas_drawn = canvas;

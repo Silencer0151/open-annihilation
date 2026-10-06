@@ -149,9 +149,7 @@ void Runtime::check_build_site_pointer(uint16_t builder, uint16_t type) {
         const oa::sim::unit_movement::Terrain terrain(*selected_tnt_);
         const auto ground =
             std::max<int32_t>(terrain.sea_level(), terrain.height(centre_x << 16, centre_z << 16));
-        const auto viewport = live_viewport(
-            static_cast<uint32_t>(match_camera_x_), static_cast<uint32_t>(match_camera_z_)
-        );
+        const auto viewport = live_viewport(match_camera_x_, match_camera_z_);
         const auto pointer = project_match_point(
             viewport,
             {static_cast<uint32_t>(centre_x) << 16,
@@ -331,7 +329,6 @@ void Runtime::check_build_site_edges(uint16_t type) {
     const auto saved_camera_z = match_camera_z_;
     const auto saved_zoom = match_zoom_;
     const auto saved_zoom_target = match_zoom_target_;
-    const auto saved_zoom_anchored = zoom_anchored_;
     const fs::path report_directory = "local/reports";
     fs::create_directories(report_directory);
     std::vector<std::string> failures;
@@ -339,7 +336,6 @@ void Runtime::check_build_site_edges(uint16_t type) {
     const auto set_zoom = [&](float zoom) {
         match_zoom_ = zoom;
         match_zoom_target_ = zoom;
-        zoom_anchored_ = false;
     };
     // Draws the frame with and without the ghost for the pointer at
     // (`pointer_x`, `pointer_y`) on the battlefield, the camera at (`camera_x`,
@@ -584,7 +580,6 @@ void Runtime::check_build_site_edges(uint16_t type) {
 
     set_zoom(saved_zoom);
     match_zoom_target_ = saved_zoom_target;
-    zoom_anchored_ = saved_zoom_anchored;
     match_camera_x_ = saved_camera_x;
     match_camera_z_ = saved_camera_z;
     render_match_surface();

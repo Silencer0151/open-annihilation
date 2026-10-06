@@ -164,37 +164,4 @@ magnified_span(uint32_t battlefield, float zoom, uint32_t scene, double offset) 
     return span;
 }
 
-double most_view_offset(int32_t camera, int32_t farthest) noexcept {
-    return std::clamp(static_cast<double>(farthest) - static_cast<double>(camera), 0.0, 1.0);
-}
-
-double scrolled_view_offset(
-    double offset, double travel, double carry, int32_t camera_step, double most
-) noexcept {
-    double moved = offset + travel - static_cast<double>(camera_step);
-    const double distance = std::abs(travel);
-    if (distance > 0.0) {
-        const double carried = std::clamp(carry, 0.0, 1.0);
-        const bool toward_end = travel > 0.0;
-        // How far the view trails the scroll's place within the camera's map pixel.
-        const double trail = toward_end ? carried - offset : offset - (1.0 - carried);
-        if (trail > 0.0) {
-            // The frames left before the camera's next step, this one among
-            // them: this one alone when its travel reaches the step, by the
-            // same sum the carry steps on, and otherwise this one and at
-            // least the next.
-            const double frames = carried + distance >= 1.0
-                                      ? 1.0
-                                      : std::max(2.0, std::ceil((1.0 - carried) / distance));
-            const double share = trail / frames;
-            moved += toward_end ? share : -share;
-        }
-    }
-    return std::clamp(moved, 0.0, std::clamp(most, 0.0, 1.0));
-}
-
-double view_offset_at(double exact, int32_t camera, double most) noexcept {
-    return std::clamp(exact - static_cast<double>(camera), 0.0, std::clamp(most, 0.0, 1.0));
-}
-
 } // namespace oa::app

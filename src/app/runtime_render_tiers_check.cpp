@@ -153,6 +153,10 @@ constexpr int most_software_difference = 2;
 constexpr double most_mean_scaled_difference = 0.5;
 /// Most a channel of the HUD may differ from the composition at a whole-number scale.
 constexpr int most_hud_difference = 1;
+/// The share of the battlefield a Full frame of a view between map pixels
+/// may differ from the frame before moved by the view's offset: one in this
+/// many pixels, which the renderer may place a pixel apart.
+constexpr uint64_t most_moved_mismatch_share = 100;
 /// Most a window point may lie from a layout pixel's place at native
 /// density, in window points: the view maps one onto the other exactly but
 /// for the rounding of floats.
@@ -1245,11 +1249,7 @@ int Runtime::check_render_tiers() {
         // pointer back through the view.
         const auto& slots = match_->world().slots;
         const auto point = project_match_point(
-            live_viewport(
-                static_cast<uint32_t>(std::max(0, match_camera_x_)),
-                static_cast<uint32_t>(std::max(0, match_camera_z_))
-            ),
-            slots[anchor].unit->position
+            live_viewport(match_camera_x_, match_camera_z_), slots[anchor].unit->position
         );
         float window_x = 0.0F;
         float window_y = 0.0F;
@@ -1897,9 +1897,11 @@ int Runtime::check_render_tiers() {
 
     // The map the view shows ends before the mosaic: the game never shows a
     // map's last 32 columns and 128 rows of map pixels, where maps end in
-    // filler tiles. A camera asked past the map's end is held at the shown
-    // map's end less the view, and the terrain fill's last column and row
-    // are the shown map's last, never the filler's.
+    // filler tiles. A camera asked past the map's end is held where the
+    // shown map's end reaches the battlefield's middle, and the terrain
+    // fill's last column and row are the shown map's last, never the
+    // filler's, with black past them; one asked before the map's start is
+    // held where the map's start reaches the middle, with black before it.
     {
         namespace features = oa::sim::feature_runtime;
         at_zoom(1.0F);
@@ -1909,13 +1911,18 @@ int Runtime::check_render_tiers() {
         if (shown_w != mosaic_w - features::hidden_right_edge ||
             shown_h != mosaic_h - features::hidden_bottom_edge)
             fail("the shown map is not the mosaic less the edges the game never shows");
-        match_camera_x_ = mosaic_w * 2;
-        match_camera_z_ = mosaic_h * 2;
+        // Where a map's edge at a battlefield's middle puts the camera.
+        const auto edge_at_middle = [](double edge, int32_t battlefield) {
+            return static_cast<int32_t>(std::floor(edge - static_cast<double>(battlefield) / 2.0));
+        };
+        const int32_t bf_w = match_layout_.battlefield_width();
+        const int32_t bf_h = match_layout_.battlefield_height();
+        set_camera_position(mosaic_w * 2, mosaic_h * 2, 0);
         std::ignore = presented();
         const auto camera = view_camera();
-        if (camera[0] != std::max(0, shown_w - visible_map_width()) ||
-            camera[1] != std::max(0, shown_h - visible_map_height()))
-            fail("the camera asked past the map's end was not held at the shown map's end");
+        if (camera[0] != edge_at_middle(shown_w, bf_w) ||
+            camera[1] != edge_at_middle(shown_h, bf_h))
+            fail("the camera asked past the map's end was not held with it at the middle");
         const auto& cache = match_terrain_cache_;
         if (cache.width == 0 || cache.height == 0 ||
             cache.rgb.size() < static_cast<std::size_t>(cache.width) * cache.height * 3U)
@@ -1974,10 +1981,42 @@ int Runtime::check_render_tiers() {
                 "the terrain fill at the shown map's end differs from the map in " +
                 std::to_string(wrong) + " pixels"
             );
+        // Before the map's start, the map's first column and row at the
+        // battlefield's middle, black before them.
+        set_camera_position(-mosaic_w * 2, -mosaic_h * 2, 0);
+        std::ignore = presented();
+        const auto before = view_camera();
+        if (before[0] != static_cast<int32_t>(std::ceil(-static_cast<double>(bf_w) / 2.0)) ||
+            before[1] != static_cast<int32_t>(std::ceil(-static_cast<double>(bf_h) / 2.0)))
+            fail("the camera asked before the map's start was not held with it at the middle");
+        const auto first_column = static_cast<uint32_t>(-before[0]);
+        const auto first_row = static_cast<uint32_t>(-before[1]);
+        uint32_t black_before = 0;
+        for (uint32_t y = 0; y < cache.height; ++y)
+            for (uint32_t x = 0; x < cache.width; ++x) {
+                if (x >= first_column && y >= first_row) {
+                    if (x < first_column + 2U && y < first_row + 2U &&
+                        cache_rgb(x, y) != map_rgb(
+                                               static_cast<int32_t>(x - first_column),
+                                               static_cast<int32_t>(y - first_row)
+                                           ))
+                        ++wrong;
+                    continue;
+                }
+                ++black_before;
+                if (cache_rgb(x, y) != std::array<uint8_t, 3>{0, 0, 0})
+                    ++wrong;
+            }
+        if (wrong != 0)
+            fail(
+                "the terrain fill before the map's start differs from black and the map in " +
+                std::to_string(wrong) + " pixels"
+            );
         std::cout << "render tiers check: the view ends at the shown map, " << shown_w << 'x'
                   << shown_h << " of the " << mosaic_w << 'x' << mosaic_h
                   << " mosaic, with the camera at " << camera[0] << ", " << camera[1] << " and "
-                  << beyond << " fill pixels black past it\n";
+                  << beyond << " fill pixels black past it; before its start at " << before[0]
+                  << ", " << before[1] << " with " << black_before << " black before it\n";
     }
     // The Full tier: the terrain drawn by the card from the atlas pages, the
     // rest by the processor over it.
@@ -2382,7 +2421,7 @@ void Runtime::check_full_render_tier(
             }
             at_zoom(whole);
             // The terrain drawn afresh, and the frame's own units counted.
-            terrain_cache_cam_x_ = ~0U;
+            terrain_cache_cam_x_ = kUncachedTerrainCamera;
             frame_draws_.units_drawn = 0;
             const uint64_t runs = terrain_box_filter_runs_;
             const auto read = presented();
@@ -2710,8 +2749,8 @@ void Runtime::check_full_render_tier(
         const std::string full_cost = cost();
         const auto mask = card_mask(zoom, read);
         const auto overlay = full_->overlay;
-        const uint32_t cam_x = full_->frame_camera_x;
-        const uint32_t cam_y = full_->frame_camera_y;
+        const int32_t cam_x = full_->frame_camera_x;
+        const int32_t cam_y = full_->frame_camera_y;
         if (cam_x % 2 != 0 || cam_y % 2 != 0)
             fail("the camera is not on an even map pixel at zoom " + zoom_text(zoom));
         write_png(picture("zoom-" + zoom_text(zoom)), read);
@@ -3006,8 +3045,8 @@ void Runtime::check_full_render_tier(
         write_png(picture("zoom-" + zoom_text(zoom)), read);
         const auto mask = card_mask(zoom, read);
         renderer::Surface reference = read;
-        const uint32_t cam_x = full.frame_camera_x;
-        const uint32_t cam_y = full.frame_camera_y;
+        const int32_t cam_x = full.frame_camera_x;
+        const int32_t cam_y = full.frame_camera_y;
         const Area field = battlefield();
         bool compared = true;
         std::string how;
@@ -3327,6 +3366,47 @@ void Runtime::check_full_render_tier(
             fail("the world target was kept with anti-aliasing off");
         std::cout << "render tiers check: full tier: with anti-aliasing off again the world target "
                      "is freed and the frame drawn straight\n";
+    }
+    // A view between map pixels: at zoom 4, half a map pixel on, the card
+    // draws the battlefield two screen pixels further left, the terrain, the
+    // fog, the stages and the painters together.
+    {
+        constexpr float between_zoom = 4.0F;
+        constexpr double between_offset = 0.5;
+        constexpr int shifted = 2;
+        at_zoom(between_zoom);
+        const auto on_pixel = full_frame();
+        scroll_match_view(1, 0, between_offset * static_cast<double>(between_zoom));
+        const auto between = full_frame();
+        if (accelerated_.frame_offset.x != between_offset)
+            fail("a view half a map pixel on was not drawn between map pixels");
+        const Area field = battlefield();
+        const Area pointer = cursor();
+        uint64_t compared = 0;
+        uint64_t differing = 0;
+        for (int y = field.y; y < field.y + field.h; ++y)
+            for (int x = field.x; x + shifted < field.x + field.w; ++x) {
+                if (x + shifted >= pointer.x && x < pointer.x + pointer.w && y >= pointer.y &&
+                    y < pointer.y + pointer.h)
+                    continue;
+                const auto at =
+                    (static_cast<std::size_t>(y) * between.width + static_cast<std::size_t>(x)) *
+                    3U;
+                const auto from = at + static_cast<std::size_t>(shifted) * 3U;
+                ++compared;
+                if (between.rgb[at] != on_pixel.rgb[from] ||
+                    between.rgb[at + 1] != on_pixel.rgb[from + 1] ||
+                    between.rgb[at + 2] != on_pixel.rgb[from + 2])
+                    ++differing;
+            }
+        std::cout << "render tiers check: full tier: half a map pixel on at zoom 4, "
+                  << compared - differing << " of " << compared
+                  << " battlefield pixels are the frame before moved two pixels left\n";
+        if (differing * most_moved_mismatch_share > compared) {
+            write_png(picture("between-on-pixel"), on_pixel);
+            write_png(picture("between"), between);
+            fail("a view half a map pixel on was not the picture moved two pixels left");
+        }
     }
     std::cout
         << "render tiers check: the full tier drew the battlefield on the card at every zoom, "

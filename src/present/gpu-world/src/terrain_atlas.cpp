@@ -542,8 +542,8 @@ tile_rect(const TerrainAtlas& atlas, uint32_t slot, uint32_t level) noexcept {
 TerrainAtlasError read_terrain_view(
     const TerrainAtlas& atlas,
     uint32_t level,
-    uint32_t camera_x,
-    uint32_t camera_y,
+    int32_t camera_x,
+    int32_t camera_y,
     uint32_t width,
     uint32_t height,
     uint8_t* rgba,
@@ -551,36 +551,44 @@ TerrainAtlasError read_terrain_view(
 ) noexcept {
     if (level >= tile_level_count)
         return TerrainAtlasError::level_out_of_range;
-    const uint32_t block = 1U << level;
-    if (camera_x % block != 0 || camera_y % block != 0)
+    const int64_t block = int64_t{1} << level;
+    if ((camera_x & (block - 1)) != 0 || (camera_y & (block - 1)) != 0)
         return TerrainAtlasError::camera_unaligned;
     if (width == 0 || height == 0)
         return TerrainAtlasError::none;
     if (rgba == nullptr || stride_bytes < static_cast<std::size_t>(width) * texel_bytes)
         return TerrainAtlasError::no_output;
     const uint32_t edge = tile_edge >> level;
-    const uint64_t map_width = static_cast<uint64_t>(atlas.grid_width) * edge;
-    const uint64_t map_height = static_cast<uint64_t>(atlas.grid_height) * edge;
-    const uint64_t first_x = camera_x / block;
-    const uint64_t first_y = camera_y / block;
+    const auto map_width = static_cast<int64_t>(atlas.grid_width) * edge;
+    const auto map_height = static_cast<int64_t>(atlas.grid_height) * edge;
+    // The camera is a whole number of texels, before the map too.
+    const int64_t first_x = camera_x / block;
+    const int64_t first_y = camera_y / block;
     for (uint32_t y = 0; y < height; ++y) {
         uint8_t* out = rgba + static_cast<std::size_t>(y) * stride_bytes;
-        const uint64_t map_y = first_y + y;
-        if (map_y >= map_height) {
+        const int64_t map_y = first_y + y;
+        if (map_y < 0 || map_y >= map_height) {
             fill_opaque_black(out, width);
             continue;
         }
         const std::size_t cell_row = static_cast<std::size_t>(map_y / edge) * atlas.grid_width;
         const auto within_y = static_cast<uint32_t>(map_y % edge);
-        uint64_t map_x = first_x;
+        int64_t map_x = first_x;
         uint32_t remaining = width;
+        if (map_x < 0) {
+            const auto before = static_cast<uint32_t>(std::min<int64_t>(remaining, -map_x));
+            fill_opaque_black(out, before);
+            out += static_cast<std::size_t>(before) * texel_bytes;
+            remaining -= before;
+            map_x = 0;
+        }
         while (remaining != 0) {
             if (map_x >= map_width) {
                 fill_opaque_black(out, remaining);
                 break;
             }
             const auto within_x = static_cast<uint32_t>(map_x % edge);
-            const uint32_t run = std::min(remaining, edge - within_x);
+            const uint32_t run = std::min<uint32_t>(remaining, edge - within_x);
             const uint16_t slot = atlas.grid[cell_row + static_cast<std::size_t>(map_x / edge)];
             const SlotPlace place = place_slot(atlas, slot);
             const AtlasPage& page = atlas.pages[place.page];

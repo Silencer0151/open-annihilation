@@ -158,10 +158,7 @@ void Runtime::check_factory_orders() {
     };
 
     center_camera_on_unit(factory);
-    const auto viewport = live_viewport(
-        static_cast<uint32_t>(std::max(0, match_camera_x_)),
-        static_cast<uint32_t>(std::max(0, match_camera_z_))
-    );
+    const auto viewport = live_viewport(match_camera_x_, match_camera_z_);
     const auto on_screen = project_match_point(viewport, slots[factory].unit->position);
     const auto factory_x = static_cast<float>(on_screen.x);
     const auto factory_y = static_cast<float>(on_screen.y);

@@ -91,11 +91,7 @@ void Runtime::check_attack_command() {
         slots[enemy].record.flags &= ~(OA_UNIT_FLAG_MOVE_ORDER_MASK | OA_UNIT_FLAG_FIRE_ORDER_MASK);
     }
 
-    const auto viewport = [&] {
-        return live_viewport(
-            static_cast<uint32_t>(match_camera_x_), static_cast<uint32_t>(match_camera_z_)
-        );
-    };
+    const auto viewport = [&] { return live_viewport(match_camera_x_, match_camera_z_); };
     const auto point_at = [&](uint16_t id) {
         const auto screen = project_match_point(viewport(), slots[id].unit->position);
         const auto x = static_cast<float>(screen.x);

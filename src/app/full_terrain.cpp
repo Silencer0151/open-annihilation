@@ -77,12 +77,19 @@ TileRange visible_tiles(const gw::TerrainAtlas& atlas, const TerrainView& view) 
     TileRange range;
     if (atlas.grid_width == 0 || atlas.grid_height == 0 || !(view.scale > 0.0F))
         return range;
-    const auto columns = [&](uint32_t camera, uint32_t extent, uint32_t cells) {
-        const auto map_pixels = static_cast<uint64_t>(
+    // The tile a map pixel lies in, rounded toward negative infinity, so
+    // that a camera before the map counts its tiles as one on it does.
+    const auto tile_of = [](int64_t pixel) {
+        constexpr auto edge = static_cast<int64_t>(gw::tile_edge);
+        return pixel >= 0 ? pixel / edge : -((edge - 1 - pixel) / edge);
+    };
+    const auto columns = [&](int32_t camera, uint32_t extent, uint32_t cells) {
+        const auto map_pixels = static_cast<int64_t>(
             std::ceil(static_cast<double>(extent) / static_cast<double>(view.scale))
         );
-        const uint64_t first = std::min<uint64_t>(camera / gw::tile_edge, cells);
-        const uint64_t end = std::min<uint64_t>((camera + map_pixels) / gw::tile_edge + 1U, cells);
+        const auto last = static_cast<int64_t>(cells);
+        const int64_t first = std::clamp<int64_t>(tile_of(camera), 0, last);
+        const int64_t end = std::clamp<int64_t>(tile_of(camera + map_pixels) + 1, 0, last);
         return std::pair{static_cast<uint32_t>(first), static_cast<uint32_t>(std::max(first, end))};
     };
     std::tie(range.first_column, range.end_column) =
@@ -150,7 +157,7 @@ uint32_t append_terrain_tiles(
     const card::Colour colour{1.0F, 1.0F, 1.0F, pass.alpha};
     const auto tile_pixels = static_cast<float>(static_cast<double>(gw::tile_edge) * view.scale);
     // Where a tile edge lands, and, on whole pixels, rounded to the nearest.
-    const auto edge_at = [&](uint32_t tile, float origin, uint32_t camera) {
+    const auto edge_at = [&](uint32_t tile, float origin, int32_t camera) {
         const auto at = static_cast<float>(
             static_cast<double>(origin) +
             (static_cast<double>(tile) * gw::tile_edge - static_cast<double>(camera)) * view.scale

@@ -167,38 +167,60 @@ logs it.
   screen loading and the host of the frontend dispatcher. Lines are only
   ever added to `screens.inc`.
 - `runtime_world_draw.cpp`, `runtime_camera.cpp`: world rendering and the
-  camera, held within the map the game shows (`shown_map_size`: the tile
-  mosaic less its last 32 columns and 128 rows of map pixels, the hidden
-  edges the original never scrolls to and maps fill with filler tiles, as
-  `Game.map_pixel_width/height` hold it); the terrain fills, the box filter
-  and the Full tier's atlas (`shown_tile_grid`) end there too, so no tier
-  draws the filler at any zoom. The wheel, a pinch and a pad zoom about
-  the pointer, and the settings dialog about the battlefield's centre
-  (`anchor_zoom_at`): each step, a wheel's notch, a trackpad's scroll or a
-  frame of a pinch or of the pad's zoom, keeps the map point the view as
-  drawn shows under the pointer there, as far as the camera's limits
-  allow. Where they stop the camera, as a map narrower or shorter than the
-  view does and a zoom out past the map's edge, it sits at the limit, so
-  that the map's edge can be reached and zoomed in on, and the next step
-  zooms about whatever is then under the pointer: a zoom out against an
-  edge and back in need not return the camera to where it was. The camera
-  is rounded as the pointer's map pixel is (`apply_zoom_anchor`), so a
-  step past the nearest or farthest zoom leaves it where it is, and the
-  wheel counts its steps from the target they began at (`zoom_wheel_`),
-  so that as many steps back return the zoom exactly. The step that
-  reaches the nearest or farthest zoom counts whole, though the zoom stops
-  there, and a step past it counts nothing, so that the first step back
-  leaves the end and as many as reached it return the zoom, and the camera
-  too where its limits never stopped it. Every zoom of the
-  player's view, the wheel's, a pinch's, the touch buttons', a pad's and
-  the settings dialog's, stays between `least_match_zoom` and
-  `most_match_zoom`, which the Maximum zoom out and Maximum zoom in
-  settings set (`least_battlefield_zoom` in `far_view.hpp`): Automatic
-  keeps the drawing's floor (`detail_zoom_floor`, half the game's scale, a
-  sixth while Full draws), Whole map the zoom at which the whole shown map
-  fits the battlefield (`whole_map_zoom`), a share that share or the whole
-  map, never past `furthest_battlefield_zoom`, a sixty-fourth; a view past the
-  limits comes within them at the next frame (`step_match_zoom`). The
+  camera. The map the game shows (`shown_map_size`) is the tile mosaic less
+  its last 32 columns and 128 rows of map pixels, the hidden edges the
+  original never scrolls to and maps fill with filler tiles, as
+  `Game.map_pixel_width/height` hold it; the terrain fills, the box filter,
+  the far view's filter and the Full tier's atlas (`shown_tile_grid`) end
+  there, and draw black past it and before its left and top edges, so no
+  tier draws the filler at any zoom. The view may go past the map's edges:
+  its centre stays on the map, so that a map's edge or corner can be
+  brought to the battlefield's middle, or, where the view shows more of an
+  axis than the map holds, the map's centre stays in the view
+  (`view_centre_span` in `far_view.hpp`). The view's exact place, the map
+  point at the battlefield's corner (`exact_view_`, `match_view_place`),
+  is what the zoom, the scroll and a finger's pan move, and the camera is
+  taken from it (`place_match_view`): the nearest whole map pixel, or the
+  one at or before it while frames draw the view between map pixels. The
+  limits hold a view from the one they held last (`view_hold_`,
+  `held_view`), so that a view past them goes no further from the map but
+  moves back toward it at once; every frame holds the camera so
+  (`view_camera`, `held_camera`), which catches the moves that set the
+  camera themselves: the minimap, the megamap, a follow, a jump to a unit
+  or a marker, a load. The camera may lie left of and above the map, and
+  every drawing and pointer path takes it signed. Saves, the match's
+  digest, a meteor strike and the camera network play shares take the
+  camera held on the map as the game holds it (`on_map_camera`), so a
+  view past the map's edges reaches none of them.
+  The wheel and a trackpad set the zoom's target (`handle_match_zoom`,
+  `wheel_zoom_target`), which `step_match_zoom` eases toward by the frame's
+  time, the zoom's logarithm a share of the way each frame, whatever the
+  game's speed and while the match is paused; a pinch and the pad's zoom
+  take their zoom at once (`zoom_match_about`); the settings dialog and a
+  change of the zoom's limits ease about the battlefield's centre. Every
+  frame of a zoom keeps the exact map point under its focus there
+  (`zoom_view_about`): the pointer where it is that frame while the wheel
+  zooms about it, or the point the zoom was given. Along an axis on which
+  that point lies on the map, the view goes wherever that takes it, past
+  the limits too, since the point keeps the map in view; past the map's
+  edge it is held within the limits. A zoom of the wheel, a pinch or the
+  pad ends a camera's follow of a unit, as a scroll does; the dialog's
+  ease keeps it, with the unit at the centre. The wheel counts its steps
+  from the target they began at (`zoom_wheel_`), so that as many steps
+  back return the zoom exactly, and with it the view where the pointer
+  rested. The step that reaches the nearest or farthest zoom counts whole,
+  though the zoom stops there, and a step past it counts nothing, so that
+  the first step back leaves the end and as many as reached it return the
+  zoom. Every zoom of the player's view, the wheel's, a pinch's, the touch
+  buttons', a pad's and the settings dialog's, stays between
+  `least_match_zoom` and `most_match_zoom`, which the Maximum zoom out and
+  Maximum zoom in settings set (`least_battlefield_zoom` in
+  `far_view.hpp`): Automatic keeps the drawing's floor
+  (`detail_zoom_floor`, half the game's scale, a sixth while Full draws),
+  Whole map the zoom at which the whole shown map fits the battlefield
+  (`whole_map_zoom`), a share that share or the whole map, never past
+  `furthest_battlefield_zoom`, a sixty-fourth; a view past the limits eases
+  within them about the battlefield's centre (`step_match_zoom`). The
   director, the checks' `--zoom` and the recorded games' replay keep their
   own range.
 - `far_view.cpp`, `far_view.hpp`: the far view, the battlefield zoomed out
@@ -219,17 +241,29 @@ logs it.
   Off tier it makes a frame of the whole map up to about twice as long as
   one at the floor. The pointer picks a unit wherever its dot is drawn
   (`far_view_dot_covers`, in `selection_hooks`), and a press on the black
-  past a map narrower or shorter than the view takes the shown map's
-  nearest edge (`ground_point_under`). In the Full tier the far frame's
-  world layer is the processor's picture, which Basic's presentation draws
-  without leaving Full. `app-far-view` checks the floors, the pyramid, the
-  filter, the dots and the pixels they cover by table; `native-navigation`
-  (`check_zoom_limit_choices`) every choice's limits on four windows, the
-  whole map's fit, the point under the pointer on the way out to it and
-  back, a choice changed in play, and at Whole map on the game's screen a
-  click on every pixel of a unit's dot, on an enemy's dot and on the black
-  past the map (`check_far_view_presses`); `native-render-tiers` the whole
-  map's far view in each tier.
+  past the map's edges, at any zoom, takes the nearest point of the shown
+  map (`ground_point_under`). In the Full tier the far frame's world layer
+  is the processor's picture, which Basic's presentation draws without
+  leaving Full. `app-far-view` checks the floors, the pyramid, the filter
+  before and past the map, the dots and the pixels they cover, and the
+  view's limits (`view_centre_span`, `held_view`, `held_camera`) by table;
+  `native-navigation` (`runtime_tracking_zoom_check.cpp`) every frame of
+  the wheel's, a trackpad's, a pinch's and the pad's zooms at the map's
+  corners, edges and middle and past them, with the pointer resting and
+  moving, keeping the map point under the pointer to a millionth of a map
+  pixel (`check_zoom_about_pointer`); every choice's limits on four
+  windows, the whole map's fit, the point under the pointer on the way out
+  to it and back, a zoom in from it landing where it is aimed, and a
+  choice changed in play (`check_zoom_limit_choices`); at Whole map on the
+  game's screen a click on every pixel of a unit's dot, on an enemy's dot
+  and on the black either side of the map (`check_far_view_presses`); a
+  scroll stopping at the view's limits, the minimap bringing the map's
+  corner to the middle, a view a zoom left past the limits, an aircraft
+  past the map's edge drawn, hovered and selected as a model and as a dot,
+  and the digest of a view past the map (`check_view_past_map`); and a
+  zoom ending a follow (`check_tracking_zoom`); `native-render-tiers` the
+  whole map's far view in each tier, and the fill before the map's start
+  and past its end.
 - `runtime_skirmish_start.cpp` builds a match: the feature table's GAF files
   are kept as read and parsed without their pixels (`gaf::PixelData::checked`);
   a feature sequence's pixels are decoded from its file when a feature first
@@ -333,16 +367,9 @@ logs it.
   at. For a view drawn between map pixels (below), `area_phase` gives the
   area pass's start in the scene, `magnified_span` the corner a magnified
   frame draws and where it lands, one more column and row at the same
-  scale, `most_view_offset` how far past its camera the view may lie
-  before the camera's farthest place, and `scrolled_view_offset` and
-  `view_offset_at` the offset a scroll and a zoom's anchor leave.
-  `app-world-scaling` checks these by table, that over the zoom range and
-  every window's battlefield the scene holds every pixel the nearest
-  resample and the area pass read, and, frame by frame, that a scroll
-  toward the map's end draws the view at its exact place while the camera
-  steps whole map pixels, toward its start or held at the edge never
-  jumps or turns back, and on an axis joining a scroll under way catches
-  up with the carry both axes step on by that axis's first step.
+  scale. `app-world-scaling` checks these by table, and that over the zoom
+  range and every window's battlefield the scene holds every pixel the
+  nearest resample and the area pass read.
 - The accelerated presentation (`runtime_accelerated.cpp`,
   `scaled_world.hpp`, `scaled_world.cpp`): a component switched on at a
   rung of the step-down ladder (`switch_accelerated_presentation`) when
@@ -373,20 +400,17 @@ logs it.
   the overlay but keeps the base the frame being presented drew, so that
   frame is magnified as every other.
   Smooth panning: while a frame is magnified or reduced by the area pass,
-  the view may lie between map pixels (`smooth_view_`, `view_offset`). The
-  camera, and Game's, steps whole map pixels exactly as in the standard
-  tier (`scroll_match_view`, `apply_zoom_anchor`), so nothing reaches the
-  simulation, saves, digests or the wire; the view follows the scroll's
-  exact travel within the camera's map pixel, an axis joining a scroll
-  under way catching up with the carry both axes step on over the frames
-  before its camera steps, or the exact point under a zoom's anchor, the
-  anchor's whole map pixel the camera's own, held from 0 to one map pixel
-  and before the camera's farthest place, and a camera moved any other way
-  starts it on its own map pixel. The card draws the scene that far before the battlefield's
-  edge (`magnified_span`), the area pass starts its picture that far into
-  the scene, and the painters after the fog move by it to the nearest
-  screen pixel. Hover, picking, the drag box, the build site and orders'
-  map pixels take the same offset (`game_screen_point`,
+  or drawn by the card in the Full tier, the view lies between map pixels
+  (`view_between_pixels_`, `view_offset`): at its exact place
+  (`match_view_place`), past the camera taken at or before it, which, and
+  Game's, steps whole map pixels as the place moves, so nothing reaches the
+  simulation, saves, digests or the wire; a camera moved any other way
+  starts the view on its own map pixel. The card draws the scene that far
+  before the battlefield's edge (`magnified_span`), the area pass starts
+  its picture that far into the scene, the Full tier draws its terrain,
+  fog and stages that far on, and the painters after the fog move by it to
+  the nearest screen pixel. Hover, picking, the drag box, the build site
+  and orders' map pixels take the same offset (`game_screen_point`,
   `match_world_point`, `screen_to_map_pixel` with a `ViewOffset`), so the
   pointer is over what is drawn under it, and orders stay whole map
   pixels; the offset never carries the pointer past Game's view
@@ -430,14 +454,16 @@ logs it.
   them; that the picture kept for a reader is the standard tier's and eases
   nothing; that a slow scroll at zoom 2.5 and 0.5 moves the battlefield
   read back by at most a pixel a frame, the view drawn at the scroll's
-  exact place while the camera steps whole map pixels, where at 2.5 the
-  standard tier jumps two or three pixels, and a second axis joining the
-  scroll moves at most a pixel a frame too; that at zoom 4 the pointer
-  finds a unit three pixels further left with the view three quarters of
-  a map pixel on, as it is drawn, and the game view up to the
-  battlefield's edges; and that a zoom to the zoom it is at, by the wheel
-  or about the centre, keeps the point drawn under its anchor
-  (`check_smooth_panning`, `runtime_smooth_pan_check.cpp`); that a zoom
+  exact place either way while the camera steps whole map pixels, where at
+  2.5 the standard tier jumps two or three pixels, and a second axis
+  joining the scroll is at its exact place from its first frame; that at
+  zoom 4 the pointer finds a unit three pixels further left with the view
+  three quarters of a map pixel on, as it is drawn, and the game view up
+  to the battlefield's edges; and that a zoom to the zoom it is at, by the
+  wheel or about the centre, keeps the point drawn under its focus
+  (`check_smooth_panning`, `runtime_smooth_pan_check.cpp`); that at zoom 4
+  a view half a map pixel on is, as Full draws it, the frame before moved
+  two pixels left; that a zoom
   ease makes no texture; that prescale targets are drawn once a painted
   frame; and that the Full tier's model stage (`runtime_full.hpp`), given
   the zoom-1 frame's list, draws the fight's units, projectiles, debris and
@@ -1667,9 +1693,10 @@ saves, recordings and network games are unaffected.
   lays out the controls' frame with `oa::ui::touch_hud::lay_out`.
 - `runtime_touch_actions.cpp` holds what each control, sheet item and
   wheel item does; `runtime_touch_camera.cpp` the camera a finger moves:
-  `pan_match_camera_by` (the map follows the finger) and
-  `zoom_match_about` (a pinch's zoom and anchor applied at once, so the map
-  stays under the fingers), inertia and auto-scroll.
+  `pan_match_camera_by` (the map follows the finger, past the map's edges
+  as far as a scroll goes) and `zoom_match_about` (a pinch's zoom applied
+  at once about the fingers, so the map stays under them), inertia and
+  auto-scroll.
 - `runtime_input_modifiers.cpp`: every place the engine reads the modifier
   keys asks `input_modifiers(use)` for its own use, so a latch gives Shift
   only to its kind of action: ADD to selecting, QUEUE to orders, placement

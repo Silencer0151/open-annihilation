@@ -138,8 +138,8 @@ std::vector<uint8_t> fill_view(
     const Map& map,
     const oa::PaletteBytes& palette,
     const GammaTable* gamma,
-    uint32_t source_x,
-    uint32_t source_y,
+    int32_t source_x,
+    int32_t source_y,
     uint32_t width,
     uint32_t height
 ) {
@@ -330,8 +330,8 @@ AtlasDigests digest_atlas(const gw::TerrainAtlas& atlas) {
 std::vector<uint8_t> read_view(
     const gw::TerrainAtlas& atlas,
     uint32_t level,
-    uint32_t camera_x,
-    uint32_t camera_y,
+    int32_t camera_x,
+    int32_t camera_y,
     uint32_t width,
     uint32_t height
 ) {
@@ -793,8 +793,18 @@ void test_zoom_1_matches_fill() {
     const GammaTable brighter = gamma_table(1.25F);
     const GammaTable* gammas[] = {nullptr, &darker, &brighter};
     const uint32_t sizes[][2] = {{1000, 700}, {1, 1}, {31, 33}, {1664, 952}};
-    const uint32_t cameras[][2] = {
-        {0, 0}, {13, 7}, {map_w - 500, map_h - 300}, {map_w - 1, map_h - 1}, {map_w + 5, map_h + 5}
+    const auto w = static_cast<int32_t>(map_w);
+    const auto h = static_cast<int32_t>(map_h);
+    // On the map, past its end, and before its left and top edges.
+    const int32_t cameras[][2] = {
+        {0, 0},
+        {13, 7},
+        {w - 500, h - 300},
+        {w - 1, h - 1},
+        {w + 5, h + 5},
+        {-40, -7},
+        {-1, 13},
+        {-2000, -900}
     };
     int views = 0;
     std::size_t wrong = 0;

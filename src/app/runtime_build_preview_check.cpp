@@ -266,10 +266,7 @@ int Runtime::check_build_preview() {
         render_match_surface();
         // Where the frame draws map points: from the battlefield's corner,
         // moved by the view's offset to the nearest screen pixel.
-        auto view = live_viewport(
-            static_cast<uint32_t>(std::max(0, match_camera_x_)),
-            static_cast<uint32_t>(std::max(0, match_camera_z_))
-        );
+        auto view = live_viewport(match_camera_x_, match_camera_z_);
         view.destination_x = -static_cast<int32_t>(
             std::lround(accelerated_.frame_offset.x * static_cast<double>(zoom))
         );

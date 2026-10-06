@@ -1326,8 +1326,6 @@ void Runtime::touch_match_started() {
     state.hud.drawer_page = 0;
     state.hud.drawer_tab = oa::ui::touch_hud::DrawerTab::build;
     state.dispatch.drawer_unit = 0;
-    state.dispatch.pan_carry_x = 0.0;
-    state.dispatch.pan_carry_y = 0.0;
     // A phone with touch controls starts nearer the ground unless the
     // command line chose a zoom; the player zooms freely from there.
     if (!touch || !touch_phone_class() || options_.match_zoom != kDefaultBattlefieldZoom)

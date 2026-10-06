@@ -551,10 +551,7 @@ void Runtime::check_interpolation() {
     const auto even_x = [&](const FixedVec3& from, const FixedVec3& to, uint32_t frame) {
         const auto place = blend_point(from, to, frame * (whole_tick / kFramesPerTick));
         return project_match_point(
-                   live_viewport(
-                       static_cast<uint32_t>(match_camera_x_),
-                       static_cast<uint32_t>(match_camera_z_)
-                   ),
+                   live_viewport(match_camera_x_, match_camera_z_),
                    oa::sim::match_runtime::fixed_words(place)
         )
             .x;

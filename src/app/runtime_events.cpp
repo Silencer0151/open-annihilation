@@ -235,7 +235,7 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
         // With the Mouse wheel zoom setting off the wheel does nothing here.
         if (!engine_settings().wheel_zoom || !convert_event_to_frame(sdl_.renderer, event))
             return;
-        handle_match_zoom(event.wheel.y, event.wheel.mouse_x, event.wheel.mouse_y);
+        handle_match_zoom(event.wheel.y, event.wheel.mouse_x, event.wheel.mouse_y, true);
         return;
     }
     if (event.type == SDL_EVENT_MOUSE_WHEEL && screen_ == Screen::map_selection &&
@@ -292,6 +292,9 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
         match_pointer_known_ =
             screen_ == Screen::match && event_mouse_id(event) != SDL_TOUCH_MOUSEID;
         update_pointer(x, y);
+        // A zoom the wheel eases goes on about the pointer as it moves.
+        if (match_pointer_known_ && zoom_focus_.follows_pointer)
+            zoom_focus_ = {true, x, y};
         // Only a left press the radar acted on (below) leaves its release
         // nothing to do; any other left press clears that mark.
         if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT)
@@ -392,9 +395,8 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
             }
             if (match_drag_ && !match_drag_is_click()) {
                 const bool add = (input_modifiers(ModifierUse::selection) & SDL_KMOD_SHIFT) != 0;
-                const auto [from, to] = match_drag_corners(live_viewport(
-                    static_cast<uint32_t>(match_camera_x_), static_cast<uint32_t>(match_camera_z_)
-                ));
+                const auto [from, to] =
+                    match_drag_corners(live_viewport(match_camera_x_, match_camera_z_));
                 match_drag_.reset();
                 if (match_command_ == MatchCommand::attack || match_command_ == MatchCommand::dgun)
                     area_order_units(from.x, from.y, to.x, to.y, "attack");

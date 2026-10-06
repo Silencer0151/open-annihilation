@@ -97,6 +97,14 @@ void rows_above_the_camera_truncate() {
     CHECK(wr::unit_draw_row(fixed(-16), 0) == -1);
 }
 
+// A camera above the map counts its rows on from the map's: the rows a
+// camera three rows further down counts, three fewer.
+void rows_above_the_map_run_on() {
+    for (const int32_t unit : {-30, -5, 18, 176})
+        CHECK(wr::unit_draw_row(fixed(unit), -40) == wr::unit_draw_row(fixed(unit + 48), 8) - 3);
+    CHECK(wr::unit_draw_row(fixed(-30), -40) == -3);
+}
+
 // Features below the standing height lie under every unit, row by row and
 // left to right within a row, and are not in the ground pass.
 void low_features_lie_under_every_unit() {
@@ -147,6 +155,7 @@ int main() {
     unit_in_front_covers_tree();
     rows_count_from_the_camera();
     rows_above_the_camera_truncate();
+    rows_above_the_map_run_on();
     low_features_lie_under_every_unit();
     a_row_draws_units_then_features();
     units_off_the_ground_draw_last();

@@ -140,11 +140,18 @@ Change it to play a mod, or to go back to the game as 3.1c plays it.
 Each of these takes effect at once.
 
 - **Mouse wheel zoom**, On by default. The mouse wheel, or a trackpad's
-  scroll, zooms the battlefield in and out; a camera that follows a unit
-  (**T**) keeps the unit in the centre as it zooms. Turned off, the view
-  eases back to the game's own scale. Turn it off if the wheel zooms when
-  you do not mean it to, or to use a mod's megamap, which takes the wheel
-  only while this is off
+  scroll, zooms the battlefield in and out smoothly about the pointer: the
+  ground under the pointer stays under it on every frame of the zoom, as
+  the pointer moves too, so a zoom out and back in comes back to where it
+  began. A zoom ends a camera's follow of a unit (**T**, or Ctrl+C for the
+  commander), as a scroll does. The view goes past the map's edges, by a
+  scroll, the minimap and a zoom, until the map's edge reaches the middle
+  of the battlefield, or, with more than the whole map in view, until the
+  map's centre reaches the view's edge; the battlefield is black past the
+  map, and your aircraft stay in view where their flight takes them past
+  its edges. Turned off, the view eases back to the game's own scale.
+  Turn it off if the wheel zooms when you do not mean it to, or to use a
+  mod's megamap, which takes the wheel only while this is off
   ([ui.megamap](mods/standard-hacks/ui.megamap.md)); the wheel itself can
   zoom out to the whole map (Maximum zoom out).
 - **Maximum zoom out**, Automatic, Whole map, 1/32, 1/16, 1/8, 1/4 or 1/2,
@@ -153,22 +160,23 @@ Each of these takes effect at once.
   the units are drawn whole, as the view always has: half the game's scale,
   or a sixth while Full hardware acceleration draws the battlefield. Whole
   map zooms out until the whole map fits the battlefield, filling it one
-  way, with the camera at the map's corner and black past the map the
-  other way; each fraction zooms out to that share of the game's scale, or
-  to the whole map if it fits first. Farther out than Automatic, the
-  battlefield is drawn as a far view in every tier: the terrain reduced,
-  each unit as a dot of its owner's colour, framed while selected, and no
-  health bars, so that a frame of the whole map takes no more memory than
-  one at half scale. It takes about as long to draw too, but for the fog,
-  which grows with the map: on the largest maps, with Hardware
-  acceleration Off, the fog can make a frame of the whole map up to about
-  twice as long as one at half scale. Clicks, drags and orders work as
-  ever: a click on a unit's dot picks the unit, and a press on the black
-  past the map gives its order at the map's nearest edge. Choose Whole map
-  to see and command the whole battle at once.
+  way and fitting within it the other; each fraction zooms out to that
+  share of the game's scale, or to the whole map if it fits first. Farther
+  out than Automatic, the battlefield is drawn as a far view in every
+  tier: the terrain reduced, each unit as a dot of its owner's colour,
+  framed while selected, and no health bars, so that a frame of the whole
+  map takes no more memory than one at half scale. It takes about as long
+  to draw too, but for the fog, which grows with the map: on the largest
+  maps, with Hardware acceleration Off, the fog can make a frame of the
+  whole map up to about twice as long as one at half scale. Clicks, drags
+  and orders work as ever: a click on a unit's dot picks the unit, and a
+  press on the black past the map, at any zoom, gives its order at the
+  nearest point of the map. Choose Whole map to see and command the whole
+  battle at once.
 - **Maximum zoom in**, None, 2x, 3x or 4x, 4x by default. How close the
   same zooms go: None keeps the game's own scale as the closest, the others
-  that many times it. A view past a new limit comes within it at once.
+  that many times it. A view past a new limit eases within it about the
+  battlefield's centre.
 - **Escape opens the game menu**, On by default on macOS and Off
   elsewhere. The first Escape cancels an order or clears the selection, as
   in 3.1c; the next opens the in-game menu. Turn it on if F2 is awkward to

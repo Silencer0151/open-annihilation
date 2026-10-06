@@ -142,9 +142,7 @@ void Runtime::check_turret_draws(const fs::path& report_directory) {
     // The battlefield around the turret, from the frame drawn last.
     const auto crop = [&] {
         const auto& battlefield = match_world_cpu_;
-        auto view = live_viewport(
-            static_cast<uint32_t>(match_camera_x_), static_cast<uint32_t>(match_camera_z_)
-        );
+        auto view = live_viewport(match_camera_x_, match_camera_z_);
         view.destination_x = 0;
         view.destination_y = 0;
         view.surface_width = battlefield.width;

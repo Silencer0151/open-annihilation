@@ -27,12 +27,14 @@ namespace {
 // last frame.
 constexpr float kLongestZoomStep = 0.05F;
 
-// The range of the map pixels a zoom's exact anchor lies past its whole map
-// pixel: half a pixel either side of the point on the camera's map pixel,
-// which the whole one is rounded from, and the view's offset, up to a map
-// pixel, past that.
-constexpr double kLeastAnchorFraction = -0.5;
-constexpr double kMostAnchorFraction = 1.5;
+// How near the target's logarithm the eased zoom's must come for the zoom
+// to take the target: a ten-thousandth of the zoom.
+constexpr double kZoomArrival = 1.0e-4;
+
+// The farthest the view's exact place goes from the map's corner, in map
+// pixels, whatever moves it: far past any map, and well within a camera's
+// whole map pixels.
+constexpr double kFarthestViewPlace = 16'777'216.0;
 
 // The wheel steps short of an end of the zoom's range that count as at
 // it, well above the rounding of a target to float and below any step a
@@ -188,47 +190,6 @@ bool Runtime::pan_camera_from_radar(float x, float y) {
     return true;
 }
 
-void Runtime::apply_zoom_anchor() {
-    if (!zoom_anchored_)
-        return;
-    const auto zoom = static_cast<double>(match_zoom_ <= 0.0F ? 1.0F : match_zoom_);
-    // The camera that shows the anchor's map pixel under the anchor, the
-    // map pixels from the camera's to it rounded as screen_to_map_pixel
-    // rounds them: a step that leaves the zoom as it was leaves the camera
-    // where it was, and where the camera's limits never stop it, the steps
-    // back find the same map pixel under the anchor and return the camera.
-    const auto map_pixels_to = [zoom](int at) {
-        return static_cast<int32_t>(std::llround(static_cast<double>(at) / zoom));
-    };
-    match_camera_x_ = zoom_anchor_map_x_ - map_pixels_to(zoom_anchor_sx_);
-    match_camera_z_ = zoom_anchor_map_y_ - map_pixels_to(zoom_anchor_sy_);
-    // Where the camera's limits stop it, it sits at the limit, and the next
-    // step anchors on what is then under the pointer (anchor_zoom_at).
-    const auto camera = view_camera();
-    match_camera_x_ = camera[0];
-    match_camera_z_ = camera[1];
-    // A view drawn between map pixels keeps the exact point under the
-    // anchor, where the camera's rounding allows: the camera stays where
-    // the anchor rounds it to.
-    if (!smooth_view_.on || !selected_tnt_)
-        return;
-    const auto most = most_view_offsets(camera[0], camera[1]);
-    smooth_view_.camera_x = camera[0];
-    smooth_view_.camera_z = camera[1];
-    smooth_view_.offset.x = view_offset_at(
-        static_cast<double>(zoom_anchor_map_x_) + zoom_anchor_fraction_x_ -
-            static_cast<double>(zoom_anchor_sx_) / zoom,
-        camera[0],
-        most.x
-    );
-    smooth_view_.offset.y = view_offset_at(
-        static_cast<double>(zoom_anchor_map_y_) + zoom_anchor_fraction_y_ -
-            static_cast<double>(zoom_anchor_sy_) / zoom,
-        camera[1],
-        most.y
-    );
-}
-
 std::array<int32_t, 2> Runtime::shown_map_size() const noexcept {
     namespace features = oa::sim::feature_runtime;
     if (match_) {
@@ -263,76 +224,92 @@ std::array<int32_t, 2> Runtime::view_camera() const {
     if (!selected_tnt_)
         return {match_camera_x_, match_camera_z_};
     const auto [map_width, map_height] = shown_map_size();
+    const auto zoom = static_cast<double>(match_zoom() <= 0.0F ? 1.0F : match_zoom());
+    const auto from = [this](double centre) {
+        return view_hold_.held ? std::optional<double>(centre) : std::nullopt;
+    };
+    return {
+        held_camera(
+            match_camera_x_,
+            static_cast<double>(match_layout_.battlefield_width()) / zoom,
+            static_cast<double>(map_width),
+            from(view_hold_.centre_x)
+        ),
+        held_camera(
+            match_camera_z_,
+            static_cast<double>(match_layout_.battlefield_height()) / zoom,
+            static_cast<double>(map_height),
+            from(view_hold_.centre_z)
+        )
+    };
+}
+
+std::array<int32_t, 2> Runtime::on_map_camera() const {
+    if (!selected_tnt_)
+        return {match_camera_x_, match_camera_z_};
+    const auto [map_width, map_height] = shown_map_size();
     return {
         std::clamp(match_camera_x_, 0, std::max(0, map_width - visible_map_width())),
         std::clamp(match_camera_z_, 0, std::max(0, map_height - visible_map_height()))
     };
 }
 
-oa::present::world_renderer::ViewOffset
-Runtime::most_view_offsets(int32_t camera_x, int32_t camera_z) const {
-    if (!selected_tnt_)
-        return {};
-    // The camera's farthest places, as view_camera holds it.
-    const auto [map_width, map_height] = shown_map_size();
-    return {
-        most_view_offset(camera_x, std::max(0, map_width - visible_map_width())),
-        most_view_offset(camera_z, std::max(0, map_height - visible_map_height()))
+std::array<double, 2> Runtime::match_view_place() const {
+    if (exact_view_.held && exact_view_.camera_x == match_camera_x_ &&
+        exact_view_.camera_z == match_camera_z_)
+        return {exact_view_.x, exact_view_.z};
+    return {static_cast<double>(match_camera_x_), static_cast<double>(match_camera_z_)};
+}
+
+void Runtime::place_match_view(double x, double z) {
+    x = std::clamp(x, -kFarthestViewPlace, kFarthestViewPlace);
+    z = std::clamp(z, -kFarthestViewPlace, kFarthestViewPlace);
+    // A view drawn between map pixels lies past its camera's map pixel;
+    // one drawn on whole map pixels is drawn at the nearest.
+    const auto camera = [this](double place) {
+        return static_cast<int32_t>(view_between_pixels_ ? std::floor(place) : std::round(place));
     };
+    exact_view_ = {true, x, z, camera(x), camera(z)};
+    match_camera_x_ = exact_view_.camera_x;
+    match_camera_z_ = exact_view_.camera_z;
+    camera_moved_ = true;
 }
 
 oa::present::world_renderer::ViewOffset Runtime::view_offset() const {
-    if (!smooth_view_.on || screen_ != Screen::match)
+    if (!view_between_pixels_ || screen_ != Screen::match || !exact_view_.held)
         return {};
     const auto camera = view_camera();
-    if (camera[0] != smooth_view_.camera_x || camera[1] != smooth_view_.camera_z)
+    if (camera[0] != match_camera_x_ || camera[1] != match_camera_z_ ||
+        camera[0] != exact_view_.camera_x || camera[1] != exact_view_.camera_z)
         return {};
-    return smooth_view_.offset;
+    return {
+        std::clamp(exact_view_.x - static_cast<double>(camera[0]), 0.0, 1.0),
+        std::clamp(exact_view_.z - static_cast<double>(camera[1]), 0.0, 1.0)
+    };
 }
 
-oa::present::world_renderer::ViewOffset
-Runtime::settle_view_offset(uint32_t camera_x, uint32_t camera_y, bool between) {
+oa::present::world_renderer::ViewOffset Runtime::settle_view_offset(bool between) {
     // A reader's draw of the standard tier's picture leaves the view alone.
     if (accelerated_.suspended)
         return {};
-    if (!between) {
-        smooth_view_ = {};
-        return {};
-    }
-    const auto x = static_cast<int32_t>(camera_x);
-    const auto z = static_cast<int32_t>(camera_y);
-    if (!smooth_view_.on || smooth_view_.camera_x != x || smooth_view_.camera_z != z)
-        smooth_view_.offset = {};
-    smooth_view_.on = true;
-    smooth_view_.camera_x = x;
-    smooth_view_.camera_z = z;
-    // A zoom that changed since the offset was found may leave the view less room.
-    const auto most = most_view_offsets(x, z);
-    smooth_view_.offset.x = std::clamp(smooth_view_.offset.x, 0.0, most.x);
-    smooth_view_.offset.y = std::clamp(smooth_view_.offset.y, 0.0, most.y);
-    return smooth_view_.offset;
+    view_between_pixels_ = between;
+    return view_offset();
 }
 
 void Runtime::EngineSettingsState::ease_zoom_about_centre(Runtime& runtime, float target) {
     if (!runtime.match_ || !runtime.selected_tnt_)
         return;
-    // A camera tracking a unit eases about the unit, which stays at the
-    // centre (step_match_zoom), and goes on tracking it.
-    if (runtime.match_tracking_ && runtime.match_unit_present(runtime.tracked_match_unit_)) {
-        runtime.zoom_anchored_ = false;
-        runtime.match_zoom_target_ =
-            std::clamp(target, runtime.least_match_zoom(), runtime.most_match_zoom());
-        return;
-    }
     // The point at the battlefield's centre stays there while the zoom
-    // eases, anchored as the wheel's zoom anchors it.
+    // eases; a followed unit, which the follow keeps there, goes on being
+    // followed.
     const auto& layout = runtime.match_layout_;
-    runtime.anchor_zoom_at(
-        layout.left + layout.battlefield_width() / 2, layout.top + layout.battlefield_height() / 2
-    );
+    runtime.zoom_focus_ = {
+        false,
+        static_cast<float>(layout.left) + static_cast<float>(layout.battlefield_width()) / 2.0F,
+        static_cast<float>(layout.top) + static_cast<float>(layout.battlefield_height()) / 2.0F
+    };
     runtime.match_zoom_target_ =
         std::clamp(target, runtime.least_match_zoom(), runtime.most_match_zoom());
-    runtime.stop_match_tracking();
 }
 
 float Runtime::least_match_zoom() const noexcept {
@@ -374,21 +351,19 @@ void Runtime::step_match_zoom() {
     if (director_mode())
         return;
     // The limits move with the tier, the window, the map and the zoom's
-    // settings: a view zoomed past them comes back to them at once.
+    // settings: the target keeps within them, and a view zoomed past them
+    // eases back within them about the battlefield's centre.
     const float least = least_match_zoom();
     const float most = most_match_zoom();
     match_zoom_target_ = std::clamp(match_zoom_target_, least, most);
-    const bool floored = match_zoom_ < least || match_zoom_ > most;
-    if (floored) {
-        match_zoom_ = std::clamp(match_zoom_, least, most);
-        camera_moved_ = true;
-    }
-    // A camera tracking a unit keeps the unit at the centre at every scale,
-    // as far as the map's edges let it, while a menu holds the match too.
-    const auto centre_tracked_unit = [this] {
-        if (match_tracking_ && match_unit_present(tracked_match_unit_))
-            center_camera_on_unit(tracked_match_unit_);
-    };
+    const auto bf_w = static_cast<float>(match_layout_.battlefield_width());
+    const auto bf_h = static_cast<float>(match_layout_.battlefield_height());
+    if (match_zoom_ < least || match_zoom_ > most)
+        zoom_focus_ = {
+            false,
+            static_cast<float>(match_layout_.left) + bf_w / 2.0F,
+            static_cast<float>(match_layout_.top) + bf_h / 2.0F
+        };
     // Seconds since the zoom last eased, from the frames' times; the first
     // frame takes a frame at the full rate, and a long gap counts as
     // kLongestZoomStep.
@@ -402,77 +377,82 @@ void Runtime::step_match_zoom() {
     }
     zoom_clock_ = frame_time_ns_;
     zoom_clock_valid_ = true;
-    if (std::abs(match_zoom_ - match_zoom_target_) < 1.0e-4F) {
-        const bool changed = match_zoom_ != match_zoom_target_;
-        match_zoom_ = match_zoom_target_;
-        if (zoom_anchored_) {
-            apply_zoom_anchor();
-            zoom_anchored_ = false;
-            camera_moved_ = true;
-        }
-        if (changed || floored)
-            centre_tracked_unit();
+    if (match_zoom_ == match_zoom_target_ || !selected_tnt_)
         return;
-    }
-    const auto t = 1.0F - std::exp(-kZoomLerpHz * dt);
-    match_zoom_ += (match_zoom_target_ - match_zoom_) * t;
-    apply_zoom_anchor();
-    centre_tracked_unit();
-    camera_moved_ = true;
+    // The zoom eases by its logarithm, so that each frame zooms by the same
+    // ratio whichever way it goes and however far out it is.
+    const double from = std::log(static_cast<double>(match_zoom_ > 0.0F ? match_zoom_ : 1.0F));
+    const double to = std::log(static_cast<double>(match_zoom_target_));
+    const double eased =
+        from + (to - from) * (1.0 - std::exp(-static_cast<double>(kZoomLerpHz * dt)));
+    const float zoom = std::abs(to - eased) < kZoomArrival ? match_zoom_target_
+                                                           : static_cast<float>(std::exp(eased));
+    // The focus where it is this frame: the pointer as it moves, within
+    // the battlefield.
+    const double focus_x = std::clamp(
+        static_cast<double>(zoom_focus_.x) - static_cast<double>(match_layout_.left),
+        0.0,
+        static_cast<double>(bf_w)
+    );
+    const double focus_y = std::clamp(
+        static_cast<double>(zoom_focus_.y) - static_cast<double>(match_layout_.top),
+        0.0,
+        static_cast<double>(bf_h)
+    );
+    zoom_view_about(zoom, focus_x, focus_y);
+    // A followed unit, which only the settings dialog's ease and a change
+    // of the limits leave followed, stays at the centre as the zoom eases,
+    // while a menu holds the match too.
+    if (match_tracking_ && match_unit_present(tracked_match_unit_))
+        center_camera_on_unit(tracked_match_unit_);
 }
 
-void Runtime::anchor_zoom_at(int px, int py) {
-    // The view as drawn, wherever the camera's limits stopped the last
-    // zoom: each step zooms about what is under the pointer at that step.
-    const auto camera = view_camera();
-    const auto viewport =
-        live_viewport(static_cast<uint32_t>(camera[0]), static_cast<uint32_t>(camera[1]));
-    // The map pixel under the pointer on the camera's map pixel, which the
-    // camera rounds about as it always has, and the exact point a view
-    // drawn between map pixels shows under the pointer and keeps there,
-    // the offset lying in the fraction.
-    const auto before = oa::present::world_renderer::screen_to_map_pixel(viewport, {px, py});
-    if (!before)
+void Runtime::zoom_view_about(float zoom, double focus_x, double focus_y) {
+    if (!selected_tnt_ || !(zoom > 0.0F))
         return;
-    const auto zoom = static_cast<double>(match_zoom() <= 0.0F ? 1.0F : match_zoom());
-    const auto offset = view_offset();
-    const auto fraction = [zoom](int at, uint32_t drawn, uint32_t source, double past) {
-        return std::clamp(
-            static_cast<double>(source) + past + static_cast<double>(at) / zoom -
-                static_cast<double>(drawn),
-            kLeastAnchorFraction,
-            kMostAnchorFraction
+    const auto before = static_cast<double>(match_zoom_ > 0.0F ? match_zoom_ : 1.0F);
+    const auto after = static_cast<double>(zoom);
+    const auto view = match_view_place();
+    // The exact map point under the focus, which stays under it.
+    const double point_x = view[0] + focus_x / before;
+    const double point_z = view[1] + focus_y / before;
+    match_zoom_ = zoom;
+    const auto [map_width, map_height] = shown_map_size();
+    const double visible_x = static_cast<double>(match_layout_.battlefield_width()) / after;
+    const double visible_z = static_cast<double>(match_layout_.battlefield_height()) / after;
+    const auto along = [&](double point, double focus, double visible, int32_t map, double centre) {
+        const double place = point - focus / after;
+        // A point of the map keeps it in view, wherever the view goes.
+        if (point >= 0.0 && point <= static_cast<double>(map))
+            return place;
+        return held_view(
+            place,
+            visible,
+            static_cast<double>(map),
+            view_hold_.held ? std::optional<double>(centre) : std::nullopt
         );
     };
-    zoom_anchor_sx_ = px - match_layout_.left;
-    zoom_anchor_sy_ = py - match_layout_.top;
-    zoom_anchor_map_x_ = static_cast<int32_t>(before->x);
-    zoom_anchor_map_y_ = static_cast<int32_t>(before->y);
-    zoom_anchor_fraction_x_ = fraction(zoom_anchor_sx_, before->x, viewport.source_x, offset.x);
-    zoom_anchor_fraction_y_ = fraction(zoom_anchor_sy_, before->y, viewport.source_y, offset.y);
-    zoom_anchored_ = true;
+    const double x = along(point_x, focus_x, visible_x, map_width, view_hold_.centre_x);
+    const double z = along(point_z, focus_y, visible_z, map_height, view_hold_.centre_z);
+    place_match_view(x, z);
+    view_hold_ = {true, x + visible_x / 2.0, z + visible_z / 2.0};
 }
 
-void Runtime::handle_match_zoom(float wheel_y, float pointer_x, float pointer_y) {
+void Runtime::handle_match_zoom(
+    float wheel_y, float pointer_x, float pointer_y, bool follow_pointer
+) {
     if (wheel_y == 0.0F || !selected_tnt_)
         return;
-    const int px = static_cast<int>(pointer_x);
-    const int py = static_cast<int>(pointer_y);
-    if (px < match_layout_.left || py < match_layout_.top ||
-        px >= match_layout_.left + match_layout_.battlefield_width() ||
-        py >= match_layout_.top + match_layout_.battlefield_height())
+    if (pointer_x < static_cast<float>(match_layout_.left) ||
+        pointer_y < static_cast<float>(match_layout_.top) ||
+        pointer_x >= static_cast<float>(match_layout_.left + match_layout_.battlefield_width()) ||
+        pointer_y >= static_cast<float>(match_layout_.top + match_layout_.battlefield_height()))
         return;
-    // A camera tracking a unit zooms about the unit, which stays at the
-    // centre (step_match_zoom), and goes on tracking it; the wheel changes
-    // only the scale.
-    if (match_tracking_ && match_unit_present(tracked_match_unit_)) {
-        zoom_anchored_ = false;
-        match_zoom_target_ = wheel_zoom_target(wheel_y);
-        return;
-    }
-    anchor_zoom_at(px, py);
-    match_zoom_target_ = wheel_zoom_target(wheel_y);
+    // A zoom ends a follow, as a scroll does: the view zooms about the
+    // point, wherever the followed unit is.
     stop_match_tracking();
+    zoom_focus_ = {follow_pointer, pointer_x, pointer_y};
+    match_zoom_target_ = wheel_zoom_target(wheel_y);
 }
 
 float Runtime::wheel_zoom_target(float wheel_y) {
@@ -564,58 +544,42 @@ void Runtime::pan_match_camera() {
         dx += way.x;
         dz += way.y;
     }
-    if (dx == 0 && dz == 0) {
-        scroll_zoom_carry_ = 0.0;
+    if (dx == 0 && dz == 0)
         return;
-    }
     scroll_match_view(dx, dz, step);
 }
 
 void Runtime::scroll_match_view(int32_t way_x, int32_t way_z, double step) {
     way_x = std::clamp(way_x, -1, 1);
     way_z = std::clamp(way_z, -1, 1);
-    // The view the last frame drew, before the camera moves.
-    const auto camera_before = view_camera();
-    const auto offset_before = view_offset();
-    // Zoom keeps the on-screen rate constant; the carried fraction keeps the
-    // world rate exact rather than rounding it every frame.
+    if (!selected_tnt_ || !(step > 0.0) || (way_x == 0 && way_z == 0))
+        return;
+    // Zoom keeps the on-screen rate constant; the view's exact place keeps
+    // the world rate exact rather than rounding it every frame.
     const auto zoom = static_cast<double>(match_zoom() <= 0.0F ? 1.0F : match_zoom());
     const double travel = step / zoom;
-    const double carry_before = scroll_zoom_carry_;
-    scroll_zoom_carry_ += travel;
-    const auto move = static_cast<int32_t>(std::floor(scroll_zoom_carry_));
-    scroll_zoom_carry_ -= static_cast<double>(move);
-    if (move != 0) {
-        stop_match_tracking();
-        zoom_anchored_ = false;
-        match_camera_x_ += way_x * move;
-        match_camera_z_ += way_z * move;
-        camera_moved_ = true;
-    }
-    // A view drawn between map pixels follows the scroll's exact travel
-    // within the camera's map pixel, and an axis that trails the carry both
-    // axes step on, as one joining a scroll under way does, catches up
-    // with it before its camera steps; a zoom easing about its anchor
-    // places it instead. The camera above moved as it always has.
-    if (!smooth_view_.on || zoom_anchored_ || !selected_tnt_)
+    const auto view = match_view_place();
+    const auto [map_width, map_height] = shown_map_size();
+    const auto along =
+        [&](double place, int32_t way, int32_t battlefield, int32_t map, double centre) {
+            if (way == 0)
+                return place;
+            return held_view(
+                place + static_cast<double>(way) * travel,
+                static_cast<double>(battlefield) / zoom,
+                static_cast<double>(map),
+                view_hold_.held ? std::optional<double>(centre) : std::nullopt
+            );
+        };
+    const double x =
+        along(view[0], way_x, match_layout_.battlefield_width(), map_width, view_hold_.centre_x);
+    const double z =
+        along(view[1], way_z, match_layout_.battlefield_height(), map_height, view_hold_.centre_z);
+    // Held at the limits, the view stays as it is.
+    if (x == view[0] && z == view[1])
         return;
-    const auto camera = view_camera();
-    const auto most = most_view_offsets(camera[0], camera[1]);
-    const oa::present::world_renderer::ViewOffset offset{
-        scrolled_view_offset(
-            offset_before.x, way_x * travel, carry_before, camera[0] - camera_before[0], most.x
-        ),
-        scrolled_view_offset(
-            offset_before.y, way_z * travel, carry_before, camera[1] - camera_before[1], most.y
-        )
-    };
-    // The picture moves with the view, whether or not the camera stepped.
-    if (offset.x != smooth_view_.offset.x || offset.y != smooth_view_.offset.y ||
-        camera[0] != smooth_view_.camera_x || camera[1] != smooth_view_.camera_z)
-        camera_moved_ = true;
-    smooth_view_.camera_x = camera[0];
-    smooth_view_.camera_z = camera[1];
-    smooth_view_.offset = offset;
+    stop_match_tracking();
+    place_match_view(x, z);
 }
 
 void Runtime::issue_resume_or_repair(uint16_t id) {

@@ -23,8 +23,8 @@ namespace oa::app {
 
 void Runtime::apply_match_fog(
     oa::present::world_renderer::Surface& destination,
-    uint32_t camera_x,
-    uint32_t camera_y,
+    int32_t camera_x,
+    int32_t camera_y,
     int dest_x,
     int dest_y,
     int dest_w,
@@ -66,13 +66,7 @@ void Runtime::apply_match_fog(
     if (zoom_fp == 0)
         zoom_fp = 1;
     const oa::present::world_renderer::FogView view{
-        dest_x,
-        dest_y,
-        dest_w,
-        dest_h,
-        static_cast<int32_t>(camera_x),
-        static_cast<int32_t>(camera_y),
-        zoom_fp
+        dest_x, dest_y, dest_w, dest_h, camera_x, camera_y, zoom_fp
     };
     auto grid = oa::present::world_renderer::build_fog_grid(
         sight,

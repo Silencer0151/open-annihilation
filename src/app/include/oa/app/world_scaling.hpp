@@ -5,8 +5,8 @@
 // per map pixel, apart from the zoom, the screen pixels per map pixel, and
 // the size of the scene the terrain, the draws and the fog go into; the
 // draw scale and method the accelerated tier draws it at, within its scene
-// budget; and how far between map pixels that tier draws the view as it
-// scrolls and zooms, while the camera itself stays on whole map pixels.
+// budget; and where that tier draws its scene for a view between map
+// pixels, while the camera itself stays on whole map pixels.
 #pragma once
 
 #include "oa/app/render_policy.hpp"
@@ -214,56 +214,5 @@ struct MagnifiedSpan {
 /// @return the corner and where it lands
 [[nodiscard]] MagnifiedSpan
 magnified_span(uint32_t battlefield, float zoom, uint32_t scene, double offset) noexcept;
-
-/// Returns the most a view drawn between map pixels may lie past its
-/// camera's map pixel along one axis: one map pixel, or what is left before
-/// the camera's farthest place on the map, so that the view never shows
-/// more past the map's far edge than the camera alone shows there.
-///
-/// @param camera the camera's map pixel along the axis, on the map
-/// @param farthest the camera's farthest place on the map along the axis
-/// @return map pixels, from 0 to 1
-[[nodiscard]] double most_view_offset(int32_t camera, int32_t farthest) noexcept;
-
-/// Returns a view's offset along one axis after a frame's scroll: the
-/// offset moved by the scroll's exact travel, less the whole map pixels the
-/// camera stepped, held from 0 to the most the view may lie past the
-/// camera. The view so follows the scroll smoothly within the camera's map
-/// pixel; scrolling toward the start of the map, or held at the edge of
-/// the range, it waits there for the camera's next step and never jumps.
-///
-/// The camera steps on the scroll's carry, which every axis the scroll
-/// moves shares, so the scroll's place within the camera's map pixel is the
-/// carry past it toward the map's end, and one map pixel less the carry
-/// toward its start. A view that trails that place, as an axis's does when
-/// it joins a scroll already moving the other, makes up the difference
-/// over the frames left before the camera's next step, an even share each
-/// frame on top of the travel, and lands on the place at that step instead
-/// of jumping there; from then on it moves by the travel alone. A view on
-/// the place, as every scroll's that starts from no carry is, never trails
-/// it.
-///
-/// @param offset map pixels the view lay past the camera before the frame, from 0 to 1
-/// @param travel map pixels the scroll moved the view in the frame; negative
-///        toward the map's start
-/// @param carry the fraction of a map pixel the scroll had moved toward the
-///        camera's next step before the frame, from 0 to 1
-/// @param camera_step whole map pixels the camera moved in the frame
-/// @param most the most the view may lie past the camera after the frame (most_view_offset)
-/// @return map pixels the view lies past the camera after the frame, from 0 to most
-[[nodiscard]] double scrolled_view_offset(
-    double offset, double travel, double carry, int32_t camera_step, double most
-) noexcept;
-
-/// Returns the offset of a view whose exact place is known, as a zoom
-/// eased about an anchor knows it: the exact place less the camera's map
-/// pixel, held from 0 to the most the view may lie past the camera. A view
-/// before its camera's map pixel is drawn on it.
-///
-/// @param exact the view's exact place along the axis, in map pixels
-/// @param camera the camera's map pixel along the axis
-/// @param most the most the view may lie past the camera (most_view_offset)
-/// @return map pixels the view lies past the camera, from 0 to most
-[[nodiscard]] double view_offset_at(double exact, int32_t camera, double most) noexcept;
 
 } // namespace oa::app

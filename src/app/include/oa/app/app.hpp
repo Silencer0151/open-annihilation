@@ -60,6 +60,9 @@ constexpr float kMaxBattlefieldZoom = 4.0F;
 constexpr float kDefaultBattlefieldZoom = 1.0F;
 constexpr float kZoomWheelFactor = 1.15F;
 constexpr float kZoomLerpHz = 12.0F;
+/// The camera a terrain cache notes before it holds a fill: one no view
+/// reaches, so that the first fill is never mistaken for the cache's.
+constexpr int32_t kUncachedTerrainCamera = INT32_MIN;
 constexpr uint8_t kPaletteGreen = 250;   // PALETTE.PAL RGB(0,255,0)
 constexpr std::size_t kUiColorText = 15; // Game.ui_colors slot of message and clock text
 constexpr int kDefaultWindowWidth = 1920;

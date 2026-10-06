@@ -88,7 +88,6 @@ void Runtime::center_camera_on_radar_point(float x, float y) {
     const auto ry = static_cast<int>(y) - radar_picture_.y;
     match_camera_x_ = rx * radar_map_w_ / radar_picture_.width - visible_map_width() / 2;
     match_camera_z_ = ry * radar_map_h_ / radar_picture_.height - visible_map_height() / 2;
-    zoom_anchored_ = false;
     if (match_)
         oa::present::world_renderer::camera_stop_follow(match_->state().game);
     stop_match_tracking();
@@ -132,14 +131,42 @@ void Runtime::drive_mouse_look(bool begin) {
             ))
             SDL_WarpMouseInWindow(self->sdl_.window, window_x, window_y);
     };
+    // The map cell a view's edge lies in, rounded toward negative infinity,
+    // so that a view past the map's left or top edge counts its cells on
+    // from the map's.
+    const auto cell_of = [](int32_t pixel) {
+        return pixel >= 0 ? pixel / OA_MAP_CELL_PIXELS
+                          : -((OA_MAP_CELL_PIXELS - 1 - pixel) / OA_MAP_CELL_PIXELS);
+    };
     if (begin) {
         stop_match_tracking();
         wr::mouse_look_begin(game, sink);
-    } else
-        wr::mouse_look_update(game, sink);
-    match_camera_x_ = static_cast<int32_t>(game.camera_x);
-    match_camera_z_ = static_cast<int32_t>(game.camera_y);
-    zoom_anchored_ = false;
+        game.mouse_look_cell_x = cell_of(match_camera_x_);
+        game.mouse_look_cell_y = cell_of(match_camera_z_);
+        return;
+    }
+    // The cells the pointer has travelled from the anchor, on from those
+    // the look stands at, as the game counts them; the game's look then
+    // warps the pointer back and ends on the button's release.
+    const int32_t cell_x =
+        (static_cast<int32_t>(game.pointer_state[0]) - game.mouse_look_anchor_x) /
+            wr::mouse_look_pixels_per_cell +
+        game.mouse_look_cell_x;
+    const int32_t cell_y =
+        (static_cast<int32_t>(game.pointer_state[1]) - game.mouse_look_anchor_y) /
+            wr::mouse_look_pixels_per_cell +
+        game.mouse_look_cell_y;
+    wr::mouse_look_update(game, sink);
+    // The view goes where the travel takes it, held within the view's
+    // limits rather than on the map, and the look goes on from there.
+    match_camera_x_ = cell_x * OA_MAP_CELL_PIXELS;
+    match_camera_z_ = cell_y * OA_MAP_CELL_PIXELS;
+    const auto held = view_camera();
+    match_camera_x_ = held[0];
+    match_camera_z_ = held[1];
+    game.mouse_look_cell_x = cell_of(held[0]);
+    game.mouse_look_cell_y = cell_of(held[1]);
+    bind_match_view();
 }
 
 bool Runtime::follow_pointer_modes(const SDL_Event& event) {

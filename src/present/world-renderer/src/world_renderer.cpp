@@ -27,8 +27,8 @@ constexpr uint32_t fixed_one = 65536U;
 struct ScaledFill {
     const formats::tnt::Map* map{};
     const uint8_t* lut{}; ///< three bytes, red, green and blue, for each palette index
-    uint32_t source_x{};
-    uint32_t source_y{};
+    int32_t source_x{};   ///< map column of the first destination pixel; may lie left of the map
+    int32_t source_y{};   ///< map row of the first destination row; may lie above the map
     uint32_t dest_width{};
     uint32_t scale_fp{}; ///< 16.16 screen pixels per map pixel, at least 1
     uint64_t terrain_width{};
@@ -40,7 +40,8 @@ struct ScaledFill {
 /// Fills destination rows [first_row, end_row) of a scaled terrain sample.
 ///
 /// Row r samples map row source_y + floor(r * 65536 / scale_fp), the row the
-/// fill reaches stepping 65536 a row from row 0.
+/// fill reaches stepping 65536 a row from row 0. Map pixels left of or above
+/// the mosaic are black, as those past it are.
 ///
 /// @param fill the sample and its destination
 /// @param first_row first destination row
@@ -53,21 +54,32 @@ bool fill_scaled_rows(const ScaledFill& fill, uint32_t first_row, uint32_t end_r
     const uint8_t* const tiles = map.tile_palette_indices.data();
     const uint32_t scale_fp = fill.scale_fp;
     const uint64_t advanced = static_cast<uint64_t>(first_row) * fixed_one;
-    uint32_t map_y = fill.source_y + static_cast<uint32_t>(advanced / scale_fp);
+    int64_t map_y = static_cast<int64_t>(fill.source_y) + static_cast<int64_t>(advanced / scale_fp);
     auto y_frac = static_cast<uint32_t>(advanced % scale_fp);
+    const auto terrain_width = static_cast<int64_t>(fill.terrain_width);
     for (uint32_t destination_y = first_row; destination_y < end_row; ++destination_y) {
         auto* out =
             fill.dest_rgb + static_cast<std::size_t>(destination_y) * fill.dest_stride_pixels * 3U;
-        const auto within_tile_y = static_cast<std::size_t>(map_y % tile_edge);
-        const auto row_tiles = static_cast<std::size_t>(map_y / tile_edge) * map.tile_width;
-        if (map_y >= fill.terrain_height) {
+        const bool on_terrain = map_y >= 0 && static_cast<uint64_t>(map_y) < fill.terrain_height;
+        const auto within_tile_y = on_terrain ? static_cast<std::size_t>(map_y % tile_edge) : 0U;
+        const auto row_tiles =
+            on_terrain ? static_cast<std::size_t>(map_y / tile_edge) * map.tile_width : 0U;
+        if (!on_terrain) {
             std::memset(out, 0, static_cast<std::size_t>(fill.dest_width) * 3U);
         } else if (scale_fp == fixed_one) {
-            // 1:1 sampling copies whole tile rows through the palette table.
-            uint64_t map_x = fill.source_x;
+            // 1:1 sampling copies whole tile rows through the palette table,
+            // after the black left of the mosaic.
+            int64_t map_x = fill.source_x;
             uint32_t remaining = fill.dest_width;
+            if (map_x < 0) {
+                const auto left = static_cast<uint32_t>(std::min<int64_t>(remaining, -map_x));
+                std::memset(out, 0, static_cast<std::size_t>(left) * 3U);
+                out += static_cast<std::size_t>(left) * 3U;
+                remaining -= left;
+                map_x = 0;
+            }
             while (remaining != 0) {
-                if (map_x >= fill.terrain_width) {
+                if (map_x >= terrain_width) {
                     std::memset(out, 0, static_cast<std::size_t>(remaining) * 3U);
                     break;
                 }
@@ -75,7 +87,7 @@ bool fill_scaled_rows(const ScaledFill& fill, uint32_t first_row, uint32_t end_r
                 const auto tile_index = grid[row_tiles + map_x / tile_edge];
                 if (tile_index >= map.tile_count)
                     return false;
-                const auto run = std::min(remaining, tile_edge - within_tile_x);
+                const auto run = std::min<uint32_t>(remaining, tile_edge - within_tile_x);
                 const auto* source =
                     tiles +
                     static_cast<std::size_t>(tile_index) * formats::tnt::layout::tile_bytes +
@@ -86,13 +98,13 @@ bool fill_scaled_rows(const ScaledFill& fill, uint32_t first_row, uint32_t end_r
                 remaining -= run;
             }
         } else {
-            uint32_t map_x = fill.source_x;
+            int64_t map_x = fill.source_x;
             uint32_t x_frac = 0;
             const uint8_t* rgb = nullptr;
             static constexpr uint8_t black[3] = {0, 0, 0};
             for (uint32_t destination_x = 0; destination_x < fill.dest_width; ++destination_x) {
                 if (rgb == nullptr) {
-                    if (map_x >= fill.terrain_width) {
+                    if (map_x < 0 || map_x >= terrain_width) {
                         rgb = black;
                     } else {
                         const auto tile_index = grid[row_tiles + map_x / tile_edge];
@@ -201,8 +213,8 @@ RenderResult render_viewport(
 std::optional<Error> fill_scaled_viewport(
     const formats::tnt::Map& map,
     const PaletteBytes& game_palette,
-    uint32_t source_x,
-    uint32_t source_y,
+    int32_t source_x,
+    int32_t source_y,
     uint32_t shown_width,
     uint32_t shown_height,
     uint32_t dest_width,
@@ -274,8 +286,8 @@ std::optional<Error> fill_scaled_viewport(
 RenderResult render_scaled_viewport(
     const formats::tnt::Map& map,
     const PaletteBytes& game_palette,
-    uint32_t source_x,
-    uint32_t source_y,
+    int32_t source_x,
+    int32_t source_y,
     uint32_t dest_width,
     uint32_t dest_height,
     float scale
@@ -312,7 +324,7 @@ RenderResult render_scaled_viewport(
 }
 
 std::optional<BattlefieldViewport> game_battlefield_viewport(
-    uint32_t source_x, uint32_t source_y, uint32_t surface_width, uint32_t surface_height
+    int32_t source_x, int32_t source_y, uint32_t surface_width, uint32_t surface_height
 ) noexcept {
     constexpr uint32_t left = 128;
     constexpr uint32_t top = 32;
@@ -373,15 +385,16 @@ std::optional<MapPixel> screen_to_map_pixel(
     const double offset_x = std::clamp(offset.x, 0.0, 1.0);
     const double offset_y = std::clamp(offset.y, 0.0, 1.0);
     const auto map_x =
-        static_cast<uint64_t>(viewport.source_x) +
-        static_cast<uint64_t>(std::llround(static_cast<double>(relative_x) / scale + offset_x));
+        static_cast<int64_t>(viewport.source_x) +
+        static_cast<int64_t>(std::llround(static_cast<double>(relative_x) / scale + offset_x));
     const auto map_y =
-        static_cast<uint64_t>(viewport.source_y) +
-        static_cast<uint64_t>(std::llround(static_cast<double>(relative_y) / scale + offset_y));
-    if (map_x > std::numeric_limits<uint32_t>::max() ||
-        map_y > std::numeric_limits<uint32_t>::max())
+        static_cast<int64_t>(viewport.source_y) +
+        static_cast<int64_t>(std::llround(static_cast<double>(relative_y) / scale + offset_y));
+    constexpr int64_t least = std::numeric_limits<int32_t>::min();
+    constexpr int64_t most = std::numeric_limits<int32_t>::max();
+    if (map_x < least || map_x > most || map_y < least || map_y > most)
         return std::nullopt;
-    return MapPixel{static_cast<uint32_t>(map_x), static_cast<uint32_t>(map_y)};
+    return MapPixel{static_cast<int32_t>(map_x), static_cast<int32_t>(map_y)};
 }
 
 int32_t screen_span(const BattlefieldViewport& viewport, int32_t map_pixels) noexcept {
@@ -395,6 +408,10 @@ RenderResult render_battlefield_viewport(
 ) {
     const auto right = static_cast<int64_t>(viewport.destination_x) + viewport.width;
     const auto bottom = static_cast<int64_t>(viewport.destination_y) + viewport.height;
+    if (viewport.source_x < 0 || viewport.source_y < 0)
+        return failure(
+            ErrorCode::viewport_out_of_bounds, "terrain viewport starts before the TNT tile mosaic"
+        );
     if (viewport.destination_x < 0 || viewport.destination_y < 0 ||
         right > viewport.surface_width || bottom > viewport.surface_height)
         return failure(
@@ -407,7 +424,12 @@ RenderResult render_battlefield_viewport(
             ErrorCode::output_limit, "battlefield surface exceeds the 64 Mi-pixel output limit"
         );
     auto crop = render_viewport(
-        map, palette, {viewport.source_x, viewport.source_y, viewport.width, viewport.height}
+        map,
+        palette,
+        {static_cast<uint32_t>(viewport.source_x),
+         static_cast<uint32_t>(viewport.source_y),
+         viewport.width,
+         viewport.height}
     );
     if (!crop.ok())
         return crop;

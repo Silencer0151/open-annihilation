@@ -5,6 +5,7 @@
 // zoom applied at once about the fingers, inertia and auto-scroll
 // (docs/touch-controls.md).
 #include "oa/app/runtime.hpp"
+#include "oa/app/far_view.hpp"
 #include "touch_state.hpp"
 #include "oa/app/frame_pacing.hpp"
 #include "oa/present/world_renderer/world_camera.hpp"
@@ -12,6 +13,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 
 namespace oa::app {
 namespace {
@@ -26,54 +28,53 @@ constexpr float kInertiaStopPointsPerSecond = 20.0F;
 void Runtime::pan_match_camera_by(float dx, float dy) {
     if (screen_ != Screen::match || !selected_tnt_ || director_mode())
         return;
-    auto& dispatch = touch_state().dispatch;
     const auto zoom = static_cast<double>(match_zoom() <= 0.0F ? 1.0F : match_zoom());
-    dispatch.pan_carry_x += static_cast<double>(dx) / zoom;
-    dispatch.pan_carry_y += static_cast<double>(dy) / zoom;
-    const auto move_x = static_cast<int32_t>(std::trunc(dispatch.pan_carry_x));
-    const auto move_z = static_cast<int32_t>(std::trunc(dispatch.pan_carry_y));
-    dispatch.pan_carry_x -= static_cast<double>(move_x);
-    dispatch.pan_carry_y -= static_cast<double>(move_z);
     stop_match_tracking();
-    zoom_anchored_ = false;
-    if (move_x == 0 && move_z == 0)
-        return;
-    // The stored camera stays where view_camera would hold it, so a drag
-    // past the map's edge does not have to be undone before the view moves
-    // back.
+    // The view's exact place moves by the finger's motion, held within the
+    // view's limits as a scroll is, so that a drag past them does not have
+    // to be undone before the view moves back.
+    const auto view = match_view_place();
     const auto [map_width, map_height] = shown_map_size();
-    match_camera_x_ =
-        std::clamp(match_camera_x_ + move_x, 0, std::max(0, map_width - visible_map_width()));
-    match_camera_z_ =
-        std::clamp(match_camera_z_ + move_z, 0, std::max(0, map_height - visible_map_height()));
-    camera_moved_ = true;
+    const auto along =
+        [&](double place, float delta, int32_t battlefield, int32_t map, double centre) {
+            if (delta == 0.0F)
+                return place;
+            return held_view(
+                place + static_cast<double>(delta) / zoom,
+                static_cast<double>(battlefield) / zoom,
+                static_cast<double>(map),
+                view_hold_.held ? std::optional<double>(centre) : std::nullopt
+            );
+        };
+    const double x =
+        along(view[0], dx, match_layout_.battlefield_width(), map_width, view_hold_.centre_x);
+    const double z =
+        along(view[1], dy, match_layout_.battlefield_height(), map_height, view_hold_.centre_z);
+    if (x != view[0] || z != view[1])
+        place_match_view(x, z);
 }
 
 void Runtime::zoom_match_about(float factor, float x, float y) {
     if (screen_ != Screen::match || !selected_tnt_ || director_mode() || !(factor > 0.0F))
         return;
     // A point off the battlefield zooms about the nearest point on it.
-    const int px = std::clamp(
-        static_cast<int>(x),
-        match_layout_.left,
-        match_layout_.left + std::max(1, match_layout_.battlefield_width()) - 1
+    const double focus_x = std::clamp(
+        static_cast<double>(x) - static_cast<double>(match_layout_.left),
+        0.0,
+        static_cast<double>(std::max(1, match_layout_.battlefield_width()))
     );
-    const int py = std::clamp(
-        static_cast<int>(y),
-        match_layout_.top,
-        match_layout_.top + std::max(1, match_layout_.battlefield_height()) - 1
+    const double focus_y = std::clamp(
+        static_cast<double>(y) - static_cast<double>(match_layout_.top),
+        0.0,
+        static_cast<double>(std::max(1, match_layout_.battlefield_height()))
     );
-    // The map point under the point, anchored as the wheel's zoom anchors it.
-    anchor_zoom_at(px, py);
     // The zoom and its target together: nothing eases, so the map stays
     // under the fingers.
     const float zoom = std::clamp(match_zoom_ * factor, least_match_zoom(), most_match_zoom());
-    match_zoom_ = zoom;
-    match_zoom_target_ = zoom;
-    apply_zoom_anchor();
-    zoom_anchored_ = false;
-    camera_moved_ = true;
     stop_match_tracking();
+    zoom_focus_ = {false, x, y};
+    zoom_view_about(zoom, focus_x, focus_y);
+    match_zoom_target_ = zoom;
 }
 
 void TouchDispatchAccess::step_inertia(Runtime& runtime, uint64_t elapsed_ns) {
