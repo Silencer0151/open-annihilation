@@ -24,7 +24,12 @@
 // Packets are stored in the order they arrived. A match sends its frames
 // without delivery guarantee, so a frame lost on the way leaves its sender's
 // ticks missing and a late one is stored after the frames that overtook it.
-// The same frame can also be stored twice.
+// The same frame can also be stored twice, and a sender's frame can begin
+// with the last tick of its frame before, holding the same unit state again.
+//
+// Recorders also send their peers packets of their own: a command typed in
+// chat (".sharelos") as bare text, and short recorder messages whose second
+// and third bytes are not a length. Each fills its packet.
 //
 // Only version 5 has been checked against recordings; other versions are rejected.
 
@@ -81,6 +86,7 @@ enum class RecordedSide : uint8_t { arm = 0, core = 1 };
 // records; the others exist only in recordings.
 enum class RecordType : uint8_t {
     unit_state = 0x2c,
+    recorder_command = 0x2e,  // '.' of a recorder command's text, which fills its packet
     enemy_chat = 0xf9,        // length 73; not seen in the checked recordings
     replayer_server = 0xfa,   // length 1; not seen in the checked recordings
     recorder_message = 0xfb,  // 0xfb + u16 payload length + payload
@@ -238,9 +244,11 @@ struct DecodedPayload {
 
 /// Cuts an uncompressed 0x03 payload into records and assigns ticks to the tick records.
 ///
-/// Stops at the first byte that cannot start a record or a record that runs
-/// past the payload, keeping what came before. Rejects other markers without
-/// parsing their bytes.
+/// A payload that starts with a recorder command, or with a recorder message
+/// whose length does not fit the payload, is one record of the whole payload.
+/// Otherwise stops at the first byte that cannot start a record or a record
+/// that runs past the payload, keeping what came before. Rejects other markers
+/// without parsing their bytes.
 ///
 /// @param payload Packet payload, marker byte first.
 /// @return The records, whether the marker was 0x03, and the error that stopped the split, if any.

@@ -70,6 +70,22 @@ std::size_t recorder_record_length(Bytes bytes) noexcept {
     }
 }
 
+/// Returns the length of a recorder record that fills its packet when it comes first.
+///
+/// @param bytes the packet's records, from its first one
+/// @return the whole of bytes for a recorder command, or for a recorder message whose
+///         length does not fit them; 0 for anything else
+std::size_t packet_filling_length(Bytes bytes) noexcept {
+    switch (static_cast<RecordType>(bytes[0])) {
+    case RecordType::recorder_command:
+        return bytes.size();
+    case RecordType::recorder_message:
+        return record_length(bytes) == 0 ? bytes.size() : 0;
+    default:
+        return 0;
+    }
+}
+
 class Reader {
   public:
 
@@ -402,7 +418,9 @@ RecordSplit split_records(Bytes payload) {
     std::size_t at = 1;
     while (at < payload.size()) {
         const Bytes rest = payload.subspan(at);
-        const std::size_t length = record_length(rest);
+        std::size_t length = record_length(rest);
+        if (length == 0 && at == 1)
+            length = packet_filling_length(rest);
         if (length == 0) {
             split.error =
                 make_error(ErrorCode::unknown_record, at, "cannot size a record of this type here");

@@ -28,6 +28,8 @@ std::string_view until_nul(std::string_view text) {
 
 const char* recorder_type_name(uint8_t type) {
     switch (static_cast<tad::RecordType>(type)) {
+    case tad::RecordType::recorder_command:
+        return "recorder command";
     case tad::RecordType::enemy_chat:
         return "enemy chat";
     case tad::RecordType::replayer_server:

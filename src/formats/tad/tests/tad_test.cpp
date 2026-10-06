@@ -235,6 +235,30 @@ void test_split_records() {
         stopped.error && stopped.error->offset == 2 && stopped.records.size() == 1,
         "unknown type stops split"
     );
+    // A recorder's own packets fill their payload: 7300's chat command at
+    // file offset 9335 and 9342's message at offset 9076, which has no length.
+    const Bytes command{tad::payload_marker, '.', 's', 'h', 'a', 'r', 'e', 'l', 'o', 's'};
+    const auto typed = tad::split_records(command);
+    require(
+        !typed.error && typed.records.size() == 1 && typed.records[0].type == '.' &&
+            typed.records[0].bytes.size() == 9,
+        "recorder command fills its packet"
+    );
+    const Bytes message{tad::payload_marker, 0xfb, 0x04, 0x02, 0x02, 0x00, 0x00, 0x00};
+    const auto handshake = tad::split_records(message);
+    require(
+        !handshake.error && handshake.records.size() == 1 && handshake.records[0].type == 0xfb &&
+            handshake.records[0].bytes.size() == 7,
+        "recorder message without a length fills its packet"
+    );
+    for (const uint8_t type : {uint8_t{'.'}, uint8_t{0xfb}}) {
+        const Bytes behind{tad::payload_marker, 0x06, type, 0x04, 0x02};
+        const auto split = tad::split_records(behind);
+        require(
+            split.error && split.error->offset == 2 && split.records.size() == 1,
+            "only a packet's first record fills it"
+        );
+    }
     const Bytes short_record{0x00, 0x0d, 0x01};
     const auto truncated = tad::split_records(short_record);
     require(
