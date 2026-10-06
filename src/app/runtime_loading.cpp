@@ -322,6 +322,7 @@ void Runtime::leave_match() {
     terrain_cache_cam_x_ = ~0u;
     terrain_cache_zoom_ = -1.0F;
     match_terrain_cache_ = {};
+    far_terrain_ = {};
     match_scene_cpu_ = {};
     match_hud_cpu_ = {};
     match_world_cpu_ = {};

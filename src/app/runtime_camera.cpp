@@ -3,6 +3,7 @@
 
 // Radar interaction, zoom, camera panning and move/patrol orders.
 #include "oa/app/runtime.hpp"
+#include "oa/app/far_view.hpp"
 #include "oa/core/map_plot.h"
 #include "engine_settings_state.hpp"
 #include "oa/sim/feature_runtime.hpp"
@@ -32,6 +33,12 @@ constexpr float kLongestZoomStep = 0.05F;
 // pixel, past that.
 constexpr double kLeastAnchorFraction = -0.5;
 constexpr double kMostAnchorFraction = 1.5;
+
+static_assert(
+    oa::ui::engine_settings::closest_zoom(oa::ui::engine_settings::ZoomInLimit::four_times) ==
+        kMaxBattlefieldZoom,
+    "Maximum zoom in's closest choice is the closest any view zooms in"
+);
 
 } // namespace
 
@@ -331,7 +338,7 @@ void Runtime::EngineSettingsState::ease_zoom_about_centre(Runtime& runtime, floa
     if (runtime.match_tracking_ && runtime.match_unit_present(runtime.tracked_match_unit_)) {
         runtime.zoom_anchored_ = false;
         runtime.match_zoom_target_ =
-            std::clamp(target, runtime.least_match_zoom(), kMaxBattlefieldZoom);
+            std::clamp(target, runtime.least_match_zoom(), runtime.most_match_zoom());
         return;
     }
     // The point at the battlefield's centre stays there while the zoom
@@ -341,12 +348,39 @@ void Runtime::EngineSettingsState::ease_zoom_about_centre(Runtime& runtime, floa
         layout.left + layout.battlefield_width() / 2, layout.top + layout.battlefield_height() / 2
     );
     runtime.match_zoom_target_ =
-        std::clamp(target, runtime.least_match_zoom(), kMaxBattlefieldZoom);
+        std::clamp(target, runtime.least_match_zoom(), runtime.most_match_zoom());
     runtime.stop_match_tracking();
 }
 
 float Runtime::least_match_zoom() const noexcept {
+    // Settings not yet read hold their defaults, Automatic among them.
+    const auto limit = engine_settings_ ? engine_settings_->current.max_zoom_out
+                                        : oa::ui::engine_settings::ZoomOutLimit::automatic;
+    const auto [map_width, map_height] = shown_map_size();
+    return least_battlefield_zoom(
+        limit,
+        detail_zoom_floor(),
+        map_width,
+        map_height,
+        match_layout_.battlefield_width(),
+        match_layout_.battlefield_height()
+    );
+}
+
+float Runtime::detail_zoom_floor() const noexcept {
     return full_presentation() ? kMinFullBattlefieldZoom : kMinBattlefieldZoom;
+}
+
+bool Runtime::far_view_frame() const noexcept {
+    return screen_ == Screen::match && !director_mode() &&
+           far_view_zoom(match_zoom_, detail_zoom_floor());
+}
+
+float Runtime::most_match_zoom() const noexcept {
+    namespace settings = oa::ui::engine_settings;
+    return settings::closest_zoom(
+        engine_settings_ ? engine_settings_->current.max_zoom_in : settings::ZoomInLimit::four_times
+    );
 }
 
 void Runtime::step_match_zoom() {
@@ -356,15 +390,14 @@ void Runtime::step_match_zoom() {
     // The director sets the zoom of every frame itself, off the wall clock.
     if (director_mode())
         return;
-    // The floor moves with the tier: a view zoomed out past the processor's
-    // floor when the card stops drawing the battlefield comes back to it at
-    // once.
+    // The limits move with the tier, the window, the map and the zoom's
+    // settings: a view zoomed past them comes back to them at once.
     const float least = least_match_zoom();
-    if (match_zoom_target_ < least)
-        match_zoom_target_ = least;
-    const bool floored = match_zoom_ < least;
+    const float most = most_match_zoom();
+    match_zoom_target_ = std::clamp(match_zoom_target_, least, most);
+    const bool floored = match_zoom_ < least || match_zoom_ > most;
     if (floored) {
-        match_zoom_ = least;
+        match_zoom_ = std::clamp(match_zoom_, least, most);
         camera_moved_ = true;
     }
     // A camera tracking a unit keeps the unit at the centre at every scale,
@@ -507,10 +540,9 @@ float Runtime::wheel_zoom_target(float wheel_y) {
     // A target something else set since the wheel's last step begins the
     // count again.
     const float least = least_match_zoom();
+    const float most = most_match_zoom();
     if (zoom_wheel_.target != match_zoom_target_)
-        zoom_wheel_ = {
-            std::clamp(match_zoom_target_, least, kMaxBattlefieldZoom), 0.0, match_zoom_target_
-        };
+        zoom_wheel_ = {std::clamp(match_zoom_target_, least, most), 0.0, match_zoom_target_};
     const auto from = static_cast<double>(zoom_wheel_.from);
     const auto factor = static_cast<double>(kZoomWheelFactor);
     // The steps in all, so that as many back return the target exactly,
@@ -518,8 +550,8 @@ float Runtime::wheel_zoom_target(float wheel_y) {
     // end, so that the first step back leaves it.
     double steps = zoom_wheel_.steps + static_cast<double>(wheel_y);
     auto target = static_cast<float>(from * std::pow(factor, steps));
-    if (target >= kMaxBattlefieldZoom || target <= least) {
-        target = target >= kMaxBattlefieldZoom ? kMaxBattlefieldZoom : least;
+    if (target >= most || target <= least) {
+        target = target >= most ? most : least;
         steps = std::log(static_cast<double>(target) / from) / std::log(factor);
     }
     zoom_wheel_.steps = steps;

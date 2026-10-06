@@ -48,10 +48,14 @@ constexpr int kBattlefieldWidth = kCanvasWidth - kBattlefieldLeft;
 constexpr int kBattlefieldHeight = kCanvasHeight - kBattlefieldTop - kBattlefieldBottom;
 constexpr std::size_t kDefaultCampaignTicks = 3000; // headless --mission without --match-ticks
 constexpr uint16_t kSkirmishUnitsPerPlayer = 250;
+/// The zoom floor of Maximum zoom out's Automatic while the processor draws
+/// the battlefield (the Off and Basic tiers).
 constexpr float kMinBattlefieldZoom = 0.5F;
-/// The zoom floor while the graphics card draws the battlefield (the Full
-/// tier): three times as far out as the processor's floor.
+/// The zoom floor of Maximum zoom out's Automatic while the graphics card
+/// draws the battlefield (the Full tier): three times as far out as the
+/// processor's floor.
 constexpr float kMinFullBattlefieldZoom = kMinBattlefieldZoom / 3.0F;
+/// The closest any view zooms in, and Maximum zoom in's closest choice.
 constexpr float kMaxBattlefieldZoom = 4.0F;
 constexpr float kDefaultBattlefieldZoom = 1.0F;
 constexpr float kZoomWheelFactor = 1.15F;

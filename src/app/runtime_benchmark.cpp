@@ -544,7 +544,9 @@ void Runtime::spawn_busy_combat(int32_t centre_x, int32_t centre_z) {
 void Runtime::prepare_headless_match() {
     start_benchmark_skirmish();
     match_layout_ = lay_out_match(options_.match_width, options_.match_height);
-    match_zoom_ = std::clamp(options_.match_zoom, kMinBattlefieldZoom, kMaxBattlefieldZoom);
+    // Within the view's limits, which the preferences file's Maximum zoom
+    // out and Maximum zoom in decide, and the map and the battlefield.
+    match_zoom_ = std::clamp(options_.match_zoom, least_match_zoom(), most_match_zoom());
     match_zoom_target_ = match_zoom_;
     if (options_.combat_units != 0)
         spawn_combat_armies(options_.combat_units);

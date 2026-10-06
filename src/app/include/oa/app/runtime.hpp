@@ -18,6 +18,7 @@
 #include "view_rules.hpp"
 #include "web_link.hpp"
 #include "world_scaling.hpp"
+#include "far_view.hpp"
 #include "oa/ui/display_layout.hpp"
 #include "oa/audio/sdl_audio.hpp"
 #include "oa/base/game_loop.hpp"
@@ -6334,15 +6335,41 @@ class Runtime final : public menu::Host,
     /// @return canvas pixels per map pixel; 1 draws the map 1:1
     [[nodiscard]] float match_zoom() const;
 
-    /// Returns the zoom floor of the match's view: kMinFullBattlefieldZoom
+    /// Returns the zoom floor of the match's view, as the Maximum zoom out
+    /// setting asks (least_battlefield_zoom): Automatic's is the drawing's,
+    /// detail_zoom_floor; Whole map's the zoom at which the whole shown map
+    /// fits the battlefield; a share of normal size its share, or the whole
+    /// map's fit if that comes first. Without a map the floor is
+    /// Automatic's. A view zoomed out past the floor comes back to it as
+    /// the floor moves (step_match_zoom).
+    ///
+    /// @return the least zoom the view may take, layout pixels per map pixel
+    [[nodiscard]] float least_match_zoom() const noexcept;
+
+    /// Returns the zoom ceiling of the match's view, as the Maximum zoom in
+    /// setting asks (oa::ui::engine_settings::closest_zoom).
+    ///
+    /// @return the most zoom the view may take, 1 to kMaxBattlefieldZoom
+    [[nodiscard]] float most_match_zoom() const noexcept;
+
+    /// Returns the least zoom the battlefield's units are drawn whole at,
+    /// which is Maximum zoom out's Automatic floor: kMinFullBattlefieldZoom
     /// while the graphics card draws the battlefield, which draws any view
     /// at the window's cost, else kMinBattlefieldZoom, past which the
-    /// processor's drawing of the view would grow too slow. A view zoomed
-    /// out past the floor comes back to it as the floor moves
-    /// (step_match_zoom).
+    /// processor's drawing of whole units would grow too slow and too large.
     ///
-    /// @return the least zoom the view may take
-    [[nodiscard]] float least_match_zoom() const noexcept;
+    /// @return layout pixels per map pixel
+    [[nodiscard]] float detail_zoom_floor() const noexcept;
+
+    /// Tells whether the match's next frame draws the far view: a frame of
+    /// the player's view zoomed out past detail_zoom_floor, which the
+    /// processor draws in every tier at the zoom, its terrain from the
+    /// map's pyramid (refresh_filtered_terrain) and each unit as a dot of
+    /// its owner's colour (render_match_surface). A director's frame never
+    /// does.
+    ///
+    /// @return true when the far view is drawn
+    [[nodiscard]] bool far_view_frame() const noexcept;
 
     /// Returns how many map pixels across the battlefield shows at the current zoom.
     ///
@@ -8536,6 +8563,28 @@ class Runtime final : public menu::Host,
     ///
     /// @param frame runs a frame of the match: the zoom eases and the camera moves
     void check_wheel_zoom_limits(const std::function<void()>& frame);
+    /// Checks the zoom's limits as the Maximum zoom out and Maximum zoom in
+    /// settings set them.
+    ///
+    /// On the game's screen and on windows of 1366x768, 1920x1080 and
+    /// 2560x1440: the wheel turned out stops at each Maximum zoom out
+    /// choice's floor (least_battlefield_zoom), Automatic's the drawing's
+    /// floor, and Whole map's shows the whole map with the camera at its
+    /// corner, filling the battlefield one way and fitting within it the
+    /// other; past the drawing's floor the frame is the far view, which
+    /// draws no model. The wheel turned in stops at each Maximum zoom in
+    /// choice's ceiling, and a pinch or the pad's zoom held out and in
+    /// stops at both. With Whole map, from the middle of the map out to the
+    /// whole map and back in, and from the whole map in about its far
+    /// corner and a point past its edge, each step keeps the map point
+    /// under the pointer there, as far as the map's edges allow. A choice
+    /// changed in play brings a view past the new limits within them at
+    /// once. Puts the settings, the layout and the default zoom back;
+    /// throws std::runtime_error on a failure.
+    /// [runtime_tracking_zoom_check.cpp]
+    ///
+    /// @param frame runs a frame of the match: the zoom eases and the camera moves
+    void check_zoom_limit_choices(const std::function<void()>& frame);
 
     /// Checks that a turret built during the match draws its current pieces as it turns.
     ///
@@ -13215,6 +13264,17 @@ class Runtime final : public menu::Host,
     /// runs it.
     uint64_t terrain_box_filter_runs_ = 0;
     uint64_t terrain_box_filter_ns_ = 0;
+
+    /// The far view's terrain: the shown map's pyramid in the palette it
+    /// was built in, made at the first far frame of a map and kept while
+    /// the map and the palette stay (refresh_filtered_terrain).
+    struct FarTerrain {
+        const oa::formats::tnt::Map* map{}; ///< the map it was built from
+        oa::PaletteBytes palette{};         ///< the palette it was built in
+        TerrainPyramid pyramid;
+    };
+
+    FarTerrain far_terrain_{};
     /// The scene a frame drawn apart from the world layer drew
     /// (WorldScaling::apart), kept for the next such frame; empty otherwise.
     renderer::Surface match_scene_cpu_{};

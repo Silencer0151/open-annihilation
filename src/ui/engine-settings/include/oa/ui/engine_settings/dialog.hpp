@@ -114,8 +114,12 @@ enum class DialogKind : uint8_t {
 
 /// The settings, as the dialog's rows show them.
 enum class Setting : uint8_t {
-    path_search,       ///< Pathfinding cycles: a slider
-    wheel_zoom,        ///< Mouse wheel zoom: a switch
+    path_search, ///< Pathfinding cycles: a slider
+    wheel_zoom,  ///< Mouse wheel zoom: a switch
+    /// Maximum zoom out: a drop-down of Automatic, Whole map, 1/32, 1/16,
+    /// 1/8, 1/4 and 1/2
+    max_zoom_out,
+    max_zoom_in,       ///< Maximum zoom in: a drop-down of None, 2x, 3x and 4x
     escape_opens_menu, ///< Escape opens the game menu: a switch
     switch_alt,        ///< Select groups without Alt: a switch
     unit_limit,        ///< Unit limit: a slider

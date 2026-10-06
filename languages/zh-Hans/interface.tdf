@@ -574,6 +574,21 @@
 	zh-Hans=鼠标滚轮缩放;
 	}
 
+[Maximum zoom out]
+	{
+	zh-Hans=缩小上限;
+	}
+
+[Maximum zoom in]
+	{
+	zh-Hans=放大上限;
+	}
+
+[Whole map]
+	{
+	zh-Hans=整张地图;
+	}
+
 [Escape opens the game menu]
 	{
 	zh-Hans=Esc键打开游戏菜单;
@@ -842,6 +857,76 @@
 [Scroll to zoom the battlefield in and out.]
 	{
 	zh-Hans=滚动滚轮缩放战场。;
+	}
+
+[As far as units are drawn whole: 1/6 of normal]
+	{
+	zh-Hans=缩小到单位仍完整绘制为止：硬件加速为完整时;
+	}
+
+[size with Full hardware acceleration, else 1/2.]
+	{
+	zh-Hans=为正常大小的1/6，其他为1/2。;
+	}
+
+[Out until the whole map fits the view.]
+	{
+	zh-Hans=缩小到整张地图都能装进视图为止。;
+	}
+
+[Farther out than Automatic, units show as dots.]
+	{
+	zh-Hans=比自动缩得更远时，单位显示为小点。;
+	}
+
+[Out to 1/32 of normal size, or the whole map.]
+	{
+	zh-Hans=最多缩小到正常大小的1/32，或整张地图。;
+	}
+
+[Out to 1/16 of normal size, or the whole map.]
+	{
+	zh-Hans=最多缩小到正常大小的1/16，或整张地图。;
+	}
+
+[Out to 1/8 of normal size, or the whole map.]
+	{
+	zh-Hans=最多缩小到正常大小的1/8，或整张地图。;
+	}
+
+[Out to 1/4 of normal size, or the whole map.]
+	{
+	zh-Hans=最多缩小到正常大小的1/4，或整张地图。;
+	}
+
+[Out to 1/2 of normal size, or the whole map.]
+	{
+	zh-Hans=最多缩小到正常大小的1/2，或整张地图。;
+	}
+
+[Never closer than normal size.]
+	{
+	zh-Hans=放大不超过正常大小。;
+	}
+
+[In to 2x normal size at most.]
+	{
+	zh-Hans=最多放大到正常大小的2倍。;
+	}
+
+[In to 3x normal size at most.]
+	{
+	zh-Hans=最多放大到正常大小的3倍。;
+	}
+
+[In to 4x normal size at most.]
+	{
+	zh-Hans=最多放大到正常大小的4倍。;
+	}
+
+[The wheel, a pinch and a controller stop there.]
+	{
+	zh-Hans=滚轮、双指缩放和手柄都止于此。;
 	}
 
 [The first press clears the selection,]

@@ -32,6 +32,12 @@ namespace key {
 inline constexpr std::string_view path_search_nodes = "open-annihilation.path-search-nodes";
 /// 1 or 0 (EngineSettings::wheel_zoom).
 inline constexpr std::string_view wheel_zoom = "open-annihilation.wheel-zoom";
+/// "automatic", "whole-map", or the share of normal size: "1/32", "1/16",
+/// "1/8", "1/4" or "1/2" (EngineSettings::max_zoom_out).
+inline constexpr std::string_view max_zoom_out = "open-annihilation.max-zoom-out";
+/// Times normal size in decimal: "1", "2", "3" or "4"
+/// (EngineSettings::max_zoom_in).
+inline constexpr std::string_view max_zoom_in = "open-annihilation.max-zoom-in";
 /// 1 or 0 (EngineSettings::escape_opens_menu).
 inline constexpr std::string_view escape_opens_menu = "open-annihilation.escape-opens-menu";
 /// Units per player, decimal (EngineSettings::unit_limit).
@@ -402,6 +408,82 @@ inline constexpr std::array<ControlSize, 3> control_size_choices{
     ControlSize::larger,
 };
 
+/// Maximum zoom out: how far out the battlefield's view zooms. No choice but
+/// Automatic zooms out past the point where the whole map fits the view.
+enum class ZoomOutLimit : uint8_t {
+    /// As far as the drawing allows: a sixth of normal size while the
+    /// graphics card draws the battlefield (Full), a half otherwise.
+    automatic,
+    whole_map,         ///< until the whole map fits the view
+    one_thirty_second, ///< to 1/32 of normal size
+    one_sixteenth,     ///< to 1/16
+    one_eighth,        ///< to 1/8
+    one_quarter,       ///< to 1/4
+    one_half,          ///< to 1/2
+};
+
+/// The Maximum zoom out choices, in the order the dialog offers them.
+inline constexpr std::array<ZoomOutLimit, 7> zoom_out_limits{
+    ZoomOutLimit::automatic,
+    ZoomOutLimit::whole_map,
+    ZoomOutLimit::one_thirty_second,
+    ZoomOutLimit::one_sixteenth,
+    ZoomOutLimit::one_eighth,
+    ZoomOutLimit::one_quarter,
+    ZoomOutLimit::one_half,
+};
+
+/// Returns the share of normal size a Maximum zoom out choice stops at.
+///
+/// @param limit the choice
+/// @return screen pixels per map pixel: 1/32 to 1/2 for a share, 0 for
+///     Whole map, which only the whole map's fit stops; nothing for
+///     Automatic, which the drawing decides
+[[nodiscard]] constexpr std::optional<float> zoom_out_share(ZoomOutLimit limit) noexcept {
+    switch (limit) {
+    case ZoomOutLimit::automatic:
+        return std::nullopt;
+    case ZoomOutLimit::whole_map:
+        return 0.0F;
+    case ZoomOutLimit::one_thirty_second:
+        return 1.0F / 32.0F;
+    case ZoomOutLimit::one_sixteenth:
+        return 1.0F / 16.0F;
+    case ZoomOutLimit::one_eighth:
+        return 1.0F / 8.0F;
+    case ZoomOutLimit::one_quarter:
+        return 1.0F / 4.0F;
+    case ZoomOutLimit::one_half:
+        return 1.0F / 2.0F;
+    }
+    return std::nullopt;
+}
+
+/// Maximum zoom in: how far in the battlefield's view zooms, in times
+/// normal size.
+enum class ZoomInLimit : uint8_t {
+    none = 1,        ///< never past normal size
+    twice = 2,       ///< to 2x normal size
+    three_times = 3, ///< to 3x
+    four_times = 4,  ///< to 4x
+};
+
+/// The Maximum zoom in choices, in the order the dialog offers them.
+inline constexpr std::array<ZoomInLimit, 4> zoom_in_limits{
+    ZoomInLimit::none,
+    ZoomInLimit::twice,
+    ZoomInLimit::three_times,
+    ZoomInLimit::four_times,
+};
+
+/// Returns the zoom a Maximum zoom in choice stops at.
+///
+/// @param limit the choice
+/// @return screen pixels per map pixel: 1, 2, 3 or 4
+[[nodiscard]] constexpr float closest_zoom(ZoomInLimit limit) noexcept {
+    return static_cast<float>(static_cast<uint8_t>(limit));
+}
+
 /// The Control size a Steam Deck starts with: its screen is small and dense,
 /// so the touch controls come close to a tablet's in size.
 inline constexpr ControlSize steam_deck_control_size = ControlSize::larger;
@@ -433,7 +515,12 @@ struct EngineSettings {
     /// Path nodes the path search may visit in a game tick, all players
     /// together: base_path_search_nodes times the Pathfinding cycles.
     int32_t path_search_nodes{base_path_search_nodes};
-    bool wheel_zoom{true};    ///< the mouse wheel zooms the battlefield
+    bool wheel_zoom{true}; ///< the mouse wheel zooms the battlefield
+    /// How far out the battlefield's view zooms, by the wheel, a pinch, the
+    /// touch controls or a controller.
+    ZoomOutLimit max_zoom_out{ZoomOutLimit::automatic};
+    /// How far in the battlefield's view zooms, by the same.
+    ZoomInLimit max_zoom_in{ZoomInLimit::four_times};
     bool escape_opens_menu{}; ///< Escape with nothing to cancel opens the game menu
     bool switch_alt{};        ///< 3.1c's SwitchAlt: a number key alone selects its group
     uint16_t unit_limit{default_unit_limit};       ///< units per player, from the next game
@@ -603,9 +690,10 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// Hardware acceleration is Full with the player's own file, on every
 /// machine, and Off with a named one; whether the graphics card is used is
 /// decided apart from the setting. Vertical sync is Off everywhere. Menu
-/// scaling is Sharp everywhere. Native pixel density is Off, but On where
-/// the platform opens every window at native density. Explosion flash is
-/// Full everywhere, as 3.1c draws it. Modern
+/// scaling is Sharp everywhere. Mouse wheel zoom is On, Maximum zoom out
+/// Automatic and Maximum zoom in 4x everywhere. Native pixel density is
+/// Off, but On where the platform opens every window at native density.
+/// Explosion flash is Full everywhere, as 3.1c draws it. Modern
 /// fonts for game text are On with the player's own file and Off with a
 /// named one; their outline and shadow are On, their background Off and
 /// their size default_text_size everywhere. The language is the operating
@@ -673,7 +761,9 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// value gives the default; Pointer speed and Gyro speed read as numbers,
 /// held to their ranges and put on their nearest stops (half a step rounds
 /// up); Trackpad glide, Magnetism and Left-handed read as every switch does.
-/// A stored value always wins over a Steam Deck's defaults.
+/// Maximum zoom out reads "automatic", "whole-map", "1/32", "1/16", "1/8",
+/// "1/4" or "1/2", and Maximum zoom in "1", "2", "3" or "4"; any other value gives the
+/// default. A stored value always wins over a Steam Deck's defaults.
 ///
 /// @param values the preferences
 /// @param inputs the platform, the preferences file and the installation
@@ -692,8 +782,9 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// acceleration as "off", "basic" or "full", Menu scaling, One-finger drag
 /// and QUEUE and ADD as their words (menu_scaling_text, touch_drag_text,
 /// touch_latches_text), Explosion flash as "off", "reduced" or "full", the
-/// hold delay in milliseconds, Control size and the
-/// Controller section's choices as the words read_settings reads, Pointer
+/// hold delay in milliseconds, Maximum zoom out, Maximum zoom in, Control
+/// size and the Controller section's choices as the words read_settings
+/// reads, Pointer
 /// speed and Gyro speed in percent, the mod and the picked folder as their
 /// paths, or erased
 /// for none; Restore defaults leaves the picked folder as it is. The picked

@@ -513,6 +513,17 @@ void Runtime::apply_engine_settings(const settings::EngineSettings& chosen) {
     // Turning the wheel zoom off brings the battlefield back to its own scale.
     if (before.wheel_zoom && !chosen.wheel_zoom && match_)
         EngineSettingsState::ease_zoom_about_centre(*this, kDefaultBattlefieldZoom);
+    // A view past the zoom's new limits comes back within them about the
+    // battlefield's centre, at the next frame (step_match_zoom).
+    else if (
+        (before.max_zoom_out != chosen.max_zoom_out || before.max_zoom_in != chosen.max_zoom_in) &&
+        match_
+    ) {
+        const float held = std::clamp(match_zoom_target_, least_match_zoom(), most_match_zoom());
+        if (held != match_zoom_target_ || match_zoom_ < least_match_zoom() ||
+            match_zoom_ > most_match_zoom())
+            EngineSettingsState::ease_zoom_about_centre(*this, held);
+    }
     // ui.megamap acts only while the wheel zoom is off.
     if (before.wheel_zoom != chosen.wheel_zoom && match_)
         megamap_wheel_zoom_changed();

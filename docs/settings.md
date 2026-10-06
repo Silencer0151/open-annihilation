@@ -133,7 +133,9 @@ Change it to play a mod, or to go back to the game as 3.1c plays it.
 
 ## Controls
 
-![The Controls section: Mouse wheel zoom On, Escape opens the game menu On, Select groups without Alt Off.](images/settings/controls.png)
+![The top of the Controls section: Mouse wheel zoom On, Maximum zoom out at Automatic and Maximum zoom in at 4x.](images/settings/controls-1.png)
+
+![The rest of the Controls section, scrolled to its end: Maximum zoom in at 4x, Escape opens the game menu On and Select groups without Alt Off.](images/settings/controls-2.png)
 
 Each of these takes effect at once.
 
@@ -143,7 +145,24 @@ Each of these takes effect at once.
   eases back to the game's own scale. Turn it off if the wheel zooms when
   you do not mean it to, or to use a mod's megamap, which takes the wheel
   only while this is off
-  ([ui.megamap](mods/standard-hacks/ui.megamap.md)).
+  ([ui.megamap](mods/standard-hacks/ui.megamap.md)); the wheel itself can
+  zoom out to the whole map (Maximum zoom out).
+- **Maximum zoom out**, Automatic, Whole map, 1/32, 1/16, 1/8, 1/4 or 1/2,
+  Automatic by default. How far out the wheel, a pinch, the touch zoom
+  buttons and a controller zoom the battlefield. Automatic goes as far as
+  the units are drawn whole, as the view always has: half the game's scale,
+  or a sixth while Full hardware acceleration draws the battlefield. Whole
+  map zooms out until the whole map fits the battlefield, filling it one
+  way, with the camera at the map's corner; each fraction zooms out to that
+  share of the game's scale, or to the whole map if it fits first. Farther
+  out than Automatic, the battlefield is drawn as a far view in every tier:
+  the terrain reduced, each unit as a dot of its owner's colour, framed
+  while selected, and no health bars, so that a frame of the whole map
+  costs no more than one at half scale. Clicks, drags and orders work as
+  ever. Choose Whole map to see and command the whole battle at once.
+- **Maximum zoom in**, None, 2x, 3x or 4x, 4x by default. How close the
+  same zooms go: None keeps the game's own scale as the closest, the others
+  that many times it. A view past a new limit comes within it at once.
 - **Escape opens the game menu**, On by default on macOS and Off
   elsewhere. The first Escape cancels an order or clears the selection, as
   in 3.1c; the next opens the in-game menu. Turn it on if F2 is awkward to
@@ -287,10 +306,10 @@ the game draws its text and how the modern fonts draw it.
   - **Basic**: the graphics card scales and composes the frames, so the
     picture fills the window evenly; the processor still draws them.
   - **Full**: the card also draws the battlefield, smoothed at every zoom,
-    and the view can zoom out to a sixth of the game's scale, three times
-    as far as the processor's drawing allows. It does not yet draw the
-    small lens that a shot of a weapon with render type 2 makes of the
-    ground under it; Basic and Off do.
+    and Maximum zoom out's Automatic reaches a sixth of the game's scale,
+    three times as far as the processor's drawing allows. It does not yet
+    draw the small lens that a shot of a weapon with render type 2 makes of
+    the ground under it; Basic and Off do.
 
   The card is used only where it can do the work and the computer has at
   least 2 GB of memory. Where Full cannot run, Basic draws in its place;

@@ -1332,7 +1332,7 @@ void Runtime::touch_match_started() {
     // command line chose a zoom; the player zooms freely from there.
     if (!touch || !touch_phone_class() || options_.match_zoom != kDefaultBattlefieldZoom)
         return;
-    const float start = std::clamp(kPhoneStartZoom, least_match_zoom(), kMaxBattlefieldZoom);
+    const float start = std::clamp(kPhoneStartZoom, least_match_zoom(), most_match_zoom());
     const float current = match_zoom_ > 0.0F ? match_zoom_ : kDefaultBattlefieldZoom;
     zoom_match_about(
         start / current,

@@ -1829,6 +1829,98 @@ void explosion_flash_default_read_and_round_trip() {
     }
 }
 
+/// The zoom's limits: Automatic and 4x everywhere by default, as the view
+/// always zoomed; a file written before them, which holds neither key,
+/// reads the defaults; each word reads its choice and any other text the
+/// default; each other choice written alone and read back, and Restore
+/// defaults then OK erases both keys.
+void the_zoom_limits_default_read_and_round_trip() {
+    CHECK(settings::key::max_zoom_out == "open-annihilation.max-zoom-out");
+    CHECK(settings::key::max_zoom_in == "open-annihilation.max-zoom-in");
+    settings::Inputs own_mac = players_own_on_linux;
+    own_mac.macos = true;
+    settings::Inputs light = players_own_on_linux;
+    light.light_machine = true;
+    for (const auto& inputs : {settings::Inputs{}, players_own_on_linux, own_mac, light}) {
+        const auto defaults = settings::default_settings(inputs);
+        CHECK(defaults.max_zoom_out == settings::ZoomOutLimit::automatic);
+        CHECK(defaults.max_zoom_in == settings::ZoomInLimit::four_times);
+        CHECK(settings::read_settings({}, inputs, false) == defaults);
+    }
+    // An older file: the wheel's switch and other settings, no limits.
+    Values older{
+        {std::string{settings::key::wheel_zoom}, "1"},
+        {std::string{settings::key::escape_opens_menu}, "1"},
+    };
+    const auto read_older = settings::read_settings(older, players_own_on_linux, false);
+    CHECK(read_older.max_zoom_out == settings::ZoomOutLimit::automatic);
+    CHECK(read_older.max_zoom_in == settings::ZoomInLimit::four_times);
+    CHECK(read_older.escape_opens_menu);
+
+    const auto out = [](const char* text) {
+        return read_one(settings::key::max_zoom_out, text).max_zoom_out;
+    };
+    const auto in = [](const char* text) {
+        return read_one(settings::key::max_zoom_in, text).max_zoom_in;
+    };
+    const std::array<std::pair<settings::ZoomOutLimit, const char*>, 7> out_words{{
+        {settings::ZoomOutLimit::automatic, "automatic"},
+        {settings::ZoomOutLimit::whole_map, "whole-map"},
+        {settings::ZoomOutLimit::one_thirty_second, "1/32"},
+        {settings::ZoomOutLimit::one_sixteenth, "1/16"},
+        {settings::ZoomOutLimit::one_eighth, "1/8"},
+        {settings::ZoomOutLimit::one_quarter, "1/4"},
+        {settings::ZoomOutLimit::one_half, "1/2"},
+    }};
+    const std::array<std::pair<settings::ZoomInLimit, const char*>, 4> in_words{{
+        {settings::ZoomInLimit::none, "1"},
+        {settings::ZoomInLimit::twice, "2"},
+        {settings::ZoomInLimit::three_times, "3"},
+        {settings::ZoomInLimit::four_times, "4"},
+    }};
+    for (const auto& [limit, word] : out_words)
+        CHECK(out(word) == limit);
+    for (const auto& [limit, word] : in_words)
+        CHECK(in(word) == limit);
+    for (const char* text : {"", "Whole map", "WHOLE-MAP", "32", "0.5", "1/3", " 1/8", "8x"})
+        CHECK(out(text) == settings::ZoomOutLimit::automatic);
+    for (const char* text : {"", "0", "5", "8", "4x", "none", " 2"})
+        CHECK(in(text) == settings::ZoomInLimit::four_times);
+
+    const auto defaults = settings::default_settings(players_own_on_linux);
+    for (const auto& [limit, word] : out_words) {
+        if (limit == defaults.max_zoom_out)
+            continue;
+        auto chosen = defaults;
+        chosen.max_zoom_out = limit;
+        Values values;
+        settings::write_settings(values, defaults, chosen, defaults, false);
+        CHECK(values.size() == 1);
+        CHECK(values.at(std::string{settings::key::max_zoom_out}) == word);
+        CHECK(settings::read_settings(values, players_own_on_linux, false) == chosen);
+    }
+    for (const auto& [limit, word] : in_words) {
+        if (limit == defaults.max_zoom_in)
+            continue;
+        auto chosen = defaults;
+        chosen.max_zoom_in = limit;
+        Values values;
+        settings::write_settings(values, defaults, chosen, defaults, false);
+        CHECK(values.size() == 1);
+        CHECK(values.at(std::string{settings::key::max_zoom_in}) == word);
+        CHECK(settings::read_settings(values, players_own_on_linux, false) == chosen);
+    }
+    auto both = defaults;
+    both.max_zoom_out = settings::ZoomOutLimit::whole_map;
+    both.max_zoom_in = settings::ZoomInLimit::none;
+    Values values;
+    settings::write_settings(values, defaults, both, defaults, false);
+    CHECK(values.size() == 2);
+    CHECK(settings::read_settings(values, players_own_on_linux, false) == both);
+    settings::write_settings(values, both, defaults, defaults, true);
+    CHECK(values.empty());
+}
+
 void menu_scaling_and_native_density_default_read_and_round_trip() {
     CHECK(settings::key::menu_scaling == "open-annihilation.menu-scaling");
     CHECK(settings::key::native_density == "open-annihilation.native-density");
@@ -1984,6 +2076,7 @@ int main() {
     the_controller_settings_round_trip_and_restore();
     menu_scaling_and_native_density_default_read_and_round_trip();
     explosion_flash_default_read_and_round_trip();
+    the_zoom_limits_default_read_and_round_trip();
     if (failures != 0)
         return 1;
     std::cout << "engine settings: ok\n";

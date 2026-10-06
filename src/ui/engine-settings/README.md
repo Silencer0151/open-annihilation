@@ -17,6 +17,8 @@ the locks a running game puts on them (`settings_locks`).
 | Mods | Mod | No Mod, or one of the mod folders the game finds | No Mod | `open-annihilation.mod-directory` (the folder's path; absent for No Mod) |
 | | A mod folder chosen outside the folders the game finds, kept while it is the Mod | any folder | none | `open-annihilation.picked-mod-directory` (the folder's path; absent for none, erased once another mod or No Mod is stored) |
 | Controls | Mouse wheel zoom | Off, On | On | `open-annihilation.wheel-zoom` |
+| | Maximum zoom out, a drop-down: how far out the wheel, a pinch, the touch zoom buttons and a controller zoom | Automatic (half the game's scale, a sixth while Full draws the battlefield), Whole map, 1/32, 1/16, 1/8, 1/4, 1/2; no choice but Automatic goes past the whole map | Automatic | `open-annihilation.max-zoom-out` (`automatic`, `whole-map`, `1/32`, `1/16`, `1/8`, `1/4` or `1/2`) |
+| | Maximum zoom in, a drop-down: how close the same zooms go | None (the game's own scale), 2x, 3x, 4x | 4x | `open-annihilation.max-zoom-in` (`1`, `2`, `3` or `4`) |
 | | Escape opens the game menu | Off, On | On on macOS, Off elsewhere and with `--preferences-file` | `open-annihilation.escape-opens-menu` |
 | | Select groups without Alt | Off, On | Off | 3.1c's SwitchAlt |
 | Common Tweaks | Your files: the player's own folder and buttons that open its Saves, Screenshots and Mods folders | changes no setting | | `open-annihilation.user-folder`, read at start (`src/app/include/oa/app/user_folder.hpp`) |
@@ -62,9 +64,15 @@ the locks a running game puts on them (`settings_locks`).
 | | The overrides of the profile's standard hacks, in Developer Mode's list | any hack on or off, with its parameters | none | `open-annihilation.hack-overrides.<id>`, the id of the profile the game plays, `ta-3.1c` without a mod, `folder:<path>` for a mod folder without a profile |
 
 Mouse wheel zoom, while on, also leaves a profile's megamap off for the
-player: the wheel zooms the battlefield in its place
+player: the wheel zooms the battlefield in its place, out to the whole map
+with Maximum zoom out at Whole map
 ([ui.megamap](../../../docs/mods/standard-hacks/ui.megamap.md)). Turning it
 on during a match closes an open megamap.
+
+Maximum zoom out and Maximum zoom in hold every zoom of the player's view,
+with Mouse wheel zoom off too, since a pinch and the touch zoom buttons
+zoom then; a change brings a view past the new limits within them at once.
+Neither changes the match: they are never locked.
 
 The Touch section is the same everywhere, every machine and preferences
 file alike. A stored One-finger drag or QUEUE and ADD that is none of their
@@ -366,16 +374,17 @@ pixels, and shows a scroll bar in the margin right of its rows: a well like
 a switch's, its thumb as tall as the view's share of the section and never
 under 16 pixels. Graphics, with eight rows, is taller than its view by 257
 pixels, Language, with the Language drop-down, four switches and the
-Text size slider, by 129, and Touch, with its three strips, the Hold delay
-slider and two switches, by 121; Controls and Common Tweaks fit, Common
-Tweaks' Your files and two sliders in 210 pixels, and draw as if there were
-no scrolling,
+Text size slider, by 129, Touch, with its three strips, the Hold delay
+slider and two switches, by 121, and Controls, with its three switches and
+the zoom's two drop-downs, by 84; Common Tweaks fits, its Your files and
+two sliders in 210 pixels, and draws as if there were no scrolling,
 with no bar. While the dialog's words are drawn in the modern fonts, as in
 Simplified Chinese, whose ideographs stand as tall as a hint line, the
 lines of a hint or a notice lie three pixels further apart
 (`tall_hint_line_gap`), clear of each other: each row with such lines is
-taller by three pixels a line after the first, and a section that scrolls
-scrolls further than the pixels given above. Each section keeps its offset
+taller by three pixels a line after the first, a section that scrolls
+scrolls further than the pixels given above, and at the end of its scroll
+on until the view's top edge cuts no hint line (`open_rows`). Each section keeps its offset
 while the dialog is open, and every section starts at its top each time it
 opens. A row the view cuts shows the part inside it and takes a press
 only there;

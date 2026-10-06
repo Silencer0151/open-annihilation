@@ -52,8 +52,9 @@ it and centres the battlefield view on the map point under the pointer.
 #### With Mouse wheel zoom on
 
 The settings' Mouse wheel zoom (Controls, on by default) zooms the
-battlefield with the wheel, which makes the megamap redundant. While it is
-on, the hack is off for this player, as if the profile left it out: Tab and
+battlefield with the wheel, out to the whole map with Maximum zoom out at
+Whole map, which makes the megamap redundant. While it is on, the hack is
+off for this player, as if the profile left it out: Tab and
 the wheel do what they do without it, the wheel zooming the battlefield, no
 megamap opens and the minimap keeps the game's own picture. Turning the
 setting on during a match closes an open megamap, without its sound, and

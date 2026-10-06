@@ -243,6 +243,23 @@ constexpr std::array<ChoiceWord<ExplosionFlash>, 3> explosion_flash_words{{
     {ExplosionFlash::reduced, "reduced"},
     {ExplosionFlash::full, "full"},
 }};
+/// Maximum zoom out's words, in zoom_out_limits' order.
+constexpr std::array<ChoiceWord<ZoomOutLimit>, 7> zoom_out_words{{
+    {ZoomOutLimit::automatic, "automatic"},
+    {ZoomOutLimit::whole_map, "whole-map"},
+    {ZoomOutLimit::one_thirty_second, "1/32"},
+    {ZoomOutLimit::one_sixteenth, "1/16"},
+    {ZoomOutLimit::one_eighth, "1/8"},
+    {ZoomOutLimit::one_quarter, "1/4"},
+    {ZoomOutLimit::one_half, "1/2"},
+}};
+/// Maximum zoom in's words, in zoom_in_limits' order.
+constexpr std::array<ChoiceWord<ZoomInLimit>, 4> zoom_in_words{{
+    {ZoomInLimit::none, "1"},
+    {ZoomInLimit::twice, "2"},
+    {ZoomInLimit::three_times, "3"},
+    {ZoomInLimit::four_times, "4"},
+}};
 /// Control size's words, in control_size_choices' order.
 constexpr std::array<ChoiceWord<ControlSize>, 3> control_size_words{{
     {ControlSize::standard, "standard"},
@@ -573,6 +590,8 @@ EngineSettings read_settings(
             clamped(*number, base_path_search_nodes, highest_path_search_nodes);
     if (const auto number = stored_number(values, key::wheel_zoom))
         settings.wheel_zoom = *number > 0;
+    read_word(values, key::max_zoom_out, zoom_out_words, settings.max_zoom_out);
+    read_word(values, key::max_zoom_in, zoom_in_words, settings.max_zoom_in);
     if (const auto number = stored_number(values, key::escape_opens_menu))
         settings.escape_opens_menu = *number > 0;
     if (const auto number = stored_number(values, key::unit_limit))
@@ -698,6 +717,24 @@ void write_settings(
         switch_text(chosen.wheel_zoom),
         chosen.wheel_zoom != opened.wheel_zoom,
         chosen.wheel_zoom == defaults.wheel_zoom,
+        restored
+    );
+    store_word(
+        values,
+        key::max_zoom_out,
+        zoom_out_words,
+        opened.max_zoom_out,
+        chosen.max_zoom_out,
+        defaults.max_zoom_out,
+        restored
+    );
+    store_word(
+        values,
+        key::max_zoom_in,
+        zoom_in_words,
+        opened.max_zoom_in,
+        chosen.max_zoom_in,
+        defaults.max_zoom_in,
         restored
     );
     store(

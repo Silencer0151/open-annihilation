@@ -732,6 +732,16 @@ if(BUILD_TESTING)
   target_link_libraries(oa-app-world-scaling-test PRIVATE oa-app-headers oa-present-world-renderer
     oa-app-render-policy oa-test-support oa-options)
   add_test(NAME app-world-scaling COMMAND oa-app-world-scaling-test)
+  # The view's zoom floor for each Maximum zoom out choice and the whole
+  # map's fit on maps and battlefields of every shape; the far view's
+  # terrain pyramid against the means of the map pixels it stands for, the
+  # level each zoom reads, the filter against a sum over the texels and the
+  # same on one and on several drawing threads; and the units' dots, framed
+  # and clipped.
+  add_executable(oa-app-far-view-test src/app/far_view_test.cpp src/app/far_view.cpp)
+  target_link_libraries(oa-app-far-view-test PRIVATE oa-app-headers oa-formats-tnt oa-formats-hpi
+    oa-platform-job-pool oa-ui-engine-settings oa-test-support oa-options)
+  add_test(NAME app-far-view COMMAND oa-app-far-view-test)
   # The battlefield's thin lines drawn band by band: lines of the frame and
   # selection lines of the model bridge, 2 pixels thick as a reduced scene
   # draws them, cover the pixels a square pen gives across the bands' edges,
@@ -869,7 +879,7 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/runtime_mod_install.cpp src/app/runtime_mod_install_check.cpp src/app/mod_install_watch.cpp
   src/app/user_folder_open.cpp
   src/app/runtime_mission_orders.cpp src/app/runtime_showcase.cpp src/app/match_clock.cpp
-  src/app/world_scaling.cpp
+  src/app/world_scaling.cpp src/app/far_view.cpp
   src/app/frame_pacing.cpp src/app/frame_stats_panel.cpp src/app/runtime_frame_stats.cpp
   src/app/runtime_team_panels.cpp src/app/runtime_team_panel_check.cpp
   src/app/runtime_scroll_bars.cpp src/app/runtime_scroll_bar_check.cpp
@@ -1103,6 +1113,9 @@ if(OA_BUILD_PLATFORM)
       # card, lighter at a third and none at a quarter and the Full floor.
       # Health bars keep the game's 35 by 5 pixels at zoom 1 and in, and
       # shrink zoomed out to 13 by 3 at the Full floor, alike in every tier.
+      # Zoomed out to the whole map, past the zoom units are drawn whole at,
+      # each tier's frame is the processor's far view, which plans no model,
+      # Full's presented without leaving Full.
       # Pictures of one moment at zoom 0.5, 1 and 2.5 in both tiers, and of
       # the shadows at each of those zooms, go to local/reports. Skips under
       # 2 GiB of memory.
@@ -1965,7 +1978,9 @@ if(OA_BUILD_PLATFORM)
           --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
         set_tests_properties(native-renderer-walk PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
         # The headless menu, match, composed-frame, message log, speed and
-        # build placement checks, from fresh preferences each run.
+        # build placement checks, from fresh preferences each run; among
+        # them the wheel's zoom about the pointer and within each Maximum
+        # zoom out and Maximum zoom in choice, out to the whole map and back.
         add_test(NAME native-navigation COMMAND ${Python3_EXECUTABLE}
           "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_navigation.py"
           --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"

@@ -3,6 +3,7 @@
 
 // Area-filtered terrain for zoomed-out battlefield views.
 #include "oa/app/runtime.hpp"
+#include "oa/app/far_view.hpp"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -152,7 +153,9 @@ void Runtime::refresh_filtered_terrain() {
         return;
     // The Full tier's zoomed-out terrain is the card's, from the atlas
     // levels: its base stays the nearest fill, and the box filter never runs.
-    if (full_presentation())
+    // The far view is the processor's in every tier.
+    const bool far = far_view_frame();
+    if (full_presentation() && !far)
         return;
     // The scene's terrain, at the draw scale: below one pixel per map pixel
     // only, so a scene drawn 1:1 or magnified keeps the nearest fill.
@@ -191,18 +194,43 @@ void Runtime::refresh_filtered_terrain() {
         current(terrain_cache_cam_x_, terrain_cache_cam_y_, terrain_cache_zoom_))
         return;
     const auto filter_start = std::chrono::steady_clock::now();
-    const bool filtered = box_filter_terrain(
-        map,
-        match_palette_,
-        camera_x,
-        camera_y,
-        static_cast<uint32_t>(map_width),
-        static_cast<uint32_t>(map_height),
-        dest_w,
-        dest_h,
-        draw_scale,
-        cache.rgb.data()
-    );
+    bool filtered = false;
+    if (far) {
+        // The far view reads the map's pyramid, made at its first far frame
+        // and again when the map or the palette changes.
+        if (far_terrain_.map != &map || far_terrain_.palette != match_palette_ ||
+            far_terrain_.pyramid.tile_count != map.tile_count || far_terrain_.pyramid.rgb.empty()) {
+            far_terrain_.pyramid = build_terrain_pyramid(map, match_palette_);
+            far_terrain_.map = &map;
+            far_terrain_.palette = match_palette_;
+        }
+        filtered = filter_far_terrain(
+            map,
+            far_terrain_.pyramid,
+            camera_x,
+            camera_y,
+            static_cast<uint32_t>(map_width),
+            static_cast<uint32_t>(map_height),
+            dest_w,
+            dest_h,
+            draw_scale,
+            cache.rgb.data(),
+            draw_pool_.get()
+        );
+    } else {
+        filtered = box_filter_terrain(
+            map,
+            match_palette_,
+            camera_x,
+            camera_y,
+            static_cast<uint32_t>(map_width),
+            static_cast<uint32_t>(map_height),
+            dest_w,
+            dest_h,
+            draw_scale,
+            cache.rgb.data()
+        );
+    }
     terrain_box_filter_ns_ +=
         static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                   std::chrono::steady_clock::now() - filter_start

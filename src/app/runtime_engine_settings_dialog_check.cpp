@@ -6,7 +6,8 @@
 // setting changed and in effect at once, Vertical sync read back from the
 // renderer, Menu scaling's whole steps in the window's presentation at once,
 // Native pixel density kept for the next start, Explosion flash's Reduced in
-// effect for the next frame drawn, OK, Cancel and Restore
+// effect for the next frame drawn, the zoom's limits stepped by the keys on
+// their drop-downs, OK, Cancel and Restore
 // defaults and the preferences they
 // leave, Developer Mode's overrides in effect and kept), and the main menu
 // with its OA button and the dialog as the window shows them at several
@@ -215,6 +216,10 @@ std::string_view label_of(settings::Setting setting) {
         return "Pathfinding cycles";
     case settings::Setting::wheel_zoom:
         return "Mouse wheel zoom";
+    case settings::Setting::max_zoom_out:
+        return "Maximum zoom out";
+    case settings::Setting::max_zoom_in:
+        return "Maximum zoom in";
     case settings::Setting::escape_opens_menu:
         return "Escape opens the game menu";
     case settings::Setting::switch_alt:
@@ -642,10 +647,23 @@ void Runtime::check_engine_settings_dialog() {
     click(settings::first_row_control, "OFF", "Mouse wheel zoom's Off");
     chosen.wheel_zoom = false;
     expect("Mouse wheel zoom Off");
-    click(settings::first_row_control + 1, "ON", "Escape opens the game menu's On");
+    // The zoom's limits, on their drop-downs: Right steps a choice on and
+    // Left one back.
+    focus(settings::first_row_control + 1, "Maximum zoom out");
+    tap(SDLK_RIGHT);
+    chosen.max_zoom_out = settings::ZoomOutLimit::whole_map;
+    expect("Maximum zoom out Whole map");
+    focus(settings::first_row_control + 2, "Maximum zoom in");
+    tap(SDLK_LEFT);
+    chosen.max_zoom_in = settings::ZoomInLimit::three_times;
+    expect("Maximum zoom in 3x");
+    // The rows under them, scrolled into view as the focus reaches them.
+    focus(settings::first_row_control + 3, "Escape opens the game menu");
+    click(settings::first_row_control + 3, "ON", "Escape opens the game menu's On");
     chosen.escape_opens_menu = true;
     expect("Escape opens the game menu On");
-    click(settings::first_row_control + 2, "ON", "Select groups without Alt's On");
+    focus(settings::first_row_control + 4, "Select groups without Alt");
+    click(settings::first_row_control + 4, "ON", "Select groups without Alt's On");
     chosen.switch_alt = true;
     expect("Select groups without Alt On");
     require(
@@ -653,7 +671,7 @@ void Runtime::check_engine_settings_dialog() {
         "Select groups without Alt did not set SwitchAlt"
     );
     // A click on the side a switch already shows changes nothing.
-    click(settings::first_row_control + 2, "ON", "Select groups without Alt's On");
+    click(settings::first_row_control + 4, "ON", "Select groups without Alt's On");
     expect("a second click on On");
 
     click(settings::page_control(settings::Page::common_tweaks), {}, "Common Tweaks' entry");
@@ -902,6 +920,8 @@ void Runtime::check_engine_settings_dialog() {
     std::map<std::string, std::string> expected_keys{
         {std::string(settings::key::path_search_nodes), std::to_string(kChosenPathNodes)},
         {std::string(settings::key::wheel_zoom), "0"},
+        {std::string(settings::key::max_zoom_out), "whole-map"},
+        {std::string(settings::key::max_zoom_in), "3"},
         {std::string(settings::key::escape_opens_menu), "1"},
         {std::string(settings::key::unit_limit), std::to_string(kChosenUnitLimit)},
         {std::string(settings::key::max_frame_rate), std::to_string(kChosenFrameRate)},

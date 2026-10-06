@@ -12,8 +12,9 @@ preferences file the check writes:
   default value, it writes the same trace stream, reaches the same world
   digest and draws the same last frame, byte for byte.
 - With every setting that only changes the look or the input away from its
-  default (wheel zoom off, Escape opens the game menu, Select groups without
-  Alt, the lowest maximum frame rate, the performance statistics, hardware
+  default (wheel zoom off, the zoom's limits at Whole map and None, Escape
+  opens the game menu, Select groups without Alt, the lowest maximum frame
+  rate, the performance statistics, hardware
   acceleration at Full and vertical sync, which a headless run has no
   renderer for, and the explosions' flashes off), it writes the same trace
   stream and reaches the same world digest.
@@ -56,6 +57,8 @@ SWITCH_ALT_KEY = "Total Annihilation|SwitchAlt"
 DEFAULTS = {
     "open-annihilation.path-search-nodes": "1333",
     "open-annihilation.wheel-zoom": "1",
+    "open-annihilation.max-zoom-out": "automatic",
+    "open-annihilation.max-zoom-in": "4",
     "open-annihilation.escape-opens-menu": "0",
     "open-annihilation.unit-limit": "250",
     "open-annihilation.max-fps": "120",
@@ -74,6 +77,8 @@ DEFAULTS = {
 # The settings that change only the look or the input, away from their defaults.
 PRESENTATION = {
     "open-annihilation.wheel-zoom": "0",
+    "open-annihilation.max-zoom-out": "whole-map",
+    "open-annihilation.max-zoom-in": "1",
     "open-annihilation.escape-opens-menu": "1",
     "open-annihilation.max-fps": "40",
     "open-annihilation.frame-stats": "1",

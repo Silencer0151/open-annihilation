@@ -2195,6 +2195,58 @@ void Runtime::check_full_render_tier(
                   << full_->drawn_quads << " quads\n";
     }
 
+    // Zoomed out to the whole map (Maximum zoom out), past the zoom each
+    // tier draws units whole at: the processor draws the far view at the
+    // zoom in every tier, Full's presented as Basic presents a frame
+    // without leaving Full; its terrain is refreshed from the map's
+    // pyramid, its units are dots and no model is planned; back at the
+    // floor the card draws the frame again. Pictures of each go to the
+    // report.
+    {
+        namespace engine = oa::ui::engine_settings;
+        const engine::EngineSettings saved = engine_settings();
+        engine::EngineSettings whole_map = saved;
+        whole_map.max_zoom_out = engine::ZoomOutLimit::whole_map;
+        apply_engine_settings(whole_map);
+        for (const auto level :
+             {HardwareAcceleration::off, HardwareAcceleration::basic, HardwareAcceleration::full}) {
+            set_level(level);
+            const float whole = least_match_zoom();
+            const std::string tier = level == HardwareAcceleration::off     ? "off"
+                                     : level == HardwareAcceleration::basic ? "basic"
+                                                                            : "full";
+            if (!(whole < detail_zoom_floor()))
+                fail(
+                    "the whole map fits the " + tier + " tier's battlefield at " +
+                    zoom_text(whole) + ", no farther out than its units are drawn whole"
+                );
+            at_zoom(whole);
+            // The terrain drawn afresh, and the frame's own units counted.
+            terrain_cache_cam_x_ = ~0U;
+            frame_draws_.units_drawn = 0;
+            const uint64_t runs = terrain_box_filter_runs_;
+            const auto read = presented();
+            if (!far_view_frame() || match_zoom() != whole)
+                fail("the " + tier + " tier did not hold the whole map's zoom as the far view");
+            if (terrain_box_filter_runs_ == runs)
+                fail("the " + tier + " tier's far view did not refresh its terrain");
+            if (!match_models().draws.models.empty())
+                fail("the " + tier + " tier's far view planned a model");
+            if (frame_draws_.units_drawn == 0)
+                fail("the " + tier + " tier's far view drew no unit");
+            if (level == HardwareAcceleration::full &&
+                (!full_presentation() || full_frame_drawn() || full_->drawn))
+                fail("the full tier's far view was not the processor's, presented as Basic's");
+            write_png(report_directory / ("native-render-tiers-far-view-" + tier + ".png"), read);
+            std::cout << "render tiers check: " << tier << " tier: the whole map at zoom "
+                      << zoom_text(whole) << " is the far view, " << frame_draws_.units_drawn
+                      << " units drawn as dots\n";
+        }
+        at_zoom(kMinFullBattlefieldZoom);
+        std::ignore = full_frame();
+        apply_engine_settings(saved);
+    }
+
     // Shadows lighten as the view zooms out and are not drawn from a
     // quarter out. The standard tier draws the game's own at zoom 1 and, at
     // its floor of 0.5, shadows at half the game's darkness through the

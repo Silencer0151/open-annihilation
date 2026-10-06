@@ -35,9 +35,11 @@ namespace {
 
 /// Mods' one row: the list of the mods the game can play.
 constexpr std::array<Setting, 1> kModsRows{Setting::mod};
-/// Controls' rows.
-constexpr std::array<Setting, 3> kControlsRows{
+/// Controls' rows: the zoom's limits right under the switch for the wheel.
+constexpr std::array<Setting, 5> kControlsRows{
     Setting::wheel_zoom,
+    Setting::max_zoom_out,
+    Setting::max_zoom_in,
     Setting::escape_opens_menu,
     Setting::switch_alt,
 };
@@ -443,6 +445,20 @@ constexpr std::array<pad_controls::Prompts, 6> kPromptsChoices{
 constexpr std::array<std::string_view, 6> kPromptsCaptions{
     "Automatic", "Steam Deck", "Xbox", "PlayStation", "Nintendo", "Off"
 };
+
+/// Maximum zoom out's choices' texts, in zoom_out_limits' order.
+constexpr std::array<std::string_view, 7> kZoomOutCaptions{
+    "Automatic", "Whole map", "1/32", "1/16", "1/8", "1/4", "1/2"
+};
+static_assert(
+    kZoomOutCaptions.size() == zoom_out_limits.size(),
+    "every Maximum zoom out choice has its caption"
+);
+/// Maximum zoom in's choices' texts, in zoom_in_limits' order.
+constexpr std::array<std::string_view, 4> kZoomInCaptions{"None", "2x", "3x", "4x"};
+static_assert(
+    kZoomInCaptions.size() == zoom_in_limits.size(), "every Maximum zoom in choice has its caption"
+);
 
 /// Returns a choice's place among the choices a strip offers.
 ///
@@ -1153,7 +1169,8 @@ std::string shown_hint_text(
 
 bool is_choice(Setting setting) noexcept {
     return setting == Setting::language || setting == Setting::pad_gyro ||
-           setting == Setting::pad_prompts;
+           setting == Setting::pad_prompts || setting == Setting::max_zoom_out ||
+           setting == Setting::max_zoom_in;
 }
 
 int32_t choice_field_width(Setting setting) noexcept {
@@ -1180,6 +1197,10 @@ std::size_t choice_count(const Dialog& dialog, Setting setting) {
         return kGyroChoices.size();
     case Setting::pad_prompts:
         return kPromptsChoices.size();
+    case Setting::max_zoom_out:
+        return zoom_out_limits.size();
+    case Setting::max_zoom_in:
+        return zoom_in_limits.size();
     default:
         return 0;
     }
@@ -1192,6 +1213,10 @@ std::string choice_text(const Dialog& dialog, Setting setting, std::size_t index
         return std::string(shown_text(kGyroCaptions[index]));
     if (setting == Setting::pad_prompts)
         return std::string(shown_text(kPromptsCaptions[index]));
+    if (setting == Setting::max_zoom_out)
+        return std::string(shown_text(kZoomOutCaptions[index]));
+    if (setting == Setting::max_zoom_in)
+        return std::string(shown_text(kZoomInCaptions[index]));
     if (index == 0) {
         const auto* system = dialog.system_language;
         const auto& named = system != nullptr ? *system : oa::data::languages::english();
@@ -1229,6 +1254,10 @@ std::size_t choice_index(const Dialog& dialog, Setting setting) {
         return choice_place(kGyroChoices, settings.pad_gyro);
     if (setting == Setting::pad_prompts)
         return choice_place(kPromptsChoices, settings.pad_prompts);
+    if (setting == Setting::max_zoom_out)
+        return choice_place(zoom_out_limits, settings.max_zoom_out);
+    if (setting == Setting::max_zoom_in)
+        return choice_place(zoom_in_limits, settings.max_zoom_in);
     if (setting != Setting::language)
         return 0;
     const auto offered = offered_languages();
@@ -1250,6 +1279,14 @@ void set_choice(Dialog& dialog, Setting setting, std::size_t index) {
     }
     if (setting == Setting::pad_prompts) {
         settings.pad_prompts = kPromptsChoices[clamped];
+        return;
+    }
+    if (setting == Setting::max_zoom_out) {
+        settings.max_zoom_out = zoom_out_limits[clamped];
+        return;
+    }
+    if (setting == Setting::max_zoom_in) {
+        settings.max_zoom_in = zoom_in_limits[clamped];
         return;
     }
     settings.language = clamped == 0 ? std::string(oa::data::languages::system_choice)
@@ -1536,6 +1573,29 @@ ScrolledRows open_rows(const Dialog& dialog) {
     }
     open.content_height = content_height(open.rows, 0);
     open.limit = scroll_limit(open.content_height);
+    // While the dialog's words are drawn in the modern fonts, whose
+    // ideographs fill a hint line from its top row, the view's top edge
+    // cuts no hint line at the end of the scroll, of which a sliver would
+    // show under it: the section scrolls on until the line has passed the
+    // edge, its end gap that much taller.
+    const bool tall = oa::data::languages::interface_language().needs !=
+                      oa::data::languages::TextNeeds::game_fonts;
+    if (open.limit > 0 && tall) {
+        const int32_t edge = open.area.view.y;
+        for (bool moved = true; moved;) {
+            moved = false;
+            for (const Row& row : open.rows.rows)
+                for (std::size_t line = 0; line < row.hint_lines; ++line) {
+                    const SourceRect& box = row.hints[line];
+                    const int32_t top = box.y - open.limit;
+                    if (top <= edge && top + box.height > edge) {
+                        open.limit += top + box.height - edge;
+                        moved = true;
+                    }
+                }
+        }
+        open.content_height = open.limit + view.height;
+    }
     open.scroll = std::clamp(dialog.scroll[scroll_index(dialog.page)], int32_t{0}, open.limit);
     scroll_rows(open.rows, open.scroll);
     return open;
@@ -1737,6 +1797,10 @@ std::string_view label_of(Setting setting) noexcept {
         return "Pathfinding cycles";
     case Setting::wheel_zoom:
         return "Mouse wheel zoom";
+    case Setting::max_zoom_out:
+        return "Maximum zoom out";
+    case Setting::max_zoom_in:
+        return "Maximum zoom in";
     case Setting::escape_opens_menu:
         return "Escape opens the game menu";
     case Setting::switch_alt:
@@ -1891,6 +1955,56 @@ std::string_view hint_line(
     case Setting::wheel_zoom:
         lines = {"Scroll to zoom the battlefield in and out.", {}};
         break;
+    case Setting::max_zoom_out: {
+        // What the choice stops at, then where the far view begins.
+        constexpr std::string_view dots = "Farther out than Automatic, units show as dots.";
+        switch (settings.max_zoom_out) {
+        case ZoomOutLimit::automatic:
+            lines = {
+                "As far as units are drawn whole: 1/6 of normal",
+                "size with Full hardware acceleration, else 1/2."
+            };
+            break;
+        case ZoomOutLimit::whole_map:
+            lines = {"Out until the whole map fits the view.", dots};
+            break;
+        case ZoomOutLimit::one_thirty_second:
+            lines = {"Out to 1/32 of normal size, or the whole map.", dots};
+            break;
+        case ZoomOutLimit::one_sixteenth:
+            lines = {"Out to 1/16 of normal size, or the whole map.", dots};
+            break;
+        case ZoomOutLimit::one_eighth:
+            lines = {"Out to 1/8 of normal size, or the whole map.", dots};
+            break;
+        case ZoomOutLimit::one_quarter:
+            lines = {"Out to 1/4 of normal size, or the whole map.", dots};
+            break;
+        case ZoomOutLimit::one_half:
+            lines = {"Out to 1/2 of normal size, or the whole map.", dots};
+            break;
+        }
+        break;
+    }
+    case Setting::max_zoom_in: {
+        // What the choice stops at, then every way of zooming it holds.
+        constexpr std::string_view every = "The wheel, a pinch and a controller stop there.";
+        switch (settings.max_zoom_in) {
+        case ZoomInLimit::none:
+            lines = {"Never closer than normal size.", every};
+            break;
+        case ZoomInLimit::twice:
+            lines = {"In to 2x normal size at most.", every};
+            break;
+        case ZoomInLimit::three_times:
+            lines = {"In to 3x normal size at most.", every};
+            break;
+        case ZoomInLimit::four_times:
+            lines = {"In to 4x normal size at most.", every};
+            break;
+        }
+        break;
+    }
     case Setting::escape_opens_menu:
         lines = {"The first press clears the selection,", "the second opens the menu."};
         break;
@@ -2158,6 +2272,8 @@ std::string_view hint_line(
 
 std::size_t hint_line_count(Setting setting) noexcept {
     switch (setting) {
+    case Setting::max_zoom_out:
+    case Setting::max_zoom_in:
     case Setting::escape_opens_menu:
     case Setting::unit_limit:
     case Setting::anti_aliasing:
@@ -3066,6 +3182,12 @@ void copy_setting(EngineSettings& to, const EngineSettings& from, Setting settin
         break;
     case Setting::wheel_zoom:
         to.wheel_zoom = from.wheel_zoom;
+        break;
+    case Setting::max_zoom_out:
+        to.max_zoom_out = from.max_zoom_out;
+        break;
+    case Setting::max_zoom_in:
+        to.max_zoom_in = from.max_zoom_in;
         break;
     case Setting::escape_opens_menu:
         to.escape_opens_menu = from.escape_opens_menu;

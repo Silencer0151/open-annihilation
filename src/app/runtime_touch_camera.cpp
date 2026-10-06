@@ -67,7 +67,7 @@ void Runtime::zoom_match_about(float factor, float x, float y) {
     anchor_zoom_at(px, py);
     // The zoom and its target together: nothing eases, so the map stays
     // under the fingers.
-    const float zoom = std::clamp(match_zoom_ * factor, least_match_zoom(), kMaxBattlefieldZoom);
+    const float zoom = std::clamp(match_zoom_ * factor, least_match_zoom(), most_match_zoom());
     match_zoom_ = zoom;
     match_zoom_target_ = zoom;
     apply_zoom_anchor();

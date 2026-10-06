@@ -1,0 +1,413 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// The far view (far_view.hpp): the zoom at which the whole map fits a
+// battlefield wider, taller and the same shape as the map; the view's zoom
+// floor for each Maximum zoom out choice on a large map, a map that fits
+// at normal size, a map past the farthest zoom and no map, Automatic
+// keeping the drawing's floor; which frames draw the far view; the terrain
+// pyramid's texels against the means of the map pixels they stand for; the
+// level each zoom reads; the filter against a sum over the texels whose
+// centres each screen pixel covers, black past the shown map, the same on
+// one and on four drawing threads; and the units' dots, framed when
+// selected and clipped at the picture's edges.
+#include "oa/app/far_view.hpp"
+
+#include "oa/platform/job_pool.hpp"
+#include "oa/test/check.hpp"
+
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+
+namespace {
+
+using oa::app::FarViewDot;
+using oa::ui::engine_settings::ZoomOutLimit;
+
+/// Map pixels across a tile.
+constexpr uint32_t tile_edge = 32;
+
+/// A palette whose entry n is (n, 255 - n, n / 2).
+oa::PaletteBytes ramp_palette() {
+    oa::PaletteBytes palette{};
+    for (std::size_t entry = 0; entry < 256; ++entry) {
+        palette[entry * 4] = static_cast<uint8_t>(entry);
+        palette[entry * 4 + 1] = static_cast<uint8_t>(255 - entry);
+        palette[entry * 4 + 2] = static_cast<uint8_t>(entry / 2);
+    }
+    return palette;
+}
+
+/// A map of tiles_wide by tiles_high tiles over three distinct tiles: the
+/// first a ramp across and down, the second a checkerboard of entries 10
+/// and 200, the third entry 77 throughout; the grid names them in turn.
+oa::formats::tnt::Map three_tile_map(uint32_t tiles_wide, uint32_t tiles_high) {
+    oa::formats::tnt::Map map;
+    map.tile_width = tiles_wide;
+    map.tile_height = tiles_high;
+    map.tile_count = 3;
+    map.tile_palette_indices.resize(3U * tile_edge * tile_edge);
+    for (uint32_t y = 0; y < tile_edge; ++y)
+        for (uint32_t x = 0; x < tile_edge; ++x) {
+            const std::size_t at = static_cast<std::size_t>(y) * tile_edge + x;
+            map.tile_palette_indices[at] = static_cast<uint8_t>(x * 4 + y * 3);
+            map.tile_palette_indices[1024 + at] = (x + y) % 2 == 0 ? 10 : 200;
+            map.tile_palette_indices[2048 + at] = 77;
+        }
+    map.tile_indices.resize(static_cast<std::size_t>(tiles_wide) * tiles_high);
+    for (std::size_t cell = 0; cell < map.tile_indices.size(); ++cell)
+        map.tile_indices[cell] = static_cast<uint16_t>((cell * 7 + cell / tiles_wide) % 3);
+    return map;
+}
+
+/// The colour channel of one map pixel in the ramp palette.
+uint32_t map_channel(
+    const oa::formats::tnt::Map& map,
+    const oa::PaletteBytes& palette,
+    uint32_t x,
+    uint32_t y,
+    uint32_t channel
+) {
+    const auto tile =
+        map.tile_indices[static_cast<std::size_t>(y / tile_edge) * map.tile_width + x / tile_edge];
+    const auto index =
+        map.tile_palette_indices
+            [static_cast<std::size_t>(tile) * 1024 + (y % tile_edge) * tile_edge + x % tile_edge];
+    return palette[static_cast<std::size_t>(index) * 4 + channel];
+}
+
+void the_whole_map_fits_one_way_and_fills_the_other() {
+    // A map wider than the battlefield's shape fills its width.
+    OA_CHECK(oa::app::whole_map_zoom(8192, 2048, 1664, 952) == 1664.0F / 8192.0F);
+    // A taller one fills its height.
+    OA_CHECK(oa::app::whole_map_zoom(4096, 8192, 1664, 952) == 952.0F / 8192.0F);
+    // A map of the battlefield's own shape fills both.
+    OA_CHECK(oa::app::whole_map_zoom(3328, 1904, 1664, 952) == 0.5F);
+    // A map smaller than the battlefield fits beyond normal size.
+    OA_CHECK(oa::app::whole_map_zoom(832, 476, 1664, 952) == 2.0F);
+    OA_CHECK(oa::app::whole_map_zoom(0, 2048, 1664, 952) == 0.0F);
+    OA_CHECK(oa::app::whole_map_zoom(2048, 2048, 0, 952) == 0.0F);
+}
+
+void automatic_keeps_the_drawings_floor() {
+    for (const float floor : {0.5F, 0.5F / 3.0F}) {
+        // Whatever the map: a map larger than the view, one smaller than
+        // it, and none.
+        OA_CHECK(
+            oa::app::least_battlefield_zoom(
+                ZoomOutLimit::automatic, floor, 20448, 20352, 1664, 952
+            ) == floor
+        );
+        OA_CHECK(
+            oa::app::least_battlefield_zoom(
+                ZoomOutLimit::automatic, floor, 1024, 1024, 1664, 952
+            ) == floor
+        );
+        OA_CHECK(
+            oa::app::least_battlefield_zoom(ZoomOutLimit::automatic, floor, 0, 0, 1664, 952) ==
+            floor
+        );
+    }
+}
+
+void each_choice_stops_at_its_share_or_the_whole_map() {
+    constexpr float floor = 0.5F;
+    // A large map at 1920x1080: the whole map fits at 952 / 20352.
+    constexpr int32_t wide = 20448, high = 20352, bf_w = 1664, bf_h = 952;
+    const float fit = oa::app::whole_map_zoom(wide, high, bf_w, bf_h);
+    OA_CHECK(fit == 952.0F / 20352.0F);
+    const auto least = [&](ZoomOutLimit limit) {
+        return oa::app::least_battlefield_zoom(limit, floor, wide, high, bf_w, bf_h);
+    };
+    // The map fits at about a twenty-first: 1/32 stops there too.
+    OA_CHECK(least(ZoomOutLimit::whole_map) == fit);
+    OA_CHECK(least(ZoomOutLimit::one_thirty_second) == fit);
+    OA_CHECK(least(ZoomOutLimit::one_sixteenth) == 1.0F / 16.0F);
+    OA_CHECK(least(ZoomOutLimit::one_eighth) == 1.0F / 8.0F);
+    OA_CHECK(least(ZoomOutLimit::one_quarter) == 0.25F);
+    OA_CHECK(least(ZoomOutLimit::one_half) == 0.5F);
+    // A map that fits at a fifth: the shares beyond it stop at the fit.
+    // At 640x480 the same map fits at about a forty-ninth, past 1/32.
+    OA_CHECK(
+        oa::app::least_battlefield_zoom(
+            ZoomOutLimit::one_thirty_second, floor, wide, high, 416, 416
+        ) == 1.0F / 32.0F
+    );
+    const auto least_fifth = [&](ZoomOutLimit limit) {
+        return oa::app::least_battlefield_zoom(limit, floor, 8320, 4760, bf_w, bf_h);
+    };
+    OA_CHECK(least_fifth(ZoomOutLimit::whole_map) == 0.2F);
+    OA_CHECK(least_fifth(ZoomOutLimit::one_thirty_second) == 0.2F);
+    OA_CHECK(least_fifth(ZoomOutLimit::one_eighth) == 0.2F);
+    OA_CHECK(least_fifth(ZoomOutLimit::one_quarter) == 0.25F);
+    // A map that fits at normal size or closer: no choice zooms out, and
+    // none forces a zoom in.
+    for (const auto limit : oa::ui::engine_settings::zoom_out_limits)
+        if (limit != ZoomOutLimit::automatic)
+            OA_CHECK(oa::app::least_battlefield_zoom(limit, floor, 1024, 512, bf_w, bf_h) == 1.0F);
+    // A map past the farthest zoom stops there.
+    OA_CHECK(
+        oa::app::least_battlefield_zoom(ZoomOutLimit::whole_map, floor, 65536, 65536, 640, 520) ==
+        oa::app::furthest_battlefield_zoom
+    );
+    // Without a map, every choice keeps Automatic's floor.
+    for (const auto limit : oa::ui::engine_settings::zoom_out_limits)
+        OA_CHECK(oa::app::least_battlefield_zoom(limit, floor, 0, 0, bf_w, bf_h) == floor);
+}
+
+void frames_past_the_detail_floor_draw_the_far_view() {
+    OA_CHECK(!oa::app::far_view_zoom(0.5F, 0.5F));
+    OA_CHECK(oa::app::far_view_zoom(0.49F, 0.5F));
+    OA_CHECK(!oa::app::far_view_zoom(1.0F, 0.5F));
+    OA_CHECK(!oa::app::far_view_zoom(0.5F / 3.0F, 0.5F / 3.0F));
+    OA_CHECK(oa::app::far_view_zoom(0.1F, 0.5F / 3.0F));
+    OA_CHECK(!oa::app::far_view_zoom(0.0F, 0.5F));
+}
+
+void the_pyramid_holds_the_means_of_the_map_pixels() {
+    const auto palette = ramp_palette();
+    const auto map = three_tile_map(2, 2);
+    const auto pyramid = oa::app::build_terrain_pyramid(map, palette);
+    OA_CHECK(pyramid.tile_count == 3);
+    OA_CHECK(pyramid.rgb.size() == 3 * oa::app::pyramid_tile_texels * 3);
+    std::size_t offset = 0;
+    for (uint32_t level = 1; level <= 5; ++level) {
+        const uint32_t edge = tile_edge >> level;
+        const uint32_t side = 1U << level;
+        for (uint32_t tile = 0; tile < 3; ++tile)
+            for (uint32_t y = 0; y < edge; ++y)
+                for (uint32_t x = 0; x < edge; ++x)
+                    for (uint32_t channel = 0; channel < 3; ++channel) {
+                        uint32_t sum = 0;
+                        for (uint32_t py = 0; py < side; ++py)
+                            for (uint32_t px = 0; px < side; ++px) {
+                                const auto index =
+                                    map.tile_palette_indices
+                                        [tile * 1024 + (y * side + py) * tile_edge + x * side + px];
+                                sum += palette[static_cast<std::size_t>(index) * 4 + channel];
+                            }
+                        const uint32_t covered = side * side;
+                        const auto expected = static_cast<uint8_t>((sum + covered / 2) / covered);
+                        const std::size_t at =
+                            (tile * oa::app::pyramid_tile_texels + offset + y * edge + x) * 3 +
+                            channel;
+                        OA_CHECK(pyramid.rgb[at] == expected);
+                    }
+        offset += static_cast<std::size_t>(edge) * edge;
+    }
+    // A tile of one colour is that colour at every level.
+    OA_CHECK(pyramid.rgb[(2 * oa::app::pyramid_tile_texels + 340) * 3] == 77);
+    OA_CHECK(pyramid.rgb[(2 * oa::app::pyramid_tile_texels + 340) * 3 + 1] == 178);
+    // A short tile table builds no pyramid.
+    auto short_map = map;
+    short_map.tile_palette_indices.resize(1024);
+    OA_CHECK(oa::app::build_terrain_pyramid(short_map, palette).rgb.empty());
+}
+
+void each_zoom_reads_its_level() {
+    OA_CHECK(oa::app::far_terrain_level(0.49F) == 1);
+    OA_CHECK(oa::app::far_terrain_level(0.26F) == 1);
+    OA_CHECK(oa::app::far_terrain_level(0.25F) == 2);
+    OA_CHECK(oa::app::far_terrain_level(0.5F / 3.0F) == 2);
+    OA_CHECK(oa::app::far_terrain_level(0.125F) == 3);
+    OA_CHECK(oa::app::far_terrain_level(1.0F / 20.0F) == 4);
+    OA_CHECK(oa::app::far_terrain_level(1.0F / 32.0F) == 5);
+    OA_CHECK(oa::app::far_terrain_level(1.0F / 64.0F) == 5);
+    OA_CHECK(oa::app::far_terrain_level(1.0F / 200.0F) == 5);
+}
+
+/// The filter's picture by a sum over the texels: each pixel's span of map
+/// pixels stepped as the nearest fill steps them, the texels whose centres
+/// lie in it, black past the shown map.
+std::vector<uint8_t> expected_far_terrain(
+    const oa::formats::tnt::Map& map,
+    const oa::PaletteBytes& palette,
+    uint32_t source_x,
+    uint32_t source_y,
+    uint32_t shown_width,
+    uint32_t shown_height,
+    int32_t width,
+    int32_t height,
+    float zoom
+) {
+    const uint32_t level = oa::app::far_terrain_level(zoom);
+    const uint32_t side = 1U << level;
+    auto scale_fp = static_cast<uint32_t>(std::lround(static_cast<double>(zoom) * 65536.0));
+    const auto spans = [&](uint32_t start, int32_t count) {
+        std::vector<uint32_t> bounds;
+        uint32_t position = start, fraction = 0;
+        for (int32_t index = 0; index <= count; ++index) {
+            bounds.push_back(position);
+            fraction += 65536;
+            while (fraction >= scale_fp) {
+                fraction -= scale_fp;
+                ++position;
+            }
+        }
+        return bounds;
+    };
+    const auto columns = spans(source_x, width);
+    const auto rows = spans(source_y, height);
+    const uint32_t terrain_w = std::min(map.tile_width * tile_edge, shown_width);
+    const uint32_t terrain_h = std::min(map.tile_height * tile_edge, shown_height);
+    std::vector<uint8_t> picture(static_cast<std::size_t>(width) * height * 3);
+    for (int32_t dy = 0; dy < height; ++dy)
+        for (int32_t dx = 0; dx < width; ++dx)
+            for (uint32_t channel = 0; channel < 3; ++channel) {
+                uint64_t sum = 0;
+                uint32_t count = 0;
+                // Texels whose centres lie in the pixel's spans.
+                for (uint32_t ty = 0; ty * side < rows.back() + side; ++ty) {
+                    const uint32_t centre_y = ty * side + side / 2;
+                    if (centre_y < rows[dy] || centre_y >= rows[dy + 1])
+                        continue;
+                    for (uint32_t tx = 0; tx * side < columns.back() + side; ++tx) {
+                        const uint32_t centre_x = tx * side + side / 2;
+                        if (centre_x < columns[dx] || centre_x >= columns[dx + 1])
+                            continue;
+                        ++count;
+                        if (centre_x >= terrain_w || centre_y >= terrain_h)
+                            continue;
+                        uint32_t texel = 0;
+                        for (uint32_t py = 0; py < side; ++py)
+                            for (uint32_t px = 0; px < side; ++px)
+                                texel += map_channel(
+                                    map, palette, tx * side + px, ty * side + py, channel
+                                );
+                        sum += (texel + side * side / 2) / (side * side);
+                    }
+                }
+                picture[(static_cast<std::size_t>(dy) * width + dx) * 3 + channel] =
+                    count == 0 ? 0 : static_cast<uint8_t>((sum + count / 2) / count);
+            }
+    return picture;
+}
+
+void the_filter_averages_the_texels_each_pixel_covers() {
+    const auto palette = ramp_palette();
+    const auto map = three_tile_map(9, 7);
+    const auto pyramid = oa::app::build_terrain_pyramid(map, palette);
+    oa::platform::job_pool::Pool four(4);
+
+    struct Case {
+        float zoom;
+        uint32_t source_x, source_y, shown_width, shown_height;
+        int32_t width, height;
+    };
+
+    // Each level, from the camera at the map's corner and off it, the view
+    // past the shown map's edges on the right and bottom.
+    const std::array<Case, 6> cases{{
+        {0.4F, 0, 0, 288, 224, 90, 70},
+        {0.3F, 13, 7, 280, 200, 80, 60},
+        {0.2F, 37, 5, 288, 224, 60, 48},
+        {0.1F, 3, 61, 288, 224, 30, 20},
+        {0.05F, 0, 0, 270, 210, 16, 12},
+        {1.0F / 40.0F, 17, 0, 288, 224, 9, 7},
+    }};
+    for (const Case& c : cases) {
+        const auto expected = expected_far_terrain(
+            map,
+            palette,
+            c.source_x,
+            c.source_y,
+            c.shown_width,
+            c.shown_height,
+            c.width,
+            c.height,
+            c.zoom
+        );
+        for (oa::platform::job_pool::Pool* pool :
+             {static_cast<oa::platform::job_pool::Pool*>(nullptr), &four}) {
+            std::vector<uint8_t> picture(expected.size(), 0xAB);
+            OA_CHECK(
+                oa::app::filter_far_terrain(
+                    map,
+                    pyramid,
+                    c.source_x,
+                    c.source_y,
+                    c.shown_width,
+                    c.shown_height,
+                    c.width,
+                    c.height,
+                    c.zoom,
+                    picture.data(),
+                    pool
+                )
+            );
+            OA_CHECK(picture == expected);
+        }
+    }
+    // A map of one colour reads that colour wherever the view lies on it.
+    auto plain = map;
+    for (auto& tile : plain.tile_indices)
+        tile = 2;
+    const auto plain_pyramid = oa::app::build_terrain_pyramid(plain, palette);
+    std::vector<uint8_t> picture(20 * 10 * 3);
+    OA_CHECK(
+        oa::app::filter_far_terrain(
+            plain, plain_pyramid, 0, 0, 288, 224, 20, 10, 0.1F, picture.data(), nullptr
+        )
+    );
+    for (std::size_t pixel = 0; pixel < 20 * 10; ++pixel)
+        OA_CHECK(
+            picture[pixel * 3] == 77 && picture[pixel * 3 + 1] == 178 &&
+            picture[pixel * 3 + 2] == 38
+        );
+    // A grid naming a missing tile, or a pyramid of no map, fails.
+    auto broken = map;
+    broken.tile_indices[0] = 9;
+    OA_CHECK(!oa::app::filter_far_terrain(
+        broken, pyramid, 0, 0, 288, 224, 20, 10, 0.1F, picture.data(), nullptr
+    ));
+    oa::app::TerrainPyramid empty;
+    OA_CHECK(!oa::app::filter_far_terrain(
+        map, empty, 0, 0, 288, 224, 20, 10, 0.1F, picture.data(), nullptr
+    ));
+}
+
+void dots_are_framed_when_selected_and_clipped() {
+    constexpr int32_t width = 12, height = 9;
+    std::vector<uint8_t> picture(static_cast<std::size_t>(width) * height * 3, 0);
+    const std::array<FarViewDot, 2> dots{{
+        {5, 4, {200, 10, 20}, true, {255, 255, 255}},
+        // Past the right edge: only its left columns land.
+        {11, 0, {0, 0, 250}, false, {}},
+    }};
+    oa::app::draw_far_view_dots(picture.data(), width, height, dots);
+    const auto at = [&](int32_t x, int32_t y) {
+        const auto* pixel = &picture[(static_cast<std::size_t>(y) * width + x) * 3];
+        return std::array<uint8_t, 3>{pixel[0], pixel[1], pixel[2]};
+    };
+    // The selected dot: 5x5 of its colour within a white ring.
+    for (int32_t y = 1; y <= 7; ++y)
+        for (int32_t x = 2; x <= 8; ++x) {
+            const bool ring = x == 2 || x == 8 || y == 1 || y == 7;
+            OA_CHECK(
+                at(x, y) ==
+                (ring ? std::array<uint8_t, 3>{255, 255, 255} : std::array<uint8_t, 3>{200, 10, 20})
+            );
+        }
+    OA_CHECK(at(1, 4) == (std::array<uint8_t, 3>{0, 0, 0}));
+    // The clipped dot covers columns 9 to 11 of rows 0 to 2.
+    OA_CHECK(at(9, 0) == (std::array<uint8_t, 3>{0, 0, 250}));
+    OA_CHECK(at(11, 2) == (std::array<uint8_t, 3>{0, 0, 250}));
+    OA_CHECK(at(10, 3) == (std::array<uint8_t, 3>{0, 0, 0}));
+}
+
+} // namespace
+
+int main() {
+    the_whole_map_fits_one_way_and_fills_the_other();
+    automatic_keeps_the_drawings_floor();
+    each_choice_stops_at_its_share_or_the_whole_map();
+    frames_past_the_detail_floor_draw_the_far_view();
+    the_pyramid_holds_the_means_of_the_map_pixels();
+    each_zoom_reads_its_level();
+    the_filter_averages_the_texels_each_pixel_covers();
+    dots_are_framed_when_selected_and_clipped();
+    return oa::test::check_exit_status();
+}

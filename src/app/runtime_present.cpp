@@ -183,8 +183,9 @@ Runtime::live_viewport(uint32_t camera_x, uint32_t camera_y) const {
 WorldScaling Runtime::world_scaling() const {
     // The Full tier draws at the zoom with no split: the card draws the
     // terrain, and the processor the rest over it, in screen pixels at the
-    // zoom, as the standard tier plans its frame.
-    if (!scene_draw_scale_ && full_presentation() && screen_ == Screen::match)
+    // zoom, as the standard tier plans its frame. The far view is drawn at
+    // the zoom with no split in every tier, by the processor.
+    if (!scene_draw_scale_ && (full_presentation() || far_view_frame()) && screen_ == Screen::match)
         return oa::app::world_scaling(
             match_zoom(),
             match_layout_.battlefield_width(),

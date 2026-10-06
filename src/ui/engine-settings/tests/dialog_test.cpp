@@ -488,10 +488,13 @@ void each_section_shows_its_rows() {
 
     CHECK(settings::page_settings(Page::mods).size() == 1);
     CHECK(settings::page_settings(Page::mods)[0] == Setting::mod);
-    CHECK(settings::page_settings(Page::controls).size() == 3);
+    // Controls: the wheel's switch with the zoom's two limits under it.
+    CHECK(settings::page_settings(Page::controls).size() == 5);
     CHECK(settings::page_settings(Page::controls)[0] == Setting::wheel_zoom);
-    CHECK(settings::page_settings(Page::controls)[1] == Setting::escape_opens_menu);
-    CHECK(settings::page_settings(Page::controls)[2] == Setting::switch_alt);
+    CHECK(settings::page_settings(Page::controls)[1] == Setting::max_zoom_out);
+    CHECK(settings::page_settings(Page::controls)[2] == Setting::max_zoom_in);
+    CHECK(settings::page_settings(Page::controls)[3] == Setting::escape_opens_menu);
+    CHECK(settings::page_settings(Page::controls)[4] == Setting::switch_alt);
     // Common Tweaks: Your files first, then the unit limit and pathfinding.
     CHECK(settings::page_settings(Page::common_tweaks).size() == 3);
     CHECK(settings::page_settings(Page::common_tweaks)[0] == Setting::user_folder);
@@ -529,16 +532,38 @@ void each_section_shows_its_rows() {
           "CONTROLS",
           "Mouse wheel zoom",
           "Scroll to zoom the battlefield in and out.",
-          "Escape opens the game menu",
-          "The first press clears the selection,",
-          "the second opens the menu.",
-          "Select groups without Alt",
-          "A number key selects its group on its own.",
+          "Maximum zoom out",
+          "As far as units are drawn whole: 1/6 of normal",
+          "size with Full hardware acceleration, else 1/2.",
+          "Maximum zoom in",
+          "In to 4x normal size at most.",
+          "The wheel, a pinch and a controller stop there.",
           "OFF",
           "ON",
           "RESTORE DEFAULTS",
           "CANCEL",
           "OK"})
+        CHECK(find_part(parts, text, settings::no_control) != nullptr);
+    // The limits' fields show their choices.
+    const auto controls_rows = geometry::place_rows(Page::controls, {});
+    for (const auto& [row, choice] :
+         {std::pair{std::size_t{1}, std::string_view{"Automatic"}},
+          std::pair{std::size_t{2}, std::string_view{"4x"}}})
+        CHECK(
+            find_part(parts, choice, settings::first_row_control + static_cast<int32_t>(row)) !=
+            nullptr
+        );
+    CHECK(controls_rows.rows.size() == 5);
+    // The last two rows, scrolled into view.
+    settings::Dialog scrolled = opened(Page::controls);
+    scrolled.scroll[static_cast<std::size_t>(Page::controls)] = std::numeric_limits<int32_t>::max();
+    parts = settings::dialog_layout(scrolled);
+    for (const std::string_view text :
+         {"Escape opens the game menu",
+          "The first press clears the selection,",
+          "the second opens the menu.",
+          "Select groups without Alt",
+          "A number key selects its group on its own."})
         CHECK(find_part(parts, text, settings::no_control) != nullptr);
     CHECK(find_part(parts, "Shared game - still running", settings::no_control) == nullptr);
     // Each entry is its section's control.
@@ -608,8 +633,17 @@ void switches_take_a_click_on_either_half_and_keys() {
     CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
     CHECK(dialog.chosen.wheel_zoom);
     CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::redraw);
+    // Down to the limits' drop-downs: Right steps a choice on, Left back.
     CHECK(settings::dialog_key(dialog, DialogKey::down) == DialogAction::redraw);
     CHECK(dialog.focused == settings::first_row_control + 1);
+    CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
+    CHECK(dialog.chosen.max_zoom_out == settings::ZoomOutLimit::whole_map);
+    CHECK(settings::dialog_key(dialog, DialogKey::down) == DialogAction::redraw);
+    CHECK(dialog.focused == settings::first_row_control + 2);
+    CHECK(settings::dialog_key(dialog, DialogKey::left) == DialogAction::changed);
+    CHECK(dialog.chosen.max_zoom_in == settings::ZoomInLimit::three_times);
+    CHECK(settings::dialog_key(dialog, DialogKey::down) == DialogAction::redraw);
+    CHECK(dialog.focused == settings::first_row_control + 3);
     CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
     CHECK(dialog.chosen.escape_opens_menu);
     CHECK(settings::dialog_key(dialog, DialogKey::tab) == DialogAction::redraw);
@@ -1575,6 +1609,8 @@ void the_focus_moves_round_every_control() {
         settings::first_row_control,
         settings::first_row_control + 1,
         settings::first_row_control + 2,
+        settings::first_row_control + 3,
+        settings::first_row_control + 4,
         settings::restore_control,
         settings::cancel_control,
         settings::ok_control,
@@ -1793,16 +1829,16 @@ void the_view_and_the_scroll_bar_keep_their_places() {
 
 void sections_that_fit_do_not_scroll() {
     // Each section's content: its rows, and the end gap under the last.
-    // Controls' three switches are 162 and Common Tweaks' Your files, unit
-    // limit and pathfinding sliders 210, and both fit; Graphics' eight rows
-    // are 493 and Language's drop-down, five switches and slider 424, and
-    // both scroll. Mods' list and Developer's list scroll in views of their
-    // own (mods_scroll, developer_*).
+    // Common Tweaks' Your files, unit limit and pathfinding sliders are 210,
+    // and fit; Controls' three switches and the zoom's two drop-downs are
+    // 320, Graphics' eight rows 493 and Language's drop-down, five switches
+    // and slider 424, and they scroll. Mods' list and Developer's list
+    // scroll in views of their own (mods_scroll, developer_*).
     const std::array<Page, 4> pages{
         Page::controls, Page::common_tweaks, Page::graphics, Page::language
     };
-    const std::array<int32_t, 4> content{162, 210, 493, 424};
-    const std::array<int32_t, 4> limits{0, 0, 257, 188};
+    const std::array<int32_t, 4> content{320, 210, 493, 424};
+    const std::array<int32_t, 4> limits{84, 0, 257, 188};
     for (std::size_t index = 0; index < content.size(); ++index) {
         const Page page = pages[index];
         if (limits[index] != 0) {
@@ -3211,8 +3247,11 @@ void the_dialog_draws_its_faces_and_accents(const settings::DialogFonts& fonts) 
     const auto rows = geometry::place_rows(Page::controls, {});
     const auto& zoom = rows.rows[0].control_area;
     CHECK(canvas.at(zoom.x + zoom.width - 3, zoom.y + 2) == kAccent); // On
-    const auto& escape = rows.rows[1].control_area;
-    CHECK(canvas.at(escape.x + 2, escape.y + 2) == kOffSelected); // Off
+    Canvas off = blank(settings::dialog_width, settings::dialog_height);
+    settings::Dialog zoom_off = dialog;
+    zoom_off.chosen.wheel_zoom = false;
+    settings::draw_dialog(off.surface, {0, 0, 1}, zoom_off, fonts, kNoIcon);
+    CHECK(off.at(zoom.x + 2, zoom.y + 2) == kOffSelected); // Off
 
     // At twice the size, offset into a larger surface.
     Canvas larger = blank(1200, 800);
@@ -3376,11 +3415,11 @@ settings::DialogFonts block_fonts() {
 void the_dialog_draws_the_scroll_bar_and_clips_the_rows() {
     const auto fonts = block_fonts();
     // Sections that fit draw no scroll bar, whatever offset they hold:
-    // every one but Graphics, Language, and Mods and Developer, whose
-    // lists scroll in views of their own.
+    // every one but Controls, Graphics, Language, and Mods and Developer,
+    // whose lists scroll in views of their own.
     for (const Page page : kPages) {
-        if (page == Page::graphics || page == Page::language || page == Page::mods ||
-            page == Page::developer)
+        if (page == Page::controls || page == Page::graphics || page == Page::language ||
+            page == Page::mods || page == Page::developer)
             continue;
         Canvas canvas = blank(settings::dialog_width, settings::dialog_height);
         settings::Dialog dialog = opened(page);
@@ -5002,13 +5041,13 @@ void hint_lines_part_while_the_modern_fonts_draw_the_words() {
     oa::data::languages::set_interface_language(nullptr, modern);
     const auto tall = geometry::place_rows(Page::controls, {});
     oa::data::languages::set_interface_language(nullptr, oa::data::languages::english());
-    CHECK(game_fonts.rows.size() == 3 && tall.rows.size() == 3);
-    if (game_fonts.rows.size() != 3 || tall.rows.size() != 3)
+    CHECK(game_fonts.rows.size() == 5 && tall.rows.size() == 5);
+    if (game_fonts.rows.size() != 5 || tall.rows.size() != 5)
         return;
     // Mouse wheel zoom: one line, in the same place.
     CHECK(tall.rows[0].hint_lines == 1 && tall.rows[0].height == game_fonts.rows[0].height);
-    // Escape opens the game menu: two lines, 12 rows apart beside the game's
-    // fonts and 15 beside the modern fonts; the row is 3 rows taller.
+    // Maximum zoom out: two lines, 12 rows apart beside the game's fonts
+    // and 15 beside the modern fonts; the row is 3 rows taller.
     const auto& escape = game_fonts.rows[1];
     const auto& parted = tall.rows[1];
     CHECK(escape.hint_lines == 2 && parted.hint_lines == 2);

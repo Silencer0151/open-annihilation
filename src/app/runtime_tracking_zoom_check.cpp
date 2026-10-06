@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // Headless checks of the wheel's zoom: about the pointer as far as the map's
-// edges allow, and about a unit the camera tracks.
+// edges allow, within the limits the zoom's settings set, and about a unit
+// the camera tracks.
 #include "oa/app/runtime.hpp"
+#include "oa/app/far_view.hpp"
 #include "engine_settings_state.hpp"
 #include "match_fault.hpp"
 
@@ -16,6 +18,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace oa::app {
 namespace {
@@ -53,6 +56,14 @@ constexpr int kHeldZoomFrames = 60;
 /// there, as every odd multiple of 19 does.
 constexpr float kOffStepZoom = 1.52F;
 constexpr std::array<int, 2> kHalfwayAtOffStep{247, 209};
+
+/// Wheel steps that take the zoom from the nearest to past the farthest
+/// any view reaches: 1.15 to the 41st is past 4 times 64.
+constexpr int kFarSteps = 41;
+/// Windows the zoom's limits are tried on, beside the game's own screen.
+constexpr std::array<std::array<int, 2>, 3> kLimitWindows{
+    {{1366, 768}, {1920, 1080}, {2560, 1440}}
+};
 
 /// Ends the check with a failure.
 ///
@@ -298,6 +309,208 @@ void Runtime::check_wheel_zoom_limits(const std::function<void()>& frame) {
                  "leave it\n";
 }
 
+void Runtime::check_zoom_limit_choices(const std::function<void()>& frame) {
+    namespace settings = oa::ui::engine_settings;
+    const auto saved_layout = match_layout_;
+    const bool saved_paused = match_paused_;
+    const settings::EngineSettings saved = engine_settings();
+    match_paused_ = true;
+    match_pointer_known_ = false;
+    stop_match_tracking();
+    const auto [map_width, map_height] = shown_map_size();
+    const auto choose = [&](settings::ZoomOutLimit out, settings::ZoomInLimit in) {
+        auto chosen = engine_settings();
+        chosen.max_zoom_out = out;
+        chosen.max_zoom_in = in;
+        apply_engine_settings(chosen);
+    };
+    // Frames until the zoom settles, and then one drawn.
+    const auto settle = [&] {
+        for (int step = 0; step < kSettleFrames; ++step) {
+            frame();
+            if (match_zoom_ == match_zoom_target_)
+                break;
+        }
+        render_match_surface();
+    };
+    const auto wheel = [&](int steps, std::array<int, 2> at) {
+        for (int step = 0; step < std::abs(steps); ++step) {
+            handle_match_zoom(
+                steps > 0 ? 1.0F : -1.0F,
+                static_cast<float>(match_layout_.left + at[0]),
+                static_cast<float>(match_layout_.top + at[1])
+            );
+            settle();
+        }
+    };
+    const auto place = [&](float zoom, std::array<int32_t, 2> camera) {
+        match_zoom_ = match_zoom_target_ = zoom;
+        zoom_anchored_ = false;
+        zoom_hold_ = {};
+        match_camera_x_ = camera[0];
+        match_camera_z_ = camera[1];
+        render_match_surface();
+    };
+    const auto zoom_text = [](float zoom) { return std::to_string(zoom); };
+    // The exact map point the view shows at a battlefield point.
+    const auto point_at = [&](std::array<int, 2> at) {
+        const auto camera = view_camera();
+        const auto zoom = static_cast<double>(match_zoom());
+        return std::array<double, 2>{camera[0] + at[0] / zoom, camera[1] + at[1] / zoom};
+    };
+    // Wheel steps that keep the map point aimed at under the pointer there,
+    // to within a map pixel, or as near that as the camera's limits allow:
+    // steps in after steps out past the map's edge go on about the point
+    // the steps out aimed at.
+    std::array<double, 2> anchored{};
+    const auto aim = [&](std::array<int, 2> at) { anchored = point_at(at); };
+    const auto turn = [&](const std::string& what, std::array<int, 2> at, int steps) {
+        for (int step = 0; step < std::abs(steps); ++step) {
+            wheel(steps > 0 ? 1 : -1, at);
+            const auto now = view_camera();
+            const auto zoom = static_cast<double>(match_zoom());
+            const std::array<int32_t, 2> most{
+                std::max(0, map_width - visible_map_width()),
+                std::max(0, map_height - visible_map_height())
+            };
+            for (std::size_t axis = 0; axis < 2; ++axis) {
+                const double wanted = std::clamp(
+                    anchored[axis] - at[axis] / zoom, 0.0, static_cast<double>(most[axis])
+                );
+                if (std::abs(now[axis] - wanted) > 1.0)
+                    fail(
+                        what + ": step " + std::to_string(step + 1) + " at zoom " +
+                        zoom_text(match_zoom()) + " left the camera " +
+                        std::to_string(now[axis] - wanted) + " map pixels " +
+                        (axis == 0 ? "across" : "down") +
+                        " from where the point under the pointer stays"
+                    );
+            }
+        }
+    };
+    std::vector<std::array<int, 2>> windows{{kCanvasWidth, kCanvasHeight}};
+    windows.insert(windows.end(), kLimitWindows.begin(), kLimitWindows.end());
+    for (const auto& window : windows) {
+        match_layout_ = lay_out_match(window[0], window[1]);
+        const auto size = std::to_string(window[0]) + "x" + std::to_string(window[1]);
+        const int bf_w = match_layout_.battlefield_width();
+        const int bf_h = match_layout_.battlefield_height();
+        const std::array<int, 2> centre{bf_w / 2, bf_h / 2};
+        const std::array<int32_t, 2> middle{
+            std::max(0, map_width - bf_w) / 2, std::max(0, map_height - bf_h) / 2
+        };
+        // The wheel out stops at each choice's floor.
+        for (const auto out : settings::zoom_out_limits) {
+            choose(out, settings::ZoomInLimit::four_times);
+            place(kDefaultBattlefieldZoom, middle);
+            wheel(-kFarSteps, centre);
+            const float floor =
+                least_battlefield_zoom(out, detail_zoom_floor(), map_width, map_height, bf_w, bf_h);
+            if (match_zoom() != floor || least_match_zoom() != floor)
+                fail(
+                    size + ": the wheel stopped at zoom " + zoom_text(match_zoom()) +
+                    ", not at the choice's floor " + zoom_text(floor)
+                );
+            if (out == settings::ZoomOutLimit::automatic && floor != detail_zoom_floor())
+                fail(size + ": Automatic left the drawing's floor");
+            // Past the drawing's floor the frame is the far view.
+            if (far_view_frame() != (floor < detail_zoom_floor()))
+                fail(size + ": the far view does not begin past the drawing's floor");
+            if (out != settings::ZoomOutLimit::whole_map)
+                continue;
+            // The whole map in view, the camera at its corner: it fills the
+            // battlefield one way and fits within it the other.
+            const int wide = visible_map_width(), high = visible_map_height();
+            if (floor < kDefaultBattlefieldZoom &&
+                (wide < map_width - 1 || high < map_height - 1 ||
+                 (std::abs(wide - map_width) > 1 && std::abs(high - map_height) > 1)))
+                fail(
+                    size + ": Whole map shows " + std::to_string(wide) + "x" +
+                    std::to_string(high) + " map pixels of a map of " + std::to_string(map_width) +
+                    "x" + std::to_string(map_height)
+                );
+            if (view_camera() != std::array<int32_t, 2>{0, 0})
+                fail(size + ": Whole map left the camera off the map's corner");
+        }
+        // The wheel in stops at each choice's ceiling.
+        for (const auto in : settings::zoom_in_limits) {
+            choose(settings::ZoomOutLimit::automatic, in);
+            place(kDefaultBattlefieldZoom, middle);
+            wheel(kFarSteps, centre);
+            if (match_zoom() != settings::closest_zoom(in))
+                fail(
+                    size + ": the wheel stopped at zoom " + zoom_text(match_zoom()) +
+                    ", not at the choice's ceiling " + zoom_text(settings::closest_zoom(in))
+                );
+        }
+        // A pinch or the pad's zoom held out and in stops at both limits.
+        choose(settings::ZoomOutLimit::one_quarter, settings::ZoomInLimit::twice);
+        place(kDefaultBattlefieldZoom, middle);
+        const float least = least_match_zoom();
+        for (const float way : {1.0F / kZoomWheelFactor, kZoomWheelFactor}) {
+            for (int held = 0; held < 2 * kFarSteps; ++held) {
+                zoom_match_about(
+                    way,
+                    static_cast<float>(match_layout_.left + centre[0]),
+                    static_cast<float>(match_layout_.top + centre[1])
+                );
+                frame();
+            }
+            const float limit = way < 1.0F ? least : 2.0F;
+            if (match_zoom() != limit)
+                fail(
+                    size + ": a held zoom stopped at " + zoom_text(match_zoom()) +
+                    ", not at the limit " + zoom_text(limit)
+                );
+        }
+        // With Whole map: out from the middle to the whole map and back in,
+        // and in from the whole map about its far corner and about a point
+        // past its edge, the point under the pointer stays.
+        choose(settings::ZoomOutLimit::whole_map, settings::ZoomInLimit::four_times);
+        place(kDefaultBattlefieldZoom, middle);
+        aim(centre);
+        turn(size + ": out to the whole map", centre, -kFarSteps);
+        turn(size + ": in from the whole map", centre, kFarSteps);
+        const float whole = least_match_zoom();
+        if (whole >= kDefaultBattlefieldZoom)
+            continue;
+        const std::array<int, 2> far_corner{
+            std::min(bf_w - 1, static_cast<int>(static_cast<float>(map_width) * whole) - 3),
+            std::min(bf_h - 1, static_cast<int>(static_cast<float>(map_height) * whole) - 3)
+        };
+        place(whole, {0, 0});
+        aim(far_corner);
+        turn(size + ": in about the map's far corner", far_corner, kZoomInSteps);
+        // The battlefield's far corner, past the map on the axis it fits.
+        place(whole, {0, 0});
+        aim({bf_w - 2, bf_h - 2});
+        turn(size + ": in about a point past the map", {bf_w - 2, bf_h - 2}, kZoomInSteps);
+        // A choice changed in play: the view comes within the new limits.
+        place(whole, {0, 0});
+        choose(settings::ZoomOutLimit::one_half, settings::ZoomInLimit::four_times);
+        frame();
+        if (match_zoom() < least_match_zoom() || least_match_zoom() < 0.5F)
+            fail(size + ": a view past the new limit stayed past it");
+        choose(settings::ZoomOutLimit::whole_map, settings::ZoomInLimit::none);
+        place(kMaxBattlefieldZoom, middle);
+        frame();
+        if (match_zoom() != kDefaultBattlefieldZoom)
+            fail(size + ": a view past the new ceiling stayed past it");
+    }
+    apply_engine_settings(saved);
+    match_layout_ = saved_layout;
+    match_zoom_ = match_zoom_target_ = kDefaultBattlefieldZoom;
+    zoom_anchored_ = false;
+    zoom_hold_ = {};
+    match_paused_ = saved_paused;
+    render_match_surface();
+    std::cout << "tracking zoom check: the wheel, a pinch and the pad's zoom stop at each "
+                 "Maximum zoom out and Maximum zoom in choice, Whole map shows the whole map, "
+                 "past the drawing's floor as the far view, the point under the pointer stays "
+                 "on the way to it and back, and a choice changed in play holds the view at "
+                 "once\n";
+}
+
 void Runtime::check_tracking_zoom() {
     exercise_click(skirmish::resource_name(skirmish::Button::start));
     if (screen_ != Screen::match || !match_ || !selected_tnt_)
@@ -364,6 +577,7 @@ void Runtime::check_tracking_zoom() {
     };
 
     check_wheel_zoom_limits(frame);
+    check_zoom_limit_choices(frame);
 
     // The commander walks while the camera tracks it and the wheel zooms in
     // and out about a point away from it.

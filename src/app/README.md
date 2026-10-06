@@ -184,7 +184,38 @@ logs it.
   pointer's map pixel is (`apply_zoom_anchor`), so a step past the
   nearest or farthest zoom leaves it where it is, and the wheel counts its
   steps from the target they began at (`zoom_wheel_`), so that as many
-  steps back return the zoom exactly.
+  steps back return the zoom exactly. Every zoom of the player's view,
+  the wheel's, a pinch's, the touch buttons', a pad's and the settings
+  dialog's, stays between `least_match_zoom` and `most_match_zoom`, which
+  the Maximum zoom out and Maximum zoom in settings set
+  (`least_battlefield_zoom` in `far_view.hpp`): Automatic keeps the
+  drawing's floor (`detail_zoom_floor`, half the game's scale, a sixth
+  while Full draws), Whole map the zoom at which the whole shown map fits
+  the battlefield (`whole_map_zoom`), a share that share or the whole map,
+  never past `furthest_battlefield_zoom`, a sixty-fourth; a view past the
+  limits comes within them at the next frame (`step_match_zoom`). The
+  director, the checks' `--zoom` and the recorded games' replay keep their
+  own range.
+- `far_view.cpp`, `far_view.hpp`: the far view, the battlefield zoomed out
+  past `detail_zoom_floor`, which the processor draws at the zoom in every
+  tier (`far_view_frame`, `world_scaling`): the terrain averaged from a
+  pyramid of each tile's means at 2 to 32 map pixels a texel
+  (`build_terrain_pyramid`, made at the map's first far frame and kept in
+  `far_terrain_` while the map and palette stay; `filter_far_terrain`
+  reads the level whose texels are one or two to a screen pixel, in bands
+  on the drawing threads), the fog as at any zoom, each unit the player
+  sees as a dot of its owner's colour over the fog, framed in the
+  selection boxes' colour while selected (`draw_far_view_dots`), and no
+  model of a unit, feature, projectile, fragment or debris, no health bar
+  or squad digit and a model bridge of one pixel, so a frame of the whole
+  map costs time and memory as a frame at the processor's floor does
+  whatever the map's size. In the Full tier the far frame's world layer is
+  the processor's picture, which Basic's presentation draws without
+  leaving Full. `app-far-view` checks the floors, the pyramid, the filter
+  and the dots by table; `native-navigation` (`check_zoom_limit_choices`)
+  every choice's limits on four windows, the whole map's fit, the point
+  under the pointer on the way out to it and back, and a choice changed in
+  play; `native-render-tiers` the whole map's far view in each tier.
 - `runtime_skirmish_start.cpp` builds a match: the feature table's GAF files
   are kept as read and parsed without their pixels (`gaf::PixelData::checked`);
   a feature sequence's pixels are decoded from its file when a feature first
@@ -624,9 +655,11 @@ logs it.
   and `+stats` name the full tier. Off and Basic
   are untouched: nothing here runs unless the tier is Full, which the
   setting's Full or `--hardware-acceleration=full` gives (design D76).
-  While Full draws, the view zooms out to `kMinFullBattlefieldZoom`, one
-  sixth, three times as far as the processor's floor, and the terrain's
-  level rule reaches the atlas's third level (design D79). Below the
+  While Full draws, Maximum zoom out's Automatic reaches
+  `kMinFullBattlefieldZoom`, one sixth, three times as far as the
+  processor's floor, and the terrain's level rule reaches the atlas's third
+  level (design D79); farther out the frame is the far view, which the
+  processor draws (`far_view.hpp`). Below the
   processor's floor a tile spans a fraction of a pixel or a few, so the
   terrain's tiles and the fog's quads there have their edges on whole
   pixels (`TerrainView::whole_pixels`, `FogPlacement::whole_pixels`), each
