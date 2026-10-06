@@ -238,15 +238,24 @@ OA_DRAW_THREADS=8 ctest --test-dir build
 
 ### Time limits
 
-`native-navigation` and `native-side-commanders` play the longest headless
-games, and give each run of the game 900 seconds. A build whose run-time
-error checks make the game several times slower can set
+The `native-navigation-*` and `native-side-commanders-*` tests play the
+longest headless games, and give each run of the game 900 seconds. A build
+whose run-time error checks make the game several times slower can set
 `OA_TEST_TIMEOUT_SCALE` to a positive number that multiplies that limit.
 ctest's own limit for each of these tests, 1800 seconds, still applies:
 
 ```sh
-OA_TEST_TIMEOUT_SCALE=2 ctest --test-dir build -R '^native-(navigation|side-commanders)$'
+OA_TEST_TIMEOUT_SCALE=2 ctest --test-dir build -R '^native-(navigation|side-commanders)-'
 ```
+
+Each `native-navigation-GROUP` test runs one group of the navigation check,
+`--check-navigation GROUP`, which starts from the main menu and stands
+alone: `screens`, `orders`, `outcomes`, `zoom` (the zoom's limits on the
+game's own screen), `zoom-1366x768`, `zoom-1920x1080` and `zoom-2560x1440`
+(the zoom's limits on that window) and `campaign`. `--check-navigation`
+without a group runs every group in one game. The side commanders check runs
+as one test for each part (`--part`): `art`, `rule`, `loopback`, `give`, and
+`records-GROUP`, the navigation group over its mod folder.
 
 ### The demo's installer
 
@@ -406,7 +415,7 @@ names, these run the game headless:
   the worlds still agree. Then it gives every unit it has through
   SHARE.GUI: the kbot goes, one 0x14 to the joiner, and the commander,
   whose type is in the Commander category, stays on both machines;
-  `native-side-commanders` gives a commander outside that category, which
+  `native-side-commanders-give` gives a commander outside that category, which
   goes too;
   `native-net-loopback-watcher` has the joiner watch, and
   `native-net-loopback-computer` and `native-net-loopback-computer-watcher`

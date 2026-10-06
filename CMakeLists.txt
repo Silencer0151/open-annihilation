@@ -2008,11 +2008,22 @@ if(OA_BUILD_PLATFORM)
         # build placement checks, from fresh preferences each run; among
         # them the wheel's zoom about the pointer and within each Maximum
         # zoom out and Maximum zoom in choice, out to the whole map and back.
-        add_test(NAME native-navigation COMMAND ${Python3_EXECUTABLE}
-          "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_navigation.py"
-          --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
-          --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
-        set_tests_properties(native-navigation PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
+        # One test for each group of the check (--check-navigation GROUP),
+        # which stands alone: the menus' screens and a skirmish's first
+        # orders; a builder's orders and the match's panels; a skirmish's
+        # outcomes; the zoom and its limits on the game's own screen; the
+        # zoom's limits on each larger window; and a campaign.
+        set(oa_navigation_groups screens orders outcomes zoom zoom-1366x768 zoom-1920x1080
+          zoom-2560x1440 campaign)
+        foreach(oa_navigation_group IN LISTS oa_navigation_groups)
+          add_test(NAME native-navigation-${oa_navigation_group} COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_navigation.py"
+            --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
+            --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks"
+            --group ${oa_navigation_group})
+          set_tests_properties(native-navigation-${oa_navigation_group} PROPERTIES
+            TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
+        endforeach()
         # --trace-digest streams of seeded headless skirmishes repeat byte
         # for byte and follow the trace stream layout.
         add_test(NAME native-trace COMMAND ${Python3_EXECUTABLE}
@@ -2143,13 +2154,32 @@ if(OA_BUILD_PLATFORM)
         # the network loopback and player records checks find them. In a
         # network game, a player giving every unit gives its commander too,
         # as its type is in no Commander category, and both machines agree.
-        add_test(NAME native-side-commanders COMMAND ${Python3_EXECUTABLE}
-          "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_side_commanders.py"
-          --native $<TARGET_FILE:oa-game> --oa-tool $<TARGET_FILE:oa-tool>
-          --game-dir "${OA_GAME_DIR}"
-          --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks")
-        set_tests_properties(native-side-commanders PROPERTIES
-          TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
+        # One test for each part (--part), over a mod folder of its own: the
+        # HUDs, the commander rule, the loopback, the give, and the player
+        # records, which runs each group of the navigation check over the
+        # mod as a test of its own.
+        foreach(oa_side_commanders_part art rule loopback give)
+          add_test(NAME native-side-commanders-${oa_side_commanders_part}
+            COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_side_commanders.py"
+            --native $<TARGET_FILE:oa-game> --oa-tool $<TARGET_FILE:oa-tool>
+            --game-dir "${OA_GAME_DIR}"
+            --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks"
+            --part ${oa_side_commanders_part})
+          set_tests_properties(native-side-commanders-${oa_side_commanders_part} PROPERTIES
+            TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
+        endforeach()
+        foreach(oa_navigation_group IN LISTS oa_navigation_groups)
+          add_test(NAME native-side-commanders-records-${oa_navigation_group}
+            COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_native_side_commanders.py"
+            --native $<TARGET_FILE:oa-game> --oa-tool $<TARGET_FILE:oa-tool>
+            --game-dir "${OA_GAME_DIR}"
+            --scratch-root "${CMAKE_CURRENT_BINARY_DIR}/native-checks"
+            --part records --navigation-group ${oa_navigation_group})
+          set_tests_properties(native-side-commanders-records-${oa_navigation_group} PROPERTIES
+            TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
+        endforeach()
         # A mod folder whose sides name interface art and a font of their
         # own: each side's HUD draws the panels its intgaf names and the
         # numbers in the font it names, or in COMIX, unmeasured, when it

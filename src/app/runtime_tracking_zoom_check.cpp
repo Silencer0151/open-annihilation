@@ -638,7 +638,11 @@ void Runtime::check_zoom_about_pointer(const std::function<void()>& frame) {
                  "the view where the pointer rested\n";
 }
 
-void Runtime::check_zoom_limit_choices(const std::function<void()>& frame) {
+void Runtime::check_zoom_limit_choices(
+    const std::function<void()>& frame,
+    const std::vector<std::array<int, 2>>& windows,
+    bool far_view_presses
+) {
     namespace settings = oa::ui::engine_settings;
     const auto saved_layout = match_layout_;
     const bool saved_paused = match_paused_;
@@ -744,8 +748,6 @@ void Runtime::check_zoom_limit_choices(const std::function<void()>& frame) {
             }
         }
     };
-    std::vector<std::array<int, 2>> windows{{kCanvasWidth, kCanvasHeight}};
-    windows.insert(windows.end(), kLimitWindows.begin(), kLimitWindows.end());
     for (const auto& window : windows) {
         match_layout_ = lay_out_match(window[0], window[1]);
         const auto size = std::to_string(window[0]) + "x" + std::to_string(window[1]);
@@ -881,7 +883,8 @@ void Runtime::check_zoom_limit_choices(const std::function<void()>& frame) {
         if (match_zoom() != kDefaultBattlefieldZoom)
             fail(size + ": a view past the new ceiling stayed past it");
     }
-    check_far_view_presses();
+    if (far_view_presses)
+        check_far_view_presses();
     apply_engine_settings(saved);
     match_layout_ = saved_layout;
     match_zoom_ = match_zoom_target_ = kDefaultBattlefieldZoom;
@@ -1133,7 +1136,21 @@ void Runtime::check_view_past_map(const std::function<void()>& frame) {
                  "and the digest takes the camera held on the map\n";
 }
 
-void Runtime::check_tracking_zoom() {
+void Runtime::check_tracking_zoom(NavigationGroup group) {
+    // The windows the zoom's limits are tried on: the game's own screen
+    // and kLimitWindows, or the one a group names.
+    std::vector<std::array<int, 2>> limit_windows;
+    if (group == NavigationGroup::all || group == NavigationGroup::zoom)
+        limit_windows.push_back({kCanvasWidth, kCanvasHeight});
+    if (group == NavigationGroup::all)
+        limit_windows.insert(limit_windows.end(), kLimitWindows.begin(), kLimitWindows.end());
+    else if (group == NavigationGroup::zoom_1366x768)
+        limit_windows.push_back(kLimitWindows[0]);
+    else if (group == NavigationGroup::zoom_1920x1080)
+        limit_windows.push_back(kLimitWindows[1]);
+    else if (group == NavigationGroup::zoom_2560x1440)
+        limit_windows.push_back(kLimitWindows[2]);
+    const bool limits_only = group != NavigationGroup::all && group != NavigationGroup::zoom;
     exercise_click(skirmish::resource_name(skirmish::Button::start));
     if (screen_ != Screen::match || !match_ || !selected_tnt_)
         fail("Start did not enter a match");
@@ -1191,8 +1208,13 @@ void Runtime::check_tracking_zoom() {
             fail("the dialog's ease did not reach its zoom " + what);
     };
 
+    if (limits_only) {
+        check_zoom_limit_choices(frame, limit_windows, false);
+        return_to_skirmish_menu();
+        return;
+    }
     check_zoom_about_pointer(frame);
-    check_zoom_limit_choices(frame);
+    check_zoom_limit_choices(frame, limit_windows, true);
     check_view_past_map(frame);
 
     // Ctrl+C follows the commander as it walks, or, where the side's

@@ -37,6 +37,12 @@ bar colours of its own. Over it:
 
 Each skirmish must start with one commander for each player, of its side's
 type, and no other, end with status 0 and report no simulation error.
+
+--part runs one of the checks above, each over a mod folder of its own: art
+(the HUDs), rule (the commander rule and the computer player's builds),
+loopback, give and records (the navigation check). --navigation-group runs
+the records part's navigation check as that group alone (--check-navigation
+GROUP). Without --part every check runs, over one mod folder.
 """
 import argparse
 import os
@@ -99,6 +105,13 @@ COMMANDER_GIVEN = "its commander went too, then came back from the joiner"
 # multiplies it for a build whose run-time error checks make the game several
 # times slower.
 RUN_TIMEOUT = 900 * float(os.environ.get("OA_TEST_TIMEOUT_SCALE") or 1)
+# The checks --part runs one of, in the order a run of all of them takes.
+PARTS = ("art", "rule", "loopback", "give", "records")
+# The navigation check's groups (--check-navigation GROUP), and the one whose
+# skirmish runs the player records check.
+NAVIGATION_GROUPS = ("screens", "orders", "outcomes", "zoom", "zoom-1366x768", "zoom-1920x1080",
+                     "zoom-2560x1440", "campaign")
+RECORDS_GROUP = "outcomes"
 
 
 class CommanderFailure(Exception):
@@ -392,45 +405,65 @@ def check_give(native, game_dir, mod_dir, workdir):
         raise CommanderFailure("the host's commander did not go with every unit it gave")
 
 
+def check_records(native, game_dir, mod_dir, workdir, group):
+    """The navigation check, or its group `group`, passes and reads each side's commander."""
+    navigation = ["--check-navigation", *([group] if group else [])]
+    output = run(native, game_dir, workdir, "navigation",
+                 [*navigation, "--preferences-file", str(workdir / "navigation.conf")], mod_dir)
+    records = PLAYER_CHECK.findall(output)
+    wanted = ["/".join(COMMANDERS.values())] if group in (None, RECORDS_GROUP) else []
+    if records != wanted:
+        print(output, end="")
+        raise CommanderFailure(f"the player records check read Game.sides {records}, "
+                               f"not {wanted[0] if wanted else 'nothing'}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--native", type=Path, required=True, help="open-annihilation")
     parser.add_argument("--oa-tool", type=Path, required=True, help="oa-tool")
     parser.add_argument("--game-dir", type=Path, required=True)
     parser.add_argument("--scratch-root", type=Path, required=True)
+    parser.add_argument("--part", choices=PARTS, help="the check to run; every check without")
+    parser.add_argument("--navigation-group", choices=NAVIGATION_GROUPS,
+                        help="the records part's navigation group; the whole check without")
     args = parser.parse_args()
+    if args.navigation_group and args.part != "records":
+        parser.error("--navigation-group needs --part records")
+    parts = [args.part] if args.part else list(PARTS)
     native = args.native.resolve()
     game_dir = args.game_dir.resolve()
     args.scratch_root.mkdir(parents=True, exist_ok=True)
+    passed = []
     with tempfile.TemporaryDirectory(prefix="native-side-commanders-",
                                      dir=args.scratch_root.resolve()) as scratch:
         workdir = Path(scratch)
         mod_dir = workdir / "mod"
         try:
             palette = make_mod(args.oa_tool.resolve(), game_dir, mod_dir, workdir)
-            shares = check_art(native, game_dir, mod_dir, workdir, palette)
-            built = check_commander_rule(native, game_dir, mod_dir, workdir)
-            run(native, game_dir, workdir, "network loopback",
-                ["--net-loopback-check", str(LOOPBACK_TICKS), "--net-loopback-computer",
-                 "--preferences-file", str(workdir / "loopback.conf")], mod_dir)
-            check_give(native, game_dir, mod_dir, workdir)
-            output = run(native, game_dir, workdir, "navigation",
-                         ["--check-navigation", "--preferences-file",
-                          str(workdir / "navigation.conf")], mod_dir)
-            records = PLAYER_CHECK.findall(output)
-            wanted = "/".join(COMMANDERS.values())
-            if records != [wanted]:
-                print(output, end="")
-                raise CommanderFailure(f"the player records check read Game.sides {records}, "
-                                       f"not {wanted}")
+            if "art" in parts:
+                shares = check_art(native, game_dir, mod_dir, workdir, palette)
+                passed.append(f"the HUD chrome shares (own/other) {', '.join(shares)}")
+            if "rule" in parts:
+                built = check_commander_rule(native, game_dir, mod_dir, workdir)
+                passed.append("the death of the computer player's commander ends the game under "
+                              f"the rule; the computer player built {built}")
+            if "loopback" in parts:
+                run(native, game_dir, workdir, "network loopback",
+                    ["--net-loopback-check", str(LOOPBACK_TICKS), "--net-loopback-computer",
+                     "--preferences-file", str(workdir / "loopback.conf")], mod_dir)
+                passed.append("the network loopback check found the commanders")
+            if "give" in parts:
+                check_give(native, game_dir, mod_dir, workdir)
+                passed.append("a network game gives CAPTAIN away with the other units")
+            if "records" in parts:
+                check_records(native, game_dir, mod_dir, workdir, args.navigation_group)
+                group = f" (navigation group {args.navigation_group})" if args.navigation_group else ""
+                passed.append(f"the player records check found the commanders{group}")
         except CommanderFailure as failure:
             print(f"FAIL {failure}")
             return 1
-    print("the side commanders check passed: the HUD chrome shares (own/other) "
-          f"{', '.join(shares)}; the death of the computer player's commander ends the game "
-          "under the rule; "
-          f"the computer player built {built}; the network loopback and player records checks "
-          "found the commanders; a network game gives CAPTAIN away with the other units")
+    print(f"the side commanders check passed: {'; '.join(passed)}")
     return 0
 
 

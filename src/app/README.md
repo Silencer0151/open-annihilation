@@ -258,14 +258,17 @@ logs it.
   leaving Full. `app-far-view` checks the floors, the pyramid, the filter
   before and past the map, the dots and the pixels they cover, and the
   view's limits (`view_centre_span`, `held_view`, `held_camera`) by table;
-  `native-navigation` (`runtime_tracking_zoom_check.cpp`) every frame of
+  `native-navigation-zoom` (`runtime_tracking_zoom_check.cpp`) every frame of
   the wheel's, a trackpad's, a pinch's and the pad's zooms at the map's
   corners, edges and middle and past them, with the pointer resting and
   moving, keeping the map point under the pointer to a millionth of a map
-  pixel (`check_zoom_about_pointer`); every choice's limits on four
-  windows, the whole map's fit, the point under the pointer on the way out
-  to it and back, a zoom in from it landing where it is aimed, and a
-  choice changed in play (`check_zoom_limit_choices`); at Whole map on the
+  pixel (`check_zoom_about_pointer`); every choice's limits on the game's
+  screen, and on one larger window in each of
+  `native-navigation-zoom-1366x768`, `native-navigation-zoom-1920x1080` and
+  `native-navigation-zoom-2560x1440`, the whole map's fit, the point under
+  the pointer on the way out to it and back, a zoom in from it landing where
+  it is aimed, and a choice changed in play (`check_zoom_limit_choices`); at
+  Whole map on the
   game's screen a click on every pixel of a unit's dot, on an enemy's dot
   and on the black either side of the map (`check_far_view_presses`); a
   scroll stopping at the view's limits, the minimap bringing the map's

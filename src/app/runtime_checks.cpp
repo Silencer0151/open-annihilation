@@ -1406,180 +1406,219 @@ void Runtime::check_navigation() {
         check_navigation_without_maps(report_directory);
         return;
     }
-    write_ppm(report_directory / "native-main.ppm", surface_);
-    check_screen_services();
-    load_progress_ = {100, 70, 40, 15, 0, 0};
-    loading_flash_.fill(0);
-    ensure_loading_screen();
-    enter_loading_display();
-    draw_loading_screen();
-    write_ppm(report_directory / "native-loading.ppm", surface_);
-    write_display_pcx(report_directory / "native-loading.pcx");
-    // The loading screen and the menus' screens keep the game's own fonts
-    // whatever the Language settings say.
-    require_game_fonts("navigation check: the loading screen", [this] { draw_loading_screen(); });
-    exercise_click(menu::resource_name(menu::Button::single_player));
-    if (screen_ != Screen::single_player || surface_.width != kCanvasWidth)
-        throw std::runtime_error("navigation check did not reach SINGLE.GUI");
-    write_ppm(report_directory / "native-single.ppm", surface_);
-    exercise_click(entry::resource_name(entry::Button::options));
-    if (screen_ != Screen::options || surface_.width != kCanvasWidth)
-        throw std::runtime_error("navigation check did not reach STARTOPT.GUI");
-    write_ppm(report_directory / "native-options.ppm", surface_);
-    require_game_fonts("navigation check: the Options screen", [this] { rebuild_surface(); });
-    exercise_click("CANCEL");
-    if (screen_ != Screen::single_player)
-        throw std::runtime_error("navigation check: CANCEL did not leave STARTOPT.GUI");
-    check_options_gamma();
-    exercise_click(entry::resource_name(entry::Button::skirmish));
-    if (screen_ != Screen::skirmish || surface_.width != kCanvasWidth)
-        throw std::runtime_error("navigation check did not reach SKIRMISH.GUI");
-    write_ppm(report_directory / "native-skirmish.ppm", surface_);
-    state_.player_count = 2;
-    const auto capacity = map_player_capacity();
-    if (capacity < 2)
-        throw std::runtime_error("navigation check selected map lacks two start positions");
-    exercise_click(skirmish::resource_name(skirmish::Button::start));
-    if (screen_ != Screen::match || !match_)
-        throw std::runtime_error("navigation check Start did not enter a real match");
-    const auto armcom = oa::sim::unit_spawn::find_type_index(spawn_type_names_, "ARMCOM");
-    const auto corcom = oa::sim::unit_spawn::find_type_index(spawn_type_names_, "CORCOM");
-    if (loaded_commander_types_.size() <= 1 || armcom == 0 || corcom == 0 ||
-        !loaded_commander_types_[armcom].model || !loaded_commander_types_[corcom].model ||
-        !loaded_commander_types_[armcom].script || !loaded_commander_types_[corcom].script)
-        throw std::runtime_error("navigation check did not load commander runtimes");
-    std::size_t commander_instances = 0;
-    for (const auto& slot : match_->world().slots)
-        if (slot.unit_index != 0 && slot.unit != nullptr &&
-            match_->instance(slot.unit_index) != nullptr)
-            ++commander_instances;
-    if (commander_instances != 2)
-        throw std::runtime_error("navigation check did not create both commanders");
-    uint16_t local_commander = 0;
-    for (const auto& slot : match_->world().slots) {
-        if (slot.unit_index != 0 && slot.unit != nullptr &&
-            slot.record.owner_index == match_local_player_) {
-            local_commander = slot.unit_index;
-            break;
-        }
-    }
-    if (local_commander == 0 || !match_->simulation().players[match_local_player_].present ||
-        match_->simulation().players[match_local_player_].status != entry::controller::human)
-        throw std::runtime_error("navigation check found inactive local simulation player");
-    auto& commander_slot = match_->world().slots[local_commander];
-    const std::array<uint32_t, 3> start = commander_slot.unit->position;
-    const oa::sim::ground_orders::Point bounded_destination{
-        std::bit_cast<int32_t>(start[0]),
-        std::bit_cast<int32_t>(start[1]),
-        std::bit_cast<int32_t>(start[2]) + 64 * 65536
+    const NavigationGroup group = options_.navigation_group;
+    const auto runs = [group](NavigationGroup part) {
+        return group == NavigationGroup::all || group == part;
     };
-    const uint32_t position_x_before = start[0];
-    const uint32_t position_z_before = start[2];
-    match_->issue_ground_move(local_commander, bounded_destination, false);
-    match_timing_.tick = 1;
-    match_->simulation().tick = match_timing_.tick;
-    tick_or_raise(*match_);
-    const auto* navigation = match_->ground_runtime(local_commander);
-    if (navigation == nullptr || navigation->navigation.goal == nullptr)
-        throw std::runtime_error("navigation check unit sweep skipped active commander");
-    if (surface_.width != kCanvasWidth)
-        throw std::runtime_error("navigation check did not render the match world");
-    write_ppm(report_directory / "native-match.ppm", surface_);
-    check_composed_frame();
-    check_console_commands();
-    check_game_speed_messages();
-    for (int step = 0; step < 24; ++step) {
-        ++match_timing_.tick;
+    const bool screens = runs(NavigationGroup::screens);
+    const bool orders = runs(NavigationGroup::orders);
+    const bool zoom = group == NavigationGroup::all || group == NavigationGroup::zoom ||
+                      group == NavigationGroup::zoom_1366x768 ||
+                      group == NavigationGroup::zoom_1920x1080 ||
+                      group == NavigationGroup::zoom_2560x1440;
+    if (!screens) {
+        // Every other group starts from the skirmish menu, which the
+        // screens group reaches through the Options screen.
+        exercise_click(menu::resource_name(menu::Button::single_player));
+        if (screen_ != Screen::single_player)
+            throw std::runtime_error("navigation check did not reach SINGLE.GUI");
+        exercise_click(entry::resource_name(entry::Button::skirmish));
+        if (screen_ != Screen::skirmish)
+            throw std::runtime_error("navigation check did not reach SKIRMISH.GUI");
+    }
+    int32_t capacity = 0;
+    if (screens) {
+        write_ppm(report_directory / "native-main.ppm", surface_);
+        check_screen_services();
+        load_progress_ = {100, 70, 40, 15, 0, 0};
+        loading_flash_.fill(0);
+        ensure_loading_screen();
+        enter_loading_display();
+        draw_loading_screen();
+        write_ppm(report_directory / "native-loading.ppm", surface_);
+        write_display_pcx(report_directory / "native-loading.pcx");
+        // The loading screen and the menus' screens keep the game's own fonts
+        // whatever the Language settings say.
+        require_game_fonts("navigation check: the loading screen", [this] {
+            draw_loading_screen();
+        });
+        exercise_click(menu::resource_name(menu::Button::single_player));
+        if (screen_ != Screen::single_player || surface_.width != kCanvasWidth)
+            throw std::runtime_error("navigation check did not reach SINGLE.GUI");
+        write_ppm(report_directory / "native-single.ppm", surface_);
+        exercise_click(entry::resource_name(entry::Button::options));
+        if (screen_ != Screen::options || surface_.width != kCanvasWidth)
+            throw std::runtime_error("navigation check did not reach STARTOPT.GUI");
+        write_ppm(report_directory / "native-options.ppm", surface_);
+        require_game_fonts("navigation check: the Options screen", [this] { rebuild_surface(); });
+        exercise_click("CANCEL");
+        if (screen_ != Screen::single_player)
+            throw std::runtime_error("navigation check: CANCEL did not leave STARTOPT.GUI");
+        check_options_gamma();
+        exercise_click(entry::resource_name(entry::Button::skirmish));
+        if (screen_ != Screen::skirmish || surface_.width != kCanvasWidth)
+            throw std::runtime_error("navigation check did not reach SKIRMISH.GUI");
+        write_ppm(report_directory / "native-skirmish.ppm", surface_);
+    }
+    // The match the screens and orders groups play in.
+    uint16_t local_commander = 0;
+    if (screens || orders) {
+        state_.player_count = 2;
+        capacity = map_player_capacity();
+        if (capacity < 2)
+            throw std::runtime_error("navigation check selected map lacks two start positions");
+        exercise_click(skirmish::resource_name(skirmish::Button::start));
+        if (screen_ != Screen::match || !match_)
+            throw std::runtime_error("navigation check Start did not enter a real match");
+        const auto armcom = oa::sim::unit_spawn::find_type_index(spawn_type_names_, "ARMCOM");
+        const auto corcom = oa::sim::unit_spawn::find_type_index(spawn_type_names_, "CORCOM");
+        if (loaded_commander_types_.size() <= 1 || armcom == 0 || corcom == 0 ||
+            !loaded_commander_types_[armcom].model || !loaded_commander_types_[corcom].model ||
+            !loaded_commander_types_[armcom].script || !loaded_commander_types_[corcom].script)
+            throw std::runtime_error("navigation check did not load commander runtimes");
+        std::size_t commander_instances = 0;
+        for (const auto& slot : match_->world().slots)
+            if (slot.unit_index != 0 && slot.unit != nullptr &&
+                match_->instance(slot.unit_index) != nullptr)
+                ++commander_instances;
+        if (commander_instances != 2)
+            throw std::runtime_error("navigation check did not create both commanders");
+        for (const auto& slot : match_->world().slots) {
+            if (slot.unit_index != 0 && slot.unit != nullptr &&
+                slot.record.owner_index == match_local_player_) {
+                local_commander = slot.unit_index;
+                break;
+            }
+        }
+        if (local_commander == 0 || !match_->simulation().players[match_local_player_].present ||
+            match_->simulation().players[match_local_player_].status != entry::controller::human)
+            throw std::runtime_error("navigation check found inactive local simulation player");
+    }
+    if (screens) {
+        auto& commander_slot = match_->world().slots[local_commander];
+        const std::array<uint32_t, 3> start = commander_slot.unit->position;
+        const oa::sim::ground_orders::Point bounded_destination{
+            std::bit_cast<int32_t>(start[0]),
+            std::bit_cast<int32_t>(start[1]),
+            std::bit_cast<int32_t>(start[2]) + 64 * 65536
+        };
+        const uint32_t position_x_before = start[0];
+        const uint32_t position_z_before = start[2];
+        match_->issue_ground_move(local_commander, bounded_destination, false);
+        match_timing_.tick = 1;
         match_->simulation().tick = match_timing_.tick;
         tick_or_raise(*match_);
-    }
-    render_match_surface();
-    write_ppm(report_directory / "native-match-moved.ppm", surface_);
-    if (commander_slot.unit->position[0] == position_x_before &&
-        commander_slot.unit->position[2] == position_z_before)
-        throw std::runtime_error(
-            "navigation check commander did not move toward issued destination"
-        );
-    uint16_t enemy_commander = 0;
-    for (const auto& slot : match_->world().slots) {
-        if (slot.unit_index != 0 && slot.unit != nullptr &&
-            slot.owner_index != match_local_player_) {
-            enemy_commander = slot.unit_index;
-            break;
-        }
-    }
-    if (enemy_commander != 0) {
-        try {
-            if (!match_->issue_attack(local_commander, enemy_commander, false))
-                std::cerr << "navigation check attack: refused\n";
-        } catch (const std::exception& error) {
-            std::cerr << "navigation check attack: " << error.what() << '\n';
-        }
-        for (int step = 0; step < 30; ++step) {
+        const auto* navigation = match_->ground_runtime(local_commander);
+        if (navigation == nullptr || navigation->navigation.goal == nullptr)
+            throw std::runtime_error("navigation check unit sweep skipped active commander");
+        if (surface_.width != kCanvasWidth)
+            throw std::runtime_error("navigation check did not render the match world");
+        write_ppm(report_directory / "native-match.ppm", surface_);
+        check_composed_frame();
+        check_console_commands();
+        check_game_speed_messages();
+        for (int step = 0; step < 24; ++step) {
             ++match_timing_.tick;
             match_->simulation().tick = match_timing_.tick;
             tick_or_raise(*match_);
         }
         render_match_surface();
-        write_ppm(report_directory / "native-match-fire.ppm", surface_);
-    }
-    const auto solar = oa::sim::unit_spawn::find_type_index(spawn_type_names_, "ARMSOLAR");
-    if (solar != 0) {
-        const std::array<uint32_t, 3> at = commander_slot.unit->position;
-        const oa::sim::ground_orders::Point yard{
-            std::bit_cast<int32_t>(at[0]) + 64 * 65536,
-            std::bit_cast<int32_t>(at[1]),
-            std::bit_cast<int32_t>(at[2])
-        };
-        try {
-            match_->issue_mobile_build(local_commander, solar, yard, false);
-        } catch (const std::exception& error) {
-            std::cerr << "navigation check build: " << error.what() << '\n';
-        }
-        bool wrote_nano = false;
-        for (int step = 0; step < 180; ++step) {
-            ++match_timing_.tick;
-            match_->simulation().tick = match_timing_.tick;
-            try {
-                tick_or_raise(*match_);
-            } catch (const std::exception& error) {
-                std::cerr << "navigation check build tick: " << error.what() << '\n';
+        write_ppm(report_directory / "native-match-moved.ppm", surface_);
+        if (commander_slot.unit->position[0] == position_x_before &&
+            commander_slot.unit->position[2] == position_z_before)
+            throw std::runtime_error(
+                "navigation check commander did not move toward issued destination"
+            );
+        uint16_t enemy_commander = 0;
+        for (const auto& slot : match_->world().slots) {
+            if (slot.unit_index != 0 && slot.unit != nullptr &&
+                slot.owner_index != match_local_player_) {
+                enemy_commander = slot.unit_index;
                 break;
             }
-            if (!wrote_nano && (!match_->nano_lasers().empty() || match_->particle_count() != 0)) {
+        }
+        if (enemy_commander != 0) {
+            try {
+                if (!match_->issue_attack(local_commander, enemy_commander, false))
+                    std::cerr << "navigation check attack: refused\n";
+            } catch (const std::exception& error) {
+                std::cerr << "navigation check attack: " << error.what() << '\n';
+            }
+            for (int step = 0; step < 30; ++step) {
+                ++match_timing_.tick;
+                match_->simulation().tick = match_timing_.tick;
+                tick_or_raise(*match_);
+            }
+            render_match_surface();
+            write_ppm(report_directory / "native-match-fire.ppm", surface_);
+        }
+        const auto solar = oa::sim::unit_spawn::find_type_index(spawn_type_names_, "ARMSOLAR");
+        if (solar != 0) {
+            const std::array<uint32_t, 3> at = commander_slot.unit->position;
+            const oa::sim::ground_orders::Point yard{
+                std::bit_cast<int32_t>(at[0]) + 64 * 65536,
+                std::bit_cast<int32_t>(at[1]),
+                std::bit_cast<int32_t>(at[2])
+            };
+            try {
+                match_->issue_mobile_build(local_commander, solar, yard, false);
+            } catch (const std::exception& error) {
+                std::cerr << "navigation check build: " << error.what() << '\n';
+            }
+            bool wrote_nano = false;
+            for (int step = 0; step < 180; ++step) {
+                ++match_timing_.tick;
+                match_->simulation().tick = match_timing_.tick;
+                try {
+                    tick_or_raise(*match_);
+                } catch (const std::exception& error) {
+                    std::cerr << "navigation check build tick: " << error.what() << '\n';
+                    break;
+                }
+                if (!wrote_nano &&
+                    (!match_->nano_lasers().empty() || match_->particle_count() != 0)) {
+                    render_match_surface();
+                    write_ppm(report_directory / "native-match-nano.ppm", surface_);
+                    wrote_nano = true;
+                }
+            }
+            if (!wrote_nano) {
                 render_match_surface();
                 write_ppm(report_directory / "native-match-nano.ppm", surface_);
-                wrote_nano = true;
             }
         }
-        if (!wrote_nano) {
-            render_match_surface();
-            write_ppm(report_directory / "native-match-nano.ppm", surface_);
-        }
     }
-    check_builder_orders();
-    check_build_placement();
-    check_selection_visuals([this](renderer::Surface& frame) {
-        render_match_surface();
-        compose_match_frame(frame);
-    });
-    show_match_build_page(1);
-    write_ppm(report_directory / "native-match-build.ppm", surface_);
-    // The Pause key, the menus' hold, the team panels and the keys the
-    // paused panels take, over this game, which the victory check below
-    // leaves.
-    check_pause_key();
-    check_team_panels();
-    check_match_panel_keys();
-    // The console check's Kill left this game without victory or defeat, so
-    // the victory is played in a new one.
-    return_to_skirmish_menu();
-    check_skirmish_victory(report_directory);
-    check_deathmatch_respawn();
-    check_dgun_order();
-    check_attack_command();
-    check_tracking_zoom();
-    check_turret_draws(report_directory);
+    if (orders) {
+        check_builder_orders();
+        check_build_placement();
+        check_selection_visuals([this](renderer::Surface& frame) {
+            render_match_surface();
+            compose_match_frame(frame);
+        });
+        show_match_build_page(1);
+        write_ppm(report_directory / "native-match-build.ppm", surface_);
+        // The Pause key, the menus' hold, the team panels and the keys the
+        // paused panels take, over this game, which the victory check below
+        // leaves.
+        check_pause_key();
+        check_team_panels();
+        check_match_panel_keys();
+    }
+    if (runs(NavigationGroup::outcomes)) {
+        // The console check's Kill left this game without victory or defeat, so
+        // the victory is played in a new one.
+        return_to_skirmish_menu();
+        check_skirmish_victory(report_directory);
+        check_deathmatch_respawn();
+        check_dgun_order();
+        check_attack_command();
+    }
+    if (zoom)
+        check_tracking_zoom(group);
+    if (runs(NavigationGroup::outcomes))
+        check_turret_draws(report_directory);
+    if (!runs(NavigationGroup::campaign))
+        return;
     check_launch_services();
     exercise_click(skirmish::resource_name(skirmish::Button::select_map));
     if (screen_ != Screen::map_selection || bound_map_names_.empty())
@@ -1611,8 +1650,10 @@ void Runtime::check_navigation() {
     if (screen_ != Screen::skirmish || skirmish_settings_.map_name != committed_map)
         throw std::runtime_error("map Cancel changed selection or failed to restore parent");
     std::cout << "navigation check: MAINMENU.GUI -> SINGLE.GUI -> SKIRMISH.GUI\n";
-    std::cout << "match bootstrap check: " << capacity << " OTA positions, "
-              << loaded_commander_types_.size() - 1U << " unit runtimes including ARMCOM/CORCOM\n";
+    if (capacity != 0)
+        std::cout << "match bootstrap check: " << capacity << " OTA positions, "
+                  << loaded_commander_types_.size() - 1U
+                  << " unit runtimes including ARMCOM/CORCOM\n";
     std::cout << "map selection check: " << bound_map_names_.size()
               << " eligible maps, preview capacity " << alternate_capacity << '\n';
     preferences_.side = 0;

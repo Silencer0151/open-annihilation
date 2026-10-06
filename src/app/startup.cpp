@@ -11,6 +11,7 @@
 #include "oa/platform/job_pool.hpp"
 #include "oa/platform/system.hpp"
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
@@ -18,6 +19,7 @@
 #include <filesystem>
 #include <iostream>
 #include <iterator>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -318,6 +320,28 @@ void check_game_files_options(Options& options) {
             std::to_string(oa::platform::job_pool::max_threads)
         );
     return value;
+}
+
+/// Returns the navigation check's group a word after --check-navigation
+/// names, or nothing when it names none.
+///
+/// @param text the word after --check-navigation
+/// @return the group, or nothing
+[[nodiscard]] std::optional<NavigationGroup> navigation_group_named(std::string_view text) {
+    static constexpr std::array<std::pair<std::string_view, NavigationGroup>, 8> kGroups{{
+        {"screens", NavigationGroup::screens},
+        {"orders", NavigationGroup::orders},
+        {"outcomes", NavigationGroup::outcomes},
+        {"zoom", NavigationGroup::zoom},
+        {"zoom-1366x768", NavigationGroup::zoom_1366x768},
+        {"zoom-1920x1080", NavigationGroup::zoom_1920x1080},
+        {"zoom-2560x1440", NavigationGroup::zoom_2560x1440},
+        {"campaign", NavigationGroup::campaign},
+    }};
+    for (const auto& [name, group] : kGroups)
+        if (text == name)
+            return group;
+    return std::nullopt;
 }
 
 /// Returns the showcase a --showcase value names.
@@ -748,9 +772,15 @@ namespace {
             result.headless_check = true;
         else if (argument == "--mute")
             result.mute = true;
-        else if (argument == "--check-navigation")
+        else if (argument == "--check-navigation") {
             result.check_navigation = true;
-        else if (argument == "--check-match-dialogs")
+            // A group's name may follow; any other word is read as before.
+            if (index + 1 < argc)
+                if (const auto group = navigation_group_named(argv[index + 1])) {
+                    result.navigation_group = *group;
+                    ++index;
+                }
+        } else if (argument == "--check-match-dialogs")
             result.check_match_dialogs = true;
         else if (argument == "--check-load-save")
             result.check_load_save = true;
@@ -890,7 +920,9 @@ namespace {
                    "[--snapshot PATH.ppm] [--preferences-file PATH] [--data-dir PATH] "
                    "[--user-folder PATH] "
                    "[--mute] "
-                   "[--check-navigation] [--check-match-dialogs] [--check-match-layers] "
+                   "[--check-navigation [screens|orders|outcomes|zoom|zoom-1366x768|"
+                   "zoom-1920x1080|zoom-2560x1440|campaign]] "
+                   "[--check-match-dialogs] [--check-match-layers] "
                    "[--check-render-tiers [--force-capable]] "
                    "[--check-match-orders] [--check-factory-orders] [--check-unit-speech] "
                    "[--check-download-builds] [--check-stockpile-builds] "

@@ -1210,6 +1210,29 @@ int main() {
             "--showcase plays in a window; it is not a check or benchmark",
         "a showcase is not a check"
     );
+    // --check-navigation runs every group, or the one whose name follows it.
+    const auto navigation = parse({"--check-navigation"});
+    expect(
+        navigation.check_navigation && navigation.navigation_group == oa::app::NavigationGroup::all,
+        "--check-navigation alone runs every group"
+    );
+    const auto zoom_group = parse({"--check-navigation", "zoom-2560x1440", "--mute"});
+    expect(
+        zoom_group.check_navigation && zoom_group.mute &&
+            zoom_group.navigation_group == oa::app::NavigationGroup::zoom_2560x1440,
+        "--check-navigation takes the group named after it"
+    );
+    const auto campaign_group = parse({"--mute", "--check-navigation", "campaign"});
+    expect(
+        campaign_group.navigation_group == oa::app::NavigationGroup::campaign,
+        "--check-navigation takes a group as the last argument"
+    );
+    const auto language_after = parse({"--check-navigation", "german"});
+    expect(
+        language_after.navigation_group == oa::app::NavigationGroup::all &&
+            std::string_view(language_after.launch.language) == "german",
+        "a word after --check-navigation that names no group is still the language"
+    );
     // Last: --help ends the program.
     help_lists_the_game_files_options();
 }

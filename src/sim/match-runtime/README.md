@@ -359,7 +359,7 @@ its standby, patrol or guard mission or a hit's reaction: it goes ahead of
 the orders the unit has and, unforced, on the manoeuvre order, carries the
 unit's leash and a move back to where it stood (ctests `match-attack-command`
 and `match-attack-command-data`; the pointer and area attacks in
-`native-navigation`). `issue_attack_ground` is the attack command on a ground
+`native-navigation-outcomes`). `issue_attack_ground` is the attack command on a ground
 point: the command resolver picks its mission with no target unit, Suppress
 for a unit that does not fly, AirToGround for an armed aircraft, gunships
 among them, and AirStrike for a bomber, and a unit whose weapon only reaches

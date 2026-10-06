@@ -2,7 +2,11 @@
 # SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Run the asset-backed native navigation check without touching user settings."""
+"""Run the asset-backed native navigation check without touching user settings.
+
+--group runs one group of the check (--check-navigation GROUP), which stands
+alone; without it the whole check runs in one game.
+"""
 import argparse
 import os
 from pathlib import Path
@@ -20,6 +24,9 @@ RUNNER = shlex.split(os.environ.get("OA_TEST_RUNNER", ""))
 # positive number, multiplies it for a build whose run-time error checks
 # make the game several times slower.
 RUN_TIMEOUT_SECONDS = 900 * float(os.environ.get("OA_TEST_TIMEOUT_SCALE") or 1)
+# The groups --check-navigation takes.
+GROUPS = ("screens", "orders", "outcomes", "zoom", "zoom-1366x768", "zoom-1920x1080",
+          "zoom-2560x1440", "campaign")
 
 
 def main():
@@ -27,6 +34,7 @@ def main():
     parser.add_argument("--native", type=Path, required=True)
     parser.add_argument("--game-dir", type=Path, required=True)
     parser.add_argument("--scratch-root", type=Path, required=True)
+    parser.add_argument("--group", choices=GROUPS, help="the group to run; every group without")
     args = parser.parse_args()
     native = args.native.resolve()
     game_dir = args.game_dir.resolve()
@@ -34,9 +42,11 @@ def main():
     scratch_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="native-check-", dir=scratch_root) as temporary:
         profile = Path(temporary) / "preferences.conf"
+        group = [args.group] if args.group else []
         result = subprocess.run(
             [*RUNNER, str(native), "--game-dir", str(game_dir), "--skip-intro", "--mute",
-             "--headless-check", "--check-navigation", "--preferences-file", str(profile)],
+             "--headless-check", "--check-navigation", *group, "--preferences-file",
+             str(profile)],
             cwd=temporary, timeout=RUN_TIMEOUT_SECONDS, check=False,
         )
         return result.returncode

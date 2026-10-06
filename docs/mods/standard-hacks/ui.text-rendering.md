@@ -273,7 +273,7 @@ page. Without it, chat goes out in the code page, as 3.1c's does.
     setting, its default, range, stops, keys and lock (see the settings'
     [README](../../../src/ui/engine-settings/README.md));
     `native-engine-settings` sets it through the dialog in the game.
-  - `native-navigation` draws the loading screen with modern fonts on at
+  - `native-navigation-screens` draws the loading screen with modern fonts on at
     300% and holds it to the frame with them off.
   - `platform-text-font` and `platform-text-font-pixels`
     (`src/platform/text-font/tests/text_font_test.cpp`): the font stack's

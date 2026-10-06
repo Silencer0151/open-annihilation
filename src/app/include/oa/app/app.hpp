@@ -150,6 +150,35 @@ enum class Showcase {
     skirmish_battle
 };
 
+/// The part of the navigation check --check-navigation runs. Each group
+/// starts from the main menu and sets up the menus and the match it needs,
+/// so it passes run alone; all runs every group's checks in one sequence.
+enum class NavigationGroup : uint8_t {
+    /// every check below, one after another
+    all,
+    /// the menus' screens and services, the Options screen's gamma, and a
+    /// skirmish's first frames, console commands, speed messages and orders
+    screens,
+    /// a builder's orders, build placement, the selection's visuals, the
+    /// Pause key, the team panels and the match panels' keys
+    orders,
+    /// a skirmish's victory, a deathmatch's respawn, the D-gun and attack
+    /// orders, and a turret drawn as it turns
+    outcomes,
+    /// the battlefield's zoom and follow, with the zoom's limits on the
+    /// game's own screen, and presses on the far view
+    zoom,
+    /// the zoom's limits on a window of 1366x768
+    zoom_1366x768,
+    /// the zoom's limits on a window of 1920x1080
+    zoom_1920x1080,
+    /// the zoom's limits on a window of 2560x1440
+    zoom_2560x1440,
+    /// the launch services, the map selection, a campaign mission through
+    /// its end screen and saves, the campaign screens and the dialogs
+    campaign
+};
+
 /// A renderer failure --render-fault forces in --check-renderer-ladder.
 enum class RenderFaultPoint : uint8_t {
     /// every render driver but software refuses at start-up
@@ -325,6 +354,9 @@ struct Options {
     bool headless_check = false;
     bool mute = false;
     bool check_navigation = false;
+    // The part of the navigation check to run: a group name after
+    // --check-navigation, all without one.
+    NavigationGroup navigation_group = NavigationGroup::all;
     // Opens HELP.GUI over a live match through the SDL presenter.
     bool check_match_dialogs = false;
     // Opens LOADGAME.GUI from Single Player and, through the SDL presenter,

@@ -1131,7 +1131,9 @@ class Runtime final : public menu::Host,
     ///
     /// Walks SINGLE.GUI and SKIRMISH.GUI into a skirmish and through the match,
     /// map selection, campaign, save, end-game and dialog checks, writing frames
-    /// to local/reports. The loading screen, STARTOPT.GUI and the won
+    /// to local/reports. The group --check-navigation names (NavigationGroup)
+    /// runs its part alone, from the main menu: it walks to the skirmish menu
+    /// and, for the screens and orders groups, starts the skirmish it plays in. The loading screen, STARTOPT.GUI and the won
     /// mission's statistics keep the game's own fonts with the modern fonts on
     /// (require_game_fonts()). Game data with no skirmish map runs
     /// check_navigation_without_maps() instead. Throws std::runtime_error at the
@@ -8598,7 +8600,11 @@ class Runtime final : public menu::Host,
     /// zoom's end of the follow of a unit, in a new skirmish.
     ///
     /// Runs check_zoom_about_pointer, check_zoom_limit_choices and
-    /// check_view_past_map. Then Ctrl+C follows the walking commander, or
+    /// check_view_past_map. With the group zoom the zoom's limits are tried
+    /// on the game's own screen alone; with a group that names a window,
+    /// only the zoom's limits are checked, on that window alone, and the
+    /// check returns to the skirmish menu. Then Ctrl+C follows the walking
+    /// commander, or
     /// T where the side's commander is not in Ctrl+C's category, and the
     /// wheel turned at a point away from it ends the follow and zooms
     /// about the point, every frame keeping the map point under the pointer
@@ -8608,7 +8614,9 @@ class Runtime final : public menu::Host,
     /// scroll and moving the view from the minimap end the follow. Returns
     /// to the skirmish menu; throws std::runtime_error on a failure.
     /// [runtime_tracking_zoom_check.cpp]
-    void check_tracking_zoom();
+    ///
+    /// @param group the navigation check's group: all, zoom, or a window's zoom group
+    void check_tracking_zoom(NavigationGroup group);
 
     /// Checks that every frame of a zoom keeps the map point under the
     /// pointer there, on the game's screen.
@@ -8634,7 +8642,7 @@ class Runtime final : public menu::Host,
     void check_zoom_about_pointer(const std::function<void()>& frame);
 
     /// Checks the zoom's limits at each Maximum zoom out and Maximum zoom in
-    /// choice, on the game's screen and three windows.
+    /// choice, on each of the windows given.
     ///
     /// The wheel turned out from the middle of the map stops at each
     /// choice's floor (least_battlefield_zoom), Automatic's the drawing's
@@ -8648,13 +8656,20 @@ class Runtime final : public menu::Host,
     /// at points across it, each step keeps the map point under the
     /// pointer, or, past the map's edge, the view within its limits or no
     /// further from them. A choice changed in play eases a view past the
-    /// new limits within them about the battlefield's centre. Then checks
-    /// presses on the far view (check_far_view_presses). Puts the settings,
-    /// the layout and the default zoom back; throws std::runtime_error on a
-    /// failure. [runtime_tracking_zoom_check.cpp]
+    /// new limits within them about the battlefield's centre. Then, when
+    /// asked, checks presses on the far view (check_far_view_presses). Puts
+    /// the settings, the layout and the default zoom back; throws
+    /// std::runtime_error on a failure. [runtime_tracking_zoom_check.cpp]
     ///
     /// @param frame runs a frame of the match: the zoom eases and the camera moves
-    void check_zoom_limit_choices(const std::function<void()>& frame);
+    /// @param windows the windows' widths and heights, the game's own screen
+    ///     among them as kCanvasWidth by kCanvasHeight
+    /// @param far_view_presses whether presses on the far view are checked after them
+    void check_zoom_limit_choices(
+        const std::function<void()>& frame,
+        const std::vector<std::array<int, 2>>& windows,
+        bool far_view_presses
+    );
 
     /// Checks the view past the map's edges on the game's screen.
     ///
