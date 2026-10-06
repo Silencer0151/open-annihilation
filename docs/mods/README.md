@@ -524,6 +524,7 @@ and the hacks within each follow their titles alphabetically. Scope is
 | [Display Modes](standard-hacks/ui.display-modes.md) | `ui.display-modes` | Display changes: a 1024x768 minimum, the menu resolution and screenshots. | view | implemented |
 | [Effects Tweaks](standard-hacks/ui.effects-tweaks.md) | `ui.effects-tweaks` | Changes explosion effects: end-smoke weapons add the explosion, and the extra smoke puff can go. | view | implemented |
 | [End-of-Game Statistics](standard-hacks/ui.endgame-stats.md) | `ui.endgame-stats` | End-of-game statistics list players who dropped or were removed. | view | implemented |
+| [Explosion Flash](standard-hacks/ui.explosion-flash.md) | `ui.explosion-flash` | Draws the flash of explosions at a lower level, which the player's own setting can lower further. | view | implemented |
 | [External Exports](standard-hacks/ui.external-exports.md) | `ui.external-exports` | Exports live unit state and the battle room's state for other programs. | view | implemented |
 | [Interface Fixes](standard-hacks/ui.interface-fixes.md) | `ui.interface-fixes` | A set of small display fixes, each chosen by name. | view | implemented |
 | [Map Features Always Drawn](standard-hacks/ui.map-features-ignore-los.md) | `ui.map-features-ignore-los` | Features the map places are drawn whether or not they are in line of sight. | view | implemented |

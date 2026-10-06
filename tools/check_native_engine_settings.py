@@ -15,8 +15,8 @@ preferences file the check writes:
   default (wheel zoom off, Escape opens the game menu, Select groups without
   Alt, the lowest maximum frame rate, the performance statistics, hardware
   acceleration at Full and vertical sync, which a headless run has no
-  renderer for), it writes the same trace stream and reaches the same world
-  digest.
+  renderer for, and the explosions' flashes off), it writes the same trace
+  stream and reaches the same world digest.
 - At each level of enhanced anti-aliasing it writes the same trace stream
   and reaches the same world digest, and its last frame differs: units are
   drawn finer.
@@ -64,6 +64,7 @@ DEFAULTS = {
     "open-annihilation.screen-size": "desktop",
     "open-annihilation.hardware-acceleration": "off",
     "open-annihilation.vertical-sync": "0",
+    "open-annihilation.explosion-flash": "full",
     "open-annihilation.modern-fonts": "0",
     "open-annihilation.text-outline": "1",
     "open-annihilation.text-shadow": "1",
@@ -78,6 +79,7 @@ PRESENTATION = {
     "open-annihilation.frame-stats": "1",
     "open-annihilation.hardware-acceleration": "full",
     "open-annihilation.vertical-sync": "1",
+    "open-annihilation.explosion-flash": "off",
     "open-annihilation.modern-fonts": "1",
     "open-annihilation.text-outline": "0",
     "open-annihilation.text-shadow": "0",

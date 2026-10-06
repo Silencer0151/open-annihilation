@@ -260,6 +260,8 @@ SENTENCES = {
         "Changes when the reclaim and landing voices play.",
     "ui.effects-tweaks":
         "Changes explosion effects: end-smoke weapons add the explosion, and the extra smoke puff can go.",
+    "ui.explosion-flash":
+        "Draws the flash of explosions at a lower level, which the player's own setting can lower further.",
     "ui.interface-fixes":
         "A set of small display fixes, each chosen by name.",
     "ui.endgame-stats":

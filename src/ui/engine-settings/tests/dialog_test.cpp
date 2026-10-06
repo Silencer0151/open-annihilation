@@ -500,19 +500,20 @@ void each_section_shows_its_rows() {
     CHECK(settings::page_settings(Page::language)[0] == Setting::language);
     CHECK(settings::page_settings(Page::graphics)[0] == Setting::max_frame_rate);
     CHECK(settings::page_settings(Page::graphics)[1] == Setting::anti_aliasing);
-    CHECK(settings::page_settings(Page::graphics).size() == 7);
+    CHECK(settings::page_settings(Page::graphics).size() == 8);
     CHECK(settings::page_settings(Page::graphics)[2] == Setting::screen_size);
     CHECK(settings::page_settings(Page::graphics)[3] == Setting::hardware_acceleration);
     CHECK(settings::page_settings(Page::graphics)[4] == Setting::vertical_sync);
     CHECK(settings::page_settings(Page::graphics)[5] == Setting::menu_scaling);
     CHECK(settings::page_settings(Page::graphics)[6] == Setting::native_density);
+    CHECK(settings::page_settings(Page::graphics)[7] == Setting::explosion_flash);
     CHECK(settings::page_settings(Page::developer).size() == 2);
     CHECK(settings::page_settings(Page::developer)[0] == Setting::developer_mode);
     CHECK(settings::page_settings(Page::developer)[1] == Setting::frame_stats);
-    // Graphics' seven rows are taller than the view, by 198 rows.
+    // Graphics' eight rows are taller than the view, by 257 rows.
     const auto graphics = geometry::place_rows(Page::graphics, {});
-    CHECK(graphics.rows.size() == 7);
-    CHECK(geometry::scroll_limit(geometry::content_height(graphics, 0)) == 198);
+    CHECK(graphics.rows.size() == 8);
+    CHECK(geometry::scroll_limit(geometry::content_height(graphics, 0)) == 257);
 
     auto parts = settings::dialog_layout(opened(Page::controls));
     for (const std::string_view text :
@@ -1741,15 +1742,15 @@ void the_view_and_the_scroll_bar_keep_their_places() {
 void sections_that_fit_do_not_scroll() {
     // Each section's content: its rows, and the end gap under the last.
     // Controls' three switches are 162 and Common Tweaks' Your files, unit
-    // limit and pathfinding sliders 210, and both fit; Graphics' seven rows
-    // are 434 and Language's drop-down, five switches and slider 424, and
+    // limit and pathfinding sliders 210, and both fit; Graphics' eight rows
+    // are 493 and Language's drop-down, five switches and slider 424, and
     // both scroll. Mods' list and Developer's list scroll in views of their
     // own (mods_scroll, developer_*).
     const std::array<Page, 4> pages{
         Page::controls, Page::common_tweaks, Page::graphics, Page::language
     };
-    const std::array<int32_t, 4> content{162, 210, 434, 424};
-    const std::array<int32_t, 4> limits{0, 0, 198, 188};
+    const std::array<int32_t, 4> content{162, 210, 493, 424};
+    const std::array<int32_t, 4> limits{0, 0, 257, 188};
     for (std::size_t index = 0; index < content.size(); ++index) {
         const Page page = pages[index];
         if (limits[index] != 0) {
@@ -2449,20 +2450,20 @@ int32_t graphics_scroll(const settings::Dialog& dialog) {
     return dialog.scroll[static_cast<std::size_t>(Page::graphics)];
 }
 
-void the_graphics_page_scrolls_its_seven_rows() {
+void the_graphics_page_scrolls_its_eight_rows() {
     settings::Dialog dialog = graphics_page();
     const auto open = geometry::open_rows(dialog);
-    CHECK(open.rows.rows.size() == 7);
-    const std::array<int32_t, 7> tops{54, 119, 178, 255, 314, 361, 420};
-    const std::array<int32_t, 7> heights{65, 59, 77, 59, 47, 59, 59};
+    CHECK(open.rows.rows.size() == 8);
+    const std::array<int32_t, 8> tops{54, 119, 178, 255, 314, 361, 420, 479};
+    const std::array<int32_t, 8> heights{65, 59, 77, 59, 47, 59, 59, 59};
     for (std::size_t index = 0; index < open.rows.rows.size() && index < tops.size(); ++index) {
         const auto& row = open.rows.rows[index];
         CHECK(row.top == tops[index]);
         CHECK(row.height == heights[index]);
         CHECK(row.control == settings::first_row_control + static_cast<int32_t>(index));
     }
-    CHECK(open.rows.bottom == 479);
-    CHECK(open.limit == 198);
+    CHECK(open.rows.bottom == 538);
+    CHECK(open.limit == 257);
     // Hardware acceleration: a strip of Off, Basic and Full, 34 columns a
     // level inside its border, with two status lines; Vertical sync a
     // switch with one hint line.
@@ -2495,6 +2496,15 @@ void the_graphics_page_scrolls_its_seven_rows() {
     CHECK(same_rect(density.control_area, {415, 429, 52, 16}));
     CHECK(density.hint_lines == 2);
     CHECK(density.hints[0].y == 447 && density.hints[1].y == 459);
+    // Explosion flash: a strip of Off, Reduced and Full, 50 columns a level
+    // inside its border, with two hint lines.
+    const auto& flash = open.rows.rows[7];
+    CHECK(flash.setting == Setting::explosion_flash);
+    CHECK(!flash.hint_is_status);
+    CHECK(same_rect(flash.label, {158, 488, 149, 16}));
+    CHECK(same_rect(flash.control_area, {315, 488, 152, 16}));
+    CHECK(flash.hint_lines == 2);
+    CHECK(flash.hints[0].y == 506 && flash.hints[1].y == 518);
 
     // At the top the first three rows keep their places and Hardware
     // acceleration's label and strip show whole; at the end the closing
@@ -2505,49 +2515,54 @@ void the_graphics_page_scrolls_its_seven_rows() {
     CHECK(find_part(top, {}, settings::first_row_control + 3) != nullptr);
     dialog.scroll[static_cast<std::size_t>(Page::graphics)] = 500;
     const auto end = geometry::open_rows(dialog);
-    CHECK(end.scroll == 198);
+    CHECK(end.scroll == 257);
     CHECK(end.rows.bottom == 281);
-    CHECK(end.rows.rows[1].control_area.y == -70);
-    CHECK(end.rows.rows[3].label.y == 66);
-    CHECK(end.rows.rows[4].label.y == 125);
-    CHECK(end.rows.rows[5].label.y == 172);
-    CHECK(end.rows.rows[6].label.y == 231);
+    CHECK(end.rows.rows[1].control_area.y == -129);
+    CHECK(end.rows.rows[3].label.y == 7);
+    CHECK(end.rows.rows[4].label.y == 66);
+    CHECK(end.rows.rows[5].label.y == 113);
+    CHECK(end.rows.rows[6].label.y == 172);
+    CHECK(end.rows.rows[7].label.y == 231);
     const auto at_end = settings::dialog_layout(dialog);
     CHECK(find_part(at_end, "Vertical sync", settings::no_control) != nullptr);
     CHECK(find_part(at_end, "Menu scaling", settings::no_control) != nullptr);
     CHECK(find_part(at_end, "Native pixel density", settings::no_control) != nullptr);
+    CHECK(find_part(at_end, "Explosion flash", settings::no_control) != nullptr);
     CHECK(find_part(at_end, "Applies from the next start.", settings::no_control) != nullptr);
     CHECK(
         find_part(at_end, "Each frame waits for the display: no tearing.", settings::no_control) !=
         nullptr
     );
     CHECK(
-        find_part(at_end, "Off: the processor draws and scales the view.", settings::no_control) !=
+        find_part(at_end, "Explosions light up the ground as the game", settings::no_control) !=
         nullptr
     );
 
     // Tab from no focus: the first three rows at 0, Hardware acceleration at
     // 25, Vertical sync at 72, Menu scaling at 131, Native pixel density at
-    // the end; back up, Screen size at 124 and Enhanced anti-aliasing at 65.
+    // 190, Explosion flash at the end; back up, Hardware acceleration at
+    // 201, Screen size at 124 and Enhanced anti-aliasing at 65.
     settings::Dialog keys = graphics_page();
-    const std::array<std::pair<int32_t, int32_t>, 7> forward{{
+    const std::array<std::pair<int32_t, int32_t>, 8> forward{{
         {settings::first_row_control, 0},
         {settings::first_row_control + 1, 0},
         {settings::first_row_control + 2, 0},
         {settings::first_row_control + 3, 25},
         {settings::first_row_control + 4, 72},
         {settings::first_row_control + 5, 131},
-        {settings::first_row_control + 6, 198},
+        {settings::first_row_control + 6, 190},
+        {settings::first_row_control + 7, 257},
     }};
     for (const auto& [control, expected] : forward) {
         CHECK(settings::dialog_key(keys, DialogKey::tab) == DialogAction::redraw);
         CHECK(keys.focused == control);
         CHECK(graphics_scroll(keys) == expected);
     }
-    const std::array<std::pair<int32_t, int32_t>, 6> back{{
-        {settings::first_row_control + 5, 198},
-        {settings::first_row_control + 4, 198},
-        {settings::first_row_control + 3, 198},
+    const std::array<std::pair<int32_t, int32_t>, 7> back{{
+        {settings::first_row_control + 6, 257},
+        {settings::first_row_control + 5, 257},
+        {settings::first_row_control + 4, 257},
+        {settings::first_row_control + 3, 201},
         {settings::first_row_control + 2, 124},
         {settings::first_row_control + 1, 65},
         {settings::first_row_control, 0},
@@ -2561,7 +2576,7 @@ void the_graphics_page_scrolls_its_seven_rows() {
     // Every part apart and in its place at every offset, under every lock.
     for (const auto& locks : lock_states()) {
         settings::Dialog locked = graphics_page({}, locks);
-        for (int32_t scroll = 0; scroll <= 198; scroll += 6)
+        for (int32_t scroll = 0; scroll <= 257; scroll += 6)
             check_dialog_layout_at(locked, scroll);
     }
 }
@@ -2782,10 +2797,11 @@ void the_new_rows_lock_in_their_own_forms() {
     CHECK(same_rect(rows[4].control_area, {415, 323, 52, 16}));
     CHECK(same_rect(rows[4].lock_area, {259, 323, 148, 16}));
     CHECK(same_rect(rows[4].label, {158, 323, 93, 16}));
-    CHECK(geometry::open_rows(dialog).limit == 198);
+    CHECK(geometry::open_rows(dialog).limit == 257);
 
-    // At the end: both lock texts, the status, the kept switch's captions
-    // with no control, none of the strip's, and no control for either row.
+    // Scrolled down to Native pixel density: both lock texts, the status,
+    // the kept switch's captions with no control, none of the strip's, and
+    // no control for either row.
     dialog.scroll[static_cast<std::size_t>(Page::graphics)] = 198;
     const auto parts = settings::dialog_layout(dialog);
     int32_t lock_texts = 0;
@@ -2801,8 +2817,8 @@ void the_new_rows_lock_in_their_own_forms() {
     );
     CHECK(find_part(parts, "Basic", settings::no_control) == nullptr);
     // A press where either control is, and every key, leaves them; the
-    // keys pass from the first three rows to Menu scaling and Native pixel
-    // density.
+    // keys pass from the first three rows to Menu scaling, Native pixel
+    // density and Explosion flash.
     CHECK(click(dialog, {460, 72}) == DialogAction::none);
     CHECK(click(dialog, {380, 72}) == DialogAction::none);
     CHECK(click(dialog, {460, 131}) == DialogAction::none);
@@ -2813,6 +2829,7 @@ void the_new_rows_lock_in_their_own_forms() {
           settings::first_row_control + 2,
           settings::first_row_control + 5,
           settings::first_row_control + 6,
+          settings::first_row_control + 7,
           settings::restore_control}) {
         CHECK(settings::dialog_key(dialog, DialogKey::tab) == DialogAction::redraw);
         CHECK(dialog.focused == expected);
@@ -5648,6 +5665,14 @@ void fonts_load_and_every_text_fits_its_place() {
             deck.steam_deck_panel_hz = rate;
             every_text_fits(deck);
         }
+        // Explosion flash at each level, scrolled into view with its hint.
+        for (const auto level : settings::explosion_flash_choices) {
+            settings::Dialog flash = opened(Page::graphics);
+            flash.chosen.explosion_flash = level;
+            flash.scroll[static_cast<std::size_t>(Page::graphics)] =
+                geometry::open_rows(flash).limit;
+            every_text_fits(flash);
+        }
     }
 
     // A section that scrolls: every text it lists fits its place at every
@@ -6872,6 +6897,68 @@ void menu_scaling_and_native_density_show_and_change() {
     }
 }
 
+void explosion_flash_shows_and_changes() {
+    CHECK(geometry::is_strip(Setting::explosion_flash));
+    CHECK(geometry::strip_of(Setting::explosion_flash).levels == 3);
+    CHECK(geometry::strip_caption(Setting::explosion_flash, 0) == "Off");
+    CHECK(geometry::strip_caption(Setting::explosion_flash, 1) == "Reduced");
+    CHECK(geometry::strip_caption(Setting::explosion_flash, 2) == "Full");
+    CHECK(geometry::strip_caption(Setting::explosion_flash, 3).empty());
+    CHECK(settings::EngineSettings{}.explosion_flash == settings::ExplosionFlash::full);
+
+    // At Graphics' end: the label, the three captions and Full's hint.
+    settings::Dialog dialog = graphics_page();
+    CHECK(settings::dialog_key(dialog, DialogKey::end) == DialogAction::redraw);
+    auto parts = settings::dialog_layout(dialog);
+    for (const std::string_view text :
+         {"Explosion flash",
+          "Off",
+          "Reduced",
+          "Full",
+          "Explosions light up the ground as the game",
+          "drew it, or less where a mod asks."})
+        CHECK(find_part(parts, text, settings::no_control) != nullptr);
+
+    // A click on one of the strip's captions picks it, and the hint follows.
+    const auto click_caption = [&](std::string_view caption) {
+        const auto shown = settings::dialog_layout(dialog);
+        const settings::LayoutPart* found = nullptr;
+        for (const auto& part : shown)
+            if (part.text == caption && part.control == settings::first_row_control + 7)
+                found = &part;
+        CHECK(found != nullptr);
+        return found != nullptr ? click(dialog, centre(found->rect)) : DialogAction::none;
+    };
+    CHECK(click_caption("Reduced") == DialogAction::changed);
+    CHECK(dialog.chosen.explosion_flash == settings::ExplosionFlash::reduced);
+    parts = settings::dialog_layout(dialog);
+    CHECK(
+        find_part(parts, "Explosions light up the ground at half", settings::no_control) != nullptr
+    );
+    CHECK(find_part(parts, "strength, or less where a mod asks.", settings::no_control) != nullptr);
+    CHECK(click_caption("Off") == DialogAction::changed);
+    CHECK(dialog.chosen.explosion_flash == settings::ExplosionFlash::off);
+    parts = settings::dialog_layout(dialog);
+    CHECK(
+        find_part(parts, "Explosions do not light up the ground,", settings::no_control) != nullptr
+    );
+    CHECK(find_part(parts, "whatever a mod asks for.", settings::no_control) != nullptr);
+    // The keys step it a level at a time.
+    dialog.focused = settings::first_row_control + 7;
+    CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
+    CHECK(dialog.chosen.explosion_flash == settings::ExplosionFlash::reduced);
+    CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
+    CHECK(dialog.chosen.explosion_flash == settings::ExplosionFlash::full);
+    CHECK(settings::dialog_key(dialog, DialogKey::left) == DialogAction::changed);
+    CHECK(dialog.chosen.explosion_flash == settings::ExplosionFlash::reduced);
+
+    // Restore defaults gives Full; Cancel what it opened with.
+    CHECK(click(dialog, centre(geometry::restore_button)) == DialogAction::changed);
+    CHECK(dialog.chosen.explosion_flash == settings::ExplosionFlash::full);
+    CHECK(settings::dialog_key(dialog, DialogKey::escape) == DialogAction::cancelled);
+    CHECK(dialog.chosen == dialog.opened);
+}
+
 void touch_changes_only_its_entry_and_the_sections_under_it() {
     // A section drawn with Touch listed differs from it drawn without only
     // in the list from Touch's entry down: the open section, the header,
@@ -7780,8 +7867,9 @@ int main(int argc, char** argv) {
         offsets_are_kept_for_each_section_until_the_dialog_opens_again();
         the_hover_follows_the_rows_under_a_still_pointer();
         locked_switch_rows_keep_their_value_in_sight();
-        the_graphics_page_scrolls_its_seven_rows();
+        the_graphics_page_scrolls_its_eight_rows();
         menu_scaling_and_native_density_show_and_change();
+        explosion_flash_shows_and_changes();
         every_switch_reads_and_sets_through_one_table();
         the_new_rows_lock_in_their_own_forms();
         hardware_acceleration_shows_its_status();

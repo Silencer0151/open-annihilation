@@ -1767,6 +1767,49 @@ void the_controller_settings_round_trip_and_restore() {
     }
 }
 
+/// Explosion flash: Full everywhere by default, read from its three words
+/// alone, and each other level written alone and read back; Restore
+/// defaults then OK erases it.
+void explosion_flash_default_read_and_round_trip() {
+    CHECK(settings::key::explosion_flash == "open-annihilation.explosion-flash");
+    settings::Inputs own_mac = players_own_on_linux;
+    own_mac.macos = true;
+    settings::Inputs light = players_own_on_linux;
+    light.light_machine = true;
+    for (const auto& inputs : {settings::Inputs{}, players_own_on_linux, own_mac, light}) {
+        const auto defaults = settings::default_settings(inputs);
+        CHECK(defaults.explosion_flash == settings::ExplosionFlash::full);
+        CHECK(settings::read_settings({}, inputs, false) == defaults);
+    }
+    const auto flash = [](const char* text) {
+        return read_one(settings::key::explosion_flash, text).explosion_flash;
+    };
+    CHECK(flash("off") == settings::ExplosionFlash::off);
+    CHECK(flash("reduced") == settings::ExplosionFlash::reduced);
+    CHECK(flash("full") == settings::ExplosionFlash::full);
+    for (const char* text : {"", "Off", "OFF", "0", "1", "half", " off", "none"})
+        CHECK(flash(text) == settings::ExplosionFlash::full);
+
+    const auto defaults = settings::default_settings(players_own_on_linux);
+    for (const auto [level, word] :
+         {std::pair{settings::ExplosionFlash::off, "off"},
+          std::pair{settings::ExplosionFlash::reduced, "reduced"}}) {
+        auto chosen = defaults;
+        chosen.explosion_flash = level;
+        Values values;
+        settings::write_settings(values, defaults, chosen, defaults, false);
+        CHECK(values.size() == 1);
+        CHECK(values.at(std::string{settings::key::explosion_flash}) == word);
+        CHECK(settings::read_settings(values, players_own_on_linux, false) == chosen);
+        // Set back to Full by hand, the key stays, written as full.
+        settings::write_settings(values, chosen, defaults, defaults, false);
+        CHECK(values.at(std::string{settings::key::explosion_flash}) == "full");
+        settings::write_settings(values, defaults, chosen, defaults, false);
+        settings::write_settings(values, chosen, defaults, defaults, true);
+        CHECK(values.empty());
+    }
+}
+
 void menu_scaling_and_native_density_default_read_and_round_trip() {
     CHECK(settings::key::menu_scaling == "open-annihilation.menu-scaling");
     CHECK(settings::key::native_density == "open-annihilation.native-density");
@@ -1921,6 +1964,7 @@ int main() {
     the_controller_speeds_are_held_to_their_ranges_and_stops();
     the_controller_settings_round_trip_and_restore();
     menu_scaling_and_native_density_default_read_and_round_trip();
+    explosion_flash_default_read_and_round_trip();
     if (failures != 0)
         return 1;
     std::cout << "engine settings: ok\n";

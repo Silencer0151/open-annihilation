@@ -65,6 +65,9 @@ double blended_level(double under, double colour, double alpha, card::Blend blen
     case card::Blend::minimum:
         shown = std::min(under, colour);
         break;
+    case card::Blend::lighten:
+        shown = under * (1.0 + colour / channel_whole - alpha);
+        break;
     }
     return shown;
 }

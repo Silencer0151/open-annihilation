@@ -248,7 +248,7 @@ the game draws its text and how the modern fonts draw it.
 
 ![The top of the Graphics section: Maximum frame rate at 120 fps, Enhanced anti-aliasing Off, Screen size Desktop and Hardware acceleration at Full.](images/settings/graphics-1.png)
 
-![The rest of the Graphics section, scrolled: Hardware acceleration at Full with its status "Full in use: the graphics card draws the view. Smoothed at every zoom.", Vertical sync Off, Menu scaling Sharp and Native pixel density Off.](images/settings/graphics-2.png)
+![The rest of the Graphics section, scrolled to its end: Vertical sync Off, Menu scaling Sharp, Native pixel density Off and Explosion flash Full.](images/settings/graphics-2.png)
 
 - **Maximum frame rate**, 30 to 120 frames a second in steps of 5, 120 by
   default. It caps how many pictures the game draws a second; the game
@@ -316,6 +316,17 @@ the game draws its text and how the modern fonts draw it.
   memory, and a run started with `--no-hardware-acceleration` keeps it off.
   Turn it on for a sharper picture on such a display, if the frame rate
   holds. It is always on on an iPhone and an iPad.
+- **Explosion flash**, Off, Reduced or Full, Full by default. Every
+  explosion lights up the ground around it for under a second, brightest at
+  its centre and nearly white where flashes overlap, as the game always
+  drew it; when a unit is destroyed each piece that bursts flashes, so a
+  big battle can light the battlefield white. Reduced lights it at half
+  strength; Off draws no flash at all. A mod can design its explosions to
+  flash less ([ui.explosion-flash](mods/standard-hacks/ui.explosion-flash.md)),
+  and the lower of the two is drawn, so a mod can never make them flash
+  more than you chose. It changes only what your screen shows, never the
+  game, and takes effect at once, in a multiplayer game or a replay too.
+  Choose Reduced or Off if flashing light is uncomfortable for you.
 
 Some computers start with other defaults, which Restore defaults puts back
 and which a value you choose always replaces:

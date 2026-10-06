@@ -115,10 +115,17 @@ enum class Blend : uint8_t {
     /// ignored. Where the renderer cannot (Capabilities::minimum_composed),
     /// it draws as alpha.
     minimum,
+    /// What is under it times one more than the source colour less the
+    /// source alpha, each channel clamped at white: a source of no alpha
+    /// lights what is under it by its colour, up to twice as bright, as an
+    /// explosion's flash lights the battlefield. Drawn from a page: SDL's
+    /// software renderer leaves what is under an untextured draw of no
+    /// alpha as it is.
+    lighten,
 };
 
 /// The number of blend modes; a Blend value is below it.
-inline constexpr uint8_t blend_count = 7;
+inline constexpr uint8_t blend_count = 8;
 
 /// How a draw reads a page's texels where it enlarges or reduces them.
 enum class Sampling : uint8_t {

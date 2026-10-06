@@ -210,6 +210,8 @@ template <class Visitor, class Profile> void visit_bindings(Visitor& visitor, Pr
     visitor.hack("ui.effects-tweaks", profile.ui.effects_tweaks.enabled);
     visitor.parameter("ui.effects-tweaks", "endsmoke-explosion", profile.ui.effects_tweaks.endsmoke_explosion);
     visitor.parameter("ui.effects-tweaks", "explosion-smoke-puff", profile.ui.effects_tweaks.explosion_smoke_puff);
+    visitor.hack("ui.explosion-flash", profile.ui.explosion_flash.enabled);
+    visitor.parameter("ui.explosion-flash", "level", profile.ui.explosion_flash.level);
     visitor.hack("ui.interface-fixes", profile.ui.interface_fixes.enabled);
     visitor.parameter("ui.interface-fixes", "fixes", profile.ui.interface_fixes.fixes);
     visitor.hack("ui.endgame-stats", profile.ui.endgame_stats.enabled);

@@ -60,7 +60,10 @@ existing behaviour changes.
   blend mode too (source and destination factors one, the minimum
   operation) and finds whether the renderer takes it
   (`Capabilities::minimum_composed`); where it does not, as on SDL's
-  software renderer, a minimum draw blends as alpha. On SDL 3.4 and later it also
+  software renderer, a minimum draw blends as alpha. The lighten blend is
+  SDL's multiply mode on every renderer: what is under the draw times one
+  more than the source colour less the source alpha, which a source of no
+  alpha makes what is under it times one more than its colour. On SDL 3.4 and later it also
   tells the renderer to clamp texture coordinates, so that no draw makes
   the renderer read every vertex to decide, and finds whether the renderer
   takes the pixel-art sampling mode (`Capabilities::pixel_art_sampling`);

@@ -6732,6 +6732,12 @@ class Runtime final : public menu::Host,
     /// @return the setting; Sharp before the settings are read
     [[nodiscard]] render_policy::MenuScaling menu_scaling() const noexcept;
 
+    /// Returns the Explosion flash setting in effect: the player's own,
+    /// before a mod's profile holds it lower (view_rules::explosion_flash_drawn).
+    ///
+    /// @return the setting; Full before the settings are read
+    [[nodiscard]] oa::ui::engine_settings::ExplosionFlash explosion_flash() const noexcept;
+
     /// Returns the scale mode the standard tier draws a frame over the
     /// logical presentation with (render_policy::frame_filter): PIXELART
     /// where Menu scaling and the frame's scale ask for it and the

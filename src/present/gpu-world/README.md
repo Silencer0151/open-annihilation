@@ -194,6 +194,7 @@ it decides the texels:
 | --- | --- | --- |
 | `opaque` | the keyed copy: a covered pixel replaces the pixel beneath | alpha 255 |
 | `greyed` | the fog's gray: the colour's index through the gray table | the gray table's entry for each covered pixel, alpha 255; needs `set_gray_table` |
+| `lit` | an explosion's flash: the pixel under it through the light table's row the pixel names | for each covered pixel of the light ramp, row r's share of white (r / 30, held to white) in each colour and alpha 0, which the card's lighten blend multiplies what is under it by one more than; nothing elsewhere; the same in every palette |
 
 Translucency is not a mode: a translucent feature or shadow (`ANIM_TRANS`,
 `SHAD_TRANS`, the feature shadow sprites) is the opaque cell drawn with a

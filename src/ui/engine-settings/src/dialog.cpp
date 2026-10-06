@@ -48,7 +48,7 @@ constexpr std::array<Setting, 3> kCommonTweaksRows{
     Setting::path_search,
 };
 /// Graphics' rows.
-constexpr std::array<Setting, 7> kGraphicsRows{
+constexpr std::array<Setting, 8> kGraphicsRows{
     Setting::max_frame_rate,
     Setting::anti_aliasing,
     Setting::screen_size,
@@ -56,6 +56,7 @@ constexpr std::array<Setting, 7> kGraphicsRows{
     Setting::vertical_sync,
     Setting::menu_scaling,
     Setting::native_density,
+    Setting::explosion_flash,
 };
 /// Language's rows: the language first, and the text size right
 /// under the switch it needs.
@@ -357,6 +358,12 @@ constexpr std::array<std::string_view, 3> kMenuScalingCaptions{
 static_assert(
     kMenuScalingCaptions.size() == menu_scaling_choices.size(),
     "every way of Menu scaling has its caption"
+);
+/// Explosion flash's captions, in explosion_flash_choices' order.
+constexpr std::array<std::string_view, 3> kExplosionFlashCaptions{"Off", "Reduced", "Full"};
+static_assert(
+    kExplosionFlashCaptions.size() == explosion_flash_choices.size(),
+    "every level of Explosion flash has its caption"
 );
 /// One-finger drag's captions, in touch_drag_choices' order.
 constexpr std::array<std::string_view, 3> kTouchDragCaptions{"Automatic", "Box", "Scroll"};
@@ -916,6 +923,7 @@ bool is_strip(Setting setting) noexcept {
     case Setting::anti_aliasing:
     case Setting::hardware_acceleration:
     case Setting::menu_scaling:
+    case Setting::explosion_flash:
     case Setting::touch_drag:
     case Setting::touch_latches:
     case Setting::touch_control_size:
@@ -938,6 +946,8 @@ Strip strip_of(Setting setting) noexcept {
         return Strip{hardware_acceleration_levels.size(), acceleration_level_width};
     case Setting::menu_scaling:
         return Strip{menu_scaling_choices.size(), menu_scaling_level_width};
+    case Setting::explosion_flash:
+        return Strip{explosion_flash_choices.size(), explosion_flash_level_width};
     case Setting::touch_drag:
         return Strip{touch_drag_choices.size(), touch_drag_level_width};
     case Setting::touch_latches:
@@ -967,6 +977,8 @@ std::size_t strip_level(const EngineSettings& settings, Setting setting) noexcep
         return choice_place(hardware_acceleration_levels, settings.hardware_acceleration);
     case Setting::menu_scaling:
         return choice_place(menu_scaling_choices, settings.menu_scaling);
+    case Setting::explosion_flash:
+        return choice_place(explosion_flash_choices, settings.explosion_flash);
     case Setting::touch_drag:
         return choice_place(touch_drag_choices, settings.touch_drag);
     case Setting::touch_latches:
@@ -1002,6 +1014,9 @@ void set_strip_level(EngineSettings& settings, Setting setting, std::size_t leve
         break;
     case Setting::menu_scaling:
         settings.menu_scaling = menu_scaling_choices[clamped];
+        break;
+    case Setting::explosion_flash:
+        settings.explosion_flash = explosion_flash_choices[clamped];
         break;
     case Setting::touch_drag:
         settings.touch_drag = touch_drag_choices[clamped];
@@ -1040,6 +1055,8 @@ std::string_view strip_caption(Setting setting, std::size_t level) noexcept {
         return level_caption(anti_aliasing_levels[level]);
     case Setting::menu_scaling:
         return kMenuScalingCaptions[level];
+    case Setting::explosion_flash:
+        return kExplosionFlashCaptions[level];
     case Setting::touch_drag:
         return kTouchDragCaptions[level];
     case Setting::touch_latches:
@@ -1727,6 +1744,8 @@ std::string_view label_of(Setting setting) noexcept {
         return "Menu scaling";
     case Setting::native_density:
         return "Native pixel density";
+    case Setting::explosion_flash:
+        return "Explosion flash";
     case Setting::modern_fonts:
         return "Use modern fonts for game text";
     case Setting::text_outline:
@@ -1924,6 +1943,24 @@ std::string_view hint_line(
             "The display's own pixel density (Retina on a Mac).", "Applies from the next start."
         };
         break;
+    case Setting::explosion_flash:
+        // What the level chosen draws; a mod's profile may draw less.
+        switch (settings.explosion_flash) {
+        case ExplosionFlash::off:
+            lines = {"Explosions do not light up the ground,", "whatever a mod asks for."};
+            break;
+        case ExplosionFlash::reduced:
+            lines = {
+                "Explosions light up the ground at half", "strength, or less where a mod asks."
+            };
+            break;
+        case ExplosionFlash::full:
+            lines = {
+                "Explosions light up the ground as the game", "drew it, or less where a mod asks."
+            };
+            break;
+        }
+        break;
     case Setting::modern_fonts:
         lines = {"Modern fonts for in-game text,", "including internationalization."};
         break;
@@ -2116,6 +2153,7 @@ std::size_t hint_line_count(Setting setting) noexcept {
     case Setting::language:
     case Setting::menu_scaling:
     case Setting::native_density:
+    case Setting::explosion_flash:
     case Setting::touch_drag:
     case Setting::touch_latches:
     case Setting::touch_left_handed:
@@ -3042,6 +3080,9 @@ void copy_setting(EngineSettings& to, const EngineSettings& from, Setting settin
         break;
     case Setting::menu_scaling:
         to.menu_scaling = from.menu_scaling;
+        break;
+    case Setting::explosion_flash:
+        to.explosion_flash = from.explosion_flash;
         break;
     case Setting::native_density:
         to.native_density = from.native_density;

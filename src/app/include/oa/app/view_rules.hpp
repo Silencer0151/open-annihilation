@@ -3,8 +3,9 @@
 
 // A mod profile's display rules (ModProfile::ui) as the records and small
 // decisions of the modules that carry them out: the match's voices and
-// explosions, the music folder, the display modes, the build cursor's snap
-// and the victory announcement. A default-constructed UiRules gives 3.1c's
+// explosions, how strongly the explosions' flashes are drawn, the music
+// folder, the display modes, the build cursor's snap and the victory
+// announcement. A default-constructed UiRules gives 3.1c's
 // behaviour everywhere.
 #pragma once
 
@@ -31,6 +32,19 @@ namespace oa::app::view_rules {
 /// @return the match's display rules; 3.1c's for a profile without them
 [[nodiscard]] sim::match_runtime::DisplayRules
 match_display_rules(const data::mod_profile::UiRules& ui) noexcept;
+
+/// Returns how strongly explosions' flashes are drawn: the lower of the
+/// player's Explosion flash setting and the level a profile's display rules
+/// design them at (ui.explosion-flash), so that a player can always reduce
+/// the flash or turn it off whatever the mod asks, and a mod can reduce it
+/// but never draw it above the player's choice.
+///
+/// @param ui the profile's display rules; 3.1c's full flash without the hack
+/// @param player the player's Explosion flash setting
+/// @return the level drawn
+[[nodiscard]] oa::ui::engine_settings::ExplosionFlash explosion_flash_drawn(
+    const data::mod_profile::UiRules& ui, oa::ui::engine_settings::ExplosionFlash player
+) noexcept;
 
 /// Ticks after the victory banner was last drawn before the victory
 /// announcement may play again.

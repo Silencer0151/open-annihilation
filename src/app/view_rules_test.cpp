@@ -60,6 +60,54 @@ void match_display_rules_follow_the_profile() {
     );
 }
 
+/// The explosions' flashes are drawn at the lower of the player's
+/// Explosion flash setting and the level the profile designs them at
+/// (ui.explosion-flash): the player can always reduce them or turn them
+/// off, and a profile can reduce them but never draw them above the
+/// player's choice. Without the hack the player's choice is drawn, whatever
+/// its parameter holds, and the hack never reaches the match's rules.
+void explosion_flash_follows_the_lower_level() {
+    using oa::app::view_rules::explosion_flash_drawn;
+    using oa::data::mod_profile::UiExplosionFlashLevel;
+    using oa::ui::engine_settings::ExplosionFlash;
+    constexpr std::array<ExplosionFlash, 3> players{
+        ExplosionFlash::off, ExplosionFlash::reduced, ExplosionFlash::full
+    };
+    const UiRules base{};
+    for (const ExplosionFlash player : players)
+        OA_CHECK(explosion_flash_drawn(base, player) == player);
+    UiRules unset = base;
+    unset.explosion_flash.level = UiExplosionFlashLevel::off;
+    for (const ExplosionFlash player : players)
+        OA_CHECK(explosion_flash_drawn(unset, player) == player);
+
+    // Each level of the profile against each of the player's: the lower.
+    struct Case {
+        UiExplosionFlashLevel designed{};
+        ExplosionFlash player{};
+        ExplosionFlash drawn{};
+    };
+
+    constexpr std::array<Case, 9> cases{{
+        {UiExplosionFlashLevel::full, ExplosionFlash::full, ExplosionFlash::full},
+        {UiExplosionFlashLevel::full, ExplosionFlash::reduced, ExplosionFlash::reduced},
+        {UiExplosionFlashLevel::full, ExplosionFlash::off, ExplosionFlash::off},
+        {UiExplosionFlashLevel::reduced, ExplosionFlash::full, ExplosionFlash::reduced},
+        {UiExplosionFlashLevel::reduced, ExplosionFlash::reduced, ExplosionFlash::reduced},
+        {UiExplosionFlashLevel::reduced, ExplosionFlash::off, ExplosionFlash::off},
+        {UiExplosionFlashLevel::off, ExplosionFlash::full, ExplosionFlash::off},
+        {UiExplosionFlashLevel::off, ExplosionFlash::reduced, ExplosionFlash::off},
+        {UiExplosionFlashLevel::off, ExplosionFlash::off, ExplosionFlash::off},
+    }};
+    for (const Case& entry : cases) {
+        UiRules designed = base;
+        designed.explosion_flash.enabled = true;
+        designed.explosion_flash.level = entry.designed;
+        OA_CHECK(explosion_flash_drawn(designed, entry.player) == entry.drawn);
+        OA_CHECK(match_display_rules(designed) == match_display_rules(base));
+    }
+}
+
 void victory_announcement_gate() {
     using oa::app::view_rules::victory_announcement_due;
     uint32_t last = 0;
@@ -574,6 +622,7 @@ void profile_texts_follow_the_profile() {
 
 int main() {
     match_display_rules_follow_the_profile();
+    explosion_flash_follows_the_lower_level();
     victory_announcement_gate();
     music_source_follows_the_profile();
     display_modes_follow_the_profile();

@@ -116,6 +116,17 @@ constexpr int counted_hud_frames = 3;
 constexpr std::size_t fight_units_per_side = 10;
 constexpr int fight_ticks = 150;
 
+/// The bounds the Full tier's explosion flashes are held to against the
+/// processor's, over the pixels where a flash alone is the card's own: the
+/// card lights each pixel by the light table's share, one more than row/30
+/// times the colour under it, held to twice it, where the processor takes
+/// the palette entry nearest that light (and lights row 31 a thirtieth
+/// further). The bounds hold the share with room: the fight's flashes
+/// measured a mean of under half a level and at most 59 levels, where the
+/// palette has no colour near the light.
+constexpr double most_flash_mean_difference = 2.0;
+constexpr int most_flash_difference = 80;
+
 /// Most a channel of a frame a graphics card scaled may differ from the
 /// reference: a card weighs a texel's neighbours at a precision of its own,
 /// as coarse as 64ths of a texel, which moves a level by up to 4 at full
@@ -586,7 +597,11 @@ std::string zoom_text(float zoom) {
 }
 
 /// What the card draws its own way, marked on a frame of the fight: the
-/// sprites the alpha table blends, every sprite at a zoom that is not a
+/// sprites the alpha table blends, the explosions' flashes, which the card
+/// lights by the light table's share where the processor snaps the light
+/// to the palette (held within most_flash_difference and
+/// most_flash_mean_difference of it),
+/// every sprite at a zoom that is not a
 /// whole number, every sprite that reaches a fog tile that is not wholly
 /// clear, which the fog's masks cut where the card draws the sprite whole,
 /// greyed or not at all by its cell; the lines, grown by their width; the
@@ -609,6 +624,7 @@ std::string zoom_text(float zoom) {
 /// @param zoom the frame's zoom
 /// @param width the frame's columns
 /// @param height the frame's rows
+/// @param flashes the explosions' flashes are marked too
 /// @return one byte a pixel of the frame, set where the card's own draws lie
 std::vector<uint8_t> card_draw_mask(
     const WorldDrawList& list,
@@ -617,7 +633,8 @@ std::vector<uint8_t> card_draw_mask(
     const Area& field,
     float zoom,
     uint32_t width,
-    uint32_t height
+    uint32_t height,
+    bool flashes = true
 ) {
     std::vector<uint8_t> mask(std::size_t{width} * height, 0);
     for (const FullWorldQuad& quad : quads)
@@ -675,9 +692,10 @@ std::vector<uint8_t> card_draw_mask(
     for (const auto& draw : list.draws) {
         switch (draw.kind) {
         case WorldDrawKind::sprite:
-        case WorldDrawKind::blended_sprite: {
+        case WorldDrawKind::blended_sprite:
+        case WorldDrawKind::lit_sprite: {
             const auto& sprite = list.sprites[draw.index];
-            if (sprite.frame == nullptr)
+            if (sprite.frame == nullptr || (draw.kind == WorldDrawKind::lit_sprite && !flashes))
                 break;
             const int left = field.x + sprite.screen.x - scaled(sprite.frame->origin_x);
             const int top = field.y + sprite.screen.y - scaled(sprite.frame->origin_y);
@@ -1911,6 +1929,25 @@ void Runtime::check_full_render_tier(
             read.height
         );
     };
+    // Where an explosion's flash alone is the card's own on a frame: the
+    // flashes' marks less every other draw's.
+    const auto flash_mask = [&](float zoom, const renderer::Surface& read) {
+        auto marked = card_mask(zoom, read);
+        const auto others = card_draw_mask(
+            match_models().draws,
+            full_->fog.grid,
+            full_->world_quads,
+            battlefield(),
+            zoom,
+            read.width,
+            read.height,
+            false
+        );
+        for (std::size_t pixel = 0; pixel < marked.size(); ++pixel)
+            if (others[pixel] != 0)
+                marked[pixel] = 0;
+        return marked;
+    };
     // The picture of where two frames differ beside a mask: the first
     // dimmed, the mask in blue, each differing pixel beside it white.
     const auto differing_picture = [&](const renderer::Surface& read,
@@ -1972,6 +2009,21 @@ void Runtime::check_full_render_tier(
                   << stage.greyed << " greyed, " << stage.refused << " refused), " << stage.squares
                   << " squares, " << stage.lines << " lines; " << full_cost << '\n';
         write_png(picture("zoom-" + zoom_text(zoom)), read);
+        // The fight's explosion flashes, which the card lights close to the
+        // processor's light table, within their bounds.
+        const auto flashes =
+            compare_masked(read, expected, battlefield(), cursor(), flash_mask(zoom, read));
+        std::cout << "render tiers check: full tier zoom " << zoom_text(zoom) << ": " << stage.lit
+                  << " explosion flashes; " << flashes.under.pixels << " pixels theirs alone: most "
+                  << flashes.under.most << ", mean " << flashes.under.mean << '\n';
+        if (zoom == 1.0F && (stage.lit == 0 || flashes.under.pixels == 0))
+            fail("the fight drew no explosion flash of its own at zoom 1");
+        if (flashes.under.most > most_flash_difference ||
+            flashes.under.mean > most_flash_mean_difference)
+            fail(
+                "the explosion flashes at zoom " + zoom_text(zoom) +
+                " differ from the standard tier's beyond their bounds"
+            );
         if (difference.beside.pixels < least_compared_pixels || difference.beside.most != 0 ||
             whole.most > std::max(most_hud_difference, difference.under.most)) {
             write_png(picture("zoom-" + zoom_text(zoom) + "-standard"), expected);
@@ -3109,6 +3161,7 @@ bool model_kind(WorldDrawKind kind) noexcept {
     case WorldDrawKind::pixel_square:
     case WorldDrawKind::sprite:
     case WorldDrawKind::blended_sprite:
+    case WorldDrawKind::lit_sprite:
     case WorldDrawKind::line:
     case WorldDrawKind::selection_line:
         return false;
@@ -3574,7 +3627,8 @@ void Runtime::check_full_overlays(
         for (const auto& draw : list.draws) {
             switch (draw.kind) {
             case WorldDrawKind::sprite:
-            case WorldDrawKind::blended_sprite: {
+            case WorldDrawKind::blended_sprite:
+            case WorldDrawKind::lit_sprite: {
                 const auto& sprite = list.sprites[draw.index];
                 if (sprite.frame == nullptr)
                     break;
@@ -3582,7 +3636,9 @@ void Runtime::check_full_overlays(
                 const int top = field.y + sprite.screen.y - scaled(sprite.frame->origin_y);
                 const int w = std::max(1, scaled(sprite.frame->width));
                 const int h = std::max(1, scaled(sprite.frame->height));
-                const bool blended = draw.kind == WorldDrawKind::blended_sprite;
+                // A flash lights what is under it, which the processor's
+                // fog then greys, as a blended sprite blends it.
+                const bool blended = draw.kind != WorldDrawKind::sprite;
                 if (states_under(
                         left - sprite_mask_margin,
                         top - sprite_mask_margin,

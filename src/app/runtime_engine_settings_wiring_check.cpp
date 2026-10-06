@@ -277,11 +277,14 @@ void Runtime::check_engine_settings_wiring() {
         const int32_t row_control =
             settings::first_row_control + static_cast<int32_t>(row - graphics.begin());
         // Clicks the middle of the dialog's part that shows a control, with
-        // a text where it is given, and does what the click asks.
+        // a text where it is given, and does what the click asks, the
+        // section a page down from its top, where Hardware acceleration's
+        // row shows whole.
         const auto click = [&](int32_t control, std::string_view text) {
             auto* dialog = engine_settings_dialog();
             require(dialog != nullptr, "the dialog is not open");
-            std::ignore = settings::dialog_key(*dialog, settings::DialogKey::end);
+            std::ignore = settings::dialog_key(*dialog, settings::DialogKey::home);
+            std::ignore = settings::dialog_key(*dialog, settings::DialogKey::page_down);
             const auto parts = settings::dialog_layout(*dialog);
             const auto part = std::find_if(parts.begin(), parts.end(), [&](const auto& shown) {
                 return shown.control == control && (text.empty() || shown.text == text);

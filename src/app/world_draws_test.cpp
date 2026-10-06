@@ -11,7 +11,10 @@
 // own pixels, as the game always draws them. A feature's shadow frame,
 // drawn or blended, mixes from the ground toward the game's shadow by the
 // frame's shadow level and is not drawn at level 0; a frame's shadows are
-// set from its zoom (set_frame_shadows). A file drawn a frame at a time is
+// set from its zoom (set_frame_shadows). An explosion's flash lights the
+// palette entry under each of its pixels through the light table's row the
+// pixel names, a second flash lighting what the first lit, at half the row
+// when reduced, the same on 1 to 8 bands. A file drawn a frame at a time is
 // one over the decoded threshold; its frames render from the file's bytes as
 // decoded, through a cache that keeps them within its budget, the frame
 // drawn longest ago going first, draws a frame larger than its budget
@@ -20,6 +23,8 @@
 
 #include "oa/platform/job_pool.hpp"
 #include "oa/present/model/model_library.hpp"
+#include "oa/present/palette_tables.hpp"
+#include "oa/present/rle.hpp"
 #include "oa/present/surface.hpp"
 #include "oa/test/check.hpp"
 
@@ -330,6 +335,197 @@ void test_feature_shadows() {
     }
 }
 
+/// A light table whose every row maps each palette entry to another, a
+/// different one for each row.
+///
+/// @return the table, oa::present::light_table_size bytes
+std::vector<uint8_t> test_light_table() {
+    std::vector<uint8_t> table(static_cast<std::size_t>(oa::present::light_table_size));
+    for (std::size_t row = 0; row < static_cast<std::size_t>(oa::present::ramp_table_rows); ++row)
+        for (std::size_t index = 0; index < 256U; ++index)
+            table[row * 256U + index] = static_cast<uint8_t>(index * 5U + row * 3U + 1U);
+    return table;
+}
+
+/// The light table's row a flash pixel names.
+///
+/// @param row the row
+/// @return the pixel's value
+constexpr uint8_t flash_value(uint32_t row) noexcept {
+    return static_cast<uint8_t>(oa::present::shade_ramp_base + static_cast<int32_t>(row));
+}
+
+/// A flash frame of flash_side pixels a side, its origin at its centre:
+/// each pixel names row (column + row * flash_side) % 32 of the light
+/// table, but for its first row, which holds the transparent index, a value
+/// below the light ramp and one above it.
+constexpr int32_t flash_side = 24;
+
+/// Returns the test's flash frame.
+///
+/// @return the frame, each pixel covered
+oa::formats::gaf::RenderedFrame flash_frame() {
+    oa::formats::gaf::RenderedFrame frame;
+    frame.width = flash_side;
+    frame.height = flash_side;
+    frame.origin_x = flash_side / 2;
+    frame.origin_y = flash_side / 2;
+    frame.transparency_index = 0xff;
+    frame.pixels.resize(static_cast<std::size_t>(flash_side) * flash_side);
+    frame.coverage.assign(frame.pixels.size(), 1);
+    for (int32_t y = 0; y < flash_side; ++y)
+        for (int32_t x = 0; x < flash_side; ++x)
+            frame.pixels[static_cast<std::size_t>(y * flash_side + x)] =
+                flash_value(static_cast<uint32_t>(x + y * flash_side) % 32U);
+    for (int32_t x = 0; x < flash_side; ++x)
+        frame.pixels[static_cast<std::size_t>(x)] =
+            x % 3 == 0 ? frame.transparency_index
+                       : (x % 3 == 1 ? static_cast<uint8_t>(oa::present::shade_ramp_base - 1)
+                                     : flash_value(32));
+    return frame;
+}
+
+/// Draws explosion flashes, each the test's flash frame with its origin at
+/// a point, into a frame of the ground in bands, each band on a drawing
+/// thread of its own.
+///
+/// @param palette the palette
+/// @param light the light table; null for none
+/// @param at the flashes' points, drawn in order
+/// @param strength the list's flash strength
+/// @param bands the bands wanted
+/// @return the frame's RGB pixels
+std::vector<uint8_t> draw_flashes(
+    const oa::PaletteBytes& palette,
+    const uint8_t* light,
+    const std::vector<oa::present::world_renderer::ScreenPoint>& at,
+    oa::app::FlashStrength strength,
+    int32_t bands
+) {
+    auto rgb = ground_frame(palette);
+    model_render::ModelDisplay display;
+    model_render::build_model_display(display, oa::present::palette_from_bytes(palette));
+    model_render::RgbBridge bridge;
+    const model_render::RgbFrame frame{rgb.data(), frame_width, frame_height, frame_width * 3};
+    model_render::bridge_begin(
+        bridge, frame, {0, 0, frame_width - 1, frame_height - 1}, 1.0F, display.palette
+    );
+    const auto flash = flash_frame();
+    oa::app::WorldDrawList list;
+    list.flash_strength = strength;
+    for (const auto& point : at) {
+        list.sprites.push_back({&flash, point});
+        oa::app::add_world_draw(list, WorldDrawKind::lit_sprite, list.sprites.size() - 1);
+    }
+    oa::app::WorldFrameDraw draw;
+    draw.target = {
+        rgb.data(), frame_width, frame_height, 0, 0, frame_width, frame_height, 0, frame_height
+    };
+    draw.palette = &palette;
+    draw.bridge = &bridge;
+    draw.display = &display;
+    draw.light_table = light;
+    std::vector<model_render::BridgeBand> split;
+    const int32_t made = model_render::bridge_split(bridge, bands, split);
+    OA_CHECK(made == bands);
+    for (int32_t band = 1; band < made; ++band)
+        model_render::bridge_band_colours(bridge, split[static_cast<std::size_t>(band)]);
+    std::vector<model_render::ModelRenderer> renderers(static_cast<std::size_t>(made));
+    std::vector<model_render::SupersampleScratch> supersample(static_cast<std::size_t>(made));
+    std::vector<std::vector<oa::formats::objects3d::FixedVector3>> points(
+        static_cast<std::size_t>(made)
+    );
+    std::array<bool, most_bands> failed{};
+    const auto pool = std::make_unique<job_pool::Pool>(static_cast<uint32_t>(made));
+    job_pool::run_bands(
+        made > 1 ? pool.get() : nullptr, static_cast<uint32_t>(made), [&](uint32_t band) noexcept {
+            try {
+                oa::app::draw_world_band(
+                    list, draw, split[band], renderers[band], supersample[band], points[band]
+                );
+            } catch (...) {
+                failed[band] = true;
+            }
+        }
+    );
+    for (auto& band : split)
+        model_render::bridge_join_band(bridge, band);
+    for (const bool band_failed : failed)
+        OA_CHECK(!band_failed);
+    return rgb;
+}
+
+/// Explosion flashes light what is under them as 3.1c draws them: each
+/// covered pixel of the light ramp makes the palette entry under it the
+/// light table's entry in the row the pixel names; the transparent index,
+/// values outside the table's rows and every pixel outside the frame leave
+/// the ground; a second flash over the first lights what the first lit; at
+/// the reduced strength each row is halved, rounded down; without a light
+/// table nothing is drawn; and the frame is the same drawn on 1 to 8
+/// bands, a flash across the bands' edges among them.
+void test_explosion_flashes() {
+    const auto palette = test_palette();
+    const auto light = test_light_table();
+    const auto ground = entry_colour(palette, ground_index);
+    const oa::present::world_renderer::ScreenPoint centre{40, 30};
+    const auto flash = flash_frame();
+    const int32_t left = centre.x - flash.origin_x;
+    const int32_t top = centre.y - flash.origin_y;
+    // The entry a pixel of the flash leaves under it, from the entry under it.
+    const auto lit = [&](int32_t x, int32_t y, uint8_t under, uint32_t shift) -> int32_t {
+        const uint8_t value =
+            flash.pixels[static_cast<std::size_t>((y - top) * flash_side + (x - left))];
+        if (value == flash.transparency_index || value < oa::present::shade_ramp_base)
+            return -1;
+        const auto row = static_cast<uint32_t>(value - oa::present::shade_ramp_base);
+        if (row >= static_cast<uint32_t>(oa::present::ramp_table_rows))
+            return -1;
+        return light[(row >> shift) * 256U + under];
+    };
+    for (const auto strength : {oa::app::FlashStrength::full, oa::app::FlashStrength::reduced}) {
+        const uint32_t shift = strength == oa::app::FlashStrength::reduced ? 1U : 0U;
+        const auto once = draw_flashes(palette, light.data(), {centre}, strength, 1);
+        const auto twice = draw_flashes(palette, light.data(), {centre, centre}, strength, 1);
+        bool exact = true;
+        for (int32_t y = 0; y < frame_height; ++y)
+            for (int32_t x = 0; x < frame_width; ++x) {
+                const bool inside =
+                    x >= left && x < left + flash_side && y >= top && y < top + flash_side;
+                const int32_t first = inside ? lit(x, y, ground_index, shift) : -1;
+                const auto expected_once =
+                    first < 0 ? ground : entry_colour(palette, static_cast<uint8_t>(first));
+                const int32_t second =
+                    first < 0 ? -1 : lit(x, y, static_cast<uint8_t>(first), shift);
+                const auto expected_twice =
+                    second < 0 ? expected_once
+                               : entry_colour(palette, static_cast<uint8_t>(second));
+                exact = exact && pixel_at(once, x, y) == expected_once &&
+                        pixel_at(twice, x, y) == expected_twice;
+            }
+        OA_CHECK(exact);
+        // Light row 31 at the full strength, 15 at the reduced.
+        const int32_t brightest_x = left + 31 % flash_side;
+        const int32_t brightest_y = top + 31 / flash_side;
+        OA_CHECK(
+            pixel_at(once, brightest_x, brightest_y) ==
+            entry_colour(palette, light[(31U >> shift) * 256U + ground_index])
+        );
+        // A flash across the bands' edges, drawn on every count of bands.
+        const std::vector<oa::present::world_renderer::ScreenPoint> across{
+            centre,
+            {70, model_render::bridge_tile_side * 2},
+            {12, model_render::bridge_tile_side * 5}
+        };
+        const auto whole = draw_flashes(palette, light.data(), across, strength, 1);
+        for (int32_t bands = 2; bands <= most_bands; ++bands)
+            OA_CHECK(draw_flashes(palette, light.data(), across, strength, bands) == whole);
+    }
+    OA_CHECK(
+        draw_flashes(palette, nullptr, {centre}, oa::app::FlashStrength::full, 1) ==
+        ground_frame(palette)
+    );
+}
+
 /// A frame's shadows set from its zoom: the game's own at zoom 1 and
 /// closer, through the faded table between, and none from a quarter out,
 /// where the renderer's shadow option is cleared for the frame alone.
@@ -591,6 +787,7 @@ int main() {
     test_thin_lines_in_bands();
     test_feature_shadows();
     test_frame_shadows();
+    test_explosion_flashes();
     test_frame_by_frame_threshold();
     test_frame_cache_empty();
     test_frame_cache_over_budget();

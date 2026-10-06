@@ -2601,6 +2601,7 @@ void Emitter::emit(const WorldDraw& entry) {
     case WorldDrawKind::pixel_square:
     case WorldDrawKind::sprite:
     case WorldDrawKind::blended_sprite:
+    case WorldDrawKind::lit_sprite:
     case WorldDrawKind::line:
     case WorldDrawKind::selection_line:
         break;

@@ -64,6 +64,11 @@
 	zh-Hans=完整;
 	}
 
+[Reduced]
+	{
+	zh-Hans=减弱;
+	}
+
 [Sharp]
 	{
 	zh-Hans=锐利;
@@ -629,6 +634,11 @@
 	zh-Hans=原生像素密度;
 	}
 
+[Explosion flash]
+	{
+	zh-Hans=爆炸闪光;
+	}
+
 [Use modern fonts for game text]
 	{
 	zh-Hans=游戏文字使用现代字体;
@@ -942,6 +952,36 @@
 [as the game always drew them.]
 	{
 	zh-Hans=与游戏一贯的绘制方式相同。;
+	}
+
+[Explosions do not light up the ground,]
+	{
+	zh-Hans=爆炸不会照亮地面，;
+	}
+
+[whatever a mod asks for.]
+	{
+	zh-Hans=无论模组如何要求。;
+	}
+
+[Explosions light up the ground at half]
+	{
+	zh-Hans=爆炸以一半的强度照亮地面，;
+	}
+
+[strength, or less where a mod asks.]
+	{
+	zh-Hans=模组要求时则更弱。;
+	}
+
+[Explosions light up the ground as the game]
+	{
+	zh-Hans=爆炸照亮地面，与游戏原本的绘制相同，;
+	}
+
+[drew it, or less where a mod asks.]
+	{
+	zh-Hans=模组要求时则更弱。;
 	}
 
 [The display's own pixel density (Retina on a Mac).]
@@ -3672,6 +3712,11 @@
 [Effects Tweaks]
 	{
 	zh-Hans=特效调整;
+	}
+
+[Explosion Flash]
+	{
+	zh-Hans=爆炸闪光;
 	}
 
 [Interface Fixes]

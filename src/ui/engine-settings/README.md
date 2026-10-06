@@ -36,6 +36,7 @@ the locks a running game puts on them (`settings_locks`).
 | | Vertical sync | Off, On | Off | `open-annihilation.vertical-sync` |
 | | Menu scaling | Sharp, Whole steps, Unfiltered | Sharp | `open-annihilation.menu-scaling` (`sharp`, `whole-steps` or `unfiltered`) |
 | | Native pixel density, from the next start | Off, On; always On where the platform opens every window at native density | Off | `open-annihilation.native-density` |
+| | Explosion flash; a mod's profile may draw the flashes lower still (`ui.explosion-flash`), and the lower of the two is drawn | Off, Reduced, Full | Full | `open-annihilation.explosion-flash` (`off`, `reduced` or `full`) |
 | Touch, listed only while the game has touch controls | One-finger drag | Automatic (a selection box on a tablet, scrolling on a phone), Box, Scroll | Automatic | `open-annihilation.touch-drag` (`automatic`, `box` or `scroll`) |
 | | Hold delay | 250 to 700 ms, steps of 50; a stored delay is held to the range and put on its nearest step | 350 ms | `open-annihilation.touch-hold-delay` |
 | | QUEUE and ADD | Stay on, One action | Stay on | `open-annihilation.touch-latches` (`stay-on` or `one-action`) |
@@ -356,7 +357,7 @@ and the footer never move. A section whose rows, with 8 clear pixels under
 the last row's line, are taller than the view scrolls by whole source
 pixels, and shows a scroll bar in the margin right of its rows: a well like
 a switch's, its thumb as tall as the view's share of the section and never
-under 16 pixels. Graphics, with seven rows, is taller than its view by 198
+under 16 pixels. Graphics, with eight rows, is taller than its view by 257
 pixels, Language, with the Language drop-down, four switches and the
 Text size slider, by 129, and Touch, with its three strips, the Hold delay
 slider and two switches, by 121; Controls and Common Tweaks fit, Common
@@ -757,7 +758,7 @@ Escape, Left, Right, Tab and Shift+Tab on it, the rest of the dialog taking
 nothing meanwhile, the locks during a game and by the command line with
 their notes, inert rows and disabled button, and OPEN MODS FOLDER asking
 for the Mods folder;
-the Graphics section's seven rows, their places at every offset
+the Graphics section's eight rows, their places at every offset
 and under every lock, the focus scrolling them into view, both forms of a
 locked row, every status of Hardware acceleration, Full's included, and
 the requests to try the graphics card afresh; on sections of the test's own taller than the

@@ -199,7 +199,14 @@ logs it.
   battlefield drawn in horizontal bands. `render_match_surface` first works
   out the frame's draws in their order (`WorldDrawList` in `MatchModels`):
   the effect layers' particles, the features and units far to near, the
-  projectiles, debris, explosions and smoke. Everything drawing builds or
+  projectiles, debris, explosions and smoke. Each explosion's flash, before
+  its sprite and under the units off the ground, the smoke and the fog,
+  lights the palette entry under each of its pixels through the light
+  table's row the pixel names (`blit_world_lit_hotspot`), culled on its
+  centre alone and with no sight test, as strongly as the Explosion flash
+  setting asks, held to a mod's lower level
+  (`view_rules::explosion_flash_drawn`, ui.explosion-flash); at Off none is
+  listed, and the frame is drawn as without flashes. Everything drawing builds or
   changes on the way is done then, once, on the drawing thread: the piece
   transforms and the presented copies, the units' and features' cached
   images and silhouettes and those of the units they carry
@@ -380,7 +387,9 @@ logs it.
   level to `basic` and its Full cases (`check_full_render_tier`) run after
   them at `full`: at zoom 1, 2 and 4 the frame equals the standard tier's
   draw of the same moment beside the card's own draws (`card_draw_mask`:
-  the sprites the alpha table blends, the sprites that reach a fog tile
+  the sprites the alpha table blends, the explosions' flashes, held within
+  their own bounds of the standard tier's light where they alone are the
+  card's, the sprites that reach a fog tile
   not wholly clear, the lines, the units, projectiles, debris and
   fragments with their shadows, and the fog tiles whose edges ramp), with
   the draws under the first differing pixel listed and a picture of them
@@ -498,8 +507,11 @@ logs it.
   at its share (`pass_alpha`). The model stage's shadows, then the list's
   draws in painter's order, each to the stage of its kind (`sprite_kind`,
   `model_kind`), a stage's batches never joining another's: the sprites,
-  blended sprites, particle squares, lines and selection lines
-  (`SpriteFrame`, `runtime_full_sprites.cpp`), each sprite a quad from its
+  blended sprites, explosions' flashes, particle squares, lines and
+  selection lines (`SpriteFrame`, `runtime_full_sprites.cpp`), each flash a
+  quad from its lit cell (`DrawMode::lit`) drawn by the lighten blend, which
+  makes what is under it one more than row/30 as bright, at half that
+  Reduced, each sprite a quad from its
   cell on the sprite pages (`src/present/gpu-world`, keyed by the frame
   the planner drew from) drawn by premultiplied alpha, at a vertex alpha
   of one half where the planner blends it through the alpha table, so the

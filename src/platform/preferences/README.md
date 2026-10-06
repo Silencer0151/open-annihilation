@@ -141,6 +141,7 @@ of range is clamped. A switch is On for any number above 0: a word such as
 | `open-annihilation.vertical-sync` | 0 or 1 | 0 |
 | `open-annihilation.menu-scaling` | `sharp`, `whole-steps` or `unfiltered` | `sharp` |
 | `open-annihilation.native-density` | 0 or 1 | 0; 1 where the platform opens every window at native density |
+| `open-annihilation.explosion-flash` | `off`, `reduced` or `full` | `full` |
 | `open-annihilation.modern-fonts` | 0 or 1 | 1 with the player's own file, else 0 |
 | `open-annihilation.text-outline` | 0 or 1 | 1 |
 | `open-annihilation.text-shadow` | 0 or 1 | 1 |

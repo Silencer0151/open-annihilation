@@ -737,7 +737,10 @@ if(BUILD_TESTING)
   # the same on 1 to 8 bands and drawing threads; 1 pixel thick, the line's
   # own pixels. A feature's shadow frame mixed toward the game's shadow by
   # the frame's shadow level and left out at 0, and a frame's shadows set
-  # from its zoom. A file over the decoded threshold drawn a frame at a
+  # from its zoom. An explosion's flash lighting the entry under each pixel
+  # through the light table's row the pixel names, flashes compounding, at
+  # half the row when reduced and on 1 to 8 bands alike. A file over the
+  # decoded threshold drawn a frame at a
   # time, its frames rendered from its bytes through the frame cache: its
   # budget, the frame drawn longest ago going first, a frame over the
   # budget drawn without being kept, and a failed frame not read again.
@@ -1480,11 +1483,12 @@ if(OA_BUILD_PLATFORM)
       # world depends on the chunks drawn before it, and the render reaches
       # the world the generator's undrawn replay reaches. The frames and the
       # sound are pinned; at 60 frames a second every other frame lies half
-      # way between two ticks, and is drawn so, and frames zoomed out draw
-      # their shadows lighter.
+      # way between two ticks, and is drawn so, frames zoomed out draw
+      # their shadows lighter, and explosions flash as Explosion flash's
+      # default, Full, draws them.
       set(oa_director_render_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/director-render")
       set(oa_director_render_hashes
-        "director render: frames d6b99763468b5caa0dffecb299e520b984592be1b9fda2993a1587d8e8ec349f sound 98718c0ce9d785c0a09f409493bd394e92371b25a8a79bd3d72b6d5bab2234f3")
+        "director render: frames 1bbd37d626edd02ccd54151049ec77a9501bb9ea923ca57a5ebfad70db7636d1 sound 98718c0ce9d785c0a09f409493bd394e92371b25a8a79bd3d72b6d5bab2234f3")
       file(MAKE_DIRECTORY "${oa_director_render_dir}")
       add_test(NAME native-director-render COMMAND oa-game --game-dir "${OA_GAME_DIR}"
         --mute --check-director-render

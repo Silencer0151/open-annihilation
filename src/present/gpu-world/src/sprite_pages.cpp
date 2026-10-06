@@ -4,6 +4,7 @@
 #include "oa/present/gpu_world/sprite_pages.hpp"
 
 #include "oa/present/palette_tables.hpp"
+#include "oa/present/rle.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -12,6 +13,9 @@
 
 namespace oa::present::gpu_world {
 namespace {
+
+/// A colour channel's whole brightness.
+constexpr size_t white_level = 255;
 
 /// Brings a page side inside min_page_size..max_page_size and rounds it up
 /// to a power of two.
@@ -120,6 +124,23 @@ void SpritePages::rebuild_colours() noexcept {
             gamma_channel(gray.b, gamma_),
             opaque_alpha
         };
+        // A light row's share of white, rounded to the nearest level.
+        Texel light{};
+        if (index >= static_cast<size_t>(shade_ramp_base) &&
+            index - static_cast<size_t>(shade_ramp_base) < static_cast<size_t>(ramp_table_rows)) {
+            const size_t row = index - static_cast<size_t>(shade_ramp_base);
+            const size_t level = std::min<size_t>(
+                white_level,
+                (row * white_level + light_rows_per_doubling / 2) / light_rows_per_doubling
+            );
+            light = {
+                static_cast<uint8_t>(level),
+                static_cast<uint8_t>(level),
+                static_cast<uint8_t>(level),
+                0
+            };
+        }
+        colours_[mode_index(DrawMode::lit)][index] = light;
     }
 }
 

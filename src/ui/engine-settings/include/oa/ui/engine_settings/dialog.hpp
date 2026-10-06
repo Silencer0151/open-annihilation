@@ -199,6 +199,8 @@ enum class Setting : uint8_t {
     /// Menu scaling: a strip of Sharp, Whole steps and Unfiltered
     menu_scaling,
     native_density, ///< Native pixel density: a switch
+    /// Explosion flash: a strip of Off, Reduced and Full
+    explosion_flash,
 };
 
 /// Returns the settings a section shows, top to bottom.

@@ -25,6 +25,7 @@
 #include "oa/present/model/rgb_bridge.hpp"
 #include "oa/present/model/shadow_fade.hpp"
 #include "oa/present/model/unit_supersampling.hpp"
+#include "oa/present/palette_tables.hpp"
 #include "oa/present/world_renderer.hpp"
 #include "oa/sim/effect_particles.hpp"
 #include "oa/sim/model_runtime/instance.hpp"
@@ -155,6 +156,50 @@ void blit_world_blended_hotspot(
     uint32_t shadow_level = oa::present::model::shadow_full_level
 );
 
+/// How strongly a frame's explosion flashes light what is under them.
+enum class FlashStrength : uint8_t {
+    /// Each pixel lights through the light table's row its value names, as
+    /// 3.1c draws it: about twice as bright at the centre.
+    full,
+    /// Through half that row, rounded down: about one and a half times as
+    /// bright at the centre.
+    reduced,
+};
+
+/// Lights the pixels under a rendered explosion flash frame through the
+/// light table, its origin at a screen point.
+///
+/// Each covered pixel of the frame but its transparent index names a row of
+/// the table: its value less oa::present::shade_ramp_base, halved at
+/// FlashStrength::reduced. The pixel under it, its palette index read back
+/// from the frame through the model bridge's colour lookup, becomes
+/// table[row * 256 + under], so a flash drawn over another lights what that
+/// one lit. A value whose row lies outside the table's
+/// oa::present::ramp_table_rows draws nothing.
+///
+/// @param target the frame and what may be written
+/// @param frame rendered flash frame
+/// @param screen frame point the frame's origin lands on
+/// @param scale size factor; 0 or less draws at 1
+/// @param light_table oa::present::ramp_table_rows rows of 256 palette
+///     indices; null draws nothing
+/// @param display the models' display: its palette
+/// @param[in,out] bridge the frame's model bridge, whose colour lookup remembers nearest entries
+/// @param[in,out] band the band being drawn, whose own colour memory is used
+///     when it has one; null for the bridge's
+/// @param strength how strongly the flash lights
+void blit_world_lit_hotspot(
+    const WorldTarget& target,
+    const oa::formats::gaf::RenderedFrame& frame,
+    const oa::present::world_renderer::ScreenPoint& screen,
+    float scale,
+    const uint8_t* light_table,
+    const oa::present::model::ModelDisplay& display,
+    oa::present::model::RgbBridge& bridge,
+    oa::present::model::BridgeBand* band,
+    FlashStrength strength
+);
+
 /// What one draw of the battlefield is; WorldDraw::index names it in the
 /// list of its kind.
 enum class WorldDrawKind : uint8_t {
@@ -163,6 +208,9 @@ enum class WorldDrawKind : uint8_t {
     pixel_square,   ///< a square of one colour (WorldDrawList::squares)
     sprite,         ///< a GAF frame in the palette's colours (WorldDrawList::sprites)
     blended_sprite, ///< a GAF frame blended through the alpha table (sprites)
+    /// An explosion's flash, lighting what is under it through the light
+    /// table (sprites; blit_world_lit_hotspot).
+    lit_sprite,
     line,           ///< a line of one colour (WorldDrawList::lines)
     selection_line, ///< a selection box's line through the bridge (selection_lines)
     model,          ///< a unit or a 3D feature (WorldDrawList::models)
@@ -260,6 +308,9 @@ struct WorldDrawList {
     /// oa::present::model::shadow_full_level, as the game draws them; at 0
     /// the list holds no shadow (set_frame_shadows).
     uint32_t shadow_level{oa::present::model::shadow_full_level};
+    /// How strongly the frame's flashes (WorldDrawKind::lit_sprite) light
+    /// what is under them. Like the shadow level, clear_world_draws leaves it.
+    FlashStrength flash_strength{FlashStrength::full};
     std::vector<WorldDraw> draws; ///< in the order they draw
     std::vector<SquareDraw> squares;
     std::vector<SpriteDraw> sprites;
@@ -283,7 +334,7 @@ struct WorldDrawList {
 
 /// Empties a draw list for the next frame, keeping its buffers.
 ///
-/// The shadow level is left as it is.
+/// The shadow level and the flash strength are left as they are.
 ///
 /// @param[in,out] list the list
 void clear_world_draws(WorldDrawList& list);
@@ -471,6 +522,9 @@ struct WorldFrameDraw {
     oa::present::model::RgbBridge* bridge{};
     /// The models' display: each band binds it on the thread drawing it.
     oa::present::model::ModelDisplay* display{};
+    /// The match's light table, oa::present::ramp_table_rows rows of 256
+    /// palette indices, that the flashes light through; null draws none.
+    const uint8_t* light_table{};
     const oa::Sprite* projectile_shadow{}; ///< FX.GAF "shadow" frame 0; no data for none
     alignas(4) oa::Rect32 debris_view{};   ///< the rectangle debris origins are culled to
     /// Pixels across and down a frame line (a laser, lightning or a debug

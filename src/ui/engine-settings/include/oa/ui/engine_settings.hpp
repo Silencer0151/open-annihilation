@@ -63,6 +63,8 @@ inline constexpr std::string_view vertical_sync = "open-annihilation.vertical-sy
 inline constexpr std::string_view menu_scaling = "open-annihilation.menu-scaling";
 /// 1 or 0 (EngineSettings::native_density).
 inline constexpr std::string_view native_density = "open-annihilation.native-density";
+/// "off", "reduced" or "full" (EngineSettings::explosion_flash).
+inline constexpr std::string_view explosion_flash = "open-annihilation.explosion-flash";
 /// 1 or 0 (EngineSettings::modern_fonts).
 inline constexpr std::string_view modern_fonts = "open-annihilation.modern-fonts";
 /// 1 or 0 (EngineSettings::text_outline).
@@ -324,6 +326,21 @@ inline constexpr std::array<MenuScaling, 3> menu_scaling_choices{
     MenuScaling::unfiltered,
 };
 
+/// Explosion flash: how strongly the flash of each explosion lights the
+/// battlefield under it.
+enum class ExplosionFlash : uint8_t {
+    off,     ///< no flash is drawn
+    reduced, ///< at half its light: about one and a half times as bright at the centre
+    full,    ///< as 3.1c draws it: about twice as bright at the centre
+};
+
+/// The levels of Explosion flash, in the order the dialog offers them.
+inline constexpr std::array<ExplosionFlash, 3> explosion_flash_choices{
+    ExplosionFlash::off,
+    ExplosionFlash::reduced,
+    ExplosionFlash::full,
+};
+
 /// What a one-finger drag on the battlefield does (the Touch section's One-finger drag).
 enum class TouchDrag : uint8_t {
     automatic, ///< a selection box on a tablet, scrolling on a phone
@@ -464,6 +481,9 @@ struct EngineSettings {
     /// Always on where the platform opens every window so
     /// (Inputs::native_density_windows).
     bool native_density{};
+    /// How strongly explosions' flashes light the battlefield; a mod's
+    /// profile may hold them lower still (ui.explosion-flash).
+    ExplosionFlash explosion_flash{ExplosionFlash::full};
     /// Game text is drawn in the modern fonts, which hold the letters of
     /// many languages, rather than the game's own 8-bit fonts. On by default
     /// with the player's own preferences file (default_settings).
@@ -577,7 +597,8 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// machine, and Off with a named one; whether the graphics card is used is
 /// decided apart from the setting. Vertical sync is Off everywhere. Menu
 /// scaling is Sharp everywhere. Native pixel density is Off, but On where
-/// the platform opens every window at native density. Modern
+/// the platform opens every window at native density. Explosion flash is
+/// Full everywhere, as 3.1c draws it. Modern
 /// fonts for game text are On with the player's own file and Off with a
 /// named one; their outline and shadow are On, their background Off and
 /// their size default_text_size everywhere. The language is the operating
@@ -633,7 +654,9 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// read as every switch does. Menu scaling reads the words
 /// menu_scaling_text writes, and any other value gives the default; Native
 /// pixel density reads as every switch does, but stays on where the
-/// platform opens every window at native density. Control size and the
+/// platform opens every window at native density. Explosion flash reads
+/// "off", "reduced" or "full", and any other value gives the default.
+/// Control size and the
 /// Controller section's choices read the words their keys name ("standard",
 /// "large", "larger"; "trackpads", "sticks"; "relative", "absolute"; "off",
 /// "low", "high"; "zoom", "pointer", "nothing"; "off", "right-pad",
@@ -660,7 +683,8 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// 0, the screen size as "desktop" or "WIDTHxHEIGHT", hardware
 /// acceleration as "off", "basic" or "full", Menu scaling, One-finger drag
 /// and QUEUE and ADD as their words (menu_scaling_text, touch_drag_text,
-/// touch_latches_text), the hold delay in milliseconds, Control size and the
+/// touch_latches_text), Explosion flash as "off", "reduced" or "full", the
+/// hold delay in milliseconds, Control size and the
 /// Controller section's choices as the words read_settings reads, Pointer
 /// speed and Gyro speed in percent, the mod and the picked folder as their
 /// paths, or erased

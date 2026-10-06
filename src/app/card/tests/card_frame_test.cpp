@@ -4,7 +4,8 @@
 // Card command lists run on SDL's software renderer over a surface, with
 // no window, and read back against a reference rasteriser on the
 // processor: textured and untextured quads and triangles under every blend
-// mode, premultiplied alpha from a premultiplied page and from vertex
+// mode, lighten from a page of no alpha alone, premultiplied alpha from a
+// premultiplied page and from vertex
 // colours among them, with vertex colours, partly off the canvas; a
 // scissor; a draw's own sampling mode; a page's levels and a part of a
 // level updated; render targets at supersampling factors 2 and 4, cleared,
@@ -478,6 +479,12 @@ void blend_pixel(card::Blend blend, std::array<int64_t, 4> source, Pixel& destin
     case card::Blend::minimum:
         for (std::size_t channel = 0; channel < 3; ++channel)
             under[channel] = std::min(under[channel], source[channel]);
+        break;
+    case card::Blend::lighten:
+        for (std::size_t channel = 0; channel < 3; ++channel)
+            under[channel] = std::min<int64_t>(
+                255, (source[channel] * under[channel] + under[channel] * (255 - alpha)) / 255
+            );
         break;
     }
     for (std::size_t channel = 0; channel < 4; ++channel)
@@ -1146,6 +1153,25 @@ void test_blended_draws_match_the_reference() {
         {level(43), level(43), level(43), 1.0F}
     );
     draw_since(frame, first, {}, card::Blend::minimum);
+    // Lighten: a quad of the page drawn with no alpha, so that each texel's
+    // colour lights what is under it, and one at half its colour.
+    first = next_index(frame);
+    card::append_quad(
+        frame, 20.0F, 20.0F, 40.0F, 40.0F, 0.0F, 0.0F, 0.625F, 0.625F, {1.0F, 1.0F, 1.0F, 0.0F}
+    );
+    card::append_quad(
+        frame,
+        84.0F,
+        60.0F,
+        32.0F,
+        32.0F,
+        0.5F,
+        0.5F,
+        1.0F,
+        1.0F,
+        {level(128), level(128), level(128), 0.0F}
+    );
+    draw_since(frame, first, page, card::Blend::lighten);
     // An untextured additive triangle with a gradient, and a textured
     // alpha triangle with a gradient and an alpha gradient.
     first = next_index(frame);
@@ -1749,8 +1775,8 @@ void test_malformed_frames_are_refused() {
     frame.batches[0].first_index = 3;
     refused("a range beyond the indices", frame, "beyond the 6");
     frame = good;
-    frame.batches[0].blend = static_cast<card::Blend>(7);
-    refused("a blend that names none", frame, "blend 7 names none");
+    frame.batches[0].blend = static_cast<card::Blend>(card::blend_count);
+    refused("a blend that names none", frame, "blend 8 names none");
     frame = good;
     frame.batches[0].sampling = static_cast<card::Sampling>(9);
     refused("a sampling that names none", frame, "sampling 9 names none");

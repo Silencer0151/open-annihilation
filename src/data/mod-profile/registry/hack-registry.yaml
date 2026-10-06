@@ -1450,6 +1450,20 @@ entries:
       explosion-smoke-puff: {type: bool, baseline: true, default: false, adjustable: fixed, scope: view}
     presets:
       baseline: {endsmoke-explosion: false, explosion-smoke-puff: true}
+  ui.explosion-flash:
+    kind: hack
+    title: Explosion Flash
+    implemented: true
+    area: ui
+    visual: true
+    summary: "The level the mod designs explosion flashes at: full (3.1c), reduced (half the light-table row) or off. The flash is drawn at the lower of this level and the player's Explosion flash setting."
+    ownership: local-view
+    scope: view
+    shorthand: level
+    params:
+      level: {type: enum, values: [off, reduced, full], baseline: full, default: reduced, adjustable: fixed, scope: view}
+    presets:
+      baseline: {level: full}
   ui.interface-fixes:
     kind: hack
     title: Interface Fixes

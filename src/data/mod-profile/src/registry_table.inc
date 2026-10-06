@@ -6,7 +6,7 @@
 
 // The OAMOD registry as constant tables (registry.hpp describes them).
 
-constexpr std::array<Literal, 438> literals{{
+constexpr std::array<Literal, 441> literals{{
     {.kind = LiteralKind::string, .text = "totala.ini"},
     {.kind = LiteralKind::string, .text = "\123\157\146\164\167\141\162\145\134\103\141\166\145\144\157\147\040\105\156\164\145\162\164\141\151\156\155\145\156\164"},
     {.kind = LiteralKind::number, .number = {false, 3u, 0, true}},
@@ -395,7 +395,10 @@ constexpr std::array<Literal, 438> literals{{
     {.kind = LiteralKind::boolean, .boolean = false},
     {.kind = LiteralKind::boolean, .boolean = false},
     {.kind = LiteralKind::boolean, .boolean = true},
-    {.kind = LiteralKind::list, .first_item = 388, .item_count = 0},
+    {.kind = LiteralKind::string, .text = "full"},
+    {.kind = LiteralKind::string, .text = "reduced"},
+    {.kind = LiteralKind::string, .text = "full"},
+    {.kind = LiteralKind::list, .first_item = 391, .item_count = 0},
     {.kind = LiteralKind::string, .text = "range-ring-3"},
     {.kind = LiteralKind::string, .text = "radius-0"},
     {.kind = LiteralKind::string, .text = "nanoframe-raster"},
@@ -404,8 +407,8 @@ constexpr std::array<Literal, 438> literals{{
     {.kind = LiteralKind::string, .text = "cursor-reset"},
     {.kind = LiteralKind::string, .text = "build-toggle"},
     {.kind = LiteralKind::string, .text = "downloadmenu-zero"},
-    {.kind = LiteralKind::list, .first_item = 389, .item_count = 8},
-    {.kind = LiteralKind::list, .first_item = 398, .item_count = 0},
+    {.kind = LiteralKind::list, .first_item = 392, .item_count = 8},
+    {.kind = LiteralKind::list, .first_item = 401, .item_count = 0},
     {.kind = LiteralKind::string, .text = "cd"},
     {.kind = LiteralKind::string, .text = "numbered-mp3"},
     {.kind = LiteralKind::string, .text = "cd"},
@@ -423,7 +426,7 @@ constexpr std::array<Literal, 438> literals{{
     {.kind = LiteralKind::boolean, .boolean = false},
     {.kind = LiteralKind::string, .text = "Arm"},
     {.kind = LiteralKind::string, .text = "Core"},
-    {.kind = LiteralKind::list, .first_item = 414, .item_count = 2},
+    {.kind = LiteralKind::list, .first_item = 417, .item_count = 2},
     {.kind = LiteralKind::string, .text = "*.CCX"},
     {.kind = LiteralKind::string, .text = "*.UFO"},
     {.kind = LiteralKind::string, .text = "*.HPI"},
@@ -435,11 +438,11 @@ constexpr std::array<Literal, 438> literals{{
     {.kind = LiteralKind::string, .text = "forces have been obliterated"},
     {.kind = LiteralKind::string, .text = "vermin have been exterminated"},
     {.kind = LiteralKind::string, .text = "forces have gone to a better place"},
-    {.kind = LiteralKind::list, .first_item = 425, .item_count = 3},
+    {.kind = LiteralKind::list, .first_item = 428, .item_count = 3},
     {.kind = LiteralKind::string, .text = "Credits"},
     {.kind = LiteralKind::string, .text = "honk"},
     {.kind = LiteralKind::string, .text = "sing"},
-    {.kind = LiteralKind::list, .first_item = 430, .item_count = 2},
+    {.kind = LiteralKind::list, .first_item = 433, .item_count = 2},
     {.kind = LiteralKind::string, .text = "1.zrb"},
     {.kind = LiteralKind::string, .text = "2.zrb"},
     {.kind = LiteralKind::string, .text = "3.zrb"},
@@ -447,7 +450,7 @@ constexpr std::array<Literal, 438> literals{{
     {.kind = LiteralKind::string, .text = "5.zrb"},
 }};
 
-constexpr std::array<std::string_view, 87> enum_values{{
+constexpr std::array<std::string_view, 90> enum_values{{
     "truncate",
     "dynamic",
     "easy",
@@ -523,6 +526,9 @@ constexpr std::array<std::string_view, 87> enum_values{{
     "autopause",
     "randomteam",
     "crcreport",
+    "off",
+    "reduced",
+    "full",
     "range-ring-3",
     "radius-0",
     "nanoframe-raster",
@@ -537,7 +543,7 @@ constexpr std::array<std::string_view, 87> enum_values{{
     "folder-scan",
 }};
 
-constexpr std::array<Parameter, 119> parameters{{
+constexpr std::array<Parameter, 120> parameters{{
     {.name = "default", .value = {.type = ValueType::integer, .scope = Scope::sim, .has_minimum = true, .minimum = {false, 1u, 0, true}, .has_maximum = true, .maximum = {false, 6553u, 0, true}, .baseline = 19}, .default_value = 20, .adjustable = Adjustable::match, .setting_source = SettingSource::registry, .setting_name = "UnitLimit", .clamp_low = 1, .clamp_high = 2, .unit = "units"},
     {.name = "min", .value = {.type = ValueType::integer, .scope = Scope::sim, .has_minimum = true, .minimum = {false, 1u, 0, true}, .has_maximum = true, .maximum = {false, 6553u, 0, true}, .baseline = 21}, .default_value = 22, .adjustable = Adjustable::fixed, .unit = "units"},
     {.name = "max", .value = {.type = ValueType::integer, .scope = Scope::sim, .has_minimum = true, .minimum = {false, 1u, 0, true}, .has_maximum = true, .maximum = {false, 6553u, 0, true}, .baseline = 23}, .default_value = 24, .adjustable = Adjustable::fixed, .unit = "units"},
@@ -651,15 +657,16 @@ constexpr std::array<Parameter, 119> parameters{{
     {.name = "landing-fail-voice", .value = {.type = ValueType::integer, .scope = Scope::view, .has_minimum = true, .minimum = {false, 0u, 0, true}, .has_maximum = true, .maximum = {false, 255u, 0, true}, .baseline = 377}, .default_value = 378, .adjustable = Adjustable::fixed, .unit = "voice slot"},
     {.name = "endsmoke-explosion", .value = {.type = ValueType::boolean, .scope = Scope::view, .baseline = 382}, .default_value = 383, .adjustable = Adjustable::fixed},
     {.name = "explosion-smoke-puff", .value = {.type = ValueType::boolean, .scope = Scope::view, .baseline = 384}, .default_value = 385, .adjustable = Adjustable::fixed},
-    {.name = "fixes", .value = {.type = ValueType::enumeration_set, .scope = Scope::view, .first_value = 75, .value_count = 9, .baseline = 388}, .default_value = 397, .adjustable = Adjustable::fixed},
-    {.name = "music", .value = {.type = ValueType::enumeration, .scope = Scope::view, .first_value = 84, .value_count = 3, .baseline = 399}, .default_value = 400, .adjustable = Adjustable::install},
-    {.name = "min-height-768", .value = {.type = ValueType::boolean, .scope = Scope::view, .baseline = 402}, .default_value = 403, .adjustable = Adjustable::fixed},
-    {.name = "dx-warning", .value = {.type = ValueType::boolean, .scope = Scope::view, .baseline = 404}, .default_value = 405, .adjustable = Adjustable::fixed},
-    {.name = "live-export", .value = {.type = ValueType::boolean, .scope = Scope::view, .baseline = 408}, .default_value = 409, .adjustable = Adjustable::fixed},
-    {.name = "lobby-state-export", .value = {.type = ValueType::boolean, .scope = Scope::view, .baseline = 410}, .default_value = 411, .adjustable = Adjustable::fixed},
+    {.name = "level", .value = {.type = ValueType::enumeration, .scope = Scope::view, .first_value = 75, .value_count = 3, .baseline = 388}, .default_value = 389, .adjustable = Adjustable::fixed},
+    {.name = "fixes", .value = {.type = ValueType::enumeration_set, .scope = Scope::view, .first_value = 78, .value_count = 9, .baseline = 391}, .default_value = 400, .adjustable = Adjustable::fixed},
+    {.name = "music", .value = {.type = ValueType::enumeration, .scope = Scope::view, .first_value = 87, .value_count = 3, .baseline = 402}, .default_value = 403, .adjustable = Adjustable::install},
+    {.name = "min-height-768", .value = {.type = ValueType::boolean, .scope = Scope::view, .baseline = 405}, .default_value = 406, .adjustable = Adjustable::fixed},
+    {.name = "dx-warning", .value = {.type = ValueType::boolean, .scope = Scope::view, .baseline = 407}, .default_value = 408, .adjustable = Adjustable::fixed},
+    {.name = "live-export", .value = {.type = ValueType::boolean, .scope = Scope::view, .baseline = 411}, .default_value = 412, .adjustable = Adjustable::fixed},
+    {.name = "lobby-state-export", .value = {.type = ValueType::boolean, .scope = Scope::view, .baseline = 413}, .default_value = 414, .adjustable = Adjustable::fixed},
 }};
 
-constexpr std::array<Preset, 50> presets{{
+constexpr std::array<Preset, 51> presets{{
     {.name = "baseline", .first_value = 0, .value_count = 4},
     {.name = "baseline", .first_value = 4, .value_count = 2},
     {.name = "baseline", .first_value = 6, .value_count = 2},
@@ -708,11 +715,12 @@ constexpr std::array<Preset, 50> presets{{
     {.name = "baseline", .first_value = 86, .value_count = 2},
     {.name = "baseline", .first_value = 88, .value_count = 1},
     {.name = "baseline", .first_value = 89, .value_count = 1},
-    {.name = "baseline", .first_value = 90, .value_count = 2},
-    {.name = "baseline", .first_value = 92, .value_count = 2},
+    {.name = "baseline", .first_value = 90, .value_count = 1},
+    {.name = "baseline", .first_value = 91, .value_count = 2},
+    {.name = "baseline", .first_value = 93, .value_count = 2},
 }};
 
-constexpr std::array<PresetValue, 94> preset_values{{
+constexpr std::array<PresetValue, 95> preset_values{{
     {.parameter = 0, .literal = 27},
     {.parameter = 1, .literal = 28},
     {.parameter = 2, .literal = 29},
@@ -801,12 +809,13 @@ constexpr std::array<PresetValue, 94> preset_values{{
     {.parameter = 2, .literal = 381},
     {.parameter = 0, .literal = 386},
     {.parameter = 1, .literal = 387},
-    {.parameter = 0, .literal = 398},
+    {.parameter = 0, .literal = 390},
     {.parameter = 0, .literal = 401},
-    {.parameter = 0, .literal = 406},
-    {.parameter = 1, .literal = 407},
-    {.parameter = 0, .literal = 412},
-    {.parameter = 1, .literal = 413},
+    {.parameter = 0, .literal = 404},
+    {.parameter = 0, .literal = 409},
+    {.parameter = 1, .literal = 410},
+    {.parameter = 0, .literal = 415},
+    {.parameter = 1, .literal = 416},
 }};
 
 constexpr std::array<Constraint, 5> constraints{{
@@ -817,7 +826,7 @@ constexpr std::array<Constraint, 5> constraints{{
     {.left = 2, .comparison = Comparison::less_equal, .right = 3, .text = "wreck-default <= wreck-max"},
 }};
 
-constexpr std::array<Entry, 148> entries{{
+constexpr std::array<Entry, 149> entries{{
     {.id = "identity.settings-file", .kind = EntryKind::identity, .scope = Scope::view, .key = "settings-file", .value = {.type = ValueType::string, .scope = Scope::view, .max_length = 64, .baseline = 0}, .summary = "Name of the configuration INI the game and its add-on libraries read.", .area = "paths"},
     {.id = "identity.registry-root", .kind = EntryKind::identity, .scope = Scope::view, .key = "registry-root", .value = {.type = ValueType::string, .scope = Scope::view, .max_length = 128, .baseline = 1}, .summary = "Registry root for TA settings renamed.", .area = "paths"},
     {.id = "identity.network-version", .kind = EntryKind::identity, .scope = Scope::sim, .key = "network-version", .value = {.type = ValueType::integer_list, .scope = Scope::sim, .has_minimum = true, .minimum = {false, 0u, 0, true}, .has_maximum = true, .maximum = {false, 255u, 0, true}, .has_length = true, .length_minimum = 2, .length_maximum = 2, .baseline = 4}, .summary = "Multiplayer version bytes; peers must match, and replays present their own version.", .area = "network"},
@@ -944,28 +953,29 @@ constexpr std::array<Entry, 148> entries{{
     {.id = "ui.map-features-ignore-los", .kind = EntryKind::hack, .scope = Scope::view, .visual = true, .implemented = true, .first_parameter = 107, .parameter_count = 1, .shorthand = 0, .first_preset = 43, .preset_count = 1, .first_constraint = 5, .constraint_count = 0, .summary = "Map-placed features are drawn regardless of LOS: the map loader stamps them with an owner slot that skips the LOS test.", .area = "ui", .title = "Map Features Always Drawn"},
     {.id = "ui.unit-voice-fixes", .kind = EntryKind::hack, .scope = Scope::view, .visual = true, .implemented = true, .first_parameter = 108, .parameter_count = 3, .first_preset = 44, .preset_count = 1, .first_constraint = 5, .constraint_count = 0, .summary = "Feature-reclaim \"working\" voice plays once; VTOL reclaim voice plays when reclaim starts; landing-failure messages may use the arrived voice instead of \"cannot comply\".", .area = "ui", .title = "Unit Voice Fixes"},
     {.id = "ui.effects-tweaks", .kind = EntryKind::hack, .scope = Scope::view, .visual = true, .implemented = true, .first_parameter = 111, .parameter_count = 2, .first_preset = 45, .preset_count = 1, .first_constraint = 5, .constraint_count = 0, .summary = "endsmoke=1 weapons also spawn the explosion animation; the extra smoke puff per explosion animation is removed.", .area = "ui", .title = "Effects Tweaks"},
-    {.id = "ui.interface-fixes", .kind = EntryKind::hack, .scope = Scope::view, .visual = true, .implemented = true, .first_parameter = 113, .parameter_count = 1, .shorthand = 0, .first_preset = 46, .preset_count = 1, .first_constraint = 5, .constraint_count = 0, .summary = "Assorted display fixes: weapon-3 range ring gate, radius <= 0 circles skipped, mobile nanoframes not re-rasterised until built, resource-bar sprite clamp, air-pad cursor, cursor reset when the selected unit vanishes, toggle button in build mode, zero-filled DOWNLOADMENU allocation, \"Resurrection failed\" spelling.", .area = "ui", .title = "Interface Fixes"},
-    {.id = "ui.endgame-stats", .kind = EntryKind::hack, .scope = Scope::view, .visual = true, .implemented = true, .first_parameter = 114, .parameter_count = 0, .first_preset = 47, .preset_count = 0, .first_constraint = 5, .constraint_count = 0, .summary = "End-of-game statistics list dropped (and ejected) players.", .area = "ui", .title = "End-of-Game Statistics"},
-    {.id = "ui.audio", .kind = EntryKind::hack, .scope = Scope::view, .visual = true, .implemented = true, .first_parameter = 114, .parameter_count = 1, .shorthand = 0, .first_preset = 47, .preset_count = 1, .first_constraint = 5, .constraint_count = 0, .summary = "Audio: 3D sound buffers, CD pause on menu and end, music from numbered MP3 files or a scanned folder, Victory announcement at most every 300 ticks, sound-mode and mixing-buffer defaults, Mission Complete sound.", .area = "ui", .title = "Audio"},
-    {.id = "ui.display-modes", .kind = EntryKind::hack, .scope = Scope::view, .visual = true, .implemented = true, .first_parameter = 115, .parameter_count = 2, .first_preset = 48, .preset_count = 1, .first_constraint = 5, .constraint_count = 0, .summary = "Display: minimum 1024\303\227" "768 modes, menu resolution, resolution override, screenshots (CTRL+F9/PrintScreen PCX), graphics-driver warning suppression.", .area = "ui", .title = "Display Modes"},
-    {.id = "ui.external-exports", .kind = EntryKind::hack, .scope = Scope::view, .visual = true, .implemented = true, .first_parameter = 117, .parameter_count = 2, .first_preset = 49, .preset_count = 1, .first_constraint = 5, .constraint_count = 0, .summary = "External integrations: live export of unit state, lobby game-state export.", .area = "ui", .title = "External Exports"},
-    {.id = "identity.side-names", .kind = EntryKind::identity, .scope = Scope::sim, .key = "side-names", .value = {.type = ValueType::string_list, .scope = Scope::sim, .has_length = true, .length_minimum = 2, .length_maximum = 2, .max_length = 16, .baseline = 416}, .summary = "Names of the two side slots that the game itself uses for AI player names, elimination messages and side-button gadget names (SIDEDATA keeps its own copies for everything else).", .area = "sides"},
-    {.id = "layout.archive-patterns.ccx", .kind = EntryKind::layout, .scope = Scope::sim, .key = "archive-patterns.ccx", .value = {.type = ValueType::string, .scope = Scope::sim, .max_length = 16, .pattern = "^\\*\\.[A-Za-z0-9]{1,4}$", .baseline = 417}, .summary = "Pattern of the mount group that holds Core Contingency and Battle Tactics overlays.", .area = "paths"},
-    {.id = "layout.archive-patterns.ufo", .kind = EntryKind::layout, .scope = Scope::sim, .key = "archive-patterns.ufo", .value = {.type = ValueType::string, .scope = Scope::sim, .max_length = 16, .pattern = "^\\*\\.[A-Za-z0-9]{1,4}$", .baseline = 418}, .summary = "Pattern of the third mount group (third-party unit archives); a replaced pattern stops *.UFO archives mounting.", .area = "paths"},
-    {.id = "layout.archive-patterns.hpi", .kind = EntryKind::layout, .scope = Scope::sim, .key = "archive-patterns.hpi", .value = {.type = ValueType::string, .scope = Scope::sim, .max_length = 16, .pattern = "^\\*\\.[A-Za-z0-9]{1,4}$", .baseline = 419}, .summary = "Pattern of the main archive group (first ten, then the rest, then the disc).", .area = "paths"},
-    {.id = "layout.file-extensions.unit-definition", .kind = EntryKind::layout, .scope = Scope::sim, .key = "file-extensions.unit-definition", .value = {.type = ValueType::string, .scope = Scope::sim, .max_length = 4, .pattern = "^[A-Za-z0-9]{1,4}$", .baseline = 420}, .summary = "Extension of the unit definition files read from the units directory; with another extension, base .FBI units never load although their archives stay mounted.", .area = "paths"},
-    {.id = "strings.status.nanolathing", .kind = EntryKind::string, .scope = Scope::view, .key = "status.nanolathing", .value = {.type = ValueType::string, .scope = Scope::view, .max_length = 11, .baseline = 421}, .summary = "Status-line word for building (three build order states share it).", .area = "ui"},
-    {.id = "strings.status.paralyzed", .kind = EntryKind::string, .scope = Scope::view, .key = "status.paralyzed", .value = {.type = ValueType::string, .scope = Scope::view, .max_length = 9, .baseline = 422}, .summary = "Status-line word for a paralysed unit.", .area = "ui"},
-    {.id = "strings.message.exit-confirm", .kind = EntryKind::string, .scope = Scope::view, .key = "message.exit-confirm", .value = {.type = ValueType::string, .scope = Scope::view, .max_length = 42, .baseline = 423}, .summary = "Exit confirmation prompt.", .area = "ui"},
-    {.id = "strings.message.kill-lead", .kind = EntryKind::string, .scope = Scope::view, .key = "message.kill-lead", .value = {.type = ValueType::string, .scope = Scope::view, .max_length = 35, .baseline = 424}, .summary = "Chat message when a player takes the kill lead (%s player, %d kills).", .area = "ui"},
-    {.id = "strings.message.elimination", .kind = EntryKind::string, .scope = Scope::view, .key = "message.elimination", .value = {.type = ValueType::string_list, .scope = Scope::view, .has_length = true, .length_minimum = 3, .length_maximum = 3, .max_length = 40, .baseline = 428}, .summary = "Three phrases, one picked at random, printed after the side name when a player is eliminated.", .area = "ui"},
-    {.id = "strings.gadget.credits", .kind = EntryKind::string, .scope = Scope::view, .key = "gadget.credits", .value = {.type = ValueType::string, .scope = Scope::view, .max_length = 7, .baseline = 429}, .summary = "Main-menu gadget name that opens the credits; a name no GUI uses disables the hotspot.", .area = "ui"},
-    {.id = "strings.cheat.sing-sounds", .kind = EntryKind::string, .scope = Scope::view, .key = "cheat.sing-sounds", .value = {.type = ValueType::string_list, .scope = Scope::view, .has_length = true, .length_minimum = 2, .length_maximum = 2, .max_length = 4, .baseline = 432}, .summary = "The two speech sounds the +Sing cheat alternates between.", .area = "ui"},
-    {.id = "media.movies.logo", .kind = EntryKind::media, .scope = Scope::view, .key = "movies.logo", .value = {.type = ValueType::string, .scope = Scope::view, .max_length = 12, .pattern = "^(?!\\.\\.?$)[^/\\\\:]*$", .baseline = 433}, .summary = "Boot logo movie; an empty name skips it.", .area = "ui"},
-    {.id = "media.movies.intro", .kind = EntryKind::media, .scope = Scope::view, .key = "movies.intro", .value = {.type = ValueType::string, .scope = Scope::view, .max_length = 12, .pattern = "^(?!\\.\\.?$)[^/\\\\:]*$", .baseline = 434}, .summary = "Intro movie; an empty name skips it.", .area = "ui"},
-    {.id = "media.movies.ending-a", .kind = EntryKind::media, .scope = Scope::view, .key = "movies.ending-a", .value = {.type = ValueType::string, .scope = Scope::view, .max_length = 12, .pattern = "^(?!\\.\\.?$)[^/\\\\:]*$", .baseline = 435}, .summary = "First campaign ending movie.", .area = "ui"},
-    {.id = "media.movies.ending-b", .kind = EntryKind::media, .scope = Scope::view, .key = "movies.ending-b", .value = {.type = ValueType::string, .scope = Scope::view, .max_length = 12, .pattern = "^(?!\\.\\.?$)[^/\\\\:]*$", .baseline = 436}, .summary = "Second campaign ending movie.", .area = "ui"},
-    {.id = "media.movies.credits", .kind = EntryKind::media, .scope = Scope::view, .key = "movies.credits", .value = {.type = ValueType::string, .scope = Scope::view, .max_length = 12, .pattern = "^(?!\\.\\.?$)[^/\\\\:]*$", .baseline = 437}, .summary = "Credits movie.", .area = "ui"},
+    {.id = "ui.explosion-flash", .kind = EntryKind::hack, .scope = Scope::view, .visual = true, .implemented = true, .first_parameter = 113, .parameter_count = 1, .shorthand = 0, .first_preset = 46, .preset_count = 1, .first_constraint = 5, .constraint_count = 0, .summary = "The level the mod designs explosion flashes at: full (3.1c), reduced (half the light-table row) or off. The flash is drawn at the lower of this level and the player's Explosion flash setting.", .area = "ui", .title = "Explosion Flash"},
+    {.id = "ui.interface-fixes", .kind = EntryKind::hack, .scope = Scope::view, .visual = true, .implemented = true, .first_parameter = 114, .parameter_count = 1, .shorthand = 0, .first_preset = 47, .preset_count = 1, .first_constraint = 5, .constraint_count = 0, .summary = "Assorted display fixes: weapon-3 range ring gate, radius <= 0 circles skipped, mobile nanoframes not re-rasterised until built, resource-bar sprite clamp, air-pad cursor, cursor reset when the selected unit vanishes, toggle button in build mode, zero-filled DOWNLOADMENU allocation, \"Resurrection failed\" spelling.", .area = "ui", .title = "Interface Fixes"},
+    {.id = "ui.endgame-stats", .kind = EntryKind::hack, .scope = Scope::view, .visual = true, .implemented = true, .first_parameter = 115, .parameter_count = 0, .first_preset = 48, .preset_count = 0, .first_constraint = 5, .constraint_count = 0, .summary = "End-of-game statistics list dropped (and ejected) players.", .area = "ui", .title = "End-of-Game Statistics"},
+    {.id = "ui.audio", .kind = EntryKind::hack, .scope = Scope::view, .visual = true, .implemented = true, .first_parameter = 115, .parameter_count = 1, .shorthand = 0, .first_preset = 48, .preset_count = 1, .first_constraint = 5, .constraint_count = 0, .summary = "Audio: 3D sound buffers, CD pause on menu and end, music from numbered MP3 files or a scanned folder, Victory announcement at most every 300 ticks, sound-mode and mixing-buffer defaults, Mission Complete sound.", .area = "ui", .title = "Audio"},
+    {.id = "ui.display-modes", .kind = EntryKind::hack, .scope = Scope::view, .visual = true, .implemented = true, .first_parameter = 116, .parameter_count = 2, .first_preset = 49, .preset_count = 1, .first_constraint = 5, .constraint_count = 0, .summary = "Display: minimum 1024\303\227" "768 modes, menu resolution, resolution override, screenshots (CTRL+F9/PrintScreen PCX), graphics-driver warning suppression.", .area = "ui", .title = "Display Modes"},
+    {.id = "ui.external-exports", .kind = EntryKind::hack, .scope = Scope::view, .visual = true, .implemented = true, .first_parameter = 118, .parameter_count = 2, .first_preset = 50, .preset_count = 1, .first_constraint = 5, .constraint_count = 0, .summary = "External integrations: live export of unit state, lobby game-state export.", .area = "ui", .title = "External Exports"},
+    {.id = "identity.side-names", .kind = EntryKind::identity, .scope = Scope::sim, .key = "side-names", .value = {.type = ValueType::string_list, .scope = Scope::sim, .has_length = true, .length_minimum = 2, .length_maximum = 2, .max_length = 16, .baseline = 419}, .summary = "Names of the two side slots that the game itself uses for AI player names, elimination messages and side-button gadget names (SIDEDATA keeps its own copies for everything else).", .area = "sides"},
+    {.id = "layout.archive-patterns.ccx", .kind = EntryKind::layout, .scope = Scope::sim, .key = "archive-patterns.ccx", .value = {.type = ValueType::string, .scope = Scope::sim, .max_length = 16, .pattern = "^\\*\\.[A-Za-z0-9]{1,4}$", .baseline = 420}, .summary = "Pattern of the mount group that holds Core Contingency and Battle Tactics overlays.", .area = "paths"},
+    {.id = "layout.archive-patterns.ufo", .kind = EntryKind::layout, .scope = Scope::sim, .key = "archive-patterns.ufo", .value = {.type = ValueType::string, .scope = Scope::sim, .max_length = 16, .pattern = "^\\*\\.[A-Za-z0-9]{1,4}$", .baseline = 421}, .summary = "Pattern of the third mount group (third-party unit archives); a replaced pattern stops *.UFO archives mounting.", .area = "paths"},
+    {.id = "layout.archive-patterns.hpi", .kind = EntryKind::layout, .scope = Scope::sim, .key = "archive-patterns.hpi", .value = {.type = ValueType::string, .scope = Scope::sim, .max_length = 16, .pattern = "^\\*\\.[A-Za-z0-9]{1,4}$", .baseline = 422}, .summary = "Pattern of the main archive group (first ten, then the rest, then the disc).", .area = "paths"},
+    {.id = "layout.file-extensions.unit-definition", .kind = EntryKind::layout, .scope = Scope::sim, .key = "file-extensions.unit-definition", .value = {.type = ValueType::string, .scope = Scope::sim, .max_length = 4, .pattern = "^[A-Za-z0-9]{1,4}$", .baseline = 423}, .summary = "Extension of the unit definition files read from the units directory; with another extension, base .FBI units never load although their archives stay mounted.", .area = "paths"},
+    {.id = "strings.status.nanolathing", .kind = EntryKind::string, .scope = Scope::view, .key = "status.nanolathing", .value = {.type = ValueType::string, .scope = Scope::view, .max_length = 11, .baseline = 424}, .summary = "Status-line word for building (three build order states share it).", .area = "ui"},
+    {.id = "strings.status.paralyzed", .kind = EntryKind::string, .scope = Scope::view, .key = "status.paralyzed", .value = {.type = ValueType::string, .scope = Scope::view, .max_length = 9, .baseline = 425}, .summary = "Status-line word for a paralysed unit.", .area = "ui"},
+    {.id = "strings.message.exit-confirm", .kind = EntryKind::string, .scope = Scope::view, .key = "message.exit-confirm", .value = {.type = ValueType::string, .scope = Scope::view, .max_length = 42, .baseline = 426}, .summary = "Exit confirmation prompt.", .area = "ui"},
+    {.id = "strings.message.kill-lead", .kind = EntryKind::string, .scope = Scope::view, .key = "message.kill-lead", .value = {.type = ValueType::string, .scope = Scope::view, .max_length = 35, .baseline = 427}, .summary = "Chat message when a player takes the kill lead (%s player, %d kills).", .area = "ui"},
+    {.id = "strings.message.elimination", .kind = EntryKind::string, .scope = Scope::view, .key = "message.elimination", .value = {.type = ValueType::string_list, .scope = Scope::view, .has_length = true, .length_minimum = 3, .length_maximum = 3, .max_length = 40, .baseline = 431}, .summary = "Three phrases, one picked at random, printed after the side name when a player is eliminated.", .area = "ui"},
+    {.id = "strings.gadget.credits", .kind = EntryKind::string, .scope = Scope::view, .key = "gadget.credits", .value = {.type = ValueType::string, .scope = Scope::view, .max_length = 7, .baseline = 432}, .summary = "Main-menu gadget name that opens the credits; a name no GUI uses disables the hotspot.", .area = "ui"},
+    {.id = "strings.cheat.sing-sounds", .kind = EntryKind::string, .scope = Scope::view, .key = "cheat.sing-sounds", .value = {.type = ValueType::string_list, .scope = Scope::view, .has_length = true, .length_minimum = 2, .length_maximum = 2, .max_length = 4, .baseline = 435}, .summary = "The two speech sounds the +Sing cheat alternates between.", .area = "ui"},
+    {.id = "media.movies.logo", .kind = EntryKind::media, .scope = Scope::view, .key = "movies.logo", .value = {.type = ValueType::string, .scope = Scope::view, .max_length = 12, .pattern = "^(?!\\.\\.?$)[^/\\\\:]*$", .baseline = 436}, .summary = "Boot logo movie; an empty name skips it.", .area = "ui"},
+    {.id = "media.movies.intro", .kind = EntryKind::media, .scope = Scope::view, .key = "movies.intro", .value = {.type = ValueType::string, .scope = Scope::view, .max_length = 12, .pattern = "^(?!\\.\\.?$)[^/\\\\:]*$", .baseline = 437}, .summary = "Intro movie; an empty name skips it.", .area = "ui"},
+    {.id = "media.movies.ending-a", .kind = EntryKind::media, .scope = Scope::view, .key = "movies.ending-a", .value = {.type = ValueType::string, .scope = Scope::view, .max_length = 12, .pattern = "^(?!\\.\\.?$)[^/\\\\:]*$", .baseline = 438}, .summary = "First campaign ending movie.", .area = "ui"},
+    {.id = "media.movies.ending-b", .kind = EntryKind::media, .scope = Scope::view, .key = "movies.ending-b", .value = {.type = ValueType::string, .scope = Scope::view, .max_length = 12, .pattern = "^(?!\\.\\.?$)[^/\\\\:]*$", .baseline = 439}, .summary = "Second campaign ending movie.", .area = "ui"},
+    {.id = "media.movies.credits", .kind = EntryKind::media, .scope = Scope::view, .key = "movies.credits", .value = {.type = ValueType::string, .scope = Scope::view, .max_length = 12, .pattern = "^(?!\\.\\.?$)[^/\\\\:]*$", .baseline = 440}, .summary = "Credits movie.", .area = "ui"},
 }};
 
 constexpr std::array<AreaTitle, 16> area_titles{{

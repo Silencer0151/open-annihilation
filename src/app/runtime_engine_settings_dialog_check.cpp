@@ -5,7 +5,8 @@
 // driven through the SDL presenter's pointer and keys (every section, each
 // setting changed and in effect at once, Vertical sync read back from the
 // renderer, Menu scaling's whole steps in the window's presentation at once,
-// Native pixel density kept for the next start, OK, Cancel and Restore
+// Native pixel density kept for the next start, Explosion flash's Reduced in
+// effect for the next frame drawn, OK, Cancel and Restore
 // defaults and the preferences they
 // leave, Developer Mode's overrides in effect and kept), and the main menu
 // with its OA button and the dialog as the window shows them at several
@@ -238,6 +239,8 @@ std::string_view label_of(settings::Setting setting) {
         return "Menu scaling";
     case settings::Setting::native_density:
         return "Native pixel density";
+    case settings::Setting::explosion_flash:
+        return "Explosion flash";
     case settings::Setting::modern_fonts:
         return "Use modern fonts for game text";
     case settings::Setting::text_outline:
@@ -786,6 +789,15 @@ void Runtime::check_engine_settings_dialog() {
             shows_text(settings::dialog_layout(*dialog), "Applies from the next start."),
         "Native pixel density On changed the open window, or does not say when it applies"
     );
+    // Explosion flash: Reduced is the level the next frame draws.
+    focus(settings::first_row_control + 7, "Explosion flash");
+    click(settings::first_row_control + 7, "Reduced", "Explosion flash's Reduced");
+    chosen.explosion_flash = settings::ExplosionFlash::reduced;
+    expect("Explosion flash Reduced");
+    require(
+        explosion_flash() == settings::ExplosionFlash::reduced,
+        "Explosion flash Reduced is not the level the frames draw"
+    );
 
     // The text drawing reads the Language section at once. Text size
     // waits for the modern fonts, Off with a named preferences file: locked,
@@ -879,6 +891,7 @@ void Runtime::check_engine_settings_dialog() {
         expected_keys.emplace(std::string(settings::key::vertical_sync), "1");
     expected_keys.emplace(std::string(settings::key::menu_scaling), "whole-steps");
     expected_keys.emplace(std::string(settings::key::native_density), "1");
+    expected_keys.emplace(std::string(settings::key::explosion_flash), "reduced");
     const auto saved = oa::platform::preferences::load(preference_path_);
     require(engine_keys(saved) == expected_keys, "OK did not save exactly the settings changed");
     require(saved_general_number("SwitchAlt") == 1, "OK did not save SwitchAlt");
@@ -1578,7 +1591,7 @@ void Runtime::check_engine_settings_window_sizes() {
             // Graphics scrolls: at its end too, as the window shows the picture.
             tap(SDLK_END);
             require(
-                dialog->scroll[static_cast<std::size_t>(page)] == 198,
+                dialog->scroll[static_cast<std::size_t>(page)] == 257,
                 "End did not scroll Graphics to its end" + on
             );
             present(presented, picture);

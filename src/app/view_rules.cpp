@@ -43,6 +43,38 @@ match_display_rules(const data::mod_profile::UiRules& ui) noexcept {
     return rules;
 }
 
+oa::ui::engine_settings::ExplosionFlash explosion_flash_drawn(
+    const data::mod_profile::UiRules& ui, oa::ui::engine_settings::ExplosionFlash player
+) noexcept {
+    using oa::ui::engine_settings::ExplosionFlash;
+    // Each level by its strength, so that the lower one wins.
+    const auto strength = [](ExplosionFlash level) {
+        switch (level) {
+        case ExplosionFlash::off:
+            return 0;
+        case ExplosionFlash::reduced:
+            return 1;
+        case ExplosionFlash::full:
+            break;
+        }
+        return 2;
+    };
+    ExplosionFlash designed = ExplosionFlash::full;
+    if (ui.explosion_flash.enabled) {
+        switch (ui.explosion_flash.level) {
+        case data::mod_profile::UiExplosionFlashLevel::off:
+            designed = ExplosionFlash::off;
+            break;
+        case data::mod_profile::UiExplosionFlashLevel::reduced:
+            designed = ExplosionFlash::reduced;
+            break;
+        case data::mod_profile::UiExplosionFlashLevel::full:
+            break;
+        }
+    }
+    return strength(designed) < strength(player) ? designed : player;
+}
+
 bool victory_announcement_due(uint32_t tick, uint32_t& last_tick) noexcept {
     const bool due = tick < last_tick || tick - last_tick > victory_announcement_interval;
     last_tick = tick;

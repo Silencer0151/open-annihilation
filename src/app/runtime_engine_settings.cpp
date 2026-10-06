@@ -425,6 +425,11 @@ render_policy::MenuScaling Runtime::menu_scaling() const noexcept {
                             : render_policy::MenuScaling::sharp;
 }
 
+settings::ExplosionFlash Runtime::explosion_flash() const noexcept {
+    return engine_settings_ ? engine_settings_->current.explosion_flash
+                            : settings::ExplosionFlash::full;
+}
+
 const settings::EngineSettings& Runtime::engine_settings() {
     EngineSettingsState::take_live_settings(*this);
     return engine_settings_state().current;

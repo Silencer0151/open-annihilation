@@ -61,10 +61,24 @@ enum class DrawMode : uint8_t {
     /// The frame as the fog grays it: each covered pixel through the gray
     /// table, then opaque.
     greyed,
+    /// An explosion's flash, which lights what is under it rather than
+    /// covering it: each covered pixel of the light ramp, row r of the
+    /// light table (its index less oa::present::shade_ramp_base, below
+    /// oa::present::ramp_table_rows), holds r / light_rows_per_doubling of
+    /// white in each colour, held to white, and no alpha; every other pixel
+    /// holds nothing. Drawn by the card's lighten blend, it makes what is
+    /// under it 1 + r / light_rows_per_doubling as bright, as the light
+    /// table's row r does, without snapping to the palette. The palette
+    /// and gamma do not change its texels.
+    lit,
 };
 
 /// Number of draw modes; each has its own record of a frame.
-inline constexpr size_t draw_mode_count = 2;
+inline constexpr size_t draw_mode_count = 3;
+
+/// Rows of the light table over which it lights a colour to twice its
+/// brightness: row r scales it by 1 + r / 30.
+inline constexpr uint32_t light_rows_per_doubling = 30;
 
 /// Whether a frame was placed, and why not.
 enum class FrameStatus : uint8_t {

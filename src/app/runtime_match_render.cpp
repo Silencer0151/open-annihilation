@@ -1511,8 +1511,17 @@ void Runtime::render_match_surface() {
         draw_list.fragments.push_back(drawn);
         add_draw(WorldDrawKind::fragment, draw_list.fragments.size() - 1);
     };
-    // Explosion records and the effect layers. Flashes need
-    // the shade table and are skipped.
+    // The explosions' flashes light the frame as strongly as the player's
+    // Explosion flash setting asks, held lower where the mod's profile
+    // designs them lower (ui.explosion-flash); off, none is planned, and
+    // none without the match's light table.
+    const auto flash_level = view_rules::explosion_flash_drawn(ui_rules(), explosion_flash());
+    const bool flashes_drawn = flash_level != oa::ui::engine_settings::ExplosionFlash::off &&
+                               display_.context.light_table != nullptr;
+    draw_list.flash_strength = flash_level == oa::ui::engine_settings::ExplosionFlash::reduced
+                                   ? FlashStrength::reduced
+                                   : FlashStrength::full;
+    // Explosion records and the effect layers.
     auto plan_effect = [&](const oa::sim::effect_particles::ParticleDraw& item) {
         if (item.kind == oa::sim::effect_particles::DrawKind::fragment) {
             plan_fragment(item);
@@ -1560,15 +1569,19 @@ void Runtime::render_match_surface() {
             add_draw(WorldDrawKind::pixel_square, draw_list.squares.size() - 1);
             return;
         }
-        if (item.kind != oa::sim::effect_particles::DrawKind::sprite || item.sequence == nullptr ||
-            item.frame < 0 || static_cast<std::size_t>(item.frame) >= item.sequence->frames.size())
+        const bool flash = item.kind == oa::sim::effect_particles::DrawKind::flash;
+        if ((item.kind != oa::sim::effect_particles::DrawKind::sprite && !flash) ||
+            (flash && !flashes_drawn) || item.sequence == nullptr || item.frame < 0 ||
+            static_cast<std::size_t>(item.frame) >= item.sequence->frames.size())
             return;
         const auto* decoded =
             effect_frame(draw_list, *item.sequence, static_cast<std::size_t>(item.frame));
         if (decoded == nullptr)
             return;
         draw_list.sprites.push_back({decoded, screen});
-        add_draw(WorldDrawKind::sprite, draw_list.sprites.size() - 1);
+        add_draw(
+            flash ? WorldDrawKind::lit_sprite : WorldDrawKind::sprite, draw_list.sprites.size() - 1
+        );
     };
     const auto visit = [](void* context, const oa::sim::effect_particles::ParticleDraw& item) {
         (*static_cast<decltype(plan_effect)*>(context))(item);
@@ -1825,6 +1838,7 @@ void Runtime::render_match_surface() {
     frame_draw.scale = scene_view.scale;
     frame_draw.bridge = &models.bridge;
     frame_draw.display = &models.display;
+    frame_draw.light_table = display_.context.light_table;
     frame_draw.projectile_shadow = &models.projectile_shadow;
     frame_draw.debris_view = {0, 0, vis_w - 1, vis_h - 1};
     // A scene the area pass reduces draws its thin lines about one screen

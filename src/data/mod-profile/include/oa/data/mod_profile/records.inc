@@ -356,6 +356,26 @@ struct UiEffectsTweaks {
     bool operator==(const UiEffectsTweaks&) const = default;
 };
 
+/// The values of ui.explosion-flash level.
+enum class UiExplosionFlashLevel : uint8_t {
+    off, ///< off
+    reduced, ///< reduced
+    full, ///< full
+};
+/// @return the number of UiExplosionFlashLevel values
+[[nodiscard]] constexpr size_t enum_size(UiExplosionFlashLevel) noexcept { return 3; }
+
+/// ui.explosion-flash: The level the mod designs explosion flashes at: full (3.1c), reduced (half
+/// the light-table row) or off. The flash is drawn at the lower of this level and the player's
+/// Explosion flash setting.
+struct UiExplosionFlash {
+    bool enabled{}; ///< the profile turns the hack on
+    /// level; 3.1c: full
+    UiExplosionFlashLevel level{UiExplosionFlashLevel::full};
+    /// Compares every field.
+    bool operator==(const UiExplosionFlash&) const = default;
+};
+
 /// The values of ui.interface-fixes fixes.
 enum class UiInterfaceFixesFixes : uint8_t {
     range_ring_3, ///< range-ring-3
@@ -451,6 +471,7 @@ struct UiRules {
     UiMapFeaturesIgnoreLos map_features_ignore_los{};
     UiUnitVoiceFixes unit_voice_fixes{};
     UiEffectsTweaks effects_tweaks{};
+    UiExplosionFlash explosion_flash{};
     UiInterfaceFixes interface_fixes{};
     UiEndgameStats endgame_stats{};
     UiAudio audio{};

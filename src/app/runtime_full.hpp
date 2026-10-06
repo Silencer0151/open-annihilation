@@ -141,7 +141,8 @@ flat_colour(const std::array<uint8_t, 3>& rgb, const std::array<uint8_t, 256>* g
 /// Tells whether a kind of draw is the sprite stage's.
 ///
 /// @param kind the kind
-/// @return true for sprites, blended sprites, particle squares, lines and selection lines
+/// @return true for sprites, blended sprites, explosions' flashes, particle
+///     squares, lines and selection lines
 [[nodiscard]] bool sprite_kind(WorldDrawKind kind) noexcept;
 
 /// Tells whether a kind of draw is the model stage's.
@@ -181,6 +182,7 @@ struct SpriteStageInputs {
 struct SpriteStageResult {
     uint32_t sprites{}; ///< sprite draws emitted, greyed ones among them
     uint32_t greyed{};  ///< sprites drawn from their greyed cells
+    uint32_t lit{};     ///< explosions' flashes drawn from their lit cells
     uint32_t refused{}; ///< sprites the pages or the host refused
     uint32_t squares{}; ///< particle squares emitted
     uint32_t lines{};   ///< lines and selection lines emitted
@@ -201,7 +203,12 @@ struct SpriteStageResult {
 /// blends it through the alpha table, else opaque. Under a cell out of
 /// sight it is drawn from its greyed cell when the pages hold a gray table;
 /// under never-mapped ground it is drawn as under any other, since the
-/// black pass over that ground goes over it. A page's texels are sampled
+/// black pass over that ground goes over it. An explosion's flash is its
+/// frame's lit cell (DrawMode::lit) drawn by the lighten blend, which
+/// lights what is under it close to the light table's rows without
+/// snapping to the palette, its vertex colour one half at
+/// FlashStrength::reduced; it is drawn so under any fog, which goes over
+/// it as over the ground. A page's texels are sampled
 /// nearest at a whole-number zoom, linear below 1 and pixel-art above. A
 /// particle's square is the planner's rectangle, solid; a line is a quad
 /// `max(1, zoom)` layout pixels wide through the centres of its end

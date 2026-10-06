@@ -608,21 +608,22 @@ void Runtime::check_engine_settings_in_match() {
             ),
             "a game played alone says it is shared" + on
         );
-        // Graphics at its end in a game played alone: Hardware acceleration
-        // and Vertical sync, neither locked by the game.
+        // Graphics at its end in a game played alone: Vertical sync and
+        // Explosion flash among its last rows, and neither Hardware
+        // acceleration nor Vertical sync locked by the game.
         show_page(settings::Page::graphics, on);
         tap_key(SDLK_END, SDL_KMOD_NONE);
         {
             const auto* graphics = engine_settings_dialog();
             require(
                 graphics != nullptr &&
-                    graphics->scroll[static_cast<std::size_t>(settings::Page::graphics)] == 198,
+                    graphics->scroll[static_cast<std::size_t>(settings::Page::graphics)] == 257,
                 "End did not scroll Graphics to its end" + on
             );
             const auto parts = settings::dialog_layout(*graphics);
             require(
-                shows_text(parts, "Hardware acceleration") && shows_text(parts, "Vertical sync"),
-                "Graphics at its end does not show its last two rows" + on
+                shows_text(parts, "Vertical sync") && shows_text(parts, "Explosion flash"),
+                "Graphics at its end does not show its last rows" + on
             );
             require(
                 graphics->locks.hardware_acceleration != settings::Lock::in_game &&
@@ -779,12 +780,13 @@ void Runtime::check_engine_settings_in_match() {
                 ),
             "a shared game does not lock Mods with its note" + on
         );
-        // Graphics in a shared game: Vertical sync is locked during the game,
-        // its value set before the game kept in effect; Hardware acceleration
-        // can still be set, and Basic or Full waits for the game to end, so
-        // the processor keeps drawing. Escape then puts Off back.
+        // Graphics in a shared game, a page down to show both rows: Vertical
+        // sync is locked during the game, its value set before the game kept
+        // in effect; Hardware acceleration can still be set, and Basic or
+        // Full waits for the game to end, so the processor keeps drawing.
+        // Escape then puts Off back.
         show_page(settings::Page::graphics, on);
-        tap_key(SDLK_END, SDL_KMOD_NONE);
+        tap_key(SDLK_PAGEDOWN, SDL_KMOD_NONE);
         dialog = engine_settings_dialog();
         require(
             dialog->locks.vertical_sync ==

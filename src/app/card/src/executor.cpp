@@ -750,6 +750,10 @@ SDL_BlendMode Executor::blend_mode(Blend blend) const noexcept {
         return capabilities_.darken_composed ? darken_mode_ : SDL_BLENDMODE_MUL;
     case Blend::minimum:
         return capabilities_.minimum_composed ? minimum_mode_ : SDL_BLENDMODE_BLEND;
+    case Blend::lighten:
+        // The multiply mode: the source times what is under it, plus what is
+        // under it times one less the source alpha.
+        return SDL_BLENDMODE_MUL;
     }
     return SDL_BLENDMODE_NONE;
 }

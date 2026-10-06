@@ -38,6 +38,11 @@ constexpr float translucent_level = 0.5F;
 /// Highest value of a colour's channel.
 constexpr float channel_full = 255.0F;
 
+/// The vertex colour of an explosion's flash at FlashStrength::reduced:
+/// one half, which halves the light of each texel, as the processor halves
+/// the light table's row.
+constexpr float reduced_flash_light = 0.5F;
+
 /// The GAF frame each rendered frame of a list was decoded from this
 /// frame, for the frames decoded anew each frame (WorldDrawList::decoded).
 using DecodedFrom = std::unordered_map<const RenderedFrame*, const oa::formats::gaf::Frame*>;
@@ -232,6 +237,7 @@ bool sprite_kind(WorldDrawKind kind) noexcept {
     switch (kind) {
     case WorldDrawKind::sprite:
     case WorldDrawKind::blended_sprite:
+    case WorldDrawKind::lit_sprite:
     case WorldDrawKind::pixel_square:
     case WorldDrawKind::line:
     case WorldDrawKind::selection_line:
@@ -258,6 +264,7 @@ bool model_kind(WorldDrawKind kind) noexcept {
     case WorldDrawKind::commit_always:
     case WorldDrawKind::sprite:
     case WorldDrawKind::blended_sprite:
+    case WorldDrawKind::lit_sprite:
     case WorldDrawKind::pixel_square:
     case WorldDrawKind::line:
     case WorldDrawKind::selection_line:
@@ -447,6 +454,54 @@ struct SpriteFrame::Impl {
             ++result.greyed;
     }
 
+    /// Emits an explosion's flash: a quad from its frame's lit cell on the
+    /// pages, which the lighten blend makes light what is under it, the
+    /// vertex colour halving each texel's light at FlashStrength::reduced
+    /// and the vertex alpha 0, so that the texels' own alpha of 0 is kept.
+    ///
+    /// @param sprite the flash
+    void emit_lit(const SpriteDraw& sprite) {
+        if (sprite.frame == nullptr || hooks.card_page == nullptr) {
+            ++result.refused;
+            return;
+        }
+        const uint64_t key = frame_key(sprite.frame, decoded_from);
+        const gpu::FrameResult found = pages.frame(key, gpu::DrawMode::lit, *sprite.frame);
+        if (found.status != gpu::FrameStatus::ok) {
+            ++result.refused;
+            return;
+        }
+        const card::PageHandle page = hooks.card_page(hooks.context, found.record.page);
+        if (page == card::PageHandle{}) {
+            ++result.refused;
+            return;
+        }
+        placed.push_back({key, gpu::DrawMode::lit, found.record});
+        const SceneView& view = inputs.view;
+        const auto size = static_cast<float>(pages.pages()[found.record.page].size);
+        const gpu::TexelRect& rect = found.record.rect;
+        const float left =
+            static_cast<float>(sprite.screen.x) - static_cast<float>(sprite.frame->origin_x) * zoom;
+        const float top =
+            static_cast<float>(sprite.screen.y) - static_cast<float>(sprite.frame->origin_y) * zoom;
+        const float light =
+            inputs.list->flash_strength == FlashStrength::reduced ? reduced_flash_light : 1.0F;
+        emitter.quad(
+            {page, card::Blend::lighten, sampling},
+            emitter.place_x(left),
+            emitter.place_y(top),
+            static_cast<float>(sprite.frame->width) * zoom * view.scale,
+            static_cast<float>(sprite.frame->height) * zoom * view.scale,
+            static_cast<float>(rect.x) / size,
+            static_cast<float>(rect.y) / size,
+            static_cast<float>(rect.x + rect.width) / size,
+            static_cast<float>(rect.y + rect.height) / size,
+            {light, light, light, 0.0F}
+        );
+        ++result.sprites;
+        ++result.lit;
+    }
+
     /// Emits one draw of the list.
     ///
     /// @param draw the draw
@@ -460,6 +515,10 @@ struct SpriteFrame::Impl {
         case WorldDrawKind::blended_sprite:
             if (draw.index < list.sprites.size())
                 emit_sprite(list.sprites[draw.index], draw.kind == WorldDrawKind::blended_sprite);
+            break;
+        case WorldDrawKind::lit_sprite:
+            if (draw.index < list.sprites.size())
+                emit_lit(list.sprites[draw.index]);
             break;
         case WorldDrawKind::pixel_square: {
             if (draw.index >= list.squares.size())

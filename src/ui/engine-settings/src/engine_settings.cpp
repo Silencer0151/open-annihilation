@@ -237,6 +237,12 @@ struct ChoiceWord {
     std::string_view word; ///< its word, in lower case
 };
 
+/// Explosion flash's words, in explosion_flash_choices' order.
+constexpr std::array<ChoiceWord<ExplosionFlash>, 3> explosion_flash_words{{
+    {ExplosionFlash::off, "off"},
+    {ExplosionFlash::reduced, "reduced"},
+    {ExplosionFlash::full, "full"},
+}};
 /// Control size's words, in control_size_choices' order.
 constexpr std::array<ChoiceWord<ControlSize>, 3> control_size_words{{
     {ControlSize::standard, "standard"},
@@ -573,6 +579,7 @@ EngineSettings read_settings(
             menu_scaling_from_text(found->second).value_or(settings.menu_scaling);
     if (const auto number = stored_number(values, key::native_density))
         settings.native_density = inputs.native_density_windows || *number > 0;
+    read_word(values, key::explosion_flash, explosion_flash_words, settings.explosion_flash);
     for (const TextSwitch& entry : text_switches)
         if (const auto number = stored_number(values, entry.key))
             settings.*entry.member = *number > 0;
@@ -750,6 +757,15 @@ void write_settings(
         switch_text(chosen.native_density),
         chosen.native_density != opened.native_density,
         chosen.native_density == defaults.native_density,
+        restored
+    );
+    store_word(
+        values,
+        key::explosion_flash,
+        explosion_flash_words,
+        opened.explosion_flash,
+        chosen.explosion_flash,
+        defaults.explosion_flash,
         restored
     );
     for (const TextSwitch& entry : text_switches)
