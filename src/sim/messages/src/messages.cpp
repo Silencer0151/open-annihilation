@@ -4,6 +4,7 @@
 #include "oa/sim/messages.hpp"
 #include "oa/base/text.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <initializer_list>
@@ -74,7 +75,7 @@ void format_shown_chat_line(
         if (cut)
             return;
         const size_t kept = oa::base::text::whole_characters(part, size - 1 - used);
-        std::memcpy(out + used, part.data(), kept);
+        std::copy_n(part.data(), kept, out + used);
         used += kept;
         cut = kept < part.size();
     };

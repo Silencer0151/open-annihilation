@@ -1788,7 +1788,10 @@ void test_resolution_cycle() {
         std::array<uint8_t, sizeof(mp::PlayerSetupInfo)> bytes{};
         std::copy(std::begin(record.info_head), std::end(record.info_head), bytes.begin());
         const auto block = std::bit_cast<mp::PlayerSetupInfo>(bytes);
-        return std::pair<uint16_t, uint16_t>{block.screen_width, block.screen_height};
+        // Copied out of the packed block, whose words may lie unaligned.
+        const uint16_t width = block.screen_width;
+        const uint16_t height = block.screen_height;
+        return std::pair<uint16_t, uint16_t>{width, height};
     };
     mp::lobby_cycle_resolution(lobby, false);
     expect(info.screen_width == 2560 && info.screen_height == 1440, "RES steps to 2560x1440");
