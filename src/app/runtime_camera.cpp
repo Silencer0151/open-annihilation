@@ -195,25 +195,23 @@ void Runtime::apply_zoom_anchor() {
     // The camera that shows the anchor's map pixel under the anchor, the
     // map pixels from the camera's to it rounded as screen_to_map_pixel
     // rounds them: a step that leaves the zoom as it was leaves the camera
-    // where it was, and the steps back find the same map pixel under the
-    // anchor and return the camera.
+    // where it was, and where the camera's limits never stop it, the steps
+    // back find the same map pixel under the anchor and return the camera.
     const auto map_pixels_to = [zoom](int at) {
         return static_cast<int32_t>(std::llround(static_cast<double>(at) / zoom));
     };
     match_camera_x_ = zoom_anchor_map_x_ - map_pixels_to(zoom_anchor_sx_);
     match_camera_z_ = zoom_anchor_map_y_ - map_pixels_to(zoom_anchor_sy_);
-    // Where the camera's limits hold the view back, the next zoom goes on
-    // about the anchor (anchor_zoom_at).
-    const auto held = view_camera();
-    zoom_hold_ = {
-        true, held, match_zoom_, {match_camera_x_ != held[0], match_camera_z_ != held[1]}
-    };
+    // Where the camera's limits stop it, it sits at the limit, and the next
+    // step anchors on what is then under the pointer (anchor_zoom_at).
+    const auto camera = view_camera();
+    match_camera_x_ = camera[0];
+    match_camera_z_ = camera[1];
     // A view drawn between map pixels keeps the exact point under the
     // anchor, where the camera's rounding allows: the camera stays where
     // the anchor rounds it to.
     if (!smooth_view_.on || !selected_tnt_)
         return;
-    const auto camera = view_camera();
     const auto most = most_view_offsets(camera[0], camera[1]);
     smooth_view_.camera_x = camera[0];
     smooth_view_.camera_z = camera[1];
@@ -424,78 +422,34 @@ void Runtime::step_match_zoom() {
 }
 
 void Runtime::anchor_zoom_at(int px, int py) {
-    const int sx = px - match_layout_.left;
-    const int sy = py - match_layout_.top;
-    const auto zoom = static_cast<double>(match_zoom() <= 0.0F ? 1.0F : match_zoom());
-    // The view the last zoom left, held back by the camera's limits, while
-    // nothing else has moved it and the pointer rests within a few pixels
-    // of where the anchor was taken from the view (zoom_aim_), however
-    // little it has moved at each step since.
+    // The view as drawn, wherever the camera's limits stopped the last
+    // zoom: each step zooms about what is under the pointer at that step.
     const auto camera = view_camera();
-    const bool kept = zoom_hold_.valid && zoom_hold_.zoom == match_zoom_ &&
-                      zoom_hold_.camera == camera && (zoom_hold_.held[0] || zoom_hold_.held[1]) &&
-                      std::abs(sx - zoom_aim_[0]) <= kZoomHoldPointerSlack &&
-                      std::abs(sy - zoom_aim_[1]) <= kZoomHoldPointerSlack;
+    const auto viewport =
+        live_viewport(static_cast<uint32_t>(camera[0]), static_cast<uint32_t>(camera[1]));
     // The map pixel under the pointer on the camera's map pixel, which the
     // camera rounds about as it always has, and the exact point a view
     // drawn between map pixels shows under the pointer and keeps there,
     // the offset lying in the fraction.
-    const auto viewport =
-        live_viewport(static_cast<uint32_t>(camera[0]), static_cast<uint32_t>(camera[1]));
     const auto before = oa::present::world_renderer::screen_to_map_pixel(viewport, {px, py});
     if (!before)
         return;
+    const auto zoom = static_cast<double>(match_zoom() <= 0.0F ? 1.0F : match_zoom());
     const auto offset = view_offset();
-    const auto anchor = [&](bool held,
-                            int32_t& whole,
-                            double& fraction,
-                            int& anchored_at,
-                            int at,
-                            uint32_t drawn,
-                            double source,
-                            double past) {
-        if (kept && held) {
-            // The point the held-back view was asked to show under the
-            // pointer: the anchor's own, or beside it as far as the pointer
-            // strayed.
-            if (at != anchored_at) {
-                const double exact = static_cast<double>(whole) + fraction +
-                                     static_cast<double>(at - anchored_at) / zoom;
-                whole = static_cast<int32_t>(std::llround(exact));
-                fraction = exact - static_cast<double>(whole);
-            }
-        } else {
-            whole = static_cast<int32_t>(drawn);
-            fraction = std::clamp(
-                source + past + static_cast<double>(at) / zoom - static_cast<double>(drawn),
-                kLeastAnchorFraction,
-                kMostAnchorFraction
-            );
-        }
-        anchored_at = at;
+    const auto fraction = [zoom](int at, uint32_t drawn, uint32_t source, double past) {
+        return std::clamp(
+            static_cast<double>(source) + past + static_cast<double>(at) / zoom -
+                static_cast<double>(drawn),
+            kLeastAnchorFraction,
+            kMostAnchorFraction
+        );
     };
-    anchor(
-        zoom_hold_.held[0],
-        zoom_anchor_map_x_,
-        zoom_anchor_fraction_x_,
-        zoom_anchor_sx_,
-        sx,
-        before->x,
-        static_cast<double>(viewport.source_x),
-        offset.x
-    );
-    anchor(
-        zoom_hold_.held[1],
-        zoom_anchor_map_y_,
-        zoom_anchor_fraction_y_,
-        zoom_anchor_sy_,
-        sy,
-        before->y,
-        static_cast<double>(viewport.source_y),
-        offset.y
-    );
-    if (!kept)
-        zoom_aim_ = {sx, sy};
+    zoom_anchor_sx_ = px - match_layout_.left;
+    zoom_anchor_sy_ = py - match_layout_.top;
+    zoom_anchor_map_x_ = static_cast<int32_t>(before->x);
+    zoom_anchor_map_y_ = static_cast<int32_t>(before->y);
+    zoom_anchor_fraction_x_ = fraction(zoom_anchor_sx_, before->x, viewport.source_x, offset.x);
+    zoom_anchor_fraction_y_ = fraction(zoom_anchor_sy_, before->y, viewport.source_y, offset.y);
     zoom_anchored_ = true;
 }
 

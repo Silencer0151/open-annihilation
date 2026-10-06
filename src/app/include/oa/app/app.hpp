@@ -60,13 +60,6 @@ constexpr float kMaxBattlefieldZoom = 4.0F;
 constexpr float kDefaultBattlefieldZoom = 1.0F;
 constexpr float kZoomWheelFactor = 1.15F;
 constexpr float kZoomLerpHz = 12.0F;
-/// How far, in canvas pixels, the pointer may move from where it rested
-/// when a zoom the camera's limits hold back was aimed, as a hand on the
-/// mouse moves it while the wheel turns, and the next zoom still go on
-/// about the point aimed at. The distance counts from where the pointer
-/// rested, so a pointer moved farther a little at each step aims at the
-/// point then under it.
-constexpr int kZoomHoldPointerSlack = 8;
 constexpr uint8_t kPaletteGreen = 250;   // PALETTE.PAL RGB(0,255,0)
 constexpr std::size_t kUiColorText = 15; // Game.ui_colors slot of message and clock text
 constexpr int kDefaultWindowWidth = 1920;

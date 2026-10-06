@@ -703,10 +703,6 @@ void Runtime::idle_tick() {
 }
 
 void Runtime::move_match_camera() {
-    // A view that something other than the zoom has moved or zoomed since
-    // the zoom left it ends what the zoom held back (anchor_zoom_at).
-    if (zoom_hold_.valid && (view_camera() != zoom_hold_.camera || match_zoom_ != zoom_hold_.zoom))
-        zoom_hold_ = {};
     if (screen_ == Screen::match && selected_tnt_)
         step_match_zoom();
     if (screen_ != Screen::match || match_paused_)

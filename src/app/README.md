@@ -174,20 +174,22 @@ logs it.
   and the Full tier's atlas (`shown_tile_grid`) end there too, so no tier
   draws the filler at any zoom. The wheel, a pinch and a pad zoom about
   the pointer, and the settings dialog about the battlefield's centre
-  (`anchor_zoom_at`); where the camera's limits hold the view back, as a
-  map narrower or shorter than the view does and a zoom out past the map's
-  edge, the next step goes on about the same map point (`zoom_hold_`)
-  until something else moves the view or the pointer strays more than a
-  few pixels from where it aimed (`zoom_aim_`), so that the point comes
-  back under the pointer as soon as the limits allow and as many steps
-  back return the camera to where it was. The camera is rounded as the
-  pointer's map pixel is (`apply_zoom_anchor`), so a step past the
-  nearest or farthest zoom leaves it where it is, and the wheel counts its
-  steps from the target they began at (`zoom_wheel_`), so that as many
-  steps back return the zoom exactly. The step that reaches the nearest or
-  farthest zoom counts whole, though the zoom stops there, and a step past
-  it counts nothing, so that the first step back leaves the end and as
-  many as reached it return the zoom and the camera. Every zoom of the
+  (`anchor_zoom_at`): each step, a wheel's notch, a trackpad's scroll or a
+  frame of a pinch or of the pad's zoom, keeps the map point the view as
+  drawn shows under the pointer there, as far as the camera's limits
+  allow. Where they stop the camera, as a map narrower or shorter than the
+  view does and a zoom out past the map's edge, it sits at the limit, so
+  that the map's edge can be reached and zoomed in on, and the next step
+  zooms about whatever is then under the pointer: a zoom out against an
+  edge and back in need not return the camera to where it was. The camera
+  is rounded as the pointer's map pixel is (`apply_zoom_anchor`), so a
+  step past the nearest or farthest zoom leaves it where it is, and the
+  wheel counts its steps from the target they began at (`zoom_wheel_`),
+  so that as many steps back return the zoom exactly. The step that
+  reaches the nearest or farthest zoom counts whole, though the zoom stops
+  there, and a step past it counts nothing, so that the first step back
+  leaves the end and as many as reached it return the zoom, and the camera
+  too where its limits never stopped it. Every zoom of the
   player's view, the wheel's, a pinch's, the touch buttons', a pad's and
   the settings dialog's, stays between `least_match_zoom` and
   `most_match_zoom`, which the Maximum zoom out and Maximum zoom in

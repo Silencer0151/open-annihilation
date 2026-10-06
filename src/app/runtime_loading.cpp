@@ -316,7 +316,6 @@ void Runtime::leave_match() {
     match_zoom_ = kDefaultBattlefieldZoom;
     match_zoom_target_ = kDefaultBattlefieldZoom;
     zoom_anchored_ = false;
-    zoom_hold_ = {};
     zoom_wheel_ = {};
     zoom_clock_valid_ = false;
     terrain_cache_cam_x_ = ~0u;
