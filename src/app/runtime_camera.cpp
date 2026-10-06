@@ -726,13 +726,20 @@ void Runtime::issue_match_move(float x, float y, bool queue) {
         static_cast<int32_t>(selected_tnt_->attribute_width * 16U),
         static_cast<int32_t>(selected_tnt_->attribute_height * 16U)
     );
-    const oa::sim::ground_orders::Point point{target.x, target.y, target.z};
+    issue_selection_move({target.x, target.y, target.z}, hovered_match_unit_, queue);
+}
+
+void Runtime::issue_selection_move(
+    const oa::sim::ground_orders::Point& point, uint16_t pointer_unit, bool queue
+) {
+    if (!match_ || selected_match_unit_ == 0)
+        return;
     try {
         // Each unit moves to its own point, keeping its place in the
         // selection around the ground under the pointer. The unit under the
         // pointer is not counted in the centre and takes no order.
         const auto command = oa::sim::gameplay_input::OrderCommand::move;
-        const auto bound = group_order_bound_unit(command, hovered_match_unit_);
+        const auto bound = group_order_bound_unit(command, pointer_unit);
         const auto centre = local_selection_centre(bound);
         for_each_selected([&](uint16_t id) {
             if (id == bound)

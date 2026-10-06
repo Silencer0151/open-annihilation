@@ -375,6 +375,24 @@ void Runtime::check_megamap_clicks() {
          SDL_BUTTON_LEFT,
          enemy,
          [&](const ClickResult& r) { return attacked(r) && r.command == MatchCommand::none; }},
+        {"left-click interface: a left click with MOVE armed on an enemy moves to it",
+         input::interface_left_click,
+         true,
+         MatchCommand::move,
+         SDL_BUTTON_LEFT,
+         enemy,
+         [&](const ClickResult& r) { return moved(r) && r.command == MatchCommand::none; }},
+        {"right-click interface: a left click with MOVE armed on an own unit guards it",
+         input::interface_right_click,
+         true,
+         MatchCommand::move,
+         SDL_BUTTON_LEFT,
+         friend_unit,
+         [](const ClickResult& r) {
+             return r.mover_selected && !r.friend_selected && r.kinds.size() == 1 &&
+                    r.kinds.front() == orders::follow_ground_kind &&
+                    r.command == MatchCommand::none;
+         }},
     };
 
     // Each case from the same start on the battlefield, then on the megamap.

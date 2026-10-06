@@ -8348,14 +8348,16 @@ class Runtime final : public menu::Host,
     /// the Mouse wheel zoom setting off, and must leave the same selection,
     /// armed command and orders on both: in the left-click interface a left
     /// click on open ground moves the selection, one on an enemy attacks it
-    /// and one on an own unit selects it alone, and a right press deselects
-    /// or cancels an armed command; in the right-click interface a left click
-    /// on open ground deselects, one on an own unit selects it, a right press
-    /// on open ground moves the selection and one on an own unit guards it,
-    /// and an armed ATTACK is given by a left click. Prints a line and checks
-    /// nothing with ui.megamap off. With --snapshot, writes each surface's
-    /// frame just before and just after each click beside the snapshot.
-    /// Throws std::runtime_error on a failure.
+    /// and one on an own unit selects it alone, a right press deselects or
+    /// cancels an armed command, and an armed MOVE given on an enemy moves to
+    /// it; in the right-click interface a left click on open ground
+    /// deselects, one on an own unit selects it, a right press on open ground
+    /// moves the selection and one on an own unit guards it, an armed ATTACK
+    /// is given by a left click, and an armed MOVE given on an own unit
+    /// guards it. Prints a line and checks nothing with ui.megamap off. With
+    /// --snapshot, writes each surface's frame just before and just after
+    /// each click beside the snapshot. Throws std::runtime_error on a
+    /// failure.
     void check_megamap_clicks();
 
     /// Handles a left click on the game screen.
@@ -8777,14 +8779,17 @@ class Runtime final : public menu::Host,
 
     /// Acts on a left click on the megamap as a left click on the battlefield
     /// does (handle_match_left_click), at a map point and on a unit: an armed
-    /// BUILD places the building, an armed MOVE or PATROL sends the selection
-    /// in its shape (issue_map_orders); otherwise the cursor the point and
+    /// BUILD places the building, an armed PATROL sends the selection in its
+    /// shape (issue_map_orders), and an armed MOVE on open ground moves it in
+    /// its shape (issue_selection_move); otherwise the cursor the point and
     /// the unit give (pick_map_cursor) decides: the select cursor selects the
     /// unit, or with Shift flips it in or out of the selection; an order
     /// cursor gives the selection the armed command, or the default order,
     /// there (issue_selection_orders), a click that gives none leaving the
-    /// command armed; in the right-click interface a highlight cursor drops
-    /// the selection.
+    /// command armed, except an armed MOVE, which the click ends; in the
+    /// right-click interface a highlight cursor drops the selection. An armed
+    /// MOVE on a unit whose cursor takes no click moves the selection to the
+    /// ground there.
     ///
     /// @param target the unit whose icon is under the pointer, or 0
     /// @param ground the ground point under the pointer, or none
@@ -11094,6 +11099,21 @@ class Runtime final : public menu::Host,
     /// @param y canvas row
     /// @param queue true to queue the move
     void issue_match_move(float x, float y, bool queue);
+
+    /// Moves the selection to a ground point, whatever unit lies there.
+    ///
+    /// Each unit moves to its own point, keeping its place in the selection
+    /// around the point (group_order_destination); a selected unit under the
+    /// pointer is left out of the selection's centre and given no order. A
+    /// matching queued move is taken off instead; units that take no move order
+    /// are skipped. A failure is shown on the status line.
+    ///
+    /// @param point the ground point, in 16.16 world coordinates
+    /// @param pointer_unit the unit under the pointer, or 0
+    /// @param queue true to queue the move
+    void issue_selection_move(
+        const oa::sim::ground_orders::Point& point, uint16_t pointer_unit, bool queue
+    );
 
     /// Sends the selection to patrol to the ground under a canvas point.
     ///

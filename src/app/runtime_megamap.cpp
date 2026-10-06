@@ -622,8 +622,22 @@ void Runtime::megamap_click(
             place_pending_build_at(*ground);
         return;
     }
-    if (match_command_ == MatchCommand::move || match_command_ == MatchCommand::patrol) {
+    if (match_command_ == MatchCommand::patrol) {
         std::ignore = issue_map_orders(ground, target);
+        return;
+    }
+    // An armed MOVE on open ground, or on a unit whose cursor takes no click,
+    // moves the selection to the ground there and ends; on a unit, the cursor
+    // decides first, as on the battlefield.
+    const bool move = match_command_ == MatchCommand::move;
+    const auto move_to_ground = [&] {
+        if (!ground)
+            return;
+        issue_selection_move(*ground, target, queueing());
+        finish_issued_command();
+    };
+    if (move && target == 0) {
+        move_to_ground();
         return;
     }
     auto& world = match_->state();
@@ -631,6 +645,8 @@ void Runtime::megamap_click(
     const auto command = input::pointer_command(world.game);
     switch (input::click_action(world, command, cursor)) {
     case input::ClickAction::none:
+        if (move)
+            move_to_ground();
         return;
     case input::ClickAction::select_unit: {
         // The unit is selected in place of the others, or with Shift flipped
@@ -658,10 +674,12 @@ void Runtime::megamap_click(
     if (target == 0 && !ground)
         return;
     const auto issued = issue_selection_orders(command, target, ground, queueing());
-    if (issued.empty())
-        return;
-    status_ = std::string(issued);
-    finish_issued_command();
+    if (!issued.empty())
+        status_ = std::string(issued);
+    // An armed MOVE ends with the click whether or not it gave an order;
+    // another command that gave none stays armed.
+    if (!issued.empty() || move)
+        finish_issued_command();
 }
 
 void Runtime::megamap_right_press(
