@@ -130,11 +130,20 @@ std::optional<ReportedMode> read_mode(std::string_view text) {
 std::vector<Size> offered_sizes(const DisplayReport& report, Use use, int32_t minimum_height) {
     const Size desktop = report.desktop.size;
     const bool bounded = use == Use::window && known(desktop);
+    const auto offered = [&](Size size) {
+        return large_enough(size, minimum_height) && (!bounded || fits(size, desktop));
+    };
     std::vector<Size> sizes;
-    sizes.reserve(report.modes.size());
+    sizes.reserve(report.modes.size() + fallback_sizes.size());
     for (const ReportedMode& mode : report.modes)
-        if (large_enough(mode.size, minimum_height) && (!bounded || fits(mode.size, desktop)))
+        if (offered(mode.size))
             sizes.push_back(mode.size);
+    // A window takes any size, so the fixed sizes that fit join the
+    // display's own, which may lack the smaller ones.
+    if (use == Use::window)
+        for (const Size size : fallback_sizes)
+            if (offered(size))
+                sizes.push_back(size);
     std::sort(sizes.begin(), sizes.end(), listed_before);
     sizes.erase(std::unique(sizes.begin(), sizes.end()), sizes.end());
     if (sizes.size() > most_sizes)
@@ -142,7 +151,7 @@ std::vector<Size> offered_sizes(const DisplayReport& report, Use use, int32_t mi
     if (!sizes.empty())
         return sizes;
     // Nothing useful: the fixed sizes, the smallest that is tall enough
-    // always among them.
+    // always among them, or the tallest when none is.
     for (const Size size : fallback_sizes)
         if (large_enough(size, minimum_height) &&
             (sizes.empty() || !known(desktop) || fits(size, desktop)))

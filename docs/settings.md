@@ -284,21 +284,24 @@ the game draws its text and how the modern fonts draw it.
   draws fewer. Raise it for smoother edges if the frame rate holds.
 - **Screen size**, Desktop or any size the display offers from 640x480
   up, such as 2560x1440 or 3840x2160 on a 4K monitor and 3440x1440 on an
-  ultrawide, Desktop by default; it applies from the next start. Where the
-  game starts full screen the list holds the display's full-screen modes;
-  where it starts in a window, the sizes that fit the desktop. Sizes are
-  listed once each, whatever their refresh rates, the narrower first. On a
-  high-density display, such as a Mac's Retina display, they are in the
-  desktop's points, as the system lists them, so that each one fits the
-  screen. Desktop leaves the screen at the desktop's size. Another size
-  switches the screen to it in full screen, at the desktop's refresh rate
-  where the display has it, and opens a window of that size otherwise. A
-  size the display no longer offers, as when another monitor is connected,
-  starts at Desktop; the setting keeps it for when the display offers it
-  again. The options' Screen Size, under Visuals, lists the same sizes and
-  sets this one when the options close with OK. Choose a size for the period
-  look, for an old monitor, or so that a slow computer has fewer pixels to
-  draw.
+  ultrawide, Desktop by default; it applies from the next start. The sizes
+  are those of the display the game opens on, the main one where there are
+  several. Where the game starts full screen they are the display's
+  full-screen modes; where it starts in a window, those that fit the
+  desktop, with 640x480, 800x600, 1024x768, 1280x1024 and 1600x1200 where
+  they fit it. Sizes are listed once each, whatever their refresh rates,
+  the narrower first, up to 8192 on a side. On a high-density display,
+  such as a Mac's Retina display, they are in the desktop's points, as the
+  system lists them, so that each one fits the screen. Desktop leaves the
+  screen at the desktop's size. Another size switches the screen to it in
+  full screen, at the desktop's refresh rate where the display has it, and
+  opens a window of that size otherwise. A size the display no longer
+  offers, as when another monitor is connected, starts at Desktop; the
+  setting keeps it for when the display offers it again. The options'
+  Screen Size, under Visuals, lists the same sizes and sets this one when
+  the options close with OK; their Restore Default sets it back to its
+  default. Choose a size for the period look, for an old monitor, or so
+  that a slow computer has fewer pixels to draw.
 - **Hardware acceleration**, Off, Basic or Full, Full by default. It says
   how much of the drawing the graphics card does:
   - **Off**: the processor draws and scales every frame, as the game always

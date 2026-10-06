@@ -29,6 +29,16 @@ bool fits_screen_size(display_modes::Size size) noexcept {
     return size.width > 0 && size.height > 0 && size.width <= widest && size.height <= widest;
 }
 
+/// Tells whether the Screen size setting keeps a display's size: neither
+/// side above settings::longest_screen_side.
+///
+/// @param size the display's size
+/// @return true when both sides are above 0 and the setting keeps them
+bool kept_as_setting(display_modes::Size size) noexcept {
+    return size.width > 0 && size.height > 0 && size.width <= settings::longest_screen_side &&
+           size.height <= settings::longest_screen_side;
+}
+
 /// Returns a display's size as the Screen size setting keeps one.
 ///
 /// @param size the display's size, one fits_screen_size accepts
@@ -51,14 +61,12 @@ display_modes::Use start_use(const Options& options) noexcept {
 }
 
 std::vector<settings::ScreenSize>
-offered_screen_sizes(const Options& options, SDL_Window* window, int32_t minimum_height) {
-    const SDL_DisplayID display =
-        window != nullptr ? SDL_GetDisplayForWindow(window) : SDL_GetPrimaryDisplay();
+offered_screen_sizes(const Options& options, int32_t minimum_height) {
     std::vector<settings::ScreenSize> sizes;
     for (const display_modes::Size size : display_modes::offered_sizes(
-             display_report(options, display), start_use(options), minimum_height
+             display_report(options, SDL_GetPrimaryDisplay()), start_use(options), minimum_height
          ))
-        if (fits_screen_size(size))
+        if (kept_as_setting(size))
             sizes.push_back(screen_size_of(size));
     if (sizes.empty())
         sizes.push_back(

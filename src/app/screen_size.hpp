@@ -36,18 +36,20 @@ display_report(const Options& options, SDL_DisplayID display);
 /// @return full screen or a window
 [[nodiscard]] oa::platform::display_modes::Use start_use(const Options& options) noexcept;
 
-/// Returns the screen sizes the display the window is on offers for the
-/// way the next start shows them (start_use), each once, the narrower
-/// first: the sizes the options' Screen Size and the settings' Screen size
-/// offer after Desktop.
+/// Returns the screen sizes the primary display offers for the way the next
+/// start shows them (start_use), each once, the narrower first and neither
+/// side above oa::ui::engine_settings::longest_screen_side: the sizes the
+/// options' Screen Size and the settings' Screen size offer after Desktop.
+/// The game's window opens on the primary display, which checks a stored
+/// size at start (shown_screen_size), whichever display the window is on
+/// when the size is chosen.
 ///
 /// @param options the parsed command line
-/// @param window the game's window; null reads the primary display
 /// @param minimum_height the shortest size offered, in units: 480, or a
 ///     mod's taller floor
 /// @return the sizes; never empty
 [[nodiscard]] std::vector<oa::ui::engine_settings::ScreenSize>
-offered_screen_sizes(const Options& options, SDL_Window* window, int32_t minimum_height);
+offered_screen_sizes(const Options& options, int32_t minimum_height);
 
 /// Returns the size of the primary display's desktop: the made-up
 /// monitor's first mode with --display-modes.

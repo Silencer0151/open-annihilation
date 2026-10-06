@@ -279,10 +279,13 @@ struct OptionsHost {
     void (*play_voice_test)(void* context) = nullptr;
     void (*play_wave)(void* context, const char* path) = nullptr;
     bool (*scan_display_modes)(void* context, DisplayModeList& list) = nullptr;
-    void (*save_options)(void* context) = nullptr;       // writes preferences
-    void (*restore_all)(void* context) = nullptr;        // entry snapshot, every group
-    void (*restore_sound)(void* context) = nullptr;      // sound UNDO arm
-    void (*reset_sound)(void* context) = nullptr;        // sound RESTORE arm
+    void (*save_options)(void* context) = nullptr;  // writes preferences
+    void (*restore_all)(void* context) = nullptr;   // entry snapshot, every group
+    void (*restore_sound)(void* context) = nullptr; // sound UNDO arm
+    void (*reset_sound)(void* context) = nullptr;   // sound RESTORE arm
+    // Visual RESTORE arm, after the display stores were set to 640x480:
+    // puts the host's own default Screen Size in them instead.
+    void (*reset_screen_size)(void* context) = nullptr;
     void (*release_lightbar)(void* context) = nullptr;   // frees the lightbar buffers
     void (*draw_current_frame)(void* context) = nullptr; // clears and presents the frame
     // FLIPSURFACE: a copy of the top panel's picture, with the panel's size
@@ -355,6 +358,10 @@ struct OptionsContext {
     // The shortest display mode VIDSLDR offers, in rows: 480 in 3.1c; a
     // mod's display rules may raise it.
     int32_t minimum_mode_height = oa::present::world_renderer::minimum_mode_height;
+    // The visual RESTORE set the display stores to the default Screen Size
+    // and neither VIDSLDR nor UNDO has changed them since; cleared as the
+    // entry snapshot is taken.
+    bool screen_size_restored = false;
     bool in_game = false;         // Game.session_flags bit 2
     bool realtime_panels = false; // Game.frame_flags bit 0: in-game *RT.GUI variants
     bool audio_device_missing = false;
@@ -444,7 +451,8 @@ void options_enter_tabs(Panel& panel, OptionsContext& context) noexcept;
 /// Captures the entry snapshot the CANCEL/UNDO arms restore from.
 ///
 /// @param[in,out] context Its snapshot is filled from the preferences; nothing
-///                        happens without preferences.
+///                        happens without preferences. Its
+///                        screen_size_restored is cleared.
 void options_capture_entry(OptionsContext& context) noexcept;
 
 /// Widens an in-game options panel and adds its PANEL filler record.
@@ -541,7 +549,10 @@ void options_enter_visuals(Panel& panel, OptionsContext& context, bool select_mo
 ///
 /// The flag buttons store their bit (BSHADOWS also sets the unit and vehicle
 /// shadow bits from it). UNDO restores and RESTORE resets the visual options,
-/// then the volumes and gamma are reapplied so the gamma shows. OK on
+/// then the volumes and gamma are reapplied so the gamma shows. Where RESTORE
+/// resets the display stores, the host's reset_screen_size then puts its own
+/// default Screen Size in them, and screen_size_restored is set until
+/// VIDSLDR moves or UNDO restores them. OK on
 /// SELVMODE.GUI only plays the sound. Other buttons fall through to the tab
 /// handler. Closing drops the display-mode list and the realtime-panel flag.
 ///

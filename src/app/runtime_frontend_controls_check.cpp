@@ -1081,31 +1081,75 @@ void Runtime::check_frontend_controls() {
     // OK keeps the Screen Size chosen as the Screen size setting, from the
     // next start, and the options open on it again. The slider moves to the
     // end away from the size the options open on: the largest, or on a
-    // display whose largest that is, the smallest.
+    // display whose largest that is, the smallest. A display of one size
+    // leaves nothing to move to.
     const auto opened_on = EngineSettingsState::screen_size_in_effect(*this, offered);
     const bool to_largest = opened_on != offered.back();
     const auto moved_to = to_largest ? offered.back() : offered.front();
-    click(entry::resource_name(entry::Button::options));
-    click("VISUALS");
-    drag_check_knob("VIDSLDR", to_largest ? 400 : -400);
-    idle_tick();
-    click("PREV");
-    require(screen_ == Screen::single_player, "OK did not leave the options");
     const auto moved_to_text =
         std::to_string(moved_to.width) + 'x' + std::to_string(moved_to.height);
-    expect(
-        stored_size() == moved_to_text && engine_settings_state().current.screen_size == moved_to &&
-            preferences_.display_width == moved_to.width &&
-            preferences_.display_height == moved_to.height,
-        "OK on Screen Size " + moved_to_text + " stored the setting as " + stored_size()
-    );
+    if (offered.size() > 1) {
+        click(entry::resource_name(entry::Button::options));
+        click("VISUALS");
+        drag_check_knob("VIDSLDR", to_largest ? 400 : -400);
+        idle_tick();
+        click("PREV");
+        require(screen_ == Screen::single_player, "OK did not leave the options");
+        expect(
+            stored_size() == moved_to_text &&
+                engine_settings_state().current.screen_size == moved_to &&
+                preferences_.display_width == moved_to.width &&
+                preferences_.display_height == moved_to.height,
+            "OK on Screen Size " + moved_to_text + " stored the setting as " + stored_size()
+        );
+    }
+    // RESTORE shows the Screen size setting's default as the size it plays
+    // at, Desktop's, never 3.1c's 640x480; UNDO brings the size the options
+    // opened on back, and OK then keeps the setting. RESTORE and OK set it
+    // to its default.
+    const auto default_size =
+        oa::ui::engine_settings::default_settings(EngineSettingsState::inputs(*this)).screen_size;
+    const auto default_text = oa::ui::engine_settings::screen_size_text(default_size);
+    const auto default_shown = EngineSettingsState::screen_size_shown(*this, default_size, offered);
+    const auto kept_text = stored_size();
+    const auto kept_shown = EngineSettingsState::screen_size_in_effect(*this, offered);
     click(entry::resource_name(entry::Button::options));
     click("VISUALS");
     expect(
-        label_text("VIDVAL") == size_text(moved_to),
-        "VISUALS opened_on on " + label_text("VIDVAL") + " after OK on " + size_text(moved_to)
+        label_text("VIDVAL") == size_text(kept_shown),
+        "VISUALS opened on " + label_text("VIDVAL") + " after OK on " + size_text(kept_shown)
     );
-    click("CANCEL");
+    click("RESTORE");
+    idle_tick();
+    expect(
+        label_text("VIDVAL") == size_text(default_shown),
+        "RESTORE showed Screen Size " + label_text("VIDVAL") + ", not the default's " +
+            size_text(default_shown)
+    );
+    click("UNDO");
+    idle_tick();
+    expect(
+        label_text("VIDVAL") == size_text(kept_shown),
+        "UNDO after RESTORE showed Screen Size " + label_text("VIDVAL") + ", not " +
+            size_text(kept_shown)
+    );
+    click("PREV");
+    expect(
+        stored_size() == kept_text,
+        "OK after RESTORE and UNDO stored the setting as " + stored_size() + ", not " + kept_text
+    );
+    click(entry::resource_name(entry::Button::options));
+    click("VISUALS");
+    click("RESTORE");
+    idle_tick();
+    click("PREV");
+    expect(
+        stored_size() == default_text &&
+            engine_settings_state().current.screen_size == default_size,
+        "OK after RESTORE stored the setting as " + stored_size() + ", not " + default_text
+    );
+    std::cout << "frontend controls check: RESTORE shows Screen Size " << size_text(default_shown)
+              << " and OK stores " << default_text << '\n';
     // The check's preferences file starts the next run at Desktop again.
     EngineSettingsState::choose_screen_size(*this, oa::ui::engine_settings::desktop_screen_size);
     save_preferences();

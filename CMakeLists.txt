@@ -1262,7 +1262,9 @@ if(OA_BUILD_PLATFORM)
       # shows pressed and HELPTEXT shows the help under the pointer. VISUALS'
       # Screen Size lists the 4K monitor's sizes from 640x480 to 3840x2160,
       # opens on the size the game plays at, and sets the Screen size setting
-      # on OK and not on CANCEL.
+      # on OK and not on CANCEL; RESTORE shows the setting's default, Desktop,
+      # as the size it plays at, UNDO brings back the size it opened on, and
+      # OK after RESTORE sets the setting to Desktop.
       # NEWGAME.GUI's Campaign list selects the clicked campaign, steps with
       # Up and Down until a button takes the focus, scrolls with its arrow and
       # starts a double-clicked one.

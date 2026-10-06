@@ -3801,18 +3801,40 @@ void Runtime::bind_options_context() {
     };
     context.host.save_options = [](void* host) {
         auto& runtime = *static_cast<Runtime*>(host);
-        // A Screen Size the player moved to sets the Screen size setting,
-        // from the next start.
-        const auto& entry = match_menu_session().options.snapshot;
+        // RESTORE sets the Screen size setting back to its default, and a
+        // Screen Size the player moved to sets it to that size, from the
+        // next start; in a match the Screen Size is hidden.
+        const auto& options = match_menu_session().options;
+        const auto& entry = options.snapshot;
         const auto& preferences = runtime.preferences_;
-        if (preferences.display_width != entry.display_width ||
-            preferences.display_height != entry.display_height)
+        const bool moved = preferences.display_width != entry.display_width ||
+                           preferences.display_height != entry.display_height;
+        if (!options.in_game && options.screen_size_restored)
+            EngineSettingsState::choose_screen_size(
+                runtime,
+                oa::ui::engine_settings::default_settings(EngineSettingsState::inputs(runtime))
+                    .screen_size
+            );
+        else if (!options.in_game && moved)
             EngineSettingsState::choose_screen_size(
                 runtime,
                 {static_cast<uint16_t>(preferences.display_width),
                  static_cast<uint16_t>(preferences.display_height)}
             );
         runtime.save_preferences();
+    };
+    context.host.reset_screen_size = [](void* host) {
+        // RESTORE shows the Screen size setting's default, Desktop on most
+        // machines, as the size it plays at, rather than 3.1c's 640x480.
+        auto& runtime = *static_cast<Runtime*>(host);
+        const auto size = EngineSettingsState::screen_size_shown(
+            runtime,
+            oa::ui::engine_settings::default_settings(EngineSettingsState::inputs(runtime))
+                .screen_size,
+            EngineSettingsState::offered_screen_sizes(runtime)
+        );
+        runtime.preferences_.display_width = size.width;
+        runtime.preferences_.display_height = size.height;
     };
     context.host.restore_all = [](void* host) {
         auto& runtime = *static_cast<Runtime*>(host);

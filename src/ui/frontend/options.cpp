@@ -484,6 +484,7 @@ OptionsLightbarStep options_lightbar_step(OptionsLightbar& lightbar) noexcept {
 void options_capture_entry(OptionsContext& context) noexcept {
     if (context.preferences != nullptr)
         prefs::capture_options_entry(*context.preferences, context.snapshot);
+    context.screen_size_restored = false;
 }
 
 void options_enter_tabs(Panel& panel, OptionsContext& context) noexcept {
@@ -706,6 +707,7 @@ void options_on_video_mode_slider(Panel& panel, OptionsContext& context) noexcep
             set_mode_text(panel, mode);
             context.preferences->display_width = static_cast<uint32_t>(mode.width);
             context.preferences->display_height = static_cast<uint32_t>(mode.height);
+            context.screen_size_restored = false;
         }
     }
     panel.dirty = true;
@@ -795,6 +797,7 @@ OptionsAction options_on_visuals_click(Panel& panel, OptionsContext& context) no
         play(context, kOptionsSound);
         if (context.state != nullptr) {
             prefs::restore_visual_options(*context.preferences, *context.state, context.snapshot);
+            context.screen_size_restored = false;
             call(context, context.host.apply_volumes);
         }
         return OptionsAction::reload;
@@ -802,6 +805,11 @@ OptionsAction options_on_visuals_click(Panel& panel, OptionsContext& context) no
         play(context, kOptionsSound);
         if (context.state != nullptr) {
             prefs::reset_visual_options(*context.preferences, *context.state);
+            // The display stores are reset only while no game loads or runs.
+            if ((context.state->session_flags & oa::ui::frontend_state::flags::loading) == 0) {
+                call(context, context.host.reset_screen_size);
+                context.screen_size_restored = true;
+            }
             call(context, context.host.apply_volumes);
         }
         return OptionsAction::reload;

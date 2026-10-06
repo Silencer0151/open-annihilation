@@ -17,12 +17,15 @@ modes.
   game's resolution lists are sorted. Every mode at least 640 wide and
   `minimum_height` tall is offered (480, or the 768 of a mod's
   `ui.display-modes`); for a window (`Use::window`), only those that fit a
-  known desktop. A display that reports more than `most_sizes` (100) sizes,
-  the number the game's own list holds, offers its largest. A display that
+  known desktop, with the `fallback_sizes` that fit it, since a window
+  takes any size and a display may list no mode of the smaller ones (a
+  Mac's scaled modes). A display that reports more than `most_sizes` (100)
+  sizes, the number the game's own list holds, offers its largest. A display that
   reports nothing useful (no mode of 640x480 or more, as SDL's dummy video
   driver, or a phone's) offers `fallback_sizes`, the game's earlier fixed
   list from 640x480 to 1600x1200, without those larger than a known desktop;
-  640x480, the game's own screen, always stays.
+  640x480, the game's own screen, always stays (with a mod's floor, the
+  shortest size tall enough, or 1600x1200 when none is).
 - `can_show(report, size, use)` says whether a stored size can be shown as
   the game starts: a size the display has a mode of, or for a window any
   size that fits the desktop. A display that reports nothing useful cannot

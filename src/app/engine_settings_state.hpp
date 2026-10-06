@@ -165,8 +165,8 @@ struct Runtime::EngineSettingsState {
     /// @return why the file was not written; nothing when it was
     [[nodiscard]] static std::optional<std::string> flush(Runtime& runtime);
 
-    /// Returns the screen sizes the display the window is on offers for the
-    /// next start (offered_screen_sizes), from the floor the profile's
+    /// Returns the screen sizes the primary display offers for the next
+    /// start (offered_screen_sizes), from the floor the profile's
     /// display rules set: the options' Screen Size list, and the settings'
     /// Screen size after Desktop.
     ///
@@ -176,16 +176,29 @@ struct Runtime::EngineSettingsState {
     offered_screen_sizes(const Runtime& runtime);
 
     /// Returns the size the game plays at, as the options' Screen Size and
-    /// the battle room's RES column show it: the Screen size setting's size,
-    /// else, for Desktop, the window's size, else the desktop's; put on the
-    /// offered size nearest it from below when the display does not offer
-    /// it.
+    /// the battle room's RES column show it: screen_size_shown of the
+    /// Screen size setting.
     ///
     /// @param runtime the runtime
     /// @param offered the sizes offered (offered_screen_sizes); never empty
     /// @return one of the sizes offered
     [[nodiscard]] static oa::ui::engine_settings::ScreenSize screen_size_in_effect(
         const Runtime& runtime, const std::vector<oa::ui::engine_settings::ScreenSize>& offered
+    );
+
+    /// Returns the size a Screen size setting plays at, as the options'
+    /// Screen Size shows it: the setting's size, else, for Desktop, the
+    /// window's size, else the desktop's; put on the offered size nearest it
+    /// from below when the display does not offer it.
+    ///
+    /// @param runtime the runtime
+    /// @param setting the Screen size setting's value
+    /// @param offered the sizes offered (offered_screen_sizes); never empty
+    /// @return one of the sizes offered
+    [[nodiscard]] static oa::ui::engine_settings::ScreenSize screen_size_shown(
+        const Runtime& runtime,
+        oa::ui::engine_settings::ScreenSize setting,
+        const std::vector<oa::ui::engine_settings::ScreenSize>& offered
     );
 
     /// Sets the Screen size setting, from the next start, to the size the

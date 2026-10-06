@@ -20,6 +20,7 @@ struct Recorder {
     int restores = 0;
     int sound_undo = 0;
     int sound_reset = 0;
+    int screen_size_resets = 0;
     int stops = 0;
     int voice_tests = 0;
     uint16_t speed = 0;
@@ -38,6 +39,9 @@ OptionsContext make_context(prefs::Preferences& preferences, Recorder& recorder)
     context.host.restore_all = [](void* c) { ++static_cast<Recorder*>(c)->restores; };
     context.host.restore_sound = [](void* c) { ++static_cast<Recorder*>(c)->sound_undo; };
     context.host.reset_sound = [](void* c) { ++static_cast<Recorder*>(c)->sound_reset; };
+    context.host.reset_screen_size = [](void* c) {
+        ++static_cast<Recorder*>(c)->screen_size_resets;
+    };
     context.host.stop_sound = [](void* c) { ++static_cast<Recorder*>(c)->stops; };
     context.host.play_voice_test = [](void* c) { ++static_cast<Recorder*>(c)->voice_tests; };
     context.host.set_game_speed = [](void* c, uint16_t speed) {
@@ -292,6 +296,36 @@ OA_GAME_DATA_TEST(visuals_flags_and_display_modes) {
     select(panel, "RESTORE");
     OA_CHECK(options_on_visuals_click(panel, context) == OptionsAction::reload);
     OA_CHECK(preferences.gamma == 12 && recorder.volumes == volumes + 3);
+
+    // RESTORE sets the display stores to 640x480 and has the host put its
+    // own default Screen Size there, marking it restored until VIDSLDR moves
+    // or UNDO restores the entry's size.
+    OA_CHECK(preferences.display_width == 640 && preferences.display_height == 480);
+    OA_CHECK(recorder.screen_size_resets == 1 && context.screen_size_restored);
+    options_on_video_mode_slider(panel, context);
+    OA_CHECK(!context.screen_size_restored);
+    select(panel, "RESTORE");
+    options_on_visuals_click(panel, context);
+    OA_CHECK(recorder.screen_size_resets == 2 && context.screen_size_restored);
+    context.snapshot.display_width = 800;
+    context.snapshot.display_height = 600;
+    select(panel, "UNDO");
+    options_on_visuals_click(panel, context);
+    OA_CHECK(!context.screen_size_restored && preferences.display_width == 800);
+    // While a game loads or runs the display stores stay, and so does the
+    // Screen Size.
+    state.session_flags = oa::ui::frontend_state::flags::loading;
+    select(panel, "RESTORE");
+    options_on_visuals_click(panel, context);
+    OA_CHECK(recorder.screen_size_resets == 2 && !context.screen_size_restored);
+    OA_CHECK(preferences.display_width == 800);
+    // A fresh entry snapshot clears the mark.
+    state.session_flags = 0;
+    select(panel, "RESTORE");
+    options_on_visuals_click(panel, context);
+    OA_CHECK(context.screen_size_restored);
+    options_capture_entry(context);
+    OA_CHECK(!context.screen_size_restored);
 }
 
 // A mod's display rules that keep only modes of 768 rows or more.

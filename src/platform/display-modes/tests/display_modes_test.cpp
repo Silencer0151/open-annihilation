@@ -5,7 +5,8 @@
 // monitor on Windows, a Retina Mac's built-in display, a 1280x1024 monitor
 // of Windows XP's time, an ultrawide, a portrait monitor, one that reports
 // more sizes than a list holds and one that reports nothing; for full
-// screen and for a window. Then the mode each size switches to, the sizes a
+// screen and for a window, which also takes the fixed sizes that fit the
+// desktop. Then the mode each size switches to, the sizes a
 // start keeps, the nearest offered size and the reports a check names in
 // text.
 
@@ -168,8 +169,21 @@ void test_retina_mac() {
     };
     // 640x414 is shorter than the game's screen; 1512x982 comes once.
     OA_CHECK(dm::offered_sizes(report, Use::full_screen) == full);
-    const std::vector<Size> window{{800, 520}, {1024, 665}, {1147, 745}, {1352, 878}, {1512, 982}};
+    // A window also takes the fixed sizes that fit the desktop, which the
+    // display lists no mode of.
+    const std::vector<Size> window{
+        {640, 480},
+        {800, 520},
+        {800, 600},
+        {1024, 665},
+        {1024, 768},
+        {1147, 745},
+        {1352, 878},
+        {1512, 982},
+    };
     OA_CHECK(dm::offered_sizes(report, Use::window) == window);
+    // A stored 640x480 opens as a window of that size.
+    OA_CHECK(dm::can_show(report, {640, 480}, Use::window));
     // The desktop's size switches to its own density-2 mode, not the
     // low-density duplicate listed after it; a size SDL lists only at
     // density 2 switches to that one, the panel's own size to density 1.
@@ -223,7 +237,10 @@ void test_ultrawide() {
         {3440, 1440},
     };
     OA_CHECK(dm::offered_sizes(report, Use::full_screen) == sizes);
-    OA_CHECK(dm::offered_sizes(report, Use::window) == sizes);
+    // A window also takes 1600x1200, which fits the desktop.
+    std::vector<Size> window = sizes;
+    window.insert(window.begin() + 5, Size{1600, 1200});
+    OA_CHECK(dm::offered_sizes(report, Use::window) == window);
     OA_CHECK(dm::mode_for(report, {3440, 1440}) == std::optional<std::size_t>{0});
     DisplayReport at_sixty = report;
     at_sixty.desktop.refresh_rate = 60.0F;
@@ -238,6 +255,11 @@ void test_portrait_monitor() {
     // Sizes narrower than the game's screen are left out.
     const std::vector<Size> sizes{{768, 1024}, {900, 1600}, {1080, 1920}};
     OA_CHECK(dm::offered_sizes(report, Use::full_screen) == sizes);
+    // A window also takes the fixed sizes that fit the narrow desktop.
+    const std::vector<Size> window{
+        {640, 480}, {768, 1024}, {800, 600}, {900, 1600}, {1024, 768}, {1080, 1920}
+    };
+    OA_CHECK(dm::offered_sizes(report, Use::window) == window);
 }
 
 void test_reports_nothing() {
@@ -279,6 +301,14 @@ void test_minimum_height() {
     OA_CHECK(
         dm::offered_sizes(small_desktop, Use::window, 768) == (std::vector<Size>{{1024, 768}})
     );
+    // A floor above every fixed size leaves the tallest of them.
+    OA_CHECK(
+        dm::offered_sizes(DisplayReport{}, Use::full_screen, 1440) ==
+        (std::vector<Size>{{1600, 1200}})
+    );
+    // A window's fixed sizes keep to the floor too.
+    const auto tall_window = dm::offered_sizes(retina_mac(), Use::window, 768);
+    OA_CHECK(tall_window == (std::vector<Size>{{1024, 768}, {1352, 878}, {1512, 982}}));
 }
 
 void test_more_sizes_than_a_list_holds() {

@@ -1375,7 +1375,9 @@ logs it.
   [display modes](../platform/display-modes/README.md)), which the options'
   Screen Size, the settings' Screen size after Desktop and the battle room's
   RES column list (`multiplayer_bind_display_modes`), from what SDL reports
-  of the display the window is on, or the made-up monitor `--display-modes`
+  of the primary display, which the window opens on and a stored size is
+  checked against, up to the longest side the setting keeps, or the
+  made-up monitor `--display-modes`
   names for a check on SDL's dummy video driver; and Hardware
   acceleration, which either flag decides over
   (`hardware_acceleration_asked`). With no size named the window opens at

@@ -161,16 +161,27 @@ std::optional<std::string> Runtime::EngineSettingsState::flush(Runtime& runtime)
 std::vector<settings::ScreenSize>
 Runtime::EngineSettingsState::offered_screen_sizes(const Runtime& runtime) {
     return oa::app::offered_screen_sizes(
-        runtime.options_, runtime.sdl_.window, view_rules::minimum_mode_height(runtime.ui_rules())
+        runtime.options_, view_rules::minimum_mode_height(runtime.ui_rules())
     );
 }
 
 settings::ScreenSize Runtime::EngineSettingsState::screen_size_in_effect(
     const Runtime& runtime, const std::vector<settings::ScreenSize>& offered
 ) {
-    settings::ScreenSize size = runtime.engine_settings_
-                                    ? runtime.engine_settings_->current.screen_size
-                                    : settings::desktop_screen_size;
+    return screen_size_shown(
+        runtime,
+        runtime.engine_settings_ ? runtime.engine_settings_->current.screen_size
+                                 : settings::desktop_screen_size,
+        offered
+    );
+}
+
+settings::ScreenSize Runtime::EngineSettingsState::screen_size_shown(
+    const Runtime& runtime,
+    settings::ScreenSize setting,
+    const std::vector<settings::ScreenSize>& offered
+) {
+    settings::ScreenSize size = setting;
     // A screen size keeps each side in 16 bits.
     constexpr int widest = std::numeric_limits<uint16_t>::max();
     int width = 0;

@@ -3,9 +3,10 @@
 
 // The screen sizes a display offers: the full-screen modes it reports, each
 // size once, sorted as the game's resolution lists are, from 640x480 up; for
-// a window, the sizes that fit the desktop. The rules work on a report of the
-// display, so that a test can hand them any monitor's modes; SDL fills the
-// report for the game (oa/platform/display_modes/sdl.hpp).
+// a window, those that fit the desktop and the fixed sizes that fit it. The
+// rules work on a report of the display, so that a test can hand them any
+// monitor's modes; SDL fills the report for the game
+// (oa/platform/display_modes/sdl.hpp).
 #pragma once
 
 #include <array>
@@ -61,7 +62,8 @@ inline constexpr Size smallest_size{640, 480};
 /// largest.
 inline constexpr std::size_t most_sizes = 100;
 /// The sizes offered when a display reports no mode of smallest_size or
-/// larger.
+/// larger, and those of them that fit the desktop beside its modes for a
+/// window.
 inline constexpr std::array<Size, 5> fallback_sizes{{
     {640, 480},
     {800, 600},
@@ -87,10 +89,12 @@ inline constexpr std::array<Size, 5> fallback_sizes{{
 /// Every reported mode at least smallest_size.width wide and minimum_height
 /// tall is offered, whatever its refresh rate, colour depth or pixel
 /// density; for a window, only those no wider and no taller than a known
-/// desktop. A display that reports more than most_sizes sizes offers its
-/// largest. When nothing is left, fallback_sizes is offered, without the
-/// sizes shorter than minimum_height and, of the others, those larger than a
-/// known desktop; the smallest of them always stays.
+/// desktop, together with the fallback_sizes that are tall enough and fit
+/// it, as a window may take any size. A display that reports more than
+/// most_sizes sizes offers its largest. When nothing is left,
+/// fallback_sizes is offered, without the sizes shorter than minimum_height
+/// and, of the others, those larger than a known desktop; the smallest of
+/// them always stays, and when none is tall enough the tallest alone.
 ///
 /// @param report what the display reports
 /// @param use full screen, or a window
