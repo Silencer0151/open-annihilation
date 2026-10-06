@@ -297,7 +297,7 @@ int main() {
             );
             // Other lines show as they came: other words, one space before
             // the phrase, no name, more after the map line, no head.
-            for (const char* line :
+            for (const char* other_line :
                  {"<Hans> gg",
                   "<Hans> allied with Mary",
                   "<Hans>  allied with",
@@ -306,7 +306,7 @@ int main() {
                   " allied with Mary",
                   "Hans>  allied with Mary",
                   ""})
-                CHECK(shown(line, phrases) == line);
+                CHECK(shown(other_line, phrases) == other_line);
         }
         CHECK(shown("<Hans>  allied with Mary", nullptr) == "<Hans>  allied with Mary");
         CHECK(shown("<Hans> does not have this map", nullptr) == "<Hans> does not have this map");

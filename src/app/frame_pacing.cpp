@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <string_view>
 
 namespace oa::app::frame_pacing {
@@ -133,6 +134,16 @@ constexpr std::string_view kTierAntiAliasingJoin = " ";
 /// The characters one of the table's texts holds, its terminating zero
 /// left out.
 constexpr std::size_t kTextCharacters = kFrameStatsTextBytes - 1;
+/// The most characters a whole number of a type is written in, its sign
+/// included.
+template <typename Number>
+constexpr std::size_t kNumberCharacters = std::numeric_limits<Number>::digits10 + 2;
+/// Bytes the display row's mode takes at its widest, two whole numbers and a
+/// rate joined by "x" and "@", its terminating zero included.
+constexpr std::size_t kModeTextBytes = 2 * kNumberCharacters<int> + kNumberCharacters<long> + 3;
+/// Bytes the display row's note takes at its widest before it is cut to
+/// fit: the mode, a space and the scale, its terminating zero included.
+constexpr std::size_t kNoteTextBytes = kModeTextBytes + kFrameStatsTextBytes;
 
 /// Starts the "+stats" table: every row's kind and label, the title and the
 /// value columns' names.
@@ -532,7 +543,7 @@ void set_display_row(FrameStatsRow& row, const FrameStatsDisplay& display) noexc
         static_cast<int>(display.frame_height)
     );
     // The note's parts, each left out when it is not known.
-    std::array<char, kFrameStatsTextBytes> mode{};
+    std::array<char, kModeTextBytes> mode{};
     if (display.mode_width > 0 && display.mode_height > 0) {
         const long rate = std::lround(static_cast<double>(display.refresh_rate));
         if (rate > 0)
@@ -557,9 +568,9 @@ void set_display_row(FrameStatsRow& row, const FrameStatsDisplay& display) noexc
     if (display.display_scale > 0.0F)
         write_scale(display.display_scale, scale.data(), scale.size());
     const char* const gap = mode[0] != '\0' && scale[0] != '\0' ? " " : "";
-    std::snprintf(
-        row.note.text.data(), row.note.text.size(), "%s%s%s", mode.data(), gap, scale.data()
-    );
+    std::array<char, kNoteTextBytes> note{};
+    std::snprintf(note.data(), note.size(), "%s%s%s", mode.data(), gap, scale.data());
+    set_text(row.note, note.data());
 }
 
 FrameStatsTable frame_stats_table(

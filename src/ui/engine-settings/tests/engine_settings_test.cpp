@@ -1811,7 +1811,7 @@ void explosion_flash_default_read_and_round_trip() {
         CHECK(flash(text) == settings::ExplosionFlash::full);
 
     const auto defaults = settings::default_settings(players_own_on_linux);
-    for (const auto [level, word] :
+    for (const auto& [level, word] :
          {std::pair{settings::ExplosionFlash::off, "off"},
           std::pair{settings::ExplosionFlash::reduced, "reduced"}}) {
         auto chosen = defaults;

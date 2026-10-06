@@ -15,10 +15,13 @@
 #include "oa/test/game_assets.hpp"
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -1777,12 +1780,14 @@ void test_resolution_cycle() {
     const auto sent_size = [&] {
         const auto index = last_sent(loopback, oa::netgame::RecordType::player_info);
         oa::netgame::PlayerInfoRecord record{};
-        mp::PlayerSetupInfo block{};
         if (index < 0 ||
             oa::netgame::decode_record(loopback.sent[index], loopback.sent_size[index], &record) !=
                 oa::netgame::WireError::ok)
             return std::pair<uint16_t, uint16_t>{};
-        std::memcpy(&block, record.info_head, sizeof(record.info_head));
+        // The block's bytes as far as the record's head carries them.
+        std::array<uint8_t, sizeof(mp::PlayerSetupInfo)> bytes{};
+        std::copy(std::begin(record.info_head), std::end(record.info_head), bytes.begin());
+        const auto block = std::bit_cast<mp::PlayerSetupInfo>(bytes);
         return std::pair<uint16_t, uint16_t>{block.screen_width, block.screen_height};
     };
     mp::lobby_cycle_resolution(lobby, false);

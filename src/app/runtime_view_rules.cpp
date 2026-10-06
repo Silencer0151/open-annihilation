@@ -471,12 +471,12 @@ bool Runtime::ready_build_preview(MatchModels& models) {
         const auto& objects = preview.instance.model().objects;
         for (auto& piece : preview.instance.pieces()) {
             const bool known = piece.object_index < objects.size();
-            const bool shown =
+            const bool piece_shown =
                 list.empty()
                     ? !known || !view_rules::preview_skips_piece(objects[piece.object_index].name)
                     : known &&
                           view_rules::preview_lists_piece(list, objects[piece.object_index].name);
-            if (!shown)
+            if (!piece_shown)
                 piece.flags &= static_cast<uint16_t>(
                     ~static_cast<uint16_t>(oa::sim::model_runtime::PieceFlag::visible)
                 );

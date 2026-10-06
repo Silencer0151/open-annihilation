@@ -489,26 +489,26 @@ void Runtime::check_radar_orders() {
 
     // One press on the radar and what it should leave.
     struct Case {
-        std::string name;
+        std::string name{};
         int32_t interface_type{};
-        std::vector<uint16_t> selection; ///< selected before the press, the first as primary
-        MatchCommand command{};          ///< armed before it
-        std::pair<float, float> at{};    ///< the radar point pressed
+        std::vector<uint16_t> selection{}; ///< selected before the press, the first as primary
+        MatchCommand command{};            ///< armed before it
+        std::pair<float, float> at{};      ///< the radar point pressed
         uint8_t button = SDL_BUTTON_LEFT;
         SDL_Keymod mods = SDL_KMOD_NONE;
-        std::optional<input::OrderCursor> cursor; ///< the cursor shown there before it
+        std::optional<input::OrderCursor> cursor{}; ///< the cursor shown there before it
         /// What each watched unit holds after it, head first; a unit left
         /// out holds nothing.
-        std::vector<std::pair<uint16_t, std::vector<Expected>>> orders;
-        std::vector<uint16_t> selected_after; ///< the selection after it, in slot order
+        std::vector<std::pair<uint16_t, std::vector<Expected>>> orders{};
+        std::vector<uint16_t> selected_after{}; ///< the selection after it, in slot order
         MatchCommand command_after{};
         bool view_moves = false; ///< the view goes to the point pressed
         /// Runs after the units are set up and before the pointer goes to
         /// the radar; may stand in for the press.
-        std::function<void()> before;
+        std::function<void()> before{};
         /// Gives the press itself, in place of a press and release at `at`.
-        std::function<void()> press;
-        std::vector<std::string> sounds; ///< heard, in order, when the case listens
+        std::function<void()> press{};
+        std::vector<std::string> sounds{}; ///< heard, in order, when the case listens
         bool listens = false;
     };
 

@@ -1629,15 +1629,15 @@ ScrolledRows open_rows(const Dialog& dialog) {
     const bool tall = oa::data::languages::interface_language().needs !=
                       oa::data::languages::TextNeeds::game_fonts;
     if (open.limit > 0 && tall) {
-        const int32_t edge = open.area.view.y;
+        const int32_t view_top = open.area.view.y;
         for (bool moved = true; moved;) {
             moved = false;
             for (const Row& row : open.rows.rows)
                 for (std::size_t line = 0; line < row.hint_lines; ++line) {
                     const SourceRect& box = row.hints[line];
                     const int32_t top = box.y - open.limit;
-                    if (top <= edge && top + box.height > edge) {
-                        open.limit += top + box.height - edge;
+                    if (top <= view_top && top + box.height > view_top) {
+                        open.limit += top + box.height - view_top;
                         moved = true;
                     }
                 }

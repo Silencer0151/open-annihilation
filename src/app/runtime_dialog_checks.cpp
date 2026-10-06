@@ -2223,7 +2223,7 @@ void Runtime::check_placed_dialogs(const fs::path& report_directory) {
                     break;
                 }
             require(other != OA_PLAYER_COUNT, "the skirmish has no other player");
-            auto running = composed();
+            auto before_menu = composed();
             toggle_team_menu();
             // The tab menu lies on the bottom bar over its BackTile face, as
             // the game places it from the screen's bottom edge: once, whole
@@ -2237,14 +2237,14 @@ void Runtime::check_placed_dialogs(const fs::path& report_directory) {
                     "Tab did not open TABMENU.GUI" + on
                 );
                 const auto& gadgets = match_hud_->layout.gadgets;
-                const auto& root = gadgets.front().common;
+                const auto& tab_root = gadgets.front().common;
                 require(
-                    root.y + root.height == kCanvasHeight,
+                    tab_root.y + tab_root.height == kCanvasHeight,
                     name + " does not end on the screen's bottom edge"
                 );
                 auto menu_frame = composed();
                 const auto shown = oa::ui::display_layout::source_panel_to_canvas(
-                    match_layout_, root.x, root.y, root.width, root.height
+                    match_layout_, tab_root.x, tab_root.y, tab_root.width, tab_root.height
                 );
                 require(
                     shown.y < match_layout_.bottom_bar_y() && shown.y + shown.height == height,
@@ -2253,7 +2253,7 @@ void Runtime::check_placed_dialogs(const fs::path& report_directory) {
                 std::size_t stray = 0;
                 for (int32_t y = battlefield.y; y < battlefield.y + battlefield.height; ++y)
                     for (int32_t x = battlefield.x; x < battlefield.x + battlefield.width; ++x)
-                        if (!inside(shown, x, y) && !same_pixel(running, menu_frame, x, y))
+                        if (!inside(shown, x, y) && !same_pixel(before_menu, menu_frame, x, y))
                             ++stray;
                 require(
                     stray == 0,
@@ -2270,11 +2270,12 @@ void Runtime::check_placed_dialogs(const fs::path& report_directory) {
                 // earlier one; a root lower than a frame shows the lower rows
                 // of the top frames.
                 std::vector<const uint8_t*> face(
-                    static_cast<std::size_t>(root.width) * static_cast<std::size_t>(root.height),
+                    static_cast<std::size_t>(tab_root.width) *
+                        static_cast<std::size_t>(tab_root.height),
                     nullptr
                 );
                 for (const auto& placed_tile : oa::ui::gui_layout::skin_tiles(
-                         root.width, root.height, tile_size, tile_size
+                         tab_root.width, tab_root.height, tile_size, tile_size
                      )) {
                     const auto& art = tiles[placed_tile.frame];
                     for (int32_t ty = 0; ty < static_cast<int32_t>(art.height); ++ty)
@@ -2283,19 +2284,19 @@ void Runtime::check_placed_dialogs(const fs::path& report_directory) {
                             const auto fy = placed_tile.y + ty;
                             const auto at = static_cast<std::size_t>(ty) * art.width +
                                             static_cast<std::size_t>(tx);
-                            if (fx < 0 || fy < 0 || fx >= root.width || fy >= root.height ||
+                            if (fx < 0 || fy < 0 || fx >= tab_root.width || fy >= tab_root.height ||
                                 at >= art.coverage.size() || art.coverage[at] == 0)
                                 continue;
                             face
-                                [static_cast<std::size_t>(fy) * root.width +
+                                [static_cast<std::size_t>(fy) * tab_root.width +
                                  static_cast<std::size_t>(fx)] =
                                     &match_palette_[static_cast<std::size_t>(art.pixels[at]) * 4U];
                         }
                 }
                 std::size_t compared = 0;
                 std::size_t differing = 0;
-                for (int32_t y = root.y; y < root.y + root.height; ++y)
-                    for (int32_t x = root.x; x < root.x + root.width; ++x) {
+                for (int32_t y = tab_root.y; y < tab_root.y + tab_root.height; ++y)
+                    for (int32_t x = tab_root.x; x < tab_root.x + tab_root.width; ++x) {
                         const auto on_record = [&](const auto& gadget) {
                             const auto& record = gadget.common;
                             return &gadget != &gadgets.front() && record.active != 0 &&
@@ -2309,8 +2310,8 @@ void Runtime::check_placed_dialogs(const fs::path& report_directory) {
                             y < focused->y + focused->height + rings)
                             continue;
                         const auto* colour = face
-                            [static_cast<std::size_t>(y - root.y) * root.width +
-                             static_cast<std::size_t>(x - root.x)];
+                            [static_cast<std::size_t>(y - tab_root.y) * tab_root.width +
+                             static_cast<std::size_t>(x - tab_root.x)];
                         if (colour == nullptr)
                             continue;
                         ++compared;
@@ -2318,7 +2319,7 @@ void Runtime::check_placed_dialogs(const fs::path& report_directory) {
                             ++differing;
                     }
                 require(
-                    compared > static_cast<std::size_t>(root.width) * root.height / 4,
+                    compared > static_cast<std::size_t>(tab_root.width) * tab_root.height / 4,
                     name + " has too few face pixels to compare"
                 );
                 require(
