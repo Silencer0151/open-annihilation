@@ -184,15 +184,18 @@ logs it.
   pointer's map pixel is (`apply_zoom_anchor`), so a step past the
   nearest or farthest zoom leaves it where it is, and the wheel counts its
   steps from the target they began at (`zoom_wheel_`), so that as many
-  steps back return the zoom exactly. Every zoom of the player's view,
-  the wheel's, a pinch's, the touch buttons', a pad's and the settings
-  dialog's, stays between `least_match_zoom` and `most_match_zoom`, which
-  the Maximum zoom out and Maximum zoom in settings set
-  (`least_battlefield_zoom` in `far_view.hpp`): Automatic keeps the
-  drawing's floor (`detail_zoom_floor`, half the game's scale, a sixth
-  while Full draws), Whole map the zoom at which the whole shown map fits
-  the battlefield (`whole_map_zoom`), a share that share or the whole map,
-  never past `furthest_battlefield_zoom`, a sixty-fourth; a view past the
+  steps back return the zoom exactly. The step that reaches the nearest or
+  farthest zoom counts whole, though the zoom stops there, and a step past
+  it counts nothing, so that the first step back leaves the end and as
+  many as reached it return the zoom and the camera. Every zoom of the
+  player's view, the wheel's, a pinch's, the touch buttons', a pad's and
+  the settings dialog's, stays between `least_match_zoom` and
+  `most_match_zoom`, which the Maximum zoom out and Maximum zoom in
+  settings set (`least_battlefield_zoom` in `far_view.hpp`): Automatic
+  keeps the drawing's floor (`detail_zoom_floor`, half the game's scale, a
+  sixth while Full draws), Whole map the zoom at which the whole shown map
+  fits the battlefield (`whole_map_zoom`), a share that share or the whole
+  map, never past `furthest_battlefield_zoom`, a sixty-fourth; a view past the
   limits comes within them at the next frame (`step_match_zoom`). The
   director, the checks' `--zoom` and the recorded games' replay keep their
   own range.

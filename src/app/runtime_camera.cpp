@@ -34,6 +34,11 @@ constexpr float kLongestZoomStep = 0.05F;
 constexpr double kLeastAnchorFraction = -0.5;
 constexpr double kMostAnchorFraction = 1.5;
 
+// The wheel steps short of an end of the zoom's range that count as at
+// it, well above the rounding of a target to float and below any step a
+// trackpad sends.
+constexpr double kZoomWheelEndSlack = 1.0e-4;
+
 static_assert(
     oa::ui::engine_settings::closest_zoom(oa::ui::engine_settings::ZoomInLimit::four_times) ==
         kMaxBattlefieldZoom,
@@ -545,18 +550,25 @@ float Runtime::wheel_zoom_target(float wheel_y) {
         zoom_wheel_ = {std::clamp(match_zoom_target_, least, most), 0.0, match_zoom_target_};
     const auto from = static_cast<double>(zoom_wheel_.from);
     const auto factor = static_cast<double>(kZoomWheelFactor);
-    // The steps in all, so that as many back return the target exactly,
-    // and a step past either end of the range counts only as far as the
-    // end, so that the first step back leaves it.
-    double steps = zoom_wheel_.steps + static_cast<double>(wheel_y);
-    auto target = static_cast<float>(from * std::pow(factor, steps));
-    if (target >= most || target <= least) {
-        target = target >= most ? most : least;
-        steps = std::log(static_cast<double>(target) / from) / std::log(factor);
+    // The steps in all, so that as many back return the target exactly. A
+    // step toward an end counts in whole, though the target stops at the
+    // end, but no further than the first whole step at or past it, and a
+    // step toward an end the steps are already at counts nothing: the
+    // first step back leaves the end, and as many back as reached it
+    // return the target.
+    const double way = wheel_y > 0.0F ? 1.0 : -1.0;
+    const double end =
+        std::log(static_cast<double>(wheel_y > 0.0F ? most : least) / from) / std::log(factor);
+    const double short_of_end = way * (end - zoom_wheel_.steps);
+    if (short_of_end > kZoomWheelEndSlack) {
+        const double counted = std::min(
+            std::abs(static_cast<double>(wheel_y)), std::ceil(short_of_end - kZoomWheelEndSlack)
+        );
+        zoom_wheel_.steps += way * counted;
     }
-    zoom_wheel_.steps = steps;
-    zoom_wheel_.target = target;
-    return target;
+    zoom_wheel_.target =
+        std::clamp(static_cast<float>(from * std::pow(factor, zoom_wheel_.steps)), least, most);
+    return zoom_wheel_.target;
 }
 
 void Runtime::pan_match_camera() {

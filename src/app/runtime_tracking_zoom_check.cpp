@@ -270,6 +270,30 @@ void Runtime::check_wheel_zoom_limits(const std::function<void()>& frame) {
     wheel_at(
         "a zoom off the wheel's steps", kOffStepZoom, middle, kHalfwayAtOffStep, kZoomOutSteps, 0
     );
+    // From the default zoom, the steps that reach the farthest zoom, and the
+    // nearest, then one past it, which counts nothing, and as many back as
+    // reached it: the zoom comes back exactly, and so the camera.
+    const auto to_end_and_back = [&](const std::string& what, float end, float way) {
+        const int reach = static_cast<int>(std::ceil(
+            std::abs(std::log(end / kDefaultBattlefieldZoom) / std::log(kZoomWheelFactor))
+        ));
+        place(kDefaultBattlefieldZoom, middle, centre);
+        turn(what, centre, reach + 1, way);
+        if (match_zoom_ != end)
+            fail(
+                what + ": " + std::to_string(reach + 1) + " steps left the zoom at " +
+                std::to_string(match_zoom_) + ", short of " + std::to_string(end)
+            );
+        turn(what, centre, reach, -way);
+        if (match_zoom_ != kDefaultBattlefieldZoom)
+            fail(
+                what + ": " + std::to_string(reach) + " steps back left the zoom at " +
+                std::to_string(match_zoom_) + ", not where they began"
+            );
+        returned(what);
+    };
+    to_end_and_back("the farthest zoom and back", least_match_zoom(), -1.0F);
+    to_end_and_back("the nearest zoom and back", most_match_zoom(), 1.0F);
     // A battlefield a quarter wider and taller than the map at the farthest
     // zoom, which shows the whole map in its top left with the camera in the
     // corner: about the battlefield's centre and the map's bottom right
@@ -305,8 +329,8 @@ void Runtime::check_wheel_zoom_limits(const std::function<void()>& frame) {
     match_paused_ = saved_paused;
     std::cout << "tracking zoom check: the wheel keeps the map point under the pointer as far "
                  "as the map's edges allow, after a new aim, a scroll and a creeping pointer "
-                 "too, its steps back return the camera, and steps past the nearest zoom "
-                 "leave it\n";
+                 "too, its steps back return the camera, also from the nearest and farthest "
+                 "zoom, and steps past the nearest zoom leave it\n";
 }
 
 void Runtime::check_zoom_limit_choices(const std::function<void()>& frame) {

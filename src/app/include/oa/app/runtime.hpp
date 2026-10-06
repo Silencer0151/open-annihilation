@@ -8561,7 +8561,10 @@ class Runtime final : public menu::Host,
     /// map pixels, steps in and a pinch or the pad's zoom held in leave the
     /// camera where it is, and steps out and as many back return it; at a
     /// zoom off the wheel's steps, as a pinch leaves, so do steps out and
-    /// as many back. A frame runs after each step, and one is drawn.
+    /// as many back. From the default zoom, the steps that reach the
+    /// farthest zoom, and the nearest, with one past it, and as many back
+    /// as reached it return the zoom exactly and the camera. A frame runs
+    /// after each step, and one is drawn.
     /// Leaves the layout as it was and the default zoom; throws
     /// std::runtime_error on a failure. [runtime_tracking_zoom_check.cpp]
     ///
@@ -11197,8 +11200,11 @@ class Runtime final : public menu::Host,
     ///
     /// The target is the one the wheel's steps began from times
     /// kZoomWheelFactor to the power of all the steps turned since, within
-    /// the zoom's range, so that as many steps back return it exactly; a
-    /// step past either end counts only as far as that end, and a target
+    /// the zoom's range, so that as many steps back return it exactly. A
+    /// step that reaches either end counts in whole, though the target
+    /// stops at the end, up to the first whole step at or past it, and a
+    /// step at that end counts nothing, so that the first step back leaves
+    /// the end and as many as reached it return the target. A target
     /// something else set since the last step begins the count again.
     ///
     /// @param wheel_y wheel steps; positive zooms in
@@ -13148,7 +13154,7 @@ class Runtime final : public menu::Host,
     struct ZoomWheel {
         float from{}; ///< the target the steps began from
         /// The steps turned since in all, positive nearer, with a
-        /// trackpad's fractions.
+        /// trackpad's fractions; up to a step past either end of the range.
         double steps{};
         float target{}; ///< the target they last set
     };
