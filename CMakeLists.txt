@@ -752,9 +752,11 @@ if(BUILD_TESTING)
   # through the light table's row the pixel names, flashes compounding, at
   # half the row when reduced and on 1 to 8 bands alike. A projectile's lens
   # moving the pixels its rule names, as the 8-bit lens sprite does, at
-  # scales 1 to 3 and within the clip, and its battlefield test. A file over the
-  # decoded threshold drawn a frame at a
-  # time, its frames rendered from its bytes through the frame cache: its
+  # scales 1 to 3 and within the clip, its battlefield test, and the frame
+  # point it is drawn at, raised by half an odd height rounded down where
+  # other things round to the nearest pixel. A file over the decoded
+  # threshold drawn a frame at a time, its frames rendered from its bytes
+  # through the frame cache: its
   # budget, the frame drawn longest ago going first, a frame over the
   # budget drawn without being kept, and a failed frame not read again.
   add_executable(oa-app-world-draws-test src/app/world_draws_test.cpp src/app/world_draws.cpp)

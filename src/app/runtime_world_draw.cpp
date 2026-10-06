@@ -221,28 +221,7 @@ oa::present::world_renderer::ScreenPoint Runtime::project_match_point(
     const oa::present::world_renderer::BattlefieldViewport& viewport,
     const std::array<uint32_t, 3>& position
 ) const {
-    const auto map_x = std::bit_cast<int32_t>(position[0]) >> 16;
-    const auto map_z = std::bit_cast<int32_t>(position[2]) >> 16;
-    const auto height = std::bit_cast<int32_t>(position[1]) >> 16;
-    // A map pixel is unsigned, and a point's place on the frame hangs only on
-    // its offset from the camera, so a point left of or above the map is
-    // moved onto it together with the camera.
-    auto shifted = viewport;
-    const auto lift_x = static_cast<uint32_t>(std::max(0, -map_x));
-    const auto lift_z = static_cast<uint32_t>(std::max(0, -map_z));
-    shifted.source_x += lift_x;
-    shifted.source_y += lift_z;
-    auto screen = oa::present::world_renderer::map_pixel_to_screen(
-        shifted, {static_cast<uint32_t>(map_x) + lift_x, static_cast<uint32_t>(map_z) + lift_z}
-    );
-    const auto scale = viewport.scale == 0.0F ? 1.0F : viewport.scale;
-    // At the whole scale the lift is half the height rounded half away from
-    // zero, worked out in whole numbers.
-    screen.y -= scale == 1.0F ? (height >= 0 ? (height + 1) / 2 : -((1 - height) / 2))
-                              : static_cast<int32_t>(std::lround(
-                                    static_cast<double>(height) * 0.5 * static_cast<double>(scale)
-                                ));
-    return screen;
+    return project_world_point(viewport, position, HeightLift::nearest);
 }
 
 namespace {
@@ -468,9 +447,11 @@ void Runtime::plan_match_projectiles(
             break;
         }
         case ProjectileRender::lens:
-            // The pass ends before a lens off the battlefield, so this one
-            // is on it.
-            draws.lenses.push_back(project_match_point(viewport, shot_position));
+            // The pass ends before a lens whose shot's place at the tick is
+            // off the battlefield (projectiles_drawn). This one is drawn
+            // where the frame shows the shot, raised by half its height
+            // rounded down as that test raises it, and clipped to the view.
+            draws.lenses.push_back(project_world_point(viewport, shot_position, HeightLift::down));
             add_world_draw(draws, WorldDrawKind::lens, draws.lenses.size() - 1);
             break;
         case ProjectileRender::plasma: {

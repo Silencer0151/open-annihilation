@@ -886,8 +886,9 @@ std::vector<uint8_t> lens_rule(
 /// says, and the same as the 8-bit lens sprite drawn through the lens
 /// table; at scales 2 and 3 whole blocks move; a lens over the clip's edge
 /// changes only the pixels inside it; a second lens reads what the first
-/// drew; drawn as a draw of the list it is the same; and the battlefield
-/// test takes its edges and the height's lift.
+/// drew; drawn as a draw of the list it is the same; the battlefield test
+/// takes its edges and the height's lift, rounded down; and the lens is
+/// drawn at the point the test takes, at scales 1 and 2.
 void test_projectile_lens() {
     const oa::present::world_renderer::ScreenPoint centre{40, 50};
     const auto before = distinct_frame();
@@ -1011,6 +1012,45 @@ void test_projectile_lens() {
     // Half the height lifts it back onto the bottom edge, and off the top.
     OA_CHECK(oa::app::projectile_lens_on_battlefield(view, at(300, 2, 680)));
     OA_CHECK(!oa::app::projectile_lens_on_battlefield(view, at(300, 2, 200)));
+    // Half an odd height is rounded down: a height of 3 lifts it by 1, onto
+    // the bottom edge from one row below it, and no further.
+    OA_CHECK(oa::app::projectile_lens_on_battlefield(view, at(300, 3, 680)));
+    OA_CHECK(!oa::app::projectile_lens_on_battlefield(view, at(300, 3, 681)));
+
+    // The lens is drawn where the test places it, on the same battlefield
+    // and camera: half the whole height rounded down, one row below where
+    // half of an odd height rounded to the nearest pixel puts it.
+    using oa::app::HeightLift;
+    oa::present::world_renderer::BattlefieldViewport viewport{};
+    viewport.source_x = 100;
+    viewport.source_y = 200;
+    viewport.width = 640;
+    viewport.height = 480;
+    const auto lens_at = [&viewport](const std::array<uint32_t, 3>& position) {
+        return oa::app::project_world_point(viewport, position, HeightLift::down);
+    };
+    const auto nearest_at = [&viewport](const std::array<uint32_t, 3>& position) {
+        return oa::app::project_world_point(viewport, position, HeightLift::nearest);
+    };
+    OA_CHECK(lens_at(at(300, 3, 680)).x == 328);
+    OA_CHECK(lens_at(at(300, 3, 680)).y == 511);
+    OA_CHECK(nearest_at(at(300, 3, 680)).y == 510);
+    OA_CHECK(lens_at(at(300, 139, 400)).y == 163);
+    OA_CHECK(nearest_at(at(300, 139, 400)).y == 162);
+    // A height's fraction is dropped before it is halved.
+    auto between = at(300, 139, 400);
+    between[1] |= 0xffffU;
+    OA_CHECK(lens_at(between).y == 163);
+    // Even and negative heights land alike either way.
+    OA_CHECK(lens_at(at(300, 138, 400)).y == 163);
+    OA_CHECK(nearest_at(at(300, 138, 400)).y == 163);
+    OA_CHECK(lens_at(at(300, -3, 400)).y == 234);
+    OA_CHECK(nearest_at(at(300, -3, 400)).y == 234);
+    // At scale 2 the rounded-down half is doubled.
+    viewport.scale = 2.0F;
+    OA_CHECK(lens_at(at(300, 139, 400)).x == 528);
+    OA_CHECK(lens_at(at(300, 139, 400)).y == 294);
+    OA_CHECK(nearest_at(at(300, 139, 400)).y == 293);
 }
 
 } // namespace

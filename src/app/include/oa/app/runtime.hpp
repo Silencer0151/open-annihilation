@@ -5258,7 +5258,10 @@ class Runtime final : public menu::Host,
     /// Returns how many of the match's projectiles, from the first, a frame
     /// draws: all of them, unless one of render type 2, past its burst wait
     /// and in the viewer's sight, lies off the battlefield
-    /// (projectile_lens_on_battlefield).
+    /// (projectile_lens_on_battlefield). Each is tested where it is at the
+    /// tick, so a frame drawn between ticks draws the same projectiles as
+    /// the tick's, each lens where the frame shows its shot, clipped to the
+    /// view.
     ///
     /// @param view camera position and battlefield rectangle
     /// @return the count
@@ -5275,7 +5278,8 @@ class Runtime final : public menu::Host,
     [[nodiscard]] std::array<uint8_t, 3> ui_color_rgb(uint8_t index) const;
 
     /// Projects a 16.16 world position onto the battlefield frame, raised by half its height at the
-    /// view's scale.
+    /// view's scale, rounded to the nearest pixel (project_world_point with
+    /// HeightLift::nearest).
     ///
     /// x and z are signed, so a point left of or above the map lands left of
     /// or above the map's edge on the frame.

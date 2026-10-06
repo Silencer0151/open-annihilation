@@ -208,14 +208,44 @@ inline constexpr int32_t projectile_lens_side = 22;
 /// How strongly that lens magnifies: oa::present::build_lens_frame's scale.
 inline constexpr int32_t projectile_lens_strength = 8;
 
+/// How a point's height raises it on the battlefield frame.
+enum class HeightLift : uint8_t {
+    /// Half its height, rounded to the nearest pixel, halves away from zero.
+    nearest,
+    /// Half its whole map pixels of height, rounded down; at a scale, that
+    /// times the scale, rounded. The game raises an explosion record's
+    /// flash and sprite and a projectile's lens so, as it tests them
+    /// against the battlefield (draw_explosions,
+    /// projectile_lens_on_battlefield).
+    down,
+};
+
+/// Projects a 16.16 world position onto the battlefield frame, raised by
+/// its height as `lift` says.
+///
+/// x and z are signed, so a point left of or above the map lands left of or
+/// above the map's edge on the frame. An odd height puts a point raised to
+/// the nearest pixel one row above one raised down.
+///
+/// @param viewport battlefield viewport
+/// @param position 16.16 x, height and z
+/// @param lift how the height raises the point
+/// @return frame point
+[[nodiscard]] oa::present::world_renderer::ScreenPoint project_world_point(
+    const oa::present::world_renderer::BattlefieldViewport& viewport,
+    const std::array<uint32_t, 3>& position,
+    HeightLift lift
+) noexcept;
+
 /// Tells whether a projectile's lens is drawn: whether the projectile's
 /// position, placed on the game's screen as an explosion record's centre is
 /// (draw_explosions), lies on the battlefield rectangle, its edges included.
 ///
 /// The screen point is the position's whole map pixels less the camera's,
-/// lifted by half its height, from the battlefield's corner
+/// lifted by half its height rounded down, from the battlefield's corner
 /// (battlefield_screen_x, battlefield_screen_y); the map pixels, the height
-/// and the camera are each taken as signed 16-bit values.
+/// and the camera are each taken as signed 16-bit values. The lens is drawn
+/// at that point (project_world_point with HeightLift::down).
 ///
 /// @param view camera position and battlefield rectangle
 /// @param position the projectile's 16.16 world position, x, height and z
