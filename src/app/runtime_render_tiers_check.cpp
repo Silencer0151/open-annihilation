@@ -2413,13 +2413,17 @@ void Runtime::check_full_render_tier(
                 apply_engine_settings(whole_map);
                 set_level(level);
                 const float whole = least_match_zoom();
-                const bool dots = units == engine::ZoomedOutUnits::dots;
+                const bool chose_dots = units == engine::ZoomedOutUnits::dots;
+                // Dots are drawn only past After zoom; a map that fits
+                // whole nearer than that, as the demo's does, keeps models.
+                const bool dots =
+                    chose_dots && whole < engine::zoomed_out_zoom(whole_map.zoomed_out_after);
                 const std::string tier = std::string(
                                              level == HardwareAcceleration::off     ? "off"
                                              : level == HardwareAcceleration::basic ? "basic"
                                                                                     : "full"
                                          ) +
-                                         (dots ? " dots" : " rendered");
+                                         (chose_dots ? " dots" : " rendered");
                 // A map that fits whole before the tier's units stop being
                 // drawn whole, as the demo's does, has no far view to check.
                 if (!(whole < detail_zoom_floor())) {
