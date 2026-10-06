@@ -840,7 +840,7 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/runtime_turret_draw_check.cpp
   src/app/runtime_selection.cpp src/app/runtime_selection_shortcuts.cpp
   src/app/runtime_view_panels.cpp src/app/runtime_whiteboard.cpp src/app/runtime_commander_placement.cpp
-  src/app/runtime_megamap.cpp src/app/runtime_skirmish_host.cpp
+  src/app/runtime_megamap.cpp src/app/runtime_megamap_check.cpp src/app/runtime_skirmish_host.cpp
   src/app/runtime_skirmish_start.cpp src/app/runtime_map_units.cpp src/app/runtime_world_draw.cpp src/app/world_draws.cpp src/app/runtime_benchmark.cpp src/app/runtime_music.cpp
   src/app/runtime_saveload.cpp src/app/runtime_sides.cpp src/app/asset_files.cpp
   src/app/runtime_platform.cpp src/app/runtime_endgame.cpp src/app/runtime_radar.cpp
@@ -1771,6 +1771,28 @@ if(OA_BUILD_PLATFORM)
         --preferences-file "${oa_pointer_check_dir}/pointer-interfaces.conf")
       set_tests_properties(native-pointer-interfaces PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_pointer_check_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # The megamap's clicks (ui.megamap) against the battlefield's in both
+      # interface types: orders, selection, deselection, guard, and an armed
+      # command given and cancelled, under a profile that turns the megamap on.
+      set(oa_megamap_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/megamap-clicks")
+      file(MAKE_DIRECTORY "${oa_megamap_check_dir}")
+      file(WRITE "${oa_megamap_check_dir}/megamap-clicks.oamod.yaml"
+        "oamod: 1\n"
+        "id: megamap-clicks\n"
+        "name: Megamap clicks\n"
+        "version: \"1.0\"\n"
+        "requires: {base: ta-3.1c, catalogue: 1}\n"
+        "author: {name: unknown}\n"
+        "packaging: {revision: 1, date: 2026-10-06, packager: Open Annihilation}\n"
+        "hacks:\n"
+        "  ui.megamap: true\n")
+      add_test(NAME native-megamap-clicks COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-megamap-clicks
+        --mod "${oa_megamap_check_dir}/megamap-clicks.oamod.yaml"
+        --preferences-file "${oa_megamap_check_dir}/megamap-clicks.conf")
+      set_tests_properties(native-megamap-clicks PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_megamap_check_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # --check-touch-controls: the touch controls, driven by finger events through the
       # dispatcher, on a skirmish: taps, boxes, latches, the radial, placement, the

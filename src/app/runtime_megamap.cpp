@@ -4,10 +4,10 @@
 // ui.megamap in a running match: Tab and the wheel open and close it; open,
 // it draws the whole map over the battlefield with the sight shading, the
 // category icons of the units the minimap shows, the selection's sensor
-// rings and the main view's rectangle; its clicks select and give orders at
-// the map point they stand for. The enhanced minimap redraws the radar's
-// picture at its own size. The Mouse wheel zoom setting, while on, leaves
-// the hack off for this player.
+// rings and the main view's rectangle; its clicks act as the battlefield's
+// do in the chosen interface type, at the map point they stand for. The
+// enhanced minimap redraws the radar's picture at its own size. The Mouse
+// wheel zoom setting, while on, leaves the hack off for this player.
 
 #include "engine_settings_state.hpp"
 #include "oa/app/runtime.hpp"
@@ -551,19 +551,21 @@ bool Runtime::megamap_pointer(const SDL_Event& event, float x, float y) {
     world.game.local_player_index = match_local_player_;
     state.pointer_x = px;
     state.pointer_y = py;
-    const bool shift = (input_modifiers(ModifierUse::selection) & SDL_KMOD_SHIFT) != 0;
+    // The press's buttons and modifiers, which queueing() reads, as the
+    // battlefield's.
+    record_pointer_event(event);
+    const auto ground = [&]() -> std::optional<oa::sim::ground_orders::Point> {
+        const auto point = hud::megamap_map_point(state.layout, px, py);
+        return point ? map_world_point((*point)[0], (*point)[1]) : std::nullopt;
+    };
     if (event.button.button == SDL_BUTTON_RIGHT) {
-        if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
-            // The default order, or the armed one, at the map point.
-            const auto point = hud::megamap_map_point(state.layout, px, py);
-            std::ignore = issue_map_orders(
-                point ? map_world_point((*point)[0], (*point)[1]) : std::nullopt, state.hovered
-            );
-        }
+        if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN)
+            megamap_right_press(state.hovered, ground());
         return true;
     }
     if (event.button.button != SDL_BUTTON_LEFT)
         return true;
+    const bool shift = (input_modifiers(ModifierUse::selection) & SDL_KMOD_SHIFT) != 0;
     if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
         if (event.button.clicks >= 2 && event.button.clicks % 2 == 0 && state.hovered != 0) {
             // A double-click on one of the viewer's units selects every unit of its type.
@@ -587,30 +589,112 @@ bool Runtime::megamap_pointer(const SDL_Event& event, float x, float y) {
     state.pressed = false;
     const bool dragged =
         std::abs(px - state.press_x) > kClickSlack || std::abs(py - state.press_y) > kClickSlack;
+    if (!dragged) {
+        megamap_click(state.hovered, ground());
+        return true;
+    }
+    // A box selects the viewer's units in it, added to the selection with Shift.
     if (!shift)
         clear_local_selection();
-    if (dragged) {
-        const int32_t left = std::min(px, state.press_x), right = std::max(px, state.press_x);
-        const int32_t top = std::min(py, state.press_y), bottom = std::max(py, state.press_y);
-        for (auto& slot : match_->world().slots) {
-            if (slot.unit_index == 0 || slot.unit == nullptr ||
-                slot.owner_index != match_local_player_ || !match_->selectable(slot.unit_index))
-                continue;
-            const auto& record = world.units[slot.unit_index];
-            const auto at =
-                hud::megamap_point(state.layout, record.position.x >> 16, record.position.z >> 16);
-            if (at[0] >= left && at[0] <= right && at[1] >= top && at[1] <= bottom)
-                slot.unit->flags |= OA_UNIT_FLAG_SELECTED;
-        }
-    } else if (state.hovered != 0) {
-        auto& slot = match_->world().slots[state.hovered];
-        if (slot.unit != nullptr && slot.owner_index == match_local_player_ &&
-            match_->selectable(state.hovered))
-            slot.unit->flags ^= OA_UNIT_FLAG_SELECTED;
+    const int32_t left = std::min(px, state.press_x), right = std::max(px, state.press_x);
+    const int32_t top = std::min(py, state.press_y), bottom = std::max(py, state.press_y);
+    for (auto& slot : match_->world().slots) {
+        if (slot.unit_index == 0 || slot.unit == nullptr ||
+            slot.owner_index != match_local_player_ || !match_->selectable(slot.unit_index))
+            continue;
+        const auto& record = world.units[slot.unit_index];
+        const auto at =
+            hud::megamap_point(state.layout, record.position.x >> 16, record.position.z >> 16);
+        if (at[0] >= left && at[0] <= right && at[1] >= top && at[1] <= bottom)
+            slot.unit->flags |= OA_UNIT_FLAG_SELECTED;
     }
     selected_match_unit_ = 0;
     adopt_selected_units();
     return true;
+}
+
+void Runtime::megamap_click(
+    uint16_t target, const std::optional<oa::sim::ground_orders::Point>& ground
+) {
+    namespace input = oa::sim::gameplay_input;
+    if (match_command_ == MatchCommand::build) {
+        if (ground)
+            place_pending_build_at(*ground);
+        return;
+    }
+    if (match_command_ == MatchCommand::move || match_command_ == MatchCommand::patrol) {
+        std::ignore = issue_map_orders(ground, target);
+        return;
+    }
+    auto& world = match_->state();
+    const auto cursor = static_cast<input::OrderCursor>(pick_map_cursor(target, ground));
+    const auto command = input::pointer_command(world.game);
+    switch (input::click_action(world, command, cursor)) {
+    case input::ClickAction::none:
+        return;
+    case input::ClickAction::select_unit: {
+        // The unit is selected in place of the others, or with Shift flipped
+        // in or out of the selection, as on the battlefield.
+        const bool toggle = (input_modifiers(ModifierUse::selection) & SDL_KMOD_SHIFT) != 0;
+        if (!toggle)
+            clear_local_selection();
+        auto& slot = match_->world().slots[target];
+        if (target != 0 && slot.unit != nullptr && slot.owner_index == match_local_player_ &&
+            match_->selectable(target)) {
+            slot.unit->flags ^= OA_UNIT_FLAG_SELECTED;
+            if (!toggle)
+                selected_match_unit_ = target;
+        }
+        adopt_selected_units();
+        return;
+    }
+    case input::ClickAction::clear_selection:
+        clear_local_selection();
+        apply_match_hud_for_selection();
+        return;
+    case input::ClickAction::issue_command:
+        break;
+    }
+    if (target == 0 && !ground)
+        return;
+    const auto issued = issue_selection_orders(command, target, ground, queueing());
+    if (issued.empty())
+        return;
+    status_ = std::string(issued);
+    finish_issued_command();
+}
+
+void Runtime::megamap_right_press(
+    uint16_t target, const std::optional<oa::sim::ground_orders::Point>& ground
+) {
+    namespace input = oa::sim::gameplay_input;
+    auto& world = match_->state();
+    std::ignore = pick_map_cursor(target, ground);
+    switch (input::right_press(world.game)) {
+    case input::RightPress::cancel_command:
+        reset_match_command();
+        pending_build_type_ = 0;
+        input::set_pointer_command(world.game, input::OrderCommand::default_order);
+        return;
+    case input::RightPress::mouse_look:
+    case input::RightPress::clear_selection:
+        // The megamap has no view to look round: Control drops the selection too.
+        clear_local_selection();
+        apply_match_hud_for_selection();
+        return;
+    case input::RightPress::default_order:
+        break;
+    case input::RightPress::none:
+    case input::RightPress::radar_scroll:
+    case input::RightPress::radar_jump:
+        return;
+    }
+    if (target == 0 && !ground)
+        return;
+    const auto issued =
+        issue_selection_orders(input::OrderCommand::default_order, target, ground, queueing());
+    if (!issued.empty())
+        status_ = std::string(issued);
 }
 
 void Runtime::megamap_wheel_zoom_changed() {

@@ -483,6 +483,27 @@ uint8_t Runtime::pick_match_cursor() {
     return static_cast<uint8_t>(cursor);
 }
 
+uint8_t Runtime::pick_map_cursor(
+    uint16_t target, const std::optional<oa::sim::ground_orders::Point>& ground
+) {
+    if (!match_)
+        return static_cast<uint8_t>(input::OrderCursor::normal);
+    auto& world = match_->state();
+    world.game.local_player_index = match_local_player_;
+    input::set_pointer_command(world.game, armed_order(match_command_));
+    // The point stands for the battlefield's ground under the pointer.
+    input::set_pointer_area(world.game, false, true);
+    if (ground) {
+        input::set_pointer_position(world.game, {(*ground)[0], (*ground)[1], (*ground)[2]});
+        store_cursor_cell(*ground);
+    }
+    world.game.cursor_unit_id = target;
+    input::OrderCursor cursor{};
+    if (!input::pointer_cursor(world, order_cursor_hooks(), &cursor))
+        return static_cast<uint8_t>(input::OrderCursor::build);
+    return static_cast<uint8_t>(cursor);
+}
+
 bool Runtime::pointer_over_top_panel() {
     const auto* gadgets = screen_ == Screen::match
                               ? (match_hud_ ? &match_hud_->layout.gadgets : nullptr)

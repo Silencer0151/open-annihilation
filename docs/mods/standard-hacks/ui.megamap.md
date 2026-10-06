@@ -106,16 +106,29 @@ a ring is drawn when its range is above 0 and reaches its minimum.
 
 #### Clicks
 
-Clicks on the megamap act at the map point they stand for, and the orders
-they give are ordinary orders:
+Clicks on the megamap act as clicks on the battlefield do in the player's
+interface type (the Interface option: left-click or right-click), at the
+map point they stand for and on the unit whose icon is under the pointer.
+The orders they give are ordinary orders, queued while Shift is held:
 
-- left click: without Shift the selection is cleared first; a click on one
-  of the viewer's selectable units then flips it in or out of the
-  selection;
+- left-click interface: a left click gives the selection the order the
+  battlefield's cursor would there, the armed command or the default order
+  (a move on open ground, an attack on an enemy); one on a unit of the
+  viewer's otherwise selects it in place of the selection, or with Shift
+  flips it in or out of it. A right press drops the selection, with Ctrl
+  held too, since the megamap has no view to look round, or the armed
+  command;
+- right-click interface: a left click on a unit of the viewer's selects
+  it, or with Shift flips it, and elsewhere drops the selection, but gives
+  an armed command. A right press gives the default order there (a move on
+  open ground, an attack on an enemy, a guard on a unit of the viewer's),
+  or drops the armed command.
+
+In both interface types:
+
 - left drag (more than 3 pixels): box-select the viewer's selectable units,
   added to the selection while Shift is held;
-- left double-click on a unit of the viewer's: select every unit of its type;
-- right click: the default order, or the armed one, at that map point.
+- left double-click on a unit of the viewer's: select every unit of its type.
 
 #### Enhanced minimap
 
@@ -153,7 +166,9 @@ match hash and every machine's simulation stay as they are.
   `enhanced_minimap`, `dither`, `feature_blobs`, `ring_minimums`,
   `icon_categories`).
 - `src/app/runtime_megamap.cpp` opens, draws and clicks the megamap and
-  redraws the enhanced minimap (`enhance_radar_picture`);
+  redraws the enhanced minimap (`enhance_radar_picture`); its clicks go
+  through the battlefield's cursor and order resolution
+  (`megamap_click`, `megamap_right_press`, `pick_map_cursor`);
   `src/app/include/oa/app/megamap_state.hpp` holds what a match keeps for it.
 - `src/ui/hud/include/oa/ui/hud/megamap.hpp` and `src/ui/hud/src/megamap.cpp`
   hold the layout and its two-way mapping, the terrain downscale, the
@@ -165,6 +180,13 @@ match hash and every machine's simulation stay as they are.
 - Test: `ui-hud-megamap` (`src/ui/hud/tests/megamap_test.cpp`) covers the
   layout, the terrain downscale, the feature colours, the icon file, the
   icon choice and the ring minimums.
+- Test: `native-megamap-clicks` (`src/app/runtime_megamap_check.cpp`)
+  makes the same clicks on the battlefield and on the megamap in both
+  interface types and checks that each leaves the same selection, armed
+  command and orders: moves, an attack, a guard, selecting, deselecting,
+  and an armed command given and dropped. With `--snapshot` it writes each
+  surface's frame just before and just after each click beside the
+  snapshot.
 - Test: `native-render-tiers-visual-rules`
   (`src/app/runtime_visual_rules_check.cpp`) checks that with Mouse wheel
   zoom on, Tab and the wheel open no megamap; that with it off, Tab opens

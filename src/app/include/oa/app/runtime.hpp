@@ -2581,6 +2581,20 @@ class Runtime final : public menu::Host,
     ///     match, the build cursor when the resolution fails
     uint8_t pick_match_cursor();
 
+    /// Picks the cursor a point and a unit given apart from the pointer, as
+    /// the megamap's are, show through the order-cursor resolution.
+    ///
+    /// Writes the local player, the armed order, the pointer area (over the
+    /// battlefield), the ground point with its cursor cell and the unit into
+    /// the Game block (Game.cursor_unit_id), as pick_match_cursor does for
+    /// the battlefield's pointer.
+    ///
+    /// @param target the unit under the point, or 0
+    /// @param ground the ground point, or none
+    /// @return a cursor table index: the build cursor when the resolution fails
+    uint8_t
+    pick_map_cursor(uint16_t target, const std::optional<oa::sim::ground_orders::Point>& ground);
+
     /// Binds the GUI context's devices.
     ///
     /// The frontend clock, the SDL pointer as the latest move (the queue is
@@ -8312,6 +8326,23 @@ class Runtime final : public menu::Host,
     /// std::runtime_error on a failure.
     void check_commander_placement();
 
+    /// Checks the megamap's clicks (ui.megamap) against the battlefield's
+    /// through SDL input on a skirmish, in both interface types.
+    ///
+    /// Each case starts the same on the battlefield and on the megamap, with
+    /// the Mouse wheel zoom setting off, and must leave the same selection,
+    /// armed command and orders on both: in the left-click interface a left
+    /// click on open ground moves the selection, one on an enemy attacks it
+    /// and one on an own unit selects it alone, and a right press deselects
+    /// or cancels an armed command; in the right-click interface a left click
+    /// on open ground deselects, one on an own unit selects it, a right press
+    /// on open ground moves the selection and one on an own unit guards it,
+    /// and an armed ATTACK is given by a left click. Prints a line and checks
+    /// nothing with ui.megamap off. With --snapshot, writes each surface's
+    /// frame just before and just after each click beside the snapshot.
+    /// Throws std::runtime_error on a failure.
+    void check_megamap_clicks();
+
     /// Handles a left click on the game screen.
     ///
     /// The click first picks the unit under the pointer (the cursor unit), and
@@ -8696,17 +8727,49 @@ class Runtime final : public menu::Host,
     /// @param color palette index
     void draw_megamap_ring(int32_t x, int32_t y, int32_t radius, uint8_t color);
 
-    /// Takes a pointer event on the open megamap: the left button selects the
-    /// unit under it, a box, or with a double-click every unit of a type; the
-    /// right button gives the selection orders at the point.
+    /// Takes a pointer event on the open megamap. Its clicks act as the
+    /// battlefield's do in the chosen interface type, at the map point under
+    /// the pointer and on the unit whose icon is under it: a left click
+    /// (megamap_click) and a right press (megamap_right_press). A left drag
+    /// selects a box of the viewer's units, and a left double-click on one
+    /// of them every unit of its type, in either interface type.
     /// Presses are taken in the overlays' area and not where placed_hud_covers
-    /// claims; the release of a press taken is taken anywhere.
+    /// claims; the release of a press taken is taken anywhere. The presses'
+    /// buttons and modifiers go to the pointer's key word
+    /// (record_pointer_event), as the battlefield's do.
     ///
     /// @param event the pointer event
     /// @param x pointer column on the canvas
     /// @param y pointer row on the canvas
     /// @return true when the megamap took the event
     bool megamap_pointer(const SDL_Event& event, float x, float y);
+
+    /// Acts on a left click on the megamap as a left click on the battlefield
+    /// does (handle_match_left_click), at a map point and on a unit: an armed
+    /// BUILD places the building, an armed MOVE or PATROL sends the selection
+    /// in its shape (issue_map_orders); otherwise the cursor the point and
+    /// the unit give (pick_map_cursor) decides: the select cursor selects the
+    /// unit, or with Shift flips it in or out of the selection; an order
+    /// cursor gives the selection the armed command, or the default order,
+    /// there (issue_selection_orders), a click that gives none leaving the
+    /// command armed; in the right-click interface a highlight cursor drops
+    /// the selection.
+    ///
+    /// @param target the unit whose icon is under the pointer, or 0
+    /// @param ground the ground point under the pointer, or none
+    void megamap_click(uint16_t target, const std::optional<oa::sim::ground_orders::Point>& ground);
+
+    /// Acts on a right press on the megamap as one on the battlefield does
+    /// (handle_match_right_press), at a map point and on a unit: an armed
+    /// command drops back to the default order; otherwise the left-click
+    /// interface drops the selection, Control held or not, and the
+    /// right-click interface gives the selection the default order there.
+    ///
+    /// @param target the unit whose icon is under the pointer, or 0
+    /// @param ground the ground point under the pointer, or none
+    void megamap_right_press(
+        uint16_t target, const std::optional<oa::sim::ground_orders::Point>& ground
+    );
 
     /// Redraws the radar's terrain picture at its own size from the map's
     /// minimap (ui.megamap enhanced-minimap) while the hack acts
@@ -10837,7 +10900,8 @@ class Runtime final : public menu::Host,
     bool issue_radar_orders(float x, float y);
 
     /// Gives the selection the armed command at a map point and on a unit, as
-    /// a radar click does (issue_radar_orders); the megamap's clicks use it.
+    /// a radar click does (issue_radar_orders); the megamap's clicks use it
+    /// for an armed MOVE or PATROL.
     ///
     /// @param world the ground point, or none
     /// @param target the unit clicked on, or 0

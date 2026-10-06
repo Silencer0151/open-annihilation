@@ -393,6 +393,9 @@ struct Options {
     // clicks and right presses, shift cancels, radar scrolls, mouse look and a
     // factory build button's right click.
     bool check_pointer_interfaces = false;
+    /// --check-megamap-clicks: the megamap's clicks (ui.megamap) against the
+    /// battlefield's in both interface types, on a skirmish.
+    bool check_megamap_clicks = false;
     /// --check-touch-controls: the touch controls, driven by finger events, on a skirmish.
     bool check_touch_controls = false;
     /// --check-pad-controls: the gamepad controls, driven by SDL virtual pads, on a skirmish.
