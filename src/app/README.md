@@ -211,7 +211,13 @@ logs it.
   centre alone and with no sight test, as strongly as the Explosion flash
   setting asks, held to a mod's lower level
   (`view_rules::explosion_flash_drawn`, ui.explosion-flash); at Off none is
-  listed, and the frame is drawn as without flashes. Everything drawing builds or
+  listed, and the frame is drawn as without flashes. A projectile of render
+  type 2 draws a lens among the other projectiles (`draw_world_lens`): the
+  five by five map pixels at its centre spread out from it, read from the
+  frame as it stood, as the game draws them. As in the game, the pass stops
+  at such a projectile in sight whose centre lies off the battlefield,
+  leaving it and every projectile after it undrawn that frame
+  (`projectiles_drawn`). The Full tier draws no lens. Everything drawing builds or
   changes on the way is done then, once, on the drawing thread: the piece
   transforms and the presented copies, the units' and features' cached
   images and silhouettes and those of the units they carry
@@ -233,7 +239,8 @@ logs it.
   each line and polygon working out its pixels as over the whole frame. A
   band reads the list and the models and writes only its rows of the frame
   and of the bridge, so the bands draw on the job pool at once and give the
-  frame drawn whole byte for byte. The first band draws with the models'
+  frame drawn whole byte for byte; a frame with a lens, which reads rows of
+  other bands, is drawn as one band. The first band draws with the models'
   renderer and buffers; each other band keeps a renderer of its own (its
   composite buffer), its supersampling buffers and its own memory of
   colours outside the palette, about 1 MB a band; with one drawing thread

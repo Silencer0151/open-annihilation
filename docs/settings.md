@@ -288,7 +288,9 @@ the game draws its text and how the modern fonts draw it.
     picture fills the window evenly; the processor still draws them.
   - **Full**: the card also draws the battlefield, smoothed at every zoom,
     and the view can zoom out to a sixth of the game's scale, three times
-    as far as the processor's drawing allows.
+    as far as the processor's drawing allows. It does not yet draw the
+    small lens that a shot of a weapon with render type 2 makes of the
+    ground under it; Basic and Off do.
 
   The card is used only where it can do the work and the computer has at
   least 2 GB of memory. Where Full cannot run, Basic draws in its place;

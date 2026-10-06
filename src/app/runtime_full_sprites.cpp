@@ -248,6 +248,7 @@ bool sprite_kind(WorldDrawKind kind) noexcept {
     case WorldDrawKind::projectile:
     case WorldDrawKind::debris:
     case WorldDrawKind::fragment:
+    case WorldDrawKind::lens:
         break;
     }
     return false;
@@ -268,6 +269,7 @@ bool model_kind(WorldDrawKind kind) noexcept {
     case WorldDrawKind::pixel_square:
     case WorldDrawKind::line:
     case WorldDrawKind::selection_line:
+    case WorldDrawKind::lens:
         break;
     }
     return false;
@@ -583,6 +585,7 @@ struct SpriteFrame::Impl {
         case WorldDrawKind::projectile:
         case WorldDrawKind::debris:
         case WorldDrawKind::fragment:
+        case WorldDrawKind::lens:
             break;
         }
     }

@@ -331,7 +331,9 @@ bool mirrored_owner(const oa::World& world, const oa::Unit& unit) noexcept {
 ///
 /// The bridge is split into one band for each thread the pool runs a job
 /// on (bridge_split), and the bands draw at once on the pool, or the one
-/// band covering the frame draws on the calling thread alone. The first band
+/// band covering the frame draws on the calling thread alone, as it does
+/// whenever the frame holds a projectile's lens, which reads the rows of
+/// other bands (draw_world_lens). The first band
 /// draws with the models' renderer and buffers; each other band with its
 /// own (MatchModels::band_scratch), the frame's renderer settings copied in,
 /// and its own memory of colours outside the palette. A band that fails
@@ -345,7 +347,7 @@ void draw_world_bands(
     MatchModels& models, const WorldFrameDraw& frame, oa::platform::job_pool::Pool* pool
 ) {
     const auto threads =
-        pool != nullptr
+        pool != nullptr && models.draws.lenses.empty()
             ? static_cast<int32_t>(std::min(pool->threads(), oa::platform::job_pool::max_threads))
             : 1;
     const int32_t made = model_render::bridge_split(models.bridge, threads, models.bands);
@@ -1076,14 +1078,15 @@ void Runtime::render_match_surface() {
     const auto add_draw = [&draw_list](WorldDrawKind kind, std::size_t index) {
         add_world_draw(draw_list, kind, index);
     };
-    // Projectile render types 1, 3 and 6: the projectile's ground shadow,
-    // then its model; a missile also draws its first child
-    // (the flame or propeller) while it still has flight time.
-    const auto plan_projectile_models = [&](MatchModels& models) {
+    // Projectile render types 1, 3 and 6, of the first `drawn` projectiles:
+    // the projectile's ground shadow, then its model; a missile also draws
+    // its first child (the flame or propeller) while it still has flight
+    // time.
+    const auto plan_projectile_models = [&](MatchModels& models, std::size_t drawn) {
         auto& renderer = models.renderer;
         const auto shots = match_->projectiles();
         const auto& shown_shots = models.presentation.presented_shots;
-        for (std::size_t index = 0; index < shots.size(); ++index) {
+        for (std::size_t index = 0; index < std::min(drawn, shots.size()); ++index) {
             const auto& shot = shots[index];
             const auto* weapon = match_->projectile_weapon(shot);
             if (weapon == nullptr || shot.burst_remaining != 0)
@@ -1700,10 +1703,22 @@ void Runtime::render_match_surface() {
             plan_feature(draw.index);
     }
     plan_effect_layers(5, 6);
-    plan_projectile_models(models);
+    // The battlefield rectangle the load screen sets, over the visible map
+    // area, which the projectiles' lenses and the explosion records are
+    // culled to.
+    const oa::sim::effect_particles::ExplosionView explosion_view{
+        renderer.camera_x,
+        renderer.camera_y,
+        {oa::sim::effect_particles::battlefield_screen_x,
+         oa::sim::effect_particles::battlefield_screen_y,
+         oa::sim::effect_particles::battlefield_screen_x + vis_w - 1,
+         oa::sim::effect_particles::battlefield_screen_y + vis_h - 1}
+    };
+    const std::size_t shots_drawn = projectiles_drawn(explosion_view);
+    plan_projectile_models(models, shots_drawn);
     // Every captured tile goes back to the frame after the projectiles.
     add_draw(WorldDrawKind::commit_always, 0);
-    plan_match_projectiles(draw_list, scene_view);
+    plan_match_projectiles(draw_list, scene_view, shots_drawn);
     // Nano streams are the type-6 particles; the beam line is a debug aid.
     const auto debug_beams = options_.debug_order_lines
                                  ? match_->nano_lasers()
@@ -1726,15 +1741,6 @@ void Runtime::render_match_surface() {
         draw_list.lines.push_back({from.x, from.y, to.x, to.y, color, 0});
         add_draw(WorldDrawKind::line, draw_list.lines.size() - 1);
     }
-    // The battlefield rectangle the load screen sets, over the visible map area.
-    const oa::sim::effect_particles::ExplosionView explosion_view{
-        renderer.camera_x,
-        renderer.camera_y,
-        {oa::sim::effect_particles::battlefield_screen_x,
-         oa::sim::effect_particles::battlefield_screen_y,
-         oa::sim::effect_particles::battlefield_screen_x + vis_w - 1,
-         oa::sim::effect_particles::battlefield_screen_y + vis_h - 1}
-    };
     // The in-bounds pass starts with the debris pieces: each piece's object is turned
     // by its spin and drawn at its origin, culled on
     // that origin, in its unit's team colour.

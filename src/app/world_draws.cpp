@@ -365,6 +365,139 @@ void blit_world_lit_hotspot(
     }
 }
 
+namespace {
+
+/// Where one map pixel of a projectile's lens takes its colour from: the
+/// pixel of the lens's square it reads, across and down; a pixel the lens
+/// leaves as it is reads none.
+struct LensSource {
+    int8_t x{};
+    int8_t y{};
+    bool moved{}; ///< the pixel reads another
+};
+
+/// The sources of every pixel of a lens's square, row by row.
+using LensSources =
+    std::array<LensSource, static_cast<std::size_t>(projectile_lens_side) * projectile_lens_side>;
+
+/// Returns the sources of a projectile's lens, read from the lens table
+/// the first time they are asked for.
+///
+/// @return the sources, row by row
+const LensSources& projectile_lens_sources() {
+    static const LensSources sources = [] {
+        LensSources read{};
+        const auto lens = oa::present::build_lens_frame(
+            projectile_lens_side, projectile_lens_side, projectile_lens_strength
+        );
+        if (lens.sprite.data == nullptr)
+            return read;
+        constexpr int32_t cells = projectile_lens_side * projectile_lens_side;
+        for (int32_t cell = 0; cell < cells; ++cell) {
+            const uint16_t entry = oa::present::lens_offset(lens.sprite, cell);
+            if (entry == oa::present::lens_outside)
+                continue;
+            // An entry is the step, in pixels of the square's rows, to the
+            // pixel read.
+            const int32_t source = cell + static_cast<int16_t>(entry);
+            if (source == cell || source < 0 || source >= cells)
+                continue;
+            read[static_cast<std::size_t>(cell)] = {
+                static_cast<int8_t>(source % projectile_lens_side),
+                static_cast<int8_t>(source / projectile_lens_side),
+                true
+            };
+        }
+        return read;
+    }();
+    return sources;
+}
+
+} // namespace
+
+bool projectile_lens_on_battlefield(
+    const oa::sim::effect_particles::ExplosionView& view, const std::array<uint32_t, 3>& position
+) noexcept {
+    // The whole map pixels of a 16.16 value, as a signed 16-bit value.
+    const auto whole = [](uint32_t fixed) {
+        return static_cast<int32_t>(static_cast<int16_t>(fixed >> 16));
+    };
+    const int32_t x = whole(position[0]) - static_cast<int16_t>(view.camera_x) +
+                      oa::sim::effect_particles::battlefield_screen_x;
+    const int32_t y = whole(position[2]) - static_cast<int16_t>(view.camera_y) -
+                      (whole(position[1]) >> 1) + oa::sim::effect_particles::battlefield_screen_y;
+    return x >= view.battlefield.x1 && x <= view.battlefield.x2 && y >= view.battlefield.y1 &&
+           y <= view.battlefield.y2;
+}
+
+void draw_world_lens(
+    const WorldTarget& target, const oa::present::world_renderer::ScreenPoint& screen, float scale
+) {
+    if (scale <= 0.0F)
+        scale = 1.0F;
+    const LensSources& sources = projectile_lens_sources();
+    constexpr int32_t side = projectile_lens_side;
+    const auto scaled = [scale](int32_t pixels) {
+        return static_cast<int32_t>(
+            std::lround(static_cast<double>(pixels) * static_cast<double>(scale))
+        );
+    };
+    const int32_t left = screen.x - scaled(side / 2);
+    const int32_t top = screen.y - scaled(side / 2);
+    const int32_t drawn = std::max(1, scaled(side));
+    // The square's pixels in the visible world rectangle and the frame,
+    // which the lens reads; of them it writes those in the band.
+    const int32_t read_left = std::max({left, target.clip_x, 0});
+    const int32_t read_top = std::max({top, target.clip_y, 0});
+    const int32_t read_right = static_cast<int32_t>(std::min<int64_t>(
+        {int64_t{left} + drawn, int64_t{target.clip_x} + target.clip_width, target.width}
+    ));
+    const int32_t read_bottom = static_cast<int32_t>(std::min<int64_t>(
+        {int64_t{top} + drawn, int64_t{target.clip_y} + target.clip_height, target.height}
+    ));
+    const int32_t first_row = std::max(read_top, target.first_row);
+    const int32_t end_row = std::min(read_bottom, target.end_row);
+    if (read_left >= read_right || first_row >= end_row)
+        return;
+    // The pixels read, as they stood before the lens.
+    const auto columns = static_cast<std::size_t>(read_right - read_left);
+    const auto row_bytes = static_cast<std::size_t>(target.width) * 3U;
+    std::vector<uint8_t> before(columns * static_cast<std::size_t>(read_bottom - read_top) * 3U);
+    for (int32_t y = read_top; y < read_bottom; ++y)
+        std::copy_n(
+            target.rgb + static_cast<std::size_t>(y) * row_bytes +
+                static_cast<std::size_t>(read_left) * 3U,
+            columns * 3U,
+            before.begin() +
+                static_cast<std::ptrdiff_t>(static_cast<std::size_t>(y - read_top) * columns * 3U)
+        );
+    for (int32_t y = first_row; y < end_row; ++y) {
+        const auto cell_y = static_cast<int32_t>(int64_t{y - top} * side / drawn);
+        for (int32_t x = read_left; x < read_right; ++x) {
+            const auto cell_x = static_cast<int32_t>(int64_t{x - left} * side / drawn);
+            const LensSource& source =
+                sources[static_cast<std::size_t>(cell_y) * side + static_cast<std::size_t>(cell_x)];
+            if (!source.moved)
+                continue;
+            const int32_t from_x = x + scaled(source.x - cell_x);
+            const int32_t from_y = y + scaled(source.y - cell_y);
+            if (from_x < read_left || from_x >= read_right || from_y < read_top ||
+                from_y >= read_bottom)
+                continue;
+            const auto* from =
+                before.data() + (static_cast<std::size_t>(from_y - read_top) * columns +
+                                 static_cast<std::size_t>(from_x - read_left)) *
+                                    3U;
+            std::copy_n(
+                from,
+                3,
+                target.rgb + static_cast<std::size_t>(y) * row_bytes +
+                    static_cast<std::size_t>(x) * 3U
+            );
+        }
+    }
+}
+
 void set_frame_shadows(
     WorldDrawList& list,
     model_render::ModelRenderer& renderer,
@@ -398,6 +531,7 @@ void clear_world_draws(WorldDrawList& list) {
     list.projectiles.clear();
     list.debris.clear();
     list.fragments.clear();
+    list.lenses.clear();
     list.decoded.clear();
     list.decoded_of.clear();
     list.held.clear();
@@ -724,6 +858,9 @@ void draw_world_band(
             model_render::bridge_end(bridge, band);
             break;
         }
+        case WorldDrawKind::lens:
+            draw_world_lens(target, list.lenses[draw.index], frame.scale);
+            break;
         }
     }
 }

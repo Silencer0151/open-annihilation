@@ -11,7 +11,9 @@
 // frame alone (draw_world_band), reading the list and the models and
 // writing only its rows of the frame and of the model bridge, so that the
 // bands give the frame drawn whole byte for byte, one after another or at
-// the same time. A large explosion file is drawn a frame at a time: each of
+// the same time. A projectile's lens reads the frame around it, rows of
+// other bands among them, so a frame with one is drawn as a single band. A
+// large explosion file is drawn a frame at a time: each of
 // its frames is rendered from the file's bytes as it is drawn, through a
 // cache of rendered frames with a budget of bytes (GafFrameCache).
 #pragma once
@@ -200,6 +202,52 @@ void blit_world_lit_hotspot(
     FlashStrength strength
 );
 
+/// Side of the square a projectile of render type 2 draws its lens over, in
+/// map pixels; its centre is the square's middle.
+inline constexpr int32_t projectile_lens_side = 22;
+/// How strongly that lens magnifies: oa::present::build_lens_frame's scale.
+inline constexpr int32_t projectile_lens_strength = 8;
+
+/// Tells whether a projectile's lens is drawn: whether the projectile's
+/// position, placed on the game's screen as an explosion record's centre is
+/// (draw_explosions), lies on the battlefield rectangle, its edges included.
+///
+/// The screen point is the position's whole map pixels less the camera's,
+/// lifted by half its height, from the battlefield's corner
+/// (battlefield_screen_x, battlefield_screen_y); the map pixels, the height
+/// and the camera are each taken as signed 16-bit values.
+///
+/// @param view camera position and battlefield rectangle
+/// @param position the projectile's 16.16 world position, x, height and z
+/// @return true when its lens is drawn
+[[nodiscard]] bool projectile_lens_on_battlefield(
+    const oa::sim::effect_particles::ExplosionView& view, const std::array<uint32_t, 3>& position
+) noexcept;
+
+/// Draws a projectile's lens on the battlefield frame, its centre at a
+/// screen point.
+///
+/// The lens covers a square of projectile_lens_side map pixels, placed as a
+/// GAF frame of that side whose origin is its middle would be. Only the
+/// five by five map pixels at its middle change: each takes the pixel the
+/// lens table names (oa::present::build_lens_frame), one step nearer the
+/// centre in each direction it lies off it, read from the frame as it
+/// stood before the lens. The centre pixel grows to a block of three by
+/// three, and the eight around it move out by one to frame it, those beside
+/// it stretched to three. A lens drawn over another reads what that one
+/// drew. At a scale each map pixel is a block of the frame, found as a GAF
+/// frame's pixels are, and moves by its step times the scale, rounded.
+///
+/// The lens reads rows outside the band being drawn, so a frame with a lens
+/// is drawn as one band (draw_world_bands).
+///
+/// @param target the frame and what may be written
+/// @param screen frame point the lens's centre lands on
+/// @param scale size factor; 0 or less draws at 1
+void draw_world_lens(
+    const WorldTarget& target, const oa::present::world_renderer::ScreenPoint& screen, float scale
+);
+
 /// What one draw of the battlefield is; WorldDraw::index names it in the
 /// list of its kind.
 enum class WorldDrawKind : uint8_t {
@@ -217,6 +265,7 @@ enum class WorldDrawKind : uint8_t {
     projectile,     ///< a projectile's 3DO object (WorldDrawList::projectiles)
     debris,         ///< a debris piece (WorldDrawList::debris)
     fragment,       ///< a shatter fragment (WorldDrawList::fragments)
+    lens,           ///< a projectile's lens (WorldDrawList::lenses; draw_world_lens)
 };
 
 /// One draw of the battlefield.
@@ -320,6 +369,8 @@ struct WorldDrawList {
     std::vector<ProjectileDraw> projectiles;
     std::vector<DebrisDraw> debris;
     std::vector<FragmentDraw> fragments;
+    /// The centres of the projectiles' lenses, as frame points.
+    std::vector<oa::present::world_renderer::ScreenPoint> lenses;
     /// GAF frames decoded for this frame's draws (particles, plasma and
     /// flames), each once: a deque, so that the draws keep pointing at them.
     std::deque<oa::formats::gaf::RenderedFrame> decoded;

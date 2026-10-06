@@ -349,6 +349,33 @@ void test_lens() {
         inside += lens_offset(lens.sprite, i) != lens_outside;
     CHECK(inside > 0 && inside < size * size);
     CHECK(build_lens_frame(0x8000, 1, 1).sprite.data == nullptr);
+
+    // The lens a projectile of render type 2 draws: 22 pixels square,
+    // strength 8. Inside a radius of 5, 69 pixels; of them only the five
+    // across the middle each way read another, the one a step nearer the
+    // centre for the outer two and the centre itself for the three between.
+    constexpr int side = 22;
+    const SpriteBuffer projectile = build_lens_frame(side, side, 8);
+    CHECK(projectile.sprite.origin_x == side / 2 && projectile.sprite.origin_y == side / 2);
+    const auto step = [](int offset) { return offset == -2 ? -1 : offset == 2 ? 1 : 0; };
+    int within = 0;
+    bool rule = true;
+    for (int y = 0; y < side; ++y)
+        for (int x = 0; x < side; ++x) {
+            const int dx = x - side / 2;
+            const int dy = y - side / 2;
+            const uint16_t entry = lens_offset(projectile.sprite, y * side + x);
+            if (dx * dx + dy * dy >= 25) {
+                rule = rule && entry == lens_outside;
+                continue;
+            }
+            ++within;
+            const bool middle = std::abs(dx) <= 2 && std::abs(dy) <= 2;
+            const int expected = middle ? (step(dy) - dy) * side + (step(dx) - dx) : 0;
+            rule = rule && static_cast<int16_t>(entry) == expected;
+        }
+    CHECK(within == 69);
+    CHECK(rule);
 }
 
 void test_downsample() {

@@ -740,7 +740,9 @@ if(BUILD_TESTING)
   # the frame's shadow level and left out at 0, and a frame's shadows set
   # from its zoom. An explosion's flash lighting the entry under each pixel
   # through the light table's row the pixel names, flashes compounding, at
-  # half the row when reduced and on 1 to 8 bands alike. A file over the
+  # half the row when reduced and on 1 to 8 bands alike. A projectile's lens
+  # moving the pixels its rule names, as the 8-bit lens sprite does, at
+  # scales 1 to 3 and within the clip, and its battlefield test. A file over the
   # decoded threshold drawn a frame at a
   # time, its frames rendered from its bytes through the frame cache: its
   # budget, the frame drawn longest ago going first, a frame over the

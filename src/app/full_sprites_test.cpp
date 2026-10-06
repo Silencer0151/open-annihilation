@@ -1346,7 +1346,8 @@ void test_helpers() {
           WorldDrawKind::debris,
           WorldDrawKind::fragment})
         OA_CHECK(full::model_kind(kind) && !full::sprite_kind(kind));
-    for (const auto kind : {WorldDrawKind::commit, WorldDrawKind::commit_always})
+    for (const auto kind :
+         {WorldDrawKind::commit, WorldDrawKind::commit_always, WorldDrawKind::lens})
         OA_CHECK(!full::sprite_kind(kind) && !full::model_kind(kind));
     OA_CHECK(full::sprite_sampling(1.0F) == card::Sampling::nearest);
     OA_CHECK(full::sprite_sampling(2.0F) == card::Sampling::nearest);

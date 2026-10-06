@@ -607,7 +607,8 @@ std::string zoom_text(float zoom) {
 /// greyed or not at all by its cell; the lines, grown by their width; the
 /// units, projectiles, debris and fragments, which the card draws as
 /// meshes (check_full_models holds them to the processor's raster) with
-/// their shadows; and the fog tiles that are not wholly in sight or wholly
+/// their shadows; the projectiles' lenses, which the card does not draw;
+/// and the fog tiles that are not wholly in sight or wholly
 /// out of it, whose edges ramp where the processor's masks cut, with
 /// every tile a corner out of sight at a zoom below 1, where the greyed
 /// level is the box of the grey where the processor grays the box; and the
@@ -724,6 +725,21 @@ std::vector<uint8_t> card_draw_mask(
         case WorldDrawKind::fragment:
             mark_region(list.fragments[draw.index].region);
             break;
+        case WorldDrawKind::lens: {
+            const auto& centre = list.lenses[draw.index];
+            const int side = std::max(1, scaled(projectile_lens_side));
+            mark_rect(
+                mask,
+                width,
+                height,
+                field.x + centre.x - scaled(projectile_lens_side / 2),
+                field.y + centre.y - scaled(projectile_lens_side / 2),
+                side,
+                side,
+                reach
+            );
+            break;
+        }
         case WorldDrawKind::line: {
             const auto& line = list.lines[draw.index];
             mark_line(
@@ -3164,6 +3180,7 @@ bool model_kind(WorldDrawKind kind) noexcept {
     case WorldDrawKind::lit_sprite:
     case WorldDrawKind::line:
     case WorldDrawKind::selection_line:
+    case WorldDrawKind::lens:
         return false;
     }
     return false;
@@ -3661,6 +3678,22 @@ void Runtime::check_full_overlays(
             case WorldDrawKind::fragment:
                 mark_region(list.fragments[draw.index].region);
                 break;
+            case WorldDrawKind::lens: {
+                // The card draws no lens.
+                const auto& centre = list.lenses[draw.index];
+                const int side = std::max(1, scaled(projectile_lens_side));
+                mark_rect(
+                    mask,
+                    frame.width,
+                    frame.height,
+                    field.x + centre.x - scaled(projectile_lens_side / 2),
+                    field.y + centre.y - scaled(projectile_lens_side / 2),
+                    side,
+                    side,
+                    reach
+                );
+                break;
+            }
             case WorldDrawKind::line: {
                 const auto& line = list.lines[draw.index];
                 mark_line(

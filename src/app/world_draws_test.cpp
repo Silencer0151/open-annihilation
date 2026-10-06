@@ -14,7 +14,11 @@
 // set from its zoom (set_frame_shadows). An explosion's flash lights the
 // palette entry under each of its pixels through the light table's row the
 // pixel names, a second flash lighting what the first lit, at half the row
-// when reduced, the same on 1 to 8 bands. A file drawn a frame at a time is
+// when reduced, the same on 1 to 8 bands. A projectile's lens moves exactly
+// the 24 pixels its rule names, as the 8-bit lens sprite does, whole blocks
+// at scales 2 and 3, within the clip, a second lens reading the first's
+// pixels; its battlefield test takes the rectangle's edges and the height's
+// lift. A file drawn a frame at a time is
 // one over the decoded threshold; its frames render from the file's bytes as
 // decoded, through a cache that keeps them within its budget, the frame
 // drawn longest ago going first, draws a frame larger than its budget
@@ -22,6 +26,7 @@
 #include "world_draws.hpp"
 
 #include "oa/platform/job_pool.hpp"
+#include "oa/present/blit.hpp"
 #include "oa/present/model/model_library.hpp"
 #include "oa/present/palette_tables.hpp"
 #include "oa/present/rle.hpp"
@@ -33,6 +38,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <span>
@@ -781,6 +787,232 @@ void test_ranged_frames() {
     OA_CHECK(!failure.has_value() && reads.reads == reads_before);
 }
 
+/// Returns a frame whose pixels all differ: red the column, green the row,
+/// blue the two mixed.
+///
+/// @return the frame's RGB pixels
+std::vector<uint8_t> distinct_frame() {
+    std::vector<uint8_t> rgb(std::size_t{frame_width} * frame_height * 3U);
+    for (int32_t y = 0; y < frame_height; ++y)
+        for (int32_t x = 0; x < frame_width; ++x) {
+            const std::size_t at =
+                (static_cast<std::size_t>(y) * frame_width + static_cast<std::size_t>(x)) * 3U;
+            rgb[at] = static_cast<uint8_t>(x);
+            rgb[at + 1] = static_cast<uint8_t>(y);
+            rgb[at + 2] = static_cast<uint8_t>(x * 3 + y * 5);
+        }
+    return rgb;
+}
+
+/// Returns a whole frame as a target, clipped to a rectangle, on one band.
+///
+/// @param rgb the frame's RGB pixels
+/// @param clip_x the clip's left column
+/// @param clip_y its top row
+/// @param clip_width its columns
+/// @param clip_height its rows
+/// @return the target
+oa::app::WorldTarget lens_target(
+    std::vector<uint8_t>& rgb,
+    int32_t clip_x = 0,
+    int32_t clip_y = 0,
+    int32_t clip_width = frame_width,
+    int32_t clip_height = frame_height
+) {
+    return {
+        rgb.data(),
+        frame_width,
+        frame_height,
+        clip_x,
+        clip_y,
+        clip_width,
+        clip_height,
+        0,
+        frame_height
+    };
+}
+
+/// The step a map pixel of the lens's middle five takes toward the pixel it
+/// shows: none for the middle three, one inward for the outer two.
+///
+/// @param offset the pixel's offset from the centre, -2 to 2
+/// @return the offset of the pixel it shows
+int32_t lens_step(int32_t offset) {
+    return offset == -2 ? -1 : offset == 2 ? 1 : 0;
+}
+
+/// Returns a frame with the lens's rule applied at a whole scale: each map
+/// pixel of the middle five shows the one lens_step names, read from the
+/// frame before, every block of `scale` pixels moving whole.
+///
+/// @param before the frame before
+/// @param centre the lens's centre
+/// @param scale frame pixels per map pixel
+/// @param target what may be written
+/// @return the frame after
+std::vector<uint8_t> lens_rule(
+    const std::vector<uint8_t>& before,
+    const oa::present::world_renderer::ScreenPoint& centre,
+    int32_t scale,
+    const oa::app::WorldTarget& target
+) {
+    auto after = before;
+    const int32_t half = oa::app::projectile_lens_side / 2;
+    const int32_t left = centre.x - half * scale;
+    const int32_t top = centre.y - half * scale;
+    for (int32_t y = top; y < top + oa::app::projectile_lens_side * scale; ++y)
+        for (int32_t x = left; x < left + oa::app::projectile_lens_side * scale; ++x) {
+            const int32_t dx = (x - left) / scale - half;
+            const int32_t dy = (y - top) / scale - half;
+            if (std::abs(dx) > 2 || std::abs(dy) > 2)
+                continue;
+            if (x < target.clip_x || x >= target.clip_x + target.clip_width || y < target.clip_y ||
+                y >= target.clip_y + target.clip_height)
+                continue;
+            const int32_t from_x = x + (lens_step(dx) - dx) * scale;
+            const int32_t from_y = y + (lens_step(dy) - dy) * scale;
+            const auto to =
+                (static_cast<std::size_t>(y) * frame_width + static_cast<std::size_t>(x)) * 3U;
+            const auto from = (static_cast<std::size_t>(from_y) * frame_width +
+                               static_cast<std::size_t>(from_x)) *
+                              3U;
+            for (std::size_t channel = 0; channel < 3; ++channel)
+                after[to + channel] = before[from + channel];
+        }
+    return after;
+}
+
+/// A projectile's lens: at scale 1 exactly 24 pixels change, as the rule
+/// says, and the same as the 8-bit lens sprite drawn through the lens
+/// table; at scales 2 and 3 whole blocks move; a lens over the clip's edge
+/// changes only the pixels inside it; a second lens reads what the first
+/// drew; drawn as a draw of the list it is the same; and the battlefield
+/// test takes its edges and the height's lift.
+void test_projectile_lens() {
+    const oa::present::world_renderer::ScreenPoint centre{40, 50};
+    const auto before = distinct_frame();
+    {
+        auto rgb = before;
+        oa::app::draw_world_lens(lens_target(rgb), centre, 1.0F);
+        OA_CHECK(rgb == lens_rule(before, centre, 1, lens_target(rgb)));
+        std::size_t changed = 0;
+        for (std::size_t at = 0; at < rgb.size(); at += 3)
+            changed += rgb[at] != before[at] || rgb[at + 1] != before[at + 1];
+        OA_CHECK(changed == 24);
+    }
+    // The 8-bit lens sprite over the same picture as palette indices, none of
+    // them the sprite's key 0.
+    {
+        const auto palette = test_palette();
+        auto surface = oa::present::create_surface(frame_width, frame_height);
+        std::vector<uint8_t> rgb(std::size_t{frame_width} * frame_height * 3U);
+        for (int32_t y = 0; y < frame_height; ++y)
+            for (int32_t x = 0; x < frame_width; ++x) {
+                const auto index = static_cast<uint8_t>(1 + (x * 7 + y * 13) % 255);
+                surface.pixels
+                    [static_cast<std::size_t>(y) * frame_width + static_cast<std::size_t>(x)] =
+                    index;
+                const auto colour = entry_colour(palette, index);
+                std::copy(
+                    colour.begin(),
+                    colour.end(),
+                    rgb.begin() + static_cast<std::ptrdiff_t>(
+                                      (static_cast<std::size_t>(y) * frame_width +
+                                       static_cast<std::size_t>(x)) *
+                                      3U
+                                  )
+                );
+            }
+        auto lens = oa::present::build_lens_frame(
+            oa::app::projectile_lens_side,
+            oa::app::projectile_lens_side,
+            oa::app::projectile_lens_strength
+        );
+        oa::present::draw_displacement_sprite(&surface.surface, lens.sprite, centre.x, centre.y);
+        oa::app::draw_world_lens(lens_target(rgb), centre, 1.0F);
+        bool same = true;
+        for (int32_t y = 0; y < frame_height; ++y)
+            for (int32_t x = 0; x < frame_width; ++x)
+                same = same &&
+                       pixel_at(rgb, x, y) == entry_colour(
+                                                  palette,
+                                                  surface.pixels
+                                                      [static_cast<std::size_t>(y) * frame_width +
+                                                       static_cast<std::size_t>(x)]
+                                              );
+        OA_CHECK(same);
+    }
+    for (const int32_t scale : {2, 3}) {
+        auto rgb = before;
+        oa::app::draw_world_lens(lens_target(rgb), centre, static_cast<float>(scale));
+        OA_CHECK(rgb == lens_rule(before, centre, scale, lens_target(rgb)));
+    }
+    // The clip's left edge on the centre's column, as when the centre is on
+    // the battlefield's edge.
+    {
+        auto rgb = before;
+        const auto clipped = lens_target(rgb, centre.x, 0, frame_width - centre.x);
+        oa::app::draw_world_lens(clipped, centre, 1.0F);
+        OA_CHECK(rgb == lens_rule(before, centre, 1, clipped));
+    }
+    // A second lens a pixel to the right reads the first's pixels.
+    {
+        auto rgb = before;
+        const oa::present::world_renderer::ScreenPoint next{centre.x + 1, centre.y};
+        oa::app::draw_world_lens(lens_target(rgb), centre, 1.0F);
+        oa::app::draw_world_lens(lens_target(rgb), next, 1.0F);
+        const auto first = lens_rule(before, centre, 1, lens_target(rgb));
+        OA_CHECK(rgb == lens_rule(first, next, 1, lens_target(rgb)));
+    }
+    // As a draw of the list, on one band.
+    {
+        const auto palette = test_palette();
+        auto rgb = before;
+        model_render::ModelDisplay display;
+        model_render::build_model_display(display, oa::present::palette_from_bytes(palette));
+        model_render::RgbBridge bridge;
+        const model_render::RgbFrame frame{rgb.data(), frame_width, frame_height, frame_width * 3};
+        model_render::bridge_begin(
+            bridge, frame, {0, 0, frame_width - 1, frame_height - 1}, 1.0F, display.palette
+        );
+        oa::app::WorldDrawList list;
+        list.lenses.push_back(centre);
+        oa::app::add_world_draw(list, WorldDrawKind::lens, 0);
+        oa::app::WorldFrameDraw draw;
+        draw.target = lens_target(rgb);
+        draw.palette = &palette;
+        draw.bridge = &bridge;
+        draw.display = &display;
+        std::vector<model_render::BridgeBand> split;
+        model_render::bridge_split(bridge, 1, split);
+        model_render::ModelRenderer renderer;
+        model_render::SupersampleScratch supersample;
+        std::vector<oa::formats::objects3d::FixedVector3> points;
+        oa::app::draw_world_band(list, draw, split.front(), renderer, supersample, points);
+        model_render::bridge_join_band(bridge, split.front());
+        OA_CHECK(rgb == lens_rule(before, centre, 1, lens_target(rgb)));
+        oa::app::clear_world_draws(list);
+        OA_CHECK(list.lenses.empty());
+    }
+    // The battlefield from (128, 32) to (767, 511), the camera at (100, 200).
+    const oa::sim::effect_particles::ExplosionView view{100, 200, {128, 32, 767, 511}};
+    const auto at = [](int32_t x, int32_t height, int32_t z) {
+        return std::array<uint32_t, 3>{
+            static_cast<uint32_t>(x) << 16,
+            static_cast<uint32_t>(height) << 16,
+            static_cast<uint32_t>(z) << 16
+        };
+    };
+    OA_CHECK(oa::app::projectile_lens_on_battlefield(view, at(100, 0, 200)));
+    OA_CHECK(oa::app::projectile_lens_on_battlefield(view, at(739, 0, 679)));
+    OA_CHECK(!oa::app::projectile_lens_on_battlefield(view, at(99, 0, 300)));
+    OA_CHECK(!oa::app::projectile_lens_on_battlefield(view, at(740, 0, 300)));
+    OA_CHECK(!oa::app::projectile_lens_on_battlefield(view, at(300, 0, 680)));
+    // Half the height lifts it back onto the bottom edge, and off the top.
+    OA_CHECK(oa::app::projectile_lens_on_battlefield(view, at(300, 2, 680)));
+    OA_CHECK(!oa::app::projectile_lens_on_battlefield(view, at(300, 2, 200)));
+}
+
 } // namespace
 
 int main() {
@@ -788,6 +1020,7 @@ int main() {
     test_feature_shadows();
     test_frame_shadows();
     test_explosion_flashes();
+    test_projectile_lens();
     test_frame_by_frame_threshold();
     test_frame_cache_empty();
     test_frame_cache_over_budget();

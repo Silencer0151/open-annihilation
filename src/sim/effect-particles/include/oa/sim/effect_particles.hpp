@@ -788,7 +788,8 @@ void build_flash_tier(
 
 /// Builds the three flash tiers and clears the explosion, debris and fragment tables.
 ///
-/// The lens table 3.1c prepares alongside the flash tiers is not built.
+/// The lens the projectiles of render type 2 draw is built by the renderer,
+/// not here; building it draws no random numbers.
 ///
 /// @param[in,out] world explosion, debris and fragment tables
 /// @param[in,out] tiers frame storage sized as for build_flash_tier; `world` keeps pointers to it

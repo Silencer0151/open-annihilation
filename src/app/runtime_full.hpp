@@ -140,6 +140,9 @@ flat_colour(const std::array<uint8_t, 3>& rgb, const std::array<uint8_t, 256>* g
 
 /// Tells whether a kind of draw is the sprite stage's.
 ///
+/// A projectile's lens is neither stage's: the Full tier draws none, since
+/// it does not read back what it has drawn.
+///
 /// @param kind the kind
 /// @return true for sprites, blended sprites, explosions' flashes, particle
 ///     squares, lines and selection lines

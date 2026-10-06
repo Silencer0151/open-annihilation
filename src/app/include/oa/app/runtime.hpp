@@ -5238,16 +5238,34 @@ class Runtime final : public menu::Host,
     /// Adds the frame's projectiles drawn by their weapon render type to its draws.
     ///
     /// Lasers are a line from the head to the tail in UI colour `color`, with a
-    /// second line one pixel off the major axis in `color2`; plasma and flames
+    /// second line one pixel off the major axis in `color2`; render type 2 is
+    /// a lens over what is drawn under it (draw_world_lens); plasma and flames
     /// are FX.GAF sprites, decoded once for the frame; lightning is jittered
     /// lines. Model projectiles (render types 1, 3 and 6) are not drawn by
     /// this pass; a projectile out of the viewer's sight is skipped.
     ///
     /// @param[in,out] draws the frame's draws, in order
     /// @param viewport battlefield viewport
+    /// @param drawn how many of the match's projectiles, from the first, the
+    ///     pass may draw (projectiles_drawn)
     void plan_match_projectiles(
-        WorldDrawList& draws, const oa::present::world_renderer::BattlefieldViewport& viewport
+        WorldDrawList& draws,
+        const oa::present::world_renderer::BattlefieldViewport& viewport,
+        std::size_t drawn
     );
+
+    /// Returns how many of the match's projectiles, from the first, a frame
+    /// draws: all of them, unless one of render type 2, past its burst wait
+    /// and in the viewer's sight, lies off the battlefield
+    /// (projectile_lens_on_battlefield).
+    ///
+    /// @param view camera position and battlefield rectangle
+    /// @return the count
+    /// @quirk The game's projectile pass stops at such a projectile: it and
+    ///        every projectile after it, of any render type, go undrawn that
+    ///        frame.
+    [[nodiscard]] std::size_t
+    projectiles_drawn(const oa::sim::effect_particles::ExplosionView& view);
 
     /// Returns the RGB of a Game UI colour slot.
     ///

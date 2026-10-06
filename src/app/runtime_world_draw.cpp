@@ -373,6 +373,7 @@ namespace {
 // Weapon render types dispatched by the projectile pass.
 enum class ProjectileRender : uint8_t {
     laser = 0,
+    lens = 2,
     plasma = 4,
     flame = 5,
     lightning = 7,
@@ -396,7 +397,9 @@ std::array<uint32_t, 3> fixed_point(int64_t x, int64_t y, int64_t z) {
 } // namespace
 
 void Runtime::plan_match_projectiles(
-    WorldDrawList& draws, const oa::present::world_renderer::BattlefieldViewport& viewport
+    WorldDrawList& draws,
+    const oa::present::world_renderer::BattlefieldViewport& viewport,
+    std::size_t drawn
 ) {
     if (!match_)
         return;
@@ -426,7 +429,7 @@ void Runtime::plan_match_projectiles(
     // frame's draw worked out for the pool as it is.
     const auto shots = match_->projectiles();
     const auto& shown_shots = match_models().presentation.presented_shots;
-    for (std::size_t index = 0; index < shots.size(); ++index) {
+    for (std::size_t index = 0; index < std::min(drawn, shots.size()); ++index) {
         const auto& shot = shots[index];
         const auto* weapon = match_->projectile_weapon(shot);
         if (weapon == nullptr || shot.burst_remaining != 0)
@@ -464,6 +467,12 @@ void Runtime::plan_match_projectiles(
             line(head.x, head.y, tail.x, tail.y, ui_color_rgb(weapon->color));
             break;
         }
+        case ProjectileRender::lens:
+            // The pass ends before a lens off the battlefield, so this one
+            // is on it.
+            draws.lenses.push_back(project_match_point(viewport, shot_position));
+            add_world_draw(draws, WorldDrawKind::lens, draws.lenses.size() - 1);
+            break;
         case ProjectileRender::plasma: {
             if (weapon->color == kNoPlasmaSprite || weapon->color >= kPlasmaSprites.size())
                 break;
@@ -531,6 +540,29 @@ void Runtime::plan_match_projectiles(
             break;
         }
     }
+}
+
+std::size_t Runtime::projectiles_drawn(const oa::sim::effect_particles::ExplosionView& view) {
+    if (!match_)
+        return 0;
+    const auto shots = match_->projectiles();
+    for (std::size_t index = 0; index < shots.size(); ++index) {
+        const auto& shot = shots[index];
+        const auto* weapon = match_->projectile_weapon(shot);
+        if (weapon == nullptr || shot.burst_remaining != 0 ||
+            weapon->rendertype != static_cast<uint8_t>(ProjectileRender::lens))
+            continue;
+        const auto position = oa::sim::match_runtime::fixed_words(shot.position);
+        try {
+            if (!match_->point_visible(static_cast<uint8_t>(match_view_player()), position))
+                continue;
+        } catch (const std::exception&) {
+            continue;
+        }
+        if (!projectile_lens_on_battlefield(view, position))
+            return index;
+    }
+    return shots.size();
 }
 
 } // namespace oa::app
