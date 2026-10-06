@@ -67,7 +67,7 @@ fs::path step_snapshot(const fs::path& snapshot, std::string_view step) {
 }
 
 /// What a click left behind: the selection, the armed command and the
-/// mover's orders.
+/// orders of the mover and the solar collector.
 struct ClickResult {
     bool mover_selected{};
     bool friend_selected{};
@@ -75,13 +75,14 @@ struct ClickResult {
     MatchCommand command{};
     std::vector<uint8_t> kinds;                               ///< the mover's queue, head first
     std::optional<oa::sim::ground_orders::Point> destination; ///< its head's point
+    std::vector<uint8_t> collector_kinds; ///< the solar collector's queue, head first
 
     /// Tells whether two clicks left the same selection, armed command and
-    /// queue; the destinations differ by where each surface's pointer was.
+    /// queues; the destinations differ by where each surface's pointer was.
     [[nodiscard]] bool same_as(const ClickResult& other) const {
         return mover_selected == other.mover_selected && friend_selected == other.friend_selected &&
                any_selected == other.any_selected && command == other.command &&
-               kinds == other.kinds;
+               kinds == other.kinds && collector_kinds == other.collector_kinds;
     }
 };
 
@@ -93,6 +94,12 @@ std::string describe(const ClickResult& result) {
                        std::to_string(static_cast<int>(result.command)) + ", orders [";
     for (std::size_t index = 0; index < result.kinds.size(); ++index)
         text += (index == 0 ? "" : " ") + std::to_string(result.kinds[index]);
+    text += "]";
+    if (result.collector_kinds.empty())
+        return text;
+    text += ", solar collector orders [";
+    for (std::size_t index = 0; index < result.collector_kinds.size(); ++index)
+        text += (index == 0 ? "" : " ") + std::to_string(result.collector_kinds[index]);
     return text + "]";
 }
 
@@ -158,13 +165,17 @@ void Runtime::check_megamap_clicks() {
     };
     // The mover, a friend beside it and an enemy in its sight, placed from
     // the commander toward the map's middle; the ground clicked lies
-    // between them.
+    // between them. A solar collector, which cannot patrol, stands between
+    // the commander and the mover.
     const int32_t way_x = map_x(commander) < map_width / 2 ? 1 : -1;
     const int32_t way_z = map_z(commander) < map_height / 2 ? 1 : -1;
     const auto mover =
         spawn("ARMPW", local, map_x(commander) + way_x * kApart, map_z(commander) + way_z * kApart);
     const auto friend_unit = spawn("ARMPW", local, map_x(mover) + way_x * kApart, map_z(mover));
     const auto enemy = spawn("CORAK", enemy_player, map_x(mover), map_z(mover) + way_z * kApart);
+    const auto collector = spawn(
+        "ARMSOLAR", local, map_x(mover) - way_x * kApart / 2, map_z(mover) - way_z * kApart / 2
+    );
     const std::array<int32_t, 2> open_ground{
         map_x(mover) + way_x * kApart / 2, map_z(mover) + way_z * kApart / 2
     };
@@ -283,6 +294,9 @@ void Runtime::check_megamap_clicks() {
                 out.destination = view.destination;
             out.kinds.push_back(view.kind);
         });
+        match_->visit_primary_queue(collector, [&](const auto& view) {
+            out.collector_kinds.push_back(view.kind);
+        });
         return out;
     };
 
@@ -294,6 +308,7 @@ void Runtime::check_megamap_clicks() {
         uint8_t button{};       ///< the button clicked
         uint16_t on{};          ///< the unit clicked on, or 0 for the open ground
         std::function<bool(const ClickResult&)> expected; ///< what both must leave
+        bool collector_selected{}; ///< the solar collector selected beside the mover
     };
 
     const auto moved = [&](const ClickResult& r) {
@@ -312,14 +327,16 @@ void Runtime::check_megamap_clicks() {
          MatchCommand::none,
          SDL_BUTTON_LEFT,
          0,
-         [&](const ClickResult& r) { return moved(r) && r.command == MatchCommand::none; }},
+         [&](const ClickResult& r) { return moved(r) && r.command == MatchCommand::none; },
+         false},
         {"left-click interface: a left click on an enemy attacks it",
          input::interface_left_click,
          true,
          MatchCommand::none,
          SDL_BUTTON_LEFT,
          enemy,
-         [&](const ClickResult& r) { return attacked(r); }},
+         [&](const ClickResult& r) { return attacked(r); },
+         false},
         {"left-click interface: a left click on an own unit selects it alone",
          input::interface_left_click,
          true,
@@ -328,14 +345,16 @@ void Runtime::check_megamap_clicks() {
          friend_unit,
          [](const ClickResult& r) {
              return !r.mover_selected && r.friend_selected && r.kinds.empty();
-         }},
+         },
+         false},
         {"left-click interface: a right press on open ground deselects without an order",
          input::interface_left_click,
          true,
          MatchCommand::none,
          SDL_BUTTON_RIGHT,
          0,
-         deselected},
+         deselected,
+         false},
         {"left-click interface: a right press cancels an armed PATROL alone",
          input::interface_left_click,
          true,
@@ -344,14 +363,28 @@ void Runtime::check_megamap_clicks() {
          0,
          [](const ClickResult& r) {
              return r.mover_selected && r.command == MatchCommand::none && r.kinds.empty();
-         }},
+         },
+         false},
+        {"left-click interface: a left click with PATROL armed sends the mover on patrol and "
+         "gives the solar collector selected beside it no order",
+         input::interface_left_click,
+         true,
+         MatchCommand::patrol,
+         SDL_BUTTON_LEFT,
+         0,
+         [](const ClickResult& r) {
+             return r.mover_selected && r.command == MatchCommand::none && r.kinds.size() == 1 &&
+                    r.kinds.front() == orders::patrol_kind && r.collector_kinds.empty();
+         },
+         true},
         {"right-click interface: a left click on open ground deselects without an order",
          input::interface_right_click,
          true,
          MatchCommand::none,
          SDL_BUTTON_LEFT,
          0,
-         deselected},
+         deselected,
+         false},
         {"right-click interface: a left click on an own unit selects it",
          input::interface_right_click,
          false,
@@ -360,14 +393,16 @@ void Runtime::check_megamap_clicks() {
          friend_unit,
          [](const ClickResult& r) {
              return !r.mover_selected && r.friend_selected && r.kinds.empty();
-         }},
+         },
+         false},
         {"right-click interface: a right press on open ground moves the selection",
          input::interface_right_click,
          true,
          MatchCommand::none,
          SDL_BUTTON_RIGHT,
          0,
-         [&](const ClickResult& r) { return moved(r); }},
+         [&](const ClickResult& r) { return moved(r); },
+         false},
         {"right-click interface: a right press on an own unit guards it",
          input::interface_right_click,
          true,
@@ -377,21 +412,24 @@ void Runtime::check_megamap_clicks() {
          [](const ClickResult& r) {
              return r.mover_selected && !r.friend_selected && r.kinds.size() == 1 &&
                     r.kinds.front() == orders::follow_ground_kind;
-         }},
+         },
+         false},
         {"right-click interface: a left click with ATTACK armed attacks the enemy",
          input::interface_right_click,
          true,
          MatchCommand::attack,
          SDL_BUTTON_LEFT,
          enemy,
-         [&](const ClickResult& r) { return attacked(r) && r.command == MatchCommand::none; }},
+         [&](const ClickResult& r) { return attacked(r) && r.command == MatchCommand::none; },
+         false},
         {"left-click interface: a left click with MOVE armed on an enemy moves to it",
          input::interface_left_click,
          true,
          MatchCommand::move,
          SDL_BUTTON_LEFT,
          enemy,
-         [&](const ClickResult& r) { return moved(r) && r.command == MatchCommand::none; }},
+         [&](const ClickResult& r) { return moved(r) && r.command == MatchCommand::none; },
+         false},
         {"right-click interface: a left click with MOVE armed on an own unit guards it",
          input::interface_right_click,
          true,
@@ -402,13 +440,15 @@ void Runtime::check_megamap_clicks() {
              return r.mover_selected && !r.friend_selected && r.kinds.size() == 1 &&
                     r.kinds.front() == orders::follow_ground_kind &&
                     r.command == MatchCommand::none;
-         }},
+         },
+         false},
     };
 
     // Each case from the same start on the battlefield, then on the megamap.
     const auto prepare = [&](const Case& one) {
         world.game.interface_type = one.interface_type;
         match_->stop_orders(mover);
+        match_->stop_orders(collector);
         clear_local_selection();
         reset_match_command();
         pending_build_type_ = 0;
@@ -416,6 +456,8 @@ void Runtime::check_megamap_clicks() {
             adopt_selection(mover);
             selected_match_unit_ = mover;
         }
+        if (one.collector_selected)
+            adopt_selection(collector);
         apply_match_hud_for_selection();
         match_command_ = one.command;
     };
@@ -490,6 +532,7 @@ void Runtime::check_megamap_clicks() {
             failures.push_back(std::string(one.name) + " (megamap: " + describe(megamap) + ")");
     }
     match_->stop_orders(mover);
+    match_->stop_orders(collector);
     clear_local_selection();
     wheel_zoom = kept_wheel_zoom;
     megamap_wheel_zoom_changed();
@@ -500,8 +543,8 @@ void Runtime::check_megamap_clicks() {
         fail("the megamap's clicks differ from the battlefield's:" + text);
     }
     std::cout << "megamap click check: the megamap's clicks give the battlefield's results in "
-                 "both interface types: orders, selection, deselection, guard and the armed "
-                 "command's order and cancel\n";
+                 "both interface types: orders, selection, deselection, guard, the armed "
+                 "command's order and cancel, and no patrol for a solar collector\n";
 }
 
 void Runtime::check_megamap_picture() {

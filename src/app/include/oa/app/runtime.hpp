@@ -8366,8 +8366,11 @@ class Runtime final : public menu::Host,
     /// shift right presses, an armed MOVE or PATROL and a radar click keeps its
     /// shape around the point, a unit far from it going to the point itself; an
     /// armed PATROL clicked on one unit of a block gives that unit no order and
-    /// measures the others' places from the centre of the rest. A right click on
-    /// a factory build button takes that unit type off the queue even when
+    /// measures the others' places from the centre of the rest. An armed
+    /// PATROL gives a selected solar collector no order, and a Shift click no
+    /// queued one, while the construction kbot and the Peewee beside it patrol
+    /// in their shape around a centre that counts the collector. A right click
+    /// on a factory build button takes that unit type off the queue even when
     /// another type was queued after it. The screen's edges scroll first
     /// (check_edge_scroll), and the on-screen list and the pick follow
     /// (check_pointer_picks). Throws std::runtime_error on a failure.
@@ -8417,12 +8420,13 @@ class Runtime final : public menu::Host,
     /// armed command and orders on both: in the left-click interface a left
     /// click on open ground moves the selection, one on an enemy attacks it
     /// and one on an own unit selects it alone, a right press deselects or
-    /// cancels an armed command, and an armed MOVE given on an enemy moves to
-    /// it; in the right-click interface a left click on open ground
-    /// deselects, one on an own unit selects it, a right press on open ground
-    /// moves the selection and one on an own unit guards it, an armed ATTACK
-    /// is given by a left click, and an armed MOVE given on an own unit
-    /// guards it. Before the clicks it checks the megamap's picture
+    /// cancels an armed command, an armed PATROL sends the mover on patrol and
+    /// gives a solar collector selected beside it no order, and an armed MOVE
+    /// given on an enemy moves to it; in the right-click interface a left
+    /// click on open ground deselects, one on an own unit selects it, a right
+    /// press on open ground moves the selection and one on an own unit guards
+    /// it, an armed ATTACK is given by a left click, and an armed MOVE given
+    /// on an own unit guards it. Before the clicks it checks the megamap's picture
     /// (check_megamap_picture). Prints a line and checks nothing with
     /// ui.megamap off. With --snapshot, writes each surface's frame just
     /// before and just after each click beside the snapshot. Throws
@@ -11133,7 +11137,8 @@ class Runtime final : public menu::Host,
     void note_build_site_under_pointer();
 
     /// Patrols the selection to a map point and on a unit, as the
-    /// battlefield's armed PATROL does; the megamap's clicks use it.
+    /// battlefield's armed PATROL does (issue_selection_patrol), and ends the
+    /// command unless Shift is held; the megamap's clicks use it.
     ///
     /// @param world the ground point, or none
     /// @param target the unit clicked on, or 0
@@ -11333,18 +11338,31 @@ class Runtime final : public menu::Host,
         const oa::sim::ground_orders::Point& point, uint16_t pointer_unit, bool queue
     );
 
-    /// Sends the selection to patrol to the ground under a canvas point.
-    ///
-    /// Each unit patrols to its own point, keeping its place in the selection
-    /// around the ground (group_order_destination); a selected unit under the
-    /// pointer is left out of the selection's centre and given no order. A
-    /// matching queued patrol is taken off instead. A failure is shown on the
-    /// status line.
+    /// Sends the selection to patrol to the ground under a canvas point
+    /// (issue_selection_patrol).
     ///
     /// @param x canvas column
     /// @param y canvas row
     /// @param queue true to queue the patrol
     void issue_match_patrol(float x, float y, bool queue = false);
+
+    /// Sends the selection to patrol to a ground point, whatever unit lies there.
+    ///
+    /// Each unit patrols to its own point, keeping its place in the selection
+    /// around the point (group_order_destination); a selected unit under the
+    /// pointer is left out of the selection's centre and given no order. A
+    /// unit the order table gives no patrol for, one that cannot patrol such
+    /// as a solar collector, is counted in the centre but given no order. A
+    /// matching queued patrol is taken off instead. The status line shows
+    /// Patrol, or the failure.
+    ///
+    /// @param point the ground point, in 16.16 world coordinates
+    /// @param pointer_unit the unit under the pointer, or 0
+    /// @param queue true to queue the patrol
+    /// @return true when the orders were given, false with nothing selected or on a failure
+    bool issue_selection_patrol(
+        const oa::sim::ground_orders::Point& point, uint16_t pointer_unit, bool queue
+    );
 
     /// Handles an SDL event the screen packages did not take.
     ///

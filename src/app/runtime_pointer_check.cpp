@@ -728,6 +728,85 @@ void Runtime::check_pointer_interfaces() {
         "left-click interface: an armed PATROL clicked on a kbot of a block did not leave it out "
         "and send the other three in their shape"
     );
+
+    // An armed PATROL gives a selected unit that cannot patrol, a solar
+    // collector, no order, though it counts in the selection's centre; the
+    // others patrol each to its own point around the ground, the
+    // construction kbot on the patrol that repairs. First the construction
+    // kbot and the solar collector, then both with a Peewee, whose Shift
+    // click queues a second patrol the same way and keeps PATROL armed.
+    const auto constructor = spawn("ARMCK", 160, 96);
+    const auto collector = spawn("ARMSOLAR", 176, 176);
+    const auto walker = spawn("ARMPW", 208, 96);
+    const auto select_group = [&](std::initializer_list<uint16_t> members) {
+        clear_local_selection();
+        for (const auto id : members) {
+            match_->stop_orders(id);
+            adopt_selection(id);
+        }
+        selected_match_unit_ = *members.begin();
+    };
+    const auto patrols_in_shape = [&](std::initializer_list<uint16_t> members,
+                                      std::initializer_list<oa::sim::ground_orders::Point> points) {
+        int32_t members_x = 0;
+        int32_t members_z = 0;
+        for (const auto id : members) {
+            members_x += static_cast<int32_t>(slots[id].unit->position[0]) >> 16;
+            members_z += static_cast<int32_t>(slots[id].unit->position[2]) >> 16;
+        }
+        const auto count = static_cast<int32_t>(members.size());
+        const auto members_centre_x = members_x / count * 0x10000;
+        const auto members_centre_z = members_z / count * 0x10000;
+        for (const auto id : members) {
+            const auto queue = queue_of(id);
+            if (id == collector) {
+                if (!queue.empty())
+                    return false;
+                continue;
+            }
+            if (queue.size() != points.size())
+                return false;
+            const std::array<uint32_t, 3> position = slots[id].unit->position;
+            const auto kind = id == constructor ? orders::repair_patrol_kind : orders::patrol_kind;
+            std::size_t index = 0;
+            for (const auto& point : points) {
+                const auto& entry = queue[index++];
+                const oa::sim::ground_orders::Point own{
+                    static_cast<int32_t>(position[0]) + point[0] - members_centre_x,
+                    point[1],
+                    point[2] + static_cast<int32_t>(position[2]) - members_centre_z
+                };
+                if (entry.kind != kind || entry.destination != own)
+                    return false;
+            }
+        }
+        return true;
+    };
+    select_group({constructor, collector});
+    centre_on(constructor);
+    std::tie(px, py) = screen_of(constructor);
+    const auto patrol_point = open_ground(px + kPointOffset, py + kPointOffset);
+    const auto queued_point = open_ground(px + 2 * kPointOffset, py + kPointOffset);
+    match_command_ = MatchCommand::patrol;
+    click(SDL_BUTTON_LEFT, px + kPointOffset, py + kPointOffset);
+    require(
+        match_command_ == MatchCommand::none &&
+            patrols_in_shape({constructor, collector}, {patrol_point}),
+        "left-click interface: an armed PATROL gave a solar collector an order, or did not send "
+        "the construction kbot beside it on its patrol in their shape"
+    );
+    select_group({constructor, collector, walker});
+    match_command_ = MatchCommand::patrol;
+    click(SDL_BUTTON_LEFT, px + kPointOffset, py + kPointOffset);
+    match_command_ = MatchCommand::patrol;
+    click(SDL_BUTTON_LEFT, px + 2 * kPointOffset, py + kPointOffset, SDL_KMOD_LSHIFT);
+    require(
+        match_command_ == MatchCommand::patrol &&
+            patrols_in_shape({constructor, collector, walker}, {patrol_point, queued_point}),
+        "left-click interface: an armed PATROL and a Shift click gave a solar collector an order, "
+        "or did not send and queue the patrols of the units beside it in their shape"
+    );
+    reset_match_command();
     clear_local_selection();
 
     // A right click on a factory's build button takes that type off its queue.
@@ -793,7 +872,8 @@ void Runtime::check_pointer_interfaces() {
                  "its panel, the radar's view, and a deselect closing it and resuming, and "
                  "the Pause key's pause kept; a group's moves, patrol and cancels in its shape, "
                  "and a patrol clicked on "
-                 "one of a block left it out; "
+                 "one of a block left it out; a patrol and a queued patrol gave a solar "
+                 "collector nothing and its group their shape; "
                  "factory right click took ARMPW off ahead of ARMCK\n";
     check_pointer_picks();
     check_commander_placement();

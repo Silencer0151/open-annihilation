@@ -173,30 +173,10 @@ bool Runtime::issue_radar_default_order(float x, float y) {
 bool Runtime::issue_map_orders(
     const std::optional<oa::sim::ground_orders::Point>& world, uint16_t target
 ) {
-    namespace input = oa::sim::gameplay_input;
     if (!match_ || selected_match_unit_ == 0 || match_command_ != MatchCommand::patrol || !world)
         return false;
-    try {
-        // Each unit patrols to its own point, keeping its place in the
-        // selection around the map point. The unit under the pointer is not
-        // counted in the centre and takes no order.
-        const auto bound = group_order_bound_unit(input::OrderCommand::patrol, target);
-        const auto centre = local_selection_centre(bound);
-        for_each_selected([&](uint16_t id) {
-            if (id == bound)
-                return;
-            const auto at =
-                group_order_destination(centre, input::OrderCommand::patrol, id, 0, *world);
-            if (!cancels_queued_command(id, input::OrderCommand::patrol, 0, at, queueing()))
-                match_->issue_patrol(id, at, queueing());
-        });
-    } catch (const std::exception& error) {
-        status_ = std::string("patrol command: ") + error.what();
-        std::cerr << "unsupported operation: " << status_ << '\n';
-        return true;
-    }
-    finish_issued_command();
-    status_ = "Patrol";
+    if (issue_selection_patrol(*world, target, queueing()))
+        finish_issued_command();
     return true;
 }
 
@@ -769,26 +749,46 @@ void Runtime::issue_match_patrol(float x, float y, bool queue) {
         static_cast<int32_t>(selected_tnt_->attribute_width * 16U),
         static_cast<int32_t>(selected_tnt_->attribute_height * 16U)
     );
-    const oa::sim::ground_orders::Point point{target.x, target.y, target.z};
+    std::ignore =
+        issue_selection_patrol({target.x, target.y, target.z}, hovered_match_unit_, queue);
+}
+
+bool Runtime::issue_selection_patrol(
+    const oa::sim::ground_orders::Point& point, uint16_t pointer_unit, bool queue
+) {
+    namespace input = oa::sim::gameplay_input;
+    if (!match_ || selected_match_unit_ == 0)
+        return false;
     try {
         // Each unit patrols to its own point, keeping its place in the
-        // selection around the ground under the pointer. The unit under the
-        // pointer is not counted in the centre and takes no order.
-        const auto command = oa::sim::gameplay_input::OrderCommand::patrol;
-        const auto bound = group_order_bound_unit(command, hovered_match_unit_);
+        // selection around the point. The unit under the pointer is not
+        // counted in the centre and takes no order. A unit the order table
+        // gives no patrol, one that cannot patrol, is counted in the centre
+        // but takes no order either.
+        const auto command = input::OrderCommand::patrol;
+        const auto bound = group_order_bound_unit(command, pointer_unit);
         const auto centre = local_selection_centre(bound);
+        const auto& world = match_->state();
+        const auto* aimed = bound != 0 ? oa::world_unit_at(&world, bound) : nullptr;
+        const oa::FixedVec3 position{point[0], point[1], point[2]};
+        const auto hooks = order_cursor_hooks();
         for_each_selected([&](uint16_t id) {
-            if (id == bound)
+            const auto* actor = oa::world_unit_at(&world, id);
+            if (id == bound || actor == nullptr ||
+                input::unit_order(world, command, *actor, aimed, &position, hooks) ==
+                    input::UnitOrder::none)
                 return;
             const auto at = group_order_destination(centre, command, id, 0, point);
             if (!cancels_queued_command(id, command, 0, at, queue))
                 match_->issue_patrol(id, at, queue);
         });
-        status_ = "Patrol";
     } catch (const std::exception& error) {
         status_ = std::string("patrol command: ") + error.what();
         std::cerr << "unsupported operation: " << status_ << '\n';
+        return false;
     }
+    status_ = "Patrol";
+    return true;
 }
 
 } // namespace oa::app

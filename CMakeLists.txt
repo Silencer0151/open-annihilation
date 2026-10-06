@@ -1797,8 +1797,10 @@ if(OA_BUILD_PLATFORM)
       # left clicks and right presses on open ground, units and the radar,
       # shift clicks taking queued orders and a build site back, mouse look,
       # right clicks beside the in-game menu, one dropping the selection
-      # closing it and resuming the game, the Pause key's pause kept,
-      # and a factory build button's right click taking its type off the queue;
+      # closing it and resuming the game, the Pause key's pause kept, a
+      # group's moves and patrols in its shape, a solar collector selected
+      # with it given no patrol, and a factory build button's right click
+      # taking its type off the queue;
       # and the system's pointer in place of the game's cursor without the focus.
       set(oa_pointer_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/pointer-interfaces")
       file(MAKE_DIRECTORY "${oa_pointer_check_dir}")
@@ -1811,9 +1813,10 @@ if(OA_BUILD_PLATFORM)
       # What the megamap (ui.megamap) draws: the map's own colours, only its
       # indestructible features by their pictures, no rectangle for the main
       # view and dark grey bars; then its clicks against the battlefield's in
-      # both interface types: orders, selection, deselection, guard, and an
-      # armed command given and cancelled, under a profile that turns the
-      # megamap on.
+      # both interface types: orders, selection, deselection, guard, an
+      # armed command given and cancelled, and a patrol that gives a solar
+      # collector selected beside the mover no order, under a profile that
+      # turns the megamap on.
       set(oa_megamap_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/megamap-clicks")
       file(MAKE_DIRECTORY "${oa_megamap_check_dir}")
       file(WRITE "${oa_megamap_check_dir}/megamap-clicks.oamod.yaml"
