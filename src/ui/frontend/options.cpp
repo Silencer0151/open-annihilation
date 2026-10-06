@@ -144,7 +144,7 @@ std::string_view control_name(const Control& control) noexcept {
 
 void set_control_name(Control& control, std::string_view name) noexcept {
     control.name.fill('\0');
-    std::memcpy(control.name.data(), name.data(), std::min(name.size(), control.name.size()));
+    std::copy_n(name.data(), std::min(name.size(), control.name.size()), control.name.data());
 }
 
 std::string_view control_text(const Control& control) noexcept {
@@ -153,7 +153,7 @@ std::string_view control_text(const Control& control) noexcept {
 
 void set_control_text(Control& control, std::string_view text) noexcept {
     control.text.fill('\0');
-    std::memcpy(control.text.data(), text.data(), std::min(text.size(), control.text.size() - 1U));
+    std::copy_n(text.data(), std::min(text.size(), control.text.size() - 1U), control.text.data());
 }
 
 void panel_load_layout(Panel& panel, const ui::gui_layout::Layout& layout) noexcept {
@@ -308,7 +308,7 @@ void panel_set_text(Panel& panel, std::string_view name, std::string_view text) 
     std::array<char, kTranslationKeyBytes> key{};
     const char* translated = nullptr;
     if (text.size() < key.size()) {
-        std::memcpy(key.data(), text.data(), text.size());
+        std::copy_n(text.data(), text.size(), key.data());
         translated = oa::data::languages::installed_translation(nullptr, key.data());
     }
     set_control_text(*control, translated != nullptr ? std::string_view(translated) : text);
