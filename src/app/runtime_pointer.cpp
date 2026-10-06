@@ -440,6 +440,8 @@ void Runtime::pick_cursor_unit(bool refresh_view) {
     // and the radar the unit picked last stays.
     const bool placing =
         (flags & input::pointer_over_view) != 0 && match_command_ == MatchCommand::build;
+    if (placing)
+        note_build_site_under_pointer();
     if (!placing && (flags & (input::pointer_over_view | input::pointer_over_radar)) != 0 &&
         on_screen_units_.size() == match_->state().unit_slot_count)
         game.cursor_unit_id = oa::sim::selection::unit_under_pointer(

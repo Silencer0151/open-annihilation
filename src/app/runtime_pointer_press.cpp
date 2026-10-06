@@ -357,7 +357,9 @@ std::string_view Runtime::issue_selection_orders(
                 }
                 break;
             case input::UnitOrder::suppress:
-                if (const auto& at = target_point ? target_point : ground) {
+                // The ground under the pointer, as for every other order;
+                // the unit there is not followed.
+                if (const auto& at = ground ? ground : target_point) {
                     std::ignore = match_->issue_attack_ground(source, *at, queue);
                     issued = "Attack ground";
                 }
@@ -373,6 +375,31 @@ std::string_view Runtime::issue_selection_orders(
                 if (const auto at = ground ? feature_reclaim_point(*ground) : std::nullopt) {
                     match_->issue_feature_reclaim(source, *at, queue);
                     issued = "Reclaim";
+                }
+                break;
+            case input::UnitOrder::resurrect:
+                if (const auto at = ground ? feature_reclaim_point(*ground) : std::nullopt) {
+                    match_->issue_order(
+                        source,
+                        oa::data::mission_types::index_for_name(input::unit_order_name(order)),
+                        queue,
+                        0,
+                        &*at,
+                        0,
+                        0
+                    );
+                    issued = "Resurrect";
+                }
+                break;
+            case input::UnitOrder::patrol:
+            case input::UnitOrder::vtol_patrol:
+            case input::UnitOrder::repair_patrol:
+            case input::UnitOrder::vtol_repair_patrol:
+            case input::UnitOrder::qpatrol:
+                if (destination) {
+                    match_->issue_patrol(source, *destination, queue);
+                    if (issued.empty())
+                        issued = "Patrol";
                 }
                 break;
             case input::UnitOrder::ground_unload:

@@ -124,6 +124,9 @@ inline constexpr uint8_t pointer_over_view = 0x02;
 inline constexpr uint8_t pointer_over_map = 0x04; // over the radar or the view
 inline constexpr uint8_t pointer_box_drag = 0x08;
 inline constexpr uint8_t pointer_radar_scroll = 0x10;
+// The building site last tested under the pointer over the view was clear.
+// Only a test over the view writes it, and a match starts without it.
+inline constexpr uint8_t pointer_build_site_clear = 0x40;
 
 // Bits of the pointer event's key word (Game.pointer_state[2]): the
 // buttons and modifiers held with the event.

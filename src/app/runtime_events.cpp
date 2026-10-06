@@ -281,6 +281,10 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
         match_pointer_known_ =
             screen_ == Screen::match && event_mouse_id(event) != SDL_TOUCH_MOUSEID;
         update_pointer(x, y);
+        // Only a left press the radar acted on (below) leaves its release
+        // nothing to do; any other left press clears that mark.
+        if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT)
+            radar_left_press_held_ = false;
         // The commander placement (setup.commander-warp) takes the pointer
         // first; ui.resource-panel's panel floats over the battlefield and
         // takes it next; ui.build-tools' drag with the snap override key
@@ -346,6 +350,13 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
                     center_camera_on_radar_point(x, y);
                     return;
                 }
+                // Any other left press on the radar acts as it goes down, as
+                // 3.1c's does; its release then does nothing.
+                if (radar_contains(x, y)) {
+                    radar_left_press_held_ = true;
+                    std::ignore = issue_radar_orders(x, y);
+                    return;
+                }
             }
         }
         if (screen_ == Screen::match && event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
@@ -364,7 +375,7 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
             track_match_drag();
         if (screen_ == Screen::match && event.type == SDL_EVENT_MOUSE_BUTTON_UP &&
             event.button.button == SDL_BUTTON_LEFT) {
-            if (match_finished_) {
+            if (match_finished_ || std::exchange(radar_left_press_held_, false)) {
                 match_drag_.reset();
                 return;
             }

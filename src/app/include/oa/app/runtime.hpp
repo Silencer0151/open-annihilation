@@ -7983,8 +7983,16 @@ class Runtime final : public menu::Host,
     /// @param queue the order goes behind the builders' others
     void place_pending_build_at(const oa::sim::ground_orders::Point& target, bool queue);
 
-    /// Places the pending building under a canvas point: the radar's map point, else the
-    /// battlefield's.
+    /// Sends every selected mobile builder to build the pending building at a
+    /// site, plays oktobuild and ends build mode unless the order is queued.
+    ///
+    /// @param site 16.16 world point of the site, snapped to the footprint
+    /// @param queue the order goes behind the builders' others
+    void issue_pending_build(const oa::sim::ground_orders::Point& site, bool queue);
+
+    /// Places the pending building under a canvas point: on the radar as 3.1c
+    /// places it there (place_pending_build_on_radar), else at the
+    /// battlefield's site.
     ///
     /// @param x canvas column
     /// @param y canvas row
@@ -8372,6 +8380,27 @@ class Runtime final : public menu::Host,
     /// std::runtime_error on a failure.
     void check_megamap_clicks();
 
+    /// Checks presses on the minimap (the radar) through SDL input on a
+    /// skirmish of three players, one allied with the viewer.
+    ///
+    /// Each case starts from the same selection, armed command and view and
+    /// presses once on the radar: on open ground, on the dot of an own,
+    /// allied or enemy unit, or on a wreck on ground the viewer mapped or
+    /// never mapped. It must leave the cursor 3.1c shows there, the orders
+    /// each unit holds, the selection, the armed command and the view as
+    /// 3.1c does: in the left-click interface the default order moves,
+    /// selects, attacks, reclaims or does nothing by the cursor, and ATTACK
+    /// attacks; in the right-click interface MOVE, ATTACK, D-GUN, PATROL,
+    /// GUARD, REPAIR, RECLAIM, CAPTURE, LOAD and UNLOAD give the order table's
+    /// orders, a press whose cursor gives nothing leaves the command armed,
+    /// Shift queues and keeps it armed, a press released over the battlefield
+    /// gives its order at the press, and a building is placed by the last
+    /// site tested over the battlefield. A left press with the default order
+    /// in the right-click interface, and a right press in either, move the
+    /// view and give no order. Prints a line per case and throws
+    /// std::runtime_error listing every case that differs.
+    void check_radar_orders();
+
     /// Checks what the open megamap draws, on the match check_megamap_clicks
     /// plays: its terrain takes only colours the map's tiles use; only the
     /// indestructible features that cannot be reclaimed change the terrain
@@ -8385,8 +8414,8 @@ class Runtime final : public menu::Host,
     /// Handles a left click on the game screen.
     ///
     /// The click first picks the unit under the pointer (the cursor unit), and
-    /// an open unit info panel takes it. Over the radar it gives the
-    /// selection's orders there or pans the camera; off the battlefield it
+    /// an open unit info panel takes it. Over the radar it is the radar's
+    /// left press (issue_radar_orders); off the battlefield it
     /// does nothing; otherwise the armed command decides: build places the
     /// pending building, the D-gun fires at a unit or the ground, ATTACK,
     /// RECLAIM, CAPTURE, LOAD and UNLOAD give the orders the order table
@@ -10970,27 +10999,64 @@ class Runtime final : public menu::Host,
     /// @return unit id, or 0
     uint16_t pick_radar_unit(float x, float y);
 
-    /// Gives the selection the armed command at a radar position.
+    /// Acts on a left press on the radar as 3.1c's left press does there.
     ///
-    /// Patrol and build take the map point; attack and D-gun take the enemy blip
-    /// or the ground; move (and no command) takes the map point. A move or
-    /// patrol sends each unit to its own point, keeping its place in the
-    /// selection around the map point; a selected unit whose blip is under the
-    /// pointer is left out of the selection's centre and given no order. A
-    /// failure is shown on the status line.
+    /// The press is the battlefield's at the radar's map point: the unit
+    /// under it is the unit whose dot the pointer is over (pick_radar_unit),
+    /// and the ground is the map point under the pointer. The cursor the
+    /// pointer shows there decides: the select cursor selects the unit alone,
+    /// or with Shift flips it in or out of the selection; a cursor that
+    /// gives no order (enemy, friendly, normal) does nothing and leaves the
+    /// command armed; every other cursor gives each selected unit the order
+    /// the order table resolves for the armed command, or the default order,
+    /// there (issue_selection_orders), and the command then ends, kept armed
+    /// while Shift is held, whether or not a unit took an order. An armed
+    /// build places the building at the radar's point
+    /// (place_pending_build_on_radar). The view never moves.
     ///
     /// @param x canvas column
     /// @param y canvas row
-    /// @return true when the click was used
+    /// @return true when the press selected, ordered or placed
     bool issue_radar_orders(float x, float y);
 
-    /// Gives the selection the armed command at a map point and on a unit, as
-    /// a radar click does (issue_radar_orders); the megamap's clicks use it
-    /// for an armed MOVE or PATROL.
+    /// Gives the selection the default order at a radar point, as 3.1c's right
+    /// press over the radar does in the right-click interface; a touch hold on
+    /// the minimap gives it there, where the right button moves the view.
+    ///
+    /// @param x canvas column
+    /// @param y canvas row
+    /// @return true when a unit took an order
+    bool issue_radar_default_order(float x, float y);
+
+    /// Places the armed building at the radar's map point, as 3.1c does: the
+    /// site there is not tested; the last site tested under the pointer over
+    /// the battlefield decides (pointer_build_site_clear in Game.pointer_flags).
+    /// When it was clear, every selected builder is sent to build at the
+    /// point, snapped to the footprint as on the battlefield, at that site's
+    /// height (Game.drag_start), oktobuild plays and build mode ends unless
+    /// Shift is held; otherwise notoktobuild plays and build mode stays.
+    ///
+    /// @param x canvas column
+    /// @param y canvas row
+    /// @return true when the builders were sent
+    /// @quirk A placement on the radar follows the battlefield's last site,
+    ///        wherever it was, so the radar takes a site the battlefield
+    ///        refused and refuses one it would take.
+    bool place_pending_build_on_radar(float x, float y);
+
+    /// Tests the building site under the pointer over the battlefield, as each
+    /// frame's pointer pass does while a building is placed: its result goes
+    /// into Game.pointer_flags (pointer_build_site_clear) and the footprint,
+    /// at the site's height, into Game.drag_start and drag_end, in whole map
+    /// pixels.
+    void note_build_site_under_pointer();
+
+    /// Patrols the selection to a map point and on a unit, as the
+    /// battlefield's armed PATROL does; the megamap's clicks use it.
     ///
     /// @param world the ground point, or none
     /// @param target the unit clicked on, or 0
-    /// @return true when the click was used
+    /// @return true when the click was used: PATROL armed and a ground point
     bool
     issue_map_orders(const std::optional<oa::sim::ground_orders::Point>& world, uint16_t target);
 
@@ -13511,6 +13577,9 @@ class Runtime final : public menu::Host,
     // The reclaim click being given was snapped onto a feature: a queued
     // order cancels only within 8 pixels of it.
     bool reclaim_click_snapped_ = false;
+    // A left press on the radar gave its orders as it went down: the left
+    // release that ends it does nothing.
+    bool radar_left_press_held_ = false;
     // The match tick the victory banner was last drawn at, which
     // announce_victory() gates on; kept from one match to the next.
     uint32_t victory_banner_tick_ = 0;

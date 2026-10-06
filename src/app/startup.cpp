@@ -286,6 +286,7 @@ void check_game_files_options(Options& options) {
         {options.check_build_preview, "--check-build-preview"},
         {options.check_pointer_interfaces, "--check-pointer-interfaces"},
         {options.check_megamap_clicks, "--check-megamap-clicks"},
+        {options.check_radar_orders, "--check-radar-orders"},
         {options.check_touch_controls, "--check-touch-controls"},
         {options.check_pad_controls, "--check-pad-controls"},
         {options.check_multiplayer_menu, "--check-multiplayer-menu"},
@@ -471,6 +472,7 @@ void check_director_options(Options& options) {
         {options.check_build_preview, "--check-build-preview"},
         {options.check_pointer_interfaces, "--check-pointer-interfaces"},
         {options.check_megamap_clicks, "--check-megamap-clicks"},
+        {options.check_radar_orders, "--check-radar-orders"},
         {options.check_touch_controls, "--check-touch-controls"},
         {options.check_pad_controls, "--check-pad-controls"},
         {options.check_multiplayer_menu, "--check-multiplayer-menu"},
@@ -814,6 +816,8 @@ namespace {
             result.check_pointer_interfaces = true;
         else if (argument == "--check-megamap-clicks")
             result.check_megamap_clicks = true;
+        else if (argument == "--check-radar-orders")
+            result.check_radar_orders = true;
         else if (argument == "--check-touch-controls")
             result.check_touch_controls = true;
         else if (argument == "--check-pad-controls")
@@ -896,7 +900,7 @@ namespace {
                    "[--check-unit-language TAG] "
                    "[--check-language-switch] "
                    "[--check-patrol-reclaim] [--check-reclaim-cursor] [--check-build-preview] "
-                   "[--check-megamap-clicks] "
+                   "[--check-megamap-clicks] [--check-radar-orders] "
                    "[--check-pointer-interfaces] [--check-pad-controls] [--check-touch-controls] "
                    "[--check-game-files] "
                    "[--check-multiplayer-menu] "
@@ -1068,9 +1072,9 @@ namespace {
         !result.check_unit_language.empty() || result.check_language_switch ||
         result.check_patrol_reclaim || result.check_reclaim_cursor || result.check_build_preview ||
         result.check_pointer_interfaces || result.check_megamap_clicks ||
-        result.check_touch_controls || result.check_pad_controls || result.check_director_view ||
-        result.check_director_render || result.check_interpolation || result.check_unit_playout ||
-        result.check_paused_save;
+        result.check_radar_orders || result.check_touch_controls || result.check_pad_controls ||
+        result.check_director_view || result.check_director_render || result.check_interpolation ||
+        result.check_unit_playout || result.check_paused_save;
     // A capture and a showcase need the application's own loop and window,
     // which checks and benchmarks do not run.
     const bool check_run = result.fixed_clock || result.check_navigation ||

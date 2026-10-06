@@ -844,7 +844,8 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/runtime_turret_draw_check.cpp
   src/app/runtime_selection.cpp src/app/runtime_selection_shortcuts.cpp
   src/app/runtime_view_panels.cpp src/app/runtime_whiteboard.cpp src/app/runtime_commander_placement.cpp
-  src/app/runtime_megamap.cpp src/app/runtime_megamap_check.cpp src/app/runtime_skirmish_host.cpp
+  src/app/runtime_megamap.cpp src/app/runtime_megamap_check.cpp src/app/runtime_radar_orders_check.cpp
+  src/app/runtime_skirmish_host.cpp
   src/app/runtime_skirmish_start.cpp src/app/runtime_map_units.cpp src/app/runtime_world_draw.cpp src/app/world_draws.cpp src/app/runtime_benchmark.cpp src/app/runtime_music.cpp
   src/app/runtime_saveload.cpp src/app/runtime_sides.cpp src/app/asset_files.cpp
   src/app/runtime_platform.cpp src/app/runtime_endgame.cpp src/app/runtime_radar.cpp
@@ -1813,6 +1814,21 @@ if(OA_BUILD_PLATFORM)
         --preferences-file "${oa_megamap_check_dir}/megamap-clicks.conf")
       set_tests_properties(native-megamap-clicks PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_megamap_check_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # Presses on the minimap (the radar) in both interface types, on a
+      # skirmish of three with one ally: the cursor, the orders, the
+      # selection, the armed command and the view for every armed command
+      # and the default order over open ground, units' dots and wrecks on
+      # mapped and unmapped ground, Shift, a press released over the
+      # battlefield, a building placed by the battlefield's last site, and
+      # the view moves the radar keeps.
+      set(oa_radar_orders_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/radar-orders")
+      file(MAKE_DIRECTORY "${oa_radar_orders_check_dir}")
+      add_test(NAME native-radar-orders COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-radar-orders
+        --preferences-file "${oa_radar_orders_check_dir}/radar-orders.conf")
+      set_tests_properties(native-radar-orders PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_radar_orders_check_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # --check-touch-controls: the touch controls, driven by finger events through the
       # dispatcher, on a skirmish: taps, boxes, latches, the radial, placement, the

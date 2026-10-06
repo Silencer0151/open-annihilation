@@ -3,6 +3,7 @@
 
 // HUD gadget actions, build placement, features and wrecks.
 #include "oa/app/runtime.hpp"
+#include "oa/core/map_plot.h"
 #include "oa/ui/gui_layout/gui_gadget.hpp"
 #include "oa/ui/hud/command_buttons.hpp"
 #include "oa/ui/hud/order_panel.hpp"
@@ -17,6 +18,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -390,6 +392,12 @@ void Runtime::place_pending_build_at(const oa::sim::ground_orders::Point& target
         play_match_interface_sound("notoktobuild");
         return;
     }
+    issue_pending_build(site->world, queue);
+}
+
+void Runtime::issue_pending_build(const oa::sim::ground_orders::Point& site, bool queue) {
+    if (!match_ || pending_build_type_ == 0)
+        return;
     try {
         for_each_selected([&](uint16_t id) {
             const auto* def = definition_for(id);
@@ -406,11 +414,11 @@ void Runtime::place_pending_build_at(const oa::sim::ground_orders::Point& target
                                      : oa::sim::gameplay_input::UnitOrder::mobile_build;
             // The building is placed facing as the player turned it
             // (units.build-rotation).
-            if (!cancels_queued_order(id, order, 0, site->world, queue))
+            if (!cancels_queued_order(id, order, 0, site, queue))
                 match_->issue_mobile_build(
                     id,
                     pending_build_type_,
-                    site->world,
+                    site,
                     queue,
                     static_cast<uint8_t>(pending_build_facing())
                 );
@@ -513,8 +521,8 @@ void Runtime::check_build_placement() {
 void Runtime::place_pending_build(float x, float y) {
     if (!match_ || !selected_tnt_ || pending_build_type_ == 0 || selected_match_unit_ == 0)
         return;
-    if (const auto world = radar_world_point(x, y)) {
-        place_pending_build_at(*world);
+    if (radar_contains(x, y)) {
+        std::ignore = place_pending_build_on_radar(x, y);
         return;
     }
     // The profile's click snap may move the building onto metal or a vent.
@@ -524,6 +532,51 @@ void Runtime::place_pending_build(float x, float y) {
     }
     if (const auto site = build_site_under(x, y))
         place_pending_build_at(site->world);
+}
+
+bool Runtime::place_pending_build_on_radar(float x, float y) {
+    namespace input = oa::sim::gameplay_input;
+    if (!match_ || pending_build_type_ == 0)
+        return false;
+    const auto& game = match_->state().game;
+    if ((input::pointer_flags(game) & input::pointer_build_site_clear) == 0) {
+        // The battlefield's last site was refused; build mode stays.
+        play_match_interface_sound("notoktobuild");
+        return false;
+    }
+    const auto ground = radar_world_point(x, y);
+    const auto site = ground ? pending_build_site(*ground) : std::nullopt;
+    if (!site)
+        return false;
+    // The point snapped to the footprint, at the height of the battlefield's
+    // last site.
+    auto point = site->world;
+    point[1] = static_cast<int32_t>(static_cast<uint32_t>(game.drag_start[1]) << 16);
+    issue_pending_build(point, queueing());
+    return true;
+}
+
+void Runtime::note_build_site_under_pointer() {
+    namespace input = oa::sim::gameplay_input;
+    if (!match_)
+        return;
+    auto& game = match_->state().game;
+    auto flags =
+        static_cast<uint8_t>(input::pointer_flags(game) & ~input::pointer_build_site_clear);
+    if (const auto site = build_site_under(pointer_x_, pointer_y_)) {
+        if (site->legal)
+            flags |= input::pointer_build_site_clear;
+        const int32_t height = site->world[1] >> 16;
+        const int32_t left = site->cell_x * OA_MAP_CELL_PIXELS;
+        const int32_t top = site->cell_z * OA_MAP_CELL_PIXELS;
+        game.drag_start[0] = left;
+        game.drag_start[1] = height;
+        game.drag_start[2] = top;
+        game.drag_end[0] = left + site->footprint_x * OA_MAP_CELL_PIXELS;
+        game.drag_end[1] = height;
+        game.drag_end[2] = top + site->footprint_z * OA_MAP_CELL_PIXELS;
+    }
+    input::set_pointer_flags(game, flags);
 }
 
 std::optional<oa::sim::ground_orders::Point>

@@ -403,6 +403,10 @@ struct Options {
     /// --check-megamap-clicks: the megamap's clicks (ui.megamap) against the
     /// battlefield's in both interface types, on a skirmish.
     bool check_megamap_clicks = false;
+    /// --check-radar-orders: presses on the minimap (the radar) in both
+    /// interface types, for every armed command and the default order, on a
+    /// skirmish.
+    bool check_radar_orders = false;
     /// --check-touch-controls: the touch controls, driven by finger events, on a skirmish.
     bool check_touch_controls = false;
     /// --check-pad-controls: the gamepad controls, driven by SDL virtual pads, on a skirmish.

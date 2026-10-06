@@ -351,6 +351,17 @@ void Runtime::enter_match_view() {
     selected_ = -1;
     hovered_.reset();
     match_command_ = MatchCommand::none;
+    // No building site has been tested under the pointer yet.
+    if (match_) {
+        auto& game = match_->state().game;
+        oa::sim::gameplay_input::set_pointer_flags(
+            game,
+            static_cast<uint8_t>(
+                oa::sim::gameplay_input::pointer_flags(game) &
+                ~oa::sim::gameplay_input::pointer_build_site_clear
+            )
+        );
+    }
     apply_output_mode();
     select_local_commander();
     apply_match_hud_for_selection();

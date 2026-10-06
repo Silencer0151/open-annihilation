@@ -492,6 +492,11 @@ int Runtime::run() {
         flush_preferences();
         return 0;
     }
+    if (options_.check_radar_orders) {
+        check_radar_orders();
+        flush_preferences();
+        return 0;
+    }
     if (options_.check_touch_controls) {
         check_touch_controls();
         flush_preferences();

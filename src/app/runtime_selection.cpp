@@ -50,10 +50,10 @@ void Runtime::handle_match_left_click(float x, float y, int32_t clicks) {
     update_pointer(x, y);
     if (click_unit_info(x, y))
         return;
+    // A click on the radar is its left press (issue_radar_orders), which
+    // never moves the view.
     if (radar_contains(x, y)) {
-        if (selected_match_unit_ != 0 && issue_radar_orders(x, y))
-            return;
-        pan_camera_from_radar(x, y);
+        std::ignore = issue_radar_orders(x, y);
         return;
     }
     // Off the radar and the battlefield a click gives nothing.

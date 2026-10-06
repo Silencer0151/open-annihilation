@@ -209,7 +209,9 @@ typedef struct Game {
     int16_t cursor_cell_z;
     /* The box drag the left button started on the battlefield: x, height and
      * z of the ground under the pointer where it began and where it is now,
-     * in whole map pixels. */
+     * in whole map pixels. While a building is placed, the footprint of the
+     * site last tested under the pointer over the view instead: its first
+     * and last corners, at the site's height. */
     int32_t drag_start[3];
     int32_t drag_end[3];
     FixedVec3 cursor_position; /* 16.16 world position of the ground under the cursor */

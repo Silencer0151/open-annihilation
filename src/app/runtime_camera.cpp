@@ -108,152 +108,84 @@ void Runtime::bind_match_view() {
 }
 
 bool Runtime::issue_radar_orders(float x, float y) {
-    if (!match_ || selected_match_unit_ == 0)
+    namespace input = oa::sim::gameplay_input;
+    if (!match_ || !radar_contains(x, y))
         return false;
-    const auto world = radar_world_point(x, y);
-    return issue_map_orders(world, pick_radar_unit(x, y));
+    // The frame's pointer pass at the press: the unit whose dot is under the
+    // pointer, the map point under it and the cursor shown there.
+    update_pointer(x, y);
+    const auto cursor = static_cast<input::OrderCursor>(pick_match_cursor());
+    auto& world = match_->state();
+    const auto command = input::pointer_command(world.game);
+    if (command == input::OrderCommand::build)
+        return place_pending_build_on_radar(x, y);
+    switch (input::click_action(world, command, cursor)) {
+    case input::ClickAction::none:
+        return false;
+    case input::ClickAction::select_unit:
+        select_match_unit(x, y, 1);
+        return true;
+    case input::ClickAction::clear_selection:
+        clear_local_selection();
+        apply_match_hud_for_selection();
+        return true;
+    case input::ClickAction::issue_command:
+        break;
+    }
+    const auto issued =
+        issue_selection_orders(command, hovered_match_unit_, radar_world_point(x, y), queueing());
+    if (!issued.empty())
+        status_ = std::string(issued);
+    // The command ends with the press whether or not a unit took an order.
+    finish_issued_command();
+    return true;
+}
+
+bool Runtime::issue_radar_default_order(float x, float y) {
+    namespace input = oa::sim::gameplay_input;
+    if (!match_ || !radar_contains(x, y) || selected_match_unit_ == 0)
+        return false;
+    update_pointer(x, y);
+    // The pick is wanted for what it writes into the Game block; the cursor
+    // it returns is not needed.
+    std::ignore = pick_match_cursor();
+    const auto issued = issue_selection_orders(
+        input::OrderCommand::default_order, hovered_match_unit_, radar_world_point(x, y), queueing()
+    );
+    if (issued.empty())
+        return false;
+    status_ = std::string(issued);
+    return true;
 }
 
 bool Runtime::issue_map_orders(
     const std::optional<oa::sim::ground_orders::Point>& world, uint16_t target
 ) {
     namespace input = oa::sim::gameplay_input;
-    if (!match_ || selected_match_unit_ == 0)
+    if (!match_ || selected_match_unit_ == 0 || match_command_ != MatchCommand::patrol || !world)
         return false;
-    auto& slots = match_->world().slots;
-    const auto enemy = target != 0 && slots[target].unit != nullptr &&
-                               slots[target].owner_index != match_local_player_
-                           ? target
-                           : uint16_t{0};
     try {
-        if (match_command_ == MatchCommand::patrol) {
-            if (!world)
-                return false;
-            // Each unit patrols to its own point, keeping its place in the
-            // selection around the map point. The unit under the pointer is
-            // not counted in the centre and takes no order.
-            const auto bound = group_order_bound_unit(input::OrderCommand::patrol, target);
-            const auto centre = local_selection_centre(bound);
-            for_each_selected([&](uint16_t id) {
-                if (id == bound)
-                    return;
-                const auto at =
-                    group_order_destination(centre, input::OrderCommand::patrol, id, 0, *world);
-                if (!cancels_queued_command(id, input::OrderCommand::patrol, 0, at, queueing()))
-                    match_->issue_patrol(id, at, queueing());
-            });
-            finish_issued_command();
-            status_ = "Patrol";
-            return true;
-        }
-        if (match_command_ == MatchCommand::build) {
-            if (!world)
-                return false;
-            place_pending_build_at(*world);
-            return true;
-        }
-        // The order table gives AttackSpecial only to the units that can D-gun.
-        const auto blasts = [&](uint16_t source) {
-            auto& state = match_->state();
-            const auto* actor = oa::world_unit_at(&state, source);
-            const auto* aimed = enemy != 0 ? oa::world_unit_at(&state, enemy) : nullptr;
-            const oa::FixedVec3 position =
-                world ? oa::FixedVec3{(*world)[0], (*world)[1], (*world)[2]} : oa::FixedVec3{};
-            return actor != nullptr && input::unit_order(
-                                           state,
-                                           input::OrderCommand::blast,
-                                           *actor,
-                                           aimed,
-                                           world ? &position : nullptr,
-                                           order_cursor_hooks()
-                                       ) == input::UnitOrder::attack_special;
-        };
-        auto armed = input::OrderCommand::default_order;
-        if (match_command_ == MatchCommand::dgun)
-            armed = input::OrderCommand::blast;
-        else if (match_command_ == MatchCommand::attack)
-            armed = input::OrderCommand::attack;
-        else if (match_command_ == MatchCommand::move)
-            armed = input::OrderCommand::move;
-        if (match_command_ == MatchCommand::attack || match_command_ == MatchCommand::dgun) {
-            if (enemy != 0) {
-                for_each_selected([&](uint16_t source) {
-                    if (cancels_queued_command(source, armed, enemy, world, queueing()))
-                        return;
-                    // A unit no attack resolves for is given no order.
-                    if (match_command_ == MatchCommand::dgun) {
-                        if (!blasts(source))
-                            return;
-                        auto dest = world.value_or(oa::sim::ground_orders::Point{});
-                        auto& slot = slots[enemy];
-                        if (slot.unit) {
-                            const std::array<uint32_t, 3> position = slot.unit->position;
-                            dest = {
-                                std::bit_cast<int32_t>(position[0]),
-                                std::bit_cast<int32_t>(position[1]),
-                                std::bit_cast<int32_t>(position[2])
-                            };
-                        }
-                        match_->issue_attack_special(source, dest, queueing(), enemy);
-                    } else
-                        std::ignore = match_->issue_attack_command(
-                            source, enemy, queueing(), world ? &*world : nullptr
-                        );
-                });
-                status_ = match_command_ == MatchCommand::dgun ? "D-Gun" : "Attack";
-            } else if (world) {
-                for_each_selected([&](uint16_t source) {
-                    if (cancels_queued_command(source, armed, 0, world, queueing()))
-                        return;
-                    if (match_command_ == MatchCommand::dgun) {
-                        if (blasts(source))
-                            match_->issue_attack_special(source, *world, queueing());
-                    } else
-                        std::ignore = match_->issue_attack_ground(source, *world, queueing());
-                });
-                status_ = match_command_ == MatchCommand::dgun ? "D-Gun ground" : "Attack ground";
-            } else
-                return false;
-            finish_issued_command();
-            return true;
-        }
-        if (enemy != 0) {
-            for_each_selected([&](uint16_t id) {
-                if (!cancels_queued_command(id, armed, enemy, world, queueing()))
-                    std::ignore = match_->issue_attack_command(
-                        id, enemy, queueing(), world ? &*world : nullptr
-                    );
-            });
-            status_ = "Attack";
-            finish_issued_command();
-            return true;
-        }
-        if (!world)
-            return false;
-        if (match_command_ == MatchCommand::move || match_command_ == MatchCommand::none) {
-            // Each unit moves to its own point, keeping its place in the
-            // selection around the map point. The unit under the pointer is
-            // not counted in the centre and takes no order.
-            const auto bound = group_order_bound_unit(armed, target);
-            const auto centre = local_selection_centre(bound);
-            for_each_selected([&](uint16_t id) {
-                if (id == bound)
-                    return;
-                const auto at = group_order_destination(centre, armed, id, 0, *world);
-                if (!cancels_queued_command(id, armed, 0, at, queueing()) &&
-                    match_->takes_move_order(id))
-                    match_->issue_ground_move(id, at, queueing());
-            });
-            finish_issued_command();
-            status_ = "Move";
-            return true;
-        }
+        // Each unit patrols to its own point, keeping its place in the
+        // selection around the map point. The unit under the pointer is not
+        // counted in the centre and takes no order.
+        const auto bound = group_order_bound_unit(input::OrderCommand::patrol, target);
+        const auto centre = local_selection_centre(bound);
+        for_each_selected([&](uint16_t id) {
+            if (id == bound)
+                return;
+            const auto at =
+                group_order_destination(centre, input::OrderCommand::patrol, id, 0, *world);
+            if (!cancels_queued_command(id, input::OrderCommand::patrol, 0, at, queueing()))
+                match_->issue_patrol(id, at, queueing());
+        });
     } catch (const std::exception& error) {
-        status_ = std::string("radar order: ") + error.what();
+        status_ = std::string("patrol command: ") + error.what();
         std::cerr << "unsupported operation: " << status_ << '\n';
         return true;
     }
-    return false;
+    finish_issued_command();
+    status_ = "Patrol";
+    return true;
 }
 
 bool Runtime::pan_camera_from_radar(float x, float y) {

@@ -804,7 +804,9 @@ void TouchDispatchAccess::finger_gestures(
             break;
         case TouchTarget::minimap:
             // The minimap moves the camera first; an armed order, or a
-            // hold, gives the order there.
+            // hold, gives the order there: an armed command's as the radar's
+            // left press gives it, and a hold's with no command armed as the
+            // chosen interface type gives the default order there.
             switch (gesture.kind) {
             case gestures::GestureKind::tap:
                 if (finger->held)
@@ -830,7 +832,13 @@ void TouchDispatchAccess::finger_gestures(
                 finger->held = true;
                 runtime.play_haptic(Haptic::hold_started);
                 runtime.refresh_pointer_modifiers();
-                if (runtime.issue_radar_orders(gesture.x, gesture.y)) {
+                // In the right-click interface the default order needs no
+                // cursor, as that interface's right press gives it.
+                const bool default_order =
+                    runtime.match_ && runtime.match_command_ == MatchCommand::none &&
+                    runtime.match_->state().game.interface_type == input::interface_right_click;
+                if (default_order ? runtime.issue_radar_default_order(gesture.x, gesture.y)
+                                  : runtime.issue_radar_orders(gesture.x, gesture.y)) {
                     auto& look = runtime.touch_state().hud;
                     look.latches.used(hud::ActionClass::order, look.latch_mode);
                     runtime.refresh_pointer_modifiers();
