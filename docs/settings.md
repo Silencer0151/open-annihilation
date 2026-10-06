@@ -153,13 +153,19 @@ Each of these takes effect at once.
   the units are drawn whole, as the view always has: half the game's scale,
   or a sixth while Full hardware acceleration draws the battlefield. Whole
   map zooms out until the whole map fits the battlefield, filling it one
-  way, with the camera at the map's corner; each fraction zooms out to that
-  share of the game's scale, or to the whole map if it fits first. Farther
-  out than Automatic, the battlefield is drawn as a far view in every tier:
-  the terrain reduced, each unit as a dot of its owner's colour, framed
-  while selected, and no health bars, so that a frame of the whole map
-  costs no more than one at half scale. Clicks, drags and orders work as
-  ever. Choose Whole map to see and command the whole battle at once.
+  way, with the camera at the map's corner and black past the map the
+  other way; each fraction zooms out to that share of the game's scale, or
+  to the whole map if it fits first. Farther out than Automatic, the
+  battlefield is drawn as a far view in every tier: the terrain reduced,
+  each unit as a dot of its owner's colour, framed while selected, and no
+  health bars, so that a frame of the whole map takes no more memory than
+  one at half scale. It takes about as long to draw too, but for the fog,
+  which grows with the map: on the largest maps, with Hardware
+  acceleration Off, the fog can make a frame of the whole map up to about
+  twice as long as one at half scale. Clicks, drags and orders work as
+  ever: a click on a unit's dot picks the unit, and a press on the black
+  past the map gives its order at the map's nearest edge. Choose Whole map
+  to see and command the whole battle at once.
 - **Maximum zoom in**, None, 2x, 3x or 4x, 4x by default. How close the
   same zooms go: None keeps the game's own scale as the closest, the others
   that many times it. A view past a new limit comes within it at once.

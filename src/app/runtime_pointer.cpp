@@ -4,11 +4,13 @@
 // Pointer tracking, menu activation and match unit picking.
 #include "oa/app/runtime.hpp"
 #include "match_models.hpp"
+#include "oa/app/far_view.hpp"
 #include "oa/app/hook_call.hpp"
 #include "oa/sim/spatial_state/spatial.hpp"
 #include "oa/sim/weapon_execution/retaliation.hpp"
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cctype>
 #include <cmath>
 #include <cstddef>
@@ -327,6 +329,20 @@ oa::sim::selection::Hooks Runtime::selection_hooks() {
             candidate.position = {unit.position.x, unit.position.y, unit.position.z};
             candidate.rotation = {unit.bank, static_cast<int16_t>(unit.heading), unit.pitch};
             pick_where_drawn(self.drawn_match_models(), world, unit, candidate);
+            // In the far view a unit is picked wherever its dot is drawn,
+            // since its box there shrinks to a pixel or less; a carried
+            // unit shows in its carrier's dot and has none of its own.
+            if (self.far_view_frame() && unit.attach_parent == 0) {
+                const auto dot = self.project_match_point(
+                    self.live_viewport(world.game.camera_x, world.game.camera_y),
+                    {std::bit_cast<uint32_t>(candidate.position.x),
+                     std::bit_cast<uint32_t>(candidate.position.y),
+                     std::bit_cast<uint32_t>(candidate.position.z)}
+                );
+                const auto pointer = self.game_screen_canvas(x, y);
+                if (far_view_dot_covers(dot.x, dot.y, pointer.x, pointer.y))
+                    return true;
+            }
             candidate.model = &instance->model().model();
             // A unit without a root object has no box to pick.
             if (candidate.model->objects.empty())

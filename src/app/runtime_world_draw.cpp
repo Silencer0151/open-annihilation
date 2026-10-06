@@ -79,26 +79,7 @@ std::optional<Runtime::PendingBuildSite> Runtime::build_site_under(float x, floa
 }
 
 std::optional<oa::sim::ground_orders::Point> Runtime::build_cursor_point(float x, float y) const {
-    if (!selected_tnt_)
-        return std::nullopt;
-    const auto viewport = live_viewport(
-        static_cast<uint32_t>(match_camera_x_), static_cast<uint32_t>(match_camera_z_)
-    );
-    // The map pixel drawn under the point.
-    const auto screen_map = oa::present::world_renderer::screen_to_map_pixel(
-        viewport, {static_cast<int32_t>(x), static_cast<int32_t>(y)}, view_offset()
-    );
-    if (!screen_map)
-        return std::nullopt;
-    const oa::sim::unit_movement::Terrain terrain(*selected_tnt_);
-    const auto target = oa::sim::gameplay_input::terrain_intersection(
-        terrain,
-        static_cast<int32_t>(screen_map->x),
-        static_cast<int32_t>(screen_map->y),
-        static_cast<int32_t>(selected_tnt_->attribute_width * 16U),
-        static_cast<int32_t>(selected_tnt_->attribute_height * 16U)
-    );
-    return oa::sim::ground_orders::Point{target.x, target.y, target.z};
+    return ground_point_under(x, y);
 }
 
 void Runtime::draw_build_ghost(

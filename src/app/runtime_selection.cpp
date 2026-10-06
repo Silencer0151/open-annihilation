@@ -309,17 +309,28 @@ void Runtime::check_builder_orders() {
 std::optional<oa::sim::ground_orders::Point> Runtime::match_world_point(float x, float y) {
     if (const auto world = radar_world_point(x, y))
         return world;
+    return ground_point_under(x, y);
+}
+
+std::optional<oa::sim::ground_orders::Point> Runtime::ground_point_under(float x, float y) const {
     if (!selected_tnt_)
         return std::nullopt;
     const auto viewport = live_viewport(
         static_cast<uint32_t>(match_camera_x_), static_cast<uint32_t>(match_camera_z_)
     );
     // The map pixel drawn under the point, a whole one as orders take.
-    const auto screen_map = oa::present::world_renderer::screen_to_map_pixel(
+    auto screen_map = oa::present::world_renderer::screen_to_map_pixel(
         viewport, {static_cast<int32_t>(x), static_cast<int32_t>(y)}, view_offset()
     );
     if (!screen_map)
         return std::nullopt;
+    // A view wider or taller than the map shows black past it: a point
+    // there takes the shown map's nearest edge.
+    const auto [map_width, map_height] = shown_map_size();
+    if (map_width > 0 && map_height > 0) {
+        screen_map->x = std::min(screen_map->x, static_cast<uint32_t>(map_width - 1));
+        screen_map->y = std::min(screen_map->y, static_cast<uint32_t>(map_height - 1));
+    }
     const oa::sim::unit_movement::Terrain terrain(*selected_tnt_);
     const auto target = oa::sim::gameplay_input::terrain_intersection(
         terrain,

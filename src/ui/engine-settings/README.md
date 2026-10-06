@@ -383,11 +383,11 @@ Simplified Chinese, whose ideographs stand as tall as a hint line, the
 lines of a hint or a notice lie three pixels further apart
 (`tall_hint_line_gap`), clear of each other: each row with such lines is
 taller by three pixels a line after the first, a section that scrolls
-scrolls further than the pixels given above, and at the end of its scroll
-on until the view's top edge cuts no hint line (`open_rows`). Each section keeps its offset
-while the dialog is open, and every section starts at its top each time it
-opens. A row the view cuts shows the part inside it and takes a press
-only there;
+scrolls further than the pixels given above, and its scroll ends only
+where the view's top edge cuts no hint line (`open_rows`). Each section
+keeps its offset while the dialog is open, and every section starts at
+its top each time it opens. A row the view cuts shows the part inside it
+and takes a press only there;
 while the section is scrolled from its top, the view's first pixel row keeps
 a hairline, the same as a row's own line. `dialog_layout` lists only the
 parts wholly in the view.

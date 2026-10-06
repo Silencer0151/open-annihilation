@@ -5120,7 +5120,8 @@ class Runtime final : public menu::Host,
     std::optional<PendingBuildSite> build_site_under(float x, float y) const;
 
     /// Returns the terrain point the pointer picks at a battlefield screen
-    /// point, as the build ghost tests it.
+    /// point, as the build ghost tests it: the ground under it
+    /// (ground_point_under).
     ///
     /// @param x canvas column
     /// @param y canvas row
@@ -8590,12 +8591,25 @@ class Runtime final : public menu::Host,
     /// corner and a point past its edge, each step keeps the map point
     /// under the pointer there, as far as the map's edges allow. A choice
     /// changed in play brings a view past the new limits within them at
-    /// once. Puts the settings, the layout and the default zoom back;
-    /// throws std::runtime_error on a failure.
+    /// once. Then checks presses on the far view (check_far_view_presses).
+    /// Puts the settings, the layout and the default zoom back; throws
+    /// std::runtime_error on a failure.
     /// [runtime_tracking_zoom_check.cpp]
     ///
     /// @param frame runs a frame of the match: the zoom eases and the camera moves
     void check_zoom_limit_choices(const std::function<void()>& frame);
+    /// Checks presses on the far view at Whole map on the game's screen.
+    ///
+    /// A click on every pixel of the local commander's dot selects it, as
+    /// small as its box is there; with it selected, a click on the dot of
+    /// an enemy spawned beside it attacks the enemy, and a click on the
+    /// black past the map moves it to the ground at the shown map's
+    /// nearest edge, never into the edges the game never shows. Leaves the
+    /// layout, the zoom and the settings for check_zoom_limit_choices to put
+    /// back, the enemy dismissed, the commander without orders and nothing
+    /// selected; throws std::runtime_error on a failure.
+    /// [runtime_tracking_zoom_check.cpp]
+    void check_far_view_presses();
 
     /// Checks that a turret built during the match draws its current pieces as it turns.
     ///
@@ -8657,6 +8671,18 @@ class Runtime final : public menu::Host,
     /// @param y canvas row
     /// @return 16.16 world point, or nullopt off the radar and battlefield
     std::optional<oa::sim::ground_orders::Point> match_world_point(float x, float y);
+
+    /// Returns the ground the battlefield shows under a canvas point, at a
+    /// whole map pixel as orders take it. A point on the black past a map
+    /// narrower or shorter than the view takes the shown map's nearest edge
+    /// (shown_map_size), so that no press reaches the edges the game never
+    /// shows.
+    ///
+    /// @param x canvas column
+    /// @param y canvas row
+    /// @return 16.16 world point, or nullopt off the battlefield or without a map
+    [[nodiscard]] std::optional<oa::sim::ground_orders::Point>
+    ground_point_under(float x, float y) const;
 
     /// Force-attacks what is under a canvas point with the selection: a unit other than the
     /// selected one, else the ground.

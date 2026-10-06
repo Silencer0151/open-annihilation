@@ -210,15 +210,24 @@ logs it.
   sees as a dot of its owner's colour over the fog, framed in the
   selection boxes' colour while selected (`draw_far_view_dots`), and no
   model of a unit, feature, projectile, fragment or debris, no health bar
-  or squad digit and a model bridge of one pixel, so a frame of the whole
-  map costs time and memory as a frame at the processor's floor does
-  whatever the map's size. In the Full tier the far frame's world layer is
-  the processor's picture, which Basic's presentation draws without
-  leaving Full. `app-far-view` checks the floors, the pyramid, the filter
-  and the dots by table; `native-navigation` (`check_zoom_limit_choices`)
-  every choice's limits on four windows, the whole map's fit, the point
-  under the pointer on the way out to it and back, and a choice changed in
-  play; `native-render-tiers` the whole map's far view in each tier.
+  or squad digit and a model bridge of one pixel. A frame of the whole map
+  then takes the memory of a frame at the processor's floor whatever the
+  map's size, and about its time but for the fog, whose grid holds every
+  cell of the map in view (`build_fog_grid`): on the largest maps in the
+  Off tier it makes a frame of the whole map up to about twice as long as
+  one at the floor. The pointer picks a unit wherever its dot is drawn
+  (`far_view_dot_covers`, in `selection_hooks`), and a press on the black
+  past a map narrower or shorter than the view takes the shown map's
+  nearest edge (`ground_point_under`). In the Full tier the far frame's
+  world layer is the processor's picture, which Basic's presentation draws
+  without leaving Full. `app-far-view` checks the floors, the pyramid, the
+  filter, the dots and the pixels they cover by table; `native-navigation`
+  (`check_zoom_limit_choices`) every choice's limits on four windows, the
+  whole map's fit, the point under the pointer on the way out to it and
+  back, a choice changed in play, and at Whole map on the game's screen a
+  click on every pixel of a unit's dot, on an enemy's dot and on the black
+  past the map (`check_far_view_presses`); `native-render-tiers` the whole
+  map's far view in each tier.
 - `runtime_skirmish_start.cpp` builds a match: the feature table's GAF files
   are kept as read and parsed without their pixels (`gaf::PixelData::checked`);
   a feature sequence's pixels are decoded from its file when a feature first

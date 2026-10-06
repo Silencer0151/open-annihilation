@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // Headless checks of the wheel's zoom: about the pointer as far as the map's
-// edges allow, within the limits the zoom's settings set, and about a unit
+// edges allow, within the limits the zoom's settings set, with the far
+// view's dots and the black past the map taking presses, and about a unit
 // the camera tracks.
 #include "oa/app/runtime.hpp"
 #include "oa/app/far_view.hpp"
@@ -18,6 +19,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace oa::app {
@@ -65,6 +67,12 @@ constexpr std::array<std::array<int, 2>, 3> kLimitWindows{
     {{1366, 768}, {1920, 1080}, {2560, 1440}}
 };
 
+/// Dots' widths from the centre of the commander's dot in the far view to
+/// the enemy's, so that the two stand apart.
+constexpr int32_t kDotsApart = 2;
+/// Screen pixels of black past the map a press there needs at least.
+constexpr int kLeastMargin = 8;
+
 /// Ends the check with a failure.
 ///
 /// @param what what failed
@@ -73,6 +81,166 @@ constexpr std::array<std::array<int, 2>, 3> kLimitWindows{
 }
 
 } // namespace
+
+void Runtime::check_far_view_presses() {
+    namespace settings = oa::ui::engine_settings;
+    namespace match_runtime = oa::sim::match_runtime;
+    auto& slots = match_->world().slots;
+    uint16_t commander = 0;
+    for (const auto& slot : slots)
+        if (slot.unit_index != 0 && slot.unit != nullptr && slot.record.type_index != 0 &&
+            slot.record.owner_index == match_local_player_) {
+            if (const auto* def = definition_for(slot.unit_index);
+                def != nullptr && def->can_dgun) {
+                commander = slot.unit_index;
+                break;
+            }
+        }
+    if (commander == 0)
+        fail("the far view's presses found no local commander");
+    const auto [map_width, map_height] = shown_map_size();
+    match_layout_ = lay_out_match(kCanvasWidth, kCanvasHeight);
+    auto chosen = engine_settings();
+    chosen.max_zoom_out = settings::ZoomOutLimit::whole_map;
+    chosen.max_zoom_in = settings::ZoomInLimit::four_times;
+    apply_engine_settings(chosen);
+    match_zoom_ = match_zoom_target_ = least_match_zoom();
+    zoom_anchored_ = false;
+    zoom_hold_ = {};
+    match_camera_x_ = 0;
+    match_camera_z_ = 0;
+    const auto zoom = static_cast<double>(match_zoom());
+    if (!far_view_frame())
+        fail("Whole map on the game's screen is not the far view");
+    // An enemy far enough from the commander that their dots stand apart
+    // and near enough that the commander sees it, toward the map's middle,
+    // holding its fire and its ground.
+    const auto type = oa::sim::unit_spawn::find_type_index(spawn_type_names_, "CORAK");
+    if (type == 0)
+        fail("the game lacks CORAK");
+    const auto home_x = static_cast<int32_t>(slots[commander].unit->position[0] >> 16);
+    const auto home_z = static_cast<int32_t>(slots[commander].unit->position[2] >> 16);
+    const auto apart =
+        static_cast<int32_t>(std::ceil(static_cast<double>(kDotsApart * far_view_dot_side) / zoom));
+    const auto enemy_x = static_cast<uint32_t>(
+        std::clamp(home_x + (home_x < map_width / 2 ? apart : -apart), 0, map_width - 1)
+    );
+    const auto enemy_z = static_cast<uint32_t>(home_z) << 16;
+    oa::sim::unit_spawn::Request request;
+    request.player = static_cast<uint8_t>(match_local_player_ == 0 ? 1 : 0);
+    request.type = type;
+    request.finished = true;
+    request.state = kGroundOccupancyState;
+    request.position = {
+        enemy_x << 16,
+        static_cast<uint32_t>(match_->map_height(enemy_x << 16, enemy_z)) << 16,
+        enemy_z
+    };
+    auto* spawned = match_->create(request);
+    if (spawned == nullptr || spawned->unit == nullptr)
+        fail("could not spawn an enemy for the far view's presses");
+    const uint16_t enemy = spawned->unit_index;
+    ++match_timing_.tick;
+    match_->simulation().tick = match_timing_.tick;
+    tick_or_raise(*match_);
+    match_->stop_orders(enemy);
+    slots[enemy].record.flags &= ~(OA_UNIT_FLAG_MOVE_ORDER_MASK | OA_UNIT_FLAG_FIRE_ORDER_MASK);
+    render_match_surface();
+    const auto dot_at = [&](uint16_t id) {
+        return project_match_point(
+            live_viewport(
+                static_cast<uint32_t>(match_camera_x_), static_cast<uint32_t>(match_camera_z_)
+            ),
+            slots[id].unit->position
+        );
+    };
+    const auto click = [&](int32_t x, int32_t y) {
+        update_pointer(static_cast<float>(x), static_cast<float>(y));
+        handle_match_left_click(static_cast<float>(x), static_cast<float>(y), 1);
+    };
+    const auto first_order = [&] {
+        std::array<match_runtime::Match::OrderRecordView, 4> records{};
+        const auto count = match_->queue_records(commander, false, records.data(), records.size());
+        return std::pair{records[0], count};
+    };
+    const auto zoom_named = " at zoom " + std::to_string(match_zoom());
+    // A click on any pixel of the commander's dot selects it.
+    const auto own = dot_at(commander);
+    constexpr int32_t reach = far_view_dot_side;
+    for (int32_t y = own.y - reach; y <= own.y + reach; ++y)
+        for (int32_t x = own.x - reach; x <= own.x + reach; ++x) {
+            if (!far_view_dot_covers(own.x, own.y, x, y))
+                continue;
+            clear_local_selection();
+            match_command_ = MatchCommand::none;
+            click(x, y);
+            if (selected_match_unit_ != commander)
+                fail(
+                    "a click on the commander's dot at " + std::to_string(x - own.x) + "," +
+                    std::to_string(y - own.y) + " from its centre" + zoom_named +
+                    " selected unit " + std::to_string(selected_match_unit_)
+                );
+        }
+    // With the commander selected, a click on the enemy's dot attacks it.
+    match_->stop_orders(commander);
+    const auto foe = dot_at(enemy);
+    click(foe.x, foe.y);
+    if (const auto [order, count] = first_order();
+        count != 1 || order.kind != match_runtime::attack_chase_kind || order.target != enemy)
+        fail(
+            "a click on the enemy's dot" + zoom_named + " left " + std::to_string(count) +
+            " orders, the first of kind " + std::to_string(order.kind) + " on unit " +
+            std::to_string(order.target) + ", not an attack on unit " + std::to_string(enemy)
+        );
+    // A click on the black past the map moves the commander to the ground
+    // at the shown map's nearest edge.
+    const int bf_w = match_layout_.battlefield_width();
+    const int bf_h = match_layout_.battlefield_height();
+    const auto drawn_w = static_cast<int>(std::floor(map_width * zoom));
+    const auto drawn_h = static_cast<int>(std::floor(map_height * zoom));
+    const bool right = bf_w - drawn_w >= kLeastMargin;
+    if (!right && bf_h - drawn_h < kLeastMargin)
+        fail("Whole map on the game's screen leaves no black past the map");
+    const int32_t press_x = match_layout_.left + (right ? (drawn_w + bf_w) / 2 : drawn_w / 2);
+    const int32_t press_y = match_layout_.top + (right ? drawn_h / 2 : (drawn_h + bf_h) / 2);
+    auto pressed = oa::present::world_renderer::screen_to_map_pixel(
+        live_viewport(
+            static_cast<uint32_t>(match_camera_x_), static_cast<uint32_t>(match_camera_z_)
+        ),
+        {press_x, press_y},
+        view_offset()
+    );
+    if (!pressed)
+        fail("the press past the map is off the battlefield");
+    pressed->x = std::min(pressed->x, static_cast<uint32_t>(map_width - 1));
+    pressed->y = std::min(pressed->y, static_cast<uint32_t>(map_height - 1));
+    const oa::sim::unit_movement::Terrain terrain(*selected_tnt_);
+    const auto edge = oa::sim::gameplay_input::terrain_intersection(
+        terrain,
+        static_cast<int32_t>(pressed->x),
+        static_cast<int32_t>(pressed->y),
+        static_cast<int32_t>(selected_tnt_->attribute_width * 16U),
+        static_cast<int32_t>(selected_tnt_->attribute_height * 16U)
+    );
+    match_->stop_orders(commander);
+    click(press_x, press_y);
+    if (const auto [order, count] = first_order();
+        count != 1 || order.point != oa::sim::ground_orders::Point{edge.x, edge.y, edge.z})
+        fail(
+            "a click on the black " + std::string(right ? "right" : "below") + " of the map" +
+            zoom_named + " sent the commander to " + std::to_string(order.point[0] >> 16) + "," +
+            std::to_string(order.point[2] >> 16) + ", not to the map's edge at " +
+            std::to_string(edge.x >> 16) + "," + std::to_string(edge.z >> 16)
+        );
+    match_->stop_orders(commander);
+    match_->kill_unit(enemy, static_cast<uint8_t>(match_runtime::DeathKind::dismissed));
+    clear_local_selection();
+    match_command_ = MatchCommand::none;
+    std::cout << "tracking zoom check: at Whole map on the game's screen, zoom " << match_zoom()
+              << ", a click on any pixel of the commander's dot selects it, "
+              << "one on an enemy's dot attacks it, and one on the black "
+              << (right ? "right" : "below") << " of the map moves to the map's edge\n";
+}
 
 void Runtime::check_wheel_zoom_limits(const std::function<void()>& frame) {
     const auto saved_layout = match_layout_;
@@ -521,6 +689,7 @@ void Runtime::check_zoom_limit_choices(const std::function<void()>& frame) {
         if (match_zoom() != kDefaultBattlefieldZoom)
             fail(size + ": a view past the new ceiling stayed past it");
     }
+    check_far_view_presses();
     apply_engine_settings(saved);
     match_layout_ = saved_layout;
     match_zoom_ = match_zoom_target_ = kDefaultBattlefieldZoom;

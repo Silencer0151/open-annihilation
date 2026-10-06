@@ -682,25 +682,11 @@ void Runtime::issue_match_move(float x, float y, bool queue) {
         std::ignore = issue_radar_orders(x, y);
         return;
     }
-    const auto viewport = live_viewport(
-        static_cast<uint32_t>(match_camera_x_), static_cast<uint32_t>(match_camera_z_)
-    );
-
-    // The map pixel drawn under the point, a whole one as orders take.
-    const auto screen_map = oa::present::world_renderer::screen_to_map_pixel(
-        viewport, {static_cast<int32_t>(x), static_cast<int32_t>(y)}, view_offset()
-    );
-    if (!screen_map)
+    // The ground drawn under the point, a whole map pixel as orders take.
+    const auto target = ground_point_under(x, y);
+    if (!target)
         return;
-    const oa::sim::unit_movement::Terrain terrain(*selected_tnt_);
-    const auto target = oa::sim::gameplay_input::terrain_intersection(
-        terrain,
-        static_cast<int32_t>(screen_map->x),
-        static_cast<int32_t>(screen_map->y),
-        static_cast<int32_t>(selected_tnt_->attribute_width * 16U),
-        static_cast<int32_t>(selected_tnt_->attribute_height * 16U)
-    );
-    issue_selection_move({target.x, target.y, target.z}, hovered_match_unit_, queue);
+    issue_selection_move(*target, hovered_match_unit_, queue);
 }
 
 void Runtime::issue_selection_move(
@@ -731,26 +717,11 @@ void Runtime::issue_selection_move(
 void Runtime::issue_match_patrol(float x, float y, bool queue) {
     if (!match_ || !selected_tnt_ || selected_match_unit_ == 0)
         return;
-    const auto viewport = live_viewport(
-        static_cast<uint32_t>(match_camera_x_), static_cast<uint32_t>(match_camera_z_)
-    );
-
-    // The map pixel drawn under the point, a whole one as orders take.
-    const auto screen_map = oa::present::world_renderer::screen_to_map_pixel(
-        viewport, {static_cast<int32_t>(x), static_cast<int32_t>(y)}, view_offset()
-    );
-    if (!screen_map)
+    // The ground drawn under the point, a whole map pixel as orders take.
+    const auto target = ground_point_under(x, y);
+    if (!target)
         return;
-    const oa::sim::unit_movement::Terrain terrain(*selected_tnt_);
-    const auto target = oa::sim::gameplay_input::terrain_intersection(
-        terrain,
-        static_cast<int32_t>(screen_map->x),
-        static_cast<int32_t>(screen_map->y),
-        static_cast<int32_t>(selected_tnt_->attribute_width * 16U),
-        static_cast<int32_t>(selected_tnt_->attribute_height * 16U)
-    );
-    std::ignore =
-        issue_selection_patrol({target.x, target.y, target.z}, hovered_match_unit_, queue);
+    std::ignore = issue_selection_patrol(*target, hovered_match_unit_, queue);
 }
 
 bool Runtime::issue_selection_patrol(

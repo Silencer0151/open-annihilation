@@ -165,6 +165,22 @@ build_terrain_pyramid(const oa::formats::tnt::Map& map, const oa::PaletteBytes& 
 /// megamap's square for a unit with no picture.
 inline constexpr int32_t far_view_dot_side = 5;
 
+/// Tells whether a screen pixel lies on a unit's dot in the far view: in
+/// the square far_view_dot_side pixels a side centred on where the unit
+/// shows, as draw_far_view_dots draws it, its frame left out.
+///
+/// @param dot_x the unit's screen column
+/// @param dot_y its screen row
+/// @param x the pixel's column
+/// @param y its row
+/// @return true when the dot covers the pixel
+[[nodiscard]] constexpr bool
+far_view_dot_covers(int32_t dot_x, int32_t dot_y, int32_t x, int32_t y) noexcept {
+    const int32_t left = dot_x - far_view_dot_side / 2;
+    const int32_t top = dot_y - far_view_dot_side / 2;
+    return x >= left && x < left + far_view_dot_side && y >= top && y < top + far_view_dot_side;
+}
+
 /// A unit's dot in the far view: a square of its owner's colour centred on
 /// where the unit shows, framed one pixel wide when it is selected.
 struct FarViewDot {

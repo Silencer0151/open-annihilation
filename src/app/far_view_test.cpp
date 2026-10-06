@@ -9,8 +9,9 @@
 // pyramid's texels against the means of the map pixels they stand for; the
 // level each zoom reads; the filter against a sum over the texels whose
 // centres each screen pixel covers, black past the shown map, the same on
-// one and on four drawing threads; and the units' dots, framed when
-// selected and clipped at the picture's edges.
+// one and on four drawing threads; the units' dots, framed when selected
+// and clipped at the picture's edges; and the pixels a dot covers for the
+// pointer, which are the pixels drawn in its colour.
 #include "oa/app/far_view.hpp"
 
 #include "oa/platform/job_pool.hpp"
@@ -398,6 +399,23 @@ void dots_are_framed_when_selected_and_clipped() {
     OA_CHECK(at(10, 3) == (std::array<uint8_t, 3>{0, 0, 0}));
 }
 
+void a_dot_covers_the_pixels_drawn_in_its_colour() {
+    constexpr int32_t width = 11, height = 10;
+    std::vector<uint8_t> picture(static_cast<std::size_t>(width) * height * 3, 0);
+    const std::array<FarViewDot, 1> dot{{{5, 4, {9, 99, 199}, true, {255, 255, 255}}}};
+    oa::app::draw_far_view_dots(picture.data(), width, height, dot);
+    int32_t covered = 0;
+    for (int32_t y = 0; y < height; ++y)
+        for (int32_t x = 0; x < width; ++x) {
+            const auto* pixel = &picture[(static_cast<std::size_t>(y) * width + x) * 3];
+            const bool drawn = pixel[0] == 9 && pixel[1] == 99 && pixel[2] == 199;
+            const bool covers = oa::app::far_view_dot_covers(5, 4, x, y);
+            OA_CHECK(covers == drawn);
+            covered += covers ? 1 : 0;
+        }
+    OA_CHECK(covered == oa::app::far_view_dot_side * oa::app::far_view_dot_side);
+}
+
 } // namespace
 
 int main() {
@@ -409,5 +427,6 @@ int main() {
     each_zoom_reads_its_level();
     the_filter_averages_the_texels_each_pixel_covers();
     dots_are_framed_when_selected_and_clipped();
+    a_dot_covers_the_pixels_drawn_in_its_colour();
     return oa::test::check_exit_status();
 }
