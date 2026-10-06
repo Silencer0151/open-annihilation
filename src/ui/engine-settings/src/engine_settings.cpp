@@ -461,10 +461,31 @@ std::string screen_size_text(ScreenSize size) {
 }
 
 std::optional<ScreenSize> screen_size_from_text(std::string_view text) {
-    for (const ScreenSize size : screen_sizes)
-        if (text == screen_size_text(size))
-            return size;
-    return std::nullopt;
+    if (text == desktop_text)
+        return desktop_screen_size;
+    const auto cross = text.find('x');
+    if (cross == std::string_view::npos)
+        return std::nullopt;
+    // A side: digits alone, no leading zero, at least `least` and at most
+    // longest_screen_side.
+    const auto side = [](std::string_view digits, uint16_t least) -> std::optional<uint16_t> {
+        if (digits.empty() || digits.size() > 5 || digits.front() == '0')
+            return std::nullopt;
+        uint32_t value = 0;
+        for (const char digit : digits) {
+            if (digit < '0' || digit > '9')
+                return std::nullopt;
+            value = value * 10 + static_cast<uint32_t>(digit - '0');
+        }
+        if (value < least || value > longest_screen_side)
+            return std::nullopt;
+        return static_cast<uint16_t>(value);
+    };
+    const auto width = side(text.substr(0, cross), smallest_screen_size.width);
+    const auto height = side(text.substr(cross + 1), smallest_screen_size.height);
+    if (!width || !height)
+        return std::nullopt;
+    return ScreenSize{*width, *height};
 }
 
 std::string_view hardware_acceleration_text(HardwareAcceleration level) noexcept {

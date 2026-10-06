@@ -25,6 +25,7 @@
 #include "oa/platform/render_probe.hpp"
 #include "oa/sim/ground_orders/search_worker.hpp"
 #include "oa/ui/frontend/savegame_dialogs.hpp"
+#include "oa/ui/frontend_multiplayer/screens.hpp"
 #include "oa/ui/touch_hud.hpp"
 
 #include <SDL3/SDL.h>
@@ -37,6 +38,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -154,6 +156,50 @@ std::optional<std::string> Runtime::EngineSettingsState::flush(Runtime& runtime)
         return std::string(error.what());
     }
     return std::nullopt;
+}
+
+std::vector<settings::ScreenSize>
+Runtime::EngineSettingsState::offered_screen_sizes(const Runtime& runtime) {
+    return oa::app::offered_screen_sizes(
+        runtime.options_, runtime.sdl_.window, view_rules::minimum_mode_height(runtime.ui_rules())
+    );
+}
+
+settings::ScreenSize Runtime::EngineSettingsState::screen_size_in_effect(
+    const Runtime& runtime, const std::vector<settings::ScreenSize>& offered
+) {
+    settings::ScreenSize size = runtime.engine_settings_
+                                    ? runtime.engine_settings_->current.screen_size
+                                    : settings::desktop_screen_size;
+    // A screen size keeps each side in 16 bits.
+    constexpr int widest = std::numeric_limits<uint16_t>::max();
+    int width = 0;
+    int height = 0;
+    if (size == settings::desktop_screen_size && runtime.sdl_.window != nullptr &&
+        SDL_GetWindowSize(runtime.sdl_.window, &width, &height) && width > 0 && height > 0 &&
+        width <= widest && height <= widest)
+        size = {static_cast<uint16_t>(width), static_cast<uint16_t>(height)};
+    if (size == settings::desktop_screen_size && runtime.engine_settings_)
+        size = runtime.engine_settings_->desktop;
+    std::vector<oa::platform::display_modes::Size> sizes;
+    sizes.reserve(offered.size());
+    for (const settings::ScreenSize each : offered)
+        sizes.push_back({each.width, each.height});
+    const auto nearest =
+        oa::platform::display_modes::nearest_offered(sizes, {size.width, size.height});
+    return nearest ? offered[*nearest] : size;
+}
+
+void Runtime::EngineSettingsState::choose_screen_size(Runtime& runtime, settings::ScreenSize size) {
+    auto& state = runtime.engine_settings_state();
+    const bool full_screen =
+        start_use(runtime.options_) == oa::platform::display_modes::Use::full_screen;
+    const settings::ScreenSize chosen =
+        full_screen && size == state.desktop ? settings::desktop_screen_size : size;
+    state.current.screen_size = chosen;
+    runtime.preference_values_[std::string(settings::key::screen_size)] =
+        settings::screen_size_text(chosen);
+    runtime.preferences_dirty_ = true;
 }
 
 void Runtime::EngineSettingsState::save_frame_stats(Runtime& runtime, bool shown) {
@@ -275,7 +321,7 @@ void Runtime::load_engine_settings() {
                                  ? std::string{}
                                  : EngineSettingsState::read_installation_ini(options_.game_dir);
     // The machine as the window was opened for it (starting_screen_size).
-    const auto start = start_inputs(options_, desktop_size());
+    const auto start = start_inputs(options_, desktop_size(options_));
     state.raspberry_pi = start.raspberry_pi;
     state.light_machine = start.light_machine;
     state.desktop = start.desktop;
@@ -314,6 +360,31 @@ void Runtime::load_engine_settings() {
     // The run's unit limit starts at the setting.
     frontend_game().max_units_setting = read.unit_limit;
     show_frame_stats(read.frame_stats);
+    // The battle room's RES column offers the display's sizes and starts
+    // at the size the game plays at; a 3.1c machine shows either as sent.
+    namespace mp = oa::ui::frontend_multiplayer;
+    constexpr int32_t game_bits = 8;
+    mp::multiplayer_bind_display_modes(
+        {this,
+         [](void* context, mp::DisplayMode* out, int32_t capacity) {
+             const auto sizes =
+                 EngineSettingsState::offered_screen_sizes(*static_cast<const Runtime*>(context));
+             int32_t count = 0;
+             for (const auto size : sizes) {
+                 if (count >= capacity)
+                     break;
+                 out[count++] = {size.width, size.height, game_bits};
+             }
+             return count;
+         },
+         [](void* context) {
+             const auto& runtime = *static_cast<const Runtime*>(context);
+             const auto size = EngineSettingsState::screen_size_in_effect(
+                 runtime, EngineSettingsState::offered_screen_sizes(runtime)
+             );
+             return mp::DisplayMode{size.width, size.height, game_bits};
+         }}
+    );
 }
 
 void Runtime::list_offered_mods() {
@@ -835,6 +906,24 @@ settings::Dialog& Runtime::open_engine_settings_dialog(settings::DialogKind kind
         game_files,
         pad_used()
     );
+    // Screen size offers Desktop and the display's own sizes, and the size
+    // in effect where the display does not offer it.
+    dialog.offered_screen_sizes.assign(1, settings::desktop_screen_size);
+    for (const settings::ScreenSize size : EngineSettingsState::offered_screen_sizes(*this))
+        dialog.offered_screen_sizes.push_back(size);
+    if (const auto stored = state.current.screen_size;
+        std::find(dialog.offered_screen_sizes.begin(), dialog.offered_screen_sizes.end(), stored) ==
+        dialog.offered_screen_sizes.end()) {
+        const auto later = std::find_if(
+            dialog.offered_screen_sizes.begin() + 1,
+            dialog.offered_screen_sizes.end(),
+            [stored](settings::ScreenSize size) {
+                return size.width > stored.width ||
+                       (size.width == stored.width && size.height > stored.height);
+            }
+        );
+        dialog.offered_screen_sizes.insert(later, stored);
+    }
     // Controller's Steam Input notice, and Maximum frame rate's line naming
     // a Steam Deck's screen rate.
     dialog.steam_input = pad_steam_input();

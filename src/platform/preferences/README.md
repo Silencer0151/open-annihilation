@@ -136,7 +136,7 @@ of range is clamped. A switch is On for any number above 0: a word such as
 | `open-annihilation.max-fps` | frames a second, 30 to 120 | 120 |
 | `open-annihilation.anti-aliasing` | 1 (off), 2, 3, 4, 8 or 16 | 1 |
 | `open-annihilation.frame-stats` | 0 or 1 | 0 |
-| `open-annihilation.screen-size` | `desktop`, or `640x480`, `800x600`, `1024x768` or `1280x1024` | `desktop`; with the player's own file on a light machine, `800x600`, or `640x480` on a smaller desktop |
+| `open-annihilation.screen-size` | `desktop`, or a size `WIDTHxHEIGHT` from `640x480`, each side at most 8192, such as `2560x1440` | `desktop`; with the player's own file on a light machine, `800x600`, or `640x480` on a smaller desktop |
 | `open-annihilation.hardware-acceleration` | `off`, `basic` or `full`; a whole number from an earlier version reads as `off` at 0 or below, else `full` | `full` with the player's own file, else `off` |
 | `open-annihilation.vertical-sync` | 0 or 1 | 0 |
 | `open-annihilation.menu-scaling` | `sharp`, `whole-steps` or `unfiltered` | `sharp` |

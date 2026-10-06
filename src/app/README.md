@@ -1321,7 +1321,15 @@ logs it.
 - `screen_size.hpp`, `screen_size.cpp`: the settings read before the window
   opens (`start_settings`), with the defaults of a light machine
   (`oa/platform/machine.hpp`): the Screen size, the window opened at that
-  size and full screen given the display mode nearest it, and Hardware
+  size and full screen given the display's mode of that size, else the one
+  nearest it, and a stored size the display does not offer shown as Desktop
+  for the run (`shown_screen_size`); the sizes the display offers for the
+  next start (`offered_screen_sizes`,
+  [display modes](../platform/display-modes/README.md)), which the options'
+  Screen Size, the settings' Screen size after Desktop and the battle room's
+  RES column list (`multiplayer_bind_display_modes`), from what SDL reports
+  of the display the window is on, or the made-up monitor `--display-modes`
+  names for a check on SDL's dummy video driver; and Hardware
   acceleration, which either flag decides over
   (`hardware_acceleration_asked`). With no size named the window opens at
   the default, held to the desktop in Steam's Game Mode, where gamescope's
@@ -2111,8 +2119,8 @@ into the records and decisions of the modules that carry them out, and
   placed in 3D by the Sound Mode setting, which the profile's registry
   seeds set.
 - **Display modes and screenshots** (ui.display-modes): with
-  `min-height-768` the options screen offers only modes of 768 rows or
-  more (`minimum_mode_height`), and the DisplaymodeWidth and
+  `min-height-768` the options screen and the settings' Screen size offer
+  only sizes of 768 rows or more (`minimum_mode_height`), and the DisplaymodeWidth and
   DisplaymodeHeight settings start at 1024 by 768 and raise a smaller
   stored width or height to it as they are read (`display_mode_setting`).
   Ctrl+F9 and Print Screen, on release and on every screen before the

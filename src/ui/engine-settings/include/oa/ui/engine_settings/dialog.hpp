@@ -590,6 +590,11 @@ struct Dialog {
     const SectionHooks* section_hooks{};
     /// The unit limit slider's highest stop (highest_offered_unit_limit).
     uint16_t highest_offered_unit{highest_unit_limit};
+    /// The Screen size slider's stops, in order: Desktop, then the sizes
+    /// the display offers, narrower first. open_dialog sets screen_sizes;
+    /// the game sets the display's own once the dialog has opened. Never
+    /// empty.
+    std::vector<ScreenSize> offered_screen_sizes{screen_sizes.begin(), screen_sizes.end()};
     /// The names of the offered mod folders, in the order of Inputs::mod_folders.
     std::vector<std::string> mod_names;
     /// The offered mod folders' paths, in the same order (Inputs::mod_folders).

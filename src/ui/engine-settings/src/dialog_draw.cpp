@@ -1762,8 +1762,18 @@ void draw_section(
                 target,
                 in_view,
                 row.control_area,
-                layout::stop_of(dialog.chosen, row.setting, dialog.highest_offered_unit),
-                layout::stops_of(dialog.chosen, row.setting, dialog.highest_offered_unit),
+                layout::stop_of(
+                    dialog.chosen,
+                    row.setting,
+                    dialog.highest_offered_unit,
+                    dialog.offered_screen_sizes
+                ),
+                layout::stops_of(
+                    dialog.chosen,
+                    row.setting,
+                    dialog.highest_offered_unit,
+                    dialog.offered_screen_sizes
+                ),
                 locked,
                 hovered
             );

@@ -4188,6 +4188,11 @@ class Runtime final : public menu::Host,
     /// running game's speed; elsewhere they are the full-screen frontend panels.
     /// A watcher's game speed slider is locked.
     void bind_options_context();
+    /// Puts the size the game plays at
+    /// (EngineSettingsState::screen_size_in_effect) in DisplaymodeWidth and
+    /// DisplaymodeHeight as the options open outside a match, so that their
+    /// Screen Size opens on it; in a match it does nothing.
+    void show_screen_size_in_options();
 
     /// Opens OPTIONS: the lightbar takes the panel below, then the tab panel loads.
     ///

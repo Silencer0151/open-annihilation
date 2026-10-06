@@ -8,17 +8,54 @@
 #pragma once
 
 #include "oa/app/app.hpp"
+#include "oa/platform/display_modes/sdl.hpp"
 #include "oa/ui/engine_settings.hpp"
 
 #include <SDL3/SDL.h>
 
+#include <cstdint>
+#include <vector>
+
 namespace oa::app {
 
-/// Returns the size of the primary display's desktop.
+/// Returns what a display reports: the made-up monitor --display-modes
+/// names, else the display's full-screen modes and desktop as SDL reports
+/// them. SDL's video must be initialised.
 ///
+/// @param options the parsed command line (Options::display_modes)
+/// @param display SDL's id of the display; 0 reads an empty report
+/// @return the report
+[[nodiscard]] oa::platform::display_modes::DisplayReport
+display_report(const Options& options, SDL_DisplayID display);
+
+/// Returns how the Screen size setting's size shows from the next start:
+/// the screen switched to it when the run starts full screen
+/// (Options::start_full_screen), else a window of it.
+///
+/// @param options the parsed command line
+/// @return full screen or a window
+[[nodiscard]] oa::platform::display_modes::Use start_use(const Options& options) noexcept;
+
+/// Returns the screen sizes the display the window is on offers for the
+/// way the next start shows them (start_use), each once, the narrower
+/// first: the sizes the options' Screen Size and the settings' Screen size
+/// offer after Desktop.
+///
+/// @param options the parsed command line
+/// @param window the game's window; null reads the primary display
+/// @param minimum_height the shortest size offered, in units: 480, or a
+///     mod's taller floor
+/// @return the sizes; never empty
+[[nodiscard]] std::vector<oa::ui::engine_settings::ScreenSize>
+offered_screen_sizes(const Options& options, SDL_Window* window, int32_t minimum_height);
+
+/// Returns the size of the primary display's desktop: the made-up
+/// monitor's first mode with --display-modes.
+///
+/// @param options the parsed command line (Options::display_modes)
 /// @return the desktop's size; desktop_screen_size (zero by zero) when SDL
 ///     does not report it
-[[nodiscard]] oa::ui::engine_settings::ScreenSize desktop_size();
+[[nodiscard]] oa::ui::engine_settings::ScreenSize desktop_size(const Options& options);
 
 /// Returns what the settings' defaults depend on at start, before the
 /// runtime reads them: the platform, whether the preferences file is the
@@ -53,6 +90,18 @@ start_settings(const Options& options, oa::ui::engine_settings::ScreenSize deskt
     const Options& options, const oa::ui::engine_settings::EngineSettings& start
 ) noexcept;
 
+/// Returns the screen size the game starts at on a display: the size, when
+/// the display can show it as the run starts (start_use,
+/// oa::platform::display_modes::can_show), else Desktop for this run, which
+/// it says on stdout; the setting keeps the size, so that the display that
+/// offers it brings it back.
+///
+/// @param options the parsed command line
+/// @param size the screen size (starting_screen_size)
+/// @return the size, or desktop_screen_size
+[[nodiscard]] oa::ui::engine_settings::ScreenSize
+shown_screen_size(const Options& options, oa::ui::engine_settings::ScreenSize size);
+
 /// Returns the size the game's window opens at when neither --resolution nor
 /// the Screen size setting names one: kDefaultWindowWidth by
 /// kDefaultWindowHeight, each side held to the desktop's in Steam's Game
@@ -80,8 +129,10 @@ void report_window_size(
     SDL_Window* window, oa::ui::engine_settings::ScreenSize desktop, bool steam_game_mode
 );
 
-/// Sets the display mode a window takes in full screen to the one nearest a
-/// screen size, and puts the window in full screen when asked.
+/// Sets the display mode a window takes in full screen to the display's
+/// mode of a screen size (oa::platform::display_modes::mode_for: the
+/// desktop's pixel density, then its refresh rate, then the highest), else
+/// to the one nearest it, and puts the window in full screen when asked.
 ///
 /// The window keeps the desktop's own mode in full screen when the display
 /// offers no mode of the size or larger.

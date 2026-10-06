@@ -331,16 +331,35 @@ void screen_sizes_are_stored_as_text() {
     CHECK(settings::screen_size_text({1280, 1024}) == "1280x1024");
     for (const auto size : settings::screen_sizes)
         CHECK(settings::screen_size_from_text(settings::screen_size_text(size)) == size);
-    // Only the offered sizes, written as stored, are read.
+    // Any size a display may offer, from the game's own screen up, is read
+    // as written: a 4K monitor's and an ultrawide's among them.
+    CHECK((settings::screen_size_from_text("1920x1080") == settings::ScreenSize{1920, 1080}));
+    CHECK((settings::screen_size_from_text("3840x2160") == settings::ScreenSize{3840, 2160}));
+    CHECK((settings::screen_size_from_text("3440x1440") == settings::ScreenSize{3440, 1440}));
+    CHECK((settings::screen_size_from_text("8192x8192") == settings::ScreenSize{8192, 8192}));
+    CHECK(
+        (read_one(settings::key::screen_size, "2560x1440").screen_size ==
+         settings::ScreenSize{2560, 1440})
+    );
+    // Text written otherwise, or a size below the game's screen or beyond
+    // the longest side, is not.
     CHECK(!settings::screen_size_from_text(""));
     CHECK(!settings::screen_size_from_text("Desktop"));
     CHECK(!settings::screen_size_from_text("800X600"));
     CHECK(!settings::screen_size_from_text("800x600 "));
-    CHECK(!settings::screen_size_from_text("1920x1080"));
+    CHECK(!settings::screen_size_from_text(" 800x600"));
     CHECK(!settings::screen_size_from_text("0x0"));
+    CHECK(!settings::screen_size_from_text("0800x600"));
+    CHECK(!settings::screen_size_from_text("+800x600"));
+    CHECK(!settings::screen_size_from_text("800x"));
+    CHECK(!settings::screen_size_from_text("x600"));
+    CHECK(!settings::screen_size_from_text("800x600x2"));
+    CHECK(!settings::screen_size_from_text("639x480"));
+    CHECK(!settings::screen_size_from_text("640x479"));
+    CHECK(!settings::screen_size_from_text("8193x4320"));
+    CHECK(!settings::screen_size_from_text("99999x480"));
     CHECK(
-        read_one(settings::key::screen_size, "1920x1080").screen_size ==
-        settings::desktop_screen_size
+        read_one(settings::key::screen_size, "320x200").screen_size == settings::desktop_screen_size
     );
     CHECK(
         (read_one(settings::key::screen_size, "640x480").screen_size ==

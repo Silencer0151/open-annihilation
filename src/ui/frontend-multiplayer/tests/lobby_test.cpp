@@ -22,6 +22,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace mp = oa::ui::frontend_multiplayer;
@@ -1737,6 +1738,77 @@ void join_remote(mp::Lobby& lobby, uint32_t id) {
     event.kind = mp::LobbyEventKind::player_joined;
     event.player_id = id;
     (void)mp::lobby_apply_event(lobby, event);
+}
+
+/// A 4K monitor's sizes, as the game gives them to the battle room's RES
+/// column: the narrower first.
+int32_t four_k_modes(void*, mp::DisplayMode* out, int32_t capacity) {
+    constexpr mp::DisplayMode modes[] = {
+        {640, 480, 8},
+        {1024, 768, 8},
+        {1920, 1080, 8},
+        {2560, 1440, 8},
+        {3840, 2160, 8},
+    };
+    const int32_t count = std::min<int32_t>(capacity, static_cast<int32_t>(std::size(modes)));
+    std::copy_n(modes, count, out);
+    return count;
+}
+
+// The RES column steps through the sizes the game gives, past 1600x1200,
+// wrapping at both ends, and each step goes to the other machines as the
+// two 16-bit words of the player's setup block a 3.1c machine shows.
+void test_resolution_cycle() {
+    constexpr uint32_t kHost = 0x100;
+    auto game = std::make_unique<oa::Game>();
+    mp::Lobby lobby{};
+    mp::LoopbackNet loopback{};
+    mp::loopback_reset(loopback);
+    mp::lobby_reset(lobby, *game);
+    lobby.net = mp::loopback_lobby_net(loopback);
+    lobby.services.display_modes = four_k_modes;
+    game->session_flags |= 1;
+    game->players[0].player_id = kHost;
+    mp::lobby_seat_local(lobby, 0, true, "Host");
+    auto& info = mp::local_info(lobby);
+    info.screen_width = 1920;
+    info.screen_height = 1080;
+    // The size the setup block carries in the last player info sent.
+    const auto sent_size = [&] {
+        const auto index = last_sent(loopback, oa::netgame::RecordType::player_info);
+        oa::netgame::PlayerInfoRecord record{};
+        mp::PlayerSetupInfo block{};
+        if (index < 0 ||
+            oa::netgame::decode_record(loopback.sent[index], loopback.sent_size[index], &record) !=
+                oa::netgame::WireError::ok)
+            return std::pair<uint16_t, uint16_t>{};
+        std::memcpy(&block, record.info_head, sizeof(record.info_head));
+        return std::pair<uint16_t, uint16_t>{block.screen_width, block.screen_height};
+    };
+    mp::lobby_cycle_resolution(lobby, false);
+    expect(info.screen_width == 2560 && info.screen_height == 1440, "RES steps to 2560x1440");
+    mp::lobby_cycle_resolution(lobby, false);
+    expect(info.screen_width == 3840 && info.screen_height == 2160, "RES steps to 3840x2160");
+    expect(
+        static_cast<int32_t>(mp::lobby_screen_width(*game)) == 3840 &&
+            static_cast<int32_t>(mp::lobby_screen_height(*game)) == 2160,
+        "the battle room's game keeps 3840x2160"
+    );
+    expect(
+        sent_size() == std::pair<uint16_t, uint16_t>{3840, 2160},
+        "the other machines are sent 3840x2160 in the setup block's words"
+    );
+    mp::lobby_cycle_resolution(lobby, false);
+    expect(info.screen_width == 640 && info.screen_height == 480, "RES wraps to the smallest");
+    mp::lobby_cycle_resolution(lobby, true);
+    expect(
+        info.screen_width == 3840 && info.screen_height == 2160, "RES wraps back to the largest"
+    );
+    // A size the list does not hold stays, as in 3.1c.
+    info.screen_width = 1366;
+    info.screen_height = 768;
+    mp::lobby_cycle_resolution(lobby, false);
+    expect(info.screen_width == 1366 && info.screen_height == 768, "an unlisted size stays");
 }
 
 int alliance_notices = 0;
@@ -5385,6 +5457,7 @@ int main(int argc, char** argv) {
         test_machine_groups();
         test_alliance_relation();
         test_damaged_records();
+        test_resolution_cycle();
         test_records_leave_from_their_players();
         test_periodic_block();
         test_host_leaving();

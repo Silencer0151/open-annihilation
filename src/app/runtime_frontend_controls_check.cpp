@@ -7,6 +7,7 @@
 // screen shows for it before Start, the help line follows the pointer, and the
 // chosen options tab shows pressed. Alt+Enter switches the window to full
 // screen and back on a menu and in a match.
+#include "engine_settings_state.hpp"
 #include "oa/app/runtime.hpp"
 #include "oa/data/persist/save_sections.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
@@ -275,6 +276,47 @@ void Runtime::check_frontend_controls() {
             std::string(name) + " did not come back to '" + first + "' after " +
                 std::to_string(stages) + " clicks"
         );
+    };
+
+    // VISUALS' Screen Size: the display's sizes from the smallest to the
+    // largest at the slider's ends (the made-up monitor's with
+    // --display-modes), each shown as VIDVAL's "WIDTH X HEIGHT"; it opens on
+    // the size the game plays at. With `pictures`, the largest is written as
+    // <stem>-options-VISUALS-largest.ppm.
+    const auto offered = EngineSettingsState::offered_screen_sizes(*this);
+    const auto size_text = [](oa::ui::engine_settings::ScreenSize size) {
+        return std::to_string(size.width) + " X " + std::to_string(size.height);
+    };
+    const auto check_screen_size_list = [&](bool pictures) {
+        const auto opened = EngineSettingsState::screen_size_in_effect(*this, offered);
+        expect(
+            label_text("VIDVAL") == size_text(opened),
+            "VISUALS' Screen Size opened on " + label_text("VIDVAL") + ", not on " +
+                size_text(opened)
+        );
+        // The slider is as long as its GUI makes it, whatever the count.
+        constexpr int32_t past_either_end = 400;
+        drag_check_knob("VIDSLDR", past_either_end);
+        idle_tick();
+        expect(
+            label_text("VIDVAL") == size_text(offered.back()),
+            "VIDSLDR's last stop shows " + label_text("VIDVAL") + ", not " +
+                size_text(offered.back())
+        );
+        if (pictures) {
+            park_pointer();
+            snapshot("options-VISUALS-largest");
+        }
+        drag_check_knob("VIDSLDR", -past_either_end);
+        idle_tick();
+        expect(
+            label_text("VIDVAL") == size_text(offered.front()),
+            "VIDSLDR's first stop shows " + label_text("VIDVAL") + ", not " +
+                size_text(offered.front())
+        );
+        std::cout << "frontend controls check: VISUALS offers " << offered.size()
+                  << " screen sizes, " << size_text(offered.front()) << " to "
+                  << size_text(offered.back()) << '\n';
     };
 
     // MAINMENU.GUI's buttons under the pointer: each is drawn as it is without
@@ -1022,12 +1064,47 @@ void Runtime::check_frontend_controls() {
         expect(pixels != 0, std::string(tab) + " is not drawn pressed after it was clicked");
         park_pointer();
         snapshot("options-" + std::string(tab));
+        if (tab == "VISUALS")
+            check_screen_size_list(true);
         for (const auto button : buttons)
             cycle_captions(button);
         shows_tab(tab, "after the " + std::string(tab) + " panel's buttons were clicked");
     }
     click("CANCEL");
     require(screen_ == Screen::single_player, "CANCEL did not leave the options");
+    const auto stored_size = [&] {
+        const auto found =
+            preference_values_.find(std::string(oa::ui::engine_settings::key::screen_size));
+        return found == preference_values_.end() ? std::string("desktop") : found->second;
+    };
+    expect(stored_size() == "desktop", "CANCEL kept a Screen Size the player moved");
+    // OK keeps the Screen Size chosen as the Screen size setting, from the
+    // next start, and the options open on it again.
+    click(entry::resource_name(entry::Button::options));
+    click("VISUALS");
+    drag_check_knob("VIDSLDR", 400);
+    idle_tick();
+    click("PREV");
+    require(screen_ == Screen::single_player, "OK did not leave the options");
+    const auto largest = offered.back();
+    const auto largest_text = std::to_string(largest.width) + 'x' + std::to_string(largest.height);
+    expect(
+        stored_size() == largest_text && engine_settings_state().current.screen_size == largest &&
+            preferences_.display_width == largest.width &&
+            preferences_.display_height == largest.height,
+        "OK on Screen Size " + largest_text + " stored the setting as " + stored_size()
+    );
+    click(entry::resource_name(entry::Button::options));
+    click("VISUALS");
+    expect(
+        label_text("VIDVAL") == size_text(largest),
+        "VISUALS opened on " + label_text("VIDVAL") + " after OK on " + size_text(largest)
+    );
+    click("CANCEL");
+    // The check's preferences file starts the next run at Desktop again.
+    EngineSettingsState::choose_screen_size(*this, oa::ui::engine_settings::desktop_screen_size);
+    save_preferences();
+    expect(stored_size() == "desktop", "the Screen size setting did not go back to Desktop");
 
     // Alt+Enter switches the window to full screen and back, on a menu and
     // in a match: Return and keypad Enter alike, a held key's repeats

@@ -750,9 +750,14 @@ struct ModRowText {
 /// @param setting a slider setting
 /// @param highest_offered_unit the unit limit slider's highest value, in
 ///     units per player
+/// @param offered_sizes the Screen size slider's stops, in order
+///     (Dialog::offered_screen_sizes); never empty
 /// @return its stops
-[[nodiscard]] Slider
-slider_of(Setting setting, uint16_t highest_offered_unit = highest_unit_limit) noexcept;
+[[nodiscard]] Slider slider_of(
+    Setting setting,
+    uint16_t highest_offered_unit = highest_unit_limit,
+    std::span<const ScreenSize> offered_sizes = screen_sizes
+) noexcept;
 
 /// Returns the stops a slider setting offers for the settings shown: a
 /// snap radius runs from 0 to the mod's most (at least two stops), the
@@ -762,11 +767,15 @@ slider_of(Setting setting, uint16_t highest_offered_unit = highest_unit_limit) n
 /// @param setting a slider setting
 /// @param highest_offered_unit the unit limit slider's highest value, in
 ///     units per player
-/// @return the stops, 2 or more
+/// @param offered_sizes the Screen size slider's stops, in order
+///     (Dialog::offered_screen_sizes); never empty
+/// @return the stops, 1 or more; 2 or more but for a Screen size slider of
+///     one stop
 [[nodiscard]] int32_t stops_of(
     const EngineSettings& settings,
     Setting setting,
-    uint16_t highest_offered_unit = highest_unit_limit
+    uint16_t highest_offered_unit = highest_unit_limit,
+    std::span<const ScreenSize> offered_sizes = screen_sizes
 ) noexcept;
 
 /// Returns the stop nearest a setting's value.
@@ -775,11 +784,15 @@ slider_of(Setting setting, uint16_t highest_offered_unit = highest_unit_limit) n
 /// @param setting a slider setting
 /// @param highest_offered_unit the unit limit slider's highest value, in
 ///     units per player
+/// @param offered_sizes the Screen size slider's stops, in order
+///     (Dialog::offered_screen_sizes); a screen size not among them is on
+///     the first
 /// @return 0 for the lowest value to stops - 1 for the highest
 [[nodiscard]] int32_t stop_of(
     const EngineSettings& settings,
     Setting setting,
-    uint16_t highest_offered_unit = highest_unit_limit
+    uint16_t highest_offered_unit = highest_unit_limit,
+    std::span<const ScreenSize> offered_sizes = screen_sizes
 ) noexcept;
 
 /// Sets a slider setting to a stop's value.
@@ -789,11 +802,14 @@ slider_of(Setting setting, uint16_t highest_offered_unit = highest_unit_limit) n
 /// @param stop the stop, clamped to the slider's
 /// @param highest_offered_unit the unit limit slider's highest value, in
 ///     units per player
+/// @param offered_sizes the Screen size slider's stops, in order
+///     (Dialog::offered_screen_sizes); never empty
 void set_stop(
     EngineSettings& settings,
     Setting setting,
     int32_t stop,
-    uint16_t highest_offered_unit = highest_unit_limit
+    uint16_t highest_offered_unit = highest_unit_limit,
+    std::span<const ScreenSize> offered_sizes = screen_sizes
 ) noexcept;
 
 /// Tells whether a setting is a strip of levels: Enhanced anti-aliasing,

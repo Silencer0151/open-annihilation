@@ -157,6 +157,7 @@ add_subdirectory(src/platform/job-pool)
 add_subdirectory(src/platform/render-probe)
 add_subdirectory(src/platform/sound-device)
 add_subdirectory(src/platform/locale)
+add_subdirectory(src/platform/display-modes)
 add_subdirectory(src/platform/file-types)
 # Total Annihilation folders found where Steam, Heroic, Lutris or Bottles put
 # them (docs/installation/steam-deck.md).
@@ -260,7 +261,7 @@ add_library(oa::app::game_options ALIAS oa-app-game-options)
 target_link_libraries(oa-app-game-options PUBLIC oa-app-headers)
 target_link_libraries(oa-app-game-options PUBLIC oa-ui-frontend-renderer oa-ui-frontend-state oa-sim-scenario
   oa-ui-screen-registry oa-app-command-line oa-platform-preferences oa-app-mod-profile
-  PRIVATE oa-app-mod-install oa-platform-job-pool oa-options)
+  PRIVATE oa-app-mod-install oa-platform-job-pool oa-platform-display-modes oa-options)
 # oa-game's game folder: --game-dir, the remembered folder, a folder found
 # where Steam, Heroic or Lutris put it, or the folder dialog's choice, the
 # installation checks, and the installer of the Total Annihilation demo
@@ -908,6 +909,7 @@ set(oa_game_libraries oa-formats-hpi oa-app-game-options oa-app-game-directory o
   oa-ui-engine-settings oa-platform-app-menu oa-platform-text-font oa-platform-job-pool
   oa-platform-render-probe oa-app-render-policy oa-ui-decoded oa-base-bytes oa-base-float-precision oa-base-text
   oa-app-acceleration-status oa-formats-png oa-data-languages oa-formats-oamod oa-platform-locale
+  oa-platform-display-modes oa-platform-display-modes-sdl
   oa-app-full-terrain oa-app-full-supersampling oa-app-full-fog oa-app-card-executor
   oa-present-gpu-world oa-app-full-models oa-app-platform-hooks oa-app-touch-paint
   oa-ui-touch-gestures oa-ui-touch-hud oa-app-game-files oa-ui-game-files oa-app-mod-install
@@ -1228,17 +1230,27 @@ if(OA_BUILD_PLATFORM)
       set_tests_properties(native-loadsave-screens PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_loadsave_check_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # A 4K monitor's modes as SDL lists them on Windows, at two refresh
+      # rates, with the television sizes, which the checks below hand the
+      # game as the display's (--display-modes): the dummy video driver
+      # reports none.
+      set(oa_four_k_monitor "3840x2160@60,3840x2160@30,2560x1600@60,2560x1440@60,1920x1200@60,\
+1920x1080@60,1680x1050@60,1600x1200@60,1600x900@60,1440x900@60,1366x768@60,1280x1024@60,\
+1280x960@60,1280x800@60,1280x720@60,1024x768@60,800x600@60,720x576@50,720x480@60,640x480@60")
       # Every option of SKIRMISH.GUI, NEWGAME.GUI and the options sub-panels
       # clicked through the SDL presenter shows the setting it changed (its
       # staged caption, frame or text) before Start; the clicked options tab
-      # shows pressed and HELPTEXT shows the help under the pointer.
+      # shows pressed and HELPTEXT shows the help under the pointer. VISUALS'
+      # Screen Size lists the 4K monitor's sizes from 640x480 to 3840x2160,
+      # opens on the size the game plays at, and sets the Screen size setting
+      # on OK and not on CANCEL.
       # NEWGAME.GUI's Campaign list selects the clicked campaign, steps with
       # Up and Down until a button takes the focus, scrolls with its arrow and
       # starts a double-clicked one.
       set(oa_frontend_controls_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/frontend-controls")
       file(MAKE_DIRECTORY "${oa_frontend_controls_dir}")
       add_test(NAME native-frontend-controls COMMAND oa-game --game-dir "${OA_GAME_DIR}"
-        --skip-intro --mute --check-frontend-controls
+        --skip-intro --mute --check-frontend-controls --display-modes "${oa_four_k_monitor}"
         --snapshot "${oa_frontend_controls_dir}/frontend-controls.ppm"
         --preferences-file "${oa_frontend_controls_dir}/frontend-controls.conf")
       set_tests_properties(native-frontend-controls PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
@@ -1301,11 +1313,12 @@ if(OA_BUILD_PLATFORM)
       # tier follow it at once, Full drawn as Basic with the status saying
       # so, and come back after a drop or a function test forced to fail;
       # every other step leaves it Off, so every frame compared is drawn on
-      # the processor.
+      # the processor. Screen size offers Desktop and the 4K monitor's sizes.
       set(oa_engine_settings_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/engine-settings")
       file(MAKE_DIRECTORY "${oa_engine_settings_dir}")
       add_test(NAME native-engine-settings COMMAND oa-game --game-dir "${OA_GAME_DIR}"
         --skip-intro --mute --check-engine-settings --force-capable
+        --display-modes "${oa_four_k_monitor}"
         --preferences-file "${oa_engine_settings_dir}/engine-settings.conf")
       set_tests_properties(native-engine-settings PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_engine_settings_dir}"

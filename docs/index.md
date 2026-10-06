@@ -175,6 +175,7 @@ Presentation, interface and sound:
 Platform and application:
 
 - [system locale](../src/platform/locale/README.md),
+  [display modes](../src/platform/display-modes/README.md),
   [user preferences](../src/platform/preferences/README.md),
   [job pool](../src/platform/job-pool/README.md),
   [render probe](../src/platform/render-probe/README.md),

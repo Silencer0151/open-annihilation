@@ -236,9 +236,11 @@ struct HostDisplay {
     /// (RendererHost::create), which it describes and logs with the tier its
     /// first frame is drawn in, from the flags and the Hardware acceleration
     /// setting read before the window opens (RendererHost::decide_start_tier).
-    /// A window of a set screen size takes the display mode nearest it in
-    /// full screen. A build whose touch controls are on from the start sets
-    /// their input hints before SDL starts (set_input_hints), and the
+    /// A window of a set screen size takes the display's mode of that size
+    /// in full screen, else the one nearest it; a set size the display does
+    /// not offer opens as Desktop for this run (shown_screen_size). A build
+    /// whose touch controls are on from the start sets their input hints
+    /// before SDL starts (set_input_hints), and the
     /// platform's window_ready hook, when there is one, is told once the
     /// window and its renderer are made.
     ///
@@ -279,9 +281,11 @@ struct HostDisplay {
         watch_opened_files();
         // The settings the window and its renderer start with, read before
         // either exists.
-        const auto desktop = desktop_size();
+        const auto desktop = desktop_size(options);
         const auto start = start_settings(options, desktop);
-        const auto screen = starting_screen_size(options, start);
+        // A stored size the display does not offer shows the desktop's
+        // for this run.
+        const auto screen = shown_screen_size(options, starting_screen_size(options, start));
         const bool sized = screen != oa::ui::engine_settings::desktop_screen_size;
         // With no size named, Steam's Game Mode holds the window to the
         // desktop, the most of it gamescope's pointer reaches.

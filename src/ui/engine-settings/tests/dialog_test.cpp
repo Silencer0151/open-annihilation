@@ -1366,6 +1366,58 @@ void sliders_follow_the_pointer_and_the_arrows() {
     );
 }
 
+void screen_size_offers_the_displays_sizes() {
+    // A 4K monitor's sizes after Desktop, as the game offers them.
+    settings::Dialog dialog = opened(Page::graphics);
+    dialog.offered_screen_sizes = {
+        settings::desktop_screen_size,
+        {640, 480},
+        {800, 600},
+        {1024, 768},
+        {1280, 1024},
+        {1600, 1200},
+        {1920, 1080},
+        {2560, 1440},
+        {3440, 1440},
+        {3840, 2160},
+    };
+    const auto track = geometry::place_rows(Page::graphics, {}).rows[2].control_area;
+    const int32_t row = track.y + track.height / 2;
+    CHECK(
+        settings::dialog_pointer_down(dialog, track.x + track.width - 1, row) ==
+        DialogAction::changed
+    );
+    CHECK((dialog.chosen.screen_size == settings::ScreenSize{3840, 2160}));
+    CHECK(
+        find_part(settings::dialog_layout(dialog), "3840 x 2160", settings::no_control) != nullptr
+    );
+    CHECK(settings::dialog_pointer_up(dialog, 0, 0) == DialogAction::redraw);
+    // The arrows step through the display's sizes and stop at the ends.
+    for (int32_t press = 0; press < 8 && dialog.focused != settings::first_row_control + 2; ++press)
+        static_cast<void>(settings::dialog_key(dialog, DialogKey::down));
+    CHECK(dialog.focused == settings::first_row_control + 2);
+    CHECK(settings::dialog_key(dialog, DialogKey::left) == DialogAction::changed);
+    CHECK((dialog.chosen.screen_size == settings::ScreenSize{3440, 1440}));
+    CHECK(settings::dialog_key(dialog, DialogKey::left) == DialogAction::changed);
+    CHECK((dialog.chosen.screen_size == settings::ScreenSize{2560, 1440}));
+    for (int32_t press = 0; press < 12; ++press)
+        static_cast<void>(settings::dialog_key(dialog, DialogKey::left));
+    CHECK(dialog.chosen.screen_size == settings::desktop_screen_size);
+    CHECK(settings::dialog_key(dialog, DialogKey::left) == DialogAction::redraw);
+    // A size the display does not offer shows on the first stop and keeps
+    // its value until moved.
+    dialog.chosen.screen_size = {1366, 768};
+    CHECK(
+        geometry::stop_of(
+            dialog.chosen,
+            settings::Setting::screen_size,
+            settings::highest_unit_limit,
+            dialog.offered_screen_sizes
+        ) == 0
+    );
+    CHECK(geometry::value_text(settings::Setting::screen_size, dialog.chosen) == "1366 x 768");
+}
+
 void the_level_strip_picks_a_level() {
     settings::Dialog dialog = opened(Page::graphics);
     std::vector<const settings::LayoutPart*> levels;
@@ -7849,6 +7901,7 @@ int main(int argc, char** argv) {
         a_language_locks_the_modern_fonts_and_unicode_chat();
         every_stop_maps_to_its_value_and_back();
         sliders_follow_the_pointer_and_the_arrows();
+        screen_size_offers_the_displays_sizes();
         the_level_strip_picks_a_level();
         enter_keeps_and_escape_cancels();
         the_footer_buttons_restore_cancel_and_keep();

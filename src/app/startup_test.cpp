@@ -563,6 +563,26 @@ int main() {
                 "--check-build-preview, --check-engine-settings and --check-kill-board",
         "--force-capable is refused without a check that takes it"
     );
+    // A made-up monitor for checks: kept as named, for unattended runs only.
+    expect(plain.display_modes.empty(), "no --display-modes, the display's own");
+    expect(
+        parse({"--check-frontend-controls", "--display-modes", "3840x2160@60,2560x1440@60"})
+                    .display_modes == "3840x2160@60,2560x1440@60" &&
+            parse({"--snapshot", "menu.ppm", "--display-modes", "none"}).display_modes == "none",
+        "--display-modes names a made-up monitor for a check or a snapshot"
+    );
+    expect(
+        rejection({"--display-modes", "3840x2160"}) ==
+            "--display-modes is accepted only with checks, snapshots, benchmarks and frame "
+            "limits",
+        "--display-modes is refused for a player's run"
+    );
+    expect(
+        rejection({"--check-frontend-controls", "--display-modes", "3840X2160"}) ==
+            "--display-modes expects WIDTHxHEIGHT[@RATE][/DENSITY] modes separated by commas, "
+            "or none",
+        "--display-modes refuses a mode it cannot read"
+    );
     expect(
         rejection({"--max-fps", "1001"}) ==
             "--max-fps expects 0 for no limit, or frames a second from 30 through 1000",

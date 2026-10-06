@@ -7,6 +7,7 @@
 #include "oa/app/game_directory.hpp"
 #include "oa/app/hook_call.hpp"
 #include "oa/app/mod_install.hpp"
+#include "oa/platform/display_modes.hpp"
 #include "oa/platform/job_pool.hpp"
 #include "oa/platform/system.hpp"
 #include <algorithm>
@@ -664,7 +665,14 @@ namespace {
             take_acceleration(argument, HardwareAcceleration::off);
         } else if (argument == "--force-capable")
             result.force_capable = true;
-        else if (argument == "--native-density")
+        else if (argument == "--display-modes") {
+            result.display_modes = std::string(value(argument));
+            if (!oa::platform::display_modes::report_from_text(result.display_modes))
+                throw std::runtime_error(
+                    "--display-modes expects WIDTHxHEIGHT[@RATE][/DENSITY] modes separated "
+                    "by commas, or none"
+                );
+        } else if (argument == "--native-density")
             result.native_density = true;
         else if (argument == "--frame-rate")
             result.frame_rate = parse_frame_rate(
@@ -905,7 +913,7 @@ namespace {
                 << "[--debug-order-lines] "
                    "[--max-fps N] "
                    "[--hardware-acceleration[=off|basic|full] | --no-hardware-acceleration] "
-                   "[--native-density] "
+                   "[--native-density] [--display-modes MODES] "
                    "[--benchmark FRAMES] [--match-ticks N "
                    "[--frame-rate FPS [--frame-log FILE] [--scroll-camera] [--march] "
                    "[--follow] [--frame-clock MS]]] "
@@ -1104,6 +1112,11 @@ namespace {
         result.unattended = true;
     if (result.check_game_files)
         result.unattended = true;
+    if (!result.display_modes.empty() && !result.unattended)
+        throw std::runtime_error(
+            "--display-modes is accepted only with checks, snapshots, benchmarks and frame "
+            "limits"
+        );
 #ifdef _WIN32
     // On Windows a player's run starts full screen; -d, with any suffix, keeps
     // a window, and so do unattended runs and video captures.

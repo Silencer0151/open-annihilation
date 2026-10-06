@@ -543,6 +543,14 @@ struct Options {
     // environment's render driver nor SDL's software renderer locks Hardware
     // acceleration or Vertical sync. It never lifts the 2 GiB rule.
     bool force_capable = false;
+    // --display-modes MODES, which only unattended runs take: a made-up
+    // monitor in place of the display's own report, for checks on SDL's
+    // dummy video driver, whose display reports no modes. MODES lists them
+    // separated by commas, each WIDTHxHEIGHT, optionally followed by @RATE
+    // and /DENSITY, the first also the desktop's, or is "none" for a monitor
+    // that reports nothing (oa::platform::display_modes::report_from_text).
+    // Empty for the display's own.
+    std::string display_modes;
     // --native-density: for this run the window opens at the display's own
     // pixel density whatever the Native pixel density setting and the rule
     // for it say (render_policy::decide_native_density), except under 2 GiB

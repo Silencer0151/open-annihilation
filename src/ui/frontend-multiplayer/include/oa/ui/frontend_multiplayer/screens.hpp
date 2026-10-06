@@ -62,6 +62,28 @@ struct LobbyClock {
 /// @param clock The clock; a null now_ms restores the steady clock.
 void multiplayer_bind_clock(const LobbyClock& clock) noexcept;
 
+/// The screen sizes the battle room's RES column offers, and the size it
+/// starts at.
+struct LobbyDisplayModes {
+    void* context{};
+    /// Writes the sizes the display offers, the narrower first and of two
+    /// as wide the shorter, at most `capacity` of them, and returns how many
+    /// it wrote; null, or none written, offers 640x480, 800x600, 1024x768,
+    /// 1152x864, 1280x1024 and 1600x1200.
+    int32_t (*modes)(void* context, DisplayMode* out, int32_t capacity){};
+    /// Returns the size the game plays at, one of those `modes` writes, which
+    /// the local player's column starts at; null, or a size of 0 by 0,
+    /// starts it at 640x480.
+    DisplayMode (*screen_size)(void* context){};
+};
+
+/// Binds the screen sizes the battle room's RES column offers and starts at.
+///
+/// The binding survives multiplayer_reset.
+///
+/// @param display_modes The sizes; a null member keeps its default.
+void multiplayer_bind_display_modes(const LobbyDisplayModes& display_modes) noexcept;
+
 /// Sets the player timeout of the battle room's game (the -t switch), which its stall scan reads.
 ///
 /// The value survives multiplayer_reset.

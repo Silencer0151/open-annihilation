@@ -206,6 +206,10 @@ Ui& ui() {
 // The clock multiplayer_bind_clock bound; it survives multiplayer_reset.
 LobbyClock g_clock{};
 
+// The screen sizes multiplayer_bind_display_modes bound; they survive
+// multiplayer_reset.
+LobbyDisplayModes g_display_modes{};
+
 uint32_t elapsed_ms() {
     if (g_clock.now_ms != nullptr)
         return g_clock.now_ms(g_clock.context);
@@ -295,6 +299,12 @@ void service_free_picture(void*, oa_ref32 picture) {
 }
 
 int32_t service_display_modes(void*, DisplayMode* out, int32_t capacity) {
+    if (g_display_modes.modes != nullptr && capacity > 0) {
+        const int32_t written =
+            std::clamp(g_display_modes.modes(g_display_modes.context, out, capacity), 0, capacity);
+        if (written > 0)
+            return written;
+    }
     constexpr DisplayMode kModes[] = {
         {640, 480, 8},
         {800, 600, 8},
@@ -704,8 +714,17 @@ void bind_boundaries() {
     if (lobby_max_units(*state.game) == 0)
         lobby_max_units(*state.game) = kDefaultMaxUnits;
     if (static_cast<int32_t>(lobby_screen_width(*state.game)) == 0) {
-        lobby_screen_width(*state.game) = kCanvasWidth;
-        lobby_screen_height(*state.game) = kCanvasHeight;
+        // The size the game plays at, when the game says, else the game's
+        // own screen.
+        DisplayMode playing{};
+        if (g_display_modes.screen_size != nullptr)
+            playing = g_display_modes.screen_size(g_display_modes.context);
+        // The setup block carries each side in 16 bits.
+        constexpr int32_t widest = std::numeric_limits<uint16_t>::max();
+        const bool known = playing.width > 0 && playing.height > 0 && playing.width <= widest &&
+                           playing.height <= widest;
+        lobby_screen_width(*state.game) = known ? playing.width : kCanvasWidth;
+        lobby_screen_height(*state.game) = known ? playing.height : kCanvasHeight;
     }
     if (state.game->side_count == 0)
         state.game->side_count = 2; // ARM and CORE
@@ -2942,6 +2961,10 @@ bool multiplayer_compose(const char* composition) noexcept {
 
 void multiplayer_bind_clock(const LobbyClock& clock) noexcept {
     g_clock = clock;
+}
+
+void multiplayer_bind_display_modes(const LobbyDisplayModes& display_modes) noexcept {
+    g_display_modes = display_modes;
 }
 
 void multiplayer_reset() noexcept {

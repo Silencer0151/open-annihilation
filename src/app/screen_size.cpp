@@ -11,16 +11,69 @@
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 
 namespace oa::app {
 
 namespace settings = oa::ui::engine_settings;
+namespace display_modes = oa::platform::display_modes;
 
-settings::ScreenSize desktop_size() {
-    const SDL_DisplayMode* mode = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
-    if (mode == nullptr || mode->w <= 0 || mode->h <= 0)
+namespace {
+
+/// Tells whether a display's size fits a screen size's 16-bit sides.
+///
+/// @param size the display's size
+/// @return true when both sides are above 0 and fit
+bool fits_screen_size(display_modes::Size size) noexcept {
+    constexpr int32_t widest = std::numeric_limits<uint16_t>::max();
+    return size.width > 0 && size.height > 0 && size.width <= widest && size.height <= widest;
+}
+
+/// Returns a display's size as the Screen size setting keeps one.
+///
+/// @param size the display's size, one fits_screen_size accepts
+/// @return the size
+settings::ScreenSize screen_size_of(display_modes::Size size) noexcept {
+    return {static_cast<uint16_t>(size.width), static_cast<uint16_t>(size.height)};
+}
+
+} // namespace
+
+display_modes::DisplayReport display_report(const Options& options, SDL_DisplayID display) {
+    if (!options.display_modes.empty())
+        if (auto made_up = display_modes::report_from_text(options.display_modes))
+            return *made_up;
+    return display_modes::read_display(display);
+}
+
+display_modes::Use start_use(const Options& options) noexcept {
+    return options.start_full_screen ? display_modes::Use::full_screen : display_modes::Use::window;
+}
+
+std::vector<settings::ScreenSize>
+offered_screen_sizes(const Options& options, SDL_Window* window, int32_t minimum_height) {
+    const SDL_DisplayID display =
+        window != nullptr ? SDL_GetDisplayForWindow(window) : SDL_GetPrimaryDisplay();
+    std::vector<settings::ScreenSize> sizes;
+    for (const display_modes::Size size : display_modes::offered_sizes(
+             display_report(options, display), start_use(options), minimum_height
+         ))
+        if (fits_screen_size(size))
+            sizes.push_back(screen_size_of(size));
+    if (sizes.empty())
+        sizes.push_back(
+            {static_cast<uint16_t>(display_modes::smallest_size.width),
+             static_cast<uint16_t>(display_modes::smallest_size.height)}
+        );
+    return sizes;
+}
+
+settings::ScreenSize desktop_size(const Options& options) {
+    const display_modes::Size desktop =
+        display_report(options, SDL_GetPrimaryDisplay()).desktop.size;
+    if (!fits_screen_size(desktop))
         return settings::desktop_screen_size;
-    return {static_cast<uint16_t>(mode->w), static_cast<uint16_t>(mode->h)};
+    return screen_size_of(desktop);
 }
 
 settings::Inputs start_inputs(const Options& options, settings::ScreenSize desktop) {
@@ -59,6 +112,20 @@ starting_screen_size(const Options& options, const settings::EngineSettings& sta
     return start.screen_size;
 }
 
+settings::ScreenSize shown_screen_size(const Options& options, settings::ScreenSize size) {
+    if (size == settings::desktop_screen_size)
+        return size;
+    if (display_modes::can_show(
+            display_report(options, SDL_GetPrimaryDisplay()),
+            {size.width, size.height},
+            start_use(options)
+        ))
+        return size;
+    std::cout << "open-annihilation: the display does not offer the " << size.width << 'x'
+              << size.height << " screen size; this run shows the desktop's\n";
+    return settings::desktop_screen_size;
+}
+
 settings::ScreenSize
 default_window_size(settings::ScreenSize desktop, bool steam_game_mode) noexcept {
     settings::ScreenSize size{
@@ -87,7 +154,8 @@ void report_window_size(SDL_Window* window, settings::ScreenSize desktop, bool s
 
 void take_screen_size(SDL_Window* window, settings::ScreenSize size, bool full_screen) {
     SDL_DisplayMode mode{};
-    if (SDL_GetClosestFullscreenDisplayMode(
+    if (!display_modes::take_full_screen_size(window, {size.width, size.height}) &&
+        SDL_GetClosestFullscreenDisplayMode(
             SDL_GetDisplayForWindow(window), size.width, size.height, 0.0F, false, &mode
         ) &&
         !SDL_SetWindowFullscreenMode(window, &mode))

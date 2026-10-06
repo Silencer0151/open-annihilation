@@ -683,6 +683,31 @@ void Runtime::check_engine_settings_dialog() {
         unit_supersampling_ == oa::present::model::UnitSupersampling::x4,
         "Enhanced anti-aliasing at 4x did not draw units finer"
     );
+    // Screen size offers Desktop, then every size the display offers (the
+    // made-up monitor's with --display-modes), the narrower first; Right
+    // steps to the largest and stops there. It applies from the next start.
+    {
+        const auto offered = EngineSettingsState::offered_screen_sizes(*this);
+        std::vector<settings::ScreenSize> stops{settings::desktop_screen_size};
+        stops.insert(stops.end(), offered.begin(), offered.end());
+        require(
+            engine_settings_dialog()->offered_screen_sizes == stops,
+            "Screen size does not offer Desktop and the display's sizes"
+        );
+        focus(settings::first_row_control + 2, "Screen size");
+        for (std::size_t step = 0; step <= offered.size(); ++step)
+            tap(SDLK_RIGHT);
+        chosen.screen_size = offered.back();
+        expect("Screen size at the display's largest");
+        const std::string largest =
+            std::to_string(offered.back().width) + " x " + std::to_string(offered.back().height);
+        require(
+            shows_text(settings::dialog_layout(*engine_settings_dialog()), largest),
+            "Screen size at its last stop does not show " + largest
+        );
+        std::cout << "engine settings check: Screen size offers Desktop and " << offered.size()
+                  << " sizes, up to " << largest << '\n';
+    }
     // Hardware acceleration, Off with a named preferences file, says the
     // processor draws, or, under 2 GiB, that the machine needs more memory;
     // it is never switched here, so that every frame the check compares is
@@ -886,6 +911,7 @@ void Runtime::check_engine_settings_dialog() {
         {std::string(settings::key::modern_fonts), "1"},
         {std::string(settings::key::text_shadow), "0"},
         {std::string(settings::key::text_size), std::to_string(chosen.text_size)},
+        {std::string(settings::key::screen_size), settings::screen_size_text(chosen.screen_size)},
     };
     if (vertical_sync)
         expected_keys.emplace(std::string(settings::key::vertical_sync), "1");

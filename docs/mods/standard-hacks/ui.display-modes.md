@@ -39,7 +39,8 @@ hacks:
 With `min-height-768`:
 
 - The options screen lists only modes of 768 rows or more, and still none
-  narrower than 640 pixels. 3.1c lists modes from 480 rows.
+  narrower than 640 pixels. 3.1c lists modes from 480 rows. The Open
+  Annihilation settings' Screen size offers the same sizes after Desktop.
 - The display mode settings, `DisplaymodeWidth` and `DisplaymodeHeight`,
   start at 1024 by 768 when they are not set, and a smaller stored width or
   height is raised to it as it is read. 3.1c starts at 640 by 480.

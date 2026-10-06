@@ -3758,6 +3758,18 @@ void Runtime::toggle_graphics_flag(uint16_t mask, std::string_view key) {
     rebuild_surface();
 }
 
+void Runtime::show_screen_size_in_options() {
+    // Outside a match the options' Screen Size opens on the size the game
+    // plays at, which DisplaymodeWidth and DisplaymodeHeight then hold.
+    if (match_menu_session().options.in_game)
+        return;
+    const auto size = EngineSettingsState::screen_size_in_effect(
+        *this, EngineSettingsState::offered_screen_sizes(*this)
+    );
+    preferences_.display_width = size.width;
+    preferences_.display_height = size.height;
+}
+
 void Runtime::bind_options_context() {
     auto& context = match_menu_session().options;
     context.preferences = &preferences_;
@@ -3787,7 +3799,21 @@ void Runtime::bind_options_context() {
     context.host.play_wave = [](void* host, const char* path) {
         static_cast<Runtime*>(host)->play_wave_file(path);
     };
-    context.host.save_options = [](void* host) { static_cast<Runtime*>(host)->save_preferences(); };
+    context.host.save_options = [](void* host) {
+        auto& runtime = *static_cast<Runtime*>(host);
+        // A Screen Size the player moved to sets the Screen size setting,
+        // from the next start.
+        const auto& entry = match_menu_session().options.snapshot;
+        const auto& preferences = runtime.preferences_;
+        if (preferences.display_width != entry.display_width ||
+            preferences.display_height != entry.display_height)
+            EngineSettingsState::choose_screen_size(
+                runtime,
+                {static_cast<uint16_t>(preferences.display_width),
+                 static_cast<uint16_t>(preferences.display_height)}
+            );
+        runtime.save_preferences();
+    };
     context.host.restore_all = [](void* host) {
         auto& runtime = *static_cast<Runtime*>(host);
         init::restore_all_options(
@@ -3818,14 +3844,19 @@ void Runtime::bind_options_context() {
     context.host.set_spatial_sound = [](void* host, bool on) {
         static_cast<Runtime*>(host)->sound_spatial_ = on ? 1 : 0;
     };
-    context.host.scan_display_modes = [](void*, ui::DisplayModeList& list) {
-        // The native renderer scales the 640x480 canvas; offer the classic modes.
-        static constexpr ui::DisplayMode modes[] = {
-            {640, 480, 8}, {800, 600, 8}, {1024, 768, 8}, {1280, 1024, 8}, {1600, 1200, 8}
-        };
+    context.host.scan_display_modes = [](void* host, ui::DisplayModeList& list) {
+        // The sizes the display offers for the next start, as the Screen
+        // size setting offers them after Desktop; the game draws them in
+        // 8 bits a pixel at any depth the display runs at.
+        constexpr int32_t game_bits = 8;
+        const auto& runtime = *static_cast<Runtime*>(host);
         list.count = 0;
-        for (const auto& mode : modes)
-            list.modes[static_cast<std::size_t>(list.count++)] = mode;
+        for (const auto size : EngineSettingsState::offered_screen_sizes(runtime)) {
+            if (static_cast<std::size_t>(list.count) >= list.modes.size())
+                break;
+            list.modes[static_cast<std::size_t>(list.count++)] =
+                ui::DisplayMode{size.width, size.height, game_bits};
+        }
         return true;
     };
     if (in_match)
@@ -3929,6 +3960,7 @@ void Runtime::enter_options_panel() {
         preferences_.current_game_speed = game.current_speed;
     }
     bind_options_context();
+    show_screen_size_in_options();
     ui::options_open(session.panel, context);
     session.kind = ui::OptionsPanel::tabs;
     session.options_open = true;
@@ -3968,6 +4000,7 @@ void Runtime::options_bar_moved(std::size_t index) {
         (session.kind != options_panel_for(screen_) &&
          session.kind != ui::OptionsPanel::select_video_mode)) {
         if (!session.options_open) {
+            show_screen_size_in_options();
             ui::options_capture_entry(context);
             session.options_open = true;
         }
@@ -4036,6 +4069,7 @@ void Runtime::activate_options_gadget() {
         (session.kind != options_panel_for(screen_) &&
          session.kind != ui::OptionsPanel::select_video_mode)) {
         if (!session.options_open) {
+            show_screen_size_in_options();
             ui::options_capture_entry(context);
             session.options_open = true;
         }

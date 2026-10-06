@@ -187,7 +187,9 @@ struct ScreenSize {
 /// The desktop's size, as ScreenSize keeps it.
 inline constexpr ScreenSize desktop_screen_size{};
 
-/// The screen sizes the setting offers, in the order the dialog offers them.
+/// The screen sizes the setting offers where the display's own are not
+/// known, in the order the dialog offers them. The game offers Desktop and
+/// the display's own sizes instead (Dialog::offered_screen_sizes).
 inline constexpr std::array<ScreenSize, 5> screen_sizes{{
     desktop_screen_size,
     {640, 480},
@@ -195,6 +197,11 @@ inline constexpr std::array<ScreenSize, 5> screen_sizes{{
     {1024, 768},
     {1280, 1024},
 }};
+
+/// The smallest screen size the preferences keep, the game's own screen.
+inline constexpr ScreenSize smallest_screen_size{640, 480};
+/// The longest side of a screen size the preferences keep, in pixels.
+inline constexpr uint16_t longest_screen_side = 8192;
 
 /// The screen size a light machine starts with.
 inline constexpr ScreenSize light_machine_screen_size{800, 600};
@@ -630,8 +637,9 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// (lowest_stored_unit_limit for 3.1c) to highest_offered_unit_limit; frame rate lowest_frame_rate to highest_frame_rate;
 /// anti-aliasing the highest level not above the stored number, off below
 /// 2; a switch is on for a number above 0. A value between a setting's
-/// stops is kept as stored. The screen size is "desktop" or one of
-/// screen_sizes as "WIDTHxHEIGHT"; any other value gives the default.
+/// stops is kept as stored. The screen size is "desktop" or a size as
+/// "WIDTHxHEIGHT" (screen_size_from_text); any other value gives the
+/// default.
 /// Hardware acceleration is "off", "basic" or "full"
 /// (hardware_acceleration_from_text), or a whole number as the switch it
 /// was before: Full above 0, else Off; any other value gives the default.
@@ -763,8 +771,10 @@ stored_language(const oa::platform::preferences::Values& values, bool players_ow
 /// Returns the screen size a preferences text names.
 ///
 /// @param text the stored text
-/// @return the size, when the text is "desktop" or names one of screen_sizes
-///     as "WIDTHxHEIGHT"; nothing otherwise
+/// @return the size, when the text is "desktop" or "WIDTHxHEIGHT" as
+///     screen_size_text writes it: whole decimal numbers with no sign or
+///     leading zero joined by a lower-case "x", at least smallest_screen_size
+///     and neither side above longest_screen_side; nothing otherwise
 [[nodiscard]] std::optional<ScreenSize> screen_size_from_text(std::string_view text);
 
 /// Returns the word the preferences and the command line keep a level of

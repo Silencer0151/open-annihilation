@@ -649,13 +649,14 @@ std::string_view reach_line(AccelerationReach reach) noexcept {
     return {};
 }
 
-/// Returns a screen size's place among screen_sizes.
+/// Returns a screen size's place among the Screen size slider's stops.
 ///
 /// @param size the screen size
-/// @return its index; 0, the desktop's, for a size not offered
-int32_t screen_size_index(ScreenSize size) noexcept {
-    const auto found = std::find(screen_sizes.begin(), screen_sizes.end(), size);
-    return found == screen_sizes.end() ? 0 : static_cast<int32_t>(found - screen_sizes.begin());
+/// @param offered_sizes the stops, in order
+/// @return its index; 0, the first stop's, for a size not offered
+int32_t screen_size_index(ScreenSize size, std::span<const ScreenSize> offered_sizes) noexcept {
+    const auto found = std::find(offered_sizes.begin(), offered_sizes.end(), size);
+    return found == offered_sizes.end() ? 0 : static_cast<int32_t>(found - offered_sizes.begin());
 }
 
 /// Returns a setting's lock, a check's own section's when it gives one.
@@ -731,7 +732,9 @@ bool is_slider(Setting setting) noexcept {
     }
 }
 
-Slider slider_of(Setting setting, uint16_t highest_offered_unit) noexcept {
+Slider slider_of(
+    Setting setting, uint16_t highest_offered_unit, std::span<const ScreenSize> offered_sizes
+) noexcept {
     switch (setting) {
     case Setting::path_search:
         return Slider{highest_path_search_multiplier};
@@ -742,7 +745,7 @@ Slider slider_of(Setting setting, uint16_t highest_offered_unit) noexcept {
             static_cast<int32_t>((highest_frame_rate - lowest_frame_rate) / frame_rate_step + 1)
         };
     case Setting::screen_size:
-        return Slider{static_cast<int32_t>(screen_sizes.size())};
+        return Slider{std::max(static_cast<int32_t>(offered_sizes.size()), int32_t{1})};
     case Setting::snap_override_key:
     case Setting::autoclick_key:
     case Setting::rotate_build_key:
@@ -781,19 +784,27 @@ Slider slider_of(Setting setting, uint16_t highest_offered_unit) noexcept {
     }
 }
 
-int32_t
-stops_of(const EngineSettings& settings, Setting setting, uint16_t highest_offered_unit) noexcept {
+int32_t stops_of(
+    const EngineSettings& settings,
+    Setting setting,
+    uint16_t highest_offered_unit,
+    std::span<const ScreenSize> offered_sizes
+) noexcept {
     const auto& options = settings.mod_options;
     if (setting == Setting::mex_snap_radius)
         return std::clamp(options.mex_snap_most, int32_t{1}, most_snap_radius) + 1;
     if (setting == Setting::wreck_snap_radius)
         return std::clamp(options.wreck_snap_most, int32_t{1}, most_snap_radius) + 1;
-    return slider_of(setting, highest_offered_unit).stops;
+    return slider_of(setting, highest_offered_unit, offered_sizes).stops;
 }
 
-int32_t
-stop_of(const EngineSettings& settings, Setting setting, uint16_t highest_offered_unit) noexcept {
-    const int32_t last = stops_of(settings, setting, highest_offered_unit) - 1;
+int32_t stop_of(
+    const EngineSettings& settings,
+    Setting setting,
+    uint16_t highest_offered_unit,
+    std::span<const ScreenSize> offered_sizes
+) noexcept {
+    const int32_t last = stops_of(settings, setting, highest_offered_unit, offered_sizes) - 1;
     int32_t stop = 0;
     switch (setting) {
     case Setting::path_search:
@@ -806,7 +817,7 @@ stop_of(const EngineSettings& settings, Setting setting, uint16_t highest_offere
         stop = steps_from(settings.max_frame_rate, lowest_frame_rate, frame_rate_step);
         break;
     case Setting::screen_size:
-        stop = screen_size_index(settings.screen_size);
+        stop = screen_size_index(settings.screen_size, offered_sizes);
         break;
     case Setting::snap_override_key:
     case Setting::autoclick_key:
@@ -857,10 +868,15 @@ stop_of(const EngineSettings& settings, Setting setting, uint16_t highest_offere
 }
 
 void set_stop(
-    EngineSettings& settings, Setting setting, int32_t stop, uint16_t highest_offered_unit
+    EngineSettings& settings,
+    Setting setting,
+    int32_t stop,
+    uint16_t highest_offered_unit,
+    std::span<const ScreenSize> offered_sizes
 ) noexcept {
-    const int32_t clamped =
-        std::clamp(stop, int32_t{0}, stops_of(settings, setting, highest_offered_unit) - 1);
+    const int32_t clamped = std::clamp(
+        stop, int32_t{0}, stops_of(settings, setting, highest_offered_unit, offered_sizes) - 1
+    );
     auto& options = settings.mod_options;
     switch (setting) {
     case Setting::path_search:
@@ -874,7 +890,8 @@ void set_stop(
             lowest_frame_rate + static_cast<uint32_t>(clamped) * frame_rate_step;
         break;
     case Setting::screen_size:
-        settings.screen_size = screen_sizes[static_cast<std::size_t>(clamped)];
+        if (!offered_sizes.empty())
+            settings.screen_size = offered_sizes[static_cast<std::size_t>(clamped)];
         break;
     case Setting::snap_override_key:
     case Setting::autoclick_key:
@@ -2730,11 +2747,13 @@ void step(Dialog& dialog, Setting setting, bool up) {
     }
     const uint16_t highest_offered_unit = dialog.highest_offered_unit;
     if (layout::is_slider(setting)) {
+        const std::span<const ScreenSize> sizes = dialog.offered_screen_sizes;
         layout::set_stop(
             settings,
             setting,
-            layout::stop_of(settings, setting, highest_offered_unit) + (up ? 1 : -1),
-            highest_offered_unit
+            layout::stop_of(settings, setting, highest_offered_unit, sizes) + (up ? 1 : -1),
+            highest_offered_unit,
+            sizes
         );
         return;
     }
@@ -3387,12 +3406,15 @@ DialogAction activate(Dialog& dialog, const layout::ScrolledRows& open, int32_t 
 /// @return what it asks of the host
 DialogAction drag_to(Dialog& dialog, const layout::Row& row, int32_t column) noexcept {
     const EngineSettings before = dialog.chosen;
-    const int32_t stops = layout::stops_of(dialog.chosen, row.setting, dialog.highest_offered_unit);
+    const int32_t stops = layout::stops_of(
+        dialog.chosen, row.setting, dialog.highest_offered_unit, dialog.offered_screen_sizes
+    );
     layout::set_stop(
         dialog.chosen,
         row.setting,
         layout::stop_at(row.control_area, column, stops),
-        dialog.highest_offered_unit
+        dialog.highest_offered_unit,
+        dialog.offered_screen_sizes
     );
     return changed_or_redraw(dialog, before);
 }
