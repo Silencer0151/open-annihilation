@@ -95,7 +95,10 @@ TYPES = re.compile(r"^saveload: unit types \d+((?: \S+=\d+)*)$", re.M)
 PLAYER_CHECK = re.compile(r"^skirmish player check: Game\.sides (\S+?),", re.M)
 DIGESTS = re.compile(r"digests ([0-9a-f]{16}) / ([0-9a-f]{16})")
 COMMANDER_GIVEN = "its commander went too, then came back from the joiner"
-RUN_TIMEOUT = 900
+# Wall-time limit per game run. OA_TEST_TIMEOUT_SCALE, a positive number,
+# multiplies it for a build whose run-time error checks make the game several
+# times slower.
+RUN_TIMEOUT = 900 * float(os.environ.get("OA_TEST_TIMEOUT_SCALE") or 1)
 
 
 class CommanderFailure(Exception):

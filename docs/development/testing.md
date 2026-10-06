@@ -236,6 +236,18 @@ OA_DRAW_THREADS=1 ctest --test-dir build
 OA_DRAW_THREADS=8 ctest --test-dir build
 ```
 
+### Time limits
+
+`native-navigation` and `native-side-commanders` play the longest headless
+games, and give each run of the game 900 seconds. A build whose run-time
+error checks make the game several times slower can set
+`OA_TEST_TIMEOUT_SCALE` to a positive number that multiplies that limit.
+ctest's own limit for each of these tests, 1800 seconds, still applies:
+
+```sh
+OA_TEST_TIMEOUT_SCALE=2 ctest --test-dir build -R '^native-(navigation|side-commanders)$'
+```
+
 ### The demo's installer
 
 `OA_DEMO_INSTALLER` names the installer of the Total Annihilation demo (1997):

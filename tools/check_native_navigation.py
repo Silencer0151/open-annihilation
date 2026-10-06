@@ -16,8 +16,10 @@ import tempfile
 RUNNER = shlex.split(os.environ.get("OA_TEST_RUNNER", ""))
 
 # Wall-time limit per game run; generous because a loaded machine stretches
-# the headless checks without extra CPU work.
-RUN_TIMEOUT_SECONDS = 900
+# the headless checks without extra CPU work. OA_TEST_TIMEOUT_SCALE, a
+# positive number, multiplies it for a build whose run-time error checks
+# make the game several times slower.
+RUN_TIMEOUT_SECONDS = 900 * float(os.environ.get("OA_TEST_TIMEOUT_SCALE") or 1)
 
 
 def main():
