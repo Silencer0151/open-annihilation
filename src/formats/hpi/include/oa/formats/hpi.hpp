@@ -173,7 +173,10 @@ int uncompress_legacy(
 /// Checks the marker, a type below four and the 32-bit byte-sum checksum,
 /// descrambles the payload when flagged, then decodes LZ77 or zlib. Stored
 /// (0) and type-3 chunks never decode. A zlib stream must reach its end and
-/// produce exactly the header's unpacked size.
+/// produce exactly the header's unpacked size. A stream whose packing tool
+/// left off its four-byte check value still reads when its header is valid,
+/// its deflate data ends at the payload's last byte and it produces exactly
+/// that size; a wrong or partial check value still fails.
 ///
 /// @param[out] output decoded bytes, at most one 64 KiB block
 /// @param[in,out] block the whole chunk, header first; its payload is

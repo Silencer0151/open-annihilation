@@ -114,6 +114,48 @@ int uncompress_legacy(
     return inflateEnd(&stream);
 }
 
+namespace {
+
+// The two bytes that open a zlib stream, and the parts of them read here.
+constexpr std::size_t kZlibHeaderBytes = 2;
+constexpr unsigned kZlibMethodMask = 0x0FU;
+constexpr unsigned kZlibDeflateMethod = 8;
+constexpr unsigned kZlibWindowShift = 4;
+constexpr unsigned kZlibLargestWindow = 7;
+constexpr unsigned kZlibPresetDictionary = 0x20U;
+constexpr unsigned kZlibHeaderCheck = 31;
+// Inflates deflate data with no zlib header or check value around it.
+constexpr int kRawDeflateWindowBits = -15;
+
+// Reads a zlib stream that its packing tool wrote without the four-byte
+// check value at its end: the two-byte header is valid, the deflate data
+// ends at the input's last byte, and it wrote exactly `expected` bytes.
+bool inflate_without_check_value(
+    std::span<uint8_t> output, uint32_t expected, std::span<const uint8_t> input
+) noexcept {
+    if (input.size() <= kZlibHeaderBytes || expected > output.size())
+        return false;
+    const unsigned method = input[0];
+    const unsigned flags = input[1];
+    if ((method & kZlibMethodMask) != kZlibDeflateMethod ||
+        (method >> kZlibWindowShift) > kZlibLargestWindow || (flags & kZlibPresetDictionary) != 0 ||
+        ((method << 8U) | flags) % kZlibHeaderCheck != 0)
+        return false;
+    const auto deflated = input.subspan(kZlibHeaderBytes);
+    z_stream stream{};
+    stream.next_in = const_cast<Bytef*>(deflated.data());
+    stream.avail_in = static_cast<uInt>(deflated.size());
+    stream.next_out = output.data();
+    stream.avail_out = static_cast<uInt>(expected);
+    if (inflateInit2(&stream, kRawDeflateWindowBits) != Z_OK)
+        return false;
+    const bool whole = inflate(&stream, Z_FINISH) == Z_STREAM_END && stream.avail_in == 0 &&
+                       stream.total_out == expected;
+    return inflateEnd(&stream) == Z_OK && whole;
+}
+
+} // namespace
+
 formats::hpi::SquashStatus
 unsquash_archive_block(std::span<uint8_t> output, std::span<uint8_t> block) noexcept {
     using formats::hpi::SquashStatus;
@@ -145,9 +187,14 @@ unsquash_archive_block(std::span<uint8_t> output, std::span<uint8_t> block) noex
         // The stream must end cleanly; `inflated` holds the most it may write
         // until then, and the count it wrote after.
         uint32_t inflated = unpacked;
-        if (uncompress_legacy(output, &inflated, payload) != Z_OK)
+        if (uncompress_legacy(output, &inflated, payload) == Z_OK)
+            produced = inflated;
+        // Some packing tools leave the stream's check value off; such a
+        // chunk reads when it is otherwise whole.
+        else if (inflate_without_check_value(output, unpacked, payload))
+            produced = unpacked;
+        else
             return SquashStatus::bad_unpack_size;
-        produced = inflated;
     } else {
         return SquashStatus::bad_unpack_size;
     }

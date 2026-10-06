@@ -305,12 +305,33 @@ void sqsh_zlib_stream_must_end_cleanly() {
     oa::HpiArchive adler = opened(dir.write("adler.hpi", bytes));
     check(read_fails(adler, "a", "SQUASHERR_BADUNPACKSIZE"), "a bad adler32 fails the chunk");
 
-    // The stream's last four bytes cut off: every byte is written, and the
-    // stream still has not ended.
+    // The stream's four-byte check value left off, as some packing tools
+    // write it: the deflate data is whole, so the chunk reads.
     bytes = pristine;
     resum(bytes, packed - 4);
-    oa::HpiArchive cut = opened(dir.write("cut.hpi", bytes));
-    check(read_fails(cut, "a", "SQUASHERR_BADUNPACKSIZE"), "a stream cut short fails");
+    oa::HpiArchive missing = opened(dir.write("missing.hpi", bytes));
+    check(
+        missing.read("a").value == text("adler tail"), "a stream missing only its check value reads"
+    );
+
+    // Half a check value, and a stream cut inside its deflate data.
+    for (const uint32_t cut_to : {packed - 2, packed - 5}) {
+        bytes = pristine;
+        resum(bytes, cut_to);
+        oa::HpiArchive cut = opened(dir.write("cut.hpi", bytes));
+        check(read_fails(cut, "a", "SQUASHERR_BADUNPACKSIZE"), "a stream cut short fails");
+    }
+
+    // The check value left off and the header broken: nothing vouches for
+    // the stream, so it fails.
+    bytes = pristine;
+    bytes[chunk + 20] ^= 0x01;
+    resum(bytes, packed - 4);
+    oa::HpiArchive headless = opened(dir.write("headless.hpi", bytes));
+    check(
+        read_fails(headless, "a", "SQUASHERR_BADUNPACKSIZE"),
+        "a stream without its check value and with a bad header fails"
+    );
 
     bytes = pristine;
     bytes[chunk + 19] ^= 0xFF;
