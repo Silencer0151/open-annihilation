@@ -177,9 +177,14 @@ logs it.
   (`anchor_zoom_at`); where the camera's limits hold the view back, as a
   map narrower or shorter than the view does and a zoom out past the map's
   edge, the next step goes on about the same map point (`zoom_hold_`)
-  until something else moves the view, so that the point comes back under
-  the pointer as soon as the limits allow and as many steps back return
-  the camera to where it was.
+  until something else moves the view or the pointer strays more than a
+  few pixels from where it aimed (`zoom_aim_`), so that the point comes
+  back under the pointer as soon as the limits allow and as many steps
+  back return the camera to where it was. The camera is rounded as the
+  pointer's map pixel is (`apply_zoom_anchor`), so a step past the
+  nearest or farthest zoom leaves it where it is, and the wheel counts its
+  steps from the target they began at (`zoom_wheel_`), so that as many
+  steps back return the zoom exactly.
 - `runtime_skirmish_start.cpp` builds a match: the feature table's GAF files
   are kept as read and parsed without their pixels (`gaf::PixelData::checked`);
   a feature sequence's pixels are decoded from its file when a feature first

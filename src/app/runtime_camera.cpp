@@ -33,12 +33,6 @@ constexpr float kLongestZoomStep = 0.05F;
 constexpr double kLeastAnchorFraction = -0.5;
 constexpr double kMostAnchorFraction = 1.5;
 
-// How far the pointer may stray between two zoom steps, in canvas pixels,
-// as a hand on the mouse does while the wheel turns, and the zoom still go
-// on about the map point the camera's limits held back; a pointer moved
-// farther aims at a new point.
-constexpr int kZoomHoldPointerSlack = 8;
-
 } // namespace
 
 bool Runtime::radar_contains(float x, float y) const {
@@ -274,12 +268,16 @@ void Runtime::apply_zoom_anchor() {
     if (!zoom_anchored_)
         return;
     const auto zoom = static_cast<double>(match_zoom_ <= 0.0F ? 1.0F : match_zoom_);
-    match_camera_x_ = static_cast<int32_t>(std::llround(
-        static_cast<double>(zoom_anchor_map_x_) - static_cast<double>(zoom_anchor_sx_) / zoom
-    ));
-    match_camera_z_ = static_cast<int32_t>(std::llround(
-        static_cast<double>(zoom_anchor_map_y_) - static_cast<double>(zoom_anchor_sy_) / zoom
-    ));
+    // The camera that shows the anchor's map pixel under the anchor, the
+    // map pixels from the camera's to it rounded as screen_to_map_pixel
+    // rounds them: a step that leaves the zoom as it was leaves the camera
+    // where it was, and the steps back find the same map pixel under the
+    // anchor and return the camera.
+    const auto map_pixels_to = [zoom](int at) {
+        return static_cast<int32_t>(std::llround(static_cast<double>(at) / zoom));
+    };
+    match_camera_x_ = zoom_anchor_map_x_ - map_pixels_to(zoom_anchor_sx_);
+    match_camera_z_ = zoom_anchor_map_y_ - map_pixels_to(zoom_anchor_sy_);
     // Where the camera's limits hold the view back, the next zoom goes on
     // about the anchor (anchor_zoom_at).
     const auto held = view_camera();
@@ -479,13 +477,15 @@ void Runtime::anchor_zoom_at(int px, int py) {
     const int sx = px - match_layout_.left;
     const int sy = py - match_layout_.top;
     const auto zoom = static_cast<double>(match_zoom() <= 0.0F ? 1.0F : match_zoom());
-    // The view the last zoom left, while nothing else has moved it and the
-    // pointer rests where that zoom was anchored.
+    // The view the last zoom left, held back by the camera's limits, while
+    // nothing else has moved it and the pointer rests within a few pixels
+    // of where the anchor was taken from the view (zoom_aim_), however
+    // little it has moved at each step since.
     const auto camera = view_camera();
     const bool kept = zoom_hold_.valid && zoom_hold_.zoom == match_zoom_ &&
-                      zoom_hold_.camera == camera &&
-                      std::abs(sx - zoom_anchor_sx_) <= kZoomHoldPointerSlack &&
-                      std::abs(sy - zoom_anchor_sy_) <= kZoomHoldPointerSlack;
+                      zoom_hold_.camera == camera && (zoom_hold_.held[0] || zoom_hold_.held[1]) &&
+                      std::abs(sx - zoom_aim_[0]) <= kZoomHoldPointerSlack &&
+                      std::abs(sy - zoom_aim_[1]) <= kZoomHoldPointerSlack;
     // The map pixel under the pointer on the camera's map pixel, which the
     // camera rounds about as it always has, and the exact point a view
     // drawn between map pixels shows under the pointer and keeps there,
@@ -544,6 +544,8 @@ void Runtime::anchor_zoom_at(int px, int py) {
         static_cast<double>(viewport.source_y),
         offset.y
     );
+    if (!kept)
+        zoom_aim_ = {sx, sy};
     zoom_anchored_ = true;
 }
 
@@ -561,20 +563,36 @@ void Runtime::handle_match_zoom(float wheel_y, float pointer_x, float pointer_y)
     // only the scale.
     if (match_tracking_ && match_unit_present(tracked_match_unit_)) {
         zoom_anchored_ = false;
-        match_zoom_target_ = std::clamp(
-            match_zoom_target_ * std::pow(kZoomWheelFactor, wheel_y),
-            least_match_zoom(),
-            kMaxBattlefieldZoom
-        );
+        match_zoom_target_ = wheel_zoom_target(wheel_y);
         return;
     }
     anchor_zoom_at(px, py);
-    match_zoom_target_ = std::clamp(
-        match_zoom_target_ * std::pow(kZoomWheelFactor, wheel_y),
-        least_match_zoom(),
-        kMaxBattlefieldZoom
-    );
+    match_zoom_target_ = wheel_zoom_target(wheel_y);
     stop_match_tracking();
+}
+
+float Runtime::wheel_zoom_target(float wheel_y) {
+    // A target something else set since the wheel's last step begins the
+    // count again.
+    const float least = least_match_zoom();
+    if (zoom_wheel_.target != match_zoom_target_)
+        zoom_wheel_ = {
+            std::clamp(match_zoom_target_, least, kMaxBattlefieldZoom), 0.0, match_zoom_target_
+        };
+    const auto from = static_cast<double>(zoom_wheel_.from);
+    const auto factor = static_cast<double>(kZoomWheelFactor);
+    // The steps in all, so that as many back return the target exactly,
+    // and a step past either end of the range counts only as far as the
+    // end, so that the first step back leaves it.
+    double steps = zoom_wheel_.steps + static_cast<double>(wheel_y);
+    auto target = static_cast<float>(from * std::pow(factor, steps));
+    if (target >= kMaxBattlefieldZoom || target <= least) {
+        target = target >= kMaxBattlefieldZoom ? kMaxBattlefieldZoom : least;
+        steps = std::log(static_cast<double>(target) / from) / std::log(factor);
+    }
+    zoom_wheel_.steps = steps;
+    zoom_wheel_.target = target;
+    return target;
 }
 
 void Runtime::pan_match_camera() {

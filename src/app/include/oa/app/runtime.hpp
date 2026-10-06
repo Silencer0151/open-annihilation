@@ -8471,8 +8471,14 @@ class Runtime final : public menu::Host,
     /// under the pointer stays there, to within a map pixel, or as near that
     /// as the camera's limits allow, and as many steps back return the camera
     /// to where it began. After a zoom out past the map's corner, a pointer
-    /// moved elsewhere and a view scrolled away and back each zoom in about
-    /// the point then under the pointer. A frame is drawn after each step.
+    /// moved elsewhere, a view scrolled away and back, and a pointer creeping
+    /// a few pixels at each step, once it has strayed farther than
+    /// kZoomHoldPointerSlack, each zoom in about the point then under the
+    /// pointer. At the nearest zoom, with the pointer halfway between two
+    /// map pixels, steps in and a pinch or the pad's zoom held in leave the
+    /// camera where it is, and steps out and as many back return it; at a
+    /// zoom off the wheel's steps, as a pinch leaves, so do steps out and
+    /// as many back. A frame runs after each step, and one is drawn.
     /// Leaves the layout as it was and the default zoom; throws
     /// std::runtime_error on a failure. [runtime_tracking_zoom_check.cpp]
     ///
@@ -10998,14 +11004,19 @@ class Runtime final : public menu::Host,
     bool pan_camera_from_radar(float x, float y);
 
     /// Keeps the map point under the zoom anchor at its screen position while zooming.
+    ///
+    /// The camera is the one that shows the anchor's map pixel there as
+    /// screen_to_map_pixel finds it, so a step that leaves the zoom as it
+    /// was, as a step past the nearest or farthest zoom does, leaves the
+    /// camera where it was.
     void apply_zoom_anchor();
 
     /// Anchors a zoom at a battlefield point: the map point the view shows
     /// there, or, along an axis on which the camera's limits held back the
-    /// view the last zoom left (zoom_hold_), while the point is within a few
-    /// pixels of where that zoom was anchored, the point that view was asked
-    /// to show there, so that what the limits held back comes back as soon
-    /// as they allow.
+    /// view the last zoom left (zoom_hold_), while the point is within
+    /// kZoomHoldPointerSlack of where the anchor was taken from the view
+    /// (zoom_aim_), the point that view was asked to show there, so that
+    /// what the limits held back comes back as soon as they allow.
     ///
     /// @param px canvas column, within the battlefield
     /// @param py canvas row, within the battlefield
@@ -11030,6 +11041,18 @@ class Runtime final : public menu::Host,
     /// @param pointer_x canvas column of the pointer
     /// @param pointer_y canvas row of the pointer
     void handle_match_zoom(float wheel_y, float pointer_x, float pointer_y);
+
+    /// Returns the zoom's target after wheel steps (zoom_wheel_).
+    ///
+    /// The target is the one the wheel's steps began from times
+    /// kZoomWheelFactor to the power of all the steps turned since, within
+    /// the zoom's range, so that as many steps back return it exactly; a
+    /// step past either end counts only as far as that end, and a target
+    /// something else set since the last step begins the count again.
+    ///
+    /// @param wheel_y wheel steps; positive zooms in
+    /// @return the new target
+    float wheel_zoom_target(float wheel_y);
 
     /// Scrolls the camera with the arrow keys and at the screen's edges.
     ///
@@ -12946,6 +12969,12 @@ class Runtime final : public menu::Host,
     int32_t zoom_anchor_map_y_{};
     int zoom_anchor_sx_{};
     int zoom_anchor_sy_{};
+    /// The battlefield point the pointer rested on when the zoom's anchor
+    /// was last taken from the view as drawn (anchor_zoom_at): a zoom goes
+    /// on about an anchor the camera's limits held back (zoom_hold_) only
+    /// while the pointer stays within kZoomHoldPointerSlack of it, however
+    /// little it moves at each step.
+    std::array<int, 2> zoom_aim_{};
 
     /// The view the zoom's anchor last put the camera at (apply_zoom_anchor),
     /// at the zoom it was at, and the axes on which the camera's limits held
@@ -12962,6 +12991,18 @@ class Runtime final : public menu::Host,
     };
 
     ZoomHold zoom_hold_{};
+
+    /// The wheel's steps since the zoom's target was last set by anything
+    /// else (wheel_zoom_target).
+    struct ZoomWheel {
+        float from{}; ///< the target the steps began from
+        /// The steps turned since in all, positive nearer, with a
+        /// trackpad's fractions.
+        double steps{};
+        float target{}; ///< the target they last set
+    };
+
+    ZoomWheel zoom_wheel_{};
     uint64_t zoom_clock_{}; ///< the frame time (frame_time_ns_) the zoom last eased at
     bool zoom_clock_valid_ = false;
     uint64_t scroll_clock_{}; ///< the frame time the camera last scrolled at; 0 before

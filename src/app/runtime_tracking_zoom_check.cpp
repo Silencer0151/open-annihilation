@@ -44,6 +44,15 @@ constexpr float kPastMap = 1.25F;
 constexpr int kLayoutFits = 3;
 /// Scroll steps the view takes away from the map's corner, and then back.
 constexpr int kScrollAwaySteps = 8;
+/// Canvas pixels a creeping pointer moves across and down at each wheel step.
+constexpr int kPointerCreep = 6;
+/// Frames a pinch or the pad's zoom is held for.
+constexpr int kHeldZoomFrames = 60;
+/// A zoom off the wheel's steps from the default, as a pinch leaves, and a
+/// battlefield column and row that lie halfway between two map pixels
+/// there, as every odd multiple of 19 does.
+constexpr float kOffStepZoom = 1.52F;
+constexpr std::array<int, 2> kHalfwayAtOffStep{247, 209};
 
 /// Ends the check with a failure.
 ///
@@ -92,22 +101,29 @@ void Runtime::check_wheel_zoom_limits(const std::function<void()>& frame) {
         render_match_surface();
         aim(at);
     };
-    // Wheel steps at a battlefield point, each until the zoom settles and
-    // then a frame drawn, which holds the stored camera within the map as
-    // every drawn frame does: on each axis the camera keeps the point aimed
-    // at under the pointer to within a map pixel, or is as near that as the
-    // camera's limits allow.
+    // A wheel step at a battlefield point, with frames until the zoom
+    // settles, at least one as the application always runs, and then a
+    // frame drawn, which holds the stored camera within the map as every
+    // drawn frame does.
+    const auto notch = [&](std::array<int, 2> at, float way) {
+        handle_match_zoom(
+            way,
+            static_cast<float>(match_layout_.left + at[0]),
+            static_cast<float>(match_layout_.top + at[1])
+        );
+        for (int settle = 0; settle < kSettleFrames; ++settle) {
+            frame();
+            if (match_zoom_ == match_zoom_target_)
+                break;
+        }
+        render_match_surface();
+    };
+    // Wheel steps at a battlefield point: after each, on each axis the
+    // camera keeps the point aimed at under the pointer to within a map
+    // pixel, or is as near that as the camera's limits allow.
     const auto turn = [&](const std::string& what, std::array<int, 2> at, int steps, float way) {
         for (int step = 0; step < steps; ++step) {
-            handle_match_zoom(
-                way,
-                static_cast<float>(match_layout_.left + at[0]),
-                static_cast<float>(match_layout_.top + at[1])
-            );
-            for (int settle = 0; settle < kSettleFrames && match_zoom_ != match_zoom_target_;
-                 ++settle)
-                frame();
-            render_match_surface();
+            notch(at, way);
             const auto now = view_camera();
             const auto most = farthest();
             const auto zoom = static_cast<double>(match_zoom());
@@ -127,13 +143,14 @@ void Runtime::check_wheel_zoom_limits(const std::function<void()>& frame) {
             }
         }
     };
-    // The steps back put the camera back where the case's steps began.
+    // The steps back, or steps that leave the zoom as it was, put the
+    // camera back where the case's steps began.
     const auto returned = [&](const std::string& what) {
         if (view_camera() != began)
             fail(
-                what + ": the wheel's steps back left the camera at " +
-                std::to_string(view_camera()[0]) + ", " + std::to_string(view_camera()[1]) +
-                ", not " + std::to_string(began[0]) + ", " + std::to_string(began[1])
+                what + ": the steps left the camera at " + std::to_string(view_camera()[0]) + ", " +
+                std::to_string(view_camera()[1]) + ", not where they began at " +
+                std::to_string(began[0]) + ", " + std::to_string(began[1])
             );
     };
     // `out` steps out and `in` steps in at one point, then as many back.
@@ -192,6 +209,56 @@ void Runtime::check_wheel_zoom_limits(const std::function<void()>& frame) {
         fail("the view did not scroll back to the map's top left corner");
     aim(centre);
     turn("a view scrolled away and back", centre, kZoomOutSteps, 1.0F);
+    // After a zoom out past the top left corner, a pointer creeping a few
+    // pixels at each step in: once it has strayed farther than
+    // kZoomHoldPointerSlack from where it rested, each step zooms about the
+    // point then under it.
+    place(kDefaultBattlefieldZoom, {0, 0}, centre);
+    turn("a creeping pointer", centre, kZoomOutSteps, -1.0F);
+    std::array<int, 2> creeping = centre;
+    for (int step = 0; step < kZoomOutSteps; ++step) {
+        creeping = {creeping[0] + kPointerCreep, creeping[1] + kPointerCreep};
+        if (creeping[0] - centre[0] <= kZoomHoldPointerSlack) {
+            notch(creeping, 1.0F);
+            continue;
+        }
+        aim(creeping);
+        turn(
+            "a pointer crept " + std::to_string(creeping[0] - centre[0]) + " pixels",
+            creeping,
+            1,
+            1.0F
+        );
+    }
+    // At the nearest zoom, with the pointer on a column and row halfway
+    // between two map pixels there: steps in, which leave the zoom as it
+    // is, leave the camera where it is, and so does a pinch or the pad's
+    // zoom held in; steps out and as many back return it.
+    const int nearest = static_cast<int>(kMaxBattlefieldZoom);
+    const std::array<int, 2> halfway{
+        centre[0] - centre[0] % nearest + nearest / 2, centre[1] - centre[1] % nearest + nearest / 2
+    };
+    const std::array<int32_t, 2> middle{farthest()[0] / 2, farthest()[1] / 2};
+    place(kMaxBattlefieldZoom, middle, halfway);
+    turn("the nearest zoom", halfway, kZoomInSteps, 1.0F);
+    returned("the nearest zoom");
+    for (int held = 0; held < kHeldZoomFrames; ++held) {
+        zoom_match_about(
+            kZoomWheelFactor,
+            static_cast<float>(match_layout_.left + halfway[0]),
+            static_cast<float>(match_layout_.top + halfway[1])
+        );
+        frame();
+        render_match_surface();
+    }
+    returned("a zoom held in at the nearest zoom");
+    wheel_at("the nearest zoom", kMaxBattlefieldZoom, middle, halfway, kZoomInSteps, 0);
+    // At a zoom off the wheel's steps, with the pointer halfway between two
+    // map pixels: steps out and as many back return the zoom exactly, and
+    // so the camera.
+    wheel_at(
+        "a zoom off the wheel's steps", kOffStepZoom, middle, kHalfwayAtOffStep, kZoomOutSteps, 0
+    );
     // A battlefield a quarter wider and taller than the map at the farthest
     // zoom, which shows the whole map in its top left with the camera in the
     // corner: about the battlefield's centre and the map's bottom right
@@ -226,8 +293,9 @@ void Runtime::check_wheel_zoom_limits(const std::function<void()>& frame) {
     zoom_hold_ = {};
     match_paused_ = saved_paused;
     std::cout << "tracking zoom check: the wheel keeps the map point under the pointer as far "
-                 "as the map's edges allow, after a new aim and a scroll too, and its steps "
-                 "back return the camera\n";
+                 "as the map's edges allow, after a new aim, a scroll and a creeping pointer "
+                 "too, its steps back return the camera, and steps past the nearest zoom "
+                 "leave it\n";
 }
 
 void Runtime::check_tracking_zoom() {
