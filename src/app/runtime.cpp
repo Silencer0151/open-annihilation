@@ -734,7 +734,10 @@ bool Runtime::match_clock_steps() const {
     if (!match_running() || match_tick_blocked_)
         return false;
     const bool shared = (current_extension_state() & extension_state::shared_match) != 0;
-    return match_clock_runs(shared, match_paused_ && !match_finished_, match_finished_);
+    // The team menu and its panels hold no match, as 3.1c holds a game on
+    // this machine alone only for its in-game menu.
+    const bool menu_holds = match_paused_ && !match_finished_ && !team_panel_open();
+    return match_clock_runs(shared, menu_holds, match_finished_);
 }
 
 oa::base::game_loop::Timing Runtime::saved_match_timing() const {

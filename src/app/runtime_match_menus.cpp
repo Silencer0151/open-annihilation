@@ -2249,10 +2249,11 @@ void Runtime::draw_end_overlay() {
     }
     // The pause bit holds any match; a menu holds only a match played on this
     // machine alone, and a shared match's menu shows over the running game.
+    // The team menu and its panels hold no match (match_clock_steps).
     const bool pause_bit =
         match_ && (match_->state().game.sim_run_flags & oa::ui::console::kSimRunPaused) != 0;
     const bool shared = (current_extension_state() & extension_state::shared_match) != 0;
-    if (pause_bit || (match_paused_ && !shared))
+    if (pause_bit || (match_paused_ && !shared && !team_panel_open()))
         draw_igtitle("igpaused");
     if (match_paused_) {
         draw_battlefield_panel();
@@ -2266,21 +2267,34 @@ void Runtime::draw_battlefield_panel() {
     if (!match_hud_ || match_hud_->layout.gadgets.empty() || match_hud_cpu_.rgb.empty() ||
         oa::ui::display_layout::placed_mode(match_layout_))
         return;
+    // A panel over the battlefield shows whole at one scale where it lies:
+    // one that reaches the bottom bar's rows, the tab menu, on the bar
+    // (display_layout::source_panel_to_canvas), where the HUD layer shows
+    // the rest of it.
+    const auto painted = [this](const oa::ui::display_layout::Rect& source) {
+        if (hud_source_space_)
+            return source;
+        const auto canvas = oa::ui::display_layout::source_panel_to_canvas(
+            match_layout_, source.x, source.y, source.width, source.height
+        );
+        const auto at = canvas_paint(canvas.x, canvas.y);
+        return oa::ui::display_layout::Rect{
+            at.x, at.y, std::max(1, canvas.width), std::max(1, canvas.height)
+        };
+    };
     // The panels kept under the HUD panel show darkened where they lie over
     // the battlefield, as they showed when the panel over each opened.
     for (const auto& below : match_panels_below_) {
         if (below.root.x + below.root.width <= kBattlefieldLeft || below.darkened.rgb.empty())
             continue;
-        const auto top_left = hud_canvas(below.root.x, below.root.y);
-        const auto bottom_right =
-            hud_canvas(below.root.x + below.root.width, below.root.y + below.root.height);
+        const auto area = painted(below.root);
         scale_blit(
             paint_target(),
             below.darkened,
-            top_left.x,
-            top_left.y,
-            std::max(1, bottom_right.x - top_left.x),
-            std::max(1, bottom_right.y - top_left.y),
+            area.x,
+            area.y,
+            area.width,
+            area.height,
             0,
             0,
             below.root.width,
@@ -2315,16 +2329,14 @@ void Runtime::draw_battlefield_panel() {
             const auto& under = *match_panel_under_;
             const auto& pixels = under.shaded ? under.darkened : under.pixels;
             if (under.root.x + under.root.width > kBattlefieldLeft && !pixels.rgb.empty()) {
-                const auto top_left = hud_canvas(under.root.x, under.root.y);
-                const auto bottom_right =
-                    hud_canvas(under.root.x + under.root.width, under.root.y + under.root.height);
+                const auto shown = painted(under.root);
                 scale_blit(
                     paint_target(),
                     pixels,
-                    top_left.x,
-                    top_left.y,
-                    std::max(1, bottom_right.x - top_left.x),
-                    std::max(1, bottom_right.y - top_left.y),
+                    shown.x,
+                    shown.y,
+                    shown.width,
+                    shown.height,
                     0,
                     0,
                     under.root.width,
@@ -2373,7 +2385,19 @@ void Runtime::draw_battlefield_panel() {
         return;
     }
     if (team_panel_open()) {
-        show(root);
+        const auto area = painted({root.x, root.y, root.width, root.height});
+        scale_blit(
+            paint_target(),
+            match_hud_cpu_,
+            area.x,
+            area.y,
+            area.width,
+            area.height,
+            root.x,
+            root.y,
+            root.width,
+            root.height
+        );
         return;
     }
     // The preferences' sub-panel lies beside the side column, at its scale.
@@ -2422,7 +2446,12 @@ void Runtime::place_match_panel(uint32_t placement, bool back_tile_face) {
          std::clamp(kBattlefieldLeft - placed.x, 0, static_cast<int32_t>(placed.width)),
          placed.height}
     );
-    if (!back_tile_face)
+    if (back_tile_face)
+        draw_match_panel_back_tile();
+}
+
+void Runtime::draw_match_panel_back_tile() {
+    if (!match_hud_ || match_hud_->layout.gadgets.empty())
         return;
     const auto* tile = gaf_sequence(match_hud_->sprites, kBackTile);
     if (tile == nullptr) {
@@ -2507,6 +2536,18 @@ void Runtime::compose_panels_below(renderer::Surface& hud) {
     if (match_hud_placement_ == 0) {
         const auto& top = match_hud_->layout.gadgets.front().common;
         over = oa::ui::display_layout::Rect{top.x, top.y, top.width, top.height};
+    }
+    // The layer keeps the rows of a unit's page past 480 kept under the
+    // panel, so that the side column shows the page whole, as it grows for
+    // the page itself (fit_match_build_page).
+    auto rows = static_cast<int64_t>(hud.height);
+    for (const auto& below : match_panels_below_)
+        rows = std::max<int64_t>(rows, int64_t{below.root.y} + below.darkened.height);
+    if (rows > static_cast<int64_t>(hud.height)) {
+        hud.rgb.resize(
+            static_cast<std::size_t>(hud.width) * static_cast<std::size_t>(rows) * 3U, 0
+        );
+        hud.height = static_cast<uint32_t>(rows);
     }
     for (const auto& below : match_panels_below_)
         for (int32_t row = 0; row < static_cast<int32_t>(below.darkened.height); ++row)

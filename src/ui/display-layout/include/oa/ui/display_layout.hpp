@@ -594,4 +594,32 @@ source_rect_to_canvas(const MatchLayout& layout, int x, int y, int width, int he
     };
 }
 
+/// Maps a panel's source rectangle onto the canvas whole, at one scale.
+///
+/// A panel that reaches the bottom bar's rows (its bottom edge past
+/// kSourceBottomBarY) lies on the bottom bar, as the game keeps a panel it
+/// places from the screen's bottom edge, the tab menu among them, on the bar
+/// at every screen size: each of its rows counts from the bar's top edge at
+/// the bars' scale, the rows above the bar too. Any other panel is placed as
+/// source_rect_to_canvas() places it.
+///
+/// @param layout match layout of the canvas
+/// @param x source left edge in 640x480 pixels
+/// @param y source top edge in 640x480 pixels
+/// @param width source width in pixels
+/// @param height source height in pixels
+/// @return the rectangle in canvas pixels
+[[nodiscard]] inline Rect
+source_panel_to_canvas(const MatchLayout& layout, int x, int y, int width, int height) noexcept {
+    if (placed_mode(layout) || y + height <= kSourceBottomBarY)
+        return source_rect_to_canvas(layout, x, y, width, height);
+    const auto scaled = [&layout](int value) {
+        return static_cast<int>(std::lround(static_cast<double>(value) * layout.scale));
+    };
+    const auto across = source_rect_to_canvas(layout, x, kSourceBottomBarY, width, 0);
+    const int top = layout.bottom_bar_y() + scaled(y - kSourceBottomBarY);
+    const int bottom = layout.bottom_bar_y() + scaled(y + height - kSourceBottomBarY);
+    return {across.x, top, across.width, bottom - top};
+}
+
 } // namespace oa::ui::display_layout

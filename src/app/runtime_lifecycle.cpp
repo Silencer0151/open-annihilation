@@ -80,14 +80,16 @@ struct LifecycleAccess {
     /// Tells whether going to the background holds the match behind its in-game menu: the
     /// match screen shows a running, unfinished match played on this machine alone
     /// (keeps_running_inactive() is false) whose in-game menu is not already open
-    /// (match_paused_). The Pause key's pause is not looked at; the menu holds the match
-    /// whether it is set or not.
+    /// (match_paused_), or over which only the team menu or one of its panels is open,
+    /// which hold no match. The Pause key's pause is not looked at; the menu holds the
+    /// match whether it is set or not.
     ///
     /// @param runtime the runtime
     /// @return true when show_match_pause_menu() is to hold the match
     [[nodiscard]] static bool holds_match_for_background(const Runtime& runtime) {
         return runtime.screen_ == Screen::match && runtime.match_ && !runtime.match_finished_ &&
-               !runtime.match_paused_ && !runtime.keeps_running_inactive();
+               (!runtime.match_paused_ || runtime.team_panel_open()) &&
+               !runtime.keeps_running_inactive();
     }
 };
 

@@ -3,7 +3,8 @@
 
 // The side column fitted to its tallest page: a column that fits keeps the
 // chrome's layout; a taller one is narrowed as a whole, and the bars and
-// the battlefield, and points on them, follow its edge.
+// the battlefield, and points on them, follow its edge. A panel that reaches
+// the bottom bar's rows lies on the bar, whole at the bars' scale.
 #include "oa/test/check.hpp"
 
 #include "oa/ui/display_layout.hpp"
@@ -77,11 +78,38 @@ void maps_points_through_the_narrowed_column() {
     OA_CHECK(strip.x == 180 && strip.width == 1024 && strip.height == 64);
 }
 
+void keeps_a_panel_on_the_bottom_bar() {
+    // The tab menu: 510x33 from (130, 447), its top row above the bar's 32.
+    const auto native =
+        layout::source_panel_to_canvas(layout::make_match_layout(640, 480), 130, 447, 510, 33);
+    OA_CHECK(native.x == 130 && native.y == 447 && native.width == 510 && native.height == 33);
+    // On a 1920x1080 window the chrome is at 2 and the bar sits on the
+    // window's bottom edge, 120 rows below the chrome's 960: the menu lies
+    // on the bar whole, its top row the two canvas rows above it.
+    const auto wide = layout::make_match_layout(1920, 1080);
+    OA_CHECK(wide.bottom_bar_y() == 1016);
+    const auto menu = layout::source_panel_to_canvas(wide, 130, 447, 510, 33);
+    OA_CHECK(menu.x == 260 && menu.y == 1014 && menu.width == 1020 && menu.height == 66);
+    // Beside a narrowed column it counts from the column's edge.
+    const auto beside = layout::source_panel_to_canvas(
+        layout::fit_side_column(wide, kTallPageRows), 130, 447, 510, 33
+    );
+    OA_CHECK(beside.x == 184 && beside.y == 1014 && beside.width == 1020 && beside.height == 66);
+    // A panel above the bar, ALLIES.GUI's, lies where source_rect_to_canvas
+    // places it: from the top, at the chrome's scale.
+    const auto allies = layout::source_panel_to_canvas(wide, 240, 108, 241, 339);
+    const auto rect = layout::source_rect_to_canvas(wide, 240, 108, 241, 339);
+    OA_CHECK(allies.x == rect.x && allies.y == rect.y);
+    OA_CHECK(allies.width == rect.width && allies.height == rect.height);
+    OA_CHECK(allies.y == 216 && allies.height == 678);
+}
+
 } // namespace
 
 int main() {
     keeps_a_column_that_fits();
     narrows_a_taller_column_as_a_whole();
     maps_points_through_the_narrowed_column();
+    keeps_a_panel_on_the_bottom_bar();
     return oa::test::check_exit_status();
 }

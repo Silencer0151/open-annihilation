@@ -38,6 +38,9 @@ hacks:
 - **Watchers** in a multiplayer game see ALLIES as well; SHARE and CONTROL stay hidden for them.
 - **Seated players** in a multiplayer game see the menu as in 3.1c: ALLIES and SHARE when there is
   another player, and CONTROL for the host of a game that is not locked.
+- **The game runs on** under the team menu and the alliance panel, in a skirmish as in multiplayer:
+  3.1c holds a game played on one machine only for its options menu and the Pause key, so neither
+  pauses it.
 
 Without the hack Tab opens the options panel outside multiplayer, and a watcher's team menu offers
 none of the three buttons.

@@ -609,6 +609,30 @@ void Runtime::check_team_panels() {
         key(SDLK_TAB, SDL_SCANCODE_TAB);
         require(!team_panel_open() && !match_paused_, "Tab did not close the tab menu");
 
+        // Over a match played on this machine alone, as a skirmish under
+        // teams.alliance-menu-all-game-types, the tab menu holds nothing and
+        // shows no paused title: 3.1c holds such a game only for its in-game
+        // menu.
+        extension_.state = [](void*, const Runtime&) -> uint32_t {
+            return extension_state::multiplayer;
+        };
+        const auto alone_title = title_pixels();
+        key(SDLK_TAB, SDL_SCANCODE_TAB);
+        require(
+            team_panel_open() && match_hud_panel_ == oa::data::defs::gui_path("TABMENU.GUI"),
+            "Tab did not open TABMENU.GUI over a match played alone"
+        );
+        require(
+            changed_pixels(alone_title, title_pixels()) == 0,
+            "the tab menu showed the paused title over a match played alone"
+        );
+        require(ticks_in_one_second() > 0, "the tab menu held a match played alone");
+        key(SDLK_TAB, SDL_SCANCODE_TAB);
+        require(!team_panel_open() && !match_paused_, "Tab did not close the tab menu");
+        extension_.state = [](void*, const Runtime&) -> uint32_t {
+            return extension_state::multiplayer | extension_state::shared_match;
+        };
+
         // The tab menu's OPTIONS opens the in-game menu over it: the menu
         // stays under it, darkened, and the menu covers the side column's
         // panel as it does opened over the running game.

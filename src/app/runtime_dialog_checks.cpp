@@ -9,6 +9,7 @@
 #include "oa/ui/decoded.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
 #include "oa/ui/gui_input.hpp"
+#include "oa/ui/gui_layout.hpp"
 #include "oa/ui/hud/resource_bar.hpp"
 #include "oa/ui/frontend/ingame_menu.hpp"
 #include "oa/ui/frontend/options.hpp"
@@ -1095,7 +1096,7 @@ void Runtime::check_match_dialogs() {
     // A panel that pauses the match after an answered confirmation, as the
     // team panels do, still gets asked.
     resume_match_pause();
-    require(load_team_panel("SHARE.GUI") && match_paused_, "SHARE.GUI did not open");
+    require(load_team_panel("SHARE.GUI", true) && match_paused_, "SHARE.GUI did not open");
     require(
         send(close_request(SDL_EVENT_WINDOW_CLOSE_REQUESTED)) && confirming(),
         "closing the window over a panel after an answered confirmation did not ask"
@@ -2222,7 +2223,111 @@ void Runtime::check_placed_dialogs(const fs::path& report_directory) {
                     break;
                 }
             require(other != OA_PLAYER_COUNT, "the skirmish has no other player");
+            auto running = composed();
             toggle_team_menu();
+            // The tab menu lies on the bottom bar over its BackTile face, as
+            // the game places it from the screen's bottom edge: once, whole
+            // at the bars' scale, its top row just above the bar, and the
+            // battlefield above that as it was.
+            {
+                const auto name = "TABMENU.GUI" + on;
+                require(
+                    team_panel_open() &&
+                        match_hud_panel_ == oa::data::defs::gui_path("TABMENU.GUI"),
+                    "Tab did not open TABMENU.GUI" + on
+                );
+                const auto& gadgets = match_hud_->layout.gadgets;
+                const auto& root = gadgets.front().common;
+                require(
+                    root.y + root.height == kCanvasHeight,
+                    name + " does not end on the screen's bottom edge"
+                );
+                auto menu_frame = composed();
+                const auto shown = oa::ui::display_layout::source_panel_to_canvas(
+                    match_layout_, root.x, root.y, root.width, root.height
+                );
+                require(
+                    shown.y < match_layout_.bottom_bar_y() && shown.y + shown.height == height,
+                    name + " does not lie on the bottom bar"
+                );
+                std::size_t stray = 0;
+                for (int32_t y = battlefield.y; y < battlefield.y + battlefield.height; ++y)
+                    for (int32_t x = battlefield.x; x < battlefield.x + battlefield.width; ++x)
+                        if (!inside(shown, x, y) && !same_pixel(running, menu_frame, x, y))
+                            ++stray;
+                require(
+                    stray == 0,
+                    name + " changed " + std::to_string(stray) +
+                        " battlefield pixels above the bottom bar"
+                );
+                const auto* focused =
+                    match_panels_keyboard_ && match_hud_focus_ > 0
+                        ? &gadgets[static_cast<std::size_t>(match_hud_focus_)].common
+                        : nullptr;
+                const auto rings = static_cast<int32_t>(kFocusRingLevels.size());
+                // The face the BackTile frames give each pixel of the root,
+                // tiled as the panel's draw tiles them, a later tile over an
+                // earlier one; a root lower than a frame shows the lower rows
+                // of the top frames.
+                std::vector<const uint8_t*> face(
+                    static_cast<std::size_t>(root.width) * static_cast<std::size_t>(root.height),
+                    nullptr
+                );
+                for (const auto& placed_tile : oa::ui::gui_layout::skin_tiles(
+                         root.width, root.height, tile_size, tile_size
+                     )) {
+                    const auto& art = tiles[placed_tile.frame];
+                    for (int32_t ty = 0; ty < static_cast<int32_t>(art.height); ++ty)
+                        for (int32_t tx = 0; tx < static_cast<int32_t>(art.width); ++tx) {
+                            const auto fx = placed_tile.x + tx;
+                            const auto fy = placed_tile.y + ty;
+                            const auto at = static_cast<std::size_t>(ty) * art.width +
+                                            static_cast<std::size_t>(tx);
+                            if (fx < 0 || fy < 0 || fx >= root.width || fy >= root.height ||
+                                at >= art.coverage.size() || art.coverage[at] == 0)
+                                continue;
+                            face
+                                [static_cast<std::size_t>(fy) * root.width +
+                                 static_cast<std::size_t>(fx)] =
+                                    &match_palette_[static_cast<std::size_t>(art.pixels[at]) * 4U];
+                        }
+                }
+                std::size_t compared = 0;
+                std::size_t differing = 0;
+                for (int32_t y = root.y; y < root.y + root.height; ++y)
+                    for (int32_t x = root.x; x < root.x + root.width; ++x) {
+                        const auto on_record = [&](const auto& gadget) {
+                            const auto& record = gadget.common;
+                            return &gadget != &gadgets.front() && record.active != 0 &&
+                                   x >= record.x && x < record.x + record.width && y >= record.y &&
+                                   y < record.y + record.height;
+                        };
+                        if (std::any_of(gadgets.begin(), gadgets.end(), on_record))
+                            continue;
+                        if (focused != nullptr && x >= focused->x - rings &&
+                            x < focused->x + focused->width + rings && y >= focused->y - rings &&
+                            y < focused->y + focused->height + rings)
+                            continue;
+                        const auto* colour = face
+                            [static_cast<std::size_t>(y - root.y) * root.width +
+                             static_cast<std::size_t>(x - root.x)];
+                        if (colour == nullptr)
+                            continue;
+                        ++compared;
+                        if (!std::equal(colour, colour + 3, pixel(match_hud_cpu_, x, y)))
+                            ++differing;
+                    }
+                require(
+                    compared > static_cast<std::size_t>(root.width) * root.height / 4,
+                    name + " has too few face pixels to compare"
+                );
+                require(
+                    differing == 0,
+                    name + " differs from its BackTile face at " + std::to_string(differing) +
+                        " of " + std::to_string(compared) + " pixels"
+                );
+                write_ppm(report_directory / ("native-match-tabmenu-" + size + ".ppm"), menu_frame);
+            }
             click_team_panel("CONTROL");
             require(
                 team_panel_open() && match_hud_panel_ == oa::data::defs::gui_path("CONTROL.GUI"),

@@ -654,6 +654,61 @@ void Runtime::check_unit_pages() {
             if (click_control(previous, label) && match_build_page_ != steps[step - 1])
                 failed(label + ": PREV opened page " + std::to_string(match_build_page_));
         }
+        // Where the profile opens the tab menu in every game, Tab opens it
+        // over the first page, which stays under it darkened, down to its
+        // last row past 480 too.
+        if (!team_menu_every_game() || !open_page(1))
+            return;
+        const auto label = size + " " + name + " page 1 under the tab menu";
+        render_match_surface();
+        auto expected = match_hud_cpu_;
+        const auto root = match_hud_->layout.gadgets.front().common;
+        // The rows the page shows: its root's, down to the HUD layer's last.
+        const int bottom = std::min<int>(root.y + root.height, static_cast<int>(expected.height));
+        renderer::shade_panel_below(
+            expected,
+            root.x,
+            root.y,
+            root.width,
+            bottom - root.y,
+            match_palette_,
+            display_.context.shade_table
+        );
+        toggle_team_menu();
+        if (!team_panel_open()) {
+            failed(label + ": Tab did not open the tab menu");
+            return;
+        }
+        render_match_surface();
+        if (static_cast<int>(match_hud_cpu_.height) < bottom) {
+            failed(
+                label + ": the side column lost the page's rows past " +
+                std::to_string(match_hud_cpu_.height)
+            );
+        } else {
+            std::size_t differing = 0;
+            for (int y = root.y; y < bottom; ++y)
+                for (int x = root.x; x < root.x + root.width; ++x) {
+                    const auto at = (static_cast<std::size_t>(y) * expected.width +
+                                     static_cast<std::size_t>(x)) *
+                                    3U;
+                    const auto shown_at = (static_cast<std::size_t>(y) * match_hud_cpu_.width +
+                                           static_cast<std::size_t>(x)) *
+                                          3U;
+                    if (!std::equal(
+                            expected.rgb.begin() + static_cast<std::ptrdiff_t>(at),
+                            expected.rgb.begin() + static_cast<std::ptrdiff_t>(at) + 3,
+                            match_hud_cpu_.rgb.begin() + static_cast<std::ptrdiff_t>(shown_at)
+                        ))
+                        ++differing;
+                }
+            if (differing != 0)
+                failed(
+                    label + ": the page under it is not shown darkened at " +
+                    std::to_string(differing) + " pixels"
+                );
+        }
+        toggle_team_menu();
     };
 
     // A unit of each type named: the player's own, or one made beside the

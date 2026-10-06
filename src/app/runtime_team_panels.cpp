@@ -229,10 +229,12 @@ void Runtime::forget_team_panel() {
     );
 }
 
-bool Runtime::load_team_panel(const char* file) {
+bool Runtime::load_team_panel(const char* file, bool back_tile_face) {
     if (!match_ || !load_match_hud_layout(oa::data::defs::gui_path(file)))
         return false;
     place_from_edges(match_hud_->layout);
+    if (back_tile_face)
+        draw_match_panel_back_tile();
     // The loader gives the focus from where the panel is placed.
     match_hud_focus_ = loaded_panel_focus();
     // The panel's first draw, where it is placed, binds its scroll bars.
@@ -466,7 +468,7 @@ void Runtime::toggle_team_menu() {
         auto& self = *static_cast<Runtime*>(user);
         self.keep_panel_below_darkened();
         self.forget_team_panel();
-        if (!self.load_team_panel(name))
+        if (!self.load_team_panel(name, true))
             return false;
         team_session().panel = TeamPanel::tab_menu;
         return true;
@@ -509,7 +511,7 @@ void Runtime::open_team_share_panel() {
         return;
     keep_panel_below_darkened();
     forget_team_panel();
-    if (!load_team_panel("SHARE.GUI"))
+    if (!load_team_panel("SHARE.GUI", true))
         return;
     world.game.frame_flags =
         static_cast<uint16_t>(world.game.frame_flags | hud::kFrameSharePanelOpen);
@@ -687,7 +689,7 @@ void Runtime::open_allies_team_panel() {
         return;
     keep_panel_below_darkened();
     forget_team_panel();
-    if (!load_team_panel("ALLIES.GUI"))
+    if (!load_team_panel("ALLIES.GUI", true))
         return;
     team_session().panel = TeamPanel::allies;
     hud::open_allies_panel(match_->state(), team_panel_controls());
@@ -701,7 +703,7 @@ void Runtime::open_control_team_panel(bool darken_panel_below) {
     if (darken_panel_below)
         keep_panel_below_darkened();
     forget_team_panel();
-    if (!load_team_panel("CONTROL.GUI"))
+    if (!load_team_panel("CONTROL.GUI", true))
         return;
     team_session().panel = TeamPanel::control;
     // It refuses only a watching player, who never gets here.
@@ -717,7 +719,7 @@ void Runtime::open_removal_question(uint8_t player) {
     // whole screen over the BackTile face as YESORNO.GUI names no picture.
     auto under = panel_under_dialog();
     forget_team_panel();
-    if (!load_team_panel("YESORNO.GUI"))
+    if (!load_team_panel("YESORNO.GUI", false))
         return;
     place_match_panel(oa::ui::gui_input::panel_flag::centre, true);
     match_panel_under_ = std::move(under);

@@ -1059,7 +1059,8 @@ class Runtime final : public menu::Host,
     /// The match goes on (match_running), its ticks are not blocked, and
     /// match_clock_runs allows it for the kind of match (shared with other
     /// players' machines or not), an open menu (match_paused_ before the
-    /// outcome) and the outcome.
+    /// outcome; the team menu and its panels, team_panel_open, hold no
+    /// match) and the outcome.
     ///
     /// @return true when idle_tick advances the match clock
     [[nodiscard]] bool match_clock_steps() const;
@@ -2780,6 +2781,9 @@ class Runtime final : public menu::Host,
     /// Pastes each panel kept under the match HUD panel (match_panels_below_)
     /// into the HUD layer, darkened, bottom first.
     ///
+    /// The layer grows to hold the rows of a unit's page past 480 kept under
+    /// the panel, so that the side column shows that page whole.
+    ///
     /// A HUD panel at its own position lies over them, so they go outside its
     /// root: ARMOPT.GUI and PREFS.GUI cover the side column's panel, whose
     /// root is the same rectangle. A placed dialog goes over them as it is
@@ -3076,6 +3080,12 @@ class Runtime final : public menu::Host,
     ///        drawn over art of its own
     void place_match_panel(uint32_t placement, bool back_tile_face);
 
+    /// Gives the match HUD panel's root the face 3.1c gives a panel whose GUI
+    /// file names no picture of its own: the common GUI art's BackTile
+    /// frames tiled over it where it lies, corner and edge frames round the
+    /// middle ones, under its records.
+    void draw_match_panel_back_tile();
+
     /// Returns where the paused match shows the panel place_match_panel() placed.
     ///
     /// The panel keeps the side column's scale and is centred as it was
@@ -3356,11 +3366,16 @@ class Runtime final : public menu::Host,
     ///
     /// A panel whose root lies at a negative position is placed from the
     /// bottom or right edge of the 640x480 screen. The in-game menu counts as
-    /// open (match_paused_), which blocks the battlefield's input.
+    /// open (match_paused_), which blocks the battlefield's input; a team
+    /// panel holds no match (match_clock_steps).
     ///
     /// @param file GUI file under guis/
+    /// @param back_tile_face true to give the panel the BackTile face where
+    ///        it lies (draw_match_panel_back_tile), as TABMENU.GUI, SHARE.GUI,
+    ///        ALLIES.GUI and CONTROL.GUI name no picture; false for a panel
+    ///        placed and faced afterwards (the removal question)
     /// @return false when the panel cannot be loaded
-    bool load_team_panel(const char* file);
+    bool load_team_panel(const char* file, bool back_tile_face);
 
     /// Checks the Pause key and the menus in a skirmish.
     ///
