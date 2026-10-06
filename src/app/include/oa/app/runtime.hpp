@@ -4189,10 +4189,12 @@ class Runtime final : public menu::Host,
     /// running game's speed; elsewhere they are the full-screen frontend panels.
     /// A watcher's game speed slider is locked.
     void bind_options_context();
-    /// Puts the size the game plays at
-    /// (EngineSettingsState::screen_size_in_effect) in DisplaymodeWidth and
+    /// Puts the size the screen is shown at (screen_size_now), else without
+    /// a window the size the game plays at
+    /// (EngineSettingsState::screen_size_in_effect), in DisplaymodeWidth and
     /// DisplaymodeHeight as the options open outside a match, so that their
-    /// Screen Size opens on it; in a match it does nothing.
+    /// Screen Size opens on it, as Custom where the display offers no such
+    /// size; in a match it does nothing.
     void show_screen_size_in_options();
 
     /// Opens OPTIONS: the lightbar takes the panel below, then the tab panel loads.
@@ -6313,7 +6315,9 @@ class Runtime final : public menu::Host,
 
     /// Sets the SDL presentation for the current screen.
     ///
-    /// A match lays the battlefield and chrome out for the window's pixel size;
+    /// A match lays the battlefield and chrome out for the window's pixel size,
+    /// or at the scaled frame's size (scaled_frame_size), letterboxed or in
+    /// whole steps as the Menu scaling setting asks;
     /// other screens present at the canvas size, the load and save dialogs at the
     /// size of the frame they are drawn over, letterboxed or in whole steps
     /// as the Menu scaling setting asks (set_frame_presentation). The layout and the pointer's
@@ -6755,21 +6759,56 @@ class Runtime final : public menu::Host,
 
     /// Returns the display pixels one pixel of the match's layout covers
     /// across: on a window at native density the renderer's output width
-    /// over the layout's, which logical presentation stretches it to, and
-    /// on any other window 1, where a layout pixel is a window pixel.
+    /// over the layout's, which logical presentation stretches it to; for a
+    /// scaled frame (scaled_frame_size) the width it is presented at over
+    /// the layout's; and on any other window 1, where a layout pixel is a
+    /// window pixel.
     ///
     /// @return display pixels per layout pixel
     [[nodiscard]] double match_display_density() const;
 
     /// Returns the scale mode a match layer laid out 1:1 in layout pixels
     /// is drawn with: NEAREST, as the standard tier draws every one; in the
-    /// accelerated tier on a window at native density the chrome's filter
-    /// at the density (render_policy::chrome_filter), so NEAREST at a
-    /// whole-number density and otherwise PIXELART, or plain LINEAR where
-    /// the filter would need a prescale target of its own.
+    /// accelerated tier on a window at native density, and for a scaled
+    /// frame, the chrome's filter at the density (render_policy::chrome_filter),
+    /// so NEAREST at a whole-number density and otherwise PIXELART, or plain
+    /// LINEAR where the filter would need a prescale target of its own; and
+    /// in the standard tier for a scaled frame the frame's filter
+    /// (standard_frame_scale_mode), found when the match was laid out.
     ///
     /// @return the scale mode
     [[nodiscard]] SDL_ScaleMode one_to_one_scale_mode() const;
+
+    /// Returns the frame the match is drawn at and scaled to the screen
+    /// (scaled_frame in screen_mode.hpp): the screen size applied this run
+    /// (FullScreenSwitch::screen_width), while the window is full screen on
+    /// the display's desktop mode and the size is not the window's own.
+    ///
+    /// @return the frame's width and height; 0 by 0 where the match is
+    ///     drawn at the window's size, without a window, and in a build
+    ///     whose touch controls are on from the start
+    [[nodiscard]] SDL_Point scaled_frame_size() const;
+
+    /// Returns the size the screen is shown at now, as the screen-size
+    /// pickers show it: the scaled frame where one is drawn
+    /// (scaled_frame_size), else the window's size, in the window system's
+    /// units.
+    ///
+    /// @return the width and height; 0 by 0 without a window
+    [[nodiscard]] SDL_Point screen_size_now() const;
+
+    /// Applies a screen size to the game's window at once
+    /// (apply_screen_size in screen_mode.hpp, through SDL's window): a
+    /// window takes the size, and full screen a display mode of it where
+    /// full screen switches modes (run_full_screen_method) and the display
+    /// has one, else the match is drawn at the size and scaled to the
+    /// screen; Desktop gives full screen the desktop's own mode back. The
+    /// screen is laid out again at once, and the match drawn again. A run
+    /// without a window, or whose touch controls are on from the start,
+    /// changes nothing.
+    ///
+    /// @param size the screen size; desktop_screen_size for the desktop's own
+    void apply_screen_size(oa::ui::engine_settings::ScreenSize size);
 
     /// Returns the Menu scaling setting in effect.
     ///
@@ -12581,9 +12620,16 @@ class Runtime final : public menu::Host,
     // Whether the renderer's pixel-art scale mode works for the standard
     // tier's frames (frame_pixelart_works); empty until it is found.
     std::optional<bool> frame_pixelart_{};
-    // The mode Alt+Enter last asked the window for.
+    // The mode Alt+Enter last asked the window for, and the screen size
+    // applied.
     FullScreenSwitch full_screen_switch_{};
     oa::ui::display_layout::MatchLayout match_layout_{};
+    // The scaled frame the match was last laid out at (scaled_frame_size);
+    // 0 by 0 when it is laid out at the window's size.
+    int scaled_frame_width_ = 0;
+    int scaled_frame_height_ = 0;
+    // The standard tier's filter for that frame (standard_frame_scale_mode).
+    SDL_ScaleMode scaled_frame_mode_ = SDL_SCALEMODE_NEAREST;
     int output_texture_w_ = 0;
     int output_texture_h_ = 0;
     oa::audio::game_audio::SdlWavPlayer audio_player_;
@@ -13501,6 +13547,14 @@ class Runtime final : public menu::Host,
     /// @return the names, valid while the runtime keeps them
     [[nodiscard]] frame_pacing::FrameStatsRenderer frame_stats_renderer() const;
 
+    /// Returns what the "+stats" overlay's display row names: whether the
+    /// window is a window, full screen on the display's desktop mode or at a
+    /// mode of its own, the size the match is laid out and drawn at, and the
+    /// mode, refresh rate and scale of the display the window is on.
+    ///
+    /// @return the display; FrameStatsScreen::none without a window
+    [[nodiscard]] frame_pacing::FrameStatsDisplay frame_stats_display() const;
+
     /// Draws the "+stats" overlay at the battlefield's bottom right, when
     /// shown, in the match label font, and notes where it drew it
     /// (frame_stats_place_). It reads the statistics and writes nothing of
@@ -13546,14 +13600,6 @@ class Runtime final : public menu::Host,
     /// Prepares the headless skirmish of --match-ticks: the size, zoom,
     /// armies, reclaim check and camera the options ask for.
     void prepare_headless_match();
-
-    /// Returns what the "+stats" overlay's display row names: whether the
-    /// window is a window, full screen on the display's desktop mode or at a
-    /// mode of its own, the size the match is laid out and drawn at, and the
-    /// mode, refresh rate and scale of the display the window is on.
-    ///
-    /// @return the display; FrameStatsScreen::none without a window
-    [[nodiscard]] frame_pacing::FrameStatsDisplay frame_stats_display() const;
 
     /// Runs --frame-rate: the headless skirmish played and drawn frame by
     /// frame on a clock that advances 1 / frame_rate seconds a frame, each

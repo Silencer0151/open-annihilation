@@ -107,6 +107,8 @@ constexpr uint16_t kChosenUnitLimit = settings::default_unit_limit + settings::u
 constexpr uint32_t kChosenFrameRate = settings::highest_frame_rate - settings::frame_rate_step;
 /// The anti-aliasing level the check picks from the strip.
 constexpr settings::AntiAliasing kChosenAntiAliasing = settings::AntiAliasing::x4;
+/// The Screen size the check chooses: one the made-up 4K monitor offers.
+constexpr settings::ScreenSize kChosenScreenSize{1280, 720};
 
 /// Throws when a condition fails.
 ///
@@ -624,12 +626,47 @@ void Runtime::check_engine_settings_dialog() {
     }
     rest();
 
-    // Each setting through the pointer or the keys, in effect at once.
+    // Each setting through the pointer or the keys, in effect at once, but
+    // Screen size, which applies when OK is pressed. In a window the dialog
+    // shows Screen size at the window's own size.
     auto chosen = defaults;
+    int opened_width = 0;
+    int opened_height = 0;
+    SDL_GetWindowSize(sdl_.window, &opened_width, &opened_height);
+    const auto window_size_text = [this] {
+        int width = 0;
+        int height = 0;
+        SDL_GetWindowSize(sdl_.window, &width, &height);
+        return std::to_string(width) + 'x' + std::to_string(height);
+    };
+    // The window's own events (its new size among them) reach the game as
+    // its loop pumps them.
+    const auto pump_window_events = [this] {
+        SDL_SyncWindow(sdl_.window);
+        SDL_Event event{};
+        bool running = true;
+        while (SDL_PollEvent(&event))
+            dispatch_event(event, running);
+        require(running, "a window event ended the run");
+    };
+    auto shown_screen_size = engine_settings_dialog()->chosen.screen_size;
+    {
+        const auto& window_size = engine_settings_dialog()->window_screen_size;
+        require(
+            window_size && settings::screen_size_text(*window_size) == window_size_text() &&
+                shows_text(
+                    settings::dialog_layout(*engine_settings_dialog()),
+                    std::to_string(window_size->width) + " x " + std::to_string(window_size->height)
+                ) == (engine_settings_dialog()->page == settings::Page::graphics),
+            "Screen size did not open on the window's size, " + window_size_text()
+        );
+    }
     const auto expect = [&](std::string_view what) {
         require(engine_settings_dialog() != nullptr, "the dialog closed on " + std::string(what));
+        auto shown = chosen;
+        shown.screen_size = shown_screen_size;
         require(
-            engine_settings_dialog()->chosen == chosen && engine_settings() == chosen,
+            engine_settings_dialog()->chosen == shown && engine_settings() == chosen,
             std::string(what) + " did not take effect at once"
         );
     };
@@ -703,7 +740,8 @@ void Runtime::check_engine_settings_dialog() {
     );
     // Screen size offers Desktop, then every size the display offers (the
     // made-up monitor's with --display-modes), the narrower first; Right
-    // steps to the largest and stops there. It applies from the next start.
+    // steps to the largest and stops there, and Left back to 1280x720. The
+    // window keeps its size until OK.
     {
         const auto offered = EngineSettingsState::offered_screen_sizes(*this);
         std::vector<settings::ScreenSize> stops{settings::desktop_screen_size};
@@ -712,16 +750,32 @@ void Runtime::check_engine_settings_dialog() {
             engine_settings_dialog()->offered_screen_sizes == stops,
             "Screen size does not offer Desktop and the display's sizes"
         );
+        require(
+            std::find(offered.begin(), offered.end(), kChosenScreenSize) != offered.end(),
+            "the display does not offer 1280x720"
+        );
         focus(settings::first_row_control + 2, "Screen size");
         for (std::size_t step = 0; step <= offered.size(); ++step)
             tap(SDLK_RIGHT);
-        chosen.screen_size = offered.back();
+        shown_screen_size = offered.back();
         expect("Screen size at the display's largest");
         const std::string largest =
             std::to_string(offered.back().width) + " x " + std::to_string(offered.back().height);
         require(
             shows_text(settings::dialog_layout(*engine_settings_dialog()), largest),
             "Screen size at its last stop does not show " + largest
+        );
+        for (std::size_t step = 0;
+             step <= offered.size() &&
+             engine_settings_dialog()->chosen.screen_size != kChosenScreenSize;
+             ++step)
+            tap(SDLK_LEFT);
+        shown_screen_size = kChosenScreenSize;
+        expect("Screen size at 1280x720");
+        require(
+            window_size_text() ==
+                std::to_string(opened_width) + 'x' + std::to_string(opened_height),
+            "Screen size moved the window before OK"
         );
         std::cout << "engine settings check: Screen size offers Desktop and " << offered.size()
                   << " sizes, up to " << largest << '\n';
@@ -911,12 +965,25 @@ void Runtime::check_engine_settings_dialog() {
     require(frame_stats_shown_, "Show performance statistics did not show the statistics");
 
     // OK keeps them and saves exactly the keys that changed, and the dialog
-    // opens again on them.
+    // opens again on them; the window takes the Screen size at once, and the
+    // main menu is drawn to the whole of it.
     click(settings::ok_control, "OK", "OK");
     require(
         engine_settings_dialog() == nullptr && !host.dialog_shown, "OK did not close the dialog"
     );
+    chosen.screen_size = kChosenScreenSize;
     require(engine_settings() == chosen, "OK did not keep the settings chosen");
+    pump_window_events();
+    {
+        int output_width = 0;
+        int output_height = 0;
+        SDL_GetRenderOutputSize(sdl_.renderer, &output_width, &output_height);
+        require(
+            window_size_text() == "1280x720" && output_width == kChosenScreenSize.width &&
+                output_height == kChosenScreenSize.height,
+            "OK on a Screen size of 1280x720 left the window at " + window_size_text()
+        );
+    }
     std::map<std::string, std::string> expected_keys{
         {std::string(settings::key::path_search_nodes), std::to_string(kChosenPathNodes)},
         {std::string(settings::key::wheel_zoom), "0"},
@@ -970,8 +1037,11 @@ void Runtime::check_engine_settings_dialog() {
     // OK after it erases every key it reset.
     open("for Restore defaults");
     click(settings::restore_control, "RESTORE DEFAULTS", "Restore defaults");
+    // Screen size, applied when OK is pressed, stays as it was until then.
+    auto restored_now = defaults;
+    restored_now.screen_size = chosen.screen_size;
     require(
-        engine_settings_dialog() != nullptr && engine_settings() == defaults &&
+        engine_settings_dialog() != nullptr && engine_settings() == restored_now &&
             !frame_stats_shown_ &&
             unit_supersampling_ == oa::present::model::UnitSupersampling::off,
         "Restore defaults did not reset every setting at once"
@@ -999,6 +1069,15 @@ void Runtime::check_engine_settings_dialog() {
     );
     const auto restored = oa::platform::preferences::load(preference_path_);
     require(engine_keys(restored).empty(), "Restore defaults and OK left settings in the file");
+    // Desktop in a window leaves its size as it is; the window then goes
+    // back to its size for the steps that follow.
+    pump_window_events();
+    require(window_size_text() == "1280x720", "Desktop resized the window");
+    require(
+        SDL_SetWindowSize(sdl_.window, opened_width, opened_height),
+        "the window was not resized back"
+    );
+    pump_window_events();
     require(!renderer_waits(sdl_.renderer), "Restore defaults and OK left the renderer waiting");
     require(saved_general_number("SwitchAlt") == 0, "Restore defaults did not save SwitchAlt off");
 

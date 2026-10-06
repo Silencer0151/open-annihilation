@@ -1468,6 +1468,23 @@ break_lines(std::string_view text, std::size_t characters, std::size_t most_line
 /// @return the text
 [[nodiscard]] std::string value_text(Setting setting, const EngineSettings& settings);
 
+/// Returns the settings a dialog's sliders show: the settings chosen, but
+/// Screen size at the window's own size until its knob moves
+/// (Dialog::window_screen_size).
+///
+/// @param dialog the dialog
+/// @return the settings
+[[nodiscard]] EngineSettings slider_settings(const Dialog& dialog);
+
+/// Returns a slider's value as the dialog shows it: as value_text of
+/// slider_settings, but "Custom" for Screen size at the window's own size
+/// that the display does not offer (Dialog::custom_screen_size).
+///
+/// @param setting a slider setting
+/// @param dialog the dialog
+/// @return the text
+[[nodiscard]] std::string value_text(Setting setting, const Dialog& dialog);
+
 /// Returns a lock's text.
 ///
 /// @param lock the lock

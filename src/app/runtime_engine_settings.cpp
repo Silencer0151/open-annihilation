@@ -71,6 +71,28 @@ static_assert(mod_directory_preference == settings::key::mod_directory);
 
 namespace {
 
+/// Returns the size of the desktop of the display a window is on, as a
+/// screen size keeps it.
+///
+/// @param options the parsed command line (Options::display_modes)
+/// @param window the game's window; null for none
+/// @param start_desktop the primary display's desktop as read at start
+/// @return the desktop's size; start_desktop without a window, or where the
+///     display does not report one a screen size can keep
+settings::ScreenSize
+window_desktop(const Options& options, SDL_Window* window, settings::ScreenSize start_desktop) {
+    const SDL_DisplayID display = window != nullptr ? SDL_GetDisplayForWindow(window) : 0;
+    if (display == 0)
+        return start_desktop;
+    // A screen size keeps each side in 16 bits.
+    constexpr int32_t widest = std::numeric_limits<uint16_t>::max();
+    const auto desktop = display_report(options, display).desktop.size;
+    if (desktop.width <= 0 || desktop.height <= 0 || desktop.width > widest ||
+        desktop.height > widest)
+        return start_desktop;
+    return {static_cast<uint16_t>(desktop.width), static_cast<uint16_t>(desktop.height)};
+}
+
 /// The version the dialog's header shows.
 constexpr const char* kVersionText = "v" OA_ENGINE_VERSION;
 
@@ -160,9 +182,46 @@ std::optional<std::string> Runtime::EngineSettingsState::flush(Runtime& runtime)
 
 std::vector<settings::ScreenSize>
 Runtime::EngineSettingsState::offered_screen_sizes(const Runtime& runtime) {
-    return oa::app::offered_screen_sizes(
-        runtime.options_, view_rules::minimum_mode_height(runtime.ui_rules())
+    const int32_t minimum_height = view_rules::minimum_mode_height(runtime.ui_rules());
+    if (runtime.sdl_.window == nullptr)
+        return oa::app::offered_screen_sizes(
+            runtime.options_, SDL_GetPrimaryDisplay(), start_use(runtime.options_), minimum_height
+        );
+    SDL_DisplayID display = SDL_GetDisplayForWindow(runtime.sdl_.window);
+    if (display == 0)
+        display = SDL_GetPrimaryDisplay();
+    const bool full_screen = (SDL_GetWindowFlags(runtime.sdl_.window) & SDL_WINDOW_FULLSCREEN) != 0;
+    const auto use = full_screen && run_full_screen_method() == FullScreenMethod::switch_mode
+                         ? oa::platform::display_modes::Use::full_screen
+                         : oa::platform::display_modes::Use::window;
+    return oa::app::offered_screen_sizes(runtime.options_, display, use, minimum_height);
+}
+
+settings::ScreenSize Runtime::EngineSettingsState::screen_size_now(const Runtime& runtime) {
+    // A screen size keeps each side in 16 bits.
+    constexpr int widest = std::numeric_limits<uint16_t>::max();
+    const SDL_Point now = runtime.screen_size_now();
+    if (now.x <= 0 || now.y <= 0 || now.x > widest || now.y > widest)
+        return settings::desktop_screen_size;
+    return {static_cast<uint16_t>(now.x), static_cast<uint16_t>(now.y)};
+}
+
+settings::ScreenSize Runtime::EngineSettingsState::screen_size_after(
+    const Runtime& runtime, settings::ScreenSize setting
+) {
+    if (setting != settings::desktop_screen_size)
+        return setting;
+    // Desktop leaves a window as it is, and shows full screen at the
+    // desktop's own size.
+    if (runtime.sdl_.window != nullptr &&
+        (SDL_GetWindowFlags(runtime.sdl_.window) & SDL_WINDOW_FULLSCREEN) == 0)
+        return screen_size_now(runtime);
+    const settings::ScreenSize desktop = window_desktop(
+        runtime.options_,
+        runtime.sdl_.window,
+        runtime.engine_settings_ ? runtime.engine_settings_->desktop : settings::desktop_screen_size
     );
+    return desktop != settings::desktop_screen_size ? desktop : screen_size_now(runtime);
 }
 
 settings::ScreenSize Runtime::EngineSettingsState::screen_size_in_effect(
@@ -201,12 +260,24 @@ settings::ScreenSize Runtime::EngineSettingsState::screen_size_shown(
     return nearest ? offered[*nearest] : size;
 }
 
+settings::ScreenSize Runtime::EngineSettingsState::stored_screen_size(
+    const Runtime& runtime, settings::ScreenSize size
+) {
+    const bool full_screen =
+        runtime.sdl_.window != nullptr
+            ? (SDL_GetWindowFlags(runtime.sdl_.window) & SDL_WINDOW_FULLSCREEN) != 0
+            : start_use(runtime.options_) == oa::platform::display_modes::Use::full_screen;
+    const settings::ScreenSize desktop = window_desktop(
+        runtime.options_,
+        runtime.sdl_.window,
+        runtime.engine_settings_ ? runtime.engine_settings_->desktop : settings::desktop_screen_size
+    );
+    return full_screen && size == desktop ? settings::desktop_screen_size : size;
+}
+
 void Runtime::EngineSettingsState::choose_screen_size(Runtime& runtime, settings::ScreenSize size) {
     auto& state = runtime.engine_settings_state();
-    const bool full_screen =
-        start_use(runtime.options_) == oa::platform::display_modes::Use::full_screen;
-    const settings::ScreenSize chosen =
-        full_screen && size == state.desktop ? settings::desktop_screen_size : size;
+    const settings::ScreenSize chosen = stored_screen_size(runtime, size);
     state.current.screen_size = chosen;
     runtime.preference_values_[std::string(settings::key::screen_size)] =
         settings::screen_size_text(chosen);
@@ -568,9 +639,11 @@ void Runtime::apply_engine_settings(const settings::EngineSettings& chosen) {
     if (chosen.hardware_acceleration != before.hardware_acceleration)
         update_render_tier();
     apply_vertical_sync();
-    // Menu scaling applies at once to a screen drawn as one frame: whole
-    // steps set the window's presentation, and every frame takes its filter.
-    if (chosen.menu_scaling != before.menu_scaling && screen_ != Screen::match)
+    // Menu scaling applies at once to a screen drawn as one frame, and to a
+    // match drawn at a screen size and scaled to the screen: whole steps
+    // set the window's presentation, and every frame takes its filter.
+    if (chosen.menu_scaling != before.menu_scaling &&
+        (screen_ != Screen::match || scaled_frame_width_ > 0))
         apply_output_mode();
     if (chosen.developer_mode != before.developer_mode ||
         chosen.hack_overrides != before.hack_overrides)
@@ -928,23 +1001,36 @@ settings::Dialog& Runtime::open_engine_settings_dialog(settings::DialogKind kind
         game_files,
         pad_used()
     );
-    // Screen size offers Desktop and the display's own sizes, and the size
-    // in effect where the display does not offer it.
+    // Screen size offers Desktop and the display's own sizes. In a window it
+    // opens at the window's own size, shown as Custom where the display
+    // offers no such size; in full screen, and without a window, at the
+    // setting, listed where the display does not offer it.
     dialog.offered_screen_sizes.assign(1, settings::desktop_screen_size);
     for (const settings::ScreenSize size : EngineSettingsState::offered_screen_sizes(*this))
         dialog.offered_screen_sizes.push_back(size);
-    if (const auto stored = state.current.screen_size;
-        std::find(dialog.offered_screen_sizes.begin(), dialog.offered_screen_sizes.end(), stored) ==
+    dialog.window_screen_size.reset();
+    dialog.custom_screen_size.reset();
+    settings::ScreenSize shown = state.current.screen_size;
+    if (sdl_.window != nullptr && (SDL_GetWindowFlags(sdl_.window) & SDL_WINDOW_FULLSCREEN) == 0)
+        if (const auto now = EngineSettingsState::screen_size_now(*this);
+            now != settings::desktop_screen_size) {
+            shown = now;
+            dialog.window_screen_size = now;
+        }
+    state.window_screen_size_shown = dialog.window_screen_size.has_value();
+    if (std::find(dialog.offered_screen_sizes.begin(), dialog.offered_screen_sizes.end(), shown) ==
         dialog.offered_screen_sizes.end()) {
         const auto later = std::find_if(
             dialog.offered_screen_sizes.begin() + 1,
             dialog.offered_screen_sizes.end(),
-            [stored](settings::ScreenSize size) {
-                return size.width > stored.width ||
-                       (size.width == stored.width && size.height > stored.height);
+            [shown](settings::ScreenSize size) {
+                return size.width > shown.width ||
+                       (size.width == shown.width && size.height > shown.height);
             }
         );
-        dialog.offered_screen_sizes.insert(later, stored);
+        dialog.offered_screen_sizes.insert(later, shown);
+        if (dialog.window_screen_size)
+            dialog.custom_screen_size = shown;
     }
     // Controller's Steam Input notice, and Maximum frame rate's line naming
     // a Steam Deck's screen rate.
@@ -1013,7 +1099,13 @@ bool Runtime::take_engine_settings_action(settings::DialogAction action) {
             return false;
         }
         take_renderer_retry(*dialog);
-        apply_engine_settings(dialog->chosen);
+        {
+            // A Screen size moved to applies when OK is pressed; until then
+            // the setting stays as it was.
+            settings::EngineSettings live = dialog->chosen;
+            live.screen_size = dialog->opened.screen_size;
+            apply_engine_settings(live);
+        }
         return false;
     case settings::DialogAction::accepted:
     case settings::DialogAction::switch_mod: {
@@ -1060,11 +1152,22 @@ bool Runtime::take_engine_settings_action(settings::DialogAction action) {
         }
         take_renderer_retry(*dialog);
         keep_renderer_records();
-        apply_engine_settings(dialog->chosen);
-        const auto failure = save_engine_settings(dialog->opened, dialog->chosen, dialog->restored);
+        // A Screen size moved to is stored (as Desktop for the desktop's own
+        // in full screen) and applied at once, also where it is the setting
+        // already, as a window sized by hand snaps back to it.
+        settings::EngineSettings chosen = dialog->chosen;
+        const bool screen_size_moved =
+            chosen.screen_size != dialog->opened.screen_size ||
+            (state.window_screen_size_shown && !dialog->window_screen_size);
+        if (screen_size_moved)
+            chosen.screen_size = EngineSettingsState::stored_screen_size(*this, chosen.screen_size);
+        apply_engine_settings(chosen);
+        const auto failure = save_engine_settings(dialog->opened, chosen, dialog->restored);
         state.last_page = dialog->page;
         state.last_developer_list = dialog->developer;
         state.dialog.reset();
+        if (screen_size_moved)
+            apply_screen_size(chosen.screen_size);
         if (failure) {
             // A mod that was not stored would not be the one the restart
             // plays: the game stays as it is and says so.

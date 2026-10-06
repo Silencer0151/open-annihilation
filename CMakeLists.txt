@@ -783,6 +783,15 @@ if(BUILD_TESTING)
   target_link_libraries(oa-app-frame-stats-panel-test PRIVATE oa-app-headers oa-base-game-loop
     oa-ui-hud oa-ui-display-layout oa-options)
   add_test(NAME app-frame-stats-panel COMMAND oa-app-frame-stats-panel-test)
+  # A screen size applied to the window at once, over made-up windows: how
+  # full screen shows a size on each window system, the frame scaled to the
+  # screen, and the steps for a window, a maximised window, full screen at a
+  # mode of the size or on the desktop's mode, a mode the display refuses,
+  # and Desktop.
+  add_executable(oa-app-screen-mode-test src/app/screen_mode_test.cpp src/app/screen_mode.cpp)
+  target_link_libraries(oa-app-screen-mode-test PRIVATE oa-platform-display-modes oa-test-support
+    oa-options)
+  add_test(NAME app-screen-mode COMMAND oa-app-screen-mode-test)
   # The render policy's decisions by table: the tier over every input, the
   # driver walk and its framebuffer hint, strikes and records, their values
   # written and read back, the sentinel and the trial through a run, present
@@ -810,7 +819,8 @@ if(BUILD_TESTING)
     # driver switched and back;
     # the pointer held on the window in full screen with the focus and let go
     # in a window or without the focus; a window that leaves full screen
-    # brought back onto its display.
+    # brought back onto its display, at a size asked for, and a window asked
+    # for a size kept on its display.
     add_executable(oa-app-full-screen-test src/app/full_screen_test.cpp src/app/full_screen.cpp)
     target_link_libraries(oa-app-full-screen-test PRIVATE oa-app-headers SDL3::SDL3 oa-options)
     add_test(NAME app-full-screen COMMAND oa-app-full-screen-test)
@@ -833,6 +843,7 @@ if(BUILD_TESTING)
   endif()
 endif()
 set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size.cpp
+  src/app/screen_mode.cpp src/app/runtime_screen_size.cpp
   src/app/game_directory_dialog.cpp src/app/runtime.cpp
   src/app/runtime_builtin_screens.cpp
   src/app/runtime_camera.cpp src/app/runtime_campaign.cpp src/app/runtime_checks.cpp
@@ -1263,10 +1274,14 @@ if(OA_BUILD_PLATFORM)
       # staged caption, frame or text) before Start; the clicked options tab
       # shows pressed and HELPTEXT shows the help under the pointer. VISUALS'
       # Screen Size lists the 4K monitor's sizes from 640x480 to 3840x2160,
-      # opens on the size the game plays at, and sets the Screen size setting
-      # on OK and not on CANCEL; RESTORE shows the setting's default, Desktop,
-      # as the size it plays at, UNDO brings back the size it opened on, and
-      # OK after RESTORE sets the setting to Desktop.
+      # opens on the window's size, or on Custom for a window dragged to a
+      # size the monitor does not offer, and on OK and not on CANCEL sets the
+      # Screen size setting and snaps the window to it; RESTORE shows the
+      # setting's default, Desktop, as the size it plays at, UNDO brings back
+      # the size it opened on, and OK after RESTORE sets the setting to
+      # Desktop, leaving the window as it is. In a match a Screen size
+      # resizes the window, and in full screen the match is drawn at it and
+      # letterboxed, the pointer in the bars resting on the frame's edge.
       # NEWGAME.GUI's Campaign list selects the clicked campaign, steps with
       # Up and Down until a button takes the focus, scrolls with its arrow and
       # starts a double-clicked one.
@@ -1336,7 +1351,9 @@ if(OA_BUILD_PLATFORM)
       # tier follow it at once, Full drawn as Basic with the status saying
       # so, and come back after a drop or a function test forced to fail;
       # every other step leaves it Off, so every frame compared is drawn on
-      # the processor. Screen size offers Desktop and the 4K monitor's sizes.
+      # the processor. Screen size offers Desktop and the 4K monitor's sizes,
+      # opens on the window's own, and applies 1280x720 when OK is pressed,
+      # in the menus and in a game, which keeps its tick and world.
       set(oa_engine_settings_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/engine-settings")
       file(MAKE_DIRECTORY "${oa_engine_settings_dir}")
       add_test(NAME native-engine-settings COMMAND oa-game --game-dir "${OA_GAME_DIR}"

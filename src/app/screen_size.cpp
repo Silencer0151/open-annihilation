@@ -3,15 +3,19 @@
 
 #include "screen_size.hpp"
 
+#include "oa/app/full_screen.hpp"
 #include "oa/app/game_directory.hpp"
 #include "oa/platform/machine.hpp"
 #include "oa/platform/preferences.hpp"
+#include "oa/platform/system.hpp"
 
 #include <algorithm>
 #include <exception>
 #include <filesystem>
 #include <iostream>
 #include <limits>
+#include <string_view>
+#include <tuple>
 
 namespace oa::app {
 
@@ -60,12 +64,12 @@ display_modes::Use start_use(const Options& options) noexcept {
     return options.start_full_screen ? display_modes::Use::full_screen : display_modes::Use::window;
 }
 
-std::vector<settings::ScreenSize>
-offered_screen_sizes(const Options& options, int32_t minimum_height) {
+std::vector<settings::ScreenSize> offered_screen_sizes(
+    const Options& options, SDL_DisplayID display, display_modes::Use use, int32_t minimum_height
+) {
     std::vector<settings::ScreenSize> sizes;
-    for (const display_modes::Size size : display_modes::offered_sizes(
-             display_report(options, SDL_GetPrimaryDisplay()), start_use(options), minimum_height
-         ))
+    for (const display_modes::Size size :
+         display_modes::offered_sizes(display_report(options, display), use, minimum_height))
         if (kept_as_setting(size))
             sizes.push_back(screen_size_of(size));
     if (sizes.empty())
@@ -160,15 +164,64 @@ void report_window_size(SDL_Window* window, settings::ScreenSize desktop, bool s
               << '\n';
 }
 
-void take_screen_size(SDL_Window* window, settings::ScreenSize size, bool full_screen) {
-    SDL_DisplayMode mode{};
-    if (!display_modes::take_full_screen_size(window, {size.width, size.height}) &&
-        SDL_GetClosestFullscreenDisplayMode(
-            SDL_GetDisplayForWindow(window), size.width, size.height, 0.0F, false, &mode
-        ) &&
-        !SDL_SetWindowFullscreenMode(window, &mode))
-        std::cerr << "open-annihilation: the " << size.width << 'x' << size.height
-                  << " display mode was refused: " << SDL_GetError() << '\n';
+FullScreenMethod run_full_screen_method() {
+    const char* const driver = SDL_GetCurrentVideoDriver();
+    return full_screen_method(
+        driver != nullptr ? std::string_view(driver) : std::string_view(),
+        oa::platform::environment_value("WAYLAND_DISPLAY").has_value(),
+        oa::platform::running_in_steam_game_mode()
+    );
+}
+
+ScreenHooks sdl_screen_hooks(SDL_Window* window) noexcept {
+    ScreenHooks hooks{};
+    hooks.context = window;
+    hooks.window = [](void* context) {
+        auto* const shown = static_cast<SDL_Window*>(context);
+        ScreenWindow state{};
+        const SDL_WindowFlags flags = SDL_GetWindowFlags(shown);
+        state.full_screen = (flags & SDL_WINDOW_FULLSCREEN) != 0;
+        state.exclusive = state.full_screen && SDL_GetWindowFullscreenMode(shown) != nullptr;
+        state.maximised = (flags & SDL_WINDOW_MAXIMIZED) != 0;
+        if (!SDL_GetWindowSize(shown, &state.size.width, &state.size.height))
+            state.size = {};
+        return state;
+    };
+    hooks.restore = [](void* context) {
+        auto* const shown = static_cast<SDL_Window*>(context);
+        // The size that follows needs the window back to a size of its own;
+        // a window system that refuses leaves it maximised.
+        if (SDL_RestoreWindow(shown))
+            std::ignore = SDL_SyncWindow(shown);
+    };
+    hooks.set_window_size = [](void* context, display_modes::Size size) {
+        // The new size reaches the game as any resize does; a window system
+        // that refuses it leaves the window as it was.
+        if (!SDL_SetWindowSize(static_cast<SDL_Window*>(context), size.width, size.height))
+            std::cerr << "open-annihilation: the window's size of " << size.width << 'x'
+                      << size.height << " was refused: " << SDL_GetError() << '\n';
+    };
+    hooks.keep_on_display = [](void* context, display_modes::Size size) {
+        keep_window_on_display(static_cast<SDL_Window*>(context), size.width, size.height);
+    };
+    hooks.take_mode = [](void* context, display_modes::Size size) {
+        return display_modes::take_full_screen_size(static_cast<SDL_Window*>(context), size);
+    };
+    hooks.take_desktop_mode = [](void* context) {
+        if (!SDL_SetWindowFullscreenMode(static_cast<SDL_Window*>(context), nullptr))
+            std::cerr << "open-annihilation: the desktop's display mode was refused: "
+                      << SDL_GetError() << '\n';
+    };
+    return hooks;
+}
+
+void take_screen_size(
+    SDL_Window* window, settings::ScreenSize size, bool full_screen, FullScreenMethod method
+) {
+    if (method == FullScreenMethod::switch_mode &&
+        !display_modes::take_full_screen_size(window, {size.width, size.height}))
+        std::cout << "open-annihilation: the display has no " << size.width << 'x' << size.height
+                  << " mode; full screen draws at that size and scales it\n";
     if (full_screen && !SDL_SetWindowFullscreen(window, true))
         std::cerr << "open-annihilation: full screen was refused: " << SDL_GetError() << '\n';
 }

@@ -33,7 +33,7 @@ the locks a running game puts on them (`settings_locks`).
 | | Enable Unicode Multiplayer Chat; On, locked, while a language whose pack asks for it is chosen | Off, On | Off | `open-annihilation.unicode-chat` |
 | Graphics | Maximum frame rate | 30 to 120, steps of 5 | 120; 60 on a Raspberry Pi or a light machine with the player's own preferences file; a Steam Deck's screen rate (60 on the LCD model, 90 on the OLED) on a Deck with the player's own preferences file | `open-annihilation.max-fps` |
 | | Enhanced anti-aliasing | Off, 2×, 4×, 8×, 16×; a stored level between reads as the one below it, a stored 3 as 2× | Off, a Raspberry Pi and a light machine included | `open-annihilation.anti-aliasing` |
-| | Screen size, from the next start | Desktop, then the sizes the display offers from 640×480 (`Dialog::offered_screen_sizes`); Desktop, 640×480, 800×600, 1024×768 and 1280×1024 where the game does not say | Desktop; 800×600 on a light machine with the player's own preferences file, 640×480 when its desktop is smaller | `open-annihilation.screen-size` (`desktop`, or a size such as `2560x1440`) |
+| | Screen size, when OK is pressed | Desktop, then the sizes the display offers from 640×480 (`Dialog::offered_screen_sizes`), in a window shown at the window's own size until moved, as Custom where the display offers no such size; Desktop, 640×480, 800×600, 1024×768 and 1280×1024 where the game does not say | Desktop; 800×600 on a light machine with the player's own preferences file, 640×480 when its desktop is smaller | `open-annihilation.screen-size` (`desktop`, or a size such as `2560x1440`) |
 | | Hardware acceleration | Off, Basic, Full | Full with the player's own preferences file on every machine; Off with `--preferences-file` | `open-annihilation.hardware-acceleration` (`off`, `basic` or `full`) |
 | | Vertical sync | Off, On | Off | `open-annihilation.vertical-sync` |
 | | Menu scaling | Sharp, Whole steps, Unfiltered | Sharp | `open-annihilation.menu-scaling` (`sharp`, `whole-steps` or `unfiltered`) |
@@ -119,12 +119,19 @@ preferences file it starts at 800×600, 60 frames a second and no enhanced
 anti-aliasing, which a machine of the game's own time keeps up with. The
 screen size is read before the window opens (`src/app/screen_size.cpp`): a
 size other than Desktop opens the window at that size, and full screen
-switches the display to its mode of that size, else the one nearest it. The
-game sets the slider's stops once the dialog has opened: Desktop, then the
-sizes the display offers for the next start
+shows it through the display's mode of that size, or draws the game at it
+and scales it to the screen. A size chosen applies when OK is pressed
+(`src/app/screen_mode.hpp`), never while the slider moves: the dialog holds
+the setting as it was until then, and Cancel leaves it. The game sets the
+slider's stops once the dialog has opened: Desktop, then the sizes the
+display the window is on offers
 ([display modes](../../platform/display-modes/README.md)), and the size
-stored where the display does not offer it, so that the slider shows it
-until it is moved. The preferences keep any size from 640×480 to 8192×8192
+shown where the display does not offer it, so that the slider shows it
+until it is moved. In a window that is the window's own size
+(`Dialog::window_screen_size`), which the slider shows until its knob
+moves, whatever the setting, as "Custom" where it is not one of the
+display's (`Dialog::custom_screen_size`); in full screen it is the size
+stored. The preferences keep any size from 640×480 to 8192×8192
 (`screen_size_from_text`), so that a size the display offers is kept as
 chosen.
 

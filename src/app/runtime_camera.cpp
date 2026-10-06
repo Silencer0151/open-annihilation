@@ -543,9 +543,17 @@ void Runtime::pan_match_camera() {
     if (match_pointer_known_ && (flags & SDL_WINDOW_MOUSE_FOCUS) != 0) {
         // A window point covers several pixels on a high-density display, and
         // the pointer rests on the outermost point, not the outermost pixel;
-        // on a window at native density the layout is in window points.
-        const auto edge =
-            edge_scroll_depth(at_native_density(flags), SDL_GetWindowPixelDensity(sdl_.window));
+        // on a window at native density the layout is in window points. A
+        // scaled frame's pixels to a window point are its width over the
+        // points it is presented across.
+        float per_point = SDL_GetWindowPixelDensity(sdl_.window);
+        SDL_FRect presented{};
+        const bool scaled = scaled_frame_width_ > 0 &&
+                            SDL_GetRenderLogicalPresentationRect(sdl_.renderer, &presented) &&
+                            presented.w > 0.0F;
+        if (scaled)
+            per_point = per_point * static_cast<float>(match_layout_.width) / presented.w;
+        const auto edge = edge_scroll_depth(at_native_density(flags) && !scaled, per_point);
         const auto way = oa::ui::hud::edge_scroll(
             static_cast<int32_t>(std::floor(match_pointer_x_)),
             static_cast<int32_t>(std::floor(match_pointer_y_)),

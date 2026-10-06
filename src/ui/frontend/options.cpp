@@ -29,6 +29,9 @@ constexpr std::string_view kOptionsSound = "Options";
 constexpr std::string_view kPreviousSound = "Previous";
 constexpr std::string_view kTestWave = "sounds\\explode.wav";
 constexpr std::string_view kNoLinesText = "None";
+/// What the Screen Size shows for a size the display offers no mode of,
+/// such as a window's own size the player dragged it to.
+constexpr std::string_view kCustomModeText = "Custom";
 
 constexpr int32_t kFxVolumeMaximum = 0x40;
 constexpr int32_t kGammaMaximum = 0x14;
@@ -687,16 +690,31 @@ void options_sync_video_mode(Panel& panel, OptionsContext& context) noexcept {
         return;
     const auto& preferences = *context.preferences;
     const auto& list = context.display_modes;
+    // The last mode listed before the size held, in the list's order: the
+    // narrower first, and of two as wide the shorter.
+    int32_t before = -1;
     for (int32_t index = 0; index < list.count; ++index) {
         const auto& mode = list.modes[static_cast<std::size_t>(index) % kDisplayModeCapacity];
-        if (preferences.display_width != static_cast<uint32_t>(mode.width) ||
-            preferences.display_height != static_cast<uint32_t>(mode.height))
+        const auto width = static_cast<uint32_t>(std::max(mode.width, 0));
+        const auto height = static_cast<uint32_t>(std::max(mode.height, 0));
+        if (width < preferences.display_width ||
+            (width == preferences.display_width && height < preferences.display_height))
+            before = index;
+        if (preferences.display_width != width || preferences.display_height != height)
             continue;
         slider_set_value(slider->slider, index);
         if (panel_control(panel, "VIDVAL") != nullptr)
             set_mode_text(panel, mode);
         return;
     }
+    // A size no mode has, such as a window's own size the player dragged it
+    // to, shows as Custom, with the knob on the mode listed before it, or on
+    // the first; moving the knob chooses a mode as ever.
+    if (list.count <= 0)
+        return;
+    slider_set_value(slider->slider, std::max(before, 0));
+    if (panel_control(panel, "VIDVAL") != nullptr)
+        panel_set_text(panel, "VIDVAL", kCustomModeText);
 }
 
 void options_on_video_mode_slider(Panel& panel, OptionsContext& context) noexcept {

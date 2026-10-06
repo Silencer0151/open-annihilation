@@ -663,6 +663,113 @@ void test_window_back_on_display() {
     SDL_Quit();
 }
 
+// A window that keeps its size moves no more than it must to lie on the
+// display, and one larger than the usable area starts at its corner.
+void test_window_at_size_on_display() {
+    const SDL_Rect usable{0, 25, 1024, 700};
+    CHECK(same_rect(
+        oa::app::window_at_size_on_display({100, 100, 640, 480}, usable), {100, 100, 640, 480}
+    ));
+    CHECK(same_rect(
+        oa::app::window_at_size_on_display({600, 400, 640, 480}, usable), {384, 245, 640, 480}
+    ));
+    CHECK(
+        same_rect(oa::app::window_at_size_on_display({-30, 0, 640, 480}, usable), {0, 25, 640, 480})
+    );
+    // As large as the area on one axis, larger on the other.
+    CHECK(same_rect(
+        oa::app::window_at_size_on_display({200, 100, 1024, 800}, usable), {0, 25, 1024, 800}
+    ));
+    // A second display left of the first.
+    CHECK(same_rect(
+        oa::app::window_at_size_on_display({-1900, 50, 1280, 720}, {-1920, 0, 1920, 1080}),
+        {-1900, 50, 1280, 720}
+    ));
+    CHECK(same_rect(
+        oa::app::window_at_size_on_display({-1000, 50, 1280, 720}, {-1920, 0, 1920, 1080}),
+        {-1280, 50, 1280, 720}
+    ));
+}
+
+// A screen size chosen on SDL's dummy video driver: a window asked for a
+// size keeps it on its display, and a size asked for in full screen is the
+// window's once it leaves full screen, kept where it was placed.
+void test_window_takes_a_size() {
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
+        std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
+        ++failures;
+        return;
+    }
+    SDL_Window* window =
+        SDL_CreateWindow("window size test", 640, 480, oa::app::game_window_flags(false, false));
+    CHECK(window != nullptr);
+    if (window == nullptr) {
+        SDL_Quit();
+        return;
+    }
+    SDL_Rect display{};
+    CHECK(SDL_GetDisplayBounds(SDL_GetDisplayForWindow(window), &display));
+    const char* driver = SDL_GetCurrentVideoDriver();
+    if (driver == nullptr || std::string_view(driver) != "dummy" ||
+        !same_rect(display, {0, 0, 1024, 768})) {
+        std::puts("full screen: a window's size is checked only on SDL's dummy video driver");
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return;
+    }
+    FullScreenSwitch full_screen{};
+    pump_window(window, full_screen);
+    // Sized in a window where it lies: it stays where it is.
+    CHECK(SDL_SetWindowPosition(window, 100, 100));
+    CHECK(SDL_SetWindowSize(window, 800, 600));
+    oa::app::keep_window_on_display(window, 800, 600);
+    pump_window(window, full_screen);
+    CHECK(same_rect(window_rect(window), {100, 100, 800, 600}));
+    // Sized past the display's edge: moved back onto it, at the size.
+    CHECK(SDL_SetWindowSize(window, 1024, 600));
+    oa::app::keep_window_on_display(window, 1024, 600);
+    pump_window(window, full_screen);
+    CHECK(same_rect(window_rect(window), {0, 100, 1024, 600}));
+
+    // A size asked for in full screen is the window's once it leaves.
+    const auto alt_enter = [&] {
+        CHECK(
+            oa::app::take_full_screen_event(
+                window, full_screen, key_down(SDLK_RETURN, SDL_KMOD_LALT, false)
+            )
+        );
+        CHECK(
+            oa::app::take_full_screen_event(window, full_screen, key_up(SDLK_RETURN, SDL_KMOD_LALT))
+        );
+        pump_window(window, full_screen);
+    };
+    alt_enter();
+    CHECK(shows_full_screen(window));
+    full_screen.window_width = 1280;
+    full_screen.window_height = 720;
+    alt_enter();
+    CHECK(!shows_full_screen(window));
+    CHECK(!full_screen.placing_window);
+    // Wider than the display: kept at its size from the display's left edge,
+    // and moved up no more than it must to end on its last row.
+    CHECK(same_rect(window_rect(window), {0, 48, 1280, 720}));
+    int width = 0;
+    int height = 0;
+    CHECK(SDL_GetWindowSizeInPixels(window, &width, &height));
+    CHECK(width == 1280 && height == 720);
+    // Entering full screen again forgets the size: the window comes back at
+    // the size it went in at.
+    CHECK(SDL_SetWindowSize(window, 800, 600));
+    CHECK(SDL_SetWindowPosition(window, 50, 60));
+    pump_window(window, full_screen);
+    alt_enter();
+    CHECK(full_screen.window_width == 0 && full_screen.window_height == 0);
+    alt_enter();
+    CHECK(same_rect(window_rect(window), {50, 60, 800, 600}));
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+}
+
 // A window of SDL's video driver (the dummy driver under ctest), switched by
 // Alt+Enter, its repeats and keypad Enter.
 void test_window() {
@@ -784,6 +891,8 @@ int main() {
     test_window();
     test_pointer_window();
     test_window_back_on_display();
+    test_window_at_size_on_display();
+    test_window_takes_a_size();
     if (failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;
@@ -791,7 +900,8 @@ int main() {
     std::puts(
         "full screen: the window opens at native density only when asked, Alt+Enter switches, "
         "the mode asked for is kept, the pointer stays on the screen while the window has the "
-        "focus, and a window leaving full screen comes back onto its display"
+        "focus, and a window leaving full screen comes back onto its display, at a size asked "
+        "for"
     );
     return 0;
 }

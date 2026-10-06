@@ -21,6 +21,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -599,6 +600,16 @@ struct Dialog {
     /// the game sets the display's own once the dialog has opened. Never
     /// empty.
     std::vector<ScreenSize> offered_screen_sizes{screen_sizes.begin(), screen_sizes.end()};
+    /// The window's own size, which Screen size shows in a window until its
+    /// knob moves, whatever the setting chosen: Desktop leaves a window as
+    /// it is. Empty in full screen, and once the knob has moved. The game
+    /// sets it with the stops, which list it.
+    std::optional<ScreenSize> window_screen_size;
+    /// The stop of offered_screen_sizes that stands for the window's own
+    /// size where the display offers no such size, which the slider shows
+    /// as "Custom"; empty when there is none. The game sets it with the
+    /// stops.
+    std::optional<ScreenSize> custom_screen_size;
     /// The names of the offered mod folders, in the order of Inputs::mod_folders.
     std::vector<std::string> mod_names;
     /// The offered mod folders' paths, in the same order (Inputs::mod_folders).

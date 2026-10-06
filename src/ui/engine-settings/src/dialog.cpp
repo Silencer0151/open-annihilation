@@ -2039,7 +2039,7 @@ std::string_view hint_line(
             lines = {"Units drawn at higher resolution and scaled down", "for smoother edges."};
         break;
     case Setting::screen_size:
-        lines = {"Full screen at this size, or a window of it.", "Applies from the next start."};
+        lines = {"Full screen at this size, or a window of it.", "Applies when you press OK."};
         break;
     case Setting::developer_mode:
         lines = {"Your changes to the profile's hacks apply while on.", {}};
@@ -2311,6 +2311,21 @@ std::size_t hint_line_count(Setting setting, const RowContext& context) noexcept
     if (setting == Setting::max_frame_rate && context.steam_deck_panel_hz != 0)
         return hint_line_count(setting) + 1;
     return hint_line_count(setting);
+}
+
+EngineSettings slider_settings(const Dialog& dialog) {
+    EngineSettings shown = dialog.chosen;
+    if (dialog.window_screen_size)
+        shown.screen_size = *dialog.window_screen_size;
+    return shown;
+}
+
+std::string value_text(Setting setting, const Dialog& dialog) {
+    const EngineSettings shown = slider_settings(dialog);
+    if (setting == Setting::screen_size && dialog.custom_screen_size &&
+        shown.screen_size == *dialog.custom_screen_size)
+        return std::string(shown_text("Custom"));
+    return value_text(setting, shown);
 }
 
 std::string value_text(Setting setting, const EngineSettings& settings) {
@@ -2864,13 +2879,12 @@ void step(Dialog& dialog, Setting setting, bool up) {
     const uint16_t highest_offered_unit = dialog.highest_offered_unit;
     if (layout::is_slider(setting)) {
         const std::span<const ScreenSize> sizes = dialog.offered_screen_sizes;
-        layout::set_stop(
-            settings,
-            setting,
-            layout::stop_of(settings, setting, highest_offered_unit, sizes) + (up ? 1 : -1),
-            highest_offered_unit,
-            sizes
-        );
+        const int32_t stop =
+            layout::stop_of(layout::slider_settings(dialog), setting, highest_offered_unit, sizes);
+        layout::set_stop(settings, setting, stop + (up ? 1 : -1), highest_offered_unit, sizes);
+        // Once moved, Screen size shows the size chosen.
+        if (setting == Setting::screen_size)
+            dialog.window_screen_size.reset();
         return;
     }
     if (layout::is_strip(setting)) {
@@ -3538,6 +3552,9 @@ DialogAction drag_to(Dialog& dialog, const layout::Row& row, int32_t column) noe
         dialog.highest_offered_unit,
         dialog.offered_screen_sizes
     );
+    // Once moved, Screen size shows the size chosen.
+    if (row.setting == Setting::screen_size)
+        dialog.window_screen_size.reset();
     return changed_or_redraw(dialog, before);
 }
 
@@ -4696,9 +4713,7 @@ std::vector<LayoutPart> dialog_layout(const Dialog& dialog, const DialogFonts* f
             );
         } else if (layout::is_slider(row.setting)) {
             row_part(LayoutPart{row.control_area, {}, DialogFont::regular, 0, control});
-            row_text(
-                row.value, layout::value_text(row.setting, dialog.chosen), DialogFont::regular
-            );
+            row_text(row.value, layout::value_text(row.setting, dialog), DialogFont::regular);
         } else if (row.control_area.width > 0) {
             const int32_t half = (row.control_area.width - 2) / 2;
             row_part(

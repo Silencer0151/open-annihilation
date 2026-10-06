@@ -1763,7 +1763,7 @@ void draw_section(
                 in_view,
                 row.control_area,
                 layout::stop_of(
-                    dialog.chosen,
+                    layout::slider_settings(dialog),
                     row.setting,
                     dialog.highest_offered_unit,
                     dialog.offered_screen_sizes
@@ -1781,7 +1781,7 @@ void draw_section(
                 target,
                 in_view,
                 regular_of(fonts),
-                layout::value_text(row.setting, dialog.chosen),
+                layout::value_text(row.setting, dialog),
                 row.value,
                 Align::right,
                 kTextColor

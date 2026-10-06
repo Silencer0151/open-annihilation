@@ -864,6 +864,88 @@ void Runtime::check_engine_settings_in_match() {
                   << button.y << " and the dialog at " << dialog_at.x << ',' << dialog_at.y << on
                   << '\n';
     }
+    // A Screen size chosen in a game applies when OK is pressed: the window
+    // takes it at once and the match is laid out again at it, the game
+    // keeping its tick and its world; the window and the setting then go
+    // back as they were.
+    {
+        require(match_ != nullptr, "no game is left for the Screen size");
+        const auto pump_window_events = [&] {
+            SDL_SyncWindow(sdl_.window);
+            SDL_Event event{};
+            while (SDL_PollEvent(&event))
+                dispatch_event(event, running);
+            require(running, "a window event ended the run");
+        };
+        // The world's digest, the camera aside, which a new layout may move.
+        const auto world_digest = [this] {
+            const auto kept_x = match_camera_x_;
+            const auto kept_z = match_camera_z_;
+            match_camera_x_ = 0;
+            match_camera_z_ = 0;
+            const auto digest = match_world_digest();
+            match_camera_x_ = kept_x;
+            match_camera_z_ = kept_z;
+            return digest;
+        };
+        int before_width = 0;
+        int before_height = 0;
+        SDL_GetWindowSize(sdl_.window, &before_width, &before_height);
+        const auto kept_values = preference_values_;
+        const auto kept_setting = engine_settings_state().current.screen_size;
+        constexpr settings::ScreenSize kChosenSize{1280, 720};
+        require(
+            before_width != kChosenSize.width || before_height != kChosenSize.height,
+            "the window is already 1280x720"
+        );
+        show_match_pause_menu();
+        const auto button = MatchHost::button_rect(match_layout_);
+        send_check_pointer(SDL_EVENT_MOUSE_MOTION, centre(button), 0);
+        send_check_pointer(SDL_EVENT_MOUSE_BUTTON_DOWN, centre(button), SDL_BUTTON_LEFT);
+        send_check_pointer(SDL_EVENT_MOUSE_BUTTON_UP, centre(button), SDL_BUTTON_LEFT);
+        require(engine_settings_dialog() != nullptr, "the OA button did not open the dialog");
+        const uint32_t tick = match_timing_.tick;
+        const auto digest = world_digest();
+        show_page(settings::Page::graphics, " for the Screen size");
+        for (int press = 0;
+             press < 16 && engine_settings_dialog()->focused != settings::first_row_control + 2;
+             ++press)
+            tap_key(SDLK_DOWN, SDL_KMOD_NONE);
+        for (int press = 0;
+             press < 64 && engine_settings_dialog()->chosen.screen_size != kChosenSize;
+             ++press)
+            tap_key(SDLK_LEFT, SDL_KMOD_NONE);
+        require(
+            engine_settings_dialog()->chosen.screen_size == kChosenSize,
+            "Screen size never reached 1280x720 in a game"
+        );
+        tap_key(SDLK_RETURN, SDL_KMOD_NONE);
+        pump_window_events();
+        int width = 0;
+        int height = 0;
+        SDL_GetWindowSize(sdl_.window, &width, &height);
+        require(
+            engine_settings_dialog() == nullptr && width == kChosenSize.width &&
+                height == kChosenSize.height && match_layout_.width == kChosenSize.width &&
+                match_layout_.height == kChosenSize.height,
+            "OK on a Screen size of 1280x720 in a game left the window at " +
+                std::to_string(width) + 'x' + std::to_string(height) + " and the match at " +
+                std::to_string(match_layout_.width) + 'x' + std::to_string(match_layout_.height)
+        );
+        require(
+            match_ && match_timing_.tick == tick && world_digest() == digest,
+            "a Screen size applied in a game changed its tick or its world"
+        );
+        std::cout << "engine settings check: a Screen size of 1280x720 chosen in a game resized "
+                     "the window from "
+                  << before_width << 'x' << before_height << " at tick " << tick << '\n';
+        resume_match_pause();
+        preference_values_ = kept_values;
+        engine_settings_state().current.screen_size = kept_setting;
+        require(!EngineSettingsState::flush(*this), "the preferences were not written back");
+        SDL_SetWindowSize(sdl_.window, before_width, before_height);
+        pump_window_events();
+    }
     leave_match();
     load(Screen::main_menu);
     // Back on the main menu Mods is unlocked.

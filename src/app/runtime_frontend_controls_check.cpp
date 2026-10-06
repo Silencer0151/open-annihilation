@@ -9,6 +9,7 @@
 // screen and back on a menu and in a match.
 #include "engine_settings_state.hpp"
 #include "oa/app/runtime.hpp"
+#include "oa/data/languages/translation.hpp"
 #include "oa/data/persist/save_sections.hpp"
 #include "oa/ui/frontend_dialogs.hpp"
 
@@ -281,21 +282,30 @@ void Runtime::check_frontend_controls() {
     // VISUALS' Screen Size: the display's sizes from the smallest to the
     // largest at the slider's ends (the made-up monitor's with
     // --display-modes), each shown as VIDVAL's "WIDTH X HEIGHT"; it opens on
-    // the size the game plays at. With `pictures`, the largest is written as
+    // the window's size, or on Custom where the display offers no such
+    // size. With `pictures`, the largest is written as
     // <stem>-options-VISUALS-largest.ppm.
     const auto offered = EngineSettingsState::offered_screen_sizes(*this);
     const auto size_text = [](oa::ui::engine_settings::ScreenSize size) {
         return std::to_string(size.width) + " X " + std::to_string(size.height);
     };
+    const char* const custom_shown = oa::data::languages::installed_translation(nullptr, "Custom");
+    const std::string custom_text = custom_shown != nullptr ? custom_shown : "Custom";
     const auto check_screen_size_list = [&](bool pictures) {
-        const auto opened = EngineSettingsState::screen_size_in_effect(*this, offered);
+        const auto now = EngineSettingsState::screen_size_now(*this);
+        const auto opened = std::find(offered.begin(), offered.end(), now) != offered.end()
+                                ? size_text(now)
+                                : custom_text;
         expect(
-            label_text("VIDVAL") == size_text(opened),
-            "VISUALS' Screen Size opened on " + label_text("VIDVAL") + ", not on " +
-                size_text(opened)
+            label_text("VIDVAL") == opened,
+            "VISUALS' Screen Size opened on " + label_text("VIDVAL") + ", not on " + opened
         );
-        // The slider is as long as its GUI makes it, whatever the count.
+        // The slider is as long as its GUI makes it, whatever the count. The
+        // knob goes to the first stop first: Custom rests it on the last
+        // when the window is larger than every size listed.
         constexpr int32_t past_either_end = 400;
+        drag_check_knob("VIDSLDR", -past_either_end);
+        idle_tick();
         drag_check_knob("VIDSLDR", past_either_end);
         idle_tick();
         expect(
@@ -1078,31 +1088,91 @@ void Runtime::check_frontend_controls() {
         return found == preference_values_.end() ? std::string("desktop") : found->second;
     };
     expect(stored_size() == "desktop", "CANCEL kept a Screen Size the player moved");
-    // OK keeps the Screen Size chosen as the Screen size setting, from the
-    // next start, and the options open on it again. The slider moves to the
-    // end away from the size the options open on: the largest, or on a
-    // display whose largest that is, the smallest. A display of one size
-    // leaves nothing to move to.
-    const auto opened_on = EngineSettingsState::screen_size_in_effect(*this, offered);
-    const bool to_largest = opened_on != offered.back();
-    const auto moved_to = to_largest ? offered.back() : offered.front();
+    // The window's own events (its new size among them) reach the game as
+    // its loop pumps them.
+    const auto settle_window = [&] {
+        (void)SDL_SyncWindow(sdl_.window);
+        SDL_Event event{};
+        while (SDL_PollEvent(&event))
+            dispatch_event(event, running);
+    };
+    const auto window_points = [&] {
+        int width = 0;
+        int height = 0;
+        (void)SDL_GetWindowSize(sdl_.window, &width, &height);
+        return std::to_string(width) + 'x' + std::to_string(height);
+    };
+    // The window's size as the check started, which it gets back at the end.
+    int opened_width = 0;
+    int opened_height = 0;
+    (void)SDL_GetWindowSize(sdl_.window, &opened_width, &opened_height);
+    // A window the player sized by hand to a size the display has no mode
+    // of shows Custom in the language shown, and CANCEL keeps it as it is.
+    constexpr oa::ui::engine_settings::ScreenSize kHandSized{1000, 700};
+    require(
+        std::find(offered.begin(), offered.end(), kHandSized) == offered.end(),
+        "the display offers the size the window is dragged to"
+    );
+    require(SDL_SetWindowSize(sdl_.window, kHandSized.width, kHandSized.height), SDL_GetError());
+    settle_window();
+    click(entry::resource_name(entry::Button::options));
+    click("VISUALS");
+    expect(
+        label_text("VIDVAL") == custom_text,
+        "VISUALS shows " + label_text("VIDVAL") + " for a window dragged to " + window_points() +
+            ", not " + custom_text
+    );
+    if (!options_.snapshot.empty()) {
+        park_pointer();
+        snapshot("options-VISUALS-custom");
+    }
+    click("CANCEL");
+    require(screen_ == Screen::single_player, "CANCEL did not leave the options");
+    expect(
+        window_points() == "1000x700" && stored_size() == "desktop",
+        "CANCEL on Custom changed the window to " + window_points() + " or the setting to " +
+            stored_size()
+    );
+    // OK on a Screen Size moved to applies it at once: the window snaps to
+    // the size, the menu follows it, the setting keeps it, and the options
+    // open on it again. The knob goes to the first size, then steps on to
+    // 1280x720.
+    constexpr oa::ui::engine_settings::ScreenSize kChosenSize{1280, 720};
+    const auto moved_to = std::find(offered.begin(), offered.end(), kChosenSize) != offered.end()
+                              ? kChosenSize
+                              : offered.back();
     const auto moved_to_text =
         std::to_string(moved_to.width) + 'x' + std::to_string(moved_to.height);
-    if (offered.size() > 1) {
-        click(entry::resource_name(entry::Button::options));
-        click("VISUALS");
-        drag_check_knob("VIDSLDR", to_largest ? 400 : -400);
-        idle_tick();
-        click("PREV");
-        require(screen_ == Screen::single_player, "OK did not leave the options");
-        expect(
-            stored_size() == moved_to_text &&
-                engine_settings_state().current.screen_size == moved_to &&
-                preferences_.display_width == moved_to.width &&
-                preferences_.display_height == moved_to.height,
-            "OK on Screen Size " + moved_to_text + " stored the setting as " + stored_size()
-        );
-    }
+    click(entry::resource_name(entry::Button::options));
+    click("VISUALS");
+    drag_check_knob("VIDSLDR", -400);
+    for (int step = 0; step < 400 && label_text("VIDVAL") != size_text(moved_to); ++step)
+        click_check_arrow("VIDSLDR", true);
+    idle_tick();
+    expect(
+        label_text("VIDVAL") == size_text(moved_to),
+        "VIDSLDR's arrow never reached " + size_text(moved_to)
+    );
+    click("PREV");
+    require(screen_ == Screen::single_player, "OK did not leave the options");
+    settle_window();
+    int menu_output_width = 0;
+    int menu_output_height = 0;
+    (void)SDL_GetRenderOutputSize(sdl_.renderer, &menu_output_width, &menu_output_height);
+    expect(
+        stored_size() == moved_to_text && engine_settings_state().current.screen_size == moved_to &&
+            preferences_.display_width == moved_to.width &&
+            preferences_.display_height == moved_to.height,
+        "OK on Screen Size " + moved_to_text + " stored the setting as " + stored_size()
+    );
+    expect(
+        window_points() == moved_to_text && menu_output_width == moved_to.width &&
+            menu_output_height == moved_to.height,
+        "OK on Screen Size " + moved_to_text + " left the window at " + window_points()
+    );
+    std::cout << "frontend controls check: VISUALS shows " << custom_text
+              << " for a window dragged to 1000x700, and OK on " << moved_to_text
+              << " snaps the window to it\n";
     // RESTORE shows the Screen size setting's default as the size it plays
     // at, Desktop's, never 3.1c's 640x480; UNDO brings the size the options
     // opened on back, and OK then keeps the setting. RESTORE and OK set it
@@ -1150,10 +1220,18 @@ void Runtime::check_frontend_controls() {
     );
     std::cout << "frontend controls check: RESTORE shows Screen Size " << size_text(default_shown)
               << " and OK stores " << default_text << '\n';
-    // The check's preferences file starts the next run at Desktop again.
+    // Desktop in a window leaves it as it is.
+    expect(
+        window_points() == moved_to_text,
+        "OK after RESTORE changed the window to " + window_points()
+    );
+    // The check's preferences file starts the next run at Desktop again, and
+    // the window goes back to its size.
     EngineSettingsState::choose_screen_size(*this, oa::ui::engine_settings::desktop_screen_size);
     save_preferences();
     expect(stored_size() == "desktop", "the Screen size setting did not go back to Desktop");
+    require(SDL_SetWindowSize(sdl_.window, opened_width, opened_height), SDL_GetError());
+    settle_window();
 
     // Alt+Enter switches the window to full screen and back, on a menu and
     // in a match: Return and keypad Enter alike, a held key's repeats
@@ -1355,6 +1433,120 @@ void Runtime::check_frontend_controls() {
     );
     key(SDL_EVENT_KEY_DOWN, SDLK_ESCAPE, SDL_KMOD_NONE, false);
     expect(!chat_composing_, "Escape did not close the chat line");
+
+    // A Screen size applied in a match: the window takes it at once and the
+    // match is laid out at it. In full screen on the display's desktop mode
+    // (the dummy driver offers no other) the match is drawn at the size and
+    // scaled to the screen, letterboxed, the pointer in the black bars
+    // resting on the frame's edge; a size chosen there is the window's once
+    // it leaves full screen; Desktop draws at the screen's own size again.
+    {
+        const bool started_full_screen = full_screen();
+        if (started_full_screen)
+            alt_enter(SDLK_RETURN, 0);
+        int before_width = 0;
+        int before_height = 0;
+        (void)SDL_GetWindowSize(sdl_.window, &before_width, &before_height);
+        const uint32_t tick = match_timing_.tick;
+        const std::string scaled_text =
+            std::to_string(kChosenSize.width) + 'x' + std::to_string(kChosenSize.height);
+        EngineSettingsState::take_screen_size(*this, kChosenSize);
+        settle();
+        expect(
+            window_points() == scaled_text && follows_window() &&
+                match_layout_.width == kChosenSize.width &&
+                match_layout_.height == kChosenSize.height,
+            "a Screen size of " + scaled_text + " in a match left the window at " +
+                window_points() + " and the match at " + std::to_string(match_layout_.width) + 'x' +
+                std::to_string(match_layout_.height)
+        );
+        alt_enter(SDLK_RETURN, 0);
+        expect(full_screen(), "Alt+Enter did not switch a sized window to full screen");
+        int logical_width = 0;
+        int logical_height = 0;
+        SDL_RendererLogicalPresentation presentation = SDL_LOGICAL_PRESENTATION_DISABLED;
+        (void)SDL_GetRenderLogicalPresentation(
+            sdl_.renderer, &logical_width, &logical_height, &presentation
+        );
+        SDL_FRect drawn{};
+        (void)SDL_GetRenderLogicalPresentationRect(sdl_.renderer, &drawn);
+        expect(
+            scaled_frame_size().x == kChosenSize.width &&
+                match_layout_.width == kChosenSize.width &&
+                match_layout_.height == kChosenSize.height && logical_width == kChosenSize.width &&
+                logical_height == kChosenSize.height &&
+                presentation != SDL_LOGICAL_PRESENTATION_DISABLED,
+            "full screen did not draw the match at " + scaled_text + " and scale it: " +
+                std::to_string(match_layout_.width) + 'x' + std::to_string(match_layout_.height)
+        );
+        snapshot_window("scaled-frame");
+        // The pointer above the frame, in the black bar, rests on its top
+        // row; one left of it on its first column.
+        const auto window_motion = [&](float x, float y) {
+            SDL_Event motion{};
+            motion.type = SDL_EVENT_MOUSE_MOTION;
+            motion.motion.windowID = SDL_GetWindowID(sdl_.window);
+            motion.motion.x = x;
+            motion.motion.y = y;
+            dispatch_event(motion, running);
+        };
+        float density = SDL_GetWindowPixelDensity(sdl_.window);
+        if (!(density > 0.0F))
+            density = 1.0F;
+        if (drawn.y >= 2.0F) {
+            window_motion((drawn.x + drawn.w / 2.0F) / density, 0.0F);
+            expect(
+                match_pointer_y_ == 0.0F && match_pointer_x_ >= 0.0F &&
+                    match_pointer_x_ < static_cast<float>(kChosenSize.width),
+                "the pointer above the scaled frame did not rest on its top row"
+            );
+        }
+        if (drawn.x >= 2.0F) {
+            window_motion(0.0F, (drawn.y + drawn.h / 2.0F) / density);
+            expect(
+                match_pointer_x_ == 0.0F,
+                "the pointer left of the scaled frame did not rest on its first column"
+            );
+        }
+        // A size chosen in full screen, then the window it leaves at.
+        constexpr oa::ui::engine_settings::ScreenSize kFullScreenSize{800, 600};
+        EngineSettingsState::take_screen_size(*this, kFullScreenSize);
+        expect(
+            full_screen() && match_layout_.width == kFullScreenSize.width &&
+                match_layout_.height == kFullScreenSize.height,
+            "a Screen size of 800x600 in full screen did not draw the match at it"
+        );
+        alt_enter(SDLK_RETURN, 0);
+        settle();
+        expect(
+            !full_screen() && window_points() == "800x600" && follows_window(),
+            "the window left full screen at " + window_points() + ", not 800x600"
+        );
+        // Desktop in full screen draws at the screen's own size.
+        alt_enter(SDLK_RETURN, 0);
+        EngineSettingsState::take_screen_size(*this, oa::ui::engine_settings::desktop_screen_size);
+        expect(
+            full_screen() && scaled_frame_size().x == 0 && follows_window(),
+            "Desktop in full screen did not draw the match at the screen's size"
+        );
+        alt_enter(SDLK_RETURN, 0);
+        expect(
+            match_ && match_timing_.tick == tick, "applying a Screen size ran or reset the game"
+        );
+        std::cout << "frontend controls check: a Screen size in a match: a " << scaled_text
+                  << " window, full screen drawn at " << scaled_text << " in "
+                  << static_cast<int>(drawn.w) << 'x' << static_cast<int>(drawn.h)
+                  << ", 800x600 chosen in full screen and Desktop\n";
+        // The check's file and window as they were.
+        EngineSettingsState::choose_screen_size(
+            *this, oa::ui::engine_settings::desktop_screen_size
+        );
+        save_preferences();
+        require(SDL_SetWindowSize(sdl_.window, before_width, before_height), SDL_GetError());
+        settle();
+        if (started_full_screen)
+            alt_enter(SDLK_RETURN, 0);
+    }
     // SDL's dummy video driver gives its window the focus, so there full
     // screen held the pointer.
     const char* video_driver = SDL_GetCurrentVideoDriver();

@@ -3,9 +3,11 @@
 
 #include "test_support.hpp"
 
+#include "oa/data/languages/translation.hpp"
 #include "oa/ui/gui_layout/gui_gadget.hpp"
 
 #include <cstdint>
+#include <cstring>
 #include <string>
 
 namespace oa::ui::frontend::test {
@@ -490,6 +492,71 @@ OA_GAME_DATA_TEST(frontend_sub_panels_are_not_widened) {
 
 // Without a PANEL record the sub-panel's records move by its root's own
 // position; the centring in PANEL halves the difference toward zero.
+/// Answers "Custom" in Simplified Chinese, as the pack's translate.tdf gives it.
+///
+/// @param text the text
+/// @return its Chinese, or null for any other text
+const char* chinese_custom(void*, const char* text) {
+    return std::strcmp(text, "Custom") == 0 ? "\u81ea\u5b9a\u4e49" : nullptr;
+}
+
+// A saved size no display mode has, such as a window's own size the player
+// dragged it to, shows Custom, in the language shown, with the knob on the
+// mode listed before it; moving the knob chooses a mode, and UNDO brings
+// Custom back.
+OA_GAME_DATA_TEST(visuals_show_custom_for_a_size_no_mode_has) {
+    Panel panel;
+    if (!options_panel(panel, "visuals.gui"))
+        return;
+    prefs::Preferences preferences{};
+    preferences.display_width = 1300;
+    preferences.display_height = 800;
+    Recorder recorder;
+    recorder.modes = {{640, 480, 0}, {1024, 768, 0}, {1280, 720, 0}, {1920, 1080, 0}};
+    auto context = make_context(preferences, recorder);
+    oa::ui::frontend_state::State state{};
+    context.state = &state;
+    options_capture_entry(context);
+    context.snapshot.display_width = 1300;
+    context.snapshot.display_height = 800;
+    options_enter_visuals(panel, context, false);
+    auto* slider = panel_control(panel, "VIDSLDR");
+    OA_CHECK(slider != nullptr && slider->slider.maximum == 3);
+    OA_CHECK(text_of(panel, "VIDVAL") == "Custom");
+    OA_CHECK(slider_value(slider->slider) == 2);
+    // The size held stays the window's until the knob moves.
+    OA_CHECK(preferences.display_width == 1300 && preferences.display_height == 800);
+    // Moving the knob to the mode it rests on chooses that mode.
+    options_on_video_mode_slider(panel, context);
+    OA_CHECK(preferences.display_width == 1280 && preferences.display_height == 720);
+    OA_CHECK(text_of(panel, "VIDVAL") == "1280 X 720");
+    // UNDO puts the entry's size back, and Custom with it.
+    select(panel, "UNDO");
+    OA_CHECK(options_on_visuals_click(panel, context) == OptionsAction::reload);
+    OA_CHECK(preferences.display_width == 1300 && preferences.display_height == 800);
+    options_enter_visuals(panel, context, false);
+    OA_CHECK(text_of(panel, "VIDVAL") == "Custom");
+    // A size narrower than every mode rests the knob on the first.
+    preferences.display_width = 600;
+    preferences.display_height = 400;
+    options_enter_visuals(panel, context, false);
+    OA_CHECK(slider_value(panel_control(panel, "VIDSLDR")->slider) == 0);
+    OA_CHECK(text_of(panel, "VIDVAL") == "Custom");
+    // A listed size shows as ever.
+    preferences.display_width = 1920;
+    preferences.display_height = 1080;
+    options_enter_visuals(panel, context, false);
+    OA_CHECK(text_of(panel, "VIDVAL") == "1920 X 1080");
+    OA_CHECK(slider_value(panel_control(panel, "VIDSLDR")->slider) == 3);
+    // Custom in the language shown.
+    preferences.display_width = 1300;
+    preferences.display_height = 800;
+    oa::data::languages::set_translation_hooks({nullptr, chinese_custom, nullptr});
+    options_enter_visuals(panel, context, false);
+    oa::data::languages::set_translation_hooks({});
+    OA_CHECK(text_of(panel, "VIDVAL") == "\u81ea\u5b9a\u4e49");
+}
+
 OA_TEST(realtime_merge_places_records_by_the_filler_or_the_root) {
     Panel sub;
     sub.controls[0].x = 128;

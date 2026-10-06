@@ -49,6 +49,22 @@ inline constexpr int window_margin_percent = 5;
 [[nodiscard]] SDL_Rect
 window_on_display(const SDL_Rect& window, const SDL_Rect& usable, bool resizable);
 
+/// Returns where a window that keeps its size goes so that it lies on its
+/// display.
+///
+/// On each axis a window that fits the display's usable area moves no more
+/// than it must to lie within it, and one that lies within it stays where
+/// it is; one longer than the area starts at the area's start, so that its
+/// title bar and its controls are on the display.
+///
+/// @param window the window's frame (its contents with its title bar and
+///        borders), in the desktop's coordinates, which are negative left of
+///        and above the primary display
+/// @param usable the display's usable area (SDL_GetDisplayUsableBounds), without
+///        the menu bar, the dock or the taskbar
+/// @return the window's frame on the display, of the window's size
+[[nodiscard]] SDL_Rect window_at_size_on_display(const SDL_Rect& window, const SDL_Rect& usable);
+
 /// What a keyboard event means to the full-screen switch.
 enum class FullScreenKey {
     none,    ///< not Alt+Enter; the screens receive it
@@ -93,8 +109,10 @@ game_window_flags(bool start_full_screen, bool native_density) {
 ///
 /// @param native_density the window opened at native density
 ///        (at_native_density), where a layout pixel is a window point
-/// @param pixel_density the window's pixels per window point
-///        (SDL_GetWindowPixelDensity)
+/// @param pixel_density the layout pixels a window point covers: the
+///        window's pixels per window point (SDL_GetWindowPixelDensity), or
+///        for a frame scaled to the screen that times the frame's pixels per
+///        pixel it is presented at
 /// @return 1 at native density; otherwise the pixel density rounded up
 [[nodiscard]] inline int32_t edge_scroll_depth(bool native_density, float pixel_density) {
     return native_density ? 1 : static_cast<int32_t>(std::ceil(pixel_density));
@@ -140,6 +158,17 @@ struct FullScreenSwitch {
     bool placing_window{};
     /// When the window left full screen or was asked to, SDL_GetTicks milliseconds.
     uint64_t left_ms{};
+    /// The screen size applied this run (apply_screen_size in
+    /// screen_mode.hpp), in the window system's units: what full screen
+    /// shows, through a display mode of the size or a frame drawn at it and
+    /// scaled to the screen; 0 by 0 for the desktop's own.
+    int32_t screen_width{};
+    int32_t screen_height{}; ///< the screen size's height, as screen_width
+    /// The size the window takes once it leaves full screen, in the window
+    /// system's units, until it enters full screen again; 0 by 0 keeps the
+    /// size it comes back at.
+    int32_t window_width{};
+    int32_t window_height{}; ///< that size's height, as window_width
 
     /// Tells what a keyboard event means to the switch, following the Enter key an Alt+Enter holds.
     ///
@@ -197,14 +226,19 @@ struct FullScreenSwitch {
     ///
     /// A change to the requested mode ends the wait; a change on the way to it
     /// (entering a space that a later request leaves again) does not. Entering
-    /// full screen ends the check of the window's place as a window.
+    /// full screen ends the check of the window's place as a window, and
+    /// forgets the size asked for as the window leaves it (window_width): the
+    /// window comes back at the size it went in at.
     ///
     /// @param shown true when the window entered full screen
     void note_shown(bool shown) {
         if (awaiting_shown && shown == requested)
             awaiting_shown = false;
-        if (shown)
+        if (shown) {
             placing_window = false;
+            window_width = 0;
+            window_height = 0;
+        }
     }
 
     /// Notes that the window left full screen, after note_shown: its place as
@@ -310,20 +344,39 @@ void release_pointer(SDL_Window* window);
 /// system reports them, is placed on the display's usable area as
 /// window_on_display says; a window that may be resized and is too large is
 /// resized, and the screen is laid out again at its new size as after any
-/// resize. A window in full screen, minimised or hidden, or one whose
-/// decorations the window system has yet to put back (an X11 window manager
-/// still restoring it), is not yet placed. A maximised window, which the
-/// window system fits to the display itself, is left as it is, and so is a
-/// window on a window system that places windows itself (Wayland), which
-/// refuses to move it.
+/// resize. A size asked for is taken first, and kept where the window is
+/// placed (window_at_size_on_display); a maximised window is brought back
+/// to a size of its own for it. A window in full screen, minimised or
+/// hidden, or one whose decorations the window system has yet to put back
+/// (an X11 window manager still restoring it), is not yet placed. A
+/// maximised window, which the window system fits to the display itself,
+/// is left as it is when no size is asked for, and so is a window on a
+/// window system that places windows itself (Wayland), which refuses to
+/// move it.
 ///
 /// @param window the game's window
 /// @param display the display the window was full screen on; 0, or a display
 ///        no longer connected, takes the display the window is on now
+/// @param width the width the window takes, in the window system's units;
+///        0 keeps its own
+/// @param height the height the window takes; 0 keeps its own
 /// @return true when the window's place is settled: it was on the display,
 ///         or it was moved or resized onto it, or it is left as it is; false
 ///         while the window system is still placing it
-bool bring_window_on_display(SDL_Window* window, SDL_DisplayID display);
+bool bring_window_on_display(
+    SDL_Window* window, SDL_DisplayID display, int width = 0, int height = 0
+);
+
+/// Moves a window that has just been asked for a size so that, at that
+/// size, it lies on the display it is on (window_at_size_on_display), its
+/// title bar and borders included where the window system reports them. A
+/// window in full screen, minimised or hidden is left where it is, and so
+/// is a window on a window system that places windows itself (Wayland).
+///
+/// @param window the game's window; null does nothing
+/// @param width the window's width asked for, in the window system's units
+/// @param height the window's height asked for
+void keep_window_on_display(SDL_Window* window, int width, int height);
 
 /// Handles an event of the full-screen switch before anything else sees it.
 ///
@@ -335,7 +388,8 @@ bool bring_window_on_display(SDL_Window* window, SDL_DisplayID display);
 /// (keep_pointer_on_screen). The display a full-screen window is on is noted,
 /// and after the window leaves full screen, its own events (its leaving,
 /// moving and resizing among them) bring it back onto that display
-/// (bring_window_on_display) once the window system has placed it.
+/// (bring_window_on_display) once the window system has placed it, at the
+/// size FullScreenSwitch::window_width and window_height ask for, if any.
 ///
 /// @param window the game's window; null ignores Alt+Enter and leaves the
 ///        pointer and the window's place as they are

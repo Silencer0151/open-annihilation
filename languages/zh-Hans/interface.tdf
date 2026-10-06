@@ -994,6 +994,16 @@
 	zh-Hans=下次启动时生效。;
 	}
 
+[Applies when you press OK.]
+	{
+	zh-Hans=按“确定”后生效。;
+	}
+
+[Custom]
+	{
+	zh-Hans=自定义;
+	}
+
 [Your changes to the profile's hacks apply while on.]
 	{
 	zh-Hans=开启时，你对配置中修改项的更改生效。;

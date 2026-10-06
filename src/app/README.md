@@ -1189,7 +1189,12 @@ logs it.
   leaves the window where it puts it). Wayland places windows itself and
   refuses to move them, so there the window stays where the compositor puts
   it. A maximised window is left as the window system fits it, and a window
-  the player moves off the display later stays there. `app-full-screen` tests
+  the player moves off the display later stays there. A Screen size chosen
+  in full screen is the window's once it leaves (`FullScreenSwitch::window_width`,
+  `window_at_size_on_display`): the window takes the size and keeps it,
+  moved no more than it must to lie on the display, from its left or top
+  edge where it is larger; entering full screen again forgets the size.
+  `app-full-screen` tests
   the keys, the modes, when the pointer is held and where a window goes on
   its display (each side out, corners, windows too large, displays at
   negative coordinates, edges exactly on the display's), over windows of
@@ -1387,23 +1392,70 @@ logs it.
 - `screen_size.hpp`, `screen_size.cpp`: the settings read before the window
   opens (`start_settings`), with the defaults of a light machine
   (`oa/platform/machine.hpp`): the Screen size, the window opened at that
-  size and full screen given the display's mode of that size, else the one
-  nearest it, and a stored size the display does not offer shown as Desktop
-  for the run (`shown_screen_size`); the sizes the display offers for the
-  next start (`offered_screen_sizes`,
+  size and full screen given the display's mode of that size where full
+  screen switches modes (`take_screen_size`, `run_full_screen_method`),
+  else drawn at the size and scaled, and a stored size the display does
+  not offer shown as Desktop for the run (`shown_screen_size`), checked
+  against the primary display, which the window opens on; the sizes a
+  display offers (`offered_screen_sizes`,
   [display modes](../platform/display-modes/README.md)), which the options'
   Screen Size, the settings' Screen size after Desktop and the battle room's
   RES column list (`multiplayer_bind_display_modes`), from what SDL reports
-  of the primary display, which the window opens on and a stored size is
-  checked against, up to the longest side the setting keeps, or the
-  made-up monitor `--display-modes`
-  names for a check on SDL's dummy video driver; and Hardware
+  of the display the window is on, its modes in full screen where full
+  screen switches modes and the sizes that fit its desktop otherwise, up to
+  the longest side the setting keeps, or the made-up monitor
+  `--display-modes` names for a check on SDL's dummy video driver; the
+  table of SDL's calls that apply a size (`sdl_screen_hooks`); and Hardware
   acceleration, which either flag decides over
   (`hardware_acceleration_asked`). With no size named the window opens at
   the default, held to the desktop in Steam's Game Mode, where gamescope's
   pointer reaches no further (`default_window_size`); the log says the size
   it opened at, the desktop's and whether the run is in Game Mode
   (`report_window_size`).
+- `screen_mode.hpp`, `screen_mode.cpp`, `runtime_screen_size.cpp`: the
+  Screen size applied at once, when the options or the settings close with
+  OK, on the menus and in a match, which carries on as it was
+  (`Runtime::apply_screen_size`, `EngineSettingsState::take_screen_size`).
+  How full screen shows a size depends on the window system
+  (`full_screen_method`): Windows, Windows XP's build among them, and X11
+  outside a Wayland session and Steam's Game Mode switch the display to the
+  mode of the size (`switch_mode`), which Windows puts back when the game
+  leaves full screen, is switched away from or ends; macOS, Wayland, X11
+  within a Wayland session, Steam's Game Mode and every other driver keep
+  the desktop's mode (`scale_frame`). `apply_screen_size` takes its steps
+  through a table of hooks (`ScreenHooks`): in a window, a maximised window
+  brought back to a size of its own, the size asked for, the window kept on
+  its display at that size (`keep_window_on_display`), and the mode full
+  screen will take; in full screen, the display's mode of the size where
+  the method switches modes and the display has one, else the desktop's,
+  the window taking the size once it leaves full screen
+  (`FullScreenSwitch::window_width`); Desktop gives full screen the
+  desktop's mode back and leaves a window as it is. The size applied
+  (`FullScreenSwitch::screen_width`) lasts the run, soft restarts included.
+  In full screen on the desktop's mode at a size of its own
+  (`scaled_frame`, `Runtime::scaled_frame_size`), a match is laid out and
+  drawn at that size, as in a window of it, and presented letterboxed, or
+  in whole steps as Menu scaling says (`set_frame_presentation`): the
+  interface scale, the side column and the HUD follow the layout; the
+  standard tier draws its layers with the frame's filter
+  (`standard_frame_scale_mode`) and the accelerated tiers at the density
+  the frame is presented at (`match_display_density`); a pointer in the
+  black bars rests on the frame's edge, and the edge-scroll band is as
+  deep as one window point. The menus keep their 640x480 frame.
+  `app-screen-mode` follows the steps on made-up windows over made-up
+  monitors (a 4K monitor on Windows, a Retina Mac's display, a monitor of
+  Windows XP's time and a Wayland desktop): each window system's method,
+  the scaled frame, a window, a maximised window, full screen at a mode or
+  on the desktop's, a mode missing or refused, and Desktop.
+  `--check-frontend-controls` drags the window to a size the display does
+  not offer, which the options' Screen Size shows as Custom, and OK on
+  1280x720 snaps it to it; in a match it applies 1280x720, switches to full
+  screen, where the dummy driver keeps the desktop's mode and the match is
+  drawn at 1280x720 and letterboxed, the pointer in the bars resting on the
+  frame's edge, applies 800x600 there, which the window takes as it leaves,
+  and Desktop. `--check-engine-settings` chooses 1280x720 in the settings,
+  which the window takes on OK and not before, in the menus and in a game,
+  whose tick and world stay as they were.
 - `render_host.hpp`, `render_host.cpp` (`oa-app-render-host`, with
   `graphics_report.cpp`): the game's renderer. `walk_render_drivers` acts
   on the render policy's walk through hooks (`CreationHooks`): it sets the

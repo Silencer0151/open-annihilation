@@ -1452,6 +1452,79 @@ void screen_size_offers_the_displays_sizes() {
     CHECK(geometry::value_text(settings::Setting::screen_size, dialog.chosen) == "1366 x 768");
 }
 
+void screen_size_shows_custom_for_a_window_sized_by_hand() {
+    // In a window Screen size shows the window's own size until its knob
+    // moves, whatever the setting (Desktop leaves a window as it is): here a
+    // window the player dragged to 1300x800, which the display offers no
+    // size of, stands as a stop of its own, shown as Custom.
+    settings::Dialog dialog = opened(Page::graphics);
+    dialog.offered_screen_sizes = {
+        settings::desktop_screen_size,
+        {640, 480},
+        {1280, 720},
+        {1300, 800},
+        {1920, 1080},
+    };
+    dialog.window_screen_size = settings::ScreenSize{1300, 800};
+    dialog.custom_screen_size = settings::ScreenSize{1300, 800};
+    CHECK(dialog.chosen.screen_size == settings::desktop_screen_size);
+    CHECK(geometry::value_text(settings::Setting::screen_size, dialog) == "Custom");
+    CHECK(geometry::value_text(settings::Setting::screen_size, dialog.chosen) == "Desktop");
+    CHECK(find_part(settings::dialog_layout(dialog), "Custom", settings::no_control) != nullptr);
+    CHECK(
+        geometry::stop_of(
+            geometry::slider_settings(dialog),
+            settings::Setting::screen_size,
+            settings::highest_unit_limit,
+            dialog.offered_screen_sizes
+        ) == 3
+    );
+    // The arrows step from the window's size to the listed sizes on each
+    // side, which show as sizes, and the setting chosen follows.
+    for (int32_t press = 0; press < 8 && dialog.focused != settings::first_row_control + 2; ++press)
+        static_cast<void>(settings::dialog_key(dialog, DialogKey::down));
+    CHECK(dialog.focused == settings::first_row_control + 2);
+    CHECK(settings::dialog_key(dialog, DialogKey::left) == DialogAction::changed);
+    CHECK((dialog.chosen.screen_size == settings::ScreenSize{1280, 720}));
+    CHECK(!dialog.window_screen_size);
+    CHECK(geometry::value_text(settings::Setting::screen_size, dialog) == "1280 x 720");
+    CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
+    CHECK((dialog.chosen.screen_size == settings::ScreenSize{1300, 800}));
+    CHECK(geometry::value_text(settings::Setting::screen_size, dialog) == "Custom");
+    CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
+    CHECK(geometry::value_text(settings::Setting::screen_size, dialog) == "1920 x 1080");
+    // A press on the track moves the knob too.
+    dialog.window_screen_size = settings::ScreenSize{1300, 800};
+    const auto track = geometry::place_rows(Page::graphics, {}).rows[2].control_area;
+    CHECK(
+        settings::dialog_pointer_down(dialog, track.x + 1, track.y + track.height / 2) ==
+        DialogAction::changed
+    );
+    CHECK(dialog.chosen.screen_size == settings::desktop_screen_size && !dialog.window_screen_size);
+    CHECK(geometry::value_text(settings::Setting::screen_size, dialog) == "Desktop");
+    CHECK(settings::dialog_pointer_up(dialog, 0, 0) == DialogAction::redraw);
+    // Without a Custom stop every size shows as itself.
+    dialog.custom_screen_size.reset();
+    dialog.chosen.screen_size = {1300, 800};
+    CHECK(geometry::value_text(settings::Setting::screen_size, dialog) == "1300 x 800");
+    // The size applies when OK is pressed.
+    CHECK(
+        geometry::hint_line(
+            settings::Setting::screen_size, dialog.chosen, dialog.acceleration, 1
+        ) == "Applies when you press OK."
+    );
+    // Custom in Simplified Chinese.
+    oa::data::languages::InterfaceText catalogue;
+    CHECK(catalogue.add("[Custom]\n{\nzh-Hans=\u81ea\u5b9a\u4e49;\n}\n"));
+    oa::data::languages::set_interface_language(
+        &catalogue, *oa::data::languages::find_by_tag("zh-Hans")
+    );
+    dialog.custom_screen_size = settings::ScreenSize{1300, 800};
+    const std::string chinese = geometry::value_text(settings::Setting::screen_size, dialog);
+    oa::data::languages::set_interface_language(nullptr, oa::data::languages::english());
+    CHECK(chinese == "\u81ea\u5b9a\u4e49");
+}
+
 void the_level_strip_picks_a_level() {
     settings::Dialog dialog = opened(Page::graphics);
     std::vector<const settings::LayoutPart*> levels;
@@ -7941,6 +8014,7 @@ int main(int argc, char** argv) {
         every_stop_maps_to_its_value_and_back();
         sliders_follow_the_pointer_and_the_arrows();
         screen_size_offers_the_displays_sizes();
+        screen_size_shows_custom_for_a_window_sized_by_hand();
         the_level_strip_picks_a_level();
         enter_keeps_and_escape_cancels();
         the_footer_buttons_restore_cancel_and_keep();

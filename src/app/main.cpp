@@ -237,8 +237,11 @@ struct HostDisplay {
     /// first frame is drawn in, from the flags and the Hardware acceleration
     /// setting read before the window opens (RendererHost::decide_start_tier).
     /// A window of a set screen size takes the display's mode of that size
-    /// in full screen, else the one nearest it; a set size the display does
-    /// not offer opens as Desktop for this run (shown_screen_size). A build
+    /// in full screen where full screen switches modes and the display has
+    /// one, and is otherwise drawn at the size and scaled to the screen
+    /// there (take_screen_size, FullScreenSwitch::screen_width); a set size
+    /// the display does not offer opens as Desktop for this run
+    /// (shown_screen_size). A build
     /// whose touch controls are on from the start sets their input hints
     /// before SDL starts (set_input_hints), and the
     /// platform's window_ready hook, when there is one, is told once the
@@ -327,8 +330,14 @@ struct HostDisplay {
         );
         if (window == nullptr)
             throw std::runtime_error(std::string("SDL_CreateWindow: ") + SDL_GetError());
-        if (sized)
-            take_screen_size(window, screen, options.start_full_screen);
+        // Full screen shows the size through a display mode of it, or draws
+        // the match at it and scales it to the screen (run_full_screen_method);
+        // the runtime follows the size applied.
+        if (sized) {
+            take_screen_size(window, screen, options.start_full_screen, run_full_screen_method());
+            full_screen.screen_width = screen.width;
+            full_screen.screen_height = screen.height;
+        }
         report_window_size(window, desktop, steam_game_mode);
         set_window_icon(window);
         renderer_host.create(window, start_faults(options));

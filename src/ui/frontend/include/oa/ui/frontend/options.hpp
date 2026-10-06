@@ -617,6 +617,11 @@ void options_hide_controls_with_prefix(Panel& panel, std::string_view prefix) no
 
 /// Moves VIDSLDR to the display mode matching the saved size and shows it in VIDVAL.
 ///
+/// A saved size no mode matches, such as a window's own size the player
+/// dragged it to, shows "Custom" in VIDVAL, in the language shown, with
+/// the knob on the last mode listed before it, or on the first; 3.1c left
+/// the panel's own defaults showing.
+///
 /// @param[in,out] panel The loaded VISUALS or SELVMODE panel.
 /// @param context Supplies the preferences and the display-mode list.
 void options_sync_video_mode(Panel& panel, OptionsContext& context) noexcept;

@@ -10,6 +10,7 @@
 #include "oa/app/app.hpp"
 #include "oa/platform/display_modes/sdl.hpp"
 #include "oa/ui/engine_settings.hpp"
+#include "screen_mode.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -36,20 +37,42 @@ display_report(const Options& options, SDL_DisplayID display);
 /// @return full screen or a window
 [[nodiscard]] oa::platform::display_modes::Use start_use(const Options& options) noexcept;
 
-/// Returns the screen sizes the primary display offers for the way the next
-/// start shows them (start_use), each once, the narrower first and neither
-/// side above oa::ui::engine_settings::longest_screen_side: the sizes the
-/// options' Screen Size and the settings' Screen size offer after Desktop.
-/// The game's window opens on the primary display, which checks a stored
-/// size at start (shown_screen_size), whichever display the window is on
-/// when the size is chosen.
+/// Returns the screen sizes a display offers for a way of showing them, each
+/// once, the narrower first and neither side above
+/// oa::ui::engine_settings::longest_screen_side: the sizes the options'
+/// Screen Size and the settings' Screen size offer after Desktop.
 ///
-/// @param options the parsed command line
+/// @param options the parsed command line (Options::display_modes)
+/// @param display SDL's id of the display
+/// @param use full screen at a mode of the size, or a window of it, or a
+///     frame drawn at it and scaled to the screen, which fits the desktop as
+///     a window does
 /// @param minimum_height the shortest size offered, in units: 480, or a
 ///     mod's taller floor
 /// @return the sizes; never empty
-[[nodiscard]] std::vector<oa::ui::engine_settings::ScreenSize>
-offered_screen_sizes(const Options& options, int32_t minimum_height);
+[[nodiscard]] std::vector<oa::ui::engine_settings::ScreenSize> offered_screen_sizes(
+    const Options& options,
+    SDL_DisplayID display,
+    oa::platform::display_modes::Use use,
+    int32_t minimum_height
+);
+
+/// Returns how full screen shows a screen size in this run
+/// (full_screen_method): from SDL's video driver, whether an X11 run is
+/// within a Wayland session, and whether the run is in Steam's Game Mode.
+/// SDL's video must be initialised.
+///
+/// @return the method
+[[nodiscard]] FullScreenMethod run_full_screen_method();
+
+/// Returns the steps that apply a screen size (apply_screen_size) on SDL's
+/// window: its flags, size and full-screen mode; SDL_RestoreWindow,
+/// SDL_SetWindowSize, keep_window_on_display, the display's mode of a size
+/// (display_modes::take_full_screen_size) and the desktop's.
+///
+/// @param window the game's window, which the hooks take as their context
+/// @return the hooks
+[[nodiscard]] ScreenHooks sdl_screen_hooks(SDL_Window* window) noexcept;
 
 /// Returns the size of the primary display's desktop: the made-up
 /// monitor's first mode with --display-modes.
@@ -133,17 +156,23 @@ void report_window_size(
 
 /// Sets the display mode a window takes in full screen to the display's
 /// mode of a screen size (oa::platform::display_modes::mode_for: the
-/// desktop's pixel density, then its refresh rate, then the highest), else
-/// to the one nearest it, and puts the window in full screen when asked.
+/// desktop's pixel density, then its refresh rate, then the highest), where
+/// full screen switches the display's mode, and puts the window in full
+/// screen when asked.
 ///
-/// The window keeps the desktop's own mode in full screen when the display
-/// offers no mode of the size or larger.
+/// The window keeps the desktop's own mode in full screen where full screen
+/// scales the frame, or the display offers no mode of the size; the match
+/// is then drawn at the size and scaled to the screen.
 ///
 /// @param window the game's window, opened at the size
 /// @param size the screen size, not desktop_screen_size
 /// @param full_screen true to put the window in full screen
+/// @param method how full screen shows the size (run_full_screen_method)
 void take_screen_size(
-    SDL_Window* window, oa::ui::engine_settings::ScreenSize size, bool full_screen
+    SDL_Window* window,
+    oa::ui::engine_settings::ScreenSize size,
+    bool full_screen,
+    FullScreenMethod method
 );
 
 } // namespace oa::app

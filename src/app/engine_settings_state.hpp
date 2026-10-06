@@ -86,6 +86,10 @@ struct Runtime::EngineSettingsState {
 
     /// The battlefield's zoom when the dialog opened, which Cancel eases back to.
     float opened_zoom_target{};
+    /// The open dialog's Screen size opened at the window's own size
+    /// (Dialog::window_screen_size), as it does in a window: its knob moved
+    /// once that size is no longer shown.
+    bool window_screen_size_shown{};
     /// The unit limit of the next game when the dialog opened, which Cancel
     /// puts back; a loaded game may have set it apart from the setting.
     uint16_t opened_run_unit_limit{};
@@ -165,15 +169,39 @@ struct Runtime::EngineSettingsState {
     /// @return why the file was not written; nothing when it was
     [[nodiscard]] static std::optional<std::string> flush(Runtime& runtime);
 
-    /// Returns the screen sizes the primary display offers for the next
-    /// start (offered_screen_sizes), from the floor the profile's
-    /// display rules set: the options' Screen Size list, and the settings'
-    /// Screen size after Desktop.
+    /// Returns the screen sizes the display the window is on offers
+    /// (offered_screen_sizes), from the floor the profile's display rules
+    /// set: the options' Screen Size list, and the settings' Screen size
+    /// after Desktop. In full screen where full screen switches the
+    /// display's mode (run_full_screen_method), the display's modes; else
+    /// the sizes that fit its desktop, as a window or as a frame scaled to
+    /// the screen. Without a window, the primary display's for the way the
+    /// next start shows them (start_use).
     ///
     /// @param runtime the runtime
     /// @return the sizes, the narrower first; never empty
     [[nodiscard]] static std::vector<oa::ui::engine_settings::ScreenSize>
     offered_screen_sizes(const Runtime& runtime);
+
+    /// Returns the size the screen is shown at now (Runtime::screen_size_now)
+    /// as a screen size keeps it.
+    ///
+    /// @param runtime the runtime
+    /// @return the size; desktop_screen_size without a window, or for a
+    ///     size a screen size cannot keep
+    [[nodiscard]] static oa::ui::engine_settings::ScreenSize
+    screen_size_now(const Runtime& runtime);
+
+    /// Returns the size a Screen size setting shows the screen at once it is
+    /// applied, as the options' Screen Size shows it: the setting's size,
+    /// else, for Desktop, the desktop's size in full screen and the window's
+    /// own in a window, which Desktop leaves as it is.
+    ///
+    /// @param runtime the runtime
+    /// @param setting the Screen size setting's value
+    /// @return the size; desktop_screen_size where neither is known
+    [[nodiscard]] static oa::ui::engine_settings::ScreenSize
+    screen_size_after(const Runtime& runtime, oa::ui::engine_settings::ScreenSize setting);
 
     /// Returns the size the game plays at, as the options' Screen Size and
     /// the battle room's RES column show it: screen_size_shown of the
@@ -201,14 +229,31 @@ struct Runtime::EngineSettingsState {
         const std::vector<oa::ui::engine_settings::ScreenSize>& offered
     );
 
-    /// Sets the Screen size setting, from the next start, to the size the
-    /// options' Screen Size chose, and puts it in the preferences, which the
-    /// options' save writes: Desktop for the desktop's own size where the
-    /// next start is full screen, so that the screen keeps its mode.
+    /// Returns the Screen size setting a size chosen is stored as: Desktop
+    /// for the desktop's own size while the window is full screen (or,
+    /// without a window, where the next start is), so that the screen keeps
+    /// its mode; else the size.
+    ///
+    /// @param runtime the runtime
+    /// @param size the size chosen
+    /// @return the setting
+    [[nodiscard]] static oa::ui::engine_settings::ScreenSize
+    stored_screen_size(const Runtime& runtime, oa::ui::engine_settings::ScreenSize size);
+
+    /// Sets the Screen size setting to the size the options' Screen Size
+    /// chose (stored_screen_size), and puts it in the preferences, which the
+    /// options' save writes.
     ///
     /// @param runtime the runtime
     /// @param size the size chosen
     static void choose_screen_size(Runtime& runtime, oa::ui::engine_settings::ScreenSize size);
+
+    /// Sets the Screen size setting to a size chosen (choose_screen_size)
+    /// and applies it at once (Runtime::apply_screen_size).
+    ///
+    /// @param runtime the runtime
+    /// @param size the size chosen
+    static void take_screen_size(Runtime& runtime, oa::ui::engine_settings::ScreenSize size);
 
     /// Shows or hides the frame statistics and saves the choice, as +stats
     /// without an argument does.

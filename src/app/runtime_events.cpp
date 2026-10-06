@@ -272,6 +272,17 @@ void Runtime::handle_sdl_event(SDL_Event& event, bool& running) {
                 std::cerr << "input coordinate conversion failed: " << SDL_GetError() << '\n';
             return;
         }
+        // Over a scaled frame the pointer in the black bars around it rests
+        // on the frame's edge, where it scrolls the view as at the screen's.
+        if (screen_ == Screen::match && scaled_frame_width_ > 0 && match_layout_.width > 0 &&
+            match_layout_.height > 0) {
+            float& pointer_x =
+                event.type == SDL_EVENT_MOUSE_MOTION ? event.motion.x : event.button.x;
+            float& pointer_y =
+                event.type == SDL_EVENT_MOUSE_MOTION ? event.motion.y : event.button.y;
+            pointer_x = std::clamp(pointer_x, 0.0F, static_cast<float>(match_layout_.width - 1));
+            pointer_y = std::clamp(pointer_y, 0.0F, static_cast<float>(match_layout_.height - 1));
+        }
         const float x = event.type == SDL_EVENT_MOUSE_MOTION ? event.motion.x : event.button.x;
         const float y = event.type == SDL_EVENT_MOUSE_MOTION ? event.motion.y : event.button.y;
         // Where the pointer is on the match's screen is known once SDL

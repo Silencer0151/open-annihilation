@@ -3759,13 +3759,17 @@ void Runtime::toggle_graphics_flag(uint16_t mask, std::string_view key) {
 }
 
 void Runtime::show_screen_size_in_options() {
-    // Outside a match the options' Screen Size opens on the size the game
-    // plays at, which DisplaymodeWidth and DisplaymodeHeight then hold.
+    // Outside a match the options' Screen Size opens on the size the screen
+    // is shown at, which DisplaymodeWidth and DisplaymodeHeight then hold:
+    // a window's own size, shown as Custom where the display offers no
+    // such size; without a window, the size the setting plays at.
     if (match_menu_session().options.in_game)
         return;
-    const auto size = EngineSettingsState::screen_size_in_effect(
-        *this, EngineSettingsState::offered_screen_sizes(*this)
-    );
+    auto size = EngineSettingsState::screen_size_now(*this);
+    if (size == oa::ui::engine_settings::desktop_screen_size)
+        size = EngineSettingsState::screen_size_in_effect(
+            *this, EngineSettingsState::offered_screen_sizes(*this)
+        );
     preferences_.display_width = size.width;
     preferences_.display_height = size.height;
 }
@@ -3802,21 +3806,21 @@ void Runtime::bind_options_context() {
     context.host.save_options = [](void* host) {
         auto& runtime = *static_cast<Runtime*>(host);
         // RESTORE sets the Screen size setting back to its default, and a
-        // Screen Size the player moved to sets it to that size, from the
-        // next start; in a match the Screen Size is hidden.
+        // Screen Size the player moved to sets it to that size, each applied
+        // at once; in a match the Screen Size is hidden.
         const auto& options = match_menu_session().options;
         const auto& entry = options.snapshot;
         const auto& preferences = runtime.preferences_;
         const bool moved = preferences.display_width != entry.display_width ||
                            preferences.display_height != entry.display_height;
         if (!options.in_game && options.screen_size_restored)
-            EngineSettingsState::choose_screen_size(
+            EngineSettingsState::take_screen_size(
                 runtime,
                 oa::ui::engine_settings::default_settings(EngineSettingsState::inputs(runtime))
                     .screen_size
             );
         else if (!options.in_game && moved)
-            EngineSettingsState::choose_screen_size(
+            EngineSettingsState::take_screen_size(
                 runtime,
                 {static_cast<uint16_t>(preferences.display_width),
                  static_cast<uint16_t>(preferences.display_height)}
@@ -3825,14 +3829,18 @@ void Runtime::bind_options_context() {
     };
     context.host.reset_screen_size = [](void* host) {
         // RESTORE shows the Screen size setting's default, Desktop on most
-        // machines, as the size it plays at, rather than 3.1c's 640x480.
+        // machines, as the size it shows the screen at, rather than 3.1c's
+        // 640x480: the desktop's in full screen, and in a window the
+        // window's own, which Desktop leaves as it is.
         auto& runtime = *static_cast<Runtime*>(host);
-        const auto size = EngineSettingsState::screen_size_shown(
-            runtime,
+        const auto setting =
             oa::ui::engine_settings::default_settings(EngineSettingsState::inputs(runtime))
-                .screen_size,
-            EngineSettingsState::offered_screen_sizes(runtime)
-        );
+                .screen_size;
+        auto size = EngineSettingsState::screen_size_after(runtime, setting);
+        if (size == oa::ui::engine_settings::desktop_screen_size)
+            size = EngineSettingsState::screen_size_shown(
+                runtime, setting, EngineSettingsState::offered_screen_sizes(runtime)
+            );
         runtime.preferences_.display_width = size.width;
         runtime.preferences_.display_height = size.height;
     };
@@ -3867,9 +3875,9 @@ void Runtime::bind_options_context() {
         static_cast<Runtime*>(host)->sound_spatial_ = on ? 1 : 0;
     };
     context.host.scan_display_modes = [](void* host, ui::DisplayModeList& list) {
-        // The sizes the display offers for the next start, as the Screen
-        // size setting offers them after Desktop; the game draws them in
-        // 8 bits a pixel at any depth the display runs at.
+        // The sizes the display offers, as the Screen size setting offers
+        // them after Desktop; the game draws them in 8 bits a pixel at any
+        // depth the display runs at.
         constexpr int32_t game_bits = 8;
         const auto& runtime = *static_cast<Runtime*>(host);
         list.count = 0;

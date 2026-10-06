@@ -80,10 +80,21 @@ void Runtime::apply_output_mode() {
                 SDL_GetWindowSizeInPixels(sdl_.window, &width, &height);
             SDL_GetWindowSize(sdl_.window, &window_width, &window_height);
         }
+        // Full screen on the desktop's mode at a screen size of its own
+        // draws the match at that size, laid out as a window of it, and
+        // scales the frame to the screen.
+        const SDL_Point scaled = scaled_frame_size();
+        oa::ui::display_layout::Insets safe{};
+        if (scaled.x > 0 && scaled.y > 0) {
+            width = window_width = scaled.x;
+            height = window_height = scaled.y;
+        } else {
+            safe = window_safe_insets();
+        }
+        scaled_frame_width_ = scaled.x;
+        scaled_frame_height_ = scaled.y;
         const auto laid_out = match_layout_;
-        match_layout_ = make_window_match_layout(
-            width, height, window_width, window_height, window_safe_insets()
-        );
+        match_layout_ = make_window_match_layout(width, height, window_width, window_height, safe);
         // The side column narrows to the game's tallest unit page; a phone
         // layout has none.
         match_layout_ =
@@ -95,14 +106,25 @@ void Runtime::apply_output_mode() {
         if (match_layout_.width != laid_out.width || match_layout_.height != laid_out.height)
             match_pointer_known_ = false;
         try {
-            if (!SDL_SetRenderLogicalPresentation(
-                    sdl_.renderer,
-                    match_layout_.width,
-                    match_layout_.height,
-                    native_density ? SDL_LOGICAL_PRESENTATION_STRETCH
-                                   : SDL_LOGICAL_PRESENTATION_DISABLED
-                ))
+            // A scaled frame is letterboxed, or held in whole steps, as Menu
+            // scaling holds the menus' frame.
+            if (scaled_frame_width_ > 0
+                    ? !set_frame_presentation(
+                          sdl_.renderer, menu_scaling(), match_layout_.width, match_layout_.height
+                      )
+                    : !SDL_SetRenderLogicalPresentation(
+                          sdl_.renderer,
+                          match_layout_.width,
+                          match_layout_.height,
+                          native_density ? SDL_LOGICAL_PRESENTATION_STRETCH
+                                         : SDL_LOGICAL_PRESENTATION_DISABLED
+                      ))
                 throw_present_error("SDL logical presentation");
+            // The standard tier draws the scaled frame's layers with the
+            // frame's filter, found now, before any frame begins.
+            scaled_frame_mode_ = scaled_frame_width_ > 0
+                                     ? standard_frame_scale_mode(match_layout_.width)
+                                     : SDL_SCALEMODE_NEAREST;
             // A match never draws the front end's texture: beyond the
             // renderer's limit it is not made at the window's size at all.
             const auto limit = render_texture_limit();
@@ -123,6 +145,9 @@ void Runtime::apply_output_mode() {
         // it darkens the match's last frame.
         match_layout_ = {};
         match_pointer_known_ = false;
+        scaled_frame_width_ = 0;
+        scaled_frame_height_ = 0;
+        scaled_frame_mode_ = SDL_SCALEMODE_NEAREST;
         int width = kCanvasWidth, height = kCanvasHeight;
         if (const auto* parent = panel_parent(); parent != nullptr) {
             width = static_cast<int>(parent->width);
@@ -659,6 +684,12 @@ void Runtime::present_match_layers() {
     // (1280x1024) size: under the side column.
     if (!SDL_SetRenderDrawColor(sdl_.renderer, 0, 0, 0, 255) || !SDL_RenderClear(sdl_.renderer))
         throw_present_error("SDL_RenderClear");
+    // A scaled frame's layers take the frame's filter; a mode the texture
+    // refuses leaves it NEAREST.
+    if (!SDL_SetTextureScaleMode(match_hud_tex_, scaled_frame_mode_))
+        std::ignore = SDL_SetTextureScaleMode(match_hud_tex_, SDL_SCALEMODE_NEAREST);
+    if (!match_world_tex_.set_scale_mode(scaled_frame_mode_))
+        std::ignore = match_world_tex_.set_scale_mode(SDL_SCALEMODE_NEAREST);
     // In placed mode the HUD's pieces are drawn after the world
     // (finish_match_layers).
     if (!oa::ui::display_layout::placed_mode(match_layout_))
@@ -688,6 +719,12 @@ void Runtime::present_match_layers() {
     };
     match_world_tex_.draw(sdl_.renderer, nullptr, &world);
     finish_match_layers(frame_format, dialogs, upload_start, present_start);
+    // Once the frame is presented the textures go back to NEAREST, as the
+    // accelerated tier draws them.
+    if (scaled_frame_mode_ != SDL_SCALEMODE_NEAREST) {
+        std::ignore = SDL_SetTextureScaleMode(match_hud_tex_, SDL_SCALEMODE_NEAREST);
+        std::ignore = match_world_tex_.set_scale_mode(SDL_SCALEMODE_NEAREST);
+    }
 }
 
 void Runtime::finish_match_layers(
@@ -845,10 +882,10 @@ void Runtime::present_software_cursor(bool match_layers) {
         static_cast<float>(frame.width),
         static_cast<float>(frame.height)
     };
-    // On a window at native density the cursor over the match goes to the
-    // display's pixels with the match's layers; a mode the texture refuses
-    // leaves it as it was.
-    if (native_density_window())
+    // On a window at native density, and over a scaled frame, the cursor
+    // over the match goes to the display's pixels with the match's layers;
+    // a mode the texture refuses leaves it as it was.
+    if (native_density_window() || scaled_frame_width_ > 0)
         std::ignore = SDL_SetTextureScaleMode(
             match_cursor_tex_, match_layers ? one_to_one_scale_mode() : SDL_SCALEMODE_LINEAR
         );
@@ -862,7 +899,16 @@ bool Runtime::native_density_window() const noexcept {
 }
 
 double Runtime::match_display_density() const {
-    if (!native_density_window() || sdl_.renderer == nullptr || match_layout_.width <= 0)
+    if (sdl_.renderer == nullptr || match_layout_.width <= 0)
+        return 1.0;
+    // A scaled frame covers the width it is presented at.
+    if (scaled_frame_width_ > 0) {
+        SDL_FRect area{};
+        if (!SDL_GetRenderLogicalPresentationRect(sdl_.renderer, &area) || !(area.w > 0.0F))
+            return 1.0;
+        return static_cast<double>(area.w) / static_cast<double>(match_layout_.width);
+    }
+    if (!native_density_window())
         return 1.0;
     int output_width = 0;
     int output_height = 0;
@@ -872,7 +918,9 @@ double Runtime::match_display_density() const {
 }
 
 SDL_ScaleMode Runtime::one_to_one_scale_mode() const {
-    if (!accelerated_presentation() || !native_density_window())
+    if (scaled_frame_width_ > 0 && !accelerated_presentation())
+        return scaled_frame_mode_;
+    if (!accelerated_presentation() || (!native_density_window() && scaled_frame_width_ <= 0))
         return SDL_SCALEMODE_NEAREST;
     return direct_scale_mode(
         render_policy::chrome_filter(accelerated_.rung, match_display_density())

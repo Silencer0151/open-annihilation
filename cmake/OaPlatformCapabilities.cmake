@@ -50,5 +50,6 @@ set_property(SOURCE "${oa_capability_app_dir}/game_directory_dialog.cpp" APPEND
 set_property(SOURCE "${oa_capability_app_dir}/main.cpp" APPEND
   PROPERTY COMPILE_DEFINITIONS "OA_NATIVE_DENSITY_WINDOWS=${oa_OA_NATIVE_DENSITY_WINDOWS_value}"
   "OA_TOUCH_FIRST=${oa_OA_TOUCH_FIRST_value}")
-set_property(SOURCE "${oa_capability_app_dir}/runtime_touch.cpp" APPEND
+set_property(SOURCE "${oa_capability_app_dir}/runtime_touch.cpp"
+  "${oa_capability_app_dir}/runtime_screen_size.cpp" APPEND
   PROPERTY COMPILE_DEFINITIONS "OA_TOUCH_FIRST=${oa_OA_TOUCH_FIRST_value}")
