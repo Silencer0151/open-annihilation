@@ -683,8 +683,9 @@ inline constexpr int32_t pixel_item_side = 2;
 
 // One item of a draw pass. Sprites blit `frame` of `sequence` at the 16.16
 // world `position`; pixels fill a pixel_item_side square with palette index
-// `color`; flashes darken through the shade table with the shade levels of
-// `frame` of `sequence`; fragments draw as 3DO objects turned by `spin`.
+// `color`; flashes light what is under them through the light table, each
+// pixel of `frame` of `sequence` naming the row that relights the pixel
+// under it; fragments draw as 3DO objects turned by `spin`.
 // Layer items other than feature smoke are drawn only where the viewer's
 // sight grid shows the point. `motion` and `spin_motion` say how the item
 // moves and turns in a tick, so that a frame drawn between two ticks can show
@@ -745,7 +746,8 @@ void draw_explosions(
 
 // ---- explosions -----------------------------------------------------------
 
-/// Draws one radial flash frame of shade levels, 0xff transparent.
+/// Draws one radial flash frame of light-table rows, brightest at the
+/// centre and fading toward the edge, 0xff transparent.
 ///
 /// @param size side of the square frame, pixels
 /// @param[out] shade receives size x size bytes

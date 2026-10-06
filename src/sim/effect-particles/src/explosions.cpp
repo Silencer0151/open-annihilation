@@ -17,7 +17,8 @@ constexpr double flash_scale = 32.0;
 constexpr double flash_row_weight = 1.33;
 constexpr int32_t flash_noise_span = 10;
 constexpr uint8_t flash_transparent = 0xffU;
-constexpr uint8_t flash_rim = 0x6eU;
+// The brightest flash value, the light table's last row: the centre's.
+constexpr uint8_t flash_brightest = 0x6eU;
 constexpr uint8_t flash_shade_base = 0x4fU;
 constexpr uint8_t flash_levels = 0x20U;
 constexpr uint16_t flash_frame_hold = 2;
@@ -238,7 +239,7 @@ int32_t build_flash_frame(int32_t size, uint8_t* shade, const EffectHost& host) 
             if (value >= flash_levels + 2)
                 pixel = flash_transparent;
             else if (value >= flash_levels)
-                pixel = flash_rim;
+                pixel = flash_brightest;
             else
                 pixel = static_cast<uint8_t>(value + flash_shade_base);
         }

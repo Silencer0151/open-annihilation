@@ -195,11 +195,13 @@ void draw_sprite_lit(
     Surface* target, const Sprite* sprite, int32_t x, int32_t y, int32_t level
 ) noexcept;
 
-/// Darkens the pixels under a sprite through the display light table.
+/// Lights the pixels under a sprite through the display light table, as an
+/// explosion's flash lights the battlefield.
 ///
-/// The light table row is selected by the sprite's shade-ramp pixels. Nothing
-/// is drawn unless display_flag_light_table is set; composite sprites shade
-/// each child.
+/// Each of the sprite's light-ramp pixels selects the light table row that
+/// relights the pixel under it. Nothing is drawn unless
+/// display_flag_light_table is set; composite sprites light through each
+/// child.
 ///
 /// @param[in,out] target target surface; null for the locked display surface
 /// @param sprite sprite whose pixels select the rows; null, or null data, draws nothing

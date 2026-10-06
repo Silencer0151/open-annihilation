@@ -174,7 +174,8 @@ int32_t encode_rle_sprite(RleEncoder& encoder, uint8_t* out, const Sprite& sprit
 // the table as in the game.
 inline constexpr int32_t shade_ramp_base = 0x4F;
 
-/// Decodes a rectangle of a row-RLE stream, darkening the destination through table row (pixel - 0x4F).
+/// Decodes a rectangle of a row-RLE stream, lighting the destination through light table row
+/// (pixel - shade_ramp_base).
 ///
 /// @param[in,out] dst destination pixels
 /// @param pitch destination bytes per row
@@ -193,7 +194,8 @@ bool decode_rle_rows_shaded(
     const uint8_t* table
 ) noexcept;
 
-/// Copies a keyed raw rectangle, darkening the destination through table row (pixel - 0x4F).
+/// Copies a keyed raw rectangle, lighting the destination through light table row
+/// (pixel - shade_ramp_base).
 ///
 /// @param[in,out] dst destination surface
 /// @param src source surface whose pixels select the rows
