@@ -39,6 +39,8 @@ the locks a running game puts on them (`settings_locks`).
 | | Menu scaling | Sharp, Whole steps, Unfiltered | Sharp | `open-annihilation.menu-scaling` (`sharp`, `whole-steps` or `unfiltered`) |
 | | Native pixel density, from the next start | Off, On; always On where the platform opens every window at native density | Off | `open-annihilation.native-density` |
 | | Explosion flash; a mod's profile may draw the flashes lower still (`ui.explosion-flash`), and the lower of the two is drawn | Off, Reduced, Full | Full | `open-annihilation.explosion-flash` (`off`, `reduced` or `full`) |
+| | Zoomed out units: how units are drawn farther out than After zoom | Rendered, Dots; Icons shown faded, not offered | Rendered | `open-annihilation.zoomed-out-units` (`rendered` or `dots`; any other word, `icons` among them, reads as Rendered) |
+| | After zoom, a drop-down, locked "Needs Dots" while Zoomed out units is Rendered | 1/2, 1/3, 1/4, 1/6, 1/8, 1/12, 1/16 of normal size | 1/6 | `open-annihilation.zoomed-out-after` (`1/2`, `1/3`, `1/4`, `1/6`, `1/8`, `1/12` or `1/16`) |
 | Touch, listed only while the game has touch controls | One-finger drag | Automatic (a selection box on a tablet, scrolling on a phone), Box, Scroll | Automatic | `open-annihilation.touch-drag` (`automatic`, `box` or `scroll`) |
 | | Hold delay | 250 to 700 ms, steps of 50; a stored delay is held to the range and put on its nearest step | 350 ms | `open-annihilation.touch-hold-delay` |
 | | QUEUE and ADD | Stay on, One action | Stay on | `open-annihilation.touch-latches` (`stay-on` or `one-action`) |
@@ -230,6 +232,14 @@ slider is locked, faded with a padlock and "Needs modern fonts"
 have fixed sizes; turning the modern fonts On lifts the lock at once.
 Restore defaults resets the size whatever the switch shows.
 
+Zoomed out units' strip shows three levels and offers the first two
+(`Strip::offered`, `offered_levels`): Icons is drawn faded into the panel,
+as a locked row is, and a click on it, or Right from Dots, changes
+nothing. After zoom says where Dots begins, so while the dialog shows
+Rendered it is locked, faded with a padlock and "Needs Dots"
+(`Lock::needs_dots`, which the dialog sets itself in
+`Locks::zoomed_out_after`); choosing Dots lifts the lock at once.
+
 A language drawn only in the modern fonts (`TextNeeds::modern_fonts`,
 Simplified Chinese) turns Use modern fonts for game text On when it is
 chosen, and while it is chosen the switch shows On with a padlock and "Set
@@ -379,7 +389,7 @@ and the footer never move. A section whose rows, with 8 clear pixels under
 the last row's line, are taller than the view scrolls by whole source
 pixels, and shows a scroll bar in the margin right of its rows: a well like
 a switch's, its thumb as tall as the view's share of the section and never
-under 16 pixels. Graphics, with eight rows, is taller than its view by 257
+under 16 pixels. Graphics, with ten rows, is taller than its view by 395
 pixels, Language, with the Language drop-down, four switches and the
 Text size slider, by 129, Touch, with its three strips, the Hold delay
 slider and two switches, by 121, and Controls, with its three switches and
@@ -504,7 +514,8 @@ line" (the frame rate under `--max-fps`, Hardware acceleration under
 acceleration when nothing in the game could help the run, and Vertical
 sync on SDL's software renderer or where each change would reset the
 graphics device), "Needs modern fonts" (Text size while the modern fonts
-are Off) or "Always on here" (Native pixel density where the platform
+are Off), "Needs Dots" (After zoom while Zoomed out units is Rendered) or
+"Always on here" (Native pixel density where the platform
 opens every window at native density). A locked slider shows the padlock at the right of its
 label line. A locked switch keeps its switch, faded, with the padlock left
 of it, so that its value still shows: Vertical sync's. A locked row whose
@@ -781,9 +792,9 @@ Escape, Left, Right, Tab and Shift+Tab on it, the rest of the dialog taking
 nothing meanwhile, the locks during a game and by the command line with
 their notes, inert rows and disabled button, and OPEN MODS FOLDER asking
 for the Mods folder;
-the Graphics section's eight rows, their places at every offset
+the Graphics section's ten rows, their places at every offset
 and under every lock, the focus scrolling them into view, both forms of a
-locked row, every status of Hardware acceleration, Full's included, and
+locked row, Zoomed out units' faded Icons and After zoom's lock, every status of Hardware acceleration, Full's included, and
 the requests to try the graphics card afresh; on sections of the test's own taller than the
 view (`SectionHooks`), its scrolling: the view and its limit, the wheel, the
 scroll bar, the scroll keys, the focus brought into view, rows the view

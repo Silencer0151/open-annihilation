@@ -2396,50 +2396,95 @@ void Runtime::check_full_render_tier(
     // tier draws units whole at: the processor draws the far view at the
     // zoom in every tier, Full's presented as Basic presents a frame
     // without leaving Full; its terrain is refreshed from the map's
-    // pyramid, its units are dots and no model is planned; back at the
-    // floor the card draws the frame again. Pictures of each go to the
-    // report.
+    // pyramid. With Zoomed out units at Rendered its units are models; at
+    // Dots they are dots and no model is planned; back at the floor the
+    // card draws the frame again. Pictures of each go to the report.
     {
         namespace engine = oa::ui::engine_settings;
         const engine::EngineSettings saved = engine_settings();
         engine::EngineSettings whole_map = saved;
         whole_map.max_zoom_out = engine::ZoomOutLimit::whole_map;
-        apply_engine_settings(whole_map);
-        for (const auto level :
-             {HardwareAcceleration::off, HardwareAcceleration::basic, HardwareAcceleration::full}) {
-            set_level(level);
-            const float whole = least_match_zoom();
-            const std::string tier = level == HardwareAcceleration::off     ? "off"
-                                     : level == HardwareAcceleration::basic ? "basic"
-                                                                            : "full";
-            // A map that fits whole before the tier's units stop being drawn
-            // whole, as the demo's does, has no far view to check.
-            if (!(whole < detail_zoom_floor())) {
-                std::cout << "render tiers check: " << tier << " tier: the whole map fits at "
-                          << zoom_text(whole) << ", before the far view; nothing to check\n";
-                continue;
+        for (const auto units : {engine::ZoomedOutUnits::rendered, engine::ZoomedOutUnits::dots})
+            for (const auto level :
+                 {HardwareAcceleration::off,
+                  HardwareAcceleration::basic,
+                  HardwareAcceleration::full}) {
+                whole_map.zoomed_out_units = units;
+                apply_engine_settings(whole_map);
+                set_level(level);
+                const float whole = least_match_zoom();
+                const bool dots = units == engine::ZoomedOutUnits::dots;
+                const std::string tier = std::string(
+                                             level == HardwareAcceleration::off     ? "off"
+                                             : level == HardwareAcceleration::basic ? "basic"
+                                                                                    : "full"
+                                         ) +
+                                         (dots ? " dots" : " rendered");
+                // A map that fits whole before the tier's units stop being
+                // drawn whole, as the demo's does, has no far view to check.
+                if (!(whole < detail_zoom_floor())) {
+                    std::cout << "render tiers check: " << tier << " tier: the whole map fits at "
+                              << zoom_text(whole) << ", before the far view; nothing to check\n";
+                    continue;
+                }
+                at_zoom(whole);
+                // The terrain drawn afresh, and the frame's own units counted.
+                terrain_cache_cam_x_ = kUncachedTerrainCamera;
+                frame_draws_.units_drawn = 0;
+                const uint64_t runs = terrain_box_filter_runs_;
+                const auto read = presented();
+                if (!far_view_frame() || match_zoom() != whole)
+                    fail("the " + tier + " tier did not hold the whole map's zoom as the far view");
+                if (terrain_box_filter_runs_ == runs)
+                    fail("the " + tier + " tier's far view did not refresh its terrain");
+                if (dots_frame() != dots)
+                    fail("the " + tier + " tier's far view did not draw its units as chosen");
+                if (match_models().draws.models.empty() != dots)
+                    fail(
+                        "the " + tier + " tier's far view " +
+                        (dots ? "planned a model" : "planned no model")
+                    );
+                if (frame_draws_.units_drawn == 0)
+                    fail("the " + tier + " tier's far view drew no unit");
+                if (level == HardwareAcceleration::full &&
+                    (!full_presentation() || full_frame_drawn() || full_->drawn))
+                    fail("the full tier's far view was not the processor's, presented as Basic's");
+                const std::string slug = std::string(
+                                             level == HardwareAcceleration::off     ? "off"
+                                             : level == HardwareAcceleration::basic ? "basic"
+                                                                                    : "full"
+                                         ) +
+                                         (dots ? "-dots" : "-rendered");
+                write_png(
+                    report_directory / ("native-render-tiers-far-view-" + slug + ".png"), read
+                );
+                std::cout << "render tiers check: " << tier << " tier: the whole map at zoom "
+                          << zoom_text(whole) << " is the far view, " << frame_draws_.units_drawn
+                          << " units drawn " << (dots ? "as dots" : "as models") << '\n';
             }
-            at_zoom(whole);
-            // The terrain drawn afresh, and the frame's own units counted.
-            terrain_cache_cam_x_ = kUncachedTerrainCamera;
+        // In the Full tier with After zoom at 1/4, a view at 1/5, nearer
+        // than the tier's floor, is the card's, its units dots on the
+        // overlay canvas and no model planned.
+        whole_map.zoomed_out_units = engine::ZoomedOutUnits::dots;
+        whole_map.zoomed_out_after = engine::ZoomedOutAfter::one_quarter;
+        apply_engine_settings(whole_map);
+        set_level(HardwareAcceleration::full);
+        constexpr float card_dots_zoom = 0.2F;
+        if (least_match_zoom() > card_dots_zoom) {
+            std::cout << "render tiers check: full tier: the whole map fits at "
+                      << zoom_text(least_match_zoom()) << ", nearer than "
+                      << zoom_text(card_dots_zoom) << "; no card frame past After zoom to check\n";
+        } else {
+            at_zoom(card_dots_zoom);
             frame_draws_.units_drawn = 0;
-            const uint64_t runs = terrain_box_filter_runs_;
-            const auto read = presented();
-            if (!far_view_frame() || match_zoom() != whole)
-                fail("the " + tier + " tier did not hold the whole map's zoom as the far view");
-            if (terrain_box_filter_runs_ == runs)
-                fail("the " + tier + " tier's far view did not refresh its terrain");
-            if (!match_models().draws.models.empty())
-                fail("the " + tier + " tier's far view planned a model");
-            if (frame_draws_.units_drawn == 0)
-                fail("the " + tier + " tier's far view drew no unit");
-            if (level == HardwareAcceleration::full &&
-                (!full_presentation() || full_frame_drawn() || full_->drawn))
-                fail("the full tier's far view was not the processor's, presented as Basic's");
-            write_png(report_directory / ("native-render-tiers-far-view-" + tier + ".png"), read);
-            std::cout << "render tiers check: " << tier << " tier: the whole map at zoom "
-                      << zoom_text(whole) << " is the far view, " << frame_draws_.units_drawn
-                      << " units drawn as dots\n";
+            const auto card_dots = full_frame();
+            if (far_view_frame() || !dots_frame() || !match_models().draws.models.empty() ||
+                frame_draws_.units_drawn == 0)
+                fail("the card's frame past After zoom did not draw its units as dots");
+            write_png(report_directory / "native-render-tiers-full-card-dots.png", card_dots);
+            std::cout << "render tiers check: full tier: at zoom " << zoom_text(card_dots_zoom)
+                      << ", past After zoom 1/4, the card draws the frame and "
+                      << frame_draws_.units_drawn << " units are dots\n";
         }
         at_zoom(kMinFullBattlefieldZoom);
         std::ignore = full_frame();

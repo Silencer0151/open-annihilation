@@ -29,6 +29,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -1921,6 +1922,89 @@ void the_zoom_limits_default_read_and_round_trip() {
     CHECK(values.empty());
 }
 
+/// How units look zoomed out: Rendered and 1/6 everywhere by default; a
+/// file written before them reads the defaults; each word reads its choice,
+/// and any other text, Icons' word among them, the default; each other
+/// choice written alone and read back, and Restore defaults then OK erases
+/// both keys. Each After zoom choice stands for its share of normal size.
+void the_zoomed_out_units_default_read_and_round_trip() {
+    CHECK(settings::key::zoomed_out_units == "open-annihilation.zoomed-out-units");
+    CHECK(settings::key::zoomed_out_after == "open-annihilation.zoomed-out-after");
+    settings::Inputs own_mac = players_own_on_linux;
+    own_mac.macos = true;
+    settings::Inputs light = players_own_on_linux;
+    light.light_machine = true;
+    for (const auto& inputs : {settings::Inputs{}, players_own_on_linux, own_mac, light}) {
+        const auto defaults = settings::default_settings(inputs);
+        CHECK(defaults.zoomed_out_units == settings::ZoomedOutUnits::rendered);
+        CHECK(defaults.zoomed_out_after == settings::ZoomedOutAfter::one_sixth);
+        CHECK(settings::read_settings({}, inputs, false) == defaults);
+    }
+    // An older file: the zoom's limits, without the keys.
+    Values older{
+        {std::string{settings::key::max_zoom_out}, "whole-map"},
+        {std::string{settings::key::explosion_flash}, "reduced"},
+    };
+    const auto read_older = settings::read_settings(older, players_own_on_linux, false);
+    CHECK(read_older.zoomed_out_units == settings::ZoomedOutUnits::rendered);
+    CHECK(read_older.zoomed_out_after == settings::ZoomedOutAfter::one_sixth);
+    CHECK(read_older.max_zoom_out == settings::ZoomOutLimit::whole_map);
+
+    const auto units = [](const char* text) {
+        return read_one(settings::key::zoomed_out_units, text).zoomed_out_units;
+    };
+    const auto after = [](const char* text) {
+        return read_one(settings::key::zoomed_out_after, text).zoomed_out_after;
+    };
+    CHECK(units("rendered") == settings::ZoomedOutUnits::rendered);
+    CHECK(units("dots") == settings::ZoomedOutUnits::dots);
+    for (const char* text : {"", "icons", "Dots", "DOTS", "dot", " dots", "1"})
+        CHECK(units(text) == settings::ZoomedOutUnits::rendered);
+    const std::array<std::tuple<settings::ZoomedOutAfter, const char*, float>, 7> after_words{{
+        {settings::ZoomedOutAfter::one_half, "1/2", 0.5F},
+        {settings::ZoomedOutAfter::one_third, "1/3", 1.0F / 3.0F},
+        {settings::ZoomedOutAfter::one_quarter, "1/4", 0.25F},
+        {settings::ZoomedOutAfter::one_sixth, "1/6", 1.0F / 6.0F},
+        {settings::ZoomedOutAfter::one_eighth, "1/8", 0.125F},
+        {settings::ZoomedOutAfter::one_twelfth, "1/12", 1.0F / 12.0F},
+        {settings::ZoomedOutAfter::one_sixteenth, "1/16", 0.0625F},
+    }};
+    for (const auto& [choice, word, zoom] : after_words) {
+        CHECK(after(word) == choice);
+        CHECK(settings::zoomed_out_zoom(choice) == zoom);
+    }
+    for (const char* text : {"", "1/5", "1/32", "0.25", "6", " 1/8", "1/6 "})
+        CHECK(after(text) == settings::ZoomedOutAfter::one_sixth);
+
+    const auto defaults = settings::default_settings(players_own_on_linux);
+    auto dots = defaults;
+    dots.zoomed_out_units = settings::ZoomedOutUnits::dots;
+    Values values;
+    settings::write_settings(values, defaults, dots, defaults, false);
+    CHECK(values.size() == 1);
+    CHECK(values.at(std::string{settings::key::zoomed_out_units}) == "dots");
+    CHECK(settings::read_settings(values, players_own_on_linux, false) == dots);
+    for (const auto& [choice, word, zoom] : after_words) {
+        if (choice == defaults.zoomed_out_after)
+            continue;
+        auto chosen = defaults;
+        chosen.zoomed_out_after = choice;
+        Values one;
+        settings::write_settings(one, defaults, chosen, defaults, false);
+        CHECK(one.size() == 1);
+        CHECK(one.at(std::string{settings::key::zoomed_out_after}) == word);
+        CHECK(settings::read_settings(one, players_own_on_linux, false) == chosen);
+    }
+    auto both = dots;
+    both.zoomed_out_after = settings::ZoomedOutAfter::one_quarter;
+    Values pair;
+    settings::write_settings(pair, defaults, both, defaults, false);
+    CHECK(pair.size() == 2);
+    CHECK(settings::read_settings(pair, players_own_on_linux, false) == both);
+    settings::write_settings(pair, both, defaults, defaults, true);
+    CHECK(pair.empty());
+}
+
 void menu_scaling_and_native_density_default_read_and_round_trip() {
     CHECK(settings::key::menu_scaling == "open-annihilation.menu-scaling");
     CHECK(settings::key::native_density == "open-annihilation.native-density");
@@ -2076,6 +2160,7 @@ int main() {
     the_controller_settings_round_trip_and_restore();
     menu_scaling_and_native_density_default_read_and_round_trip();
     explosion_flash_default_read_and_round_trip();
+    the_zoomed_out_units_default_read_and_round_trip();
     the_zoom_limits_default_read_and_round_trip();
     if (failures != 0)
         return 1;

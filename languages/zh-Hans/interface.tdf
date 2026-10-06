@@ -654,6 +654,16 @@
 	zh-Hans=爆炸闪光;
 	}
 
+[Zoomed out units]
+	{
+	zh-Hans=缩小时的单位;
+	}
+
+[After zoom]
+	{
+	zh-Hans=缩小超过;
+	}
+
 [Use modern fonts for game text]
 	{
 	zh-Hans=游戏文字使用现代字体;
@@ -859,9 +869,9 @@
 	zh-Hans=滚动滚轮缩放战场。;
 	}
 
-[As far as units are drawn whole: 1/6 of normal]
+[As far as the view always went: 1/6 of normal]
 	{
-	zh-Hans=缩小到单位仍完整绘制为止：硬件加速为完整时;
+	zh-Hans=缩小到以往的上限：硬件加速为完整时;
 	}
 
 [size with Full hardware acceleration, else 1/2.]
@@ -874,9 +884,9 @@
 	zh-Hans=缩小到整张地图都能装进视图为止。;
 	}
 
-[Farther out than Automatic, units show as dots.]
+[Graphics' Zoomed out units says how units look.]
 	{
-	zh-Hans=比自动缩得更远时，单位显示为小点。;
+	zh-Hans=单位的样子由“图形”中的“缩小时的单位”决定。;
 	}
 
 [Out to 1/32 of normal size, or the whole map.]
@@ -1077,6 +1087,81 @@
 [drew it, or less where a mod asks.]
 	{
 	zh-Hans=模组要求时则更弱。;
+	}
+
+[Rendered]
+	{
+	zh-Hans=模型;
+	}
+
+[Dots]
+	{
+	zh-Hans=小点;
+	}
+
+[Icons]
+	{
+	zh-Hans=图标;
+	}
+
+[Units are drawn as models at every zoom.]
+	{
+	zh-Hans=任何缩放下单位都以模型绘制。;
+	}
+
+[Far out on a large map, needs a fast CPU.]
+	{
+	zh-Hans=在大地图上缩得很远时需要高速CPU。;
+	}
+
+[Past After zoom, each unit is a dot of its]
+	{
+	zh-Hans=缩小超过设定值后，每个单位显示为;
+	}
+
+[owner's colour, framed while selected.]
+	{
+	zh-Hans=所属玩家颜色的小点，选中时带边框。;
+	}
+
+[Dots farther out than 1/2 of normal size.]
+	{
+	zh-Hans=缩小到正常大小的1/2以外时显示为小点。;
+	}
+
+[Dots farther out than 1/3 of normal size.]
+	{
+	zh-Hans=缩小到正常大小的1/3以外时显示为小点。;
+	}
+
+[Dots farther out than 1/4 of normal size.]
+	{
+	zh-Hans=缩小到正常大小的1/4以外时显示为小点。;
+	}
+
+[Dots farther out than 1/6 of normal size.]
+	{
+	zh-Hans=缩小到正常大小的1/6以外时显示为小点。;
+	}
+
+[Dots farther out than 1/8 of normal size.]
+	{
+	zh-Hans=缩小到正常大小的1/8以外时显示为小点。;
+	}
+
+[Dots farther out than 1/12 of normal size.]
+	{
+	zh-Hans=缩小到正常大小的1/12以外时显示为小点。;
+	}
+
+[Dots farther out than 1/16 of normal size.]
+	{
+	zh-Hans=缩小到正常大小的1/16以外时显示为小点。;
+	}
+
+[Closer in, units are drawn as models.]
+	{
+	zh-Hans=更近时单位以模型绘制。;
 	}
 
 [The display's own pixel density (Retina on a Mac).]
@@ -1487,6 +1572,11 @@
 [Needs modern fonts]
 	{
 	zh-Hans=需要现代字体;
+	}
+
+[Needs Dots]
+	{
+	zh-Hans=需要小点;
 	}
 
 [Always on here]

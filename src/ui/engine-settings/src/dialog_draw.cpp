@@ -751,8 +751,9 @@ void draw_switch(
     );
 }
 
-/// Draws a strip of levels: Enhanced anti-aliasing's or Hardware
-/// acceleration's.
+/// Draws a strip of levels, such as Enhanced anti-aliasing's or Hardware
+/// acceleration's. The levels the strip shows but does not offer are faded
+/// into the panel, as a locked row is.
 ///
 /// @param[in,out] target the surface
 /// @param placement where the dialog lands
@@ -799,6 +800,8 @@ void draw_levels(
             Align::centre,
             selected ? kOnAccentColor : kButtonTextColor
         );
+        if (index >= layout::offered_levels(strip))
+            renderer::blend_source_rect(target, placement, segment, kPanelColor, kLockedFade);
     }
 }
 

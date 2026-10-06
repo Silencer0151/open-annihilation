@@ -149,9 +149,9 @@ Each of these takes effect at once.
   of the battlefield, or, with more than the whole map in view, until the
   map's centre reaches the view's edge; the battlefield is black past the
   map, and your aircraft stay in view where their flight takes them past
-  its edges. Turned off, the view eases back to the game's own scale.
-  Turn it off if the wheel zooms when you do not mean it to, or to use a
-  mod's megamap, which takes the wheel only while this is off
+  its edges. Turned off, the view eases back to the game's own scale. Turn it off if the wheel zooms when
+  you do not mean it to, or to use a mod's megamap, which takes the wheel
+  only while this is off
   ([ui.megamap](mods/standard-hacks/ui.megamap.md)); the wheel itself can
   zoom out to the whole map (Maximum zoom out).
 - **Maximum zoom out**, Automatic, Whole map, 1/32, 1/16, 1/8, 1/4 or 1/2,
@@ -161,18 +161,17 @@ Each of these takes effect at once.
   or a sixth while Full hardware acceleration draws the battlefield. Whole
   map zooms out until the whole map fits the battlefield, filling it one
   way and fitting within it the other; each fraction zooms out to that
-  share of the game's scale, or to the whole map if it fits first. Farther
-  out than Automatic, the battlefield is drawn as a far view in every
-  tier: the terrain reduced, each unit as a dot of its owner's colour,
-  framed while selected, and no health bars, so that a frame of the whole
-  map takes no more memory than one at half scale. It takes about as long
-  to draw too, but for the fog, which grows with the map: on the largest
-  maps, with Hardware acceleration Off, the fog can make a frame of the
-  whole map up to about twice as long as one at half scale. Clicks, drags
-  and orders work as ever: a click on a unit's dot picks the unit, and a
-  press on the black past the map, at any zoom, gives its order at the
-  nearest point of the map. Choose Whole map to see and command the whole
-  battle at once.
+  share of the game's scale, or
+  to the whole map if it fits first. Farther out than Automatic, the
+  processor draws the battlefield in every tier, its terrain reduced so
+  that it takes no longer than at half scale, and the units as Zoomed out
+  units, in Graphics, says: as models, or as dots past After zoom. The fog
+  grows with the map: on the largest maps, with Hardware acceleration Off,
+  it can make a frame of the whole map up to about twice as long as one at
+  half scale. Clicks, drags and orders work as ever: a click on a unit's
+  dot picks the unit, and a press on the black past the map, at any zoom,
+  gives its order at the nearest point of the map. Choose Whole map
+  to see and command the whole battle at once.
 - **Maximum zoom in**, None, 2x, 3x or 4x, 4x by default. How close the
   same zooms go: None keeps the game's own scale as the closest, the others
   that many times it. A view past a new limit eases within it about the
@@ -281,7 +280,9 @@ the game draws its text and how the modern fonts draw it.
 
 ![The top of the Graphics section: Maximum frame rate at 120 fps, Enhanced anti-aliasing Off, Screen size Desktop and Hardware acceleration at Full.](images/settings/graphics-1.png)
 
-![The rest of the Graphics section, scrolled to its end: Vertical sync Off, Menu scaling Sharp, Native pixel density Off and Explosion flash Full.](images/settings/graphics-2.png)
+![The middle of the Graphics section: Vertical sync Off, Menu scaling Sharp, Native pixel density Off and Explosion flash Full.](images/settings/graphics-2.png)
+
+![The rest of the Graphics section, scrolled to its end: Explosion flash Full, Zoomed out units Rendered, and After zoom at 1/6, locked until Zoomed out units is Dots.](images/settings/graphics-3.png)
 
 - **Maximum frame rate**, 30 to 120 frames a second in steps of 5, 120 by
   default. It caps how many pictures the game draws a second; the game
@@ -396,6 +397,25 @@ the game draws its text and how the modern fonts draw it.
   more than you chose. It changes only what your screen shows, never the
   game, and takes effect at once, in a multiplayer game or a replay too.
   Choose Reduced or Off if flashing light is uncomfortable for you.
+- **Zoomed out units**, Rendered or Dots, Rendered by default; Icons is
+  shown but cannot be chosen yet. It says how units are drawn when the
+  view is zoomed out farther than After zoom. Rendered draws every unit,
+  wreck and shot as at any zoom, however far out the view goes: on a large
+  map zoomed out to the whole map that takes a fast processor, and memory
+  for every map pixel in view, and where a computer cannot spare an eighth
+  of its memory for that, its units are drawn as dots there. Dots draws
+  each unit as a small square of its owner's colour, framed while
+  selected, with no health bars; a frame of the whole map then costs no
+  more than one at half scale. Clicks, drags and orders work either way,
+  and a click on a unit's dot, or where it would be, picks the unit. It
+  takes effect at once.
+- **After zoom**, 1/2, 1/3, 1/4, 1/6, 1/8, 1/12 or 1/16, 1/6 by default,
+  locked ("Needs Dots") while Zoomed out units is Rendered. Farther out
+  than this share of the game's scale, units are drawn as dots; closer in,
+  as models. 1/6 is about where units stop being told apart. With Maximum
+  zoom out at Automatic the view never goes farther out than 1/2, or 1/6
+  with Full hardware acceleration, so choose a farther Maximum zoom out to
+  see the dots.
 
 Some computers start with other defaults, which Restore defaults puts back
 and which a value you choose always replaces:

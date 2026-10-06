@@ -49,8 +49,9 @@ constexpr std::array<Setting, 3> kCommonTweaksRows{
     Setting::unit_limit,
     Setting::path_search,
 };
-/// Graphics' rows.
-constexpr std::array<Setting, 8> kGraphicsRows{
+/// Graphics' rows: how units look zoomed out last, the zoom they look so
+/// from right under the way.
+constexpr std::array<Setting, 10> kGraphicsRows{
     Setting::max_frame_rate,
     Setting::anti_aliasing,
     Setting::screen_size,
@@ -59,6 +60,8 @@ constexpr std::array<Setting, 8> kGraphicsRows{
     Setting::menu_scaling,
     Setting::native_density,
     Setting::explosion_flash,
+    Setting::zoomed_out_units,
+    Setting::zoomed_out_after,
 };
 /// Language's rows: the language first, and the text size right
 /// under the switch it needs.
@@ -367,6 +370,12 @@ static_assert(
     kExplosionFlashCaptions.size() == explosion_flash_choices.size(),
     "every level of Explosion flash has its caption"
 );
+/// Zoomed out units' captions, in zoomed_out_units_choices' order.
+constexpr std::array<std::string_view, 3> kZoomedOutUnitsCaptions{"Rendered", "Dots", "Icons"};
+static_assert(
+    kZoomedOutUnitsCaptions.size() == zoomed_out_units_choices.size(),
+    "every way of Zoomed out units has its caption"
+);
 /// One-finger drag's captions, in touch_drag_choices' order.
 constexpr std::array<std::string_view, 3> kTouchDragCaptions{"Automatic", "Box", "Scroll"};
 static_assert(
@@ -453,6 +462,14 @@ constexpr std::array<std::string_view, 7> kZoomOutCaptions{
 static_assert(
     kZoomOutCaptions.size() == zoom_out_limits.size(),
     "every Maximum zoom out choice has its caption"
+);
+/// After zoom's choices' texts, in zoomed_out_afters' order.
+constexpr std::array<std::string_view, 7> kZoomedOutAfterCaptions{
+    "1/2", "1/3", "1/4", "1/6", "1/8", "1/12", "1/16"
+};
+static_assert(
+    kZoomedOutAfterCaptions.size() == zoomed_out_afters.size(),
+    "every After zoom choice has its caption"
 );
 /// Maximum zoom in's choices' texts, in zoom_in_limits' order.
 constexpr std::array<std::string_view, 4> kZoomInCaptions{"None", "2x", "3x", "4x"};
@@ -957,6 +974,7 @@ bool is_strip(Setting setting) noexcept {
     case Setting::hardware_acceleration:
     case Setting::menu_scaling:
     case Setting::explosion_flash:
+    case Setting::zoomed_out_units:
     case Setting::touch_drag:
     case Setting::touch_latches:
     case Setting::touch_control_size:
@@ -981,6 +999,10 @@ Strip strip_of(Setting setting) noexcept {
         return Strip{menu_scaling_choices.size(), menu_scaling_level_width};
     case Setting::explosion_flash:
         return Strip{explosion_flash_choices.size(), explosion_flash_level_width};
+    case Setting::zoomed_out_units:
+        return Strip{
+            zoomed_out_units_choices.size(), zoomed_out_units_level_width, offered_zoomed_out_units
+        };
     case Setting::touch_drag:
         return Strip{touch_drag_choices.size(), touch_drag_level_width};
     case Setting::touch_latches:
@@ -1012,6 +1034,8 @@ std::size_t strip_level(const EngineSettings& settings, Setting setting) noexcep
         return choice_place(menu_scaling_choices, settings.menu_scaling);
     case Setting::explosion_flash:
         return choice_place(explosion_flash_choices, settings.explosion_flash);
+    case Setting::zoomed_out_units:
+        return choice_place(zoomed_out_units_choices, settings.zoomed_out_units);
     case Setting::touch_drag:
         return choice_place(touch_drag_choices, settings.touch_drag);
     case Setting::touch_latches:
@@ -1037,6 +1061,9 @@ void set_strip_level(EngineSettings& settings, Setting setting, std::size_t leve
     const Strip strip = strip_of(setting);
     if (strip.levels == 0)
         return;
+    // A level the strip shows but does not offer changes nothing.
+    if (level >= offered_levels(strip))
+        return;
     const std::size_t clamped = std::min(level, strip.levels - 1);
     switch (setting) {
     case Setting::anti_aliasing:
@@ -1050,6 +1077,9 @@ void set_strip_level(EngineSettings& settings, Setting setting, std::size_t leve
         break;
     case Setting::explosion_flash:
         settings.explosion_flash = explosion_flash_choices[clamped];
+        break;
+    case Setting::zoomed_out_units:
+        settings.zoomed_out_units = zoomed_out_units_choices[clamped];
         break;
     case Setting::touch_drag:
         settings.touch_drag = touch_drag_choices[clamped];
@@ -1090,6 +1120,8 @@ std::string_view strip_caption(Setting setting, std::size_t level) noexcept {
         return kMenuScalingCaptions[level];
     case Setting::explosion_flash:
         return kExplosionFlashCaptions[level];
+    case Setting::zoomed_out_units:
+        return kZoomedOutUnitsCaptions[level];
     case Setting::touch_drag:
         return kTouchDragCaptions[level];
     case Setting::touch_latches:
@@ -1170,7 +1202,7 @@ std::string shown_hint_text(
 bool is_choice(Setting setting) noexcept {
     return setting == Setting::language || setting == Setting::pad_gyro ||
            setting == Setting::pad_prompts || setting == Setting::max_zoom_out ||
-           setting == Setting::max_zoom_in;
+           setting == Setting::max_zoom_in || setting == Setting::zoomed_out_after;
 }
 
 int32_t choice_field_width(Setting setting) noexcept {
@@ -1201,6 +1233,8 @@ std::size_t choice_count(const Dialog& dialog, Setting setting) {
         return zoom_out_limits.size();
     case Setting::max_zoom_in:
         return zoom_in_limits.size();
+    case Setting::zoomed_out_after:
+        return zoomed_out_afters.size();
     default:
         return 0;
     }
@@ -1217,6 +1251,8 @@ std::string choice_text(const Dialog& dialog, Setting setting, std::size_t index
         return std::string(shown_text(kZoomOutCaptions[index]));
     if (setting == Setting::max_zoom_in)
         return std::string(shown_text(kZoomInCaptions[index]));
+    if (setting == Setting::zoomed_out_after)
+        return std::string(shown_text(kZoomedOutAfterCaptions[index]));
     if (index == 0) {
         const auto* system = dialog.system_language;
         const auto& named = system != nullptr ? *system : oa::data::languages::english();
@@ -1258,6 +1294,8 @@ std::size_t choice_index(const Dialog& dialog, Setting setting) {
         return choice_place(zoom_out_limits, settings.max_zoom_out);
     if (setting == Setting::max_zoom_in)
         return choice_place(zoom_in_limits, settings.max_zoom_in);
+    if (setting == Setting::zoomed_out_after)
+        return choice_place(zoomed_out_afters, settings.zoomed_out_after);
     if (setting != Setting::language)
         return 0;
     const auto offered = offered_languages();
@@ -1287,6 +1325,10 @@ void set_choice(Dialog& dialog, Setting setting, std::size_t index) {
     }
     if (setting == Setting::max_zoom_in) {
         settings.max_zoom_in = zoom_in_limits[clamped];
+        return;
+    }
+    if (setting == Setting::zoomed_out_after) {
+        settings.zoomed_out_after = zoomed_out_afters[clamped];
         return;
     }
     settings.language = clamped == 0 ? std::string(oa::data::languages::system_choice)
@@ -1370,6 +1412,8 @@ Lock lock_of(const Locks& locks, Setting setting) noexcept {
         return locks.unicode_chat;
     case Setting::mod:
         return locks.mod;
+    case Setting::zoomed_out_after:
+        return locks.zoomed_out_after;
     default:
         return Lock::none;
     }
@@ -1543,6 +1587,10 @@ Locks shown_locks(const Dialog& dialog) noexcept {
         dialog.chosen.modern_fonts || locks.modern_fonts == Lock::set_by_language;
     if (locks.text_size == Lock::none && !modern_fonts)
         locks.text_size = Lock::needs_modern_fonts;
+    // After zoom says where units turn to dots; drawn whole, they never do.
+    if (locks.zoomed_out_after == Lock::none &&
+        dialog.chosen.zoomed_out_units != ZoomedOutUnits::dots)
+        locks.zoomed_out_after = Lock::needs_dots;
     return locks;
 }
 
@@ -1827,6 +1875,10 @@ std::string_view label_of(Setting setting) noexcept {
         return "Native pixel density";
     case Setting::explosion_flash:
         return "Explosion flash";
+    case Setting::zoomed_out_units:
+        return "Zoomed out units";
+    case Setting::zoomed_out_after:
+        return "After zoom";
     case Setting::modern_fonts:
         return "Use modern fonts for game text";
     case Setting::text_outline:
@@ -1956,12 +2008,12 @@ std::string_view hint_line(
         lines = {"Scroll to zoom the battlefield in and out.", {}};
         break;
     case Setting::max_zoom_out: {
-        // What the choice stops at, then where the far view begins.
-        constexpr std::string_view dots = "Farther out than Automatic, units show as dots.";
+        // What the choice stops at, then what says how units look there.
+        constexpr std::string_view dots = "Graphics' Zoomed out units says how units look.";
         switch (settings.max_zoom_out) {
         case ZoomOutLimit::automatic:
             lines = {
-                "As far as units are drawn whole: 1/6 of normal",
+                "As far as the view always went: 1/6 of normal",
                 "size with Full hardware acceleration, else 1/2."
             };
             break;
@@ -2092,6 +2144,52 @@ std::string_view hint_line(
             break;
         }
         break;
+    case Setting::zoomed_out_units:
+        // What the way chosen draws past After zoom, and what it costs.
+        switch (settings.zoomed_out_units) {
+        case ZoomedOutUnits::rendered:
+        case ZoomedOutUnits::icons:
+            lines = {
+                "Units are drawn as models at every zoom.",
+                "Far out on a large map, needs a fast CPU."
+            };
+            break;
+        case ZoomedOutUnits::dots:
+            lines = {
+                "Past After zoom, each unit is a dot of its",
+                "owner's colour, framed while selected."
+            };
+            break;
+        }
+        break;
+    case Setting::zoomed_out_after: {
+        // Where the dots begin, then what is drawn nearer.
+        constexpr std::string_view nearer = "Closer in, units are drawn as models.";
+        switch (settings.zoomed_out_after) {
+        case ZoomedOutAfter::one_half:
+            lines = {"Dots farther out than 1/2 of normal size.", nearer};
+            break;
+        case ZoomedOutAfter::one_third:
+            lines = {"Dots farther out than 1/3 of normal size.", nearer};
+            break;
+        case ZoomedOutAfter::one_quarter:
+            lines = {"Dots farther out than 1/4 of normal size.", nearer};
+            break;
+        case ZoomedOutAfter::one_sixth:
+            lines = {"Dots farther out than 1/6 of normal size.", nearer};
+            break;
+        case ZoomedOutAfter::one_eighth:
+            lines = {"Dots farther out than 1/8 of normal size.", nearer};
+            break;
+        case ZoomedOutAfter::one_twelfth:
+            lines = {"Dots farther out than 1/12 of normal size.", nearer};
+            break;
+        case ZoomedOutAfter::one_sixteenth:
+            lines = {"Dots farther out than 1/16 of normal size.", nearer};
+            break;
+        }
+        break;
+    }
     case Setting::modern_fonts:
         lines = {"Modern fonts for in-game text,", "including internationalization."};
         break;
@@ -2287,6 +2385,8 @@ std::size_t hint_line_count(Setting setting) noexcept {
     case Setting::menu_scaling:
     case Setting::native_density:
     case Setting::explosion_flash:
+    case Setting::zoomed_out_units:
+    case Setting::zoomed_out_after:
     case Setting::touch_drag:
     case Setting::touch_latches:
     case Setting::touch_left_handed:
@@ -2542,6 +2642,8 @@ std::string_view lock_text(Lock lock) noexcept {
         return "Always on here";
     case Lock::set_by_language:
         return "Set by the language";
+    case Lock::needs_dots:
+        return "Needs Dots";
     }
     return {};
 }
@@ -3238,6 +3340,12 @@ void copy_setting(EngineSettings& to, const EngineSettings& from, Setting settin
         break;
     case Setting::explosion_flash:
         to.explosion_flash = from.explosion_flash;
+        break;
+    case Setting::zoomed_out_units:
+        to.zoomed_out_units = from.zoomed_out_units;
+        break;
+    case Setting::zoomed_out_after:
+        to.zoomed_out_after = from.zoomed_out_after;
         break;
     case Setting::native_density:
         to.native_density = from.native_density;

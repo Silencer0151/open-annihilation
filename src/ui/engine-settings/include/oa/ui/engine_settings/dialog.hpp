@@ -206,6 +206,12 @@ enum class Setting : uint8_t {
     native_density, ///< Native pixel density: a switch
     /// Explosion flash: a strip of Off, Reduced and Full
     explosion_flash,
+    /// Zoomed out units: a strip of Rendered, Dots and Icons, of which
+    /// Icons is shown faded and cannot be chosen yet
+    zoomed_out_units,
+    /// After zoom: a drop-down of 1/2, 1/3, 1/4, 1/6, 1/8, 1/12 and 1/16,
+    /// locked while Zoomed out units shows Rendered
+    zoomed_out_after,
 };
 
 /// Returns the settings a section shows, top to bottom.

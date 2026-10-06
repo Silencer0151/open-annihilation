@@ -6363,12 +6363,34 @@ class Runtime final : public menu::Host,
     /// Tells whether the match's next frame draws the far view: a frame of
     /// the player's view zoomed out past detail_zoom_floor, which the
     /// processor draws in every tier at the zoom, its terrain from the
-    /// map's pyramid (refresh_filtered_terrain) and each unit as a dot of
-    /// its owner's colour (render_match_surface). A director's frame never
-    /// does.
+    /// map's pyramid (refresh_filtered_terrain) and its units as models or
+    /// as dots, as dots_frame says (render_match_surface). A director's
+    /// frame never does.
     ///
     /// @return true when the far view is drawn
     [[nodiscard]] bool far_view_frame() const noexcept;
+
+    /// Tells whether the match's next frame draws its units as dots: a
+    /// frame of the player's view zoomed out farther than After zoom with
+    /// Zoomed out units at Dots, or past detail_zoom_floor where the models'
+    /// drawing would take more memory than the machine can spare
+    /// (rendered_units_budget) or where a unit drawn may stand farther from
+    /// the camera than kMostModelOffset map pixels. Such a frame draws no
+    /// model of a unit, feature, projectile, fragment or debris, no health
+    /// bar or squad digit, and a model bridge of one pixel. A director's
+    /// frame never does.
+    ///
+    /// @return true when the units are drawn as dots
+    [[nodiscard]] bool dots_frame() const noexcept;
+
+    /// Returns the memory the models' drawing may take past
+    /// detail_zoom_floor, where its model bridge holds every map pixel the
+    /// view shows: an eighth of the machine's physical memory
+    /// (kRenderedUnitsMemoryShare), or kRenderedUnitsUnknownBudget where the
+    /// machine does not say.
+    ///
+    /// @return bytes
+    [[nodiscard]] uint64_t rendered_units_budget() const noexcept;
 
     /// Returns how many map pixels across the battlefield shows at the current zoom.
     ///
@@ -8645,7 +8667,8 @@ class Runtime final : public menu::Host,
     /// goes no further from the map but back toward it at once. An aircraft
     /// put past the map's left edge, with the view past that edge, is on
     /// screen, drawn over the black, hovered and selected, as a model at
-    /// zoom 1 and as a dot in the far view. A view past the map's edges
+    /// zoom 1 and in the far view with Zoomed out units at Rendered, and as
+    /// a dot with Dots. A view past the map's edges
     /// gives the match's digest of the view at the map's corner, the camera
     /// held on the map (on_map_camera). Puts the settings, the layout and
     /// the default zoom back; throws std::runtime_error on a failure.
@@ -8656,8 +8679,9 @@ class Runtime final : public menu::Host,
 
     /// Checks presses on the far view at Whole map on the game's screen.
     ///
-    /// A click on every pixel of the local commander's dot selects it, as
-    /// small as its box is there; with it selected, a click on the dot of
+    /// A click on every pixel of the local commander's dot, or where it
+    /// would be, selects it, as small as its box is there, with Zoomed out
+    /// units at Dots and at Rendered; with it selected, a click on the dot of
     /// an enemy spawned beside it attacks the enemy, and a click on the
     /// black right of the map, and left of it with the map in the middle,
     /// moves it to the ground at the nearest point of the shown map, never

@@ -63,6 +63,30 @@ constexpr float kZoomLerpHz = 12.0F;
 /// The camera a terrain cache notes before it holds a fill: one no view
 /// reaches, so that the first fill is never mistaken for the cache's.
 constexpr int32_t kUncachedTerrainCamera = INT32_MIN;
+/// Bytes the model bridge takes for each map pixel a frame shows: its 8-bit
+/// picture and the indices it captured.
+constexpr uint64_t kModelBridgeBytesPerMapPixel = 2;
+/// The share of the machine's physical memory the models' drawing may take
+/// past the drawing's floor, where it grows with the map shown: an eighth.
+constexpr uint64_t kRenderedUnitsMemoryShare = 8;
+/// The memory the models' drawing may take past the drawing's floor where
+/// the machine does not say how much it has: 512 MiB.
+constexpr uint64_t kRenderedUnitsUnknownBudget = uint64_t{512} << 20U;
+/// Screen pixels past the battlefield's edges a frame still draws what
+/// stands there at least, so that a large unit or its shadow reaching into
+/// the view is drawn.
+constexpr int kLeastCullMargin = 256;
+/// Map pixels past the battlefield's edges a zoomed-in frame draws what
+/// stands there, in screen pixels at the zoom where that is more than
+/// kLeastCullMargin.
+constexpr double kCullMarginMapPixels = 128.0;
+/// Map pixels past the battlefield's edges a frame past the tier's floor
+/// draws what stands there: room for the largest unit and its shadow.
+constexpr double kFarCullMarginMapPixels = 512.0;
+/// The most map pixels from the camera a unit drawn as a model may stand:
+/// the model routines place each piece by its 16-bit offset from the
+/// camera.
+constexpr double kMostModelOffset = 32767.0;
 constexpr uint8_t kPaletteGreen = 250;   // PALETTE.PAL RGB(0,255,0)
 constexpr std::size_t kUiColorText = 15; // Game.ui_colors slot of message and clock text
 constexpr int kDefaultWindowWidth = 1920;

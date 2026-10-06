@@ -172,6 +172,10 @@ inline constexpr int32_t menu_scaling_level_width = 71;
 /// 1-pixel border: room for Reduced, its widest caption, with three clear
 /// columns each side.
 inline constexpr int32_t explosion_flash_level_width = 50;
+/// Zoomed out units' level strip's segment width, inside the strip's
+/// 1-pixel border: room for Rendered, its widest caption, with three clear
+/// columns each side.
+inline constexpr int32_t zoomed_out_units_level_width = 56;
 /// MANAGE…'s width, Game files' button on its summary row's label line:
 /// room for its caption in the small font with clear columns each side.
 inline constexpr int32_t manage_button_width = 76;
@@ -508,7 +512,18 @@ struct Slider {
 struct Strip {
     std::size_t levels{};  ///< 2 or more, left to right
     int32_t level_width{}; ///< each level's columns, inside the strip's 1-pixel border
+    /// The levels a player may choose, counted from the left; the others are
+    /// shown faded and choosing them changes nothing. 0 offers every level.
+    std::size_t offered{};
 };
+
+/// Returns the levels of a strip a player may choose, from its left.
+///
+/// @param strip the strip
+/// @return Strip::offered, or every level where it is 0
+[[nodiscard]] constexpr std::size_t offered_levels(const Strip& strip) noexcept {
+    return strip.offered == 0 ? strip.levels : std::min(strip.offered, strip.levels);
+}
 
 /// One row of the open section, placed.
 struct Row {

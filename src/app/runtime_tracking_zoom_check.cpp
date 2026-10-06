@@ -10,10 +10,10 @@
 // limits the zoom's settings set; the view going past the map's edges until
 // the map's edge reaches the battlefield's middle, or the map's centre the
 // view's edge, and held there from a zoom past them; an aircraft past the
-// map's edge drawn, hovered and selected, as a model and as a dot; the
-// camera saves and the digest take, held on the map; the far view's dots and
-// the black past the map taking presses; and a zoom ending the follow of a
-// unit, which the settings dialog's zoom keeps.
+// map's edge drawn, hovered and selected, as a model near and far and as a
+// dot; the camera saves and the digest take, held on the map; the far
+// view's dots and the black past the map taking presses; and a zoom ending
+// the follow of a unit, which the settings dialog's zoom keeps.
 #include "oa/app/runtime.hpp"
 #include "oa/app/far_view.hpp"
 #include "engine_settings_state.hpp"
@@ -192,23 +192,33 @@ void Runtime::check_far_view_presses() {
         return std::pair{records[0], count};
     };
     const auto zoom_named = " at zoom " + std::to_string(match_zoom());
-    // A click on any pixel of the commander's dot selects it.
+    // A click on any pixel of the commander's dot selects it: drawn as a
+    // dot with Zoomed out units at Dots, and drawn as a model, a pixel or
+    // two at this zoom, with Rendered.
     const auto own = dot_at(commander);
     constexpr int32_t reach = far_view_dot_side;
-    for (int32_t y = own.y - reach; y <= own.y + reach; ++y)
-        for (int32_t x = own.x - reach; x <= own.x + reach; ++x) {
-            if (!far_view_dot_covers(own.x, own.y, x, y))
-                continue;
-            clear_local_selection();
-            match_command_ = MatchCommand::none;
-            click(x, y);
-            if (selected_match_unit_ != commander)
-                fail(
-                    "a click on the commander's dot at " + std::to_string(x - own.x) + "," +
-                    std::to_string(y - own.y) + " from its centre" + zoom_named +
-                    " selected unit " + std::to_string(selected_match_unit_)
-                );
-        }
+    for (const auto units : {settings::ZoomedOutUnits::rendered, settings::ZoomedOutUnits::dots}) {
+        chosen.zoomed_out_units = units;
+        apply_engine_settings(chosen);
+        render_match_surface();
+        if (dots_frame() != (units == settings::ZoomedOutUnits::dots))
+            fail("the far view did not draw its units as Zoomed out units says");
+        const std::string drawn = units == settings::ZoomedOutUnits::dots ? " as a dot" : "";
+        for (int32_t y = own.y - reach; y <= own.y + reach; ++y)
+            for (int32_t x = own.x - reach; x <= own.x + reach; ++x) {
+                if (!far_view_dot_covers(own.x, own.y, x, y))
+                    continue;
+                clear_local_selection();
+                match_command_ = MatchCommand::none;
+                click(x, y);
+                if (selected_match_unit_ != commander)
+                    fail(
+                        "a click on the commander's dot at " + std::to_string(x - own.x) + "," +
+                        std::to_string(y - own.y) + " from its centre" + zoom_named + drawn +
+                        " selected unit " + std::to_string(selected_match_unit_)
+                    );
+            }
+    }
     // With the commander selected, a click on the enemy's dot attacks it.
     match_->stop_orders(commander);
     const auto foe = dot_at(enemy);
@@ -270,8 +280,8 @@ void Runtime::check_far_view_presses() {
     clear_local_selection();
     match_command_ = MatchCommand::none;
     std::cout << "tracking zoom check: at Whole map on the game's screen, zoom " << match_zoom()
-              << ", a click on any pixel of the commander's dot selects it, one on an enemy's "
-                 "dot attacks it, and one on the black right or "
+              << ", a click on any pixel of the commander's dot selects it, drawn as a model "
+                 "and as a dot, one on an enemy's dot attacks it, and one on the black right or "
                  "left of the map moves to the map's edge\n";
 }
 
@@ -1005,7 +1015,8 @@ void Runtime::check_view_past_map(const std::function<void()>& frame) {
 
     // An aircraft past the map's left edge, with the view's camera half the
     // battlefield past it: drawn there, hovered and selected, as a model at
-    // zoom 1 and as a dot in the far view.
+    // zoom 1 and in the far view with Zoomed out units at Rendered, and as a
+    // dot there with Dots.
     auto& slots = match_->world().slots;
     const auto type = oa::sim::unit_spawn::find_type_index(spawn_type_names_, "ARMPEEP");
     if (type == 0)
@@ -1038,13 +1049,29 @@ void Runtime::check_view_past_map(const std::function<void()>& frame) {
             live_viewport(match_camera_x_, match_camera_z_), slots[aircraft].unit->position
         );
     };
-    for (const bool far : {false, true}) {
+
+    // A view of the aircraft: near or in the far view, and how the far
+    // view draws its units.
+    struct AircraftView {
+        bool far;
+        settings::ZoomedOutUnits units;
+    };
+
+    for (const auto [far, units] :
+         {AircraftView{false, settings::ZoomedOutUnits::rendered},
+          AircraftView{true, settings::ZoomedOutUnits::rendered},
+          AircraftView{true, settings::ZoomedOutUnits::dots}}) {
+        chosen.zoomed_out_units = units;
+        apply_engine_settings(chosen);
         const float zoom = far ? whole : kDefaultBattlefieldZoom;
         const auto half = static_cast<int32_t>(std::lround(bf_w / 2.0 / zoom));
         place(zoom, {-half, row - static_cast<int32_t>(std::lround(bf_h / 2.0 / zoom))});
-        if (far != far_view_frame())
+        const bool dots = far && units == settings::ZoomedOutUnits::dots;
+        if (far != far_view_frame() || dots != dots_frame())
             fail("the aircraft's view is not the frame it was meant to be");
-        const std::string what = far ? "in the far view" : "at zoom 1";
+        const std::string what = !far   ? "at zoom 1"
+                                 : dots ? "as a dot in the far view"
+                                        : "as a model in the far view";
         const auto at = drawn_at();
         if (at.x < match_layout_.left || at.y < match_layout_.top ||
             at.x >= match_layout_.left + bf_w || at.y >= match_layout_.top + bf_h)
@@ -1102,8 +1129,8 @@ void Runtime::check_view_past_map(const std::function<void()>& frame) {
                  "middle, and at the whole map with the map's centre at the view's edge; the "
                  "minimap brings the map's corner to the middle; a view a zoom left past the "
                  "limits goes no further and comes back at once; an aircraft past the map's "
-                 "edge is drawn, hovered and selected as a model and as a dot; and the digest "
-                 "takes the camera held on the map\n";
+                 "edge is drawn, hovered and selected as a model, near and far, and as a dot; "
+                 "and the digest takes the camera held on the map\n";
 }
 
 void Runtime::check_tracking_zoom() {

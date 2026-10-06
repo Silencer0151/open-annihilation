@@ -8,6 +8,7 @@
 #include "engine_settings_state.hpp"
 #include "oa/sim/feature_runtime.hpp"
 #include "oa/sim/selection.hpp"
+#include "oa/platform/memory_status.hpp"
 #include "oa/present/world_renderer/world_camera.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -334,6 +335,38 @@ float Runtime::detail_zoom_floor() const noexcept {
 bool Runtime::far_view_frame() const noexcept {
     return screen_ == Screen::match && !director_mode() &&
            far_view_zoom(match_zoom_, detail_zoom_floor());
+}
+
+bool Runtime::dots_frame() const noexcept {
+    namespace settings = oa::ui::engine_settings;
+    if (screen_ != Screen::match || director_mode() || !(match_zoom_ > 0.0F))
+        return false;
+    const settings::EngineSettings chosen =
+        engine_settings_ ? engine_settings_->current : settings::EngineSettings{};
+    if (chosen.zoomed_out_units == settings::ZoomedOutUnits::dots &&
+        match_zoom_ < settings::zoomed_out_zoom(chosen.zoomed_out_after))
+        return true;
+    // Past the drawing's floor, models whose drawing would take more of the
+    // machine's memory than it can spare, or a view whose units drawn reach
+    // farther from the camera than the models' places do, are drawn as
+    // dots.
+    if (!far_view_frame())
+        return false;
+    const auto zoom = static_cast<double>(match_zoom_);
+    const double wide = static_cast<double>(match_layout_.battlefield_width()) / zoom;
+    const double high = static_cast<double>(match_layout_.battlefield_height()) / zoom;
+    return wide * high * static_cast<double>(kModelBridgeBytesPerMapPixel) >
+               static_cast<double>(rendered_units_budget()) ||
+           std::max(wide, high) + kFarCullMarginMapPixels > kMostModelOffset;
+}
+
+uint64_t Runtime::rendered_units_budget() const noexcept {
+    // The machine's physical memory, read once.
+    static const uint64_t physical = [] {
+        oa::platform::SystemMemorySample sample{};
+        return oa::platform::sample_system_memory(&sample) ? sample.physical : uint64_t{0};
+    }();
+    return physical != 0 ? physical / kRenderedUnitsMemoryShare : kRenderedUnitsUnknownBudget;
 }
 
 float Runtime::most_match_zoom() const noexcept {

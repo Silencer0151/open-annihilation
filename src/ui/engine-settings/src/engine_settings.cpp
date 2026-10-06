@@ -243,6 +243,23 @@ constexpr std::array<ChoiceWord<ExplosionFlash>, 3> explosion_flash_words{{
     {ExplosionFlash::reduced, "reduced"},
     {ExplosionFlash::full, "full"},
 }};
+/// Zoomed out units' words, for the ways a player may choose: Icons, which
+/// the dialog shows but does not offer yet, has none.
+constexpr std::array<ChoiceWord<ZoomedOutUnits>, 2> zoomed_out_units_words{{
+    {ZoomedOutUnits::rendered, "rendered"},
+    {ZoomedOutUnits::dots, "dots"},
+}};
+static_assert(zoomed_out_units_words.size() == offered_zoomed_out_units);
+/// After zoom's words, in zoomed_out_afters' order.
+constexpr std::array<ChoiceWord<ZoomedOutAfter>, 7> zoomed_out_after_words{{
+    {ZoomedOutAfter::one_half, "1/2"},
+    {ZoomedOutAfter::one_third, "1/3"},
+    {ZoomedOutAfter::one_quarter, "1/4"},
+    {ZoomedOutAfter::one_sixth, "1/6"},
+    {ZoomedOutAfter::one_eighth, "1/8"},
+    {ZoomedOutAfter::one_twelfth, "1/12"},
+    {ZoomedOutAfter::one_sixteenth, "1/16"},
+}};
 /// Maximum zoom out's words, in zoom_out_limits' order.
 constexpr std::array<ChoiceWord<ZoomOutLimit>, 7> zoom_out_words{{
     {ZoomOutLimit::automatic, "automatic"},
@@ -620,6 +637,8 @@ EngineSettings read_settings(
     if (const auto number = stored_number(values, key::native_density))
         settings.native_density = inputs.native_density_windows || *number > 0;
     read_word(values, key::explosion_flash, explosion_flash_words, settings.explosion_flash);
+    read_word(values, key::zoomed_out_units, zoomed_out_units_words, settings.zoomed_out_units);
+    read_word(values, key::zoomed_out_after, zoomed_out_after_words, settings.zoomed_out_after);
     for (const TextSwitch& entry : text_switches)
         if (const auto number = stored_number(values, entry.key))
             settings.*entry.member = *number > 0;
@@ -824,6 +843,24 @@ void write_settings(
         opened.explosion_flash,
         chosen.explosion_flash,
         defaults.explosion_flash,
+        restored
+    );
+    store_word(
+        values,
+        key::zoomed_out_units,
+        zoomed_out_units_words,
+        opened.zoomed_out_units,
+        chosen.zoomed_out_units,
+        defaults.zoomed_out_units,
+        restored
+    );
+    store_word(
+        values,
+        key::zoomed_out_after,
+        zoomed_out_after_words,
+        opened.zoomed_out_after,
+        chosen.zoomed_out_after,
+        defaults.zoomed_out_after,
         restored
     );
     for (const TextSwitch& entry : text_switches)

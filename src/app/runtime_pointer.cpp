@@ -329,10 +329,11 @@ oa::sim::selection::Hooks Runtime::selection_hooks() {
             candidate.position = {unit.position.x, unit.position.y, unit.position.z};
             candidate.rotation = {unit.bank, static_cast<int16_t>(unit.heading), unit.pitch};
             pick_where_drawn(self.drawn_match_models(), world, unit, candidate);
-            // In the far view a unit is picked wherever its dot is drawn,
-            // since its box there shrinks to a pixel or less; a carried
-            // unit shows in its carrier's dot and has none of its own.
-            if (self.far_view_frame() && unit.attach_parent == 0) {
+            // A unit drawn as a dot is picked wherever its dot is drawn, and
+            // one drawn as a model in the far view wherever its dot would
+            // be, since its box there shrinks to a pixel or less; a carried
+            // unit shows in its carrier and has none of its own.
+            if ((self.dots_frame() || self.far_view_frame()) && unit.attach_parent == 0) {
                 const auto dot = self.project_match_point(
                     self.live_viewport(
                         static_cast<int32_t>(world.game.camera_x),

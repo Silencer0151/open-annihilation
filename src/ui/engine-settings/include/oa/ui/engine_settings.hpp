@@ -71,6 +71,12 @@ inline constexpr std::string_view menu_scaling = "open-annihilation.menu-scaling
 inline constexpr std::string_view native_density = "open-annihilation.native-density";
 /// "off", "reduced" or "full" (EngineSettings::explosion_flash).
 inline constexpr std::string_view explosion_flash = "open-annihilation.explosion-flash";
+/// "rendered" or "dots" (EngineSettings::zoomed_out_units).
+inline constexpr std::string_view zoomed_out_units = "open-annihilation.zoomed-out-units";
+/// The share of normal size past which Zoomed out units applies: "1/2",
+/// "1/3", "1/4", "1/6", "1/8", "1/12" or "1/16"
+/// (EngineSettings::zoomed_out_after).
+inline constexpr std::string_view zoomed_out_after = "open-annihilation.zoomed-out-after";
 /// 1 or 0 (EngineSettings::modern_fonts).
 inline constexpr std::string_view modern_fonts = "open-annihilation.modern-fonts";
 /// 1 or 0 (EngineSettings::text_outline).
@@ -354,6 +360,72 @@ inline constexpr std::array<ExplosionFlash, 3> explosion_flash_choices{
     ExplosionFlash::full,
 };
 
+/// Zoomed out units: how the battlefield's units are drawn farther out than
+/// After zoom.
+enum class ZoomedOutUnits : uint8_t {
+    rendered, ///< as at any zoom: each unit's model, as far out as the view goes
+    dots,     ///< each unit a dot of its owner's colour, framed while selected
+    icons,    ///< each unit an icon of its kind; offered, not yet chosen
+};
+
+/// The ways of Zoomed out units, in the order the dialog's strip shows them.
+inline constexpr std::array<ZoomedOutUnits, 3> zoomed_out_units_choices{
+    ZoomedOutUnits::rendered,
+    ZoomedOutUnits::dots,
+    ZoomedOutUnits::icons,
+};
+
+/// The ways of Zoomed out units a player may choose, from the strip's left:
+/// Icons is shown, but cannot be chosen yet.
+inline constexpr std::size_t offered_zoomed_out_units = 2;
+
+/// After zoom: the zoom farther out than which Zoomed out units applies,
+/// as a share of normal size.
+enum class ZoomedOutAfter : uint8_t {
+    one_half,      ///< farther out than 1/2
+    one_third,     ///< than 1/3
+    one_quarter,   ///< than 1/4
+    one_sixth,     ///< than 1/6
+    one_eighth,    ///< than 1/8
+    one_twelfth,   ///< than 1/12
+    one_sixteenth, ///< than 1/16
+};
+
+/// The After zoom choices, in the order the dialog offers them.
+inline constexpr std::array<ZoomedOutAfter, 7> zoomed_out_afters{
+    ZoomedOutAfter::one_half,
+    ZoomedOutAfter::one_third,
+    ZoomedOutAfter::one_quarter,
+    ZoomedOutAfter::one_sixth,
+    ZoomedOutAfter::one_eighth,
+    ZoomedOutAfter::one_twelfth,
+    ZoomedOutAfter::one_sixteenth,
+};
+
+/// Returns the zoom an After zoom choice stands for.
+///
+/// @param after the choice
+/// @return screen pixels per map pixel: Zoomed out units applies below it
+[[nodiscard]] constexpr float zoomed_out_zoom(ZoomedOutAfter after) noexcept {
+    switch (after) {
+    case ZoomedOutAfter::one_half:
+        return 1.0F / 2.0F;
+    case ZoomedOutAfter::one_third:
+        return 1.0F / 3.0F;
+    case ZoomedOutAfter::one_quarter:
+        return 1.0F / 4.0F;
+    case ZoomedOutAfter::one_sixth:
+        return 1.0F / 6.0F;
+    case ZoomedOutAfter::one_eighth:
+        return 1.0F / 8.0F;
+    case ZoomedOutAfter::one_twelfth:
+        return 1.0F / 12.0F;
+    case ZoomedOutAfter::one_sixteenth:
+        return 1.0F / 16.0F;
+    }
+    return 1.0F / 6.0F;
+}
+
 /// What a one-finger drag on the battlefield does (the Touch section's One-finger drag).
 enum class TouchDrag : uint8_t {
     automatic, ///< a selection box on a tablet, scrolling on a phone
@@ -578,6 +650,12 @@ struct EngineSettings {
     /// How strongly explosions' flashes light the battlefield; a mod's
     /// profile may hold them lower still (ui.explosion-flash).
     ExplosionFlash explosion_flash{ExplosionFlash::full};
+    /// How units are drawn farther out than zoomed_out_after: as at any
+    /// zoom, or as dots. Never icons, which the dialog shows but does not
+    /// offer yet.
+    ZoomedOutUnits zoomed_out_units{ZoomedOutUnits::rendered};
+    /// The zoom farther out than which zoomed_out_units applies.
+    ZoomedOutAfter zoomed_out_after{ZoomedOutAfter::one_sixth};
     /// Game text is drawn in the modern fonts, which hold the letters of
     /// many languages, rather than the game's own 8-bit fonts. On by default
     /// with the player's own preferences file (default_settings).
@@ -693,7 +771,8 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// scaling is Sharp everywhere. Mouse wheel zoom is On, Maximum zoom out
 /// Automatic and Maximum zoom in 4x everywhere. Native pixel density is
 /// Off, but On where the platform opens every window at native density.
-/// Explosion flash is Full everywhere, as 3.1c draws it. Modern
+/// Explosion flash is Full everywhere, as 3.1c draws it. Zoomed out units
+/// are Rendered and After zoom 1/6 everywhere. Modern
 /// fonts for game text are On with the player's own file and Off with a
 /// named one; their outline and shadow are On, their background Off and
 /// their size default_text_size everywhere. The language is the operating
@@ -763,7 +842,10 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// up); Trackpad glide, Magnetism and Left-handed read as every switch does.
 /// Maximum zoom out reads "automatic", "whole-map", "1/32", "1/16", "1/8",
 /// "1/4" or "1/2", and Maximum zoom in "1", "2", "3" or "4"; any other value gives the
-/// default. A stored value always wins over a Steam Deck's defaults.
+/// default. Zoomed out units reads "rendered" or "dots", and After zoom
+/// "1/2", "1/3", "1/4", "1/6", "1/8", "1/12" or "1/16"; any other value,
+/// "icons" among them, gives the default. A stored value always wins over a
+/// Steam Deck's defaults.
 ///
 /// @param values the preferences
 /// @param inputs the platform, the preferences file and the installation
@@ -782,9 +864,9 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// acceleration as "off", "basic" or "full", Menu scaling, One-finger drag
 /// and QUEUE and ADD as their words (menu_scaling_text, touch_drag_text,
 /// touch_latches_text), Explosion flash as "off", "reduced" or "full", the
-/// hold delay in milliseconds, Maximum zoom out, Maximum zoom in, Control
-/// size and the Controller section's choices as the words read_settings
-/// reads, Pointer
+/// hold delay in milliseconds, Maximum zoom out, Maximum zoom in, Zoomed
+/// out units, After zoom, Control size and the Controller section's choices
+/// as the words read_settings reads, Pointer
 /// speed and Gyro speed in percent, the mod and the picked folder as their
 /// paths, or erased
 /// for none; Restore defaults leaves the picked folder as it is. The picked
@@ -982,6 +1064,9 @@ enum class Lock : uint8_t {
     /// The language shown needs it: its text draws in the modern fonts, or
     /// its pack asks for multiplayer chat in UTF-8. The setting shows On.
     set_by_language,
+    /// Zoomed out units is Rendered: units are drawn the same at every
+    /// zoom, so After zoom changes nothing.
+    needs_dots,
 };
 
 /// The game the dialog opens over.
@@ -1041,6 +1126,9 @@ struct Locks {
     /// Native pixel density: locked command_line, the stored choice stays
     /// shown and takes effect from a start without the flag.
     Lock native_density{};
+    /// After zoom: the dialog itself locks it needs_dots while it shows
+    /// Zoomed out units Rendered.
+    Lock zoomed_out_after{};
 };
 
 /// Returns the locks a game state puts on the settings.

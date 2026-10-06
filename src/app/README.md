@@ -230,17 +230,28 @@ logs it.
   (`build_terrain_pyramid`, made at the map's first far frame and kept in
   `far_terrain_` while the map and palette stay; `filter_far_terrain`
   reads the level whose texels are one or two to a screen pixel, in bands
-  on the drawing threads), the fog as at any zoom, each unit the player
-  sees as a dot of its owner's colour over the fog, framed in the
-  selection boxes' colour while selected (`draw_far_view_dots`), and no
-  model of a unit, feature, projectile, fragment or debris, no health bar
-  or squad digit and a model bridge of one pixel. A frame of the whole map
-  then takes the memory of a frame at the processor's floor whatever the
-  map's size, and about its time but for the fog, whose grid holds every
-  cell of the map in view (`build_fog_grid`): on the largest maps in the
-  Off tier it makes a frame of the whole map up to about twice as long as
-  one at the floor. The pointer picks a unit wherever its dot is drawn
-  (`far_view_dot_covers`, in `selection_hooks`), and a press on the black
+  on the drawing threads), and the fog as at any zoom. How its units are
+  drawn is the Zoomed out units setting's: Rendered draws them, and
+  features, projectiles, fragments and debris, as at any zoom, with no
+  enhanced anti-aliasing, on a model bridge of every map pixel in view;
+  Dots draws a frame of dots farther out than After zoom
+  (`dots_frame`, which the Full tier's card frames between After zoom and
+  its floor draw too, on the overlay canvas): each unit the player sees
+  as a dot of its owner's colour over the fog, framed in the selection
+  boxes' colour while selected (`draw_far_view_dots`), and no model of a
+  unit, feature, projectile, fragment or debris, no health bar or squad
+  digit and a model bridge of one pixel. A frame past the floor whose
+  bridge would take more than `rendered_units_budget`, an eighth of the
+  machine's physical memory, is a frame of dots too. A frame of dots of
+  the whole map takes the memory of a frame at the processor's floor
+  whatever the map's size, and about its time but for the fog, whose grid
+  holds every cell of the map in view (`build_fog_grid`): on the largest
+  maps in the Off tier it makes a frame of the whole map up to about twice
+  as long as one at the floor; a rendered frame of the whole map takes two
+  bytes a map pixel for its bridge and time with the units in view.
+  The pointer picks a unit wherever its dot is drawn, or would be in a
+  rendered far view (`far_view_dot_covers`, in `selection_hooks`), and a
+  press on the black
   past the map's edges, at any zoom, takes the nearest point of the shown
   map (`ground_point_under`). In the Full tier the far frame's world layer
   is the processor's picture, which Basic's presentation draws without
@@ -259,10 +270,12 @@ logs it.
   and on the black either side of the map (`check_far_view_presses`); a
   scroll stopping at the view's limits, the minimap bringing the map's
   corner to the middle, a view a zoom left past the limits, an aircraft
-  past the map's edge drawn, hovered and selected as a model and as a dot,
-  and the digest of a view past the map (`check_view_past_map`); and a
+  past the map's edge drawn, hovered and selected as a model near and far
+  and as a dot, and the digest of a view past the map
+  (`check_view_past_map`); and a
   zoom ending a follow (`check_tracking_zoom`); `native-render-tiers` the
-  whole map's far view in each tier, and the fill before the map's start
+  whole map's far view in each tier, rendered and as dots, the Full tier's
+  card frame of dots past After zoom, and the fill before the map's start
   and past its end.
 - `runtime_skirmish_start.cpp` builds a match: the feature table's GAF files
   are kept as read and parsed without their pixels (`gaf::PixelData::checked`);
@@ -409,8 +422,8 @@ logs it.
   before the battlefield's edge (`magnified_span`), the area pass starts
   its picture that far into the scene, the Full tier draws its terrain,
   fog and stages that far on, and the painters after the fog move by it to
-  the nearest screen pixel. Hover, picking, the drag box, the build site
-  and orders' map pixels take the same offset (`game_screen_point`,
+  the nearest screen pixel. Hover, picking, the drag box, the build site and orders'
+  map pixels take the same offset (`game_screen_point`,
   `match_world_point`, `screen_to_map_pixel` with a `ViewOffset`), so the
   pointer is over what is drawn under it, and orders stay whole map
   pixels; the offset never carries the pointer past Game's view

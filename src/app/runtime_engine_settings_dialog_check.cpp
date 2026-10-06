@@ -248,6 +248,10 @@ std::string_view label_of(settings::Setting setting) {
         return "Native pixel density";
     case settings::Setting::explosion_flash:
         return "Explosion flash";
+    case settings::Setting::zoomed_out_units:
+        return "Zoomed out units";
+    case settings::Setting::zoomed_out_after:
+        return "After zoom";
     case settings::Setting::modern_fonts:
         return "Use modern fonts for game text";
     case settings::Setting::text_outline:
@@ -524,11 +528,15 @@ void Runtime::check_engine_settings_dialog() {
         auto* dialog = engine_settings_dialog();
         require(dialog->page == page, "a click on " + name + "'s entry did not show it");
         auto parts = settings::dialog_layout(*dialog);
-        // A section taller than its view shows the rest of its rows at its end.
+        // A section taller than its view shows the rest of its rows a page
+        // at a time, down to its end.
         if (dialog->scroll[static_cast<std::size_t>(page)] == 0) {
-            tap(SDLK_END);
-            const auto at_end = settings::dialog_layout(*dialog);
-            parts.insert(parts.end(), at_end.begin(), at_end.end());
+            for (int32_t last = -1; dialog->scroll[static_cast<std::size_t>(page)] != last;) {
+                last = dialog->scroll[static_cast<std::size_t>(page)];
+                tap(SDLK_PAGEDOWN);
+                const auto lower = settings::dialog_layout(*dialog);
+                parts.insert(parts.end(), lower.begin(), lower.end());
+            }
             tap(SDLK_HOME);
         }
         const auto rows = settings::page_settings(page);
@@ -1716,7 +1724,7 @@ void Runtime::check_engine_settings_window_sizes() {
             // Graphics scrolls: at its end too, as the window shows the picture.
             tap(SDLK_END);
             require(
-                dialog->scroll[static_cast<std::size_t>(page)] == 257,
+                dialog->scroll[static_cast<std::size_t>(page)] == 395,
                 "End did not scroll Graphics to its end" + on
             );
             present(presented, picture);

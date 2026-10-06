@@ -775,9 +775,12 @@ void Runtime::render_match_surface() {
     const bool bare = directed && !director_->presentation.show_interface;
     // Zoomed out past the zoom the tier draws units whole at, the frame is
     // the far view: the processor draws it at the zoom in every tier, the
-    // terrain from the map's pyramid and each unit as a dot of its owner's
-    // colour, and no model at all.
+    // terrain from the map's pyramid.
     const bool far = !directed && far_view_frame();
+    // Zoomed out past After zoom with Zoomed out units at Dots, or past the
+    // tier's floor where the models would take too much memory, each unit
+    // is a dot of its owner's colour and no model is drawn at all.
+    const bool dots = !directed && dots_frame();
     // The map the view shows: the fill below draws nothing beyond it. The
     // player's camera is held within the view's limits, which let it go
     // past the map's edges (view_camera), and the limits then hold the next
@@ -1050,8 +1053,18 @@ void Runtime::render_match_surface() {
     oa::present::world_renderer::Surface world_surface{
         scene_layer.width, scene_layer.height, std::move(scene_layer.rgb)
     };
+    // Past the tier's floor a unit is a few pixels at most: the margin
+    // keeps to the map pixels a large unit and its shadow reach.
     const auto cull_margin =
-        std::max(256, static_cast<int>(std::lround(128.0 * static_cast<double>(match_zoom()))));
+        far ? static_cast<int>(
+                  std::ceil(kFarCullMarginMapPixels * static_cast<double>(match_zoom()))
+              )
+            : std::max(
+                  kLeastCullMargin,
+                  static_cast<int>(
+                      std::lround(kCullMarginMapPixels * static_cast<double>(match_zoom()))
+                  )
+              );
     const auto on_battlefield = [&](int x, int y) {
         return x >= viewport.destination_x - cull_margin &&
                x < viewport.destination_x + bf_w + cull_margin &&
@@ -1244,13 +1257,13 @@ void Runtime::render_match_surface() {
         static_cast<int32_t>(world_surface.height),
         static_cast<int32_t>(world_surface.width) * 3
     };
-    // The far view draws no model: its bridge holds one pixel, so that its
-    // map pixels take no memory however far the view is zoomed out.
+    // A frame of dots draws no model: its bridge holds one pixel, so that
+    // its map pixels take no memory however far the view is zoomed out.
     const oa::Rect32 bridge_area{
         scene_view.destination_x,
         scene_view.destination_y,
-        far ? scene_view.destination_x : scene_view.destination_x + scene_w - 1,
-        far ? scene_view.destination_y : scene_view.destination_y + scene_h - 1
+        dots ? scene_view.destination_x : scene_view.destination_x + scene_w - 1,
+        dots ? scene_view.destination_y : scene_view.destination_y + scene_h - 1
     };
     oa::present::DisplayContext* bound_display = oa::present::display_context();
     oa::present::bind_display(&models.display.context);
@@ -1281,9 +1294,9 @@ void Runtime::render_match_surface() {
         add_draw(WorldDrawKind::model, draw_list.models.size() - 1);
     };
     const auto plan_object_feature = [&](MatchFeatureDraw& feature) {
-        // The far view draws no feature's model: a wreck or a rock of its
+        // A frame of dots draws no feature's model: a wreck or a rock of its
         // own model is a pixel or two there.
-        if (far)
+        if (dots)
             return;
         // The placed record's object, rotation words and position
         // go to the stand-in unit, which then draws like any unit; the
@@ -1407,11 +1420,13 @@ void Runtime::render_match_surface() {
     };
     // How finely units are drawn (enhanced anti-aliasing); director frames
     // draw them as without it, and so do frames of the Full tier, whose
-    // anti-aliasing is the graphics card's world target.
-    const auto unit_level = directed || full_presentation() ? model_render::UnitSupersampling::off
-                                                            : unit_supersampling_;
-    // The far view's dots, drawn over the fog, and the colour of a selected
-    // unit's frame: the selection boxes' own.
+    // anti-aliasing is the graphics card's world target, and the far view's,
+    // where a unit is a few pixels at most.
+    const auto unit_level = directed || full_presentation() || far
+                                ? model_render::UnitSupersampling::off
+                                : unit_supersampling_;
+    // The dots of a frame of dots, drawn over the fog, and the colour of a
+    // selected unit's frame: the selection boxes' own.
     std::vector<FarViewDot> far_dots;
     const auto palette_rgb = [this](uint8_t index) {
         const auto at = static_cast<std::size_t>(index) * 4U;
@@ -1428,7 +1443,7 @@ void Runtime::render_match_surface() {
         const auto model = unit_model(models, unit_index);
         if (model.instance == nullptr)
             return;
-        if (far) {
+        if (dots) {
             // Where the unit shows: between the ticks, or on another
             // machine's playout, where its copies are drawn.
             const bool shown_elsewhere =
@@ -1531,8 +1546,8 @@ void Runtime::render_match_surface() {
     // A record's shatter fragment, drawn into
     // the model bridge and written back before the record's sprite.
     const auto plan_fragment = [&](const oa::sim::effect_particles::ParticleDraw& item) {
-        // The far view draws no model.
-        if (far)
+        // A frame of dots draws no model.
+        if (dots)
             return;
         const auto& fragment = *item.fragment;
         const auto& look = fragment.look;
@@ -1789,7 +1804,7 @@ void Runtime::render_match_surface() {
          oa::sim::effect_particles::battlefield_screen_x + vis_w - 1,
          oa::sim::effect_particles::battlefield_screen_y + vis_h - 1}
     };
-    if (!far)
+    if (!dots)
         plan_projectile_models(models);
     // Every captured tile goes back to the frame after the projectiles.
     add_draw(WorldDrawKind::commit_always, 0);
@@ -1821,7 +1836,7 @@ void Runtime::render_match_surface() {
     // that origin, in its unit's team colour.
     const auto& debris_table = match_->effects().debris;
     auto plan_debris_piece = [&](const oa::sim::effect_particles::DebrisPiece& live) {
-        if (far)
+        if (dots)
             return;
         // Part of the way through the tick's fall and spin, by the piece's slot.
         const auto slot = static_cast<std::size_t>(&live - std::begin(debris_table));
@@ -1877,7 +1892,7 @@ void Runtime::render_match_surface() {
     for (const auto index : draw_plan.raised_units)
         plan_unit(units_to_draw[index]);
     // The building being placed, as the profile's build preview shows it.
-    if (!bare && !far && ready_build_preview(models)) {
+    if (!bare && !dots && ready_build_preview(models)) {
         auto& preview = models.build_preview;
         const model_render::ModelRef model{
             &preview.instance,
@@ -1954,9 +1969,8 @@ void Runtime::render_match_surface() {
         );
     };
     fog_pass(FogPasses::both);
-    // The far view's units over the fog, as the minimap shows them over
-    // its own.
-    if (far)
+    // The dots over the fog, as the minimap shows its units over its own.
+    if (dots)
         draw_far_view_dots(
             world_surface.rgb.data(),
             static_cast<int32_t>(world_surface.width),
@@ -2077,10 +2091,10 @@ void Runtime::render_match_surface() {
                                 : project_match_point(painted, slot.unit->position);
         const int bar_x = screen.x;
         const int bar_y = screen.y + bar_size.below_unit;
-        // The far view's dots carry no health bar or squad digit, which
-        // would hide the dots around them.
+        // Dots carry no health bar or squad digit, which would hide the
+        // dots around them.
         if (const auto& world = match_->state();
-            !far && oa::ui::hud::draws_health_bar(world, slot.record)) {
+            !dots && oa::ui::hud::draws_health_bar(world, slot.record)) {
             const auto* def = oa::world_unit_def_of(&world, &slot.record);
             oa::ui::hud::HealthBar bar{};
             if (def != nullptr && oa::ui::hud::unit_health_bar(
@@ -2101,7 +2115,7 @@ void Runtime::render_match_surface() {
         // digits under and over the bar keep the game font's size at most,
         // so that they stay clear of the bar.
         const PanelText unit_labels(*this);
-        if (!far && oa::ui::hud::draws_squad_digit(match_->state(), slot.record))
+        if (!dots && oa::ui::hud::draws_squad_digit(match_->state(), slot.record))
             draw_match_label(
                 bar_x - 4,
                 bar_y + bar_size.half_height + 2,
