@@ -3,8 +3,9 @@
 
 // --check-touch-controls: the touch controls, driven by finger events
 // through the dispatcher, on a skirmish: taps, boxes, latches, the radial,
-// placement, the minimap, pinch and pan, the lifecycle pause, and the tablet
-// or phone layout. It writes touch-<case>.ppm snapshots of the composed frame
+// placement, the minimap, pinch and pan, the lifecycle pause, the banner's
+// title in English, German and Simplified Chinese, and the tablet or phone
+// layout. It writes touch-<case>.ppm snapshots of the composed frame
 // into its working directory for people to look at (docs/touch-controls.md).
 //
 // Each case starts from a known state and fails on its own, naming the piece
@@ -17,6 +18,7 @@
 // setup).
 #include "oa/app/runtime.hpp"
 #include "engine_settings_state.hpp"
+#include "language_state.hpp"
 #include "touch_state.hpp"
 #include "oa/data/defs/layout.hpp"
 #include "oa/present/world_renderer.hpp"
@@ -1785,6 +1787,110 @@ struct TouchCheckAccess {
             Lane::dispatch,
             "SELECT's menu stayed open after a pick"
         );
+    }
+
+    /// Arms a building of the commander's first build page with a finger: its tile in the
+    /// phone's drawer, or its button on the tablet's build page.
+    ///
+    /// @param runtime the runtime
+    /// @param run the check's state
+    /// @param name the building's unit name
+    static void arm_building(Runtime& runtime, TouchRun& run, std::string_view name) {
+        select_only(runtime, run.commander);
+        steps(runtime, run, kFrameMs, kFrameMs);
+        if (run.phone) {
+            tap_control(runtime, run, hud::Control::build_drawer, -1, "BUILD");
+            step(runtime, run, kFrameMs);
+            tap(runtime, run, drawer_cell(runtime, name));
+        } else {
+            const auto button = gadget_named(runtime, name);
+            require(
+                button.has_value(),
+                Lane::check,
+                "the commander's build page has no " + std::string(name)
+            );
+            tap(runtime, run, gadget_centre(runtime, *button));
+        }
+        require(
+            runtime.pending_build_type_ == type_of(runtime, name),
+            Lane::dispatch,
+            "a tap on the " + std::string(name) + " tile did not arm the building"
+        );
+        step(runtime, run, kFrameMs);
+        require(
+            touch(runtime).hud.placement.active,
+            Lane::dispatch,
+            "the armed building shows no touch placement (HudState::placement)"
+        );
+    }
+
+    /// 22. The banner's title in the language shown, in English, German and Simplified
+    /// Chinese: a Metal Extractor being placed, named as the bottom bar names it, and PATROL
+    /// armed, each in its phrase's translation, or in English where the language has none. The
+    /// language chosen as the case starts is chosen again as it ends.
+    static void case_banner_languages(Runtime& runtime, TouchRun& run) {
+        /// One language's titles.
+        struct Titles {
+            std::string_view tag;       ///< the language chosen
+            std::string_view placement; ///< while a Metal Extractor is placed
+            std::string_view armed;     ///< with PATROL armed
+        };
+
+        constexpr std::array<Titles, 3> languages{{
+            {"en", "Place Metal Extractor", "PATROL armed"},
+            {"de", "Place Metallextraktor", "PATROL armed"},
+            {"zh-Hans", "放置金属采集器", "巡逻已启用"},
+        }};
+
+        /// Chooses the language the case started with again as it ends.
+        struct ChoiceKept {
+            Runtime& runtime;   ///< the runtime
+            std::string choice; ///< the choice the case started with
+
+            ~ChoiceKept() {
+                try {
+                    runtime.set_language_choice(choice);
+                } catch (const std::exception& error) {
+                    std::cerr << "touch controls check: the language was not chosen again: "
+                              << error.what() << '\n';
+                }
+            }
+        } kept{runtime, runtime.language_state().choice};
+
+        // Every title is read before the case fails, so that its message names each one wrong.
+        std::string wrong;
+        const auto expect = [&](const Titles& language,
+                                std::string_view banner,
+                                const std::string& shown,
+                                std::string_view wanted) {
+            if (shown == wanted)
+                return;
+            wrong += std::string(wrong.empty() ? "" : "; ") + "in " + std::string(language.tag) +
+                     " the " + std::string(banner) + " banner says \"" + shown + "\", not \"" +
+                     std::string(wanted) + "\"";
+        };
+        for (const auto& language : languages) {
+            runtime.set_language_choice(language.tag);
+            require(
+                runtime.shown_language().tag == language.tag,
+                Lane::check,
+                "the language " + std::string(language.tag) + " could not be chosen"
+            );
+            reset(runtime, run);
+            arm_building(runtime, run, "ARMMEX");
+            expect(
+                language, "placement", TouchDrawAccess::banner_title(runtime), language.placement
+            );
+            reset(runtime, run);
+            select_only(runtime, run.peewees[0]);
+            steps(runtime, run, kFrameMs, kFrameMs);
+            require(
+                runtime.arm_match_command("PATROL", false), Lane::check, "PATROL could not be armed"
+            );
+            step(runtime, run, kFrameMs);
+            expect(language, "armed", TouchDrawAccess::banner_title(runtime), language.armed);
+        }
+        require(wrong.empty(), Lane::draw, wrong);
     }
 
     /// 2. A tap on open ground with the commander selected queues MoveGround there.
@@ -3678,6 +3784,7 @@ void Runtime::check_touch_controls() {
         run_case("19 help", Access::case_help_tips);
         run_case("20 groups", Access::case_groups);
         run_case("21 SELECT menu", Access::case_select_menu);
+        run_case("22 banner languages", Access::case_banner_languages);
     } else {
         run_case("0 tablet layout", Access::case_tablet_layout);
         run_case("1 tap selects", Access::case_tap_selects);
@@ -3705,6 +3812,7 @@ void Runtime::check_touch_controls() {
         run_case("19 help", Access::case_help_tips);
         run_case("20 groups", Access::case_groups);
         run_case("21 SELECT menu", Access::case_select_menu);
+        run_case("22 banner languages", Access::case_banner_languages);
     }
     for (const auto& note : run.notes)
         std::cout << "touch note: " << note << '\n';

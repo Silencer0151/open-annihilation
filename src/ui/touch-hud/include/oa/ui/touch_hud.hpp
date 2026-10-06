@@ -394,11 +394,13 @@ struct RailSlot {
     bool lit{};               ///< the armed order
 };
 
-/// The armed order banner and the placement header.
+/// The armed order banner and the placement header. Its title is banner_title's.
 struct Banner {
-    bool shown{};      ///< the banner shows
-    std::string title; ///< "PATROL armed", "Place Solar Collector"
-    std::string hint;  ///< "TAP POINTS · QUEUE KEEPS ADDING", "DOUBLE TAP OR HOLD TO BUILD"
+    bool shown{}; ///< the banner shows
+    /// the armed order the title names ("PATROL armed"); none while a building is placed, whose
+    /// title names Placement::name ("Place Solar Collector")
+    std::optional<Order> order{};
+    std::string hint; ///< "TAP POINTS · QUEUE KEEPS ADDING", "DOUBLE TAP OR HOLD TO BUILD"
 };
 
 /// The tip bubble a long press shows.
@@ -413,7 +415,7 @@ struct Placement {
     bool active{};    ///< a building is being placed
     bool legal{};     ///< the site at the anchor can be built on
     Point anchor{};   ///< ghost anchor in canvas pixels (the site a hold on the ghost builds at)
-    std::string name; ///< the building's name for the header
+    std::string name; ///< the building's name for the header, as the bottom bar names it
 };
 
 /// The build ring's wedges, clockwise from the top: six build buttons at N, NE, SE, S, SW, NW,
@@ -687,6 +689,28 @@ inline constexpr std::string_view action_field = "{action}";
 [[nodiscard]] std::string status_hint(
     TapAction tap, TapAction enemy, const std::function<std::string(std::string_view)>& translate
 );
+/// The banner's title over an armed order, as it is translated: "PATROL armed".
+inline constexpr std::string_view armed_title = "{order} armed";
+/// The field armed_title holds the order's word in.
+inline constexpr std::string_view order_field = "{order}";
+/// The banner's title while a building is placed, as it is translated: "Place Solar Collector".
+inline constexpr std::string_view placement_title = "Place {name}";
+/// The field placement_title holds the building's name in.
+inline constexpr std::string_view name_field = "{name}";
+/// Returns the banner's title in the language shown: "PATROL armed", "Place Solar Collector".
+///
+/// While a building is placed, placement_title's translation, or the phrase in English when
+/// the language has none, with Placement::name filled in as it is, since it is in the language
+/// shown already. Over an armed order, armed_title's translation with the order's word
+/// translated, or the title in English when the language has no translation of the phrase, as
+/// shown_label gives a label. The words are filled in in one pass, so they are never read as a
+/// field.
+///
+/// @param state what the controls show: Banner and Placement
+/// @param translate turns a text into the language shown, or returns it unchanged
+/// @return the title in the language shown; empty when no banner shows
+[[nodiscard]] std::string
+banner_title(const HudState& state, const std::function<std::string(std::string_view)>& translate);
 /// Returns the label of a SELECT ▾, speed or phone menu item.
 ///
 /// @param sheet the open sheet

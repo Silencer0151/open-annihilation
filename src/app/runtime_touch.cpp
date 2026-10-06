@@ -350,7 +350,7 @@ look_signature(const hud::HudState& state, const hud::Viewport& viewport, uint64
             );
     }
     look.add(static_cast<uint64_t>(state.banner.shown));
-    look.add(state.banner.title);
+    look.add(state.banner.order ? static_cast<uint64_t>(*state.banner.order) + 1U : uint64_t{0});
     look.add(state.banner.hint);
     look.add(static_cast<uint64_t>(state.placement.active));
     look.add(static_cast<uint64_t>(state.placement.legal));
@@ -1221,12 +1221,11 @@ void TouchDispatchAccess::refresh_hud(Runtime& runtime, uint64_t now) {
     look.banner = {};
     if (look.placement.active) {
         look.banner.shown = true;
-        look.banner.title = "Place " + look.placement.name;
         look.banner.hint =
             queue_on ? "DOUBLE TAP OR HOLD TO BUILD · QUEUE ON" : "DOUBLE TAP OR HOLD TO BUILD";
     } else if (const auto order = order_of(runtime.match_command_)) {
         look.banner.shown = true;
-        look.banner.title = std::string(hud::order_label(*order)) + " armed";
+        look.banner.order = order;
         look.banner.hint =
             queue_on ? "TAP POINTS · QUEUE KEEPS ADDING" : "TAP A TARGET · ✕ TAKES IT BACK";
     }

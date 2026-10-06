@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // The device class, the latches, the orders' names, the hit tests, the help
-// lines, the labels, the status hint, and the pad's badges, hints and button
-// names (touch_hud.hpp). Every text is English and untranslated; the drawing
-// translates it, or hands its translation to shown_label and status_hint.
+// lines, the labels, the status hint, the banner's title, and the pad's
+// badges, hints and button names (touch_hud.hpp). Every text is English and
+// untranslated; the drawing translates it, or hands its translation to
+// shown_label, status_hint and banner_title.
 #include "oa/ui/touch_hud.hpp"
 
 #include "touch_hud_rects.hpp"
@@ -178,6 +179,26 @@ constexpr std::array<std::string_view, 10> group_labels{
 constexpr std::string_view tap_phrase = "TAP: {action}";
 /// The status hint's piece for what a tap on an enemy gives, as it is translated.
 constexpr std::string_view enemy_phrase = "ENEMY: {action}";
+
+/// Returns a translated text with each place of a field filled with words, in one pass, so
+/// the words filled in are never read as a field.
+///
+/// @param text the text, translated
+/// @param field the field it holds the words in: action_field, order_field or name_field
+/// @param words the words, in the language shown
+/// @return the text with the words in the field's places
+std::string filled_in(std::string_view text, std::string_view field, std::string_view words) {
+    std::string shown;
+    std::size_t at = 0;
+    for (std::size_t found = text.find(field); found != std::string_view::npos;
+         found = text.find(field, at)) {
+        shown += text.substr(at, found - at);
+        shown += words;
+        at = found + field.size();
+    }
+    shown += text.substr(at);
+    return shown;
+}
 
 /// Returns the word a tap's action is shown with in the status hint.
 ///
@@ -658,17 +679,7 @@ std::string shown_label(
         return std::string(label);
     if (action.empty())
         return translated;
-    const std::string word = translate(action);
-    std::string shown;
-    std::size_t at = 0;
-    for (std::size_t found = translated.find(action_field); found != std::string::npos;
-         found = translated.find(action_field, at)) {
-        shown.append(translated, at, found - at);
-        shown += word;
-        at = found + action_field.size();
-    }
-    shown.append(translated, at);
-    return shown;
+    return filled_in(translated, action_field, translate(action));
 }
 
 std::string status_hint(
@@ -686,6 +697,23 @@ std::string status_hint(
         hint += shown_label("ENEMY: " + std::string(word), enemy_phrase, translate, word);
     }
     return hint;
+}
+
+std::string
+banner_title(const HudState& state, const std::function<std::string(std::string_view)>& translate) {
+    if (!state.banner.shown)
+        return {};
+    if (state.placement.active)
+        return filled_in(translate(placement_title), name_field, state.placement.name);
+    if (!state.banner.order)
+        return {};
+    const std::string_view word = order_label(*state.banner.order);
+    const std::string translated = translate(armed_title);
+    // Without a translation of the phrase, the title shows in English, never around a
+    // translated word.
+    if (translated == armed_title)
+        return filled_in(armed_title, order_field, word);
+    return filled_in(translated, order_field, translate(word));
 }
 
 std::string_view menu_item_label(Sheet sheet, uint8_t index) noexcept {

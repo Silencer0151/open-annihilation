@@ -21,6 +21,7 @@
 #include <memory>
 #include <optional>
 #include <stdint.h>
+#include <string>
 #include <vector>
 
 namespace oa::app {
@@ -76,6 +77,13 @@ struct TouchDrawAccess {
     /// @param runtime the runtime
     /// @return true when the layer shows anything
     static bool refresh_layer(Runtime& runtime);
+
+    /// Returns the banner's title as the layer draws it, in the language shown
+    /// (oa::ui::touch_hud::banner_title).
+    ///
+    /// @param runtime the runtime
+    /// @return the title; empty when no touch state was made or no banner shows
+    [[nodiscard]] static std::string banner_title(Runtime& runtime);
 
     /// Forgets the layer's texture, as the match's other textures are forgotten when the
     /// renderer's textures are lost or the match ends; the next present makes it again.

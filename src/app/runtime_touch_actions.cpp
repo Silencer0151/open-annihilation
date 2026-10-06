@@ -9,6 +9,7 @@
 #include "touch_state.hpp"
 #include "oa/app/extension.hpp"
 #include "oa/app/platform_hooks.hpp"
+#include "oa/data/languages/unit_texts.hpp"
 #include "oa/sim/gameplay_input/input.hpp"
 #include "oa/sim/gameplay_input/order_cursor.hpp"
 #include "oa/ui/touch_gestures.hpp"
@@ -497,8 +498,13 @@ void TouchDispatchAccess::refresh_placement(Runtime& runtime) {
     const auto type = static_cast<std::size_t>(runtime.pending_build_type_);
     if (type != 0 && type <= runtime.unit_definitions_.size()) {
         const auto& definition = runtime.unit_definitions_[type - 1];
-        placement.name =
-            !definition.display_name.empty() ? definition.display_name : definition.unit_name;
+        // The name in the language shown, as the bottom bar shows it.
+        if (definition.display_name.empty())
+            placement.name = definition.unit_name;
+        else
+            placement.name = oa::data::languages::unit_display_name(
+                definition.unit_name, definition.display_name
+            );
     }
 }
 

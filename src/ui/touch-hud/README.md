@@ -59,7 +59,11 @@ against it; the drawing reads both. The gamepad dispatcher writes
   `{action}` field has it filled with the action's own translation.
   `status_hint` gives the status hint ("TAP: MOVE · ENEMY: ATTACK") in the
   language shown, each piece translated whole as "TAP: {action}" and
-  "ENEMY: {action}".
+  "ENEMY: {action}". `banner_title` gives the banner's title in the
+  language shown: "Place {name}" with the building's name as the bottom bar
+  gives it (`Placement::name`), and "{order} armed" with the order's word
+  translated, or "PATROL armed" in English where the language has no
+  translation of the phrase.
 - `gadget_help` gives the help line a long press on a 3.1c order panel
   gadget shows when the gadget carries none (the game's GUI files give the
   in-game panels no help text): the order buttons, the standing-order

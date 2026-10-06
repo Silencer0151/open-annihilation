@@ -557,16 +557,18 @@ it), the minimap, edge scrolling and auto-scroll, fingers of other
 devices, the Cmd keys, the modifiers with no latch, PAUSE and the
 lifecycle's pause through
 the in-game menu, taps against the same mouse clicks, the overlays kept
-clear of the controls, help on a long press, the groups' STORE and chips and
-SELECT ▾'s All. The phone run checks the full-bleed layout and its placed
+clear of the controls, help on a long press, the groups' STORE and chips,
+SELECT ▾'s All, and the banner's title in English, German and Simplified
+Chinese: a Metal Extractor being placed named as the bottom bar names it,
+and PATROL armed. The phone run checks the full-bleed layout and its placed
 regions, the safe area of 59, 0, 59 and 21 points, scrolling, the rail, the
 build drawer for a factory and for a building (with the same placement
 gestures, each started from the drawer), the zoom buttons, controls
 that keep their taps from the battlefield, MORE's INFO, the left-handed
 layout, the start zoom of 1.25, the chat line, message log and kill board on
 a phone, and the fingers of other devices, the modifiers, PAUSE and the
-lifecycle, help, groups and SELECT ▾ there too. Both write snapshots of the
-composed frame into their working directories,
+lifecycle, help, groups, SELECT ▾ and the banner's title there too. Both
+write snapshots of the composed frame into their working directories,
 `native-checks/touch-controls` and `native-checks/touch-controls-phone` in
 the build tree: `touch-tablet.ppm`, `touch-phone.ppm`,
 `touch-phone-safe.ppm`, `touch-radial.ppm`, `touch-placement.ppm`,

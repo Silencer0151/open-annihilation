@@ -6,7 +6,8 @@
 // left-handed mirror; with a gamepad, the Steam Deck's 1280x800 screen at
 // each Control size, the slim pad HUD, the FORCE chip, badges that never
 // move a control, the build and group rings, the pad's hints, badges and
-// help lines, and the texts the two-meaning labels are looked up by.
+// help lines, the texts the two-meaning labels are looked up by, and the
+// banner's titles in the language shown.
 #include "oa/test/check.hpp"
 #include "oa/ui/touch_hud.hpp"
 
@@ -813,7 +814,7 @@ void looks_never_move_rectangles() {
                 slot.lit = true;
                 slot.more = true;
             }
-            other.banner.title = "PATROL armed";
+            other.banner.order = hud::Order::patrol;
             other.banner.hint = "TAP POINTS · QUEUE KEEPS ADDING";
             other.placement.legal = true;
             other.placement.anchor = {300, 200};
@@ -1856,20 +1857,27 @@ void labels_with_two_meanings_are_told_apart() {
     OA_CHECK(arm_shown(english) == "ARM");
 }
 
+/// A language's translations: each English text with the words it shows.
+using Words = std::vector<std::pair<std::string_view, std::string_view>>;
+
+/// Returns a translation that knows the texts given and leaves every other one unchanged.
+///
+/// @param words the texts it translates
+/// @return the translation
+std::function<std::string(std::string_view)> translator(Words words) {
+    return [words = std::move(words)](std::string_view text) {
+        for (const auto& [english, shown] : words)
+            if (english == text)
+                return std::string(shown);
+        return std::string(text);
+    };
+}
+
 /// Checks that the status hint and the pad's enemy piece are translated piece by piece, the
 /// action's word filled into its phrase's translation, and in English where the language has
 /// no translation of the phrase.
 void tap_hints_are_translated_whole() {
     using hud::TapAction;
-    using Words = std::vector<std::pair<std::string_view, std::string_view>>;
-    const auto translator = [](Words words) {
-        return std::function<std::string(std::string_view)>([words](std::string_view text) {
-            for (const auto& [english, shown] : words)
-                if (english == text)
-                    return std::string(shown);
-            return std::string(text);
-        });
-    };
     const auto enemy_shown = [](const hud::PadHint& hint, const auto& translate) {
         for (std::size_t part = 0; part < hint.count; ++part)
             if (!hint.parts[part].action.empty())
@@ -1912,6 +1920,59 @@ void tap_hints_are_translated_whole() {
         hud::status_hint(TapAction::place, TapAction::attack, placing) ==
         "拖动以移动 · 双击或长按以放置"
     );
+}
+
+/// Checks the banner's titles: the building being placed named as the language shown names it,
+/// in its phrase's translation or the phrase in English, and the armed order's word in its
+/// phrase's translation, or the whole title in English where the language has no translation of
+/// the phrase.
+void banner_titles_are_translated_piece_by_piece() {
+    hud::HudState placing;
+    placing.banner.shown = true;
+    placing.placement.active = true;
+    hud::HudState armed;
+    armed.banner.shown = true;
+    armed.banner.order = hud::Order::patrol;
+    // English, as the titles always read.
+    const auto english = translator({});
+    placing.placement.name = "Solar Collector";
+    OA_CHECK(hud::banner_title(placing, english) == "Place Solar Collector");
+    OA_CHECK(hud::banner_title(armed, english) == "PATROL armed");
+    armed.banner.order = hud::Order::blast;
+    OA_CHECK(hud::banner_title(armed, english) == "D-GUN armed");
+    // A pack that translates the phrases and the words; the name comes in the language shown.
+    const auto chinese = translator(
+        {{"Place {name}", "放置{name}"},
+         {"{order} armed", "{order}已启用"},
+         {"PATROL", "巡逻"},
+         {"D-GUN", "D枪"}}
+    );
+    placing.placement.name = "太阳能采集器";
+    OA_CHECK(hud::banner_title(placing, chinese) == "放置太阳能采集器");
+    OA_CHECK(hud::banner_title(armed, chinese) == "D枪已启用");
+    armed.banner.order = hud::Order::patrol;
+    OA_CHECK(hud::banner_title(armed, chinese) == "巡逻已启用");
+    // A table with the words alone: the phrases show in English, the order's word with its
+    // phrase, and the name as the game data gives it in the language.
+    const auto german = translator({{"PATROL", "PATROUILLE"}, {"Kbot Lab", "Kbot-Labor"}});
+    placing.placement.name = "Kbot-Labor";
+    OA_CHECK(hud::banner_title(placing, german) == "Place Kbot-Labor");
+    OA_CHECK(hud::banner_title(armed, german) == "PATROL armed");
+    // The name is never translated again, and the words filled in are never read as a field.
+    placing.placement.name = "Kbot Lab";
+    OA_CHECK(hud::banner_title(placing, german) == "Place Kbot Lab");
+    const auto braces = translator(
+        {{"Place {name}", "{name}!"}, {"{order} armed", "{order}?"}, {"PATROL", "{order}"}}
+    );
+    placing.placement.name = "{name}";
+    OA_CHECK(hud::banner_title(placing, braces) == "{name}!");
+    OA_CHECK(hud::banner_title(armed, braces) == "{order}?");
+    // A banner that does not show has no title; nor has one with neither a building nor an
+    // order.
+    placing.banner.shown = false;
+    OA_CHECK(hud::banner_title(placing, chinese).empty());
+    armed.banner.order.reset();
+    OA_CHECK(hud::banner_title(armed, chinese).empty());
 }
 
 /// Checks the badges the touch controls show once a pad was used, through each map, and the
@@ -2073,6 +2134,7 @@ int main() {
     pad_hints_name_the_buttons();
     labels_with_two_meanings_are_told_apart();
     tap_hints_are_translated_whole();
+    banner_titles_are_translated_piece_by_piece();
     badges_name_the_pad_buttons();
     return oa::test::check_exit_status();
 }

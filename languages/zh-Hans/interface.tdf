@@ -4514,6 +4514,16 @@
 	zh-Hans=敌方：{action};
 	}
 
+[Place {name}]
+	{
+	zh-Hans=放置{name};
+	}
+
+[{order} armed]
+	{
+	zh-Hans={order}已启用;
+	}
+
 [Enable Unicode Multiplayer Chat]
 	{
 	zh-Hans=启用Unicode多人聊天;

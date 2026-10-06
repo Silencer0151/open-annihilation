@@ -115,6 +115,20 @@ constexpr float cap_share = 0.73F;
 /// Translates interface text into the game's language.
 using Translate = std::function<std::string(std::string_view)>;
 
+/// Returns the translation the controls' texts are drawn in: a text 3.1c's tables translate,
+/// else one of the HUD's own words in the interface catalogue.
+///
+/// @param runtime the runtime, kept by the translation
+/// @return the translation
+Translate interface_translation(Runtime& runtime) {
+    return [&runtime](std::string_view text) {
+        std::string translated = runtime.translate_ui(text);
+        if (translated == text)
+            translated = std::string(oa::data::languages::interface_text(text));
+        return translated;
+    };
+}
+
 /// What the painting needs: the painter, the fonts, the layer's scale and the translation.
 struct PaintContext {
     paint::Painter& painter;       ///< paints the layer
@@ -1307,7 +1321,7 @@ void paint_banner(const PaintContext& context) {
     }
     paint_title_and_hint(
         context,
-        context.translate(state.banner.title),
+        hud::banner_title(state, context.translate),
         context.translate(state.banner.hint),
         area.x + px(context, pill_pad_points),
         right,
@@ -2157,14 +2171,7 @@ bool TouchDrawAccess::refresh_layer(Runtime& runtime) {
     }
     paint::Painter painter(layer.canvas);
     painter.clear_box(layer.bounds);
-    // A text 3.1c's tables translate, else one of the HUD's own words in the
-    // interface catalogue.
-    const Translate translate = [&runtime](std::string_view text) {
-        std::string translated = runtime.translate_ui(text);
-        if (translated == text)
-            translated = std::string(oa::data::languages::interface_text(text));
-        return translated;
-    };
+    const Translate translate = interface_translation(runtime);
     const float scale_x = static_cast<float>(look.layer_width) / static_cast<float>(look.width);
     const float scale_y = static_cast<float>(look.layer_height) / static_cast<float>(look.height);
     // The build ring's pictures, from the HUD layer as the phone drawer's regions show them.
@@ -2190,6 +2197,12 @@ bool TouchDrawAccess::refresh_layer(Runtime& runtime) {
     layer.drawn_revision = look.revision;
     layer.uploaded.reset();
     return !layer.bounds.empty();
+}
+
+std::string TouchDrawAccess::banner_title(Runtime& runtime) {
+    if (runtime.touch_ == nullptr)
+        return {};
+    return hud::banner_title(runtime.touch_->hud, interface_translation(runtime));
 }
 
 void TouchDrawAccess::forget_textures(Runtime& runtime) noexcept {
