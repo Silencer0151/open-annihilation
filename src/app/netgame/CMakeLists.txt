@@ -214,5 +214,14 @@ if(BUILD_TESTING AND TARGET oa-game AND IS_DIRECTORY "${OA_GAME_DIR}")
       --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
       --scratch-root "${oa_netgame_checks}")
     set_tests_properties(native-host-not-found PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
+    # Games started with --host and --join, each a program of its own over
+    # 127.0.0.1: the host's battle room, a join by address with both names
+    # listed on both machines, a wrong password refused and the right one
+    # joining the game named.
+    add_test(NAME native-net-options COMMAND ${Python3_EXECUTABLE}
+      "${PROJECT_SOURCE_DIR}/tools/check_native_net_options.py"
+      --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
+      --scratch-root "${oa_netgame_checks}")
+    set_tests_properties(native-net-options PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
   endif()
 endif()

@@ -124,6 +124,61 @@ void multiplayer_bind_unicode_chat(bool on) noexcept;
 /// @param link The launch block and the launch's answers; a null block reads as empty.
 void multiplayer_bind_launch_link(const LaunchLink& link) noexcept;
 
+/// A TCP/IP game the multiplayer screens host or join at once, as a player
+/// would through them: the address typed into TCP.GUI and accepted, the
+/// names and password typed into the game list and NEWMULTI, and OK or the
+/// listed game's join.
+struct DirectGame {
+    enum class Kind : uint8_t {
+        none,
+        host, // create a game on NEWMULTI
+        join, // join a game the game list shows
+    };
+    Kind kind = Kind::none;
+    std::string address;     // join: typed into TCP.GUI's ADDRESS; host: the box keeps its own
+    std::string player_name; // typed into the name boxes; empty keeps the name they show
+    // host: typed into NEWMULTI's GAMENAME, empty keeping the name it shows;
+    // join: the listed game joined, empty for the first listed.
+    std::string game_name;
+    // host: typed into NEWMULTI's PASSWORD; join: into the game list's;
+    // empty keeps the password the box shows.
+    std::string password;
+};
+
+/// How far the direct game has gone (multiplayer_direct_game_progress).
+enum class DirectGameStep : uint8_t {
+    none,        // no direct game was asked for
+    connecting,  // on its way through the connection screens
+    battle_room, // its battle room opened
+    failed,      // a screen refused it, with the notice DirectGameProgress::notice
+};
+
+struct DirectGameProgress {
+    DirectGameStep reached = DirectGameStep::none; // how far it has gone
+    std::string notice;                            // failed: the notice the screen showed, as shown
+    std::string game_name;   // battle_room: the game's name, as the game list shows it
+    std::string player_name; // battle_room: the local player's name, as the battle room shows it
+};
+
+/// Asks the multiplayer screens to host or join a game as they are next entered.
+///
+/// The provider list takes TCP/IP when the launch block's connection type
+/// names it ("-n1" writes it). Each screen then goes on at once: TCP.GUI
+/// accepts the address without storing it, the game list types the player's
+/// name and, to join, the password, then goes on to NEWMULTI or waits for
+/// the game to be listed as a launched join does, and NEWMULTI types the
+/// game's name and password and takes OK. Each screen does its part once:
+/// a refusal leaves the player on that screen with its notice, to go on by
+/// hand. The binding survives multiplayer_reset.
+///
+/// @param game The game; kind none asks for nothing.
+void multiplayer_bind_direct_game(const DirectGame& game);
+
+/// Returns how far the game multiplayer_bind_direct_game asked for has gone.
+///
+/// @return The step and, once it failed, the notice that ended it.
+[[nodiscard]] const DirectGameProgress& multiplayer_direct_game_progress() noexcept;
+
 /// Binds the mod profile's rules the battle room keeps (Lobby::rules).
 ///
 /// The binding survives multiplayer_reset.

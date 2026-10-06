@@ -68,6 +68,17 @@ constexpr int32_t kCanvasWidth = 640;
 constexpr int32_t kCanvasHeight = 480;
 constexpr uint32_t kTicksPerSecond = 30;
 constexpr uint32_t kDoubleClickMs = 400;
+
+/// Tells whether a Player.reject_reason is one a host refuses a joiner with
+/// as it arrives: the game closed (3), the wrong password (4), the game full
+/// (5), a unit or version the joiner lacks (7, 8) or no watching (9).
+///
+/// @param reason the reason
+/// @return true for those reasons
+constexpr bool refuses_arrival(uint8_t reason) noexcept {
+    return (reason >= 3 && reason <= 5) || (reason >= 7 && reason <= 9);
+}
+
 constexpr uint16_t kDefaultMaxUnits = 250;
 constexpr uint16_t kMachineMemoryMb = 256; // stand-in for the physical memory probe
 constexpr uint32_t kSdlKeyReturn = 0x0d;
@@ -209,6 +220,26 @@ LobbyClock g_clock{};
 // The screen sizes multiplayer_bind_display_modes bound; they survive
 // multiplayer_reset.
 LobbyDisplayModes g_display_modes{};
+
+// The screen whose entry does the direct game's next part.
+enum class DirectStage : uint8_t {
+    none,      // nothing left to do
+    tcp,       // TCP.GUI accepts the address
+    game_list, // the game list types the names and goes on
+    new_game,  // NEWMULTI types the game's name and password and takes OK
+    joining,   // the game list waits for the game and joins it
+    entering,  // the battle room opens
+};
+
+// The game multiplayer_bind_direct_game asked for and how far it has gone;
+// it survives multiplayer_reset.
+struct DirectGameState {
+    DirectGame game{};
+    DirectStage stage = DirectStage::none;
+    DirectGameProgress progress{};
+};
+
+DirectGameState g_direct{};
 
 uint32_t elapsed_ms() {
     if (g_clock.now_ms != nullptr)
@@ -2105,6 +2136,51 @@ void set_text_input(ScreenContext* ctx, bool enabled) {
         ctx->services->set_text_input(ctx->host, enabled ? 1 : 0);
 }
 
+/// Returns the most bytes a text box holds.
+///
+/// @param control a text box
+/// @return its length limit, below the text field's size
+std::size_t text_box_limit(const Control& control) noexcept {
+    return control.value > 0 ? static_cast<std::size_t>(control.value) : kControlTextBytes - 1;
+}
+
+/// Adds the printable ASCII of typed text to a box's text while it stays within the box's limit, as the address,
+/// name and password boxes take typing.
+///
+/// @param[in,out] value the box's text
+/// @param typed the typed text
+/// @param limit the most bytes the box holds
+void take_printable(std::string& value, std::string_view typed, std::size_t limit) {
+    for (const char c : typed)
+        if (static_cast<unsigned char>(c) >= 0x20 && static_cast<unsigned char>(c) < 0x7f &&
+            value.size() < limit)
+            value.push_back(c);
+}
+
+/// Clears a named text box and types text into it, as a player does.
+///
+/// @param[in,out] panel the screen's panel
+/// @param name the box's name
+/// @param text the text typed; empty leaves the box as it is
+void retype(Panel& panel, const char* name, std::string_view text) {
+    Control* control = panel_control(panel, name);
+    if (text.empty() || control == nullptr || control->type != ControlType::text_box)
+        return;
+    std::string value;
+    take_printable(value, text, text_box_limit(*control));
+    set_control_text(*control, value);
+    panel.dirty = true;
+}
+
+/// Ends the direct game on the screen in front, which refused it with the notice it shows.
+///
+/// @param fallback the notice reported when the screen shows none
+void fail_direct_game(const char* fallback) {
+    g_direct.stage = DirectStage::none;
+    g_direct.progress.reached = DirectGameStep::failed;
+    g_direct.progress.notice = ui().message.empty() ? fallback : ui().message;
+}
+
 void apply_lobby_action(ScreenContext* ctx, LobbyAction action) {
     auto& state = ui();
     auto& lobby = state.lobby;
@@ -2209,7 +2285,14 @@ void apply_game_list_action(ScreenContext* ctx, ConnectAction action) {
     ) {
         state.in_lobby = false;
         app::screen_request(ctx, kScreenBattleroom);
+        if (g_direct.stage == DirectStage::joining)
+            g_direct.stage = DirectStage::entering;
+        return;
     }
+    // A direct join ends where the game list stops waiting without joining.
+    if (g_direct.stage == DirectStage::joining && !state.connect.join_pending &&
+        !state.connect.host_waiting)
+        fail_direct_game("The game could not be joined.");
 }
 
 /// Creates the game NEWMULTI accepted and opens the battle room.
@@ -2223,6 +2306,54 @@ void host_new_game(ScreenContext* ctx) {
     } else {
         state.message = "The game could not be created.";
     }
+}
+
+/// Types the direct game's name and password into NEWMULTI and takes OK, as a player does.
+///
+/// @param ctx Screen context of the running frontend.
+void host_direct_game(ScreenContext* ctx) {
+    auto& state = ui();
+    auto& panel = state.base.panel;
+    const auto& game = g_direct.game;
+    // A notice still up is dismissed first, as a player's click does.
+    state.message.clear();
+    retype(panel, "GAMENAME", game.game_name);
+    retype(panel, "NICKNAME", game.player_name);
+    retype(panel, "PASSWORD", game.password);
+    panel.selected = panel_find(panel, "OK");
+    if (panel.selected == kNoControl) {
+        fail_direct_game("The game could not be created.");
+        return;
+    }
+    if (new_game_handle_event(state.lobby, state.connect, panel) == ConnectAction::host)
+        host_new_game(ctx);
+    if (state.message.empty())
+        g_direct.stage = DirectStage::entering;
+    else
+        fail_direct_game("The game could not be created.");
+}
+
+/// Goes on from the game list as the direct game asks: its names typed, then NEWMULTI to host, or the wait to join.
+///
+/// @param[in,out] state The screens' state, on the game list.
+void continue_direct_game(Ui& state) {
+    auto& panel = state.base.panel;
+    auto& connect = state.connect;
+    const auto& game = g_direct.game;
+    retype(panel, "NICKNAME", game.player_name);
+    if (game.kind == DirectGame::Kind::host) {
+        // The game list's next tick goes on to NEWMULTI, as STARTNEW does.
+        connect.update_requested = true;
+        g_direct.stage = DirectStage::new_game;
+        return;
+    }
+    retype(panel, "PASSWORD", game.password);
+    connect.join_pending = true;
+    connect.join_direct = true;
+    std::snprintf(
+        connect.join_game_name, sizeof connect.join_game_name, "%s", game.game_name.c_str()
+    );
+    g_direct.stage = DirectStage::joining;
 }
 
 void dispatch(ScreenContext* ctx) {
@@ -2376,6 +2507,24 @@ void enter_tcp(ScreenContext* ctx, void*) {
     if (!load_modal(ctx, ModalKind::tcp, "tcp.gui", nullptr, "anims/selprov.gaf"))
         return;
     tcp_open(state.lobby, state.connect, state.modal.panel);
+    if (g_direct.stage == DirectStage::tcp) {
+        // The address is typed and accepted at once; a host keeps the
+        // address the box shows, as a player who only presses OK does.
+        retype(state.modal.panel, "ADDRESS", g_direct.game.address);
+        const auto action = tcp_accept_direct(state.lobby, state.connect, state.modal.panel);
+        close_modal();
+        if (action == ConnectAction::game_list) {
+            g_direct.stage = DirectStage::game_list;
+        } else {
+            state.message = state.connect.error_text;
+            state.connect.error_text[0] = '\0';
+            fail_direct_game(kServiceErrorText);
+        }
+        app::screen_request(
+            ctx, action == ConnectAction::game_list ? kScreenGameList : kScreenProviders
+        );
+        return;
+    }
     if (!state.connect.launch_address_used)
         return;
     // The launch's address is accepted at once; while a launch is
@@ -2397,12 +2546,24 @@ void enter_game_list(ScreenContext* ctx, void*) {
     close_modal();
     if (!load(state.base, ctx, "selgame.gui", "bitmaps/selectgame2x.pcx", "anims/selgame.gaf"))
         return;
+    // A direct join the host refused in its battle room comes back here,
+    // where the game list tells why.
+    const auto reason =
+        state.lobby.game != nullptr ? local_player(state.lobby).reject_reason : uint8_t{0};
+    const bool refused = g_direct.progress.reached == DirectGameStep::battle_room &&
+                         g_direct.game.kind == DirectGame::Kind::join && refuses_arrival(reason);
     if (!game_list_open(state.lobby, state.connect, state.base.panel)) {
+        if (g_direct.stage == DirectStage::game_list)
+            fail_direct_game("Invalid TCP/IP Address");
         app::screen_request(ctx, kScreenProviders);
         return;
     }
     oa::ui::gui_input::mark_label_shadows(state.base.source.gadgets);
     connect_show_error_text(state.lobby, state.connect);
+    if (g_direct.stage == DirectStage::game_list)
+        continue_direct_game(state);
+    else if (refused)
+        fail_direct_game(reject_reason_text(reason));
 }
 
 void enter_new_game(ScreenContext* ctx, void*) {
@@ -2415,6 +2576,8 @@ void enter_new_game(ScreenContext* ctx, void*) {
         oa::ui::gui_input::mark_label_shadows(state.base.source.gadgets);
         if (state.connect.host_at_once)
             host_new_game(ctx);
+        else if (g_direct.stage == DirectStage::new_game)
+            host_direct_game(ctx);
     }
 }
 
@@ -2433,6 +2596,19 @@ void enter_battleroom(ScreenContext* ctx, void*) {
     state.in_lobby = true;
     // The engine's line is said again in each battle room entered.
     state.banner_said.clear();
+    if (g_direct.stage == DirectStage::entering) {
+        auto& game = *state.game;
+        const bool joined = g_direct.game.kind == DirectGame::Kind::join;
+        const char* name = joined ? state.connect.chosen.name : lobby_game_name(game);
+        std::string shown(name, ::strnlen(name, kSessionGameNameBytes));
+        while (!shown.empty() && shown.back() == ' ')
+            shown.pop_back();
+        const char* nickname = lobby_nickname(game);
+        g_direct.stage = DirectStage::none;
+        g_direct.progress.reached = DirectGameStep::battle_room;
+        g_direct.progress.game_name = std::move(shown);
+        g_direct.progress.player_name.assign(nickname, ::strnlen(nickname, sizeof(Game::nickname)));
+    }
 }
 
 /// Closes any stacked dialog and turns text input off as a multiplayer screen is left.
@@ -2505,14 +2681,6 @@ Control* focused_text_box() noexcept {
 /// @return true for the chat line
 bool takes_any_character(const Control& control) noexcept {
     return control_name(control) == "MESSAGE";
-}
-
-/// Returns the most bytes a text box holds.
-///
-/// @param control a text box
-/// @return its length limit, below the text field's size
-std::size_t text_box_limit(const Control& control) noexcept {
-    return control.value > 0 ? static_cast<std::size_t>(control.value) : kControlTextBytes - 1;
 }
 
 /// Adds typed text to the chat line as game text, whole characters at a
@@ -2868,6 +3036,19 @@ Game& multiplayer_game() noexcept {
     return *ui().game;
 }
 
+void multiplayer_bind_direct_game(const DirectGame& game) {
+    g_direct = DirectGameState{};
+    if (game.kind == DirectGame::Kind::none)
+        return;
+    g_direct.game = game;
+    g_direct.stage = DirectStage::tcp;
+    g_direct.progress.reached = DirectGameStep::connecting;
+}
+
+const DirectGameProgress& multiplayer_direct_game_progress() noexcept {
+    return g_direct.progress;
+}
+
 void multiplayer_reload_unit_headers(ScreenContext* ctx) {
     auto& state = ui();
     auto* previous = state.ctx;
@@ -2934,10 +3115,7 @@ void multiplayer_type(ScreenContext* ctx, const char* text) noexcept {
         drop_composition(value);
         take_game_text(value, text, limit);
     } else {
-        for (const char* at = text; *at != '\0'; ++at)
-            if (static_cast<unsigned char>(*at) >= 0x20 && static_cast<unsigned char>(*at) < 0x7f &&
-                value.size() < limit)
-                value.push_back(*at);
+        take_printable(value, text, limit);
     }
     set_control_text(*control, value);
     front().panel.dirty = true;

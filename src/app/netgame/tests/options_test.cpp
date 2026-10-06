@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // Network play's long options through oa-game's command line: the loopback,
-// host-not-found and demo options, with the options the engine keeps, none
+// host-not-found, demo and network game options, with the options the engine keeps, none
 // of them without the extension, and "-y", which network play leaves to an
 // extension built on it; the names the frontend's entry takes from a launch;
 // and the multiplayer frontend states' answers about joining and leaving a
@@ -179,13 +179,70 @@ int main() {
         "--dplay-port rejects anything but 1 through 65535"
     );
 
+    // --host and --join name the game the multiplayer screens host or join
+    // at once, without the intro; the names and the password go with them,
+    // and the frontend opens multiplayer over TCP/IP.
+    using Kind = oa::ui::frontend_multiplayer::DirectGame::Kind;
+    expect(plain.net.direct_game.kind == Kind::none, "no network game without --host or --join");
+    const auto host = parse(
+        {"--host", "--player-name", "EngineHost", "--game-name", "XPlay", "--game-password", "pw"}
+    );
+    expect(
+        host.net.direct_game.kind == Kind::host &&
+            host.net.direct_game.player_name == "EngineHost" &&
+            host.net.direct_game.game_name == "XPlay" && host.net.direct_game.password == "pw" &&
+            host.net.direct_game.address.empty() && host.app.skip_intro && !host.app.unattended,
+        "--host takes the names and the password, and skips the intro"
+    );
+    expect(
+        host.app.launch.unavailable_switch == 0 && parse({"--host"}).app.skip_intro, "--host alone"
+    );
+    const auto join = parse({"--join", "192.0.2.10", "--player-name", "EngineJoin"});
+    expect(
+        join.net.direct_game.kind == Kind::join && join.net.direct_game.address == "192.0.2.10" &&
+            join.net.direct_game.player_name == "EngineJoin" &&
+            join.net.direct_game.game_name.empty() && join.app.skip_intro,
+        "--join takes the address and the name, and skips the intro"
+    );
+    {
+        oa::app::NetgameContext context{};
+        oa::app::Extension table{};
+        oa::app::fill_option_hooks(table, context);
+        std::vector<std::string> storage{"open-annihilation", "--join", "host.example"};
+        std::vector<char*> argv;
+        for (auto& argument : storage)
+            argv.push_back(argument.data());
+        (void)oa::app::parse_options(static_cast<int>(argv.size()), argv.data(), table);
+        expect(
+            context.launch.block.connection_type ==
+                oa::ui::frontend_multiplayer::launch::connection_type::tcpip,
+            "a game to join opens multiplayer over TCP/IP"
+        );
+    }
+    expect(
+        rejection({"--host", "--join", "192.0.2.10"}) ==
+                "--host and --join cannot be used together" &&
+            rejection({"--join", "192.0.2.10", "--host"}) ==
+                "--host and --join cannot be used together",
+        "--host with --join"
+    );
+    expect(
+        rejection({"--game-password", "pw"}) == "--game-password needs --host or --join" &&
+            rejection({"--game-name", "XPlay"}) == "--game-name needs --host or --join" &&
+            rejection({"--player-name", "EngineHost"}) == "--player-name needs --host or --join",
+        "the names and the password need --host or --join"
+    );
+    expect(rejection({"--join"}) == "--join requires a value", "--join needs an address");
+
     // Without the extension the demo and loopback flags do not exist.
     for (const char* flag :
          {"--play-demo",
           "--demo-unit-table",
           "--net-loopback-check",
           "--net-loopback-watcher",
-          "--check-host-not-found"})
+          "--check-host-not-found",
+          "--host",
+          "--join"})
         expect(rejection({flag}, false) == std::string("unknown option: ") + flag, flag);
     // "-y" is not network play's: with network play alone the build refuses it.
     expect(rejection({"-y"}) == "-y is not handled by this build", "-y is not network play's");

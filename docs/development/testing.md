@@ -430,7 +430,14 @@ names, these run the game headless:
   declines bytes that are no recording and refuses a truncated one;
 - `native-host-not-found` (`tools/check_native_host_not_found.py`) checks
   a joiner whose host is never listed: "Host not found.  Exiting...", and
-  the game leaves 4 s later.
+  the game leaves 4 s later;
+- `native-net-options` (`tools/check_native_net_options.py`) runs games
+  started with `--host` and `--join`, each a program of its own on the
+  dummy drivers: a host reaches its battle room, a joiner joins it by
+  address and both list both players by the names given, a wrong
+  `--game-password` is refused with the game list's notice, the right one
+  joins the game `--game-name` names, and the joiners' preferences keep
+  their address and name.
 
 `open-annihilation --play-demo FILE.tad` replays a recorded game through
 the path a watching machine receives a match on; with `--headless-check`

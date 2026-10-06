@@ -11,6 +11,7 @@
 #include "oa/app/command_line.hpp"
 #include "oa/netgame/frontend/multiplayer_states.hpp"
 #include "oa/app/netgame/launch_switches.hpp"
+#include "oa/ui/frontend_multiplayer/screens.hpp"
 #include "oa/ui/screen_registry.hpp"
 
 #include <cstddef>
@@ -61,6 +62,11 @@ struct NetOptions {
     // Present the replay version bytes (identity.replay-network-version), as a
     // game that joins a replayer's session to watch a recording does.
     bool replay_viewer = false;
+    // --host or --join ADDRESS, with --player-name, --game-name and
+    // --game-password: the TCP/IP game the multiplayer screens host or join
+    // as soon as the game starts, as the player would through them. The
+    // preferences keep what they hold.
+    oa::ui::frontend_multiplayer::DirectGame direct_game{};
 };
 
 // A recording the engine handed network play to replay
@@ -110,12 +116,12 @@ struct NetgameContext {
 
 /// Fills the extension hooks that need no running app.
 ///
-/// They cover the long options, the 3.1c network switches (the handler is
-/// bound to context.launch here), the usage text, the frontend's entry, the
-/// multiplayer frontend states and the launch values of a new match's Game
-/// block.
+/// They cover the long options and their checks as a whole, the 3.1c
+/// network switches (the handler is bound to context.launch here), the usage
+/// text, the frontend's entry, the multiplayer frontend states and the launch
+/// values of a new match's Game block.
 ///
-/// @param[in,out] table Extension table; context, take_option,
+/// @param[in,out] table Extension table; context, take_option, check_options,
 ///                      switch_handler, text, frontend_entry, frontend_states
 ///                      and match_game are set.
 /// @param[in,out] context Context the hooks read and write; becomes `table.context`.

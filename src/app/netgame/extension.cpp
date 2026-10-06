@@ -39,6 +39,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -138,6 +139,91 @@ void report_host_not_found_quit(const char* reason, int exit_code) {
     std::cout << " and exit status " << exit_code << '\n';
 }
 
+// What the direct game's lines (--host, --join) have reported: how far it
+// had got when last reported, whether a multiplayer screen has shown yet,
+// and the battle room's players as last listed.
+struct DirectGameReport {
+    mp::DirectGameStep reported = mp::DirectGameStep::connecting;
+    bool shown{};
+    uint32_t frames{}; // frames run before a multiplayer screen first showed
+    std::string players;
+};
+
+// The most frames that ask for a frontend pass while no multiplayer screen
+// has shown yet; game data that offers no multiplayer stays on the main
+// menu.
+constexpr uint32_t kDirectGameOpeningFrames = 300;
+
+DirectGameReport g_direct_report;
+
+/// Names the players seated in the battle room, in slot order.
+///
+/// @param lobby the multiplayer screens' lobby
+/// @return the names joined by ", "; empty when the lobby has no game
+std::string battle_room_players(mp::Lobby& lobby) {
+    std::string names;
+    if (lobby.game == nullptr)
+        return names;
+    for (int32_t slot = 0; slot < mp::kSlotCount; ++slot) {
+        const auto& player = mp::slot_player(lobby, slot);
+        const std::string name(player.name, ::strnlen(player.name, sizeof player.name));
+        if (player.in_use == 0 || name.empty())
+            continue;
+        if (!names.empty())
+            names += ", ";
+        names += name;
+    }
+    return names;
+}
+
+/// Runs the part of a frame that follows the game --host or --join asked for.
+///
+/// Until a multiplayer screen first shows, each frame asks for a frontend
+/// pass, so multiplayer opens without input, for kDirectGameOpeningFrames
+/// frames at most. Standard output reports, each
+/// line once and flushed at once: the battle room opening, with the game's
+/// name and the local player's; the players the battle room lists, whenever
+/// they change while it shows; and a join or a game the screens refused,
+/// with the notice they showed.
+void direct_game_frame() {
+    const auto& game = net_options().direct_game;
+    if (game.kind == mp::DirectGame::Kind::none)
+        return;
+    auto& report = g_direct_report;
+    if (mp::multiplayer_showing())
+        report.shown = true;
+    if (!report.shown && report.frames < kDirectGameOpeningFrames &&
+        g_services.services != nullptr && g_services.services->run_frontend != nullptr) {
+        ++report.frames;
+        g_services.services->run_frontend(g_services.host);
+    }
+    const auto& progress = mp::multiplayer_direct_game_progress();
+    if (progress.reached != report.reported) {
+        report.reported = progress.reached;
+        if (progress.reached == mp::DirectGameStep::battle_room)
+            std::cout << "multiplayer: in the battle room of \"" << progress.game_name << "\" as "
+                      << progress.player_name << std::endl;
+        else if (
+            progress.reached == mp::DirectGameStep::failed &&
+            game.kind == mp::DirectGame::Kind::join
+        )
+            std::cout << "multiplayer: could not join " << game.address << ": " << progress.notice
+                      << std::endl;
+        else if (progress.reached == mp::DirectGameStep::failed)
+            std::cout << "multiplayer: could not host the game: " << progress.notice << std::endl;
+    }
+    // A local player the host refused is on its way out, and lists no one.
+    auto& lobby = mp::multiplayer_lobby();
+    if (report.reported != mp::DirectGameStep::battle_room || !mp::multiplayer_showing() ||
+        lobby.game == nullptr || mp::local_player(lobby).reject_reason != 0)
+        return;
+    auto players = battle_room_players(lobby);
+    if (players.empty() || players == report.players)
+        return;
+    report.players = std::move(players);
+    std::cout << "multiplayer: battle room players: " << report.players << std::endl;
+}
+
 /// Keeps the screen host and services an overlay's create is given.
 ///
 /// @param ctx the overlay's context
@@ -226,6 +312,7 @@ void register_screens(void* /*context*/, ScreenRegistry* registry) {
     if (net_options().check_host_not_found)
         set_launch_active(true);
     mp::multiplayer_bind_launch_link(launch_link());
+    mp::multiplayer_bind_direct_game(net_options().direct_game);
     netgame.launch_active = launch_active;
     netgame.frontend.host.connection_type = launch_connection_type;
     register_frontend_state_queries(registry);
@@ -870,7 +957,8 @@ struct RuntimeExtension {
     /// @param context Extension context (unused).
     /// @param runtime The running app.
     /// @param stage pump follows the game into its close handler (and runs
-    ///              --check-host-not-found's part of the frame), binds the
+    ///              --check-host-not-found's part of the frame and the part
+    ///              that follows --host's and --join's game), binds the
     ///              profile's rules again once Developer Mode changes them
     ///              and Unicode chat as it is now, then runs the network
     ///              match's frame; after_pump applies
@@ -880,6 +968,7 @@ struct RuntimeExtension {
             observe_close_handlers(runtime);
             if (net_options().check_host_not_found)
                 host_not_found_frame();
+            direct_game_frame();
             // The rules Developer Mode lays over the profile reach the
             // multiplayer screens and the session.
             NetworkPlay::of(runtime).follow_profile_rules();

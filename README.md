@@ -124,6 +124,58 @@ hacks it names, with no code for any particular mod. See
 [Mod support](docs/mods/README.md) for installing and choosing a mod, the
 profile format and every standard hack.
 
+## Network games from the command line
+
+Network play goes through the Multiplayer screens, as in 3.1c. To host or
+join a TCP/IP game without them, start the game with:
+
+- `--host`: creates a game and opens its battle room.
+- `--join ADDRESS`: joins the game at `ADDRESS`, an IPv4 address or a host
+  name, and opens its battle room. The game waits up to 20 seconds for a
+  game to answer there ("Waiting for host..."), as a game launched to join
+  does, and joins the first that answers.
+
+With either:
+
+- `--player-name NAME`: your name in the game, which the battle room shows
+  and sends to the other players.
+- `--game-name NAME`: with `--host`, the game's name; with `--join`, the
+  game to join when several answer at the address.
+- `--game-password PASSWORD`: with `--host`, the game's password; with
+  `--join`, the password sent.
+
+Each is what you would type in the screens, and the same rules apply: a
+name keeps 16 characters at most, and a password 10. Without them, the
+screens' own entries are used. The intro is skipped, and your saved
+address, name and password stay as they were. The game says on its
+standard output when the battle room opens and who is in it:
+
+```text
+multiplayer: in the battle room of "XPlay" as EngineHost
+multiplayer: battle room players: EngineHost, RealJoin
+```
+
+When the join fails, because no game answered, the password was wrong or
+the game is full, the game list shows the notice it shows in the screens,
+and the output says so:
+
+```text
+multiplayer: could not join 192.0.2.10: You did not have the correct password
+```
+
+You are then on the game list, to try again by hand. For example, on
+macOS:
+
+```sh
+open -a "Open Annihilation" --args --host --player-name Ann --game-name "Friday Game"
+```
+
+and on another computer, on Linux:
+
+```sh
+./open-annihilation --join 192.168.1.20 --player-name Ben
+```
+
 ## Demo Recorder
 
 The demo recorder that recorded multiplayer games for 3.1c kept each game

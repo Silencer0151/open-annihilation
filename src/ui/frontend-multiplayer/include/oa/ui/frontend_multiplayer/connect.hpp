@@ -80,6 +80,12 @@ struct ConnectState {
     uint32_t host_not_found_exit_ms{};
     // NEWMULTI goes on to host at once, without waiting for OK.
     bool host_at_once{};
+    // The pending join is one the command line asked for (DirectGame): it
+    // joins the listed game named join_game_name, or the first listed while
+    // that is empty, and when no such game is listed in time the game list
+    // shows kHostNotFoundText and stays.
+    bool join_direct{};
+    char join_game_name[kSessionGameNameBytes + 1]{};
 };
 
 enum class ConnectAction : uint8_t {
@@ -153,6 +159,17 @@ void tcp_open(Lobby& lobby, ConnectState& state, Panel& panel) noexcept;
 /// @return game_list when the service opened, providers when it failed.
 ConnectAction tcp_accept_launch_address(Lobby& lobby, ConnectState& state, Panel& panel) noexcept;
 
+/// Accepts the address TCP.GUI shows as OK does, without keeping it as the player's address, and opens the service.
+///
+/// The connection flags take the address and OK, and SmlButton plays; the
+/// stored address stays as it was.
+///
+/// @param[in,out] lobby Lobby state, its game block and network table.
+/// @param[in,out] state Connection screens' state; address is set.
+/// @param panel TCP.GUI's panel.
+/// @return game_list when the service opened, providers when it failed.
+ConnectAction tcp_accept_direct(Lobby& lobby, ConnectState& state, Panel& panel) noexcept;
+
 /// Handles a click on TCP.GUI: OK, Enter or JOIN store the address and open the provider; PREV goes back.
 ///
 /// @param[in,out] lobby Lobby state, its game block and network table.
@@ -223,7 +240,10 @@ bool game_list_open(Lobby& lobby, ConnectState& state, Panel& panel) noexcept;
 /// joiner whose launch was active when the wait started has the launch's
 /// join fail with "Host not found - Host may have left the game before you
 /// arrived." (LaunchLink::join_failed), and the frontend returns to
-/// the main menu. Any other joiner shows "Host not found.  Exiting..."
+/// the main menu. A join the command line asked for (join_direct) joins
+/// the game named join_game_name when one is, and shows "Host not found -
+/// Host may have left the game before you arrived." on the game list when
+/// none is listed in time. Any other joiner shows "Host not found.  Exiting..."
 /// for kHostNotFoundExitMilliseconds, then leaves the game.
 ///
 /// @param[in,out] lobby Lobby state, its game block, network table, services and launch.

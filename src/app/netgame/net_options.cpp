@@ -46,7 +46,8 @@ NetgameContext& context_of(void* context) {
 /// --net-loopback-check makes the run an unattended headless one (the check
 /// runs only in a headless run; without it the run would sit in the menus),
 /// --check-host-not-found an unattended run that skips the intro,
-/// --check-recording-hook an unattended headless run that skips the intro. A missing or malformed value throws
+/// --check-recording-hook an unattended headless run that skips the intro,
+/// --host and --join a run that skips the intro. A missing or malformed value throws
 /// std::runtime_error.
 ///
 /// @param context The NetgameContext whose options receive the value.
@@ -76,7 +77,23 @@ bool take_option(void* context, const char* name, const OptionValues& values, ui
         result.check_recording_hook = true;
         effects |=
             option_effect::headless_check | option_effect::unattended | option_effect::skip_intro;
-    } else if (argument == "--net-record")
+    } else if (argument == "--host" || argument == "--join") {
+        using Kind = oa::ui::frontend_multiplayer::DirectGame::Kind;
+        const Kind kind = argument == "--host" ? Kind::host : Kind::join;
+        auto& game = result.direct_game;
+        if (game.kind != Kind::none && game.kind != kind)
+            throw std::runtime_error("--host and --join cannot be used together");
+        game.kind = kind;
+        if (kind == Kind::join)
+            game.address = std::string(value());
+        effects |= option_effect::skip_intro;
+    } else if (argument == "--player-name")
+        result.direct_game.player_name = std::string(value());
+    else if (argument == "--game-name")
+        result.direct_game.game_name = std::string(value());
+    else if (argument == "--game-password")
+        result.direct_game.password = std::string(value());
+    else if (argument == "--net-record")
         result.net_record = path_from_utf8(value());
     else if (argument == "--replay-viewer")
         result.replay_viewer = true;
@@ -88,6 +105,31 @@ bool take_option(void* context, const char* name, const OptionValues& values, ui
     } else
         return false;
     return true;
+}
+
+/// Checks the network game options as a whole (Extension::check_options).
+///
+/// --player-name, --game-name and --game-password need --host or --join; a
+/// game to host or join has the frontend open multiplayer over TCP/IP at
+/// once, whatever connection "-n" named. A refused combination throws
+/// std::runtime_error.
+///
+/// @param context The NetgameContext whose options are checked.
+void check_options(void* context) {
+    auto& netgame = context_of(context);
+    const auto& game = netgame.options.direct_game;
+    if (game.kind == oa::ui::frontend_multiplayer::DirectGame::Kind::none) {
+        if (!game.player_name.empty())
+            throw std::runtime_error("--player-name needs --host or --join");
+        if (!game.game_name.empty())
+            throw std::runtime_error("--game-name needs --host or --join");
+        if (!game.password.empty())
+            throw std::runtime_error("--game-password needs --host or --join");
+        return;
+    }
+    oa::app::netgame::launch::set_connection_type(
+        netgame.launch, oa::app::netgame::launch::connection_type::tcpip
+    );
 }
 
 /// Returns the handler of the 3.1c network switches (Extension::switch_handler).
@@ -108,7 +150,9 @@ const char* text(void* /*context*/, ExtensionText which) {
     case ExtensionText::usage_checks:
         return "[--check-recording-hook] ";
     case ExtensionText::usage_runs:
-        return "[--net-loopback-check TICKS] [--net-loopback-watcher] [--net-loopback-computer] "
+        return "[--host | --join ADDRESS] [--player-name NAME] [--game-name NAME] "
+               "[--game-password PASSWORD] "
+               "[--net-loopback-check TICKS] [--net-loopback-watcher] [--net-loopback-computer] "
                "[--check-host-not-found] [--dplay-port PORT] [--play-demo FILE.tad] "
                "[--demo-unit-table strict|ignore] [--net-record FILE] [--replay-viewer] ";
     case ExtensionText::usage_switches:
@@ -202,6 +246,7 @@ void fill_option_hooks(Extension& table, NetgameContext& context) {
     context.switches = oa::app::netgame::launch::launch_switch_handler(&context.launch);
     table.context = &context;
     table.take_option = take_option;
+    table.check_options = check_options;
     table.switch_handler = switch_handler;
     table.text = text;
     table.frontend_entry = frontend_entry;

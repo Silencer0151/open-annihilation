@@ -2738,7 +2738,11 @@ recorded games (`.tad`, `src/formats/tad` and `src/session/demo`) through
 `open_recording` and `--play-demo FILE.tad`. Its long options include
 `--net-loopback-check N`, which hosts and joins a match in one process
 over 127.0.0.1 and compares both worlds after N ticks,
-`--check-recording-hook` and `--check-host-not-found`;
+`--check-recording-hook` and `--check-host-not-found`, and `--host` and
+`--join ADDRESS` (with `--player-name`, `--game-name` and
+`--game-password`), which have the multiplayer screens host or join a
+TCP/IP game at once, each screen doing what a player would
+(`multiplayer_bind_direct_game`), and print the battle room's progress;
 `--check-multiplayer-menu` runs its check of the multiplayer screens.
 MULTI on the main menu asks the extensions (`select_multiplayer`), and
 network play answers by moving the frontend to its multiplayer states;

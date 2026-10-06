@@ -293,6 +293,15 @@ ConnectAction tcp_accept_launch_address(Lobby& lobby, ConnectState& state, Panel
                                                              : ConnectAction::providers;
 }
 
+ConnectAction tcp_accept_direct(Lobby& lobby, ConnectState& state, Panel& panel) noexcept {
+    auto& game = *lobby.game;
+    game.connection_flags |= kConnectFromOk | kConnectAddressSet;
+    copy_field(state.address, sizeof(state.address), panel_text(panel, "ADDRESS"));
+    play(lobby, "SmlButton");
+    return connect_open_service(lobby, state, state.address) ? ConnectAction::game_list
+                                                             : ConnectAction::providers;
+}
+
 ConnectAction tcp_handle_event(Lobby& lobby, ConnectState& state, Panel& panel) noexcept {
     auto& game = *lobby.game;
     if (panel.selected == kNoControl)
@@ -583,20 +592,42 @@ void show_host_wait(Lobby& lobby, ConnectState& state, uint32_t now, bool first)
     state.host_wait_last_ms = now;
 }
 
-/// Polls the session list while waiting for the host and joins the first game listed.
+/// Finds the listed game a pending join waits for.
+///
+/// @param state Connection screens' state, its session list polled.
+/// @return the first listed game's row, or with join_game_name set the row
+///         of the first game of that name; -1 when none is listed
+int32_t awaited_session(const ConnectState& state) noexcept {
+    if (state.join_game_name[0] == '\0')
+        return state.session_count > 0 ? 0 : -1;
+    const std::string wanted = bounded(state.join_game_name, kSessionGameNameBytes);
+    for (int32_t row = 0; row < state.session_count; ++row) {
+        std::string name = bounded(state.sessions[row].name, kSessionGameNameBytes);
+        while (!name.empty() && name.back() == ' ')
+            name.pop_back();
+        if (name == wanted)
+            return row;
+    }
+    return -1;
+}
+
+/// Polls the session list while waiting for the host and joins the game the join waits for.
 ///
 /// @param[in,out] lobby Lobby state, its game block, network table and services.
 /// @param[in,out] state Connection screens' state.
 /// @param[in,out] panel The game list's panel.
-/// @return join when a game was listed and chosen, else none.
+/// @return join when the game was listed and chosen, else none.
 ConnectAction poll_for_host(Lobby& lobby, ConnectState& state, Panel& panel) noexcept {
-    if (!game_list_update(lobby, state, panel) || state.session_count <= 0)
+    if (!game_list_update(lobby, state, panel))
+        return ConnectAction::none;
+    const auto row = awaited_session(state);
+    if (row < 0)
         return ConnectAction::none;
     state.host_waiting = false;
     message(lobby, "");
     if (auto* list = panel_control(panel, "GAMENAME"))
-        list->list_selection = 0;
-    return choose_listed_game(lobby, state, panel, 0, false);
+        list->list_selection = row;
+    return choose_listed_game(lobby, state, panel, row, false);
 }
 
 } // namespace
@@ -636,6 +667,11 @@ ConnectAction game_list_tick(Lobby& lobby, ConnectState& state, Panel& panel) no
                 lobby.game->frontend_state = kStateMainMenu;
                 panel.selected = kNoControl;
                 return ConnectAction::main_menu;
+            }
+            if (state.join_direct) {
+                state.join_direct = false;
+                message(lobby, kHostNotFoundText);
+                return ConnectAction::none;
             }
             message(lobby, kHostNotFoundExitingText);
             state.host_not_found_exiting = true;
