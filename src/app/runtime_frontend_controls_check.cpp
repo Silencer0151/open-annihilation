@@ -593,9 +593,14 @@ void Runtime::check_frontend_controls() {
     );
     require(bound_map_names_.size() > 1, "SELMAP.GUI lists a single map");
     expect_main_menu_palette("DSELECTMAP2", "SELMAP.GUI");
+    // The list can name a map twice, one row after the other, so the map
+    // chosen is the first row after the selected one that names another map.
     const auto current = static_cast<std::size_t>(std::max<int16_t>(0, modal_map_index_));
-    const auto chosen_index = (current + 1U) % bound_map_names_.size();
+    auto chosen_index = (current + 1U) % bound_map_names_.size();
+    while (chosen_index != current && bound_map_names_[chosen_index] == map_before)
+        chosen_index = (chosen_index + 1U) % bound_map_names_.size();
     const auto chosen = bound_map_names_[chosen_index];
+    require(chosen != map_before, "SELMAP.GUI lists no map but " + map_before);
     preview_map_index(chosen_index);
     // The map's summary names its players in the game's language, in the word
     // gamedata\translate.tdf gives for "Players": "Spieler" in German.
