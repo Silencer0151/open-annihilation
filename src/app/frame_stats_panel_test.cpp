@@ -268,8 +268,9 @@ void test_renderer_row_fits_the_panel() {
     const panel::TextWidthHooks measure{nullptr, console_width};
     const auto widest = frame_pacing::frame_stats_widest_table();
     const auto layout = panel::lay_out_panel(widest, measure, kRowHeight);
+    // Without the renderer and display rows, the last two.
     auto without = widest;
-    --without.row_count;
+    without.row_count -= 2;
     CHECK(panel::lay_out_panel(without, measure, kRowHeight).width == layout.width);
     const int right = layout.width - kInner;
     // Eleven e-acutes, each two bytes.
@@ -295,7 +296,7 @@ void test_renderer_row_fits_the_panel() {
         renderer.driver = names.driver;
         renderer.adapter = names.adapter;
         const auto table = frame_pacing::frame_stats_table({}, {}, renderer);
-        const auto& row = table.rows[table.row_count - 1];
+        const auto& row = table.rows[table.row_count - 2];
         CHECK(row.kind == frame_pacing::FrameStatsRowKind::renderer);
         const auto fit = panel::fit_run_on_row(row, measure, layout);
         const auto label = row.label.view();
@@ -314,6 +315,54 @@ void test_renderer_row_fits_the_panel() {
                 ++next;
             CHECK(fit.note_x + console_width(nullptr, note.substr(0, next)) > right);
         }
+    }
+}
+
+// In the match label font, the display row of a window or of full screen
+// at the sizes of today's displays shows whole, and the longest it can
+// read never passes the panel's padding: its note is cut, between whole
+// characters.
+void test_display_row_fits_the_panel() {
+    const panel::TextWidthHooks measure{nullptr, console_width};
+    const auto layout =
+        panel::lay_out_panel(frame_pacing::frame_stats_widest_table(), measure, kRowHeight);
+    const int right = layout.width - kInner;
+
+    struct Display {
+        frame_pacing::FrameStatsScreen screen; ///< how the window shows the screen
+        int32_t frame;                         ///< the frame's width; its height is 9 / 16 of it
+        int32_t mode;                          ///< the mode's width, as frame
+        float rate;                            ///< the mode's refresh rate
+        float scale;                           ///< the display's scale
+        bool cut;                              ///< the panel cuts the note
+    };
+
+    const std::array kDisplays{
+        Display{frame_pacing::FrameStatsScreen::window, 1280, 1920, 60.0F, 1.0F, false},
+        Display{frame_pacing::FrameStatsScreen::full_screen, 1280, 3840, 144.0F, 1.5F, false},
+        Display{frame_pacing::FrameStatsScreen::exclusive, 2560, 2560, 240.0F, 1.25F, false},
+        Display{frame_pacing::FrameStatsScreen::full_screen, 16384, 16384, 240.0F, 1.75F, true},
+    };
+    for (const auto& shown : kDisplays) {
+        frame_pacing::FrameStatsDisplay display{};
+        display.screen = shown.screen;
+        display.frame_width = shown.frame;
+        display.frame_height = shown.frame * 9 / 16;
+        display.mode_width = shown.mode;
+        display.mode_height = shown.mode * 9 / 16;
+        display.refresh_rate = shown.rate;
+        display.display_scale = shown.scale;
+        const auto table = frame_pacing::frame_stats_table({}, {}, {}, display);
+        const auto& row = table.rows[table.row_count - 1];
+        CHECK(row.kind == frame_pacing::FrameStatsRowKind::display);
+        const auto fit = panel::fit_run_on_row(row, measure, layout);
+        const auto label = row.label.view();
+        const auto note = row.note.view();
+        CHECK(fit.label_bytes == label.size());
+        const int label_end = layout.label_x + console_width(nullptr, label);
+        CHECK(label_end <= right);
+        CHECK(fit.note_x + console_width(nullptr, note.substr(0, fit.note_bytes)) <= right);
+        CHECK((fit.note_bytes < note.size()) == shown.cut);
     }
 }
 
@@ -367,9 +416,9 @@ void test_layout_stays_in_place() {
         CHECK(table.row_count == widest.row_count);
         for (std::size_t row = 0; row < table.row_count; ++row) {
             CHECK(table.rows[row].kind == widest.rows[row].kind);
-            // The renderer row keeps no room: it is cut where it is drawn
-            // (test_renderer_row_fits_the_panel).
-            if (table.rows[row].kind == frame_pacing::FrameStatsRowKind::renderer)
+            // The renderer and display rows keep no room: they are cut where
+            // they are drawn (test_renderer_row_fits_the_panel).
+            if (frame_pacing::runs_on(table.rows[row].kind))
                 continue;
             for (std::size_t column = 0; column < table.rows[row].values.size(); ++column)
                 CHECK(
@@ -477,6 +526,7 @@ int main() {
     test_without_a_measure();
     test_renderer_row_sets_no_width();
     test_renderer_row_fits_the_panel();
+    test_display_row_fits_the_panel();
     test_layout_stays_in_place();
     test_panel_place();
     test_bar_heights();

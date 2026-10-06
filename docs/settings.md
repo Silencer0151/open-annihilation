@@ -488,8 +488,11 @@ The Developer section sits at the foot of the column, under the divider.
   player of a network game must have them. While it is on, a network
   game's battle room is told so.
 - **Show performance statistics**, Off by default: the frame and tick
-  times over the battlefield, and the renderer in use, as the `+stats`
-  console command shows them. It works whether or not Developer Mode is
+  times over the battlefield, the renderer in use, and a line saying
+  whether the game shows in a window, full screen on the desktop's mode or
+  full screen at a mode of its own (exclusive), the size it draws the
+  battlefield at, and the display's size, refresh rate and scale (2x on a
+  Retina display), as the `+stats` console command shows them. It works whether or not Developer Mode is
   on, and takes effect at once.
 
 Under them the section lists every standard hack, grouped by area, with a

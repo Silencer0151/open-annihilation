@@ -13547,6 +13547,14 @@ class Runtime final : public menu::Host,
     /// armies, reclaim check and camera the options ask for.
     void prepare_headless_match();
 
+    /// Returns what the "+stats" overlay's display row names: whether the
+    /// window is a window, full screen on the display's desktop mode or at a
+    /// mode of its own, the size the match is laid out and drawn at, and the
+    /// mode, refresh rate and scale of the display the window is on.
+    ///
+    /// @return the display; FrameStatsScreen::none without a window
+    [[nodiscard]] frame_pacing::FrameStatsDisplay frame_stats_display() const;
+
     /// Runs --frame-rate: the headless skirmish played and drawn frame by
     /// frame on a clock that advances 1 / frame_rate seconds a frame, each
     /// frame presenting at most one unit announcement, taking the steps the

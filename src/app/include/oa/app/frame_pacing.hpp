@@ -441,6 +441,34 @@ struct FrameStatsRenderer {
     std::string_view adapter{}; ///< the adapter's name; empty where none was read
 };
 
+/// How the game's window shows the screen, as the "+stats" table's display
+/// row names it.
+enum class FrameStatsScreen : uint8_t {
+    none,        ///< no window
+    window,      ///< a window on the desktop
+    full_screen, ///< full screen on the display's desktop mode
+    exclusive,   ///< full screen at a display mode of the game's own
+};
+
+/// What the "+stats" table's display row names: how the window shows the
+/// screen, the size the match is drawn at, the display's mode and its scale.
+struct FrameStatsDisplay {
+    FrameStatsScreen screen{}; ///< a window, or full screen and how
+    /// The frame the match is laid out and drawn at, in its own pixels: the
+    /// window's size in a window and on the display's own mode, and the
+    /// screen size chosen where the frame is scaled to the screen.
+    int32_t frame_width{};
+    int32_t frame_height{}; ///< the frame's height, as frame_width
+    /// The display's mode now, in the window system's units; 0 when not known.
+    int32_t mode_width{};
+    int32_t mode_height{}; ///< the mode's height, as mode_width
+    float refresh_rate{};  ///< the mode's frames a second; 0 when not known
+    /// The display's pixels to a unit of the window's size, times the
+    /// system's scale for text and controls (SDL_GetWindowDisplayScale):
+    /// 2 on a Retina display, 1.5 at Windows' 150%; 0 when not known.
+    float display_scale{};
+};
+
 /// What a frame's drawing showed of the units. The loop clears it before each
 /// match frame is drawn; the unit drawing adds to it, and the frame
 /// statistics and the frame log of a --frame-rate run read it.
@@ -464,8 +492,9 @@ inline constexpr std::size_t kFrameStatsMeanColumn = 1;
 /// The value column of a measure's most time.
 inline constexpr std::size_t kFrameStatsMostColumn = 2;
 /// Rows of the "+stats" table: the title, the column names, the frames a
-/// second, one for each measure, the units drawn and the renderer.
-inline constexpr std::size_t kFrameStatsRowsMost = 3 + kFrameMeasureCount + 2;
+/// second, one for each measure, the units drawn, the renderer and the
+/// display.
+inline constexpr std::size_t kFrameStatsRowsMost = 3 + kFrameMeasureCount + 3;
 
 /// Returns the start of a UTF-8 text that fits in a number of bytes and
 /// does not end inside a character: the whole text when it fits, else the
@@ -498,7 +527,21 @@ enum class FrameStatsRowKind : uint8_t {
     /// across the columns as the title does, and the adapter as the note;
     /// the panel cuts the row where it would pass its width
     renderer,
+    /// how the window shows the screen and the size the match is drawn at,
+    /// with the display's mode, refresh rate and scale as the note; it runs
+    /// on and is cut as the renderer row is
+    display,
 };
+
+/// Tells whether a row of the "+stats" table runs on across the columns
+/// from the labels' left edge, cut where it would pass the panel's width,
+/// and keeps no room in the columns.
+///
+/// @param kind what the row shows
+/// @return true for the renderer and display rows
+[[nodiscard]] constexpr bool runs_on(FrameStatsRowKind kind) noexcept {
+    return kind == FrameStatsRowKind::renderer || kind == FrameStatsRowKind::display;
+}
 
 /// One row of the "+stats" table: a label, up to three right-aligned
 /// values, and a note after the row's last value.
@@ -529,26 +572,43 @@ struct FrameStatsTable {
 /// value, with how many were drawn between two ticks as the note; and the
 /// renderer: the tier and the render driver as "standard: metal", or the
 /// tier alone without a driver, with the adapter as the note, each cut to
-/// the kFrameStatsTextBytes - 1 bytes of a text, never inside a character.
-/// Before the first whole second, and for a measure with no sample in it,
-/// the mean column reads "--".
+/// the kFrameStatsTextBytes - 1 bytes of a text, never inside a character;
+/// and the display (display_row_texts). Before the first whole second, and
+/// for a measure with no sample in it, the mean column reads "--".
 ///
 /// @param window the statistics
 /// @param notes the rates and counts to show beside them
 /// @param renderer the renderer to name
+/// @param display the window and the display to name
 /// @return the table, kFrameStatsRowsMost rows
 [[nodiscard]] FrameStatsTable frame_stats_table(
-    const FrameStatsWindow& window, const FrameStatsNotes& notes, const FrameStatsRenderer& renderer
+    const FrameStatsWindow& window,
+    const FrameStatsNotes& notes,
+    const FrameStatsRenderer& renderer,
+    const FrameStatsDisplay& display = {}
 ) noexcept;
+
+/// Fills the "+stats" table's display row: as its label, how the window
+/// shows the screen, "window", "full screen" (on the display's desktop
+/// mode) or "exclusive" (at a mode of the game's own), then the frame the
+/// match is drawn at, as "full screen 1280x720"; as its note, the
+/// display's mode, its refresh rate rounded to whole frames a second and
+/// its scale with at most two decimals and no trailing zeros, as
+/// "1728x1117@120 2x". A mode, rate or scale not known is left out, and
+/// without a window the label reads "no window" with no note.
+///
+/// @param[out] row the row; its kind is set to FrameStatsRowKind::display
+/// @param display the window and the display to name
+void set_display_row(FrameStatsRow& row, const FrameStatsDisplay& display) noexcept;
 
 /// Describes the "+stats" table with the widest text each of its cells
 /// shows in play, which its layout reserves room for: the rows of
 /// frame_stats_table, each time "000.00", the frames a second "0000" with
 /// "limit 0000", the ticks a second "000/s", and "0000" units with "0000
 /// between ticks". A time of a second or more, or a count past these, runs
-/// past its column. The renderer row holds no text: no room is kept for
-/// it, and the panel cuts its names where they would pass its width, so
-/// the panel is as wide whatever the names.
+/// past its column. The renderer and display rows hold no text: no room is
+/// kept for them, and the panel cuts their texts where they would pass its
+/// width, so the panel is as wide whatever they name.
 ///
 /// @return the table, kFrameStatsRowsMost rows
 [[nodiscard]] FrameStatsTable frame_stats_widest_table() noexcept;

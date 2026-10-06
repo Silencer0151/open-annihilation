@@ -773,7 +773,7 @@ void test_frame_stats() {
     CHECK(!roll_frame_stats(window, kClockStart));
     FrameStatsTable table = oa::app::frame_pacing::frame_stats_table(window, notes, renderer);
     CHECK(table.row_count == oa::app::frame_pacing::kFrameStatsRowsMost);
-    CHECK(table.row_count == 10);
+    CHECK(table.row_count == 11);
     CHECK(table.rows[0].kind == FrameStatsRowKind::title);
     CHECK(row_reads(table.rows[0], "Frame stats (ms)", "", "", "", ""));
     CHECK(table.rows[1].kind == FrameStatsRowKind::heading);
@@ -791,6 +791,9 @@ void test_frame_stats() {
     // The renderer row: the tier and the driver, and the adapter as its note.
     CHECK(table.rows[9].kind == FrameStatsRowKind::renderer);
     CHECK(row_reads(table.rows[9], "standard: metal", "", "", "", "Apple M2"));
+    // The display row, last: no window was named.
+    CHECK(table.rows[10].kind == FrameStatsRowKind::display);
+    CHECK(row_reads(table.rows[10], "no window", "", "", "", ""));
     // A second of 120 frames 8 to 9 ms apart, 30 ticks of 2 to 4 ms.
     for (uint32_t frame = 0; frame < 120; ++frame) {
         note_frame_measure(
@@ -888,7 +891,7 @@ void test_renderer_row() {
     using oa::app::frame_pacing::kFrameStatsTextBytes;
     const oa::app::frame_pacing::FrameStatsWindow window{};
     const oa::app::frame_pacing::FrameStatsNotes notes{120, 120, 0, 0};
-    constexpr std::size_t kRendererRow = kFrameStatsRowsMost - 1;
+    constexpr std::size_t kRendererRow = kFrameStatsRowsMost - 2;
     constexpr std::size_t kTextCharacters = kFrameStatsTextBytes - 1;
     FrameStatsRenderer renderer{};
     renderer.tier = "standard";
@@ -928,6 +931,83 @@ void test_renderer_row() {
     const auto widest = oa::app::frame_pacing::frame_stats_widest_table().rows[kRendererRow];
     CHECK(widest.kind == FrameStatsRowKind::renderer);
     CHECK(row_reads(widest, "", "", "", "", ""));
+}
+
+// The display row names a window, full screen on the desktop's mode and
+// at a mode of the game's own, the frame the match is drawn at, and the
+// display's mode, refresh rate and scale, leaving out what is not known;
+// the widest table keeps it empty, since the panel cuts it to its width.
+void test_display_row() {
+    using oa::app::frame_pacing::FrameStatsDisplay;
+    using oa::app::frame_pacing::FrameStatsScreen;
+    using oa::app::frame_pacing::kFrameStatsRowsMost;
+    using oa::app::frame_pacing::runs_on;
+    const oa::app::frame_pacing::FrameStatsWindow window{};
+    const oa::app::frame_pacing::FrameStatsNotes notes{120, 120, 0, 0};
+    constexpr std::size_t kDisplayRow = kFrameStatsRowsMost - 1;
+    const auto row_of = [&](const FrameStatsDisplay& display) {
+        return oa::app::frame_pacing::frame_stats_table(window, notes, {}, display)
+            .rows[kDisplayRow];
+    };
+    // A window on a 14-inch Retina MacBook Pro's display.
+    FrameStatsDisplay display{};
+    display.screen = FrameStatsScreen::window;
+    display.frame_width = 1512;
+    display.frame_height = 982;
+    display.mode_width = 1728;
+    display.mode_height = 1117;
+    display.refresh_rate = 120.0F;
+    display.display_scale = 2.0F;
+    auto row = row_of(display);
+    CHECK(row.kind == FrameStatsRowKind::display);
+    CHECK(runs_on(row.kind));
+    CHECK(row_reads(row, "window 1512x982", "", "", "", "1728x1117@120 2x"));
+    // Full screen on the desktop's mode, the match drawn at a chosen size
+    // and scaled to the screen.
+    display.screen = FrameStatsScreen::full_screen;
+    display.frame_width = 1280;
+    display.frame_height = 720;
+    row = row_of(display);
+    CHECK(row_reads(row, "full screen 1280x720", "", "", "", "1728x1117@120 2x"));
+    // Full screen at a mode of its own on a monitor of Windows at 125%,
+    // whose rate is a fraction.
+    display.screen = FrameStatsScreen::exclusive;
+    display.mode_width = 1280;
+    display.mode_height = 720;
+    display.refresh_rate = 59.94F;
+    display.display_scale = 1.25F;
+    row = row_of(display);
+    CHECK(row_reads(row, "exclusive 1280x720", "", "", "", "1280x720@60 1.25x"));
+    display.display_scale = 1.5F;
+    CHECK(row_of(display).note.view() == "1280x720@60 1.5x");
+    display.display_scale = 1.0F;
+    CHECK(row_of(display).note.view() == "1280x720@60 1x");
+    // A rate, a mode or a scale not known is left out.
+    display.refresh_rate = 0.0F;
+    CHECK(row_of(display).note.view() == "1280x720 1x");
+    display.display_scale = 0.0F;
+    CHECK(row_of(display).note.view() == "1280x720");
+    display.mode_width = 0;
+    display.display_scale = 2.0F;
+    CHECK(row_of(display).note.view() == "2x");
+    display.display_scale = 0.0F;
+    CHECK(row_of(display).note.view().empty());
+    // The longest label and note fit the table's texts.
+    display.screen = FrameStatsScreen::full_screen;
+    display.frame_width = 16384;
+    display.frame_height = 16384;
+    display.mode_width = 16384;
+    display.mode_height = 16384;
+    display.refresh_rate = 240.0F;
+    display.display_scale = 1.75F;
+    row = row_of(display);
+    CHECK(row_reads(row, "full screen 16384x16384", "", "", "", "16384x16384@240 1.75x"));
+    // Without a window.
+    CHECK(row_reads(row_of({}), "no window", "", "", "", ""));
+    const auto widest = oa::app::frame_pacing::frame_stats_widest_table().rows[kDisplayRow];
+    CHECK(widest.kind == FrameStatsRowKind::display);
+    CHECK(row_reads(widest, "", "", "", "", ""));
+    CHECK(!runs_on(FrameStatsRowKind::measure));
 }
 
 // A cut keeps whole characters: the whole text when it fits, and else
@@ -1088,6 +1168,7 @@ int main() {
     test_scroll_distance();
     test_frame_stats();
     test_renderer_row();
+    test_display_row();
     test_whole_characters();
     test_time_severity();
     test_frame_history();

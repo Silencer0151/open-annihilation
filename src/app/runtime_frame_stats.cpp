@@ -339,6 +339,28 @@ frame_pacing::FrameStatsRenderer Runtime::frame_stats_renderer() const {
     return renderer;
 }
 
+frame_pacing::FrameStatsDisplay Runtime::frame_stats_display() const {
+    frame_pacing::FrameStatsDisplay display{};
+    display.frame_width = match_layout_.width;
+    display.frame_height = match_layout_.height;
+    if (sdl_.window == nullptr)
+        return display;
+    const SDL_WindowFlags flags = SDL_GetWindowFlags(sdl_.window);
+    display.screen = (flags & SDL_WINDOW_FULLSCREEN) == 0 ? frame_pacing::FrameStatsScreen::window
+                     : SDL_GetWindowFullscreenMode(sdl_.window) != nullptr
+                         ? frame_pacing::FrameStatsScreen::exclusive
+                         : frame_pacing::FrameStatsScreen::full_screen;
+    if (const SDL_DisplayMode* mode =
+            SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(sdl_.window));
+        mode != nullptr) {
+        display.mode_width = mode->w;
+        display.mode_height = mode->h;
+        display.refresh_rate = mode->refresh_rate;
+    }
+    display.display_scale = SDL_GetWindowDisplayScale(sdl_.window);
+    return display;
+}
+
 FrameStatsNotes Runtime::frame_stats_notes() const {
     FrameStatsNotes notes{};
     notes.max_frames_per_second = options_.max_frames_per_second;
@@ -360,8 +382,9 @@ void Runtime::draw_frame_stats() {
     if (font == nullptr)
         return;
     ensure_ui_colors();
-    const FrameStatsTable table =
-        frame_pacing::frame_stats_table(frame_stats_, frame_stats_notes(), frame_stats_renderer());
+    const FrameStatsTable table = frame_pacing::frame_stats_table(
+        frame_stats_, frame_stats_notes(), frame_stats_renderer(), frame_stats_display()
+    );
     LabelFont label_font{font};
     panel::TextWidthHooks measure{};
     measure.context = &label_font;
@@ -513,8 +536,9 @@ void Runtime::draw_frame_stats() {
             );
             continue;
         }
-        if (row.kind == FrameStatsRowKind::renderer) {
-            // The renderer's names, cut where they would pass the panel.
+        if (frame_pacing::runs_on(row.kind)) {
+            // The renderer's names and the display's, cut where they would
+            // pass the panel.
             const auto fit = panel::fit_run_on_row(row, measure, layout);
             text(
                 layout.label_x * scale,
@@ -850,8 +874,24 @@ void Runtime::check_console_stats(const std::function<void(const char*)>& enter_
                 "console check: +stats did not show a time of each grade in its colour"
             );
     }
-    const auto table =
-        frame_pacing::frame_stats_table(synthetic, frame_stats_notes(), frame_stats_renderer());
+    const auto table = frame_pacing::frame_stats_table(
+        synthetic, frame_stats_notes(), frame_stats_renderer(), frame_stats_display()
+    );
+    // The last row names how the screen is shown and the frame the match is
+    // drawn at: here a window, or none in a headless run.
+    const auto& display_row = table.rows[table.row_count - 1];
+    const std::string shown_screen = sdl_.window == nullptr
+                                         ? std::string("no window")
+                                         : "window " + std::to_string(match_layout_.width) + "x" +
+                                               std::to_string(match_layout_.height);
+    const bool windowed =
+        sdl_.window == nullptr || (SDL_GetWindowFlags(sdl_.window) & SDL_WINDOW_FULLSCREEN) == 0;
+    if (display_row.kind != FrameStatsRowKind::display ||
+        (windowed && display_row.label.view() != shown_screen))
+        throw std::runtime_error(
+            "console check: +stats named the screen as \"" + std::string(display_row.label.view()) +
+            "\", not \"" + shown_screen + "\""
+        );
     const auto frame_row = static_cast<std::size_t>(
         std::find_if(
             table.rows.begin(),

@@ -987,11 +987,17 @@ logs it.
   (`frame_stats_table`) titled "Frame stats (ms)" of the frames a second
   of the last second, with the rate the loop keeps, the frame, work, tick,
   draw and present times' least, mean and most in columns, the units
-  the last frame drew, and the renderer: the tier frames are drawn in and
+  the last frame drew, the renderer: the tier frames are drawn in and
   the render driver, as in "standard: metal", with the adapter's name, each
-  cut to 23 bytes, never inside a character. The panel keeps its width
-  whatever the names: it cuts the renderer row, in its font's own widths,
-  where it would pass the panel's padding (`fit_run_on_row`). Each
+  cut to 23 bytes, never inside a character; and the display
+  (`set_display_row`, `Runtime::frame_stats_display`): "window", "full
+  screen" (on the desktop's mode) or "exclusive" (at a mode of the game's
+  own) with the size the match is laid out and drawn at, as in "full screen
+  1280x720", then the display's mode, its refresh rate and its scale
+  (`SDL_GetWindowDisplayScale`), as in "1728x1117@120 2x". The panel keeps
+  its width whatever the names: it cuts the renderer and display rows, in
+  its font's own widths, where they would pass the panel's padding
+  (`fit_run_on_row`). Each
   time is graded as it is taken, against the
   allowance of the frame it belongs to (`frame_allowance_ns`: 1 / the rate
   kept, and half a millisecond after a precise wait or two after an idle
@@ -1007,7 +1013,8 @@ logs it.
   tick and a fainter dotted one at the frame's allowance.
   `frame_stats_panel` lays the panel out in the match label font for the
   widest texts the table shows (`frame_stats_widest_table`, which keeps no
-  room for the renderer row), so nothing in it moves from frame to frame,
+  room for the renderer and display rows), so nothing in it moves from
+  frame to frame,
   and places it at the HUD's text scale, or
   at the largest whole scale below it at which it fits the battlefield's
   bottom right quarter; it reads the statistics and writes nothing of the
@@ -1015,7 +1022,8 @@ logs it.
   edge, fill and graph, that it fits the quarter at window sizes from
   640x480 to 3840x2160, that every column of the graph has its frame's
   height and colour over two seconds of late and slow frames, the lines,
-  the colours, alignment and red cells of the table, that nothing moves,
+  the colours, alignment and red cells of the table, that the last row
+  names the window and the frame drawn, that nothing moves,
   and that nothing outside the battlefield's bottom right quarter changes. 3.1c
   has no command that shows these times; its frame rate shows as "FRATE:"
   on the debug keys' line (F11 after the developer passphrase), with

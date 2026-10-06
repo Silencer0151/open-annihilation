@@ -80,8 +80,9 @@ PanelLayout lay_out_panel(
     layout.row_height = row_height;
     const std::size_t rows = std::min(table.row_count, table.rows.size());
     // The columns' widths, then where they end with the labels at 0. The
-    // title runs across the columns and sets none of them; the renderer row
-    // sets nothing, as its texts are fitted where they are drawn.
+    // title runs across the columns and sets none of them; the renderer and
+    // display rows set nothing, as their texts are fitted where they are
+    // drawn.
     int labels = 0;
     int title = 0;
     std::array<int, kFrameStatsValueColumns> widths{};
@@ -91,7 +92,7 @@ PanelLayout lay_out_panel(
             title = std::max(title, text_width(measure, cells.label));
             continue;
         }
-        if (cells.kind == FrameStatsRowKind::renderer)
+        if (frame_pacing::runs_on(cells.kind))
             continue;
         labels = std::max(labels, text_width(measure, cells.label));
         for (std::size_t column = 0; column < kFrameStatsValueColumns; ++column)
@@ -109,7 +110,7 @@ PanelLayout lay_out_panel(
     int table_width = title;
     for (std::size_t row = 0; row < rows; ++row) {
         const auto& cells = table.rows[row];
-        if (cells.kind == FrameStatsRowKind::title || cells.kind == FrameStatsRowKind::renderer)
+        if (cells.kind == FrameStatsRowKind::title || frame_pacing::runs_on(cells.kind))
             continue;
         int last = labels;
         for (std::size_t column = 0; column < kFrameStatsValueColumns; ++column)
@@ -135,8 +136,8 @@ PanelLayout lay_out_panel(
     int y = inner;
     for (std::size_t row = 0; row < rows; ++row) {
         layout.row_y[row] = y;
-        const bool runs_on = table.rows[row].kind == FrameStatsRowKind::renderer;
-        layout.note_x[row] = runs_on ? inner : inner + notes[row] + shift;
+        layout.note_x[row] =
+            frame_pacing::runs_on(table.rows[row].kind) ? inner : inner + notes[row] + shift;
         y += row_height;
         if (table.rows[row].kind == FrameStatsRowKind::heading && layout.rule_y < 0) {
             layout.rule_y = y;

@@ -119,7 +119,9 @@ constexpr std::size_t kFirstMeasureRow = 3;
 constexpr std::size_t kCountRow = kFirstMeasureRow + kFrameMeasureCount;
 /// The row of the renderer.
 constexpr std::size_t kRendererRow = kCountRow + 1;
-static_assert(kRendererRow + 1 == kFrameStatsRowsMost);
+/// The row of the window and the display.
+constexpr std::size_t kDisplayRow = kRendererRow + 1;
+static_assert(kDisplayRow + 1 == kFrameStatsRowsMost);
 /// The top two bits of a UTF-8 byte, which tell a continuation byte.
 constexpr unsigned kUtf8LeadMask = 0xC0;
 /// The top two bits of a UTF-8 continuation byte.
@@ -160,6 +162,7 @@ FrameStatsTable table_rows() noexcept {
     table.rows[kCountRow].kind = FrameStatsRowKind::count;
     set_text(table.rows[kCountRow].label, "units");
     table.rows[kRendererRow].kind = FrameStatsRowKind::renderer;
+    table.rows[kDisplayRow].kind = FrameStatsRowKind::display;
     return table;
 }
 
@@ -190,6 +193,26 @@ void set_renderer_row(FrameStatsRow& row, const FrameStatsRenderer& renderer) no
     }
     set_text(row.label, whole_characters({label.data(), length}, kTextCharacters));
     set_text(row.note, whole_characters(renderer.adapter, kTextCharacters));
+}
+
+/// Returns a scale as the display row writes it: at most two decimals,
+/// without trailing zeros or a trailing point, and an "x", as "2x" or
+/// "1.25x".
+///
+/// @param scale the scale, above 0
+/// @param[out] out where the text goes
+/// @param bytes the bytes `out` holds, its terminating zero included
+void write_scale(float scale, char* out, std::size_t bytes) noexcept {
+    std::array<char, kFrameStatsTextBytes> digits{};
+    std::snprintf(digits.data(), digits.size(), "%.2f", static_cast<double>(scale));
+    std::string_view text{digits.data()};
+    if (const auto point = text.find('.'); point != std::string_view::npos) {
+        while (text.size() > point + 1 && text.back() == '0')
+            text.remove_suffix(1);
+        if (text.size() == point + 1)
+            text.remove_suffix(1);
+    }
+    std::snprintf(out, bytes, "%.*sx", static_cast<int>(text.size()), text.data());
 }
 
 /// Returns the frame graph's column a time lies in.
@@ -488,8 +511,62 @@ std::string_view FrameStatsText::view() const noexcept {
     return {text.data(), static_cast<std::size_t>(end - text.begin())};
 }
 
+void set_display_row(FrameStatsRow& row, const FrameStatsDisplay& display) noexcept {
+    row.kind = FrameStatsRowKind::display;
+    row.label = {};
+    row.note = {};
+    if (display.screen == FrameStatsScreen::none) {
+        set_text(row.label, "no window");
+        return;
+    }
+    const std::string_view screen = display.screen == FrameStatsScreen::window      ? "window"
+                                    : display.screen == FrameStatsScreen::exclusive ? "exclusive"
+                                                                                    : "full screen";
+    std::snprintf(
+        row.label.text.data(),
+        row.label.text.size(),
+        "%.*s %dx%d",
+        static_cast<int>(screen.size()),
+        screen.data(),
+        static_cast<int>(display.frame_width),
+        static_cast<int>(display.frame_height)
+    );
+    // The note's parts, each left out when it is not known.
+    std::array<char, kFrameStatsTextBytes> mode{};
+    if (display.mode_width > 0 && display.mode_height > 0) {
+        const long rate = std::lround(static_cast<double>(display.refresh_rate));
+        if (rate > 0)
+            std::snprintf(
+                mode.data(),
+                mode.size(),
+                "%dx%d@%ld",
+                static_cast<int>(display.mode_width),
+                static_cast<int>(display.mode_height),
+                rate
+            );
+        else
+            std::snprintf(
+                mode.data(),
+                mode.size(),
+                "%dx%d",
+                static_cast<int>(display.mode_width),
+                static_cast<int>(display.mode_height)
+            );
+    }
+    std::array<char, kFrameStatsTextBytes> scale{};
+    if (display.display_scale > 0.0F)
+        write_scale(display.display_scale, scale.data(), scale.size());
+    const char* const gap = mode[0] != '\0' && scale[0] != '\0' ? " " : "";
+    std::snprintf(
+        row.note.text.data(), row.note.text.size(), "%s%s%s", mode.data(), gap, scale.data()
+    );
+}
+
 FrameStatsTable frame_stats_table(
-    const FrameStatsWindow& window, const FrameStatsNotes& notes, const FrameStatsRenderer& renderer
+    const FrameStatsWindow& window,
+    const FrameStatsNotes& notes,
+    const FrameStatsRenderer& renderer,
+    const FrameStatsDisplay& display
 ) noexcept {
     const bool shown = window.shown_span_ns != 0;
     const uint32_t rate = notes.paced_frames_per_second;
@@ -538,6 +615,7 @@ FrameStatsTable frame_stats_table(
         notes.units_between_ticks
     );
     set_renderer_row(table.rows[kRendererRow], renderer);
+    set_display_row(table.rows[kDisplayRow], display);
     return table;
 }
 
@@ -556,7 +634,8 @@ FrameStatsTable frame_stats_widest_table() noexcept {
     );
     set_text(table.rows[kCountRow].values[kFrameStatsMeanColumn], "0000");
     set_text(table.rows[kCountRow].note, "0000 between ticks");
-    // The renderer row stays empty: the panel cuts its names to its width.
+    // The renderer and display rows stay empty: the panel cuts their texts
+    // to its width.
     return table;
 }
 
