@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 // SPDX-License-Identifier: GPL-3.0-only
 
-// The megamap's clicks (ui.megamap) against the battlefield's, in both
-// interface types, through synthetic SDL input on a skirmish.
+// The megamap's picture (ui.megamap), then its clicks against the
+// battlefield's, in both interface types, through synthetic SDL input on a
+// skirmish.
 #include "engine_settings_state.hpp"
 #include "oa/app/runtime.hpp"
 #include "oa/sim/match_runtime/attack_orders.hpp"
@@ -15,6 +16,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <iostream>
@@ -40,6 +42,13 @@ constexpr int32_t kApart = 192;
 constexpr int kSightTicks = 30;
 /// Map pixels the units keep from the map's edges.
 constexpr int32_t kEdgeMargin = 96;
+/// Map pixels of a footprint cell.
+constexpr int32_t cell_pixels = 16;
+/// Picture pixels around a drawn feature's spot that its picture may cover
+/// beyond its scaled size.
+constexpr int32_t feature_reach_margin = 2;
+/// Palette index of the bars beside the megamap's picture.
+constexpr uint8_t megamap_bar_color = 95;
 
 /// Fails the check, saying what went wrong.
 [[noreturn]] void fail(std::string_view what) {
@@ -179,6 +188,7 @@ void Runtime::check_megamap_clicks() {
             (slots[enemy].unit->flags & OA_UNIT_FLAG_RADAR_CONTACT) != 0,
         "the enemy is not in the mover's sight and on the radar"
     );
+    check_megamap_picture();
 
     bool running = true;
     const auto send = [&](SDL_EventType type, uint8_t button, float x, float y) {
@@ -492,6 +502,193 @@ void Runtime::check_megamap_clicks() {
     std::cout << "megamap click check: the megamap's clicks give the battlefield's results in "
                  "both interface types: orders, selection, deselection, guard and the armed "
                  "command's order and cancel\n";
+}
+
+void Runtime::check_megamap_picture() {
+    set_megamap_open(true);
+    render_match_surface();
+    require(megamap_shown(), "the megamap did not open");
+    const auto& world = match_->state();
+    const auto layout = megamap_.layout;
+    require(layout.width > 0 && layout.height > 0, "the megamap has no picture");
+
+    // Every difference from what the megamap should draw, reported together.
+    std::vector<std::string> failures;
+
+    // The terrain keeps to the colours of the map's tiles.
+    const auto plain = downscale_megamap_terrain(layout);
+    require(
+        !plain.empty() && plain.size() == megamap_.terrain.size(),
+        "the terrain picture and the megamap's picture differ in size"
+    );
+    std::array<bool, 256> map_colours{};
+    for (const uint8_t pixel : selected_tnt_->tile_palette_indices)
+        map_colours[pixel] = true;
+    std::size_t foreign = 0;
+    for (const uint8_t pixel : plain)
+        foreign += map_colours[pixel] ? 0U : 1U;
+    if (foreign != 0)
+        failures.push_back(
+            "the terrain picture takes " + std::to_string(foreign) +
+            " pixels of colours the map's tiles do not use"
+        );
+
+    // The features: those the megamap draws are the indestructible ones
+    // that cannot be reclaimed; each may change the picture only near its
+    // spot, raised by half the ground's height.
+    struct Drawn {
+        int32_t x{};
+        int32_t y{};
+        int32_t reach{};
+        uint8_t mark{};
+        bool picture{};
+        std::size_t changed{};
+        std::size_t unlike_mark{};
+    };
+
+    std::vector<Drawn> drawn;
+    std::size_t left_alone = 0;
+    const auto width = static_cast<int32_t>(world.game.map_width);
+    const auto cells = static_cast<std::size_t>(world.game.map_width) * world.game.map_height;
+    for (std::size_t index = 0; index < cells && width > 0; ++index) {
+        const auto& plot = world.plots[index];
+        if (plot.feature >= OA_PLOT_FEATURE_RESERVED || plot.feature >= world.feature_def_count)
+            continue;
+        const auto& def = world.feature_defs[plot.feature];
+        if ((def.flags & OA_FEATURE_FLAG_INDESTRUCTIBLE) == 0 ||
+            (def.flags & OA_FEATURE_FLAG_RECLAIMABLE) != 0) {
+            ++left_alone;
+            continue;
+        }
+        const auto cell_x = static_cast<int32_t>(index % static_cast<std::size_t>(width));
+        const auto cell_z = static_cast<int32_t>(index / static_cast<std::size_t>(width));
+        const auto* frame = feature_sequence_image(def.seq_name, 0);
+        const int32_t frame_side =
+            frame != nullptr ? std::max<int32_t>(frame->width, frame->height) : 0;
+        const auto spot = hud::megamap_point(
+            layout,
+            cell_x * cell_pixels + std::max<int32_t>(1, def.footprint_x) * cell_pixels / 2,
+            cell_z * cell_pixels + std::max<int32_t>(1, def.footprint_z) * cell_pixels / 2 -
+                plot.height / 2
+        );
+        const int32_t scaled = static_cast<int32_t>(
+            static_cast<int64_t>(frame_side) * layout.width / layout.map_width
+        );
+        drawn.push_back(
+            {spot[0] - layout.left,
+             spot[1] - layout.top,
+             std::max(scaled, hud::feature_mark_size) + feature_reach_margin,
+             hud::feature_mark_color(def),
+             frame != nullptr}
+        );
+    }
+    require(left_alone != 0, "the map places no feature the megamap leaves out");
+    require(
+        std::any_of(drawn.begin(), drawn.end(), [](const Drawn& one) { return one.picture; }),
+        "the map places no feature with a picture the megamap draws"
+    );
+    std::size_t stray = 0;
+    for (int32_t y = 0; y < layout.height; ++y)
+        for (int32_t x = 0; x < layout.width; ++x) {
+            const auto at = static_cast<std::size_t>(y) * static_cast<std::size_t>(layout.width) +
+                            static_cast<std::size_t>(x);
+            if (megamap_.terrain[at] == plain[at])
+                continue;
+            bool near = false;
+            for (auto& one : drawn)
+                if (std::abs(x - one.x) <= one.reach && std::abs(y - one.y) <= one.reach) {
+                    near = true;
+                    ++one.changed;
+                    one.unlike_mark += megamap_.terrain[at] != one.mark ? 1U : 0U;
+                }
+            stray += near ? 0U : 1U;
+        }
+    if (stray != 0)
+        failures.push_back(
+            std::to_string(stray) +
+            " pixels of the megamap's picture changed away from the features it draws: "
+            "reclaimable or destructible features are drawn"
+        );
+    std::size_t pictured = 0;
+    std::size_t flat = 0;
+    for (const auto& one : drawn) {
+        if (!one.picture || one.changed == 0)
+            continue;
+        ++pictured;
+        flat += one.unlike_mark == 0 ? 1U : 0U;
+    }
+    if (pictured == 0)
+        failures.push_back("no feature with a picture changed the megamap's picture");
+    if (flat != 0)
+        failures.push_back(
+            std::to_string(flat) + " of " + std::to_string(pictured) +
+            " features with a picture are drawn as flat marks of one colour"
+        );
+
+    // Moving the main view leaves the megamap as it was: it has no
+    // rectangle for the view. The bars beside the map are a dark grey.
+    const auto view_at = [&](int32_t x, int32_t z) {
+        set_camera_position(x, z, 0);
+        render_match_surface();
+        return match_world_cpu_;
+    };
+    const auto first = view_at(0, 0);
+    const auto second = view_at(
+        world.game.map_pixel_width - visible_map_width(),
+        world.game.map_pixel_height - visible_map_height()
+    );
+    require(
+        first.width == second.width && first.height == second.height,
+        "the battlefield layer changed size"
+    );
+    const auto pixel_at = [](const renderer::Surface& layer, int32_t x, int32_t y) {
+        const auto at =
+            (static_cast<std::size_t>(y) * layer.width + static_cast<std::size_t>(x)) * 3U;
+        return std::array<uint8_t, 3>{layer.rgb[at], layer.rgb[at + 1], layer.rgb[at + 2]};
+    };
+    std::size_t moved = 0;
+    for (int32_t y = std::max(0, layout.top);
+         y < std::min(layout.top + layout.height, static_cast<int32_t>(first.height));
+         ++y)
+        for (int32_t x = std::max(0, layout.left);
+             x < std::min(layout.left + layout.width, static_cast<int32_t>(first.width));
+             ++x)
+            moved += pixel_at(first, x, y) != pixel_at(second, x, y) ? 1U : 0U;
+    if (moved != 0)
+        failures.push_back(
+            std::to_string(moved) +
+            " pixels of the megamap changed with the main view: it draws the view's rectangle"
+        );
+    const auto area = overlay_area();
+    const int32_t area_left = area.x - match_layout_.battlefield_x();
+    const int32_t area_top = area.y - match_layout_.battlefield_y();
+    std::optional<std::array<int32_t, 2>> bar;
+    if (layout.left > area_left)
+        bar = std::array<int32_t, 2>{(area_left + layout.left) / 2, layout.top + layout.height / 2};
+    else if (layout.top + layout.height < area_top + area.height)
+        bar = std::array<int32_t, 2>{
+            layout.left + layout.width / 2,
+            (layout.top + layout.height + area_top + area.height) / 2
+        };
+    if (bar) {
+        const auto pal = static_cast<std::size_t>(megamap_bar_color) * 4U;
+        const std::array<uint8_t, 3> grey{
+            match_palette_[pal], match_palette_[pal + 1], match_palette_[pal + 2]
+        };
+        if (pixel_at(second, (*bar)[0], (*bar)[1]) != grey)
+            failures.push_back("the bars beside the megamap's picture are not the dark grey");
+    }
+    set_megamap_open(false);
+    if (!failures.empty()) {
+        std::string text;
+        for (const auto& failure : failures)
+            text += "\n  " + failure;
+        fail("the megamap's picture differs from what it should draw:" + text);
+    }
+    std::cout << "megamap click check: the picture keeps to the map's colours, draws " << pictured
+              << " of the map's indestructible features by their pictures and " << left_alone
+              << " others not at all, and draws no rectangle for the main view"
+              << (bar ? ", beside dark grey bars\n" : "\n");
 }
 
 } // namespace oa::app

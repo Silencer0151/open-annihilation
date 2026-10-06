@@ -1772,9 +1772,12 @@ if(OA_BUILD_PLATFORM)
       set_tests_properties(native-pointer-interfaces PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_pointer_check_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
-      # The megamap's clicks (ui.megamap) against the battlefield's in both
-      # interface types: orders, selection, deselection, guard, and an armed
-      # command given and cancelled, under a profile that turns the megamap on.
+      # What the megamap (ui.megamap) draws: the map's own colours, only its
+      # indestructible features by their pictures, no rectangle for the main
+      # view and dark grey bars; then its clicks against the battlefield's in
+      # both interface types: orders, selection, deselection, guard, and an
+      # armed command given and cancelled, under a profile that turns the
+      # megamap on.
       set(oa_megamap_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/megamap-clicks")
       file(MAKE_DIRECTORY "${oa_megamap_check_dir}")
       file(WRITE "${oa_megamap_check_dir}/megamap-clicks.oamod.yaml"

@@ -8354,11 +8354,22 @@ class Runtime final : public menu::Host,
     /// deselects, one on an own unit selects it, a right press on open ground
     /// moves the selection and one on an own unit guards it, an armed ATTACK
     /// is given by a left click, and an armed MOVE given on an own unit
-    /// guards it. Prints a line and checks nothing with ui.megamap off. With
-    /// --snapshot, writes each surface's frame just before and just after
-    /// each click beside the snapshot. Throws std::runtime_error on a
-    /// failure.
+    /// guards it. Before the clicks it checks the megamap's picture
+    /// (check_megamap_picture). Prints a line and checks nothing with
+    /// ui.megamap off. With --snapshot, writes each surface's frame just
+    /// before and just after each click beside the snapshot. Throws
+    /// std::runtime_error on a failure.
     void check_megamap_clicks();
+
+    /// Checks what the open megamap draws, on the match check_megamap_clicks
+    /// plays: its terrain takes only colours the map's tiles use; only the
+    /// indestructible features that cannot be reclaimed change the terrain
+    /// picture, each by its picture rather than a flat mark, while the
+    /// reclaimable and destructible ones leave it as it is; moving the main
+    /// view leaves the megamap as it was, with no rectangle for the view;
+    /// and the bars beside the map are a dark grey. Throws
+    /// std::runtime_error on a failure.
+    void check_megamap_picture();
 
     /// Handles a left click on the game screen.
     ///
@@ -8712,7 +8723,8 @@ class Runtime final : public menu::Host,
 
     /// Reads the megamap's icon file and pictures, makes the unit sets of
     /// the side commanders' (or the built-in) icons, and notes the features
-    /// the map placed, once a match.
+    /// it draws (oa::ui::hud::megamap_draws_feature) as the map placed them,
+    /// once a match.
     void prepare_megamap();
 
     /// Returns one map pixel's palette index from the map's tiles.
@@ -8722,7 +8734,24 @@ class Runtime final : public menu::Host,
     /// @return the index
     [[nodiscard]] uint8_t map_terrain_pixel(int32_t map_x, int32_t map_z) const;
 
-    /// Makes the megamap's terrain picture for a layout, with the noted features' blobs.
+    /// Downscales the map's terrain to the megamap's picture for a layout,
+    /// each pixel the palette colour among those of the map's tiles that
+    /// looks nearest the mean of the map pixels it covers
+    /// (oa::ui::hud::downscale_terrain), without the features.
+    ///
+    /// @param layout where the picture goes
+    /// @return the picture's palette indices, rows `layout.width` apart; empty
+    ///         without a map
+    [[nodiscard]] std::vector<uint8_t>
+    downscale_megamap_terrain(const oa::ui::hud::MegamapLayout& layout);
+
+    /// Makes the megamap's terrain picture for a layout
+    /// (downscale_megamap_terrain) with the noted features drawn over it:
+    /// each feature's first standing frame shrunk to its spot
+    /// (oa::ui::hud::megamap_feature_spot, oa::ui::hud::shrink_picture) and
+    /// laid over the terrain (oa::ui::hud::blend_picture), or for a feature
+    /// without a picture a 3 by 3 mark of its colour
+    /// (oa::ui::hud::feature_mark_color).
     ///
     /// @param layout where the picture goes
     void build_megamap_terrain(const oa::ui::hud::MegamapLayout& layout);
@@ -8748,8 +8777,11 @@ class Runtime final : public menu::Host,
     /// @return true when the megamap took the roll
     bool megamap_wheel(float amount, float x, float y);
 
-    /// Draws the open megamap over the battlefield: the bars across it, the
-    /// map in the overlays' area (overlay_area).
+    /// Draws the open megamap over the battlefield: the bars across it in
+    /// a dark grey, the map in the overlays' area (overlay_area) shaded by
+    /// what the viewer has mapped and sees, the units' icons, the selected
+    /// units' rings and a drag box being drawn. It draws no rectangle for the
+    /// main view.
     void draw_megamap();
 
     /// Draws a ring on the megamap.

@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // ui.megamap's pieces: the fitted layout and its two-way mapping, the
-// downscaled terrain snapped or dithered, feature blob colours, the icon
-// file, the icon chosen for a unit and its recoloured pixels, and the rings
-// with their minimums.
+// downscaled terrain snapped or dithered, by red, green and blue or as it
+// looks among the map's own colours; the features it draws, their pictures
+// shrunk, placed and laid over the terrain, and the marks of those without
+// one; the icon file, the icon chosen for a unit and its recoloured pixels,
+// and the rings with their minimums.
 #include "oa/ui/hud/megamap.hpp"
 
 #include "check.hpp"
@@ -35,31 +37,115 @@ void layout() {
     CHECK(megamap_layout(0, 0, 0, 10, 10, 10).width == 0);
 }
 
-void terrain() {
-    // A palette of greys: entry n is (n, n, n).
+/// A palette of greys: entry n is (n, n, n).
+std::vector<uint8_t> grey_palette() {
     std::vector<uint8_t> palette(256 * 4);
     for (int n = 0; n < 256; ++n)
         palette[n * 4] = palette[n * 4 + 1] = palette[n * 4 + 2] = static_cast<uint8_t>(n);
+    return palette;
+}
+
+void terrain() {
+    const auto palette = grey_palette();
     // A 4x2 map of 10 and 20 alternating columns, to 2x1: each pixel the mean, 15.
     TerrainSource source{};
     source.pixel = [](void*, int32_t x, int32_t) -> uint8_t { return x % 2 == 0 ? 10 : 20; };
-    auto picture = downscale_terrain(source, 4, 2, 2, 1, palette, false);
+    auto picture = downscale_terrain(source, 4, 2, 2, 1, palette, false, nullptr);
     CHECK(picture.size() == 2 && picture[0] == 15 && picture[1] == 15);
     // Dithered with two nearest entries 15 and 14 (or 16): odd pixels take the second.
-    picture = downscale_terrain(source, 4, 2, 2, 1, palette, true);
+    picture = downscale_terrain(source, 4, 2, 2, 1, palette, true, nullptr);
     CHECK(picture[0] == 15 && picture[1] != 15);
-    CHECK(downscale_terrain(source, 0, 2, 2, 1, palette, false).empty());
+    CHECK(downscale_terrain(source, 0, 2, 2, 1, palette, false, nullptr).empty());
+}
+
+void map_colours() {
+    const auto palette = grey_palette();
+    // Among the map's own colours, 10 and 20, the mean 15 looks nearer 20,
+    // though by red, green and blue it lies halfway and the first, 10, wins.
+    const std::array<uint8_t, 4> tiles{20, 10, 10, 20};
+    const auto colours = perceptual_palette(palette, tiles);
+    CHECK(colours.entries.size() == 2 && colours.entries[0] == 10 && colours.entries[1] == 20);
+    CHECK(nearest_perceptual(colours, 15, 15, 15) == 20);
+    CHECK(nearest_palette_entry(palette, 15, 15, 15) == 15);
+    TerrainSource source{};
+    source.pixel = [](void*, int32_t x, int32_t) -> uint8_t { return x % 2 == 0 ? 10 : 20; };
+    auto picture = downscale_terrain(source, 4, 2, 2, 1, palette, false, &colours);
+    CHECK(picture.size() == 2 && picture[0] == 20 && picture[1] == 20);
+    // Dithered, the odd pixels take the other of the map's colours.
+    picture = downscale_terrain(source, 4, 2, 2, 1, palette, true, &colours);
+    CHECK(picture[0] == 20 && picture[1] == 10);
+    // No pixels: every entry of the palette.
+    CHECK(perceptual_palette(palette, {}).entries.size() == 256);
 }
 
 void features() {
+    // Only the indestructible features that cannot be reclaimed are drawn.
     FeatureDef def{};
-    std::snprintf(def.name, sizeof def.name, "%s", "Spire");
-    CHECK(feature_blob_color(def) == kFeatureBlobSpire);
+    def.flags = OA_FEATURE_FLAG_INDESTRUCTIBLE;
+    CHECK(megamap_draws_feature(def));
+    def.flags = OA_FEATURE_FLAG_INDESTRUCTIBLE | OA_FEATURE_FLAG_RECLAIMABLE;
+    CHECK(!megamap_draws_feature(def));
+    def.flags = OA_FEATURE_FLAG_RECLAIMABLE;
+    CHECK(!megamap_draws_feature(def));
+    def.flags = 0;
+    CHECK(!megamap_draws_feature(def));
+    // The marks of those without a picture: metal, a "Spire" by its
+    // description in any case, and the rest.
+    std::snprintf(def.description, sizeof def.description, "%s", "SPIRE");
+    CHECK(feature_mark_color(def) == feature_mark_spire);
     def.metal = 5.0F;
-    CHECK(feature_blob_color(def) == kFeatureBlobReclaimable);
+    CHECK(feature_mark_color(def) == feature_mark_metal);
     def.metal = 0.0F;
-    std::snprintf(def.name, sizeof def.name, "%s", "Tree");
-    CHECK(feature_blob_color(def) == kFeatureBlobOther);
+    std::snprintf(def.name, sizeof def.name, "%s", "Spire");
+    std::snprintf(def.description, sizeof def.description, "%s", "Rock");
+    CHECK(feature_mark_color(def) == feature_mark_other);
+}
+
+void feature_pictures() {
+    const auto palette = grey_palette();
+    // A 4x2 picture whose index 9 is transparent, shrunk to 2 across: the
+    // left half opaque, 100 and 200, the right a quarter opaque, 50.
+    const std::array<uint8_t, 8> frame{100, 100, 9, 9, 200, 200, 9, 50};
+    const auto shrunk = shrink_picture(frame, 4, 2, 9, palette, 2);
+    CHECK(shrunk.width == 2 && shrunk.height == 1 && shrunk.rgba.size() == 8);
+    CHECK(shrunk.rgba[0] == 150 && shrunk.rgba[1] == 150 && shrunk.rgba[2] == 150);
+    CHECK(shrunk.rgba[3] == 255);
+    CHECK(shrunk.rgba[4] == 50 && shrunk.rgba[7] == 64);
+    // Laid over black: the opaque pixel keeps its colour, the quarter one
+    // takes (50 * 64 + 0 * 191) / 255 = 12; the pixel left of it is untouched.
+    std::array<uint8_t, 3> canvas{0, 0, 0};
+    blend_picture(canvas, 3, 1, shrunk, 1, 0, palette);
+    CHECK(canvas[0] == 0 && canvas[1] == 150 && canvas[2] == 12);
+    // Off the canvas's left edge only the second pixel lands, over 7:
+    // (50 * 64 + 7 * 191) / 255 = 17.
+    canvas = {7, 7, 7};
+    blend_picture(canvas, 3, 1, shrunk, -1, 0, palette);
+    CHECK(canvas[0] == 17 && canvas[1] == 7 && canvas[2] == 7);
+    // A fully transparent picture leaves the canvas as it is.
+    const std::array<uint8_t, 4> clear{9, 9, 9, 9};
+    const auto empty = shrink_picture(clear, 2, 2, 9, palette, 2);
+    blend_picture(canvas, 3, 1, empty, 0, 0, palette);
+    CHECK(canvas[0] == 17 && canvas[1] == 7 && canvas[2] == 7);
+
+    // A 4096x2048 map drawn 256x128: a 2x2 feature at cell (10, 20) on
+    // ground 40 high, its frame 64 pixels on its longer side.
+    MegamapLayout layout{};
+    layout.width = 256;
+    layout.height = 128;
+    layout.map_width = 4096;
+    layout.map_height = 2048;
+    auto spot = megamap_feature_spot(layout, 10, 20, 2, 2, 40, 64);
+    // (176, 336 - 20) scaled by 1/16, truncated; 64 / 16 + 0.5 truncated.
+    CHECK(spot.x == 11 && spot.y == 19 && spot.longest == 4);
+    // A frame without a size counts as 32; a small one is drawn 2 across.
+    CHECK(megamap_feature_spot(layout, 10, 20, 2, 2, 40, 0).longest == 2);
+    CHECK(megamap_feature_spot(layout, 10, 20, 2, 2, 40, 8).longest == 2);
+    // A footprint of 0 counts as 1 cell.
+    spot = megamap_feature_spot(layout, 10, 20, 0, 0, 0, 64);
+    CHECK(spot.x == 10 && spot.y == 20);
+    // The picture hangs from its origin row scaled: 30 of 60 rows is 2 of 4.
+    CHECK(feature_picture_top(19, 30, 60, 4) == 17);
+    CHECK(feature_picture_top(19, 30, 0, 4) == 15);
 }
 
 void icon_file() {
@@ -147,7 +233,9 @@ void rings() {
 int main() {
     layout();
     terrain();
+    map_colours();
     features();
+    feature_pictures();
     icon_file();
     choosing();
     rings();

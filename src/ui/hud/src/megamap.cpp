@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <charconv>
+#include <cmath>
 #include <cstring>
 #include <limits>
 
@@ -62,7 +63,115 @@ distance(std::span<const uint8_t> palette, std::size_t entry, int32_t r, int32_t
     return dr * dr + dg * dg + db * db;
 }
 
+/// Turns an sRGB channel, 0 to 255, into linear light, 0 to 1.
+float linear_channel(int32_t value) {
+    const float channel = static_cast<float>(value) / 255.0F;
+    if (channel <= 0.04045F)
+        return channel / 12.92F;
+    const float base = (channel + 0.055F) / 1.055F;
+    return static_cast<float>(std::pow(static_cast<double>(base), static_cast<double>(2.4F)));
+}
+
+/// Converts an sRGB colour to OKLab: lightness and two colour axes.
+std::array<float, 3> oklab(int32_t red, int32_t green, int32_t blue) {
+    const float r = linear_channel(red), g = linear_channel(green), b = linear_channel(blue);
+    const float l = std::cbrt(0.4122214708F * r + 0.5363325363F * g + 0.0514459929F * b);
+    const float m = std::cbrt(0.2119034982F * r + 0.6806995451F * g + 0.1073969566F * b);
+    const float s = std::cbrt(0.0883024619F * r + 0.2817188376F * g + 0.6299787005F * b);
+    return {
+        0.2104542553F * l + 0.7936177850F * m - 0.0040720468F * s,
+        1.9779984951F * l - 2.4285922050F * m + 0.4505937099F * s,
+        0.0259040371F * l + 0.7827717662F * m - 0.8086757660F * s,
+    };
+}
+
+/// Squared distance between two OKLab colours.
+float lab_distance(const std::array<float, 3>& a, const std::array<float, 3>& b) {
+    const float dl = a[0] - b[0], da = a[1] - b[1], db = a[2] - b[2];
+    return dl * dl + da * da + db * db;
+}
+
+/// The two entries of the whole palette nearest a colour by squared
+/// distance in red, green and blue; the first one found wins a tie. The
+/// second is none when the palette has a single entry.
+std::array<std::size_t, 2>
+nearest_two(std::span<const uint8_t> palette, int32_t r, int32_t g, int32_t b, bool& has_second) {
+    std::size_t nearest = 0, second = 0;
+    int32_t best = std::numeric_limits<int32_t>::max(), runner = best;
+    for (std::size_t entry = 0; entry < kPaletteEntries; ++entry) {
+        const int32_t d = distance(palette, entry, r, g, b);
+        if (d < best) {
+            runner = best;
+            second = nearest;
+            best = d;
+            nearest = entry;
+        } else if (d < runner) {
+            runner = d;
+            second = entry;
+        }
+    }
+    has_second = runner != std::numeric_limits<int32_t>::max();
+    return {nearest, second};
+}
+
+/// The two entries of a perceptual palette that look nearest a colour; the
+/// first one found wins a tie.
+std::array<std::size_t, 2> nearest_two_perceptual(
+    const PerceptualPalette& palette, int32_t r, int32_t g, int32_t b, bool& has_second
+) {
+    const auto lab = oklab(r, g, b);
+    std::size_t nearest = 0, second = 0;
+    float best = std::numeric_limits<float>::max(), runner = best;
+    for (std::size_t index = 0; index < palette.lab.size(); ++index) {
+        const float d = lab_distance(palette.lab[index], lab);
+        if (d < best) {
+            runner = best;
+            second = nearest;
+            best = d;
+            nearest = index;
+        } else if (d < runner) {
+            runner = d;
+            second = index;
+        }
+    }
+    has_second = palette.lab.size() > 1;
+    return {palette.entries[nearest], palette.entries[second]};
+}
+
 } // namespace
+
+PerceptualPalette
+perceptual_palette(std::span<const uint8_t> palette, std::span<const uint8_t> pixels) {
+    PerceptualPalette out;
+    if (palette.size() < kPaletteEntries * kPaletteEntryBytes)
+        return out;
+    std::array<bool, kPaletteEntries> used{};
+    for (const uint8_t pixel : pixels)
+        used[pixel] = true;
+    const bool every = pixels.empty();
+    for (std::size_t entry = 0; entry < kPaletteEntries; ++entry) {
+        if (!every && !used[entry])
+            continue;
+        const auto at = entry * kPaletteEntryBytes;
+        out.entries.push_back(static_cast<uint8_t>(entry));
+        out.lab.push_back(oklab(palette[at], palette[at + 1], palette[at + 2]));
+    }
+    return out;
+}
+
+uint8_t nearest_perceptual(const PerceptualPalette& palette, int32_t r, int32_t g, int32_t b) {
+    if (palette.entries.empty())
+        return 0;
+    bool has_second = false;
+    return static_cast<uint8_t>(nearest_two_perceptual(palette, r, g, b, has_second)[0]);
+}
+
+uint8_t nearest_palette_entry(std::span<const uint8_t> palette, int32_t r, int32_t g, int32_t b) {
+    if (palette.size() < kPaletteEntries * kPaletteEntryBytes)
+        return 0;
+    bool has_second = false;
+    return static_cast<uint8_t>(nearest_two(palette, r, g, b, has_second)[0]);
+}
 
 MegamapLayout megamap_layout(
     int32_t view_left,
@@ -129,11 +238,13 @@ std::vector<uint8_t> downscale_terrain(
     int32_t width,
     int32_t height,
     std::span<const uint8_t> palette,
-    bool dither
+    bool dither,
+    const PerceptualPalette* perceptual
 ) {
     std::vector<uint8_t> out;
     if (width <= 0 || height <= 0 || map_width <= 0 || map_height <= 0 || source.pixel == nullptr ||
-        palette.size() < kPaletteEntries * kPaletteEntryBytes)
+        palette.size() < kPaletteEntries * kPaletteEntryBytes ||
+        (perceptual != nullptr && perceptual->entries.empty()))
         return out;
     out.resize(static_cast<std::size_t>(width) * static_cast<std::size_t>(height));
     for (int32_t y = 0; y < height; ++y) {
@@ -159,36 +270,195 @@ std::vector<uint8_t> downscale_terrain(
             const auto mean_r = static_cast<int32_t>(r / count);
             const auto mean_g = static_cast<int32_t>(g / count);
             const auto mean_b = static_cast<int32_t>(b / count);
-            // The two nearest entries; the first one found wins a tie.
-            std::size_t nearest = 0, second = 0;
-            int32_t best = std::numeric_limits<int32_t>::max(), runner = best;
-            for (std::size_t entry = 0; entry < kPaletteEntries; ++entry) {
-                const int32_t d = distance(palette, entry, mean_r, mean_g, mean_b);
-                if (d < best) {
-                    runner = best;
-                    second = nearest;
-                    best = d;
-                    nearest = entry;
-                } else if (d < runner) {
-                    runner = d;
-                    second = entry;
-                }
-            }
-            const bool alternate =
-                dither && ((x + y) & 1) != 0 && runner != std::numeric_limits<int32_t>::max();
+            bool has_second = false;
+            const auto nearest =
+                perceptual != nullptr
+                    ? nearest_two_perceptual(*perceptual, mean_r, mean_g, mean_b, has_second)
+                    : nearest_two(palette, mean_r, mean_g, mean_b, has_second);
+            const bool alternate = dither && ((x + y) & 1) != 0 && has_second;
             out[static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
-                static_cast<std::size_t>(x)] = static_cast<uint8_t>(alternate ? second : nearest);
+                static_cast<std::size_t>(x)] = static_cast<uint8_t>(nearest[alternate ? 1 : 0]);
         }
     }
     return out;
 }
 
-uint8_t feature_blob_color(const FeatureDef& def) noexcept {
+bool megamap_draws_feature(const FeatureDef& def) noexcept {
+    return (def.flags & OA_FEATURE_FLAG_INDESTRUCTIBLE) != 0 &&
+           (def.flags & OA_FEATURE_FLAG_RECLAIMABLE) == 0;
+}
+
+uint8_t feature_mark_color(const FeatureDef& def) noexcept {
     if (def.metal > 0.0F)
-        return kFeatureBlobReclaimable;
-    if (std::strncmp(def.name, "Spire", sizeof def.name) == 0)
-        return kFeatureBlobSpire;
-    return kFeatureBlobOther;
+        return feature_mark_metal;
+    constexpr std::string_view spire = "Spire";
+    const std::string_view description(
+        def.description, ::strnlen(def.description, sizeof def.description)
+    );
+    const bool is_spire =
+        description.size() == spire.size() &&
+        std::equal(description.begin(), description.end(), spire.begin(), [](char a, char b) {
+            return std::tolower(static_cast<unsigned char>(a)) ==
+                   std::tolower(static_cast<unsigned char>(b));
+        });
+    return is_spire ? feature_mark_spire : feature_mark_other;
+}
+
+ShrunkPicture shrink_picture(
+    std::span<const uint8_t> pixels,
+    int32_t width,
+    int32_t height,
+    uint8_t transparent,
+    std::span<const uint8_t> palette,
+    int32_t longest
+) {
+    ShrunkPicture out;
+    if (width <= 0 || height <= 0 || longest < 1 ||
+        pixels.size() < static_cast<std::size_t>(width) * static_cast<std::size_t>(height) ||
+        palette.size() < kPaletteEntries * kPaletteEntryBytes)
+        return out;
+    // The longer side becomes `longest`, the other in proportion, in single
+    // precision rounded to the nearest pixel.
+    const auto larger = static_cast<float>(std::max(width, height));
+    const auto side = [&](int32_t source) {
+        return std::max<int32_t>(
+            1,
+            static_cast<int32_t>(
+                static_cast<float>(source) * static_cast<float>(longest) / larger + 0.5F
+            )
+        );
+    };
+    out.width = side(width);
+    out.height = side(height);
+    out.rgba.assign(
+        static_cast<std::size_t>(out.width) * static_cast<std::size_t>(out.height) * 4U, 0
+    );
+    for (int32_t y = 0; y < out.height; ++y) {
+        const int32_t y0 = y * height / out.height;
+        const int32_t y1 = std::min(height, std::max(y0 + 1, (y + 1) * height / out.height));
+        for (int32_t x = 0; x < out.width; ++x) {
+            const int32_t x0 = x * width / out.width;
+            const int32_t x1 = std::min(width, std::max(x0 + 1, (x + 1) * width / out.width));
+            int32_t r = 0, g = 0, b = 0, opaque = 0, area = 0;
+            for (int32_t row = y0; row < y1; ++row)
+                for (int32_t column = x0; column < x1; ++column) {
+                    ++area;
+                    const uint8_t index = pixels
+                        [static_cast<std::size_t>(row) * static_cast<std::size_t>(width) +
+                         static_cast<std::size_t>(column)];
+                    if (index == transparent)
+                        continue;
+                    const auto at = static_cast<std::size_t>(index) * kPaletteEntryBytes;
+                    r += palette[at];
+                    g += palette[at + 1];
+                    b += palette[at + 2];
+                    ++opaque;
+                }
+            if (opaque == 0)
+                continue;
+            auto* pixel = &out.rgba
+                               [(static_cast<std::size_t>(y) * static_cast<std::size_t>(out.width) +
+                                 static_cast<std::size_t>(x)) *
+                                4U];
+            pixel[0] = static_cast<uint8_t>(r / opaque);
+            pixel[1] = static_cast<uint8_t>(g / opaque);
+            pixel[2] = static_cast<uint8_t>(b / opaque);
+            pixel[3] = static_cast<uint8_t>((opaque * 255 + area / 2) / area);
+        }
+    }
+    return out;
+}
+
+void blend_picture(
+    std::span<uint8_t> canvas,
+    int32_t canvas_width,
+    int32_t canvas_height,
+    const ShrunkPicture& picture,
+    int32_t left,
+    int32_t top,
+    std::span<const uint8_t> palette
+) {
+    if (canvas_width <= 0 || canvas_height <= 0 ||
+        canvas.size() <
+            static_cast<std::size_t>(canvas_width) * static_cast<std::size_t>(canvas_height) ||
+        palette.size() < kPaletteEntries * kPaletteEntryBytes ||
+        picture.rgba.size() <
+            static_cast<std::size_t>(picture.width) * static_cast<std::size_t>(picture.height) * 4U)
+        return;
+    constexpr int32_t opaque = 255;
+    for (int32_t y = 0; y < picture.height; ++y) {
+        const int32_t row = top + y;
+        if (row < 0 || row >= canvas_height)
+            continue;
+        for (int32_t x = 0; x < picture.width; ++x) {
+            const int32_t column = left + x;
+            if (column < 0 || column >= canvas_width)
+                continue;
+            const auto* pixel =
+                &picture.rgba
+                     [(static_cast<std::size_t>(y) * static_cast<std::size_t>(picture.width) +
+                       static_cast<std::size_t>(x)) *
+                      4U];
+            const int32_t alpha = pixel[3];
+            if (alpha == 0)
+                continue;
+            auto& under = canvas
+                [static_cast<std::size_t>(row) * static_cast<std::size_t>(canvas_width) +
+                 static_cast<std::size_t>(column)];
+            int32_t r = pixel[0], g = pixel[1], b = pixel[2];
+            if (alpha < opaque) {
+                const auto at = static_cast<std::size_t>(under) * kPaletteEntryBytes;
+                r = (r * alpha + palette[at] * (opaque - alpha)) / opaque;
+                g = (g * alpha + palette[at + 1] * (opaque - alpha)) / opaque;
+                b = (b * alpha + palette[at + 2] * (opaque - alpha)) / opaque;
+            }
+            under = nearest_palette_entry(palette, r, g, b);
+        }
+    }
+}
+
+FeatureSpot megamap_feature_spot(
+    const MegamapLayout& layout,
+    int32_t cell_x,
+    int32_t cell_z,
+    int32_t footprint_x,
+    int32_t footprint_z,
+    int32_t ground_height,
+    int32_t frame_longest
+) noexcept {
+    FeatureSpot spot{};
+    if (layout.map_width <= 0 || layout.map_height <= 0)
+        return spot;
+    constexpr int32_t cell_pixels = 16;
+    constexpr int32_t frame_without_size = 32;
+    constexpr int32_t least_side = 2;
+    const auto width = static_cast<float>(layout.width);
+    const auto map_width = static_cast<float>(layout.map_width);
+    const int32_t centre_x = cell_x * cell_pixels + std::max(1, footprint_x) * cell_pixels / 2;
+    const int32_t centre_z =
+        cell_z * cell_pixels + std::max(1, footprint_z) * cell_pixels / 2 - ground_height / 2;
+    spot.x = static_cast<int32_t>(static_cast<float>(centre_x) * width / map_width);
+    spot.y = static_cast<int32_t>(
+        static_cast<float>(centre_z) * static_cast<float>(layout.height) /
+        static_cast<float>(layout.map_height)
+    );
+    const int32_t frame = frame_longest < 1 ? frame_without_size : frame_longest;
+    spot.longest = std::max(
+        least_side, static_cast<int32_t>(width / map_width * static_cast<float>(frame) + 0.5F)
+    );
+    return spot;
+}
+
+int32_t feature_picture_top(
+    int32_t spot_y, int32_t origin_y, int32_t frame_height, int32_t shrunk_height
+) noexcept {
+    if (frame_height == 0)
+        return spot_y - shrunk_height;
+    return spot_y - static_cast<int32_t>(
+                        static_cast<float>(origin_y) * static_cast<float>(shrunk_height) /
+                            static_cast<float>(frame_height) +
+                        0.5F
+                    );
 }
 
 IconConfig parse_icon_config(std::string_view text, uint32_t category_limit) {

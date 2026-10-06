@@ -62,8 +62,9 @@ same with the hack on or off.
 
 ### Related hacks
 
-- [ui.megamap](ui.megamap.md) with `feature-blobs` marks the map's features
-  on the megamap whatever the line of sight.
+- [ui.megamap](ui.megamap.md) with `feature-blobs` draws the map's
+  indestructible features on the megamap's terrain, which is shaded by what
+  the viewer has mapped and sees.
 
 ### Implementation notes
 

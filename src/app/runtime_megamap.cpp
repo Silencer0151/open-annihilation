@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // ui.megamap in a running match: Tab and the wheel open and close it; open,
-// it draws the whole map over the battlefield with the sight shading, the
-// category icons of the units the minimap shows, the selection's sensor
-// rings and the main view's rectangle; its clicks act as the battlefield's
-// do in the chosen interface type, at the map point they stand for. The
-// enhanced minimap redraws the radar's picture at its own size. The Mouse
-// wheel zoom setting, while on, leaves the hack off for this player.
+// it draws the whole map over the battlefield with small pictures of its
+// indestructible features, the sight shading, the category icons of the
+// units the minimap shows and the selection's sensor rings; its clicks act
+// as the battlefield's do in the chosen interface type, at the map point
+// they stand for. The enhanced minimap redraws the radar's picture at its
+// own size. The Mouse wheel zoom setting, while on, leaves the hack off for
+// this player.
 
 #include "engine_settings_state.hpp"
 #include "oa/app/runtime.hpp"
@@ -25,9 +26,11 @@
 #include <cstdint>
 #include <cstring>
 #include <exception>
+#include <optional>
 #include <span>
 #include <string>
 #include <tuple>
+#include <vector>
 
 namespace oa::app {
 namespace {
@@ -51,12 +54,14 @@ constexpr const char* kDefaultUnknownIcon = "UNKNOWN.PCX";
 /// Interface sounds of opening and closing the megamap.
 constexpr const char* kOpenSound = "Options";
 constexpr const char* kCloseSound = "Previous";
-/// Map pixels of a footprint cell.
-constexpr int32_t kCellPixels = 16;
+/// Palette indices of one of the map's tiles, 32 by 32 pixels.
+constexpr std::size_t tile_pixels = 32U * 32U;
 /// Map pixels of a sight cell of the radar's grids.
 constexpr int32_t kSightCellPixels = 32;
 /// Battlefield pixels the pointer may move and still click.
 constexpr int32_t kClickSlack = 3;
+/// Palette index of the bars beside the map's picture: a dark grey.
+constexpr uint8_t bar_color = 95;
 /// Characters of a unit type's side the commander icons compare.
 constexpr std::size_t kSideNameCompared = 8;
 
@@ -207,22 +212,23 @@ void Runtime::prepare_megamap() {
         state.unknown = load_megamap_icon(state.config.unknown_file);
         state.nothing = load_megamap_icon(state.config.nothing_file);
     }
-    // The features the map placed, which its picture shows as they stood.
+    // The features the picture shows, as the map placed them: only the
+    // indestructible ones that cannot be reclaimed.
     state.features.clear();
     if (rules.feature_blobs) {
         const auto width = static_cast<int32_t>(game.map_width);
         const auto cells = static_cast<std::size_t>(game.map_width) * game.map_height;
         for (std::size_t index = 0; index < cells && width > 0; ++index) {
-            const auto feature = world.plots[index].feature;
-            if (feature >= OA_PLOT_FEATURE_RESERVED || feature >= world.feature_def_count)
+            const auto& plot = world.plots[index];
+            if (plot.feature >= OA_PLOT_FEATURE_RESERVED ||
+                plot.feature >= world.feature_def_count ||
+                !hud::megamap_draws_feature(world.feature_defs[plot.feature]))
                 continue;
-            const auto& def = world.feature_defs[feature];
             state.features.push_back(
                 {static_cast<int32_t>(index % static_cast<std::size_t>(width)),
                  static_cast<int32_t>(index / static_cast<std::size_t>(width)),
-                 std::max<int32_t>(1, def.footprint_x),
-                 std::max<int32_t>(1, def.footprint_z),
-                 hud::feature_blob_color(def)}
+                 plot.feature,
+                 plot.height}
             );
         }
     }
@@ -243,41 +249,85 @@ uint8_t Runtime::map_terrain_pixel(int32_t map_x, int32_t map_z) const {
     return at < map.tile_palette_indices.size() ? map.tile_palette_indices[at] : uint8_t{0};
 }
 
-void Runtime::build_megamap_terrain(const oa::ui::hud::MegamapLayout& layout) {
-    auto& state = megamap_;
-    state.layout = layout;
-    state.terrain.clear();
+std::vector<uint8_t> Runtime::downscale_megamap_terrain(const oa::ui::hud::MegamapLayout& layout) {
     if (!selected_tnt_ || layout.width <= 0 || layout.height <= 0)
-        return;
+        return {};
+    const auto& map = *selected_tnt_;
+    // The colours the map's tiles use, which the picture keeps to.
+    const auto tile_bytes = std::min(
+        map.tile_palette_indices.size(), static_cast<std::size_t>(map.tile_count) * tile_pixels
+    );
+    const auto colours = hud::perceptual_palette(
+        match_palette_, std::span<const uint8_t>(map.tile_palette_indices.data(), tile_bytes)
+    );
     hud::TerrainSource source{};
     source.user = this;
     source.pixel = [](void* user, int32_t x, int32_t z) {
         return static_cast<const Runtime*>(user)->map_terrain_pixel(x, z);
     };
-    state.terrain = hud::downscale_terrain(
+    return hud::downscale_terrain(
         source,
         layout.map_width,
         layout.map_height,
         layout.width,
         layout.height,
         match_palette_,
-        ui_rules().megamap.dither
+        ui_rules().megamap.dither,
+        &colours
     );
-    // The features' blobs over it, each at least a pixel.
+}
+
+void Runtime::build_megamap_terrain(const oa::ui::hud::MegamapLayout& layout) {
+    auto& state = megamap_;
+    state.layout = layout;
+    state.terrain = downscale_megamap_terrain(layout);
+    if (state.terrain.empty() || !match_)
+        return;
+    const auto& world = match_->state();
+    // Each type's first standing frame, shrunk once for this picture.
+    std::vector<std::optional<hud::ShrunkPicture>> shrunk(world.feature_def_count);
     for (const auto& feature : state.features) {
-        const auto from =
-            hud::megamap_point(layout, feature.cell_x * kCellPixels, feature.cell_z * kCellPixels);
-        const auto to = hud::megamap_point(
+        if (feature.def >= world.feature_def_count)
+            continue;
+        const auto& def = world.feature_defs[feature.def];
+        const auto* frame = feature_sequence_image(def.seq_name, 0);
+        const auto spot = hud::megamap_feature_spot(
             layout,
-            (feature.cell_x + feature.width) * kCellPixels,
-            (feature.cell_z + feature.height) * kCellPixels
+            feature.cell_x,
+            feature.cell_z,
+            def.footprint_x,
+            def.footprint_z,
+            feature.ground_height,
+            frame != nullptr ? std::max<int32_t>(frame->width, frame->height) : 0
         );
-        for (int32_t y = from[1]; y < std::max(to[1], from[1] + 1); ++y)
-            for (int32_t x = from[0]; x < std::max(to[0], from[0] + 1); ++x) {
-                const int32_t px = x - layout.left, py = y - layout.top;
-                if (px >= 0 && py >= 0 && px < layout.width && py < layout.height)
-                    state.terrain[static_cast<std::size_t>(py * layout.width + px)] = feature.color;
-            }
+        auto& picture = shrunk[feature.def];
+        if (frame != nullptr && !picture)
+            picture = hud::shrink_picture(
+                frame->pixels,
+                frame->width,
+                frame->height,
+                frame->transparency_index,
+                match_palette_,
+                spot.longest
+            );
+        if (picture && !picture->rgba.empty()) {
+            hud::blend_picture(
+                state.terrain,
+                layout.width,
+                layout.height,
+                *picture,
+                spot.x - picture->width / 2,
+                hud::feature_picture_top(spot.y, frame->origin_y, frame->height, picture->height),
+                match_palette_
+            );
+            continue;
+        }
+        // A feature without a picture, such as a 3DO one, takes a mark.
+        const uint8_t color = hud::feature_mark_color(def);
+        for (int32_t y = spot.y - 1; y < spot.y - 1 + hud::feature_mark_size; ++y)
+            for (int32_t x = spot.x - 1; x < spot.x - 1 + hud::feature_mark_size; ++x)
+                if (x >= 0 && y >= 0 && x < layout.width && y < layout.height)
+                    state.terrain[static_cast<std::size_t>(y * layout.width + x)] = color;
     }
 }
 
@@ -348,7 +398,7 @@ void Runtime::draw_megamap() {
     // what the viewer has mapped and sees.
     const uint8_t unexplored = game.ui_colors[wr::ui_color_unexplored];
     fill_hud_rect(
-        0, 0, match_layout_.battlefield_width(), match_layout_.battlefield_height(), unexplored
+        0, 0, match_layout_.battlefield_width(), match_layout_.battlefield_height(), bar_color
     );
     auto& target = paint_target();
     const auto& radar = radar_state_;
@@ -475,17 +525,8 @@ void Runtime::draw_megamap() {
                 );
         }
     }
-    // The main view's rectangle.
-    const auto from = hud::megamap_point(layout, match_camera_x_, match_camera_z_);
-    const auto to = hud::megamap_point(
-        layout, match_camera_x_ + visible_map_width(), match_camera_z_ + visible_map_height()
-    );
+    // A drag box being drawn, in the minimap's marks colour.
     const uint8_t marks = game.ui_colors[wr::ui_color_radar_marks];
-    fill_hud_rect(from[0], from[1], to[0] - from[0] + 1, 1, marks);
-    fill_hud_rect(from[0], to[1], to[0] - from[0] + 1, 1, marks);
-    fill_hud_rect(from[0], from[1], 1, to[1] - from[1] + 1, marks);
-    fill_hud_rect(to[0], from[1], 1, to[1] - from[1] + 1, marks);
-    // A drag box being drawn.
     if (state.pressed && (std::abs(pointer_x - state.press_x) > kClickSlack ||
                           std::abs(pointer_y - state.press_y) > kClickSlack)) {
         const int32_t left = std::min(pointer_x, state.press_x),
@@ -785,7 +826,8 @@ void Runtime::enhance_radar_picture() {
         picture->width,
         picture->height,
         match_palette_,
-        ui_rules().megamap.dither
+        ui_rules().megamap.dither,
+        nullptr
     );
     if (pixels.empty())
         return;

@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // What the running match keeps for ui.megamap: its icons and their unit
-// sets, the terrain picture fitted to the battlefield, the features the map
-// placed, and the pointer's press on it.
+// sets, the terrain picture fitted to the battlefield, the features it
+// draws, and the pointer's press on it.
 #pragma once
 
 #include "oa/data/defs/categories.hpp"
@@ -31,13 +31,13 @@ struct MegamapIconEntry {
     const oa::data::defs::CategoryMask* types{}; ///< a category's mask, or one of `own_masks`
 };
 
-/// A feature the map placed, for the terrain picture's blobs.
+/// A feature the megamap draws on its terrain picture
+/// (oa::ui::hud::megamap_draws_feature).
 struct MegamapFeature {
-    int32_t cell_x{};
+    int32_t cell_x{}; ///< the first cell of its footprint
     int32_t cell_z{};
-    int32_t width{}; ///< footprint in cells
-    int32_t height{};
-    uint8_t color{};
+    uint16_t def{};          ///< its index in World.feature_defs
+    uint8_t ground_height{}; ///< MapPlot.height of its first cell
 };
 
 struct MegamapState {
@@ -50,7 +50,8 @@ struct MegamapState {
     std::vector<oa::data::defs::CategoryMaskStorage> own_words;
     std::vector<oa::data::defs::CategoryMask> own_masks;
     std::vector<MegamapFeature> features;
-    /// The terrain picture and the layout it was made for.
+    /// The terrain picture, with the features drawn, and the layout it was
+    /// made for.
     oa::ui::hud::MegamapLayout layout{};
     std::vector<uint8_t> terrain;
     /// The left button's press, in battlefield pixels, while it is held.

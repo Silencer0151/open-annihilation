@@ -13,11 +13,11 @@
 
 ## Description
 
-Adds a full-screen strategic map: Tab or the mouse wheel replaces the battlefield with the whole map, drawn with unit category icons, sensor rings and the main view's rectangle, and the player can select units and give orders on it. It can also redraw the minimap at a finer quality. 3.1c has only the minimap. The hack acts only while the player's Mouse wheel zoom setting is off: with the setting on, as it is by default, the wheel's zoom takes the megamap's place.
+Adds a full-screen strategic map: Tab or the mouse wheel replaces the battlefield with the whole map, drawn with its indestructible features, unit category icons and sensor rings, and the player can select units and give orders on it. It can also redraw the minimap at a finer quality. 3.1c has only the minimap. The hack acts only while the player's Mouse wheel zoom setting is off: with the setting on, as it is by default, the wheel's zoom takes the megamap's place.
 
-![Megamap open on Painted Desert, showing the whole map: blue Arm and red Core unit icons meeting on the central plateau, cyan feature marks, a faint green radar ring around the selected radar tower and a yellow rectangle for the main view.](images/ui.megamap-battle.png)
+![Megamap open on Painted Desert, showing the whole map: blue Arm and red Core unit icons meeting on the central plateau, small dark pictures of the map's indestructible features scattered over the sand, and a faint green radar ring around the selected radar tower.](images/ui.megamap-battle.png)
 
-*The megamap open in the middle of a battle on Painted Desert: Arm (blue) and Core (red) unit icons meeting on the central plateau, the selected radar tower's radar ring, feature marks in cyan and the main view's rectangle.*
+*The megamap open in the middle of a battle on Painted Desert: Arm (blue) and Core (red) unit icons meeting on the central plateau, the selected radar tower's radar ring, and the map's indestructible features drawn as small pictures of themselves.*
 
 ![Close-up of the megamap: a yellow drag box around a cluster of blue Arm icons, each with a white selection frame; red Core icons below it have no frame.](images/ui.megamap-box-select.png)
 
@@ -63,21 +63,34 @@ the enhanced minimap back.
 #### What it shows
 
 The megamap fills the battlefield's rectangle with the whole map, scaled to
-fit with its proportions kept and bars on the long sides. Each pixel of the
-picture takes the mean colour of the map pixels it covers, then the nearest
-palette colour or, with `dither`, a checkerboard of the two nearest. The
-picture is shaded by what the viewer has mapped and sees, as the minimap is.
+fit with its proportions kept and dark grey bars on the long sides. Each
+pixel of the picture takes the mean colour of the map pixels it covers, then
+the colour that looks nearest among those the map's tiles use (the least
+distance in the OKLab colour space) or, with `dither`, a checkerboard of the
+two nearest. The picture is shaded by what the viewer has mapped and sees,
+as the minimap is.
 
-With `feature-blobs`, the features the map placed are marked on the picture
-as they stood at the start: features worth metal in one colour, spire
-features in a second and the rest in a third, each at least one pixel.
+With `feature-blobs`, the map's indestructible features that cannot be
+reclaimed, such as rocks, vents and metal patches made of features, are
+drawn on the picture as the map placed them. Each is the first frame of its
+standing picture, shrunk in full colour to the map's scale and at least 2
+pixels across; each of its pixels is mixed with the terrain under it in
+proportion to how much of it is opaque, then given the nearest palette
+colour. It stands on its
+footprint's centre, raised by half the ground's height. A feature without a
+picture, such as a 3DO one, takes a mark 3 pixels square: one colour for
+features worth metal, a second for a feature described as a spire and a
+third for the rest. Features that can be reclaimed or destroyed, such as
+trees and wrecks, are not drawn.
 
 Over the picture it draws:
 
 - an icon for each unit the minimap shows, by category;
 - the sensor and anti-nuke rings of the selected units;
-- the main view's rectangle;
 - a drag box while one is being drawn.
+
+It draws no rectangle for the main view; the minimap shows where the view
+is.
 
 #### Icons
 
@@ -132,13 +145,15 @@ In both interface types:
 
 #### Enhanced minimap
 
-With `enhanced-minimap`, the minimap's picture is redrawn by the same
-downscaling at the minimap's own size, from the map file's minimap where it
-has one, else from the map's terrain; `dither` applies to it too.
+With `enhanced-minimap`, the minimap's picture is redrawn at the minimap's
+own size, from the map file's minimap where it has one, else from the map's
+terrain: each pixel the mean colour of the pixels it covers, then the
+nearest colour of the whole palette by red, green and blue; `dither`
+applies to it too.
 
 3.1c has no megamap and draws the minimap from the map file's picture as it
 is. Turning the hack on with every parameter at its baseline gives a
-megamap without icons, feature marks or the redrawn minimap, and only
+megamap without icons, features or the redrawn minimap, and only
 interceptor rings of 512 pixels or more.
 
 ### In a network game
@@ -171,17 +186,27 @@ match hash and every machine's simulation stay as they are.
   (`megamap_click`, `megamap_right_press`, `pick_map_cursor`);
   `src/app/include/oa/app/megamap_state.hpp` holds what a match keeps for it.
 - `src/ui/hud/include/oa/ui/hud/megamap.hpp` and `src/ui/hud/src/megamap.cpp`
-  hold the layout and its two-way mapping, the terrain downscale, the
-  feature colours, the icon file reader, the icon choice and recolouring,
-  and the rings.
+  hold the layout and its two-way mapping, the terrain downscale and its
+  choice of colours by how they look, the features drawn, their pictures
+  shrunk, placed and laid over the terrain, the marks of those without a
+  picture, the icon file reader, the icon choice and recolouring, and the
+  rings.
 - `Runtime::megamap_on` holds the hack off while the Mouse wheel zoom
   setting is on; `megamap_wheel_zoom_changed` closes the megamap and puts
   the minimap's picture back when the setting changes in a match.
 - Test: `ui-hud-megamap` (`src/ui/hud/tests/megamap_test.cpp`) covers the
-  layout, the terrain downscale, the feature colours, the icon file, the
+  layout, the terrain downscale by red, green and blue and among the map's
+  own colours as they look, the features drawn and the marks' colours, a
+  picture shrunk, placed and laid over the terrain, the icon file, the
   icon choice and the ring minimums.
 - Test: `native-megamap-clicks` (`src/app/runtime_megamap_check.cpp`)
-  makes the same clicks on the battlefield and on the megamap in both
+  first checks what the open megamap draws on the 3.1c skirmish's map: the
+  terrain keeps to the colours of the map's tiles; only the indestructible
+  features that cannot be reclaimed change the picture, each by its picture
+  rather than a flat mark, while the reclaimable and destructible ones leave
+  it as it is; moving the main view leaves the megamap as it was, with no
+  rectangle for the view; and the bars beside the map are the dark grey.
+  Then it makes the same clicks on the battlefield and on the megamap in both
   interface types and checks that each leaves the same selection, armed
   command and orders: moves, an attack, a guard, selecting, deselecting,
   and an armed command given and dropped. With `--snapshot` it writes each
