@@ -173,8 +173,15 @@ corner, BUILD again or a tap outside closes it.
 
 ## Other controls
 
-- **The minimap.** A tap or a drag moves the camera. A hold, or a tap with
-  an order armed, gives the order there.
+- **The minimap.** A tap or a drag moves the camera. A tap or a hold with
+  an order armed gives it there where the cursor shows it, and one while a
+  building is being placed places it there. A hold with neither gives the
+  selection the default order there with the right-click interface, as a
+  right press on the battlefield does; with the left-click interface it is
+  a left click on the minimap, which never moves the camera: it selects
+  the unit of yours whose dot is under the finger, or gives the selection
+  the order the cursor shows there, and with nothing selected over open
+  ground it does nothing.
 - **Groups.** A chip shows a stored group and its size. A tap selects the
   group, a second tap centres the camera on it, and a hold stores the
   selection in it. **STORE** (tablet) or **+** (phone) stores the

@@ -672,9 +672,9 @@ void Runtime::check_tracking_zoom() {
             static_cast<float>(radar_picture_.x + radar_picture_.width / 2),
             static_cast<float>(radar_picture_.y + radar_picture_.height / 2)
         ))
-        fail("a click on the minimap did not move the camera");
+        fail("moving the view from the minimap did not move the camera");
     if (match_tracking_ || match_->state().game.follow_unit != 0)
-        fail("a click on the minimap did not end the tracking");
+        fail("moving the view from the minimap did not end the tracking");
 
     std::cout << "tracking zoom check: the wheel and the dialog zoomed between "
               << least_match_zoom() << " and " << kMaxBattlefieldZoom

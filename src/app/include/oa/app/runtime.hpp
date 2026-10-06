@@ -8542,8 +8542,8 @@ class Runtime final : public menu::Host,
     /// ease zooms in play and under a menu. On every frame the tracking goes
     /// on and the commander stays at the centre. A unit in the map's corner
     /// is tracked with the camera held at the map's edges at every zoom. A
-    /// scroll and a click on the minimap still end the tracking. Returns to
-    /// the skirmish menu; throws std::runtime_error on a failure.
+    /// scroll and moving the view from the minimap still end the tracking.
+    /// Returns to the skirmish menu; throws std::runtime_error on a failure.
     void check_tracking_zoom();
     /// Checks the wheel's zoom about the pointer as far as the map's edges allow.
     ///
@@ -11078,16 +11078,23 @@ class Runtime final : public menu::Host,
     /// pointer shows there decides: the select cursor selects the unit alone,
     /// or with Shift flips it in or out of the selection; a cursor that
     /// gives no order (enemy, friendly, normal) does nothing and leaves the
-    /// command armed; every other cursor gives each selected unit the order
-    /// the order table resolves for the armed command, or the default order,
-    /// there (issue_selection_orders), and the command then ends, kept armed
-    /// while Shift is held, whether or not a unit took an order. An armed
-    /// build places the building at the radar's point
-    /// (place_pending_build_on_radar). The view never moves.
+    /// command armed, but with the default order in the right-click
+    /// interface clears the selection; every other cursor gives each selected
+    /// unit the order the order table resolves for the armed command, or the
+    /// default order, there (issue_selection_orders), and the command then
+    /// ends, kept armed while Shift is held, whether or not a unit took an
+    /// order. An armed build places the building at the radar's point
+    /// (place_pending_build_on_radar). The view never moves, also with
+    /// nothing selected; on the radar a right press with no command armed
+    /// moves it (right_press), and in the right-click interface so does a
+    /// left press with none armed, which scrolls the view instead of coming
+    /// here (start_left_radar_scroll).
     ///
     /// @param x canvas column
     /// @param y canvas row
-    /// @return true when the press selected, ordered or placed
+    /// @return true when the press selected a unit, cleared the selection,
+    ///     gave the command, whether or not a unit took an order, or placed
+    ///     the building; false when it did nothing or the building was refused
     bool issue_radar_orders(float x, float y);
 
     /// Gives the selection the default order at a radar point, as 3.1c's right
@@ -11138,7 +11145,9 @@ class Runtime final : public menu::Host,
     /// @return the point on the terrain, or none without a map
     std::optional<oa::sim::ground_orders::Point> map_world_point(int32_t map_x, int32_t map_z);
 
-    /// Centres the view on the map point under a radar click.
+    /// Centres the view on the map point under a radar point, as a press that
+    /// moves the view from the radar does: the right button with no command
+    /// armed, or in the right-click interface the left button too.
     ///
     /// @param x canvas column
     /// @param y canvas row

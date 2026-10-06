@@ -803,10 +803,13 @@ void TouchDispatchAccess::finger_gestures(
                 hud_hold(runtime, slot, now);
             break;
         case TouchTarget::minimap:
-            // The minimap moves the camera first; an armed order, or a
-            // hold, gives the order there: an armed command's as the radar's
-            // left press gives it, and a hold's with no command armed as the
-            // chosen interface type gives the default order there.
+            // A tap or a drag on the minimap moves the camera. A tap with a
+            // command armed, and a hold, are the radar's left press
+            // (issue_radar_orders), which selects, gives an order or does
+            // nothing by the cursor there and never moves the camera; but a
+            // hold with no command armed in the right-click interface gives
+            // the default order there, as that interface's right press on
+            // the battlefield does.
             switch (gesture.kind) {
             case gestures::GestureKind::tap:
                 if (finger->held)

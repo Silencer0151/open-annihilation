@@ -92,7 +92,7 @@ pad.
 | Left stick | Scrolls the map; faster with the square of the push, and with the zoom | Arrow keys |
 | L3 | Centres on the selection, or on the commander with none | Home |
 | Left trackpad: slide | Drags the map: the ground follows the thumb, and glides on after a flick | Two-finger drag |
-| Left trackpad: press and hold | **The minimap under the thumb**: the trackpad stands for the whole map, the camera goes to the point under the thumb and follows it while the press is held | Clicking and dragging on the minimap |
+| Left trackpad: press and hold | **The minimap under the thumb**: the trackpad stands for the whole map, the camera goes to the point under the thumb and follows it while the press is held | A right drag on the minimap (a left drag with the right-click interface) |
 | Right stick ↑ and ↓ | Zooms in and out about the pointer, smoothly (the Mouse wheel zoom, Maximum zoom out and Maximum zoom in settings are honoured) | Wheel |
 | Right stick ← and → (a flick) | The previous or next build page while a builder is selected | `,` and `.` |
 | R3 | Follows the selected unit; with R4 held, the next of the selection | T, Shift+T |
@@ -265,7 +265,7 @@ both act at once.
 | Action | Gamepad |
 |---|---|
 | Scroll | Left stick; left trackpad drag, with glide; the pointer at the screen's edge |
-| Jump to a point of the map | Left trackpad pressed and held; or a click on the minimap |
+| Jump to a point of the map | Left trackpad pressed and held; or L2 on the minimap with no order armed, and with the right-click interface R2 there too. L2 with the left-click interface, and R2 with the right-click interface, then move the view with the pointer until they are let go. With the left-click interface R2 and A on the minimap never move the view: they select, or give the order the cursor shows there, as a left click does |
 | Zoom | Right stick ↑ and ↓, about the pointer |
 | Centre, follow, next unit, next report | L3, R3, D-pad →, D-pad ↓ |
 | Mouse look | R5 and L2 held, sliding the right trackpad |
