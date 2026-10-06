@@ -1615,6 +1615,27 @@ void repeated_create_under_recorder_rules_is_dropped() {
     }
 }
 
+// A 0x09 naming a definition past this machine's unit table creates nothing
+// and is counted apart from refused creates.
+void create_past_the_table_is_counted_apart() {
+    KillScene scene;
+    auto& host = *scene.pair.host;
+    auto& world = host.match->state();
+    const auto slot = static_cast<uint16_t>(scene.victim + 1);
+    const auto created = host.binding.created_remote;
+    const auto refused = host.binding.refused_creates;
+    UnitCreatedRecord record{};
+    record.unit_def_index = static_cast<uint16_t>(world.unit_def_count);
+    record.unit_index = slot;
+    record.position[0] = 96 << 16;
+    record.position[2] = 96 << 16;
+    auto sim = match_binding_sim(&host.binding);
+    sim.create_unit(sim.context, &world, 1, record);
+    CHECK(host.binding.creates_past_table == 1);
+    CHECK(host.binding.created_remote == created && host.binding.refused_creates == refused);
+    CHECK(!KillScene::live(host, slot));
+}
+
 // A machine whose player lacks the host role hands a weapon hit on a feature
 // to the host (0x0f with the weapon id, addressed to the host's id) and
 // leaves the feature as it is; the host applies it, destroys the corpse and
@@ -2519,6 +2540,7 @@ int main() {
     received_kill_credits_the_record();
     create_into_live_slot_runs_the_kill();
     repeated_create_under_recorder_rules_is_dropped();
+    create_past_the_table_is_counted_apart();
     feature_hits_go_to_the_host();
     reclaims_go_out_from_the_reclaiming_unit_s_owner();
     interceptions_reach_the_shot_s_owner();

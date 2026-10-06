@@ -118,7 +118,7 @@ void create_unit(
         if (b.match->create(request) != nullptr)
             ++b.created_remote;
         else
-            ++b.refused_creates;
+            ++(past_table ? b.creates_past_table : b.refused_creates);
     } catch (const std::exception&) {
         ++(past_table ? b.creates_past_table : b.refused_creates);
     }
