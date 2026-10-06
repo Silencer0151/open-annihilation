@@ -33,6 +33,12 @@ constexpr float kLongestZoomStep = 0.05F;
 constexpr double kLeastAnchorFraction = -0.5;
 constexpr double kMostAnchorFraction = 1.5;
 
+// How far the pointer may stray between two zoom steps, in canvas pixels,
+// as a hand on the mouse does while the wheel turns, and the zoom still go
+// on about the map point the camera's limits held back; a pointer moved
+// farther aims at a new point.
+constexpr int kZoomHoldPointerSlack = 8;
+
 } // namespace
 
 bool Runtime::radar_contains(float x, float y) const {
@@ -274,6 +280,12 @@ void Runtime::apply_zoom_anchor() {
     match_camera_z_ = static_cast<int32_t>(std::llround(
         static_cast<double>(zoom_anchor_map_y_) - static_cast<double>(zoom_anchor_sy_) / zoom
     ));
+    // Where the camera's limits hold the view back, the next zoom goes on
+    // about the anchor (anchor_zoom_at).
+    const auto held = view_camera();
+    zoom_hold_ = {
+        true, held, match_zoom_, {match_camera_x_ != held[0], match_camera_z_ != held[1]}
+    };
     // A view drawn between map pixels keeps the exact point under the
     // anchor, where the camera's rounding allows: the camera stays where
     // the anchor rounds it to.
@@ -392,42 +404,12 @@ void Runtime::EngineSettingsState::ease_zoom_about_centre(Runtime& runtime, floa
             std::clamp(target, runtime.least_match_zoom(), kMaxBattlefieldZoom);
         return;
     }
-    // The point at the battlefield's centre stays there while the zoom eases.
+    // The point at the battlefield's centre stays there while the zoom
+    // eases, anchored as the wheel's zoom anchors it.
     const auto& layout = runtime.match_layout_;
-    const int centre_x = layout.battlefield_width() / 2;
-    const int centre_y = layout.battlefield_height() / 2;
-    const auto zoom = static_cast<double>(runtime.match_zoom_ <= 0.0F ? 1.0F : runtime.match_zoom_);
-    runtime.zoom_anchor_map_x_ = static_cast<uint32_t>(std::max<int64_t>(
-        0,
-        std::llround(
-            static_cast<double>(runtime.match_camera_x_) + static_cast<double>(centre_x) / zoom
-        )
-    ));
-    runtime.zoom_anchor_map_y_ = static_cast<uint32_t>(std::max<int64_t>(
-        0,
-        std::llround(
-            static_cast<double>(runtime.match_camera_z_) + static_cast<double>(centre_y) / zoom
-        )
-    ));
-    // The exact point at the centre, which a view drawn between map pixels
-    // shows there and keeps there: the whole map pixel above is the
-    // camera's, as the camera rounds it, and the offset lies in the fraction.
-    const auto offset = runtime.view_offset();
-    runtime.zoom_anchor_fraction_x_ = std::clamp(
-        static_cast<double>(runtime.match_camera_x_) + offset.x +
-            static_cast<double>(centre_x) / zoom - static_cast<double>(runtime.zoom_anchor_map_x_),
-        kLeastAnchorFraction,
-        kMostAnchorFraction
+    runtime.anchor_zoom_at(
+        layout.left + layout.battlefield_width() / 2, layout.top + layout.battlefield_height() / 2
     );
-    runtime.zoom_anchor_fraction_y_ = std::clamp(
-        static_cast<double>(runtime.match_camera_z_) + offset.y +
-            static_cast<double>(centre_y) / zoom - static_cast<double>(runtime.zoom_anchor_map_y_),
-        kLeastAnchorFraction,
-        kMostAnchorFraction
-    );
-    runtime.zoom_anchor_sx_ = centre_x;
-    runtime.zoom_anchor_sy_ = centre_y;
-    runtime.zoom_anchored_ = true;
     runtime.match_zoom_target_ =
         std::clamp(target, runtime.least_match_zoom(), kMaxBattlefieldZoom);
     runtime.stop_match_tracking();
@@ -493,6 +475,78 @@ void Runtime::step_match_zoom() {
     camera_moved_ = true;
 }
 
+void Runtime::anchor_zoom_at(int px, int py) {
+    const int sx = px - match_layout_.left;
+    const int sy = py - match_layout_.top;
+    const auto zoom = static_cast<double>(match_zoom() <= 0.0F ? 1.0F : match_zoom());
+    // The view the last zoom left, while nothing else has moved it and the
+    // pointer rests where that zoom was anchored.
+    const auto camera = view_camera();
+    const bool kept = zoom_hold_.valid && zoom_hold_.zoom == match_zoom_ &&
+                      zoom_hold_.camera == camera &&
+                      std::abs(sx - zoom_anchor_sx_) <= kZoomHoldPointerSlack &&
+                      std::abs(sy - zoom_anchor_sy_) <= kZoomHoldPointerSlack;
+    // The map pixel under the pointer on the camera's map pixel, which the
+    // camera rounds about as it always has, and the exact point a view
+    // drawn between map pixels shows under the pointer and keeps there,
+    // the offset lying in the fraction.
+    const auto viewport =
+        live_viewport(static_cast<uint32_t>(camera[0]), static_cast<uint32_t>(camera[1]));
+    const auto before = oa::present::world_renderer::screen_to_map_pixel(viewport, {px, py});
+    if (!before)
+        return;
+    const auto offset = view_offset();
+    const auto anchor = [&](bool held,
+                            int32_t& whole,
+                            double& fraction,
+                            int& anchored_at,
+                            int at,
+                            uint32_t drawn,
+                            double source,
+                            double past) {
+        if (kept && held) {
+            // The point the held-back view was asked to show under the
+            // pointer: the anchor's own, or beside it as far as the pointer
+            // strayed.
+            if (at != anchored_at) {
+                const double exact = static_cast<double>(whole) + fraction +
+                                     static_cast<double>(at - anchored_at) / zoom;
+                whole = static_cast<int32_t>(std::llround(exact));
+                fraction = exact - static_cast<double>(whole);
+            }
+        } else {
+            whole = static_cast<int32_t>(drawn);
+            fraction = std::clamp(
+                source + past + static_cast<double>(at) / zoom - static_cast<double>(drawn),
+                kLeastAnchorFraction,
+                kMostAnchorFraction
+            );
+        }
+        anchored_at = at;
+    };
+    anchor(
+        zoom_hold_.held[0],
+        zoom_anchor_map_x_,
+        zoom_anchor_fraction_x_,
+        zoom_anchor_sx_,
+        sx,
+        before->x,
+        static_cast<double>(viewport.source_x),
+        offset.x
+    );
+    anchor(
+        zoom_hold_.held[1],
+        zoom_anchor_map_y_,
+        zoom_anchor_fraction_y_,
+        zoom_anchor_sy_,
+        sy,
+        before->y,
+        static_cast<double>(viewport.source_y),
+        offset.y
+    );
+    zoom_anchored_ = true;
+}
+
 void Runtime::handle_match_zoom(float wheel_y, float pointer_x, float pointer_y) {
     if (wheel_y == 0.0F || !selected_tnt_)
         return;
@@ -514,36 +568,7 @@ void Runtime::handle_match_zoom(float wheel_y, float pointer_x, float pointer_y)
         );
         return;
     }
-    const auto viewport = live_viewport(
-        static_cast<uint32_t>(std::max(0, match_camera_x_)),
-        static_cast<uint32_t>(std::max(0, match_camera_z_))
-    );
-    // The map pixel under the pointer on the camera's map pixel, which the
-    // camera rounds about as it always has, and the exact point a view
-    // drawn between map pixels shows under the pointer and keeps there,
-    // the offset lying in the fraction.
-    const auto before = oa::present::world_renderer::screen_to_map_pixel(viewport, {px, py});
-    if (before) {
-        zoom_anchor_map_x_ = before->x;
-        zoom_anchor_map_y_ = before->y;
-        zoom_anchor_sx_ = px - match_layout_.left;
-        zoom_anchor_sy_ = py - match_layout_.top;
-        const auto offset = view_offset();
-        const auto zoom = static_cast<double>(match_zoom() <= 0.0F ? 1.0F : match_zoom());
-        zoom_anchor_fraction_x_ = std::clamp(
-            static_cast<double>(viewport.source_x) + offset.x +
-                static_cast<double>(zoom_anchor_sx_) / zoom - static_cast<double>(before->x),
-            kLeastAnchorFraction,
-            kMostAnchorFraction
-        );
-        zoom_anchor_fraction_y_ = std::clamp(
-            static_cast<double>(viewport.source_y) + offset.y +
-                static_cast<double>(zoom_anchor_sy_) / zoom - static_cast<double>(before->y),
-            kLeastAnchorFraction,
-            kMostAnchorFraction
-        );
-        zoom_anchored_ = true;
-    }
+    anchor_zoom_at(px, py);
     match_zoom_target_ = std::clamp(
         match_zoom_target_ * std::pow(kZoomWheelFactor, wheel_y),
         least_match_zoom(),

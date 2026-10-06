@@ -172,7 +172,14 @@ logs it.
   edges the original never scrolls to and maps fill with filler tiles, as
   `Game.map_pixel_width/height` hold it); the terrain fills, the box filter
   and the Full tier's atlas (`shown_tile_grid`) end there too, so no tier
-  draws the filler at any zoom.
+  draws the filler at any zoom. The wheel, a pinch and a pad zoom about
+  the pointer, and the settings dialog about the battlefield's centre
+  (`anchor_zoom_at`); where the camera's limits hold the view back, as a
+  map narrower or shorter than the view does and a zoom out past the map's
+  edge, the next step goes on about the same map point (`zoom_hold_`)
+  until something else moves the view, so that the point comes back under
+  the pointer as soon as the limits allow and as many steps back return
+  the camera to where it was.
 - `runtime_skirmish_start.cpp` builds a match: the feature table's GAF files
   are kept as read and parsed without their pixels (`gaf::PixelData::checked`);
   a feature sequence's pixels are decoded from its file when a feature first

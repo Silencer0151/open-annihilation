@@ -8428,6 +8428,22 @@ class Runtime final : public menu::Host,
     /// scroll and a click on the minimap still end the tracking. Returns to
     /// the skirmish menu; throws std::runtime_error on a failure.
     void check_tracking_zoom();
+    /// Checks the wheel's zoom about the pointer as far as the map's edges allow.
+    ///
+    /// On the game's screen, with the camera in the map's top left and bottom
+    /// right corners and in the middle, and on a battlefield wider and taller
+    /// than the map at the farthest zoom, about its centre and the map's far
+    /// corner: each wheel step leaves the camera where the map point first
+    /// under the pointer stays there, to within a map pixel, or as near that
+    /// as the camera's limits allow, and as many steps back return the camera
+    /// to where it began. After a zoom out past the map's corner, a pointer
+    /// moved elsewhere and a view scrolled away and back each zoom in about
+    /// the point then under the pointer. A frame is drawn after each step.
+    /// Leaves the layout as it was and the default zoom; throws
+    /// std::runtime_error on a failure. [runtime_tracking_zoom_check.cpp]
+    ///
+    /// @param frame runs a frame of the match: the zoom eases and the camera moves
+    void check_wheel_zoom_limits(const std::function<void()>& frame);
 
     /// Checks that a turret built during the match draws its current pieces as it turns.
     ///
@@ -10926,6 +10942,17 @@ class Runtime final : public menu::Host,
     /// Keeps the map point under the zoom anchor at its screen position while zooming.
     void apply_zoom_anchor();
 
+    /// Anchors a zoom at a battlefield point: the map point the view shows
+    /// there, or, along an axis on which the camera's limits held back the
+    /// view the last zoom left (zoom_hold_), while the point is within a few
+    /// pixels of where that zoom was anchored, the point that view was asked
+    /// to show there, so that what the limits held back comes back as soon
+    /// as they allow.
+    ///
+    /// @param px canvas column, within the battlefield
+    /// @param py canvas row, within the battlefield
+    void anchor_zoom_at(int px, int py);
+
     /// Eases the battlefield zoom toward its target by frame time, keeping the anchor in place.
     ///
     /// The time is the frame's (frame_time_ns_), so a --frame-rate run eases
@@ -10936,8 +10963,10 @@ class Runtime final : public menu::Host,
 
     /// Zooms the battlefield with the mouse wheel about the pointer.
     ///
-    /// A camera tracking a unit zooms about the unit instead and goes on
-    /// tracking it: the wheel changes only the scale.
+    /// The map point under the pointer stays there as far as the camera's
+    /// limits allow, and what they hold back comes back under it as soon as
+    /// they allow (anchor_zoom_at). A camera tracking a unit zooms about the
+    /// unit instead and goes on tracking it: the wheel changes only the scale.
     ///
     /// @param wheel_y wheel steps; positive zooms in
     /// @param pointer_x canvas column of the pointer
@@ -12838,10 +12867,28 @@ class Runtime final : public menu::Host,
     float match_zoom_ = kDefaultBattlefieldZoom;
     float match_zoom_target_ = kDefaultBattlefieldZoom;
     bool zoom_anchored_ = false;
-    uint32_t zoom_anchor_map_x_{};
-    uint32_t zoom_anchor_map_y_{};
+    /// The anchor's whole map pixel; past the map's left or top edge where
+    /// a view the camera's limits held back was asked to go.
+    int32_t zoom_anchor_map_x_{};
+    int32_t zoom_anchor_map_y_{};
     int zoom_anchor_sx_{};
     int zoom_anchor_sy_{};
+
+    /// The view the zoom's anchor last put the camera at (apply_zoom_anchor),
+    /// at the zoom it was at, and the axes on which the camera's limits held
+    /// it back from where the anchor puts it: a map narrower or shorter than
+    /// the view, or a view the zoom took past the map's edge. While the view
+    /// is still that one, the next zoom goes on about the anchor along those
+    /// axes (anchor_zoom_at); a frame that finds the view moved or zoomed by
+    /// anything else ends it (move_match_camera).
+    struct ZoomHold {
+        bool valid{};                    ///< an anchored zoom has put the camera somewhere
+        std::array<int32_t, 2> camera{}; ///< that camera, as view_camera holds it
+        float zoom{};                    ///< the zoom it was put there at
+        std::array<bool, 2> held{};      ///< across and down: the limits held it back
+    };
+
+    ZoomHold zoom_hold_{};
     uint64_t zoom_clock_{}; ///< the frame time (frame_time_ns_) the zoom last eased at
     bool zoom_clock_valid_ = false;
     uint64_t scroll_clock_{}; ///< the frame time the camera last scrolled at; 0 before
@@ -13084,8 +13131,9 @@ class Runtime final : public menu::Host,
     /// (place_tracking_camera).
     void step_match_frame();
 
-    /// Moves the battlefield camera for the frame, before its clock step: eases
-    /// the zoom, scrolls (pan_match_camera), and, unless a menu holds the match,
+    /// Moves the battlefield camera for the frame, before its clock step: ends
+    /// the zoom's hold on a view something else has moved since (zoom_hold_),
+    /// eases the zoom, scrolls (pan_match_camera), and, unless a menu holds the match,
     /// takes up the unit Game.follow_unit names and centres on the tracked
     /// unit where its tick holds it (center_camera_on_unit). The application
     /// loop and a --frame-rate run move it so.

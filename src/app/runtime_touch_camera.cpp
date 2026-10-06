@@ -16,11 +16,6 @@
 namespace oa::app {
 namespace {
 
-// The range of the map pixels a zoom's exact anchor lies past its whole map
-// pixel, as the wheel's zoom keeps it (runtime_camera.cpp).
-constexpr double kLeastAnchorFraction = -0.5;
-constexpr double kMostAnchorFraction = 1.5;
-
 /// The time constant a pan's inertia decays with, seconds.
 constexpr double kInertiaDecaySeconds = 0.25;
 /// The speed under which a pan's inertia stops, points a second.
@@ -68,34 +63,8 @@ void Runtime::zoom_match_about(float factor, float x, float y) {
         match_layout_.top,
         match_layout_.top + std::max(1, match_layout_.battlefield_height()) - 1
     );
-    const auto viewport = live_viewport(
-        static_cast<uint32_t>(std::max(0, match_camera_x_)),
-        static_cast<uint32_t>(std::max(0, match_camera_z_))
-    );
-    // The map pixel under the point and the exact point a view drawn between
-    // map pixels shows there, anchored as the wheel's zoom anchors them.
-    const auto before = oa::present::world_renderer::screen_to_map_pixel(viewport, {px, py});
-    if (before) {
-        zoom_anchor_map_x_ = before->x;
-        zoom_anchor_map_y_ = before->y;
-        zoom_anchor_sx_ = px - match_layout_.left;
-        zoom_anchor_sy_ = py - match_layout_.top;
-        const auto offset = view_offset();
-        const auto zoom = static_cast<double>(match_zoom() <= 0.0F ? 1.0F : match_zoom());
-        zoom_anchor_fraction_x_ = std::clamp(
-            static_cast<double>(viewport.source_x) + offset.x +
-                static_cast<double>(zoom_anchor_sx_) / zoom - static_cast<double>(before->x),
-            kLeastAnchorFraction,
-            kMostAnchorFraction
-        );
-        zoom_anchor_fraction_y_ = std::clamp(
-            static_cast<double>(viewport.source_y) + offset.y +
-                static_cast<double>(zoom_anchor_sy_) / zoom - static_cast<double>(before->y),
-            kLeastAnchorFraction,
-            kMostAnchorFraction
-        );
-        zoom_anchored_ = true;
-    }
+    // The map point under the point, anchored as the wheel's zoom anchors it.
+    anchor_zoom_at(px, py);
     // The zoom and its target together: nothing eases, so the map stays
     // under the fingers.
     const float zoom = std::clamp(match_zoom_ * factor, least_match_zoom(), kMaxBattlefieldZoom);
