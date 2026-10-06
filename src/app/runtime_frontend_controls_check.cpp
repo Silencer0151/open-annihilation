@@ -1079,26 +1079,31 @@ void Runtime::check_frontend_controls() {
     };
     expect(stored_size() == "desktop", "CANCEL kept a Screen Size the player moved");
     // OK keeps the Screen Size chosen as the Screen size setting, from the
-    // next start, and the options open on it again.
+    // next start, and the options open on it again. The slider moves to the
+    // end away from the size the options open on: the largest, or on a
+    // display whose largest that is, the smallest.
+    const auto opened_on = EngineSettingsState::screen_size_in_effect(*this, offered);
+    const bool to_largest = opened_on != offered.back();
+    const auto moved_to = to_largest ? offered.back() : offered.front();
     click(entry::resource_name(entry::Button::options));
     click("VISUALS");
-    drag_check_knob("VIDSLDR", 400);
+    drag_check_knob("VIDSLDR", to_largest ? 400 : -400);
     idle_tick();
     click("PREV");
     require(screen_ == Screen::single_player, "OK did not leave the options");
-    const auto largest = offered.back();
-    const auto largest_text = std::to_string(largest.width) + 'x' + std::to_string(largest.height);
+    const auto moved_to_text =
+        std::to_string(moved_to.width) + 'x' + std::to_string(moved_to.height);
     expect(
-        stored_size() == largest_text && engine_settings_state().current.screen_size == largest &&
-            preferences_.display_width == largest.width &&
-            preferences_.display_height == largest.height,
-        "OK on Screen Size " + largest_text + " stored the setting as " + stored_size()
+        stored_size() == moved_to_text && engine_settings_state().current.screen_size == moved_to &&
+            preferences_.display_width == moved_to.width &&
+            preferences_.display_height == moved_to.height,
+        "OK on Screen Size " + moved_to_text + " stored the setting as " + stored_size()
     );
     click(entry::resource_name(entry::Button::options));
     click("VISUALS");
     expect(
-        label_text("VIDVAL") == size_text(largest),
-        "VISUALS opened on " + label_text("VIDVAL") + " after OK on " + size_text(largest)
+        label_text("VIDVAL") == size_text(moved_to),
+        "VISUALS opened_on on " + label_text("VIDVAL") + " after OK on " + size_text(moved_to)
     );
     click("CANCEL");
     // The check's preferences file starts the next run at Desktop again.
