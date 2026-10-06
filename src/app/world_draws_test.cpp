@@ -1053,6 +1053,83 @@ void test_projectile_lens() {
     OA_CHECK(nearest_at(at(300, 139, 400)).y == 293);
 }
 
+/// An explosion record's flash and sprite, placed with HeightLift::down, land
+/// on the point the record is culled on (draw_explosions): a record at an odd
+/// height on the battlefield's bottom row is drawn on that row, one row
+/// below where half its height rounded to the nearest pixel would put it,
+/// and the record a row lower is culled.
+void test_explosion_record_points() {
+    // The battlefield from (128, 32) to (767, 511), the camera at (100, 200).
+    const oa::sim::effect_particles::ExplosionView view{100, 200, {128, 32, 767, 511}};
+    oa::present::world_renderer::BattlefieldViewport viewport{};
+    viewport.source_x = 100;
+    viewport.source_y = 200;
+    viewport.width = 640;
+    viewport.height = 480;
+    const oa::formats::gaf::Sequence sequence{};
+    const auto world = std::make_unique<oa::sim::effect_particles::EffectWorld>();
+    // Whole map pixels x, height and z: on the bottom row at an odd
+    // height, one row below it, and an odd height inside the battlefield.
+    const std::array<std::array<int32_t, 3>, 3> centres{
+        {{300, 3, 680}, {300, 3, 681}, {400, 139, 400}}
+    };
+    for (const auto& centre : centres) {
+        auto& record = world->explosions[world->explosion_count++];
+        record.position = {centre[0] * 0x10000, centre[1] * 0x10000, centre[2] * 0x10000};
+        record.flash.sequence = &sequence;
+        record.sprite.sequence = &sequence;
+    }
+
+    struct Placed {
+        oa::sim::effect_particles::DrawKind kind{};
+        oa::present::world_renderer::ScreenPoint down{};
+        oa::present::world_renderer::ScreenPoint nearest{};
+    };
+
+    struct Context {
+        const oa::present::world_renderer::BattlefieldViewport* viewport{};
+        std::vector<Placed> placed;
+    } context{&viewport, {}};
+
+    oa::sim::effect_particles::draw_explosions(
+        *world, view, &context, [](void* raw, const oa::sim::effect_particles::ParticleDraw& item) {
+            auto& out = *static_cast<Context*>(raw);
+            const std::array<uint32_t, 3> position{
+                static_cast<uint32_t>(item.position.x),
+                static_cast<uint32_t>(item.position.y),
+                static_cast<uint32_t>(item.position.z)
+            };
+            out.placed.push_back(
+                {item.kind,
+                 oa::app::project_world_point(*out.viewport, position, oa::app::HeightLift::down),
+                 oa::app::project_world_point(
+                     *out.viewport, position, oa::app::HeightLift::nearest
+                 )}
+            );
+        }
+    );
+    using oa::sim::effect_particles::DrawKind;
+    // Two flashes, then the two records' sprites; the record a row lower
+    // draws nothing.
+    OA_CHECK(context.placed.size() == 4);
+    if (context.placed.size() != 4)
+        return;
+    OA_CHECK(context.placed[0].kind == DrawKind::flash);
+    OA_CHECK(context.placed[1].kind == DrawKind::flash);
+    OA_CHECK(context.placed[2].kind == DrawKind::sprite);
+    OA_CHECK(context.placed[3].kind == DrawKind::sprite);
+    for (const std::size_t index : {std::size_t{0}, std::size_t{2}}) {
+        const auto& placed = context.placed[index];
+        OA_CHECK(placed.down.x == 328 && placed.down.y == 511);
+        OA_CHECK(placed.nearest.y == 510);
+    }
+    for (const std::size_t index : {std::size_t{1}, std::size_t{3}}) {
+        const auto& placed = context.placed[index];
+        OA_CHECK(placed.down.x == 428 && placed.down.y == 163);
+        OA_CHECK(placed.nearest.y == 162);
+    }
+}
+
 } // namespace
 
 int main() {
@@ -1061,6 +1138,7 @@ int main() {
     test_frame_shadows();
     test_explosion_flashes();
     test_projectile_lens();
+    test_explosion_record_points();
     test_frame_by_frame_threshold();
     test_frame_cache_empty();
     test_frame_cache_over_budget();

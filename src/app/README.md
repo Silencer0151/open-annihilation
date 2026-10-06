@@ -239,7 +239,9 @@ logs it.
   its sprite and under the units off the ground, the smoke and the fog,
   lights the palette entry under each of its pixels through the light
   table's row the pixel names (`blit_world_lit_hotspot`), culled on its
-  centre alone and with no sight test, as strongly as the Explosion flash
+  centre alone and with no sight test, and placed with the record's sprite
+  on that centre, half the record's height rounded down above its ground
+  point (`project_world_point`), as strongly as the Explosion flash
   setting asks, held to a mod's lower level
   (`view_rules::explosion_flash_drawn`, ui.explosion-flash); at Off none is
   listed, and the frame is drawn as without flashes. A projectile of render

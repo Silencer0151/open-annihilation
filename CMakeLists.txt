@@ -754,11 +754,12 @@ if(BUILD_TESTING)
   # moving the pixels its rule names, as the 8-bit lens sprite does, at
   # scales 1 to 3 and within the clip, its battlefield test, and the frame
   # point it is drawn at, raised by half an odd height rounded down where
-  # other things round to the nearest pixel. A file over the decoded
-  # threshold drawn a frame at a time, its frames rendered from its bytes
-  # through the frame cache: its
-  # budget, the frame drawn longest ago going first, a frame over the
-  # budget drawn without being kept, and a failed frame not read again.
+  # other things round to the nearest pixel; an explosion record's flash
+  # and sprite placed the same way, on the point the record is culled on.
+  # A file over the decoded threshold drawn a frame at a time, its frames
+  # rendered from its bytes through the frame cache: its budget, the frame
+  # drawn longest ago going first, a frame over the budget drawn without
+  # being kept, and a failed frame not read again.
   add_executable(oa-app-world-draws-test src/app/world_draws_test.cpp src/app/world_draws.cpp)
   target_link_libraries(oa-app-world-draws-test PRIVATE oa-present oa-present-model
     oa-present-world-renderer oa-formats-gaf oa-sim-effect-particles oa-sim-model-runtime
@@ -1519,7 +1520,7 @@ if(OA_BUILD_PLATFORM)
       # default, Full, draws them.
       set(oa_director_render_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/director-render")
       set(oa_director_render_hashes
-        "director render: frames 1bbd37d626edd02ccd54151049ec77a9501bb9ea923ca57a5ebfad70db7636d1 sound 98718c0ce9d785c0a09f409493bd394e92371b25a8a79bd3d72b6d5bab2234f3")
+        "director render: frames 30c0058be0acb9c3d8c04e51de5948307445940aae6447487f41ea3871dcd03d sound 98718c0ce9d785c0a09f409493bd394e92371b25a8a79bd3d72b6d5bab2234f3")
       file(MAKE_DIRECTORY "${oa_director_render_dir}")
       add_test(NAME native-director-render COMMAND oa-game --game-dir "${OA_GAME_DIR}"
         --mute --check-director-render

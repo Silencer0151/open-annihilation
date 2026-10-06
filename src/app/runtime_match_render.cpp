@@ -1585,7 +1585,12 @@ void Runtime::render_match_surface() {
     draw_list.flash_strength = flash_level == oa::ui::engine_settings::ExplosionFlash::reduced
                                    ? FlashStrength::reduced
                                    : FlashStrength::full;
-    // Explosion records and the effect layers.
+    // Explosion records and the effect layers. An explosion record's flash
+    // and sprite are raised by half the record's whole height rounded down,
+    // as draw_explosions culls the record and the game places them, so an
+    // odd height does not lift them a row; the layers' items are raised to
+    // the nearest pixel.
+    auto effect_lift = HeightLift::nearest;
     auto plan_effect = [&](const oa::sim::effect_particles::ParticleDraw& item) {
         if (item.kind == oa::sim::effect_particles::DrawKind::fragment) {
             plan_fragment(item);
@@ -1603,11 +1608,12 @@ void Runtime::render_match_surface() {
             return;
         }
         // Part of the way through the ticks' steps, on the scene.
-        const auto screen = project_match_point(
+        const auto screen = project_world_point(
             scene_view,
             oa::sim::match_runtime::fixed_words(point_along_step(
                 item.position, item.motion, presentation.batch, presentation.fraction
-            ))
+            )),
+            effect_lift
         );
         const auto pal = static_cast<std::size_t>(item.color) * 4U;
         if (item.kind == oa::sim::effect_particles::DrawKind::pixel) {
@@ -1855,9 +1861,11 @@ void Runtime::render_match_surface() {
             (*static_cast<decltype(plan_debris_piece)*>(context))(piece);
         }
     );
+    effect_lift = HeightLift::down;
     oa::sim::effect_particles::draw_explosions(
         match_->effects(), explosion_view, &plan_effect, visit
     );
+    effect_lift = HeightLift::nearest;
     plan_effect_layers(7, 7);
     for (const auto index : draw_plan.raised_units)
         plan_unit(units_to_draw[index]);
