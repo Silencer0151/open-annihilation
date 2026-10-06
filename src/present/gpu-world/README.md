@@ -148,12 +148,14 @@ and grid to pinned FNV-1a digests, with and without a gamma table and
 within either edge; refuses each malformed map and each bad read; and
 prints the memory figures within 4096 and within 2048.
 
-`gpu-world-terrain-atlas-data` does the same over every map of the installed
-game: level 0 against the fill over the whole map, level 1 against the area
-pass and level 2 against the filter written out on every fourth band of 256
-rows, and every eighth map again through a gamma table; then builds the
-largest atlas within 2048 as well, checks that it shows the same views from
-pages within the edge, and prints both figures.
+`gpu-world-terrain-atlas-part1-data` to `gpu-world-terrain-atlas-part4-data`
+do the same over every map of the installed game, each over a quarter of the
+maps in name order (`--data --part K/4`): level 0 against the fill over the
+whole map, level 1 against the area pass and level 2 against the filter
+written out on every fourth band of 256 rows, and every eighth map again
+through a gamma table; then each builds the largest atlas of its quarter
+within 2048 as well, checks that it shows the same views from pages within
+the edge, and prints both figures.
 
 ## Sprite pages
 

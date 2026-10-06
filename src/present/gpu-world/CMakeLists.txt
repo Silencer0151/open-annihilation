@@ -24,23 +24,27 @@ if(BUILD_TESTING)
   # gutters, zoom 1 against today's terrain fill, the mip levels against the
   # area pass and today's box filter, the whole chain's exact reduction,
   # pinned digests, malformed maps and the memory figures; with --data, the
-  # same over every map of the installed game.
+  # same over every map of the installed game, a quarter of them in name
+  # order in each of the four tests (--part K/4).
   add_executable(oa-gpu-world-terrain-atlas-test tests/terrain_atlas_test.cpp)
   target_link_libraries(oa-gpu-world-terrain-atlas-test PRIVATE oa-present-gpu-world oa-present-world-renderer
     oa-present oa-formats-hpi oa-test-support oa-test-game-data oa-options)
   add_test(NAME gpu-world-terrain-atlas COMMAND oa-gpu-world-terrain-atlas-test)
   set_tests_properties(gpu-world-terrain-atlas PROPERTIES TIMEOUT 300)
-  oa_add_game_data_test(gpu-world-terrain-atlas-data oa-gpu-world-terrain-atlas-test --data)
-  set_tests_properties(gpu-world-terrain-atlas-data PROPERTIES TIMEOUT 900)
-  # The run builds and checks the atlas of every map of the installed
-  # game, 13.6 GB of texels over 3.1c's 275 maps: about a minute in a
+  # The four build and check the atlas of every map of the installed game,
+  # 13.6 GB of texels over 3.1c's 275 maps: about a minute in all in a
   # Check build, about 1,130 s in a Debug build, and about 2,500 s in a
   # Debug build with the sanitizers, which check every read and write.
-  if(OA_SANITIZERS)
-    set_tests_properties(gpu-world-terrain-atlas-data PROPERTIES TIMEOUT 5400)
-  elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    set_tests_properties(gpu-world-terrain-atlas-data PROPERTIES TIMEOUT 2700)
-  endif()
+  foreach(oa_atlas_part RANGE 1 4)
+    oa_add_game_data_test(gpu-world-terrain-atlas-part${oa_atlas_part}-data
+      oa-gpu-world-terrain-atlas-test --data --part ${oa_atlas_part}/4)
+    set_tests_properties(gpu-world-terrain-atlas-part${oa_atlas_part}-data PROPERTIES TIMEOUT 900)
+    if(OA_SANITIZERS)
+      set_tests_properties(gpu-world-terrain-atlas-part${oa_atlas_part}-data PROPERTIES TIMEOUT 5400)
+    elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
+      set_tests_properties(gpu-world-terrain-atlas-part${oa_atlas_part}-data PROPERTIES TIMEOUT 2700)
+    endif()
+  endforeach()
 
   # The sprite pages: frames through the palette and gamma in each draw
   # mode, RLE edge cases through the GAF reader, malformed frames refused,

@@ -9,7 +9,8 @@
 // for byte; every level's exact reduction; the same views from every page
 // edge; the pinned digests of the seeded map's page and grid; refusals; the
 // memory figures. With --data, the same over every map of the installed
-// game.
+// game, or with --data --part K/N over the K-th of N runs of them in name
+// order.
 #include "oa/present/gpu_world/terrain_atlas.hpp"
 #include "oa/present/palette_tables.hpp"
 #include "oa/present/world_renderer.hpp"
@@ -26,7 +27,9 @@
 #include <cstdio>
 #include <cstring>
 #include <random>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -1326,9 +1329,47 @@ std::string atlas_figure(const std::string& name, const Map& map, const gw::Terr
     return figure;
 }
 
-void test_installed_maps(const oa::AssetStore& assets) {
+/// The part of the installed maps --data checks: the K-th of N runs of them
+/// in name order, each a whole share of the maps.
+struct MapPart {
+    std::size_t index = 1; // K, from 1
+    std::size_t count = 1; // N
+};
+
+/// Returns the part a --part value names, K/N with K from 1 through N.
+///
+/// Throws std::invalid_argument for any other value.
+///
+/// @param text the option's value
+/// @return the part
+MapPart parse_map_part(std::string_view text) {
+    const auto slash = text.find('/');
+    const auto number = [](std::string_view digits) {
+        std::size_t value = 0;
+        if (digits.empty() || digits.size() > 3)
+            throw std::invalid_argument("--part expects K/N");
+        for (const char digit : digits) {
+            if (digit < '0' || digit > '9')
+                throw std::invalid_argument("--part expects K/N");
+            value = value * 10U + static_cast<std::size_t>(digit - '0');
+        }
+        return value;
+    };
+    if (slash == std::string_view::npos)
+        throw std::invalid_argument("--part expects K/N");
+    const MapPart part{number(text.substr(0, slash)), number(text.substr(slash + 1))};
+    if (part.index == 0 || part.index > part.count)
+        throw std::invalid_argument("--part expects K/N with K from 1 through N");
+    return part;
+}
+
+void test_installed_maps(const oa::AssetStore& assets, MapPart part) {
     std::vector<std::string> maps = assets.list_effective("maps", ".tnt");
     std::sort(maps.begin(), maps.end());
+    // The part's maps; each keeps its place in the whole list, which picks
+    // the maps checked through a gamma table.
+    const std::size_t first = maps.size() * (part.index - 1U) / part.count;
+    const std::size_t end = maps.size() * part.index / part.count;
     const oa::PaletteBytes palette = installed_palette(assets);
     const GammaTable brighter = gamma_table(1.25F);
     int checked = 0;
@@ -1344,8 +1385,8 @@ void test_installed_maps(const oa::AssetStore& assets) {
     uint64_t largest_bytes = 0;
     std::string largest_figure;
     const auto started = std::chrono::steady_clock::now();
-    for (std::size_t m = 0; m < maps.size(); ++m) {
-        if ((m + 1U) % progress_maps == 0 || m + 1U == maps.size()) {
+    for (std::size_t m = first; m < end; ++m) {
+        if ((m + 1U) % progress_maps == 0 || m + 1U == end) {
             const std::chrono::duration<double> elapsed =
                 std::chrono::steady_clock::now() - started;
             std::printf("  %zu of %zu maps, %.1f s\n", m + 1U, maps.size(), elapsed.count());
@@ -1418,6 +1459,7 @@ void test_installed_maps(const oa::AssetStore& assets) {
     }
     // The largest atlas within 2048 as well: the same tiles and views on
     // more pages, each within the edge, and its footprint equal to the build.
+    // A part checks its own largest.
     if (!largest_name.empty()) {
         const auto bytes = oa::test::read_game_file(assets, largest_name);
         const auto parsed = oa::formats::tnt::parse(bytes);
@@ -1444,9 +1486,12 @@ void test_installed_maps(const oa::AssetStore& assets) {
         }
     }
     std::printf(
-        "installed terrain atlases: %d maps checked (%d through a gamma table), %d unparsed, %d "
-        "refused; "
+        "installed terrain atlases, maps %zu to %zu of %zu: %d maps checked (%d through a gamma "
+        "table), %d unparsed, %d refused; "
         "%llu cells, %llu slots, %llu pages, %llu bytes of texels in all; %zu texels differ\n",
+        first + 1U,
+        end,
+        maps.size(),
         checked,
         through_gamma,
         unparsed,
@@ -1465,7 +1510,18 @@ void test_installed_maps(const oa::AssetStore& assets) {
 
 int main(int argc, char** argv) {
     if (oa::test::game_data_requested(argc, argv)) {
-        test_installed_maps(oa::test::require_game_assets("the installed maps' terrain atlases"));
+        MapPart part;
+        if (argc > 3 && std::string_view(argv[2]) == "--part") {
+            try {
+                part = parse_map_part(argv[3]);
+            } catch (const std::invalid_argument& error) {
+                std::fprintf(stderr, "%s\n", error.what());
+                return 2;
+            }
+        }
+        test_installed_maps(
+            oa::test::require_game_assets("the installed maps' terrain atlases"), part
+        );
     } else {
         test_page_plan();
         test_packing();
