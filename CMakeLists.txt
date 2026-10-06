@@ -1118,7 +1118,9 @@ if(OA_BUILD_PLATFORM)
       # shrink zoomed out to 13 by 3 at the Full floor, alike in every tier.
       # Zoomed out to the whole map, past the zoom units are drawn whole at,
       # each tier's frame is the processor's far view, which plans no model,
-      # Full's presented without leaving Full.
+      # Full's presented without leaving Full. A shot of render type 2 whose
+      # lens's centre lies off the battlefield draws no lens, and a laser's
+      # shot after it lists the lines it lists alone.
       # Pictures of one moment at zoom 0.5, 1 and 2.5 in both tiers, and of
       # the shadows at each of those zooms, go to local/reports. Skips under
       # 2 GiB of memory.

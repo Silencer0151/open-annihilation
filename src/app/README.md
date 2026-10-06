@@ -261,10 +261,10 @@ logs it.
   five by five map pixels at its centre spread out from it, read from the
   frame as it stood, as the game draws them. Its centre is raised by half
   the shot's height rounded down (`project_world_point`), where units and
-  most particles round to the nearest pixel. As in the game, the pass stops
-  at such a projectile in sight whose centre lies off the battlefield at the
-  tick, leaving it and every projectile after it undrawn that frame
-  (`projectiles_drawn`). The Full tier draws no lens. Everything drawing builds or
+  most particles round to the nearest pixel. A lens whose centre lies off
+  the battlefield at the tick is not drawn
+  (`projectile_lens_on_battlefield`), and every projectile after it is
+  drawn as without it. The Full tier draws no lens. Everything drawing builds or
   changes on the way is done then, once, on the drawing thread: the piece
   transforms and the presented copies, the units' and features' cached
   images and silhouettes and those of the units they carry

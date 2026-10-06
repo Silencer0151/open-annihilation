@@ -1085,15 +1085,14 @@ void Runtime::render_match_surface() {
     const auto add_draw = [&draw_list](WorldDrawKind kind, std::size_t index) {
         add_world_draw(draw_list, kind, index);
     };
-    // Projectile render types 1, 3 and 6, of the first `drawn` projectiles:
-    // the projectile's ground shadow, then its model; a missile also draws
-    // its first child (the flame or propeller) while it still has flight
-    // time.
-    const auto plan_projectile_models = [&](MatchModels& models, std::size_t drawn) {
+    // Projectile render types 1, 3 and 6: the projectile's ground shadow,
+    // then its model; a missile also draws its first child (the flame or
+    // propeller) while it still has flight time.
+    const auto plan_projectile_models = [&](MatchModels& models) {
         auto& renderer = models.renderer;
         const auto shots = match_->projectiles();
         const auto& shown_shots = models.presentation.presented_shots;
-        for (std::size_t index = 0; index < std::min(drawn, shots.size()); ++index) {
+        for (std::size_t index = 0; index < shots.size(); ++index) {
             const auto& shot = shots[index];
             const auto* weapon = match_->projectile_weapon(shot);
             if (weapon == nullptr || shot.burst_remaining != 0)
@@ -1781,12 +1780,11 @@ void Runtime::render_match_surface() {
          oa::sim::effect_particles::battlefield_screen_x + vis_w - 1,
          oa::sim::effect_particles::battlefield_screen_y + vis_h - 1}
     };
-    const std::size_t shots_drawn = projectiles_drawn(explosion_view);
     if (!far)
-        plan_projectile_models(models, shots_drawn);
+        plan_projectile_models(models);
     // Every captured tile goes back to the frame after the projectiles.
     add_draw(WorldDrawKind::commit_always, 0);
-    plan_match_projectiles(draw_list, scene_view, shots_drawn);
+    plan_match_projectiles(draw_list, scene_view, explosion_view);
     // Nano streams are the type-6 particles; the beam line is a debug aid.
     const auto debug_beams = options_.debug_order_lines
                                  ? match_->nano_lasers()

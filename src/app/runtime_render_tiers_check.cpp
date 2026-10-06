@@ -59,6 +59,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <initializer_list>
 #include <iostream>
 #include <optional>
 #include <span>
@@ -115,6 +116,17 @@ constexpr int counted_hud_frames = 3;
 /// before its first frame, so that lasers fire and units move.
 constexpr std::size_t fight_units_per_side = 10;
 constexpr int fight_ticks = 150;
+/// The weapon render types of a laser's shot, drawn as lines, and of a
+/// shot that draws a lens of the ground under it.
+constexpr uint8_t laser_render_type = 0;
+constexpr uint8_t lens_render_type = 2;
+/// How far the projectile pass's case puts a laser's tail from its head,
+/// 16.16 map pixels across, and how far past the view's edge it puts the
+/// shots off the battlefield, in map pixels.
+constexpr oa_fixed lens_check_laser_length = 16 << 16;
+constexpr int32_t lens_check_margin = 8;
+/// The most shots that case puts in the pool at once.
+constexpr std::ptrdiff_t lens_check_shots = 2;
 
 /// The bounds the Full tier's explosion flashes are held to against the
 /// processor's, over the pixels where a flash alone is the card's own: the
@@ -1391,6 +1403,152 @@ int Runtime::check_render_tiers() {
                   << boxed.width << 'x' << boxed.height << '\n';
     }
     switch_tier(true);
+    // A shot of render type 2 whose lens's centre lies off the battlefield
+    // draws no lens, and the projectiles after it in the pool are drawn as
+    // without it: a laser's shot behind a lens in the view, and behind one
+    // just past the view's edge, lists the lines it lists alone, and only
+    // the lens in the view is listed. Each pool holds only the case's shots,
+    // at the local unit's place, which is in its player's sight; the
+    // match's own pool is put back after.
+    {
+        // The first weapon of each kind, past record zero, the fallback; a
+        // laser is one with a colour.
+        std::optional<uint8_t> lens_weapon;
+        std::optional<uint8_t> laser_weapon;
+        for (std::size_t index = 1; index < oa::sim::combat_state::weapon_registry_capacity;
+             ++index) {
+            const auto weapon = static_cast<uint8_t>(index);
+            if (weapon_registry_.name(weapon).empty())
+                continue;
+            const auto& definition = weapon_registry_.definition(weapon);
+            if (definition.rendertype == lens_render_type && !lens_weapon)
+                lens_weapon = weapon;
+            else if (
+                definition.rendertype == laser_render_type && definition.color != 0 && !laser_weapon
+            )
+                laser_weapon = weapon;
+        }
+        if (!lens_weapon || !laser_weapon) {
+            std::cout << "render tiers check: the data has no weapon of render type 2 or no "
+                         "laser with a colour; the projectile pass past a lens is not checked\n";
+        } else {
+            oa::World& world = match_->state();
+            // The match's count and every record a case writes over.
+            const int32_t match_count = world.game.projectile_count;
+            const std::vector<oa::Projectile> match_shots(
+                world.projectiles,
+                world.projectiles + std::max<std::ptrdiff_t>(lens_check_shots, match_count)
+            );
+            const oa::FixedVec3 place = oa::world_unit_at(&world, anchor)->position;
+            const auto shot_of = [&](uint8_t weapon) {
+                oa::Projectile shot{};
+                shot.def = static_cast<oa_ref32>(weapon) + 1U;
+                shot.position = place;
+                shot.origin = place;
+                shot.origin.x += lens_check_laser_length;
+                return shot;
+            };
+
+            struct Listed {
+                std::size_t lenses{};
+                std::vector<LineDraw> lines;
+            };
+
+            // Draws a frame with only the shots in the pool and returns what
+            // its list holds.
+            const auto listed_with = [&](std::initializer_list<oa::Projectile> shots) {
+                std::copy(shots.begin(), shots.end(), world.projectiles);
+                world.game.projectile_count = static_cast<int32_t>(shots.size());
+                std::ignore = presented();
+                const WorldDrawList& list = match_models().draws;
+                return Listed{list.lenses.size(), list.lines};
+            };
+            const auto same_lines = [](const Listed& one, const Listed& other) {
+                return std::equal(
+                    one.lines.begin(),
+                    one.lines.end(),
+                    other.lines.begin(),
+                    other.lines.end(),
+                    [](const LineDraw& a, const LineDraw& b) {
+                        return a.x0 == b.x0 && a.y0 == b.y0 && a.x1 == b.x1 && a.y1 == b.y1 &&
+                               a.color == b.color;
+                    }
+                );
+            };
+            // Where the frame just drawn puts the unit's place: on the
+            // battlefield rectangle or off it, as the pass tests a lens.
+            const auto place_on_battlefield = [&]() {
+                const oa::sim::effect_particles::ExplosionView view{
+                    match_camera_x_,
+                    match_camera_z_,
+                    {oa::sim::effect_particles::battlefield_screen_x,
+                     oa::sim::effect_particles::battlefield_screen_y,
+                     oa::sim::effect_particles::battlefield_screen_x + visible_map_width() - 1,
+                     oa::sim::effect_particles::battlefield_screen_y + visible_map_height() - 1}
+                };
+                return projectile_lens_on_battlefield(
+                    view, oa::sim::match_runtime::fixed_words(place)
+                );
+            };
+            if (!match_->point_visible(
+                    match_view_player(), oa::sim::match_runtime::fixed_words(place)
+                ))
+                fail("the local unit's place is out of its player's sight");
+            at_zoom(1.0F);
+            const Listed laser_in_view = listed_with({shot_of(*laser_weapon)});
+            const Listed lens_in_view =
+                listed_with({shot_of(*lens_weapon), shot_of(*laser_weapon)});
+            if (!place_on_battlefield())
+                fail("the view centred on the local unit leaves its place off the battlefield");
+            // The view moved so that the place lies just past one of its
+            // edges, the first the map leaves room for.
+            const int32_t place_x = static_cast<int32_t>(static_cast<uint32_t>(place.x) >> 16);
+            const int32_t place_z = static_cast<int32_t>(static_cast<uint32_t>(place.z) >> 16);
+            const int32_t across = visible_map_width();
+            const int32_t down = visible_map_height();
+            bool moved = false;
+            for (const auto& [camera_x, camera_z] :
+                 {std::pair{place_x + lens_check_margin, place_z - down / 2},
+                  std::pair{place_x - across - lens_check_margin, place_z - down / 2},
+                  std::pair{place_x - across / 2, place_z + lens_check_margin},
+                  std::pair{place_x - across / 2, place_z - down - lens_check_margin}}) {
+                set_camera_position(camera_x, camera_z, 0);
+                std::ignore = presented();
+                if (!place_on_battlefield()) {
+                    moved = true;
+                    break;
+                }
+            }
+            if (!moved)
+                fail("the map leaves no room to put the local unit's place past the view's edge");
+            const Listed laser_past_view = listed_with({shot_of(*laser_weapon)});
+            const Listed lens_past_view =
+                listed_with({shot_of(*lens_weapon), shot_of(*laser_weapon)});
+            std::copy(match_shots.begin(), match_shots.end(), world.projectiles);
+            world.game.projectile_count = match_count;
+            at_zoom(1.0F);
+            std::ignore = presented();
+            if (laser_in_view.lines.empty() || laser_past_view.lines.empty())
+                fail("a laser's shot listed no line");
+            if (laser_in_view.lenses != 0 || laser_past_view.lenses != 0)
+                fail("a laser's shot listed a lens");
+            if (lens_in_view.lenses != 1)
+                fail("a lens in the view was not listed");
+            if (!same_lines(lens_in_view, laser_in_view))
+                fail("a laser's shot after a lens in the view lists other lines than alone");
+            if (lens_past_view.lenses != 0)
+                fail("a lens whose centre lies off the battlefield was listed");
+            if (!same_lines(lens_past_view, laser_past_view))
+                fail(
+                    "a laser's shot after a lens off the battlefield lists other lines than "
+                    "alone"
+                );
+            std::cout << "render tiers check: a lens off the battlefield draws nothing and the "
+                         "shots after it are drawn; weapons "
+                      << weapon_registry_.name(*lens_weapon) << " and "
+                      << weapon_registry_.name(*laser_weapon) << '\n';
+        }
+    }
     // Zoom 1 at a whole-number chrome scale: the frame the processor composes.
     at_zoom(1.0F);
     {
