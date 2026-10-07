@@ -77,6 +77,10 @@ struct TerrainView {
     float scale{1.0F};  ///< target pixels per map pixel, above 0
     uint32_t width{};   ///< target pixels the view spans across
     uint32_t height{};  ///< target pixels the view spans down
+    /// Target pixels before the view's origin, across and down, that its
+    /// tiles cover too: a picture moved by a fraction of a pixel shows that
+    /// much more of the map at its edge.
+    uint32_t margin{};
     /// Every tile's edges on whole target pixels, each edge where its map
     /// pixel lands rounded to the nearest, so that the tiles of a zoom
     /// whose tiles span a fraction of a pixel meet on every renderer.
@@ -93,9 +97,10 @@ struct TileRange {
     uint32_t end_row{};
 };
 
-/// Returns the tiles a view shows: from the tile under the camera to the
-/// tile under the view's far edge, within the grid; a camera before the
-/// map starts at the grid's first tile.
+/// Returns the tiles a view shows: from the tile under the camera, or
+/// under the map pixel its margin reaches before the camera, to the tile
+/// under the view's far edge, within the grid; a camera before the map
+/// starts at the grid's first tile.
 ///
 /// @param atlas the map's atlas, whose grid is the map's tiles
 /// @param view the view

@@ -173,6 +173,41 @@ struct Runtime::FullPresentation {
     /// the terrain LINEAR straight to the window.
     bool target_refused{};
 
+    // The target a frame below zoom 1 draws the battlefield into, on the
+    // screen pixels laid from the map's corner, with a pixel of room on
+    // every side, before the card moves it by the rest of a screen pixel
+    // onto the view's exact place (Runtime::view_shift); made at the
+    // battlefield's size and twice the display's density, or at the
+    // display's density alone where the memory or the renderer refuses
+    // that (Runtime::ensure_full_moved_target).
+    card::TargetHandle moved_target{};
+    /// The moved target's picture moved by the rest of a screen pixel at its
+    /// own texels, LINEAR, which is then reduced onto the battlefield, each
+    /// display pixel the mean of the two by two texels over it, so that the
+    /// picture keeps one sharpness wherever between pixels it lands; at the
+    /// moved target's size and factor. None at the display's density alone,
+    /// where one LINEAR draw moves and lands the moved target.
+    card::TargetHandle shifted_target{};
+    uint32_t moved_target_width{};  ///< layout pixels across, the room included; 0 for none
+    uint32_t moved_target_height{}; ///< layout pixels down
+    uint32_t moved_target_factor{}; ///< texture pixels a layout pixel; 0 for none
+    /// The size and factor at which the two targets at twice the display's
+    /// density were refused, by the memory or the renderer, and are not
+    /// asked for again; 0 for none.
+    uint32_t refused_moved_width{};
+    uint32_t refused_moved_height{};
+    uint32_t refused_moved_factor{};
+    /// The frame that moves the target onto the battlefield, run after the
+    /// painters' overlay is drawn into the target: the resolve into the
+    /// shifted target by the shift and the resolve of that onto the
+    /// battlefield, or with no shifted target the one resolve that does
+    /// both.
+    card::CardFrame moved_frame;
+
+    /// Destroys the moved and shifted targets and forgets their size and
+    /// factor; a refusal remembered is left for ensure_full_moved_target.
+    void destroy_moved_targets() noexcept;
+
     // The world target the battlefield is drawn into for anti-aliasing
     // (full_supersampling.hpp): at the supersample factor the Enhanced
     // anti-aliasing row asks for, fitted to the budget S and the texture

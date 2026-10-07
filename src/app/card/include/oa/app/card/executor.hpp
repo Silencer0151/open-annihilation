@@ -255,8 +255,9 @@ class Executor {
         uint32_t generation{};
         SDL_Texture* texture{}; ///< the size times the factor
         /// The texture halved once, twice and three times, each half the
-        /// one before: the halvings a factor above 2 resolves through, one
-        /// fewer than the factor's doublings, and the first for a target
+        /// one before: the halvings a factor above 2 resolves through into
+        /// the frame's final target, one fewer than the factor's doublings
+        /// (into a target at a factor above 1, fewer), and the first for a target
         /// made with keep_half, which the two-level reduction reads it from;
         /// null beyond those made.
         std::array<SDL_Texture*, most_halvings> halves{};

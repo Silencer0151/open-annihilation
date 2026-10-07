@@ -223,8 +223,19 @@ struct Batch {
     TargetHandle source{}; ///< the render target a resolve or a blend_reduce draws; never none
     /// Where a resolve or a blend_reduce lands, in pixels of the target it
     /// draws into; a resolve scales the whole source, reduced to its own
-    /// size, into it, and a blend_reduce its source_part.
+    /// size, into it, and a blend_reduce its source_part. A resolve halves
+    /// its source until its factor is at most twice that of the target it
+    /// draws into (1 for the frame's final target), so that its one LINEAR
+    /// draw reduces it by at most 2 in that target's own texels: into a
+    /// target at the source's factor it lands texel for texel.
     Rect destination{};
+    /// How far past the destination's corner a resolve or a blend_reduce
+    /// lands, across and down, in pixels of the target it draws into, each
+    /// within one pixel either way: the source is drawn LINEAR between that
+    /// target's pixels, so that its picture moves by a fraction of a pixel.
+    /// 0 lands it on the destination; every other batch leaves it at 0.
+    float shift_x{};
+    float shift_y{};
     /// The part of the source a blend_reduce draws, in pixels of the
     /// source's texture, its factor applied: whole even pixels, so that the
     /// part's half is whole pixels of the texture's half and no renderer
@@ -283,8 +294,10 @@ void append_quad(
 /// alpha_premultiplied, a blend_reduce of no source, into its own source,
 /// with a blend other than none, of a part that is empty, lies left of or
 /// above the texture or is not on even pixels, or at a scale across or
-/// down outside smallest_blend_reduce_scale to 1, or a vertex that is not
-/// finite or lies beyond largest_coordinate. The executor refuses such a
+/// down outside smallest_blend_reduce_scale to 1, a shift that is not a
+/// number or lies a whole pixel or more from 0, or one on a batch that is
+/// neither a resolve nor a blend_reduce, or a vertex that is not finite or
+/// lies beyond largest_coordinate. The executor refuses such a
 /// frame whole and draws nothing of it.
 ///
 /// @param frame the frame

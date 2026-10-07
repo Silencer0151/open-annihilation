@@ -458,16 +458,31 @@ logs it.
   a magnified or Full frame moves a screen pixel at a time. The card draws
   the scene that far before the battlefield's edge (`magnified_span`), the
   area pass starts its picture that far into the scene, the Full tier
-  draws its terrain, fog and stages that far on, a scene the processor
+  draws its terrain, fog and stages that far on (below zoom 1 into its
+  moved target, a pixel of room on every side, at twice the display's
+  density in texture pixels, the terrain by the level rule at those
+  texels, with the painters' overlay, then moved by the rest of a screen
+  pixel, at the view's exact place (`view_shift`), at the target's own
+  texels into the shifted target, which is reduced onto the battlefield,
+  each display pixel the mean of its two by two texels: so the ground,
+  everything on it and the marks move together every frame while their
+  picture is never sampled afresh, and the ground keeps one sharpness
+  wherever between pixels it lands, where one LINEAR draw by the fraction
+  of a display pixel softened it between pixels and sharpened it on them;
+  where the memory or the renderer refuses the two targets at that
+  density, the moved target is made at the display's density and moved
+  onto the battlefield by one LINEAR draw), a
+  scene the processor
   draws at the zoom lays its terrain (the nearest fill, the box filter and
   the far view's), models and sprites from the offset's phase on the scene
   grid (`scene_phase`), and the painters after the fog move by it to the
   nearest screen pixel. A followed unit (`centre_view_on`) is kept at the
-  battlefield's middle so, by screen pixels; in a frame the processor
+  battlefield's middle so, by screen pixels, and exactly where the Full
+  tier's card moves its picture by the rest; in a frame the processor
   draws at zoom 1 and above, whose units are drawn on whole map pixels,
   the camera steps whole map pixels with the unit, as the game's does. Hover, picking, the drag box, the build site and orders'
-  map pixels take the same offset (`game_screen_point`,
-  `match_world_point`, `screen_to_map_pixel` with a `ViewOffset`), so the
+  map pixels take the same offset and the card's shift
+  (`game_screen_point`, `match_world_point`, `map_pixel_drawn_at`), so the
   pointer is over what is drawn under it, and orders stay whole map
   pixels; the offset never carries the pointer past Game's view
   (`Game.battlefield_rect`) at the battlefield's edges. Every other frame (`settle_view_offset`) draws the view on the
@@ -544,15 +559,23 @@ logs it.
   tiers alike (`health_bar_size`: 35 by 5 pixels at zoom 1 and in, 29 by
   5 at 0.75, 23 by 3 at 0.5, 15 by 3 at a quarter and 13 by 3 at a sixth)
   and each no other bar covers shows its trough and fill on the frame,
-  with pictures of each; at zoom 0.5 with the
-  camera on an even map pixel the terrain under a transparent overlay,
-  where the standard tier shows terrain too, equals that tier's box filter
-  exactly, and at 0.75 the blend of the two levels, the card's own filter,
-  is printed against it with its mean bounded and held within the
-  renderer's tolerance of that renderer's own LINEAR of each tile's quad,
-  pass over pass (2 and a mean of 1 on SDL's software renderer, 4 and a
-  mean of 0.5 on a card), the references built from the check's own atlas
-  of the map; at 1.37 the terrain through the target keeps within
+  with pictures of each; below zoom 1 the terrain goes into the
+  zoomed-out target at twice the display's density by the level rule at
+  its texels, held within the renderer's tolerance of that renderer's own
+  LINEAR of each tile's quad at those texels, pass over pass (2 and a mean
+  of 1 on SDL's software renderer, 4 and a mean of 0.5 on a card), and the
+  battlefield presented equals the target reduced on the processor as the
+  card reduces it; at zoom 0.5 with the camera on an even map pixel the
+  terrain under a transparent overlay, where the standard tier shows
+  terrain too, equals that tier's box filter within the level the
+  renderer's rounding of the mean of four may take, and at 0.75 level 0 enlarged between the texels and reduced, the
+  card's own filter, is printed against it with its mean bounded, the
+  references built from the check's own atlas of the map; following a
+  walking unit at the zoom floor, every frame lays the ground at the
+  view's exact place, the moved target's picture moves by whole pixels,
+  the frame presented is the shifted target reduced and, on a card, the
+  shifted target is the moved target moved by the shift, and the pointer
+  finds the map point and the unit drawn under it; at 1.37 the terrain through the target keeps within
   the renderer's tolerance of the level-0 view enlarged twice and drawn
   LINEAR, the sharp-bilinear reference; at the window whose chrome scales
   by 1.6 the HUD strips keep within the chrome's filter, as the Basic case
@@ -563,13 +586,14 @@ logs it.
   card frame as its terrain and fog; and the terrain's processor cost, the
   frame's build, the card's call and the overlay, is printed for each zoom
   beside the box filter's, with pictures of each zoom. Its anti-aliasing
-  cases set the row to 2x and 4x and, at zooms 0.5, 0.75, 1, 1.37 and 2,
-  require the factor the budget allows, no unit drawn finer on the
-  processor, and the battlefield under the transparent overlay equal to
-  the world target read back and reduced on the processor as the card
-  reduces it, by halving from zoom 1 up and by the two-level blend below,
+  cases set the row to 2x and 4x and, at zooms 1, 1.37 and 2, require the
+  factor the budget allows, no unit drawn finer on the processor, and the
+  battlefield under the transparent overlay equal to the world target read
+  back and reduced on the processor by halving as the card reduces it,
   within the renderer's tolerance, the target's memory printed within the
-  budget; with the row off again the target is freed. The fog, the canvas,
+  budget; at zoom 0.5 they require the frame drawn through the zoomed-out
+  target and nothing into the world target; with the row off again the
+  target is freed. The fog, the canvas,
   the kill board and the +stats panel (`check_full_overlays`), at zoom 1
   and 2: with line of sight alone, under a fog tile wholly out of sight a
   pixel the tiers agree on with the fog off is the processor's exactly,
@@ -779,11 +803,12 @@ logs it.
   and remade when the factor or the battlefield changes, by the plan of
   `full_supersampling::plan_world_target`: from zoom 1 up at the zoom, the
   texture holding the factor's pixels a window pixel, reduced into the
-  battlefield by exact halvings (`resolve`); below zoom 1 at one texel a
-  map pixel over the part the battlefield shows, reduced by the two-level
-  blend (`blend_reduce`), the half at twice the zoom under the part at
-  alpha `1 - log2(1 / zoom)`; the fog's black pass, its dither and the
-  painters' quads go over the reduced picture, as the overlay does. The
+  battlefield by exact halvings (`resolve`); the fog's black pass, its
+  dither and the painters' quads go over the reduced picture, as the
+  overlay does. Below zoom 1 no world target is drawn: the zoomed-out
+  target already holds two texels a display pixel, as many as a world
+  target would there, and moves the battlefield between pixels at the
+  view's exact place. The
   processor's anti-aliasing never runs in a Full frame
   (`unit_supersampling_` is read as off there), the factor in use is
   logged with the target's size and memory when it changes and shows in

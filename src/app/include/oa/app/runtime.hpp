@@ -6750,6 +6750,11 @@ class Runtime final : public menu::Host,
         /// How far past the camera's map pixel the last match frame drew
         /// the view; none unless it drew the view between map pixels.
         oa::present::world_renderer::ViewOffset frame_offset{};
+        /// How far the last match frame's card moved the battlefield's
+        /// picture, drawn at frame_offset, toward the view's exact place, in
+        /// layout pixels across and down (view_shift); none unless the card
+        /// drew the frame below zoom 1.
+        std::array<double, 2> frame_shift{};
         /// The last match frame presented had its scene magnified by the card.
         bool magnified{};
         /// The area pass's weights, kept while the zoom and the battlefield do not change.
@@ -7322,6 +7327,24 @@ class Runtime final : public menu::Host,
     /// @param bf_w the battlefield's width in pixels
     /// @param bf_h its height in pixels
     void ensure_full_target(uint32_t bf_w, uint32_t bf_h);
+
+    /// Makes the target a Full frame below zoom 1 draws the battlefield
+    /// into before the card moves it onto the view's exact place
+    /// (view_shift): the battlefield with a layout pixel of room on every
+    /// side, at twice the display's density rounded up to 1, 2 or 4
+    /// texture pixels a layout pixel, with the shifted target of the same
+    /// size and factor that the card moves it into at those texels and
+    /// reduces onto the battlefield, so that the picture keeps one
+    /// sharpness between display pixels. Where the memory guard or the
+    /// renderer refuses the two, which is logged once and not asked again
+    /// at that size, the target alone at the display's density, moved and
+    /// landed by one LINEAR draw. Made again when the size or the density
+    /// changes. Throws FullCardError where memory or the renderer refuses
+    /// even that.
+    ///
+    /// @param bf_w the battlefield's width in layout pixels
+    /// @param bf_h its height
+    void ensure_full_moved_target(uint32_t bf_w, uint32_t bf_h);
 
     /// Returns how many times finer than the window, along each axis, the
     /// graphics card draws the battlefield while frames are presented in
@@ -11366,9 +11389,11 @@ class Runtime final : public menu::Host,
     /// is placed (place_match_view) with the point at the battlefield's
     /// middle: on the screen pixels laid from the map's corner, the screen
     /// pixel the point lies in, so that the view moves by screen pixels,
-    /// finer than a map pixel when zoomed in; otherwise exactly. Else the
-    /// camera is put on the whole map pixel half the view before the
-    /// point's, as the game puts it.
+    /// finer than a map pixel when zoomed in; exactly where the card moves
+    /// its picture by the rest of a screen pixel (view_shift), and wherever
+    /// the frames draw the view off those pixels. Else the camera is put on
+    /// the whole map pixel half the view before the point's, as the game
+    /// puts it.
     ///
     /// @param x the point's column, 16.16 map pixels
     /// @param z the point's row, 16.16 map pixels
@@ -11650,6 +11675,35 @@ class Runtime final : public menu::Host,
     /// @return map pixels along each axis, from 0 to 1
     [[nodiscard]] oa::present::world_renderer::ViewOffset view_offset() const;
 
+    /// Returns how far the Full tier's card moves the battlefield's
+    /// picture, drawn at the screen pixel nearest the view's exact place
+    /// (view_offset), on to the exact place itself: the rest of a screen
+    /// pixel, so that the ground and everything on it move together every
+    /// frame by fractions of a pixel, as the units walking over it do,
+    /// while the picture is drawn on the screen pixels laid from the map's
+    /// corner and never sampled afresh. Hover, picking and orders' map
+    /// pixels take it with the offset, so that the pointer is over what is
+    /// drawn under it.
+    ///
+    /// The picture moves only while the card draws the frames below zoom 1
+    /// (view_moved_by_card_) and the camera is the one taken from the
+    /// view's exact place, as for view_offset; otherwise it is none.
+    ///
+    /// @return layout pixels across and down, each within half a pixel of 0
+    [[nodiscard]] std::array<double, 2> view_shift() const;
+
+    /// Returns the map pixel drawn under a screen point of a viewport: the
+    /// view's offset (view_offset) and its shift (view_shift) taken, as
+    /// world_renderer::screen_to_map_pixel takes the offset alone.
+    ///
+    /// @param viewport the battlefield's viewport on the camera's map pixel
+    /// @param screen the screen point
+    /// @return the map pixel; none outside the viewport
+    [[nodiscard]] std::optional<oa::present::world_renderer::MapPixel> map_pixel_drawn_at(
+        const oa::present::world_renderer::BattlefieldViewport& viewport,
+        oa::present::world_renderer::ScreenPoint screen
+    ) const;
+
     /// Settles how far between map pixels a match frame draws the view: an
     /// accelerated frame whose card draws the battlefield, magnifies the
     /// scene or whose area pass reduces it, and a frame whose processor draws
@@ -11662,14 +11716,17 @@ class Runtime final : public menu::Host,
     /// the map's corner (view_on_scene_grid_), and the magnified and the
     /// area pass's frames at the place itself, through their filters. A
     /// view whose camera was taken by another rule takes it again
-    /// (place_match_view), before the frame holds its camera. A frame drawn
-    /// for a reader that keeps a picture leaves it as the frame before left
-    /// it.
+    /// (place_match_view), before the frame holds its camera. Of those on
+    /// the grid, the card's frames below zoom 1 move the picture on to the
+    /// view's exact place (view_shift). A frame drawn for a reader that
+    /// keeps a picture leaves it as the frame before left it.
     ///
     /// @param between the frame may draw the view between map pixels
     /// @param on_grid such a frame draws it on the screen pixels laid from the map's corner
+    /// @param moved_by_card such a frame's card moves the picture on to the exact place
     /// @return the offset the frame draws the view at
-    oa::present::world_renderer::ViewOffset settle_view_offset(bool between, bool on_grid);
+    oa::present::world_renderer::ViewOffset
+    settle_view_offset(bool between, bool on_grid, bool moved_by_card);
 
     /// Returns how far into the camera's map pixel a scene the processor
     /// draws at the zoom starts, below zoom 1, in 16.16 parts of the scene's
@@ -13608,6 +13665,10 @@ class Runtime final : public menu::Host,
     /// map's corner (settle_view_offset), so the camera is taken at or
     /// before that point.
     bool view_on_scene_grid_ = false;
+    /// The last match frame was the card's below zoom 1, which moves the
+    /// picture drawn on the grid on to the view's exact place (view_shift),
+    /// so a followed unit's view is placed exactly (centre_view_on).
+    bool view_moved_by_card_ = false;
 
     // The drag box kept while the left button is held on the
     // battlefield (Game.drag_start and drag_end): whole map pixels x,

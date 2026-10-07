@@ -178,6 +178,15 @@ std::string check_frame(const CardFrame& frame) {
         if (static_cast<uint8_t>(batch.sampling) >= sampling_count)
             return batch_name(position) + "sampling " +
                    std::to_string(static_cast<unsigned>(batch.sampling)) + " names none";
+        // A shift moves a resolve's or a two-level reduction's picture by
+        // less than a pixel.
+        const bool shifted = batch.shift_x != 0.0F || batch.shift_y != 0.0F;
+        if (!(std::abs(batch.shift_x) < 1.0F) || !(std::abs(batch.shift_y) < 1.0F))
+            return batch_name(position) + "a shift of a whole pixel or more, or not a number";
+        if (shifted && batch.operation != Operation::resolve &&
+            batch.operation != Operation::blend_reduce)
+            return batch_name(position) + "a shift on a batch that is neither a resolve nor a "
+                                          "two-level reduction";
         std::string fault;
         switch (batch.operation) {
         case Operation::draw:

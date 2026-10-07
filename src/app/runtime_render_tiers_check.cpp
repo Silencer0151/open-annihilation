@@ -9,9 +9,11 @@
 // the standard tier's picture for the readers that keep one; the view drawn
 // between map pixels as a slow scroll moves it, and the pointer picking what
 // is drawn (runtime_smooth_pan_check.cpp); the card's textures made once
-// and its prescale targets drawn once a painted frame; and the Full tier's
-// model stage over the zoom-1 frame, its frame of models against the
-// processor's raster of the same list (check_full_models).
+// and its prescale targets drawn once a painted frame; the Full tier
+// following a walking unit at its farthest zoom, the ground at the view's
+// exact place every frame and its picture moving by whole pixels; and the
+// Full tier's model stage over the zoom-1 frame, its frame of models
+// against the processor's raster of the same list (check_full_models).
 // The tier comes from the game's own decision: --hardware-acceleration
 // switches it on after the start-up function test passed, and the check
 // switches it off and on again as --no-hardware-acceleration and
@@ -62,6 +64,7 @@
 #include <initializer_list>
 #include <iostream>
 #include <optional>
+#include <set>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -160,6 +163,24 @@ constexpr int most_hud_difference = 1;
 /// may differ from the frame before moved by the view's offset: one in this
 /// many pixels, which the renderer may place a pixel apart.
 constexpr uint64_t most_moved_mismatch_share = 100;
+/// The follow at the farthest zoom: map pixels the followed unit walks
+/// toward the map's middle, the ticks it walks before the follow begins,
+/// the frames followed, four to a tick, as a frame rate four times the
+/// tick rate draws them.
+constexpr int32_t follow_walk_reach = 1500;
+constexpr int follow_walk_start_ticks = 45;
+constexpr int follow_frames = 48;
+constexpr int follow_frames_a_tick = 4;
+/// Screen pixels the ground drawn may lie from the view's exact place:
+/// what float arithmetic leaves.
+constexpr double follow_place_tolerance = 1.0e-3;
+/// Layout pixels around the battlefield's middle, where the followed unit
+/// walks, left out of the whole-pixel moves.
+constexpr int follow_middle_reach = 40;
+/// The fractions of a screen pixel the follow's shifts are told apart by,
+/// and the least number of them the follow is to pass through.
+constexpr double follow_shift_grain = 100.0;
+constexpr std::size_t follow_least_shifts = 8;
 /// Most a window point may lie from a layout pixel's place at native
 /// density, in window points: the view maps one onto the other exactly but
 /// for the rounding of floats.
@@ -186,6 +207,10 @@ constexpr int blend_shift = 8;
 /// the blend's own rounding, where one LINEAR draw is held to
 /// most_mean_scaled_difference; a card is held to that mean.
 constexpr double most_blended_mean_difference = 1.0;
+/// Most a channel of the zoomed-out terrain at zoom 0.5 may differ from the
+/// box filter: level 0 reduced by halving rounds the mean of four as the
+/// renderer does, which may lie a level from the box filter's rounding.
+constexpr int most_halving_difference = 1;
 /// Pixels left out at each edge of a HUD strip when it is held to its
 /// reference: a card's LINEAR read may take the HUD layer beyond the
 /// strip's edge from the prescale target, where the reference clamps.
@@ -493,30 +518,11 @@ renderer::Surface composed_after(
     return composed();
 }
 
-/// Blends one channel of a texture drawn at an alpha over what is under it
-/// as SDL's software renderer blends it: the source weighted by the alpha
-/// and the destination by the rest, divided by 255 with rounding.
-///
-/// @param source the texture's level
-/// @param destination the level under it
-/// @param alpha the alpha, 0 to 255
-/// @return the blended level
-uint8_t software_blend_at_alpha(uint32_t source, uint32_t destination, uint32_t alpha) noexcept {
-    uint32_t value = source * alpha + destination * (255 - alpha) + 1;
-    value += value >> 8;
-    return static_cast<uint8_t>(value >> 8);
-}
-
 /// Reduces the Full tier's world target on the processor as the card
-/// reduces it (full_supersampling::WorldTargetPlan): from zoom 1 up by the
-/// factor's halvings, each a LINEAR draw at exactly one half, which on
-/// SDL's software renderer is that renderer's own LINEAR
-/// (software_linear_rgb24) and on a card the exact box; below zoom 1 by
-/// the two-level blend, the texture's half drawn LINEAR at twice the scale
-/// under the part drawn LINEAR at alpha 1 - log2(1 / scale), on the
-/// software renderer as that renderer stretches and blends a texture at
-/// an alpha, and on a card as the exact reference (two_level_rgb24) gives
-/// it.
+/// reduces it (full_supersampling::WorldTargetPlan): by the factor's
+/// halvings, each a LINEAR draw at exactly one half, which on SDL's
+/// software renderer is that renderer's own LINEAR (software_linear_rgb24)
+/// and on a card the exact box.
 ///
 /// @param texture the target's texture, RGB24, rows of `width` pixels
 /// @param width texture pixels across
@@ -558,48 +564,7 @@ std::vector<uint8_t> reduce_world_target_reference(
     const wr::RgbSource whole{texture.data(), width, height, width};
     linear(whole, {half_storage.data(), half_width, half_height, half_width});
     const wr::RgbSource half{half_storage.data(), half_width, half_height, half_width};
-    if (!plan.two_level) {
-        linear(plan.factor == 4 ? half : whole, target);
-        return out;
-    }
-    const auto& part = plan.source_part;
-    const wr::RgbSource part_view{
-        texture.data() +
-            (std::size_t{static_cast<uint32_t>(part.y)} * width + static_cast<uint32_t>(part.x)) *
-                3U,
-        static_cast<uint32_t>(part.width),
-        static_cast<uint32_t>(part.height),
-        width
-    };
-    if (!software) {
-        wr::two_level_rgb24(
-            part_view,
-            {static_cast<double>(destination_width) / part.width,
-             static_cast<double>(destination_height) / part.height,
-             0.0,
-             0.0},
-            target
-        );
-        return out;
-    }
-    const wr::RgbSource half_part{
-        half_storage.data() + (std::size_t{static_cast<uint32_t>(part.y / 2)} * half_width +
-                               static_cast<uint32_t>(part.x / 2)) *
-                                  3U,
-        static_cast<uint32_t>(part.width / 2),
-        static_cast<uint32_t>(part.height / 2),
-        half_width
-    };
-    linear(half_part, target);
-    const double scale = static_cast<double>(destination_width) / part.width;
-    const double t = std::clamp(std::log2(1.0 / scale), 0.0, 1.0);
-    if (t < 1.0) {
-        std::vector<uint8_t> near(out.size());
-        linear(part_view, {near.data(), destination_width, destination_height, destination_width});
-        const auto alpha = static_cast<uint32_t>(std::lround((1.0 - t) * 255.0));
-        for (std::size_t at = 0; at < out.size(); ++at)
-            out[at] = software_blend_at_alpha(near[at], out[at], alpha);
-    }
+    linear(plan.factor == 4 ? half : whole, target);
     return out;
 }
 
@@ -2350,8 +2315,9 @@ void Runtime::check_full_render_tier(
     }
 
     // Zoomed out past the processor's floor, which only Full reaches: the
-    // zoom holds, and the card draws the terrain from level 2 alone,
-    // LINEAR, reduced.
+    // zoom holds, and the card draws the terrain into the zoomed-out target
+    // by the level rule at the target's texels, LINEAR: at a factor of 2,
+    // a third of a texel a map pixel, level 2 with level 1 over it.
     {
         set_level(HardwareAcceleration::full);
         at_zoom(kMinFullBattlefieldZoom);
@@ -2359,9 +2325,19 @@ void Runtime::check_full_render_tier(
         const auto& plan = full_->plan;
         if (std::abs(match_zoom() - kMinFullBattlefieldZoom) > 1.0e-6F)
             fail("the full tier's zoom floor did not hold");
-        if (plan.pass_count != 1 || plan.passes[0].level != 2 ||
-            plan.passes[0].sampling != card::Sampling::linear || plan.through_target)
-            fail("the full tier's zoom floor was not drawn from level 2 LINEAR");
+        const float texel_zoom =
+            kMinFullBattlefieldZoom * static_cast<float>(full_->moved_target_factor);
+        const auto expected = full_terrain::plan_terrain_draw(std::min(texel_zoom, 1.0F), false);
+        bool levels_kept = full_->moved_target_factor != 0 &&
+                           plan.pass_count == expected.pass_count && !plan.through_target;
+        for (uint32_t index = 0; levels_kept && index < plan.pass_count; ++index)
+            levels_kept = plan.passes[index].level == expected.passes[index].level &&
+                          plan.passes[index].sampling == card::Sampling::linear;
+        if (!levels_kept || plan.passes[0].level != 2)
+            fail(
+                "the full tier's zoom floor was not drawn by the level rule at the zoomed-out "
+                "target's texels, from level 2 LINEAR"
+            );
         if (!full_->drawn || full_->drawn_quads == 0)
             fail("the card drew no terrain at the full tier's zoom floor");
         write_png(picture("zoom-" + zoom_text(kMinFullBattlefieldZoom)), read);
@@ -2407,7 +2383,9 @@ void Runtime::check_full_render_tier(
                       << sampled << " pixels sampled black past it\n";
         }
         std::cout << "render tiers check: full tier: the zoom floor of "
-                  << zoom_text(kMinFullBattlefieldZoom) << " is drawn from level 2 LINEAR, "
+                  << zoom_text(kMinFullBattlefieldZoom) << " is drawn from level 2 LINEAR"
+                  << (plan.pass_count == 2 ? " with level 1 over it" : "")
+                  << " into the zoomed-out target at factor " << full_->moved_target_factor << ", "
                   << full_->drawn_quads << " quads\n";
     }
 
@@ -2783,15 +2761,138 @@ void Runtime::check_full_render_tier(
         game.graphics_flags = graphics_flags;
     }
 
-    // Zoomed out: the card's levels, never the box filter. The terrain
-    // beside the card's own draws, where the standard tier shows its
-    // terrain too, is held to the standard tier's box filter of the same
-    // moment: exactly at zoom 0.5 with the camera on an even map pixel,
-    // where level 1 drawn 1:1 is that filter; at 0.75 the blend of the two
-    // levels is the card's own filter, held to a mean difference and
-    // printed.
+    // A card target read back, the texture's size.
+    const auto read_card_target = [&](card::TargetHandle target) {
+        renderer::Surface picture;
+        SDL_Texture* texture = full_->executor.target_texture(target);
+        SDL_Texture* before = SDL_GetRenderTarget(sdl_.renderer);
+        SDL_Surface* read = nullptr;
+        if (texture != nullptr && SDL_SetRenderTarget(sdl_.renderer, texture))
+            read = SDL_RenderReadPixels(sdl_.renderer, nullptr);
+        std::ignore = SDL_SetRenderTarget(sdl_.renderer, before);
+        SDL_Surface* rgb =
+            read != nullptr ? SDL_ConvertSurface(read, SDL_PIXELFORMAT_RGB24) : nullptr;
+        SDL_DestroySurface(read);
+        if (rgb == nullptr)
+            fail(std::string("reading back a card target: ") + SDL_GetError());
+        picture.width = static_cast<uint32_t>(rgb->w);
+        picture.height = static_cast<uint32_t>(rgb->h);
+        picture.rgb.resize(std::size_t{picture.width} * picture.height * 3U);
+        for (int row = 0; row < rgb->h; ++row)
+            std::memcpy(
+                picture.rgb.data() + static_cast<std::size_t>(row) * picture.width * 3U,
+                static_cast<const uint8_t*>(rgb->pixels) +
+                    static_cast<std::ptrdiff_t>(row) * rgb->pitch,
+                std::size_t{picture.width} * 3U
+            );
+        SDL_DestroySurface(rgb);
+        return picture;
+    };
+    // Holds the battlefield presented to the zoomed-out target it was
+    // reduced from, read back at its factor with its room of a layout pixel
+    // on every side, reduced on the processor as the card reduces it: to
+    // the presented frame's pixels by the factor's halvings, each a LINEAR
+    // draw at one half, within the renderer's tolerance; the pointer left
+    // out.
+    const auto hold_presented_to_reduced = [&](const renderer::Surface& presented_frame,
+                                               const renderer::Surface& target_picture,
+                                               uint32_t factor,
+                                               const std::string& what) {
+        const auto layout_width = static_cast<uint32_t>(match_layout_.width);
+        const uint32_t density = layout_width != 0 ? presented_frame.width / layout_width : 0U;
+        const Area field = battlefield();
+        const auto room_width = static_cast<uint32_t>(field.w) + 2U;
+        const auto room_height = static_cast<uint32_t>(field.h) + 2U;
+        if (density == 0 || factor == 0 || density * layout_width != presented_frame.width ||
+            factor % density != 0 || target_picture.width != room_width * factor ||
+            target_picture.height != room_height * factor)
+            fail(
+                what + ": the presented frame of " + std::to_string(presented_frame.width) + "x" +
+                std::to_string(presented_frame.height) + " and the zoomed-out target of " +
+                std::to_string(target_picture.width) + "x" + std::to_string(target_picture.height) +
+                " at factor " + std::to_string(factor) + " do not match a layout " +
+                std::to_string(layout_width) + " wide"
+            );
+        const uint32_t reduction = factor / density;
+        const uint32_t width = room_width * density;
+        const uint32_t height = room_height * density;
+        std::vector<uint8_t> reduced;
+        if (reduction == 1) {
+            reduced = target_picture.rgb;
+        } else {
+            if (reduction != 2 && reduction != 4)
+                fail(
+                    what + ": the zoomed-out target is reduced by " + std::to_string(reduction) +
+                    ", which the check does not model"
+                );
+            full_supersampling::WorldTargetPlan plan;
+            plan.factor = reduction;
+            plan.destination = {0, 0, static_cast<int32_t>(width), static_cast<int32_t>(height)};
+            reduced = reduce_world_target_reference(
+                target_picture.rgb, target_picture.width, target_picture.height, plan, software
+            );
+        }
+        const Area pointer = cursor();
+        const auto d = static_cast<int>(density);
+        Difference difference;
+        double sum = 0.0;
+        std::size_t channels = 0;
+        for (int y = 0; y < field.h * d; ++y)
+            for (int x = 0; x < field.w * d; ++x) {
+                const int sx = field.x * d + x;
+                const int sy = field.y * d + y;
+                if (sx >= pointer.x * d && sx < (pointer.x + pointer.w) * d &&
+                    sy >= pointer.y * d && sy < (pointer.y + pointer.h) * d)
+                    continue;
+                const auto at = (static_cast<std::size_t>(sy) * presented_frame.width +
+                                 static_cast<std::size_t>(sx)) *
+                                3U;
+                const auto expected_at =
+                    (static_cast<std::size_t>(d + y) * width + static_cast<std::size_t>(d + x)) *
+                    3U;
+                ++difference.pixels;
+                for (std::size_t channel = 0; channel < 3; ++channel) {
+                    const int delta = std::abs(
+                        int{presented_frame.rgb[at + channel]} - int{reduced[expected_at + channel]}
+                    );
+                    difference.most = std::max(difference.most, delta);
+                    sum += delta;
+                    ++channels;
+                }
+            }
+        difference.mean = channels != 0 ? sum / static_cast<double>(channels) : 0.0;
+        const int most_allowed = software ? most_software_difference : most_card_difference;
+        if (difference.pixels == 0 || difference.most > most_allowed ||
+            difference.mean > most_mean_scaled_difference) {
+            renderer::Surface reference{width, height, reduced};
+            write_png(picture("zoomed-out-reduced"), reference);
+            write_png(picture("zoomed-out-presented"), presented_frame);
+            fail(
+                what +
+                " presented strays from the zoomed-out target reduced on the processor: "
+                "most " +
+                std::to_string(difference.most) + ", mean " + std::to_string(difference.mean)
+            );
+        }
+        return difference;
+    };
+
+    // Zoomed out: the card's levels, never the box filter, drawn into the
+    // zoomed-out target at its factor by the level rule at its texels and
+    // reduced onto the battlefield. The target's terrain beside the card's
+    // own draws is held to the renderer's own LINEAR of each tile at the
+    // target's texels, pass over pass; the battlefield presented to the
+    // target reduced on the processor as the card reduces it; and the
+    // terrain presented, where the standard tier shows its terrain too, to
+    // the standard tier's box filter of the same moment: at zoom 0.5 with
+    // the camera on an even map pixel, where level 0 drawn at one texel a
+    // map pixel and reduced by halving is that filter, within the level the
+    // renderer's rounding of the mean of four may take; at 0.75 level 0
+    // enlarged between the target's texels and reduced is the card's own
+    // filter, held to a mean difference and printed. The camera is set on
+    // an even map pixel, so the target lands on the battlefield with no
+    // shift.
     for (const float zoom : {kMinBattlefieldZoom, 0.75F}) {
-        const bool exact = zoom == kMinBattlefieldZoom;
         set_level(HardwareAcceleration::full);
         at_zoom(zoom);
         // The camera the frame uses, within the map as the frame holds it
@@ -2803,17 +2904,25 @@ void Runtime::check_full_render_tier(
             std::clamp(match_camera_z_, 0, std::max(0, map_height - visible_map_height())) & ~1;
         const auto read = full_frame();
         const auto& plan = full_->plan;
-        if (plan.passes[0].level != full_terrain::far_level ||
-            plan.passes[0].sampling != card::Sampling::linear || plan.through_target)
-            fail("zoom " + zoom_text(zoom) + " was not drawn from level 1 LINEAR");
-        if (exact ? plan.pass_count != 1
-                  : (plan.pass_count != 2 || plan.passes[1].level != 0 ||
-                     plan.passes[1].blend != card::Blend::alpha ||
-                     std::abs(
-                         plan.passes[1].alpha -
-                         static_cast<float>(1.0 - std::log2(1.0 / static_cast<double>(zoom)))
-                     ) > 1.0e-5F))
-            fail("zoom " + zoom_text(zoom) + " did not take the level rule's passes");
+        // The level rule at the target's texels: at a factor of 2 level 0
+        // alone, one texel a map pixel at zoom 0.5 and enlarged at 0.75.
+        {
+            const float texel_zoom = zoom * static_cast<float>(full_->moved_target_factor);
+            const auto expected =
+                full_terrain::plan_terrain_draw(std::min(texel_zoom, 1.0F), false);
+            bool levels_kept = full_->moved_target_factor != 0 &&
+                               plan.pass_count == expected.pass_count && !plan.through_target;
+            for (uint32_t index = 0; levels_kept && index < plan.pass_count; ++index)
+                levels_kept = plan.passes[index].level == expected.passes[index].level &&
+                              plan.passes[index].blend == expected.passes[index].blend &&
+                              plan.passes[index].alpha == expected.passes[index].alpha &&
+                              plan.passes[index].sampling == card::Sampling::linear;
+            if (!levels_kept)
+                fail(
+                    "zoom " + zoom_text(zoom) +
+                    " did not take the level rule's passes at the zoomed-out target's texels"
+                );
+        }
         const std::string full_cost = cost();
         const auto mask = card_mask(zoom, read);
         const auto overlay = full_->overlay;
@@ -2822,35 +2931,53 @@ void Runtime::check_full_render_tier(
         if (cam_x % 2 != 0 || cam_y % 2 != 0)
             fail("the camera is not on an even map pixel at zoom " + zoom_text(zoom));
         write_png(picture("zoom-" + zoom_text(zoom)), read);
-        // The renderer's own picture of the passes, each tile's quad drawn
-        // LINEAR from the check's atlas and the level-0 pass blended over
-        // the level-1 pass at its alpha. On SDL's software renderer each
-        // quad is a texture copy: its rectangle truncated to whole pixels,
+        // The zoomed-out target the card drew the battlefield into, a layout
+        // pixel of room on every side, and the target it was moved into and
+        // reduced from.
+        const auto& drawn_into = *full_;
+        const auto factor = static_cast<int>(drawn_into.moved_target_factor);
+        if (drawn_into.moved_target == card::TargetHandle{} || factor == 0)
+            fail("zoom " + zoom_text(zoom) + " was not drawn into the zoomed-out target");
+        const auto moved_picture = read_card_target(drawn_into.moved_target);
+        const auto reduced_picture = read_card_target(
+            drawn_into.shifted_target != card::TargetHandle{} ? drawn_into.shifted_target
+                                                              : drawn_into.moved_target
+        );
+        // The renderer's own picture of the passes at the target's texels,
+        // each tile's quad drawn LINEAR from the check's atlas and each pass
+        // blended over the one before at its alpha. On SDL's
+        // software renderer each quad is a texture copy: its corners scaled
+        // to the target's texels, its rectangle truncated to whole pixels,
         // the tile's texels at the level stretched into it as that renderer
         // draws a texture LINEAR (software_linear_rgb24), and the blend in
-        // that renderer's 256ths. On a card each quad covers the pixels
+        // that renderer's 256ths. On a card each quad covers the texels
         // whose centres lie within it, each sampled LINEAR at its centre
         // from the tile, clamped at the tile's edge as the gutter clamps it
         // (bilinear_rgb24), and the blend is exact, rounded once.
-        renderer::Surface renderer_reference = read;
+        renderer::Surface renderer_reference = moved_picture;
         {
             const auto& atlas = reference_atlas;
             const Area field = battlefield();
+            // The battlefield's texels in the target, past its room.
+            const int field_left = factor;
+            const int field_top = factor;
+            const int field_right = factor + field.w * factor;
+            const int field_bottom = factor + field.h * factor;
             const auto within_field = [&](int x, int y) {
-                return x >= field.x && x < field.x + field.w && y >= field.y &&
-                       y < field.y + field.h;
+                return x >= field_left && x < field_right && y >= field_top && y < field_bottom;
             };
             full_terrain::TerrainView view;
             view.camera_x = cam_x;
             view.camera_y = cam_y;
-            view.origin_x = static_cast<float>(field.x);
-            view.origin_y = static_cast<float>(field.y);
+            view.origin_x = 1.0F;
+            view.origin_y = 1.0F;
             view.scale = zoom;
             view.width = static_cast<uint32_t>(field.w);
             view.height = static_cast<uint32_t>(field.h);
             const auto range = full_terrain::visible_tiles(atlas, view);
             const auto tile_pixels = static_cast<float>(gw::tile_edge) * zoom;
-            // Lays a drawn tile over the reference at a pixel, replacing or
+            const auto scale = static_cast<float>(factor);
+            // Lays a drawn tile over the reference at a texel, replacing or
             // blending by the pass.
             const auto lay = [&](int sx,
                                  int sy,
@@ -2919,12 +3046,18 @@ void Runtime::check_full_render_tier(
                              static_cast<double>(cam_y)) *
                                 zoom
                         );
+                        // The corners at the target's texels, as the renderer
+                        // scales them.
+                        const float texel_x = corner_x * scale;
+                        const float texel_y = corner_y * scale;
+                        const float texel_right = (corner_x + tile_pixels) * scale;
+                        const float texel_bottom = (corner_y + tile_pixels) * scale;
                         if (software) {
                             const SDL_Rect landed{
-                                static_cast<int>(corner_x),
-                                static_cast<int>(corner_y),
-                                static_cast<int>((corner_x + tile_pixels) - corner_x),
-                                static_cast<int>((corner_y + tile_pixels) - corner_y)
+                                static_cast<int>(texel_x),
+                                static_cast<int>(texel_y),
+                                static_cast<int>(texel_right - texel_x),
+                                static_cast<int>(texel_bottom - texel_y)
                             };
                             if (landed.w <= 0 || landed.h <= 0)
                                 continue;
@@ -2952,9 +3085,9 @@ void Runtime::check_full_render_tier(
                         // top-left rule: from the first centre at or past the
                         // quad's left and top edges to the last before its
                         // right and bottom edges.
-                        const double left = corner_x;
-                        const double top = corner_y;
-                        const double size = tile_pixels;
+                        const double left = texel_x;
+                        const double top = texel_y;
+                        const double size = static_cast<double>(tile_pixels) * factor;
                         const auto first_x = static_cast<int>(std::ceil(left - 0.5));
                         const auto first_y = static_cast<int>(std::ceil(top - 0.5));
                         const auto end_x = static_cast<int>(std::ceil(left + size - 0.5));
@@ -3035,7 +3168,8 @@ void Runtime::check_full_render_tier(
                   << "; the standard tier's box filter took "
                   << (terrain_box_filter_ns_ - filter_ns) / 1000 << " us\n";
         const bool enough = difference.pixels >= least_terrain_pixels;
-        if (!enough || (exact ? difference.most != 0
+        const bool exact = zoom == kMinBattlefieldZoom;
+        if (!enough || (exact ? difference.most > most_halving_difference
                               : (difference.mean > most_blend_mean_difference ||
                                  difference.most > most_blend_difference))) {
             write_png(picture("zoom-" + zoom_text(zoom) + "-standard"), standard_frame);
@@ -3044,34 +3178,38 @@ void Runtime::check_full_render_tier(
                 (exact ? " differs from the box filter" : " strays from the box filter")
             );
         }
-        // The blend is held to the renderer's own LINEAR of each tile,
-        // pass over pass, within the renderer's tolerance: SDL's software
-        // renderer to its own, a card to the card's.
-        if (!exact) {
+        // The target's terrain is held to the renderer's own LINEAR of each
+        // tile at its texels, pass over pass, within the renderer's
+        // tolerance: SDL's software renderer to its own, a card to the
+        // card's.
+        {
             Difference modelled;
             double model_sum = 0.0;
             std::size_t model_channels = 0;
             for (int y = 0; y < field.h; ++y)
                 for (int x = 0; x < field.w; ++x) {
-                    const int sx = field.x + x;
-                    const int sy = field.y + y;
-                    if (sx >= pointer.x && sx < pointer.x + pointer.w && sy >= pointer.y &&
-                        sy < pointer.y + pointer.h)
-                        continue;
                     const auto cell = static_cast<std::size_t>(y) * bf_w + static_cast<uint32_t>(x);
-                    const auto marked = static_cast<std::size_t>(sy) * read.width + sx;
+                    const auto marked =
+                        static_cast<std::size_t>(field.y + y) * read.width + (field.x + x);
                     if (overlay[cell * 4U + 3U] != 0 || mask[marked] != 0)
                         continue;
-                    const auto at = marked * 3U;
-                    ++modelled.pixels;
-                    for (std::size_t channel = 0; channel < 3; ++channel) {
-                        const int delta = std::abs(
-                            int{read.rgb[at + channel]} - int{renderer_reference.rgb[at + channel]}
-                        );
-                        modelled.most = std::max(modelled.most, delta);
-                        model_sum += delta;
-                        ++model_channels;
-                    }
+                    for (int ty = 0; ty < factor; ++ty)
+                        for (int tx = 0; tx < factor; ++tx) {
+                            const auto at = (static_cast<std::size_t>(factor + y * factor + ty) *
+                                                 moved_picture.width +
+                                             static_cast<std::size_t>(factor + x * factor + tx)) *
+                                            3U;
+                            ++modelled.pixels;
+                            for (std::size_t channel = 0; channel < 3; ++channel) {
+                                const int delta = std::abs(
+                                    int{moved_picture.rgb[at + channel]} -
+                                    int{renderer_reference.rgb[at + channel]}
+                                );
+                                modelled.most = std::max(modelled.most, delta);
+                                model_sum += delta;
+                                ++model_channels;
+                            }
+                        }
                 }
             modelled.mean =
                 model_channels != 0 ? model_sum / static_cast<double>(model_channels) : 0.0;
@@ -3079,19 +3217,315 @@ void Runtime::check_full_render_tier(
             const double mean_allowed =
                 software ? most_blended_mean_difference : most_mean_scaled_difference;
             std::cout << "render tiers check: full tier zoom " << zoom_text(zoom) << ": terrain of "
-                      << modelled.pixels << " pixels against the "
-                      << (software ? "software renderer's" : "card's")
+                      << modelled.pixels << " texels of the zoomed-out target at factor " << factor
+                      << " against the " << (software ? "software renderer's" : "card's")
                       << " LINEAR of each tile, blended: most " << modelled.most << ", mean "
                       << modelled.mean << '\n';
             if (modelled.pixels < least_terrain_pixels || modelled.most > most_allowed ||
                 modelled.mean > mean_allowed) {
                 write_png(picture("zoom-" + zoom_text(zoom) + "-reference"), renderer_reference);
+                write_png(picture("zoom-" + zoom_text(zoom) + "-target"), moved_picture);
                 fail(
                     "the terrain at zoom " + zoom_text(zoom) +
                     " strays from the renderer's own LINEAR of each tile"
                 );
             }
         }
+        // What the player sees: the battlefield presented is the target
+        // reduced on the processor as the card reduces it, each pixel the
+        // box of its texels, the pointer left out.
+        const auto seen = hold_presented_to_reduced(
+            read,
+            reduced_picture,
+            static_cast<uint32_t>(factor),
+            "the battlefield at zoom " + zoom_text(zoom)
+        );
+        std::cout << "render tiers check: full tier zoom " << zoom_text(zoom) << ": the "
+                  << seen.pixels << " pixels of the battlefield presented against the "
+                  << "zoomed-out target reduced on the processor: most " << seen.most << ", mean "
+                  << seen.mean << '\n';
+    }
+
+    // Following a walking unit at the farthest zoom: the card draws the
+    // battlefield into its moved target on the screen pixels laid from the
+    // map's corner, so the target's picture moves by whole pixels and is
+    // never sampled afresh, and moves the target by the rest of a screen
+    // pixel at its own texels into the shifted target, which it reduces
+    // onto the battlefield, so that the ground and everything on it lie at
+    // the view's exact place every frame, gliding with the followed unit
+    // rather than stepping a pixel at a time. Every frame presented is the
+    // shifted target reduced, and on a card the shifted target is the
+    // moved target moved by the shift. The pointer finds there the map
+    // point drawn under it, and the followed unit where it is drawn.
+    {
+        set_level(HardwareAcceleration::full);
+        const float zoom = least_match_zoom();
+        at_zoom(zoom);
+        // A walk across the map, toward its middle, by the first unit of the
+        // local player that takes it and is still walking once it has
+        // started: a mission's unit may fall to an enemy close by first.
+        const auto [map_width, map_height] = shown_map_size();
+        const auto toward_middle = [](int32_t at, int32_t size, int32_t reach) {
+            return std::clamp(at + (at < size / 2 ? reach : -reach), 64, size - 64);
+        };
+        uint16_t walker = 0;
+        for (std::size_t index = 1; index < match_->world().slots.size() && walker == 0; ++index) {
+            const auto& slot = match_->world().slots[index];
+            if (slot.unit == nullptr || slot.record.type_index == 0 ||
+                slot.record.owner_index != match_local_player_)
+                continue;
+            const uint16_t id = slot.unit_index;
+            const uint32_t start_x = slot.unit->position[0];
+            const uint32_t start_z = slot.unit->position[2];
+            const int32_t goal_x = toward_middle(start_x >> 16, map_width, follow_walk_reach);
+            const int32_t goal_z = toward_middle(start_z >> 16, map_height, follow_walk_reach);
+            const auto& order = match_->issue_ground_move(
+                id,
+                {goal_x * 0x10000,
+                 match_->map_height(
+                     static_cast<uint32_t>(goal_x) << 16, static_cast<uint32_t>(goal_z) << 16
+                 ) * 0x10000,
+                 goal_z * 0x10000},
+                false
+            );
+            if (match_->order_refused(order))
+                continue;
+            for (int tick = 0; tick < follow_walk_start_ticks; ++tick)
+                step_match_simulation();
+            if (!match_unit_present(id))
+                continue;
+            const auto* unit = match_->world().slots[id].unit;
+            if (unit->position[0] != start_x || unit->position[2] != start_z)
+                walker = id;
+        }
+        if (walker == 0)
+            fail("no unit of the local player took a walk and was still walking to follow");
+        begin_match_tracking(walker);
+        // The moved target read back.
+        const auto read_moved = [&]() { return read_card_target(full_->moved_target); };
+        // The share of the battlefield's pixels, the middle where the unit
+        // walks left out, that differ from the frame before moved by a
+        // whole pixel, at the best such move.
+        const auto unmatched = [&](const renderer::Surface& before,
+                                   const renderer::Surface& after) {
+            const auto factor = static_cast<int>(full_->moved_target_factor);
+            const int width = match_layout_.battlefield_width() * factor;
+            const int height = match_layout_.battlefield_height() * factor;
+            const int middle = follow_middle_reach * factor;
+            uint64_t best = UINT64_MAX;
+            uint64_t compared = 0;
+            for (int dy = -factor; dy <= factor; ++dy)
+                for (int dx = -factor; dx <= factor; ++dx) {
+                    uint64_t differing = 0;
+                    compared = 0;
+                    for (int y = 2 * factor; y < height - 2 * factor; ++y)
+                        for (int x = 2 * factor; x < width - 2 * factor; ++x) {
+                            if (std::abs(x - width / 2) < middle &&
+                                std::abs(y - height / 2) < middle)
+                                continue;
+                            ++compared;
+                            const auto at = [&](const renderer::Surface& picture, int px, int py) {
+                                return picture.rgb.data() +
+                                       (static_cast<std::size_t>(py + factor) * picture.width +
+                                        static_cast<std::size_t>(px + factor)) *
+                                           3U;
+                            };
+                            if (!std::equal(
+                                    at(before, x, y),
+                                    at(before, x, y) + 3,
+                                    at(after, x + dx, y + dy)
+                                ))
+                                ++differing;
+                        }
+                    best = std::min(best, differing);
+                }
+            return std::pair{best, compared};
+        };
+        renderer::Surface moved_before;
+        int presented_most = 0;
+        std::set<long long> shifts_seen;
+        int glided = 0;
+        for (int frame = 0; frame < follow_frames; ++frame) {
+            move_match_camera();
+            const int within = frame % follow_frames_a_tick;
+            if (within == 0)
+                step_match_simulation();
+            set_presentation_alpha(
+                static_cast<float>(within + 1) / static_cast<float>(follow_frames_a_tick)
+            );
+            place_tracking_camera();
+            const auto presented_frame = full_frame();
+            set_presentation_alpha(1.0F);
+            if (!match_tracking_)
+                fail("the follow ended at frame " + std::to_string(frame));
+            const auto& full = *full_;
+            const bool shifted_apart = full.shifted_target != card::TargetHandle{};
+            if (full.moved_target == card::TargetHandle{} ||
+                full.moved_frame.batches.size() != (shifted_apart ? 2U : 1U))
+                fail("a frame at zoom " + zoom_text(zoom) + " was not drawn into the moved target");
+            // Every draw of the battlefield goes into the moved target.
+            for (const auto& batch : full.frame.batches)
+                if (batch.target != full.moved_target)
+                    fail(
+                        "a draw of the battlefield at zoom " + zoom_text(zoom) +
+                        " went past the moved target"
+                    );
+            // The target's picture lands the shift past its corner: in the
+            // shifted target at its texels, which lands a pixel before the
+            // battlefield's corner with no shift; or, with no shifted target,
+            // there itself. The map's corner lies with it where the view's
+            // exact place puts it.
+            const auto& moved_by = full.moved_frame.batches.front();
+            const auto& onto = full.moved_frame.batches.back();
+            const auto shift = accelerated_.frame_shift;
+            if (shifted_apart &&
+                (moved_by.source != full.moved_target || moved_by.target != full.shifted_target ||
+                 moved_by.destination.x != 0 || moved_by.destination.y != 0 ||
+                 onto.source != full.shifted_target || onto.shift_x != 0.0F ||
+                 onto.shift_y != 0.0F))
+                fail(
+                    "the moved target was not moved at its texels into the shifted target and "
+                    "reduced from it"
+                );
+            if (onto.destination.x != match_layout_.left - 1 ||
+                onto.destination.y != match_layout_.top - 1 ||
+                std::abs(static_cast<double>(moved_by.shift_x) - shift[0]) >
+                    follow_place_tolerance ||
+                std::abs(static_cast<double>(moved_by.shift_y) - shift[1]) > follow_place_tolerance)
+                fail(
+                    "the moved target did not land the frame's shift past the battlefield's corner"
+                );
+            const auto exact = match_view_place();
+            const auto offset = accelerated_.frame_offset;
+            const std::array<double, 2> drawn{
+                static_cast<double>(full.frame_camera_x) + offset.x,
+                static_cast<double>(full.frame_camera_y) + offset.y
+            };
+            for (std::size_t axis = 0; axis < 2; ++axis) {
+                // Screen pixels from the battlefield's corner to the map's.
+                const double ground =
+                    -drawn[axis] * static_cast<double>(zoom) +
+                    static_cast<double>(axis == 0 ? moved_by.shift_x : moved_by.shift_y);
+                const double view = -exact[axis] * static_cast<double>(zoom);
+                if (std::abs(ground - view) > follow_place_tolerance)
+                    fail(
+                        "frame " + std::to_string(frame) + " drew the ground " +
+                        std::to_string(ground - view) +
+                        " screen pixels from the view's exact place" +
+                        (axis == 0 ? " across" : " down")
+                    );
+            }
+            shifts_seen.insert(std::llround(shift[0] * follow_shift_grain));
+            // The moved target's picture moves by whole pixels.
+            auto moved = read_moved();
+            if (!moved_before.rgb.empty()) {
+                const auto [differing, compared] = unmatched(moved_before, moved);
+                if (differing * most_moved_mismatch_share > compared)
+                    fail(
+                        "frame " + std::to_string(frame) + " at zoom " + zoom_text(zoom) +
+                        " sampled the ground afresh: " + std::to_string(differing) + " of " +
+                        std::to_string(compared) + " pixels match no whole-pixel move"
+                    );
+            }
+            // What the player sees: the frame presented is the shifted
+            // target reduced; on a card the shifted target is the moved
+            // target moved by the shift at its texels, LINEAR, where SDL's
+            // software renderer lands a texture on whole pixels only.
+            const auto shifted = shifted_apart ? read_card_target(full.shifted_target) : moved;
+            const auto seen = hold_presented_to_reduced(
+                presented_frame, shifted, full.moved_target_factor, "frame " + std::to_string(frame)
+            );
+            presented_most = std::max(presented_most, seen.most);
+            if (shifted_apart && !software) {
+                const auto factor = static_cast<double>(full.moved_target_factor);
+                renderer::Surface expected = shifted;
+                wr::bilinear_rgb24(
+                    {moved.rgb.data(), moved.width, moved.height, moved.width},
+                    {1.0, 1.0, shift[0] * factor, shift[1] * factor},
+                    {expected.rgb.data(), expected.width, expected.height, expected.width}
+                );
+                // The texels the move brings in at an edge are left out.
+                const auto edge = static_cast<uint32_t>(full.moved_target_factor);
+                int most = 0;
+                for (uint32_t y = edge; y + edge < shifted.height; ++y)
+                    for (uint32_t x = edge; x + edge < shifted.width; ++x)
+                        for (std::size_t channel = 0; channel < 3; ++channel) {
+                            const auto at = (std::size_t{y} * shifted.width + x) * 3U + channel;
+                            most = std::max(
+                                most, std::abs(int{shifted.rgb[at]} - int{expected.rgb[at]})
+                            );
+                        }
+                if (most > most_card_difference)
+                    fail(
+                        "frame " + std::to_string(frame) +
+                        ": the shifted target is not the moved target moved by the shift (most " +
+                        std::to_string(most) + ")"
+                    );
+            }
+            moved_before = std::move(moved);
+            if (shift[0] != 0.0 || shift[1] != 0.0)
+                ++glided;
+            // The pointer finds the map point drawn under it: a quarter of
+            // the way in, and at the middle, where the followed unit is.
+            const auto camera = view_camera();
+            for (const int share : {4, 2}) {
+                const int x = match_layout_.left + match_layout_.battlefield_width() / share;
+                const int y = match_layout_.top + match_layout_.battlefield_height() / share;
+                const auto found = game_screen_point(static_cast<float>(x), static_cast<float>(y));
+                const auto expected = [&](int at, int edge, std::size_t axis) {
+                    return static_cast<int>(std::llround(
+                        static_cast<double>(at - edge) / static_cast<double>(zoom) + exact[axis] -
+                        static_cast<double>(camera[axis])
+                    ));
+                };
+                namespace layout = oa::ui::display_layout;
+                if (found.x != layout::kSourceLeft + expected(x, match_layout_.left, 0) ||
+                    found.y != layout::kSourceTop + expected(y, match_layout_.top, 1))
+                    fail(
+                        "frame " + std::to_string(frame) +
+                        ": the pointer found a map point other than the one drawn under it"
+                    );
+            }
+            // The pointer over the followed unit, where it is drawn: its
+            // place lifted by its height, on the camera's map pixel, moved by
+            // the view's offset and the card's shift, finds it.
+            if (frame + 1 == follow_frames) {
+                const auto* followed = match_->world().slots[walker].unit;
+                if (followed == nullptr)
+                    fail("the followed unit is gone");
+                const auto lifted =
+                    project_match_point(live_viewport(camera[0], camera[1]), followed->position);
+                const auto at = [&](int32_t projected, double past, double moved) {
+                    return static_cast<float>(
+                        static_cast<double>(projected) - past * static_cast<double>(zoom) + moved
+                    );
+                };
+                update_pointer(at(lifted.x, offset.x, shift[0]), at(lifted.y, offset.y, shift[1]));
+                if (hovered_match_unit_ != walker)
+                    fail(
+                        "the pointer over the followed unit at zoom " + zoom_text(zoom) +
+                        " did not find it"
+                    );
+                // The cursor waits in the blank corner right of the bottom bar.
+                update_pointer(
+                    static_cast<float>(match_layout_.width - 1),
+                    static_cast<float>(match_layout_.height - 1)
+                );
+            }
+        }
+        // The view glided between screen pixels rather than stepping.
+        if (glided * 2 < follow_frames || shifts_seen.size() < follow_least_shifts)
+            fail("the ground at zoom " + zoom_text(zoom) + " did not move by fractions of a pixel");
+        stop_match_tracking();
+        std::cout << "render tiers check: following a walking unit at zoom " << zoom_text(zoom)
+                  << ", " << follow_frames << " frames: the ground at the view's exact place "
+                  << "every frame, moved past the screen pixel it is drawn on by "
+                  << shifts_seen.size() << " fractions, its picture moving by whole pixels; the "
+                  << "zoomed-out target at factor " << full_->moved_target_factor
+                  << (full_->shifted_target != card::TargetHandle{} ? ", moved at its texels"
+                                                                    : ", moved in one draw")
+                  << "; every frame presented within " << presented_most
+                  << " levels of the target reduced\n";
     }
 
     // A zoom above 1 that is not whole: level 0 through the target at the
@@ -3262,13 +3696,13 @@ void Runtime::check_full_render_tier(
     // Anti-aliasing: the Enhanced anti-aliasing row's level chooses the
     // world target's factor, 2x giving 2 and 4x 4, within the budget S and
     // the texture limit at this battlefield; the processor draws no unit
-    // finer in Full; and the battlefield under a transparent overlay and
-    // beside the painters' quads equals
-    // the target read back and reduced on the processor as the card reduces
-    // it: by the factor's halvings from zoom 1 up, and by the two-level
-    // blend of the part drawn at zoom 1 below, with the terrain, the fog
-    // and the stages in the target. With the row off again the target is
-    // freed and the frame drawn straight.
+    // finer in Full; and from zoom 1 up the battlefield under a transparent
+    // overlay and beside the painters' quads equals the target read back
+    // and reduced on the processor by the factor's halvings, as the card
+    // reduces it, with the terrain, the fog and the stages in the target.
+    // Below zoom 1 no world target is drawn: the battlefield goes through
+    // the zoomed-out target, at twice the display's density. With the row
+    // off again the target is freed and the frame drawn straight.
     {
         using oa::present::model::UnitSupersampling;
         const auto level_before = unit_supersampling_;
@@ -3385,8 +3819,7 @@ void Runtime::check_full_render_tier(
                 }
             difference.mean = channels != 0 ? sum / static_cast<double>(channels) : 0.0;
             const int most_allowed = software ? most_software_difference : most_card_difference;
-            const double most_mean_allowed =
-                plan.two_level ? most_blended_mean_difference : most_mean_scaled_difference;
+            const double most_mean_allowed = most_mean_scaled_difference;
             const std::string name = "aa-" + std::to_string(asked) + "x-zoom-" + zoom_text(zoom);
             std::cout << "render tiers check: full tier anti-aliasing " << asked << "x at zoom "
                       << zoom_text(zoom) << ": factor " << plan.factor << ", the world target of "
@@ -3395,8 +3828,7 @@ void Runtime::check_full_render_tier(
                       << full.world_target_bytes / (1024 * 1024) << " MiB within the budget of "
                       << full.supersample_budget * 4 / (1024 * 1024) << " MiB; the battlefield of "
                       << difference.pixels << " pixels against the target reduced "
-                      << (plan.two_level ? "by the two-level blend" : "by halving")
-                      << " on the processor: most " << difference.most << ", mean "
+                      << "by halving on the processor: most " << difference.most << ", mean "
                       << difference.mean << "; " << cost() << '\n';
             write_png(picture(name), read);
             if (full.world_target_bytes > full.supersample_budget * card::texel_bytes)
@@ -3417,13 +3849,32 @@ void Runtime::check_full_render_tier(
         };
         bool budget_allows = true;
         for (const auto level : {UnitSupersampling::x2, UnitSupersampling::x4}) {
-            for (const float zoom : {kMinBattlefieldZoom, 0.75F, 1.0F, 1.37F, 2.0F})
+            for (const float zoom : {1.0F, 1.37F, 2.0F})
                 if (!hold_reduced(level, zoom)) {
                     budget_allows = false;
                     break;
                 }
             if (!budget_allows)
                 break;
+            // Below zoom 1 the frame is drawn into the zoomed-out target and
+            // nothing into the world target.
+            unit_supersampling_ = level;
+            at_zoom(kMinBattlefieldZoom);
+            std::ignore = full_frame();
+            const auto& full = *full_;
+            if (full.drawn_plan.factor != 1 || full.drawn_through_target ||
+                full.moved_target == card::TargetHandle{})
+                fail(
+                    "anti-aliasing " +
+                    std::to_string(oa::present::model::supersampling_factor(level)) + "x at zoom " +
+                    zoom_text(kMinBattlefieldZoom) + " was not drawn through the zoomed-out target"
+                );
+            for (const auto& batch : full.frame.batches)
+                if (full.world_target != card::TargetHandle{} && batch.target == full.world_target)
+                    fail(
+                        "anti-aliasing at zoom " + zoom_text(kMinBattlefieldZoom) +
+                        " drew into the world target"
+                    );
         }
         // Off again: the target is freed and the frame drawn straight.
         unit_supersampling_ = level_before;

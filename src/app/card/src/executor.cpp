@@ -427,16 +427,21 @@ bool Executor::prepare_target(SDL_Texture* texture, uint32_t factor, const std::
 namespace {
 
 /// Returns how many times a render target at a factor is halved before the
-/// one LINEAR draw that resolves it: one fewer than the factor's doublings,
-/// none at a factor of 1 or 2.
+/// one LINEAR draw that resolves it into a target at another factor: until
+/// its factor is at most twice that target's, so that the draw reduces it
+/// by at most 2 in that target's own pixels. Into the frame's final target,
+/// factor 1, that is one fewer than the factor's doublings, none at a
+/// factor of 1 or 2; into a target at the source's own factor, none.
 ///
 /// @param factor the supersampling factor, a power of two
+/// @param into_factor the factor of the target drawn into, a power of two;
+///        1 for the frame's final target
 /// @return the halvings
-uint32_t resolve_halvings(uint32_t factor) noexcept {
-    uint32_t doublings = 0;
-    while ((1U << doublings) < factor)
-        ++doublings;
-    return doublings > 1 ? doublings - 1 : 0;
+uint32_t resolve_halvings(uint32_t factor, uint32_t into_factor = 1) noexcept {
+    uint32_t halvings = 0;
+    while ((factor >> halvings) > 2U * into_factor)
+        ++halvings;
+    return halvings;
 }
 
 } // namespace
@@ -892,27 +897,31 @@ bool Executor::run_resolve(Run& run, const Batch& batch) {
     Target* source = find_target(batch.source);
     SDL_Texture* picture = source->texture;
     SDL_BlendMode* picture_blend = &source->blend;
-    // A factor above 2 reduces through its halves, one fewer than its
-    // doublings; a lesser factor whose target keeps a half for the two-level
-    // reduction resolves from the texture itself, since the one LINEAR draw
-    // reduces it exactly.
-    const uint32_t halvings = resolve_halvings(source->factor);
+    // A factor above twice the destination's reduces through its halves to
+    // twice that factor; a lesser factor whose target keeps a half for the
+    // two-level reduction resolves from the texture itself, since the one
+    // LINEAR draw reduces it exactly, and a target at the destination's own
+    // factor lands texel for texel.
+    Target* destination = batch.target == TargetHandle{} ? nullptr : find_target(batch.target);
+    const uint32_t halvings =
+        resolve_halvings(source->factor, destination != nullptr ? destination->factor : 1U);
     if (halvings != 0) {
         if (!halve(run, *source, halvings))
             return false;
         picture = source->halves[halvings - 1];
         picture_blend = &source->half_blends[halvings - 1];
     }
-    Target* destination = batch.target == TargetHandle{} ? nullptr : find_target(batch.target);
     if (!bind(run, destination) || !set_clip(run, batch.scissored, batch.scissor) ||
         !set_texture_blend(picture, *picture_blend, blend_mode(batch.blend)))
         return false;
     // The destination is written, so its own half, if it has one, is stale.
     if (destination != nullptr)
         destination->halved_in = 0;
+    // A shift lands the picture between the destination's pixels, which the
+    // target's LINEAR sampling draws.
     const SDL_FRect landed{
-        static_cast<float>(batch.destination.x),
-        static_cast<float>(batch.destination.y),
+        static_cast<float>(batch.destination.x) + batch.shift_x,
+        static_cast<float>(batch.destination.y) + batch.shift_y,
         static_cast<float>(batch.destination.width),
         static_cast<float>(batch.destination.height)
     };
@@ -945,9 +954,11 @@ bool Executor::run_blend_reduce(Run& run, const Batch& batch) {
         static_cast<float>(part.width / 2),
         static_cast<float>(part.height / 2)
     };
+    // A shift lands the picture between the destination's pixels, which the
+    // target's LINEAR sampling draws.
     const SDL_FRect landed{
-        static_cast<float>(batch.destination.x),
-        static_cast<float>(batch.destination.y),
+        static_cast<float>(batch.destination.x) + batch.shift_x,
+        static_cast<float>(batch.destination.y) + batch.shift_y,
         static_cast<float>(batch.destination.width),
         static_cast<float>(batch.destination.height)
     };

@@ -28,7 +28,9 @@ existing behaviour changes.
   own, so that one page is drawn differently at different zooms) and an
   optional scissor; a `clear` of a target; a `resolve`, which draws a
   render target reduced to its own size into a rectangle of another target
-  by `none`, `alpha` or `alpha_premultiplied`; or a `blend_reduce`, which
+  by `none`, `alpha` or `alpha_premultiplied`, landed less than a pixel past
+  the rectangle by its `shift_x` and `shift_y`, drawn LINEAR between the
+  pixels; or a `blend_reduce`, which
   draws a part of a render target's texture, on even pixels, into a
   rectangle of another target by the two-level blend: the texture's half,
   each pixel the mean of four, LINEAR at twice the scale, then the part
@@ -86,7 +88,11 @@ existing behaviour changes.
   4), drawn into with vertices in pixels of the size, and reduced by a
   resolve: by one LINEAR draw at factor 2, which averages each square of
   four texels exactly, and through a half-size texture at factor 4, so that
-  every sample counts. A new target, and the half, is cleared to a check
+  every sample counts. Into another render target a resolve halves its
+  source only until its factor is at most twice that target's, so that a
+  source at the target's own factor lands texel for texel, moved by its
+  shift between them; the Full tier moves its zoomed-out battlefield that
+  way before reducing it to the window. A new target, and the half, is cleared to a check
   colour and one pixel is read back before it is trusted, since a texture a
   driver failed to make draws black and reports no error; a pixel of
   another colour refuses the target with an error naming the read-back. It
@@ -160,9 +166,10 @@ renderer's own rounding of each blend takes. A transparent target drawn
 into and resolved by premultiplied alpha composites a half-covered pixel
 at half the canvas, which it checks against the value as well as the
 reference; a factor-4 target cleared and drawn again between resolves
-shows each new content; a draw's sampling mode is set on the page only
-when it changes and keeps batches apart; a new target reads back
-transparent. A frame of edges between a target's pixels at factors 2 and
+shows each new content; a target resolved into another at its own
+factor, 2 or 4, is halved never and lands texel for texel; a draw's
+sampling mode is set on the page only when it changes and keeps batches
+apart; a new target reads back transparent. A frame of edges between a target's pixels at factors 2 and
 4, resolved, lands each edge pixel at the share of it the drawing covers,
 one of two columns at 127 and one or three of four at 63 and 191, and
 matches the reference reduced by halving exactly; the two-level reduction

@@ -314,9 +314,8 @@ std::optional<oa::sim::ground_orders::Point> Runtime::ground_point_under(float x
         return std::nullopt;
     const auto viewport = live_viewport(match_camera_x_, match_camera_z_);
     // The map pixel drawn under the point, a whole one as orders take.
-    auto screen_map = oa::present::world_renderer::screen_to_map_pixel(
-        viewport, {static_cast<int32_t>(x), static_cast<int32_t>(y)}, view_offset()
-    );
+    auto screen_map =
+        map_pixel_drawn_at(viewport, {static_cast<int32_t>(x), static_cast<int32_t>(y)});
     if (!screen_map)
         return std::nullopt;
     // A view past the map's edges shows black there: a point there takes

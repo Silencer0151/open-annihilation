@@ -1491,6 +1491,38 @@ void test_a_target_written_again_resolves_again() {
     OA_CHECK(fixture.executor.counts().resolves == 4);
 }
 
+/// A resolve into a target at the source's own factor, 2 or 4, halves
+/// nothing and lands the source texel for texel: the second target's
+/// texture equals the first's, a seeded page's texels drawn between its
+/// pixels included, where a source halved first and enlarged again would
+/// not.
+void test_a_resolve_into_a_target_at_its_factor_lands_texel_for_texel() {
+    for (const uint32_t factor : {2U, 4U}) {
+        Fixture fixture;
+        const Image texels = seeded(seed_page, 64, 64);
+        const card::PageHandle page = fixture.make_page({texels});
+        const card::TargetHandle drawn = fixture.make_target(24, 20, factor);
+        const card::TargetHandle copied = fixture.make_target(24, 20, factor);
+        card::CardFrame frame;
+        const card::Index first = next_index(frame);
+        card::append_quad(frame, 0.0F, 0.0F, 24.0F, 20.0F, 0.0F, 0.0F, 0.75F, 0.625F, {});
+        draw_since(frame, first, page, card::Blend::none, drawn);
+        card::Batch onto;
+        onto.operation = card::Operation::resolve;
+        onto.source = drawn;
+        onto.target = copied;
+        onto.destination = {0, 0, 24, 20};
+        frame.batches.push_back(onto);
+        OA_CHECK(card::check_frame(frame).empty());
+        OA_CHECK(fixture.executor.execute(frame, nullptr));
+        OA_CHECK(fixture.executor.counts().halvings == 0);
+        const Image from = fixture.canvas.read_target(fixture.executor.target_texture(drawn));
+        const Image into = fixture.canvas.read_target(fixture.executor.target_texture(copied));
+        OA_CHECK(from.width == 24 * factor && into.width == from.width);
+        OA_CHECK(into.pixels == from.pixels);
+    }
+}
+
 /// A frame drawn into a target at a supersampling factor and reduced to its
 /// size: an edge that falls between the target's pixels lands at the share
 /// of the pixel the drawing covers, one of two columns at 127 at factor 2
@@ -1818,6 +1850,19 @@ void test_malformed_frames_are_refused() {
     frame.batches.back().blend = card::Blend::none;
     frame.batches.back().destination = {0, 0, 0, 16};
     refused("an empty destination", frame, "empty destination");
+    // A resolve lands less than a pixel past its destination; a whole pixel,
+    // or a shift on a draw, is refused.
+    frame.batches.back().destination = {0, 0, 16, 16};
+    frame.batches.back().shift_x = -0.75F;
+    frame.batches.back().shift_y = 0.25F;
+    OA_CHECK(card::check_frame(frame).empty());
+    frame.batches.back().shift_x = 1.0F;
+    refused("a shift of a whole pixel", frame, "a whole pixel or more");
+    frame.batches.back().shift_x = std::nanf("");
+    refused("a shift that is not a number", frame, "not a number");
+    frame = good;
+    frame.batches[0].shift_y = 0.5F;
+    refused("a shift on a draw", frame, "neither a resolve nor");
     frame = good;
     card::Batch clear;
     clear.operation = card::Operation::clear;
@@ -2247,6 +2292,7 @@ int main() {
     test_a_transparent_target_resolves_by_premultiplied_alpha();
     test_sampling_is_the_draws_own();
     test_a_target_written_again_resolves_again();
+    test_a_resolve_into_a_target_at_its_factor_lands_texel_for_texel();
     test_supersampled_edges_reduce_to_their_coverage();
     test_two_level_reductions_match_the_reference();
     test_levels_of_a_page();

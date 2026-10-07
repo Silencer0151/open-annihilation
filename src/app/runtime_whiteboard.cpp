@@ -52,20 +52,24 @@ std::array<int32_t, 2> Runtime::battlefield_map_point(float x, float y) const {
     const auto width = std::max(1, match_layout_.battlefield_width());
     const auto height = std::max(1, match_layout_.battlefield_height());
     // A view drawn between map pixels shows each map pixel that far before
-    // the camera's; with none, adding zero leaves the quotient as it was.
+    // the camera's, and the card's shift moves the picture on (view_shift);
+    // with neither, adding zero leaves the quotient as it was.
     const auto offset = view_offset();
-    const auto map_x = match_camera_x_ +
-                       static_cast<int32_t>(
-                           (x - static_cast<float>(match_layout_.left)) *
-                               static_cast<float>(visible_map_width()) / static_cast<float>(width) +
-                           static_cast<float>(offset.x)
-                       );
-    const auto map_y = match_camera_z_ + static_cast<int32_t>(
-                                             (y - static_cast<float>(match_layout_.top)) *
-                                                 static_cast<float>(visible_map_height()) /
-                                                 static_cast<float>(height) +
-                                             static_cast<float>(offset.y)
-                                         );
+    const auto shift = view_shift();
+    const auto map_x =
+        match_camera_x_ +
+        static_cast<int32_t>(
+            (x - static_cast<float>(match_layout_.left) - static_cast<float>(shift[0])) *
+                static_cast<float>(visible_map_width()) / static_cast<float>(width) +
+            static_cast<float>(offset.x)
+        );
+    const auto map_y =
+        match_camera_z_ +
+        static_cast<int32_t>(
+            (y - static_cast<float>(match_layout_.top) - static_cast<float>(shift[1])) *
+                static_cast<float>(visible_map_height()) / static_cast<float>(height) +
+            static_cast<float>(offset.y)
+        );
     return {map_x, map_y};
 }
 

@@ -322,6 +322,50 @@ oa::present::world_renderer::ViewOffset Runtime::view_offset() const {
     };
 }
 
+std::array<double, 2> Runtime::view_shift() const {
+    // The picture moves from the same view, on the same terms, as its
+    // offset is drawn from.
+    if (!view_moved_by_card_ || !view_between_pixels_ || screen_ != Screen::match ||
+        !exact_view_.held)
+        return {};
+    const auto camera = view_camera();
+    if (camera[0] != match_camera_x_ || camera[1] != match_camera_z_ ||
+        camera[0] != exact_view_.camera_x || camera[1] != exact_view_.camera_z)
+        return {};
+    const auto zoom = static_cast<double>(match_zoom() > 0.0F ? match_zoom() : 1.0F);
+    // The point drawn at the battlefield's corner lands that far from it,
+    // within half a screen pixel, held there against a rounding beyond it.
+    const auto rest = [zoom](double drawn, double exact) {
+        return std::clamp((drawn - exact) * zoom, -0.5, 0.5);
+    };
+    return {rest(exact_view_.drawn_x, exact_view_.x), rest(exact_view_.drawn_z, exact_view_.z)};
+}
+
+std::optional<oa::present::world_renderer::MapPixel> Runtime::map_pixel_drawn_at(
+    const oa::present::world_renderer::BattlefieldViewport& viewport,
+    oa::present::world_renderer::ScreenPoint screen
+) const {
+    const auto offset = view_offset();
+    const auto shift = view_shift();
+    if (shift[0] == 0.0 && shift[1] == 0.0)
+        return oa::present::world_renderer::screen_to_map_pixel(viewport, screen, offset);
+    // The picture moved by the shift shows at a screen point the map
+    // pixel it showed the shift before, which lies the shift over the
+    // scale before the offset: its whole map pixels go to the viewport's
+    // camera and the rest stays the offset.
+    const auto scale = static_cast<double>(viewport.scale > 0.0F ? viewport.scale : 1.0F);
+    const double across = offset.x - shift[0] / scale;
+    const double down = offset.y - shift[1] / scale;
+    const double whole_across = std::floor(across);
+    const double whole_down = std::floor(down);
+    auto moved = viewport;
+    moved.source_x += static_cast<int32_t>(whole_across);
+    moved.source_y += static_cast<int32_t>(whole_down);
+    return oa::present::world_renderer::screen_to_map_pixel(
+        moved, screen, {across - whole_across, down - whole_down}
+    );
+}
+
 void Runtime::centre_view_on(int32_t x, int32_t z) {
     if (!view_between_pixels_) {
         // The whole map pixel of the point, its 16.16 high word.
@@ -334,7 +378,7 @@ void Runtime::centre_view_on(int32_t x, int32_t z) {
         return;
     }
     const uint32_t step = oa::present::scene_step(match_zoom());
-    if (!view_on_scene_grid_) {
+    if (!view_on_scene_grid_ || view_moved_by_card_) {
         const auto zoom = static_cast<double>(match_zoom() > 0.0F ? match_zoom() : 1.0F);
         place_match_view(
             static_cast<double>(x) / oa::present::scene_step_one -
@@ -371,13 +415,15 @@ std::array<uint32_t, 2> Runtime::scene_phase(const WorldScaling& scaling) const 
     return {phase(offset.x), phase(offset.y)};
 }
 
-oa::present::world_renderer::ViewOffset Runtime::settle_view_offset(bool between, bool on_grid) {
+oa::present::world_renderer::ViewOffset
+Runtime::settle_view_offset(bool between, bool on_grid, bool moved_by_card) {
     // A reader's draw of the standard tier's picture leaves the view alone.
     if (accelerated_.suspended)
         return {};
     // A view whose camera was taken by another rule takes it again from
     // its exact place.
     on_grid = between && on_grid;
+    view_moved_by_card_ = on_grid && moved_by_card;
     const bool changed = between != view_between_pixels_ || on_grid != view_on_scene_grid_;
     view_between_pixels_ = between;
     view_on_scene_grid_ = on_grid;

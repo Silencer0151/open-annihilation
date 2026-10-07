@@ -83,12 +83,16 @@ TileRange visible_tiles(const gw::TerrainAtlas& atlas, const TerrainView& view) 
         constexpr auto edge = static_cast<int64_t>(gw::tile_edge);
         return pixel >= 0 ? pixel / edge : -((edge - 1 - pixel) / edge);
     };
+    // The map pixels the margin reaches before the camera.
+    const auto before = static_cast<int64_t>(
+        std::ceil(static_cast<double>(view.margin) / static_cast<double>(view.scale))
+    );
     const auto columns = [&](int32_t camera, uint32_t extent, uint32_t cells) {
         const auto map_pixels = static_cast<int64_t>(
             std::ceil(static_cast<double>(extent) / static_cast<double>(view.scale))
         );
         const auto last = static_cast<int64_t>(cells);
-        const int64_t first = std::clamp<int64_t>(tile_of(camera), 0, last);
+        const int64_t first = std::clamp<int64_t>(tile_of(camera - before), 0, last);
         const int64_t end = std::clamp<int64_t>(tile_of(camera + map_pixels) + 1, 0, last);
         return std::pair{static_cast<uint32_t>(first), static_cast<uint32_t>(std::max(first, end))};
     };

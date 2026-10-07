@@ -11,18 +11,20 @@
 // sprites, particles, lines, units, projectiles and debris in the planner's
 // order from the sprite pages and the models' meshes (runtime_full.hpp);
 // the fog's black pass over never-mapped ground; and the quads the painters
-// asked for in place of shading the world themselves. With Enhanced
-// anti-aliasing on, the card draws the terrain, the fog's greyed pass and
-// the stages into a world target at the row's supersample factor
-// (full_supersampling.hpp), within the texture limit and the memory guard,
-// and reduces it to the window: by exact halvings from
-// zoom 1 up, by the two-level blend of the view drawn at zoom 1 below; the
-// processor's anti-aliasing never runs. The processor paints the interface
-// and, onto an overlay canvas cleared to a key colour outside the palette,
-// everything the painters after the fog paint; the overlay is laid over the
-// card's picture 1:1. The planner, the HUD, the painters and the readers
-// that keep a picture run as in the Basic tier. It is reached only when the
-// tier decided for the frame is Full.
+// asked for in place of shading the world themselves. Below zoom 1 the
+// card draws all of it into the zoomed-out target, at twice the display's
+// density on the screen pixels laid from the map's corner, moves that by
+// the rest of a screen pixel at its own texels and reduces it onto the
+// battlefield. With Enhanced anti-aliasing on, from zoom 1 up the card
+// draws the terrain, the fog's greyed pass and the stages into a world
+// target at the row's supersample factor (full_supersampling.hpp), within
+// the texture limit and the memory guard, and reduces it to the window by
+// exact halvings; the processor's anti-aliasing never runs. The processor
+// paints the interface and, onto an overlay canvas cleared to a key colour
+// outside the palette, everything the painters after the fog paint; the
+// overlay is laid over the card's picture 1:1. The planner, the HUD, the
+// painters and the readers that keep a picture run as in the Basic tier.
+// It is reached only when the tier decided for the frame is Full.
 #include "oa/app/runtime.hpp"
 
 #include "full_fog.hpp"
@@ -644,10 +646,14 @@ void ensure_projectile_shadow(
 ///
 /// @param[in,out] frame the frame
 /// @param quads the quads, in pixels of the battlefield layer
-/// @param battlefield the battlefield's rectangle in the window
+/// @param battlefield the battlefield's rectangle in the target drawn into
+/// @param target the target drawn into; none for the window
 /// @return quads appended
 uint32_t append_world_quads(
-    card::CardFrame& frame, std::span<const FullWorldQuad> quads, const card::Rect& battlefield
+    card::CardFrame& frame,
+    std::span<const FullWorldQuad> quads,
+    const card::Rect& battlefield,
+    card::TargetHandle target
 ) {
     card::Batch* batch = nullptr;
     for (const FullWorldQuad& quad : quads) {
@@ -655,6 +661,7 @@ uint32_t append_world_quads(
             frame.batches.emplace_back();
             batch = &frame.batches.back();
             batch->operation = card::Operation::draw;
+            batch->target = target;
             batch->blend = quad.blend;
             batch->scissored = true;
             batch->scissor = battlefield;
@@ -777,6 +784,16 @@ void Runtime::FullPresentation::destroy_sprite_card_pages() noexcept {
     card_pages.clear();
 }
 
+void Runtime::FullPresentation::destroy_moved_targets() noexcept {
+    executor.destroy_target(moved_target);
+    executor.destroy_target(shifted_target);
+    moved_target = {};
+    shifted_target = {};
+    moved_target_width = 0;
+    moved_target_height = 0;
+    moved_target_factor = 0;
+}
+
 void Runtime::FullPresentation::destroy_world_target() noexcept {
     executor.destroy_target(world_target);
     world_target = {};
@@ -836,6 +853,10 @@ void Runtime::free_full_match_textures() noexcept {
     full.target_width = 0;
     full.target_height = 0;
     full.target_refused = false;
+    full.destroy_moved_targets();
+    full.refused_moved_width = 0;
+    full.refused_moved_height = 0;
+    full.refused_moved_factor = 0;
     full.destroy_world_target();
     full.refused_world_width = 0;
     full.refused_world_height = 0;
@@ -973,6 +994,64 @@ void Runtime::ensure_full_target(uint32_t bf_w, uint32_t bf_h) {
     }
 }
 
+void Runtime::ensure_full_moved_target(uint32_t bf_w, uint32_t bf_h) {
+    auto& full = *full_;
+    // A layout pixel of room on every side, and the display's density in
+    // texture pixels a layout pixel, rounded up to a factor a target takes.
+    const uint32_t width = bf_w + 2U;
+    const uint32_t height = bf_h + 2U;
+    const double density = match_display_density();
+    const uint32_t display_factor = density <= 1.0 ? 1U : density <= 2.0 ? 2U : 4U;
+    const uint32_t doubled = display_factor * 2U;
+    const bool doubled_refused = full.refused_moved_width == width &&
+                                 full.refused_moved_height == height &&
+                                 full.refused_moved_factor == doubled;
+    const uint32_t wanted = doubled_refused ? display_factor : doubled;
+    if (full.moved_target != card::TargetHandle{} && full.moved_target_width == width &&
+        full.moved_target_height == height && full.moved_target_factor == wanted)
+        return;
+    full.destroy_moved_targets();
+    const auto bytes_at = [&](uint32_t factor) {
+        return uint64_t{width} * factor * height * factor * bytes_per_texel;
+    };
+    // Twice the display's density, with the shifted target, where the
+    // memory and the renderer allow both: the tier draws on without them.
+    if (!doubled_refused) {
+        if (accelerated_buffer_fits(2U * bytes_at(doubled))) {
+            full.moved_target = full.executor.create_target(width, height, doubled);
+            if (full.moved_target != card::TargetHandle{})
+                full.shifted_target = full.executor.create_target(width, height, doubled);
+        }
+        if (full.shifted_target != card::TargetHandle{}) {
+            full.moved_target_width = width;
+            full.moved_target_height = height;
+            full.moved_target_factor = doubled;
+            return;
+        }
+        std::cout << graphics_log_prefix << "full tier: the zoomed-out targets of " << width << "x"
+                  << height << " at factor " << doubled
+                  << " could not be made or would leave too little memory; the battlefield is "
+                     "moved between pixels at the display's density\n"
+                  << std::flush;
+        full.destroy_moved_targets();
+        full.refused_moved_width = width;
+        full.refused_moved_height = height;
+        full.refused_moved_factor = doubled;
+    }
+    if (!accelerated_buffer_allowed(
+            policy::AcceleratedBuffer::card_targets, bytes_at(display_factor)
+        ))
+        throw FullCardError("the full tier's zoomed-out target: too little memory");
+    full.moved_target = full.executor.create_target(width, height, display_factor);
+    if (full.moved_target == card::TargetHandle{})
+        throw FullCardError(
+            "the full tier's zoomed-out target could not be made: " + full.executor.error()
+        );
+    full.moved_target_width = width;
+    full.moved_target_height = height;
+    full.moved_target_factor = display_factor;
+}
+
 uint32_t Runtime::full_supersample() const noexcept {
     return full_presentation() ? full_->supersample : 0;
 }
@@ -1079,6 +1158,14 @@ void Runtime::ensure_full_executor() {
         full.atlas_source = {};
         full.target = {};
         full.target_refused = false;
+        full.moved_target = {};
+        full.shifted_target = {};
+        full.moved_target_width = 0;
+        full.moved_target_height = 0;
+        full.moved_target_factor = 0;
+        full.refused_moved_width = 0;
+        full.refused_moved_height = 0;
+        full.refused_moved_factor = 0;
         full.world_target = {};
         full.world_target_width = 0;
         full.world_target_height = 0;
@@ -1249,6 +1336,7 @@ void Runtime::ensure_full_match_textures() {
         full.target_width = 0;
         full.target_height = 0;
         full.target_refused = false;
+        full.destroy_moved_targets();
         full.destroy_world_target();
     }
 }
@@ -1521,6 +1609,17 @@ bool Runtime::present_full_match_layers(bool dialogs) {
             );
         };
         bool fog_in_target = false;
+        // Below zoom 1 the battlefield is drawn into the moved target, a
+        // pixel in from its corner, on the screen pixels laid from the map's
+        // corner as the view's offset places it, and the card then moves the
+        // target onto the battlefield by the rest of a screen pixel, at the
+        // view's exact place: the fog's passes over everything and the
+        // painters' quads go where the battlefield was drawn.
+        bool moved = false;
+        ft::TerrainView over_view = view;
+        card::TargetHandle over_target{};
+        const card::Rect* over_scissor = &battlefield;
+        card::Rect painted = battlefield;
 
         // Anti-aliasing: the factor the Enhanced anti-aliasing row asks for,
         // fitted to this battlefield, and the world target at it.
@@ -1529,19 +1628,15 @@ bool Runtime::present_full_match_layers(bool dialogs) {
             supersampling::plan_world_target(zoom, full.supersample, bf_w, bf_h);
         full.drawn_plan = supersampled;
         if (supersampled.factor > 1) {
-            // The terrain into the world target, level 0 NEAREST at the
-            // plan's draw scale: from zoom 1 up the texture holds the
-            // factor's texels a window pixel, and below it one a map pixel;
-            // the fog's greyed pass and the stages into it at the same
-            // scale; then the target reduced into the battlefield, by the
-            // factor's halvings or by the two-level blend of the part drawn.
+            // From zoom 1 up the terrain into the world target, level 0
+            // NEAREST at the zoom, the texture holding the factor's texels a
+            // window pixel; the fog's greyed pass and the stages into it at
+            // the same scale; then the target reduced into the battlefield
+            // by the factor's halvings. Below zoom 1 the plan makes no world
+            // target: the zoomed-out target below holds two texels a display
+            // pixel already.
             through_target = true;
-            // The terrain at the texel scale: level 0 NEAREST at one texel
-            // a map pixel, else the level whose texels the scale is made
-            // of, alone, LINEAR (the level rule at the texel scale).
-            full.plan = ft::plan_terrain_draw(supersampled.texel_scale, false);
-            full.plan.through_target = false;
-            full.plan.target_zoom = 1;
+            full.plan = ft::plan_terrain_draw(1.0F, false);
             const ft::TerrainPass pass = full.plan.passes[0];
             card::Batch clear;
             clear.operation = card::Operation::clear;
@@ -1554,26 +1649,21 @@ bool Runtime::present_full_match_layers(bool dialogs) {
                 static_cast<float>(-offset.x * static_cast<double>(target_view.scale));
             target_view.origin_y =
                 static_cast<float>(-offset.y * static_cast<double>(target_view.scale));
-            target_view.width =
-                static_cast<uint32_t>(supersampled.source_part.width) / supersampled.factor;
-            target_view.height =
-                static_cast<uint32_t>(supersampled.source_part.height) / supersampled.factor;
+            target_view.width = supersampled.size_width;
+            target_view.height = supersampled.size_height;
             quads += ft::append_terrain_tiles(
                 frame, full.atlas, full.pages, target_view, pass, full.world_target, nullptr
             );
             const std::array<full_fog::GreyedLevel, 1> levels{{{pass.level, pass.sampling, 1.0F}}};
             append_unseen(target_view, levels, full.world_target, nullptr);
             // Size pixels per layout pixel, so that the texture holds the
-            // stages at the factor's pixels a window pixel, or at zoom 1
-            // below zoom 1.
+            // stages at the factor's pixels a window pixel.
             emit_stages(0.0F, 0.0F, supersampled.draw_scale / zoom, full.world_target);
             append_fog_over(target_view, full.world_target, nullptr);
             fog_in_target = true;
             card::Batch reduce;
-            reduce.operation =
-                supersampled.two_level ? card::Operation::blend_reduce : card::Operation::resolve;
+            reduce.operation = card::Operation::resolve;
             reduce.source = full.world_target;
-            reduce.source_part = supersampled.source_part;
             reduce.destination = {
                 battlefield.x + supersampled.destination.x,
                 battlefield.y + supersampled.destination.y,
@@ -1645,11 +1735,41 @@ bool Runtime::present_full_match_layers(bool dialogs) {
                 card::TargetHandle{}
             );
         } else {
+            moved = zoom < 1.0F;
+            if (moved) {
+                ensure_full_moved_target(bf_w, bf_h);
+                // The terrain by the level rule at the target's own texels,
+                // so that a level's texel lands on about one of the target's
+                // and the reduction onto the battlefield, not an enlarged
+                // level, makes each display pixel: the ground keeps its
+                // detail. From one texel a map pixel up, level 0 alone,
+                // LINEAR, which the reduction smooths as it would a larger
+                // level.
+                const float texel_zoom = zoom * static_cast<float>(full.moved_target_factor);
+                full.plan = ft::plan_terrain_draw(std::min(texel_zoom, 1.0F), false);
+                for (uint32_t index = 0; index < full.plan.pass_count; ++index)
+                    full.plan.passes[index].sampling = card::Sampling::linear;
+                over_target = full.moved_target;
+                over_scissor = nullptr;
+                painted = {1, 1, static_cast<int32_t>(bf_w), static_cast<int32_t>(bf_h)};
+                // The terrain fills the room around the battlefield too,
+                // which the move brings into view at an edge.
+                over_view.origin_x = static_cast<float>(1.0 - offset.x * static_cast<double>(zoom));
+                over_view.origin_y = static_cast<float>(1.0 - offset.y * static_cast<double>(zoom));
+                over_view.width = bf_w + 2U;
+                over_view.height = bf_h + 2U;
+                over_view.margin = 1;
+                card::Batch clear;
+                clear.operation = card::Operation::clear;
+                clear.target = over_target;
+                clear.colour = card::Colour{0.0F, 0.0F, 0.0F, 1.0F};
+                frame.batches.push_back(clear);
+            }
             std::array<full_fog::GreyedLevel, ft::most_terrain_passes> levels{};
             for (uint32_t index = 0; index < full.plan.pass_count; ++index) {
                 const ft::TerrainPass& pass = full.plan.passes[index];
                 quads += ft::append_terrain_tiles(
-                    frame, full.atlas, full.pages, view, pass, card::TargetHandle{}, &battlefield
+                    frame, full.atlas, full.pages, over_view, pass, over_target, over_scissor
                 );
                 levels[index] = {pass.level, pass.sampling, 1.0F};
             }
@@ -1660,23 +1780,21 @@ bool Runtime::present_full_match_layers(bool dialogs) {
                 levels[0].share = 1.0F - levels[1].share;
             }
             append_unseen(
-                view,
+                over_view,
                 std::span<const full_fog::GreyedLevel>(levels.data(), full.plan.pass_count),
-                card::TargetHandle{},
-                &battlefield
+                over_target,
+                over_scissor
             );
             emit_stages(
-                static_cast<float>(match_layout_.left),
-                static_cast<float>(match_layout_.top),
-                1.0F,
-                card::TargetHandle{}
+                static_cast<float>(painted.x), static_cast<float>(painted.y), 1.0F, over_target
             );
         }
-        // Over everything, straight to the window: the fog's passes where
-        // no world target holds them, and the painters' quads.
+        // Over everything, straight to the window or into the moved target:
+        // the fog's passes where no world target holds them, and the
+        // painters' quads.
         if (!fog_in_target)
-            append_fog_over(view, card::TargetHandle{}, &battlefield);
-        world_quads = append_world_quads(frame, full.world_quads, battlefield);
+            append_fog_over(over_view, over_target, over_scissor);
+        world_quads = append_world_quads(frame, full.world_quads, painted, over_target);
         full.build_ns = nanoseconds_since(build_start) - full.stage_ns;
         const auto execute_start = std::chrono::steady_clock::now();
         // The failure --check-renderer-ladder forces stands in for the
@@ -1701,16 +1819,83 @@ bool Runtime::present_full_match_layers(bool dialogs) {
         full.drawn_through_target = through_target;
         ++full.frames;
 
-        // What the painters painted, over the card's picture, 1:1.
-        const SDL_FRect world{
-            static_cast<float>(battlefield.x),
-            static_cast<float>(battlefield.y),
-            static_cast<float>(bf_w),
-            static_cast<float>(bf_h)
-        };
-        draw_one_to_one(
-            sdl_.renderer, full.overlay_texture, nullptr, &world, one_to_one_scale_mode()
-        );
+        // What the painters painted, over the card's picture, 1:1: into the
+        // moved target where the battlefield was drawn into it, which the
+        // card then moves onto the battlefield by the rest of a screen pixel
+        // (view_shift), so that the ground, everything on it and the
+        // painters' marks move together; else over the window.
+        const auto& shift = accelerated_.frame_shift;
+        if (moved) {
+            SDL_Texture* into = full.executor.target_texture(full.moved_target);
+            const SDL_FRect in_target{
+                1.0F, 1.0F, static_cast<float>(bf_w), static_cast<float>(bf_h)
+            };
+            if (into == nullptr || !SDL_SetRenderTarget(sdl_.renderer, into))
+                throw FullCardError(
+                    std::string("SDL_SetRenderTarget of the zoomed-out target: ") + SDL_GetError()
+                );
+            draw_one_to_one(
+                sdl_.renderer, full.overlay_texture, nullptr, &in_target, one_to_one_scale_mode()
+            );
+            if (!SDL_SetRenderTarget(sdl_.renderer, nullptr))
+                throw FullCardError(
+                    std::string("SDL_SetRenderTarget of the window: ") + SDL_GetError()
+                );
+            auto& move = full.moved_frame;
+            move.reset();
+            card::Batch onto;
+            onto.operation = card::Operation::resolve;
+            onto.source = full.moved_target;
+            onto.destination = {
+                battlefield.x - 1,
+                battlefield.y - 1,
+                static_cast<int32_t>(full.moved_target_width),
+                static_cast<int32_t>(full.moved_target_height)
+            };
+            onto.shift_x = static_cast<float>(shift[0]);
+            onto.shift_y = static_cast<float>(shift[1]);
+            onto.scissored = true;
+            onto.scissor = battlefield;
+            if (full.shifted_target != card::TargetHandle{}) {
+                // The shift at the target's own texels, where a LINEAR draw
+                // blurs no more than a fraction of a texel, then the shifted
+                // picture reduced in place, each display pixel the mean of
+                // its texels: one LINEAR draw moving the picture by a
+                // fraction of a display pixel would blur it by that fraction,
+                // so that the ground sharpened each time it landed on whole
+                // pixels and softened between.
+                card::Batch shifted = onto;
+                shifted.target = full.shifted_target;
+                shifted.destination = {
+                    0,
+                    0,
+                    static_cast<int32_t>(full.moved_target_width),
+                    static_cast<int32_t>(full.moved_target_height)
+                };
+                shifted.scissored = false;
+                shifted.scissor = {};
+                move.batches.push_back(shifted);
+                onto.source = full.shifted_target;
+                onto.shift_x = 0.0F;
+                onto.shift_y = 0.0F;
+            }
+            move.batches.push_back(onto);
+            if (!full.executor.execute(move, nullptr))
+                throw FullCardError(
+                    "the card refused the zoomed-out target's move: " + full.executor.error()
+                );
+            oa::base::float_precision::restore_program_float_control();
+        } else {
+            const SDL_FRect world{
+                static_cast<float>(static_cast<double>(battlefield.x) + shift[0]),
+                static_cast<float>(static_cast<double>(battlefield.y) + shift[1]),
+                static_cast<float>(bf_w),
+                static_cast<float>(bf_h)
+            };
+            draw_one_to_one(
+                sdl_.renderer, full.overlay_texture, nullptr, &world, one_to_one_scale_mode()
+            );
+        }
         finish_match_layers(frame_format, dialogs, upload_start, present_start);
         return true;
     } catch (const FullCardError& error) {

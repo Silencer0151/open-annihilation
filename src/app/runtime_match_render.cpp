@@ -839,7 +839,13 @@ void Runtime::render_match_surface() {
         ((accelerated_presentation() && (card_world || scaling.method == SceneMethod::magnify ||
                                          scaling.method == SceneMethod::area)) ||
          processor_below_one);
-    std::ignore = settle_view_offset(between_pixels, card_world || processor_below_one);
+    // The card's frames below zoom 1 draw the picture on the grid and move
+    // it on to the view's exact place by the rest of a screen pixel.
+    std::ignore = settle_view_offset(
+        between_pixels,
+        card_world || processor_below_one,
+        card_world && match_zoom() > 0.0F && match_zoom() < 1.0F
+    );
     const auto held = view_camera();
     const int32_t camera_x = directed ? std::max(0, match_camera_x_) : held[0];
     const int32_t camera_y = directed ? std::max(0, match_camera_z_) : held[1];
@@ -1009,6 +1015,7 @@ void Runtime::render_match_surface() {
     const auto phase = scene_phase(scaling);
     accelerated_.frame_offset =
         processor_below_one ? oa::present::world_renderer::ViewOffset{} : drawn_offset;
+    accelerated_.frame_shift = card_world ? view_shift() : std::array<double, 2>{};
     ++accelerated_.hud_revision;
     const int32_t scene_w = scaling.scene_width;
     const int32_t scene_h = scaling.scene_height;
