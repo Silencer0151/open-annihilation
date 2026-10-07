@@ -669,6 +669,11 @@
 	zh-Hans=缩小超过;
 	}
 
+[Window frame]
+	{
+	zh-Hans=窗口边框;
+	}
+
 [Use modern fonts for game text]
 	{
 	zh-Hans=游戏文字使用现代字体;
@@ -1197,6 +1202,36 @@
 [Closer in, units are drawn as models.]
 	{
 	zh-Hans=更近时单位以模型绘制。;
+	}
+
+[Hidden in play]
+	{
+	zh-Hans=游戏中隐藏;
+	}
+
+[Always shown]
+	{
+	zh-Hans=始终显示;
+	}
+
+[A window hides its title bar and borders]
+	{
+	zh-Hans=进行游戏时，窗口隐藏标题栏和边框，;
+	}
+
+[while a game is played; menus show them.]
+	{
+	zh-Hans=在菜单中则显示。;
+	}
+
+[A window shows its title bar and borders]
+	{
+	zh-Hans=窗口在每个画面都显示标题栏和边框，;
+	}
+
+[on every screen, a game's included.]
+	{
+	zh-Hans=进行游戏时也一样。;
 	}
 
 [The display's own pixel density (Retina on a Mac).]

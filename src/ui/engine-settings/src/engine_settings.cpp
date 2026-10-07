@@ -260,6 +260,11 @@ constexpr std::array<ChoiceWord<ZoomedOutAfter>, 7> zoomed_out_after_words{{
     {ZoomedOutAfter::one_twelfth, "1/12"},
     {ZoomedOutAfter::one_sixteenth, "1/16"},
 }};
+/// Window frame's words, in window_frame_choices' order.
+constexpr std::array<ChoiceWord<WindowFrame>, 2> window_frame_words{{
+    {WindowFrame::hidden_in_play, "hidden-in-play"},
+    {WindowFrame::always_shown, "always-shown"},
+}};
 /// Maximum zoom out's words, in zoom_out_limits' order.
 constexpr std::array<ChoiceWord<ZoomOutLimit>, 7> zoom_out_words{{
     {ZoomOutLimit::automatic, "automatic"},
@@ -648,6 +653,7 @@ EngineSettings read_settings(
     read_word(values, key::explosion_flash, explosion_flash_words, settings.explosion_flash);
     read_word(values, key::zoomed_out_units, zoomed_out_units_words, settings.zoomed_out_units);
     read_word(values, key::zoomed_out_after, zoomed_out_after_words, settings.zoomed_out_after);
+    read_word(values, key::window_frame, window_frame_words, settings.window_frame);
     for (const TextSwitch& entry : text_switches)
         if (const auto number = stored_number(values, entry.key))
             settings.*entry.member = *number > 0;
@@ -879,6 +885,15 @@ void write_settings(
         opened.zoomed_out_after,
         chosen.zoomed_out_after,
         defaults.zoomed_out_after,
+        restored
+    );
+    store_word(
+        values,
+        key::window_frame,
+        window_frame_words,
+        opened.window_frame,
+        chosen.window_frame,
+        defaults.window_frame,
         restored
     );
     for (const TextSwitch& entry : text_switches)

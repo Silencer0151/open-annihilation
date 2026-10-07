@@ -3,7 +3,7 @@
 
 // The Screen size applied at once: the window resized, full screen at a
 // display mode of the size or drawn at it and scaled to the screen, and the
-// size the pickers show.
+// size the pickers show; and the window's frame as Window frame says.
 #include "engine_settings_state.hpp"
 #include "oa/app/runtime.hpp"
 #include "screen_mode.hpp"
@@ -61,6 +61,29 @@ void Runtime::apply_screen_size(settings::ScreenSize size) {
     apply_output_mode();
     if (screen_ == Screen::match && match_ && selected_tnt_)
         render_match_surface();
+}
+
+void Runtime::apply_window_frame() {
+    if (OA_TOUCH_FIRST || sdl_.window == nullptr || !engine_settings_)
+        return;
+    const SDL_WindowFlags flags = SDL_GetWindowFlags(sdl_.window);
+    // A window still switching to or from full screen is changed once it
+    // has.
+    const bool switching =
+        full_screen_switch_.awaiting_shown &&
+        SDL_GetTicks() - full_screen_switch_.requested_ms < full_screen_settle_ms;
+    const WindowFramePlace place{
+        .windowed = (flags & SDL_WINDOW_FULLSCREEN) == 0 && !switching,
+        .playing = screen_ == Screen::match && match_ && !match_finished_ && !match_paused_,
+        .bordered = (flags & SDL_WINDOW_BORDERLESS) == 0,
+    };
+    const auto request = window_frame_request(
+        engine_settings_->current.window_frame == settings::WindowFrame::hidden_in_play, place
+    );
+    if (request != WindowFrameRequest::none &&
+        !set_window_frame(sdl_.window, request == WindowFrameRequest::show))
+        std::cerr << "open-annihilation: the window's frame did not change: " << SDL_GetError()
+                  << '\n';
 }
 
 void Runtime::EngineSettingsState::take_screen_size(Runtime& runtime, settings::ScreenSize size) {

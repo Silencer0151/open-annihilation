@@ -214,6 +214,8 @@ enum class Setting : uint8_t {
     /// After zoom: a drop-down of 1/2, 1/3, 1/4, 1/6, 1/8, 1/12 and 1/16,
     /// locked while Zoomed out units shows Rendered
     zoomed_out_after,
+    /// Window frame: a strip of Hidden in play and Always shown
+    window_frame,
 };
 
 /// Returns the settings a section shows, top to bottom.

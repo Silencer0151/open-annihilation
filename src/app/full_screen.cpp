@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // Alt+Enter: switching the game's window between full screen and a window,
-// the pointer kept on the game's screen in full screen, and the window brought
-// back onto its display when it leaves full screen.
+// the pointer kept on the game's screen in full screen, the window brought
+// back onto its display when it leaves full screen, and its title bar and
+// borders shown or hidden.
 #include "oa/app/full_screen.hpp"
 
 #include <SDL3/SDL.h>
@@ -233,6 +234,27 @@ bool bring_window_on_display(SDL_Window* window, SDL_DisplayID display, int widt
     // which the game keeps drawing at.
     if (placed_width != contents.w || placed_height != contents.h)
         std::ignore = SDL_SetWindowSize(window, placed_width, placed_height);
+    return true;
+}
+
+bool set_window_frame(SDL_Window* window, bool shown) {
+    if (window == nullptr)
+        return true;
+    SDL_Rect before{};
+    const bool read = SDL_GetWindowPosition(window, &before.x, &before.y) &&
+                      SDL_GetWindowSize(window, &before.w, &before.h);
+    if (!SDL_SetWindowBordered(window, shown))
+        return false;
+    SDL_Rect after{};
+    if (!read || (SDL_GetWindowFlags(window) & SDL_WINDOW_MAXIMIZED) != 0 ||
+        !SDL_GetWindowSize(window, &after.w, &after.h) ||
+        (after.w == before.w && after.h == before.h))
+        return true;
+    // The contents go back where they were, then to their size, which a
+    // window system that places windows itself refuses; the window is then
+    // drawn at the size it is given, as after any resize.
+    std::ignore = SDL_SetWindowPosition(window, before.x, before.y);
+    std::ignore = SDL_SetWindowSize(window, before.w, before.h);
     return true;
 }
 

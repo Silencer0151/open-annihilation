@@ -2052,6 +2052,39 @@ void the_zoomed_out_units_default_read_and_round_trip() {
     CHECK(pair.empty());
 }
 
+/// Window frame: Hidden in play everywhere by default; a file written
+/// before it reads the default; each word reads its way and any other text
+/// the default; Always shown written alone and read back, and Restore
+/// defaults then OK erases the key.
+void the_window_frame_default_read_and_round_trip() {
+    CHECK(settings::key::window_frame == "open-annihilation.window-frame");
+    settings::Inputs own_mac = players_own_on_linux;
+    own_mac.macos = true;
+    for (const auto& inputs : {settings::Inputs{}, players_own_on_linux, own_mac}) {
+        const auto defaults = settings::default_settings(inputs);
+        CHECK(defaults.window_frame == settings::WindowFrame::hidden_in_play);
+        CHECK(settings::read_settings({}, inputs, false) == defaults);
+    }
+    const auto frame = [](const char* text) {
+        return read_one(settings::key::window_frame, text).window_frame;
+    };
+    CHECK(frame("hidden-in-play") == settings::WindowFrame::hidden_in_play);
+    CHECK(frame("always-shown") == settings::WindowFrame::always_shown);
+    for (const char* text : {"", "Always-Shown", "always", "1", " always-shown"})
+        CHECK(frame(text) == settings::WindowFrame::hidden_in_play);
+
+    const auto defaults = settings::default_settings(players_own_on_linux);
+    auto shown = defaults;
+    shown.window_frame = settings::WindowFrame::always_shown;
+    Values values;
+    settings::write_settings(values, defaults, shown, defaults, false);
+    CHECK(values.size() == 1);
+    CHECK(values.at(std::string{settings::key::window_frame}) == "always-shown");
+    CHECK(settings::read_settings(values, players_own_on_linux, false) == shown);
+    settings::write_settings(values, shown, defaults, defaults, true);
+    CHECK(values.empty());
+}
+
 void menu_scaling_and_native_density_default_read_and_round_trip() {
     CHECK(settings::key::menu_scaling == "open-annihilation.menu-scaling");
     CHECK(settings::key::native_density == "open-annihilation.native-density");
@@ -2208,6 +2241,7 @@ int main() {
     menu_scaling_and_native_density_default_read_and_round_trip();
     explosion_flash_default_read_and_round_trip();
     the_zoomed_out_units_default_read_and_round_trip();
+    the_window_frame_default_read_and_round_trip();
     the_zoom_limits_default_read_and_round_trip();
     the_view_past_the_map_edge_defaults_reads_and_round_trips();
     if (failures != 0)

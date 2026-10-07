@@ -293,7 +293,7 @@ the game draws its text and how the modern fonts draw it.
 
 ![The middle of the Graphics section: Vertical sync Off, Menu scaling Sharp, Native pixel density Off and Explosion flash Full.](images/settings/graphics-2.png)
 
-![The rest of the Graphics section, scrolled to its end: Explosion flash Full, Zoomed out units Rendered, and After zoom at 1/6, locked until Zoomed out units is Dots.](images/settings/graphics-3.png)
+![The rest of the Graphics section, scrolled to its end: Zoomed out units Rendered, After zoom at 1/6, locked until Zoomed out units is Dots, and Window frame Hidden in play.](images/settings/graphics-3.png)
 
 - **Maximum frame rate**, 30 to 120 frames a second in steps of 5, 120 by
   default. It caps how many pictures the game draws a second; the game
@@ -427,6 +427,13 @@ the game draws its text and how the modern fonts draw it.
   zoom out at Automatic the view never goes farther out than 1/2, or 1/6
   with Full hardware acceleration, so choose a farther Maximum zoom out to
   see the dots.
+- **Window frame**, Hidden in play or Always shown, Hidden in play by
+  default. In a window, Hidden in play hides the window's title bar and
+  borders while you play a game, so that only the battlefield shows, and
+  brings them back while the game menu, or a panel it opens, is up and on
+  every other screen, where the window can be moved and closed. Always
+  shown keeps them on every screen. The battlefield keeps its size either
+  way, and full screen has no frame to hide. It takes effect at once.
 
 Some computers start with other defaults, which Restore defaults puts back
 and which a value you choose always replaces:

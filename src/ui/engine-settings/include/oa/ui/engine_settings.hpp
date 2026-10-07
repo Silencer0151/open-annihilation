@@ -80,6 +80,8 @@ inline constexpr std::string_view zoomed_out_units = "open-annihilation.zoomed-o
 /// "1/3", "1/4", "1/6", "1/8", "1/12" or "1/16"
 /// (EngineSettings::zoomed_out_after).
 inline constexpr std::string_view zoomed_out_after = "open-annihilation.zoomed-out-after";
+/// "hidden-in-play" or "always-shown" (EngineSettings::window_frame).
+inline constexpr std::string_view window_frame = "open-annihilation.window-frame";
 /// 1 or 0 (EngineSettings::modern_fonts).
 inline constexpr std::string_view modern_fonts = "open-annihilation.modern-fonts";
 /// 1 or 0 (EngineSettings::text_outline).
@@ -381,6 +383,21 @@ inline constexpr std::array<ZoomedOutUnits, 3> zoomed_out_units_choices{
 /// The ways of Zoomed out units a player may choose, from the strip's left:
 /// Icons is shown, but cannot be chosen yet.
 inline constexpr std::size_t offered_zoomed_out_units = 2;
+
+/// Window frame: when the game's window shows its title bar and borders.
+/// Full screen has none either way.
+enum class WindowFrame : uint8_t {
+    /// hidden while a game is played; shown while the game menu or a panel
+    /// it opens is over the game, and on every other screen
+    hidden_in_play,
+    always_shown, ///< shown on every screen, as the window system draws them
+};
+
+/// The ways of Window frame, in the order the dialog offers them.
+inline constexpr std::array<WindowFrame, 2> window_frame_choices{
+    WindowFrame::hidden_in_play,
+    WindowFrame::always_shown,
+};
 
 /// After zoom: the zoom farther out than which Zoomed out units applies,
 /// as a share of normal size.
@@ -693,6 +710,8 @@ struct EngineSettings {
     ZoomedOutUnits zoomed_out_units{ZoomedOutUnits::rendered};
     /// The zoom farther out than which zoomed_out_units applies.
     ZoomedOutAfter zoomed_out_after{ZoomedOutAfter::one_sixth};
+    /// When the game's window shows its title bar and borders.
+    WindowFrame window_frame{WindowFrame::hidden_in_play};
     /// Game text is drawn in the modern fonts, which hold the letters of
     /// many languages, rather than the game's own 8-bit fonts. On by default
     /// with the player's own preferences file (default_settings).
@@ -810,7 +829,8 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// everywhere. Native pixel density is
 /// Off, but On where the platform opens every window at native density.
 /// Explosion flash is Full everywhere, as 3.1c draws it. Zoomed out units
-/// are Rendered and After zoom 1/6 everywhere. Modern
+/// are Rendered and After zoom 1/6 everywhere. Window frame is Hidden in
+/// play everywhere. Modern
 /// fonts for game text are On with the player's own file and Off with a
 /// named one; their outline and shadow are On, their background Off and
 /// their size default_text_size everywhere. The language is the operating
@@ -883,8 +903,9 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// map's edge "off", "25" or "50"; any other value gives the default.
 /// Zoomed out units reads "rendered" or "dots", and After zoom
 /// "1/2", "1/3", "1/4", "1/6", "1/8", "1/12" or "1/16"; any other value,
-/// "icons" among them, gives the default. A stored value always wins over a
-/// Steam Deck's defaults.
+/// "icons" among them, gives the default. Window frame reads
+/// "hidden-in-play" or "always-shown", and any other value gives the
+/// default. A stored value always wins over a Steam Deck's defaults.
 ///
 /// @param values the preferences
 /// @param inputs the platform, the preferences file and the installation
@@ -904,9 +925,9 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// and QUEUE and ADD as their words (menu_scaling_text, touch_drag_text,
 /// touch_latches_text), Explosion flash as "off", "reduced" or "full", the
 /// hold delay in milliseconds, Maximum zoom out, Maximum zoom in, View past
-/// the map's edge, Zoomed out units, After zoom, Control size and the
-/// Controller section's choices as the words read_settings reads, Pointer
-/// speed and Gyro speed in percent, the mod and the picked folder as their
+/// the map's edge, Zoomed out units, After zoom, Window frame, Control size
+/// and the Controller section's choices as the words read_settings reads,
+/// Pointer speed and Gyro speed in percent, the mod and the picked folder as their
 /// paths, or erased
 /// for none; Restore defaults leaves the picked folder as it is. The picked
 /// folder's key is then erased unless the mod key names the same folder,

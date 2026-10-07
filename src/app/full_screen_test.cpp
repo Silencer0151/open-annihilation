@@ -9,12 +9,15 @@
 // pointer is kept on the game's screen, where a window that leaves full
 // screen goes on its display, and windows of SDL's dummy video driver
 // switched to full screen and back, losing and regaining the focus and
-// coming back onto the display, and one opened at native density.
+// coming back onto the display, and one opened at native density; and the
+// window's title bar and borders asked for as the game goes from its menus
+// to a game, its game menu and full screen.
 #include "oa/app/full_screen.hpp"
 
 #include <SDL3/SDL.h>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <string_view>
@@ -770,6 +773,107 @@ void test_window_takes_a_size() {
     SDL_Quit();
 }
 
+// The frame asked for in each case, one of each: hidden while a game is
+// played at Hidden in play, shown elsewhere and at Always shown, and left
+// as it is when the window shows what it should, in full screen, while
+// switching and without a window.
+void test_window_frame_cases() {
+    using oa::app::window_frame_request;
+    using oa::app::WindowFramePlace;
+    using oa::app::WindowFrameRequest;
+    CHECK(
+        window_frame_request(true, WindowFramePlace{true, true, true}) == WindowFrameRequest::hide
+    );
+    CHECK(
+        window_frame_request(true, WindowFramePlace{true, true, false}) == WindowFrameRequest::none
+    );
+    CHECK(
+        window_frame_request(true, WindowFramePlace{true, false, false}) == WindowFrameRequest::show
+    );
+    CHECK(
+        window_frame_request(true, WindowFramePlace{true, false, true}) == WindowFrameRequest::none
+    );
+    CHECK(
+        window_frame_request(false, WindowFramePlace{true, true, false}) == WindowFrameRequest::show
+    );
+    CHECK(
+        window_frame_request(false, WindowFramePlace{true, true, true}) == WindowFrameRequest::none
+    );
+    CHECK(
+        window_frame_request(true, WindowFramePlace{false, true, true}) == WindowFrameRequest::none
+    );
+    CHECK(
+        window_frame_request(true, WindowFramePlace{false, false, false}) ==
+        WindowFrameRequest::none
+    );
+}
+
+// A run through the game, the window doing what it is asked each frame:
+// the frame goes as a game starts and comes back with its game menu, stays
+// as it is in full screen, comes back on leaving full screen with the menu
+// up, stays at Always shown and comes back at the main menu.
+void test_window_frame_through_a_game() {
+    using oa::app::window_frame_request;
+    using oa::app::WindowFramePlace;
+    using oa::app::WindowFrameRequest;
+
+    struct Step {
+        bool hidden_in_play;
+        bool windowed;
+        bool playing;
+        WindowFrameRequest expected;
+    };
+
+    const std::array<Step, 12> steps{{
+        {true, true, false, WindowFrameRequest::none},  // the main menu
+        {true, true, true, WindowFrameRequest::hide},   // a game starts
+        {true, true, true, WindowFrameRequest::none},   // and goes on
+        {true, true, false, WindowFrameRequest::show},  // the game menu opens
+        {true, true, true, WindowFrameRequest::hide},   // and closes
+        {true, false, true, WindowFrameRequest::none},  // Alt+Enter: full screen
+        {true, false, false, WindowFrameRequest::none}, // the game menu, in full screen
+        {true, true, false, WindowFrameRequest::show},  // Alt+Enter: a window, the menu up
+        {false, true, false, WindowFrameRequest::none}, // Always shown chosen
+        {false, true, true, WindowFrameRequest::none},  // the menu closes
+        {true, true, true, WindowFrameRequest::hide},   // Hidden in play again
+        {true, true, false, WindowFrameRequest::show},  // the game ends: the main menu
+    }};
+    bool bordered = true;
+    for (std::size_t index = 0; index < steps.size(); ++index) {
+        const Step& step = steps[index];
+        const auto request =
+            window_frame_request(step.hidden_in_play, {step.windowed, step.playing, bordered});
+        if (request != step.expected)
+            std::fprintf(stderr, "window frame step %zu\n", index);
+        CHECK(request == step.expected);
+        if (request != WindowFrameRequest::none)
+            bordered = request == WindowFrameRequest::show;
+    }
+}
+
+// SDL's dummy video driver has no frame to hide: the window keeps its size
+// and SDL accepts the request; with no window nothing is asked.
+void test_window_frame_kept_size() {
+    CHECK(oa::app::set_window_frame(nullptr, false));
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
+        std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
+        ++failures;
+        return;
+    }
+    SDL_Window* window =
+        SDL_CreateWindow("window frame test", 640, 480, oa::app::game_window_flags(false, false));
+    CHECK(window != nullptr);
+    if (window != nullptr) {
+        CHECK(oa::app::set_window_frame(window, false));
+        CHECK(oa::app::set_window_frame(window, true));
+        int width = 0;
+        int height = 0;
+        CHECK(SDL_GetWindowSize(window, &width, &height) && width == 640 && height == 480);
+        SDL_DestroyWindow(window);
+    }
+    SDL_Quit();
+}
+
 // A window of SDL's video driver (the dummy driver under ctest), switched by
 // Alt+Enter, its repeats and keypad Enter.
 void test_window() {
@@ -893,6 +997,9 @@ int main() {
     test_window_back_on_display();
     test_window_at_size_on_display();
     test_window_takes_a_size();
+    test_window_frame_cases();
+    test_window_frame_through_a_game();
+    test_window_frame_kept_size();
     if (failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;
@@ -900,8 +1007,8 @@ int main() {
     std::puts(
         "full screen: the window opens at native density only when asked, Alt+Enter switches, "
         "the mode asked for is kept, the pointer stays on the screen while the window has the "
-        "focus, and a window leaving full screen comes back onto its display, at a size asked "
-        "for"
+        "focus, a window leaving full screen comes back onto its display, at a size asked "
+        "for, and the window's frame follows the game"
     );
     return 0;
 }

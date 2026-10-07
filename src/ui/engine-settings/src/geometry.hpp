@@ -180,6 +180,10 @@ inline constexpr int32_t explosion_flash_level_width = 50;
 /// 1-pixel border: room for Rendered, its widest caption, with three clear
 /// columns each side.
 inline constexpr int32_t zoomed_out_units_level_width = 56;
+/// Window frame's level strip's segment width, inside the strip's 1-pixel
+/// border: room for Hidden in play, its widest caption, with three clear
+/// columns each side.
+inline constexpr int32_t window_frame_level_width = 85;
 /// MANAGE…'s width, Game files' button on its summary row's label line:
 /// room for its caption in the small font with clear columns each side.
 inline constexpr int32_t manage_button_width = 76;

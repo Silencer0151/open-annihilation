@@ -5,8 +5,9 @@
 // them the display's own pixel density, and what a window at that density
 // changes; the Alt+Enter key that switches between full screen and a window,
 // the mode the player last asked for while the window system is still
-// switching to it, the pointer kept on the game's screen in full screen, and
-// the window brought back onto its display when it leaves full screen.
+// switching to it, the pointer kept on the game's screen in full screen, the
+// window brought back onto its display when it leaves full screen, and the
+// window's title bar and borders hidden while a game is played.
 #pragma once
 
 #include <SDL3/SDL.h>
@@ -377,6 +378,67 @@ bool bring_window_on_display(
 /// @param width the window's width asked for, in the window system's units
 /// @param height the window's height asked for
 void keep_window_on_display(SDL_Window* window, int width, int height);
+
+/// What the game's window is asked to do with its frame: its title bar and
+/// borders.
+enum class WindowFrameRequest : uint8_t {
+    none, ///< nothing: the window already shows what it should, or has no frame to change
+    show, ///< show the title bar and borders
+    hide, ///< hide them
+};
+
+/// Where the game is, as the window's frame follows it.
+struct WindowFramePlace {
+    /// The game has a window that is neither in full screen nor still
+    /// switching to or from it (FullScreenSwitch::awaiting_shown within
+    /// full_screen_settle_ms); a run without a window has none.
+    bool windowed{};
+    /// A game is played: its battlefield shows, unfinished, with neither the
+    /// game menu nor a panel it opens, a team panel or the exit confirmation
+    /// over it.
+    bool playing{};
+    /// The window shows its title bar and borders now (no
+    /// SDL_WINDOW_BORDERLESS among its flags).
+    bool bordered{};
+};
+
+/// Returns what to ask of the game's window's frame (the Window frame
+/// setting).
+///
+/// With Window frame at Hidden in play, the window hides its title bar and
+/// borders while a game is played, and shows them on every other screen
+/// and while the game menu or a panel it opens is over the game, so that
+/// the window can be moved and closed there; at Always shown it shows them
+/// everywhere. Full screen, a window still switching to or from it, and a
+/// run without a window, are left as they are.
+///
+/// @param hidden_in_play Window frame is Hidden in play
+/// @param place where the game is, and what the window shows now
+/// @return show or hide where the window shows otherwise; none where it
+///         already shows what it should, or is not windowed
+[[nodiscard]] constexpr WindowFrameRequest
+window_frame_request(bool hidden_in_play, const WindowFramePlace& place) noexcept {
+    if (!place.windowed)
+        return WindowFrameRequest::none;
+    const bool shown = !(hidden_in_play && place.playing);
+    if (shown == place.bordered)
+        return WindowFrameRequest::none;
+    return shown ? WindowFrameRequest::show : WindowFrameRequest::hide;
+}
+
+/// Shows or hides a window's title bar and borders, keeping the window's
+/// contents at their size and place.
+///
+/// A window system that changes the contents' size with the frame (macOS
+/// keeps the frame's own) has the contents put back at the size and place
+/// they had, so that the change reaches the game as no resize; a
+/// maximised window, which the window system fits to the display itself,
+/// is left at the size it is given.
+///
+/// @param window the game's window; null does nothing
+/// @param shown true to show the title bar and borders, false to hide them
+/// @return false when SDL refused, with SDL_GetError saying why
+bool set_window_frame(SDL_Window* window, bool shown);
 
 /// Handles an event of the full-screen switch before anything else sees it.
 ///

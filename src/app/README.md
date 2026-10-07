@@ -1267,6 +1267,18 @@ logs it.
   holds the pointer and a window lets it go, and that the window comes back
   at its own size, or onto its display when it started off it (the dummy
   driver's display is smaller than the game's first window).
+  The Window frame setting hides a window's title bar and borders while a
+  game is played and shows them on every other screen and while the game
+  menu or a panel it opens is up (`window_frame_request`, applied each
+  frame by `Runtime::apply_window_frame` in `runtime_screen_size.cpp`);
+  Always shown keeps them. Full screen, a window still switching to or
+  from it, and a run without a window are left as they are. Windows and
+  X11 keep the window's contents at their size as the frame comes and
+  goes; macOS keeps the frame's, so the contents are put back at the size
+  and place they had (`set_window_frame`), and the screen size the
+  settings show never changes with the frame. A maximised window is left
+  at the size the window system gives it. `app-full-screen` asks for the
+  frame in each case and through a game, its game menu and full screen.
 - `runtime_hud.cpp`, `runtime_match_hud.cpp`: the HUD.
 - `runtime_messages.cpp`: the in-game message log (`Game.chat_lines`) drawn
   over the battlefield, and the speed and message part of `--check-navigation`.

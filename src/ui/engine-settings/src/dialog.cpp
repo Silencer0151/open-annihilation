@@ -51,9 +51,9 @@ constexpr std::array<Setting, 3> kCommonTweaksRows{
     Setting::unit_limit,
     Setting::path_search,
 };
-/// Graphics' rows: how units look zoomed out last, the zoom they look so
-/// from right under the way.
-constexpr std::array<Setting, 10> kGraphicsRows{
+/// Graphics' rows: how units look zoomed out, the zoom they look so from
+/// right under the way, then the window's frame.
+constexpr std::array<Setting, 11> kGraphicsRows{
     Setting::max_frame_rate,
     Setting::anti_aliasing,
     Setting::screen_size,
@@ -64,6 +64,7 @@ constexpr std::array<Setting, 10> kGraphicsRows{
     Setting::explosion_flash,
     Setting::zoomed_out_units,
     Setting::zoomed_out_after,
+    Setting::window_frame,
 };
 /// Language's rows: the language first, and the text size right
 /// under the switch it needs.
@@ -383,6 +384,12 @@ constexpr std::array<std::string_view, 3> kZoomedOutUnitsCaptions{"Rendered", "D
 static_assert(
     kZoomedOutUnitsCaptions.size() == zoomed_out_units_choices.size(),
     "every way of Zoomed out units has its caption"
+);
+/// Window frame's captions, in window_frame_choices' order.
+constexpr std::array<std::string_view, 2> kWindowFrameCaptions{"Hidden in play", "Always shown"};
+static_assert(
+    kWindowFrameCaptions.size() == window_frame_choices.size(),
+    "every way of Window frame has its caption"
 );
 /// One-finger drag's captions, in touch_drag_choices' order.
 constexpr std::array<std::string_view, 3> kTouchDragCaptions{"Automatic", "Box", "Scroll"};
@@ -984,6 +991,7 @@ bool is_strip(Setting setting) noexcept {
     case Setting::explosion_flash:
     case Setting::zoomed_out_units:
     case Setting::view_past_map_edge:
+    case Setting::window_frame:
     case Setting::touch_drag:
     case Setting::touch_latches:
     case Setting::touch_control_size:
@@ -1014,6 +1022,8 @@ Strip strip_of(Setting setting) noexcept {
         };
     case Setting::view_past_map_edge:
         return Strip{view_past_map_edge_choices.size(), view_past_map_edge_level_width};
+    case Setting::window_frame:
+        return Strip{window_frame_choices.size(), window_frame_level_width};
     case Setting::touch_drag:
         return Strip{touch_drag_choices.size(), touch_drag_level_width};
     case Setting::touch_latches:
@@ -1049,6 +1059,8 @@ std::size_t strip_level(const EngineSettings& settings, Setting setting) noexcep
         return choice_place(zoomed_out_units_choices, settings.zoomed_out_units);
     case Setting::view_past_map_edge:
         return choice_place(view_past_map_edge_choices, settings.view_past_map_edge);
+    case Setting::window_frame:
+        return choice_place(window_frame_choices, settings.window_frame);
     case Setting::touch_drag:
         return choice_place(touch_drag_choices, settings.touch_drag);
     case Setting::touch_latches:
@@ -1097,6 +1109,9 @@ void set_strip_level(EngineSettings& settings, Setting setting, std::size_t leve
     case Setting::view_past_map_edge:
         settings.view_past_map_edge = view_past_map_edge_choices[clamped];
         break;
+    case Setting::window_frame:
+        settings.window_frame = window_frame_choices[clamped];
+        break;
     case Setting::touch_drag:
         settings.touch_drag = touch_drag_choices[clamped];
         break;
@@ -1140,6 +1155,8 @@ std::string_view strip_caption(Setting setting, std::size_t level) noexcept {
         return kZoomedOutUnitsCaptions[level];
     case Setting::view_past_map_edge:
         return kViewPastMapEdgeCaptions[level];
+    case Setting::window_frame:
+        return kWindowFrameCaptions[level];
     case Setting::touch_drag:
         return kTouchDragCaptions[level];
     case Setting::touch_latches:
@@ -1899,6 +1916,8 @@ std::string_view label_of(Setting setting) noexcept {
         return "Zoomed out units";
     case Setting::zoomed_out_after:
         return "After zoom";
+    case Setting::window_frame:
+        return "Window frame";
     case Setting::modern_fonts:
         return "Use modern fonts for game text";
     case Setting::text_outline:
@@ -2234,6 +2253,22 @@ std::string_view hint_line(
         }
         break;
     }
+    case Setting::window_frame:
+        // When a window shows its frame; full screen has none.
+        switch (settings.window_frame) {
+        case WindowFrame::hidden_in_play:
+            lines = {
+                "A window hides its title bar and borders",
+                "while a game is played; menus show them."
+            };
+            break;
+        case WindowFrame::always_shown:
+            lines = {
+                "A window shows its title bar and borders", "on every screen, a game's included."
+            };
+            break;
+        }
+        break;
     case Setting::modern_fonts:
         lines = {"Modern fonts for in-game text,", "including internationalization."};
         break;
@@ -2432,6 +2467,7 @@ std::size_t hint_line_count(Setting setting) noexcept {
     case Setting::explosion_flash:
     case Setting::zoomed_out_units:
     case Setting::zoomed_out_after:
+    case Setting::window_frame:
     case Setting::touch_drag:
     case Setting::touch_latches:
     case Setting::touch_left_handed:
@@ -3394,6 +3430,9 @@ void copy_setting(EngineSettings& to, const EngineSettings& from, Setting settin
         break;
     case Setting::zoomed_out_after:
         to.zoomed_out_after = from.zoomed_out_after;
+        break;
+    case Setting::window_frame:
+        to.window_frame = from.window_frame;
         break;
     case Setting::native_density:
         to.native_density = from.native_density;

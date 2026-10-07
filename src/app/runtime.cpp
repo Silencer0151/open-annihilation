@@ -574,8 +574,10 @@ void Runtime::run_frame(bool& running) {
     while (SDL_PollEvent(&event))
         dispatch_event(event, running);
     // Whatever showed or hid the system's pointer since the last frame, the
-    // rule holds again before this frame is drawn.
+    // rule holds again before this frame is drawn; so does the window's
+    // frame, for the screen the events left.
     apply_system_pointer(false);
+    apply_window_frame();
     idle_tick();
     const auto now_ms = static_cast<uint32_t>(SDL_GetTicks());
     if (oa::platform::finished_stream_sweep_due(now_ms, last_stream_sweep_ms_)) {

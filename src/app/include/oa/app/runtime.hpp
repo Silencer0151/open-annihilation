@@ -4136,6 +4136,15 @@ class Runtime final : public menu::Host,
     /// were and puts Vertical sync out of reach for the run.
     void apply_vertical_sync();
 
+    /// Shows or hides the window's title bar and borders as the Window frame
+    /// setting in effect says for where the game is (window_frame_request):
+    /// hidden while a game is played at Hidden in play, shown in the menus
+    /// and while the game menu or a panel it opens is up. Every frame of the
+    /// loop applies it. A window in full screen or still switching to or
+    /// from it, and a run without a window, are left as they are; the
+    /// window's contents keep their size (set_window_frame).
+    void apply_window_frame();
+
     /// Returns the refresh rate of the display the window is on.
     ///
     /// @return hertz; 0 without a window or when the display reports none
