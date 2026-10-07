@@ -29,7 +29,28 @@ struct ScanState {
     const CampaignFiles* files{};
     bool first_only{};
     bool stopped{};
+    // The file names scanned so far, NUL-separated, and their size in bytes.
+    // The listing names a map once for each archive that holds it, but the
+    // map is read from the first of them, so the others are the same map.
+    char* scanned{};
+    std::size_t scanned_bytes{};
 };
+
+// Notes a file name as scanned; false when the name, in any capitalisation,
+// was scanned before. A name that cannot be noted is scanned all the same.
+bool note_scanned(ScanState& scan, const char* file_name) noexcept {
+    for (std::size_t at = 0; at < scan.scanned_bytes; at += std::strlen(scan.scanned + at) + 1)
+        if (oa::formats::tdf::compare_nocase(scan.scanned + at, file_name) == 0)
+            return false;
+    const std::size_t length = std::strlen(file_name) + 1;
+    auto* grown = static_cast<char*>(std::realloc(scan.scanned, scan.scanned_bytes + length));
+    if (grown == nullptr)
+        return true;
+    scan.scanned = grown;
+    std::memcpy(scan.scanned + scan.scanned_bytes, file_name, length);
+    scan.scanned_bytes += length;
+    return true;
+}
 
 // Appends a name to the packed block, keeping the closing NUL after it.
 bool append_name(MapList& list, const char* name) noexcept {
@@ -69,7 +90,7 @@ void display_name(
 
 void scan_map_file(void* context, const char* file_name) {
     auto& scan = *static_cast<ScanState*>(context);
-    if (scan.stopped)
+    if (scan.stopped || !note_scanned(scan, file_name))
         return;
     // A map's rules come from its own folder: the language's folders hold
     // only what players read and hear, so that the language never changes a
@@ -110,9 +131,10 @@ int32_t map_build_multiplayer_list(
             return 0;
         list.names[0] = '\0';
         list.count = 0;
-        ScanState scan{&list, &files, first_only, false};
+        ScanState scan{&list, &files, first_only, false, nullptr, 0};
         if (files.list != nullptr)
             files.list(files.context, kMapsDirectory, "ota", scan_map_file, &scan);
+        std::free(scan.scanned);
         if (host.set_cursor != nullptr)
             host.set_cursor(host.context, kMapScanIdleCursor);
         if (list.complete == 0)

@@ -34,7 +34,8 @@ struct MapScanHost {
 /// Builds or hands out the list of maps with a multiplayer schema.
 ///
 /// The first call scans Maps/*.ota and caches the maps' localised names; every call then
-/// hands the list to `out`.
+/// hands the list to `out`. A map that several archives hold is listed once, as the copy
+/// it is read from.
 ///
 /// @param[in,out] list cached list and bookkeeping
 /// @param files file services

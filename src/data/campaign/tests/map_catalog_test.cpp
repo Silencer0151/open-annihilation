@@ -39,6 +39,9 @@ std::string fold(std::string path) {
 struct MemoryFiles {
     std::map<std::string, std::string> files;
     std::map<std::string, std::string> translations;
+    // Names the listing reports again after the files, as a later archive
+    // holding the same map reports it.
+    std::vector<std::string> listed_again;
     int reads = 0;
 };
 
@@ -77,6 +80,8 @@ void memory_list(
             name[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
             visit(visit_context, name.c_str());
         }
+    for (const auto& name : files->listed_again)
+        visit(visit_context, name.c_str());
 }
 
 const char* memory_translate(void* context, const char* text) {
@@ -195,6 +200,19 @@ void list_tests() {
         "rescan after hand-over"
     );
     map_clear_list_cache(list, nullptr);
+
+    // A map that a second archive holds too is listed again, under its own
+    // capitalisation; it is still one map.
+    memory.listed_again = {"Alpha.ota", "GAMMA.OTA"};
+    names = nullptr;
+    const auto again = map_build_multiplayer_list(list, files, MapScanHost{}, &names, false, false);
+    expect(
+        again == 2 && names != nullptr &&
+            unpack(names, again) == std::vector<std::string>{"Alpha", "Gamma Prime"},
+        "a map listed by two archives is listed once"
+    );
+    std::free(names);
+    map_clear_list_cache(list, nullptr);
 }
 
 // The installed game's maps, read through its store as the game reads them.
@@ -209,6 +227,13 @@ void corpus_tests(const oa::AssetStore& assets) {
         std::find(listed.begin(), listed.end(), "coast to coast") != listed.end() ||
             std::find(listed.begin(), listed.end(), "Coast To Coast") != listed.end(),
         "Coast To Coast is listed"
+    );
+    // Comet Catcher comes in both ccmaps.ccx and Cometctr.ufo where an
+    // installation has both; it is listed once either way.
+    auto sorted = listed;
+    std::sort(sorted.begin(), sorted.end());
+    expect(
+        std::adjacent_find(sorted.begin(), sorted.end()) == sorted.end(), "every map is listed once"
     );
     std::free(names);
     map_clear_list_cache(list, nullptr);
