@@ -181,14 +181,23 @@ float least_battlefield_zoom(
     return std::min(1.0F, std::max({*share, fit, furthest_battlefield_zoom}));
 }
 
-ViewCentreSpan view_centre_span(double map, double visible) noexcept {
+ViewCentreSpan view_centre_span(double map, double visible, double share) noexcept {
+    // No wider than the map, the view's centre keeps the rest of the view's
+    // half on the map's side of each edge; wider, the map's centre keeps
+    // within the share of the view of the view's centre.
+    if (visible <= map) {
+        const double inside = (0.5 - share) * visible;
+        return {inside, map - inside};
+    }
     const double middle = map / 2.0;
-    const double half_view = visible / 2.0;
-    return {std::min(0.0, middle - half_view), std::max(map, middle + half_view)};
+    const double reach = share * visible;
+    return {middle - reach, middle + reach};
 }
 
-double held_view(double view, double visible, double map, std::optional<double> from) noexcept {
-    auto span = view_centre_span(map, visible);
+double held_view(
+    double view, double visible, double map, double share, std::optional<double> from
+) noexcept {
+    auto span = view_centre_span(map, visible, share);
     if (from) {
         span.least = std::min(span.least, *from);
         span.most = std::max(span.most, *from);
@@ -197,10 +206,11 @@ double held_view(double view, double visible, double map, std::optional<double> 
     return std::clamp(view + half_view, span.least, span.most) - half_view;
 }
 
-int32_t
-held_camera(int32_t camera, double visible, double map, std::optional<double> from) noexcept {
+int32_t held_camera(
+    int32_t camera, double visible, double map, double share, std::optional<double> from
+) noexcept {
     const auto exact = static_cast<double>(camera);
-    const double held = held_view(exact, visible, map, from);
+    const double held = held_view(exact, visible, map, share, from);
     // A camera is taken from the view's exact place, to the nearest whole
     // map pixel or the one before it: within a map pixel of a place the
     // limits hold, it is held already.

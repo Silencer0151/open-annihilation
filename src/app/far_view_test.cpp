@@ -429,38 +429,67 @@ void the_view_goes_past_the_map_until_its_edge_reaches_the_middle() {
     using oa::app::held_camera;
     using oa::app::held_view;
     using oa::app::view_centre_span;
+    constexpr double half = 0.5;
     // A view narrower than the map: its centre stays on the map.
-    auto span = view_centre_span(1000.0, 400.0);
+    auto span = view_centre_span(1000.0, 400.0, half);
     OA_CHECK(span.least == 0.0 && span.most == 1000.0);
     // A view wider than the map: the map's centre stays in the view.
-    span = view_centre_span(1000.0, 3000.0);
+    span = view_centre_span(1000.0, 3000.0, half);
     OA_CHECK(span.least == -1000.0 && span.most == 2000.0);
     // The two meet at the map's size.
-    span = view_centre_span(1000.0, 1000.0);
+    span = view_centre_span(1000.0, 1000.0, half);
     OA_CHECK(span.least == 0.0 && span.most == 1000.0);
     // A view within the span stays; one past it comes to its edge.
-    OA_CHECK(held_view(-150.0, 400.0, 1000.0, std::nullopt) == -150.0);
-    OA_CHECK(held_view(-250.0, 400.0, 1000.0, std::nullopt) == -200.0);
-    OA_CHECK(held_view(900.0, 400.0, 1000.0, std::nullopt) == 800.0);
-    OA_CHECK(held_view(-2500.0, 3000.0, 1000.0, std::nullopt) == -2500.0);
-    OA_CHECK(held_view(-2600.0, 3000.0, 1000.0, std::nullopt) == -2500.0);
-    OA_CHECK(held_view(600.0, 3000.0, 1000.0, std::nullopt) == 500.0);
+    OA_CHECK(held_view(-150.0, 400.0, 1000.0, half, std::nullopt) == -150.0);
+    OA_CHECK(held_view(-250.0, 400.0, 1000.0, half, std::nullopt) == -200.0);
+    OA_CHECK(held_view(900.0, 400.0, 1000.0, half, std::nullopt) == 800.0);
+    OA_CHECK(held_view(-2500.0, 3000.0, 1000.0, half, std::nullopt) == -2500.0);
+    OA_CHECK(held_view(-2600.0, 3000.0, 1000.0, half, std::nullopt) == -2500.0);
+    OA_CHECK(held_view(600.0, 3000.0, 1000.0, half, std::nullopt) == 500.0);
     // A view held from one past the span goes no further from the map, and
     // never back toward it.
-    OA_CHECK(held_view(-400.0, 400.0, 1000.0, -150.0) == -350.0);
-    OA_CHECK(held_view(-320.0, 400.0, 1000.0, -150.0) == -320.0);
-    OA_CHECK(held_view(-100.0, 400.0, 1000.0, -150.0) == -100.0);
-    OA_CHECK(held_view(1000.0, 400.0, 1000.0, 1150.0) == 950.0);
+    OA_CHECK(held_view(-400.0, 400.0, 1000.0, half, -150.0) == -350.0);
+    OA_CHECK(held_view(-320.0, 400.0, 1000.0, half, -150.0) == -320.0);
+    OA_CHECK(held_view(-100.0, 400.0, 1000.0, half, -150.0) == -100.0);
+    OA_CHECK(held_view(1000.0, 400.0, 1000.0, half, 1150.0) == 950.0);
     // A camera within a map pixel of the limits stays; one past them comes
     // to the nearest whole map pixel within them.
-    OA_CHECK(held_camera(-200, 400.0, 1000.0, std::nullopt) == -200);
-    OA_CHECK(held_camera(-201, 401.0, 1000.0, std::nullopt) == -201);
-    OA_CHECK(held_camera(-210, 400.0, 1000.0, std::nullopt) == -200);
-    OA_CHECK(held_camera(-210, 401.0, 1000.0, std::nullopt) == -200);
-    OA_CHECK(held_camera(-210, 403.0, 1000.0, std::nullopt) == -201);
-    OA_CHECK(held_camera(812, 400.0, 1000.0, std::nullopt) == 800);
-    OA_CHECK(held_camera(812, 401.0, 1000.0, std::nullopt) == 799);
-    OA_CHECK(held_camera(-500, 400.0, 1000.0, -150.0) == -350);
+    OA_CHECK(held_camera(-200, 400.0, 1000.0, half, std::nullopt) == -200);
+    OA_CHECK(held_camera(-201, 401.0, 1000.0, half, std::nullopt) == -201);
+    OA_CHECK(held_camera(-210, 400.0, 1000.0, half, std::nullopt) == -200);
+    OA_CHECK(held_camera(-210, 401.0, 1000.0, half, std::nullopt) == -200);
+    OA_CHECK(held_camera(-210, 403.0, 1000.0, half, std::nullopt) == -201);
+    OA_CHECK(held_camera(812, 400.0, 1000.0, half, std::nullopt) == 800);
+    OA_CHECK(held_camera(812, 401.0, 1000.0, half, std::nullopt) == 799);
+    OA_CHECK(held_camera(-500, 400.0, 1000.0, half, -150.0) == -350);
+}
+
+void a_smaller_share_keeps_more_of_the_view_on_the_map() {
+    using oa::app::held_view;
+    using oa::app::view_centre_span;
+    constexpr double quarter = 0.25;
+    constexpr double none = 0.0;
+    // A quarter: a view narrower than the map shows at most a quarter of
+    // itself past either edge; one wider keeps the map's centre within a
+    // quarter of the view of the view's centre. The two meet at the map's
+    // size.
+    auto span = view_centre_span(1000.0, 400.0, quarter);
+    OA_CHECK(span.least == 100.0 && span.most == 900.0);
+    span = view_centre_span(1000.0, 3000.0, quarter);
+    OA_CHECK(span.least == -250.0 && span.most == 1250.0);
+    span = view_centre_span(1000.0, 1000.0, quarter);
+    OA_CHECK(span.least == 250.0 && span.most == 750.0);
+    OA_CHECK(held_view(-250.0, 400.0, 1000.0, quarter, std::nullopt) == -100.0);
+    OA_CHECK(held_view(-2000.0, 3000.0, 1000.0, quarter, std::nullopt) == -1750.0);
+    // None: a view narrower than the map stays on it, as 3.1c's does; one
+    // wider has the map at its centre.
+    span = view_centre_span(1000.0, 400.0, none);
+    OA_CHECK(span.least == 200.0 && span.most == 800.0);
+    span = view_centre_span(1000.0, 3000.0, none);
+    OA_CHECK(span.least == 500.0 && span.most == 500.0);
+    OA_CHECK(held_view(-250.0, 400.0, 1000.0, none, std::nullopt) == 0.0);
+    OA_CHECK(held_view(900.0, 400.0, 1000.0, none, std::nullopt) == 600.0);
+    OA_CHECK(held_view(0.0, 3000.0, 1000.0, none, std::nullopt) == -1000.0);
 }
 
 } // namespace
@@ -476,5 +505,6 @@ int main() {
     dots_are_framed_when_selected_and_clipped();
     a_dot_covers_the_pixels_drawn_in_its_colour();
     the_view_goes_past_the_map_until_its_edge_reaches_the_middle();
+    a_smaller_share_keeps_more_of_the_view_on_the_map();
     return oa::test::check_exit_status();
 }

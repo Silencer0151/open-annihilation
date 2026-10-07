@@ -158,6 +158,10 @@ inline constexpr int32_t right_trackpad_level_width = 51;
 /// acceleration's, so that the two strips of three levels from Off look
 /// alike; High, its widest caption, fits with room to spare.
 inline constexpr int32_t pad_acceleration_level_width = acceleration_level_width;
+/// View past the map's edge's level strip's segment width: Hardware
+/// acceleration's, so that the strips of three levels from Off look alike;
+/// 25% and 50%, its widest captions, fit with room to spare.
+inline constexpr int32_t view_past_map_edge_level_width = acceleration_level_width;
 /// Right stick's level strip's segment width: room for Nothing, its widest
 /// caption, with three clear columns each side.
 inline constexpr int32_t right_stick_level_width = 46;

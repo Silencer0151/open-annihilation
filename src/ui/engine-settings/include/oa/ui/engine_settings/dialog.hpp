@@ -120,7 +120,9 @@ enum class Setting : uint8_t {
     /// Maximum zoom out: a drop-down of Automatic, Whole map, 1/32, 1/16,
     /// 1/8, 1/4 and 1/2
     max_zoom_out,
-    max_zoom_in,       ///< Maximum zoom in: a drop-down of None, 2x, 3x and 4x
+    max_zoom_in, ///< Maximum zoom in: a drop-down of None, 2x, 3x and 4x
+    /// View past the map's edge: a strip of Off, 25% and 50%
+    view_past_map_edge,
     escape_opens_menu, ///< Escape opens the game menu: a switch
     switch_alt,        ///< Select groups without Alt: a switch
     unit_limit,        ///< Unit limit: a slider

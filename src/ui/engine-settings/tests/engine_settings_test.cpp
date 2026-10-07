@@ -1922,6 +1922,53 @@ void the_zoom_limits_default_read_and_round_trip() {
     CHECK(values.empty());
 }
 
+/// View past the map's edge: 50% everywhere by default, as far as the view
+/// always went; a file written before it reads the default; each word reads
+/// its choice and any other text the default; each other choice written
+/// alone and read back, and Restore defaults then OK erases the key. Each
+/// choice stands for its share of the battlefield.
+void the_view_past_the_map_edge_defaults_reads_and_round_trips() {
+    CHECK(settings::key::view_past_map_edge == "open-annihilation.view-past-map-edge");
+    for (const auto& inputs : {settings::Inputs{}, players_own_on_linux}) {
+        const auto defaults = settings::default_settings(inputs);
+        CHECK(defaults.view_past_map_edge == settings::ViewPastMapEdge::one_half);
+    }
+    const Values older{{std::string{settings::key::max_zoom_out}, "whole-map"}};
+    CHECK(
+        settings::read_settings(older, players_own_on_linux, false).view_past_map_edge ==
+        settings::ViewPastMapEdge::one_half
+    );
+    const auto past = [](const char* text) {
+        return read_one(settings::key::view_past_map_edge, text).view_past_map_edge;
+    };
+    const std::array<std::pair<settings::ViewPastMapEdge, const char*>, 3> words{{
+        {settings::ViewPastMapEdge::off, "off"},
+        {settings::ViewPastMapEdge::one_quarter, "25"},
+        {settings::ViewPastMapEdge::one_half, "50"},
+    }};
+    for (const auto& [limit, word] : words)
+        CHECK(past(word) == limit);
+    for (const char* text : {"", "0", "25%", "1/4", "Off", "75"})
+        CHECK(past(text) == settings::ViewPastMapEdge::one_half);
+    const auto defaults = settings::default_settings(players_own_on_linux);
+    for (const auto& [limit, word] : words) {
+        if (limit == defaults.view_past_map_edge)
+            continue;
+        auto chosen = defaults;
+        chosen.view_past_map_edge = limit;
+        Values values;
+        settings::write_settings(values, defaults, chosen, defaults, false);
+        CHECK(values.size() == 1);
+        CHECK(values.at(std::string{settings::key::view_past_map_edge}) == word);
+        CHECK(settings::read_settings(values, players_own_on_linux, false) == chosen);
+        settings::write_settings(values, chosen, defaults, defaults, true);
+        CHECK(values.empty());
+    }
+    CHECK(settings::past_map_edge_share(settings::ViewPastMapEdge::off) == 0.0);
+    CHECK(settings::past_map_edge_share(settings::ViewPastMapEdge::one_quarter) == 0.25);
+    CHECK(settings::past_map_edge_share(settings::ViewPastMapEdge::one_half) == 0.5);
+}
+
 /// How units look zoomed out: Rendered and 1/6 everywhere by default; a
 /// file written before them reads the defaults; each word reads its choice,
 /// and any other text, Icons' word among them, the default; each other
@@ -2162,6 +2209,7 @@ int main() {
     explosion_flash_default_read_and_round_trip();
     the_zoomed_out_units_default_read_and_round_trip();
     the_zoom_limits_default_read_and_round_trip();
+    the_view_past_the_map_edge_defaults_reads_and_round_trips();
     if (failures != 0)
         return 1;
     std::cout << "engine settings: ok\n";

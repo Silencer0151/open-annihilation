@@ -38,6 +38,9 @@ inline constexpr std::string_view max_zoom_out = "open-annihilation.max-zoom-out
 /// Times normal size in decimal: "1", "2", "3" or "4"
 /// (EngineSettings::max_zoom_in).
 inline constexpr std::string_view max_zoom_in = "open-annihilation.max-zoom-in";
+/// "off", or the share of the battlefield in percent: "25" or "50"
+/// (EngineSettings::view_past_map_edge).
+inline constexpr std::string_view view_past_map_edge = "open-annihilation.view-past-map-edge";
 /// 1 or 0 (EngineSettings::escape_opens_menu).
 inline constexpr std::string_view escape_opens_menu = "open-annihilation.escape-opens-menu";
 /// Units per player, decimal (EngineSettings::unit_limit).
@@ -556,6 +559,38 @@ inline constexpr std::array<ZoomInLimit, 4> zoom_in_limits{
     return static_cast<float>(static_cast<uint8_t>(limit));
 }
 
+/// View past the map's edge: how much of the battlefield the view may show
+/// past the map's edges.
+enum class ViewPastMapEdge : uint8_t {
+    off,         ///< none: the view stays on the map, as 3.1c's does
+    one_quarter, ///< up to a quarter of the battlefield
+    one_half,    ///< up to half of it: the map's edge reaches its middle
+};
+
+/// The View past the map's edge choices, in the order the dialog offers them.
+inline constexpr std::array<ViewPastMapEdge, 3> view_past_map_edge_choices{
+    ViewPastMapEdge::off,
+    ViewPastMapEdge::one_quarter,
+    ViewPastMapEdge::one_half,
+};
+
+/// Returns the share of the battlefield a View past the map's edge choice
+/// lets the view show past each of the map's edges.
+///
+/// @param limit the choice
+/// @return 0, 0.25 or 0.5
+[[nodiscard]] constexpr double past_map_edge_share(ViewPastMapEdge limit) noexcept {
+    switch (limit) {
+    case ViewPastMapEdge::off:
+        return 0.0;
+    case ViewPastMapEdge::one_quarter:
+        return 0.25;
+    case ViewPastMapEdge::one_half:
+        return 0.5;
+    }
+    return 0.5;
+}
+
 /// The Control size a Steam Deck starts with: its screen is small and dense,
 /// so the touch controls come close to a tablet's in size.
 inline constexpr ControlSize steam_deck_control_size = ControlSize::larger;
@@ -593,6 +628,8 @@ struct EngineSettings {
     ZoomOutLimit max_zoom_out{ZoomOutLimit::automatic};
     /// How far in the battlefield's view zooms, by the same.
     ZoomInLimit max_zoom_in{ZoomInLimit::four_times};
+    /// How much of the battlefield the view may show past the map's edges.
+    ViewPastMapEdge view_past_map_edge{ViewPastMapEdge::one_half};
     bool escape_opens_menu{}; ///< Escape with nothing to cancel opens the game menu
     bool switch_alt{};        ///< 3.1c's SwitchAlt: a number key alone selects its group
     uint16_t unit_limit{default_unit_limit};       ///< units per player, from the next game
@@ -769,7 +806,8 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// machine, and Off with a named one; whether the graphics card is used is
 /// decided apart from the setting. Vertical sync is Off everywhere. Menu
 /// scaling is Sharp everywhere. Mouse wheel zoom is On, Maximum zoom out
-/// Automatic and Maximum zoom in 4x everywhere. Native pixel density is
+/// Automatic, Maximum zoom in 4x and View past the map's edge 50%
+/// everywhere. Native pixel density is
 /// Off, but On where the platform opens every window at native density.
 /// Explosion flash is Full everywhere, as 3.1c draws it. Zoomed out units
 /// are Rendered and After zoom 1/6 everywhere. Modern
@@ -841,8 +879,9 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// held to their ranges and put on their nearest stops (half a step rounds
 /// up); Trackpad glide, Magnetism and Left-handed read as every switch does.
 /// Maximum zoom out reads "automatic", "whole-map", "1/32", "1/16", "1/8",
-/// "1/4" or "1/2", and Maximum zoom in "1", "2", "3" or "4"; any other value gives the
-/// default. Zoomed out units reads "rendered" or "dots", and After zoom
+/// "1/4" or "1/2", Maximum zoom in "1", "2", "3" or "4", and View past the
+/// map's edge "off", "25" or "50"; any other value gives the default.
+/// Zoomed out units reads "rendered" or "dots", and After zoom
 /// "1/2", "1/3", "1/4", "1/6", "1/8", "1/12" or "1/16"; any other value,
 /// "icons" among them, gives the default. A stored value always wins over a
 /// Steam Deck's defaults.
@@ -864,9 +903,9 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// acceleration as "off", "basic" or "full", Menu scaling, One-finger drag
 /// and QUEUE and ADD as their words (menu_scaling_text, touch_drag_text,
 /// touch_latches_text), Explosion flash as "off", "reduced" or "full", the
-/// hold delay in milliseconds, Maximum zoom out, Maximum zoom in, Zoomed
-/// out units, After zoom, Control size and the Controller section's choices
-/// as the words read_settings reads, Pointer
+/// hold delay in milliseconds, Maximum zoom out, Maximum zoom in, View past
+/// the map's edge, Zoomed out units, After zoom, Control size and the
+/// Controller section's choices as the words read_settings reads, Pointer
 /// speed and Gyro speed in percent, the mod and the picked folder as their
 /// paths, or erased
 /// for none; Restore defaults leaves the picked folder as it is. The picked

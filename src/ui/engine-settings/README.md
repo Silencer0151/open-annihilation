@@ -19,6 +19,7 @@ the locks a running game puts on them (`settings_locks`).
 | Controls | Mouse wheel zoom | Off, On | On | `open-annihilation.wheel-zoom` |
 | | Maximum zoom out, a drop-down: how far out the wheel, a pinch, the touch zoom buttons and a controller zoom | Automatic (half the game's scale, a sixth while Full draws the battlefield), Whole map, 1/32, 1/16, 1/8, 1/4, 1/2; no choice but Automatic goes past the whole map | Automatic | `open-annihilation.max-zoom-out` (`automatic`, `whole-map`, `1/32`, `1/16`, `1/8`, `1/4` or `1/2`) |
 | | Maximum zoom in, a drop-down: how close the same zooms go | None (the game's own scale), 2x, 3x, 4x | 4x | `open-annihilation.max-zoom-in` (`1`, `2`, `3` or `4`) |
+| | View past the map's edge, a strip: how much of the battlefield the view may show past the map's edges; at 25% and Off a zoom keeps to it too | Off (the view stays on the map, as 3.1c's does), 25%, 50% (the map's edge reaches the battlefield's middle) | 50% | `open-annihilation.view-past-map-edge` (`off`, `25` or `50`) |
 | | Escape opens the game menu | Off, On | On on macOS, Off elsewhere and with `--preferences-file` | `open-annihilation.escape-opens-menu` |
 | | Select groups without Alt | Off, On | Off | 3.1c's SwitchAlt |
 | Common Tweaks | Your files: the player's own folder and buttons that open its Saves, Screenshots and Mods folders | changes no setting | | `open-annihilation.user-folder`, read at start (`src/app/include/oa/app/user_folder.hpp`) |

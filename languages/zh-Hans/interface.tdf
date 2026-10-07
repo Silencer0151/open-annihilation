@@ -584,6 +584,11 @@
 	zh-Hans=放大上限;
 	}
 
+[View past the map's edge]
+	{
+	zh-Hans=视野越过地图边缘;
+	}
+
 [Whole map]
 	{
 	zh-Hans=整张地图;
@@ -937,6 +942,36 @@
 [The wheel, a pinch and a controller stop there.]
 	{
 	zh-Hans=滚轮、双指缩放和手柄都止于此。;
+	}
+
+[The view stays on the map, as the game kept it.]
+	{
+	zh-Hans=视野保持在地图之内，与游戏原本一致。;
+	}
+
+[With more than the map in view, it is centred.]
+	{
+	zh-Hans=视野大于地图时，地图居中显示。;
+	}
+
+[Up to a quarter of the battlefield past the]
+	{
+	zh-Hans=最多四分之一的战场可显示在;
+	}
+
+[map's edges, however the view moves.]
+	{
+	zh-Hans=地图边缘之外，无论视野如何移动。;
+	}
+
+[Up to half the battlefield past the map's edges;]
+	{
+	zh-Hans=最多一半的战场可显示在地图边缘之外；;
+	}
+
+[a zoom keeps the ground under the pointer.]
+	{
+	zh-Hans=缩放时指针下的地面保持不动。;
 	}
 
 [The first press clears the selection,]

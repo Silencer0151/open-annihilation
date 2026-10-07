@@ -177,10 +177,12 @@ logs it.
   are cut off at the same edges in every tier, nothing of them drawn on
   the black (`shown_map_span`, `region_on_map`, `shown_map_scissor`);
   units, shots and effects past the edges are drawn whole. The view may go
-  past the map's edges:
-  its centre stays on the map, so that a map's edge or corner can be
-  brought to the battlefield's middle, or, where the view shows more of an
-  axis than the map holds, the map's centre stays in the view
+  past the map's edges as far as View past the map's edge lets it
+  (`past_map_edge_share`): at 50% its centre stays on the map, so that a
+  map's edge or corner can be brought to the battlefield's middle, or,
+  where the view shows more of an axis than the map holds, the map's
+  centre stays in the view; 25% lets a quarter of the view lie past an
+  edge, and Off none, the map centred in a view wider than it
   (`view_centre_span` in `far_view.hpp`). The view's exact place, the map
   point at the battlefield's corner (`exact_view_`, `match_view_place`),
   is what the zoom, the scroll and a finger's pan move, and the camera is
@@ -204,11 +206,13 @@ logs it.
   change of the zoom's limits ease about the battlefield's centre. Every
   frame of a zoom keeps the exact map point under its focus there
   (`zoom_view_about`): the pointer where it is that frame while the wheel
-  zooms about it, or the point the zoom was given. Along an axis on which
-  that point lies on the map, the view goes wherever that takes it, past
-  the limits too, since the point keeps the map in view; past the map's
-  edge it is held within the limits. A zoom of the wheel, a pinch or the
-  pad ends a camera's follow of a unit, as a scroll does; the dialog's
+  zooms about it, or the point the zoom was given. At View past the map's
+  edge 50%, along an axis on which that point lies on the map, the view
+  goes wherever that takes it, past the limits too, since the point keeps
+  the map in view; past the map's edge it is held within the limits. At
+  25% and Off it is held within the limits along both axes, so that the
+  point slides where the view meets them. A zoom of the wheel, a pinch or
+  the pad ends a camera's follow of a unit, as a scroll does; the dialog's
   ease keeps it, with the unit at the centre. The wheel counts its steps
   from the target they began at (`zoom_wheel_`), so that as many steps
   back return the zoom exactly, and with it the view where the pointer

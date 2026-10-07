@@ -43,6 +43,7 @@ void Runtime::pan_match_camera_by(float dx, float dy) {
                 place + static_cast<double>(delta) / zoom,
                 static_cast<double>(battlefield) / zoom,
                 static_cast<double>(map),
+                past_map_edge_share(),
                 view_hold_.held ? std::optional<double>(centre) : std::nullopt
             );
         };

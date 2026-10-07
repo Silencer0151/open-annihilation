@@ -7,9 +7,9 @@
 // renderer, Menu scaling's whole steps in the window's presentation at once,
 // Native pixel density kept for the next start, Explosion flash's Reduced in
 // effect for the next frame drawn, the zoom's limits stepped by the keys on
-// their drop-downs, OK, Cancel and Restore
-// defaults and the preferences they
-// leave, Developer Mode's overrides in effect and kept), and the main menu
+// their drop-downs, View past the map's edge's 25% in effect at once, OK,
+// Cancel and Restore defaults and the preferences they leave, Developer
+// Mode's overrides in effect and kept), and the main menu
 // with its OA button and the dialog as the window shows them at several
 // sizes, the Graphics section at its top and its end, and the Developer
 // section with an area of Developer Mode's list open, off and on.
@@ -222,6 +222,8 @@ std::string_view label_of(settings::Setting setting) {
         return "Maximum zoom out";
     case settings::Setting::max_zoom_in:
         return "Maximum zoom in";
+    case settings::Setting::view_past_map_edge:
+        return "View past the map's edge";
     case settings::Setting::escape_opens_menu:
         return "Escape opens the game menu";
     case settings::Setting::switch_alt:
@@ -703,12 +705,21 @@ void Runtime::check_engine_settings_dialog() {
     chosen.max_zoom_in = settings::ZoomInLimit::three_times;
     expect("Maximum zoom in 3x");
     // The rows under them, scrolled into view as the focus reaches them.
-    focus(settings::first_row_control + 3, "Escape opens the game menu");
-    click(settings::first_row_control + 3, "ON", "Escape opens the game menu's On");
+    // View past the map's edge: 25% is the share the view's limits take.
+    focus(settings::first_row_control + 3, "View past the map's edge");
+    click(settings::first_row_control + 3, "25%", "View past the map's edge's 25%");
+    chosen.view_past_map_edge = settings::ViewPastMapEdge::one_quarter;
+    expect("View past the map's edge 25%");
+    require(
+        past_map_edge_share() == 0.25,
+        "View past the map's edge 25% is not the view's limits' share"
+    );
+    focus(settings::first_row_control + 4, "Escape opens the game menu");
+    click(settings::first_row_control + 4, "ON", "Escape opens the game menu's On");
     chosen.escape_opens_menu = true;
     expect("Escape opens the game menu On");
-    focus(settings::first_row_control + 4, "Select groups without Alt");
-    click(settings::first_row_control + 4, "ON", "Select groups without Alt's On");
+    focus(settings::first_row_control + 5, "Select groups without Alt");
+    click(settings::first_row_control + 5, "ON", "Select groups without Alt's On");
     chosen.switch_alt = true;
     expect("Select groups without Alt On");
     require(
@@ -716,7 +727,7 @@ void Runtime::check_engine_settings_dialog() {
         "Select groups without Alt did not set SwitchAlt"
     );
     // A click on the side a switch already shows changes nothing.
-    click(settings::first_row_control + 4, "ON", "Select groups without Alt's On");
+    click(settings::first_row_control + 5, "ON", "Select groups without Alt's On");
     expect("a second click on On");
 
     click(settings::page_control(settings::Page::common_tweaks), {}, "Common Tweaks' entry");
@@ -997,6 +1008,7 @@ void Runtime::check_engine_settings_dialog() {
         {std::string(settings::key::wheel_zoom), "0"},
         {std::string(settings::key::max_zoom_out), "whole-map"},
         {std::string(settings::key::max_zoom_in), "3"},
+        {std::string(settings::key::view_past_map_edge), "25"},
         {std::string(settings::key::escape_opens_menu), "1"},
         {std::string(settings::key::unit_limit), std::to_string(kChosenUnitLimit)},
         {std::string(settings::key::max_frame_rate), std::to_string(kChosenFrameRate)},

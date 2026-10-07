@@ -145,11 +145,9 @@ Each of these takes effect at once.
   the pointer moves too, so a zoom out and back in comes back to where it
   began. A zoom ends a camera's follow of a unit (**T**, or Ctrl+C for the
   commander), as a scroll does. The view goes past the map's edges, by a
-  scroll, the minimap and a zoom, until the map's edge reaches the middle
-  of the battlefield, or, with more than the whole map in view, until the
-  map's centre reaches the view's edge; the battlefield is black past the
-  map, and your aircraft stay in view where their flight takes them past
-  its edges. Turned off, the view eases back to the game's own scale. Turn it off if the wheel zooms when
+  scroll, the minimap and a zoom, as far as View past the map's edge lets
+  it; the battlefield is black past the map, and your aircraft stay in
+  view where their flight takes them past its edges. Turned off, the view eases back to the game's own scale. Turn it off if the wheel zooms when
   you do not mean it to, or to use a mod's megamap, which takes the wheel
   only while this is off
   ([ui.megamap](mods/standard-hacks/ui.megamap.md)); the wheel itself can
@@ -176,6 +174,19 @@ Each of these takes effect at once.
   same zooms go: None keeps the game's own scale as the closest, the others
   that many times it. A view past a new limit eases within it about the
   battlefield's centre.
+- **View past the map's edge**, Off, 25% or 50%, 50% by default, as far
+  as the view has always gone. How much of the battlefield the view may
+  show past the map's edges, by a scroll, the minimap, a finger's drag and
+  a zoom, at any zoom. 50% lets the map's edge reach the middle of the
+  battlefield, or, with more than the whole map in view, the map's centre
+  reach the view's edge; a zoom keeps the ground under the pointer under
+  it wherever that takes the view. 25% lets a quarter of the battlefield
+  show past an edge, or, with more than the whole map in view, the map's
+  centre a quarter of the battlefield from its middle. Off keeps the view
+  on the map, as 3.1c does, and centres the map in a view wider than it.
+  At 25% and Off a zoom keeps to the limit too: where the view meets it,
+  the ground under the pointer slides instead. Choose Off or 25% to keep
+  the black past the map out of a view zoomed far out.
 - **Escape opens the game menu**, On by default on macOS and Off
   elsewhere. The first Escape cancels an order or clears the selection, as
   in 3.1c; the next opens the in-game menu. Turn it on if F2 is awkward to

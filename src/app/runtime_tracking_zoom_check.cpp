@@ -738,8 +738,10 @@ void Runtime::check_zoom_limit_choices(
                 }
                 if (after[axis] >= 0.0 && after[axis] <= map_size[axis])
                     continue;
-                const auto span = view_centre_span(map_size[axis], visible[axis]);
-                const auto span_before = view_centre_span(map_size[axis], visible_before[axis]);
+                const auto span =
+                    view_centre_span(map_size[axis], visible[axis], past_map_edge_share());
+                const auto span_before =
+                    view_centre_span(map_size[axis], visible_before[axis], past_map_edge_share());
                 if (centre_after[axis] <
                         std::min({span.least, span_before.least, centre_before[axis]}) - 1.0 ||
                     centre_after[axis] >
@@ -947,7 +949,8 @@ void Runtime::check_view_past_map(const std::function<void()>& frame) {
                         break;
                     last = now;
                 }
-                const auto span = view_centre_span(map_size[axis], visible()[axis]);
+                const auto span =
+                    view_centre_span(map_size[axis], visible()[axis], past_map_edge_share());
                 const double reached = centre_of_view()[axis];
                 const double wanted = way < 0 ? span.least : span.most;
                 if (frames == kLimitScrollFrames || std::abs(reached - wanted) > 1.0)
@@ -1001,7 +1004,7 @@ void Runtime::check_view_past_map(const std::function<void()>& frame) {
         }
     }
     const auto out_of_limits = centre_of_view();
-    const auto out_span = view_centre_span(map_width, visible()[0]);
+    const auto out_span = view_centre_span(map_width, visible()[0], past_map_edge_share());
     if (out_of_limits[0] >= out_span.least)
         fail("a zoom out about a point of the map near its edge left the view within its limits");
     scroll_match_view(-1, 0, kScrollStep);
@@ -1015,6 +1018,53 @@ void Runtime::check_view_past_map(const std::function<void()>& frame) {
     const double moved = centre_of_view()[0] - out_of_limits[0];
     if (std::abs(moved - kScrollStep / static_cast<double>(match_zoom())) > 1.0)
         fail("a scroll toward the map from past the view's limits did not move it by the scroll");
+
+    // View past the map's edge at 25% and Off: a scroll each way stops
+    // where the span for the share ends, at zoom 1 and at the whole map,
+    // and a zoom out about a point of the map near the battlefield's right
+    // edge, from the view at its limit past the map's left edge, keeps it
+    // at that limit.
+    for (const auto& [limit, name] :
+         {std::pair{settings::ViewPastMapEdge::one_quarter, "25%"},
+          std::pair{settings::ViewPastMapEdge::off, "Off"}}) {
+        const std::string what = std::string("View past the map's edge ") + name;
+        chosen.view_past_map_edge = limit;
+        apply_engine_settings(chosen);
+        const double share = past_map_edge_share();
+        place(kDefaultBattlefieldZoom, {map_width / 2 - bf_w / 2, map_height / 2 - bf_h / 2});
+        scroll_to_limits(what + " at zoom 1");
+        place(whole, {0, 0});
+        scroll_to_limits(what + " at the whole map");
+        place(
+            kDefaultBattlefieldZoom,
+            {static_cast<int32_t>(-share * static_cast<double>(bf_w)), map_height / 2}
+        );
+        for (int step = 0; step < kZoomOutSteps * 2; ++step) {
+            handle_match_zoom(
+                -1.0F,
+                static_cast<float>(match_layout_.left + right_edge[0]),
+                static_cast<float>(match_layout_.top + right_edge[1]),
+                true
+            );
+            for (int settle = 0; settle < kSettleFrames && match_zoom_ != match_zoom_target_;
+                 ++settle) {
+                frame();
+                render_match_surface();
+            }
+        }
+        const auto span = view_centre_span(map_width, visible()[0], share);
+        if (match_zoom_ >= kDefaultBattlefieldZoom ||
+            std::abs(centre_of_view()[0] - span.least) > 1.0)
+            fail(
+                what +
+                ": a zoom out about a point near the battlefield's edge left the view's "
+                "centre at " +
+                std::to_string(centre_of_view()[0]) + ", not at its limit " +
+                std::to_string(span.least)
+            );
+    }
+    chosen.view_past_map_edge = settings::ViewPastMapEdge::one_half;
+    apply_engine_settings(chosen);
 
     // An aircraft past the map's left edge, with the view's camera half the
     // battlefield past it: drawn there, hovered and selected, as a model at
@@ -1128,12 +1178,15 @@ void Runtime::check_view_past_map(const std::function<void()>& frame) {
     match_zoom_ = match_zoom_target_ = kDefaultBattlefieldZoom;
     match_paused_ = saved_paused;
     render_match_surface();
-    std::cout << "tracking zoom check: a scroll stops with the map's edge at the battlefield's "
-                 "middle, and at the whole map with the map's centre at the view's edge; the "
-                 "minimap brings the map's corner to the middle; a view a zoom left past the "
-                 "limits goes no further and comes back at once; an aircraft past the map's "
-                 "edge is drawn, hovered and selected as a model, near and far, and as a dot; "
-                 "and the digest takes the camera held on the map\n";
+    std::cout
+        << "tracking zoom check: a scroll stops with the map's edge at the battlefield's "
+           "middle, and at the whole map with the map's centre at the view's edge; the "
+           "minimap brings the map's corner to the middle; a view a zoom left past the "
+           "limits goes no further and comes back at once; at View past the map's edge "
+           "25% and Off a scroll stops at the span for the share, at zoom 1 and at the "
+           "whole map, and a zoom out keeps the view at its limit; an aircraft past the map's "
+           "edge is drawn, hovered and selected as a model, near and far, and as a dot; "
+           "and the digest takes the camera held on the map\n";
 }
 
 void Runtime::check_tracking_zoom(NavigationGroup group) {

@@ -583,6 +583,13 @@ settings::ExplosionFlash Runtime::explosion_flash() const noexcept {
                             : settings::ExplosionFlash::full;
 }
 
+double Runtime::past_map_edge_share() const noexcept {
+    return settings::past_map_edge_share(
+        engine_settings_ ? engine_settings_->current.view_past_map_edge
+                         : settings::ViewPastMapEdge::one_half
+    );
+}
+
 const settings::EngineSettings& Runtime::engine_settings() {
     EngineSettingsState::take_live_settings(*this);
     return engine_settings_state().current;
@@ -606,6 +613,10 @@ void Runtime::apply_engine_settings(const settings::EngineSettings& chosen) {
             match_zoom_ > most_match_zoom())
             EngineSettingsState::ease_zoom_about_centre(*this, held);
     }
+    // A view past the new limits of View past the map's edge is held within
+    // them from the next frame, not from where it lies now.
+    if (before.view_past_map_edge != chosen.view_past_map_edge)
+        view_hold_ = {};
     // ui.megamap acts only while the wheel zoom is off.
     if (before.wheel_zoom != chosen.wheel_zoom && match_)
         megamap_wheel_zoom_changed();

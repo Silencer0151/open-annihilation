@@ -35,11 +35,13 @@ namespace {
 
 /// Mods' one row: the list of the mods the game can play.
 constexpr std::array<Setting, 1> kModsRows{Setting::mod};
-/// Controls' rows: the zoom's limits right under the switch for the wheel.
-constexpr std::array<Setting, 5> kControlsRows{
+/// Controls' rows: the zoom's limits right under the switch for the wheel,
+/// and how far past the map's edges the view goes under them.
+constexpr std::array<Setting, 6> kControlsRows{
     Setting::wheel_zoom,
     Setting::max_zoom_out,
     Setting::max_zoom_in,
+    Setting::view_past_map_edge,
     Setting::escape_opens_menu,
     Setting::switch_alt,
 };
@@ -369,6 +371,12 @@ constexpr std::array<std::string_view, 3> kExplosionFlashCaptions{"Off", "Reduce
 static_assert(
     kExplosionFlashCaptions.size() == explosion_flash_choices.size(),
     "every level of Explosion flash has its caption"
+);
+/// View past the map's edge's captions, in view_past_map_edge_choices' order.
+constexpr std::array<std::string_view, 3> kViewPastMapEdgeCaptions{"Off", "25%", "50%"};
+static_assert(
+    kViewPastMapEdgeCaptions.size() == view_past_map_edge_choices.size(),
+    "every choice of View past the map's edge has its caption"
 );
 /// Zoomed out units' captions, in zoomed_out_units_choices' order.
 constexpr std::array<std::string_view, 3> kZoomedOutUnitsCaptions{"Rendered", "Dots", "Icons"};
@@ -975,6 +983,7 @@ bool is_strip(Setting setting) noexcept {
     case Setting::menu_scaling:
     case Setting::explosion_flash:
     case Setting::zoomed_out_units:
+    case Setting::view_past_map_edge:
     case Setting::touch_drag:
     case Setting::touch_latches:
     case Setting::touch_control_size:
@@ -1003,6 +1012,8 @@ Strip strip_of(Setting setting) noexcept {
         return Strip{
             zoomed_out_units_choices.size(), zoomed_out_units_level_width, offered_zoomed_out_units
         };
+    case Setting::view_past_map_edge:
+        return Strip{view_past_map_edge_choices.size(), view_past_map_edge_level_width};
     case Setting::touch_drag:
         return Strip{touch_drag_choices.size(), touch_drag_level_width};
     case Setting::touch_latches:
@@ -1036,6 +1047,8 @@ std::size_t strip_level(const EngineSettings& settings, Setting setting) noexcep
         return choice_place(explosion_flash_choices, settings.explosion_flash);
     case Setting::zoomed_out_units:
         return choice_place(zoomed_out_units_choices, settings.zoomed_out_units);
+    case Setting::view_past_map_edge:
+        return choice_place(view_past_map_edge_choices, settings.view_past_map_edge);
     case Setting::touch_drag:
         return choice_place(touch_drag_choices, settings.touch_drag);
     case Setting::touch_latches:
@@ -1081,6 +1094,9 @@ void set_strip_level(EngineSettings& settings, Setting setting, std::size_t leve
     case Setting::zoomed_out_units:
         settings.zoomed_out_units = zoomed_out_units_choices[clamped];
         break;
+    case Setting::view_past_map_edge:
+        settings.view_past_map_edge = view_past_map_edge_choices[clamped];
+        break;
     case Setting::touch_drag:
         settings.touch_drag = touch_drag_choices[clamped];
         break;
@@ -1122,6 +1138,8 @@ std::string_view strip_caption(Setting setting, std::size_t level) noexcept {
         return kExplosionFlashCaptions[level];
     case Setting::zoomed_out_units:
         return kZoomedOutUnitsCaptions[level];
+    case Setting::view_past_map_edge:
+        return kViewPastMapEdgeCaptions[level];
     case Setting::touch_drag:
         return kTouchDragCaptions[level];
     case Setting::touch_latches:
@@ -1849,6 +1867,8 @@ std::string_view label_of(Setting setting) noexcept {
         return "Maximum zoom out";
     case Setting::max_zoom_in:
         return "Maximum zoom in";
+    case Setting::view_past_map_edge:
+        return "View past the map's edge";
     case Setting::escape_opens_menu:
         return "Escape opens the game menu";
     case Setting::switch_alt:
@@ -2057,6 +2077,30 @@ std::string_view hint_line(
         }
         break;
     }
+    case Setting::view_past_map_edge:
+        // How much of the battlefield may lie past the map, and whether a
+        // zoom keeps to it.
+        switch (settings.view_past_map_edge) {
+        case ViewPastMapEdge::off:
+            lines = {
+                "The view stays on the map, as the game kept it.",
+                "With more than the map in view, it is centred."
+            };
+            break;
+        case ViewPastMapEdge::one_quarter:
+            lines = {
+                "Up to a quarter of the battlefield past the",
+                "map's edges, however the view moves."
+            };
+            break;
+        case ViewPastMapEdge::one_half:
+            lines = {
+                "Up to half the battlefield past the map's edges;",
+                "a zoom keeps the ground under the pointer."
+            };
+            break;
+        }
+        break;
     case Setting::escape_opens_menu:
         lines = {"The first press clears the selection,", "the second opens the menu."};
         break;
@@ -2372,6 +2416,7 @@ std::size_t hint_line_count(Setting setting) noexcept {
     switch (setting) {
     case Setting::max_zoom_out:
     case Setting::max_zoom_in:
+    case Setting::view_past_map_edge:
     case Setting::escape_opens_menu:
     case Setting::unit_limit:
     case Setting::anti_aliasing:
@@ -3304,6 +3349,9 @@ void copy_setting(EngineSettings& to, const EngineSettings& from, Setting settin
         break;
     case Setting::max_zoom_in:
         to.max_zoom_in = from.max_zoom_in;
+        break;
+    case Setting::view_past_map_edge:
+        to.view_past_map_edge = from.view_past_map_edge;
         break;
     case Setting::escape_opens_menu:
         to.escape_opens_menu = from.escape_opens_menu;

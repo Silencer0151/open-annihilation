@@ -85,17 +85,21 @@ struct ViewCentreSpan {
 /// Returns how far the centre of the battlefield's view may go along one
 /// axis.
 ///
-/// Where the view shows no more of the axis than the map holds, its centre
-/// stays on the map: at least half the view shows the map, and the map's
-/// edges and corners can be brought to the middle of the battlefield.
-/// Where the view shows more than the map holds, the map's centre stays in
-/// the view. The two meet where the view is the map's size, so the span
-/// grows smoothly with the zoom.
+/// Where the view shows no more of the axis than the map holds, at most
+/// `share` of the view lies past either of the map's edges: at a half the
+/// view's centre stays on the map, so that the map's edges and corners can
+/// be brought to the middle of the battlefield, and at none the view stays
+/// on the map. Where the view shows more than the map holds, the map's
+/// centre stays within `share` of the view of the view's centre: at a half
+/// it stays in the view, and at none the map is centred. The two meet where
+/// the view is the map's size, so the span grows smoothly with the zoom.
 ///
 /// @param map map pixels the shown map holds along the axis
 /// @param visible map pixels the view shows along the axis
+/// @param share the share of the view that may lie past the map's edge,
+///        0 to 0.5 (oa::ui::engine_settings::past_map_edge_share)
 /// @return the span, least at most most
-[[nodiscard]] ViewCentreSpan view_centre_span(double map, double visible) noexcept;
+[[nodiscard]] ViewCentreSpan view_centre_span(double map, double visible, double share) noexcept;
 
 /// Returns where a view held within its limits lies along one axis.
 ///
@@ -107,11 +111,14 @@ struct ViewCentreSpan {
 /// @param view the map pixel at the view's start along the axis, exact
 /// @param visible map pixels the view shows along the axis
 /// @param map map pixels the shown map holds along the axis
+/// @param share the share of the view that may lie past the map's edge
+///        (view_centre_span)
 /// @param from the centre of the view held last, in map pixels; none holds
 ///        the view within the span alone
 /// @return the view's start, held
-[[nodiscard]] double
-held_view(double view, double visible, double map, std::optional<double> from) noexcept;
+[[nodiscard]] double held_view(
+    double view, double visible, double map, double share, std::optional<double> from
+) noexcept;
 
 /// Returns the whole map pixel a camera held within the view's limits takes
 /// along one axis (held_view): the camera itself when the limits leave it
@@ -121,10 +128,13 @@ held_view(double view, double visible, double map, std::optional<double> from) n
 /// @param camera the camera's map pixel along the axis
 /// @param visible map pixels the view shows along the axis
 /// @param map map pixels the shown map holds along the axis
+/// @param share the share of the view that may lie past the map's edge
+///        (view_centre_span)
 /// @param from the centre of the view held last, in map pixels, or none
 /// @return the camera's map pixel, held
-[[nodiscard]] int32_t
-held_camera(int32_t camera, double visible, double map, std::optional<double> from) noexcept;
+[[nodiscard]] int32_t held_camera(
+    int32_t camera, double visible, double map, double share, std::optional<double> from
+) noexcept;
 
 /// Tells whether a frame at a zoom draws the far view: farther out than the
 /// zoom its units are drawn whole at, which is Automatic's floor for the

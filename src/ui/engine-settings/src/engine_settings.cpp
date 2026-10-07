@@ -277,6 +277,12 @@ constexpr std::array<ChoiceWord<ZoomInLimit>, 4> zoom_in_words{{
     {ZoomInLimit::three_times, "3"},
     {ZoomInLimit::four_times, "4"},
 }};
+/// View past the map's edge's words, in view_past_map_edge_choices' order.
+constexpr std::array<ChoiceWord<ViewPastMapEdge>, 3> view_past_map_edge_words{{
+    {ViewPastMapEdge::off, "off"},
+    {ViewPastMapEdge::one_quarter, "25"},
+    {ViewPastMapEdge::one_half, "50"},
+}};
 /// Control size's words, in control_size_choices' order.
 constexpr std::array<ChoiceWord<ControlSize>, 3> control_size_words{{
     {ControlSize::standard, "standard"},
@@ -609,6 +615,9 @@ EngineSettings read_settings(
         settings.wheel_zoom = *number > 0;
     read_word(values, key::max_zoom_out, zoom_out_words, settings.max_zoom_out);
     read_word(values, key::max_zoom_in, zoom_in_words, settings.max_zoom_in);
+    read_word(
+        values, key::view_past_map_edge, view_past_map_edge_words, settings.view_past_map_edge
+    );
     if (const auto number = stored_number(values, key::escape_opens_menu))
         settings.escape_opens_menu = *number > 0;
     if (const auto number = stored_number(values, key::unit_limit))
@@ -754,6 +763,15 @@ void write_settings(
         opened.max_zoom_in,
         chosen.max_zoom_in,
         defaults.max_zoom_in,
+        restored
+    );
+    store_word(
+        values,
+        key::view_past_map_edge,
+        view_past_map_edge_words,
+        opened.view_past_map_edge,
+        chosen.view_past_map_edge,
+        defaults.view_past_map_edge,
         restored
     );
     store(

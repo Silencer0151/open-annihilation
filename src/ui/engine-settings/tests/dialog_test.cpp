@@ -488,13 +488,15 @@ void each_section_shows_its_rows() {
 
     CHECK(settings::page_settings(Page::mods).size() == 1);
     CHECK(settings::page_settings(Page::mods)[0] == Setting::mod);
-    // Controls: the wheel's switch with the zoom's two limits under it.
-    CHECK(settings::page_settings(Page::controls).size() == 5);
+    // Controls: the wheel's switch with the zoom's two limits under it, and
+    // how far past the map's edges the view goes under them.
+    CHECK(settings::page_settings(Page::controls).size() == 6);
     CHECK(settings::page_settings(Page::controls)[0] == Setting::wheel_zoom);
     CHECK(settings::page_settings(Page::controls)[1] == Setting::max_zoom_out);
     CHECK(settings::page_settings(Page::controls)[2] == Setting::max_zoom_in);
-    CHECK(settings::page_settings(Page::controls)[3] == Setting::escape_opens_menu);
-    CHECK(settings::page_settings(Page::controls)[4] == Setting::switch_alt);
+    CHECK(settings::page_settings(Page::controls)[3] == Setting::view_past_map_edge);
+    CHECK(settings::page_settings(Page::controls)[4] == Setting::escape_opens_menu);
+    CHECK(settings::page_settings(Page::controls)[5] == Setting::switch_alt);
     // Common Tweaks: Your files first, then the unit limit and pathfinding.
     CHECK(settings::page_settings(Page::common_tweaks).size() == 3);
     CHECK(settings::page_settings(Page::common_tweaks)[0] == Setting::user_folder);
@@ -555,7 +557,7 @@ void each_section_shows_its_rows() {
             find_part(parts, choice, settings::first_row_control + static_cast<int32_t>(row)) !=
             nullptr
         );
-    CHECK(controls_rows.rows.size() == 5);
+    CHECK(controls_rows.rows.size() == 6);
     // The last two rows, scrolled into view.
     settings::Dialog scrolled = opened(Page::controls);
     scrolled.scroll[static_cast<std::size_t>(Page::controls)] = std::numeric_limits<int32_t>::max();
@@ -644,8 +646,13 @@ void switches_take_a_click_on_either_half_and_keys() {
     CHECK(dialog.focused == settings::first_row_control + 2);
     CHECK(settings::dialog_key(dialog, DialogKey::left) == DialogAction::changed);
     CHECK(dialog.chosen.max_zoom_in == settings::ZoomInLimit::three_times);
+    // View past the map's edge's strip: Left steps a level down from 50%.
     CHECK(settings::dialog_key(dialog, DialogKey::down) == DialogAction::redraw);
     CHECK(dialog.focused == settings::first_row_control + 3);
+    CHECK(settings::dialog_key(dialog, DialogKey::left) == DialogAction::changed);
+    CHECK(dialog.chosen.view_past_map_edge == settings::ViewPastMapEdge::one_quarter);
+    CHECK(settings::dialog_key(dialog, DialogKey::down) == DialogAction::redraw);
+    CHECK(dialog.focused == settings::first_row_control + 4);
     CHECK(settings::dialog_key(dialog, DialogKey::right) == DialogAction::changed);
     CHECK(dialog.chosen.escape_opens_menu);
     CHECK(settings::dialog_key(dialog, DialogKey::tab) == DialogAction::redraw);
@@ -1686,6 +1693,7 @@ void the_focus_moves_round_every_control() {
         settings::first_row_control + 2,
         settings::first_row_control + 3,
         settings::first_row_control + 4,
+        settings::first_row_control + 5,
         settings::restore_control,
         settings::cancel_control,
         settings::ok_control,
@@ -1905,15 +1913,16 @@ void the_view_and_the_scroll_bar_keep_their_places() {
 void sections_that_fit_do_not_scroll() {
     // Each section's content: its rows, and the end gap under the last.
     // Common Tweaks' Your files, unit limit and pathfinding sliders are 210,
-    // and fit; Controls' three switches and the zoom's two drop-downs are
-    // 320, Graphics' ten rows 631 and Language's drop-down, five switches
-    // and slider 424, and they scroll. Mods' list and Developer's list
-    // scroll in views of their own (mods_scroll, developer_*).
+    // and fit; Controls' three switches, the zoom's two drop-downs and View
+    // past the map's edge's strip are 379, Graphics' ten rows 631 and
+    // Language's drop-down, five switches and slider 424, and they scroll.
+    // Mods' list and Developer's list scroll in views of their own
+    // (mods_scroll, developer_*).
     const std::array<Page, 4> pages{
         Page::controls, Page::common_tweaks, Page::graphics, Page::language
     };
-    const std::array<int32_t, 4> content{320, 210, 631, 424};
-    const std::array<int32_t, 4> limits{84, 0, 395, 188};
+    const std::array<int32_t, 4> content{379, 210, 631, 424};
+    const std::array<int32_t, 4> limits{143, 0, 395, 188};
     for (std::size_t index = 0; index < content.size(); ++index) {
         const Page page = pages[index];
         if (limits[index] != 0) {
@@ -5139,8 +5148,8 @@ void hint_lines_part_while_the_modern_fonts_draw_the_words() {
     oa::data::languages::set_interface_language(nullptr, modern);
     const auto tall = geometry::place_rows(Page::controls, {});
     oa::data::languages::set_interface_language(nullptr, oa::data::languages::english());
-    CHECK(game_fonts.rows.size() == 5 && tall.rows.size() == 5);
-    if (game_fonts.rows.size() != 5 || tall.rows.size() != 5)
+    CHECK(game_fonts.rows.size() == 6 && tall.rows.size() == 6);
+    if (game_fonts.rows.size() != 6 || tall.rows.size() != 6)
         return;
     // Mouse wheel zoom: one line, in the same place.
     CHECK(tall.rows[0].hint_lines == 1 && tall.rows[0].height == game_fonts.rows[0].height);

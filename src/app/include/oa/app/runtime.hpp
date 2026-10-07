@@ -6846,6 +6846,13 @@ class Runtime final : public menu::Host,
     /// @return the setting; Full before the settings are read
     [[nodiscard]] oa::ui::engine_settings::ExplosionFlash explosion_flash() const noexcept;
 
+    /// Returns the share of the battlefield the view may show past each of
+    /// the map's edges, as View past the map's edge sets it
+    /// (oa::ui::engine_settings::past_map_edge_share).
+    ///
+    /// @return 0, 0.25 or 0.5; 0.5 before the settings are read
+    [[nodiscard]] double past_map_edge_share() const noexcept;
+
     /// Returns the scale mode the standard tier draws a frame over the
     /// logical presentation with (render_policy::frame_filter): PIXELART
     /// where Menu scaling and the frame's scale ask for it and the
@@ -8680,7 +8687,11 @@ class Runtime final : public menu::Host,
     /// edge. A press on the minimap's corner brings the map's corner to the
     /// battlefield's middle. A zoom out about a point of the map near the
     /// battlefield's edge leaves the view past its limits, and a scroll then
-    /// goes no further from the map but back toward it at once. An aircraft
+    /// goes no further from the map but back toward it at once. With View
+    /// past the map's edge at 25% and at Off, a scroll each way stops at
+    /// the end of the span for the share, at zoom 1 and at the whole map,
+    /// and a zoom out about a point of the map near the battlefield's edge,
+    /// from the view at its limit, keeps it at that limit. An aircraft
     /// put past the map's left edge, with the view past that edge, is on
     /// screen, drawn over the black, hovered and selected, as a model at
     /// zoom 1 and in the far view with Zoomed out units at Rendered, and as
@@ -11306,12 +11317,16 @@ class Runtime final : public menu::Host,
     ///
     /// The exact map point under the point before the zoom is under it
     /// after, the view's exact place moving with it (place_match_view).
-    /// Along an axis on which that map point lies on the shown map, the
-    /// view goes wherever that takes it, so that a zoom never slides the
-    /// point under the pointer and the map stays in view; along an axis on
-    /// which it lies past the map's edge, the view is held within its
-    /// limits as a scroll is (held_view). The limits hold from the view
-    /// placed (view_hold_).
+    /// With View past the map's edge at 50%, along an axis on which that
+    /// map point lies on the shown map, the view goes wherever that takes
+    /// it, so that a zoom never slides the point under the pointer and the
+    /// map stays in view; along an axis on which it lies past the map's
+    /// edge, the view is held within its limits as a scroll is (held_view),
+    /// the limits holding from the view placed (view_hold_). At 25% and Off
+    /// the view is held within its limits along both axes, from the limits
+    /// alone, so that a zoom never takes more of the view past the map's
+    /// edges than they let it: the point under the pointer slides where
+    /// the view meets them.
     ///
     /// @param zoom the zoom to take, screen pixels per map pixel, above 0
     /// @param focus_x the point's column from the battlefield's left edge, screen pixels
@@ -11371,9 +11386,10 @@ class Runtime final : public menu::Host,
     /// are the screen pixels over the zoom, added to the view's exact place
     /// (place_match_view), whose camera steps whole map pixels at the
     /// scroll's exact rate; the view is held within its limits (held_view),
-    /// so that it may go past the map's edges until the map's edge reaches
-    /// the middle of the battlefield. A scroll that moves the view stops
-    /// tracking a unit.
+    /// so that it may go past the map's edges as far as View past the
+    /// map's edge lets it: at 50% until the map's edge reaches the middle
+    /// of the battlefield. A scroll that moves the view stops tracking a
+    /// unit.
     ///
     /// @param way_x -1 left, 1 right, 0 neither; held to that range
     /// @param way_z -1 up, 1 down, 0 neither; held to that range
@@ -11382,8 +11398,9 @@ class Runtime final : public menu::Host,
 
     /// Returns the camera as the next frame draws it: held within the
     /// view's limits (held_camera), which let the view go past the map's
-    /// edges as far as view_centre_span allows, or as far as the view the
-    /// limits held last lay past them (view_hold_), whichever is further.
+    /// edges as far as view_centre_span allows for View past the map's
+    /// edge (past_map_edge_share), or as far as the view the limits held
+    /// last lay past them (view_hold_), whichever is further.
     ///
     /// @return the camera's column and row in map pixels; the camera as it
     ///         is without a map
