@@ -197,6 +197,7 @@ void Runtime::bind_message_log() {
     // Elimination lights the killer's kills and the victim's losses on the
     // kills board while F4 holds it out.
     kill_board_ = {};
+    console_clock_fade_ = {};
     match_->kill_board.context = this;
     match_->kill_board.flash = [](void* context, uint8_t killer, uint8_t victim) {
         oa::ui::hud::flash_kill(static_cast<Runtime*>(context)->kill_board_, killer, victim);

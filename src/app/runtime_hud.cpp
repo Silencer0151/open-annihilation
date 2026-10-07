@@ -8,6 +8,8 @@
 #include "oa/data/defs/layout.hpp"
 #include "oa/app/hook_call.hpp"
 #include "oa/ui/decoded.hpp"
+#include "oa/ui/hud/game_clock.hpp"
+#include "oa/ui/hud/kill_board.hpp"
 #include "oa/ui/hud/status_panel.hpp"
 #include "oa/present/world_renderer/world_fog.hpp"
 #include "oa/present/world_renderer/world_camera.hpp"
@@ -1235,14 +1237,21 @@ void Runtime::draw_status_panel() {
         return offset == 0 || offset == -hud::kStatusPanelRise;
     };
     const int32_t before = game.status_panel_offset;
-    if (hud::status_panel_step(
-            game, status_panel_next_step_ms_, static_cast<uint32_t>(SDL_GetTicks()), held
-        )) {
+    const auto now_ms = static_cast<uint32_t>(SDL_GetTicks());
+    if (hud::status_panel_step(game, status_panel_next_step_ms_, now_ms, held)) {
         if (at_end(before))
             play_match_interface_sound("Panel");
         if (at_end(game.status_panel_offset))
             play_match_interface_sound("Options");
     }
+    // The console's clock gives way to the strip, which shows the game time
+    // in its place: hidden from the frame Space is held, it fades back in
+    // once the strip is down and the kills board, drawn before it, has
+    // stopped sliding.
+    const bool board_still = kill_board_.slide == 0 || kill_board_.slide == hud::kBoardWidth;
+    console_clock_opacity_ = hud::step_clock_fade(
+        console_clock_fade_, held, game.status_panel_offset == 0 && board_still, now_ms
+    );
     if (game.status_panel_offset == 0)
         return;
     if (!status_lightbar_loaded_) {

@@ -12,6 +12,7 @@
 #include "oa/present/game_text.hpp"
 #include "oa/ui/frontend_renderer/game_text.hpp"
 #include "oa/ui/console/game_fields.hpp"
+#include "oa/ui/hud/game_clock.hpp"
 #include "oa/ui/hud/kill_board.hpp"
 #include "oa/ui/hud/resource_bar.hpp"
 #include "oa/ui/hud/status_panel.hpp"
@@ -837,6 +838,123 @@ void Runtime::check_kill_board() {
     unmoved("after it was let go");
     if (differing_outside(still, after, {cursor}) != 0)
         throw std::runtime_error("kill board check: Space left pixels behind");
+
+    // The console's clock gives way to the strip, which shows the game time
+    // where the clock stands: hidden from the first frame Space is held,
+    // while it is held and while the strip and the board close, it fades
+    // back in from the first frame after their last closing frame and
+    // shows whole kClockFadeInMs later.
+    namespace console = oa::ui::console;
+    const auto flags = console::console_flags(game);
+    const auto clock_flags = [&](bool on) {
+        console::set_console_flags(
+            game,
+            static_cast<uint16_t>(
+                on ? flags | console::console_flag::clock : flags & ~console::console_flag::clock
+            )
+        );
+    };
+    // The strip closed on the last frame drawn, so the clock waits out its
+    // fade first.
+    SDL_Delay(hud::kClockFadeInMs);
+    clock_flags(false);
+    renderer::Surface no_clock;
+    capture(no_clock);
+    clock_flags(true);
+    renderer::Surface clock_shown;
+    capture(clock_shown);
+    if (console_clock_opacity_ != hud::kClockOpaque)
+        throw std::runtime_error("kill board check: the clock did not show whole before Space");
+    write_ppm(report_directory / "native-kill-board-clock-before.ppm", clock_shown);
+    Rect clock{};
+    {
+        int x0 = static_cast<int>(no_clock.width), y0 = static_cast<int>(no_clock.height);
+        int x1 = -1, y1 = -1;
+        for (int y = 0; y < static_cast<int>(no_clock.height); ++y)
+            for (int x = 0; x < static_cast<int>(no_clock.width); ++x)
+                if (!same_pixel(no_clock, clock_shown, x, y)) {
+                    x0 = std::min(x0, x);
+                    y0 = std::min(y0, y);
+                    x1 = std::max(x1, x);
+                    y1 = std::max(y1, y);
+                }
+        if (x1 < 0)
+            throw std::runtime_error("kill board check: +clock drew nothing");
+        clock = {x0, y0, x1 - x0 + 1, y1 - y0 + 1};
+    }
+    const auto clock_hidden = [&](const char* when) {
+        if (console_clock_opacity_ != 0)
+            throw std::runtime_error(std::string("kill board check: the clock showed ") + when);
+    };
+    const auto strip_closed = [&] {
+        return strip_offset == 0 &&
+               (kill_board_.slide == 0 || kill_board_.slide == hud::kBoardWidth);
+    };
+    send_space(true);
+    space_held_by_check_ = true;
+    renderer::Surface clock_frame;
+    capture(clock_frame);
+    clock_hidden("on the first frame Space was held");
+    int clock_frames = 0;
+    while ((strip_offset != -hud::kStatusPanelRise || kill_board_.slide != hud::kBoardWidth) &&
+           ++clock_frames < kMostSpaceFrames) {
+        SDL_Delay(hud::kStatusPanelStepMs + 1);
+        capture(clock_frame);
+        clock_hidden("while the strip rose");
+    }
+    write_ppm(report_directory / "native-kill-board-clock-held.ppm", clock_frame);
+    clock_flags(false);
+    renderer::Surface held_no_clock;
+    capture(held_no_clock);
+    clock_flags(true);
+    if (differing_inside(held_no_clock, clock_frame, clock) != 0)
+        throw std::runtime_error("kill board check: the clock showed over the strip");
+    space_held_by_check_ = false;
+    send_space(false);
+    renderer::Surface last_closing;
+    clock_frames = 0;
+    do {
+        last_closing = clock_frame;
+        SDL_Delay(hud::kStatusPanelStepMs + 1);
+        capture(clock_frame);
+        if (!strip_closed())
+            clock_hidden("while the strip closed");
+        if (clock_frames == 0)
+            write_ppm(report_directory / "native-kill-board-clock-closing.ppm", clock_frame);
+    } while (!strip_closed() && ++clock_frames < kMostSpaceFrames);
+    if (!strip_closed())
+        throw std::runtime_error("kill board check: the strip did not close with the clock on");
+    // The first frame after the strip's and the board's last closing frame
+    // starts the fade.
+    clock_hidden("on the frame the strip closed");
+    write_ppm(report_directory / "native-kill-board-clock-last-closing.ppm", last_closing);
+    SDL_Delay(hud::kClockFadeInMs / 2);
+    capture(clock_frame);
+    const auto fading_opacity = console_clock_opacity_;
+    if (fading_opacity == 0 || fading_opacity >= hud::kClockOpaque ||
+        differing_inside(no_clock, clock_frame, clock) == 0 ||
+        differing_inside(clock_shown, clock_frame, clock) == 0)
+        throw std::runtime_error(
+            "kill board check: the clock did not fade in, opacity " + std::to_string(fading_opacity)
+        );
+    if (differing_outside(no_clock, clock_frame, {clock, cursor}) != 0)
+        throw std::runtime_error("kill board check: the fading clock changed the frame around it");
+    write_ppm(report_directory / "native-kill-board-clock-fading.ppm", clock_frame);
+    SDL_Delay(hud::kClockFadeInMs);
+    capture(clock_frame);
+    if (console_clock_opacity_ != hud::kClockOpaque ||
+        differing_outside(clock_shown, clock_frame, {cursor}) != 0)
+        throw std::runtime_error(
+            "kill board check: the clock did not show whole after its fade, opacity " +
+            std::to_string(console_clock_opacity_) + ", " +
+            std::to_string(differing_outside(clock_shown, clock_frame, {cursor})) +
+            " pixels changed"
+        );
+    write_ppm(report_directory / "native-kill-board-clock-after.ppm", clock_frame);
+    console::set_console_flags(game, flags);
+    std::cout << "kill board check: the console clock hid while Space was held and the strip "
+                 "closed, then faded in (at "
+              << fading_opacity << "/256 midway)\n";
     std::cout << "kill board check: " << board.width << 'x' << board.height << " at " << board.x
               << ',' << board.y << " on the " << match_layout_.width << 'x' << match_layout_.height
               << " canvas, shaded by " << (full ? "the card in the full tier" : "the shade table")

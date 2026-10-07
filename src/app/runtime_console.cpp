@@ -862,7 +862,7 @@ void Runtime::draw_console_clock() {
     namespace hud = oa::ui::hud;
     namespace layout = oa::ui::display_layout;
     const auto pen_row = console_clock_pen_row();
-    if (!pen_row)
+    if (!pen_row || console_clock_opacity_ == 0)
         return;
     const oa::Game& game = match_->state().game;
     const oa::formats::fnt::Font* font = console_clock_font();
@@ -888,7 +888,32 @@ void Runtime::draw_console_clock() {
     const auto scale = hud_text_scale();
     const auto at =
         canvas_paint(overlay_area().x + (hud::kClockLeft - layout::kSourceLeft) * scale, *pen_row);
-    draw_match_text(font, at.x, at.y, text, ui_colors_[hud::kClockColorSlot], scale);
+    const auto paint = [&] {
+        draw_match_text(font, at.x, at.y, text, ui_colors_[hud::kClockColorSlot], scale);
+    };
+    if (console_clock_opacity_ >= hud::kClockOpaque) {
+        paint();
+        return;
+    }
+    // Fading in: the clock and all it paints around its letters, which may
+    // lie a line above and below the pen and a few columns either side.
+    const int line =
+        std::max(
+            static_cast<int>(oa::formats::fnt::line_height(*font)),
+            static_cast<int>(oa::present::sized_length(
+                static_cast<uint8_t>(font->nominal_height), oa::present::game_text_size()
+            ))
+        ) *
+        scale;
+    const int margin = 8 * scale;
+    paint_faded(
+        at.x - margin,
+        at.y - 2 * line,
+        match_text_width(*font, text, scale) + 2 * margin,
+        5 * line,
+        console_clock_opacity_,
+        paint
+    );
 }
 
 void Runtime::check_console_commands() {

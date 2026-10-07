@@ -6,8 +6,10 @@
 #include "oa/ui/hud/game_clock.hpp"
 #include "oa/ui/hud/status_panel.hpp"
 
+#include <cstdint>
 #include <cstring>
 #include <memory>
+#include <tuple>
 
 using namespace oa;
 using namespace oa::ui::hud;
@@ -56,11 +58,57 @@ void formats_the_game_time() {
     CHECK(std::strcmp(cut, "Game Time") == 0);
 }
 
+// Space held hides the clock from its first frame, before the strip has
+// moved; let go, the clock stays hidden while the strip or the board closes,
+// starts to fade in on the first frame after they have closed and shows
+// whole kClockFadeInMs later. Space held again mid-fade hides it at once.
+void gives_way_to_the_status_strip() {
+    ClockFade fade{};
+    CHECK(step_clock_fade(fade, false, true, 1000) == kClockOpaque);
+    CHECK(step_clock_fade(fade, true, true, 1001) == 0);
+    CHECK(fade.showing == ClockShowing::hidden);
+    CHECK(step_clock_fade(fade, true, false, 1100) == 0);
+
+    CHECK(step_clock_fade(fade, false, false, 1200) == 0);
+    CHECK(step_clock_fade(fade, false, false, 9000) == 0);
+    CHECK(fade.showing == ClockShowing::hidden);
+
+    CHECK(step_clock_fade(fade, false, true, 9015) == 0);
+    CHECK(fade.showing == ClockShowing::fading && fade.fade_start_ms == 9015);
+    CHECK(step_clock_fade(fade, false, true, 9015 + kClockFadeInMs / 2) == kClockOpaque / 2);
+
+    CHECK(step_clock_fade(fade, false, true, 9015 + kClockFadeInMs) == kClockOpaque);
+    CHECK(fade.showing == ClockShowing::shown);
+
+    CHECK(step_clock_fade(fade, true, true, 10000) == 0);
+    CHECK(step_clock_fade(fade, false, true, 10100) == 0);
+    CHECK(step_clock_fade(fade, false, true, 10150) == 50 * kClockOpaque / kClockFadeInMs);
+    CHECK(step_clock_fade(fade, true, true, 10100 + kClockFadeInMs / 2) == 0);
+    CHECK(fade.showing == ClockShowing::hidden);
+}
+
+// The fade runs on time alone: stepped every millisecond or once, it stands
+// at the same opacity at the same moment, across the clock's wrap too.
+void fades_by_time_not_frames() {
+    constexpr uint32_t start = UINT32_MAX - 50;
+    ClockFade every{ClockShowing::hidden, 0};
+    ClockFade once{ClockShowing::hidden, 0};
+    std::ignore = step_clock_fade(every, false, true, start);
+    std::ignore = step_clock_fade(once, false, true, start);
+    uint32_t stepped = 0;
+    for (uint32_t ms = 1; ms <= 100; ++ms)
+        stepped = step_clock_fade(every, false, true, start + ms);
+    CHECK(stepped == step_clock_fade(once, false, true, start + 100));
+    CHECK(stepped == 100 * kClockOpaque / kClockFadeInMs);
+}
+
 } // namespace
 
 int main() {
     picks_the_font_the_log_leaves();
     sits_above_the_bottom_bar();
     formats_the_game_time();
+    gives_way_to_the_status_strip();
+    fades_by_time_not_frames();
     return 0;
 }

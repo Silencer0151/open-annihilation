@@ -3,7 +3,9 @@
 
 // The game clock the console's Clock option shows over the bottom-left
 // corner of the battlefield: "Game Time : hh:mm:ss" (format_game_time) in
-// UI colour 15, written as a label with no background.
+// UI colour 15, written as a label with no background. It gives way to the
+// space bar's status strip, which shows the game time in its place, and
+// fades back in once the strip and the kills board have closed.
 #pragma once
 
 #include "oa/core/game_state.h"
@@ -28,6 +30,45 @@ enum class ClockFont : uint8_t {
     /// The viewer's side's font (SIDEDATA.TDF font=, CONSOLE.FNT).
     side_panel,
 };
+
+/// Milliseconds the clock takes to fade back in once the strip and the
+/// kills board have closed.
+inline constexpr uint32_t kClockFadeInMs = 250;
+/// The clock's opacity drawn whole, in 256ths.
+inline constexpr uint32_t kClockOpaque = 256;
+
+/// How the clock shows while the space bar's status strip comes and goes.
+enum class ClockShowing : uint8_t {
+    /// drawn whole
+    shown,
+    /// not drawn: Space is held, or the strip or the board is still closing
+    hidden,
+    /// fading back in since ClockFade::fade_start_ms
+    fading,
+};
+
+/// The clock's showing kept between frames.
+struct ClockFade {
+    ClockShowing showing{ClockShowing::shown};
+    uint32_t fade_start_ms{}; ///< when the fade began, on the clock the strip steps on
+};
+
+/// Moves the clock's showing on for a frame and returns its opacity.
+///
+/// Space held hides the clock at once, from the frame the strip starts to
+/// rise. Let go, it stays hidden until the strip is down and the kills board
+/// has stopped sliding; from the first frame after their last closing frame
+/// it fades in over kClockFadeInMs, and Space held again hides it at once.
+/// The fade runs on the strip's clock, so it takes the same time at any
+/// frame rate or game speed, and while the game is paused.
+///
+/// @param[in,out] fade the clock's showing
+/// @param held whether Space is held while no text field has the keyboard,
+///             as the strip rises (status_panel_step)
+/// @param closed whether the strip is down and the kills board is at rest
+/// @param now_ms the time in milliseconds on the clock the strip steps on
+/// @return the opacity in 256ths: 0 hidden up to kClockOpaque whole
+uint32_t step_clock_fade(ClockFade& fade, bool held, bool closed, uint32_t now_ms) noexcept;
 
 /// Returns the font the clock is written in.
 ///

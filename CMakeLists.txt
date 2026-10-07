@@ -1497,7 +1497,9 @@ if(OA_BUILD_PLATFORM)
       # right through the SDL presenter, with no dialog, and away again.
       # Space selects nothing and moves no camera; held, it slides the board
       # in and raises the status strip over the battlefield's bottom left,
-      # every frame leaving the bottom bar as it was.
+      # every frame leaving the bottom bar as it was. The console's clock
+      # hides while Space is held and the strip and the board close, then
+      # fades back in.
       set(oa_kill_board_check_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/kill-board")
       file(MAKE_DIRECTORY "${oa_kill_board_check_dir}")
       add_test(NAME native-kill-board COMMAND oa-game --game-dir "${OA_GAME_DIR}"

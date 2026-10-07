@@ -19,7 +19,9 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <span>
+#include <tuple>
 #include <vector>
 
 namespace oa::app {
@@ -220,6 +222,95 @@ bool Runtime::paint_world_minimum(
     full_->world_quads.push_back({x, y, width, height, shown, card::Blend::minimum});
     cover_canvas_paint(paint_target(), full_overlay_key(), full_->world_quads.back(), colour);
     return true;
+}
+
+void Runtime::paint_faded(
+    int x, int y, int width, int height, uint32_t opacity, const std::function<void()>& paint
+) {
+    if (opacity == 0)
+        return;
+    const auto whole = static_cast<uint32_t>(blend_opacity_whole);
+    if (opacity >= whole) {
+        paint();
+        return;
+    }
+    auto& target = paint_target();
+    const int left = std::max(x, 0);
+    const int top = std::max(y, 0);
+    const int right = std::min(x + width, static_cast<int>(target.width));
+    const int bottom = std::min(y + height, static_cast<int>(target.height));
+    if (left >= right || top >= bottom ||
+        target.rgb.size() < static_cast<std::size_t>(target.width) * target.height * 3U)
+        return;
+    const auto columns = static_cast<std::size_t>(right - left);
+    const auto row_bytes = columns * 3U;
+    const auto at = [&](int row) {
+        return target.rgb.data() +
+               (static_cast<std::size_t>(row) * target.width + static_cast<std::size_t>(left)) * 3U;
+    };
+    std::vector<uint8_t> before(row_bytes * static_cast<std::size_t>(bottom - top));
+    for (int row = top; row < bottom; ++row)
+        std::copy_n(at(row), row_bytes, before.data() + row_bytes * (row - top));
+    const bool canvas = paints_full_canvas();
+    const std::size_t first_quad = canvas ? full_->world_quads.size() : 0;
+    paint();
+    if (canvas) {
+        // What the painter asked the card for, at the opacity: its blends
+        // and shades fainter, the rest left out.
+        auto& quads = full_->world_quads;
+        const auto faint = static_cast<float>(opacity) / blend_opacity_whole;
+        const auto kept = std::remove_if(
+            quads.begin() + static_cast<std::ptrdiff_t>(first_quad),
+            quads.end(),
+            [](const FullWorldQuad& quad) {
+                return quad.blend != card::Blend::alpha && quad.blend != card::Blend::darken;
+            }
+        );
+        quads.erase(kept, quads.end());
+        for (auto quad = quads.begin() + static_cast<std::ptrdiff_t>(first_quad);
+             quad != quads.end();
+             ++quad)
+            quad->colour.alpha *= faint;
+    }
+    const auto key = canvas ? full_overlay_key() : std::array<uint8_t, 3>{};
+
+    // Over the canvas's key a painted pixel is blended over the world by the
+    // card, a row's run of one colour in a quad; elsewhere it is blended
+    // over what the target held.
+    struct Run {
+        int start{};
+        int length{};
+        std::array<uint8_t, 3> colour{};
+    };
+
+    std::vector<Run> runs;
+    for (int row = top; row < bottom; ++row) {
+        uint8_t* pixel = at(row);
+        const uint8_t* held = before.data() + row_bytes * (row - top);
+        runs.clear();
+        for (std::size_t column = 0; column < columns; ++column, pixel += 3, held += 3) {
+            if (std::equal(pixel, pixel + 3, held))
+                continue;
+            if (canvas && std::equal(key.begin(), key.end(), held)) {
+                const std::array<uint8_t, 3> colour{pixel[0], pixel[1], pixel[2]};
+                std::copy(key.begin(), key.end(), pixel);
+                const int column_at = left + static_cast<int>(column);
+                if (!runs.empty() && runs.back().colour == colour &&
+                    runs.back().start + runs.back().length == column_at)
+                    ++runs.back().length;
+                else
+                    runs.push_back({column_at, 1, colour});
+                continue;
+            }
+            for (std::size_t channel = 0; channel < 3; ++channel)
+                pixel[channel] = static_cast<uint8_t>(
+                    (held[channel] * (whole - opacity) + pixel[channel] * opacity + whole / 2) /
+                    whole
+                );
+        }
+        for (const Run& run : runs)
+            std::ignore = paint_world_blend(run.start, row, run.length, 1, run.colour, opacity);
+    }
 }
 
 std::vector<uint8_t> replay_world_quads(

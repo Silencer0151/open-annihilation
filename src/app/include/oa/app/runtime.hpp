@@ -54,6 +54,7 @@
 #include "oa/ui/hud/boundary.hpp"
 #include "oa/ui/hud/build_page_fit.hpp"
 #include "oa/ui/hud/camera_scroll.hpp"
+#include "oa/ui/hud/game_clock.hpp"
 #include "oa/ui/hud/health_bar.hpp"
 #include "oa/ui/hud/kill_board.hpp"
 #include "oa/ui/hud/order_panel.hpp"
@@ -1268,7 +1269,10 @@ class Runtime final : public menu::Host,
     /// again. A press of Space selects nothing and moves no camera; held, it
     /// slides the board in and raises the status strip over the battlefield's
     /// bottom left, and let go, both leave again, every frame keeping the
-    /// bottom bar and the rest of the interface as they were. Throws
+    /// bottom bar and the rest of the interface as they were. With the
+    /// console's Clock on, the clock is hidden from the first frame Space is
+    /// held until the strip and the board have closed, then fades back in,
+    /// part shown half its fade later and whole once it has ended. Throws
     /// std::runtime_error on a failure.
     void check_kill_board();
 
@@ -7222,6 +7226,25 @@ class Runtime final : public menu::Host,
     [[nodiscard]] bool
     paint_world_minimum(int x, int y, int width, int height, std::array<uint8_t, 3> colour);
 
+    /// Paints over the paint target at an opacity: what `paint` changes in
+    /// a rectangle shows at that share over what the target held, and
+    /// nothing outside the rectangle may change. On the Full tier's overlay
+    /// canvas (paints_full_canvas), which holds no world, the pixels painted
+    /// over the world are blended over it by the card (paint_world_blend);
+    /// of what `paint` asks the card for, the blends and shades are made
+    /// fainter by the opacity and the rest, such as holds to a colour
+    /// (paint_world_minimum), is left out.
+    ///
+    /// @param x the rectangle's left column, in pixels of the paint target
+    /// @param y its top row
+    /// @param width its columns
+    /// @param height its rows
+    /// @param opacity the share in 256ths; 0 paints nothing, 256 or more all
+    /// @param paint paints on the paint target
+    void paint_faded(
+        int x, int y, int width, int height, uint32_t opacity, const std::function<void()>& paint
+    );
+
     /// Drops the Full tier for the rest of the run, to Basic: logs the
     /// reason once, frees what Full made, closes the stage of Full's first
     /// frames where it stands (RendererHost::end_path_stage), keeps Full
@@ -10497,7 +10520,10 @@ class Runtime final : public menu::Host,
     /// 0x82, y height-0x22-font), and its glyph rows start the font's row
     /// lift above the pen; all scaled with the chrome. In the modern fonts
     /// the height is the font's at the text size, so that a larger clock
-    /// rises clear of the bottom bar (console_clock_pen_row).
+    /// rises clear of the bottom bar (console_clock_pen_row). It gives way
+    /// to the status strip at the opacity draw_status_panel leaves in
+    /// console_clock_opacity_: not drawn while hidden, painted at its
+    /// opacity while it fades back in (paint_faded).
     void draw_console_clock();
 
     /// Returns the canvas row of the console clock's pen while it shows.
@@ -12954,6 +12980,11 @@ class Runtime final : public menu::Host,
     /// passed before the newest tick is refreshed ahead of it.
     void run_radar_ticks();
     uint32_t status_panel_next_step_ms_ = 0; // the strip's step timer
+    /// How the console clock shows while the strip comes and goes.
+    oa::ui::hud::ClockFade console_clock_fade_{};
+    /// The console clock's opacity this frame, in 256ths
+    /// (oa::ui::hud::step_clock_fade).
+    uint32_t console_clock_opacity_ = oa::ui::hud::kClockOpaque;
     std::optional<oa::formats::gaf::RenderedFrame> status_lightbar_{};
     bool status_lightbar_loaded_ = false;
     std::string status_label_;           // last label translated for the status strip
@@ -12967,7 +12998,9 @@ class Runtime final : public menu::Host,
     /// scale, less while the strip would be wider than the area, and is
     /// painted on the battlefield's layer, cut off at the area's last row, so
     /// that it leaves the bottom bar as it is. It sounds "Panel" as it leaves
-    /// an end and "Options" as it reaches one.
+    /// an end and "Options" as it reaches one. It also moves the console
+    /// clock's showing on (oa::ui::hud::step_clock_fade), as the kills board
+    /// drawn before it left the board's slide, on the strip's own clock.
     void draw_status_panel();
     int radar_map_h_ = 0;
     std::optional<oa::present::world_renderer::TextureCatalog> texture_catalog_;
