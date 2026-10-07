@@ -14,6 +14,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <span>
 #include <string_view>
 
 namespace oa::sim::ai {
@@ -50,7 +51,7 @@ enum class TaskKind : uint8_t {
 };
 
 /// The type fields the computer player reads, gathered from the unit
-/// definitions and the side build lists.
+/// definitions and their build lists.
 struct ComputerType {
     char unit_name[32]{};
     char side[32]{};
@@ -139,11 +140,12 @@ struct ComputerPlayer {
 struct ComputerPlayers {
     ComputerType* types{}; // type_count entries; index 0 reserved
     uint32_t type_count{};
-    // How many CANBUILD entries a builder's list keeps (30 in 3.1c); set
-    // before computer_players_initialize.
+    // How many CANBUILD entries a builder's list keeps (30 in 3.1c); a list
+    // holds one entry more, which only the download menus fill. Set before
+    // computer_players_initialize.
     data::limits::BuildLists build_lists{};
-    // type_count lists of data::limits::build_list_kept(build_lists) type ids,
-    // one for each type, which ComputerType::build_ids point into.
+    // type_count lists of data::limits::build_list_kept(build_lists) + 1 type
+    // ids, one for each type, which ComputerType::build_ids point into.
     uint16_t* build_id_block{};
     // The rules the match plays by (Match::rules_view), the ai.* hacks among
     // them; set before computer_players_initialize and at every pass. Unset,
@@ -155,8 +157,11 @@ struct ComputerPlayers {
     bool plan_matches{}; // the last plan line named the difficulty; kept between passes
     char* profile_text{};
     uint32_t profile_length{};
-    char* build_list_text{}; // gamedata/sidedata.tdf
-    uint32_t build_list_length{};
+    // Every unit type's build list (UnitDef.build_ids: its SIDEDATA CANBUILD
+    // entries, then the download menus' entries), as runs of a count and that
+    // many type ids, from type 0 on.
+    uint16_t* build_list_runs{};
+    uint32_t build_list_run_length{};
 };
 
 /// Function-pointer boundary to the match runtime. Order calls return false
@@ -209,14 +214,20 @@ struct ComputerHost {
     bool (*order_attack_point)(void* context, uint16_t unit, const oa::FixedVec3* at){};
 };
 
-/// Stores the AI profile text and the side build lists applied at the next initialisation.
+/// Stores the AI profile text and the unit types' build lists applied at the next
+/// initialisation.
+///
+/// A computer player's builder chooses from its type's whole build list, the list the
+/// game gives the type: its SIDEDATA CANBUILD entries, then the entries the download
+/// menus add for it.
 ///
 /// @param[in,out] state computer players; marked uninitialised
 /// @param profile ai/<profile>.txt text
-/// @param build_lists gamedata/sidedata.tdf text
+/// @param build_lists for each type from 0 on, the number of ids in its list
+///        (UnitDef.build_ids) followed by those ids
 /// @return false for a null state or when a copy cannot be allocated
 bool computer_players_configure(
-    ComputerPlayers* state, std::string_view profile, std::string_view build_lists
+    ComputerPlayers* state, std::string_view profile, std::span<const uint16_t> build_lists
 ) noexcept;
 /// Allocates a zeroed type table.
 ///
@@ -231,7 +242,7 @@ void computer_players_release(ComputerPlayers* state) noexcept;
 
 /// Creates the computer players' controllers as the game starts.
 ///
-/// Loads the side build lists, creates a controller and knowledge record for every
+/// Loads the build lists, creates a controller and knowledge record for every
 /// computer player, applies the profile and each downloadable type's own directives,
 /// and scans the metal spots for every player with a controller.
 ///
@@ -471,14 +482,15 @@ ComputerHost match_computer_host(sim::match_runtime::Match& match) noexcept;
 ///
 /// @param match match that owns the state
 /// @param profile ai/<profile>.txt text
-/// @param build_lists gamedata/sidedata.tdf text
+/// @param build_lists for each type from 0 on, the number of ids in its list
+///        (UnitDef.build_ids) followed by those ids
 /// @param campaign_session true in a campaign, where computer players never build a
 ///        downloadable type
-/// @return false when the texts cannot be stored
+/// @return false when the profile or the lists cannot be stored
 [[nodiscard]] bool configure_match_computer_players(
     sim::match_runtime::Match& match,
     std::string_view profile,
-    std::string_view build_lists,
+    std::span<const uint16_t> build_lists,
     bool campaign_session
 );
 /// Reloads a match's AI profile (computer_players_reload_profile).

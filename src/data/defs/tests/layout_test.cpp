@@ -239,8 +239,24 @@ void renamed_directories_replace_the_base_ones() {
 
 } // namespace
 
+/// The side slots' names: with two, every side but the first takes the
+/// second; with more, each side its own, and a side past the last the last.
+void side_names_name_each_side() {
+    check(std::string_view(defs::side_name(0)) == "Arm", "side 0 is the Arm");
+    check(std::string_view(defs::side_name(1)) == "Core", "side 1 is the Core");
+    check(std::string_view(defs::side_name(2)) == "Core", "with two names, side 2 is the Core");
+    defs::DataLayout layout;
+    layout.side_names = {"North", "South", "East"};
+    const LayoutScope scope(layout);
+    check(std::string_view(defs::side_name(0)) == "North", "three names: side 0");
+    check(std::string_view(defs::side_name(2)) == "East", "three names: side 2 has its own");
+    check(std::string_view(defs::side_name(4)) == "East", "three names: side 4 takes the last");
+}
+
 int main() {
     try {
+        base_layout_is_the_games();
+        side_names_name_each_side();
         base_layout_is_the_games();
         renamed_directories_replace_the_base_ones();
         base_layout_is_the_games();

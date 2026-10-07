@@ -17,7 +17,6 @@ namespace oa::ui::hud {
 namespace {
 
 constexpr int32_t kBytesPerMegabyte = 0x100000;
-constexpr uint8_t kArmSide = 0;
 // The name init_player_slot gives a human in a campaign or skirmish, as the
 // English game shows it; a computer player is named after its side slot.
 constexpr const char* kHumanName = "Player";
@@ -133,7 +132,7 @@ void init_player_slot(
     if (status == OA_PLAYER_STATUS_LOCAL)
         name = kHumanName;
     else if (status == OA_PLAYER_STATUS_COMPUTER && info != nullptr)
-        name = oa::data::defs::side_name(info->side == kArmSide ? 0 : 1);
+        name = oa::data::defs::side_name(info->side);
     if (name != nullptr)
         std::snprintf(player.name, sizeof player.name, "%s", name);
     std::snprintf(

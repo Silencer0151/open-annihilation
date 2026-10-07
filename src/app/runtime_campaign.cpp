@@ -5,6 +5,7 @@
 // NEWGAME lists and the MSNBRIEF panel to the frontend runtime.
 #include "oa/app/runtime.hpp"
 #include "oa/data/defs/layout.hpp"
+#include "oa/data/defs/unit_catalog.hpp"
 #include "oa/base/text/line_break.hpp"
 #include "oa/data/languages/translation.hpp"
 #include "oa/ui/decoded.hpp"
@@ -81,7 +82,6 @@ constexpr int32_t kFirstSideFontRecord = 1;
 // darkening it.
 constexpr uint32_t kInGameBriefingFlags = 0;
 constexpr const char* kDefaultAiProfile = "default.txt";
-constexpr const char* kSideBuildLists = "sidedata.tdf";
 // Width of the message box the mission loader's messages open in.
 constexpr int32_t kMissionMessageWidth = 480;
 
@@ -844,18 +844,20 @@ std::string Runtime::read_computer_profile() {
 void Runtime::configure_computer_players() {
     if (!match_)
         return;
-    const auto lists =
-        read(oa::data::defs::data_path(oa::data::defs::DataDirectory::gamedata, kSideBuildLists));
-    if (!lists)
-        throw std::runtime_error("cannot load gamedata/sidedata.tdf");
+    // Every type's build list as the game holds it, its CANBUILD entries then
+    // the download menus': per type, a count then its ids.
+    const auto& tables = unit_table_.tables;
+    std::vector<uint16_t> lists;
+    for (uint32_t type = 0; type < tables.count; ++type) {
+        const auto& unit = tables.records[type];
+        const uint16_t* ids = oa::data::defs::unit_def_build_ids(&tables, unit);
+        const uint32_t count = ids != nullptr ? unit.build_id_count : 0;
+        lists.push_back(static_cast<uint16_t>(count));
+        lists.insert(lists.end(), ids, ids + count);
+    }
     const auto profile = read_computer_profile();
-    if (!oa::sim::ai::configure_match_computer_players(
-            *match_,
-            profile,
-            std::string_view(reinterpret_cast<const char*>(lists->data()), lists->size()),
-            campaign_mission_
-        ))
-        throw std::runtime_error("cannot store the computer players' profile");
+    if (!oa::sim::ai::configure_match_computer_players(*match_, profile, lists, campaign_mission_))
+        throw std::runtime_error("cannot store the computer players' profile and build lists");
 }
 
 void Runtime::reload_computer_profiles() {

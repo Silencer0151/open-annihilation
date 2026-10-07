@@ -331,7 +331,10 @@ ComputerPlayers* match_computer_players(Match& match) {
 }
 
 bool configure_match_computer_players(
-    Match& match, std::string_view profile, std::string_view build_lists, bool campaign_session
+    Match& match,
+    std::string_view profile,
+    std::span<const uint16_t> build_lists,
+    bool campaign_session
 ) {
     auto* state = match_computer_players(match);
     state->downloadables_restricted = campaign_session ? 1 : 0;

@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace oa::data::defs {
 
@@ -49,10 +50,12 @@ struct DataLayout {
     /// key is checked against: a unit of a later version is unavailable. It is
     /// the game's network version, 3.1 for the base game.
     std::array<int8_t, 2> build_version{3, 1};
-    /// The names of the two side slots the game itself uses: computer
-    /// players' names, elimination messages and the side buttons' gadgets.
-    /// SIDEDATA keeps its own names for everything else.
-    std::array<std::string, 2> side_names{"Arm", "Core"};
+    /// The names of the side slots the game itself uses: computer players'
+    /// names, elimination messages and the side buttons' gadgets, one a side,
+    /// two to five; a side past the last name takes the last, so with two
+    /// every side but the first takes the second. SIDEDATA keeps its own
+    /// names for everything else.
+    std::vector<std::string> side_names{"Arm", "Core"};
 
     /// Compares every field.
     bool operator==(const DataLayout&) const = default;
@@ -102,7 +105,7 @@ void use_data_layout(const DataLayout& layout);
 
 /// Returns the name of a side slot the game itself uses.
 ///
-/// @param side 0 or 1; any other slot is named as 1
+/// @param side the side's index; a side past the last name is named as the last
 /// @return the name, NUL-terminated
 [[nodiscard]] const char* side_name(uint8_t side) noexcept;
 

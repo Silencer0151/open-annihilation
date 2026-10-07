@@ -7,7 +7,6 @@
 #include "oa/data/match_rules/difficulty_names.hpp"
 #include "oa/sim/unit_movement/movement.hpp"
 #include "oa/sim/simulation_state.hpp"
-#include "oa/formats/tdf.hpp"
 #include "oa/sim/unit_health.hpp"
 
 #include <cmath>
@@ -46,12 +45,6 @@ bool equal_nocase(const char* a, const char* b) noexcept {
 
 bool is_space(char c) noexcept {
     return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' || c == '\f';
-}
-
-void copy_bounded(char* out, std::size_t capacity, std::string_view text) noexcept {
-    const auto n = text.size() < capacity - 1 ? text.size() : capacity - 1;
-    std::memcpy(out, text.data(), n);
-    out[n] = '\0';
 }
 
 char* duplicate(std::string_view text) noexcept {
@@ -141,13 +134,6 @@ bool name_is_unit(const ComputerPlayers* state, const char* name) noexcept {
         if (equal_nocase(state->types[t].unit_name, name))
             return true;
     return false;
-}
-
-uint16_t type_by_name(const ComputerPlayers* state, const char* name) noexcept {
-    for (uint32_t t = 1; t < state->type_count; ++t)
-        if (equal_nocase(state->types[t].unit_name, name))
-            return static_cast<uint16_t>(t);
-    return 0;
 }
 
 bool allocate_knowledge(ComputerKnowledge& k, uint32_t count) noexcept {
@@ -350,68 +336,45 @@ void apply_script(
     }
 }
 
-/// Loads the side build lists from gamedata/sidedata.tdf [CANBUILD] [<unit>] canbuildN.
+/// Loads every builder type's list from the unit types' build lists (UnitDef.build_ids).
 ///
-/// Every builder type gets a list, possibly empty; unknown names are skipped and a list
-/// holds at most data::limits::build_list_kept(state->build_lists) entries, 30 in 3.1c.
+/// A computer player's builder chooses from its type's whole build list: its SIDEDATA
+/// CANBUILD entries, then the entries the download menus add for it, as the game holds
+/// them. Every builder type gets a list, possibly empty, that takes its type's ids in
+/// order, repeats included, up to data::limits::build_list_kept(state->build_lists) + 1
+/// entries (31 in 3.1c); an id outside the type table is skipped, and a type the runs
+/// do not reach keeps an empty list.
 ///
-/// @param[in,out] state type table and build-list limits; its list block is allocated anew
-/// @param text sidedata.tdf text; empty or unparsable leaves every list empty, as does a
-///     block that cannot be allocated
-void load_build_lists(ComputerPlayers* state, std::string_view text) noexcept {
-    const uint32_t kept = data::limits::build_list_kept(state->build_lists);
+/// @param[in,out] state type table, build-list limits and build_list_runs; its list block
+///     is allocated anew, and a block that cannot be allocated leaves every list empty
+void load_build_lists(ComputerPlayers* state) noexcept {
+    const uint32_t capacity = data::limits::build_list_kept(state->build_lists) + 1;
     std::free(state->build_id_block);
     state->build_id_block = static_cast<uint16_t*>(
-        std::calloc(std::size_t{state->type_count} * kept, sizeof(uint16_t))
+        std::calloc(std::size_t{state->type_count} * capacity, sizeof(uint16_t))
     );
     for (uint32_t t = 1; t < state->type_count; ++t) {
         auto& type = state->types[t];
         type.build_count = 0;
         type.build_ids = state->build_id_block != nullptr
-                             ? state->build_id_block + std::size_t{t} * kept
+                             ? state->build_id_block + std::size_t{t} * capacity
                              : nullptr;
         type.has_build_list = (type.flags & OA_UNIT_DEF_FLAG_BUILDER) != 0 ? 1 : 0;
     }
-    if (state->build_id_block == nullptr)
+    if (state->build_id_block == nullptr || state->build_list_runs == nullptr)
         return;
-    if (text.empty())
-        return;
-    formats::tdf::OwnedDocument document;
-    if (!document.parse(text))
-        return;
-    // The last section and the last entry of a name are the ones read.
-    const formats::tdf::Block* lists = nullptr;
-    for (uint32_t index = 0; index < formats::tdf::child_count(document.root()); ++index) {
-        const auto* section = formats::tdf::child_at(document.root(), index);
-        if (equal_nocase(section->name, "canbuild"))
-            lists = section;
-    }
-    if (lists == nullptr)
-        return;
-    for (uint32_t t = 1; t < state->type_count; ++t) {
+    const uint16_t* run = state->build_list_runs;
+    const uint16_t* const end = run + state->build_list_run_length;
+    for (uint32_t t = 0; t < state->type_count && run < end; ++t) {
+        const uint32_t count = *run++;
+        const auto present = static_cast<uint32_t>(end - run);
+        const uint32_t length = count < present ? count : present;
         auto& type = state->types[t];
-        if (!type.has_build_list)
-            continue;
-        const formats::tdf::Block* entry = nullptr;
-        for (uint32_t index = 0; index < formats::tdf::child_count(lists); ++index) {
-            const auto* child = formats::tdf::child_at(lists, index);
-            if (equal_nocase(child->name, type.unit_name))
-                entry = child;
-        }
-        if (entry == nullptr)
-            continue;
-        char key[24];
-        for (uint32_t n = 1;; ++n) {
-            std::snprintf(key, sizeof key, "canbuild%u", n);
-            const char* value = formats::tdf::find_value(entry, key);
-            if (value == nullptr)
-                break;
-            char name[32];
-            copy_bounded(name, sizeof name, value);
-            const auto id = type_by_name(state, name);
-            if (id != 0 && type.build_count < kept)
-                type.build_ids[type.build_count++] = id;
-        }
+        if (t != 0 && type.has_build_list)
+            for (uint32_t i = 0; i < length && type.build_count < capacity; ++i)
+                if (run[i] != 0 && run[i] < state->type_count)
+                    type.build_ids[type.build_count++] = run[i];
+        run += length;
     }
 }
 
@@ -689,18 +652,23 @@ const ComputerType* computer_type(const ComputerPlayers* state, uint16_t type) n
 }
 
 bool computer_players_configure(
-    ComputerPlayers* state, std::string_view profile, std::string_view build_lists
+    ComputerPlayers* state, std::string_view profile, std::span<const uint16_t> build_lists
 ) noexcept {
     if (state == nullptr)
         return false;
     std::free(state->profile_text);
-    std::free(state->build_list_text);
+    std::free(state->build_list_runs);
     state->profile_text = duplicate(profile);
     state->profile_length = static_cast<uint32_t>(profile.size());
-    state->build_list_text = duplicate(build_lists);
-    state->build_list_length = static_cast<uint32_t>(build_lists.size());
+    state->build_list_runs = static_cast<uint16_t*>(
+        std::malloc(build_lists.empty() ? sizeof(uint16_t) : build_lists.size_bytes())
+    );
+    if (state->build_list_runs != nullptr && !build_lists.empty())
+        std::memcpy(state->build_list_runs, build_lists.data(), build_lists.size_bytes());
+    state->build_list_run_length =
+        state->build_list_runs != nullptr ? static_cast<uint32_t>(build_lists.size()) : 0;
     state->initialized = 0;
-    return state->profile_text != nullptr && state->build_list_text != nullptr;
+    return state->profile_text != nullptr && state->build_list_runs != nullptr;
 }
 
 bool computer_players_reserve_types(ComputerPlayers* state, uint32_t type_count) noexcept {
@@ -720,17 +688,14 @@ void computer_players_release(ComputerPlayers* state) noexcept {
     std::free(state->types);
     std::free(state->build_id_block);
     std::free(state->profile_text);
-    std::free(state->build_list_text);
+    std::free(state->build_list_runs);
     *state = {};
 }
 
 bool computer_players_initialize(ComputerPlayers* state, const ComputerHost& host) noexcept {
     if (state == nullptr || host.world == nullptr || state->types == nullptr)
         return false;
-    load_build_lists(
-        state,
-        {state->build_list_text != nullptr ? state->build_list_text : "", state->build_list_length}
-    );
+    load_build_lists(state);
     for (uint8_t index = 0; index < OA_PLAYER_COUNT; ++index) {
         auto& ai = state->players[index];
         release_knowledge(ai.knowledge);

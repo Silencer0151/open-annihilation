@@ -674,7 +674,7 @@ Identity keys are written directly under `identity`.
 | `replay-network-version` | The version bytes a replay presents | `[3, 1]` | two integers, 0 to 255 | sim |
 | `settings-file` | The name of the INI file the game reads its settings from | `totala.ini` | string, at most 64 | view |
 | `registry-root` | The registry key the game keeps its settings under | 3.1c's own key | string, at most 128 | view |
-| `side-names` | The two side names the game itself uses: computer players' names, elimination messages and the side buttons. SIDEDATA keeps its own names for everything else. | `[Arm, Core]` | two strings, at most 16 each | sim |
+| `side-names` | The side names the game itself uses: computer players' names, elimination messages and the side buttons, one name a side in SIDEDATA's order. A side past the last name takes the last, so with two names every side but the first takes the second, as in 3.1c; a mod with more sides names each. SIDEDATA keeps its own names for everything else. | `[Arm, Core]` | two to five strings, at most 16 each | sim |
 
 ### 6.2 `layout`
 

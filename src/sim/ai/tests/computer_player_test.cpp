@@ -228,36 +228,39 @@ void describe_catalog(ComputerPlayers& state) {
     describe(state, CORMEX, "CORMEX", "CORE", "CORE LEVEL1", 0, 0);
 }
 
-constexpr const char* kBuildLists = R"(
-[CANBUILD]
-	{
-	[ARMCOM]
-		{
-		canbuild1=ARMSOLAR;
-		canbuild2=ARMMEX;
-		canbuild3=ARMLAB;
-		canbuild4=NOSUCHUNIT;
-		canbuild5=CORMEX;
-		}
-	[ARMLAB]
-		{
-		canbuild1=ARMPW;
-		canbuild2=ARMCK;
-		}
-	}
-)";
+// The unit types' build lists (UnitDef.build_ids), from type 0 on: a count, then that
+// many ids. ARMCOM's holds an id outside the table, which the computer players skip.
+constexpr uint16_t kBuildLists[] = {
+    0, // type 0
+    5,
+    ARMSOLAR,
+    ARMMEX,
+    ARMLAB,
+    TYPE_COUNT + 3,
+    CORMEX, // ARMCOM
+    0,
+    0, // ARMMEX, ARMSOLAR
+    2,
+    ARMPW,
+    ARMCK, // ARMLAB
+    0,
+    0,
+    0,
+    0,
+    0,
+    0, // ARMPW to CORMEX
+};
 
-/// Checks the computer players' build lists against the build-list limits: 30
-/// entries in 3.1c, a raised copy, the largest copy, and every entry.
+/// Checks the computer players' build lists against the build-list limits: a list holds
+/// one entry more than the CANBUILD entries a builder keeps (31 in 3.1c), for 3.1c's
+/// copy, a raised copy, the largest copy, and every entry.
 void test_build_list_limits() {
-    // ARMCOM lists 1100 entries, cycling through the catalog's types.
+    // ARMCOM's list holds 1100 entries, cycling through the catalog's types.
     constexpr uint32_t listed = 1100;
-    std::string text = "[CANBUILD]{[ARMCOM]{";
-    const char* names[] = {"ARMMEX", "ARMSOLAR", "ARMLAB", "ARMPW", "ARMCK"};
     const uint16_t ids[] = {ARMMEX, ARMSOLAR, ARMLAB, ARMPW, ARMCK};
+    std::vector<uint16_t> lists = {0, listed};
     for (uint32_t index = 0; index < listed; ++index)
-        text += "canbuild" + std::to_string(index + 1) + "=" + names[index % 5] + ";";
-    text += "}}";
+        lists.push_back(ids[index % 5]);
 
     struct Case {
         oa::data::limits::BuildLists lists;
@@ -265,12 +268,12 @@ void test_build_list_limits() {
     };
 
     const Case cases[] = {
-        {{}, 30},
-        {{36, oa::data::limits::BuildListOverflow::truncate}, 36},
+        {{}, 31},
+        {{36, oa::data::limits::BuildListOverflow::truncate}, 37},
         {{oa::data::limits::highest_build_list_copy, oa::data::limits::BuildListOverflow::truncate},
-         oa::data::limits::highest_build_list_copy},
+         oa::data::limits::highest_build_list_copy + 1},
         {{30, oa::data::limits::BuildListOverflow::dynamic},
-         oa::data::limits::highest_build_list_copy},
+         oa::data::limits::highest_build_list_copy + 1},
     };
     for (const auto& c : cases) {
         Fake fake;
@@ -278,7 +281,7 @@ void test_build_list_limits() {
         ComputerPlayers state{};
         describe_catalog(state);
         state.build_lists = c.lists;
-        check(computer_players_configure(&state, "", text), "long list: configure");
+        check(computer_players_configure(&state, "", lists), "long list: configure");
         check(computer_players_initialize(&state, host_for(fake)), "long list: initialize");
         const auto& com = state.types[ARMCOM];
         check(com.build_count == c.expected, "long list: entries kept");
@@ -289,6 +292,40 @@ void test_build_list_limits() {
         check(state.types[ARMLAB].build_count == 0, "long list: other builders keep theirs");
         computer_players_release(&state);
     }
+}
+
+/// A builder's list is its type's whole build list, the download menus' entries
+/// included: ids in order with repeats kept, an id outside the table skipped, none for a
+/// type that builds nothing, and empty lists for types the lists do not reach.
+void test_whole_build_lists() {
+    // ARMCOM lists a repeated entry; ARMMEX, no builder, lists one it never gets; the
+    // lists end before ARMCK.
+    const std::vector<uint16_t> lists = {
+        0, 4, ARMSOLAR, ARMLLT, ARMLLT, TYPE_COUNT + 3, 1, ARMPW, 0, 2, ARMPW, ARMLLT
+    };
+    Fake fake;
+    fake.player(1, OA_PLAYER_STATUS_COMPUTER, 10, 30);
+    ComputerPlayers state{};
+    describe_catalog(state);
+    check(computer_players_configure(&state, "", lists), "whole lists: configure");
+    check(computer_players_initialize(&state, host_for(fake)), "whole lists: initialize");
+    const auto& com = state.types[ARMCOM];
+    check(
+        com.build_count == 3 && com.build_ids[0] == ARMSOLAR && com.build_ids[1] == ARMLLT &&
+            com.build_ids[2] == ARMLLT,
+        "whole lists: in order, repeats kept, an id outside the table skipped"
+    );
+    check(state.types[ARMMEX].build_count == 0, "whole lists: a type that builds nothing");
+    const auto& lab = state.types[ARMLAB];
+    check(
+        lab.build_count == 2 && lab.build_ids[0] == ARMPW && lab.build_ids[1] == ARMLLT,
+        "whole lists: the lab's list"
+    );
+    check(
+        state.types[ARMCK].has_build_list == 1 && state.types[ARMCK].build_count == 0,
+        "whole lists: a builder the lists do not reach has an empty list"
+    );
+    computer_players_release(&state);
 }
 
 void test_sort_squads() {
@@ -1115,9 +1152,8 @@ std::string read_text(const oa::AssetStore& assets, const char* resource) {
 // The installed game's computer-player profile and side build lists.
 void test_installed_data(const oa::AssetStore& assets) {
     const auto profile = read_text(assets, "ai/default.txt");
-    const auto lists = read_text(assets, "gamedata/sidedata.tdf");
-    check(!profile.empty() && !lists.empty(), "the install holds ai/default.txt and sidedata.tdf");
-    if (profile.empty() || lists.empty())
+    check(!profile.empty(), "the install holds ai/default.txt");
+    if (profile.empty())
         return;
     Fake fake;
     fake.player(1, OA_PLAYER_STATUS_COMPUTER, 10, 30);
@@ -1125,15 +1161,8 @@ void test_installed_data(const oa::AssetStore& assets) {
     host.difficulty = OA_DIFFICULTY_MEDIUM;
     ComputerPlayers state{};
     describe_catalog(state);
-    check(computer_players_configure(&state, profile, lists), "configure from the install");
+    check(computer_players_configure(&state, profile, kBuildLists), "configure from the install");
     check(computer_players_initialize(&state, host), "initialize from the install");
-    const auto& com = state.types[ARMCOM];
-    bool mex = false, lab = false;
-    for (uint32_t i = 0; i < com.build_count; ++i) {
-        mex |= com.build_ids[i] == ARMMEX;
-        lab |= com.build_ids[i] == ARMLAB;
-    }
-    check(mex && lab, "the installed commander build list");
     const auto& k = state.players[1].knowledge;
     check(k.limits[ARMMEX] >= 0, "the installed limit applied");
     check(k.weight_percent[ARMPW] < 100, "the installed ARM weight applied");
@@ -1613,6 +1642,7 @@ int main(int argc, char** argv) {
     }
     test_sort_squads();
     test_build_list_limits();
+    test_whole_build_lists();
     test_profile();
     test_downloadable_directives();
     test_weight_report();

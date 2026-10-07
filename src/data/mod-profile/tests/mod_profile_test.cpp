@@ -478,6 +478,21 @@ void test_blocks() {
     );
 }
 
+/// A profile names one side a name, up to five sides; three names give three.
+void test_side_names() {
+    const ResolveResult result =
+        resolve(profile_text("sides", "identity:\n  side-names: [North, South, East]\n"));
+    OA_CHECK(result.errors.empty());
+    if (!result.resolution)
+        return;
+    const auto& names = result.resolution->profile.identity.side_names;
+    OA_CHECK(names.size() == 3 && names[0] == "North" && names[2] == "East");
+    OA_CHECK(
+        text_of(at(*result.resolution, {"identity", "side-names"})) ==
+        "[\"North\",\"South\",\"East\"]"
+    );
+}
+
 void test_comments_and_true() {
     const std::string text = "# a comment line\n" + profile_text("c") +
                              "hacks:\n  units.id-reuse-delay: true   # trailing comment\n";
@@ -586,6 +601,8 @@ void test_refusals() {
         {"settings: {limits.effects.nothing: {ini: A/B}}", "unknown parameter"},
         {"settings: {registry-seeds: {UnitLimit: true}}", "integers or strings"},
         {"identity: {network-version: [3, 1, 0]}", "2 items"},
+        {"identity: {side-names: [Arm]}", "items"},
+        {"identity: {side-names: [A, B, C, D, E, F]}", "items"},
         {"identity: {display-version: 3.1}", "expected a string"},
         {"layout: {directories: {maps: maps}}", "unknown key"},
         {"layout: {archive-patterns: {ufo: SWX}}", "does not match"},
@@ -813,6 +830,8 @@ constexpr std::pair<std::string_view, std::string_view> reference_hashes[] = {
      "7fbd7aba1e6ce27a9818f42762b5f917e24029bdef263c1aebebdd5f241a88a4"},
     {"7bd577f653cf4ca28223b9e9631346374446278b9bca92d4d06c87d494c2ec02",
      "f9a43dfae42cfab8ecbf405145b895d02f86c44ee80766dae90db10c897e9d33"},
+    {"43f81e8688ecf1cf02a4fb33b149626ca332e50f3fe2501ba2e1cc6afad883c8",
+     "b99f8aa74b18026f24d644abd959a0f3a9b00a0035d097644723b581a0134e02"},
 };
 
 /// Resolves every reference profile and checks it against its pinned hashes.
@@ -1161,6 +1180,7 @@ int main(int argc, char** argv) {
     test_single_profile();
     test_base_profile();
     test_blocks();
+    test_side_names();
     test_comments_and_true();
     test_unimplemented();
     test_refusals();

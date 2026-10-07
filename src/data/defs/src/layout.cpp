@@ -3,6 +3,8 @@
 
 #include "oa/data/defs/layout.hpp"
 
+#include <algorithm>
+
 namespace oa::data::defs {
 namespace {
 
@@ -46,7 +48,10 @@ std::string unit_file_suffix() {
 }
 
 const char* side_name(uint8_t side) noexcept {
-    return current_layout().side_names[side == 0 ? 0 : 1].c_str();
+    const auto& names = current_layout().side_names;
+    if (names.empty())
+        return "";
+    return names[std::min<std::size_t>(side, names.size() - 1)].c_str();
 }
 
 const char* map_units_section() noexcept {

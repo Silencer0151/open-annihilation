@@ -246,7 +246,7 @@ void post_notice(World& world, const char* text, const Hooks& hooks) {
 
 void post_elimination(World& world, const Player& player, const Hooks& hooks) {
     const PlayerSetupInfo* info = world_player_info(&world, &player);
-    const uint8_t slot = info != nullptr && info->side == 0 ? 0 : 1;
+    const uint8_t slot = info != nullptr ? info->side : 1;
     const char* side = hooks.side_name != nullptr ? hooks.side_name(hooks.context, slot)
                        : slot == 0                ? side_name_arm
                                                   : side_name_core;

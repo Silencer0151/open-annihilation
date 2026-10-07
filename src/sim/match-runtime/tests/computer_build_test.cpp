@@ -42,15 +42,9 @@ constexpr float builder_metal_make = 10.0F;
 
 enum Type : uint16_t { vehicle = 1, collector, relay, type_count };
 
-constexpr const char* build_lists = R"([CANBUILD]
-	{
-	[ARMCV]
-		{
-		canbuild1=ARMSOLAR;
-		canbuild2=ARMRELAY;
-		}
-	}
-)";
+// The types' build lists (UnitDef.build_ids), from type 0 on: a count, then that many
+// ids. The vehicle builds the collector and the relay.
+constexpr uint16_t build_lists[] = {0, 2, collector, relay, 0, 0};
 
 // A leading line before any plan applies only once a pass has left the plan
 // flag set; the medium plan halves the relay's weight.

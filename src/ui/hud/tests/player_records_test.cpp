@@ -4,6 +4,7 @@
 #include "check.hpp"
 #include "fixtures.hpp"
 
+#include "oa/data/defs/layout.hpp"
 #include "oa/ui/hud/chat_panel.hpp"
 #include "oa/ui/hud/player_records.hpp"
 
@@ -77,6 +78,34 @@ void slot_reset() {
         *w.world, 3, OA_PLAYER_STATUS_LOCAL, oa::data::campaign::SessionKind::skirmish, kMemory64Mb
     );
     CHECK(std::strcmp(p.name, "Player") == 0 && info->state == OA_PLAYER_STATUS_LOCAL);
+
+    // A computer on a third side is named "Core" by the two names, and by
+    // its own when a profile names three sides.
+    info->side = 2;
+    init_player_slot(
+        *w.world,
+        3,
+        OA_PLAYER_STATUS_COMPUTER,
+        oa::data::campaign::SessionKind::skirmish,
+        kMemory64Mb
+    );
+    CHECK(std::strcmp(p.name, "Core") == 0);
+    oa::data::defs::DataLayout three_sides;
+    three_sides.side_names = {"North", "South", "East"};
+    oa::data::defs::use_data_layout(three_sides);
+    init_player_slot(
+        *w.world,
+        3,
+        OA_PLAYER_STATUS_COMPUTER,
+        oa::data::campaign::SessionKind::skirmish,
+        kMemory64Mb
+    );
+    oa::data::defs::use_data_layout({});
+    CHECK(std::strcmp(p.name, "East") == 0 && std::strcmp(p.second_name, "East") == 0);
+    info->side = 0;
+    init_player_slot(
+        *w.world, 3, OA_PLAYER_STATUS_LOCAL, oa::data::campaign::SessionKind::skirmish, kMemory64Mb
+    );
 
     // A status for another player's machine leaves the info state and
     // memory alone; its name is only copied.

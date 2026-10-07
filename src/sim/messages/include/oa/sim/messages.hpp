@@ -105,8 +105,9 @@ struct Hooks {
     int32_t (*game_kind)(void* context){};
     // Centre the camera on a map pixel.
     void (*center_camera)(void* context, int32_t x, int32_t y, int32_t glide){};
-    /// Names side slot 0 or 1 in an elimination message; null names them
-    /// side_name_arm and side_name_core.
+    /// Names the eliminated player's side (PlayerSetupInfo.side) in an
+    /// elimination message; null names side 0 side_name_arm and every other
+    /// side side_name_core.
     const char* (*side_name)(void* context, uint8_t side){};
     /// Gives the ending of an elimination message in place of
     /// elimination_messages[index] (index 0 to 2), shown as written whatever

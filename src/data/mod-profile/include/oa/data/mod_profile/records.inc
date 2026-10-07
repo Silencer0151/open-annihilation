@@ -496,10 +496,11 @@ struct Identity {
     std::array<int32_t, 2> replay_network_version{3, 1};
     /// identity.display-version: Main-menu version text. 3.1c: v3.1.
     std::string display_version{"v3.1"};
-    /// identity.side-names: Names of the two side slots that the game itself uses for AI player
-    /// names, elimination messages and side-button gadget names (SIDEDATA keeps its own copies for
-    /// everything else). 3.1c: [Arm, Core].
-    std::array<std::string, 2> side_names{"Arm", "Core"};
+    /// identity.side-names: Names of the side slots that the game itself uses for AI player names,
+    /// elimination messages and side-button gadget names (SIDEDATA keeps its own copies for
+    /// everything else): one a side, two to five; every side past the last name takes the last.
+    /// 3.1c: [Arm, Core].
+    std::vector<std::string> side_names{"Arm", "Core"};
     /// Compares every field.
     bool operator==(const Identity&) const = default;
 };

@@ -1533,11 +1533,11 @@ entries:
   identity.side-names:
     kind: identity
     area: sides
-    summary: "Names of the two side slots that the game itself uses for AI player names, elimination messages and side-button gadget names (SIDEDATA keeps its own copies for everything else)."
+    summary: "Names of the side slots that the game itself uses for AI player names, elimination messages and side-button gadget names (SIDEDATA keeps its own copies for everything else): one a side, two to five; every side past the last name takes the last."
     ownership: all-machines
     scope: sim
     key: side-names
-    value: {type: list<string>, length: 2, max-length: 16, baseline: [Arm, Core], scope: sim}
+    value: {type: list<string>, length: [2, 5], max-length: 16, baseline: [Arm, Core], scope: sim}
   layout.archive-patterns.ccx:
     kind: layout
     area: paths

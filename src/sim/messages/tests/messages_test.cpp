@@ -410,6 +410,25 @@ int main() {
     t->game.chat_head = OA_CHAT_LINE_COUNT;
     CHECK(!track_next_reported_unit(*t, h));
     world_destroy(t);
+
+    // A third side's elimination: the hook names it by its own index; without
+    // the hook every side but the first is the Core.
+    World* s = world_create();
+    if (s == nullptr)
+        return 1;
+    set_capacity(s->game, 5);
+    Player& third = s->game.players[2];
+    third.index = 2;
+    third.info = oa_ref_from_index(2);
+    s->player_info[2].side = 2;
+    Hooks by_side = h;
+    by_side.side_name = [](void*, uint8_t side) { return side == 2 ? "East" : "Other"; };
+    post_elimination(*s, third, by_side);
+    CHECK(std::strncmp(message_line(s->game, 0)->text, "East ", 5) == 0);
+    post_elimination(*s, third, h);
+    CHECK(std::strncmp(message_line(s->game, 1)->text, "Core ", 5) == 0);
+    world_destroy(s);
+
     world_destroy(v);
     world_destroy(w);
     if (failures != 0)
