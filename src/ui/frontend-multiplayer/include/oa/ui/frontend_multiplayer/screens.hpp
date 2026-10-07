@@ -227,9 +227,13 @@ void multiplayer_bind_engine_banner(const EngineBanner& banner) noexcept;
 ///
 /// @param version The engine's version as the engine shows it, such as "v0.6.2".
 /// @param developer_mode Developer Mode is on.
+/// @param remote_controlled A program on the machine may control the game
+///        (oa::app::Options::remote_controlled).
 /// @return "[Engine: OpenAnnihilation <version>]", with " DEV MODE" before
-///         the closing bracket while Developer Mode is on
-[[nodiscard]] std::string engine_banner_line(std::string_view version, bool developer_mode);
+///         the closing bracket while Developer Mode is on, and then
+///         " REMOTED" while the game may be remote-controlled
+[[nodiscard]] std::string
+engine_banner_line(std::string_view version, bool developer_mode, bool remote_controlled);
 
 // Receives the lobby when the battle room starts a game (the host's START,
 // or the host's 0x08 on a client) and takes over from the frontend. Without
@@ -271,6 +275,17 @@ void multiplayer_bind_start(StartHandler handler, void* context) noexcept;
 
 /// Returns the interactive panel of the current screen: the stacked dialog when one is open.
 [[nodiscard]] Panel& multiplayer_panel() noexcept;
+
+/// Where the interactive panel's controls lie on the 640x480 canvas.
+struct PanelOffset {
+    int16_t x{}; ///< columns added to a control's x
+    int16_t y{}; ///< rows added to a control's y
+};
+
+/// Returns where the interactive panel (multiplayer_panel) lies on the canvas.
+///
+/// @return the offset its controls' positions take on the canvas
+[[nodiscard]] PanelOffset multiplayer_panel_offset() noexcept;
 
 /// Returns the gadget records of the current base screen as its loader left them.
 [[nodiscard]] const ui::gui_layout::Layout& multiplayer_screen_layout() noexcept;

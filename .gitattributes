@@ -6,3 +6,8 @@
 # them exactly as committed, line endings included, whatever its own
 # line-ending settings.
 /licenses/** -text
+
+# The automation protocol's test frames are compared byte for byte, line
+# feeds and carriage returns included, so no checkout changes their line
+# endings.
+/src/app/automation/tests/vectors/*.bin -text

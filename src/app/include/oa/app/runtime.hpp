@@ -1768,6 +1768,9 @@ class Runtime final : public menu::Host,
     friend struct BuiltinScreens;
     // The check host's entries (check_host.hpp, runtime_check_host.cpp).
     friend struct CheckHostAccess;
+    // The automation host's entries (automation_host.hpp,
+    // runtime_automation_host.cpp).
+    friend struct AutomationHostAccess;
     // Network play's state for one runtime (src/app/netgame/network_play.hpp),
     // which its extension owns and through which its hooks reach the
     // runtime; to be replaced by hooks and declared headers
@@ -1786,10 +1789,11 @@ class Runtime final : public menu::Host,
         build_button, ///< build buttons' +5/-5: + x5
     };
 
-    /// Returns the modifiers for a use: SDL_GetModState(), the pulse a synthetic key carries, and
+    /// Returns the modifiers for a use: the modifier keys held (device_state.hpp: SDL_GetModState()
+    /// and those the automation endpoint holds), the pulse a synthetic key carries, and
     /// SDL_KMOD_LSHIFT when the use's latch is active.
     ///
-    /// Without touch state it is exactly SDL_GetModState(). Every place the engine reads the
+    /// Without touch state it is exactly the modifier keys held. Every place the engine reads the
     /// modifier keys asks this for its own use. [runtime_input_modifiers.cpp]
     ///
     /// @param use what the read is for

@@ -2936,11 +2936,14 @@ void multiplayer_bind_engine_banner(const EngineBanner& banner) noexcept {
     ui().engine_banner = banner;
 }
 
-std::string engine_banner_line(std::string_view version, bool developer_mode) {
+std::string
+engine_banner_line(std::string_view version, bool developer_mode, bool remote_controlled) {
     std::string line = "[Engine: OpenAnnihilation ";
     line += version;
     if (developer_mode)
         line += " DEV MODE";
+    if (remote_controlled)
+        line += " REMOTED";
     line += ']';
     return line;
 }
@@ -3018,6 +3021,11 @@ ConnectState& multiplayer_connect() noexcept {
 
 Panel& multiplayer_panel() noexcept {
     return front().panel;
+}
+
+PanelOffset multiplayer_panel_offset() noexcept {
+    const auto& res = front();
+    return {res.offset_x, res.offset_y};
 }
 
 const ui::gui_layout::Layout& multiplayer_screen_layout() noexcept {

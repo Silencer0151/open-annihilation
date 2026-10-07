@@ -4,6 +4,7 @@
 // Radar interaction, zoom, camera panning and move/patrol orders.
 #include "oa/app/runtime.hpp"
 #include "oa/app/far_view.hpp"
+#include "device_state.hpp"
 #include "oa/core/map_plot.h"
 #include "engine_settings_state.hpp"
 #include "oa/sim/feature_runtime.hpp"
@@ -639,20 +640,19 @@ void Runtime::pan_match_camera() {
     const auto speed =
         match_ != nullptr ? match_->state().game.scroll_speed : preferences_.scroll_speed;
     const double step = frame_pacing::scroll_distance(speed, elapsed_ns);
-    const bool* keys = SDL_GetKeyboardState(nullptr);
     int dx = 0, dz = 0;
     // A --frame-rate run's held scroll is an arrow key.
     if (frame_run_clock_ns_)
         dx += frame_run_scroll_;
     // Only the arrow keys scroll, as in 3.1c: the letter keys stay the
     // game's own commands (A attack, S stop and so on).
-    if (keys[SDL_SCANCODE_LEFT])
+    if (device_state::key_held(SDL_SCANCODE_LEFT))
         --dx;
-    if (keys[SDL_SCANCODE_RIGHT])
+    if (device_state::key_held(SDL_SCANCODE_RIGHT))
         ++dx;
-    if (keys[SDL_SCANCODE_UP])
+    if (device_state::key_held(SDL_SCANCODE_UP))
         --dz;
-    if (keys[SDL_SCANCODE_DOWN])
+    if (device_state::key_held(SDL_SCANCODE_DOWN))
         ++dz;
     // The pointer on the screen's outermost pixels scrolls toward that edge,
     // and in a corner both ways, whatever panel lies under it, as in 3.1c: in

@@ -69,6 +69,10 @@ void apply_filter(
     std::size_t stride,
     uint8_t* out
 ) {
+    if (filter == Filter::none) {
+        std::memcpy(out, row, size);
+        return;
+    }
     for (std::size_t i = 0; i < size; ++i) {
         const int32_t left = i >= stride ? row[i - stride] : 0;
         const int32_t up = previous[i];
@@ -102,10 +106,11 @@ uint64_t filter_cost(const uint8_t* filtered, std::size_t size) {
     return cost;
 }
 
-// Appends one filtered scanline: palette and sub-byte images are left
-// unfiltered, others take the cheapest filter.
+// Appends one filtered scanline: palette and sub-byte images, and every row
+// of a stored file, are left unfiltered, others take the cheapest filter.
 void append_scanline(
     const Header& header,
+    bool stored,
     const uint8_t* row,
     const uint8_t* previous,
     std::size_t size,
@@ -114,7 +119,7 @@ void append_scanline(
 ) {
     const std::size_t stride = filter_stride(header);
     Filter best = Filter::none;
-    if (header.color_type != ColorType::palette && header.bit_depth >= 8) {
+    if (!stored && header.color_type != ColorType::palette && header.bit_depth >= 8) {
         uint64_t best_cost = UINT64_MAX;
         for (uint8_t f = 0; f < k_filter_count; ++f) {
             apply_filter(static_cast<Filter>(f), row, previous, size, stride, candidate.data());
@@ -161,6 +166,10 @@ void gather_row(
     }
 }
 
+// Encodes an image as a PNG file: filtered and compressed as tightly as zlib
+// can, or, stored, unfiltered and in deflate's uncompressed blocks.
+bool write_file(const Image& image, bool stored, std::vector<uint8_t>* out);
+
 } // namespace
 
 uint32_t detail::crc_update(uint32_t crc, const uint8_t* data, std::size_t size) {
@@ -179,6 +188,16 @@ uint32_t detail::chunk_crc(const uint8_t* type_and_data, std::size_t size) {
 }
 
 bool write(const Image& image, std::vector<uint8_t>* out) {
+    return write_file(image, false, out);
+}
+
+bool write_stored(const Image& image, std::vector<uint8_t>* out) {
+    return write_file(image, true, out);
+}
+
+namespace {
+
+bool write_file(const Image& image, bool stored, std::vector<uint8_t>* out) {
     const Header& header = image.header;
     if (!valid_header(header))
         return false;
@@ -210,7 +229,7 @@ bool write(const Image& image, std::vector<uint8_t>* out) {
             const std::size_t image_y = pass.y0 + static_cast<std::size_t>(y) * pass.dy;
             gather_row(image.rows.data() + image_y * row, pass, pass_width, bits, current.data());
             append_scanline(
-                header, current.data(), previous.data(), pass_bytes, candidate, filtered
+                header, stored, current.data(), previous.data(), pass_bytes, candidate, filtered
             );
             std::memcpy(previous.data(), current.data(), pass_bytes);
         }
@@ -223,7 +242,7 @@ bool write(const Image& image, std::vector<uint8_t>* out) {
             &packed_size,
             filtered.data(),
             static_cast<uLong>(filtered.size()),
-            Z_BEST_COMPRESSION
+            stored ? Z_NO_COMPRESSION : Z_BEST_COMPRESSION
         ) != Z_OK)
         return false;
 
@@ -254,5 +273,7 @@ bool write(const Image& image, std::vector<uint8_t>* out) {
     append_chunk(*out, "IEND", nullptr, 0);
     return true;
 }
+
+} // namespace
 
 } // namespace oa::formats::png

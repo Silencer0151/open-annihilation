@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/netgame/socket_host.hpp"
+#include "oa/netgame/stream_socket.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -1117,6 +1118,170 @@ bool resolve_ipv4(const char* name, uint8_t ip[4]) noexcept {
     }
     freeaddrinfo(found);
     return resolved;
+}
+
+// Loopback streams (stream_socket.hpp) ------------------------------------------
+
+namespace {
+
+// Connections a loopback listener holds waiting to be accepted.
+constexpr int stream_backlog = 4;
+// The most bytes one read or write hands the system, which takes an int.
+constexpr std::size_t max_stream_transfer = std::size_t{1} << 30;
+
+/// Writes why a loopback stream failed.
+///
+/// @param[out] error receives the text and a zero byte
+/// @param error_size the bytes `error` holds
+/// @param what the text
+void stream_error(char* error, std::size_t error_size, const char* what) {
+    if (error != nullptr && error_size > 0)
+        std::snprintf(error, error_size, "%s", what);
+}
+
+/// Prepares a loopback stream's socket: non-blocking, and never ending the
+/// program when the other end has gone.
+///
+/// @param fd the socket
+/// @return false when the system refused
+bool prepare_stream(intptr_t fd) {
+    if (!set_nonblocking(fd))
+        return false;
+#ifdef SO_NOSIGPIPE
+    set_option(fd, SOL_SOCKET, SO_NOSIGPIPE, 1);
+#endif
+    return true;
+}
+
+} // namespace
+
+intptr_t stream_listen(
+    Loopback loopback, uint16_t port, uint16_t& bound_port, char* error, std::size_t error_size
+) noexcept {
+    if (!platform_startup()) {
+        stream_error(error, error_size, "the socket subsystem failed to start");
+        return invalid_socket;
+    }
+    const int family = loopback == Loopback::ipv6 ? AF_INET6 : AF_INET;
+    const native_socket s = socket(family, SOCK_STREAM, IPPROTO_TCP);
+#ifdef _WIN32
+    intptr_t fd = s == INVALID_SOCKET ? invalid_socket : static_cast<intptr_t>(s);
+#else
+    intptr_t fd = s < 0 ? invalid_socket : static_cast<intptr_t>(s);
+#endif
+    if (!socket_valid(fd) || !prepare_stream(fd)) {
+        close_socket(&fd);
+        stream_error(error, error_size, "cannot create a socket");
+        return invalid_socket;
+    }
+#ifndef _WIN32
+    // A port given again soon after the last run binds while that run's
+    // connections wait out their close.
+    set_option(fd, SOL_SOCKET, SO_REUSEADDR, 1);
+#endif
+    sockaddr_storage address{};
+    socket_len address_size = 0;
+    if (loopback == Loopback::ipv6) {
+        sockaddr_in6 ipv6{};
+        ipv6.sin6_family = AF_INET6;
+        ipv6.sin6_port = htons(port);
+        ipv6.sin6_addr.s6_addr[15] = 1; // ::1
+        std::memcpy(&address, &ipv6, sizeof ipv6);
+        address_size = sizeof ipv6;
+    } else {
+        sockaddr_in ipv4{};
+        ipv4.sin_family = AF_INET;
+        ipv4.sin_port = htons(port);
+        std::memcpy(&ipv4.sin_addr, this_machine_ip, 4);
+        std::memcpy(&address, &ipv4, sizeof ipv4);
+        address_size = sizeof ipv4;
+    }
+    if (bind(native(fd), reinterpret_cast<const sockaddr*>(&address), address_size) != 0) {
+        close_socket(&fd);
+        stream_error(error, error_size, "the address is taken or cannot be bound");
+        return invalid_socket;
+    }
+    if (listen(native(fd), stream_backlog) != 0) {
+        close_socket(&fd);
+        stream_error(error, error_size, "cannot listen on the address");
+        return invalid_socket;
+    }
+    sockaddr_storage bound{};
+    socket_len bound_size = sizeof bound;
+    if (getsockname(native(fd), reinterpret_cast<sockaddr*>(&bound), &bound_size) != 0) {
+        close_socket(&fd);
+        stream_error(error, error_size, "cannot read the port bound");
+        return invalid_socket;
+    }
+    if (bound.ss_family == AF_INET6) {
+        sockaddr_in6 ipv6{};
+        std::memcpy(&ipv6, &bound, sizeof ipv6);
+        bound_port = ntohs(ipv6.sin6_port);
+    } else {
+        sockaddr_in ipv4{};
+        std::memcpy(&ipv4, &bound, sizeof ipv4);
+        bound_port = ntohs(ipv4.sin_port);
+    }
+    return fd;
+}
+
+intptr_t stream_accept(intptr_t listener) noexcept {
+    if (!socket_valid(listener))
+        return invalid_socket;
+    const native_socket s = accept(native(listener), nullptr, nullptr);
+#ifdef _WIN32
+    intptr_t fd = s == INVALID_SOCKET ? invalid_socket : static_cast<intptr_t>(s);
+#else
+    intptr_t fd = s < 0 ? invalid_socket : static_cast<intptr_t>(s);
+#endif
+    if (!socket_valid(fd))
+        return invalid_socket;
+    if (!prepare_stream(fd)) {
+        close_socket(&fd);
+        return invalid_socket;
+    }
+    set_option(fd, IPPROTO_TCP, TCP_NODELAY, 1);
+    return fd;
+}
+
+std::ptrdiff_t stream_read(intptr_t stream, uint8_t* bytes, std::size_t size) noexcept {
+    if (!socket_valid(stream))
+        return stream_failed;
+    // An empty read would look like the other end's end.
+    if (size == 0)
+        return 0;
+    const auto wanted = static_cast<int>(std::min(size, max_stream_transfer));
+    const auto got = recv(native(stream), reinterpret_cast<char*>(bytes), wanted, 0);
+    if (got > 0)
+        return static_cast<std::ptrdiff_t>(got);
+    if (got == 0)
+        return stream_ended;
+    return would_block() ? 0 : stream_failed;
+}
+
+std::ptrdiff_t stream_write(intptr_t stream, const uint8_t* bytes, std::size_t size) noexcept {
+    if (!socket_valid(stream))
+        return stream_failed;
+    const auto wanted = static_cast<int>(std::min(size, max_stream_transfer));
+    const auto sent =
+        send(native(stream), reinterpret_cast<const char*>(bytes), wanted, send_flags());
+    if (sent >= 0)
+        return static_cast<std::ptrdiff_t>(sent);
+    return would_block() ? 0 : stream_failed;
+}
+
+void stream_finish(intptr_t stream) noexcept {
+    if (!socket_valid(stream))
+        return;
+#ifdef _WIN32
+    (void)shutdown(native(stream), SD_SEND);
+#else
+    (void)shutdown(native(stream), SHUT_WR);
+#endif
+}
+
+void stream_close(intptr_t* stream) noexcept {
+    close_socket(stream);
 }
 
 } // namespace oa::netgame::sock

@@ -4,6 +4,7 @@
 // End-of-game screen over the finished match's Game block. The extension
 // hears the match events it reports.
 #include "oa/app/runtime.hpp"
+#include "device_state.hpp"
 #include "oa/app/game_directory.hpp"
 #include "oa/app/hook_call.hpp"
 #include "oa/ui/decoded.hpp"
@@ -358,7 +359,7 @@ void Runtime::start_endgame() {
     state.host.open_panel = [](void* context) { runtime_of(context).open_end_panel(nullptr); };
     // A finger resting on the screen holds the button as the left button does.
     state.host.button_held = [](void* context) {
-        return (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_LMASK) != 0 ||
+        return (device_state::buttons_held() & SDL_BUTTON_LMASK) != 0 ||
                runtime_of(context).touch_finger_count() != 0;
     };
     state.host.play_sound = [](void* context, const char* name) {

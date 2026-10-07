@@ -1771,7 +1771,10 @@ saves, recordings and network games are unaffected.
   keys asks `input_modifiers(use)` for its own use, so a latch gives Shift
   only to its kind of action: ADD to selecting, QUEUE to orders, placement
   and the queued-order overlays, x5 to build buttons. Without the touch
-  state it is exactly `SDL_GetModState()`. `press_match_key` runs a key with
+  state it is exactly the modifier keys held. Every read of the keys,
+  pointer buttons and modifier keys held goes through `device_state.hpp`,
+  defined here, which adds what the automation endpoint holds down to
+  what SDL's devices hold. `press_match_key` runs a key with
   modifiers held for the call (SELECT ▾'s items), `refresh_pointer_modifiers`
   brings the pointer's key word up to a changed latch, and `play_haptic`
   reaches the platform's haptics. `remap_keypad_enter` turns the keypad's
@@ -2624,9 +2627,10 @@ progress, the team panels' host (a tournament game withholds CONTROL),
 requests to close the window, the label a match's return names in its
 menus, whether the preferences keep the stored password, recordings to
 replay, console commands and checks. Each such library is an extension.
-The engine registers its own, network play ([below](#network-play)); a
-project that builds the game registers further ones after adding the
-engine, each with the function that fills its table:
+The engine registers its own, network play ([below](#network-play)) and
+the automation endpoint ([below](#the-automation-endpoint)); a project
+that builds the game registers further ones after adding the engine, each
+with the function that fills its table:
 
 ```cmake
 oa_add_extension(<target> INIT <function> [SWITCHES <letters>] [GAME_FILES <COMMAND ...>])
@@ -2691,6 +2695,18 @@ also when the runtime's constructor throws, at the point in the runtime's
 teardown where its match is still whole; the runtime is passed only to say
 which one goes. Network play keeps its state for each runtime this way.
 
+Version 12 adds `option_effect::remote_controlled`, the effect of an
+option through which a program on this machine controls the run, as the
+automation endpoint's `--fark` does. The engine sets
+`Options::remote_controlled` for it, and the main loop then runs every
+frame while the window is inactive, so that the extension serves that
+program from its frame hook; without it the loop waits for events there.
+
+Version 13 adds `FrameStage::presented`: the frame hook is called a third
+time each frame, after the frame is drawn and shown, so that an extension
+sees the frame the player saw. Network play does nothing there; the
+automation endpoint answers its frame request.
+
 `app-extension-list` checks each rule of the combined table over two test
 extensions, and `tests/extension/` tests the boundary itself.
 `extension-layout-mismatch` links a unit that sees `Runtime` with members
@@ -2748,6 +2764,21 @@ includes no other engine header, so such a check needs only
 `oa::app::headers` and never a private name of `Runtime`. The check host is
 not part of the extension table, which `OA_EXTENSION_API_VERSION` numbers
 alone.
+
+The automation endpoint reads what the check host does not through the
+automation host (`automation_host.hpp`, `runtime_automation_host.cpp`):
+`automation_host(runtime)` returns a table whose entries read the
+preferences as the game holds them now and the file they live in, the
+running match's Game block, its world and the digest of its state a saved
+game carries, and the controls of the built-in screen shown or the match's
+panel, with the dialog over them (names, kinds, places on the canvas,
+state, text and a list's rows); through which the endpoint holds keys and
+pointer buttons down for the game's reads of what is held
+(`device_state.hpp`), since the input it hands the game comes through
+SDL's event queue alone; and which have the game copy each frame it
+presents, just before it shows it, into a surface the endpoint keeps,
+until the endpoint stops it. Like the check host it is not part of the
+extension table.
 
 An extension reaches `oa-game` only through these hooks and declared
 headers. When it needs something the table does not offer, add a hook or
@@ -2818,9 +2849,30 @@ Developer Mode lays over the profile reach them; the profile the rules are
 played by is one object for the whole run, which each change is copied
 into, so that what is bound to it stays valid. It binds the engine's line
 to the battle room (`multiplayer_bind_engine_banner`): `[Engine: OpenAnnihilation v<version>]`,
-or with ` DEV MODE` before the bracket while `Runtime::developer_mode` says
-Developer Mode is on, which the battle room says as the local player's chat
+with ` DEV MODE` before the bracket while `Runtime::developer_mode` says
+Developer Mode is on, and then ` REMOTED` while a program on this machine
+may control the game (`Options::remote_controlled`, read through
+`runtime_options`), which the battle room says as the local player's chat
 line as it is entered and again each time the line changes there, a
 deliberate difference from 3.1c.
 [docs/development/testing.md](../../docs/development/testing.md#network-play)
 lists its tests.
+
+## The automation endpoint
+
+`automation/` is the automation endpoint's extension, `oa-app-automation`,
+which the engine always builds and registers after network play's. Without
+`--fark` it does nothing: no socket is opened and no file written. With
+it, a program on this machine drives the game through a loopback TCP
+address and the automation protocol: it reads the screen shown, its
+controls, the preferences, the frames the game presents, the running
+match and the battle room, is sent events as they change, hands the game
+keys, text, pointer and finger events through SDL's event queue as a
+device's, and quits the game as a player closing its window does. The
+endpoint is served from the frame hook on the main thread, never waiting,
+and changes nothing of the simulation. While `--fark` is on, the battle
+room's engine line ends in ` REMOTED`, so that every player there knows a
+program may control this machine's game.
+[automation/README.md](automation/README.md) describes the options, the
+protocol and the tests, and [docs/automation.md](../../docs/automation.md)
+the endpoint for those who write a program that drives the game.

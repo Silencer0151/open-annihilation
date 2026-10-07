@@ -6,6 +6,7 @@
 // received marker, drawing the marks, and the batches network play carries.
 
 #include "oa/app/runtime.hpp"
+#include "device_state.hpp"
 #include "oa/formats/fnt.hpp"
 #include "oa/present/game_text.hpp"
 #include "oa/present/typed_text.hpp"
@@ -38,10 +39,7 @@ constexpr std::size_t kMarkerTextLimit = 64;
 constexpr int32_t kMarkerTextFallbackRows = 12;
 
 bool whiteboard_key_held() {
-    int count = 0;
-    const bool* keys = SDL_GetKeyboardState(&count);
-    return keys != nullptr && static_cast<int>(kWhiteboardScancode) < count &&
-           keys[kWhiteboardScancode];
+    return device_state::key_held(kWhiteboardScancode);
 }
 
 } // namespace

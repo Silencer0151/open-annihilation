@@ -886,7 +886,7 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/runtime_kill_board.cpp src/app/runtime_frontend_controls_check.cpp
   src/app/runtime_briefing_narration_check.cpp
   src/app/runtime_build_site_check.cpp src/app/runtime_multiplayer_check.cpp
-  src/app/runtime_check_host.cpp src/app/check_host_input.cpp
+  src/app/runtime_check_host.cpp src/app/check_host_input.cpp src/app/runtime_automation_host.cpp
   src/app/runtime_notices.cpp src/app/runtime_notice_check.cpp src/app/web_link.cpp
   src/app/runtime_user_folder.cpp src/app/runtime_user_folder_check.cpp
   src/app/runtime_mod_switch_check.cpp
@@ -2566,6 +2566,15 @@ add_subdirectory(src/session/demo)
 add_subdirectory(src/app/netgame)
 if(TARGET oa-app-netgame)
   oa_add_extension(oa-app-netgame INIT oa_extension_init_netgame SWITCHES ehnpt)
+endif()
+# The automation endpoint: the automation protocol's codec, and the
+# endpoint a program on this machine drives the game through, oa-game's
+# extension oa-app-automation, which takes --fark, --fark-address and
+# --fark-file and does nothing without --fark. Registered after network
+# play's, so that it comes after it in the extension list.
+add_subdirectory(src/app/automation)
+if(TARGET oa-app-automation)
+  oa_add_extension(oa-app-automation INIT oa_extension_init_automation)
 endif()
 # The tests' view of the installation network play's tests read
 # (oa/test/netgame_installs.hpp), and network play's launch bound to a

@@ -61,7 +61,7 @@ namespace {
 // The version of the extension table's contract the recorder follows, and
 // the hooks the table holds after its context at that version. A change to
 // the table raises OA_EXTENSION_API_VERSION (extension.hpp); both follow it.
-constexpr uint32_t kExtensionApiVersionRecorded = 11;
+constexpr uint32_t kExtensionApiVersionRecorded = 13;
 constexpr std::size_t kHookCount = 40;
 static_assert(
     extension_api_version == kExtensionApiVersionRecorded,
@@ -180,6 +180,8 @@ const char* stage_name(FrameStage stage) {
         return "pump";
     case FrameStage::after_pump:
         return "after_pump";
+    case FrameStage::presented:
+        return "presented";
     }
     return "unknown";
 }

@@ -155,8 +155,14 @@
 /// handler entry that throws stops the start with its message; and the
 /// hooks that must not throw, now the ReplayHooks' too, are reported when
 /// they do. Version 11 adds release_runtime, through which an extension
-/// frees what it keeps for a runtime as that runtime is destroyed.
-#define OA_EXTENSION_API_VERSION 11
+/// frees what it keeps for a runtime as that runtime is destroyed. Version
+/// 12 adds option_effect::remote_controlled, the effect of an option that
+/// lets a program on this machine control the run through the extension:
+/// the engine then keeps the main loop running every frame while the window
+/// is inactive, and Options::remote_controlled says so. Version 13 adds
+/// FrameStage::presented: the frame hook is called a third time each frame,
+/// after the frame is drawn and shown.
+#define OA_EXTENSION_API_VERSION 13
 
 namespace oa {
 struct Game;
@@ -213,6 +219,10 @@ namespace option_effect {
 inline constexpr uint32_t headless_check = 1;
 inline constexpr uint32_t skip_intro = 2;
 inline constexpr uint32_t unattended = 4; // a scripted run: nobody answers a dialog
+// A program on this machine may control the run through the extension,
+// which serves it from its frame hook: the main loop runs every frame while
+// the window is inactive, as it does for a live multiplayer game.
+inline constexpr uint32_t remote_controlled = 8;
 } // namespace option_effect
 
 // Text an extension may word in place of the engine's (Extension::text).
@@ -238,10 +248,11 @@ enum class MultiplayerSelection : uint8_t {
     taken,       // the extension has taken the game over; the engine does nothing more
 };
 
-// The two points of each frame where the extension works.
+// The three points of each frame where the extension works.
 enum class FrameStage : uint8_t {
     pump,       // charged to the frame profile's pump bucket
     after_pump, // after that bucket closes, before the match clock runs
+    presented,  // after the frame is drawn and shown in the window
 };
 
 // Extension::state bits; all clear without an extension.
@@ -607,7 +618,10 @@ struct Extension {
     /// Called every frame of the main loop and of the checks that step it,
     /// including every frame of a pause, once with FrameStage::pump and then
     /// once with after_pump, before the match clock runs and the frame is
-    /// drawn.
+    /// drawn, and once with presented after the frame is drawn and shown.
+    /// A frame that ends the run before it is drawn has no presented stage;
+    /// one the game does not show, as while its device is lost, has it all
+    /// the same.
     ///
     /// @param context Extension::context
     /// @param[in,out] runtime the running app

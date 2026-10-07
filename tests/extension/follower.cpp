@@ -70,6 +70,22 @@ const char* phase_name(RunPhase phase) {
     return "unknown";
 }
 
+/// Returns the name of a FrameStage.
+///
+/// @param stage the stage
+/// @return its enumerator's name
+const char* stage_name(FrameStage stage) {
+    switch (stage) {
+    case FrameStage::pump:
+        return "pump";
+    case FrameStage::after_pump:
+        return "after_pump";
+    case FrameStage::presented:
+        return "presented";
+    }
+    return "unknown";
+}
+
 void fill(Extension* table) {
     table->take_option = [](void*, const char*, const OptionValues&, uint32_t&) {
         count("take_option");
@@ -128,9 +144,7 @@ void fill(Extension* table) {
         count("state");
         return 0;
     };
-    table->frame = [](void*, Runtime&, FrameStage stage) {
-        count("frame", stage == FrameStage::pump ? "pump" : "after_pump");
-    };
+    table->frame = [](void*, Runtime&, FrameStage stage) { count("frame", stage_name(stage)); };
     table->simulation_step = [](void*, Runtime&) {
         count("simulation_step");
         return false;

@@ -8,7 +8,8 @@
 // applies the two row transforms those pages use: 16-bit samples cut to their
 // high byte and 1/2/4-bit samples widened to one unscaled byte each. The
 // writer turns packed rows back into a file, which the tools use for image
-// output.
+// output; its stored form, which the automation endpoint uses for the frames
+// it hands out, trades the file's size for the time it takes to write.
 //
 // Reading is split in two so that a caller can act between the steps:
 // read_info takes the chunks before the image data, read_image decodes the
@@ -155,5 +156,15 @@ struct Image {
 /// @param[out] out receives the file bytes
 /// @return false when the header, palette or row data is invalid
 bool write(const Image& image, std::vector<uint8_t>* out);
+
+/// Encodes an image as a PNG file without filtering its rows or compressing
+/// them: the image data is stored as deflate's uncompressed blocks, so the
+/// file takes little more than one pass over the pixels to write and is a
+/// little larger than they are.
+///
+/// @param image header, palette and packed rows
+/// @param[out] out receives the file bytes
+/// @return false when the header, palette or row data is invalid
+bool write_stored(const Image& image, std::vector<uint8_t>* out);
 
 } // namespace oa::formats::png

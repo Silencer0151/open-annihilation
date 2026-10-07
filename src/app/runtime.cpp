@@ -534,8 +534,9 @@ int Runtime::run() {
            (!options_.frame_limit || frames < *options_.frame_limit)) {
         park_music_while_inactive();
         SDL_Event event{};
-        // A frame-limited run is scripted and must finish without focus.
-        const bool live = keeps_running_inactive();
+        // A frame-limited run is scripted and must finish without focus; a
+        // remote-controlled run is served from the frame hooks, every frame.
+        const bool live = keeps_running_inactive() || options_.remote_controlled;
         if (!options_.frame_limit &&
             oa::platform::application_waits_for_events(application_active_, live, false)) {
             // While this copy takes a second start's mod packages, it looks
@@ -698,6 +699,9 @@ void Runtime::idle_tick() {
     capture_film_frame();
     if (profiled && match_)
         mark_profile(OA_PROFILE_RENDER_STATIC);
+    // The extensions see the frame as it was shown, outside the frame
+    // profile's drawing bucket.
+    call_hook_or_raise<&Extension::frame>(extension_, *this, FrameStage::presented);
     // The frame just drawn showed the outcome's title; the end screen follows
     // on its own.
     if (screen_ == Screen::match && match_finished_)

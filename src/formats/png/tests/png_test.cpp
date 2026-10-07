@@ -806,6 +806,53 @@ void test_bad_filter_and_stream() {
     CHECK((log.errors == std::vector<std::string>{"Decompression error"}));
 }
 
+// The stored form reads back as written, with every row unfiltered and the
+// image data in deflate's uncompressed blocks, where the default form
+// filters and compresses the same smooth picture to a fraction of it.
+void test_stored_form() {
+    const Header header{40, 30, 8, ColorType::rgb, Interlace::none};
+    const std::size_t row = row_bytes(header, {});
+    std::vector<uint8_t> rows(row * header.height);
+    for (uint32_t y = 0; y < header.height; ++y)
+        for (uint32_t x = 0; x < header.width; ++x) {
+            uint8_t* pixel = rows.data() + y * row + x * 3;
+            pixel[0] = static_cast<uint8_t>(x * 6);
+            pixel[1] = static_cast<uint8_t>(y * 8);
+            pixel[2] = static_cast<uint8_t>(x + y);
+        }
+    std::vector<uint8_t> stored;
+    CHECK(write_stored(Image{header, {}, rows}, &stored));
+    Log log;
+    const Decoded d = decode(stored, {}, &log);
+    CHECK(d.info_ok && d.progress == Progress::end);
+    CHECK(log.errors.empty() && log.warnings.empty());
+    CHECK(d.rows == rows);
+
+    std::vector<uint8_t> image_data;
+    for (const RawChunk& chunk : split(stored))
+        if (chunk.type == "IDAT")
+            image_data.insert(image_data.end(), chunk.data.begin(), chunk.data.end());
+    // The zlib stream's header says it was written without compression.
+    constexpr uint8_t k_zlib_level_bits = 0xc0;
+    CHECK(image_data.size() >= 2 && (image_data[1] & k_zlib_level_bits) == 0);
+    CHECK(image_data.size() > rows.size() + header.height);
+    std::vector<uint8_t> filtered(rows.size() + header.height);
+    uLongf filtered_size = static_cast<uLongf>(filtered.size());
+    CHECK(
+        uncompress(
+            filtered.data(),
+            &filtered_size,
+            image_data.data(),
+            static_cast<uLong>(image_data.size())
+        ) == Z_OK
+    );
+    CHECK(filtered_size == filtered.size());
+    for (uint32_t y = 0; y < header.height; ++y)
+        CHECK(filtered[y * (row + 1)] == static_cast<uint8_t>(detail::Filter::none));
+
+    CHECK(encode(header, rows).size() * 4 < stored.size());
+}
+
 void test_writer_rejects_invalid_images() {
     std::vector<uint8_t> out;
     const std::vector<uint8_t> rows(8);
@@ -816,6 +863,8 @@ void test_writer_rejects_invalid_images() {
     CHECK(!write(Image{{0, 2, 8, ColorType::grey, Interlace::none}, {}, rows}, &out));
     CHECK(write(Image{{2, 4, 8, ColorType::grey, Interlace::none}, {}, rows}, &out));
     CHECK(has_signature(out) && !has_signature(std::span<const uint8_t>(out.data(), 7)));
+    CHECK(!write_stored(Image{{2, 2, 8, ColorType::palette, Interlace::none}, {}, rows}, &out));
+    CHECK(!write_stored(Image{{2, 2, 8, ColorType::grey, Interlace::none}, {}, rows}, &out));
 }
 
 } // namespace
@@ -832,6 +881,7 @@ int main() {
     test_chunk_message_format();
     test_partial_image_data();
     test_bad_filter_and_stream();
+    test_stored_form();
     test_writer_rejects_invalid_images();
     if (g_failures != 0) {
         std::fprintf(stderr, "%d failure(s)\n", g_failures);

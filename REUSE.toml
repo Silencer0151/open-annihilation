@@ -91,6 +91,13 @@ path = "src/audio/tests/data/**"
 SPDX-FileCopyrightText = "The Open Annihilation Authors; see COPYRIGHT"
 SPDX-License-Identifier = "GPL-3.0-only"
 
+# The automation protocol's test frames, which make_vectors.py beside them
+# writes and explains.
+[[annotations]]
+path = "src/app/automation/tests/vectors/**.bin"
+SPDX-FileCopyrightText = "The Open Annihilation Authors; see COPYRIGHT"
+SPDX-License-Identifier = "GPL-3.0-only"
+
 # The changes the build makes to the pinned SDL release (tools/sdl-patches).
 # Each patch holds lines of the SDL file it changes, whose authors that file
 # names, and the change, which the project's authors offer to SDL under

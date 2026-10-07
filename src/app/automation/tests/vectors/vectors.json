@@ -1,0 +1,271 @@
+{
+ "vectors": [
+  {
+   "file": "hello.bin",
+   "why": "a client's hello",
+   "expect": [
+    {
+     "frame": {
+      "route": "-",
+      "json_text": "{\"id\":1,\"op\":\"hello\",\"client\":\"check\",\"versions\":[1],\"token\":\"5f2c\u2026\"}",
+      "payload_len": 0,
+      "payload_crc32": "00000000"
+     }
+    }
+   ]
+  },
+  {
+   "file": "key.bin",
+   "why": "a request (header AUTO/1 game 37 0 4ae1fb5a)",
+   "expect": [
+    {
+     "frame": {
+      "route": "game",
+      "json_text": "{\"id\":7,\"op\":\"key\",\"keys\":[\"Return\"]}",
+      "payload_len": 0,
+      "payload_crc32": "00000000"
+     }
+    }
+   ]
+  },
+  {
+   "file": "ping-empty.bin",
+   "why": "a request without a payload (CRC 3a7a3fac)",
+   "expect": [
+    {
+     "frame": {
+      "route": "-",
+      "json_text": "{\"id\":1,\"op\":\"ping\"}",
+      "payload_len": 0,
+      "payload_crc32": "00000000"
+     }
+    }
+   ]
+  },
+  {
+   "file": "payload.bin",
+   "why": "an answer with a 1 KiB payload",
+   "expect": [
+    {
+     "frame": {
+      "route": "oa",
+      "json_text": "{\"id\":9,\"ok\":true,\"t\":81234567,\"image\":{\"format\":\"bmp\",\"width\":16,\"height\":16}}",
+      "payload_len": 1024,
+      "payload_crc32": "6fea9368"
+     }
+    }
+   ]
+  },
+  {
+   "file": "two-frames.bin",
+   "why": "two frames back to back",
+   "expect": [
+    {
+     "frame": {
+      "route": "game",
+      "json_text": "{\"id\":2,\"op\":\"wait\",\"label\":\"the battle room\",\"until\":{\"state\":\"screen\",\"equals\":\"mp_battleroom\"}}",
+      "payload_len": 0,
+      "payload_crc32": "00000000"
+     }
+    },
+    {
+     "frame": {
+      "route": "game",
+      "json_text": "{\"id\":3,\"ok\":true,\"t\":61002113,\"met\":true,\"after_ms\":7310}",
+      "payload_len": 3,
+      "payload_crc32": "0854897f"
+     }
+    }
+   ]
+  },
+  {
+   "file": "noise-then-frame.bin",
+   "why": "37 bytes of noise, then a frame",
+   "expect": [
+    {
+     "bad_frame": {
+      "reason": "noise",
+      "skipped": 37
+     }
+    },
+    {
+     "frame": {
+      "route": "-",
+      "json_text": "{\"id\":1,\"op\":\"ping\"}",
+      "payload_len": 0,
+      "payload_crc32": "00000000"
+     }
+    }
+   ]
+  },
+  {
+   "file": "bad-crc.bin",
+   "why": "a frame with one payload bit flipped, then a good frame",
+   "expect": [
+    {
+     "bad_frame": {
+      "reason": "crc",
+      "skipped": 168
+     }
+    },
+    {
+     "frame": {
+      "route": "oa",
+      "json_text": "{\"id\":7,\"op\":\"key\",\"keys\":[\"Return\"]}",
+      "payload_len": 0,
+      "payload_crc32": "00000000"
+     }
+    }
+   ]
+  },
+  {
+   "file": "too-long.bin",
+   "why": "a header announcing a 2 MiB JSON part and the start of its body, then a frame",
+   "expect": [
+    {
+     "bad_frame": {
+      "reason": "too_long",
+      "skipped": 121
+     }
+    },
+    {
+     "frame": {
+      "route": "oa",
+      "json_text": "{\"id\":1,\"op\":\"ping\"}",
+      "payload_len": 0,
+      "payload_crc32": "00000000"
+     }
+    }
+   ]
+  },
+  {
+   "file": "utf8.bin",
+   "why": "a chat line in Chinese, a player name with an accent, and escapes",
+   "expect": [
+    {
+     "frame": {
+      "route": "game",
+      "json_text": "{\"id\":5,\"op\":\"type\",\"text\":\"\u4f60\u597d\uff0c\u4e16\u754c hello\",\"player\":\"Ren\u00e9e\",\"escaped\":\"Ren\\u00e9e \\ud83d\\ude00 \\\"q\\\" \\\\ \\n\"}",
+      "payload_len": 0,
+      "payload_crc32": "00000000",
+      "strings": {
+       "text": "\u4f60\u597d\uff0c\u4e16\u754c hello",
+       "player": "Ren\u00e9e",
+       "escaped": "Ren\u00e9e \ud83d\ude00 \"q\" \\ \n"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "file": "replay.bin",
+   "why": "the same request twice in a row",
+   "expect": [
+    {
+     "frame": {
+      "route": "echo",
+      "json_text": "{\"id\":7,\"op\":\"echo\",\"text\":\"once\"}",
+      "payload_len": 0,
+      "payload_crc32": "00000000"
+     }
+    },
+    {
+     "frame": {
+      "route": "echo",
+      "json_text": "{\"id\":7,\"op\":\"echo\",\"text\":\"once\"}",
+      "payload_len": 0,
+      "payload_crc32": "00000000"
+     }
+    }
+   ]
+  },
+  {
+   "file": "nested-route.bin",
+   "why": "a route of two parts",
+   "expect": [
+    {
+     "frame": {
+      "route": "relay/echo",
+      "json_text": "{\"id\":8,\"op\":\"echo\",\"text\":\"through a relay\"}",
+      "payload_len": 0,
+      "payload_crc32": "00000000"
+     }
+    }
+   ]
+  },
+  {
+   "file": "bad-header.bin",
+   "why": "malformed header lines, then a frame",
+   "expect": [
+    {
+     "bad_frame": {
+      "reason": "header",
+      "skipped": 31
+     }
+    },
+    {
+     "frame": {
+      "route": "-",
+      "json_text": "{\"id\":1,\"op\":\"ping\"}",
+      "payload_len": 0,
+      "payload_crc32": "00000000"
+     }
+    }
+   ]
+  },
+  {
+   "file": "noise-glued.bin",
+   "why": "stray text with no line end right before a frame",
+   "expect": [
+    {
+     "bad_frame": {
+      "reason": "noise",
+      "skipped": 28
+     }
+    },
+    {
+     "frame": {
+      "route": "-",
+      "json_text": "{\"id\":1,\"op\":\"ping\"}",
+      "payload_len": 0,
+      "payload_crc32": "00000000"
+     }
+    }
+   ]
+  },
+  {
+   "file": "stalled.bin",
+   "why": "a frame cut off before its payload ends, at the end of the stream",
+   "expect": [
+    {
+     "frame": {
+      "route": "-",
+      "json_text": "{\"id\":1,\"op\":\"ping\"}",
+      "payload_len": 0,
+      "payload_crc32": "00000000"
+     }
+    },
+    {
+     "bad_frame": {
+      "reason": "stalled",
+      "skipped": 150
+     }
+    }
+   ]
+  },
+  {
+   "file": "empty-json.bin",
+   "why": "a frame with an empty JSON part, which the framing allows",
+   "expect": [
+    {
+     "frame": {
+      "route": "-",
+      "json_text": "",
+      "payload_len": 0,
+      "payload_crc32": "00000000"
+     }
+    }
+   ]
+  }
+ ]
+}

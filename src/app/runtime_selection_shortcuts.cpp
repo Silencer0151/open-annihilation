@@ -5,6 +5,7 @@
 // double-click, Ctrl+S, Ctrl+B, Ctrl+F and the W, B and Y drag-box filters.
 
 #include "oa/app/runtime.hpp"
+#include "device_state.hpp"
 #include "oa/sim/selection/shortcuts.hpp"
 
 #include <array>
@@ -23,9 +24,7 @@ constexpr SDL_Scancode kLineBuildScancode = SDL_SCANCODE_X;
 
 /// Tells whether a scancode is held now.
 bool scancode_held(SDL_Scancode code) {
-    int count = 0;
-    const bool* keys = SDL_GetKeyboardState(&count);
-    return keys != nullptr && static_cast<int>(code) < count && keys[code];
+    return device_state::key_held(code);
 }
 
 } // namespace

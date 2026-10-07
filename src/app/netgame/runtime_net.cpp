@@ -1733,15 +1733,18 @@ void NetworkPlay::net_bind_multiplayer() {
              return static_cast<Runtime*>(context)->translate_ui(interface_text);
          }}
     );
-    // Every battle room is told which engine this machine runs, and whether
-    // Developer Mode is on.
-    mp::multiplayer_bind_engine_banner(
-        {&runtime_, [](void* context) {
-             return mp::engine_banner_line(
-                 kEngineVersionText, static_cast<const Runtime*>(context)->developer_mode()
-             );
-         }}
-    );
+    // Every battle room is told which engine this machine runs, whether
+    // Developer Mode is on, and whether a program on this machine may
+    // control the game.
+    mp::multiplayer_bind_engine_banner({&runtime_, [](void* context) {
+                                            const auto& runtime =
+                                                *static_cast<const Runtime*>(context);
+                                            return mp::engine_banner_line(
+                                                kEngineVersionText,
+                                                runtime.developer_mode(),
+                                                runtime_options(runtime).remote_controlled
+                                            );
+                                        }});
 }
 
 void NetworkPlay::bind_profile_rules() {

@@ -649,6 +649,11 @@ struct Options {
     // frame limits, snapshots, and the extension's): nobody is there to answer
     // a dialog.
     bool unattended = false;
+    // An extension's option lets a program on this machine control the run
+    // (option_effect::remote_controlled): the main loop runs every frame
+    // while the window is inactive, and the battle room says the run can be
+    // remote-controlled.
+    bool remote_controlled = false;
     // On Windows, a player's run without the -d switch opens its window full
     // screen; unattended runs and video captures keep a window.
     bool start_full_screen = false;

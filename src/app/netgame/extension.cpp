@@ -54,7 +54,7 @@
 // The version of the engine's extension table these hooks follow. A build
 // against a table of another version stops here until the engine's change
 // has been read and the hooks follow it.
-constexpr uint32_t kExtensionApiVersionFollowed = 11;
+constexpr uint32_t kExtensionApiVersionFollowed = 13;
 static_assert(
     oa::app::extension_api_version == kExtensionApiVersionFollowed,
     "the engine's extension table changed: follow its change, then raise "
@@ -962,7 +962,7 @@ struct RuntimeExtension {
     ///              profile's rules again once Developer Mode changes them
     ///              and Unicode chat as it is now, then runs the network
     ///              match's frame; after_pump applies
-    ///              the demo's recorded speed.
+    ///              the demo's recorded speed; presented does nothing.
     static void frame(void* /*context*/, Runtime& runtime, FrameStage stage) {
         if (stage == FrameStage::pump) {
             observe_close_handlers(runtime);
@@ -974,7 +974,7 @@ struct RuntimeExtension {
             NetworkPlay::of(runtime).follow_profile_rules();
             NetworkPlay::of(runtime).follow_unicode_chat();
             NetworkPlay::of(runtime).net_frame();
-        } else {
+        } else if (stage == FrameStage::after_pump) {
             NetworkPlay::of(runtime).demo_frame();
         }
     }

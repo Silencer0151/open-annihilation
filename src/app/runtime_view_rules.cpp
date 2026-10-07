@@ -6,6 +6,7 @@
 #include "oa/app/game_directory.hpp"
 #include "oa/app/runtime.hpp"
 #include "oa/app/view_rules.hpp"
+#include "device_state.hpp"
 #include "match_models.hpp"
 #include "oa/platform/files.hpp"
 #include "oa/formats/objects3d.hpp"
@@ -110,10 +111,7 @@ bool Runtime::view_key_held(uint32_t code) const {
         return (modifiers & SDL_KMOD_CTRL) != 0;
     if (key == SDLK_LSHIFT || key == SDLK_RSHIFT)
         return (modifiers & SDL_KMOD_SHIFT) != 0;
-    int count = 0;
-    const bool* keys = SDL_GetKeyboardState(&count);
-    const auto scancode = SDL_GetScancodeFromKey(key, nullptr);
-    return keys != nullptr && scancode > SDL_SCANCODE_UNKNOWN && scancode < count && keys[scancode];
+    return device_state::key_held(SDL_GetScancodeFromKey(key, nullptr));
 }
 
 std::optional<Runtime::PendingBuildSite> Runtime::snapped_build_site(float x, float y) const {

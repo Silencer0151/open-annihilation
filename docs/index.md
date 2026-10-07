@@ -59,6 +59,11 @@ Every document in the repository, by what you want to do.
   `--generate-script`, rendering it to video with its sound with
   `--render-script`, the script format, the files a render writes, and what
   stays the same on every platform.
+- [automation.md](automation.md): the automation endpoint, through which a
+  program on the same machine drives the game and watches it: `--fark`,
+  `--fark-address` and `--fark-file`, connecting with the token, the
+  requests, input through the event queue, events, what it never does,
+  and the ` REMOTED` line in the battle room.
 - [mods/README.md](mods/README.md): mod support: installing a mod in a mod
   folder or as a copied install, choosing it in the settings or with
   `--mod-dir`, network play and saves under a mod, and the tables of every
@@ -190,6 +195,10 @@ Platform and application:
 - [card command lists](../src/app/card/README.md): what a frame asks the
   graphics card to draw, and the executor that runs it on SDL's renderer,
   for the Full tier.
+- [automation endpoint](../src/app/automation/README.md): `--fark`, the
+  loopback service a program on the same machine drives the game through
+  by its screens' controls and device input, and the automation protocol's
+  frames.
 
 Modules without a README are described by the comments at the top of their
 public headers.

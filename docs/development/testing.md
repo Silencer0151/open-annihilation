@@ -443,6 +443,33 @@ names, these run the game headless:
 the path a watching machine receives a match on; with `--headless-check`
 and `--match-ticks N` it replays without a window.
 
+### The automation endpoint
+
+The automation endpoint (`--fark`, [src/app/automation](../../src/app/automation/README.md))
+is always built and tested. `automation-protocol` reads the protocol's
+test vectors, kept in `src/app/automation/tests/vectors`, and malformed
+input; `automation-protocol-vectors` checks that the vectors are the ones
+their `make_vectors.py` writes; `automation-options` checks the options
+and the combinations refused; `automation-input` reads the device events
+of input requests and refuses those that cannot be read; and
+`automation-reports` checks what the endpoint reports of a match and the
+battle room, and its events, over records it builds. Over the
+installation `OA_GAME_DIR` names, `native-automation-menus`
+(`tools/check_native_automation.py`) starts the game with `--fark` on the
+dummy drivers and drives it through the endpoint on the main menu, its
+controls and a click on SINGLE among it; `native-automation-input`
+(`tools/check_native_automation_input.py`) holds back a client that sends
+input faster than the game takes it, types an address into the TCP/IP
+dialog's field and scrolls a skirmish's camera with an arrow key the
+endpoint holds down; `native-automation-frame`
+(`tools/check_native_automation_frame.py`) asks the game on the main menu
+for the frames it presents, in a 640x480 window and in a 1280x720 one,
+and checks them against the frame it composed; and
+`native-automation-digest` (`tools/check_native_automation_digest.py`)
+plays a recorded network game back in the main loop with and without the
+endpoint, a client reading the match and every event at every frame, and
+requires the same trace stream.
+
 ### The renderer
 
 The game makes its renderer by walking SDL's render drivers and makes it

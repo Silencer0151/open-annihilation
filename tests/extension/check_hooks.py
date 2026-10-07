@@ -165,7 +165,7 @@ RUNS = {
             ["run_mode headless", "close_requested", "follower.order run_mode"], game=True,
             output="recorder: check host, headless:"),
         Run("main-menu-frames", ["--game-dir", "{game}", "--skip-intro", "--mute", "--frames", "30"],
-            ["start_scene", "frame pump", "frame after_pump", "shutdown", "state",
+            ["start_scene", "frame pump", "frame after_pump", "frame presented", "shutdown", "state",
              "follower.order shutdown"], game=True, dummy=True),
         Run("multiplayer-menu", ["--game-dir", "{game}", "--skip-intro", "--mute", "--check-multiplayer-menu"],
             ["check_multiplayer_menu", "select_multiplayer"], game=True, dummy=True,

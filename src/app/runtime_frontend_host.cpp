@@ -3,6 +3,7 @@
 
 // Frontend dispatcher, preferences, map list and main-menu host services.
 #include "oa/app/runtime.hpp"
+#include "device_state.hpp"
 #include "oa/app/mod_profile_loader.hpp"
 #include "oa/app/hook_call.hpp"
 #include "oa/ui/decoded.hpp"
@@ -559,8 +560,8 @@ uint32_t Runtime::find_disc(menu::Disc disc) {
 }
 
 int16_t Runtime::shift_key_state() {
-    const auto* keys = SDL_GetKeyboardState(nullptr);
-    return keys != nullptr && (keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT])
+    return device_state::key_held(SDL_SCANCODE_LSHIFT) ||
+                   device_state::key_held(SDL_SCANCODE_RSHIFT)
                ? static_cast<int16_t>(-1)
                : 0;
 }

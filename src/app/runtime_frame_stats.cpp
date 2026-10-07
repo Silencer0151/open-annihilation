@@ -7,6 +7,7 @@
 // frame's time, and the "+stats" overlay of frame, tick, draw and present
 // times and the latest frames' graph, with its console check.
 #include "oa/app/runtime.hpp"
+#include "device_state.hpp"
 #include "frame_stats_panel.hpp"
 #include "graphics_report.hpp"
 #include "match_clock.hpp"
@@ -276,7 +277,7 @@ void Runtime::pace_next_frame(bool& running) {
     // held, is a held button: hold timers, ghost drags and auto-scroll need
     // the full rate.
     activity.input_recent = (last_input_ns_ != 0 && now - last_input_ns_ < kInputActivityNs) ||
-                            SDL_GetMouseState(nullptr, nullptr) != 0 || touch_finger_count() != 0 ||
+                            device_state::buttons_held() != 0 || touch_finger_count() != 0 ||
                             PadAccess::input_held(*this);
     activity.unattended = options_.unattended;
     paced_frames_per_second_ = paced_frame_rate(options_.max_frames_per_second, activity);

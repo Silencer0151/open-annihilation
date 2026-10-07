@@ -687,11 +687,14 @@ bool host_battleroom(Driver& d, const char* game, const char* nickname) {
 /// Whether Developer Mode is on, as the engine's line the test binds says.
 bool banner_developer_mode = false;
 
+/// Whether the game may be remote-controlled, as the engine's line the test binds says.
+bool banner_remote_controlled = false;
+
 /// Returns the engine's line the test binds.
 ///
 /// @return the line, at version v9.8.7
 std::string banner_line(void*) {
-    return mp::engine_banner_line("v9.8.7", banner_developer_mode);
+    return mp::engine_banner_line("v9.8.7", banner_developer_mode, banner_remote_controlled);
 }
 
 /// Counts the battle room's chat lines that read as a text.
@@ -729,14 +732,26 @@ int32_t chat_records(std::string_view text) {
 /// once as it is entered and again whenever the line changes there.
 void check_engine_banner(Driver& d) {
     expect(
-        mp::engine_banner_line("v9.8.7", false) == "[Engine: OpenAnnihilation v9.8.7]",
+        mp::engine_banner_line("v9.8.7", false, false) == "[Engine: OpenAnnihilation v9.8.7]",
         "the engine's line names the engine and its version"
     );
     expect(
-        mp::engine_banner_line("v9.8.7", true) == "[Engine: OpenAnnihilation v9.8.7 DEV MODE]",
+        mp::engine_banner_line("v9.8.7", true, false) ==
+            "[Engine: OpenAnnihilation v9.8.7 DEV MODE]",
         "the engine's line says when Developer Mode is on"
     );
+    expect(
+        mp::engine_banner_line("v9.8.7", false, true) ==
+            "[Engine: OpenAnnihilation v9.8.7 REMOTED]",
+        "the engine's line says when the game may be remote-controlled"
+    );
+    expect(
+        mp::engine_banner_line("v9.8.7", true, true) ==
+            "[Engine: OpenAnnihilation v9.8.7 DEV MODE REMOTED]",
+        "the engine's line says both, Developer Mode first"
+    );
     banner_developer_mode = false;
+    banner_remote_controlled = false;
     mp::multiplayer_bind_engine_banner({nullptr, banner_line});
     if (!host_battleroom(d, "Banner", "Host")) {
         mp::multiplayer_bind_engine_banner({});
@@ -766,6 +781,15 @@ void check_engine_banner(Driver& d) {
         chat_lines(lobby, plain) == 2 && chat_records(plain) == 2,
         "the engine's line is said again as Developer Mode turns off"
     );
+    const std::string remoted = "<Host> [Engine: OpenAnnihilation v9.8.7 REMOTED]";
+    banner_remote_controlled = true;
+    d.frame();
+    expect(
+        chat_lines(lobby, remoted) == 1 && chat_records(remoted) == 1,
+        "the battle room says the line of a game that may be remote-controlled"
+    );
+    banner_remote_controlled = false;
+    d.frame();
     // A battle room entered again says it again, at the chat ring's head.
     if (host_battleroom(d, "Banner again", "Host")) {
         auto& again = mp::multiplayer_lobby();

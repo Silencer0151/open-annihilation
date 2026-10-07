@@ -997,6 +997,8 @@ namespace {
                 result.headless_check = true;
             if ((effects & option_effect::skip_intro) != 0)
                 result.skip_intro = true;
+            if ((effects & option_effect::remote_controlled) != 0)
+                result.remote_controlled = true;
             extension_effects |= effects;
         } else if (argument.starts_with("-psn_")) {
             // macOS names the process it started from the Finder; nothing to read.

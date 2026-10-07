@@ -4,6 +4,7 @@
 // Host services behind the application loop: held-key queries, window
 // activation, closing the application and the developer memory report.
 #include "oa/app/runtime.hpp"
+#include "device_state.hpp"
 #include "oa/platform/memory_status.hpp"
 #include <SDL3/SDL.h>
 #include <cstdint>
@@ -18,14 +19,10 @@ namespace gui_input = oa::ui::gui_input;
 // Text of one memory report (the report fits in well under 400 bytes).
 constexpr std::size_t kMemoryReportCapacity = 512;
 
-// Key-state word (bit 15 while held) from SDL's keyboard state; either key of a
-// left/right modifier pair holds it.
+// Key-state word (bit 15 while held) from the keys held (device_state.hpp);
+// either key of a left/right modifier pair holds it.
 uint16_t sdl_async_key_state(void*, gui_input::VirtualKey key) {
-    int count = 0;
-    const bool* keys = SDL_GetKeyboardState(&count);
-    const auto held = [&](SDL_Scancode code) {
-        return keys != nullptr && static_cast<int>(code) < count && keys[code];
-    };
+    const auto held = [](SDL_Scancode code) { return device_state::key_held(code); };
     bool down = false;
     switch (key) {
     case gui_input::VirtualKey::left:

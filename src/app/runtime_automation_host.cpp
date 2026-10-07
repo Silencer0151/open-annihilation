@@ -1,0 +1,478 @@
+// SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
+// SPDX-License-Identifier: GPL-3.0-only
+
+// The automation host (automation_host.hpp): each entry reads one thing the
+// runtime holds, or holds a key or button down for the reads of what is
+// held (device_state.hpp).
+#include "oa/app/automation_host.hpp"
+
+#include "device_state.hpp"
+#include "oa/app/runtime.hpp"
+#include "oa/ui/gui_input.hpp"
+#include "oa/ui/gui_layout/gui_gadget.hpp"
+
+#include <SDL3/SDL.h>
+
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <variant>
+
+namespace oa::app {
+
+namespace {
+
+namespace gui = oa::ui::gui_layout;
+
+/// Where a panel's gadgets lie on the canvas, and what the collected
+/// controls of one panel share.
+struct PanelPlacement {
+    int32_t x{};        ///< columns added to a gadget's panel-relative left edge
+    int32_t y{};        ///< rows added to its top edge
+    std::string dialog; ///< the dialog the panel is; empty for the screen's own
+    int32_t focus{-1};  ///< the gadget holding the keyboard focus; -1 for none
+};
+
+/// Returns the name a dialog goes by: its GUI file's name without its
+/// folder and suffix, in lower case.
+///
+/// @param file the GUI file, as its loader named it
+/// @return the name, such as "selmap" for guis/SELMAP.GUI
+std::string dialog_name(std::string_view file) {
+    if (const auto folder = file.find_last_of("/\\"); folder != std::string_view::npos)
+        file.remove_prefix(folder + 1);
+    if (const auto suffix = file.rfind('.'); suffix != std::string_view::npos)
+        file = file.substr(0, suffix);
+    std::string name(file);
+    for (char& character : name)
+        if (character >= 'A' && character <= 'Z')
+            character = static_cast<char>(character - 'A' + 'a');
+    return name;
+}
+
+/// Returns the kind of control a gadget is.
+///
+/// @param gadget the gadget
+/// @return its kind; nothing for a record that is no control (the panel's
+///         root, resources, skins and progress bars)
+std::optional<AutomationControlKind> control_kind(const gui::Gadget& gadget) {
+    switch (gadget.common.type) {
+    case gui::GadgetType::button:
+        return (static_cast<uint32_t>(gadget.common.attributes) & gui::attribute::checkbox) != 0
+                   ? AutomationControlKind::check_box
+                   : AutomationControlKind::button;
+    case gui::GadgetType::list_box:
+        return AutomationControlKind::list;
+    case gui::GadgetType::text_box:
+        return AutomationControlKind::text_field;
+    case gui::GadgetType::scroll_bar:
+        return AutomationControlKind::slider;
+    case gui::GadgetType::label:
+        return AutomationControlKind::label;
+    case gui::GadgetType::hot_surface:
+        return AutomationControlKind::area;
+    case gui::GadgetType::image:
+        return AutomationControlKind::image;
+    default:
+        return std::nullopt;
+    }
+}
+
+/// Returns the text a gadget shows: a button's caption at its stage, a
+/// label's text or a field's typed text.
+///
+/// @param gadget the gadget
+/// @param stage the stage a button with stages shows
+/// @return the text; empty for a gadget without one
+std::string gadget_text(const gui::Gadget& gadget, std::size_t stage) {
+    if (const auto* button = std::get_if<gui::ButtonFields>(&gadget.fields)) {
+        if (auto translated = renderer::translated_stage_caption(*button, stage))
+            return *translated;
+        return std::string(renderer::staged_caption(button->text, stage));
+    }
+    if (const auto* label = std::get_if<gui::LabelFields>(&gadget.fields))
+        return label->text;
+    if (const auto* box = std::get_if<gui::TextBoxFields>(&gadget.fields))
+        return box->text;
+    return {};
+}
+
+/// Makes the control a gadget is, without a list's rows.
+///
+/// @param gadgets the panel's gadgets
+/// @param index the gadget's index
+/// @param kind what it is
+/// @param placement where the panel lies
+/// @param stage the stage a button with stages shows
+/// @param grayed the game grays the gadget out beyond its record's own state
+/// @return the control
+AutomationControl gadget_control(
+    std::span<const gui::Gadget> gadgets,
+    std::size_t index,
+    AutomationControlKind kind,
+    const PanelPlacement& placement,
+    std::size_t stage,
+    bool grayed
+) {
+    const auto& gadget = gadgets[index];
+    AutomationControl control;
+    control.name = gadget.common.name;
+    control.kind = kind;
+    control.dialog = placement.dialog;
+    if (const auto rect = oa::ui::gui_input::gadget_geometry(gadgets, index)) {
+        control.x = rect->left + placement.x;
+        control.y = rect->top + placement.y;
+        control.width = rect->right - rect->left + 1;
+        control.height = rect->bottom - rect->top + 1;
+    }
+    control.visible = gadget.common.active != 0;
+    const auto* button = std::get_if<gui::ButtonFields>(&gadget.fields);
+    const auto* bar = std::get_if<gui::ScrollBarFields>(&gadget.fields);
+    control.enabled = control.visible && !grayed && (button == nullptr || !button->grayed_out) &&
+                      (bar == nullptr || !bar->locked);
+    control.focused = placement.focus == static_cast<int32_t>(index);
+    control.checked =
+        kind == AutomationControlKind::check_box && button != nullptr && button->status != 0;
+    control.text = gadget_text(gadget, stage);
+    return control;
+}
+
+/// A list's rows as a screen shows them.
+struct ListRows {
+    std::span<const std::string> items;  ///< the rows
+    std::size_t first_visible{};         ///< the first row shown
+    std::optional<std::size_t> selected; ///< the selected row
+};
+
+} // namespace
+
+// The runtime's side of the automation host: the one friend through which
+// its entries read the runtime.
+struct AutomationHostAccess {
+    /// Returns the runtime an automation host's context names.
+    ///
+    /// @param context AutomationHost::context
+    /// @return the runtime
+    static const Runtime& runtime(void* context) { return *static_cast<const Runtime*>(context); }
+
+    /// Returns the runtime an automation host's context names, for the
+    /// entries that set what it copies.
+    ///
+    /// @param context AutomationHost::context
+    /// @return the runtime
+    static Runtime& capturing_runtime(void* context) { return *static_cast<Runtime*>(context); }
+
+    /// Returns the preferences as the runtime holds them (AutomationHost::preferences).
+    ///
+    /// @param context AutomationHost::context
+    /// @return the values
+    static const std::map<std::string, std::string>* preferences(void* context) {
+        return &runtime(context).preference_values_;
+    }
+
+    /// Returns the preferences file's path (AutomationHost::preferences_file).
+    ///
+    /// @param context AutomationHost::context
+    /// @return the path
+    static const std::filesystem::path* preferences_file(void* context) {
+        return &runtime(context).preference_path_;
+    }
+
+    /// Returns the running match's Game block (AutomationHost::match_game).
+    ///
+    /// @param context AutomationHost::context
+    /// @return the block, or null while no match runs
+    static const oa::Game* match_game(void* context) {
+        const auto& match = runtime(context).match_;
+        return match ? &match->state().game : nullptr;
+    }
+
+    /// Collects the controls of the screen shown (AutomationHost::controls).
+    ///
+    /// The runtime's list and scroll readers are not const, though they
+    /// change nothing; the controls are only read.
+    ///
+    /// @param context AutomationHost::context
+    /// @param[out] controls replaced by the controls
+    static void controls(void* context, std::vector<AutomationControl>* controls) {
+        controls->clear();
+        auto& game = *static_cast<Runtime*>(context);
+        if (game.screen_ == Screen::match)
+            match_controls(game, *controls);
+        else if (
+            screen_id(game.screen_) <= screen_id(Screen::briefing) &&
+            game.screen_ != Screen::loading && !game.frame_owned_by_package()
+        )
+            frontend_controls(game, *controls);
+    }
+
+    /// Collects the controls of a frontend screen's panel, or of the dialog
+    /// shown as one: the map selection, and the panels drawn over another
+    /// screen.
+    ///
+    /// @param game the runtime
+    /// @param[out] controls receives the controls
+    static void frontend_controls(Runtime& game, std::vector<AutomationControl>& controls) {
+        const auto& gadgets = game.resources_.layout.gadgets;
+        if (gadgets.empty())
+            return;
+        PanelPlacement placement;
+        const auto origin = game.panel_origin();
+        placement.x = origin.x;
+        placement.y = origin.y;
+        if (game.screen_ == Screen::map_selection) {
+            // The map selection is centred over the skirmish setup.
+            const auto& root = gadgets.front().common;
+            placement.x += (kCanvasWidth - static_cast<int32_t>(root.width)) / 2;
+            placement.y += (kCanvasHeight - static_cast<int32_t>(root.height)) / 2;
+        }
+        if (game.screen_ == Screen::map_selection || game.panel_over_screen()) {
+            const auto* desc = screen_find(&game.screens_, screen_id(game.screen_));
+            placement.dialog = dialog_name(
+                desc != nullptr && desc->assets.layout != nullptr ? desc->assets.layout
+                                                                  : gadgets.front().common.name
+            );
+        }
+        // The focus counts while the panel takes the keys.
+        placement.focus = game.frontend_has_keyboard() ? game.frontend_focus() : -1;
+        auto* scrolls = game.frontend_scrolls();
+        for (std::size_t index = 1; index < gadgets.size(); ++index) {
+            const auto kind = control_kind(gadgets[index]);
+            if (!kind)
+                continue;
+            const auto& name = gadgets[index].common.name;
+            const auto stage = game.widget_text_stages_.find(name);
+            auto control = gadget_control(
+                gadgets,
+                index,
+                *kind,
+                placement,
+                stage != game.widget_text_stages_.end() ? stage->second : 0,
+                false
+            );
+            if (*kind == AutomationControlKind::list) {
+                const auto* list =
+                    scrolls != nullptr ? renderer::find_layout_list(*scrolls, index) : nullptr;
+                int32_t row_height = scrolls != nullptr ? scrolls->line_height : 0;
+                if (list != nullptr && list->list.item_height > 0)
+                    row_height = list->list.item_height;
+                if (const auto* fields = std::get_if<gui::ListBoxFields>(&gadgets[index].fields);
+                    row_height <= 0 && fields != nullptr)
+                    row_height = fields->item_height;
+                control.row_height = std::max(row_height, 0);
+                control.rows = control.row_height > 0 ? control.height / control.row_height : 0;
+                if (const auto rows = frontend_list_rows(game, name)) {
+                    control.items.assign(rows->items.begin(), rows->items.end());
+                    control.first_visible = static_cast<int32_t>(rows->first_visible);
+                    control.selected = rows->selected ? static_cast<int32_t>(*rows->selected) : -1;
+                }
+            }
+            controls.push_back(std::move(control));
+        }
+    }
+
+    /// Returns the rows of a frontend screen's list, as the frame shows them.
+    ///
+    /// @param game the runtime
+    /// @param name the list's name
+    /// @return its rows; nothing for a list whose rows the runtime does not keep
+    static std::optional<ListRows> frontend_list_rows(Runtime& game, std::string_view name) {
+        const auto first = [&game, name](std::size_t kept) {
+            return game.frontend_list_first(name).value_or(kept);
+        };
+        const auto named = [name](std::string_view list) {
+            return Runtime::tdf_names_equal(name, list);
+        };
+        if (game.screen_ == Screen::map_selection && named("MAPNAMES"))
+            return ListRows{
+                game.bound_map_names_,
+                game.map_first_visible(),
+                static_cast<std::size_t>(std::max<int16_t>(0, game.modal_map_index_))
+            };
+        if ((game.screen_ == Screen::any_mission || game.screen_ == Screen::new_campaign) &&
+            named("Campaign"))
+            return ListRows{
+                game.campaign_labels_,
+                first(game.campaign_first_visible_),
+                game.selected_campaign_index_
+            };
+        if (game.screen_ == Screen::any_mission && named("Missions"))
+            return ListRows{
+                game.campaign_mission_labels_,
+                first(game.campaign_mission_first_visible_),
+                game.selected_mission_index_
+            };
+        if (game.screen_ == Screen::campaign_end && named("Missions"))
+            return ListRows{
+                game.end_mission_rows_,
+                game.campaign_mission_first_visible_,
+                game.selected_mission_index_
+            };
+        return std::nullopt;
+    }
+
+    /// Collects the controls of the match's panel, or of the menu or dialog
+    /// over the match.
+    ///
+    /// @param game the runtime
+    /// @param[out] controls receives the controls
+    static void match_controls(Runtime& game, std::vector<AutomationControl>& controls) {
+        if (!game.match_hud_ || game.match_hud_->layout.gadgets.empty())
+            return;
+        const auto& gadgets = game.match_hud_->layout.gadgets;
+        PanelPlacement placement;
+        if (game.match_hud_placement_ != 0 || game.match_panel_under_)
+            placement.dialog = dialog_name(game.match_hud_panel_);
+        // The focus counts while the match's panels take the keys.
+        placement.focus = game.match_panels_keyboard_ ? game.match_hud_focus_ : -1;
+        const auto area = game.placed_panel_area();
+        const auto& root = gadgets.front().common;
+        if (area && (root.width <= 0 || root.height <= 0))
+            return;
+        for (std::size_t index = 1; index < gadgets.size(); ++index) {
+            const auto kind = control_kind(gadgets[index]);
+            if (!kind)
+                continue;
+            const auto& state = index < game.match_hud_states_.size()
+                                    ? game.match_hud_states_[index]
+                                    : Runtime::MatchGadgetState{};
+            const auto stage = game.widget_text_stages_.find(gadgets[index].common.name);
+            auto control = gadget_control(
+                gadgets,
+                index,
+                *kind,
+                placement,
+                stage != game.widget_text_stages_.end() ? stage->second : 0,
+                state.grayed
+            );
+            if (*kind == AutomationControlKind::check_box)
+                control.checked = state.status != 0;
+            // The HUD is laid out in its 640x480 source; the canvas shows it
+            // through the match's layout, the side column's scale among it,
+            // and a menu or dialog placed over the paused match through the
+            // area it is drawn in.
+            const auto& common = gadgets[index].common;
+            if (area) {
+                const auto through =
+                    [](int source, int start, int length, int canvas, int canvas_length) {
+                        return canvas +
+                               static_cast<int>(std::lround(
+                                   static_cast<double>(source - start) * canvas_length / length
+                               ));
+                    };
+                control.x = through(common.x, root.x, root.width, area->x, area->width);
+                control.y = through(common.y, root.y, root.height, area->y, area->height);
+                control.width =
+                    through(common.x + common.width, root.x, root.width, area->x, area->width) -
+                    control.x;
+                control.height =
+                    through(common.y + common.height, root.y, root.height, area->y, area->height) -
+                    control.y;
+            } else {
+                const auto rect = oa::ui::display_layout::source_rect_to_canvas(
+                    game.match_layout_, common.x, common.y, common.width, common.height
+                );
+                const auto centre = game.hud_gadget_centre(index);
+                control.width = rect.width;
+                control.height = rect.height;
+                control.x = centre.x - rect.width / 2;
+                control.y = centre.y - rect.height / 2;
+            }
+            controls.push_back(std::move(control));
+        }
+    }
+
+    /// Holds a key down or lets it go (AutomationHost::hold_key).
+    ///
+    /// @param scancode the key
+    /// @param down true to hold it
+    static void hold_key(void* /*context*/, uint32_t scancode, bool down) {
+        if (scancode < SDL_SCANCODE_COUNT)
+            device_state::hold_key(static_cast<SDL_Scancode>(scancode), down);
+    }
+
+    /// Sets the pointer buttons held down (AutomationHost::hold_buttons).
+    ///
+    /// @param buttons SDL_BUTTON_MASK bits
+    static void hold_buttons(void* /*context*/, uint32_t buttons) {
+        device_state::hold_buttons(static_cast<SDL_MouseButtonFlags>(buttons));
+    }
+
+    /// Has the runtime copy the frames it presents into a surface
+    /// (AutomationHost::start_frame_capture).
+    ///
+    /// @param context AutomationHost::context
+    /// @param[out] into the surface
+    /// @return false when the runtime copies them somewhere else
+    static bool start_frame_capture(void* context, oa::ui::frontend_renderer::Surface* into) {
+        auto*& capture = capturing_runtime(context).capture_frame_;
+        if (capture != nullptr && capture != into)
+            return false;
+        capture = into;
+        return true;
+    }
+
+    /// Stops the runtime copying the frames it presents into a surface
+    /// (AutomationHost::stop_frame_capture).
+    ///
+    /// @param context AutomationHost::context
+    /// @param into the surface
+    static void stop_frame_capture(void* context, const oa::ui::frontend_renderer::Surface* into) {
+        auto*& capture = capturing_runtime(context).capture_frame_;
+        if (capture == into)
+            capture = nullptr;
+    }
+
+    /// Returns the running match's world (AutomationHost::match_world).
+    ///
+    /// @param context AutomationHost::context
+    /// @return the world, or null while no match runs
+    static const oa::World* match_world(void* context) {
+        const auto& match = runtime(context).match_;
+        return match ? &match->state() : nullptr;
+    }
+
+    /// Returns the running match's saved-state digest (AutomationHost::match_digest).
+    ///
+    /// @param context AutomationHost::context
+    /// @return the digest, as Runtime::match_world_digest gives it
+    static uint64_t match_digest(void* context) { return runtime(context).match_world_digest(); }
+};
+
+namespace {
+
+// Every entry of the automation host; automation_host() binds a copy to a runtime.
+constexpr AutomationHost kAutomationHostEntries{
+    nullptr,
+    AutomationHostAccess::preferences,
+    AutomationHostAccess::preferences_file,
+    AutomationHostAccess::match_game,
+    AutomationHostAccess::controls,
+    AutomationHostAccess::hold_key,
+    AutomationHostAccess::hold_buttons,
+    AutomationHostAccess::start_frame_capture,
+    AutomationHostAccess::stop_frame_capture,
+    AutomationHostAccess::match_world,
+    AutomationHostAccess::match_digest
+};
+
+// The entries above, one for each of the table's after its context.
+constexpr std::size_t kAutomationHostEntryCount = 10;
+static_assert(
+    sizeof(AutomationHost) == sizeof(void*) * (1 + kAutomationHostEntryCount),
+    "the automation host's entries changed: set every one of them here"
+);
+
+} // namespace
+
+AutomationHost automation_host(Runtime& runtime) {
+    AutomationHost host = kAutomationHostEntries;
+    host.context = &runtime;
+    return host;
+}
+
+} // namespace oa::app

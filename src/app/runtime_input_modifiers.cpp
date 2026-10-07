@@ -6,20 +6,56 @@
 // FORCE that gives Ctrl to orders and selection; the pointer key word kept
 // in step with a latch; keys pressed for the touch controls; the Cmd
 // alternates of a hardware keyboard; the keypad's Enter as Return; haptics, on the platform's device and
-// the gamepad in use (docs/touch-controls.md, docs/controllers.md). This is
-// the one place the engine reads SDL_GetModState().
+// the gamepad in use (docs/touch-controls.md, docs/controllers.md); and the
+// keys, buttons and modifier keys held, the devices' and the automation
+// endpoint's (device_state.hpp). This is the one place the engine reads
+// SDL_GetModState(), SDL_GetKeyboardState() and SDL_GetMouseState().
 #include "oa/app/runtime.hpp"
+#include "device_state.hpp"
 #include "touch_state.hpp"
 #include "oa/app/platform_hooks.hpp"
 #include "oa/sim/gameplay_input/input.hpp"
 #include "oa/ui/pad_controls.hpp"
 #include "oa/ui/touch_hud.hpp"
 #include <SDL3/SDL.h>
+#include <array>
 #include <cstdint>
 #include <tuple>
 
 namespace oa::app {
 namespace {
+
+/// What the automation endpoint holds down (device_state.hpp).
+struct EndpointHeld {
+    std::array<bool, SDL_SCANCODE_COUNT> keys{}; ///< by scancode
+    SDL_MouseButtonFlags buttons{};              ///< SDL_BUTTON_MASK bits
+};
+
+/// Returns what the automation endpoint holds down, for the process.
+///
+/// @return the one record, made on first use
+EndpointHeld& endpoint_held() noexcept {
+    static EndpointHeld held;
+    return held;
+}
+
+/// A modifier key and the modifier bit it holds.
+struct ModifierKey {
+    SDL_Scancode scancode{}; ///< the key
+    SDL_Keymod modifier{};   ///< the bit it holds
+};
+
+/// The modifier keys, each with the bit SDL_GetModState() gives while it is down.
+constexpr ModifierKey kModifierKeys[] = {
+    {SDL_SCANCODE_LSHIFT, SDL_KMOD_LSHIFT},
+    {SDL_SCANCODE_RSHIFT, SDL_KMOD_RSHIFT},
+    {SDL_SCANCODE_LCTRL, SDL_KMOD_LCTRL},
+    {SDL_SCANCODE_RCTRL, SDL_KMOD_RCTRL},
+    {SDL_SCANCODE_LALT, SDL_KMOD_LALT},
+    {SDL_SCANCODE_RALT, SDL_KMOD_RALT},
+    {SDL_SCANCODE_LGUI, SDL_KMOD_LGUI},
+    {SDL_SCANCODE_RGUI, SDL_KMOD_RGUI},
+};
 
 /// One Cmd alternate of a hardware keyboard: the key typed with Cmd and the key it stands for.
 struct CommandAlternate {
@@ -59,8 +95,42 @@ oa::ui::pad_controls::Feel pad_feel_of(Haptic kind) noexcept {
 
 } // namespace
 
-SDL_Keymod Runtime::input_modifiers(ModifierUse use) const {
+namespace device_state {
+
+bool key_held(SDL_Scancode scancode) noexcept {
+    if (scancode <= SDL_SCANCODE_UNKNOWN || scancode >= SDL_SCANCODE_COUNT)
+        return false;
+    int count = 0;
+    const bool* keys = SDL_GetKeyboardState(&count);
+    return endpoint_held().keys[scancode] ||
+           (keys != nullptr && static_cast<int>(scancode) < count && keys[scancode]);
+}
+
+SDL_MouseButtonFlags buttons_held() noexcept {
+    return SDL_GetMouseState(nullptr, nullptr) | endpoint_held().buttons;
+}
+
+SDL_Keymod modifiers_held() noexcept {
     auto modifiers = static_cast<uint32_t>(SDL_GetModState());
+    for (const auto& key : kModifierKeys)
+        if (endpoint_held().keys[key.scancode])
+            modifiers |= key.modifier;
+    return static_cast<SDL_Keymod>(modifiers);
+}
+
+void hold_key(SDL_Scancode scancode, bool down) noexcept {
+    if (scancode > SDL_SCANCODE_UNKNOWN && scancode < SDL_SCANCODE_COUNT)
+        endpoint_held().keys[scancode] = down;
+}
+
+void hold_buttons(SDL_MouseButtonFlags buttons) noexcept {
+    endpoint_held().buttons = buttons;
+}
+
+} // namespace device_state
+
+SDL_Keymod Runtime::input_modifiers(ModifierUse use) const {
+    auto modifiers = static_cast<uint32_t>(device_state::modifiers_held());
     if (const auto* state = touch_state_if_made(); state != nullptr)
         modifiers |= state->dispatch.pulse;
     if (virtual_shift(use))
