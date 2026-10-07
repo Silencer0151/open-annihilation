@@ -8,6 +8,7 @@
 
 #include "oa/app/runtime.hpp"
 #include "oa/sim/match_runtime.hpp"
+#include "oa/ui/console/game_fields.hpp"
 #include "oa/ui/display_layout.hpp"
 #include "oa/ui/hud/kill_board.hpp"
 #include "oa/ui/hud/resource_bar.hpp"
@@ -26,6 +27,7 @@
 namespace oa::app {
 namespace {
 
+namespace console = oa::ui::console;
 namespace hud = oa::ui::hud;
 
 /// Palette index of the top bar line's labels, the wind's range and the
@@ -43,6 +45,40 @@ int32_t wind_generator_output(const oa::World& world) {
         }
     }
     return hud::kDefaultWindGenerator;
+}
+
+/// ui.resource-panel's clock line as written now.
+struct ClockLines {
+    char time[64]{};
+    char wind[64]{};
+    char tidal[64]{};
+    /// The wind's readout with its amount at the map's most, which no
+    /// amount the match reaches has more figures than.
+    hud::WindReadout widest_wind{};
+};
+
+/// Writes ui.resource-panel's game time, wind and tidal strength lines.
+///
+/// @param match the running match
+/// @param watching whether the local player watches, who sees only the
+///        wind's range
+/// @return the lines
+ClockLines format_clock_lines(const oa::sim::match_runtime::Match& match, bool watching) {
+    const auto& world = match.state();
+    const auto& wind = match.environment_wind();
+    const auto readout = hud::wind_readout(
+        wind.strength,
+        wind.minimum_strength,
+        wind.maximum_strength,
+        wind.strength_divisor,
+        wind_generator_output(world)
+    );
+    ClockLines lines{};
+    hud::format_game_time(lines.time, sizeof lines.time, world.game.tick);
+    hud::format_wind(lines.wind, sizeof lines.wind, readout, watching);
+    hud::format_tidal(lines.tidal, sizeof lines.tidal, world.game.tidal_strength);
+    lines.widest_wind = hud::WindReadout{readout.maximum, readout.minimum, readout.maximum};
+    return lines;
 }
 
 } // namespace
@@ -130,98 +166,156 @@ void Runtime::draw_resource_panel_overlay() {
     hud::draw_resource_panel(world, resource_panel_, rows, sink);
 }
 
-void Runtime::draw_clock_line(PaintLayer layer) {
-    namespace layout = oa::ui::display_layout;
-    if (!match_ || !ui_rules().resource_panel.enabled)
-        return;
-    const auto* font = match_label_font();
-    const auto& world = match_->state();
-    const auto& game = world.game;
-    const auto& wind = match_->environment_wind();
-    const auto readout = hud::wind_readout(
-        wind.strength,
-        wind.minimum_strength,
-        wind.maximum_strength,
-        wind.strength_divisor,
-        wind_generator_output(world)
+int Runtime::clock_line_sign_pull(
+    const oa::formats::fnt::Font& font, std::string_view amount
+) const {
+    if (amount.size() < 2 || amount.front() != '+')
+        return 0;
+    return std::max(
+        0, match_text_margins(font, amount[0]).right - match_text_margins(font, amount[1]).right
     );
-    const bool watching = local_player_watches();
-    char time_line[64];
-    char wind_line[64];
-    char tidal_line[64];
-    hud::format_game_time(time_line, sizeof time_line, game.tick);
-    hud::format_wind(wind_line, sizeof wind_line, readout, watching);
-    hud::format_tidal(tidal_line, sizeof tidal_line, game.tidal_strength);
-    const auto width = [&](std::string_view text) {
-        return font != nullptr ? match_text_width(*font, text, 1) : 0;
+}
+
+hud::ClockLineWidths
+Runtime::clock_line_widths(const oa::formats::fnt::Font& font, bool watching) const {
+    const auto width = [&](std::string_view text) { return match_text_width(font, text, 1); };
+    // Every figure of the time and of the wind's amount at the font's widest
+    // digit, so that no time or wind the match reaches is wider.
+    char widest_digit = '0';
+    for (char digit = '0'; digit <= '9'; ++digit)
+        if (width({&digit, 1}) > width({&widest_digit, 1}))
+            widest_digit = digit;
+    const auto lines = format_clock_lines(*match_, watching);
+    char time[64];
+    char wind[64];
+    hud::format_game_time(time, sizeof time, 0);
+    hud::format_wind(wind, sizeof wind, lines.widest_wind, watching);
+    const auto widest = [widest_digit](char* line, std::string_view figures) {
+        const auto at = static_cast<std::size_t>(figures.data() - line);
+        for (std::size_t index = at; index < at + figures.size(); ++index)
+            if (line[index] >= '0' && line[index] <= '9')
+                line[index] = widest_digit;
     };
-    // Where the line goes is decided at its widest figures, so that it
-    // stays put while they change: the wind at its most, and the time at
-    // 00:00:00.
-    char widest_time[64];
-    char widest_wind[64];
-    hud::format_game_time(widest_time, sizeof widest_time, 0);
-    hud::format_wind(
-        widest_wind,
-        sizeof widest_wind,
-        hud::WindReadout{readout.maximum, readout.minimum, readout.maximum},
-        watching
-    );
-    const auto wind_parts = hud::split_clock_line(wind_line);
-    const auto tidal_parts = hud::split_clock_line(tidal_line);
-    const auto time_parts = hud::split_clock_line(time_line);
-    const auto widest_time_parts = hud::split_clock_line(widest_time);
-    // A signed amount's figures sit as near its sign as they sit to each
-    // other: they move left by the columns the sign leaves blank on its
-    // right past those a figure does.
-    const auto sign_pull = [&](std::string_view amount) {
-        if (font == nullptr || amount.size() < 2 || amount.front() != '+')
-            return 0;
-        return std::max(
-            0,
-            match_text_margins(*font, amount[0]).right - match_text_margins(*font, amount[1]).right
-        );
-    };
-    const auto amount_width = [&](std::string_view amount) {
-        return width(amount) - sign_pull(amount);
-    };
+    const auto time_parts = hud::split_clock_line(time);
+    widest(time, time_parts.rest);
+    widest(wind, hud::split_clock_line(wind).amount);
+    const auto wind_parts = hud::split_clock_line(wind);
+    const auto tidal_parts = hud::split_clock_line(lines.tidal);
     const auto figures = [&](const hud::ClockLineParts& parts) {
-        return amount_width(parts.amount) + width(parts.rest);
+        return width(parts.amount) - clock_line_sign_pull(font, parts.amount) + width(parts.rest);
     };
     // "Game Time" alone, without the " : " that ends its label.
     constexpr std::string_view kLabelEnd = " : ";
     auto time_label = time_parts.label;
     if (time_label.ends_with(kLabelEnd))
         time_label.remove_suffix(kLabelEnd.size());
-    // The touch controls' layout shows no top bar past the interface's
-    // columns.
-    const auto place = layout::placed_mode(match_layout_) || font == nullptr
-                           ? hud::ClockLinePlace{}
-                           : hud::place_clock_line(
-                                 top_bar_pieces_,
-                                 layout::kSourceLeft + match_layout_.bar_columns(),
-                                 hud::ClockLineWidths{
-                                     std::max(width(wind_parts.label), width(tidal_parts.label)),
-                                     std::max(
-                                         {figures(wind_parts),
-                                          figures(hud::split_clock_line(widest_wind)),
-                                          figures(tidal_parts)}
-                                     ),
-                                     std::max(width(time_line), width(widest_time)),
-                                     width(time_label),
-                                     std::max(width(time_parts.rest), width(widest_time_parts.rest))
-                                 },
-                                 match_layout_.width
-                             );
+    return hud::ClockLineWidths{
+        std::max(width(wind_parts.label), width(tidal_parts.label)),
+        std::max(figures(wind_parts), figures(tidal_parts)),
+        width(time),
+        width(time_label),
+        width(time_parts.rest)
+    };
+}
+
+bool Runtime::clock_line_shows_time() const {
+    return !match_ ||
+           (console::console_flags(match_->state().game) & console::console_flag::clock) == 0;
+}
+
+oa::ui::display_layout::MatchLayout
+Runtime::make_room_for_clock_line(const oa::ui::display_layout::MatchLayout& laid_out) {
+    namespace layout = oa::ui::display_layout;
+    // The touch controls' layouts and a frame without the interface keep
+    // theirs.
+    if (!match_ || !ui_rules().resource_panel.enabled || laid_out.phone ||
+        layout::placed_mode(laid_out) || laid_out.hud_width <= 0 || touch_controls_active())
+        return laid_out;
+    const auto fitted = [&](double most_scale) {
+        auto fit = layout::fit_side_column(
+            layout::make_match_layout(laid_out.width, laid_out.height, most_scale),
+            side_column_page_rows()
+        );
+        fit.px_per_point = laid_out.px_per_point;
+        fit.safe = laid_out.safe;
+        return fit;
+    };
+    const auto own = fitted(layout::kMaxChromeScale);
+    const auto* font = match_label_font();
+    if (font == nullptr)
+        return own;
+    // Room for the wind's line as a player sees it, which a watcher's is
+    // no wider than, so that the chrome keeps its size when the player
+    // becomes one.
+    const double scale = hud::clock_line_chrome_scale(
+        top_bar_pieces_,
+        clock_line_widths(*font, false),
+        clock_line_shows_time(),
+        own.width,
+        layout::kSourceLeft + own.bar_columns(),
+        own.scale
+    );
+    return scale < own.scale ? fitted(scale) : own;
+}
+
+void Runtime::keep_room_for_clock_line() {
+    if (!ui_rules().resource_panel.enabled)
+        return;
+    const auto laid_out = make_room_for_clock_line(match_layout_);
+    if (laid_out.scale != match_layout_.scale || laid_out.left != match_layout_.left)
+        match_layout_ = laid_out;
+}
+
+hud::ClockLinePlace Runtime::clock_line_place() const {
+    namespace layout = oa::ui::display_layout;
+    const auto* font = match_label_font();
+    // Where the line goes is decided at its widest figures, so that it
+    // stays put while they change. The touch controls' layout shows no top
+    // bar past the interface's columns.
+    if (!match_ || font == nullptr || layout::placed_mode(match_layout_))
+        return {};
+    return hud::place_clock_line(
+        top_bar_pieces_,
+        layout::kSourceLeft + match_layout_.bar_columns(),
+        clock_line_widths(*font, local_player_watches()),
+        match_layout_.width,
+        clock_line_shows_time()
+    );
+}
+
+void Runtime::draw_clock_line(PaintLayer layer) {
+    namespace layout = oa::ui::display_layout;
+    if (!match_ || !ui_rules().resource_panel.enabled)
+        return;
+    const auto* font = match_label_font();
+    const auto& game = match_->state().game;
+    // While the console's Clock shows the game time, the line leaves it out.
+    const bool shows_time = clock_line_shows_time();
+    const auto lines = format_clock_lines(*match_, local_player_watches());
+    const auto width = [&](std::string_view text) {
+        return font != nullptr ? match_text_width(*font, text, 1) : 0;
+    };
+    const auto wind_parts = hud::split_clock_line(lines.wind);
+    const auto tidal_parts = hud::split_clock_line(lines.tidal);
+    const auto time_parts = hud::split_clock_line(lines.time);
+    // "Game Time" alone, without the " : " that ends its label.
+    constexpr std::string_view kLabelEnd = " : ";
+    auto time_label = time_parts.label;
+    if (time_label.ends_with(kLabelEnd))
+        time_label.remove_suffix(kLabelEnd.size());
+    const auto place = clock_line_place();
     if (place.spot != hud::ClockLineSpot::battlefield) {
         if (layer != PaintLayer::hud)
             return;
         const auto green = hud::readout_color(game, hud::kReadoutProducedColor);
-        // The label ends at the figures, which follow in their colours.
+        // The label ends at the figures, which follow in their colours: a
+        // signed amount's figures as near its sign as they sit to each
+        // other.
         const auto line = [&](int y, const hud::ClockLineParts& parts) {
             const int x = place.figures_x;
             draw_hud_label(x - width(parts.label), y, parts.label, kClockLineGrey);
-            if (const int pull = sign_pull(parts.amount); pull > 0) {
+            const int pull = clock_line_sign_pull(*font, parts.amount);
+            if (pull > 0) {
                 // The figures start where the whole amount puts them, less
                 // the pull.
                 const auto digits = parts.amount.substr(1);
@@ -230,13 +324,13 @@ void Runtime::draw_clock_line(PaintLayer layer) {
             } else {
                 draw_hud_label(x, y, parts.amount, green);
             }
-            draw_hud_label(x + amount_width(parts.amount), y, parts.rest, kClockLineGrey);
+            draw_hud_label(x + width(parts.amount) - pull, y, parts.rest, kClockLineGrey);
         };
         line(hud::kClockLineWindY, wind_parts);
         line(hud::kClockLineTidalY, tidal_parts);
         if (place.spot == hud::ClockLineSpot::sections) {
-            draw_hud_label(place.time_x, hud::kClockLineTimeY, time_line, kClockLineGrey);
-        } else {
+            draw_hud_label(place.time_x, hud::kClockLineTimeY, lines.time, kClockLineGrey);
+        } else if (place.spot == hud::ClockLineSpot::beside) {
             draw_hud_label(place.time_x, hud::kClockLineWindY, time_label, kClockLineGrey);
             draw_hud_label(place.time_x, hud::kClockLineTidalY, time_parts.rest, kClockLineGrey);
         }
@@ -262,9 +356,11 @@ void Runtime::draw_clock_line(PaintLayer layer) {
         );
         draw_match_label(at.x, at.y, text, text_color);
     };
-    label(hud::kClockLineTop, time_line);
-    label(hud::kClockLineTop + hud::kClockLineStep, wind_line);
-    label(hud::kClockLineTop + 2 * hud::kClockLineStep, tidal_line);
+    const auto rows = hud::clock_line_battlefield_rows(shows_time);
+    if (rows.time)
+        label(*rows.time, lines.time);
+    label(rows.wind, lines.wind);
+    label(rows.tidal, lines.tidal);
 }
 
 bool Runtime::resource_panel_pointer(const SDL_Event& event, float x, float y) {

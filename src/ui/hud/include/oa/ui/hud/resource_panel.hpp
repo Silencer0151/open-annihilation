@@ -14,6 +14,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 
 namespace oa::ui::hud {
@@ -253,8 +254,9 @@ inline constexpr int32_t kClockLineTimeY = 11;
 /// Columns between the wind's and the tidal strength's figures and the game
 /// time beside them, where the bar holds one section.
 inline constexpr int32_t kClockLineBesideGap = 12;
-/// The widest window, in pixels, whose clock line stays on the battlefield;
-/// on a wider one it goes in the top bar.
+/// The widest window, in pixels, whose clock line with the game time stays
+/// on the battlefield, and whose chrome keeps its scale for the line; on a
+/// wider one the line goes in the top bar.
 inline constexpr int32_t kClockLineBattlefieldMaxWidth = 1024;
 
 /// The clock line's place on the battlefield: three lines from the
@@ -275,6 +277,10 @@ enum class ClockLineSpot : uint8_t {
     /// The top bar past PANELTOP, where it holds one section: the wind
     /// over the tidal strength, and beside them "Game Time" over the time.
     beside,
+    /// The top bar's first section past PANELTOP, while the line leaves
+    /// out the game time: the wind over the tidal strength, on a window of
+    /// any width.
+    first_section,
 };
 
 /// Widths, in pixels, of the clock line's parts.
@@ -297,9 +303,10 @@ struct ClockLinePlace {
     int32_t time_x{};
 };
 
-/// Places the clock line: on a window no wider than
-/// kClockLineBattlefieldMaxWidth, on the battlefield; on a wider one, in
-/// the top bar past PANELTOP, whose PANELBOT pieces are each divided into
+/// Places the clock line: with the game time, on a window no wider than
+/// kClockLineBattlefieldMaxWidth, on the battlefield; on a wider one, and
+/// without the game time on a window of any width, in the top bar past
+/// PANELTOP, whose PANELBOT pieces are each divided into
 /// kTopBarPieceSections sections.
 ///
 /// The first section holds the wind over the tidal strength: the longer
@@ -308,17 +315,100 @@ struct ClockLinePlace {
 /// section and the bar hold the game time's line kClockLineInset columns
 /// into it, it goes there; otherwise "Game Time" goes over the time,
 /// kClockLineBesideGap columns past the figures, while that fits in the
-/// bar. A bar with no room past PANELTOP for either leaves the line on the
+/// bar. A line without the game time takes the first section alone
+/// (ClockLineSpot::first_section) where the bar reaches past the figures.
+/// A bar with no room past PANELTOP for the line leaves it on the
 /// battlefield.
 ///
 /// @param pieces the top bar's repeated pieces
 /// @param bar_end the column just past the top bar's last
-/// @param widths the widths of the line's parts
+/// @param widths the widths of the line's parts; the game time's are not
+///        read without it
 /// @param window_width the window's width in pixels
+/// @param game_time whether the line shows the game time
 /// @return where the line goes
 [[nodiscard]] ClockLinePlace place_clock_line(
-    const TopBarPieces& pieces, int32_t bar_end, const ClockLineWidths& widths, int32_t window_width
+    const TopBarPieces& pieces,
+    int32_t bar_end,
+    const ClockLineWidths& widths,
+    int32_t window_width,
+    bool game_time
 ) noexcept;
+
+/// Returns how far the top bar must reach for place_clock_line to put the
+/// clock line at a spot: two sections or the game time beside the figures
+/// on a window wider than kClockLineBattlefieldMaxWidth, the first section
+/// alone on a window of any width.
+///
+/// @param pieces the top bar's repeated pieces
+/// @param widths the widths of the line's parts
+/// @param spot ClockLineSpot::sections, ClockLineSpot::beside or
+///        ClockLineSpot::first_section
+/// @return the least column just past the bar's last that puts the line
+///         there; 0 where no bar does, as for the battlefield, for two
+///         sections whose first does not hold the wind's and the tidal
+///         strength's lines or whose second does not hold the game time's,
+///         and without pieces
+[[nodiscard]] int32_t clock_line_bar_end(
+    const TopBarPieces& pieces, const ClockLineWidths& widths, ClockLineSpot spot
+) noexcept;
+
+/// The least scale the top and bottom bars are drawn at to make room for
+/// the clock line's two sections: one and a half times the interface's
+/// size, as on a 1280x720 window.
+inline constexpr double kClockLineSectionsLeastScale = 1.5;
+
+/// Returns the scale the interface's chrome is drawn at on a window wider
+/// than kClockLineBattlefieldMaxWidth so that the top bar has room for the
+/// clock line.
+///
+/// The chrome keeps its scale where its bar already reaches far enough for
+/// two sections. Otherwise it is drawn at the largest scale at which a bar
+/// running from the side column's right edge to the window's right edge
+/// reaches kClockLineInset columns past the game time in the second
+/// section (the window's width over the column it must reach), while that
+/// is at least kClockLineSectionsLeastScale. Where it is not, the chrome
+/// keeps its scale where its bar reaches far enough for "Game Time" beside
+/// the figures, and is otherwise drawn at the largest scale at which the
+/// bar reaches kClockLineInset columns past it. A line without the game
+/// time needs only the first section: the chrome keeps its scale where the
+/// bar reaches past the figures, and is otherwise drawn at the largest
+/// scale at which the bar reaches kClockLineInset columns past them. A
+/// window kClockLineBattlefieldMaxWidth pixels wide or narrower, and a bar
+/// with no room for the line at any scale, keep the scale.
+///
+/// @param pieces the top bar's repeated pieces
+/// @param widths the widths of the line's parts
+/// @param game_time whether the line shows the game time
+/// @param window_width the window's width in pixels
+/// @param bar_end the column just past the top bar's last at the chrome's
+///        own scale
+/// @param scale the chrome's own scale: canvas pixels per source pixel
+/// @return the scale, no larger than `scale`
+[[nodiscard]] double clock_line_chrome_scale(
+    const TopBarPieces& pieces,
+    const ClockLineWidths& widths,
+    bool game_time,
+    int32_t window_width,
+    int32_t bar_end,
+    double scale
+) noexcept;
+
+/// Rows of the clock line's lines on the battlefield.
+struct ClockLineRows {
+    std::optional<int32_t> time{}; ///< the game time's; none without it
+    int32_t wind{};
+    int32_t tidal{};
+};
+
+/// Returns the rows of the clock line's lines on the battlefield, from
+/// kClockLineTop and kClockLineStep apart: the game time, the wind and the
+/// tidal strength; without the game time, the wind and the tidal strength
+/// in the first two lines' places.
+///
+/// @param game_time whether the line shows the game time
+/// @return the rows
+[[nodiscard]] ClockLineRows clock_line_battlefield_rows(bool game_time) noexcept;
 
 /// A clock line cut into its parts, any of them empty.
 struct ClockLineParts {

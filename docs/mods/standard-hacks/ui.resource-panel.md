@@ -76,14 +76,38 @@ amounts the green of the produced rates, each sign against its figures.
 
 ![The top bar's right end: the energy readouts, then a section with "Wind : +23 (6-30)" over "Tidal : +25", then a section with "Game Time : 00:00:10".](images/ui.resource-panel-clock.png)
 
-Where the bar reaches far enough for one section, as on a 16:9 window from
-1280x720 to 1600x900, the wind and the tidal strength keep their place and
-"Game Time" goes over the time beside them.
+Where the bar reaches far enough for one section, as at 1280x720 and
+1366x768, the wind and the tidal strength keep their place and "Game Time"
+goes over the time beside them.
+
+On a window wider than 1024 pixels whose bar ends short of the two
+sections, the side column, the minimap and both bars are drawn smaller,
+just enough for the bar to reach 16 columns past the game time in the
+second section, while that keeps them at least one and a half times the
+size of the original 640x480 interface, as on a 1280x720 window. Where it
+would not, they keep their size if the bar holds the game time beside the
+wind and the tidal strength, and are otherwise drawn just small enough for
+the bar to reach 16 columns past it. With the original game's fonts, a
+window about 1450 pixels wide or wider gets the two sections, as 1600x900
+and 1600x1200 do, and a narrower one the single section, as 4:3 and 5:4
+windows from 1152x864 to 1400x1050 and 16:10 windows at 1280x800 and
+1440x900 do. Clicks, the build menu and the minimap follow the smaller
+interface, as on a smaller window. Without the hack, the interface keeps
+its size.
+
+While the console's clock (`+clock`) shows the game time, the readings
+leave it out: the top bar's first section holds the wind over the tidal
+strength, and the interface is drawn smaller only as far as they need.
+On a window 1024 pixels wide or narrower they go there too wherever the
+bar already reaches past them, as at 1024x600, and at 800x600 and
+1024x768 with HUD scaling Off; the interface keeps its size. Turned off
+again, the game time comes back.
 
 On a window 1024 pixels wide or narrower, and with the touch controls, the
 readings are three plain lines under the top panel at the battlefield's
-top left, the game time first. So are they on a wider window whose bar has
-no room past its readouts, such as 1440x900 or a 4:3 window.
+top left, the game time first. With the console's clock on, the wind and
+the tidal strength take the first two where the top bar has no room for
+them, as at 640x480 and on 4:3 windows with HUD scaling On.
 
 #### Watcher view switching
 

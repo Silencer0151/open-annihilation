@@ -1751,6 +1751,35 @@ if(OA_BUILD_PLATFORM)
       set_tests_properties(native-match-bars PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_match_bars_check_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # The same with ui.resource-panel on: on the 4:3 and 5:4 windows wider
+      # than 1024 pixels the chrome is drawn smaller, so that the top bar
+      # holds the clock line, with the game time and, with the console's
+      # Clock on, without it; without it the line also goes in the bar at
+      # 1024x600, where the bar reaches past it, and stays on the battlefield
+      # at 640x480, 800x600 and 1024x768, where it does not; the bars still
+      # reach the window's right edge with the side's art where the game
+      # places it.
+      set(oa_match_bars_panel_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/native-checks/match-bars-resource-panel")
+      file(MAKE_DIRECTORY "${oa_match_bars_panel_dir}")
+      file(WRITE "${oa_match_bars_panel_dir}/resource-panel.oamod.yaml"
+        "oamod: 1\n"
+        "id: resource-panel\n"
+        "name: Resource panel\n"
+        "version: \"1.0\"\n"
+        "requires: {base: ta-3.1c, catalogue: 1}\n"
+        "author: {name: unknown}\n"
+        "packaging: {revision: 1, date: 2026-10-07, packager: Open Annihilation}\n"
+        "hacks:\n"
+        "  ui.resource-panel: true\n")
+      add_test(NAME native-match-bars-resource-panel COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-match-bars
+        --mod "${oa_match_bars_panel_dir}/resource-panel.oamod.yaml"
+        --preferences-file "${oa_match_bars_panel_dir}/match-bars.conf")
+      set_tests_properties(native-match-bars-resource-panel PROPERTIES
+        TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_match_bars_panel_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # The pages of a builder of one page, one of several, a factory and a
       # unit that builds nothing, on windows from 640x480 to 2560x1440,
       # walked with NEXT, PREV, ORDERS and BUILD through SDL input on dummy

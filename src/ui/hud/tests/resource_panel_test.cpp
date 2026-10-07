@@ -11,6 +11,8 @@
 #include "check.hpp"
 #include "fixtures.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -222,23 +224,44 @@ void clock_line_place() {
     // 1920x1080: the bar ends at column 960 and holds both sections. The
     // labels end 16 columns plus the longer label into the first; the time
     // starts 16 columns into the second, at 813.
-    const auto wide = place_clock_line(pieces, 960, widths, 1920);
+    const auto wide = place_clock_line(pieces, 960, widths, 1920, true);
     CHECK(wide.spot == ClockLineSpot::sections);
     CHECK(wide.figures_x == 692);
     CHECK(wide.time_x == 829);
     // 1280x720: the bar ends at column 854, inside the second section; the
     // time goes beside the figures, 12 columns past them.
-    const auto one = place_clock_line(pieces, 854, widths, 1280);
+    const auto one = place_clock_line(pieces, 854, widths, 1280, true);
     CHECK(one.spot == ClockLineSpot::beside);
     CHECK(one.figures_x == 692);
     CHECK(one.time_x == 754);
     // 1024x768: the battlefield, whatever the bar holds.
-    CHECK(place_clock_line(pieces, 640, widths, 1024).spot == ClockLineSpot::battlefield);
-    CHECK(place_clock_line(pieces, 960, widths, 1024).spot == ClockLineSpot::battlefield);
+    CHECK(place_clock_line(pieces, 640, widths, 1024, true).spot == ClockLineSpot::battlefield);
+    CHECK(place_clock_line(pieces, 960, widths, 1024, true).spot == ClockLineSpot::battlefield);
     // A bar with no room past PANELTOP keeps the line on the battlefield.
-    CHECK(place_clock_line(pieces, 640, widths, 1280).spot == ClockLineSpot::battlefield);
+    CHECK(place_clock_line(pieces, 640, widths, 1280, true).spot == ClockLineSpot::battlefield);
     // On the battlefield, the line keeps its place at the top left.
     CHECK(kClockLineLeft == 130 && kClockLineTop == 34 && kClockLineStep == 10);
+    const auto rows = clock_line_battlefield_rows(true);
+    CHECK(rows.time == 34 && rows.wind == 44 && rows.tidal == 54);
+
+    // While the console's Clock shows the game time, the line leaves it
+    // out: the wind over the tidal strength in the first section, with no
+    // place for the time, wherever the bar reaches past their figures, on
+    // a window 1024 pixels wide or narrower too (a bar of the original
+    // game's size at 1024x768).
+    const auto first = place_clock_line(pieces, 960, widths, 1920, false);
+    CHECK(first.spot == ClockLineSpot::first_section);
+    CHECK(first.figures_x == 692 && first.time_x == 0);
+    CHECK(place_clock_line(pieces, 742, widths, 1280, false).spot == ClockLineSpot::first_section);
+    CHECK(place_clock_line(pieces, 741, widths, 1280, false).spot == ClockLineSpot::battlefield);
+    const auto narrow = place_clock_line(pieces, 1024, widths, 1024, false);
+    CHECK(narrow.spot == ClockLineSpot::first_section && narrow.figures_x == 692);
+    // A bar that ends at its readouts, as at 640x480, leaves it on the
+    // battlefield, where the wind and the tidal strength take the first two
+    // lines, with no line for the time.
+    CHECK(place_clock_line(pieces, 640, widths, 640, false).spot == ClockLineSpot::battlefield);
+    const auto without_time = clock_line_battlefield_rows(false);
+    CHECK(!without_time.time && without_time.wind == 34 && without_time.tidal == 44);
     // A line is cut into its label, signed amount and the rest.
     const auto wind = split_clock_line("Wind : +26 (24-30)");
     CHECK(wind.label == "Wind : " && wind.amount == "+26" && wind.rest == " (24-30)");
@@ -247,6 +270,56 @@ void clock_line_place() {
     const auto time = split_clock_line("Game Time : 00:00:02");
     CHECK(time.label == "Game Time : " && time.amount.empty() && time.rest == "00:00:02");
     CHECK(split_clock_line("Tidal").label == "Tidal");
+}
+
+// The scale of the chrome on a window of a size, with the top bar's
+// pieces and the parts' widths of clock_line_place.
+double chrome_scale(int32_t width, int32_t height, bool game_time) {
+    const TopBarPieces pieces{642, 513};
+    const ClockLineWidths widths{34, 50, 103, 46, 40};
+    // The interface's own scale, and the column just past its top bar's
+    // last: the window's width in source columns.
+    const double scale = std::min({width / 640.0, height / 480.0, 2.0});
+    const auto bar_end = static_cast<int32_t>(std::ceil(width / scale - 1e-9));
+    return clock_line_chrome_scale(pieces, widths, game_time, width, bar_end, scale);
+}
+
+void clock_line_room() {
+    const TopBarPieces pieces{642, 513};
+    const ClockLineWidths widths{34, 50, 103, 46, 40};
+    // The time 16 columns into the second section; "Game Time" over the
+    // time 12 past the figures; the figures alone.
+    CHECK(clock_line_bar_end(pieces, widths, ClockLineSpot::sections) == 932);
+    CHECK(clock_line_bar_end(pieces, widths, ClockLineSpot::beside) == 800);
+    CHECK(clock_line_bar_end(pieces, widths, ClockLineSpot::first_section) == 742);
+    CHECK(clock_line_bar_end(pieces, widths, ClockLineSpot::battlefield) == 0);
+    // Figures past the first section leave no room for two sections.
+    CHECK(clock_line_bar_end(pieces, {34, 130, 103, 46, 40}, ClockLineSpot::sections) == 0);
+    CHECK(clock_line_bar_end({642, 0}, widths, ClockLineSpot::beside) == 0);
+
+    const auto near = [](double scale, double expected) {
+        return std::abs(scale - expected) < 1e-9;
+    };
+    // 5:4 and 4:3, whose bars end at their readouts: drawn smaller, as far
+    // as one section past the readouts needs (816 columns), since two
+    // (948) would take them under one and a half times the interface.
+    CHECK(near(chrome_scale(1280, 1024, true), 1280.0 / 816));
+    CHECK(near(chrome_scale(1152, 864, true), 1152.0 / 816));
+    // 16:10 at 1440x900 has room for two sections at that scale or more.
+    CHECK(near(chrome_scale(1440, 900, true), 1440.0 / 948));
+    // Bars that reach far enough keep the interface's scale: two sections
+    // at 1920x1080, one at 1280x720 (which two would take under 1.5).
+    CHECK(near(chrome_scale(1920, 1080, true), 2.0));
+    CHECK(near(chrome_scale(1280, 720, true), 1.5));
+    // At 1024 pixels wide or narrower the line stays on the battlefield.
+    CHECK(near(chrome_scale(1024, 768, true), 1.6));
+    // Without the game time the figures alone need room (758 columns), or
+    // none past the bar's end at 1440x900; at 1024 pixels wide or narrower
+    // the chrome keeps its scale, the line going in the bar only where it
+    // already reaches past the figures.
+    CHECK(near(chrome_scale(1280, 1024, false), 1280.0 / 758));
+    CHECK(near(chrome_scale(1440, 900, false), 1.875));
+    CHECK(near(chrome_scale(1024, 768, false), 1.6));
 }
 
 } // namespace
@@ -259,6 +332,7 @@ int main() {
     f4_cycle();
     clock_line();
     clock_line_place();
+    clock_line_room();
     std::puts("ui-hud-resource-panel-test: ok");
     return 0;
 }

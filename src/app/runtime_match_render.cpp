@@ -783,6 +783,7 @@ void Runtime::render_match_surface() {
     mark_profile(OA_PROFILE_MISC);
     sync_match_wrecks();
     follow_shared_cameras();
+    keep_room_for_clock_line();
     // ui.interface-fixes cursor-reset: an armed command, build placement
     // included, is dropped once the unit the order panel shows is gone.
     if (const auto& fixes = ui_rules().interface_fixes;

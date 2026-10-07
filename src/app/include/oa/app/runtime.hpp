@@ -861,7 +861,9 @@ class Runtime final : public menu::Host,
 
     /// Lays out the match on a canvas: make_match_layout, with the side
     /// column fitted to the running match's tallest unit page
-    /// (display_layout::fit_side_column, side_column_page_rows()).
+    /// (display_layout::fit_side_column, side_column_page_rows()), and the
+    /// chrome smaller where ui.resource-panel's clock line needs room in
+    /// the top bar (make_room_for_clock_line).
     ///
     /// @param width canvas width in pixels
     /// @param height canvas height in pixels
@@ -8996,14 +8998,80 @@ class Runtime final : public menu::Host,
     /// time, in the second section where the bar holds two, or else as
     /// "Game Time" over the time beside them; labels, the wind's range and
     /// the time in a light grey and the signed amounts in the produced
-    /// rates' colour. Elsewhere (a window no wider than 1024 pixels, a bar
-    /// with no room past PANELTOP, the touch controls' layout) it goes on
-    /// the battlefield layer: three lines at the top left of the overlays'
-    /// area, in the readouts' text colour.
+    /// rates' colour. Elsewhere (with the game time, a window no wider than
+    /// 1024 pixels; a bar with no room past PANELTOP; the touch controls'
+    /// layout) it goes on the battlefield layer: three lines at the top
+    /// left of the overlays' area, in the readouts' text colour. While the
+    /// console's Clock shows the game time (clock_line_shows_time), the
+    /// line leaves it out: the top bar holds the wind over the tidal
+    /// strength in its first section wherever it reaches past them, on a
+    /// window of any width, and the battlefield their two lines, in the
+    /// first two lines' places.
     ///
     /// @param layer the layer being painted; the line is drawn only when it
     ///        goes on that one
     void draw_clock_line(PaintLayer layer);
+
+    /// Returns the columns a signed amount's figures move left in
+    /// ui.resource-panel's clock line, to sit as near its sign as they sit
+    /// to each other: those the sign leaves blank on its right past those
+    /// its first figure does.
+    ///
+    /// @param font the line's font
+    /// @param amount the amount, its sign first
+    /// @return the columns; 0 for an amount without a sign or a figure
+    [[nodiscard]] int
+    clock_line_sign_pull(const oa::formats::fnt::Font& font, std::string_view amount) const;
+
+    /// Returns the widths of ui.resource-panel's clock line's parts in a
+    /// font, at the widest the running match makes them: each figure of the
+    /// game time and of the wind's amount the font's widest digit, the
+    /// amount with as many figures as the map's most wind, and the wind's
+    /// range and the tidal strength as the map has them.
+    ///
+    /// @param font the line's font
+    /// @param watching whether the line is a watcher's, whose wind shows
+    ///        only its range
+    /// @return the widths; requires a running match
+    [[nodiscard]] oa::ui::hud::ClockLineWidths
+    clock_line_widths(const oa::formats::fnt::Font& font, bool watching) const;
+
+    /// Returns where ui.resource-panel's clock line goes on the match's
+    /// layout (hud::place_clock_line): at the widest its parts get, with
+    /// the game time unless the console's Clock shows it.
+    ///
+    /// @return the place; the battlefield without a match or a font, and
+    ///         on the touch controls' layout
+    [[nodiscard]] oa::ui::hud::ClockLinePlace clock_line_place() const;
+
+    /// Returns whether ui.resource-panel's clock line shows the game time:
+    /// while the console's Clock is off, which shows it otherwise.
+    ///
+    /// @return whether it does; true without a match
+    [[nodiscard]] bool clock_line_shows_time() const;
+
+    /// Lays out the match's chrome small enough for ui.resource-panel's
+    /// clock line to go in the top bar.
+    ///
+    /// With the hack on, on a layout of the side column, the bars and the
+    /// battlefield (not the touch controls' or a frame without the
+    /// interface), the chrome is laid out afresh for the canvas
+    /// (make_match_layout, display_layout::fit_side_column) at the scale
+    /// hud::clock_line_chrome_scale gives for the running match's top bar
+    /// and the line's widest parts as a player sees them, with or without
+    /// the game time (clock_line_shows_time). The layout keeps its canvas
+    /// pixels per window point and its safe area. Anything else returns
+    /// the layout as it is.
+    ///
+    /// @param laid_out the match layout of the canvas
+    /// @return the layout
+    [[nodiscard]] oa::ui::display_layout::MatchLayout
+    make_room_for_clock_line(const oa::ui::display_layout::MatchLayout& laid_out);
+
+    /// With ui.resource-panel on, lays the match out again
+    /// (make_room_for_clock_line) where the chrome's scale it wants has
+    /// changed, as when the console's Clock is turned on or off.
+    void keep_room_for_clock_line();
 
     /// Takes a pointer event on ui.resource-panel's panel: a press on it
     /// starts a drag, moves follow it, the release ends it, and a watcher's
@@ -10133,7 +10201,8 @@ class Runtime final : public menu::Host,
     ///
     /// For each of the first two sides SIDEDATA.TDF lists, a skirmish starts
     /// with the local player on that side. On windows of 640x480, 1024x768,
-    /// 1280x1024, 1280x720, 1920x1080 and 2560x1080 each bar must run from
+    /// 1152x864, 1280x1024, 1280x720, 1920x1080 and 2560x1080 the chrome's
+    /// scale must be as check_clock_line_room expects, and each bar must run from
     /// the side column's edge to the window's right edge at the bars' scale,
     /// every column of each bar must show something other than black, and
     /// the HUD's bars must hold the side's panel art (the GAF its intgaf
@@ -10143,6 +10212,26 @@ class Runtime final : public menu::Host,
     /// bottom, each from its first row. Throws std::runtime_error after the
     /// last window when any of these failed.
     void check_match_bars();
+
+    /// Checks the chrome's scale and ui.resource-panel's clock line on the
+    /// match's layout, for check_match_bars.
+    ///
+    /// Without the hack the chrome must keep the interface's scale. With it
+    /// the clock line must go on the battlefield at the interface's scale
+    /// on a window 1024 pixels wide or narrower, in two sections at that
+    /// scale at 1920 pixels wide and wider, and on a window whose bar at
+    /// that scale ends short of the line beside the figures, beside them at
+    /// the largest scale whose bar reaches kClockLineInset columns past it.
+    /// With the console's Clock turned on the line must leave out the game
+    /// time, in the top bar and on the battlefield, and on such a window
+    /// take the first section at the largest scale whose bar reaches
+    /// kClockLineInset columns past the figures; turned off, the time must
+    /// come back.
+    ///
+    /// @param label the side's art and the window's size, for the failures
+    /// @param failed takes each failure's message
+    void
+    check_clock_line_room(const std::string& label, const std::function<void(std::string)>& failed);
 
     /// Checks the pages of the unit types options_.check_unit_pages names
     /// against the side column on windows of several sizes.

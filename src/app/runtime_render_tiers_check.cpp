@@ -84,6 +84,9 @@ constexpr int skipped_exit_code = 77;
 /// one whose chrome does not (1.6).
 constexpr int whole_scale_width = 1280;
 constexpr int whole_scale_height = 960;
+/// A window as tall whose chrome scales by 2 with ui.resource-panel on too,
+/// its top bar wide enough for the hack's clock line at that scale.
+constexpr int wide_whole_scale_width = 1920;
 constexpr int part_scale_width = 1024;
 constexpr int part_scale_height = 768;
 
@@ -928,6 +931,14 @@ int Runtime::check_render_tiers() {
             fail(std::string("SDL_SetWindowSize: ") + SDL_GetError());
         apply_output_mode();
     };
+    // The match at a whole-number chrome scale: on the whole-scale window,
+    // or where ui.resource-panel draws the chrome smaller there to give its
+    // clock line room in the top bar, on one as tall and wider.
+    const auto resize_whole = [&] {
+        resize(whole_scale_width, whole_scale_height);
+        if (std::floor(match_layout_.scale) != match_layout_.scale)
+            resize(wide_whole_scale_width, whole_scale_height);
+    };
     const auto presented = [&]() {
         renderer::Surface frame;
         capture_frame_ = &frame;
@@ -1342,7 +1353,7 @@ int Runtime::check_render_tiers() {
     }
 
     switch_tier(false);
-    resize(whole_scale_width, whole_scale_height);
+    resize_whole();
     // The cursor waits in the blank corner right of the bottom bar.
     update_pointer(
         static_cast<float>(match_layout_.width - 1), static_cast<float>(match_layout_.height - 1)
@@ -1728,10 +1739,11 @@ int Runtime::check_render_tiers() {
         check_magnified(zoom, presented(), "the first frame after the tier was switched on");
     }
     for (const float zoom : first_frame_zooms)
-        for (const auto& [width, height] :
-             {std::pair{part_scale_width, part_scale_height},
-              std::pair{whole_scale_width, whole_scale_height}}) {
-            resize(width, height);
+        for (const bool whole : {false, true}) {
+            if (whole)
+                resize_whole();
+            else
+                resize(part_scale_width, part_scale_height);
             update_pointer(
                 static_cast<float>(match_layout_.width - 1),
                 static_cast<float>(match_layout_.height - 1)
@@ -1740,7 +1752,8 @@ int Runtime::check_render_tiers() {
             check_magnified(
                 zoom,
                 presented(),
-                "the first frame at " + std::to_string(width) + 'x' + std::to_string(height)
+                "the first frame at " + std::to_string(match_layout_.width) + 'x' +
+                    std::to_string(match_layout_.height)
             );
         }
     // The standard tier's picture of the same moment, which screenshots,
@@ -2038,8 +2051,13 @@ int Runtime::check_render_tiers() {
     } else
         std::cout << "render tiers check: the Full cases need --hardware-acceleration=full; "
                      "skipped\n";
-    // Switched off, every frame is the standard tier's again.
+    // Switched off, every frame is the standard tier's again, the whole
+    // frame where the chrome's scale is a whole number.
     switch_tier(false);
+    resize_whole();
+    update_pointer(
+        static_cast<float>(match_layout_.width - 1), static_cast<float>(match_layout_.height - 1)
+    );
     for (const float zoom : {0.5F, 1.0F, 2.0F}) {
         at_zoom(zoom);
         const auto read = presented();

@@ -4,17 +4,22 @@
 // The top and bottom bars on windows of several shapes, for each of two
 // sides: each bar runs from the side column's edge to the window's right
 // edge with art in every column, and holds the side's panel art where the
-// game places it on a screen that wide.
+// game places it on a screen that wide. The chrome keeps the interface's
+// scale, or under ui.resource-panel the scale that gives its clock line
+// room in the top bar, with and without the game time.
 #include "oa/app/runtime.hpp"
 #include "oa/formats/gaf.hpp"
 #include "oa/formats/tdf.hpp"
+#include "oa/ui/console/game_fields.hpp"
 #include "oa/ui/display_layout.hpp"
+#include "oa/ui/hud/resource_panel.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <iostream>
 #include <optional>
 #include <stdexcept>
@@ -25,13 +30,17 @@
 namespace oa::app {
 namespace {
 
-// Window sizes: 4:3 at the interface's own size, between it and its largest
-// and at its largest; then wider than 4:3 below the largest, at it, and
-// past it on a window twice as wide as tall.
-constexpr std::array<std::pair<int, int>, 6> kWindowSizes{{
+// Window sizes: 4:3 at the interface's own size and between it and its
+// largest, either side of 1024 pixels wide, and 5:4 at its largest; then
+// wider than 4:3 below the largest on either side of 1024 pixels wide, at
+// it, and past it on a window twice as wide as tall.
+constexpr std::array<std::pair<int, int>, 9> kWindowSizes{{
     {640, 480},
+    {800, 600},
     {1024, 768},
+    {1152, 864},
     {1280, 1024},
+    {1024, 600},
     {1280, 720},
     {1920, 1080},
     {2560, 1080},
@@ -85,6 +94,106 @@ std::vector<std::string> side_panel_art(const std::vector<uint8_t>& sidedata) {
 }
 
 } // namespace
+
+void Runtime::check_clock_line_room(
+    const std::string& label, const std::function<void(std::string)>& failed
+) {
+    namespace display = oa::ui::display_layout;
+    namespace hud = oa::ui::hud;
+    const int width = match_layout_.width;
+    const auto own = display::fit_side_column(
+        display::make_match_layout(width, match_layout_.height), side_column_page_rows()
+    );
+    const auto scale_text = [](double scale) { return std::to_string(scale); };
+    if (!ui_rules().resource_panel.enabled) {
+        // Without the hack the chrome keeps the interface's scale.
+        if (match_layout_.scale != own.scale)
+            failed(
+                label + ": the chrome is drawn at scale " + scale_text(match_layout_.scale) +
+                ", not the interface's " + scale_text(own.scale)
+            );
+        return;
+    }
+    // With ui.resource-panel the clock line goes in the top bar on a window
+    // wider than 1024 pixels: in two sections where the interface's bar
+    // already reaches far enough, at 1920x1080 and wider; beside the wind's
+    // and the tidal strength's figures on the 4:3 and 5:4 windows, with
+    // the chrome drawn at the largest scale whose bar reaches 16 columns
+    // past the line; and on the battlefield at 1024 pixels wide or
+    // narrower, the chrome at the interface's scale.
+    const auto* font = match_label_font();
+    if (font == nullptr) {
+        failed(label + ": no font for the clock line");
+        return;
+    }
+    const auto widths = clock_line_widths(*font, false);
+    const auto reaching = [&](hud::ClockLineSpot spot) {
+        return static_cast<double>(width) /
+               (hud::clock_line_bar_end(top_bar_pieces_, widths, spot) + hud::kClockLineInset);
+    };
+    const auto expect = [&](hud::ClockLineSpot spot, double scale, const std::string& clock) {
+        const auto place = clock_line_place();
+        if (place.spot != spot || std::abs(match_layout_.scale - scale) > 1e-9)
+            failed(
+                label + clock + ": the clock line goes to place " +
+                std::to_string(static_cast<int>(place.spot)) + " at scale " +
+                scale_text(match_layout_.scale) + ", not place " +
+                std::to_string(static_cast<int>(spot)) + " at " + scale_text(scale)
+            );
+    };
+    const bool wide = width > hud::kClockLineBattlefieldMaxWidth;
+    // Whether the interface's bar ends short of the line at a place.
+    const auto short_of = [&](hud::ClockLineSpot spot) {
+        return display::kSourceLeft + own.bar_columns() <
+               hud::clock_line_bar_end(top_bar_pieces_, widths, spot);
+    };
+    if (!wide)
+        expect(hud::ClockLineSpot::battlefield, own.scale, "");
+    else if (width >= 1920)
+        expect(hud::ClockLineSpot::sections, own.scale, "");
+    else if (short_of(hud::ClockLineSpot::beside))
+        expect(hud::ClockLineSpot::beside, reaching(hud::ClockLineSpot::beside), "");
+    else
+        expect(hud::ClockLineSpot::beside, own.scale, "");
+    // While the console's Clock shows the game time, the line leaves it
+    // out: the top bar's first section, the chrome on a window wider than
+    // 1024 pixels drawn as large as it can be with the bar reaching 16
+    // columns past the figures; on a narrower one, the chrome at the
+    // interface's scale, where its bar reaches past the figures, at 800x600
+    // and 1024x768 with HUD scaling Off and at 1024x600, and elsewhere on
+    // the battlefield, with no line for the time. Turned off again, the
+    // line and the chrome are back as they were.
+    const auto shown = clock_line_place().spot;
+    const double shown_scale = match_layout_.scale;
+    auto& game = match_->state().game;
+    const auto flags = oa::ui::console::console_flags(game);
+    oa::ui::console::set_console_flags(
+        game, static_cast<uint16_t>(flags | oa::ui::console::console_flag::clock)
+    );
+    render_match_surface();
+    if (clock_line_shows_time() || hud::clock_line_battlefield_rows(clock_line_shows_time()).time)
+        failed(label + " with +clock: the clock line keeps the game time");
+    if (!wide)
+        expect(
+            short_of(hud::ClockLineSpot::first_section) ? hud::ClockLineSpot::battlefield
+                                                        : hud::ClockLineSpot::first_section,
+            own.scale,
+            " with +clock"
+        );
+    else
+        expect(
+            hud::ClockLineSpot::first_section,
+            short_of(hud::ClockLineSpot::first_section)
+                ? reaching(hud::ClockLineSpot::first_section)
+                : own.scale,
+            " with +clock"
+        );
+    oa::ui::console::set_console_flags(game, flags);
+    render_match_surface();
+    if (!clock_line_shows_time() || clock_line_place().spot != shown ||
+        match_layout_.scale != shown_scale)
+        failed(label + ": the game time did not come back with +clock off");
+}
 
 void Runtime::check_match_bars() {
     if (sdl_.renderer == nullptr || sdl_.window == nullptr)
@@ -146,6 +255,7 @@ void Runtime::check_match_bars() {
             if (match_layout_.width != width || match_layout_.height != height)
                 throw std::runtime_error("match bars check: could not size the match to " + label);
             render_match_surface();
+            check_clock_line_room(label, failed);
             const int left = match_layout_.left;
             const int columns = match_layout_.bar_columns();
 

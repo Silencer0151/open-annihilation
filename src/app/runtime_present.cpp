@@ -99,6 +99,8 @@ void Runtime::apply_output_mode() {
         // layout has none.
         match_layout_ =
             oa::ui::display_layout::fit_side_column(match_layout_, side_column_page_rows());
+        // ui.resource-panel's clock line may need the chrome smaller.
+        match_layout_ = make_room_for_clock_line(match_layout_);
         // On a phone the HUD's pieces are placed for this canvas.
         refresh_placed_hud_regions();
         // On a screen of another size the pointer's place is known again

@@ -321,15 +321,27 @@ void format_tidal(char* out, std::size_t size, float tidal_strength) {
 }
 
 ClockLinePlace place_clock_line(
-    const TopBarPieces& pieces, int32_t bar_end, const ClockLineWidths& widths, int32_t window_width
+    const TopBarPieces& pieces,
+    int32_t bar_end,
+    const ClockLineWidths& widths,
+    int32_t window_width,
+    bool game_time
 ) noexcept {
     ClockLinePlace place{};
     const int32_t section = pieces.width / kTopBarPieceSections;
-    if (window_width <= kClockLineBattlefieldMaxWidth || section <= 0)
+    // Without the game time the line needs only the first section, which
+    // the bar of a window of any width may hold.
+    if (section <= 0 || (game_time && window_width <= kClockLineBattlefieldMaxWidth))
         return place;
     const int32_t second = pieces.left + section;
     const int32_t figures_end = pieces.left + kClockLineInset + widths.label + widths.figures;
     place.figures_x = pieces.left + kClockLineInset + widths.label;
+    if (!game_time) {
+        if (figures_end > bar_end)
+            return ClockLinePlace{};
+        place.spot = ClockLineSpot::first_section;
+        return place;
+    }
     if (figures_end <= second &&
         second + kClockLineInset + widths.time <= std::min(bar_end, second + section)) {
         place.spot = ClockLineSpot::sections;
@@ -344,6 +356,71 @@ ClockLinePlace place_clock_line(
         return place;
     }
     return ClockLinePlace{};
+}
+
+int32_t clock_line_bar_end(
+    const TopBarPieces& pieces, const ClockLineWidths& widths, ClockLineSpot spot
+) noexcept {
+    const int32_t section = pieces.width / kTopBarPieceSections;
+    if (section <= 0)
+        return 0;
+    const int32_t second = pieces.left + section;
+    const int32_t figures_end = pieces.left + kClockLineInset + widths.label + widths.figures;
+    if (spot == ClockLineSpot::sections) {
+        const int32_t time_end = second + kClockLineInset + widths.time;
+        return figures_end <= second && time_end <= second + section ? time_end : 0;
+    }
+    if (spot == ClockLineSpot::beside)
+        return figures_end + kClockLineBesideGap + std::max(widths.time_label, widths.time_value);
+    if (spot == ClockLineSpot::first_section)
+        return figures_end;
+    return 0;
+}
+
+double clock_line_chrome_scale(
+    const TopBarPieces& pieces,
+    const ClockLineWidths& widths,
+    bool game_time,
+    int32_t window_width,
+    int32_t bar_end,
+    double scale
+) noexcept {
+    if (window_width <= kClockLineBattlefieldMaxWidth || scale <= 0.0)
+        return scale;
+    // A bar from the side column's edge to the window's at a scale ends at
+    // the window's width in source columns, or a column past it. A bar
+    // drawn smaller for the line reaches as far past it as the line starts
+    // into its section.
+    const auto reaching = [window_width](int32_t end) {
+        return static_cast<double>(window_width) / (end + kClockLineInset);
+    };
+    if (game_time) {
+        if (const int32_t sections = clock_line_bar_end(pieces, widths, ClockLineSpot::sections);
+            sections > 0) {
+            if (bar_end >= sections)
+                return scale;
+            if (const double smaller = reaching(sections); smaller >= kClockLineSectionsLeastScale)
+                return std::min(scale, smaller);
+        }
+    }
+    const int32_t end = clock_line_bar_end(
+        pieces, widths, game_time ? ClockLineSpot::beside : ClockLineSpot::first_section
+    );
+    if (end <= 0 || bar_end >= end)
+        return scale;
+    return std::min(scale, reaching(end));
+}
+
+ClockLineRows clock_line_battlefield_rows(bool game_time) noexcept {
+    ClockLineRows rows{};
+    int32_t y = kClockLineTop;
+    if (game_time) {
+        rows.time = y;
+        y += kClockLineStep;
+    }
+    rows.wind = y;
+    rows.tidal = y + kClockLineStep;
+    return rows;
 }
 
 ClockLineParts split_clock_line(std::string_view line) noexcept {
