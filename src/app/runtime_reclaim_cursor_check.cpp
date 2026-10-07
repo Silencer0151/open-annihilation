@@ -3,10 +3,13 @@
 
 // The cursor a selected commander shows over the map's vegetation, another
 // reclaimable feature and a wreck, driven through synthetic SDL pointer motion,
-// and its clicks on trees out of sight, on mapped ground and on ground never
-// mapped.
+// its clicks on trees out of sight, on mapped ground and on ground never
+// mapped, and where a construction kbot's and a construction aircraft's
+// Reclaim of a tree draw their markers.
 #include "oa/app/runtime.hpp"
 #include "oa/core/map_plot.h"
+#include "oa/formats/png.hpp"
+#include "oa/sim/feature_runtime.hpp"
 #include "oa/sim/gameplay_input/order_cursor.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -15,6 +18,7 @@
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <optional>
@@ -37,8 +41,9 @@ constexpr int32_t kWreckNearest = 6;
 constexpr int32_t kSampleStep = 2;
 constexpr int32_t kSampleMargin = 12;
 constexpr uint16_t kNoFeature = 0xffff;
-// The ground Reclaim order's kind (VTOL_Reclaim is 58).
+// The Reclaim orders' kinds, of a ground unit and of an aircraft.
 constexpr uint8_t kReclaimKind = 32;
+constexpr uint8_t kAirReclaimKind = 58;
 constexpr std::string_view kWreckName = "armsolar_dead";
 // Map pixels a sight cell spans, and the most a sight cell sits north of the
 // ground it covers: half the tallest ground.
@@ -49,6 +54,13 @@ constexpr int32_t kHalfTallestGround = 128;
 constexpr int32_t kFogMarginCells = 2;
 constexpr int32_t kFogTreesApartCells = 24;
 constexpr int kFogReclaimTicks = 3000;
+// Map pixels west and south of the first tree the construction kbot is
+// placed at, and the aircraft further off; the ticks it then flies toward the
+// tree before the overlays are drawn, and the picture of them.
+constexpr int32_t kKbotApart = 48;
+constexpr int32_t kAircraftApart = 160;
+constexpr int kAircraftFlightTicks = 90;
+constexpr const char* kOverlayPicture = "reclaim-order-overlays.png";
 
 [[noreturn]] void fail(const std::string& what) {
     throw std::runtime_error("reclaim cursor check: " + what);
@@ -63,6 +75,25 @@ struct Hovered {
     int32_t cell_z{};
     const oa::FeatureDef* def{};
 };
+
+/// Writes a frame as a PNG file.
+///
+/// @param path the file
+/// @param frame the frame
+void write_png(const char* path, const oa::present::world_renderer::Surface& frame) {
+    std::vector<uint8_t> file;
+    const oa::formats::png::Header header{
+        frame.width, frame.height, 8, oa::formats::png::ColorType::rgb, {}
+    };
+    if (!oa::formats::png::write(oa::formats::png::Image{header, {}, frame.rgb}, &file))
+        fail(std::string("cannot encode ") + path);
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    output.write(
+        reinterpret_cast<const char*>(file.data()), static_cast<std::streamsize>(file.size())
+    );
+    if (!output)
+        fail(std::string("cannot write ") + path);
+}
 
 } // namespace
 
@@ -507,6 +538,96 @@ void Runtime::check_reclaim_cursor() {
               << " out of sight on mapped ground shows Reclaim, a click there gives a Reclaim, "
                  "and the commander reclaimed it by tick "
               << reclaimed_tick << "\n";
+
+    // A construction kbot and a construction aircraft placed south of the
+    // first tree are given its Reclaim with a RECLAIM click; once the aircraft
+    // is flying, the overlays Shift shows are drawn into a picture. Each order
+    // stands on the ground where the tree does, so that its marker is drawn
+    // on the tree and the aircraft's path comes down to it.
+    const auto& tree = hovered.front();
+    const auto& tree_def = *tree.def;
+    const auto stands = oa::sim::feature_runtime::feature_center(
+        world, static_cast<int16_t>(tree.cell_x), static_cast<int16_t>(tree.cell_z), tree_def
+    );
+    const auto place = [&](const char* name, int32_t apart) {
+        const auto type = oa::sim::unit_spawn::find_type_index(spawn_type_names_, name);
+        if (type == 0)
+            fail(std::string("the game has no ") + name);
+        const auto x = static_cast<uint32_t>((stands.x >> 16) - apart);
+        const auto z = static_cast<uint32_t>((stands.z >> 16) + apart);
+        oa::sim::unit_spawn::Request request;
+        request.player = match_local_player_;
+        request.type = type;
+        request.finished = true;
+        request.state = kGroundOccupancyState;
+        request.position = {
+            x << 16U,
+            static_cast<uint32_t>(std::max(match_->map_height(x << 16U, z << 16U), 0)) << 16U,
+            z << 16U
+        };
+        auto* slot = match_->create(request);
+        if (slot == nullptr || slot->unit == nullptr)
+            fail(std::string("could not place ") + name);
+        slot->unit->object_present = true;
+        return slot->unit_index;
+    };
+    match_->stop_orders(commander);
+    clear_local_selection();
+    const auto kbot = place("ARMCK", kKbotApart);
+    const auto aircraft = place("ARMCA", kAircraftApart);
+    adopt_selection(kbot);
+    adopt_selection(aircraft);
+    match_camera_x_ = (stands.x >> 16) - visible_map_width() / 2;
+    match_camera_z_ = (stands.z >> 16) - visible_map_height() / 2;
+    render_match_surface();
+    const auto on_tree = project_match_point(
+        viewport(),
+        {static_cast<uint32_t>(stands.x),
+         static_cast<uint32_t>(std::max(stands.y, 0)),
+         static_cast<uint32_t>(stands.z)}
+    );
+    match_command_ = MatchCommand::reclaim;
+    click(static_cast<float>(on_tree.x), static_cast<float>(on_tree.y));
+    for (int tick = 0; tick < kAircraftFlightTicks; ++tick)
+        step_match_simulation();
+    // The aircraft's path pips are drawn as for the unit in the order panel.
+    world.game.panel_unit_id = aircraft;
+    render_match_surface();
+    oa::present::world_renderer::Surface picture{
+        match_world_cpu_.width, match_world_cpu_.height, match_world_cpu_.rgb
+    };
+    auto drawn_view = viewport();
+    drawn_view.destination_x = 0;
+    drawn_view.destination_y = 0;
+    drawn_view.surface_width = picture.width;
+    drawn_view.surface_height = picture.height;
+    const auto drawn = draw_order_overlays(picture, drawn_view);
+    write_png(kOverlayPicture, picture);
+    const auto aimed_on_tree = [&](uint16_t unit, uint8_t kind, const std::string& who) {
+        std::vector<oa::sim::match_runtime::Match::QueuedCommandView> queue;
+        match_->visit_primary_queue(unit, [&](const auto& order) { queue.push_back(order); });
+        if (queue.empty() || queue.front().kind != kind)
+            fail(
+                "a RECLAIM click on " + feature_name(tree_def) + " gave the " + who + " no Reclaim"
+            );
+        const auto& aim = queue.front().destination;
+        if (aim[0] != stands.x || aim[1] != stands.y || aim[2] != stands.z)
+            fail(
+                "the " + who + "'s Reclaim of " + feature_name(tree_def) + " is aimed at " +
+                std::to_string(aim[0] >> 16) + "," + std::to_string(aim[1] >> 16) + "," +
+                std::to_string(aim[2] >> 16) + ", not on the tree at " +
+                std::to_string(stands.x >> 16) + "," + std::to_string(stands.y >> 16) + "," +
+                std::to_string(stands.z >> 16) + " (" + kOverlayPicture + ")"
+            );
+    };
+    aimed_on_tree(kbot, kReclaimKind, "construction kbot");
+    aimed_on_tree(aircraft, kAirReclaimKind, "construction aircraft");
+    if (drawn.sprites < 2)
+        fail("the order overlays drew no Reclaim markers");
+    std::cout << "reclaim cursor check: a construction kbot's and a construction aircraft's "
+                 "Reclaim of "
+              << feature_name(tree_def) << " stand on the tree, at height " << (stands.y >> 16)
+              << ", and draw their markers there (" << kOverlayPicture << ")\n";
 }
 
 } // namespace oa::app

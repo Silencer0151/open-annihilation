@@ -1781,6 +1781,10 @@ if(OA_BUILD_PLATFORM)
       # the open ground around them. Under the fog a tree on mapped ground
       # shows Reclaim and a click there gives a Reclaim, which the commander
       # carries out; a tree on ground never mapped shows Move and takes a Move.
+      # A construction kbot's and a flying construction aircraft's Reclaim of
+      # a tree stand on the ground where the tree does, so that their markers
+      # are drawn on it; the order overlays are drawn into
+      # reclaim-order-overlays.png in the test's folder.
       set(oa_reclaim_cursor_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/reclaim-cursor")
       file(MAKE_DIRECTORY "${oa_reclaim_cursor_dir}")
       add_test(NAME native-reclaim-cursor COMMAND oa-game --game-dir "${OA_GAME_DIR}"

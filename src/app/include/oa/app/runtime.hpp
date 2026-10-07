@@ -8116,7 +8116,8 @@ class Runtime final : public menu::Host,
     /// where the engine aims a Reclaim order.
     ///
     /// @param ground 16.16 ground point
-    /// @return 16.16 point at height 0, or nullopt without a reclaimable feature
+    /// @return 16.16 point on the ground where the feature stands, the height the feature is
+    ///         drawn at, or nullopt without a reclaimable feature
     [[nodiscard]] std::optional<oa::sim::ground_orders::Point>
     feature_reclaim_point(const oa::sim::ground_orders::Point& ground) const;
 

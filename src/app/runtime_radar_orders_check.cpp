@@ -10,6 +10,7 @@
 #include "oa/app/runtime.hpp"
 #include "oa/core/map_plot.h"
 #include "oa/data/mission_types.hpp"
+#include "oa/sim/feature_runtime.hpp"
 #include "oa/sim/map_runtime/feature_defs.hpp"
 
 #include <SDL3/SDL.h>
@@ -298,13 +299,13 @@ void Runtime::check_radar_orders() {
     };
     map_around(mapped_wreck, true);
     map_around(unmapped_wreck, false);
-    // Where a Reclaim of a wreck goes: the middle of its footprint.
+    // Where a Reclaim of a wreck goes: the middle of its footprint, on the
+    // ground where the wreck stands.
     const auto wreck_middle = [&](std::array<int32_t, 2> cell) {
-        return Point{
-            (cell[0] * OA_MAP_CELL_PIXELS + wreck.footprint_x * OA_MAP_CELL_PIXELS / 2) << 16,
-            0,
-            (cell[1] * OA_MAP_CELL_PIXELS + wreck.footprint_z * OA_MAP_CELL_PIXELS / 2) << 16
-        };
+        const auto stands = oa::sim::feature_runtime::feature_center(
+            world, static_cast<int16_t>(cell[0]), static_cast<int16_t>(cell[1]), wreck
+        );
+        return Point{stands.x, stands.y, stands.z};
     };
     const auto open_ground = place(2, 2);
 

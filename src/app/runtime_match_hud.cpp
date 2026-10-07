@@ -4,6 +4,7 @@
 // HUD gadget actions, build placement, features and wrecks.
 #include "oa/app/runtime.hpp"
 #include "oa/core/map_plot.h"
+#include "oa/sim/feature_runtime.hpp"
 #include "oa/ui/gui_layout/gui_gadget.hpp"
 #include "oa/ui/hud/command_buttons.hpp"
 #include "oa/ui/hud/order_panel.hpp"
@@ -588,10 +589,13 @@ Runtime::feature_reclaim_point(const oa::sim::ground_orders::Point& ground) cons
     if (word >= world.feature_def_count ||
         (world.feature_defs[word].flags & OA_FEATURE_FLAG_RECLAIMABLE) == 0)
         return std::nullopt;
-    const auto& def = world.feature_defs[word];
-    return oa::sim::ground_orders::Point{
-        (origin_x * 16 + def.footprint_x * 8) << 16, 0, (origin_z * 16 + def.footprint_z * 8) << 16
-    };
+    // On the ground where the feature stands, so that the order's marker and
+    // path end on the feature; height 0 where the map has no ground under it.
+    const auto centre = oa::sim::feature_runtime::feature_center(
+        world, origin_x, origin_z, world.feature_defs[word]
+    );
+    const oa_fixed height = centre.y;
+    return oa::sim::ground_orders::Point{centre.x, std::max<oa_fixed>(height, 0), centre.z};
 }
 
 bool Runtime::try_reclaim_feature_at(float x, float y) {
