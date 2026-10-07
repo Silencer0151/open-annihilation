@@ -78,9 +78,12 @@ uint32_t reported_index(const UnitSyncPeer& peer, uint32_t key) noexcept {
     return index;
 }
 
-// Reported its unit count, sent every checksum and acknowledged every verdict.
+// Reported its unit count, sent every checksum and acknowledged every verdict. A machine
+// acknowledges every 0x1a record it handled, those sent to its computer players included: a
+// computer player the host greeted as a playing peer before its info told otherwise leaves
+// the machine's count above what the host sent its human, and the count still covers them.
 bool peer_complete(const UnitSyncPeer& peer) noexcept {
-    return peer.expected != 0 && peer.received == peer.expected && peer.sent == peer.acknowledged;
+    return peer.expected != 0 && peer.received == peer.expected && peer.acknowledged >= peer.sent;
 }
 
 /// Returns the player id of the first host-flagged slot, an open slot included.
@@ -439,7 +442,7 @@ const char* unit_sync_diagnostic(Lobby& lobby, char* out, std::size_t capacity) 
             );
             return out;
         }
-        if (peer.sent != peer.acknowledged) {
+        if (peer.acknowledged < peer.sent) {
             std::snprintf(
                 out,
                 capacity,

@@ -99,7 +99,8 @@ struct AutomationHost {
     const oa::Game* (*match_game)(void* context){};
     /// Collects the controls of the built-in screen shown and of the dialog
     /// over it, or of the match's panel or dialog: those of the panel that
-    /// takes the pointer, the dialog's while one is up. The screens of the
+    /// takes the pointer, the dialog's while one is up, and a stacked
+    /// dialog's (a message box) before them. The screens of the
     /// screen packages are not among them; their modules report their own.
     ///
     /// @param context AutomationHost::context

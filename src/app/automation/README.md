@@ -90,8 +90,8 @@ been served and `tick` is the running match's (0 outside a match), or
 | Request | Answer |
 |---|---|
 | `hello` | `version` (1), `engine` (`version`), `automation` (1), `window` (`width`, `height` in the window's pixels), `canvas` (`width`, `height`, and `rect`, `[x, y, w, h]`, where the game's canvas lies in the window: the 640x480 screen on the menus, the whole window in a match), `tick_rate` (30), `fixed_clock` |
-| `screen` | `screen` (`main_menu`, `single_player`, `skirmish`, `map_selection`, `loading`, `match`, `options`, `load_game`, `briefing`, `mp_providers`, `mp_tcp`, `mp_game_list`, `mp_new_game`, `mp_battleroom` and the like; `screen_<id>` for one without a name), `frontend_state`, `dialogs` (the dialogs over the screen whose controls take the pointer, by their GUI file's name: `selmap`, `tcp`, `yesorno` and the like), `focused` (the name of the control that takes the keys, or null), `pointer` (`x`, `y` on the canvas), and in a match `camera` (`x`, `y`, the map pixel at the battlefield's top-left corner; null elsewhere) |
-| `controls` | `screen`, and `controls`: those of the panel that takes the pointer, a dialog's first while one is up, each with `name` (as the GUI file spells it), `kind` (`button`, `check box`, `list`, `text field`, `slider`, `label`, `area`, `image`), `dialog` (null for the screen's own), `rect` (`[x, y, w, h]` on the canvas), `window_rect` (in the window's pixels), `enabled`, `visible`, `text` and `focused`; a check box adds `checked`; a list adds `items`, `first_visible`, `rows`, `row_height`, `selected` (-1 for none) and `scroll_up` and `scroll_down` (null: a list's scroll bar carries its own arrows). With `screen`, refused `screen_changed` when another is shown |
+| `screen` | `screen` (`main_menu`, `single_player`, `skirmish`, `map_selection`, `loading`, `match`, `options`, `load_game`, `briefing`, `mp_providers`, `mp_tcp`, `mp_game_list`, `mp_new_game`, `mp_battleroom` and the like; `screen_<id>` for one without a name), `frontend_state`, `dialogs` (the dialogs over the screen whose controls take the pointer, the top one first, by their GUI file's name: `selmap`, `tcp`, `yesorno`, `msgbox` and the like), `focused` (the name of the control that takes the keys, or null), `pointer` (`x`, `y` on the canvas), and in a match `camera` (`x`, `y`, the map pixel at the battlefield's top-left corner; null elsewhere) |
+| `controls` | `screen`, and `controls`: those of the panel that takes the pointer, a dialog's first while one is up (a message box's before the dialog it is over), each with `name` (as the GUI file spells it), `kind` (`button`, `check box`, `list`, `text field`, `slider`, `label`, `area`, `image`), `dialog` (null for the screen's own), `rect` (`[x, y, w, h]` on the canvas), `window_rect` (in the window's pixels), `enabled`, `visible`, `text` and `focused`; a check box adds `checked`; a list adds `items`, `first_visible`, `rows`, `row_height`, `selected` (-1 for none) and `scroll_up` and `scroll_down` (null: a list's scroll bar carries its own arrows). With `screen`, refused `screen_changed` when another is shown |
 | `input` | `consumed` (`frame`, `tick`): the frame and tick at which the game took the events. See below |
 | `prefs` | `path`, the preferences file, and `values`, the preferences as the game holds them now, whether written to the file yet or not; with `names`, a list of keys, only those |
 | `quit` | nothing more; once the answer is written the game quits as a player closing its window does: at once from the menus, through the surrender question in a match |
@@ -304,7 +304,9 @@ system's sockets elsewhere.
   unanswered, a wrong token denied, hello, a second client busy, the main
   menu's screen, the preferences, refusals, the main menu's controls, input
   refused for another screen and for events that cannot be read, a click
-  on SINGLE answered once taken and opening Single Player, and a hello and
+  on SINGLE answered once taken and opening Single Player, Load Game's
+  message box (no saved games) listed over its dialog and closed by its
+  OK, and a hello and
   quit sent at once by a client that then ends its side of the connection,
   both answered, ending the game with status 0; the log names the address
   and never the token.
@@ -312,11 +314,14 @@ system's sockets elsewhere.
   drives the game by input alone: input requests sent far faster than the
   game takes them, of which it reads no more than about a frame's worth
   while they wait, so that the sender stalls and the game's memory stays
-  flat; a double click on the providers' TCP/IP row placed in the
+  flat (not judged in a build with the address sanitizer, whose quarantine
+  keeps the memory it frees); a double click on the providers' TCP/IP row placed in the
   window's pixels, keys and text replacing the address in the TCP/IP
   dialog's field, a skirmish started from the menus, its
   camera scrolling while the endpoint holds the right arrow key and
-  stopping once it is let go, and Yes to the surrender question that quit
+  stopping once it is let go, the match saved from the game menu under a
+  typed name, which the save dialog's field holds and Load Game then
+  lists, and Yes to the surrender question that quit
   asks ending the game with status 0.
 - `native-automation-frame` (`tools/check_native_automation_frame.py`)
   starts the game in the same way on the main menu, in a 640x480 window,

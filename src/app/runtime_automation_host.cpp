@@ -8,6 +8,7 @@
 
 #include "device_state.hpp"
 #include "oa/app/runtime.hpp"
+#include "oa/ui/frontend_dialogs.hpp"
 #include "oa/ui/gui_input.hpp"
 #include "oa/ui/gui_layout/gui_gadget.hpp"
 
@@ -208,6 +209,32 @@ struct AutomationHostAccess {
             game.screen_ != Screen::loading && !game.frame_owned_by_package()
         )
             frontend_controls(game, *controls);
+        stacked_dialog_controls(*controls);
+    }
+
+    /// Puts the controls of the top stacked dialog (a message box such as
+    /// "There are no saved games to choose from", the disc prompt, the help
+    /// panel) before the others: it takes the pointer and the keys over the
+    /// screen and its panels while it is up.
+    ///
+    /// @param[in,out] controls the screen's controls, which the dialog's go before
+    static void stacked_dialog_controls(std::vector<AutomationControl>& controls) {
+        const auto* resources = oa::ui::frontend_dialogs::dialog_resources();
+        if (resources == nullptr || resources->layout.gadgets.empty())
+            return;
+        const auto& gadgets = resources->layout.gadgets;
+        // The root holds the dialog's place on the canvas; its records lie
+        // relative to it.
+        const auto& root = gadgets.front().common;
+        PanelPlacement placement;
+        placement.x = root.x;
+        placement.y = root.y;
+        placement.dialog = dialog_name(oa::ui::frontend_dialogs::dialog_layout_name());
+        std::vector<AutomationControl> stacked;
+        for (std::size_t index = 1; index < gadgets.size(); ++index)
+            if (const auto kind = control_kind(gadgets[index]))
+                stacked.push_back(gadget_control(gadgets, index, *kind, placement, 0, false));
+        controls.insert(controls.begin(), stacked.begin(), stacked.end());
     }
 
     /// Collects the controls of a frontend screen's panel, or of the dialog
@@ -254,6 +281,10 @@ struct AutomationHostAccess {
                 stage != game.widget_text_stages_.end() ? stage->second : 0,
                 false
             );
+            // The load and save dialog holds its fields' and labels' text itself.
+            if (*kind == AutomationControlKind::text_field || *kind == AutomationControlKind::label)
+                if (auto held = game.load_game_control_text(index))
+                    control.text = std::move(*held);
             if (*kind == AutomationControlKind::list) {
                 const auto* list =
                     scrolls != nullptr ? renderer::find_layout_list(*scrolls, index) : nullptr;
@@ -306,6 +337,9 @@ struct AutomationHostAccess {
                 first(game.campaign_mission_first_visible_),
                 game.selected_mission_index_
             };
+        if (named("GAMES"))
+            if (const auto saves = game.load_game_rows(); saves && saves->items != nullptr)
+                return ListRows{*saves->items, first(0), saves->selected};
         if (game.screen_ == Screen::campaign_end && named("Missions"))
             return ListRows{
                 game.end_mission_rows_,

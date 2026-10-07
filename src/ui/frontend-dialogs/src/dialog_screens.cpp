@@ -322,6 +322,11 @@ const renderer::ScreenResources* dialog_resources() noexcept {
     return dialog == nullptr ? nullptr : &dialog->resources;
 }
 
+std::string_view dialog_layout_name() noexcept {
+    const auto* dialog = dialog_top();
+    return dialog == nullptr ? std::string_view() : std::string_view(dialog->name);
+}
+
 int32_t help_page() noexcept {
     const auto* dialog = dialog_top();
     return dialog == nullptr || dialog->kind != DialogKind::help ? 0 : dialog->help_page;

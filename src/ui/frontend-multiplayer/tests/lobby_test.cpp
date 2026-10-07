@@ -2239,6 +2239,31 @@ void test_unit_sync_and_restrictions() {
         std::strcmp(mp::unit_sync_diagnostic(lobby, diagnostic, sizeof diagnostic), "OK") == 0,
         "+syncerr reports OK"
     );
+    // The joiner seats a computer player. Until its info says it is one, the host takes it
+    // for a playing peer, greets it and relays every record to it too, and the joiner's
+    // machine acknowledges every record it handled, those included.
+    mp::LobbyEvent computer{};
+    computer.kind = mp::LobbyEventKind::player_joined;
+    computer.player_id = 0x201;
+    (void)mp::lobby_apply_event(lobby, computer);
+    mp::unit_sync_tick(lobby);
+    const auto computer_sent = lobby.sync.peer_count == 2 ? lobby.sync.peers[1].sent : 0;
+    expect(
+        computer_sent == 5, "a computer player taken for a playing peer is greeted and relayed to"
+    );
+    for (int32_t slot = 0; slot < mp::kSlotCount; ++slot)
+        if (mp::slot_player(lobby, slot).player_id == 0x201)
+            if (auto* info = mp::slot_info(lobby, slot))
+                info->state = mp::kInfoStateDefeated; // its info: a computer player
+    mp::unit_sync_tick(lobby);
+    expect(lobby.sync.peer_count == 1, "its info drops it from the peers");
+    const auto human_sent = lobby.sync.peers[0].sent;
+    handshake(4, 0, human_sent + computer_sent);
+    expect(
+        lobby.sync.peers[0].acknowledged > human_sent && mp::unit_sync_complete(lobby) &&
+            std::strcmp(mp::unit_sync_diagnostic(lobby, diagnostic, sizeof diagnostic), "OK") == 0,
+        "a peer whose machine acknowledged its computer player's records too is complete"
+    );
     lobby.sync.host = false;
     expect(
         mp::unit_sync_diagnostic(lobby, diagnostic, sizeof diagnostic) == nullptr,
@@ -2247,7 +2272,7 @@ void test_unit_sync_and_restrictions() {
     expect(!mp::unit_sync_peer_complete(lobby, 0x200), "a client reports no peer complete");
     lobby.sync.host = true;
     handshake(120, 0, 0);
-    expect(lobby.sync.records_handled == 7, "subtypes >= 100 are dropped");
+    expect(lobby.sync.records_handled == 8, "subtypes >= 100 are dropped");
 
     mp::RestrictPanel restrict {};
     mp::Panel panel;

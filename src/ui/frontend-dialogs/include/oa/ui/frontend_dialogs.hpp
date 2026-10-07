@@ -150,6 +150,12 @@ void reset_dialogs();
 ///         whose records 1.. are root-relative; null when no dialog is open.
 [[nodiscard]] const ui::frontend_renderer::ScreenResources* dialog_resources() noexcept;
 
+/// Returns the name of the top dialog's GUI file.
+///
+/// @return The file's name without its folder and suffix, such as "MSGBOX";
+///         empty when no dialog is open.
+[[nodiscard]] std::string_view dialog_layout_name() noexcept;
+
 /// Returns the page HELP.GUI shows.
 ///
 /// @return The page from 0, or 0 when the top dialog is not the help panel.

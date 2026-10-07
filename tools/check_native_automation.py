@@ -22,6 +22,9 @@ which only its owner may read, and then, over 127.0.0.1:
   screen is refused screen_changed and pushes nothing, events that cannot
   be read are refused bad_request, and a click on SINGLE through the event
   queue is answered once the game has taken it and opens Single Player;
+- Load Game, with no saved games, stacks its message box over its dialog:
+  screen lists msgbox before loadgame, and controls the box's OK first;
+  OK closes the box and Cancel the dialog;
 - a client that sends hello and quit at once and then ends its side of the
   connection has both answered, and the game ends with status 0.
 
@@ -161,6 +164,18 @@ def click_control(client, name, screen):
     if not answer.get("ok") or not isinstance(answer.get("consumed", {}).get("frame"), int):
         raise AutomationFailure(f"the click on {name} was answered {answer}")
     return answer
+
+
+def wait_dialogs(client, dialogs):
+    """Waits for the dialogs named over the screen, the top one first, and returns screen's answer."""
+    deadline = time.monotonic() + TIMEOUT
+    screen = client.request("screen")
+    while screen.get("dialogs") != dialogs and time.monotonic() < deadline:
+        time.sleep(0.1)
+        screen = client.request("screen")
+    if screen.get("dialogs") != dialogs:
+        raise AutomationFailure(f"the dialogs are {screen.get('dialogs')}, not {dialogs}: {screen}")
+    return screen
 
 
 def wait_screen(client, name):
@@ -349,6 +364,24 @@ def check(native, game_dir, workdir):
         single = wait_screen(client, "single_player")
         if single.get("dialogs") != []:
             raise AutomationFailure(f"Single Player was answered {single}")
+
+        # The check's own folder holds no saved games, so Load Game says so
+        # in a message box over its dialog, which takes the pointer first.
+        click_control(client, "LoadGame", "single_player")
+        wait_screen(client, "load_game")
+        wait_dialogs(client, ["msgbox", "loadgame"])
+        listed = client.request("controls").get("controls", [])
+        box = [control for control in listed if control.get("dialog") == "msgbox"]
+        if not box or box != listed[:len(box)] or box[0].get("name") != "OK" or \
+                not box[0].get("enabled") or \
+                "There are no saved games to choose from" not in [c.get("text") for c in box]:
+            raise AutomationFailure(f"Load Game's message box is listed as {listed}")
+        click_control(client, "OK", "load_game")
+        wait_dialogs(client, ["loadgame"])
+        click_control(client, "CANCEL", "load_game")
+        back = wait_screen(client, "single_player")
+        if back.get("dialogs") != []:
+            raise AutomationFailure(f"Single Player after Load Game was answered {back}")
 
         # A one-shot client sends its requests and ends its side of the
         # connection: each is answered all the same. Until the endpoint has

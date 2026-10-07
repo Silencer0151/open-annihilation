@@ -5790,6 +5790,25 @@ class Runtime final : public menu::Host,
     /// @param[in,out] lists list presentations the screen draws
     void present_load_game_panel(std::vector<renderer::ListPresentation>& lists);
 
+    /// Returns the text a control of the load or save dialog holds, as its handlers left it:
+    /// the name typed in GAMENAME, a save's details in the labels. The dialog draws its own copy
+    /// of LOADGAME.GUI, so the screen's records keep the GUI file's text.
+    ///
+    /// @param index the control's record in LOADGAME.GUI
+    /// @return the text; none while the dialog is not shown or past its records
+    [[nodiscard]] std::optional<std::string> load_game_control_text(std::size_t index) const;
+
+    /// The saves the load or save dialog lists in GAMES, and the one selected.
+    struct LoadGameRows {
+        const std::vector<std::string>* items = nullptr; ///< the rows, as the last frame drew them
+        std::optional<std::size_t> selected;             ///< the selected row, if any
+    };
+
+    /// Returns the saves the load or save dialog lists in GAMES.
+    ///
+    /// @return the rows and the selected one; none while the dialog is not shown
+    [[nodiscard]] std::optional<LoadGameRows> load_game_rows() const;
+
     /// Checks LOADGAME.GUI in both roles, placed as the game places it.
     ///
     /// The load dialog centred over Single Player, which it darkens (with no

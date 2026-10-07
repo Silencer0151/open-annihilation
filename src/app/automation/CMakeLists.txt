@@ -104,19 +104,27 @@ if(BUILD_TESTING AND TARGET oa-game AND IS_DIRECTORY "${OA_GAME_DIR}")
     file(MAKE_DIRECTORY "${oa_automation_checks}")
     # The game started with --fark on the dummy drivers, driven through the
     # endpoint on the main menu: its hello, screen, preferences and quit, a
-    # wrong token, a second client and a connection that speaks no frames.
+    # wrong token, a second client and a connection that speaks no frames;
+    # then Load Game's message box over its dialog.
     add_test(NAME native-automation-menus COMMAND ${Python3_EXECUTABLE}
       "${PROJECT_SOURCE_DIR}/tools/check_native_automation.py"
       --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
       --scratch-root "${oa_automation_checks}")
     set_tests_properties(native-automation-menus PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
     # Input through the endpoint: a typed address reaching the TCP/IP
-    # dialog's field, and an arrow key the endpoint holds scrolling a
-    # skirmish's camera, as the keyboard's does.
+    # dialog's field, an arrow key the endpoint holds scrolling a
+    # skirmish's camera, as the keyboard's does, and the match saved under a
+    # typed name that Load Game then lists.
+    # A build with the address sanitizer keeps the memory it frees, so the
+    # game's memory is not judged there while input waits.
+    set(oa_automation_input_sanitized)
+    if(OA_SANITIZERS)
+      set(oa_automation_input_sanitized --sanitized)
+    endif()
     add_test(NAME native-automation-input COMMAND ${Python3_EXECUTABLE}
       "${PROJECT_SOURCE_DIR}/tools/check_native_automation_input.py"
       --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
-      --scratch-root "${oa_automation_checks}")
+      --scratch-root "${oa_automation_checks}" ${oa_automation_input_sanitized})
     set_tests_properties(native-automation-input PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
     # The frames the game presents on the main menu, in a window the canvas
     # fills and in one it is drawn larger in: whole, as PNG files, as

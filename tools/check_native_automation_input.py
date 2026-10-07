@@ -11,7 +11,9 @@ endpoint's input, which reaches it through SDL's event queue:
 - input requests sent far faster than the game takes them, one a frame, are
   held back: the game reads no more of them than about a frame's worth
   while they wait, so the sender stalls long before it has sent
-  FLOOD_BYTES and the game's memory stays within FLOOD_GROWTH_BYTES;
+  FLOOD_BYTES and the game's memory stays within FLOOD_GROWTH_BYTES (not
+  judged with --sanitized: a build with the address sanitizer keeps the
+  memory it frees in a quarantine of its own);
 - MULTI on the main menu opens the providers, whose list names TCP/IP; a
   double click on its row, placed from the list's rows in the window's
   pixels, opens the TCP/IP dialog, with its address field focused and holding the
@@ -23,6 +25,9 @@ endpoint's input, which reaches it through SDL's event queue:
 - in the match the camera stays still, scrolls right while the endpoint
   holds the right arrow key down, as the game reads a held key, and stops
   once the key is let go, and once a client that left holding it is gone;
+- F2 opens the game menu; in Save Game the name field holds the name typed,
+  OK saves the match under it, and Load Game lists it, selected; Cancel and
+  Resume go back to the match;
 - quit there asks the surrender question, and its Yes ends the game with
   status 0.
 """
@@ -47,12 +52,15 @@ KEYS = {
     "End": (77, 0x4000004D),
     "BackSpace": (42, 0x08),
     "Right": (79, 0x4000004F),
+    "F2": (59, 0x4000003B),
     ".": (55, ord(".")),
     "0": (39, ord("0")),
     **{str(digit): (29 + digit, ord(str(digit))) for digit in range(1, 10)},
 }
 # Seconds the camera is given to move while the key is held.
 SCROLL_WAIT = 10
+# The name the match is saved under.
+SAVE_NAME = "endpoint check"
 # Bytes of input requests a client sends without reading; the game must hold
 # it back well before, and its memory must grow by less than the second.
 FLOOD_BYTES = 64 << 20
@@ -85,7 +93,7 @@ def resident_bytes(pid):
     return int(text) * 1024 if result.returncode == 0 and text.isdigit() else None
 
 
-def check_held_back(game, client):
+def check_held_back(game, client, judge_memory):
     """Sends input requests without reading the answers, far faster than the game takes them."""
     before = resident_bytes(game.process.pid)
     request = automation.encode({"id": 1, "op": "input", "expect_screen": "main_menu",
@@ -107,7 +115,7 @@ def check_held_back(game, client):
     if sent >= FLOOD_BYTES:
         raise AutomationFailure(f"the game read all {sent} bytes of input requests sent faster than it takes them")
     after = resident_bytes(game.process.pid)
-    if before is not None and after is not None and after - before >= FLOOD_GROWTH_BYTES:
+    if judge_memory and before is not None and after is not None and after - before >= FLOOD_GROWTH_BYTES:
         raise AutomationFailure(f"the game's memory grew from {before} to {after} bytes while "
                                 f"{sent} bytes of input requests waited")
 
@@ -169,6 +177,49 @@ def check_address(client):
     automation.wait_screen(client, "main_menu")
 
 
+def wait_control(client, name, shown=True):
+    """Waits for the screen's control of a name to be shown, or with shown false to be gone."""
+    deadline = time.monotonic() + automation.TIMEOUT
+    while True:
+        controls = client.request("controls").get("controls", [])
+        found = any(c.get("name") == name and c.get("visible") for c in controls)
+        if found == shown:
+            return
+        if time.monotonic() > deadline:
+            raise AutomationFailure(f"{name} was {'never shown' if shown else 'never gone'}: {controls}")
+        time.sleep(0.1)
+
+
+def check_save(client):
+    """Saves the match through the game menu's Save Game and finds the save in its Load Game."""
+    if not client.request("input", expect_screen="match", events=press("F2")).get("ok"):
+        raise AutomationFailure("F2 in the match was not answered")
+    wait_control(client, "SAVEGAME")
+    automation.click_control(client, "SAVEGAME", "match")
+    automation.wait_screen(client, "load_game")
+    automation.click_control(client, "GAMENAME", "load_game")
+    typed = client.request("input", expect_screen="load_game",
+                           events=[{"kind": "text", "text": SAVE_NAME}])
+    if not typed.get("ok"):
+        raise AutomationFailure(f"the save's name was answered {typed}")
+    field = automation.find_control(client, "GAMENAME")
+    if field.get("text") != SAVE_NAME:
+        raise AutomationFailure(f"the save dialog's name field is {field}")
+    automation.click_control(client, "LOAD", "load_game")
+    automation.wait_screen(client, "match")
+    wait_control(client, "LOADGAME")
+    automation.click_control(client, "LOADGAME", "match")
+    automation.wait_screen(client, "load_game")
+    games = automation.find_control(client, "GAMES")
+    if games.get("items") != [SAVE_NAME] or games.get("selected") != 0:
+        raise AutomationFailure(f"Load Game lists {games}")
+    automation.click_control(client, "CANCEL", "load_game")
+    automation.wait_screen(client, "match")
+    wait_control(client, "OK")
+    automation.click_control(client, "OK", "match")
+    wait_control(client, "SAVEGAME", shown=False)
+
+
 def check_camera(client, connect):
     """Starts a skirmish from the main menu and scrolls its camera with a held key.
 
@@ -214,6 +265,7 @@ def check_camera(client, connect):
     if camera(client) != left:
         raise AutomationFailure(f"the camera moved on from {left} once its client had left")
 
+    check_save(client)
     if not client.request("quit").get("ok"):
         raise AutomationFailure("quit in the match was not answered")
     deadline = time.monotonic() + automation.TIMEOUT
@@ -238,7 +290,7 @@ def check_camera(client, connect):
     return client
 
 
-def check(native, game_dir, workdir):
+def check(native, game_dir, workdir, sanitized=False):
     """Drives the game through the endpoint's input; raises AutomationFailure when it differs."""
     game = automation.Game(native, game_dir, workdir)
     client = None
@@ -261,7 +313,7 @@ def check(native, game_dir, workdir):
 
         client = connect()
         automation.wait_screen(client, "main_menu")
-        check_held_back(game, client)
+        check_held_back(game, client, judge_memory=not sanitized)
         # The answers it did not read are dropped with it.
         client.close()
         client = connect()
@@ -285,12 +337,15 @@ def main(argv=None):
     parser.add_argument("--native", required=True, type=Path, help="the game's executable")
     parser.add_argument("--game-dir", required=True, type=Path, help="the installed game")
     parser.add_argument("--scratch-root", type=Path, help="where the check's own folder is made")
+    parser.add_argument("--sanitized", action="store_true",
+                        help="the game is built with the address sanitizer, whose quarantine keeps the memory it "
+                             "frees, so the game's memory is not judged while input waits")
     args = parser.parse_args(argv)
     if args.scratch_root:
         args.scratch_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=args.scratch_root) as scratch:
         try:
-            check(args.native.resolve(), args.game_dir, Path(scratch))
+            check(args.native.resolve(), args.game_dir, Path(scratch), args.sanitized)
         except AutomationFailure as failure:
             print(f"native-automation-input: {failure}", file=sys.stderr)
             return 1

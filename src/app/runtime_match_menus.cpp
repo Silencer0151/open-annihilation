@@ -1465,6 +1465,26 @@ void Runtime::present_load_game_panel(std::vector<renderer::ListPresentation>& l
     lists.push_back({"GAMES", overlay.rows, frontend_list_first("GAMES").value_or(0), selected});
 }
 
+std::optional<std::string> Runtime::load_game_control_text(std::size_t index) const {
+    const auto& overlay = load_overlay();
+    if (!overlay.bound || screen_ != Screen::load_game || index == 0 ||
+        index > static_cast<std::size_t>(overlay.panel.count) || index >= ui::kPanelControls)
+        return std::nullopt;
+    return std::string(ui::control_text(overlay.panel.controls[index]));
+}
+
+std::optional<Runtime::LoadGameRows> Runtime::load_game_rows() const {
+    const auto& overlay = load_overlay();
+    if (!overlay.bound || screen_ != Screen::load_game)
+        return std::nullopt;
+    LoadGameRows rows{&overlay.rows, std::nullopt};
+    if (const auto* list = ui::panel_control(overlay.panel, "GAMES");
+        list != nullptr && list->list_selection >= 0 &&
+        static_cast<std::size_t>(list->list_selection) < overlay.rows.size())
+        rows.selected = static_cast<std::size_t>(list->list_selection);
+    return rows;
+}
+
 bool Runtime::load_match_hud_layout(const std::string& layout, oa::ui::hud::SidePage side_page) {
     // A new panel's scroll bars are bound once it is placed.
     hud_scrolls_ = {};
