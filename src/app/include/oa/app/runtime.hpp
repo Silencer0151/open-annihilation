@@ -1942,7 +1942,8 @@ class Runtime final : public menu::Host,
     /// Sets match_zoom_ and match_zoom_target_ together to the product within the zoom's
     /// limits (no easing) and keeps the exact map point under the point there
     /// (zoom_view_about); a point off the battlefield zooms about the nearest point on it.
-    /// Stops tracking. The wheel and the zoom −/+ buttons keep the eased handle_match_zoom.
+    /// While the camera follows a unit it zooms about the battlefield's centre instead, and
+    /// the follow goes on. The wheel and the zoom −/+ buttons keep the eased handle_match_zoom.
     /// [runtime_touch_camera.cpp]
     ///
     /// @param factor the zoom now over the zoom before, > 0
@@ -8891,9 +8892,10 @@ class Runtime final : public menu::Host,
 
     /// Follows a unit with the camera, centred on it at once, and names it on the status line.
     ///
-    /// A zoom under way goes on about the unit. Zooming keeps the follow;
-    /// scrolling, the minimap, mouse-look, the unit's end and the follow
-    /// keys end it.
+    /// A zoom under way goes on about the unit. Zooming keeps the follow,
+    /// and so does the view held at its limits near the map's edge, which
+    /// follows the unit again as it comes back; scrolling, the minimap,
+    /// mouse-look, the unit's end and the follow keys end it.
     ///
     /// @param id unit id
     void begin_match_tracking(uint16_t id);
@@ -11422,8 +11424,10 @@ class Runtime final : public menu::Host,
     /// Sets the zoom's target (wheel_zoom_target), which step_match_zoom
     /// eases toward about the point: the pointer as it moves while
     /// `follow_pointer`, so that the map point under the pointer stays under
-    /// it on every frame, else the point itself. Ends a follow of a unit,
-    /// as a scroll does. A point off the battlefield does nothing.
+    /// it on every frame, else the point itself. While the camera follows a
+    /// unit it eases about the battlefield's centre instead, where the
+    /// follow keeps the unit, and the follow goes on. A point off the
+    /// battlefield does nothing.
     ///
     /// @param wheel_y wheel steps; positive zooms in
     /// @param pointer_x canvas column of the point
@@ -11472,8 +11476,8 @@ class Runtime final : public menu::Host,
     /// scroll's exact rate; the view is held within its limits (held_view),
     /// so that it may go past the map's edges as far as View past the
     /// map's edge lets it: at 50% until the map's edge reaches the middle
-    /// of the battlefield. A scroll that moves the view stops tracking a
-    /// unit.
+    /// of the battlefield. A scroll stops tracking a unit, though the view
+    /// is held at its limits.
     ///
     /// @param way_x -1 left, 1 right, 0 neither; held to that range
     /// @param way_z -1 up, 1 down, 0 neither; held to that range

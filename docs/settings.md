@@ -143,9 +143,11 @@ Each of these takes effect at once.
   scroll, zooms the battlefield in and out smoothly about the pointer: the
   ground under the pointer stays under it on every frame of the zoom, as
   the pointer moves too, so a zoom out and back in comes back to where it
-  began. A zoom ends a camera's follow of a unit (**T**, or Ctrl+C for the
-  commander), as a scroll does. The view goes past the map's edges, by a
-  scroll, the minimap and a zoom, as far as View past the map's edge lets
+  began. A zoom keeps a camera's follow of a unit (**T**, or Ctrl+C for
+  the commander): it zooms about the unit at the battlefield's centre, and
+  the view goes on following it; a scroll ends the follow. The view goes
+  past the map's edges, by a scroll, the minimap and a zoom, as far as
+  View past the map's edge lets
   it; the battlefield is black past the map, and your aircraft stay in
   view where their flight takes them past its edges. Turned off, the view eases back to the game's own scale. Turn it off if the wheel zooms when
   you do not mean it to, or to use a mod's megamap, which takes the wheel
@@ -185,8 +187,11 @@ Each of these takes effect at once.
   centre a quarter of the battlefield from its middle. Off keeps the view
   on the map, as 3.1c does, and centres the map in a view wider than it.
   At 25% and Off a zoom keeps to the limit too: where the view meets it,
-  the ground under the pointer slides instead. Choose Off or 25% to keep
-  the black past the map out of a view zoomed far out.
+  the ground under the pointer slides instead. A unit the camera follows
+  toward an edge takes the view as far as the limit, where it stops; the
+  follow goes on, and the view follows the unit again as it comes back.
+  Choose Off or 25% to keep the black past the map out of a view zoomed
+  far out.
 - **Escape opens the game menu**, On by default on macOS and Off
   elsewhere. The first Escape cancels an order or clears the selection, as
   in 3.1c; the next opens the in-game menu. Turn it on if F2 is awkward to

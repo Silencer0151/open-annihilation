@@ -213,9 +213,15 @@ logs it.
   goes wherever that takes it, past the limits too, since the point keeps
   the map in view; past the map's edge it is held within the limits. At
   25% and Off it is held within the limits along both axes, so that the
-  point slides where the view meets them. A zoom of the wheel, a pinch or
-  the pad ends a camera's follow of a unit, as a scroll does; the dialog's
-  ease keeps it, with the unit at the centre. The wheel counts its steps
+  point slides where the view meets them. Every zoom keeps a camera's
+  follow of a unit: the wheel's, a pinch's and the pad's are about the
+  battlefield's centre while it follows, as the dialog's ease is, and the
+  unit stays at the centre, or as near it as the limits let the view go.
+  A unit followed toward the map's edge takes the view to the limits,
+  where the view stops and the follow goes on; the view follows it again
+  from there as it comes back. A scroll ends the follow, though the view
+  is held at the limits, as do the minimap, a finger's drag, mouse-look
+  and the unit's end. The wheel counts its steps
   from the target they began at (`zoom_wheel_`), so that as many steps
   back return the zoom exactly, and with it the view where the pointer
   rested. The step that reaches the nearest or farthest zoom counts whole,
@@ -286,7 +292,9 @@ logs it.
   past the map's edge drawn, hovered and selected as a model near and far
   and as a dot, and the digest of a view past the map
   (`check_view_past_map`); and a
-  zoom ending a follow (`check_tracking_zoom`); `native-render-tiers` the
+  zoom keeping a follow, a unit followed to the map's edge and back at
+  each View past the map's edge, and what ends a follow
+  (`check_tracking_zoom`); `native-render-tiers` the
   whole map's far view in each tier, rendered and as dots, the Full tier's
   card frame of dots past After zoom, and the fill before the map's start
   and past its end.
@@ -1756,7 +1764,8 @@ saves, recordings and network games are unaffected.
   wheel item does; `runtime_touch_camera.cpp` the camera a finger moves:
   `pan_match_camera_by` (the map follows the finger, past the map's edges
   as far as a scroll goes) and `zoom_match_about` (a pinch's zoom applied
-  at once about the fingers, so the map stays under them), inertia and
+  at once about the fingers, so the map stays under them, or about the
+  battlefield's centre while the camera follows a unit), inertia and
   auto-scroll.
 - `runtime_input_modifiers.cpp`: every place the engine reads the modifier
   keys asks `input_modifiers(use)` for its own use, so a latch gives Shift

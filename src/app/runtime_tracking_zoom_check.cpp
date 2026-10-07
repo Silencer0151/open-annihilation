@@ -12,8 +12,10 @@
 // view's edge, and held there from a zoom past them; an aircraft past the
 // map's edge drawn, hovered and selected, as a model near and far and as a
 // dot; the camera saves and the digest take, held on the map; the far
-// view's dots and the black past the map taking presses; and a zoom ending
-// the follow of a unit, which the settings dialog's zoom keeps.
+// view's dots and the black past the map taking presses; every zoom
+// keeping the follow of a unit; a unit followed to the map's edge and back
+// at each View past the map's edge, the view stopping at the limit and
+// following on; and what ends a follow.
 #include "oa/app/runtime.hpp"
 #include "oa/app/far_view.hpp"
 #include "engine_settings_state.hpp"
@@ -47,6 +49,18 @@ constexpr int kWheelSteps = 12;
 /// Map pixels the walking unit is sent, and where the corner unit stands from the map's corner.
 constexpr int32_t kWalkTrip = 400;
 constexpr int32_t kCornerInset = 40;
+/// The unit driven to the map's edge and back, and the map pixels past the
+/// limit View past the map's edge Off sets at zoom 1 it starts and comes
+/// back to.
+constexpr const char* kEdgeDriver = "ARMPW";
+constexpr int32_t kEdgeStartPast = 64;
+/// Frames the driven unit is given to reach a column, map pixels from it
+/// it counts as there, and frames it stands still there to have arrived.
+constexpr int kEdgeDriveFrames = 3000;
+constexpr int32_t kEdgeArrival = 24;
+constexpr int kEdgeStillFrames = 8;
+/// Wheel steps out and back in the follow is zoomed by at the map's edge.
+constexpr int kEdgeZoomSteps = 2;
 /// Screen pixels a step scrolls the camera by.
 constexpr double kScrollStep = 32.0;
 /// Wheel steps out from the default zoom short of the farthest, and in from
@@ -1281,9 +1295,9 @@ void Runtime::check_tracking_zoom(NavigationGroup group) {
 
     // Ctrl+C follows the commander as it walks, or, where the side's
     // commander is not in the commander category Ctrl+C looks for, the
-    // camera follows it as T does; the wheel turned at a point away from it
-    // ends the follow and zooms about that point, every frame keeping the
-    // map point under the pointer there.
+    // camera follows it as T does; the wheel turned in and back out at a
+    // point away from it, and a pinch there, keep the follow and zoom about
+    // the battlefield's centre: every frame keeps the commander there.
     match_paused_ = false;
     match_pointer_known_ = false;
     const auto& walker = *slots[commander].unit;
@@ -1309,37 +1323,34 @@ void Runtime::check_tracking_zoom(NavigationGroup group) {
         frame();
     require_tracking(commander, "as the follow began");
     const uint32_t walked_from = walker.position[0];
-    const std::array<double, 2> aim{
-        match_layout_.battlefield_width() * 0.85, match_layout_.battlefield_height() * 0.15
-    };
-    const auto under_aim = [&] {
-        const auto view = match_view_place();
-        const auto zoom = static_cast<double>(match_zoom());
-        return std::array<double, 2>{view[0] + aim[0] / zoom, view[1] + aim[1] / zoom};
+    const std::array<float, 2> aim{
+        static_cast<float>(match_layout_.left + match_layout_.battlefield_width() * 0.85),
+        static_cast<float>(match_layout_.top + match_layout_.battlefield_height() * 0.15)
     };
     for (int step = 0; step < kWheelSteps; ++step) {
-        auto before = under_aim();
-        handle_match_zoom(
-            step < kWheelSteps / 2 ? 1.0F : -1.0F,
-            static_cast<float>(match_layout_.left + aim[0]),
-            static_cast<float>(match_layout_.top + aim[1]),
-            true
-        );
-        if (match_tracking_ || match_->state().game.follow_unit != 0)
-            fail("the wheel did not end the follow of the commander");
+        const bool in = step < kWheelSteps / 2;
+        const std::string what = in ? "in" : "out";
+        handle_match_zoom(in ? 1.0F : -1.0F, aim[0], aim[1], true);
+        require_tracking(commander, "as the wheel began to zoom " + what);
         for (int settle = 0; settle < kSettleFrames && match_zoom_ != match_zoom_target_;
              ++settle) {
             frame();
-            render_match_surface();
-            const auto after = under_aim();
-            if (std::abs(after[0] - before[0]) > kMostAnchorStray ||
-                std::abs(after[1] - before[1]) > kMostAnchorStray)
-                fail("the wheel during the follow did not zoom about the pointer");
-            before = after;
+            require_tracking(commander, "while the wheel zoomed " + what);
         }
     }
+    if (match_zoom_ != kDefaultBattlefieldZoom)
+        fail("the wheel's steps in and as many out did not return the zoom");
+    for (const float factor : {kPinchFactor, 1.0F / kPinchFactor})
+        for (int step = 0; step < kPinchFrames; ++step) {
+            zoom_match_about(factor, aim[0], aim[1]);
+            frame();
+            require_tracking(
+                commander, std::string("while a pinch zoomed ") + (factor > 1.0F ? "in" : "out")
+            );
+        }
     if (walker.position[0] == walked_from)
         fail("the commander did not walk while the zoom changed");
+    match_zoom_ = match_zoom_target_ = kDefaultBattlefieldZoom;
 
     // The settings dialog's ease about the centre keeps the follow, in
     // play and while a menu holds the match.
@@ -1377,11 +1388,186 @@ void Runtime::check_tracking_zoom(NavigationGroup group) {
         fail("the camera tracking the corner unit was held on the map");
     dialog_ease(cornered, kDefaultBattlefieldZoom, "back at the map's corner");
 
-    // A scroll still ends the tracking, and so does the minimap.
+    // A unit driven to the map's left edge and back, followed, at View past
+    // the map's edge Off, 25% and 50%: on every frame the view's centre is
+    // the unit's held within the span for the share, and moves no more
+    // than the unit does. At Off and 25% the view stops at the limit with
+    // the follow kept, and follows the unit again from there, without a
+    // jump, as it drives back; at 50% the limit is the map's edge, which
+    // keeps the unit at the centre all the way.
+    namespace settings = oa::ui::engine_settings;
+    const settings::EngineSettings saved_settings = engine_settings();
+    const double visible_x = static_cast<double>(match_layout_.battlefield_width()) /
+                             static_cast<double>(kDefaultBattlefieldZoom);
+    // On the commander's row, ground it walked on.
+    const int32_t edge_row = walk_z;
+    const auto ground_at = [&](int32_t x) {
+        return oa::sim::ground_orders::Point{
+            x * 0x10000,
+            match_->map_height(
+                static_cast<uint32_t>(x) << 16, static_cast<uint32_t>(edge_row) << 16
+            ) * 0x10000,
+            edge_row * 0x10000
+        };
+    };
+    // It starts where the view centred on it is within the limits at Off.
+    const auto edge_start = static_cast<int32_t>(visible_x / 2.0) + kEdgeStartPast;
+    const auto edge_type = oa::sim::unit_spawn::find_type_index(spawn_type_names_, kEdgeDriver);
+    if (edge_type == 0)
+        fail(std::string("the game lacks ") + kEdgeDriver);
+    request.type = edge_type;
+    const auto start = ground_at(edge_start);
+    request.position = {
+        static_cast<uint32_t>(start[0]),
+        static_cast<uint32_t>(start[1]),
+        static_cast<uint32_t>(start[2])
+    };
+    auto* driver_slot = match_->create(request);
+    if (driver_slot == nullptr || driver_slot->unit == nullptr)
+        fail("no unit could be placed to drive to the map's edge");
+    const uint16_t driver = driver_slot->unit_index;
+    const auto unit_x = [&] { return static_cast<int32_t>(slots[driver].unit->position[0] >> 16); };
+    // A frame of the follow as the application loop draws it: the camera
+    // centred on the unit, then placed where the frame shows it
+    // (place_tracking_camera), on the screen pixels laid from the map's
+    // corner while the frames draw the view between map pixels, and drawn.
+    // At zoom 1 that camera steps whole map pixels with the unit.
+    const auto follow_frame = [&] {
+        frame();
+        place_tracking_camera();
+        render_match_surface();
+    };
+    // Drives the unit to a column, following it, and returns the frames
+    // on which the limit held the view short of centring it.
+    const auto drive = [&](int32_t to, double share, const std::string& what) {
+        (void)match_->issue_ground_move(driver, ground_at(to), false);
+        int held = 0;
+        int32_t last_camera = match_camera_x_;
+        int32_t last_unit = unit_x();
+        int still = 0;
+        for (int step = 0; still < kEdgeStillFrames; ++step) {
+            if (step == kEdgeDriveFrames)
+                fail(
+                    what + ": the unit stopped at column " + std::to_string(unit_x()) +
+                    ", short of " + std::to_string(to)
+                );
+            follow_frame();
+            if (!match_tracking_ || tracked_match_unit_ != driver ||
+                match_->state().game.follow_unit != oa::oa_unit_ref_from_slot(driver))
+                fail(what + ": the follow ended at column " + std::to_string(unit_x()));
+            const int32_t centred = tracking_camera(driver)[0];
+            const int32_t wanted = held_camera(
+                centred, visible_x, static_cast<double>(map_width), share, std::nullopt
+            );
+            if (std::abs(match_camera_x_ - wanted) > 1)
+                fail(
+                    what + ": the camera stood at " + std::to_string(match_camera_x_) +
+                    " with the unit at column " + std::to_string(unit_x()) + ", not at " +
+                    std::to_string(wanted)
+                );
+            if (std::abs(match_camera_x_ - last_camera) > std::abs(unit_x() - last_unit) + 1)
+                fail(
+                    what + ": the camera jumped from " + std::to_string(last_camera) + " to " +
+                    std::to_string(match_camera_x_) + " as the unit moved from column " +
+                    std::to_string(last_unit) + " to " + std::to_string(unit_x())
+                );
+            if (wanted != centred)
+                ++held;
+            still =
+                std::abs(unit_x() - to) <= kEdgeArrival && unit_x() == last_unit ? still + 1 : 0;
+            last_camera = match_camera_x_;
+            last_unit = unit_x();
+        }
+        return held;
+    };
+    match_zoom_ = match_zoom_target_ = kDefaultBattlefieldZoom;
+    for (const auto& [limit, name] :
+         {std::pair{settings::ViewPastMapEdge::off, "Off"},
+          std::pair{settings::ViewPastMapEdge::one_quarter, "25%"},
+          std::pair{settings::ViewPastMapEdge::one_half, "50%"}}) {
+        auto chosen = engine_settings();
+        chosen.view_past_map_edge = limit;
+        apply_engine_settings(chosen);
+        const double share = past_map_edge_share();
+        const std::string what = std::string("View past the map's edge ") + name;
+        begin_match_tracking(driver);
+        render_match_surface();
+        const int held_out = drive(kCornerInset, share, what + " to the edge");
+        const auto span = view_centre_span(map_width, visible_x, share);
+        const bool past =
+            share < settings::past_map_edge_share(settings::ViewPastMapEdge::one_half);
+        if (past && (held_out == 0 || tracking_camera(driver)[0] == match_camera_x_))
+            fail(what + ": the view was not held at the limit at the map's edge");
+        if (!past && held_out != 0)
+            fail(what + ": the limit held the view short of a unit on the map");
+        if (past &&
+            std::abs(static_cast<double>(match_camera_x_) + visible_x / 2.0 - span.least) > 1.0)
+            fail(what + ": the view at the map's edge was not at the limit");
+        drive(edge_start, share, what + " back from the edge");
+        require_tracking(driver, what + " back from the map's edge");
+    }
+    std::cout << "tracking zoom check: a unit driven to the map's left edge and back was "
+                 "followed all the way at View past the map's edge Off, 25% and 50%, the view "
+                 "stopping at the limit and following on from there without a jump\n";
+
+    // At Off, with the view held at the limit short of the unit at the
+    // map's edge, the wheel out and back in keeps the follow: on every
+    // frame the view is as near the unit as the limit at that zoom lets it
+    // go.
+    auto at_edge = engine_settings();
+    at_edge.view_past_map_edge = settings::ViewPastMapEdge::off;
+    apply_engine_settings(at_edge);
+    (void)match_->issue_ground_move(driver, ground_at(kCornerInset), false);
+    begin_match_tracking(driver);
+    for (int step = 0; step < kEdgeDriveFrames && tracking_camera(driver)[0] >= 0; ++step)
+        follow_frame();
+    if (tracking_camera(driver)[0] == match_camera_x_ || !match_tracking_)
+        fail("the view was not held at the map's edge with the follow kept");
+    for (int step = 0; step < kEdgeZoomSteps * 2; ++step) {
+        handle_match_zoom(step < kEdgeZoomSteps ? -1.0F : 1.0F, aim[0], aim[1], true);
+        for (int settle = 0; settle < kSettleFrames && match_zoom_ != match_zoom_target_;
+             ++settle) {
+            follow_frame();
+            if (!match_tracking_ || tracked_match_unit_ != driver)
+                fail("the wheel at the map's edge ended the follow");
+            const int32_t wanted = held_camera(
+                tracking_camera(driver)[0],
+                static_cast<double>(match_layout_.battlefield_width()) /
+                    static_cast<double>(match_zoom()),
+                static_cast<double>(map_width),
+                past_map_edge_share(),
+                std::nullopt
+            );
+            if (std::abs(match_camera_x_ - wanted) > 1)
+                fail(
+                    "the wheel at the map's edge left the camera at " +
+                    std::to_string(match_camera_x_) + ", not at " + std::to_string(wanted)
+                );
+        }
+    }
+    if (match_zoom_ != kDefaultBattlefieldZoom)
+        fail("the wheel's steps out and back in at the map's edge did not return the zoom");
+
+    // A scroll still ends the tracking, the view held at its limit at the
+    // map's edge too, and so do a finger's drag, the minimap and the
+    // unit's end.
+    const auto held_at = match_view_place();
+    scroll_match_view(-1, 0, kScrollStep);
+    if (match_tracking_ || match_->state().game.follow_unit != 0)
+        fail("a scroll held at the map's edge did not end the tracking");
+    frame();
+    render_match_surface();
+    if (match_view_place() != held_at)
+        fail("a scroll held at the map's edge moved the view");
     begin_match_tracking(commander);
     scroll_match_view(1, 0, kScrollStep);
     if (match_tracking_ || match_->state().game.follow_unit != 0)
         fail("a scroll did not end the tracking");
+    apply_engine_settings(saved_settings);
+    begin_match_tracking(commander);
+    pan_match_camera_by(kScrollStep, 0.0F);
+    if (match_tracking_ || match_->state().game.follow_unit != 0)
+        fail("a finger's drag did not end the tracking");
     begin_match_tracking(commander);
     render_match_surface();
     if (radar_picture_.width <= 0 || radar_picture_.height <= 0)
@@ -1393,12 +1579,20 @@ void Runtime::check_tracking_zoom(NavigationGroup group) {
         fail("moving the view from the minimap did not move the camera");
     if (match_tracking_ || match_->state().game.follow_unit != 0)
         fail("moving the view from the minimap did not end the tracking");
+    begin_match_tracking(driver);
+    match_->kill_unit(driver, static_cast<uint8_t>(oa::sim::match_runtime::DeathKind::weapon));
+    for (int step = 0; step < kEdgeDriveFrames && match_tracking_; ++step)
+        frame();
+    if (match_tracking_ || match_->state().game.follow_unit != 0)
+        fail("the followed unit's end did not end the tracking");
 
-    std::cout << "tracking zoom check: the wheel ended the commander's follow and zoomed about "
-                 "the pointer; the dialog zoomed between "
+    std::cout << "tracking zoom check: the wheel and a pinch kept the commander's follow, "
+                 "zooming about it at the centre; the dialog zoomed between "
               << least_match_zoom() << " and " << kMaxBattlefieldZoom
               << " with the tracked unit at the centre, in play, under a menu and at the "
-                 "map's corner, past its edges; a scroll and the minimap ended the tracking\n";
+                 "map's corner, past its edges; the wheel at the map's edge kept the follow "
+                 "held at the limit; a scroll, the view held at the map's edge too, a finger's "
+                 "drag, the minimap and the unit's end ended the tracking\n";
     stop_match_tracking();
     match_zoom_ = match_zoom_target_ = kDefaultBattlefieldZoom;
     return_to_skirmish_menu();

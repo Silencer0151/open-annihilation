@@ -522,9 +522,9 @@ void Runtime::step_match_zoom() {
         static_cast<double>(bf_h)
     );
     zoom_view_about(zoom, focus_x, focus_y);
-    // A followed unit, which only the settings dialog's ease and a change
-    // of the limits leave followed, stays at the centre as the zoom eases,
-    // while a menu holds the match too.
+    // A followed unit, which every zoom leaves followed, stays at the centre
+    // as the zoom eases, or as near it as the view's limits let the view
+    // go, while a menu holds the match too.
     if (match_tracking_ && match_unit_present(tracked_match_unit_))
         center_camera_on_unit(tracked_match_unit_);
 }
@@ -578,10 +578,19 @@ void Runtime::handle_match_zoom(
         pointer_x >= static_cast<float>(match_layout_.left + match_layout_.battlefield_width()) ||
         pointer_y >= static_cast<float>(match_layout_.top + match_layout_.battlefield_height()))
         return;
-    // A zoom ends a follow, as a scroll does: the view zooms about the
-    // point, wherever the followed unit is.
-    stop_match_tracking();
-    zoom_focus_ = {follow_pointer, pointer_x, pointer_y};
+    // A zoom keeps a camera's follow of a unit: the view zooms about the
+    // battlefield's centre, where the follow keeps the unit, and the follow
+    // goes on. Otherwise it zooms about the point.
+    if (match_tracking_)
+        zoom_focus_ = {
+            false,
+            static_cast<float>(match_layout_.left) +
+                static_cast<float>(match_layout_.battlefield_width()) / 2.0F,
+            static_cast<float>(match_layout_.top) +
+                static_cast<float>(match_layout_.battlefield_height()) / 2.0F
+        };
+    else
+        zoom_focus_ = {follow_pointer, pointer_x, pointer_y};
     match_zoom_target_ = wheel_zoom_target(wheel_y);
 }
 
@@ -706,10 +715,11 @@ void Runtime::scroll_match_view(int32_t way_x, int32_t way_z, double step) {
         along(view[0], way_x, match_layout_.battlefield_width(), map_width, view_hold_.centre_x);
     const double z =
         along(view[1], way_z, match_layout_.battlefield_height(), map_height, view_hold_.centre_z);
-    // Held at the limits, the view stays as it is.
+    // A scroll ends a follow of a unit, as in 3.1c, though the view is held
+    // at its limits and stays as it is: a follow held at the map's edge too.
+    stop_match_tracking();
     if (x == view[0] && z == view[1])
         return;
-    stop_match_tracking();
     place_match_view(x, z);
 }
 

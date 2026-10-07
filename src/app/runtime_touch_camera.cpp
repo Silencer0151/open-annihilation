@@ -58,6 +58,15 @@ void Runtime::pan_match_camera_by(float dx, float dy) {
 void Runtime::zoom_match_about(float factor, float x, float y) {
     if (screen_ != Screen::match || !selected_tnt_ || director_mode() || !(factor > 0.0F))
         return;
+    // A zoom keeps a camera's follow of a unit: it zooms about the
+    // battlefield's centre, where the follow keeps the unit, and the follow
+    // goes on.
+    if (match_tracking_) {
+        x = static_cast<float>(match_layout_.left) +
+            static_cast<float>(match_layout_.battlefield_width()) / 2.0F;
+        y = static_cast<float>(match_layout_.top) +
+            static_cast<float>(match_layout_.battlefield_height()) / 2.0F;
+    }
     // A point off the battlefield zooms about the nearest point on it.
     const double focus_x = std::clamp(
         static_cast<double>(x) - static_cast<double>(match_layout_.left),
@@ -72,7 +81,6 @@ void Runtime::zoom_match_about(float factor, float x, float y) {
     // The zoom and its target together: nothing eases, so the map stays
     // under the fingers.
     const float zoom = std::clamp(match_zoom_ * factor, least_match_zoom(), most_match_zoom());
-    stop_match_tracking();
     zoom_focus_ = {false, x, y};
     zoom_view_about(zoom, focus_x, focus_y);
     match_zoom_target_ = zoom;
