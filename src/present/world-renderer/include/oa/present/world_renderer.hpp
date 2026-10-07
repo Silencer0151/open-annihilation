@@ -172,6 +172,28 @@ inline constexpr uint32_t terrain_band_rows = 32;
     platform::job_pool::Pool* pool = nullptr
 );
 
+/// The destination pixels along one axis that show the map: from `first`
+/// up to `end`; empty when `end` is not past `first`.
+struct ShownSpan {
+    int32_t first = 0;
+    int32_t end = 0;
+};
+
+/// Returns the destination pixels along one axis that a scaled sample of
+/// the map (fill_scaled_viewport) fills from the shown map, rather than
+/// black past its edges.
+///
+/// Pixel d samples map pixel source + floor(d * 65536 / scale_fp), scale_fp
+/// being the scale in 16.16 rounded to nearest, as the fill samples it; it
+/// shows the map when that lies from 0 up to `shown`. The span is not cut
+/// to any destination: a camera on the map puts `first` before pixel 0.
+///
+/// @param source map pixel of destination pixel 0; below 0 before the map
+/// @param shown map pixels the view shows along the axis
+/// @param scale screen pixels per map pixel; non-positive means 1
+/// @return the pixels, clamped to the range of int32_t
+[[nodiscard]] ShownSpan shown_map_span(int32_t source, uint32_t shown, float scale) noexcept;
+
 /// Renders the battlefield crop into a full presentation surface.
 ///
 /// The crop lands at the same destination origin unit projection and

@@ -314,6 +314,37 @@ oa::Rect32 unit_region(
     };
 }
 
+/// Returns the part of a bridge region over the map the view shows.
+///
+/// The bridge's pixels are the map pixels from the renderer's camera on,
+/// one for one, so nothing drawn within the part lies past the map's edges.
+///
+/// @param region the region, inclusive bridge pixels
+/// @param renderer the renderer, whose camera and origin place the map
+/// @param map_width map pixels across the map the view shows
+/// @param map_height map pixels down
+/// @return the part over the map; a region off the map is left with its
+///         right edge before its left, which captures nothing
+oa::Rect32 region_on_map(
+    const oa::Rect32& region,
+    const model_render::ModelRenderer& renderer,
+    int32_t map_width,
+    int32_t map_height
+) {
+    const int32_t left = region.x1;
+    const int32_t top = region.y1;
+    const int32_t right = region.x2;
+    const int32_t bottom = region.y2;
+    const int32_t map_left = renderer.origin_x - renderer.camera_x;
+    const int32_t map_top = renderer.origin_y - renderer.camera_y;
+    return {
+        std::max(left, map_left),
+        std::max(top, map_top),
+        std::min(right, map_left + map_width - 1),
+        std::min(bottom, map_top + map_height - 1)
+    };
+}
+
 /// Tells whether a unit's owner is another machine's player: in use with
 /// OA_PLAYER_STATUS_MIRRORED. Only such a player's records move its units;
 /// the units of a player in use but free or closed stay where the
@@ -1104,6 +1135,9 @@ void Runtime::render_match_surface() {
     // band then draws the list.
     auto& draw_list = models.draws;
     clear_world_draws(draw_list);
+    // The features are cut off where the map the view shows ends.
+    draw_list.shown_map_width = map_width;
+    draw_list.shown_map_height = map_height;
     const auto add_draw = [&draw_list](WorldDrawKind kind, std::size_t index) {
         add_world_draw(draw_list, kind, index);
     };
@@ -1314,13 +1348,20 @@ void Runtime::render_match_surface() {
         };
         model_render::note_piece_changes(model);
         draw_list.stand_ins.push_back(models.feature_unit);
+        // Drawn only over the map the view shows.
         add_model(
             model,
-            unit_region(renderer, model, terrain_height(&models, models.feature_unit.position)),
+            region_on_map(
+                unit_region(renderer, model, terrain_height(&models, models.feature_unit.position)),
+                renderer,
+                map_width,
+                map_height
+            ),
             false,
             model_render::UnitSupersampling::off,
             static_cast<int32_t>(draw_list.stand_ins.size() - 1)
         );
+        draw_list.models.back().on_map = true;
     };
     advance_gaf_feature_anims(match_->simulation().tick);
     // plan_feature_draw picks each sprite feature's frames, its
@@ -1368,7 +1409,7 @@ void Runtime::render_match_surface() {
             }
             if (image == nullptr)
                 continue;
-            draw_list.sprites.push_back({image, screen, sprite.shadow});
+            draw_list.sprites.push_back({image, screen, sprite.shadow, true});
             add_draw(
                 sprite.translucent ? WorldDrawKind::blended_sprite : WorldDrawKind::sprite,
                 draw_list.sprites.size() - 1
@@ -1934,6 +1975,16 @@ void Runtime::render_match_surface() {
         0,
         static_cast<int32_t>(world_surface.height)
     };
+    {
+        // The scene's pixels that show the map, as its terrain was filled.
+        const auto across = oa::present::world_renderer::shown_map_span(
+            camera_x, static_cast<uint32_t>(map_width), draw_scale
+        );
+        const auto down = oa::present::world_renderer::shown_map_span(
+            camera_y, static_cast<uint32_t>(map_height), draw_scale
+        );
+        frame_draw.shown_map = {across.first, down.first, across.end, down.end};
+    }
     frame_draw.palette = &match_palette_;
     frame_draw.scale = scene_view.scale;
     frame_draw.bridge = &models.bridge;

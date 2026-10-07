@@ -36,6 +36,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <limits>
 #include <list>
 #include <memory>
 #include <optional>
@@ -320,6 +321,10 @@ struct SpriteDraw {
     oa::present::world_renderer::ScreenPoint screen{};
     /// A feature's shadow frame, drawn as dark as the list's shadow_level.
     bool shadow{};
+    /// A feature's frame, cut off where the map the view shows ends
+    /// (WorldFrameDraw::shown_map), so that nothing of it lies on the black
+    /// past the map's edges.
+    bool on_map{};
 };
 
 /// A line of the frame (WorldDrawKind::line) in RGB, or of the bridge
@@ -341,6 +346,10 @@ struct ModelDraw {
     /// set to it when the feature draws. -1 for a unit.
     int32_t stand_in{-1};
     oa::present::model::SupersampledUnitPlan plan{};
+    /// A 3D feature, cut off where the map the view shows ends
+    /// (WorldDrawList::shown_map_width): its plan's region lies within the
+    /// map already, and the Full tier's card clips it there.
+    bool on_map{};
 };
 
 /// A projectile drawn as a 3DO object (render types 1, 3 and 6): its ground
@@ -390,6 +399,13 @@ struct WorldDrawList {
     /// How strongly the frame's flashes (WorldDrawKind::lit_sprite) light
     /// what is under them. Like the shadow level, clear_world_draws leaves it.
     FlashStrength flash_strength{FlashStrength::full};
+    /// The map the view shows, in map pixels across and down from its
+    /// top-left corner, where the features' draws (SpriteDraw::on_map,
+    /// ModelDraw::on_map) are cut off. Like the shadow level,
+    /// clear_world_draws leaves it.
+    int32_t shown_map_width{};
+    int32_t shown_map_height{}; ///< map pixels down
+
     std::vector<WorldDraw> draws; ///< in the order they draw
     std::vector<SquareDraw> squares;
     std::vector<SpriteDraw> sprites;
@@ -415,7 +431,8 @@ struct WorldDrawList {
 
 /// Empties a draw list for the next frame, keeping its buffers.
 ///
-/// The shadow level and the flash strength are left as they are.
+/// The shadow level, the flash strength and the shown map are left as they
+/// are.
 ///
 /// @param[in,out] list the list
 void clear_world_draws(WorldDrawList& list);
@@ -594,10 +611,29 @@ const oa::formats::gaf::RenderedFrame* ranged_frame(
 /// @param index its place in its kind's list
 void add_world_draw(WorldDrawList& list, WorldDrawKind kind, std::size_t index);
 
+/// A rectangle of the battlefield frame: the columns from `left` up to
+/// `right` and the rows from `top` up to `bottom`.
+struct FrameArea {
+    int32_t left{};
+    int32_t top{};
+    int32_t right{};
+    int32_t bottom{};
+};
+
 /// What every band of one frame draws with.
 struct WorldFrameDraw {
     /// The whole frame; each band narrows its rows to its own.
     WorldTarget target{};
+    /// The frame pixels that show the map rather than the black past its
+    /// edges, which a feature's frames (SpriteDraw::on_map) are drawn
+    /// within (oa::present::world_renderer::shown_map_span); the whole
+    /// frame unless set.
+    FrameArea shown_map{
+        std::numeric_limits<int32_t>::min(),
+        std::numeric_limits<int32_t>::min(),
+        std::numeric_limits<int32_t>::max(),
+        std::numeric_limits<int32_t>::max()
+    };
     const oa::PaletteBytes* palette{}; ///< the match's palette, 4 bytes a colour
     float scale{1.0F};                 ///< frame pixels per map pixel, as the GAF draws scale
     oa::present::model::RgbBridge* bridge{};

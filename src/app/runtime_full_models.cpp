@@ -956,6 +956,24 @@ class Emitter {
             static_cast<int32_t>(std::lround(static_cast<double>(view.width) * view.scale));
         scissor_.height =
             static_cast<int32_t>(std::lround(static_cast<double>(view.height) * view.scale));
+        if (inputs.draws != nullptr) {
+            map_scissor_ = shown_map_scissor(
+                view,
+                view.origin_x,
+                view.origin_y,
+                inputs.draws->shown_map_width,
+                inputs.draws->shown_map_height,
+                scissor_
+            );
+            shadow_map_scissor_ = shown_map_scissor(
+                view,
+                0.0F,
+                0.0F,
+                inputs.draws->shown_map_width,
+                inputs.draws->shown_map_height,
+                {0, 0, scissor_.width, scissor_.height}
+            );
+        }
     }
 
     /// Emits the frame's shadows and composes them.
@@ -988,6 +1006,27 @@ class Emitter {
     /// battlefield's size at its own origin, panned as the battlefield is.
     [[nodiscard]] Canvas shadow_surface() const noexcept {
         return {impl_.shadow_target, false, {}, pan_x_, pan_y_};
+    }
+
+    /// Returns the battlefield, or the shadow target, which has no scissor
+    /// of its own, as a feature's draws go into it: cut off where the map
+    /// the view shows ends.
+    ///
+    /// @param surface the battlefield or the shadow target
+    /// @return the surface, its scissor the part over the map
+    [[nodiscard]] Canvas on_map(const Canvas& surface) const noexcept {
+        Canvas narrowed = surface;
+        narrowed.scissored = true;
+        narrowed.scissor = surface.scissored ? map_scissor_ : shadow_map_scissor_;
+        return narrowed;
+    }
+
+    /// Tells whether a feature's draws show anywhere: whether the map the
+    /// view shows lies on the battlefield.
+    ///
+    /// @return false when the map lies wholly off it
+    [[nodiscard]] bool map_shown() const noexcept {
+        return map_scissor_.width > 0 && map_scissor_.height > 0;
     }
 
     // Pages and meshes.
@@ -1103,7 +1142,10 @@ class Emitter {
     bool whole_scale_{true};
     float texel_offset_{texel_edge}; ///< where a corner lies within its texel
     card::Rect scissor_{};           ///< the battlefield in the target, every batch's scissor
-    float origin_x_{};               ///< where the frame's pixel (0, 0) lands in the target
+    card::Rect map_scissor_{};       ///< the part of scissor_ over the map the view shows
+    /// The part of the shadow target over the map the view shows.
+    card::Rect shadow_map_scissor_{};
+    float origin_x_{}; ///< where the frame's pixel (0, 0) lands in the target
     float origin_y_{};
     float pan_x_{}; ///< the view's offset in target pixels, on every vertex
     float pan_y_{};
@@ -1974,6 +2016,10 @@ void Emitter::emit_silhouettes(
 // The kinds
 
 void Emitter::draw_model(const ModelDraw& drawn) {
+    // A feature draws only over the map the view shows.
+    if (drawn.on_map && !map_shown())
+        return;
+    const Canvas canvas = drawn.on_map ? on_map(battlefield()) : battlefield();
     draw::ModelRef model = drawn.model;
     if (drawn.stand_in >= 0 && static_cast<size_t>(drawn.stand_in) < in_.draws->stand_ins.size())
         model.unit = &in_.draws->stand_ins[static_cast<size_t>(drawn.stand_in)];
@@ -2035,7 +2081,7 @@ void Emitter::draw_model(const ModelDraw& drawn) {
             1.0F,
             true
         );
-        emit_polygons(battlefield());
+        emit_polygons(canvas);
         return;
     }
     if (!depth_image) {
@@ -2077,7 +2123,7 @@ void Emitter::draw_model(const ModelDraw& drawn) {
                 true
             );
         }
-        emit_polygons(battlefield());
+        emit_polygons(canvas);
         return;
     }
     // A depth image: the image's pieces, the moving pieces drawn again over
@@ -2171,8 +2217,8 @@ void Emitter::draw_model(const ModelDraw& drawn) {
     order_as_depth_plane(
         model.state, impl_.corners, impl_.polygons, impl_.plane_order, impl_.kept_plane_orders
     );
-    emit_polygons(battlefield());
-    emit_outline(battlefield());
+    emit_polygons(canvas);
+    emit_outline(canvas);
 }
 
 namespace {
@@ -2558,10 +2604,18 @@ void Emitter::shadows(bool& through_target) {
     for (const WorldDraw& entry : in_.draws->draws)
         if (entry.kind == WorldDrawKind::projectile && entry.index < in_.draws->projectiles.size())
             shadow_of_projectile(in_.draws->projectiles[entry.index], surface);
+    // A feature's shadow falls only over the map the view shows.
     for (const bool unfinished_pass : {true, false})
-        for (const WorldDraw& entry : in_.draws->draws)
-            if (entry.kind == WorldDrawKind::model && entry.index < in_.draws->models.size())
-                shadow_of_model(in_.draws->models[entry.index], surface, blend, unfinished_pass);
+        for (const WorldDraw& entry : in_.draws->draws) {
+            if (entry.kind != WorldDrawKind::model || entry.index >= in_.draws->models.size())
+                continue;
+            const ModelDraw& drawn = in_.draws->models[entry.index];
+            if (drawn.on_map && !map_shown())
+                continue;
+            shadow_of_model(
+                drawn, drawn.on_map ? on_map(surface) : surface, blend, unfinished_pass
+            );
+        }
     if (!through_target)
         return;
     card::Batch compose;

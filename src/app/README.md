@@ -173,7 +173,11 @@ logs it.
   `Game.map_pixel_width/height` hold it; the terrain fills, the box filter,
   the far view's filter and the Full tier's atlas (`shown_tile_grid`) end
   there, and draw black past it and before its left and top edges, so no
-  tier draws the filler at any zoom. The view may go past the map's edges:
+  tier draws the filler at any zoom. The features, trees, rocks and wrecks,
+  are cut off at the same edges in every tier, nothing of them drawn on
+  the black (`shown_map_span`, `region_on_map`, `shown_map_scissor`);
+  units, shots and effects past the edges are drawn whole. The view may go
+  past the map's edges:
   its centre stays on the map, so that a map's edge or corner can be
   brought to the battlefield's middle, or, where the view shows more of an
   axis than the map holds, the map's centre stays in the view

@@ -67,6 +67,8 @@ struct BatchKey {
     card::PageHandle page{};
     card::Blend blend{card::Blend::none};
     card::Sampling sampling{card::Sampling::nearest};
+    /// The batch draws a feature's frames, cut off where the map ends.
+    bool on_map{};
 
     friend bool operator==(const BatchKey&, const BatchKey&) = default;
 };
@@ -80,13 +82,33 @@ class Emitter {
     ///
     /// @param frame the frame appended to
     /// @param view the view every batch draws through
-    Emitter(card::CardFrame& frame, const SceneView& view) : frame_(frame), view_(view) {
+    /// @param list the frame's draws, whose shown map a feature's frames are
+    ///     cut off at; null for none
+    Emitter(card::CardFrame& frame, const SceneView& view, const WorldDrawList* list)
+        : frame_(frame), view_(view) {
         scissor_.x = static_cast<int32_t>(std::lround(view.origin_x));
         scissor_.y = static_cast<int32_t>(std::lround(view.origin_y));
         scissor_.width =
             static_cast<int32_t>(std::lround(static_cast<double>(view.width) * view.scale));
         scissor_.height =
             static_cast<int32_t>(std::lround(static_cast<double>(view.height) * view.scale));
+        if (list != nullptr)
+            map_scissor_ = shown_map_scissor(
+                view,
+                view.origin_x,
+                view.origin_y,
+                list->shown_map_width,
+                list->shown_map_height,
+                scissor_
+            );
+    }
+
+    /// Tells whether a feature's frames show anywhere: whether the map the
+    /// view shows lies on the battlefield.
+    ///
+    /// @return false when the map lies wholly off it
+    [[nodiscard]] bool map_shown() const noexcept {
+        return map_scissor_.width > 0 && map_scissor_.height > 0;
     }
 
     /// Returns a scene pixel column's place in the target.
@@ -185,7 +207,7 @@ class Emitter {
         batch.blend = key.blend;
         batch.sampling = key.sampling;
         batch.scissored = true;
-        batch.scissor = scissor_;
+        batch.scissor = key.on_map ? map_scissor_ : scissor_;
         batch.first_index = static_cast<card::Index>(frame_.indices.size());
         batch.index_count = 0;
         frame_.batches.push_back(batch);
@@ -199,6 +221,7 @@ class Emitter {
     card::CardFrame& frame_;
     const SceneView& view_;
     card::Rect scissor_{};
+    card::Rect map_scissor_{}; ///< the part of scissor_ over the map the view shows
     bool open_{};
     BatchKey key_{};
     std::size_t last_{};                ///< the position of the batch last opened
@@ -368,7 +391,7 @@ struct SpriteFrame::Impl {
         card::CardFrame& card_frame
     )
         : inputs(stage_inputs), pages(sprite_pages), hooks(page_hooks), frame(card_frame),
-          emitter(card_frame, stage_inputs.view) {
+          emitter(card_frame, stage_inputs.view, stage_inputs.list) {
         drawing = inputs.list != nullptr && inputs.view.width > 0 && inputs.view.height > 0;
         if (!drawing)
             return;
@@ -391,8 +414,10 @@ struct SpriteFrame::Impl {
     /// @param sprite the sprite
     /// @param blended the planner blends it through the alpha table
     void emit_sprite(const SpriteDraw& sprite, bool blended) {
-        // A frame drawn too far out for shadows draws no feature's shadow.
-        if (sprite.shadow && !shadows_drawn(*inputs.list))
+        // A frame drawn too far out for shadows draws no feature's shadow,
+        // and a feature's frames show only over the map.
+        if ((sprite.shadow && !shadows_drawn(*inputs.list)) ||
+            (sprite.on_map && !emitter.map_shown()))
             return;
         if (sprite.frame == nullptr || hooks.card_page == nullptr) {
             ++result.refused;
@@ -440,7 +465,7 @@ struct SpriteFrame::Impl {
         const float level = translucent_level * strength;
         const card::Colour translucent{level, level, level, level};
         emitter.quad(
-            {page, card::Blend::alpha_premultiplied, sampling},
+            {page, card::Blend::alpha_premultiplied, sampling, sprite.on_map},
             emitter.place_x(left),
             emitter.place_y(top),
             static_cast<float>(sprite.frame->width) * zoom * view.scale,

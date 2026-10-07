@@ -468,7 +468,8 @@ walk runs:
   covering the game's lines within a pixel; with the stage's order and
   batches, the fog's states (a sprite under a cell out of sight greyed,
   under a never-mapped cell left out, every sprite in colour under the
-  dithered option), the refusals, a frame overflowing the pages and a
+  dithered option), a feature's frame cut off where the map the view
+  shows ends, the refusals, a frame overflowing the pages and a
   pinned digest of its frame. `app-full-sprites-data` draws a scene of the
   installed game's GAF frames through its palette and alpha table the same
   way, against the processor and a reference that blends to the true mean;

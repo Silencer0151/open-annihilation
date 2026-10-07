@@ -64,14 +64,17 @@ grid, which draws only the surface rows its map rows land on. Bands write
 nothing another reads, so a pool of any size draws the bytes the calling
 thread draws alone, and with no pool the bands run in order on the calling
 thread. A missing tile stops the band that finds it; the fill then reports
-it, and which rows were written is not specified.
+it, and which rows were written is not specified. `shown_map_span` names
+the destination pixels along an axis that the fill takes from the shown
+map, where the match cuts its features off.
 
 `world-draw-bands` fills a random map at zoom 1, 1.37, 0.6, 0.75 and 2, from
 the corner, the middle and past the map's edges, and draws a random fog grid
 with random tile art at four zooms, plain and dithered, without a pool and
 on pools of 2, 3, 4 and 8 threads: every pool gives the same bytes, each
 filled pixel is the map pixel its zoom names, no band writes past its row,
-and a missing tile is reported from a pool.
+a missing tile is reported from a pool, and `shown_map_span` names exactly
+the pixels a fill draws from the shown map.
 
 ## The area pass
 

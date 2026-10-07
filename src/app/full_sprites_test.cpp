@@ -10,7 +10,8 @@
 // the lines cover the game's lines and stray no further than their width;
 // the squares are exact; the stage keeps the list's order and merges its
 // batches; a sprite under a cell out of sight is drawn greyed and one
-// under a never-mapped cell left out; malformed frames are refused; a
+// under a never-mapped cell left out; a feature's frame is cut off where
+// the map the view shows ends; malformed frames are refused; a
 // frame whose sprites overflow the pages draws nothing; and a digest of
 // the synthetic frame is pinned. With --data, a scene of the installed
 // game's GAF frames through its palette and alpha table, held to the
@@ -255,7 +256,8 @@ Picture grey_background(const oa::PaletteBytes& palette, uint32_t width, uint32_
     return picture;
 }
 
-/// Draws a list on the processor as the bands draw it, on one band.
+/// Draws a list on the processor as the bands draw it, on one band, the
+/// camera on the map's top-left corner.
 ///
 /// @param list the list
 /// @param palette the palette
@@ -282,6 +284,12 @@ Picture draw_processor(
     draw.scale = zoom;
     draw.bridge = &bridge;
     draw.display = &display;
+    if (list.shown_map_width > 0 && list.shown_map_height > 0) {
+        const auto across =
+            wr::shown_map_span(0, static_cast<uint32_t>(list.shown_map_width), zoom);
+        const auto down = wr::shown_map_span(0, static_cast<uint32_t>(list.shown_map_height), zoom);
+        draw.shown_map = {across.first, down.first, across.end, down.end};
+    }
     std::vector<model_render::BridgeBand> split;
     OA_CHECK(model_render::bridge_split(bridge, 1, split) == 1);
     model_render::ModelRenderer renderer{};
@@ -879,6 +887,82 @@ void test_synthetic_scene(float zoom) {
         std::printf("synthetic frame digest %#llx\n", static_cast<unsigned long long>(digest));
         OA_CHECK(digest == synthetic_frame_digest);
     }
+}
+
+/// A feature's frame over the map's right and bottom edges is cut off
+/// where the map the view shows ends, on the card as on the processor and
+/// the same on both; a feature's frame wholly past the map draws nothing;
+/// a frame that is not a feature's is drawn past the edges whole.
+///
+/// @param zoom scene pixels per map pixel
+void test_features_on_the_map(float zoom) {
+    constexpr int32_t map_width = 100;
+    constexpr int32_t map_height = 80;
+    const auto palette = test_palette();
+    const auto width = static_cast<int32_t>(std::lround(field_width * zoom));
+    const auto height = static_cast<int32_t>(std::lround(field_height * zoom));
+    const auto edge_x = static_cast<int32_t>(std::lround(map_width * zoom));
+    const auto edge_y = static_cast<int32_t>(std::lround(map_height * zoom));
+    const RenderedFrame feature = block_frame(20, 16, 10, 8, grey_entries + 5);
+    const RenderedFrame other = block_frame(12, 12, 6, 6, grey_entries + 40);
+    WorldDrawList list;
+    list.shown_map_width = map_width;
+    list.shown_map_height = map_height;
+    add_sprite(list, feature, map_width - 4, map_height - 3, zoom, false);
+    list.sprites.back().on_map = true;
+    add_sprite(list, feature, map_width + 30, 20, zoom, false);
+    list.sprites.back().on_map = true;
+    add_sprite(list, other, 30, map_height, zoom, false);
+    model_render::ModelDisplay display;
+    model_render::build_model_display(display, oa::present::palette_from_bytes(palette));
+    const Picture background =
+        grey_background(palette, static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+    const Picture processor = draw_processor(list, palette, display, background, zoom);
+    CardSide side(
+        static_cast<uint32_t>(field_left + width + border),
+        static_cast<uint32_t>(field_top + height + border),
+        gpu::Limits{}
+    );
+    side.pages.set_palette(oa::present::palette_from_bytes(palette), plain_gamma);
+    const CardDraw card = draw_card(side, list, palette, background, zoom);
+    OA_CHECK(card.outside_untouched);
+    const Comparison comparison = compare(card.field, processor, {});
+    OA_CHECK(comparison.beside > 0 && comparison.most_beside == 0);
+    // Past the map only the other frame changes the picture; over the map
+    // the feature's frame is drawn up to the edges.
+    const auto feature_colour = entry_colour(palette, grey_entries + 5);
+    const auto other_colour = entry_colour(palette, grey_entries + 40);
+    uint32_t feature_past = 0;
+    uint32_t other_past = 0;
+    for (uint32_t y = 0; y < processor.height; ++y)
+        for (uint32_t x = 0; x < processor.width; ++x) {
+            const bool past =
+                static_cast<int32_t>(x) >= edge_x || static_cast<int32_t>(y) >= edge_y;
+            feature_past += past && processor.at(x, y) == feature_colour ? 1U : 0U;
+            other_past += past && processor.at(x, y) == other_colour ? 1U : 0U;
+        }
+    OA_CHECK(feature_past == 0);
+    OA_CHECK(other_past != 0);
+    OA_CHECK(
+        processor.at(static_cast<uint32_t>(edge_x - 1), static_cast<uint32_t>(edge_y - 1)) ==
+        feature_colour
+    );
+    // The features' batch takes the map's part of the battlefield as its
+    // scissor, which leaves out the feature past the map.
+    OA_CHECK(card.result.sprites == 3 && card.result.refused == 0);
+    bool map_batch = false;
+    for (const auto& batch : card.frame.batches)
+        map_batch = map_batch || (batch.scissor.x == field_left && batch.scissor.y == field_top &&
+                                  batch.scissor.width == edge_x && batch.scissor.height == edge_y);
+    OA_CHECK(map_batch);
+    std::printf(
+        "features on the map at zoom %g: %u sprites in %u batches, none of a feature past the "
+        "edges, %u pixels of another frame there\n",
+        static_cast<double>(zoom),
+        card.result.sprites,
+        card.result.batches,
+        other_past
+    );
 }
 
 /// A feature's shadow frames, drawn and blended, on the card as dark as the
@@ -1558,6 +1642,8 @@ int main(int argc, char** argv) {
         test_synthetic_scene(1.0F);
         test_synthetic_scene(2.0F);
         test_shadow_sprites();
+        test_features_on_the_map(1.0F);
+        test_features_on_the_map(2.0F);
         test_lines(1.0F);
         test_lines(2.0F);
         test_fog_states();

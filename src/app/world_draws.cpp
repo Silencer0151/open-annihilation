@@ -672,6 +672,30 @@ void add_world_draw(WorldDrawList& list, WorldDrawKind kind, std::size_t index) 
     list.draws.push_back({kind, static_cast<uint32_t>(index)});
 }
 
+namespace {
+
+/// Returns a target whose clip is narrowed to an area of the frame.
+///
+/// @param target the frame and what may be written
+/// @param area the area
+/// @return the target, its clip the part of its own within the area; no
+///     columns or no rows when they do not meet
+WorldTarget within_area(const WorldTarget& target, const FrameArea& area) noexcept {
+    const int64_t left = std::max<int64_t>(target.clip_x, area.left);
+    const int64_t top = std::max<int64_t>(target.clip_y, area.top);
+    const int64_t right = std::min<int64_t>(int64_t{target.clip_x} + target.clip_width, area.right);
+    const int64_t bottom =
+        std::min<int64_t>(int64_t{target.clip_y} + target.clip_height, area.bottom);
+    WorldTarget narrowed = target;
+    narrowed.clip_x = static_cast<int32_t>(left);
+    narrowed.clip_y = static_cast<int32_t>(top);
+    narrowed.clip_width = static_cast<int32_t>(std::max<int64_t>(0, right - left));
+    narrowed.clip_height = static_cast<int32_t>(std::max<int64_t>(0, bottom - top));
+    return narrowed;
+}
+
+} // namespace
+
 void draw_world_band(
     const WorldDrawList& list,
     const WorldFrameDraw& frame,
@@ -699,6 +723,8 @@ void draw_world_band(
     WorldTarget target = frame.target;
     target.first_row = band.frame_first_row;
     target.end_row = band.frame_end_row;
+    // A feature's frames draw within the pixels that show the map.
+    const WorldTarget on_map = within_area(target, frame.shown_map);
     oa::Surface* surface = &band.surface;
     // The bridge holds draws not yet written back to the frame: sprites and
     // squares draw straight into the frame, so the bridge's pixels go back
@@ -729,7 +755,7 @@ void draw_world_band(
             if (sprite.shadow && !shadows_drawn(list))
                 break;
             blit_world_hotspot(
-                target,
+                sprite.on_map ? on_map : target,
                 *sprite.frame,
                 sprite.screen,
                 *frame.palette,
@@ -743,7 +769,7 @@ void draw_world_band(
             if (sprite.shadow && !shadows_drawn(list))
                 break;
             blit_world_blended_hotspot(
-                target,
+                sprite.on_map ? on_map : target,
                 *sprite.frame,
                 sprite.screen,
                 frame.scale,

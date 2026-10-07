@@ -34,7 +34,9 @@
 #include "oa/present/world_renderer.hpp"
 #include "world_draws.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -92,6 +94,55 @@ struct SceneView {
 /// @param view the view
 /// @return the zoom times the view's scale
 [[nodiscard]] float pixels_per_map_pixel(const SceneView& view) noexcept;
+
+/// Returns the part of a scissor that lies over the map a view shows, where
+/// a feature's draws are cut off, as the terrain ends there.
+///
+/// A map pixel's left edge lands `(pixel - camera_x - offset.x) * zoom *
+/// scale` target pixels right of the battlefield's corner, and its top edge
+/// likewise; the map's edges are rounded to the nearest pixel edge.
+///
+/// @param view the view: its camera, offset, zoom and scale
+/// @param corner_x the battlefield's top-left corner in the scissor's target
+/// @param corner_y its row
+/// @param map_width map pixels across the map the view shows
+/// @param map_height map pixels down
+/// @param scissor the scissor, in the same target
+/// @return the part of the scissor over the map; no width or no height when
+///     the map lies wholly off it
+[[nodiscard]] inline card::Rect shown_map_scissor(
+    const SceneView& view,
+    float corner_x,
+    float corner_y,
+    int32_t map_width,
+    int32_t map_height,
+    const card::Rect& scissor
+) noexcept {
+    const double pixel = static_cast<double>(view.zoom) * static_cast<double>(view.scale);
+    const auto edge = [pixel](float corner, double from_camera) {
+        return std::llround(static_cast<double>(corner) + from_camera * pixel);
+    };
+    const int64_t left = std::max<int64_t>(
+        scissor.x, edge(corner_x, -static_cast<double>(view.camera_x) - view.offset.x)
+    );
+    const int64_t top = std::max<int64_t>(
+        scissor.y, edge(corner_y, -static_cast<double>(view.camera_y) - view.offset.y)
+    );
+    const int64_t right = std::min<int64_t>(
+        int64_t{scissor.x} + scissor.width,
+        edge(corner_x, static_cast<double>(map_width) - view.camera_x - view.offset.x)
+    );
+    const int64_t bottom = std::min<int64_t>(
+        int64_t{scissor.y} + scissor.height,
+        edge(corner_y, static_cast<double>(map_height) - view.camera_y - view.offset.y)
+    );
+    return {
+        static_cast<int32_t>(left),
+        static_cast<int32_t>(top),
+        static_cast<int32_t>(std::max<int64_t>(0, right - left)),
+        static_cast<int32_t>(std::max<int64_t>(0, bottom - top))
+    };
+}
 
 /// The viewer's sight, from which a stage tells the fog's state at a cell:
 /// the sight grid's cells of fog_cell_pixels map pixels a side.

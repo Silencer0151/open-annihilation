@@ -3,7 +3,7 @@
 
 // The terrain fill and the fog drawn in bands: every pool size draws the
 // bytes the calling thread alone draws, and the terrain fill samples the map
-// pixel its scale names.
+// pixel its scale names, from the shown map where shown_map_span says.
 #include "oa/platform/job_pool.hpp"
 #include "oa/present/world_renderer.hpp"
 #include "oa/present/world_renderer/world_fog.hpp"
@@ -282,6 +282,74 @@ void terrain_fill_ends_at_the_shown_map() {
         }
 }
 
+/// The pixels shown_map_span names are those the fill draws from the shown
+/// map, and only those, the rest black (no entry of the test's palette is):
+/// a view over the map's top-left corner zoomed out, one past its bottom-right
+/// corner magnified, and one inside it at zoom 1, whose span reaches past
+/// the view on both sides.
+void shown_map_span_is_what_the_fill_shows() {
+    std::mt19937 random(test_seed);
+    const auto map = test_map(random);
+    const auto palette = test_palette();
+    constexpr uint32_t shown_width = map_tiles_wide * 32U - 32U;
+    constexpr uint32_t shown_height = map_tiles_high * 32U - 128U;
+
+    const struct {
+        int32_t source_x;
+        int32_t source_y;
+        float scale;
+    } views[] = {
+        {-300, -170, 0.6F},
+        {1200, 900, 1.37F},
+        {200, 150, 1.0F},
+    };
+
+    for (const auto& view : views) {
+        std::vector<uint8_t> rgb(static_cast<std::size_t>(view_width) * view_height * 3U);
+        CHECK(!wr::fill_scaled_viewport(
+                   map,
+                   palette,
+                   view.source_x,
+                   view.source_y,
+                   shown_width,
+                   shown_height,
+                   view_width,
+                   view_height,
+                   view.scale,
+                   rgb.data(),
+                   view_width
+        )
+                   .has_value());
+        const auto across = wr::shown_map_span(view.source_x, shown_width, view.scale);
+        const auto down = wr::shown_map_span(view.source_y, shown_height, view.scale);
+        bool all = true;
+        uint32_t shown_pixels = 0;
+        uint32_t black_pixels = 0;
+        for (uint32_t y = 0; y < view_height; ++y)
+            for (uint32_t x = 0; x < view_width; ++x) {
+                const auto at = (static_cast<std::size_t>(y) * view_width + x) * 3U;
+                const bool black = rgb[at] == 0 && rgb[at + 1] == 0 && rgb[at + 2] == 0;
+                const bool spanned = static_cast<int32_t>(x) >= across.first &&
+                                     static_cast<int32_t>(x) < across.end &&
+                                     static_cast<int32_t>(y) >= down.first &&
+                                     static_cast<int32_t>(y) < down.end;
+                all = all && black != spanned;
+                shown_pixels += spanned ? 1U : 0U;
+                black_pixels += black ? 1U : 0U;
+            }
+        CHECK(all);
+        CHECK(shown_pixels != 0);
+        if (view.scale != 1.0F)
+            CHECK(black_pixels != 0);
+        else
+            CHECK(
+                across.first < 0 && down.first < 0 &&
+                across.end > static_cast<int32_t>(view_width) &&
+                down.end > static_cast<int32_t>(view_height)
+            );
+    }
+}
+
 /// The fog's colours, each entry distinct.
 wr::FogShading test_shading() {
     wr::FogShading shading;
@@ -379,6 +447,7 @@ int main() {
     terrain_fill_is_the_same_on_every_pool();
     terrain_fill_reports_a_missing_tile_on_a_pool();
     terrain_fill_ends_at_the_shown_map();
+    shown_map_span_is_what_the_fill_shows();
     fog_is_the_same_on_every_pool();
     if (failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);

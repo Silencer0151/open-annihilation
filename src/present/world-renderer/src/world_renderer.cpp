@@ -283,6 +283,26 @@ std::optional<Error> fill_scaled_viewport(
     return std::nullopt;
 }
 
+ShownSpan shown_map_span(int32_t source, uint32_t shown, float scale) noexcept {
+    if (scale <= 0.0F)
+        scale = 1.0F;
+    auto scale_fp = static_cast<int64_t>(std::lround(static_cast<double>(scale) * fixed_one));
+    if (scale_fp == 0)
+        scale_fp = 1;
+    // The first pixel whose sample lies at or past a map pixel:
+    // floor(d * 65536 / scale_fp) >= m - source holds from
+    // d = ceil((m - source) * scale_fp / 65536).
+    const auto first_at = [&](int64_t map_pixel) {
+        const int64_t scaled = (map_pixel - source) * scale_fp;
+        const int64_t whole = scaled / int64_t{fixed_one};
+        const int64_t rounded_up = whole + (scaled % int64_t{fixed_one} > 0 ? 1 : 0);
+        return static_cast<int32_t>(std::clamp<int64_t>(
+            rounded_up, std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::max()
+        ));
+    };
+    return {first_at(0), first_at(static_cast<int64_t>(shown))};
+}
+
 RenderResult render_scaled_viewport(
     const formats::tnt::Map& map,
     const PaletteBytes& game_palette,

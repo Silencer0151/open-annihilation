@@ -579,7 +579,8 @@ if(OA_BUILD_PLATFORM)
     # alpha table blends them, with the lines held to the game's lines and
     # the squares exact; the stage's order, batches, fog states (a sprite
     # under a cell out of sight greyed, under a never-mapped cell left out),
-    # the refusals, the pages overflowing a frame, a pinned digest of the
+    # a feature's frame cut off where the map the view shows ends, the
+    # refusals, the pages overflowing a frame, a pinned digest of the
     # frame, and a feature's shadow frames, drawn and blended, as dark as
     # the list's shadow level on both sides and left out at level 0. With
     # --data, a scene of the installed game's GAF frames
