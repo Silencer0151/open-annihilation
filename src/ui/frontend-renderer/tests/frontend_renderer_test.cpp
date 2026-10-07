@@ -123,6 +123,39 @@ void test_grayed_art_frame() {
     CHECK(red_at(oa::ui::frontend_renderer::render_screen(resources, {&grayed, 1}), 1, 1) == 77);
 }
 
+// An art button whose authored rectangle is smaller than its frame, as
+// NEWGAME's captionless Side0 is, draws the whole frame at its own size from
+// the gadget's corner.
+void test_art_keeps_frame_size() {
+    oa::ui::frontend_renderer::ScreenResources resources;
+    resources.background.width = 5;
+    resources.background.height = 5;
+    resources.background.rgb.assign(5U * 5U * 3U, 99);
+    for (std::size_t index = 0; index < 256; ++index)
+        resources.gui_palette[index * 4] = static_cast<uint8_t>(index);
+    resources.background.palette = resources.gui_palette;
+    auto side = button("Side0", 1, 1, 2, 2);
+    side.common.attributes = static_cast<int32_t>(
+        oa::ui::gui_layout::attribute::centered | oa::ui::gui_layout::attribute::text_list |
+        oa::ui::gui_layout::attribute::no_focus
+    );
+    resources.layout.gadgets.push_back(side);
+    oa::formats::gaf::Sequence sequence;
+    sequence.name = "Side0";
+    oa::formats::gaf::Frame frame;
+    frame.width = 3;
+    frame.height = 3;
+    frame.pixels = {10, 11, 12, 13, 14, 15, 16, 17, 18};
+    frame.coverage.assign(9, 1);
+    sequence.frames.push_back(frame);
+    resources.sprites.sequences.push_back(sequence);
+    const auto drawn = oa::ui::frontend_renderer::render_screen(resources, {});
+    CHECK(red_at(drawn, 1, 1) == 10);
+    CHECK(red_at(drawn, 2, 2) == 14);
+    CHECK(red_at(drawn, 3, 3) == 18);
+    CHECK(red_at(drawn, 4, 4) == 99);
+}
+
 // A centred caption underlines its quick key's glyph on the row below the
 // text, in GUI palette entry 2, or 0 while pressed, and not while grayed;
 // the focused record gets the focus marker's six rings, lit through the
@@ -948,6 +981,7 @@ int main() {
     CHECK(vertical > 0);
 
     test_grayed_art_frame();
+    test_art_keeps_frame_size();
     test_grayed_art_cost();
     test_quick_key_and_focus();
     test_caption_placement();

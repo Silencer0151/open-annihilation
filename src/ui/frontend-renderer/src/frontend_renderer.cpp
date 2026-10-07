@@ -1306,27 +1306,12 @@ void render_screen_into(
                     "': " + rendered.error->message
                 );
             }
-            if (portrait_hit && gadget.common.width > 0 && gadget.common.height > 0) {
-                blit_stretched(
-                    result,
-                    *rendered.frame,
-                    gadget.common.x,
-                    gadget.common.y,
-                    gadget.common.width,
-                    gadget.common.height,
-                    active_palette,
-                    light_row
-                );
-            } else {
-                blit(
-                    result,
-                    *rendered.frame,
-                    gadget.common.x,
-                    gadget.common.y,
-                    active_palette,
-                    light_row
-                );
-            }
+            // The frame keeps its own size at the gadget's corner, however
+            // the authored rectangle differs: NEWGAME's 160x160 side emblems
+            // fill their frames from 132x106 Side0 and 129x104 Side1.
+            blit(
+                result, *rendered.frame, gadget.common.x, gadget.common.y, active_palette, light_row
+            );
             auto resolved_gadget = gadget;
             resolved_gadget.common.width = static_cast<int16_t>(rendered.frame->width);
             resolved_gadget.common.height = static_cast<int16_t>(rendered.frame->height);
