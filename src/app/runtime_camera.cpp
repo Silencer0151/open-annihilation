@@ -9,6 +9,7 @@
 #include "oa/sim/feature_runtime.hpp"
 #include "oa/sim/selection.hpp"
 #include "oa/platform/memory_status.hpp"
+#include "oa/present/scene_grid.hpp"
 #include "oa/present/world_renderer/world_camera.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -19,6 +20,7 @@
 #include <optional>
 #include <string>
 #include <tuple>
+#include <utility>
 
 namespace oa::app {
 
@@ -230,19 +232,33 @@ std::array<int32_t, 2> Runtime::view_camera() const {
         return view_hold_.held ? std::optional<double>(centre) : std::nullopt;
     };
     const double share = past_map_edge_share();
+    // A camera taken from the view's exact place, which may lie up to a
+    // screen pixel and a map pixel from it zoomed out, is held already
+    // where the limits hold that place.
+    const bool exact = exact_view_.held && exact_view_.camera_x == match_camera_x_ &&
+                       exact_view_.camera_z == match_camera_z_;
+    const auto held = [&](int32_t camera,
+                          double place,
+                          double visible,
+                          double map,
+                          std::optional<double> centre) {
+        if (exact && std::abs(held_view(place, visible, map, share, centre) - place) < 1.0)
+            return camera;
+        return held_camera(camera, visible, map, share, centre);
+    };
     return {
-        held_camera(
+        held(
             match_camera_x_,
+            exact_view_.x,
             static_cast<double>(match_layout_.battlefield_width()) / zoom,
             static_cast<double>(map_width),
-            share,
             from(view_hold_.centre_x)
         ),
-        held_camera(
+        held(
             match_camera_z_,
+            exact_view_.z,
             static_cast<double>(match_layout_.battlefield_height()) / zoom,
             static_cast<double>(map_height),
-            share,
             from(view_hold_.centre_z)
         )
     };
@@ -268,12 +284,25 @@ std::array<double, 2> Runtime::match_view_place() const {
 void Runtime::place_match_view(double x, double z) {
     x = std::clamp(x, -kFarthestViewPlace, kFarthestViewPlace);
     z = std::clamp(z, -kFarthestViewPlace, kFarthestViewPlace);
-    // A view drawn between map pixels lies past its camera's map pixel;
-    // one drawn on whole map pixels is drawn at the nearest.
-    const auto camera = [this](double place) {
-        return static_cast<int32_t>(view_between_pixels_ ? std::floor(place) : std::round(place));
+    // A view drawn between map pixels is drawn at the screen pixel nearest
+    // its place, counted from the map's corner, and lies past its camera's
+    // map pixel; one drawn on whole map pixels is drawn at the nearest.
+    const uint32_t step = oa::present::scene_step(match_zoom());
+    const auto camera = [&](double place) {
+        if (!view_between_pixels_)
+            return std::pair{static_cast<int32_t>(std::round(place)), place};
+        if (!view_on_scene_grid_)
+            return std::pair{static_cast<int32_t>(std::floor(place)), place};
+        const auto origin = oa::present::scene_origin(place, step);
+        return std::pair{
+            static_cast<int32_t>(origin.map_pixel),
+            static_cast<double>(origin.map_pixel) +
+                static_cast<double>(origin.phase) / static_cast<double>(step)
+        };
     };
-    exact_view_ = {true, x, z, camera(x), camera(z)};
+    const auto [camera_x, drawn_x] = camera(x);
+    const auto [camera_z, drawn_z] = camera(z);
+    exact_view_ = {true, x, z, camera_x, camera_z, drawn_x, drawn_z};
     match_camera_x_ = exact_view_.camera_x;
     match_camera_z_ = exact_view_.camera_z;
     camera_moved_ = true;
@@ -287,16 +316,73 @@ oa::present::world_renderer::ViewOffset Runtime::view_offset() const {
         camera[0] != exact_view_.camera_x || camera[1] != exact_view_.camera_z)
         return {};
     return {
-        std::clamp(exact_view_.x - static_cast<double>(camera[0]), 0.0, 1.0),
-        std::clamp(exact_view_.z - static_cast<double>(camera[1]), 0.0, 1.0)
+        std::clamp(exact_view_.drawn_x - static_cast<double>(camera[0]), 0.0, 1.0),
+        std::clamp(exact_view_.drawn_z - static_cast<double>(camera[1]), 0.0, 1.0)
     };
 }
 
-oa::present::world_renderer::ViewOffset Runtime::settle_view_offset(bool between) {
+void Runtime::centre_view_on(int32_t x, int32_t z) {
+    if (!view_between_pixels_) {
+        // The whole map pixel of the point, its 16.16 high word.
+        const auto whole = [](int32_t place) {
+            return static_cast<int32_t>(static_cast<int16_t>(static_cast<uint32_t>(place) >> 16));
+        };
+        set_camera_position(
+            whole(x) - visible_map_width() / 2, whole(z) - visible_map_height() / 2, 0
+        );
+        return;
+    }
+    const uint32_t step = oa::present::scene_step(match_zoom());
+    if (!view_on_scene_grid_) {
+        const auto zoom = static_cast<double>(match_zoom() > 0.0F ? match_zoom() : 1.0F);
+        place_match_view(
+            static_cast<double>(x) / oa::present::scene_step_one -
+                static_cast<double>(match_layout_.battlefield_width()) / zoom / 2.0,
+            static_cast<double>(z) / oa::present::scene_step_one -
+                static_cast<double>(match_layout_.battlefield_height()) / zoom / 2.0
+        );
+        return;
+    }
+    // The scene pixel the point lies in, on the pixels laid from the map's
+    // corner, at the battlefield's middle: the view's place is that pixel's
+    // start, which place_match_view keeps.
+    const auto place = [step](int32_t point, int32_t battlefield) {
+        const int64_t pixel = oa::present::scene_pixel_of(point, step);
+        return static_cast<double>(pixel - battlefield / 2) *
+               static_cast<double>(oa::present::scene_step_one) / static_cast<double>(step);
+    };
+    place_match_view(
+        place(x, match_layout_.battlefield_width()), place(z, match_layout_.battlefield_height())
+    );
+}
+
+std::array<uint32_t, 2> Runtime::scene_phase(const WorldScaling& scaling) const {
+    if (scaling.method != SceneMethod::none || !(scaling.draw_scale > 0.0F) ||
+        !(scaling.draw_scale < 1.0F))
+        return {};
+    const uint32_t step = oa::present::scene_step(scaling.draw_scale);
+    const auto offset = view_offset();
+    const auto phase = [step](double into) {
+        return static_cast<uint32_t>(std::clamp<double>(
+            std::round(into * static_cast<double>(step)), 0.0, static_cast<double>(step - 1)
+        ));
+    };
+    return {phase(offset.x), phase(offset.y)};
+}
+
+oa::present::world_renderer::ViewOffset Runtime::settle_view_offset(bool between, bool on_grid) {
     // A reader's draw of the standard tier's picture leaves the view alone.
     if (accelerated_.suspended)
         return {};
+    // A view whose camera was taken by another rule takes it again from
+    // its exact place.
+    on_grid = between && on_grid;
+    const bool changed = between != view_between_pixels_ || on_grid != view_on_scene_grid_;
     view_between_pixels_ = between;
+    view_on_scene_grid_ = on_grid;
+    if (changed && exact_view_.held && exact_view_.camera_x == match_camera_x_ &&
+        exact_view_.camera_z == match_camera_z_)
+        place_match_view(exact_view_.x, exact_view_.z);
     return view_offset();
 }
 

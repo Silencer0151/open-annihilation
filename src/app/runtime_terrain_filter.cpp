@@ -28,10 +28,14 @@ constexpr uint32_t kFixedOne = 65536u;
 /// @param start map coordinate of the first destination pixel
 /// @param count destination pixels
 /// @param scale_fp zoom in 16.16, at least 1
-void footprint_bounds(std::vector<int64_t>& bounds, int32_t start, int count, uint32_t scale_fp) {
+/// @param phase how far into map pixel `start` the first destination pixel
+///        starts, 16.16 parts of scale_fp, below it (scene_grid.hpp's phase)
+void footprint_bounds(
+    std::vector<int64_t>& bounds, int32_t start, int count, uint32_t scale_fp, uint32_t phase
+) {
     bounds.resize(static_cast<std::size_t>(count) + 1U);
     int64_t position = start;
-    uint32_t fraction = 0;
+    uint32_t fraction = phase % scale_fp;
     for (auto& bound : bounds) {
         bound = position;
         fraction += kFixedOne;
@@ -58,6 +62,9 @@ void footprint_bounds(std::vector<int64_t>& bounds, int32_t start, int count, ui
 /// @param dest_h destination height
 /// @param zoom destination pixels per map pixel (the draw scale), below 1
 /// @param[out] dest_rgb 3 bytes per destination pixel
+/// @param phase_x how far into map column source_x the first destination
+///        column starts, 16.16 parts of the zoom's step, below it
+/// @param phase_y the same for map row source_y and the first destination row
 /// @return false when the terrain's tile tables are malformed or name a missing tile
 bool box_filter_terrain(
     const oa::formats::tnt::Map& map,
@@ -69,7 +76,9 @@ bool box_filter_terrain(
     int dest_w,
     int dest_h,
     float zoom,
-    uint8_t* dest_rgb
+    uint8_t* dest_rgb,
+    uint32_t phase_x,
+    uint32_t phase_y
 ) {
     constexpr auto tile_edge = static_cast<uint32_t>(oa::formats::tnt::layout::tile_edge_pixels);
     constexpr auto tile_bytes = oa::formats::tnt::layout::tile_bytes;
@@ -93,8 +102,8 @@ bool box_filter_terrain(
         std::memcpy(&lut[index * 3U], &palette[index * oa::palette_entry_bytes], 3U);
     std::vector<int64_t> columns;
     std::vector<int64_t> rows;
-    footprint_bounds(columns, source_x, dest_w, scale_fp);
-    footprint_bounds(rows, source_y, dest_h, scale_fp);
+    footprint_bounds(columns, source_x, dest_w, scale_fp, phase_x);
+    footprint_bounds(rows, source_y, dest_h, scale_fp, phase_y);
     std::vector<uint32_t> sums(static_cast<std::size_t>(dest_w) * 3U);
     const uint16_t* const grid = map.tile_indices.data();
     const uint8_t* const tiles = map.tile_palette_indices.data();
@@ -171,8 +180,10 @@ void Runtime::refresh_filtered_terrain() {
     const int dest_h = scaling.scene_height;
     if (dest_w <= 0 || dest_h <= 0)
         return;
-    // The renderer holds the camera the same way before it checks its cache.
+    // The renderer holds the camera the same way before it checks its cache,
+    // and lays the scene from the view's phase.
     const auto [camera_x, camera_y] = view_camera();
+    const auto phase = scene_phase(scaling);
     auto& cache = match_terrain_cache_;
     const auto pixels = static_cast<std::size_t>(dest_w) * static_cast<std::size_t>(dest_h) * 3U;
     const bool resized = cache.width != static_cast<uint32_t>(dest_w) ||
@@ -188,7 +199,8 @@ void Runtime::refresh_filtered_terrain() {
     };
     if (!resized &&
         current(terrain_filtered_cam_x_, terrain_filtered_cam_y_, terrain_filtered_zoom_) &&
-        current(terrain_cache_cam_x_, terrain_cache_cam_y_, terrain_cache_zoom_))
+        current(terrain_cache_cam_x_, terrain_cache_cam_y_, terrain_cache_zoom_) &&
+        terrain_filtered_phase_ == phase && terrain_cache_phase_ == phase)
         return;
     const auto filter_start = std::chrono::steady_clock::now();
     bool filtered = false;
@@ -212,7 +224,9 @@ void Runtime::refresh_filtered_terrain() {
             dest_h,
             draw_scale,
             cache.rgb.data(),
-            draw_pool_.get()
+            draw_pool_.get(),
+            phase[0],
+            phase[1]
         );
     } else {
         filtered = box_filter_terrain(
@@ -225,7 +239,9 @@ void Runtime::refresh_filtered_terrain() {
             dest_w,
             dest_h,
             draw_scale,
-            cache.rgb.data()
+            cache.rgb.data(),
+            phase[0],
+            phase[1]
         );
     }
     terrain_box_filter_ns_ +=
@@ -239,9 +255,11 @@ void Runtime::refresh_filtered_terrain() {
     terrain_cache_cam_x_ = camera_x;
     terrain_cache_cam_y_ = camera_y;
     terrain_cache_zoom_ = draw_scale;
+    terrain_cache_phase_ = phase;
     terrain_filtered_cam_x_ = camera_x;
     terrain_filtered_cam_y_ = camera_y;
     terrain_filtered_zoom_ = draw_scale;
+    terrain_filtered_phase_ = phase;
 }
 
 } // namespace oa::app

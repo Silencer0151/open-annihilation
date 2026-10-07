@@ -103,6 +103,11 @@ struct RgbBridge {
     RgbFrame frame{};
     Rect32 area{};     // RGB rectangle covered, inclusive
     float scale{1.0F}; // RGB pixels per 8-bit pixel
+    /// How far into its 8-bit column the rectangle's first RGB column
+    /// starts, in 16.16 parts of the scale's step (oa/present/scene_grid.hpp's
+    /// phase), as the terrain under it was filled.
+    uint32_t phase_x{};
+    uint32_t phase_y{}; ///< the same for the rectangle's first RGB row
     Palette palette{};
     std::vector<uint32_t> exact_keys; // open-addressed RGB -> index for palette colours
     std::vector<uint8_t> exact_values;
@@ -123,8 +128,8 @@ struct RgbBridge {
 /// terrain fill lays the map pixel of the same place, so that a model drawn
 /// on a map pixel lands over that pixel's ground. Nothing is captured yet.
 /// The colour lookup is rebuilt when the palette changes. The capture copy
-/// is kept when the frame's size and row length, the rectangle, the scale
-/// and the palette are those of the last call, so
+/// is kept when the frame's size and row length, the rectangle, the scale,
+/// the phases and the palette are those of the last call, so
 /// that captures map again only the colours that changed, whatever the frame
 /// holds now; otherwise it is forgotten.
 ///
@@ -133,12 +138,17 @@ struct RgbBridge {
 /// @param area inclusive RGB rectangle to cover
 /// @param scale RGB pixels per 8-bit pixel; non-positive counts as 1
 /// @param palette palette the indices refer to
+/// @param phase_x how far into the 8-bit column 0 the rectangle's first
+///     RGB column starts, 16.16 parts of the scale's step, below it
+/// @param phase_y the same for the 8-bit row 0 and the first RGB row
 void bridge_begin(
     RgbBridge& bridge,
     const RgbFrame& frame,
     const Rect32& area,
     float scale,
-    const Palette& palette
+    const Palette& palette,
+    uint32_t phase_x = 0,
+    uint32_t phase_y = 0
 );
 
 /// Captures the tiles overlapping a region and clips the surface to it.

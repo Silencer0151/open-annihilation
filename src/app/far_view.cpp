@@ -57,13 +57,20 @@ static_assert((tile_edge >> last_pyramid_level) == 1U, "the last level holds a t
 /// @param count destination pixels
 /// @param scale_fp the zoom in 16.16, at least 1
 /// @param level the pyramid level
+/// @param phase how far into map pixel `start` the first destination pixel
+///        starts, 16.16 parts of scale_fp, below it
 void texel_bounds(
-    std::vector<uint32_t>& bounds, int32_t start, int32_t count, uint32_t scale_fp, uint32_t level
+    std::vector<uint32_t>& bounds,
+    int32_t start,
+    int32_t count,
+    uint32_t scale_fp,
+    uint32_t level,
+    uint32_t phase
 ) {
     bounds.resize(static_cast<std::size_t>(count) + 1U);
     const int64_t half = int64_t{1} << (level - 1U);
     int64_t position = start;
-    uint32_t fraction = 0;
+    uint32_t fraction = phase % scale_fp;
     for (auto& bound : bounds) {
         // The first texel whose centre, at (texel + 1/2) * 2^level, is at or
         // past the map pixel; the map's first texel for a pixel before it.
@@ -285,7 +292,9 @@ bool filter_far_terrain(
     int32_t dest_height,
     float zoom,
     uint8_t* dest_rgb,
-    oa::platform::job_pool::Pool* pool
+    oa::platform::job_pool::Pool* pool,
+    uint32_t phase_x,
+    uint32_t phase_y
 ) {
     if (dest_width <= 0 || dest_height <= 0)
         return true;
@@ -307,8 +316,8 @@ bool filter_far_terrain(
     };
     std::vector<uint32_t> columns;
     std::vector<uint32_t> rows;
-    texel_bounds(columns, source_x, dest_width, scale_fp, level);
-    texel_bounds(rows, source_y, dest_height, scale_fp, level);
+    texel_bounds(columns, source_x, dest_width, scale_fp, level, phase_x);
+    texel_bounds(rows, source_y, dest_height, scale_fp, level, phase_y);
     const FarFill fill{
         &map,
         pyramid.rgb.data() + level_offset(level) * pyramid_texel_bytes,

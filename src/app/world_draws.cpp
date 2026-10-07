@@ -235,21 +235,23 @@ void visit_sprite_pixels(
     Visit&& visit
 ) {
     const uint32_t step = oa::present::scene_step(scale);
+    const uint32_t phase_x = target.phase_x % step;
+    const uint32_t phase_y = target.phase_y % step;
     const int64_t left = int64_t{place.x} - frame.origin_x;
     const int64_t top = int64_t{place.y} - frame.origin_y;
     const int64_t first_row = std::max<int64_t>(
-        {oa::present::first_scene_pixel(top, step), target.first_row, target.clip_y, 0}
+        {oa::present::first_scene_pixel(top, step, phase_y), target.first_row, target.clip_y, 0}
     );
     const int64_t end_row = std::min<int64_t>(
-        {oa::present::first_scene_pixel(top + frame.height, step),
+        {oa::present::first_scene_pixel(top + frame.height, step, phase_y),
          target.end_row,
          int64_t{target.clip_y} + target.clip_height,
          target.height}
     );
     const int64_t first_column =
-        std::max<int64_t>({oa::present::first_scene_pixel(left, step), target.clip_x, 0});
+        std::max<int64_t>({oa::present::first_scene_pixel(left, step, phase_x), target.clip_x, 0});
     const int64_t end_column = std::min<int64_t>(
-        {oa::present::first_scene_pixel(left + frame.width, step),
+        {oa::present::first_scene_pixel(left + frame.width, step, phase_x),
          int64_t{target.clip_x} + target.clip_width,
          target.width}
     );
@@ -258,12 +260,12 @@ void visit_sprite_pixels(
     const auto source_width = static_cast<std::size_t>(frame.width);
     // The map pixel the first column shows, and how far into it the column
     // lies, in 16.16 parts of the step, kept while the column steps.
-    const int64_t first_shown = oa::present::map_pixel_shown(first_column, step);
-    const int64_t first_into =
-        first_column * int64_t{oa::present::scene_step_one} - first_shown * int64_t{step};
+    const int64_t first_shown = oa::present::map_pixel_shown(first_column, step, phase_x);
+    const int64_t first_into = first_column * int64_t{oa::present::scene_step_one} +
+                               int64_t{phase_x} - first_shown * int64_t{step};
     for (int64_t row = first_row; row < end_row; ++row) {
         const auto source_row =
-            static_cast<std::size_t>(oa::present::map_pixel_shown(row, step) - top);
+            static_cast<std::size_t>(oa::present::map_pixel_shown(row, step, phase_y) - top);
         const std::size_t row_offset = source_row * source_width;
         uint8_t* out =
             target.rgb + ((static_cast<std::size_t>(row) * static_cast<std::size_t>(target.width) +
@@ -456,15 +458,19 @@ oa::present::world_renderer::ScreenPoint project_world_point(
     return screen;
 }
 
-SceneRect sprite_scene_rect(const SpriteDraw& sprite, float scale) noexcept {
+SceneRect sprite_scene_rect(
+    const SpriteDraw& sprite, float scale, uint32_t phase_x, uint32_t phase_y
+) noexcept {
     const uint32_t step = oa::present::scene_step(scale);
+    phase_x %= step;
+    phase_y %= step;
     const int64_t left = int64_t{sprite.place.x} - sprite.frame->origin_x;
     const int64_t top = int64_t{sprite.place.y} - sprite.frame->origin_y;
     return {
-        oa::present::first_scene_pixel(left, step),
-        oa::present::first_scene_pixel(top, step),
-        oa::present::first_scene_pixel(left + sprite.frame->width, step),
-        oa::present::first_scene_pixel(top + sprite.frame->height, step)
+        oa::present::first_scene_pixel(left, step, phase_x),
+        oa::present::first_scene_pixel(top, step, phase_y),
+        oa::present::first_scene_pixel(left + sprite.frame->width, step, phase_x),
+        oa::present::first_scene_pixel(top + sprite.frame->height, step, phase_y)
     };
 }
 

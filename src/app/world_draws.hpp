@@ -62,6 +62,11 @@ struct WorldTarget {
     /// those in the band.
     int32_t first_row{};
     int32_t end_row{}; ///< the row after the last one the draw may change
+    /// How far into its map pixel the frame's first column starts, in 16.16
+    /// parts of the scene's step (oa/present/scene_grid.hpp's phase), which
+    /// the sprites are laid on the scene grid with, as the terrain is.
+    uint32_t phase_x{};
+    uint32_t phase_y{}; ///< the same for the frame's first row
 };
 
 /// Writes one pixel of the battlefield frame, clipped to the visible world
@@ -389,8 +394,12 @@ struct SceneRect {
 ///
 /// @param sprite the sprite; its frame must be set
 /// @param scale scene pixels per map pixel; 0 or less is 1
+/// @param phase_x the scene's phase across (WorldTarget::phase_x)
+/// @param phase_y the scene's phase down
 /// @return the rectangle
-[[nodiscard]] SceneRect sprite_scene_rect(const SpriteDraw& sprite, float scale) noexcept;
+[[nodiscard]] SceneRect sprite_scene_rect(
+    const SpriteDraw& sprite, float scale, uint32_t phase_x = 0, uint32_t phase_y = 0
+) noexcept;
 
 /// A line of the frame (WorldDrawKind::line) in RGB, or of the bridge
 /// (WorldDrawKind::selection_line) in a palette index, in its pixels.

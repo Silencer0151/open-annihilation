@@ -596,11 +596,7 @@ void Runtime::place_tracking_camera() {
     const FixedVec3 shown = shown_unit_position(
         models, world, tracked_match_unit_, tick_fraction(presentation_alpha())
     );
-    set_camera_position(
-        high_word(shown.x) - visible_map_width() / 2,
-        high_word(shown.z) - visible_map_height() / 2,
-        0
-    );
+    centre_view_on(static_cast<int32_t>(shown.x), static_cast<int32_t>(shown.z));
 }
 
 const oa::formats::gaf::RenderedFrame*
@@ -818,6 +814,31 @@ void Runtime::render_match_surface() {
     const auto bf_h = match_layout_.battlefield_height();
     const auto vis_w = visible_map_width();
     const auto vis_h = visible_map_height();
+    // The terrain, the draws and the fog go into the scene at the draw scale;
+    // unless it is drawn apart, the scene is the world layer at the zoom.
+    const auto scaling = world_scaling();
+    const float draw_scale = scaling.draw_scale;
+    // In the Full tier the graphics card draws the whole battlefield: the
+    // terrain is not filled, the bands do not draw and the fog is not
+    // rasterised; the world layer is the overlay canvas, cleared to the key
+    // colour, which the painters after the fog paint. The camera and the
+    // zoom the frame draws at are kept for the card's frame.
+    const bool card_world = full_presentation() && !directed && !far;
+    // How far between map pixels the frame draws the view: an accelerated
+    // frame the card draws, magnifies or the area pass reduces may, and so
+    // may a scene the processor draws at a zoom below 1, which lays its
+    // ground from the view's phase; every other frame draws it on the
+    // camera's map pixel, as the game always has. Settled before the camera
+    // is held, so that a frame that changes it takes its camera by its own
+    // rule.
+    const bool processor_below_one = !card_world && scaling.method == SceneMethod::none &&
+                                     draw_scale > 0.0F && draw_scale < 1.0F;
+    const bool between_pixels =
+        !directed &&
+        ((accelerated_presentation() && (card_world || scaling.method == SceneMethod::magnify ||
+                                         scaling.method == SceneMethod::area)) ||
+         processor_below_one);
+    std::ignore = settle_view_offset(between_pixels, card_world || processor_below_one);
     const auto held = view_camera();
     const int32_t camera_x = directed ? std::max(0, match_camera_x_) : held[0];
     const int32_t camera_y = directed ? std::max(0, match_camera_z_) : held[1];
@@ -977,28 +998,16 @@ void Runtime::render_match_surface() {
         hud.height = static_cast<uint32_t>(kCanvasHeight);
         hud.rgb.assign(static_cast<std::size_t>(kCanvasWidth * kCanvasHeight * 3), 0);
     }
-    // The terrain, the draws and the fog go into the scene at the draw scale;
-    // unless it is drawn apart, the scene is the world layer at the zoom.
-    const auto scaling = world_scaling();
-    const float draw_scale = scaling.draw_scale;
     // What the presentation and the picture-keeping readers learn of the frame.
     accelerated_.frame = scaling;
     accelerated_.frame_alpha = presentation_alpha();
-    // In the Full tier the graphics card draws the whole battlefield: the
-    // terrain is not filled, the bands do not draw and the fog is not
-    // rasterised; the world layer is the overlay canvas, cleared to the key
-    // colour, which the painters after the fog paint. The camera and the
-    // zoom the frame draws at are kept for the card's frame.
-    const bool card_world = full_presentation() && !directed && !far;
-    // How far between map pixels the frame draws the view: an accelerated
-    // frame the card draws, magnifies or the area pass reduces may; every
-    // other frame draws it on the camera's map pixel, as the game always
-    // has.
-    const bool between_pixels = !directed && accelerated_presentation() &&
-                                (card_world || scaling.method == SceneMethod::magnify ||
-                                 scaling.method == SceneMethod::area);
-    const auto drawn_offset = settle_view_offset(between_pixels);
-    accelerated_.frame_offset = drawn_offset;
+    const auto drawn_offset = view_offset();
+    // The processor's scene starts that far into the camera's map pixel;
+    // what it draws carries the offset, so the presentation moves it no
+    // further.
+    const auto phase = scene_phase(scaling);
+    accelerated_.frame_offset =
+        processor_below_one ? oa::present::world_renderer::ViewOffset{} : drawn_offset;
     ++accelerated_.hud_revision;
     const int32_t scene_w = scaling.scene_width;
     const int32_t scene_h = scaling.scene_height;
@@ -1022,7 +1031,7 @@ void Runtime::render_match_surface() {
     } else if (
         terrain_cache_cam_x_ != camera_x || terrain_cache_cam_y_ != camera_y ||
         std::abs(terrain_cache_zoom_ - draw_scale) > 1.0e-4F ||
-        (directed && terrain_cache_zoom_ != draw_scale)
+        (directed && terrain_cache_zoom_ != draw_scale) || terrain_cache_phase_ != phase
     ) {
         if (auto error = oa::present::world_renderer::fill_scaled_viewport(
                 *selected_tnt_,
@@ -1036,12 +1045,15 @@ void Runtime::render_match_surface() {
                 draw_scale,
                 match_terrain_cache_.rgb.data(),
                 static_cast<uint32_t>(scene_w),
-                draw_pool_.get()
+                draw_pool_.get(),
+                phase[0],
+                phase[1]
             ))
             throw std::runtime_error("cannot render match terrain: " + error->message);
         terrain_cache_cam_x_ = camera_x;
         terrain_cache_cam_y_ = camera_y;
         terrain_cache_zoom_ = draw_scale;
+        terrain_cache_phase_ = phase;
     }
     // The world layer is the battlefield alone; the HUD stays in 640x480
     // source space until presentation (or compose_match_frame) scales it.
@@ -1297,7 +1309,7 @@ void Runtime::render_match_surface() {
     draw_match_debug_grid(models.bridge, models.display, rgb_frame, bridge_area, scale);
     mark_profile(OA_PROFILE_RENDER_STATIC);
     model_render::bridge_begin(
-        models.bridge, rgb_frame, bridge_area, scale, models.display.palette
+        models.bridge, rgb_frame, bridge_area, scale, models.display.palette, phase[0], phase[1]
     );
     // Models draw into the bridge and sprites straight into the RGB frame,
     // so the bridge's pixels go back to the frame before a sprite draws over
@@ -1682,15 +1694,15 @@ void Runtime::render_match_surface() {
             // its top left corner at the point, and one at least; clipped to
             // the frame before it is filled.
             const uint32_t step = oa::present::scene_step(scene_view.scale);
-            const auto span = [step](int32_t from) {
-                const int64_t first = oa::present::first_scene_pixel(from, step);
+            const auto span = [step](int32_t from, uint32_t into) {
+                const int64_t first = oa::present::first_scene_pixel(from, step, into % step);
                 const int64_t end = oa::present::first_scene_pixel(
-                    int64_t{from} + oa::sim::effect_particles::pixel_item_side, step
+                    int64_t{from} + oa::sim::effect_particles::pixel_item_side, step, into % step
                 );
                 return std::pair<int64_t, int64_t>{first, std::max(end, first + 1)};
             };
-            const auto [left, right] = span(place.x);
-            const auto [top, bottom] = span(place.y);
+            const auto [left, right] = span(place.x, phase[0]);
+            const auto [top, bottom] = span(place.y, phase[1]);
             draw_list.squares.push_back(
                 {static_cast<int32_t>(std::clamp<int64_t>(left, 0, world_surface.width)),
                  static_cast<int32_t>(std::clamp<int64_t>(top, 0, world_surface.height)),
@@ -1975,15 +1987,17 @@ void Runtime::render_match_surface() {
         world_pixel_clip_.w,
         world_pixel_clip_.h,
         0,
-        static_cast<int32_t>(world_surface.height)
+        static_cast<int32_t>(world_surface.height),
+        phase[0],
+        phase[1]
     };
     {
         // The scene's pixels that show the map, as its terrain was filled.
         const auto across = oa::present::world_renderer::shown_map_span(
-            camera_x, static_cast<uint32_t>(map_width), draw_scale
+            camera_x, static_cast<uint32_t>(map_width), draw_scale, phase[0]
         );
         const auto down = oa::present::world_renderer::shown_map_span(
-            camera_y, static_cast<uint32_t>(map_height), draw_scale
+            camera_y, static_cast<uint32_t>(map_height), draw_scale, phase[1]
         );
         frame_draw.shown_map = {across.first, down.first, across.end, down.end};
     }

@@ -135,7 +135,9 @@ inline constexpr uint32_t terrain_band_rows = 32;
 
 /// Writes a scaled sample of the TNT mosaic into caller storage without allocating.
 ///
-/// Samples as render_scaled_viewport does, within the map the view shows:
+/// Samples as render_scaled_viewport does, from the phase on (scene_grid.hpp:
+/// destination column x samples map column source_x + map_pixel_shown(x,
+/// step, phase_x), and rows alike), within the map the view shows:
 /// the mosaic ends for the fill at shown_width across and shown_height
 /// down, where the game never shows a map's last columns and rows, and the
 /// pixels past them are black as those past the mosaic, and those left of
@@ -156,6 +158,9 @@ inline constexpr uint32_t terrain_band_rows = 32;
 /// @param[out] dest_rgb RGB rows of dest_stride_pixels pixels
 /// @param dest_stride_pixels destination row stride in pixels, at least dest_width
 /// @param pool threads to fill the bands on; null fills them on the calling thread
+/// @param phase_x how far into map column source_x the first destination
+///     column starts, 16.16 parts of the scale's step, below it; 0 at its start
+/// @param phase_y the same for map row source_y and the first destination row
 /// @return an error for a missing destination, a malformed map or a missing tile; nullopt on success
 [[nodiscard]] std::optional<Error> fill_scaled_viewport(
     const formats::tnt::Map& map,
@@ -169,7 +174,9 @@ inline constexpr uint32_t terrain_band_rows = 32;
     float scale,
     uint8_t* dest_rgb,
     uint32_t dest_stride_pixels,
-    platform::job_pool::Pool* pool = nullptr
+    platform::job_pool::Pool* pool = nullptr,
+    uint32_t phase_x = 0,
+    uint32_t phase_y = 0
 );
 
 /// The destination pixels along one axis that show the map: from `first`
@@ -183,16 +190,19 @@ struct ShownSpan {
 /// the map (fill_scaled_viewport) fills from the shown map, rather than
 /// black past its edges.
 ///
-/// Pixel d samples map pixel source + map_pixel_shown(d, scene_step(scale)),
-/// as the fill samples it on the scene grid (oa/present/scene_grid.hpp); it
+/// Pixel d samples map pixel source + map_pixel_shown(d, scene_step(scale),
+/// phase), as the fill samples it on the scene grid (oa/present/scene_grid.hpp); it
 /// shows the map when that lies from 0 up to `shown`. The span is not cut
 /// to any destination: a camera on the map puts `first` before pixel 0.
 ///
 /// @param source map pixel of destination pixel 0; below 0 before the map
 /// @param shown map pixels the view shows along the axis
 /// @param scale screen pixels per map pixel; non-positive means 1
+/// @param phase how far into map pixel `source` pixel 0 starts, 16.16 parts
+///     of the scale's step, below it (fill_scaled_viewport's phase)
 /// @return the pixels, clamped to the range of int32_t
-[[nodiscard]] ShownSpan shown_map_span(int32_t source, uint32_t shown, float scale) noexcept;
+[[nodiscard]] ShownSpan
+shown_map_span(int32_t source, uint32_t shown, float scale, uint32_t phase = 0) noexcept;
 
 /// Renders the battlefield crop into a full presentation surface.
 ///

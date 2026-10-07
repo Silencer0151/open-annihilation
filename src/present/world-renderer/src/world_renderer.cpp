@@ -32,6 +32,10 @@ struct ScaledFill {
     int32_t source_y{};   ///< map row of the first destination row; may lie above the map
     uint32_t dest_width{};
     uint32_t scale_fp{}; ///< 16.16 screen pixels per map pixel, at least 1
+    /// How far into its map column the first destination pixel starts, in
+    /// 16.16 parts of scale_fp, below it (scene_grid.hpp's phase).
+    uint32_t phase_x{};
+    uint32_t phase_y{}; ///< the same down, for the first destination row
     uint64_t terrain_width{};
     uint64_t terrain_height{};
     uint8_t* dest_rgb{};
@@ -40,9 +44,10 @@ struct ScaledFill {
 
 /// Fills destination rows [first_row, end_row) of a scaled terrain sample.
 ///
-/// Row r samples map row source_y + floor(r * 65536 / scale_fp), the row the
-/// fill reaches stepping 65536 a row from row 0. Map pixels left of or above
-/// the mosaic are black, as those past it are.
+/// Row r samples map row source_y + floor((r * 65536 + phase_y) / scale_fp),
+/// the row the fill reaches stepping 65536 a row from row 0, and columns
+/// alike with phase_x (scene_grid.hpp's map_pixel_shown). Map pixels left
+/// of or above the mosaic are black, as those past it are.
 ///
 /// @param fill the sample and its destination
 /// @param first_row first destination row
@@ -54,7 +59,7 @@ bool fill_scaled_rows(const ScaledFill& fill, uint32_t first_row, uint32_t end_r
     const uint16_t* const grid = map.tile_indices.data();
     const uint8_t* const tiles = map.tile_palette_indices.data();
     const uint32_t scale_fp = fill.scale_fp;
-    const uint64_t advanced = static_cast<uint64_t>(first_row) * fixed_one;
+    const uint64_t advanced = static_cast<uint64_t>(first_row) * fixed_one + fill.phase_y;
     int64_t map_y = static_cast<int64_t>(fill.source_y) + static_cast<int64_t>(advanced / scale_fp);
     auto y_frac = static_cast<uint32_t>(advanced % scale_fp);
     const auto terrain_width = static_cast<int64_t>(fill.terrain_width);
@@ -67,7 +72,7 @@ bool fill_scaled_rows(const ScaledFill& fill, uint32_t first_row, uint32_t end_r
             on_terrain ? static_cast<std::size_t>(map_y / tile_edge) * map.tile_width : 0U;
         if (!on_terrain) {
             std::memset(out, 0, static_cast<std::size_t>(fill.dest_width) * 3U);
-        } else if (scale_fp == fixed_one) {
+        } else if (scale_fp == fixed_one && fill.phase_x == 0) {
             // 1:1 sampling copies whole tile rows through the palette table,
             // after the black left of the mosaic.
             int64_t map_x = fill.source_x;
@@ -100,7 +105,7 @@ bool fill_scaled_rows(const ScaledFill& fill, uint32_t first_row, uint32_t end_r
             }
         } else {
             int64_t map_x = fill.source_x;
-            uint32_t x_frac = 0;
+            uint32_t x_frac = fill.phase_x;
             const uint8_t* rgb = nullptr;
             static constexpr uint8_t black[3] = {0, 0, 0};
             for (uint32_t destination_x = 0; destination_x < fill.dest_width; ++destination_x) {
@@ -223,7 +228,9 @@ std::optional<Error> fill_scaled_viewport(
     float scale,
     uint8_t* dest_rgb,
     uint32_t dest_stride_pixels,
-    platform::job_pool::Pool* pool
+    platform::job_pool::Pool* pool,
+    uint32_t phase_x,
+    uint32_t phase_y
 ) {
     if (scale <= 0.0F)
         scale = 1.0F;
@@ -254,6 +261,8 @@ std::optional<Error> fill_scaled_viewport(
         source_y,
         dest_width,
         scale_fp,
+        phase_x % scale_fp,
+        phase_y % scale_fp,
         std::min<uint64_t>(
             static_cast<uint64_t>(map.tile_width) * formats::tnt::layout::tile_edge_pixels,
             shown_width
@@ -283,12 +292,12 @@ std::optional<Error> fill_scaled_viewport(
     return std::nullopt;
 }
 
-ShownSpan shown_map_span(int32_t source, uint32_t shown, float scale) noexcept {
+ShownSpan shown_map_span(int32_t source, uint32_t shown, float scale, uint32_t phase) noexcept {
     // The fill's step, and the first pixel that shows each end of the map.
     const uint32_t step = scene_step(scale);
     const auto first_at = [&](int64_t map_pixel) {
         return static_cast<int32_t>(std::clamp<int64_t>(
-            first_scene_pixel(map_pixel - source, step),
+            first_scene_pixel(map_pixel - source, step, phase % step),
             std::numeric_limits<int32_t>::min(),
             std::numeric_limits<int32_t>::max()
         ));

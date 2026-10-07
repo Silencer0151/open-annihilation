@@ -3,8 +3,13 @@
 
 // The terrain fill and the fog drawn in bands: every pool size draws the
 // bytes the calling thread alone draws, and the terrain fill samples the map
-// pixel its scale names, from the shown map where shown_map_span says.
+// pixel its scale names, from the shown map where shown_map_span says; and
+// zoomed out, a view placed on the scene pixels laid from the map's corner
+// (scene_origin) and moved by fractions of a map pixel shows its ground
+// moved by whole pixels, never sampled afresh, where a view filled from its
+// whole map pixel samples it afresh.
 #include "oa/platform/job_pool.hpp"
+#include "oa/present/scene_grid.hpp"
 #include "oa/present/world_renderer.hpp"
 #include "oa/present/world_renderer/world_fog.hpp"
 
@@ -443,11 +448,97 @@ void fog_is_the_same_on_every_pool() {
 
 } // namespace
 
+/// The zoomed-out scale the moving view is filled at, a scale whose step
+/// lays the map's pixels unevenly, the place it starts from and the map
+/// pixels it moves by a frame, a fraction of one.
+constexpr float moving_scale = 0.35F;
+constexpr double moving_start = 301.25;
+constexpr double moving_step = 0.37;
+constexpr uint32_t moving_frames = 12;
+
+/// Checks that a view placed on the scene grid from the map's corner, moved
+/// by fractions of a map pixel at a zoomed-out scale, fills the ground of
+/// the first frame moved by whole pixels, the pixels the view's place moved
+/// by on that grid; and that the same view filled from its whole map pixel,
+/// with no phase, samples the ground afresh.
+void terrain_fill_moves_by_whole_pixels() {
+    std::mt19937 random(test_seed);
+    const auto map = test_map(random);
+    const auto palette = test_palette();
+    const uint32_t step = oa::present::scene_step(moving_scale);
+    const auto filled = [&](int32_t source, uint32_t phase) {
+        std::vector<uint8_t> rgb(static_cast<std::size_t>(view_width) * view_height * 3U);
+        CHECK(!wr::fill_scaled_viewport(
+                   map,
+                   palette,
+                   source,
+                   source,
+                   map_tiles_wide * 32U,
+                   map_tiles_high * 32U,
+                   view_width,
+                   view_height,
+                   moving_scale,
+                   rgb.data(),
+                   view_width,
+                   nullptr,
+                   phase,
+                   phase
+        )
+                   .has_value());
+        return rgb;
+    };
+    // Whether frame b is frame a moved up and left by `moved` pixels, over
+    // the pixels both show.
+    const auto moved_by =
+        [](const std::vector<uint8_t>& a, const std::vector<uint8_t>& b, int64_t moved) {
+            for (uint32_t y = 0; y + moved < view_height; ++y)
+                for (uint32_t x = 0; x + moved < view_width; ++x)
+                    if (std::memcmp(
+                            &b[(static_cast<std::size_t>(y) * view_width + x) * 3U],
+                            &a[(static_cast<std::size_t>(y + moved) * view_width + x + moved) * 3U],
+                            3U
+                        ) != 0)
+                        return false;
+            return true;
+        };
+    const auto pixel_of = [&](double place) {
+        return std::llround(place * step / oa::present::scene_step_one);
+    };
+    const auto first = oa::present::scene_origin(moving_start, step);
+    const auto first_frame = filled(static_cast<int32_t>(first.map_pixel), first.phase);
+    bool resampled = false;
+    for (uint32_t frame = 1; frame < moving_frames; ++frame) {
+        const double place = moving_start + moving_step * frame;
+        const auto origin = oa::present::scene_origin(place, step);
+        CHECK(origin.phase < step);
+        const int64_t moved = pixel_of(place) - pixel_of(moving_start);
+        CHECK(moved_by(
+            first_frame, filled(static_cast<int32_t>(origin.map_pixel), origin.phase), moved
+        ));
+        // From the whole map pixel the ground shows other map pixels.
+        const auto whole = static_cast<int32_t>(std::floor(place));
+        const auto whole_first = static_cast<int32_t>(std::floor(moving_start));
+        if (whole != whole_first) {
+            const auto from_whole = filled(whole, 0);
+            const auto first_whole = filled(whole_first, 0);
+            bool any = false;
+            for (int64_t shift = 0; shift <= 2 && !any; ++shift)
+                any = moved_by(first_whole, from_whole, shift);
+            resampled = resampled || !any;
+        }
+    }
+    CHECK(resampled);
+    // At a scale of 1 the view starts on its nearest map pixel, with no phase.
+    const auto unscaled = oa::present::scene_origin(moving_start, oa::present::scene_step_one);
+    CHECK(unscaled.map_pixel == 301 && unscaled.phase == 0);
+}
+
 int main() {
     terrain_fill_is_the_same_on_every_pool();
     terrain_fill_reports_a_missing_tile_on_a_pool();
     terrain_fill_ends_at_the_shown_map();
     shown_map_span_is_what_the_fill_shows();
+    terrain_fill_moves_by_whole_pixels();
     fog_is_the_same_on_every_pool();
     if (failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);

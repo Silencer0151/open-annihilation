@@ -208,6 +208,10 @@ build_terrain_pyramid(const oa::formats::tnt::Map& map, const oa::PaletteBytes& 
 /// @param zoom destination pixels per map pixel, below 1
 /// @param[out] dest_rgb 3 bytes per destination pixel, rows dest_width apart
 /// @param pool the drawing threads; null draws on the calling thread
+/// @param phase_x how far into map column source_x the first destination
+///     column starts, 16.16 parts of the zoom's step, below it
+///     (oa/present/scene_grid.hpp's phase); the spans then step from there
+/// @param phase_y the same for map row source_y and the first destination row
 /// @return false when the map or the pyramid is malformed; the destination
 ///         is then left partly drawn
 [[nodiscard]] bool filter_far_terrain(
@@ -221,7 +225,9 @@ build_terrain_pyramid(const oa::formats::tnt::Map& map, const oa::PaletteBytes& 
     int32_t dest_height,
     float zoom,
     uint8_t* dest_rgb,
-    oa::platform::job_pool::Pool* pool
+    oa::platform::job_pool::Pool* pool,
+    uint32_t phase_x = 0,
+    uint32_t phase_y = 0
 );
 
 // ---------------------------------------------------------------------------

@@ -186,8 +186,10 @@ logs it.
   (`view_centre_span` in `far_view.hpp`). The view's exact place, the map
   point at the battlefield's corner (`exact_view_`, `match_view_place`),
   is what the zoom, the scroll and a finger's pan move, and the camera is
-  taken from it (`place_match_view`): the nearest whole map pixel, or the
-  one at or before it while frames draw the view between map pixels. The
+  taken from it (`place_match_view`): the nearest whole map pixel, or,
+  while frames draw the view between map pixels, the one at or before the
+  screen pixel nearest the place, on the screen pixels laid from the map's
+  corner at the zoom (`scene_origin`). The
   limits hold a view from the one they held last (`view_hold_`,
   `held_view`), so that a view past them goes no further from the map but
   moves back toward it at once; every frame holds the camera so
@@ -435,16 +437,27 @@ logs it.
   the overlay but keeps the base the frame being presented drew, so that
   frame is magnified as every other.
   Smooth panning: while a frame is magnified or reduced by the area pass,
-  or drawn by the card in the Full tier, the view lies between map pixels
-  (`view_between_pixels_`, `view_offset`): at its exact place
-  (`match_view_place`), past the camera taken at or before it, which, and
-  Game's, steps whole map pixels as the place moves, so nothing reaches the
-  simulation, saves, digests or the wire; a camera moved any other way
-  starts the view on its own map pixel. The card draws the scene that far
-  before the battlefield's edge (`magnified_span`), the area pass starts
-  its picture that far into the scene, the Full tier draws its terrain,
-  fog and stages that far on, and the painters after the fog move by it to
-  the nearest screen pixel. Hover, picking, the drag box, the build site and orders'
+  drawn by the card in the Full tier, or drawn by the processor at a zoom
+  below 1, the view lies between map pixels (`view_between_pixels_`,
+  `view_offset`): at the screen pixel nearest its exact place
+  (`match_view_place`), counted from the map's corner, past the camera
+  taken at or before it, which, and Game's, steps whole map pixels as the
+  place moves, so nothing reaches the simulation, saves, digests or the
+  wire; a camera moved any other way starts the view on its own map pixel.
+  Every map pixel then falls on the same parts of screen pixels from every
+  camera, so the ground moves by whole screen pixels and is never sampled
+  afresh: zoomed out it does not shimmer as the view moves, and zoomed in
+  a magnified or Full frame moves a screen pixel at a time. The card draws
+  the scene that far before the battlefield's edge (`magnified_span`), the
+  area pass starts its picture that far into the scene, the Full tier
+  draws its terrain, fog and stages that far on, a scene the processor
+  draws at the zoom lays its terrain (the nearest fill, the box filter and
+  the far view's), models and sprites from the offset's phase on the scene
+  grid (`scene_phase`), and the painters after the fog move by it to the
+  nearest screen pixel. A followed unit (`centre_view_on`) is kept at the
+  battlefield's middle so, by screen pixels; in a frame the processor
+  draws at zoom 1 and above, whose units are drawn on whole map pixels,
+  the camera steps whole map pixels with the unit, as the game's does. Hover, picking, the drag box, the build site and orders'
   map pixels take the same offset (`game_screen_point`,
   `match_world_point`, `screen_to_map_pixel` with a `ViewOffset`), so the
   pointer is over what is drawn under it, and orders stay whole map

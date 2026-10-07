@@ -11249,6 +11249,19 @@ class Runtime final : public menu::Host,
     /// @param id unit id; 0 or an empty slot does nothing
     void center_camera_on_unit(uint16_t id);
 
+    /// Centres the view on a point of the map, as a tracking camera follows
+    /// a unit. While the frames draw the view between map pixels, the view
+    /// is placed (place_match_view) with the point at the battlefield's
+    /// middle: on the screen pixels laid from the map's corner, the screen
+    /// pixel the point lies in, so that the view moves by screen pixels,
+    /// finer than a map pixel when zoomed in; otherwise exactly. Else the
+    /// camera is put on the whole map pixel half the view before the
+    /// point's, as the game puts it.
+    ///
+    /// @param x the point's column, 16.16 map pixels
+    /// @param z the point's row, 16.16 map pixels
+    void centre_view_on(int32_t x, int32_t z);
+
     /// Shows the order panel for the selection: the build page the panel
     /// unit shows (match_panel_page()), which every unit of a type with a
     /// build page shows from its creation until ORDERS, BUILD or the page
@@ -11493,10 +11506,18 @@ class Runtime final : public menu::Host,
     /// @return the map column and row, which may lie past the map's edges
     [[nodiscard]] std::array<double, 2> match_view_place() const;
 
-    /// Puts the view at an exact place and takes the camera from it: the
-    /// whole map pixel at or before it while the frames draw the view
-    /// between map pixels (view_between_pixels_), else the nearest.
-    /// Marks the camera moved.
+    /// Puts the view at an exact place and takes the camera from it.
+    ///
+    /// While the frames draw the view between map pixels on the screen
+    /// pixels laid from the map's corner (view_on_scene_grid_), the view is
+    /// drawn at the screen pixel nearest the place, so that every map pixel
+    /// falls on the same parts of screen pixels from every camera and the
+    /// ground moves by whole screen pixels; the camera is the whole map pixel
+    /// at or before that point. While they draw it between map pixels
+    /// otherwise (view_between_pixels_), the view is drawn at the place and
+    /// the camera is the whole map pixel at or before it. Otherwise the
+    /// camera is the map pixel nearest the place, and the view is drawn on
+    /// it. Marks the camera moved.
     ///
     /// @param x the map column at the battlefield's left edge
     /// @param z the map row at its top edge
@@ -11506,26 +11527,48 @@ class Runtime final : public menu::Host,
     /// hover, picking, orders' map pixels and the painters after the fog
     /// take, so that what the pointer is over is what is drawn under it.
     ///
-    /// The view lies between map pixels only while the accelerated tier's
-    /// match frames draw it so (view_between_pixels_) and the camera is the
-    /// one taken from the view's exact place (exact_view_); otherwise, and
-    /// always in the standard tier, it is drawn on the camera's map pixel
-    /// and the offset is none.
+    /// The view lies between map pixels only while the match frames draw it
+    /// so (view_between_pixels_: the accelerated tier's, and the
+    /// processor's below zoom 1) and the camera is the one taken from the
+    /// view's exact place (exact_view_); otherwise it is drawn on the
+    /// camera's map pixel and the offset is none.
     ///
     /// @return map pixels along each axis, from 0 to 1
     [[nodiscard]] oa::present::world_renderer::ViewOffset view_offset() const;
 
     /// Settles how far between map pixels a match frame draws the view: an
-    /// accelerated frame whose card magnifies the scene or whose area pass
-    /// reduces it draws the view at its exact place (view_offset), and the
-    /// view's camera is then taken at or before that place; every other
-    /// frame, the standard tier's, the director's and those at a method of
-    /// neither, draws the view on the camera's map pixel. A frame drawn for
-    /// a reader that keeps a picture leaves it as the frame before left it.
+    /// accelerated frame whose card draws the battlefield, magnifies the
+    /// scene or whose area pass reduces it, and a frame whose processor draws
+    /// the scene at a zoom below 1, draw the view between map pixels
+    /// (view_offset), and the view's camera is then taken at or before the
+    /// point drawn; every other frame, the director's among them, draws the
+    /// view on the camera's map pixel. Of those between map pixels, the
+    /// Full tier's card frames and the processor's draw the view at the
+    /// screen pixel nearest its exact place, on the screen pixels laid from
+    /// the map's corner (view_on_scene_grid_), and the magnified and the
+    /// area pass's frames at the place itself, through their filters. A
+    /// view whose camera was taken by another rule takes it again
+    /// (place_match_view), before the frame holds its camera. A frame drawn
+    /// for a reader that keeps a picture leaves it as the frame before left
+    /// it.
     ///
     /// @param between the frame may draw the view between map pixels
+    /// @param on_grid such a frame draws it on the screen pixels laid from the map's corner
     /// @return the offset the frame draws the view at
-    oa::present::world_renderer::ViewOffset settle_view_offset(bool between);
+    oa::present::world_renderer::ViewOffset settle_view_offset(bool between, bool on_grid);
+
+    /// Returns how far into the camera's map pixel a scene the processor
+    /// draws at the zoom starts, below zoom 1, in 16.16 parts of the scene's
+    /// step (oa/present/scene_grid.hpp's phase): the view's offset
+    /// (view_offset) on the scene's grid, which its terrain, sprites and
+    /// models are laid from, so that its ground moves by whole pixels and
+    /// is never sampled afresh. None for every other scene: one drawn at
+    /// zoom 1 or above, or reduced by the area pass or drawn by the card,
+    /// which place the view's offset themselves.
+    ///
+    /// @param scaling how the frame draws the battlefield (world_scaling)
+    /// @return the phase across and down
+    [[nodiscard]] std::array<uint32_t, 2> scene_phase(const WorldScaling& scaling) const;
 
     /// Sends the primary selected unit to resume building or repair a unit.
     ///
@@ -13422,6 +13465,11 @@ class Runtime final : public menu::Host,
         double z{};         ///< the map row at its top edge
         int32_t camera_x{}; ///< the camera column taken from x
         int32_t camera_z{}; ///< the camera row taken from z
+        /// Where the frames draw the view: x and z themselves on whole map
+        /// pixels; between them, the map point on the screen pixel nearest
+        /// x and z, counted from the map's corner at the zoom.
+        double drawn_x{};
+        double drawn_z{};
     };
 
     ExactView exact_view_{};
@@ -13441,6 +13489,11 @@ class Runtime final : public menu::Host,
     /// (settle_view_offset), so the camera is taken at or before the view's
     /// exact place and the offset past it drawn.
     bool view_between_pixels_ = false;
+    /// The last match frame drew the view between map pixels at the screen
+    /// pixel nearest its exact place, on the screen pixels laid from the
+    /// map's corner (settle_view_offset), so the camera is taken at or
+    /// before that point.
+    bool view_on_scene_grid_ = false;
 
     // The drag box kept while the left button is held on the
     // battlefield (Game.drag_start and drag_end): whole map pixels x,
@@ -13524,16 +13577,18 @@ class Runtime final : public menu::Host,
     };
 
     FeatureFogRules feature_fog_rules_{};
-    // The terrain of the scene, at its size, and the camera and draw scale it
-    // was filled for.
+    // The terrain of the scene, at its size, and the camera, draw scale and
+    // phase (scene_phase) it was filled for.
     oa::present::world_renderer::Surface match_terrain_cache_{};
     int32_t terrain_cache_cam_x_ = kUncachedTerrainCamera;
     int32_t terrain_cache_cam_y_ = kUncachedTerrainCamera;
     float terrain_cache_zoom_ = -1.0F;
+    std::array<uint32_t, 2> terrain_cache_phase_{};
     // View of the last box-filtered fill of match_terrain_cache_ (runtime_terrain_filter.cpp).
     int32_t terrain_filtered_cam_x_ = kUncachedTerrainCamera;
     int32_t terrain_filtered_cam_y_ = kUncachedTerrainCamera;
     float terrain_filtered_zoom_ = -1.0F;
+    std::array<uint32_t, 2> terrain_filtered_phase_{};
     /// Runs of the box filter (refresh_filtered_terrain) and their time in
     /// nanoseconds, which the render tiers check reads: a Full frame never
     /// runs it.
@@ -13681,9 +13736,10 @@ class Runtime final : public menu::Host,
     /// presentation_alpha(), after the frame's clock step (step_match_frame):
     /// the unit holds still on the screen and the ground moves under it
     /// evenly, and the pointer, clicks and the build box map through the
-    /// camera the frame is drawn from. Nothing while a menu holds the match,
-    /// when nothing is tracked or when the director draws. The camera is this
-    /// player's view, not the simulation's state.
+    /// camera the frame is drawn from (centre_view_on: by screen pixels
+    /// while the frames draw the view between map pixels). Nothing while a
+    /// menu holds the match, when nothing is tracked or when the director
+    /// draws. The camera is this player's view, not the simulation's state.
     void place_tracking_camera();
 
     /// Chooses the fraction of a tick the frame about to be drawn shows.

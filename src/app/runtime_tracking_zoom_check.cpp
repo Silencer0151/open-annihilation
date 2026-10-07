@@ -71,8 +71,9 @@ constexpr float kPinchFactor = 1.05F;
 /// a zoom, and the view's exact place may lie from where steps out and as
 /// many back began: what double arithmetic leaves.
 constexpr double kMostAnchorStray = 1.0e-6;
-/// Map pixels the camera may lie from the view's exact place: the nearest
-/// whole map pixel.
+/// Map pixels the drawn view, its camera and offset, may lie from the view's
+/// exact place: the nearest whole map pixel, or zoomed out the nearest
+/// screen pixel, half of 1 over the zoom (kMostCameraStray over the zoom).
 constexpr double kMostCameraStray = 0.5 + 1.0e-9;
 /// A zoom off the wheel's steps from the default, as a pinch leaves.
 constexpr float kOffStepZoom = 1.52F;
@@ -337,47 +338,55 @@ void Runtime::check_zoom_about_pointer(const std::function<void()>& frame) {
     // A zoom's frames: before each of the gesture's, the pointer moved to
     // the path's point for it and the gesture's step; after each, drawn,
     // the exact map point that was under the pointer before the frame is
-    // under it still, wherever it lies on the map, and the camera is the
-    // nearest whole map pixel to the view's exact place. After the
-    // gesture, frames with the pointer resting until the zoom settles.
-    const auto zoom_frames =
-        [&](const std::string& what, const Path& path, const Gesture& gesture) {
-            std::array<double, 2> at{};
-            for (int step = 0; step < gesture.steps + kSettleFrames; ++step) {
-                const bool acting = step < gesture.steps;
-                if (!acting && match_zoom_ == match_zoom_target_)
-                    return;
-                if (acting)
-                    at = path(step);
-                move_pointer(at);
-                const auto before = point_at(at);
-                if (acting)
-                    gesture.act(step, at);
-                frame();
-                render_match_surface();
-                const auto after = point_at(at);
-                const auto view = match_view_place();
-                const std::array<int32_t, 2> camera{match_camera_x_, match_camera_z_};
-                for (std::size_t axis = 0; axis < 2; ++axis) {
-                    const std::string way = axis == 0 ? " across" : " down";
-                    const bool on_map =
-                        before[axis] >= 0.0 && before[axis] <= static_cast<double>(map_size[axis]);
-                    if (on_map && std::abs(after[axis] - before[axis]) > kMostAnchorStray)
-                        fail(
-                            what + ": frame " + std::to_string(step + 1) + " at zoom " +
-                            std::to_string(match_zoom()) + " moved the point under the pointer " +
-                            std::to_string(after[axis] - before[axis]) + " map pixels" + way
-                        );
-                    if (std::abs(static_cast<double>(camera[axis]) - view[axis]) > kMostCameraStray)
-                        fail(
-                            what + ": frame " + std::to_string(step + 1) + " drew the camera " +
-                            std::to_string(camera[axis]) + way + " for a view at " +
-                            std::to_string(view[axis])
-                        );
-                }
+    // under it still, wherever it lies on the map, and the view is drawn
+    // from the nearest whole map pixel to its exact place, or zoomed out
+    // the nearest screen pixel (kMostCameraStray). After the gesture,
+    // frames with the pointer resting until the zoom settles.
+    const auto zoom_frames = [&](const std::string& what,
+                                 const Path& path,
+                                 const Gesture& gesture) {
+        std::array<double, 2> at{};
+        for (int step = 0; step < gesture.steps + kSettleFrames; ++step) {
+            const bool acting = step < gesture.steps;
+            if (!acting && match_zoom_ == match_zoom_target_)
+                return;
+            if (acting)
+                at = path(step);
+            move_pointer(at);
+            const auto before = point_at(at);
+            if (acting)
+                gesture.act(step, at);
+            frame();
+            render_match_surface();
+            const auto after = point_at(at);
+            const auto view = match_view_place();
+            const std::array<int32_t, 2> camera{match_camera_x_, match_camera_z_};
+            const auto offset = view_offset();
+            const std::array<double, 2> drawn{
+                static_cast<double>(camera[0]) + offset.x, static_cast<double>(camera[1]) + offset.y
+            };
+            const double most_stray =
+                std::max(kMostCameraStray, kMostCameraStray / static_cast<double>(match_zoom()));
+            for (std::size_t axis = 0; axis < 2; ++axis) {
+                const std::string way = axis == 0 ? " across" : " down";
+                const bool on_map =
+                    before[axis] >= 0.0 && before[axis] <= static_cast<double>(map_size[axis]);
+                if (on_map && std::abs(after[axis] - before[axis]) > kMostAnchorStray)
+                    fail(
+                        what + ": frame " + std::to_string(step + 1) + " at zoom " +
+                        std::to_string(match_zoom()) + " moved the point under the pointer " +
+                        std::to_string(after[axis] - before[axis]) + " map pixels" + way
+                    );
+                if (std::abs(drawn[axis] - view[axis]) > most_stray)
+                    fail(
+                        what + ": frame " + std::to_string(step + 1) + " drew the view at " +
+                        std::to_string(drawn[axis]) + way + " for a view at " +
+                        std::to_string(view[axis])
+                    );
             }
-            fail(what + ": the zoom did not settle");
-        };
+        }
+        fail(what + ": the zoom did not settle");
+    };
     // Wheel notches at the pointer, `out` out, `out` and `in` in and `in`
     // out again, of `notches` each, a notch every `apart` frames.
     const auto wheel = [this](int out, int in, float notches, int apart) {
