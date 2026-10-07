@@ -626,7 +626,7 @@ ConnectAction poll_for_host(Lobby& lobby, ConnectState& state, Panel& panel) noe
     state.host_waiting = false;
     message(lobby, "");
     if (auto* list = panel_control(panel, "GAMENAME"))
-        list->list_selection = row;
+        list->list_selection = static_cast<int16_t>(row);
     return choose_listed_game(lobby, state, panel, row, false);
 }
 
