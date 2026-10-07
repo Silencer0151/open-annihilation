@@ -256,6 +256,8 @@ std::string_view label_of(settings::Setting setting) {
         return "After zoom";
     case settings::Setting::window_frame:
         return "Window frame";
+    case settings::Setting::hud_scaling:
+        return "HUD scaling";
     case settings::Setting::modern_fonts:
         return "Use modern fonts for game text";
     case settings::Setting::text_outline:
@@ -1738,7 +1740,7 @@ void Runtime::check_engine_settings_window_sizes() {
             // Graphics scrolls: at its end too, as the window shows the picture.
             tap(SDLK_END);
             require(
-                dialog->scroll[static_cast<std::size_t>(page)] == 454,
+                dialog->scroll[static_cast<std::size_t>(page)] == 513,
                 "End did not scroll Graphics to its end" + on
             );
             present(presented, picture);

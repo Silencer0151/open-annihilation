@@ -93,7 +93,9 @@ and 1600x1200 do, and a narrower one the single section, as 4:3 and 5:4
 windows from 1152x864 to 1400x1050 and 16:10 windows at 1280x800 and
 1440x900 do. Clicks, the build menu and the minimap follow the smaller
 interface, as on a smaller window. Without the hack, the interface keeps
-its size.
+its size. With HUD scaling Off in the settings the interface keeps the
+original game's size, and its bar holds the two sections on every window
+wider than 1024 pixels.
 
 While the console's clock (`+clock`) shows the game time, the readings
 leave it out: the top bar's first section holds the wind over the tidal

@@ -43,6 +43,7 @@ the locks a running game puts on them (`settings_locks`).
 | | Zoomed out units: how units are drawn farther out than After zoom | Rendered, Dots; Icons shown faded, not offered | Rendered | `open-annihilation.zoomed-out-units` (`rendered` or `dots`; any other word, `icons` among them, reads as Rendered) |
 | | After zoom, a drop-down, locked "Needs Dots" while Zoomed out units is Rendered | 1/2, 1/3, 1/4, 1/6, 1/8, 1/12, 1/16 of normal size | 1/6 | `open-annihilation.zoomed-out-after` (`1/2`, `1/3`, `1/4`, `1/6`, `1/8`, `1/12` or `1/16`) |
 | | Window frame: whether a window shows its title bar and borders while a game is played; the game menu, a panel it opens and every other screen show them | Hidden in play, Always shown | Hidden in play | `open-annihilation.window-frame` (`hidden-in-play` or `always-shown`) |
+| | HUD scaling: whether a game's side column and bars grow with the window, up to twice the original game's size, or keep its size | Off, On | On | `open-annihilation.hud-scaling` |
 | Touch, listed only while the game has touch controls | One-finger drag | Automatic (a selection box on a tablet, scrolling on a phone), Box, Scroll | Automatic | `open-annihilation.touch-drag` (`automatic`, `box` or `scroll`) |
 | | Hold delay | 250 to 700 ms, steps of 50; a stored delay is held to the range and put on its nearest step | 350 ms | `open-annihilation.touch-hold-delay` |
 | | QUEUE and ADD | Stay on, One action | Stay on | `open-annihilation.touch-latches` (`stay-on` or `one-action`) |
@@ -254,6 +255,13 @@ window are left as they are. The window's contents keep their size and
 place as the frame comes and goes (`set_window_frame`), so the screen
 size the dialog shows does not change and no size reads as Custom.
 
+HUD scaling is never locked, and takes effect at once, in a game too: the
+application lays the game out again (`Runtime::apply_output_mode`). On,
+the side column, its minimap and build menu, and the top and bottom bars
+are drawn at the window's scale, up to `kMaxChromeScale`; Off, at the
+original game's size on every window (`Runtime::match_chrome_most_scale`).
+The touch controls' layouts keep their own sizes either way.
+
 A language drawn only in the modern fonts (`TextNeeds::modern_fonts`,
 Simplified Chinese) turns Use modern fonts for game text On when it is
 chosen, and while it is chosen the switch shows On with a padlock and "Set
@@ -403,7 +411,7 @@ and the footer never move. A section whose rows, with 8 clear pixels under
 the last row's line, are taller than the view scrolls by whole source
 pixels, and shows a scroll bar in the margin right of its rows: a well like
 a switch's, its thumb as tall as the view's share of the section and never
-under 16 pixels. Graphics, with eleven rows, is taller than its view by 454
+under 16 pixels. Graphics, with twelve rows, is taller than its view by 513
 pixels, Language, with the Language drop-down, four switches and the
 Text size slider, by 129, Touch, with its three strips, the Hold delay
 slider and two switches, by 121, and Controls, with its three switches and
@@ -806,9 +814,9 @@ Escape, Left, Right, Tab and Shift+Tab on it, the rest of the dialog taking
 nothing meanwhile, the locks during a game and by the command line with
 their notes, inert rows and disabled button, and OPEN MODS FOLDER asking
 for the Mods folder;
-the Graphics section's eleven rows, their places at every offset
+the Graphics section's twelve rows, their places at every offset
 and under every lock, the focus scrolling them into view, both forms of a
-locked row, Zoomed out units' faded Icons and After zoom's lock, Window frame's two ways, every status of Hardware acceleration, Full's included, and
+locked row, Zoomed out units' faded Icons and After zoom's lock, Window frame's two ways, HUD scaling's two hints, every status of Hardware acceleration, Full's included, and
 the requests to try the graphics card afresh; on sections of the test's own taller than the
 view (`SectionHooks`), its scrolling: the view and its limit, the wheel, the
 scroll bar, the scroll keys, the focus brought into view, rows the view

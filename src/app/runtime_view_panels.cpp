@@ -240,7 +240,7 @@ Runtime::make_room_for_clock_line(const oa::ui::display_layout::MatchLayout& lai
         fit.safe = laid_out.safe;
         return fit;
     };
-    const auto own = fitted(layout::kMaxChromeScale);
+    const auto own = fitted(match_chrome_most_scale());
     const auto* font = match_label_font();
     if (font == nullptr)
         return own;

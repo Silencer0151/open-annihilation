@@ -298,7 +298,7 @@ the game draws its text and how the modern fonts draw it.
 
 ![The middle of the Graphics section: Vertical sync Off, Menu scaling Sharp, Native pixel density Off and Explosion flash Full.](images/settings/graphics-2.png)
 
-![The rest of the Graphics section, scrolled to its end: Zoomed out units Rendered, After zoom at 1/6, locked until Zoomed out units is Dots, and Window frame Hidden in play.](images/settings/graphics-3.png)
+![The rest of the Graphics section, scrolled to its end: After zoom at 1/6, locked until Zoomed out units is Dots, Window frame Hidden in play, and HUD scaling On.](images/settings/graphics-3.png)
 
 - **Maximum frame rate**, 30 to 120 frames a second in steps of 5, 120 by
   default. It caps how many pictures the game draws a second; the game
@@ -439,6 +439,14 @@ the game draws its text and how the modern fonts draw it.
   every other screen, where the window can be moved and closed. Always
   shown keeps them on every screen. The battlefield keeps its size either
   way, and full screen has no frame to hide. It takes effect at once.
+- **HUD scaling**, Off or On, On by default. On, the side panel with its
+  minimap and build menu, and the top and bottom bars of a game, grow with
+  the window up to twice the original game's size, as on a 1280x960
+  window, and the battlefield takes the rest. Off, they keep the original
+  game's 640x480 size on every window, and the battlefield takes all the
+  room they leave. Clicks and the minimap follow either way, and at
+  640x480 the two look the same. The touch controls keep their own sizes.
+  It takes effect at once, in a game too.
 
 Some computers start with other defaults, which Restore defaults puts back
 and which a value you choose always replaces:

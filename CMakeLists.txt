@@ -1780,6 +1780,27 @@ if(OA_BUILD_PLATFORM)
         TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_match_bars_panel_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # The same with HUD scaling Off: the side column and both bars at the
+      # original game's size on every window, still reaching the window's
+      # right edge with the side's art, and the clock line placed by the
+      # same rule: on the battlefield at 1024x768 and in two sections at
+      # 1280x1024 and 1920x1080; with the console's Clock on, in the top
+      # bar's first section at 800x600 and 1024x768, and on the battlefield
+      # at 640x480.
+      set(oa_match_bars_unscaled_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/native-checks/match-bars-hud-scaling-off")
+      file(MAKE_DIRECTORY "${oa_match_bars_unscaled_dir}")
+      file(WRITE "${oa_match_bars_unscaled_dir}/match-bars.conf"
+        "open-annihilation-preferences 1\n"
+        "\"open-annihilation.hud-scaling\" \"0\"\n")
+      add_test(NAME native-match-bars-hud-scaling-off COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-match-bars
+        --mod "${oa_match_bars_panel_dir}/resource-panel.oamod.yaml"
+        --preferences-file "${oa_match_bars_unscaled_dir}/match-bars.conf")
+      set_tests_properties(native-match-bars-hud-scaling-off PROPERTIES
+        TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
+        WORKING_DIRECTORY "${oa_match_bars_unscaled_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # The pages of a builder of one page, one of several, a factory and a
       # unit that builds nothing, on windows from 640x480 to 2560x1440,
       # walked with NEXT, PREV, ORDERS and BUILD through SDL input on dummy

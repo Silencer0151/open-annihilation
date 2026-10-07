@@ -52,8 +52,8 @@ constexpr std::array<Setting, 3> kCommonTweaksRows{
     Setting::path_search,
 };
 /// Graphics' rows: how units look zoomed out, the zoom they look so from
-/// right under the way, then the window's frame.
-constexpr std::array<Setting, 11> kGraphicsRows{
+/// right under the way, then the window's frame and the HUD's scaling.
+constexpr std::array<Setting, 12> kGraphicsRows{
     Setting::max_frame_rate,
     Setting::anti_aliasing,
     Setting::screen_size,
@@ -65,6 +65,7 @@ constexpr std::array<Setting, 11> kGraphicsRows{
     Setting::zoomed_out_units,
     Setting::zoomed_out_after,
     Setting::window_frame,
+    Setting::hud_scaling,
 };
 /// Language's rows: the language first, and the text size right
 /// under the switch it needs.
@@ -329,7 +330,7 @@ struct SwitchMember {
 };
 
 /// Every switch and its value: the one table switch_on and set_switch read.
-constexpr std::array<SwitchMember, 21> kSwitches{{
+constexpr std::array<SwitchMember, 22> kSwitches{{
     {Setting::wheel_zoom, &EngineSettings::wheel_zoom, nullptr},
     {Setting::escape_opens_menu, &EngineSettings::escape_opens_menu, nullptr},
     {Setting::switch_alt, &EngineSettings::switch_alt, nullptr},
@@ -337,6 +338,7 @@ constexpr std::array<SwitchMember, 21> kSwitches{{
     {Setting::frame_stats, &EngineSettings::frame_stats, nullptr},
     {Setting::vertical_sync, &EngineSettings::vertical_sync, nullptr},
     {Setting::native_density, &EngineSettings::native_density, nullptr},
+    {Setting::hud_scaling, &EngineSettings::hud_scaling, nullptr},
     {Setting::modern_fonts, &EngineSettings::modern_fonts, nullptr},
     {Setting::text_outline, &EngineSettings::text_outline, nullptr},
     {Setting::text_shadow, &EngineSettings::text_shadow, nullptr},
@@ -1918,6 +1920,8 @@ std::string_view label_of(Setting setting) noexcept {
         return "After zoom";
     case Setting::window_frame:
         return "Window frame";
+    case Setting::hud_scaling:
+        return "HUD scaling";
     case Setting::modern_fonts:
         return "Use modern fonts for game text";
     case Setting::text_outline:
@@ -2269,6 +2273,16 @@ std::string_view hint_line(
             break;
         }
         break;
+    case Setting::hud_scaling:
+        // The size the game's side column and bars are drawn at.
+        if (settings.hud_scaling)
+            lines = {
+                "The side panel and bars grow with the window,",
+                "up to twice the original game's size."
+            };
+        else
+            lines = {"The side panel and bars keep the original", "game's size on every window."};
+        break;
     case Setting::modern_fonts:
         lines = {"Modern fonts for in-game text,", "including internationalization."};
         break;
@@ -2468,6 +2482,7 @@ std::size_t hint_line_count(Setting setting) noexcept {
     case Setting::zoomed_out_units:
     case Setting::zoomed_out_after:
     case Setting::window_frame:
+    case Setting::hud_scaling:
     case Setting::touch_drag:
     case Setting::touch_latches:
     case Setting::touch_left_handed:
@@ -3433,6 +3448,9 @@ void copy_setting(EngineSettings& to, const EngineSettings& from, Setting settin
         break;
     case Setting::window_frame:
         to.window_frame = from.window_frame;
+        break;
+    case Setting::hud_scaling:
+        to.hud_scaling = from.hud_scaling;
         break;
     case Setting::native_density:
         to.native_density = from.native_density;

@@ -82,6 +82,8 @@ inline constexpr std::string_view zoomed_out_units = "open-annihilation.zoomed-o
 inline constexpr std::string_view zoomed_out_after = "open-annihilation.zoomed-out-after";
 /// "hidden-in-play" or "always-shown" (EngineSettings::window_frame).
 inline constexpr std::string_view window_frame = "open-annihilation.window-frame";
+/// 1 or 0 (EngineSettings::hud_scaling).
+inline constexpr std::string_view hud_scaling = "open-annihilation.hud-scaling";
 /// 1 or 0 (EngineSettings::modern_fonts).
 inline constexpr std::string_view modern_fonts = "open-annihilation.modern-fonts";
 /// 1 or 0 (EngineSettings::text_outline).
@@ -712,6 +714,11 @@ struct EngineSettings {
     ZoomedOutAfter zoomed_out_after{ZoomedOutAfter::one_sixth};
     /// When the game's window shows its title bar and borders.
     WindowFrame window_frame{WindowFrame::hidden_in_play};
+    /// The side column and the top and bottom bars of a game grow with the
+    /// window, up to twice the original game's size; off, they keep the
+    /// original game's size on every window. The touch controls' layouts
+    /// keep their own sizes either way.
+    bool hud_scaling{true};
     /// Game text is drawn in the modern fonts, which hold the letters of
     /// many languages, rather than the game's own 8-bit fonts. On by default
     /// with the player's own preferences file (default_settings).
@@ -830,7 +837,7 @@ highest_offered_unit_limit(const oa::data::limits::UnitsPerPlayer& units) noexce
 /// Off, but On where the platform opens every window at native density.
 /// Explosion flash is Full everywhere, as 3.1c draws it. Zoomed out units
 /// are Rendered and After zoom 1/6 everywhere. Window frame is Hidden in
-/// play everywhere. Modern
+/// play and HUD scaling On everywhere. Modern
 /// fonts for game text are On with the player's own file and Off with a
 /// named one; their outline and shadow are On, their background Off and
 /// their size default_text_size everywhere. The language is the operating

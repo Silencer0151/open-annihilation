@@ -859,8 +859,9 @@ class Runtime final : public menu::Host,
     /// @return the marks of the running match; empty before one starts
     [[nodiscard]] oa::ui::hud::Whiteboard& match_whiteboard();
 
-    /// Lays out the match on a canvas: make_match_layout, with the side
-    /// column fitted to the running match's tallest unit page
+    /// Lays out the match on a canvas: make_match_layout, the chrome no
+    /// larger than HUD scaling lets it be (match_chrome_most_scale), with
+    /// the side column fitted to the running match's tallest unit page
     /// (display_layout::fit_side_column, side_column_page_rows()), and the
     /// chrome smaller where ui.resource-panel's clock line needs room in
     /// the top bar (make_room_for_clock_line).
@@ -1998,8 +1999,10 @@ class Runtime final : public menu::Host,
     /// regions when touch controls are active in the phone class; also px_per_point and safe.
     ///
     /// With touch on and px_per_point > 1 the tablet chrome is capped at kMaxChromeScale ×
-    /// px_per_point (make_match_layout's three-argument form); otherwise exactly
-    /// make_match_layout(width, height) in the fields it sets. [runtime_phone_hud.cpp]
+    /// px_per_point (make_match_layout's three-argument form), and with touch on otherwise
+    /// exactly make_match_layout(width, height) in the fields it sets; with touch off, the
+    /// chrome is capped at match_chrome_most_scale(), as HUD scaling sets it.
+    /// [runtime_phone_hud.cpp]
     ///
     /// @param width canvas pixels
     /// @param height canvas pixels
@@ -6872,6 +6875,14 @@ class Runtime final : public menu::Host,
     /// @return 0, 0.25 or 0.5; 0.5 before the settings are read
     [[nodiscard]] double past_map_edge_share() const noexcept;
 
+    /// Returns the largest scale a game's side column and bars are drawn
+    /// at outside the touch controls' layouts, as HUD scaling sets it:
+    /// display_layout::kMaxChromeScale while it is On, and 1, the original
+    /// game's size, while it is Off.
+    ///
+    /// @return the scale; kMaxChromeScale before the settings are read
+    [[nodiscard]] double match_chrome_most_scale() const noexcept;
+
     /// Returns the scale mode the standard tier draws a frame over the
     /// logical presentation with (render_policy::frame_filter): PIXELART
     /// where Menu scaling and the frame's scale ask for it and the
@@ -9056,7 +9067,8 @@ class Runtime final : public menu::Host,
     /// With the hack on, on a layout of the side column, the bars and the
     /// battlefield (not the touch controls' or a frame without the
     /// interface), the chrome is laid out afresh for the canvas
-    /// (make_match_layout, display_layout::fit_side_column) at the scale
+    /// (make_match_layout, display_layout::fit_side_column), no larger than
+    /// HUD scaling lets it be (match_chrome_most_scale), at the scale
     /// hud::clock_line_chrome_scale gives for the running match's top bar
     /// and the line's widest parts as a player sees them, with or without
     /// the game time (clock_line_shows_time). The layout keeps its canvas
@@ -10202,7 +10214,8 @@ class Runtime final : public menu::Host,
     /// For each of the first two sides SIDEDATA.TDF lists, a skirmish starts
     /// with the local player on that side. On windows of 640x480, 1024x768,
     /// 1152x864, 1280x1024, 1280x720, 1920x1080 and 2560x1080 the chrome's
-    /// scale must be as check_clock_line_room expects, and each bar must run from
+    /// scale must be as check_clock_line_room expects, 1 on every window
+    /// with HUD scaling Off, and each bar must run from
     /// the side column's edge to the window's right edge at the bars' scale,
     /// every column of each bar must show something other than black, and
     /// the HUD's bars must hold the side's panel art (the GAF its intgaf
@@ -10216,12 +10229,16 @@ class Runtime final : public menu::Host,
     /// Checks the chrome's scale and ui.resource-panel's clock line on the
     /// match's layout, for check_match_bars.
     ///
-    /// Without the hack the chrome must keep the interface's scale. With it
-    /// the clock line must go on the battlefield at the interface's scale
-    /// on a window 1024 pixels wide or narrower, in two sections at that
-    /// scale at 1920 pixels wide and wider, and on a window whose bar at
-    /// that scale ends short of the line beside the figures, beside them at
-    /// the largest scale whose bar reaches kClockLineInset columns past it.
+    /// The interface's scale is the largest HUD scaling lets the chrome be
+    /// that fits the window: 1 with HUD scaling Off, on every window. Without the hack the
+    /// chrome must keep it. With it the clock line must go on the
+    /// battlefield at that scale on a window 1024 pixels wide or narrower,
+    /// in two sections at that scale where its bar reaches far enough for
+    /// them, as at 1920x1080 and on every wider window with HUD scaling
+    /// Off, beside the figures at that scale where its bar reaches only as
+    /// far as that, and on a window whose bar at that scale ends short of
+    /// the line beside the figures, beside them at the largest scale whose
+    /// bar reaches kClockLineInset columns past it.
     /// With the console's Clock turned on the line must leave out the game
     /// time, in the top bar and on the battlefield, and on such a window
     /// take the first section at the largest scale whose bar reaches

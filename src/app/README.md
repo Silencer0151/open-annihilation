@@ -1787,7 +1787,10 @@ saves, recordings and network games are unaffected.
   and the 3.1c HUD's minimap, resources, drawer cells, MORE sheet gadgets
   and panels are drawn into placed regions (`display_layout`'s placed
   mode), whose hit tests map back to the HUD's own gadgets; on a tablet the
-  3.1c layout with the window's density and safe area. `overlay_area` is
+  3.1c layout with the window's density and safe area; without the touch
+  controls the 3.1c layout at the window's scale, no larger than the HUD
+  scaling setting lets it be (`match_chrome_most_scale`: twice the original
+  size, or the original size with HUD scaling Off). `overlay_area` is
   where the message log, the chat line, the kill board, the megamap, the
   whiteboard and the commander placement prompt go: the battlefield less
   the touch controls, or the battlefield itself without them.

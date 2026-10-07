@@ -24,6 +24,7 @@
 #include "oa/platform/machine.hpp"
 #include "oa/platform/render_probe.hpp"
 #include "oa/sim/ground_orders/search_worker.hpp"
+#include "oa/ui/display_layout.hpp"
 #include "oa/ui/frontend/savegame_dialogs.hpp"
 #include "oa/ui/frontend_multiplayer/screens.hpp"
 #include "oa/ui/touch_hud.hpp"
@@ -590,6 +591,12 @@ double Runtime::past_map_edge_share() const noexcept {
     );
 }
 
+double Runtime::match_chrome_most_scale() const noexcept {
+    namespace layout = oa::ui::display_layout;
+    return !engine_settings_ || engine_settings_->current.hud_scaling ? layout::kMaxChromeScale
+                                                                      : 1.0;
+}
+
 const settings::EngineSettings& Runtime::engine_settings() {
     EngineSettingsState::take_live_settings(*this);
     return engine_settings_state().current;
@@ -655,6 +662,9 @@ void Runtime::apply_engine_settings(const settings::EngineSettings& chosen) {
     // set the window's presentation, and every frame takes its filter.
     if (chosen.menu_scaling != before.menu_scaling &&
         (screen_ != Screen::match || scaled_frame_width_ > 0))
+        apply_output_mode();
+    // HUD scaling lays a game out again at once.
+    else if (chosen.hud_scaling != before.hud_scaling && screen_ == Screen::match)
         apply_output_mode();
     if (chosen.developer_mode != before.developer_mode ||
         chosen.hack_overrides != before.hack_overrides)

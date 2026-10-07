@@ -216,6 +216,7 @@ enum class Setting : uint8_t {
     zoomed_out_after,
     /// Window frame: a strip of Hidden in play and Always shown
     window_frame,
+    hud_scaling, ///< HUD scaling: a switch
 };
 
 /// Returns the settings a section shows, top to bottom.

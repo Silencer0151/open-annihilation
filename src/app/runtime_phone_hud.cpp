@@ -247,7 +247,7 @@ layout::MatchLayout Runtime::make_window_match_layout(
                 ? layout::make_match_layout(width, height, layout::kMaxChromeScale * px_per_point)
                 : layout::make_match_layout(width, height);
     } else {
-        laid_out = layout::make_match_layout(width, height);
+        laid_out = layout::make_match_layout(width, height, match_chrome_most_scale());
     }
     laid_out.px_per_point = px_per_point;
     laid_out.safe = canvas_safe;

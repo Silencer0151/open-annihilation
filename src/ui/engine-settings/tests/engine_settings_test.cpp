@@ -2085,6 +2085,33 @@ void the_window_frame_default_read_and_round_trip() {
     CHECK(values.empty());
 }
 
+/// HUD scaling: On everywhere by default; a file written before it reads
+/// the default; a number above 0 reads On and any other number Off; Off
+/// written alone and read back, and Restore defaults then OK erases the key.
+void the_hud_scaling_default_read_and_round_trip() {
+    CHECK(settings::key::hud_scaling == "open-annihilation.hud-scaling");
+    settings::Inputs own_mac = players_own_on_linux;
+    own_mac.macos = true;
+    for (const auto& inputs : {settings::Inputs{}, players_own_on_linux, own_mac}) {
+        const auto defaults = settings::default_settings(inputs);
+        CHECK(defaults.hud_scaling);
+        CHECK(settings::read_settings({}, inputs, false) == defaults);
+    }
+    CHECK(read_one(settings::key::hud_scaling, "1").hud_scaling);
+    CHECK(!read_one(settings::key::hud_scaling, "0").hud_scaling);
+
+    const auto defaults = settings::default_settings(players_own_on_linux);
+    auto unscaled = defaults;
+    unscaled.hud_scaling = false;
+    Values values;
+    settings::write_settings(values, defaults, unscaled, defaults, false);
+    CHECK(values.size() == 1);
+    CHECK(values.at(std::string{settings::key::hud_scaling}) == "0");
+    CHECK(settings::read_settings(values, players_own_on_linux, false) == unscaled);
+    settings::write_settings(values, unscaled, defaults, defaults, true);
+    CHECK(values.empty());
+}
+
 void menu_scaling_and_native_density_default_read_and_round_trip() {
     CHECK(settings::key::menu_scaling == "open-annihilation.menu-scaling");
     CHECK(settings::key::native_density == "open-annihilation.native-density");
@@ -2242,6 +2269,7 @@ int main() {
     explosion_flash_default_read_and_round_trip();
     the_zoomed_out_units_default_read_and_round_trip();
     the_window_frame_default_read_and_round_trip();
+    the_hud_scaling_default_read_and_round_trip();
     the_zoom_limits_default_read_and_round_trip();
     the_view_past_the_map_edge_defaults_reads_and_round_trips();
     if (failures != 0)

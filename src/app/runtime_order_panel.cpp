@@ -305,7 +305,8 @@ int Runtime::side_column_page_rows() {
 oa::ui::display_layout::MatchLayout Runtime::lay_out_match(int width, int height) {
     return make_room_for_clock_line(
         oa::ui::display_layout::fit_side_column(
-            oa::ui::display_layout::make_match_layout(width, height), side_column_page_rows()
+            oa::ui::display_layout::make_match_layout(width, height, match_chrome_most_scale()),
+            side_column_page_rows()
         )
     );
 }

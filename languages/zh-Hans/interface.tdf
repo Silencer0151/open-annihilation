@@ -674,6 +674,11 @@
 	zh-Hans=窗口边框;
 	}
 
+[HUD scaling]
+	{
+	zh-Hans=界面缩放;
+	}
+
 [Use modern fonts for game text]
 	{
 	zh-Hans=游戏文字使用现代字体;
@@ -1232,6 +1237,26 @@
 [on every screen, a game's included.]
 	{
 	zh-Hans=进行游戏时也一样。;
+	}
+
+[The side panel and bars grow with the window,]
+	{
+	zh-Hans=侧边栏和上下栏随窗口放大，;
+	}
+
+[up to twice the original game's size.]
+	{
+	zh-Hans=最大为原版游戏的两倍。;
+	}
+
+[The side panel and bars keep the original]
+	{
+	zh-Hans=侧边栏和上下栏在任何窗口中;
+	}
+
+[game's size on every window.]
+	{
+	zh-Hans=都保持原版游戏的大小。;
 	}
 
 [The display's own pixel density (Retina on a Mac).]

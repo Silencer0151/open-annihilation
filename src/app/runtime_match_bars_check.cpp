@@ -101,10 +101,20 @@ void Runtime::check_clock_line_room(
     namespace display = oa::ui::display_layout;
     namespace hud = oa::ui::hud;
     const int width = match_layout_.width;
+    // With HUD scaling Off the chrome keeps the original game's size.
+    const bool scaled = engine_settings().hud_scaling;
     const auto own = display::fit_side_column(
-        display::make_match_layout(width, match_layout_.height), side_column_page_rows()
+        display::make_match_layout(
+            width, match_layout_.height, scaled ? display::kMaxChromeScale : 1.0
+        ),
+        side_column_page_rows()
     );
     const auto scale_text = [](double scale) { return std::to_string(scale); };
+    if (!scaled && match_layout_.scale != 1.0)
+        failed(
+            label + ": with HUD scaling Off the chrome is drawn at scale " +
+            scale_text(match_layout_.scale) + ", not 1"
+        );
     if (!ui_rules().resource_panel.enabled) {
         // Without the hack the chrome keeps the interface's scale.
         if (match_layout_.scale != own.scale)
@@ -116,11 +126,12 @@ void Runtime::check_clock_line_room(
     }
     // With ui.resource-panel the clock line goes in the top bar on a window
     // wider than 1024 pixels: in two sections where the interface's bar
-    // already reaches far enough, at 1920x1080 and wider; beside the wind's
-    // and the tidal strength's figures on the 4:3 and 5:4 windows, with
-    // the chrome drawn at the largest scale whose bar reaches 16 columns
-    // past the line; and on the battlefield at 1024 pixels wide or
-    // narrower, the chrome at the interface's scale.
+    // already reaches far enough, at 1920x1080 and wider and with HUD
+    // scaling Off; beside the wind's and the tidal strength's figures at
+    // 1280x720, and on the 4:3 and 5:4 windows with the chrome drawn at the
+    // largest scale whose bar reaches 16 columns past the line; and on the
+    // battlefield at 1024 pixels wide or narrower, the chrome at the
+    // interface's scale.
     const auto* font = match_label_font();
     if (font == nullptr) {
         failed(label + ": no font for the clock line");
@@ -149,7 +160,7 @@ void Runtime::check_clock_line_room(
     };
     if (!wide)
         expect(hud::ClockLineSpot::battlefield, own.scale, "");
-    else if (width >= 1920)
+    else if (!short_of(hud::ClockLineSpot::sections))
         expect(hud::ClockLineSpot::sections, own.scale, "");
     else if (short_of(hud::ClockLineSpot::beside))
         expect(hud::ClockLineSpot::beside, reaching(hud::ClockLineSpot::beside), "");

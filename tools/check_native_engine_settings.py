@@ -10,15 +10,18 @@ preferences file the check writes:
 
 - With no preferences file, and with one holding every setting's key at its
   default value, it writes the same trace stream, reaches the same world
-  digest and draws the same last frame, byte for byte.
+  digest and draws the same last frame, byte for byte. So it does with HUD
+  scaling Off alone: at the run's 640x480 the side column and bars are at
+  the original game's size either way.
 - With every setting that only changes the look or the input away from its
   default (wheel zoom off, the zoom's limits at Whole map and None, Escape
   opens the game menu, Select groups without Alt, the lowest maximum frame
   rate, the performance statistics, hardware
   acceleration at Full and vertical sync, which a headless run has no
   renderer for, the explosions' flashes off, units zoomed out as dots past
-  half scale, and the window's frame always shown), it writes the same trace
-  stream and reaches the same world digest.
+  half scale, the window's frame always shown, and the side column and bars
+  at the original game's size), it writes the same trace stream and reaches
+  the same world digest.
 - At each level of enhanced anti-aliasing it writes the same trace stream
   and reaches the same world digest, and its last frame differs: units are
   drawn finer.
@@ -73,6 +76,7 @@ DEFAULTS = {
     "open-annihilation.zoomed-out-units": "rendered",
     "open-annihilation.zoomed-out-after": "1/6",
     "open-annihilation.window-frame": "hidden-in-play",
+    "open-annihilation.hud-scaling": "1",
     "open-annihilation.modern-fonts": "0",
     "open-annihilation.text-outline": "1",
     "open-annihilation.text-shadow": "1",
@@ -94,12 +98,14 @@ PRESENTATION = {
     "open-annihilation.zoomed-out-units": "dots",
     "open-annihilation.zoomed-out-after": "1/2",
     "open-annihilation.window-frame": "always-shown",
+    "open-annihilation.hud-scaling": "0",
     "open-annihilation.modern-fonts": "1",
     "open-annihilation.text-outline": "0",
     "open-annihilation.text-shadow": "0",
     "open-annihilation.text-background": "1",
     SWITCH_ALT_KEY: "1",
 }
+HUD_SCALING_KEY = "open-annihilation.hud-scaling"
 ANTI_ALIASING_KEY = "open-annihilation.anti-aliasing"
 ANTI_ALIASING_LEVELS = (2, 3, 4, 8, 16)
 PATH_SEARCH_KEY = "open-annihilation.path-search-nodes"
@@ -185,6 +191,11 @@ def main():
                 f"every key at its default moved the game: digest {defaults[0]} trace "
                 f"{short(defaults[1])} frame {short(defaults[2])}, not {digest} {short(trace)} "
                 f"{short(frame)}")
+        unscaled = skirmish(native, game_dir, workdir, "unscaled", {**DEFAULTS, HUD_SCALING_KEY: "0"})
+        if unscaled != (digest, trace, frame):
+            raise SystemExit(
+                f"HUD scaling Off at 640x480 moved the game or its picture: digest {unscaled[0]} "
+                f"frame {short(unscaled[2])}, not {digest} {short(frame)}")
         shown = skirmish(native, game_dir, workdir, "presentation", {**DEFAULTS, **PRESENTATION})
         if shown[:2] != (digest, trace):
             raise SystemExit(f"the look and input settings moved the world: digest {shown[0]}, "
@@ -215,7 +226,7 @@ def main():
         director_render(native, game_dir, workdir, "director-aa16",
                         {**DEFAULTS, ANTI_ALIASING_KEY: "16"}, args.director_hashes)
         print(f"engine settings determinism: digest {digest} with no preferences, every default, "
-              f"the look and input settings and anti-aliasing at "
+              f"HUD scaling Off, the look and input settings and anti-aliasing at "
               f"{', '.join(f'{level}x' for level in ANTI_ALIASING_LEVELS)}; Pathfinding cycles "
               f"at 2x {paths[0][0]}, unit limit {RAISED_UNIT_LIMIT} {limits[0][0]}; the director "
               f"render's pinned frames and sound at every default and at 16x")

@@ -608,8 +608,8 @@ void Runtime::check_engine_settings_in_match() {
             ),
             "a game played alone says it is shared" + on
         );
-        // Graphics at its end in a game played alone: Zoomed out units and
-        // Window frame among its last rows, and neither Hardware
+        // Graphics at its end in a game played alone: Window frame and HUD
+        // scaling among its last rows, and neither Hardware
         // acceleration nor Vertical sync locked by the game.
         show_page(settings::Page::graphics, on);
         tap_key(SDLK_END, SDL_KMOD_NONE);
@@ -617,12 +617,12 @@ void Runtime::check_engine_settings_in_match() {
             const auto* graphics = engine_settings_dialog();
             require(
                 graphics != nullptr &&
-                    graphics->scroll[static_cast<std::size_t>(settings::Page::graphics)] == 454,
+                    graphics->scroll[static_cast<std::size_t>(settings::Page::graphics)] == 513,
                 "End did not scroll Graphics to its end" + on
             );
             const auto parts = settings::dialog_layout(*graphics);
             require(
-                shows_text(parts, "Zoomed out units") && shows_text(parts, "Window frame"),
+                shows_text(parts, "Window frame") && shows_text(parts, "HUD scaling"),
                 "Graphics at its end does not show its last rows" + on
             );
             require(

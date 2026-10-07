@@ -654,6 +654,8 @@ EngineSettings read_settings(
     read_word(values, key::zoomed_out_units, zoomed_out_units_words, settings.zoomed_out_units);
     read_word(values, key::zoomed_out_after, zoomed_out_after_words, settings.zoomed_out_after);
     read_word(values, key::window_frame, window_frame_words, settings.window_frame);
+    if (const auto number = stored_number(values, key::hud_scaling))
+        settings.hud_scaling = *number > 0;
     for (const TextSwitch& entry : text_switches)
         if (const auto number = stored_number(values, entry.key))
             settings.*entry.member = *number > 0;
@@ -894,6 +896,14 @@ void write_settings(
         opened.window_frame,
         chosen.window_frame,
         defaults.window_frame,
+        restored
+    );
+    store(
+        values,
+        key::hud_scaling,
+        switch_text(chosen.hud_scaling),
+        chosen.hud_scaling != opened.hud_scaling,
+        chosen.hud_scaling == defaults.hud_scaling,
         restored
     );
     for (const TextSwitch& entry : text_switches)
