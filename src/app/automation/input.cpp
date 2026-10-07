@@ -408,7 +408,8 @@ void let_go(const Endpoint& endpoint, InputState& state) {
         up.key.mod = held.modifiers();
         (void)SDL_PushEvent(&up);
     }
-    for (const uint8_t button : {SDL_BUTTON_LEFT, SDL_BUTTON_MIDDLE, SDL_BUTTON_RIGHT}) {
+    for (const uint8_t button :
+         std::array<uint8_t, 3>{SDL_BUTTON_LEFT, SDL_BUTTON_MIDDLE, SDL_BUTTON_RIGHT}) {
         if ((held.buttons & SDL_BUTTON_MASK(button)) == 0)
             continue;
         held.buttons &= ~SDL_BUTTON_MASK(button);
