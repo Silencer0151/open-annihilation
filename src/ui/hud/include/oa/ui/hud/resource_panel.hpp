@@ -14,6 +14,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 
 namespace oa::ui::hud {
 
@@ -231,5 +232,106 @@ void format_wind(char* out, std::size_t size, const WindReadout& wind, bool watc
 
 /// Formats "Tidal : +<strength>", the strength truncated.
 void format_tidal(char* out, std::size_t size, float tidal_strength);
+
+/// Where the top bar's art repeats right of PANELTOP: the column the first
+/// PANELBOT piece starts at and each piece's width, 0 for none.
+struct TopBarPieces {
+    int32_t left{};
+    int32_t width{};
+};
+
+/// Sections of equal width a PANELBOT piece is divided into by bevels.
+inline constexpr int32_t kTopBarPieceSections = 3;
+/// Columns from a section's left edge to the clock line's text in it.
+inline constexpr int32_t kClockLineInset = 16;
+/// Rows of the wind's and the tidal strength's lines in the top bar, level
+/// with its produced and consumed rates.
+inline constexpr int32_t kClockLineWindY = 5;
+inline constexpr int32_t kClockLineTidalY = 17;
+/// Row of the game time in the top bar, midway between them.
+inline constexpr int32_t kClockLineTimeY = 11;
+/// Columns between the wind's and the tidal strength's figures and the game
+/// time beside them, where the bar holds one section.
+inline constexpr int32_t kClockLineBesideGap = 12;
+/// The widest window, in pixels, whose clock line stays on the battlefield;
+/// on a wider one it goes in the top bar.
+inline constexpr int32_t kClockLineBattlefieldMaxWidth = 1024;
+
+/// The clock line's place on the battlefield: three lines from the
+/// battlefield's top left, two columns right of the 128-column side panel
+/// and two rows under the top bar.
+inline constexpr int32_t kClockLineLeft = 130;
+inline constexpr int32_t kClockLineTop = 34;
+/// Rows between the battlefield's three lines.
+inline constexpr int32_t kClockLineStep = 10;
+
+/// Where the clock line goes.
+enum class ClockLineSpot : uint8_t {
+    /// Three lines on the battlefield, at kClockLineLeft and kClockLineTop.
+    battlefield,
+    /// The top bar's first two sections past PANELTOP: the wind over the
+    /// tidal strength in the first, the game time in the second.
+    sections,
+    /// The top bar past PANELTOP, where it holds one section: the wind
+    /// over the tidal strength, and beside them "Game Time" over the time.
+    beside,
+};
+
+/// Widths, in pixels, of the clock line's parts.
+struct ClockLineWidths {
+    int32_t label{};   ///< the longer of the wind's and the tidal strength's labels, " : " included
+    int32_t figures{}; ///< the wider of the two lines' figures
+    int32_t time{};    ///< the game time's whole line
+    int32_t time_label{}; ///< "Game Time", without " : "
+    int32_t time_value{}; ///< the time alone
+};
+
+/// Where the clock line goes and its columns there.
+struct ClockLinePlace {
+    ClockLineSpot spot{};
+    /// Column the wind's and the tidal strength's figures start at, their
+    /// labels ending there.
+    int32_t figures_x{};
+    /// Column the game time starts at: its whole line in the second
+    /// section, or "Game Time" over the time beside the figures.
+    int32_t time_x{};
+};
+
+/// Places the clock line: on a window no wider than
+/// kClockLineBattlefieldMaxWidth, on the battlefield; on a wider one, in
+/// the top bar past PANELTOP, whose PANELBOT pieces are each divided into
+/// kTopBarPieceSections sections.
+///
+/// The first section holds the wind over the tidal strength: the longer
+/// label starts kClockLineInset columns into it and both figures start
+/// right after it, so that the labels end together. Where the second
+/// section and the bar hold the game time's line kClockLineInset columns
+/// into it, it goes there; otherwise "Game Time" goes over the time,
+/// kClockLineBesideGap columns past the figures, while that fits in the
+/// bar. A bar with no room past PANELTOP for either leaves the line on the
+/// battlefield.
+///
+/// @param pieces the top bar's repeated pieces
+/// @param bar_end the column just past the top bar's last
+/// @param widths the widths of the line's parts
+/// @param window_width the window's width in pixels
+/// @return where the line goes
+[[nodiscard]] ClockLinePlace place_clock_line(
+    const TopBarPieces& pieces, int32_t bar_end, const ClockLineWidths& widths, int32_t window_width
+) noexcept;
+
+/// A clock line cut into its parts, any of them empty.
+struct ClockLineParts {
+    std::string_view label{};  ///< up to and including the " : " that ends it
+    std::string_view amount{}; ///< a signed amount right after it, "+26"
+    std::string_view rest{};   ///< what follows: the wind's range, the time
+};
+
+/// Cuts a line format_game_time, format_wind or format_tidal wrote into its
+/// label, its signed amount and the rest.
+///
+/// @param line the line; a line without " : " is all label
+/// @return the parts, views into `line`
+[[nodiscard]] ClockLineParts split_clock_line(std::string_view line) noexcept;
 
 } // namespace oa::ui::hud

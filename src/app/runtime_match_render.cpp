@@ -2191,6 +2191,7 @@ void Runtime::render_match_surface() {
         // selection.
         draw_unit_panel();
         draw_resource_readout();
+        draw_clock_line(PaintLayer::hud);
         draw_build_captions();
         call_hook_or_report<&Extension::draw_match_hud>(extension_, hook_error_report(), *this);
     }
@@ -2206,7 +2207,7 @@ void Runtime::render_match_surface() {
         draw_status_panel();
     }
     draw_resource_panel_overlay();
-    draw_clock_line();
+    draw_clock_line(PaintLayer::battlefield);
     draw_chat_overlay();
     draw_extension_overlay();
     draw_risen_chat_line();

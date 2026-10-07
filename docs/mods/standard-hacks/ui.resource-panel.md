@@ -13,11 +13,11 @@
 
 ## Description
 
-Adds a floating panel that lists allied players' stored resources, storage bars and incomes (every player's, for a watcher), and a line under the top panel with the game time, the wind and the tidal strength. A watcher can also switch to a player's view from the panel and follow that player's camera. 3.1c shows only the player's own resources.
+Adds a floating panel that lists allied players' stored resources, storage bars and incomes (every player's, for a watcher), and the wind, the tidal strength and the game time in the top bar, or on a window 1024 pixels wide or narrower at the battlefield's top left. A watcher can also switch to a player's view from the panel and follow that player's camera. 3.1c shows only the player's own resources.
 
-![Top of the battlefield: "Game Time", "Wind" and "Tidal" lines at the left, and on the right a panel with two allies, each with a colour square, stored metal and energy, storage bars and income figures.](images/ui.resource-panel-allies.png)
+![Top of the battlefield: a panel with two allies, each with a colour square, stored metal and energy, storage bars and income figures.](images/ui.resource-panel-allies.png)
 
-*The floating resource panel lists each ally's stored metal and energy, storage bars and incomes; Game Time, Wind and Tidal lines sit under the top panel.*
+*The floating resource panel lists each ally's stored metal and energy, storage bars and incomes.*
 
 ## Configuration example
 
@@ -56,15 +56,34 @@ out, F4 brings the panel back; otherwise the key goes to the board.
 
 #### The clock line
 
-Under the top panel, at the battlefield's top left, three lines show:
+Three readings show:
 
-- `Game Time : hh:mm:ss`, at 30 ticks a second;
 - `Wind : +<now> (<least>-<most>)`, the energy a wind generator makes at
   the current strength and at the map's least and most, each rounded to
   nearest and at most the generator's output; a watcher sees only the
   range. The output is the base game's wind generator's, or 30 when the
   unit types name none;
-- `Tidal : +<strength>`, truncated.
+- `Tidal : +<strength>`, truncated;
+- `Game Time : hh:mm:ss`, at 30 ticks a second.
+
+On a window wider than 1024 pixels the readings go in the top bar, in the
+bar's font. There the bar runs on past its metal and energy readouts, its
+art repeating in bevelled sections. Where it reaches far enough for two
+sections, as at 1920x1080, the first holds the wind over the tidal
+strength, their labels ending together, and the second holds the game
+time. Labels, the wind's range and the time are light grey, and the signed
+amounts the green of the produced rates, each sign against its figures.
+
+![The top bar's right end: the energy readouts, then a section with "Wind : +23 (6-30)" over "Tidal : +25", then a section with "Game Time : 00:00:10".](images/ui.resource-panel-clock.png)
+
+Where the bar reaches far enough for one section, as on a 16:9 window from
+1280x720 to 1600x900, the wind and the tidal strength keep their place and
+"Game Time" goes over the time beside them.
+
+On a window 1024 pixels wide or narrower, and with the touch controls, the
+readings are three plain lines under the top panel at the battlefield's
+top left, the game time first. So are they on a wider window whose bar has
+no room past its readouts, such as 1440x900 or a 4:3 window.
 
 #### Watcher view switching
 

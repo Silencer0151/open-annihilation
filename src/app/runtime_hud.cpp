@@ -461,6 +461,55 @@ int Runtime::match_text_width(
     return width;
 }
 
+Runtime::TextMargins
+Runtime::match_text_margins(const oa::formats::fnt::Font& font, char character) const {
+    const std::string_view text(&character, 1);
+    // Columns from the pen to the first painted one and to the last, in a
+    // coverage of the given width and height.
+    const auto margins = [](std::span<const uint8_t> painted,
+                            int width,
+                            int height,
+                            int pen,
+                            int advance) -> TextMargins {
+        int first = width;
+        int last = -1;
+        for (int row = 0; row < height; ++row)
+            for (int column = 0; column < width; ++column)
+                if (painted
+                        [static_cast<std::size_t>(row) * static_cast<std::size_t>(width) +
+                         static_cast<std::size_t>(column)] != 0) {
+                    first = std::min(first, column);
+                    last = std::max(last, column);
+                }
+        if (last < 0)
+            return {};
+        return {first - pen, pen + advance - (last + 1)};
+    };
+    if (renderer::needs_text_runs(text, true)) {
+        const auto runs =
+            renderer::split_game_text(text, renderer::fnt_font_characters(font), true);
+        if (runs.size() == 1 && runs.front().modern) {
+            const auto layers = oa::present::modern_text(
+                runs.front().text, renderer::fnt_font_face(font), 1, painted_text_size(runs.front())
+            );
+            if (!layers || layers->width <= 0 || layers->height <= 0)
+                return {};
+            // Every layer paints: the letters, their outline and their shadow.
+            std::vector<uint8_t> painted(layers->fill);
+            for (const auto* layer : {&layers->outline, &layers->shadow})
+                for (std::size_t index = 0; index < std::min(painted.size(), layer->size());
+                     ++index)
+                    painted[index] = static_cast<uint8_t>(painted[index] | (*layer)[index]);
+            return margins(painted, layers->width, layers->height, layers->pen, layers->advance);
+        }
+    }
+    const auto& glyph = font.glyphs[static_cast<unsigned char>(character)];
+    if (!glyph || glyph->width == 0 ||
+        glyph->coverage.size() != static_cast<std::size_t>(glyph->width) * glyph->height)
+        return {};
+    return margins(glyph->coverage, glyph->width, glyph->height, glyph->origin_x, glyph->width);
+}
+
 void Runtime::paint_font_text(
     const oa::formats::fnt::Font& font,
     int x,

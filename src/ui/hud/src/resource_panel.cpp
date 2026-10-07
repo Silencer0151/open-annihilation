@@ -3,6 +3,7 @@
 
 #include "oa/ui/hud/resource_panel.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -317,6 +318,51 @@ void format_wind(char* out, std::size_t size, const WindReadout& wind, bool watc
 
 void format_tidal(char* out, std::size_t size, float tidal_strength) {
     std::snprintf(out, size, "Tidal : +%d", static_cast<int>(tidal_strength));
+}
+
+ClockLinePlace place_clock_line(
+    const TopBarPieces& pieces, int32_t bar_end, const ClockLineWidths& widths, int32_t window_width
+) noexcept {
+    ClockLinePlace place{};
+    const int32_t section = pieces.width / kTopBarPieceSections;
+    if (window_width <= kClockLineBattlefieldMaxWidth || section <= 0)
+        return place;
+    const int32_t second = pieces.left + section;
+    const int32_t figures_end = pieces.left + kClockLineInset + widths.label + widths.figures;
+    place.figures_x = pieces.left + kClockLineInset + widths.label;
+    if (figures_end <= second &&
+        second + kClockLineInset + widths.time <= std::min(bar_end, second + section)) {
+        place.spot = ClockLineSpot::sections;
+        place.time_x = second + kClockLineInset;
+        return place;
+    }
+    const int32_t beside = figures_end + kClockLineBesideGap;
+    if (figures_end <= bar_end &&
+        beside + std::max(widths.time_label, widths.time_value) <= bar_end) {
+        place.spot = ClockLineSpot::beside;
+        place.time_x = beside;
+        return place;
+    }
+    return ClockLinePlace{};
+}
+
+ClockLineParts split_clock_line(std::string_view line) noexcept {
+    constexpr std::string_view kLabelEnd = " : ";
+    ClockLineParts parts{};
+    const auto at = line.find(kLabelEnd);
+    if (at == std::string_view::npos) {
+        parts.label = line;
+        return parts;
+    }
+    parts.label = line.substr(0, at + kLabelEnd.size());
+    auto after = line.substr(parts.label.size());
+    if (after.starts_with('+')) {
+        const auto end = std::min(after.find(' '), after.size());
+        parts.amount = after.substr(0, end);
+        after = after.substr(end);
+    }
+    parts.rest = after;
+    return parts;
 }
 
 } // namespace oa::ui::hud

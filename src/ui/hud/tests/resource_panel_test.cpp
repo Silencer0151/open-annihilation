@@ -4,7 +4,8 @@
 // ui.resource-panel over a small World: the rows a watcher and a player
 // list, the amount, bar and income formats, the drawn row, the hits, the F4
 // cycle with the kills board, a watcher's view switches, and the clock,
-// wind and tidal line.
+// wind and tidal line and where it goes: the top bar's two sections, beside
+// each other in the top bar, or the battlefield.
 #include "oa/ui/hud/resource_panel.hpp"
 
 #include "check.hpp"
@@ -211,6 +212,43 @@ void clock_line() {
     CHECK(std::strcmp(text, "Tidal : +19") == 0);
 }
 
+void clock_line_place() {
+    // The top bar past PANELTOP at column 642: PANELBOT pieces of 513
+    // columns, three sections of 171 each. The parts' widths: the longer
+    // label 34, the figures 50, the time's line 103, "Game Time" 46 and the
+    // time alone 40.
+    const TopBarPieces pieces{642, 513};
+    const ClockLineWidths widths{34, 50, 103, 46, 40};
+    // 1920x1080: the bar ends at column 960 and holds both sections. The
+    // labels end 16 columns plus the longer label into the first; the time
+    // starts 16 columns into the second, at 813.
+    const auto wide = place_clock_line(pieces, 960, widths, 1920);
+    CHECK(wide.spot == ClockLineSpot::sections);
+    CHECK(wide.figures_x == 692);
+    CHECK(wide.time_x == 829);
+    // 1280x720: the bar ends at column 854, inside the second section; the
+    // time goes beside the figures, 12 columns past them.
+    const auto one = place_clock_line(pieces, 854, widths, 1280);
+    CHECK(one.spot == ClockLineSpot::beside);
+    CHECK(one.figures_x == 692);
+    CHECK(one.time_x == 754);
+    // 1024x768: the battlefield, whatever the bar holds.
+    CHECK(place_clock_line(pieces, 640, widths, 1024).spot == ClockLineSpot::battlefield);
+    CHECK(place_clock_line(pieces, 960, widths, 1024).spot == ClockLineSpot::battlefield);
+    // A bar with no room past PANELTOP keeps the line on the battlefield.
+    CHECK(place_clock_line(pieces, 640, widths, 1280).spot == ClockLineSpot::battlefield);
+    // On the battlefield, the line keeps its place at the top left.
+    CHECK(kClockLineLeft == 130 && kClockLineTop == 34 && kClockLineStep == 10);
+    // A line is cut into its label, signed amount and the rest.
+    const auto wind = split_clock_line("Wind : +26 (24-30)");
+    CHECK(wind.label == "Wind : " && wind.amount == "+26" && wind.rest == " (24-30)");
+    const auto watched = split_clock_line("Wind : (24-30)");
+    CHECK(watched.label == "Wind : " && watched.amount.empty() && watched.rest == "(24-30)");
+    const auto time = split_clock_line("Game Time : 00:00:02");
+    CHECK(time.label == "Game Time : " && time.amount.empty() && time.rest == "00:00:02");
+    CHECK(split_clock_line("Tidal").label == "Tidal");
+}
+
 } // namespace
 
 int main() {
@@ -220,6 +258,7 @@ int main() {
     hits_and_switches();
     f4_cycle();
     clock_line();
+    clock_line_place();
     std::puts("ui-hud-resource-panel-test: ok");
     return 0;
 }

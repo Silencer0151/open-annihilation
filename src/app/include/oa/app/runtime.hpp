@@ -2706,6 +2706,9 @@ class Runtime final : public menu::Host,
     /// last piece of each. Nothing is stretched, and the art comes from the
     /// side's panel GAF.
     ///
+    /// Notes where the top bar's PANELBOT pieces start and how wide they
+    /// are in top_bar_pieces_.
+    ///
     /// @param from_column the first column drawn; the columns left of it
     ///        keep what they hold
     void draw_match_bars(int from_column);
@@ -7900,6 +7903,24 @@ class Runtime final : public menu::Host,
     [[nodiscard]] int
     match_text_width(const oa::formats::fnt::Font& font, std::string_view text, int scale) const;
 
+    /// Columns of a character's advance, as match_text_width measures it at
+    /// scale 1, left of the first column paint_text paints and right of the
+    /// last.
+    struct TextMargins {
+        int left{};
+        int right{};
+    };
+
+    /// Measures the blank columns either side of a character as paint_text
+    /// paints it at scale 1: in the font, or in the modern fonts where the
+    /// settings draw game text there.
+    ///
+    /// @param font the font
+    /// @param character the character
+    /// @return the margins; both 0 for a character painted without ink
+    [[nodiscard]] TextMargins
+    match_text_margins(const oa::formats::fnt::Font& font, char character) const;
+
     /// Measures game text in a GUI font as overlay_gui_text writes it.
     ///
     /// @param font GUI font
@@ -8941,8 +8962,23 @@ class Runtime final : public menu::Host,
     /// Draws ui.resource-panel's panel over the battlefield.
     void draw_resource_panel_overlay();
 
-    /// Draws ui.resource-panel's clock, wind and tidal line.
-    void draw_clock_line();
+    /// Draws ui.resource-panel's clock, wind and tidal line on one layer.
+    ///
+    /// On a window wider than 1024 pixels (hud::place_clock_line), the line
+    /// goes in the top bar past PANELTOP, on the HUD layer, in the bar's
+    /// font: the wind over the tidal strength, their labels ending together
+    /// and each signed amount's sign against its figures, then the game
+    /// time, in the second section where the bar holds two, or else as
+    /// "Game Time" over the time beside them; labels, the wind's range and
+    /// the time in a light grey and the signed amounts in the produced
+    /// rates' colour. Elsewhere (a window no wider than 1024 pixels, a bar
+    /// with no room past PANELTOP, the touch controls' layout) it goes on
+    /// the battlefield layer: three lines at the top left of the overlays'
+    /// area, in the readouts' text colour.
+    ///
+    /// @param layer the layer being painted; the line is drawn only when it
+    ///        goes on that one
+    void draw_clock_line(PaintLayer layer);
 
     /// Takes a pointer event on ui.resource-panel's panel: a press on it
     /// starts a drag, moves follow it, the release ends it, and a watcher's
@@ -12786,6 +12822,8 @@ class Runtime final : public menu::Host,
     oa::Image match_chrome_{};
     std::optional<renderer::ScreenResources> match_hud_;
     std::string match_hud_panel_; // GUI file of match_hud_, as its loader named it
+    /// Where draw_match_bars repeats the top bar's art right of PANELTOP.
+    oa::ui::hud::TopBarPieces top_bar_pieces_{};
     // How place_match_panel placed match_hud_ (panel_flag::beside_hud or
     // panel_flag::centre), or 0 for a panel at its own position.
     uint32_t match_hud_placement_ = 0;

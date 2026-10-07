@@ -16,21 +16,21 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
 #include <optional>
+#include <string_view>
 
 namespace oa::app {
 namespace {
 
 namespace hud = oa::ui::hud;
 
-/// The line's place: the battlefield's top left, below the top panel.
-constexpr int kClockLineX = oa::ui::display_layout::kSourceLeft + 2;
-constexpr int kClockLineY = 34;
-/// Rows between the line's three parts.
-constexpr int kClockLineStep = 10;
+/// Palette index of the top bar line's labels, the wind's range and the
+/// time: a light grey.
+constexpr uint8_t kClockLineGrey = 0x55;
 
 /// A wind generator's output, from the unit type the game's own wind
 /// generator names; kDefaultWindGenerator without it.
@@ -130,49 +130,141 @@ void Runtime::draw_resource_panel_overlay() {
     hud::draw_resource_panel(world, resource_panel_, rows, sink);
 }
 
-void Runtime::draw_clock_line() {
+void Runtime::draw_clock_line(PaintLayer layer) {
+    namespace layout = oa::ui::display_layout;
     if (!match_ || !ui_rules().resource_panel.enabled)
+        return;
+    const auto* font = match_label_font();
+    const auto& world = match_->state();
+    const auto& game = world.game;
+    const auto& wind = match_->environment_wind();
+    const auto readout = hud::wind_readout(
+        wind.strength,
+        wind.minimum_strength,
+        wind.maximum_strength,
+        wind.strength_divisor,
+        wind_generator_output(world)
+    );
+    const bool watching = local_player_watches();
+    char time_line[64];
+    char wind_line[64];
+    char tidal_line[64];
+    hud::format_game_time(time_line, sizeof time_line, game.tick);
+    hud::format_wind(wind_line, sizeof wind_line, readout, watching);
+    hud::format_tidal(tidal_line, sizeof tidal_line, game.tidal_strength);
+    const auto width = [&](std::string_view text) {
+        return font != nullptr ? match_text_width(*font, text, 1) : 0;
+    };
+    // Where the line goes is decided at its widest figures, so that it
+    // stays put while they change: the wind at its most, and the time at
+    // 00:00:00.
+    char widest_time[64];
+    char widest_wind[64];
+    hud::format_game_time(widest_time, sizeof widest_time, 0);
+    hud::format_wind(
+        widest_wind,
+        sizeof widest_wind,
+        hud::WindReadout{readout.maximum, readout.minimum, readout.maximum},
+        watching
+    );
+    const auto wind_parts = hud::split_clock_line(wind_line);
+    const auto tidal_parts = hud::split_clock_line(tidal_line);
+    const auto time_parts = hud::split_clock_line(time_line);
+    const auto widest_time_parts = hud::split_clock_line(widest_time);
+    // A signed amount's figures sit as near its sign as they sit to each
+    // other: they move left by the columns the sign leaves blank on its
+    // right past those a figure does.
+    const auto sign_pull = [&](std::string_view amount) {
+        if (font == nullptr || amount.size() < 2 || amount.front() != '+')
+            return 0;
+        return std::max(
+            0,
+            match_text_margins(*font, amount[0]).right - match_text_margins(*font, amount[1]).right
+        );
+    };
+    const auto amount_width = [&](std::string_view amount) {
+        return width(amount) - sign_pull(amount);
+    };
+    const auto figures = [&](const hud::ClockLineParts& parts) {
+        return amount_width(parts.amount) + width(parts.rest);
+    };
+    // "Game Time" alone, without the " : " that ends its label.
+    constexpr std::string_view kLabelEnd = " : ";
+    auto time_label = time_parts.label;
+    if (time_label.ends_with(kLabelEnd))
+        time_label.remove_suffix(kLabelEnd.size());
+    // The touch controls' layout shows no top bar past the interface's
+    // columns.
+    const auto place = layout::placed_mode(match_layout_) || font == nullptr
+                           ? hud::ClockLinePlace{}
+                           : hud::place_clock_line(
+                                 top_bar_pieces_,
+                                 layout::kSourceLeft + match_layout_.bar_columns(),
+                                 hud::ClockLineWidths{
+                                     std::max(width(wind_parts.label), width(tidal_parts.label)),
+                                     std::max(
+                                         {figures(wind_parts),
+                                          figures(hud::split_clock_line(widest_wind)),
+                                          figures(tidal_parts)}
+                                     ),
+                                     std::max(width(time_line), width(widest_time)),
+                                     width(time_label),
+                                     std::max(width(time_parts.rest), width(widest_time_parts.rest))
+                                 },
+                                 match_layout_.width
+                             );
+    if (place.spot != hud::ClockLineSpot::battlefield) {
+        if (layer != PaintLayer::hud)
+            return;
+        const auto green = hud::readout_color(game, hud::kReadoutProducedColor);
+        // The label ends at the figures, which follow in their colours.
+        const auto line = [&](int y, const hud::ClockLineParts& parts) {
+            const int x = place.figures_x;
+            draw_hud_label(x - width(parts.label), y, parts.label, kClockLineGrey);
+            if (const int pull = sign_pull(parts.amount); pull > 0) {
+                // The figures start where the whole amount puts them, less
+                // the pull.
+                const auto digits = parts.amount.substr(1);
+                draw_hud_label(x, y, parts.amount.substr(0, 1), green);
+                draw_hud_label(x + width(parts.amount) - width(digits) - pull, y, digits, green);
+            } else {
+                draw_hud_label(x, y, parts.amount, green);
+            }
+            draw_hud_label(x + amount_width(parts.amount), y, parts.rest, kClockLineGrey);
+        };
+        line(hud::kClockLineWindY, wind_parts);
+        line(hud::kClockLineTidalY, tidal_parts);
+        if (place.spot == hud::ClockLineSpot::sections) {
+            draw_hud_label(place.time_x, hud::kClockLineTimeY, time_line, kClockLineGrey);
+        } else {
+            draw_hud_label(place.time_x, hud::kClockLineWindY, time_label, kClockLineGrey);
+            draw_hud_label(place.time_x, hud::kClockLineTidalY, time_parts.rest, kClockLineGrey);
+        }
+        return;
+    }
+    if (layer != PaintLayer::battlefield)
         return;
     // Its lines step by the game font's height.
     const PanelText panel(*this);
-    const auto& world = match_->state();
-    const auto& game = world.game;
-    const bool watching = local_player_watches();
-    const auto text_color = oa::ui::hud::readout_color(game, oa::ui::hud::kReadoutTextColor);
+    const auto text_color = hud::readout_color(game, hud::kReadoutTextColor);
     // At the top left of the overlays' area (the battlefield, or with the
     // touch controls on, the part of it they leave clear), as far from its
     // corner as from the battlefield's; painted on the battlefield's layer.
     const auto area = overlay_area();
     const auto label = [&](int y, const char* text) {
-        namespace layout = oa::ui::display_layout;
-        const auto point = layout::placed_mode(match_layout_)
-                               ? layout::source_battlefield_to_canvas(match_layout_, kClockLineX, y)
-                               : layout::source_to_canvas(match_layout_, kClockLineX, y);
+        const auto point =
+            layout::placed_mode(match_layout_)
+                ? layout::source_battlefield_to_canvas(match_layout_, hud::kClockLineLeft, y)
+                : layout::source_to_canvas(match_layout_, hud::kClockLineLeft, y);
         const auto at = canvas_paint(
             point.x + area.x - match_layout_.battlefield_x(),
             point.y + area.y - match_layout_.battlefield_y()
         );
         draw_match_label(at.x, at.y, text, text_color);
     };
-    char line[64];
-    hud::format_game_time(line, sizeof line, game.tick);
-    label(kClockLineY, line);
-    const auto& wind = match_->environment_wind();
-    hud::format_wind(
-        line,
-        sizeof line,
-        hud::wind_readout(
-            wind.strength,
-            wind.minimum_strength,
-            wind.maximum_strength,
-            wind.strength_divisor,
-            wind_generator_output(world)
-        ),
-        watching
-    );
-    label(kClockLineY + kClockLineStep, line);
-    hud::format_tidal(line, sizeof line, game.tidal_strength);
-    label(kClockLineY + 2 * kClockLineStep, line);
+    label(hud::kClockLineTop, time_line);
+    label(hud::kClockLineTop + hud::kClockLineStep, wind_line);
+    label(hud::kClockLineTop + 2 * hud::kClockLineStep, tidal_line);
 }
 
 bool Runtime::resource_panel_pointer(const SDL_Event& event, float x, float y) {

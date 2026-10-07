@@ -1697,6 +1697,7 @@ void Runtime::draw_match_bars(int from_column) {
         piece(*top, x, 0, top_rows);
         x += top->width;
     }
+    top_bar_pieces_ = {x, bottom ? static_cast<int32_t>(bottom->width) : 0};
     if (!bottom || bottom->width == 0)
         return;
     for (; x < width; x += bottom->width)
