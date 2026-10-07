@@ -770,10 +770,6 @@ renderer::ButtonCondition Runtime::match_button_condition(std::size_t index) con
     // order the selection cannot give, shows grayed rather than hidden.
     if (!status && button != nullptr && button->grayed_out)
         return renderer::ButtonCondition::disabled;
-    // A page's PREV and NEXT are drawn as it authors them, also for a
-    // builder of one page, where they take no click.
-    if (!status && match_hud_action(gadget.common.name) == "MISSION" && !campaign_mission_)
-        return renderer::ButtonCondition::hidden;
     // The pointer over a button leaves it as it is: a button shows pressed
     // while a press on it is held with the pointer still over it, or while
     // its order is lit.

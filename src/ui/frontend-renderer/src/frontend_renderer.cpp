@@ -227,7 +227,12 @@ struct ResolvedSprite {
             fallback_name = "stagebuttn" + std::to_string(fields->stages);
         }
     }
+    // The default art is commongui.gaf's: the shared archive of a frontend
+    // screen, the screen's own archive of an in-game panel, which holds
+    // commongui.gaf with the side's interface art shared.
     const auto* fallback = sequence_for(resources.shared_sprites, fallback_name);
+    if (fallback == nullptr || fallback->frames.empty())
+        fallback = sequence_for(resources.sprites, fallback_name);
     if (fallback == nullptr || fallback->frames.empty())
         return {};
     std::size_t best = 0;

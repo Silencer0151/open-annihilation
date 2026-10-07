@@ -66,11 +66,9 @@ void Runtime::update_pointer(float x, float y) {
             // A grayed order page status button still takes the click and
             // ignores it. Build page navigation is never on a paused menu.
             const auto takes_pointer = [&](const oa::ui::gui_layout::Gadget& gadget) {
-                const auto action = match_hud_action(gadget.common.name);
                 return match_gadget_state(gadget) != nullptr ||
                        !((!pause_menu_shown() && is_build_page_nav(gadget.common.name) &&
                           !build_page_nav_shown()) ||
-                         (action == "MISSION" && !campaign_mission_) ||
                          !gadget_command_available(gadget));
             };
             hovered_ = oa::ui::gui_input::hit_test(hud, hud_point.x, hud_point.y);

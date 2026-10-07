@@ -156,6 +156,54 @@ void test_art_keeps_frame_size() {
     CHECK(red_at(drawn, 4, 4) == 99);
 }
 
+// An in-game panel holds commongui.gaf in its own archive and the side's
+// interface art shared (ARMOPT's buttons): a button without art of its own
+// draws BUTTONS0's frames from there. Off the pointer and under it, it shows
+// its normal face, frame 0 of its size group; pressed, frame 1. The frame's
+// top-left is on the record's position whatever origin the frame carries.
+void test_default_art_in_panel_archive() {
+    namespace renderer = oa::ui::frontend_renderer;
+    renderer::ScreenResources resources;
+    resources.background.width = 6;
+    resources.background.height = 6;
+    resources.background.rgb.assign(6U * 6U * 3U, 99);
+    for (std::size_t index = 0; index < 256; ++index)
+        resources.gui_palette[index * 4] = static_cast<uint8_t>(index);
+    resources.layout.gadgets.push_back(button("OK", 2, 3, 2, 1));
+    oa::formats::gaf::Sequence buttons;
+    buttons.name = "BUTTONS0";
+    for (uint8_t value : {uint8_t{40}, uint8_t{41}, uint8_t{42}, uint8_t{43}}) {
+        oa::formats::gaf::Frame frame;
+        frame.width = 2;
+        frame.height = 1;
+        frame.origin_x = 304;
+        frame.origin_y = 207;
+        frame.pixels = {value, value};
+        frame.coverage = {1, 1};
+        buttons.frames.push_back(frame);
+    }
+    resources.sprites.sequences.push_back(buttons);
+    oa::formats::gaf::Sequence chrome;
+    chrome.name = "PANELSIDE";
+    chrome.frames.push_back(buttons.frames.front());
+    resources.shared_sprites.sequences.push_back(chrome);
+    const auto shown = [&](renderer::ButtonCondition condition) {
+        const renderer::ButtonPresentation state{
+            "OK", condition, std::nullopt, std::nullopt, std::nullopt
+        };
+        return renderer::render_screen(resources, {&state, 1});
+    };
+    const auto normal = shown(renderer::ButtonCondition::normal);
+    CHECK(red_at(normal, 2, 3) == 40);
+    CHECK(red_at(normal, 3, 3) == 40);
+    CHECK(red_at(normal, 1, 3) == 99);
+    CHECK(red_at(normal, 4, 3) == 99);
+    CHECK(red_at(normal, 2, 2) == 99);
+    CHECK(red_at(normal, 2, 4) == 99);
+    CHECK(shown(renderer::ButtonCondition::hovered).rgb == normal.rgb);
+    CHECK(red_at(shown(renderer::ButtonCondition::pressed), 2, 3) == 41);
+}
+
 // A centred caption underlines its quick key's glyph on the row below the
 // text, in GUI palette entry 2, or 0 while pressed, and not while grayed;
 // the focused record gets the focus marker's six rings, lit through the
@@ -982,6 +1030,7 @@ int main() {
 
     test_grayed_art_frame();
     test_art_keeps_frame_size();
+    test_default_art_in_panel_archive();
     test_grayed_art_cost();
     test_quick_key_and_focus();
     test_caption_placement();

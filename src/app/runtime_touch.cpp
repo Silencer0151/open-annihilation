@@ -758,11 +758,9 @@ TouchDispatchAccess::hud_gadget_at(const Runtime& runtime, float x, float y, boo
         *on_gadget = true;
     // The gadgets the pointer skips, as update_pointer skips them.
     const auto& gadget = gadgets[*hit];
-    const auto action = runtime.match_hud_action(gadget.common.name);
     if (runtime.match_gadget_state(gadget) == nullptr &&
         ((!runtime.pause_menu_shown() && runtime.is_build_page_nav(gadget.common.name) &&
           runtime.builder_gui_page_count() <= 1) ||
-         (action == "MISSION" && !runtime.campaign_mission_) ||
          !runtime.gadget_command_available(gadget)))
         return std::nullopt;
     return *hit;

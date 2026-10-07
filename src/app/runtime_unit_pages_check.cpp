@@ -191,9 +191,7 @@ void Runtime::check_unit_pages() {
         const auto* state = match_gadget_state(gadget);
         const auto* fields = std::get_if<layout::ButtonFields>(&gadget.fields);
         const bool grayed = fields != nullptr && fields->grayed_out;
-        const bool hidden =
-            (match_hud_action(gadget.common.name) == "MISSION" && !campaign_mission_) ||
-            !gadget_command_available(gadget);
+        const bool hidden = !gadget_command_available(gadget);
         const bool idle_pager = is_build_page_nav(gadget.common.name) && !build_page_nav_shown();
         return Shown{
             state != nullptr || grayed || !hidden, state != nullptr || (!hidden && !idle_pager)
