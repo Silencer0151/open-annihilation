@@ -183,8 +183,8 @@ struct ShownSpan {
 /// the map (fill_scaled_viewport) fills from the shown map, rather than
 /// black past its edges.
 ///
-/// Pixel d samples map pixel source + floor(d * 65536 / scale_fp), scale_fp
-/// being the scale in 16.16 rounded to nearest, as the fill samples it; it
+/// Pixel d samples map pixel source + map_pixel_shown(d, scene_step(scale)),
+/// as the fill samples it on the scene grid (oa/present/scene_grid.hpp); it
 /// shows the map when that lies from 0 up to `shown`. The span is not cut
 /// to any destination: a camera on the map puts `first` before pixel 0.
 ///

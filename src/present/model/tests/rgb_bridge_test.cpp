@@ -6,6 +6,7 @@
 #include "oa/present/blit.hpp"
 #include "oa/present/polygon.hpp"
 #include "oa/present/raster.hpp"
+#include "oa/present/scene_grid.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -136,6 +137,50 @@ void test_scaled() {
     CHECK(is_entry(frame.at(9, 9), palette.entries[50]));
     CHECK(is_entry(frame.at(10, 9), palette.entries[3]));
     CHECK(is_entry(frame.at(7, 8), palette.entries[3]));
+}
+
+// At a scale zoomed out and one zoomed in, every frame pixel is written back
+// from the 8-bit pixel of the map pixel the scene grid shows there, the one
+// the terrain fill shows there too, across a frame as wide as a large
+// window's scene.
+void test_written_on_the_scene_grid() {
+    const oa::Palette palette = ramp_palette();
+    constexpr int frame_width = 2400;
+    constexpr int frame_height = 6;
+    // The index an 8-bit pixel is drawn with: never the frame's own.
+    const auto drawn = [](int x, int y) {
+        return static_cast<uint8_t>(20 + (x * 7 + y * 3) % 200);
+    };
+    for (const float scale : {0.37F, 1.37F}) {
+        Frame frame(frame_width, frame_height, palette.entries[3]);
+        RgbBridge bridge;
+        bridge_begin(
+            bridge, frame.view(), {0, 0, frame_width - 1, frame_height - 1}, scale, palette
+        );
+        bridge_open(bridge, {0, 0, bridge.surface.width - 1, bridge.surface.height - 1});
+        for (int y = 0; y < bridge.surface.height; ++y)
+            for (int x = 0; x < bridge.surface.width; ++x)
+                bridge.surface.pixels[static_cast<std::ptrdiff_t>(y) * bridge.surface.pitch + x] =
+                    drawn(x, y);
+        bridge_end(bridge);
+        const uint32_t step = oa::present::scene_step(scale);
+        int misplaced = 0;
+        for (int y = 0; y < frame_height; ++y)
+            for (int x = 0; x < frame_width; ++x) {
+                const auto shown_x = static_cast<int>(oa::present::map_pixel_shown(x, step));
+                const auto shown_y = static_cast<int>(oa::present::map_pixel_shown(y, step));
+                misplaced +=
+                    is_entry(frame.at(x, y), palette.entries[drawn(shown_x, shown_y)]) ? 0 : 1;
+            }
+        CHECK(misplaced == 0);
+        if (misplaced != 0)
+            std::fprintf(
+                stderr,
+                "scale %g: %d frame pixels written from another map pixel\n",
+                static_cast<double>(scale),
+                misplaced
+            );
+    }
 }
 
 // Colours outside the palette resolve to the same entry however often they
@@ -668,6 +713,7 @@ int main() {
     test_draw_and_commit();
     test_blended_draw();
     test_scaled();
+    test_written_on_the_scene_grid();
     test_nearest_remembered();
     test_sampled_untouched();
     test_sampled_coverage();

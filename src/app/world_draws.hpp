@@ -130,8 +130,35 @@ void blit_world_hotspot(
     uint32_t shadow_level = oa::present::model::shadow_full_level
 ) noexcept;
 
+/// Blits a rendered GAF frame standing on the battlefield onto the scene,
+/// its origin at a place on the map, laid on the scene grid.
+///
+/// The frame's pixel (i, j) lies on the map pixel `place - origin + (i, j)`
+/// from the scene's first, and covers the scene pixels the grid gives that
+/// map pixel at the scale (oa/present/scene_grid.hpp), the pixels the
+/// terrain of that map pixel fills: what the frame shows stays over the
+/// same ground at every scale and from every camera. At a scale of 1 the
+/// frame is copied with its origin at the place.
+///
+/// @param target the frame and what may be written
+/// @param frame rendered frame
+/// @param place where the GAF origin lies, in map pixels from the scene's
+///     first, raised by its height (place_world_point)
+/// @param palette 4 bytes per colour
+/// @param scale scene pixels per map pixel; 0 or less draws at 1
+/// @param shadow_level as blit_world_frame's
+void blit_world_sprite(
+    const WorldTarget& target,
+    const oa::formats::gaf::RenderedFrame& frame,
+    const oa::present::world_renderer::ScreenPoint& place,
+    const oa::PaletteBytes& palette,
+    float scale,
+    uint32_t shadow_level = oa::present::model::shadow_full_level
+) noexcept;
+
 /// Blends a rendered GAF frame's covered pixels into the battlefield frame
-/// through the display's alpha table, its origin at a screen point.
+/// through the display's alpha table, its origin at a place on the map,
+/// laid on the scene grid as blit_world_sprite lays it.
 ///
 /// Each covered pixel takes table[source * 256 + destination], the
 /// destination's palette index read back from the frame through the model
@@ -140,8 +167,8 @@ void blit_world_hotspot(
 ///
 /// @param target the frame and what may be written
 /// @param frame rendered frame
-/// @param screen frame point the GAF origin lands on
-/// @param scale size factor; 0 or less draws at 1
+/// @param place where the GAF origin lies, in map pixels from the scene's first
+/// @param scale scene pixels per map pixel; 0 or less draws at 1
 /// @param display the models' display: its alpha table and palette
 /// @param[in,out] bridge the frame's model bridge, whose colour lookup remembers nearest entries
 /// @param[in,out] band the band being drawn, whose own colour memory is used
@@ -151,7 +178,7 @@ void blit_world_hotspot(
 void blit_world_blended_hotspot(
     const WorldTarget& target,
     const oa::formats::gaf::RenderedFrame& frame,
-    const oa::present::world_renderer::ScreenPoint& screen,
+    const oa::present::world_renderer::ScreenPoint& place,
     float scale,
     const oa::present::model::ModelDisplay& display,
     oa::present::model::RgbBridge& bridge,
@@ -170,7 +197,8 @@ enum class FlashStrength : uint8_t {
 };
 
 /// Lights the pixels under a rendered explosion flash frame through the
-/// light table, its origin at a screen point.
+/// light table, its origin at a place on the map, laid on the scene grid as
+/// blit_world_sprite lays it.
 ///
 /// Each covered pixel of the frame but its transparent index names a row of
 /// the table: its value less oa::present::shade_ramp_base, halved at
@@ -182,8 +210,8 @@ enum class FlashStrength : uint8_t {
 ///
 /// @param target the frame and what may be written
 /// @param frame rendered flash frame
-/// @param screen frame point the frame's origin lands on
-/// @param scale size factor; 0 or less draws at 1
+/// @param place where the frame's origin lies, in map pixels from the scene's first
+/// @param scale scene pixels per map pixel; 0 or less draws at 1
 /// @param light_table oa::present::ramp_table_rows rows of 256 palette
 ///     indices; null draws nothing
 /// @param display the models' display: its palette
@@ -194,7 +222,7 @@ enum class FlashStrength : uint8_t {
 void blit_world_lit_hotspot(
     const WorldTarget& target,
     const oa::formats::gaf::RenderedFrame& frame,
-    const oa::present::world_renderer::ScreenPoint& screen,
+    const oa::present::world_renderer::ScreenPoint& place,
     float scale,
     const uint8_t* light_table,
     const oa::present::model::ModelDisplay& display,
@@ -233,6 +261,22 @@ enum class HeightLift : uint8_t {
 /// @param lift how the height raises the point
 /// @return frame point
 [[nodiscard]] oa::present::world_renderer::ScreenPoint project_world_point(
+    const oa::present::world_renderer::BattlefieldViewport& viewport,
+    const std::array<uint32_t, 3>& position,
+    HeightLift lift
+) noexcept;
+
+/// Returns where a 16.16 world position lies on the battlefield as the game
+/// draws it unscaled: its whole map pixels from the viewport's camera,
+/// raised by its height as `lift` says, from the viewport's corner, whatever
+/// the viewport's scale. A sprite drawn there (blit_world_sprite) is laid on
+/// a scene at any scale over the ground it stands on.
+///
+/// @param viewport battlefield viewport; its scale is not used
+/// @param position 16.16 x, height and z
+/// @param lift how the height raises the point
+/// @return the place, in map pixels from the viewport's corner
+[[nodiscard]] oa::present::world_renderer::ScreenPoint place_world_point(
     const oa::present::world_renderer::BattlefieldViewport& viewport,
     const std::array<uint32_t, 3>& position,
     HeightLift lift
@@ -315,10 +359,14 @@ struct SquareDraw {
     std::array<uint8_t, 3> color{};
 };
 
-/// A GAF frame drawn at a screen point.
+/// A GAF frame drawn at a place on the battlefield.
 struct SpriteDraw {
     const oa::formats::gaf::RenderedFrame* frame{};
-    oa::present::world_renderer::ScreenPoint screen{};
+    /// Where the frame's origin lies, in map pixels from the scene's first,
+    /// raised by its height (place_world_point): the point the game's
+    /// unscaled view draws it at, which the scene's scale lays on the scene
+    /// grid (blit_world_sprite).
+    oa::present::world_renderer::ScreenPoint place{};
     /// A feature's shadow frame, drawn as dark as the list's shadow_level.
     bool shadow{};
     /// A feature's frame, cut off where the map the view shows ends
@@ -326,6 +374,23 @@ struct SpriteDraw {
     /// past the map's edges.
     bool on_map{};
 };
+
+/// A rectangle of scene pixels: the columns from `left` up to `right` and
+/// the rows from `top` up to `bottom`.
+struct SceneRect {
+    int64_t left{};
+    int64_t top{};
+    int64_t right{};
+    int64_t bottom{};
+};
+
+/// Returns the scene pixels a sprite's frame covers at a scale, laid on the
+/// scene grid as blit_world_sprite lays it; unclipped.
+///
+/// @param sprite the sprite; its frame must be set
+/// @param scale scene pixels per map pixel; 0 or less is 1
+/// @return the rectangle
+[[nodiscard]] SceneRect sprite_scene_rect(const SpriteDraw& sprite, float scale) noexcept;
 
 /// A line of the frame (WorldDrawKind::line) in RGB, or of the bridge
 /// (WorldDrawKind::selection_line) in a palette index, in its pixels.

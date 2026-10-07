@@ -45,7 +45,11 @@ a scale of frame pixels to 8-bit pixels:
 - `bridge_end` writes every 8-bit pixel that a draw changed back to the frame
   through the palette, for the tiles captured since the last write-back.
   Pixels no draw changed keep their colour, so colours outside the palette
-  survive.
+  survive. At a scale other than 1 an 8-bit pixel covers the frame pixels
+  the scene grid lays its place over
+  ([`scene_grid.hpp`](../include/oa/present/scene_grid.hpp)), the pixels the
+  terrain fill gives the map pixel of the same place, so a model stays over
+  its ground at every zoom.
 - `bridge_open_sampled` and `bridge_end_sampled` do the same for a region
   drawn at several samples a pixel.
 
@@ -117,7 +121,9 @@ thread, so that each thread drawing a band binds the frame's display.
 ## Tests
 
 `tests/` holds one ctest per file (`model-render-*`). `rgb_bridge_test.cpp`
-checks captures, write-backs, scaling and sampled regions, and holds the copy
+checks captures, write-backs, scaling and sampled regions, that at 0.37 and
+1.37 every pixel of a frame 2400 pixels wide is written back from the map
+pixel the scene grid shows there, and holds the copy
 to a bridge that maps every pixel afresh: over many captures, write-backs and
 writes into the frame between them, at scales of 1, 2, 0.5, 0.75 and 1.5, with
 the rectangle inside the frame or past its edges and with colours that more than

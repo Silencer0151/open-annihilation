@@ -355,7 +355,18 @@ logs it.
   terrain fill and its box filter, the fog, the model bridge and the
   sprites, particles and lines of the list take, while units and features
   are culled, and the order overlays, build ghost, selection band and every
-  painter after them placed, in screen pixels at the zoom. The standard
+  painter after them placed, in screen pixels at the zoom. The terrain
+  fill, the model bridge's write-back and the list's sprites and particle
+  squares lay the map's pixels over the scene one way, the scene grid
+  ([`scene_grid.hpp`](../present/include/oa/present/scene_grid.hpp)): a
+  sprite is placed by the map pixel its origin stands on as the game's
+  unscaled view places it (`place_world_point`), and each of its pixels
+  covers the scene pixels the terrain of its map pixel fills
+  (`blit_world_sprite`), so that features, explosions and particles stay
+  over their ground, and with the units, through a zoom and under a
+  camera that moves; at zoom 1 they draw as the game draws them. The Full
+  tier's sprite stage places them at their map pixels times the zoom, as
+  its terrain and models. The standard
   tier draws at the zoom, its scene the world layer itself; a check may
   draw the scene at another scale apart from the world layer, which a
   nearest resample (`resample_nearest_rgb24`) then fills at the zoom; and
@@ -461,7 +472,8 @@ logs it.
   modelled on the processor (`software_linear_rgb24`), within 2 levels,
   scenes and prescale targets in tiles and a view between map pixels
   among it; `app-world-draws` checks
-  the thick lines band by band; and
+  the thick lines band by band, and a sprite over its ground through a
+  zoom's ease from 0.25 to 3 and under a camera following it far out; and
   `--check-render-tiers` (`runtime_render_tiers_check.cpp`,
   `native-render-tiers`, with `--hardware-acceleration` and
   `--force-capable` on that renderer, which the start-up function test

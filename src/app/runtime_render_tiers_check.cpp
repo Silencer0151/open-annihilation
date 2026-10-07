@@ -714,10 +714,11 @@ std::vector<uint8_t> card_draw_mask(
             const auto& sprite = list.sprites[draw.index];
             if (sprite.frame == nullptr || (draw.kind == WorldDrawKind::lit_sprite && !flashes))
                 break;
-            const int left = field.x + sprite.screen.x - scaled(sprite.frame->origin_x);
-            const int top = field.y + sprite.screen.y - scaled(sprite.frame->origin_y);
-            const int w = std::max(1, scaled(sprite.frame->width));
-            const int h = std::max(1, scaled(sprite.frame->height));
+            const SceneRect rect = sprite_scene_rect(sprite, zoom);
+            const int left = field.x + static_cast<int>(rect.left);
+            const int top = field.y + static_cast<int>(rect.top);
+            const int w = std::max(1, static_cast<int>(rect.right - rect.left));
+            const int h = std::max(1, static_cast<int>(rect.bottom - rect.top));
             const bool fog_cut = touches_fog(
                 left - sprite_mask_margin,
                 top - sprite_mask_margin,
@@ -3990,10 +3991,11 @@ void Runtime::check_full_overlays(
                 const auto& sprite = list.sprites[draw.index];
                 if (sprite.frame == nullptr)
                     break;
-                const int left = field.x + sprite.screen.x - scaled(sprite.frame->origin_x);
-                const int top = field.y + sprite.screen.y - scaled(sprite.frame->origin_y);
-                const int w = std::max(1, scaled(sprite.frame->width));
-                const int h = std::max(1, scaled(sprite.frame->height));
+                const SceneRect rect = sprite_scene_rect(sprite, zoom);
+                const int left = field.x + static_cast<int>(rect.left);
+                const int top = field.y + static_cast<int>(rect.top);
+                const int w = std::max(1, static_cast<int>(rect.right - rect.left));
+                const int h = std::max(1, static_cast<int>(rect.bottom - rect.top));
                 // A flash lights what is under it, which the processor's
                 // fog then greys, as a blended sprite blends it.
                 const bool blended = draw.kind != WorldDrawKind::sprite;

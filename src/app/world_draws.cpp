@@ -8,6 +8,7 @@
 #include "oa/present/display.hpp"
 #include "oa/present/raster.hpp"
 #include "oa/present/rle.hpp"
+#include "oa/present/scene_grid.hpp"
 #include "oa/present/world_renderer/world_overlays.hpp"
 
 #include <algorithm>
@@ -211,10 +212,107 @@ void blit_world_hotspot(
     blit_world_frame(target, frame, x, y, palette, scale, shadow_level);
 }
 
+namespace {
+
+/// Visits the frame pixels a GAF frame covers on the scene grid, within the
+/// visible world rectangle, the frame and the band: the frame's column
+/// (or row) `i` lies on the map pixel `place - origin + i` from the scene's
+/// first, and covers the scene pixels the grid gives that map pixel at the
+/// scale's step (oa/present/scene_grid.hpp), as the terrain under it does.
+///
+/// @param target the frame and what may be written
+/// @param frame the GAF frame
+/// @param place where the frame's origin lies, in map pixels from the scene's first
+/// @param scale scene pixels per map pixel; 0 or less draws at 1
+/// @param visit called with each pixel's offset in the GAF frame, row by
+///     row, and the RGB pixel it covers
+template <typename Visit>
+void visit_sprite_pixels(
+    const WorldTarget& target,
+    const oa::formats::gaf::RenderedFrame& frame,
+    const oa::present::world_renderer::ScreenPoint& place,
+    float scale,
+    Visit&& visit
+) {
+    const uint32_t step = oa::present::scene_step(scale);
+    const int64_t left = int64_t{place.x} - frame.origin_x;
+    const int64_t top = int64_t{place.y} - frame.origin_y;
+    const int64_t first_row = std::max<int64_t>(
+        {oa::present::first_scene_pixel(top, step), target.first_row, target.clip_y, 0}
+    );
+    const int64_t end_row = std::min<int64_t>(
+        {oa::present::first_scene_pixel(top + frame.height, step),
+         target.end_row,
+         int64_t{target.clip_y} + target.clip_height,
+         target.height}
+    );
+    const int64_t first_column =
+        std::max<int64_t>({oa::present::first_scene_pixel(left, step), target.clip_x, 0});
+    const int64_t end_column = std::min<int64_t>(
+        {oa::present::first_scene_pixel(left + frame.width, step),
+         int64_t{target.clip_x} + target.clip_width,
+         target.width}
+    );
+    if (first_row >= end_row || first_column >= end_column)
+        return;
+    const auto source_width = static_cast<std::size_t>(frame.width);
+    // The map pixel the first column shows, and how far into it the column
+    // lies, in 16.16 parts of the step, kept while the column steps.
+    const int64_t first_shown = oa::present::map_pixel_shown(first_column, step);
+    const int64_t first_into =
+        first_column * int64_t{oa::present::scene_step_one} - first_shown * int64_t{step};
+    for (int64_t row = first_row; row < end_row; ++row) {
+        const auto source_row =
+            static_cast<std::size_t>(oa::present::map_pixel_shown(row, step) - top);
+        const std::size_t row_offset = source_row * source_width;
+        uint8_t* out =
+            target.rgb + ((static_cast<std::size_t>(row) * static_cast<std::size_t>(target.width) +
+                           static_cast<std::size_t>(first_column)) *
+                          3U);
+        auto source_column = static_cast<std::size_t>(first_shown - left);
+        int64_t into = first_into;
+        for (int64_t column = first_column; column < end_column; ++column, out += 3) {
+            visit(row_offset + source_column, out);
+            into += oa::present::scene_step_one;
+            while (into >= step) {
+                into -= step;
+                ++source_column;
+            }
+        }
+    }
+}
+
+} // namespace
+
+void blit_world_sprite(
+    const WorldTarget& target,
+    const oa::formats::gaf::RenderedFrame& frame,
+    const oa::present::world_renderer::ScreenPoint& place,
+    const oa::PaletteBytes& palette,
+    float scale,
+    uint32_t shadow_level
+) noexcept {
+    // A frame whose pixels or coverage are short is read only where they reach.
+    const std::size_t readable = std::min(
+        {frame.coverage.size(),
+         frame.pixels.size(),
+         static_cast<std::size_t>(frame.width) * frame.height}
+    );
+    visit_sprite_pixels(target, frame, place, scale, [&](std::size_t offset, uint8_t* out) {
+        if (offset >= readable || frame.coverage[offset] == 0)
+            return;
+        const auto pal = static_cast<std::size_t>(frame.pixels[offset]) * 4U;
+        for (std::size_t channel = 0; channel < 3; ++channel)
+            out[channel] = model_render::fade_shadow_channel(
+                out[channel], palette[pal + channel], shadow_level
+            );
+    });
+}
+
 void blit_world_blended_hotspot(
     const WorldTarget& target,
     const oa::formats::gaf::RenderedFrame& frame,
-    const oa::present::world_renderer::ScreenPoint& screen,
+    const oa::present::world_renderer::ScreenPoint& place,
     float scale,
     const model_render::ModelDisplay& display,
     model_render::RgbBridge& bridge,
@@ -224,71 +322,28 @@ void blit_world_blended_hotspot(
     const auto& context = display.context;
     if ((context.flags & oa::present::display_flag_alpha_table) == 0)
         return;
-    if (scale <= 0.0F)
-        scale = 1.0F;
-    const auto left =
-        screen.x - static_cast<int>(std::lround(static_cast<double>(frame.origin_x) * scale));
-    const auto top =
-        screen.y - static_cast<int>(std::lround(static_cast<double>(frame.origin_y) * scale));
-    const auto dest_w =
-        std::max(1, static_cast<int>(std::lround(static_cast<double>(frame.width) * scale)));
-    const auto dest_h =
-        std::max(1, static_cast<int>(std::lround(static_cast<double>(frame.height) * scale)));
     const auto& palette = display.palette;
-    // The columns of the drawn rectangle that land in the visible world
-    // rectangle and the frame; each one's source column is its index times
-    // the frame's width over the drawn width, rounded down, kept as a whole
-    // part and a remainder while the column steps.
-    const int64_t first_column =
-        std::max<int64_t>(0, std::max<int64_t>(target.clip_x, 0) - int64_t{left});
-    const int64_t end_column = std::min<int64_t>(
-        dest_w,
-        std::min<int64_t>(int64_t{target.clip_x} + target.clip_width, target.width) - int64_t{left}
-    );
-    const auto source_width = static_cast<std::size_t>(frame.width);
-    const auto columns = static_cast<std::size_t>(dest_w);
-    for (int row = 0; row < dest_h && first_column < end_column; ++row) {
-        const int y = top + row;
-        if (y < target.clip_y || y >= target.clip_y + target.clip_height || y < 0 ||
-            y >= target.height || y < target.first_row || y >= target.end_row)
-            continue;
-        const auto source_row =
-            static_cast<std::size_t>(row) * frame.height / static_cast<std::size_t>(dest_h);
-        const std::size_t start = static_cast<std::size_t>(first_column) * source_width;
-        std::size_t source_column = start / columns;
-        std::size_t remainder = start % columns;
-        for (int64_t column = first_column; column < end_column; ++column) {
-            const auto x = static_cast<int>(left + column);
-            const auto offset = source_row * source_width + source_column;
-            remainder += source_width;
-            while (remainder >= columns) {
-                remainder -= columns;
-                ++source_column;
-            }
-            if (offset >= frame.coverage.size() || frame.coverage[offset] == 0)
-                continue;
-            auto* pixel =
-                target.rgb +
-                (static_cast<std::size_t>(y) * target.width + static_cast<std::size_t>(x)) * 3U;
-            const uint8_t under =
-                band != nullptr
-                    ? model_render::bridge_index(bridge, *band, pixel[0], pixel[1], pixel[2])
-                    : model_render::bridge_index(bridge, pixel[0], pixel[1], pixel[2]);
-            const auto& blended =
-                palette
-                    .entries[context.alpha_table
-                                 [static_cast<std::size_t>(frame.pixels[offset]) * 0x100 + under]];
-            pixel[0] = model_render::fade_shadow_channel(pixel[0], blended.r, shadow_level);
-            pixel[1] = model_render::fade_shadow_channel(pixel[1], blended.g, shadow_level);
-            pixel[2] = model_render::fade_shadow_channel(pixel[2], blended.b, shadow_level);
-        }
-    }
+    const std::size_t readable = std::min(frame.coverage.size(), frame.pixels.size());
+    visit_sprite_pixels(target, frame, place, scale, [&](std::size_t offset, uint8_t* pixel) {
+        if (offset >= readable || frame.coverage[offset] == 0)
+            return;
+        const uint8_t under =
+            band != nullptr
+                ? model_render::bridge_index(bridge, *band, pixel[0], pixel[1], pixel[2])
+                : model_render::bridge_index(bridge, pixel[0], pixel[1], pixel[2]);
+        const auto& blended =
+            palette.entries[context.alpha_table
+                                [static_cast<std::size_t>(frame.pixels[offset]) * 0x100 + under]];
+        pixel[0] = model_render::fade_shadow_channel(pixel[0], blended.r, shadow_level);
+        pixel[1] = model_render::fade_shadow_channel(pixel[1], blended.g, shadow_level);
+        pixel[2] = model_render::fade_shadow_channel(pixel[2], blended.b, shadow_level);
+    });
 }
 
 void blit_world_lit_hotspot(
     const WorldTarget& target,
     const oa::formats::gaf::RenderedFrame& frame,
-    const oa::present::world_renderer::ScreenPoint& screen,
+    const oa::present::world_renderer::ScreenPoint& place,
     float scale,
     const uint8_t* light_table,
     const model_render::ModelDisplay& display,
@@ -298,71 +353,29 @@ void blit_world_lit_hotspot(
 ) {
     if (light_table == nullptr)
         return;
-    if (scale <= 0.0F)
-        scale = 1.0F;
-    const auto left =
-        screen.x - static_cast<int>(std::lround(static_cast<double>(frame.origin_x) * scale));
-    const auto top =
-        screen.y - static_cast<int>(std::lround(static_cast<double>(frame.origin_y) * scale));
-    const auto dest_w =
-        std::max(1, static_cast<int>(std::lround(static_cast<double>(frame.width) * scale)));
-    const auto dest_h =
-        std::max(1, static_cast<int>(std::lround(static_cast<double>(frame.height) * scale)));
     const auto& palette = display.palette;
     const uint32_t row_shift = strength == FlashStrength::reduced ? 1U : 0U;
-    // The columns of the drawn rectangle that land in the visible world
-    // rectangle and the frame, each one's source column found as
-    // blit_world_blended_hotspot finds it.
-    const int64_t first_column =
-        std::max<int64_t>(0, std::max<int64_t>(target.clip_x, 0) - int64_t{left});
-    const int64_t end_column = std::min<int64_t>(
-        dest_w,
-        std::min<int64_t>(int64_t{target.clip_x} + target.clip_width, target.width) - int64_t{left}
-    );
-    const auto source_width = static_cast<std::size_t>(frame.width);
-    const auto columns = static_cast<std::size_t>(dest_w);
     const std::size_t readable = std::min(frame.coverage.size(), frame.pixels.size());
-    for (int row = 0; row < dest_h && first_column < end_column; ++row) {
-        const int y = top + row;
-        if (y < target.clip_y || y >= target.clip_y + target.clip_height || y < 0 ||
-            y >= target.height || y < target.first_row || y >= target.end_row)
-            continue;
-        const auto source_row =
-            static_cast<std::size_t>(row) * frame.height / static_cast<std::size_t>(dest_h);
-        const std::size_t start = static_cast<std::size_t>(first_column) * source_width;
-        std::size_t source_column = start / columns;
-        std::size_t remainder = start % columns;
-        for (int64_t column = first_column; column < end_column; ++column) {
-            const auto x = static_cast<int>(left + column);
-            const auto offset = source_row * source_width + source_column;
-            remainder += source_width;
-            while (remainder >= columns) {
-                remainder -= columns;
-                ++source_column;
-            }
-            if (offset >= readable || frame.coverage[offset] == 0)
-                continue;
-            const uint8_t value = frame.pixels[offset];
-            if (value == frame.transparency_index || value < oa::present::shade_ramp_base)
-                continue;
-            const auto row_named = static_cast<uint32_t>(value - oa::present::shade_ramp_base);
-            if (row_named >= static_cast<uint32_t>(oa::present::ramp_table_rows))
-                continue;
-            auto* pixel =
-                target.rgb +
-                (static_cast<std::size_t>(y) * target.width + static_cast<std::size_t>(x)) * 3U;
-            const uint8_t under =
-                band != nullptr
-                    ? model_render::bridge_index(bridge, *band, pixel[0], pixel[1], pixel[2])
-                    : model_render::bridge_index(bridge, pixel[0], pixel[1], pixel[2]);
-            const auto& lit =
-                palette.entries
-                    [light_table[static_cast<std::size_t>(row_named >> row_shift) * 0x100 + under]];
-            pixel[0] = lit.r;
-            pixel[1] = lit.g;
-            pixel[2] = lit.b;
-        }
-    }
+    visit_sprite_pixels(target, frame, place, scale, [&](std::size_t offset, uint8_t* pixel) {
+        if (offset >= readable || frame.coverage[offset] == 0)
+            return;
+        const uint8_t value = frame.pixels[offset];
+        if (value == frame.transparency_index || value < oa::present::shade_ramp_base)
+            return;
+        const auto row_named = static_cast<uint32_t>(value - oa::present::shade_ramp_base);
+        if (row_named >= static_cast<uint32_t>(oa::present::ramp_table_rows))
+            return;
+        const uint8_t under =
+            band != nullptr
+                ? model_render::bridge_index(bridge, *band, pixel[0], pixel[1], pixel[2])
+                : model_render::bridge_index(bridge, pixel[0], pixel[1], pixel[2]);
+        const auto& lit =
+            palette.entries
+                [light_table[static_cast<std::size_t>(row_named >> row_shift) * 0x100 + under]];
+        pixel[0] = lit.r;
+        pixel[1] = lit.g;
+        pixel[2] = lit.b;
+    });
 }
 
 namespace {
@@ -441,6 +454,28 @@ oa::present::world_renderer::ScreenPoint project_world_point(
                                     static_cast<double>(height) * 0.5 * static_cast<double>(scale)
                                 ));
     return screen;
+}
+
+SceneRect sprite_scene_rect(const SpriteDraw& sprite, float scale) noexcept {
+    const uint32_t step = oa::present::scene_step(scale);
+    const int64_t left = int64_t{sprite.place.x} - sprite.frame->origin_x;
+    const int64_t top = int64_t{sprite.place.y} - sprite.frame->origin_y;
+    return {
+        oa::present::first_scene_pixel(left, step),
+        oa::present::first_scene_pixel(top, step),
+        oa::present::first_scene_pixel(left + sprite.frame->width, step),
+        oa::present::first_scene_pixel(top + sprite.frame->height, step)
+    };
+}
+
+oa::present::world_renderer::ScreenPoint place_world_point(
+    const oa::present::world_renderer::BattlefieldViewport& viewport,
+    const std::array<uint32_t, 3>& position,
+    HeightLift lift
+) noexcept {
+    auto unscaled = viewport;
+    unscaled.scale = 1.0F;
+    return project_world_point(unscaled, position, lift);
 }
 
 bool projectile_lens_on_battlefield(
@@ -754,10 +789,10 @@ void draw_world_band(
             const SpriteDraw& sprite = list.sprites[draw.index];
             if (sprite.shadow && !shadows_drawn(list))
                 break;
-            blit_world_hotspot(
+            blit_world_sprite(
                 sprite.on_map ? on_map : target,
                 *sprite.frame,
-                sprite.screen,
+                sprite.place,
                 *frame.palette,
                 frame.scale,
                 sprite.shadow ? list.shadow_level : model_render::shadow_full_level
@@ -771,7 +806,7 @@ void draw_world_band(
             blit_world_blended_hotspot(
                 sprite.on_map ? on_map : target,
                 *sprite.frame,
-                sprite.screen,
+                sprite.place,
                 frame.scale,
                 *frame.display,
                 bridge,
@@ -785,7 +820,7 @@ void draw_world_band(
             blit_world_lit_hotspot(
                 target,
                 *sprite.frame,
-                sprite.screen,
+                sprite.place,
                 frame.scale,
                 frame.light_table,
                 *frame.display,

@@ -118,9 +118,13 @@ struct RgbBridge {
 
 /// Covers a rectangle of an RGB frame with an 8-bit surface of the rectangle's size divided by the scale.
 ///
-/// Nothing is captured yet. The colour lookup is rebuilt when the palette
-/// changes. The capture copy is kept when the frame's size and row length,
-/// the rectangle, the scale and the palette are those of the last call, so
+/// Each 8-bit pixel is written back to the frame pixels the scene grid
+/// lays its place over at the scale (oa/present/scene_grid.hpp), as the
+/// terrain fill lays the map pixel of the same place, so that a model drawn
+/// on a map pixel lands over that pixel's ground. Nothing is captured yet.
+/// The colour lookup is rebuilt when the palette changes. The capture copy
+/// is kept when the frame's size and row length, the rectangle, the scale
+/// and the palette are those of the last call, so
 /// that captures map again only the colours that changed, whatever the frame
 /// holds now; otherwise it is forgotten.
 ///

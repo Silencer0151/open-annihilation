@@ -569,16 +569,12 @@ void mark(std::vector<uint8_t>& mask, uint32_t width, uint32_t height, int x, in
 /// @param zoom scene pixels per map pixel
 /// @return left, top, columns, rows
 std::array<int, 4> sprite_rect(const oa::app::SpriteDraw& sprite, float zoom) {
-    const auto scaled = [&](int32_t pixels) {
-        return static_cast<int>(
-            std::lround(static_cast<double>(pixels) * static_cast<double>(zoom))
-        );
-    };
+    const oa::app::SceneRect rect = oa::app::sprite_scene_rect(sprite, zoom);
     return {
-        sprite.screen.x - scaled(sprite.frame->origin_x),
-        sprite.screen.y - scaled(sprite.frame->origin_y),
-        std::max(1, scaled(sprite.frame->width)),
-        std::max(1, scaled(sprite.frame->height))
+        static_cast<int>(rect.left),
+        static_cast<int>(rect.top),
+        std::max(1, static_cast<int>(rect.right - rect.left)),
+        std::max(1, static_cast<int>(rect.bottom - rect.top))
     };
 }
 
@@ -623,8 +619,8 @@ std::vector<uint8_t> blend_counts(const WorldDrawList& list, uint32_t width, uin
             for (uint16_t x = 0; x < frame.width; ++x) {
                 if (frame.coverage[std::size_t{y} * frame.width + x] == 0)
                     continue;
-                const int64_t column = int64_t{sprite.screen.x} - frame.origin_x + x;
-                const int64_t row = int64_t{sprite.screen.y} - frame.origin_y + y;
+                const int64_t column = int64_t{sprite.place.x} - frame.origin_x + x;
+                const int64_t row = int64_t{sprite.place.y} - frame.origin_y + y;
                 if (column < 0 || row < 0 || column >= width || row >= height)
                     continue;
                 auto& count = counts
@@ -657,29 +653,20 @@ int most_blend_excess(
     return excess;
 }
 
-/// Adds a sprite draw to a list, placed at a map point drawn at a zoom,
-/// with the camera on map pixel (0, 0).
+/// Adds a sprite draw to a list, placed at a map point, with the camera on
+/// map pixel (0, 0); the zoom the list is drawn at lays it on the scene.
 ///
 /// @param[in,out] list the list
 /// @param frame the frame
-/// @param map_x the point's map pixel column, which the screen point follows at the zoom
+/// @param map_x the point's map pixel column
 /// @param map_y its row
-/// @param zoom scene pixels per map pixel
 /// @param blended whether the planner blends it through the alpha table
 void add_sprite(
-    WorldDrawList& list,
-    const RenderedFrame& frame,
-    int32_t map_x,
-    int32_t map_y,
-    float zoom,
-    bool blended
+    WorldDrawList& list, const RenderedFrame& frame, int32_t map_x, int32_t map_y, bool blended
 ) {
     oa::app::SpriteDraw sprite;
     sprite.frame = &frame;
-    sprite.screen = {
-        static_cast<int32_t>(std::lround(static_cast<double>(map_x) * zoom)),
-        static_cast<int32_t>(std::lround(static_cast<double>(map_y) * zoom))
-    };
+    sprite.place = {map_x, map_y};
     list.sprites.push_back(sprite);
     oa::app::add_world_draw(
         list,
@@ -746,15 +733,15 @@ WorldDrawList synthetic_scene(
     const Frames& frames, const oa::PaletteBytes& palette, float zoom, int32_t width, int32_t height
 ) {
     WorldDrawList list;
-    add_sprite(list, frames.colour_block, 30, 20, zoom, false);
-    add_sprite(list, frames.grey_block, 24, 60, zoom, true);
-    add_sprite(list, frames.gradient, 100, 30, zoom, false);
+    add_sprite(list, frames.colour_block, 30, 20, false);
+    add_sprite(list, frames.grey_block, 24, 60, true);
+    add_sprite(list, frames.gradient, 100, 30, false);
     // Over an opaque grey, blended; then an opaque ring over the blend.
-    add_sprite(list, frames.grey_block, 70, 90, zoom, false);
-    add_sprite(list, frames.pale_block, 66, 88, zoom, true);
-    add_sprite(list, frames.ring, 72, 92, zoom, false);
+    add_sprite(list, frames.grey_block, 70, 90, false);
+    add_sprite(list, frames.pale_block, 66, 88, true);
+    add_sprite(list, frames.ring, 72, 92, false);
     oa::app::add_world_draw(list, WorldDrawKind::commit, 0);
-    add_sprite(list, frames.bright_ring, 120, 80, zoom, true);
+    add_sprite(list, frames.bright_ring, 120, 80, true);
     const auto side = static_cast<int32_t>(std::lround(2.0 * zoom));
     add_square(
         list,
@@ -775,10 +762,10 @@ WorldDrawList synthetic_scene(
         height
     );
     add_square(list, width - 1, height - 1, side, entry_colour(palette, 220), width, height);
-    add_sprite(list, frames.tiny, 0, 0, zoom, false);
-    add_sprite(list, frames.colour_block, -2, 110, zoom, false);
-    add_sprite(list, frames.tall, 158, -6, zoom, false);
-    add_sprite(list, frames.colour_block, 150, 115, zoom, false);
+    add_sprite(list, frames.tiny, 0, 0, false);
+    add_sprite(list, frames.colour_block, -2, 110, false);
+    add_sprite(list, frames.tall, 158, -6, false);
+    add_sprite(list, frames.colour_block, 150, 115, false);
     return list;
 }
 
@@ -908,11 +895,11 @@ void test_features_on_the_map(float zoom) {
     WorldDrawList list;
     list.shown_map_width = map_width;
     list.shown_map_height = map_height;
-    add_sprite(list, feature, map_width - 4, map_height - 3, zoom, false);
+    add_sprite(list, feature, map_width - 4, map_height - 3, false);
     list.sprites.back().on_map = true;
-    add_sprite(list, feature, map_width + 30, 20, zoom, false);
+    add_sprite(list, feature, map_width + 30, 20, false);
     list.sprites.back().on_map = true;
-    add_sprite(list, other, 30, map_height, zoom, false);
+    add_sprite(list, other, 30, map_height, false);
     model_render::ModelDisplay display;
     model_render::build_model_display(display, oa::present::palette_from_bytes(palette));
     const Picture background =
@@ -980,11 +967,11 @@ void test_shadow_sprites() {
     for (const uint32_t level : {model_render::shadow_full_level, 32U, 16U, 0U}) {
         WorldDrawList list;
         list.shadow_level = level;
-        add_sprite(list, frames.colour_block, 30, 20, 1.0F, false);
+        add_sprite(list, frames.colour_block, 30, 20, false);
         list.sprites.back().shadow = true;
-        add_sprite(list, frames.grey_block, 24, 60, 1.0F, true);
+        add_sprite(list, frames.grey_block, 24, 60, true);
         list.sprites.back().shadow = true;
-        add_sprite(list, frames.ring, 100, 30, 1.0F, false);
+        add_sprite(list, frames.ring, 100, 30, false);
         const Picture processor = draw_processor(list, palette, display, background, 1.0F);
         CardSide side(
             static_cast<uint32_t>(field_left + field_width + border),
@@ -1275,10 +1262,10 @@ void test_fog_states() {
     const RenderedFrame unmapped_greyed = mapped_frame(unmapped, gray);
     const auto scene = [&](const RenderedFrame& second, const RenderedFrame& third) {
         WorldDrawList list;
-        add_sprite(list, seen, cell + 4, cell + 4, 1.0F, false);
-        add_sprite(list, second, 4, cell + 4, 1.0F, false);
-        add_sprite(list, third, 2 * cell + 4, 2 * cell + 4, 1.0F, false);
-        add_sprite(list, off_grid, cells * cell + 2, cell + 4, 1.0F, false);
+        add_sprite(list, seen, cell + 4, cell + 4, false);
+        add_sprite(list, second, 4, cell + 4, false);
+        add_sprite(list, third, 2 * cell + 4, 2 * cell + 4, false);
+        add_sprite(list, off_grid, cells * cell + 2, cell + 4, false);
         return list;
     };
     const WorldDrawList list = scene(unseen, unmapped);
@@ -1334,7 +1321,7 @@ void test_pages_overflow() {
         frames.push_back(block_frame(20, 20, 0, 0, static_cast<uint8_t>(64 + index * 9)));
     WorldDrawList list;
     for (std::size_t index = 0; index < frames.size(); ++index)
-        add_sprite(list, frames[index], static_cast<int32_t>(index * 25), 10, 1.0F, false);
+        add_sprite(list, frames[index], static_cast<int32_t>(index * 25), 10, false);
     const Picture background = grey_background(palette, field_width, field_height);
     // One page of 64 texels a side holds four cells of 24; five frames need
     // a second page the limit refuses.
@@ -1380,11 +1367,11 @@ void test_refusals() {
     malformed.pixels.pop_back();
     const RenderedFrame empty = block_frame(0, 0, 0, 0, 70);
     WorldDrawList list;
-    add_sprite(list, good, 10, 10, 1.0F, false);
-    add_sprite(list, malformed, 30, 10, 1.0F, false);
-    add_sprite(list, empty, 50, 10, 1.0F, false);
+    add_sprite(list, good, 10, 10, false);
+    add_sprite(list, malformed, 30, 10, false);
+    add_sprite(list, empty, 50, 10, false);
     oa::app::SpriteDraw no_frame;
-    no_frame.screen = {70, 10};
+    no_frame.place = {70, 10};
     list.sprites.push_back(no_frame);
     oa::app::add_world_draw(list, WorldDrawKind::sprite, list.sprites.size() - 1);
     list.squares.push_back({10, 50, 10, 60, {}});
@@ -1500,8 +1487,8 @@ Picture draw_reference(
                 const std::size_t offset = std::size_t{y} * frame.width + x;
                 if (frame.coverage[offset] == 0)
                     continue;
-                const int64_t column = int64_t{sprite.screen.x} - frame.origin_x + x;
-                const int64_t row = int64_t{sprite.screen.y} - frame.origin_y + y;
+                const int64_t column = int64_t{sprite.place.x} - frame.origin_x + x;
+                const int64_t row = int64_t{sprite.place.y} - frame.origin_y + y;
                 if (column < 0 || row < 0 || column >= picture.width || row >= picture.height)
                     continue;
                 const auto colour = entry_colour(palette, frame.pixels[offset]);
@@ -1578,7 +1565,7 @@ void test_installed_scene(const oa::AssetStore& assets) {
         const auto& frame = frames[stream.next() % frames.size()];
         const int32_t x = static_cast<int32_t>(stream.next() % (data_field_width + 40)) - 20;
         const int32_t y = static_cast<int32_t>(stream.next() % (data_field_height + 40)) - 20;
-        add_sprite(list, frame, x, y, 1.0F, index % data_blend_every == 0);
+        add_sprite(list, frame, x, y, index % data_blend_every == 0);
     }
     Picture background(data_field_width, data_field_height, {});
     for (uint32_t y = 0; y < background.height; ++y)

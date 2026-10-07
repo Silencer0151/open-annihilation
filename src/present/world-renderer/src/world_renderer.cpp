@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "oa/present/world_renderer.hpp"
+#include "oa/present/scene_grid.hpp"
 
 #include <algorithm>
 #include <array>
@@ -239,9 +240,8 @@ std::optional<Error> fill_scaled_viewport(
             ErrorCode::invalid_map_model, "TNT arrays do not match the declared tile grid"
         };
     }
-    auto scale_fp = static_cast<uint32_t>(std::lround(static_cast<double>(scale) * fixed_one));
-    if (scale_fp == 0)
-        scale_fp = 1;
+    // The step every scene of the battlefield lays the map's pixels with.
+    const uint32_t scale_fp = scene_step(scale);
     std::array<uint8_t, 256U * 3U> lut{};
     for (std::size_t index = 0; index < 256U; ++index)
         std::memcpy(&lut[index * 3U], &game_palette[index * palette_entry_bytes], 3U);
@@ -284,20 +284,13 @@ std::optional<Error> fill_scaled_viewport(
 }
 
 ShownSpan shown_map_span(int32_t source, uint32_t shown, float scale) noexcept {
-    if (scale <= 0.0F)
-        scale = 1.0F;
-    auto scale_fp = static_cast<int64_t>(std::lround(static_cast<double>(scale) * fixed_one));
-    if (scale_fp == 0)
-        scale_fp = 1;
-    // The first pixel whose sample lies at or past a map pixel:
-    // floor(d * 65536 / scale_fp) >= m - source holds from
-    // d = ceil((m - source) * scale_fp / 65536).
+    // The fill's step, and the first pixel that shows each end of the map.
+    const uint32_t step = scene_step(scale);
     const auto first_at = [&](int64_t map_pixel) {
-        const int64_t scaled = (map_pixel - source) * scale_fp;
-        const int64_t whole = scaled / int64_t{fixed_one};
-        const int64_t rounded_up = whole + (scaled % int64_t{fixed_one} > 0 ? 1 : 0);
         return static_cast<int32_t>(std::clamp<int64_t>(
-            rounded_up, std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::max()
+            first_scene_pixel(map_pixel - source, step),
+            std::numeric_limits<int32_t>::min(),
+            std::numeric_limits<int32_t>::max()
         ));
     };
     return {first_at(0), first_at(static_cast<int64_t>(shown))};

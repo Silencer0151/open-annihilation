@@ -18,6 +18,7 @@
 #include "oa/present/display.hpp"
 #include "oa/present/palette_tables.hpp"
 #include "oa/present/raster.hpp"
+#include "oa/present/scene_grid.hpp"
 #include "oa/ui/console/game_fields.hpp"
 #include "oa/ui/hud/health_bar.hpp"
 #include "oa/ui/hud/shared_views.hpp"
@@ -1076,10 +1077,6 @@ void Runtime::render_match_surface() {
     scene_view.height = static_cast<uint32_t>(scene_h);
     scene_view.surface_width = static_cast<uint32_t>(scene_w);
     scene_view.surface_height = static_cast<uint32_t>(scene_h);
-    const auto drawn_at = [&](const oa::present::world_renderer::ScreenPoint& culled,
-                              const std::array<uint32_t, 3>& position) {
-        return scaling.apart ? project_match_point(scene_view, position) : culled;
-    };
     world_pixel_clip_ = {0, 0, scene_w, scene_h};
     oa::present::world_renderer::Surface world_surface{
         scene_layer.width, scene_layer.height, std::move(scene_layer.rgb)
@@ -1380,7 +1377,7 @@ void Runtime::render_match_surface() {
     };
     const auto plan_sprite_feature = [&](const MatchGafFeatureDraw& feature,
                                          const oa::present::model::FeatureDraw& plan,
-                                         const oa::present::world_renderer::ScreenPoint& screen) {
+                                         const oa::present::world_renderer::ScreenPoint& place) {
         plan_commit();
         const auto* plot = oa::world_plot(&world_record, feature.cell_x, feature.cell_z);
         const auto* record =
@@ -1409,7 +1406,7 @@ void Runtime::render_match_surface() {
             }
             if (image == nullptr)
                 continue;
-            draw_list.sprites.push_back({image, screen, sprite.shadow, true});
+            draw_list.sprites.push_back({image, place, sprite.shadow, true});
             add_draw(
                 sprite.translucent ? WorldDrawKind::blended_sprite : WorldDrawKind::sprite,
                 draw_list.sprites.size() - 1
@@ -1671,8 +1668,9 @@ void Runtime::render_match_surface() {
         } catch (const std::exception&) {
             return;
         }
-        // Part of the way through the ticks' steps, on the scene.
-        const auto screen = project_world_point(
+        // Part of the way through the ticks' steps, on the scene's map
+        // pixels.
+        const auto place = place_world_point(
             scene_view,
             oa::sim::match_runtime::fixed_words(point_along_step(
                 item.position, item.motion, presentation.batch, presentation.fraction
@@ -1684,20 +1682,24 @@ void Runtime::render_match_surface() {
             const std::array<uint8_t, 3> color{
                 match_palette_[pal], match_palette_[pal + 1], match_palette_[pal + 2]
             };
-            const auto side = oa::present::world_renderer::screen_span(
-                scene_view, oa::sim::effect_particles::pixel_item_side
-            );
-            // The square, its top left corner at the point, clipped to the
-            // frame before it is filled.
+            // The square covers the scene pixels of its map pixels, from
+            // its top left corner at the point, and one at least; clipped to
+            // the frame before it is filled.
+            const uint32_t step = oa::present::scene_step(scene_view.scale);
+            const auto span = [step](int32_t from) {
+                const int64_t first = oa::present::first_scene_pixel(from, step);
+                const int64_t end = oa::present::first_scene_pixel(
+                    int64_t{from} + oa::sim::effect_particles::pixel_item_side, step
+                );
+                return std::pair<int64_t, int64_t>{first, std::max(end, first + 1)};
+            };
+            const auto [left, right] = span(place.x);
+            const auto [top, bottom] = span(place.y);
             draw_list.squares.push_back(
-                {static_cast<int32_t>(std::max<int64_t>(screen.x, 0)),
-                 static_cast<int32_t>(std::max<int64_t>(screen.y, 0)),
-                 static_cast<int32_t>(
-                     std::min<int64_t>(int64_t{screen.x} + side, world_surface.width)
-                 ),
-                 static_cast<int32_t>(
-                     std::min<int64_t>(int64_t{screen.y} + side, world_surface.height)
-                 ),
+                {static_cast<int32_t>(std::clamp<int64_t>(left, 0, world_surface.width)),
+                 static_cast<int32_t>(std::clamp<int64_t>(top, 0, world_surface.height)),
+                 static_cast<int32_t>(std::clamp<int64_t>(right, 0, world_surface.width)),
+                 static_cast<int32_t>(std::clamp<int64_t>(bottom, 0, world_surface.height)),
                  color}
             );
             add_draw(WorldDrawKind::pixel_square, draw_list.squares.size() - 1);
@@ -1712,7 +1714,7 @@ void Runtime::render_match_surface() {
             effect_frame(draw_list, *item.sequence, static_cast<std::size_t>(item.frame));
         if (decoded == nullptr)
             return;
-        draw_list.sprites.push_back({decoded, screen});
+        draw_list.sprites.push_back({decoded, place});
         add_draw(
             flash ? WorldDrawKind::lit_sprite : WorldDrawKind::sprite, draw_list.sprites.size() - 1
         );
@@ -1732,7 +1734,9 @@ void Runtime::render_match_surface() {
         MatchFeatureDraw* object{};
         const MatchGafFeatureDraw* sprite{};
         oa::present::model::FeatureDraw plan{};
-        oa::present::world_renderer::ScreenPoint screen{};
+        /// Where a sprite feature stands on the scene's map pixels
+        /// (place_world_point).
+        oa::present::world_renderer::ScreenPoint place{};
     };
 
     const auto feature_height = [&](uint16_t feature_index) -> int8_t {
@@ -1754,13 +1758,13 @@ void Runtime::render_match_surface() {
         if (!on_battlefield(feature_screen.x, feature_screen.y) ||
             feature_hidden_by_fog(feature.feature_index, feature.cell_x, feature.cell_z))
             continue;
-        features_to_draw.push_back({&feature, nullptr, {}, feature_screen});
+        features_to_draw.push_back({&feature, nullptr, {}, {}});
         feature_sites.push_back(
             {feature.cell_x, feature.cell_z, feature_height(feature.feature_index)}
         );
     }
-    // A sprite feature is culled on the battlefield and drawn where it falls
-    // on the scene.
+    // A sprite feature is culled on the battlefield and drawn over the map
+    // pixels it stands on, as the scene lays them at its scale.
     for (const auto& feature : match_gaf_features_) {
         const std::array<uint32_t, 3> position{
             static_cast<uint32_t>(feature.position.x),
@@ -1775,7 +1779,9 @@ void Runtime::render_match_surface() {
             oa::present::model::plan_feature_draw(world_record, feature.cell_x, feature.cell_z);
         if (plan.object)
             continue;
-        features_to_draw.push_back({nullptr, &feature, plan, drawn_at(screen, position)});
+        features_to_draw.push_back(
+            {nullptr, &feature, plan, place_world_point(scene_view, position, HeightLift::nearest)}
+        );
         feature_sites.push_back(
             {feature.cell_x, feature.cell_z, feature_height(feature.feature_index)}
         );
@@ -1815,7 +1821,7 @@ void Runtime::render_match_surface() {
         if (feature.object != nullptr)
             plan_object_feature(*feature.object);
         else
-            plan_sprite_feature(*feature.sprite, feature.plan, feature.screen);
+            plan_sprite_feature(*feature.sprite, feature.plan, feature.place);
     };
     // The battlefield draws far to near: effect layers 0 to 2 (wakes among
     // them), the lying features, layers 3 and 4, then row by row the ground

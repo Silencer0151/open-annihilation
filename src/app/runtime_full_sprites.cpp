@@ -425,15 +425,10 @@ struct SpriteFrame::Impl {
         }
         const SceneView& view = inputs.view;
         // The fog's state where the sprite is drawn: the map pixel under
-        // its screen point, as the fog lays its tiles by map column and row
-        // alone, whatever height the point was lifted by.
-        const CellFog fog = cell_fog(
-            inputs.sight,
-            view.camera_x +
-                static_cast<int32_t>(std::floor(static_cast<float>(sprite.screen.x) / zoom)),
-            view.camera_y +
-                static_cast<int32_t>(std::floor(static_cast<float>(sprite.screen.y) / zoom))
-        );
+        // its place, as the fog lays its tiles by map column and row alone,
+        // whatever height the point was lifted by.
+        const CellFog fog =
+            cell_fog(inputs.sight, view.camera_x + sprite.place.x, view.camera_y + sprite.place.y);
         const bool greyed = fog == CellFog::unseen && greys && !inputs.sight.dithered;
         const auto mode = greyed ? gpu::DrawMode::greyed : gpu::DrawMode::opaque;
         const uint64_t key = frame_key(sprite.frame, decoded_from);
@@ -450,10 +445,10 @@ struct SpriteFrame::Impl {
         placed.push_back({key, mode, found.record});
         const auto size = static_cast<float>(pages.pages()[found.record.page].size);
         const gpu::TexelRect& rect = found.record.rect;
-        const float left =
-            static_cast<float>(sprite.screen.x) - static_cast<float>(sprite.frame->origin_x) * zoom;
-        const float top =
-            static_cast<float>(sprite.screen.y) - static_cast<float>(sprite.frame->origin_y) * zoom;
+        // The frame lies over the map pixels from its place less its
+        // origin, where the terrain draws them at the zoom.
+        const float left = static_cast<float>(sprite.place.x - sprite.frame->origin_x) * zoom;
+        const float top = static_cast<float>(sprite.place.y - sprite.frame->origin_y) * zoom;
         // A feature's shadow frame draws as dark as the list's shadow
         // level: under the premultiplied blend, a vertex colour and alpha of
         // the level's strength mix that much of the frame (or of its blend)
@@ -507,10 +502,10 @@ struct SpriteFrame::Impl {
         const SceneView& view = inputs.view;
         const auto size = static_cast<float>(pages.pages()[found.record.page].size);
         const gpu::TexelRect& rect = found.record.rect;
-        const float left =
-            static_cast<float>(sprite.screen.x) - static_cast<float>(sprite.frame->origin_x) * zoom;
-        const float top =
-            static_cast<float>(sprite.screen.y) - static_cast<float>(sprite.frame->origin_y) * zoom;
+        // The frame lies over the map pixels from its place less its
+        // origin, where the terrain draws them at the zoom.
+        const float left = static_cast<float>(sprite.place.x - sprite.frame->origin_x) * zoom;
+        const float top = static_cast<float>(sprite.place.y - sprite.frame->origin_y) * zoom;
         const float light =
             inputs.list->flash_strength == FlashStrength::reduced ? reduced_flash_light : 1.0F;
         emitter.quad(

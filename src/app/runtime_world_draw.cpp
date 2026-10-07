@@ -369,12 +369,15 @@ void Runtime::plan_match_projectiles(
         draws.lines.push_back({x0, y0, x1, y1, color, 0});
         add_world_draw(draws, WorldDrawKind::line, draws.lines.size() - 1);
     };
+    // A sprite stands over the map pixels of its point at any scale.
     const auto sprite = [&](const oa::formats::gaf::Frame& frame,
-                            const oa::present::world_renderer::ScreenPoint& screen) {
+                            const std::array<uint32_t, 3>& position) {
         const auto* decoded = decoded_frame(draws, frame);
         if (decoded == nullptr)
             return;
-        draws.sprites.push_back({decoded, screen});
+        draws.sprites.push_back(
+            {decoded, place_world_point(viewport, position, HeightLift::nearest)}
+        );
         add_world_draw(draws, WorldDrawKind::sprite, draws.sprites.size() - 1);
     };
     ensure_ui_colors();
@@ -447,7 +450,7 @@ void Runtime::plan_match_projectiles(
             if (sequence == nullptr || sequence->frames.empty())
                 break;
             const auto frame = (now - shot.burst_tick) % sequence->frames.size();
-            sprite(sequence->frames[frame], project_match_point(viewport, shot_position));
+            sprite(sequence->frames[frame], shot_position);
             break;
         }
         case ProjectileRender::flame: {
@@ -460,10 +463,7 @@ void Runtime::plan_match_projectiles(
             const auto frame = count - remaining * count / weapon->weapontimer_ticks;
             if (frame < 0 || frame >= count)
                 break;
-            sprite(
-                sequence->frames[static_cast<std::size_t>(frame)],
-                project_match_point(viewport, shot_position)
-            );
+            sprite(sequence->frames[static_cast<std::size_t>(frame)], shot_position);
             break;
         }
         case ProjectileRender::lightning: {

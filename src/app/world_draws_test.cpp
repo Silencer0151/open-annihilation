@@ -11,10 +11,14 @@
 // own pixels, as the game always draws them. A feature's shadow frame,
 // drawn or blended, mixes from the ground toward the game's shadow by the
 // frame's shadow level and is not drawn at level 0; a frame's shadows are
-// set from its zoom (set_frame_shadows). An explosion's flash lights the
-// palette entry under each of its pixels through the light table's row the
-// pixel names, a second flash lighting what the first lit, at half the row
-// when reduced, the same on 1 to 8 bands. A projectile's lens moves exactly
+// set from its zoom (set_frame_shadows). A sprite stays over the ground it
+// stands on through every frame of a zoom's ease from 0.25 to 3 and while a
+// camera follows it a map pixel a frame zoomed far out: drawn at the zoom,
+// it is the ground with it drawn on at zoom 1, resampled as the terrain is.
+// An explosion's flash lights the palette entry under each of its pixels
+// through the light table's row the pixel names, a second flash lighting
+// what the first lit, at half the row when reduced, the same on 1 to 8
+// bands. A projectile's lens moves exactly
 // the 24 pixels its rule names, as the 8-bit lens sprite does, whole blocks
 // at scales 2 and 3, within the clip, a second lens reading the first's
 // pixels; its battlefield test takes the rectangle's edges and the height's
@@ -31,6 +35,7 @@
 #include "oa/present/palette_tables.hpp"
 #include "oa/present/rle.hpp"
 #include "oa/present/surface.hpp"
+#include "oa/present/world_renderer/scene_filter.hpp"
 #include "oa/test/check.hpp"
 
 #include <algorithm>
@@ -339,6 +344,167 @@ void test_feature_shadows() {
         OA_CHECK(draw_square(palette, kind, true, 0) == ground_frame(palette));
         OA_CHECK(draw_square(palette, kind, false, 0) == plain);
     }
+}
+
+/// The map a sprite stands on in test_sprites_stay_on_their_ground, in map
+/// pixels, and the place of the sprite's origin on it.
+constexpr int32_t ground_map_width = 1200;
+constexpr int32_t ground_map_height = 400;
+constexpr oa::present::world_renderer::ScreenPoint ground_sprite_place{243, 93};
+/// The scene the sprite is drawn on, in scene pixels.
+constexpr uint32_t ground_scene_width = 120;
+constexpr uint32_t ground_scene_height = 40;
+/// The zoom the wheel's ease starts at, the share it grows by each frame,
+/// and the zoom it stops past.
+constexpr double ease_first_zoom = 0.25;
+constexpr double ease_growth = 1.06;
+constexpr double ease_last_zoom = 3.0;
+/// The camera's corner while the zoom eases, in map pixels.
+constexpr int32_t ease_camera_x = 200;
+constexpr int32_t ease_camera_y = 70;
+/// The far zooms a camera follows the sprite at, a map pixel a frame, and
+/// the frames it follows it for.
+constexpr std::array<float, 2> follow_zooms{0.2F, 0.37F};
+constexpr int32_t follow_frames = 40;
+/// Seed of the map's and the sprite's pixels.
+constexpr uint32_t ground_seed = 0x6A09E667U;
+
+/// Returns the next number of a 32-bit xorshift sequence.
+///
+/// @param[in,out] state the sequence
+/// @return 32 bits
+uint32_t next_random(uint32_t& state) {
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+    return state;
+}
+
+/// The ground and the sprite the drawings in test_sprites_stay_on_their_ground share.
+struct GroundScene {
+    std::vector<uint8_t> map;                 ///< the ground, RGB, a map pixel a pixel
+    std::vector<uint8_t> composite;           ///< the ground with the sprite drawn on it at zoom 1
+    oa::formats::gaf::RenderedFrame sprite{}; ///< the sprite, some of its pixels transparent
+    oa::PaletteBytes palette{};
+};
+
+/// Returns a whole-frame target over RGB pixels.
+///
+/// @param rgb the pixels
+/// @param width their columns
+/// @param height their rows
+/// @return the target
+oa::app::WorldTarget whole_target(std::vector<uint8_t>& rgb, int32_t width, int32_t height) {
+    return {rgb.data(), width, height, 0, 0, width, height, 0, height};
+}
+
+/// Builds the seeded ground, the sprite and the ground with the sprite drawn
+/// on it at zoom 1.
+///
+/// @return the scene
+GroundScene ground_scene() {
+    GroundScene scene;
+    scene.palette = test_palette();
+    uint32_t state = ground_seed;
+    scene.map.resize(std::size_t{ground_map_width} * ground_map_height * 3U);
+    for (auto& byte : scene.map)
+        byte = static_cast<uint8_t>(next_random(state) >> 24);
+    auto& sprite = scene.sprite;
+    sprite.width = 23;
+    sprite.height = 17;
+    sprite.origin_x = 11;
+    sprite.origin_y = 14;
+    for (int32_t pixel = 0; pixel < sprite.width * sprite.height; ++pixel) {
+        const uint32_t random = next_random(state);
+        sprite.pixels.push_back(static_cast<uint8_t>(random >> 24));
+        sprite.coverage.push_back((random & 3U) != 0 ? 1 : 0);
+    }
+    scene.composite = scene.map;
+    oa::app::blit_world_sprite(
+        whole_target(scene.composite, ground_map_width, ground_map_height),
+        sprite,
+        ground_sprite_place,
+        scene.palette,
+        1.0F
+    );
+    return scene;
+}
+
+/// Draws the ground's scene from a camera at a zoom: the ground resampled
+/// on the scene grid, with the sprite drawn over it as the battlefield
+/// draws its sprites, or the ground with the sprite already on it resampled
+/// alike.
+///
+/// @param scene the ground and the sprite
+/// @param camera_x the map column at the scene's first pixel
+/// @param camera_y the map row at the scene's first pixel
+/// @param zoom scene pixels per map pixel
+/// @param sprite_drawn whether the sprite is drawn on the scene, or was drawn on the ground
+/// @return the scene's RGB pixels
+std::vector<uint8_t> ground_picture(
+    const GroundScene& scene, int32_t camera_x, int32_t camera_y, float zoom, bool sprite_drawn
+) {
+    namespace wr = oa::present::world_renderer;
+    const auto& ground = sprite_drawn ? scene.map : scene.composite;
+    const wr::RgbSource source{
+        ground.data() + (static_cast<std::size_t>(camera_y) * ground_map_width +
+                         static_cast<std::size_t>(camera_x)) *
+                            3U,
+        static_cast<uint32_t>(ground_map_width - camera_x),
+        static_cast<uint32_t>(ground_map_height - camera_y),
+        static_cast<uint32_t>(ground_map_width)
+    };
+    std::vector<uint8_t> picture(std::size_t{ground_scene_width} * ground_scene_height * 3U, 0);
+    OA_CHECK(
+        wr::resample_nearest_rgb24(
+            source,
+            zoom,
+            {picture.data(), ground_scene_width, ground_scene_height, ground_scene_width}
+        ) == wr::AreaError::none
+    );
+    if (sprite_drawn)
+        oa::app::blit_world_sprite(
+            whole_target(
+                picture,
+                static_cast<int32_t>(ground_scene_width),
+                static_cast<int32_t>(ground_scene_height)
+            ),
+            scene.sprite,
+            {ground_sprite_place.x - camera_x, ground_sprite_place.y - camera_y},
+            scene.palette,
+            zoom
+        );
+    return picture;
+}
+
+/// A sprite stays over the ground it stands on: through every frame of the
+/// wheel's ease from zoom 0.25 to 3, and as a camera follows it a map pixel
+/// a frame at zooms 0.2 and 0.37, the scene with the sprite drawn on it at
+/// the zoom is the scene of the ground with the sprite drawn on it at zoom
+/// 1, byte for byte.
+void test_sprites_stay_on_their_ground() {
+    const GroundScene scene = ground_scene();
+    const auto off_ground = [&](int32_t camera_x, int32_t camera_y, float zoom) {
+        return ground_picture(scene, camera_x, camera_y, zoom, true) !=
+               ground_picture(scene, camera_x, camera_y, zoom, false);
+    };
+    int frames = 0;
+    int moved = 0;
+    for (double zoom = ease_first_zoom; zoom <= ease_last_zoom; zoom *= ease_growth) {
+        ++frames;
+        moved += off_ground(ease_camera_x, ease_camera_y, static_cast<float>(zoom)) ? 1 : 0;
+    }
+    OA_CHECK(frames > 40);
+    OA_CHECK(moved == 0);
+    for (const float zoom : follow_zooms)
+        for (int32_t frame = 0; frame < follow_frames; ++frame) {
+            const bool off =
+                off_ground(ground_sprite_place.x - follow_frames - 30 + frame, ease_camera_y, zoom);
+            OA_CHECK(!off);
+            moved += off ? 1 : 0;
+        }
+    if (moved != 0)
+        std::fprintf(stderr, "a sprite left its ground on %d frames\n", moved);
 }
 
 /// A light table whose every row maps each palette entry to another, a
@@ -1135,6 +1301,7 @@ void test_explosion_record_points() {
 int main() {
     test_thin_lines_in_bands();
     test_feature_shadows();
+    test_sprites_stay_on_their_ground();
     test_frame_shadows();
     test_explosion_flashes();
     test_projectile_lens();

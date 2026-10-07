@@ -4,6 +4,7 @@
 // 8-bit drawing over an RGB frame.
 #include "oa/present/model/rgb_bridge.hpp"
 
+#include "oa/present/scene_grid.hpp"
 #include "oa/present/surface.hpp"
 
 #include <algorithm>
@@ -135,9 +136,23 @@ int32_t rgb_y(const RgbBridge& bridge, int32_t y) noexcept {
            static_cast<int32_t>(std::floor((static_cast<double>(y) + 0.5) * bridge.scale));
 }
 
+// The step the bridge's pixels are written back to the frame with: the
+// scene grid's step of its scale (scene_grid.hpp), which the terrain is
+// filled with, so that an 8-bit pixel lands on the frame pixels of the map
+// pixel it holds.
+uint32_t written_step(const RgbBridge& bridge) noexcept {
+    return scene_step(bridge.scale);
+}
+
 // First RGB column (or row) whose 8-bit source is at or after `index`.
-int32_t rgb_start(int32_t origin, int32_t index, float scale) noexcept {
-    return origin + static_cast<int32_t>(std::ceil(static_cast<double>(index) * scale));
+int32_t rgb_start(int32_t origin, int32_t index, uint32_t step) noexcept {
+    return origin + static_cast<int32_t>(first_scene_pixel(index, step));
+}
+
+// The 8-bit column (or row) a frame column (or row) at `index` is written
+// from, from an origin.
+int32_t written_index(int32_t origin, int32_t index, uint32_t step) noexcept {
+    return static_cast<int32_t>(map_pixel_shown(int64_t{index} - origin, step));
 }
 
 // The frame row an 8-bit row captures from.
@@ -161,8 +176,8 @@ int32_t captured_column(const RgbBridge& bridge, int32_t x) noexcept {
 // The 8-bit row (or column) a frame row (or column) takes its pixel from
 // when written back, as commit_tile maps it, kept within [first, last].
 int32_t
-written_from(int32_t origin, int32_t index, float scale, int32_t first, int32_t last) noexcept {
-    return std::clamp(static_cast<int32_t>((index - origin) / scale), first, last);
+written_from(int32_t origin, int32_t index, uint32_t step, int32_t first, int32_t last) noexcept {
+    return std::clamp(written_index(origin, index, step), first, last);
 }
 
 // Whether `count` bytes all hold `value`.
@@ -393,19 +408,18 @@ void commit_tile(RgbBridge& bridge, const Scope& scope, int32_t tx, int32_t ty) 
     const int32_t y0 = ty * bridge_tile_side;
     const int32_t x1 = std::min(x0 + bridge_tile_side, bridge.surface.width);
     const int32_t y1 = std::min(y0 + bridge_tile_side, bridge.surface.height);
-    const int32_t top = std::max(
-        {rgb_start(bridge.area.y1, y0, bridge.scale), bridge.area.y1, 0, scope.frame_first_row}
-    );
+    const uint32_t step = written_step(bridge);
+    const int32_t top =
+        std::max({rgb_start(bridge.area.y1, y0, step), bridge.area.y1, 0, scope.frame_first_row});
     const int32_t bottom = std::min(
-        {rgb_start(bridge.area.y1, y1, bridge.scale) - 1,
+        {rgb_start(bridge.area.y1, y1, step) - 1,
          bridge.area.y2,
          bridge.frame.height - 1,
          scope.frame_end_row - 1}
     );
-    const int32_t left = std::max({rgb_start(bridge.area.x1, x0, bridge.scale), bridge.area.x1, 0});
-    const int32_t right = std::min(
-        {rgb_start(bridge.area.x1, x1, bridge.scale) - 1, bridge.area.x2, bridge.frame.width - 1}
-    );
+    const int32_t left = std::max({rgb_start(bridge.area.x1, x0, step), bridge.area.x1, 0});
+    const int32_t right =
+        std::min({rgb_start(bridge.area.x1, x1, step) - 1, bridge.area.x2, bridge.frame.width - 1});
     if (left > right)
         return;
     // The 8-bit column each frame column of the tile takes its pixel from.
@@ -413,14 +427,13 @@ void commit_tile(RgbBridge& bridge, const Scope& scope, int32_t tx, int32_t ty) 
     columns.resize(static_cast<std::size_t>(right - left + 1));
     for (int32_t x = left; x <= right; ++x)
         columns[static_cast<std::size_t>(x - left)] =
-            std::min(static_cast<int32_t>((x - bridge.area.x1) / bridge.scale), x1 - 1);
+            std::min(written_index(bridge.area.x1, x, step), x1 - 1);
     // The 8-bit row last read, and whether any of its pixels in the tile
     // differ from the baseline.
     int32_t compared = -1;
     bool changed = false;
     for (int32_t y = top; y <= bottom; ++y) {
-        const int32_t sy =
-            std::min(static_cast<int32_t>((y - bridge.area.y1) / bridge.scale), y1 - 1);
+        const int32_t sy = std::min(written_index(bridge.area.y1, y, step), y1 - 1);
         const auto offset = static_cast<std::ptrdiff_t>(sy) * bridge.surface.pitch;
         if (sy != compared) {
             compared = sy;
@@ -637,21 +650,18 @@ void end_sampled_region(
     if (region.x1 > region.x2 || region.y1 > region.y2)
         return;
     const uint32_t all = sampled.factor * sampled.factor;
-    const int32_t top = std::max(
-        {rgb_start(bridge.area.y1, region.y1, bridge.scale), bridge.area.y1, 0, frame_first_row}
-    );
+    const uint32_t step = written_step(bridge);
+    const int32_t top =
+        std::max({rgb_start(bridge.area.y1, region.y1, step), bridge.area.y1, 0, frame_first_row});
     const int32_t bottom = std::min(
-        {rgb_start(bridge.area.y1, region.y2 + 1, bridge.scale) - 1,
+        {rgb_start(bridge.area.y1, region.y2 + 1, step) - 1,
          bridge.area.y2,
          bridge.frame.height - 1,
          frame_end_row - 1}
     );
-    const int32_t left =
-        std::max({rgb_start(bridge.area.x1, region.x1, bridge.scale), bridge.area.x1, 0});
+    const int32_t left = std::max({rgb_start(bridge.area.x1, region.x1, step), bridge.area.x1, 0});
     const int32_t right = std::min(
-        {rgb_start(bridge.area.x1, region.x2 + 1, bridge.scale) - 1,
-         bridge.area.x2,
-         bridge.frame.width - 1}
+        {rgb_start(bridge.area.x1, region.x2 + 1, step) - 1, bridge.area.x2, bridge.frame.width - 1}
     );
     if (top > bottom || left > right)
         return;
@@ -660,12 +670,12 @@ void end_sampled_region(
     columns.resize(static_cast<std::size_t>(right - left + 1));
     for (int32_t x = left; x <= right; ++x)
         columns[static_cast<std::size_t>(x - left)] =
-            written_from(bridge.area.x1, x, bridge.scale, region.x1, region.x2) - region.x1;
+            written_from(bridge.area.x1, x, step, region.x1, region.x2) - region.x1;
     sums.resize(static_cast<std::size_t>(region.x2 - region.x1 + 1) * 4);
     int32_t summed = region.y1 - 1;
     bool drawn = false;
     for (int32_t y = top; y <= bottom; ++y) {
-        const int32_t row = written_from(bridge.area.y1, y, bridge.scale, region.y1, region.y2);
+        const int32_t row = written_from(bridge.area.y1, y, step, region.y1, region.y2);
         if (row != summed) {
             drawn = sum_drawn_samples(bridge, sampled, row, sums);
             summed = row;
@@ -695,16 +705,15 @@ void end_sampled_region(
 // and are written to that frame row or below. `row` is a whole number of
 // tiles down, inside the surface.
 bool splits_at(const RgbBridge& bridge, int32_t row) noexcept {
-    const int32_t frame_row = rgb_start(bridge.area.y1, row, bridge.scale);
+    const uint32_t step = written_step(bridge);
+    const int32_t frame_row = rgb_start(bridge.area.y1, row, step);
     if (frame_row <= std::max(bridge.area.y1, 0) ||
         frame_row > std::min(bridge.area.y2, bridge.frame.height - 1))
         return false;
     // The rows each side capture from (captured_row), and the rows the frame
     // rows each side are written from, as commit_tile and written_from work
     // them out.
-    const auto written = [&](int32_t y) {
-        return static_cast<int32_t>((y - bridge.area.y1) / bridge.scale);
-    };
+    const auto written = [&](int32_t y) { return written_index(bridge.area.y1, y, step); };
     return captured_row(bridge, row - 1) < frame_row && captured_row(bridge, row) >= frame_row &&
            written(frame_row) >= row && written(frame_row - 1) < row;
 }
@@ -758,10 +767,19 @@ void bridge_begin(
                 bridge_index(bridge, entry.r, entry.g, entry.b);
         }
     }
-    const int32_t width =
-        std::max(0, static_cast<int32_t>(std::ceil((area.x2 - area.x1 + 1) / bridge.scale)));
-    const int32_t height =
-        std::max(0, static_cast<int32_t>(std::ceil((area.y2 - area.y1 + 1) / bridge.scale)));
+    // The 8-bit view holds every map pixel a frame pixel of the rectangle
+    // shows when written back.
+    const uint32_t step = written_step(bridge);
+    const auto covered = [&](int32_t pixels) {
+        if (pixels <= 0)
+            return 0;
+        return std::max(
+            static_cast<int32_t>(std::ceil(pixels / bridge.scale)),
+            static_cast<int32_t>(map_pixel_shown(pixels - 1, step) + 1)
+        );
+    };
+    const int32_t width = covered(area.x2 - area.x1 + 1);
+    const int32_t height = covered(area.y2 - area.y1 + 1);
     const auto size = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
     if (bridge.pixels.size() < size + 1) {
         bridge.pixels.resize(size + 1);
@@ -830,9 +848,9 @@ int32_t bridge_split(RgbBridge& bridge, int32_t count, std::vector<BridgeBand>& 
         band.end_row =
             index + 1 < made ? starts[static_cast<std::size_t>(index) + 1] : bridge.surface.height;
         band.frame_first_row =
-            index == 0 ? 0 : rgb_start(bridge.area.y1, band.first_row, bridge.scale);
+            index == 0 ? 0 : rgb_start(bridge.area.y1, band.first_row, written_step(bridge));
         band.frame_end_row = index + 1 < made
-                                 ? rgb_start(bridge.area.y1, band.end_row, bridge.scale)
+                                 ? rgb_start(bridge.area.y1, band.end_row, written_step(bridge))
                                  : bridge.frame.height;
         band.surface = bridge.surface;
         present::set_surface_band(band.surface, band.first_row, band.end_row);
