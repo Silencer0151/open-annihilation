@@ -488,9 +488,11 @@ void check_json() {
     OA_CHECK(!parse("9223372036854775808")->integer().has_value());
     OA_CHECK(parse("[]")->type() == automation::JsonType::array);
     OA_CHECK(*parse(R"("é😀\/")")->string() == "\xC3\xA9\xF0\x9F\x98\x80/");
-    // Half a surrogate pair stands for U+FFFD.
-    OA_CHECK(*parse(R"("\ud800x")")->string() == "\xEF\xBF\xBDx");
-    OA_CHECK(*parse(R"("\udc00")")->string() == "\xEF\xBF\xBD");
+    // Half a surrogate pair stands for U+FFFD. The escapes are spelled with
+    // a doubled backslash, not in raw strings, which some compilers read
+    // as invalid characters of the source.
+    OA_CHECK(*parse("\"\\ud800x\"")->string() == "\xEF\xBF\xBDx");
+    OA_CHECK(*parse("\"\\udc00\"")->string() == "\xEF\xBF\xBD");
     // Nested 64 deep is taken; 65 is refused.
     OA_CHECK(parse(std::string(64, '[') + std::string(64, ']')).has_value());
     OA_CHECK(!parse(std::string(65, '[') + std::string(65, ']')).has_value());
