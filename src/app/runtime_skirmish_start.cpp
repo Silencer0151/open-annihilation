@@ -1254,7 +1254,9 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         campaign_mission_,
         bootstrap.multiplayer
     );
-    for (std::size_t player = 0; player < skirmish_settings_.slots.size(); ++player) {
+    // Only the ten players have alliances; the eleventh slot record has no
+    // player, even when a restored or received block enables it.
+    for (std::size_t player = 0; player < std::size(match_->state().game.players); ++player) {
         const auto& owner = skirmish_settings_.slots[player];
         if (owner.controller == entry::controller::disabled)
             continue;
