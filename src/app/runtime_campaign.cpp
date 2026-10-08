@@ -667,7 +667,8 @@ void Runtime::spawn_campaign_units() {
     for (const auto& slot : match_->world().slots)
         if (slot.unit_index != 0 && slot.record.type_index != 0)
             ++placed;
-    for (std::size_t player = 0; player < skirmish_settings_.slots.size(); ++player) {
+    // The eleventh slot record has no player to take its side.
+    for (std::size_t player = 0; player < match_->world().players.size(); ++player) {
         const auto& setup = skirmish_settings_.slots[player];
         if (setup.controller != entry::controller::disabled)
             match_->world().players[player].setup_side = static_cast<uint8_t>(setup.side);

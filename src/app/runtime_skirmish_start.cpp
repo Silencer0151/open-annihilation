@@ -1229,7 +1229,9 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         if (controller != entry::controller::disabled && controller != entry::controller::human &&
             controller != entry::controller::computer)
             throw std::runtime_error("skirmish player has invalid controller state");
-        if (bootstrap.seat_roster)
+        // The settings block's eleventh slot record has no player of the
+        // ten to describe.
+        if (bootstrap.seat_roster || player >= match_->simulation().players.size())
             continue;
         auto& simulation_player = match_->simulation().players[player];
         simulation_player.present = controller != entry::controller::disabled;
@@ -1252,7 +1254,9 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         campaign_mission_,
         bootstrap.multiplayer
     );
-    for (std::size_t player = 0; player < skirmish_settings_.slots.size(); ++player) {
+    // Only the ten players have alliances; the eleventh slot record has no
+    // player, even when a restored or received block enables it.
+    for (std::size_t player = 0; player < std::size(match_->state().game.players); ++player) {
         const auto& owner = skirmish_settings_.slots[player];
         if (owner.controller == entry::controller::disabled)
             continue;
