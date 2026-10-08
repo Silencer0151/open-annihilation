@@ -1,11 +1,16 @@
 # Contributors
 
-## People
+## Maintainers
 
 - **Steve Gray**: creator and maintainer
 
-Contributions are welcome once the source code is published. Everyone taking
-part is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+## Contributors
+
+- [Zane van Iperen](https://github.com/vs49688)
+- [mderryberry](https://github.com/Silencer0151)
+
+Contributions are welcome. Everyone taking part is expected to follow the
+[Code of Conduct](CODE_OF_CONDUCT.md).
 
 Contributions are accepted under the GNU General Public License version 3
 only, the project's licence, and their authors keep the copyright in them.
