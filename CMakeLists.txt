@@ -2664,7 +2664,10 @@ endif()
 # its OA_GAME_FILES_DIR, the bundle's Resources on macOS, and follow
 # whatever the extensions add there (their GAME_FILES, which the script
 # cmake/OaExtensions.cmake writes runs). The executables may share a
-# directory, so the copies take turns on one lock.
+# directory, so the copies take turns on one lock. An executable copies them
+# when it links, and a change to the notices alone links it again (in Ninja
+# and Makefile builds), so a build tree never keeps older notices than its
+# sources.
 # The fonts travel with the game in the fonts folder of its
 # OA_GAME_FILES_DIR, where oa::platform::text_font::bundled_font_directory()
 # finds them (cmake/OaTextFonts.cmake).
@@ -2674,10 +2677,14 @@ if(TARGET oa-game)
   # reads them beside the interface catalogue files.
   oa_copy_language_packs(oa-game "$<GENEX_EVAL:$<TARGET_PROPERTY:oa-game,OA_GAME_FILES_DIR>>")
 endif()
+file(GLOB oa_notice_licenses CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/licenses/*")
+set(oa_notice_files "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE" "${CMAKE_CURRENT_SOURCE_DIR}/ATTRIBUTIONS.md"
+  ${oa_notice_licenses} "${CMAKE_CURRENT_SOURCE_DIR}/tools/copy_notices.cmake")
 foreach(target IN ITEMS oa-game oa-intro oa-tool)
   if(NOT TARGET ${target})
     continue()
   endif()
+  set_property(TARGET ${target} APPEND PROPERTY LINK_DEPENDS ${oa_notice_files})
   set(oa_extension_files "")
   set(oa_notices_dir "$<TARGET_FILE_DIR:${target}>")
   if(target STREQUAL "oa-game")
