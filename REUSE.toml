@@ -68,7 +68,7 @@ SPDX-License-Identifier = "GPL-3.0-only"
 # The files of the builds for other platforms (platforms/) that cannot hold
 # a comment: their documents, bundle property lists and templates, launch
 # screens, data, images, build settings and entitlements, and the Steam
-# Input templates the Linux package carries for the Steam Deck.
+# Input templates the Steam Deck package carries.
 [[annotations]]
 path = [
     "platforms/**.md",

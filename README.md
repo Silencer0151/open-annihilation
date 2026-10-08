@@ -67,7 +67,7 @@ from your copy of Total Annihilation and starting the game:
     <tr><th colspan="3" align="left">Mobile &amp; small form factor</th></tr>
     <tr><td align="center"><img alt="iOS" src="docs/images/platforms/ios.svg"></td><td>iPhone and iPad: iOS and iPadOS 15 or later, built on your own Mac</td><td><a href="docs/installation/ios.md">Installing on iPhone and iPad</a></td></tr>
     <tr><td align="center"><img alt="Raspberry Pi" src="docs/images/platforms/raspberry-pi.svg"></td><td>Raspberry Pi 2, 3, 4, 400 and 5 with Raspberry Pi OS Bookworm or later</td><td><a href="docs/installation/linux.md#raspberry-pi">Installing on Raspberry Pi</a></td></tr>
-    <tr><td align="center"><img alt="Steam Deck" src="docs/images/platforms/steam-deck.svg"></td><td>Steam Deck, LCD and OLED, in Game Mode with the Linux 64-bit PC package; experimental</td><td><a href="docs/installation/steam-deck.md">Installing on the Steam Deck</a></td></tr>
+    <tr><td align="center"><img alt="Steam Deck" src="docs/images/platforms/steam-deck.svg"></td><td>Steam Deck, LCD and OLED, in Game Mode with the Steam Deck package; experimental</td><td><a href="docs/installation/steam-deck.md">Installing on the Steam Deck</a></td></tr>
   </tbody>
 </table>
 

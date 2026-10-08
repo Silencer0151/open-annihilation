@@ -420,7 +420,7 @@ rumbles on the left or right side. Off plays nothing.
 
 ## The Steam Input templates
 
-The Linux x86_64 package's `steam-deck` folder holds two layouts in Steam's
+The Steam Deck package's `steam-deck` folder holds two layouts in Steam's
 controller format. Copied into Steam's `controller_base/templates` folder,
 they are listed under Templates once Steam restarts:
 
@@ -465,8 +465,8 @@ See [development/testing.md](development/testing.md).
 These are checked by hand on a real Steam Deck before the README's badge
 changes from "experimental":
 
-- the Linux package starting in Game Mode at 1280×800, with sound, and the
-  templates, copied in by hand, in Steam;
+- the Steam Deck package starting in Game Mode at 1280×800, with sound, and
+  the templates, copied in by hand, in Steam;
 - the pad pointer's speed, acceleration and ticks, the left-pad minimap and
   the trackpads' own pulses;
 - Steam Input off: SDL's own Deck driver, and the Steam and ··· buttons,

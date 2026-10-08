@@ -1,6 +1,6 @@
 # Steam Deck files
 
-This folder goes into the Linux x86_64 package as `steam-deck`, beside the
+This folder goes into the Steam Deck package as `steam-deck`, beside the
 game, `open-annihilation`. It holds Open Annihilation's two controller
 layouts for Steam Input and its artwork for the Steam library, for a Steam
 Deck, or any Linux computer with Steam, that plays the game as a non-Steam
@@ -49,7 +49,7 @@ native Linux program, not one for Proton.
 `cmake --build <build folder> --target oa-steam-deck-files` makes the
 artwork with `oa-steam-artwork` and copies this folder's README and both
 templates beside it, into `steam-deck` in the build folder, ready to go
-into the package ([docs/development/releasing.md](https://github.com/open-annihilation/open-annihilation/blob/main/docs/development/releasing.md)).
+into the Steam Deck package ([docs/development/releasing.md](https://github.com/open-annihilation/open-annihilation/blob/main/docs/development/releasing.md)).
 
 The artwork is the Open Annihilation branding, whose terms are in
 `licenses/LicenseRef-OpenAnnihilation-Branding.txt` beside the game. The

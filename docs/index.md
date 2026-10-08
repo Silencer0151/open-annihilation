@@ -12,9 +12,9 @@ Every document in the repository, by what you want to do.
   - [Windows](installation/windows.md), including Windows XP
   - [Linux and Raspberry Pi](installation/linux.md)
   - [Steam Deck](installation/steam-deck.md), experimental:
-    the Linux package in Desktop Mode, adding it to Steam as a non-Steam
-    game, the Steam Input layouts and artwork installed by hand, the
-    controls, the first start, the Deck's settings and the logs
+    the Steam Deck package in Desktop Mode, adding it to Steam as a
+    non-Steam game, the Steam Input layouts and artwork installed by hand,
+    the controls, the first start, the Deck's settings and the logs
   - [iPhone and iPad](installation/ios.md), built on your own Mac
 - [settings.md](settings.md): Open Annihilation's own settings, with a
   picture of each section: opening them, OK, Cancel and Restore defaults,
@@ -96,8 +96,8 @@ Every document in the repository, by what you want to do.
   builds, and copying the game data onto the device.
 - [development/releasing.md](development/releasing.md): building, signing,
   notarizing and checking the macOS release packages with
-  `tools/release_macos.sh`, on the maintainer's Mac, and the `steam-deck`
-  folder of the Linux x86_64 package.
+  `tools/release_macos.sh`, on the maintainer's Mac, and the Steam Deck
+  package: the Linux x86_64 package with its `steam-deck` folder.
 - [tools/sdl-patches](../tools/sdl-patches/README.md): the changes
   the build makes to the pinned SDL release, which
   [tools/bootstrap_sdl.py](../tools/bootstrap_sdl.py) applies, each offered

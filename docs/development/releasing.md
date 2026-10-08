@@ -6,9 +6,9 @@ holds the project's signing keys. Continuous integration builds and tests
 the game unsigned and never signs or notarizes anything, and no key,
 password or signing identity is kept in the repository or on GitHub. The
 other platforms' packages are not built by a script in this repository yet;
-the folder the Linux x86_64 package carries for the Steam Deck is described
-at the end ([Linux x86_64 package: the steam-deck
-folder](#linux-x86_64-package-the-steam-deck-folder)).
+the Steam Deck package, the Linux x86_64 package with the Deck's own files
+added, is described at the end ([The Steam Deck
+package](#the-steam-deck-package)).
 
 ## What it makes
 
@@ -262,22 +262,32 @@ on Intel Macs is a change of its own: the dependencies rebuilt for it, that
 value and the release notes changed, and a run on that release of macOS. Apple silicon needs
 macOS 11.0 in any case.
 
-## Linux x86_64 package: the steam-deck folder
+## The Steam Deck package
 
-The Linux packages are not built by a script in this repository yet, but
-the Linux x86_64 package carries one folder more than the others,
-`steam-deck`, beside `open-annihilation`. It holds the Steam Input
-templates and the library artwork that the Steam Deck guide
+The Linux packages are not built by a script in this repository yet. The
+Steam Deck package is the Linux x86_64 package with one folder more,
+`steam-deck`, beside `open-annihilation`:
+
+| File | What it holds |
+|---|---|
+| `open-annihilation-vX.Y.Z-steam-deck.zip` | the folder `open-annihilation-vX.Y.Z-steam-deck`, holding the Linux x86_64 package's files (`open-annihilation`, `oa-intro`, `oa-tool`, `LICENSE`, `ATTRIBUTIONS.md`, `licenses/`, `fonts/` and `languages/`) and the `steam-deck` folder |
+
+The `steam-deck` folder holds the Steam Input templates and the library
+artwork that the Steam Deck guide
 ([steam-deck.md](../installation/steam-deck.md)) has the player install by
 hand, on a Steam Deck or any Linux computer with Steam; nothing in it adds
-the game to Steam. Make it in the build tree the package's game comes
-from:
+the game to Steam. Make it first, in a build tree of the release's commit
+for the machine that makes the package, which need not be the tree the
+package's game comes from:
 
 ```sh
 cmake --build build --target oa-steam-deck-files
 ```
 
-This writes `build/steam-deck`, made afresh each time:
+This writes `build/steam-deck`, made afresh each time. `oa-steam-artwork`,
+which draws the pictures, is a program of that build and runs while the
+target is built, so a tree cross-compiled for another system cannot write
+the folder. It holds:
 
 | File | What it is |
 |---|---|
@@ -285,18 +295,22 @@ This writes `build/steam-deck`, made afresh each time:
 | `open-annihilation.vdf`, `open-annihilation-keyboard-mouse.vdf` | The two Steam Input templates |
 | `README.md` | What the folder holds, and how to install the templates and the artwork by hand |
 
-Copy the folder into the package's folder, next to `open-annihilation`,
-`LICENSE`, `ATTRIBUTIONS.md` and `licenses/`, and zip it with the rest.
-The artwork is the Open Annihilation branding, under the terms of
+Then put the Linux x86_64 package's files in a folder named
+`open-annihilation-vX.Y.Z-steam-deck`, copy the `steam-deck` folder into it
+beside them, and zip that folder as the other packages are zipped: the
+folder alone at the top of the zip, with `open-annihilation`, `oa-intro`
+and `oa-tool` still allowed to run. The artwork is the Open Annihilation
+branding, under the terms of
 `licenses/LicenseRef-OpenAnnihilation-Branding.txt`, which the package
 already carries; it is made at packaging time and never committed.
 
 Before a release, check the folder: each picture has the size above, and
-both templates and the README are there. The other Linux packages have no
-`steam-deck` folder.
+both templates and the README are there. The Linux x86_64, arm64 and armhf
+packages have no `steam-deck` folder.
 
-The SDL in the Linux package, as in every package, is the pinned release
-with the patches in [tools/sdl-patches](../../tools/sdl-patches/README.md) applied, which
+The SDL in the Linux and Steam Deck packages, as in every package, is the
+pinned release with the patches in
+[tools/sdl-patches](../../tools/sdl-patches/README.md) applied, which
 `tools/bootstrap_sdl.py` applies when it unpacks the release;
 [ATTRIBUTIONS.md](../../ATTRIBUTIONS.md) says so. One of them lets the
 game play its light ticks on the Steam Deck's trackpads.

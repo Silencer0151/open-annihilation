@@ -2375,7 +2375,7 @@ if(OA_REQUIRE_GAME AND NOT TARGET oa-game)
 endif()
 add_executable(oa-tool tools/oa-tool/main.cpp)
 target_link_libraries(oa-tool PRIVATE oa-formats-hpi oa-formats-png oa-ui-decoded)
-# The Steam Deck's artwork and files for the Linux package.
+# The Steam Deck's artwork and files for the Steam Deck package.
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/OaSteamDeck.cmake")
 
 if(OA_BUILD_PLATFORM)

@@ -1,15 +1,16 @@
 # Installing on Linux and Raspberry Pi
 
-Open Annihilation has three Linux packages: one for 64-bit PCs, and two for
-ARM computers such as the Raspberry Pi. No game data is included: you also
-need the game data from your own copy of Total Annihilation. On a Steam
-Deck, see [Steam Deck](#steam-deck) below.
+Open Annihilation has four Linux packages: one for 64-bit PCs, one for the
+Steam Deck, and two for ARM computers such as the Raspberry Pi. No game
+data is included: you also need the game data from your own copy of Total
+Annihilation. On a Steam Deck, see [Steam Deck](#steam-deck) below.
 
 ## 1. Choose your package
 
 | Your computer | Package | Needs |
 |---|---|---|
-| 64-bit PC, including the Steam Deck | `open-annihilation-<version>-linux-x86_64.zip` | glibc 2.28 or later: Debian 10, Ubuntu 20.04, Fedora 29, RHEL 8, SteamOS 3 or newer |
+| 64-bit PC | `open-annihilation-<version>-linux-x86_64.zip` | glibc 2.28 or later: Debian 10, Ubuntu 20.04, Fedora 29, RHEL 8, SteamOS 3 or newer |
+| Steam Deck | `open-annihilation-<version>-steam-deck.zip`, the 64-bit PC package with the Deck's files for Steam; follow [its own guide](steam-deck.md) | SteamOS 3 or newer |
 | 64-bit ARM, including 64-bit Raspberry Pi OS | `open-annihilation-<version>-linux-arm64.zip` | glibc 2.28 or later |
 | 32-bit ARMv7, including 32-bit Raspberry Pi OS | `open-annihilation-<version>-linux-armhf.zip` | glibc 2.36 or later: Debian 12, Raspberry Pi OS Bookworm or newer |
 
@@ -45,10 +46,8 @@ unzip open-annihilation-<version>-linux-x86_64.zip
 ```
 
 This makes the folder `open-annihilation-<version>-linux-x86_64`, which
-holds the game, `open-annihilation`, and in the 64-bit PC package the
-`steam-deck` folder, with the game's Steam Input layouts and library
-artwork (see [Steam Deck](#steam-deck)). If `unzip` is missing, install it,
-for example with `sudo apt install unzip`.
+holds the game, `open-annihilation`. If `unzip` is missing, install it, for
+example with `sudo apt install unzip`.
 
 ## 4. Get the game data
 
@@ -149,17 +148,22 @@ the settings like on any other computer.
 
 ## Steam Deck
 
-The Steam Deck runs the 64-bit PC package; its support is experimental.
-Its own guide, [Installing on the Steam Deck](steam-deck.md), walks through
-it: unzipping the package in Desktop Mode, adding the game to Steam as a
+The Steam Deck has a package of its own,
+`open-annihilation-<version>-steam-deck.zip`: the 64-bit PC package with
+one folder more, `steam-deck`, which holds the game's Steam Input layouts
+and library artwork. The 64-bit PC package runs on a Deck too, without that
+folder. Steam Deck support is experimental. Its own guide,
+[Installing on the Steam Deck](steam-deck.md), walks through it: unzipping
+the Steam Deck package in Desktop Mode, adding the game to Steam as a
 non-Steam game, installing the Steam Input layouts and the artwork from the
 `steam-deck` folder by hand, the controls, the first start and the Deck's
 settings.
 
 Steam's own **Add a Non-Steam Game** adds the game to Steam on any Linux
-computer with Steam in the same way, and the layouts install there as the
-guide describes. A gamepad works on every Linux computer, with or without
-Steam; [controllers.md](../controllers.md) describes the gamepad controls.
+computer with Steam in the same way, and the layouts from the Steam Deck
+package install there as the guide describes. A gamepad works on every
+Linux computer, with or without Steam; [controllers.md](../controllers.md)
+describes the gamepad controls.
 
 ## Where it keeps its files
 

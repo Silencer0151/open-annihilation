@@ -1,10 +1,11 @@
 # Installing on the Steam Deck
 
-Open Annihilation runs natively on the Steam Deck from the Linux 64-bit PC
-(x86_64) package. No game data is included: you also need the game data
-from your own copy of Total Annihilation. This guide adds the game to Steam
-as a non-Steam game, with its own controller layout and artwork, so that it
-starts from the library in Game Mode like any other game.
+Open Annihilation runs natively on the Steam Deck from the Steam Deck
+package, which holds the Linux 64-bit PC (x86_64) game. No game data is
+included: you also need the game data from your own copy of Total
+Annihilation. This guide adds the game to Steam as a non-Steam game, with
+its own controller layout and artwork, so that it starts from the library
+in Game Mode like any other game.
 
 **Steam Deck support is experimental.** It has been tried on one Steam
 Deck so far, where Steam's own **Add a Non-Steam Game** added it. Other
@@ -32,13 +33,15 @@ with the game's log (see [Logs](#logs-and-reporting-a-problem)).
    then **Switch to Desktop**.
 2. Open the latest release on GitHub in the browser,
    [github.com/open-annihilation/open-annihilation/releases/latest](https://github.com/open-annihilation/open-annihilation/releases/latest),
-   and download `open-annihilation-<version>-linux-x86_64.zip` under
-   **Assets**: the Linux 64-bit PC package. The other Linux packages are for
+   and download `open-annihilation-<version>-steam-deck.zip` under
+   **Assets**: the Steam Deck package, the Linux 64-bit PC game with the
+   `steam-deck` folder this guide uses. The Linux 64-bit PC package runs on
+   a Deck too but lacks that folder, and the other Linux packages are for
    ARM computers and do not run on a Deck.
 3. In **Dolphin**, the file manager, make a folder called `Applications`
    in your home folder, move the zip there, right-click it and choose
    **Extract**, then **Extract archive here**. This makes the folder
-   `open-annihilation-<version>-linux-x86_64`, which holds the game,
+   `open-annihilation-<version>-steam-deck`, which holds the game,
    `open-annihilation`, and the `steam-deck` folder with the game's
    controller layouts and artwork for Steam.
 
@@ -109,7 +112,7 @@ from the application launcher (under **System**), and copy both files
 there:
 
 ```sh
-cd ~/Applications/open-annihilation-<version>-linux-x86_64
+cd ~/Applications/open-annihilation-<version>-steam-deck
 mkdir -p ~/.steam/steam/controller_base/templates
 cp steam-deck/*.vdf ~/.steam/steam/controller_base/templates/
 ```
@@ -300,7 +303,7 @@ once chosen ([typing.md](../typing.md#steam-deck)).
 The Windows package also runs through Proton, but that is not the supported
 way: the game folder shows as a `Z:` drive, the folder dialog is Wine's,
 the controller reaches the game through Wine, and Proton's own problems
-become the game's. Use the Linux package, with no compatibility tool
+become the game's. Use the Steam Deck package, with no compatibility tool
 forced in its properties.
 
 ## Troubleshooting
@@ -392,4 +395,4 @@ update it. To publish it from a Deck:
    the layout appears under **Community Layouts**.
 
 Publish an updated layout the same way whenever the template in the
-package's `steam-deck` folder changes.
+Steam Deck package's `steam-deck` folder changes.

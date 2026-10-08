@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: The Open Annihilation Authors; see COPYRIGHT
 # SPDX-License-Identifier: GPL-3.0-only
 
-# The Steam Deck's files for the Linux x86_64 package
+# The Steam Deck's files for the Steam Deck package
 # (docs/installation/steam-deck.md, docs/development/releasing.md).
 #
 # oa-steam-artwork makes Steam's library pictures from the engine's icon in
@@ -10,7 +10,7 @@
 # writes those pictures into steam-deck/artwork in the build tree and copies
 # the files of platforms/linux/steam-deck beside them (the two Steam Input
 # templates and the folder's README), giving the steam-deck folder that goes
-# into the package next to open-annihilation.
+# into the Steam Deck package next to open-annihilation.
 include_guard(GLOBAL)
 
 add_executable(oa-steam-artwork "${PROJECT_SOURCE_DIR}/tools/steam-artwork/steam_artwork.cpp")
