@@ -1229,7 +1229,9 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         if (controller != entry::controller::disabled && controller != entry::controller::human &&
             controller != entry::controller::computer)
             throw std::runtime_error("skirmish player has invalid controller state");
-        if (bootstrap.seat_roster)
+        // The settings block's eleventh slot record has no player of the
+        // ten to describe.
+        if (bootstrap.seat_roster || player >= match_->simulation().players.size())
             continue;
         auto& simulation_player = match_->simulation().players[player];
         simulation_player.present = controller != entry::controller::disabled;
