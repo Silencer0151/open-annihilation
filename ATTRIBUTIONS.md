@@ -243,7 +243,7 @@ are in [`licenses/mingw-w64.txt`](licenses/mingw-w64.txt).
 
 ## LLVM runtime libraries
 
-The Windows packages (x64, x86 and the experimental ARM64 package) are
+The Windows packages (x64, x86 and ARM64) are
 built with the LLVM toolchain llvm-mingw 20260922, with LLVM 23.1.2, and
 link LLVM's C++ standard library and its support libraries (libc++,
 libc++abi, libunwind and compiler-rt) statically. These are licensed under

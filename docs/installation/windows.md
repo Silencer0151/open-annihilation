@@ -10,7 +10,7 @@ the game data from your own copy of Total Annihilation.
 |---|---|
 | 64-bit Windows 7, 8, 10 or 11: most PCs | `open-annihilation-<version>-windows-x64.zip` |
 | 32-bit Windows, including Windows XP SP3, on a Pentium III, Athlon XP or newer processor | `open-annihilation-<version>-windows-x86.zip` |
-| Windows 11 on ARM | `open-annihilation-<version>-windows-arm64-experimental.zip` (experimental) |
+| Windows 11 on ARM | `open-annihilation-<version>-windows-arm64.zip` |
 
 To see which Windows you have:
 
