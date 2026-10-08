@@ -13,17 +13,30 @@
 // video drivers whose windows have a framebuffer of their own; and a
 // Direct3D 9 device's answers read as its states. Then SDL's software
 // renderer on the dummy video driver, described as the game describes it,
-// and its device state, unknown.
+// and its device state, unknown. On Windows, the test's own executable,
+// which links the probe and SDL, imports no graphics library.
 #include "oa/platform/render_probe.hpp"
 
 #include "oa/test/check.hpp"
 
 #include <SDL3/SDL.h>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -458,6 +471,78 @@ void test_software_renderer() {
     SDL_Quit();
 }
 
+#if defined(_WIN32)
+/// The libraries of the graphics interfaces the readers reach, which no
+/// Windows build links: Direct3D 9, 11 and 12, DXGI, OpenGL, OpenGL ES 2
+/// through EGL, and Vulkan.
+constexpr std::array<std::string_view, 8> kGraphicsLibraries = {
+    "d3d9.dll",
+    "d3d11.dll",
+    "d3d12.dll",
+    "dxgi.dll",
+    "opengl32.dll",
+    "libegl.dll",
+    "libglesv2.dll",
+    "vulkan-1.dll",
+};
+
+/// Returns a library name in lower case.
+///
+/// @param name the name, as the import table spells it
+/// @return the name with A to Z lowered
+std::string lowered(std::string_view name) {
+    std::string result(name);
+    std::transform(result.begin(), result.end(), result.begin(), [](char letter) {
+        return letter >= 'A' && letter <= 'Z' ? static_cast<char>(letter - 'A' + 'a') : letter;
+    });
+    return result;
+}
+
+/// Lists the libraries a loaded image imports, its delay-loaded ones too.
+///
+/// @param image the image, as the system loaded it
+/// @return the libraries' names, in lower case
+std::vector<std::string> imported_libraries(HMODULE image) {
+    const auto* base = reinterpret_cast<const unsigned char*>(image);
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+    const auto* headers = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+    const auto& directories = headers->OptionalHeader.DataDirectory;
+    std::vector<std::string> names;
+    const auto& imports = directories[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (imports.VirtualAddress != 0)
+        for (auto* entry =
+                 reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR*>(base + imports.VirtualAddress);
+             entry->Name != 0;
+             ++entry)
+            names.push_back(lowered(reinterpret_cast<const char*>(base + entry->Name)));
+    const auto& delayed = directories[IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT];
+    if (delayed.VirtualAddress != 0)
+        for (auto* entry =
+                 reinterpret_cast<const IMAGE_DELAYLOAD_DESCRIPTOR*>(base + delayed.VirtualAddress);
+             entry->DllNameRVA != 0;
+             ++entry)
+            names.push_back(lowered(reinterpret_cast<const char*>(base + entry->DllNameRVA)));
+    return names;
+}
+
+/// The test's own executable, which links the probe and SDL, imports no
+/// graphics library, so one Windows package starts where any is missing.
+void test_no_graphics_library_imported() {
+    const std::vector<std::string> names = imported_libraries(GetModuleHandleW(nullptr));
+    // The executable imports at least the system's own kernel library, so
+    // the table was found.
+    OA_CHECK(std::find(names.begin(), names.end(), "kernel32.dll") != names.end());
+    for (const std::string_view library : kGraphicsLibraries) {
+        const bool imported = std::find(names.begin(), names.end(), library) != names.end();
+        if (imported)
+            std::fprintf(
+                stderr, "imports %.*s\n", static_cast<int>(library.size()), library.data()
+            );
+        OA_CHECK(!imported);
+    }
+}
+#endif
+
 } // namespace
 
 /// A Direct3D 9 device's answers read as its states, and every renderer
@@ -505,5 +590,8 @@ int main() {
     test_clean_name();
     test_native_window_framebuffer();
     test_software_renderer();
+#if defined(_WIN32)
+    test_no_graphics_library_imported();
+#endif
     return oa::test::check_exit_status();
 }

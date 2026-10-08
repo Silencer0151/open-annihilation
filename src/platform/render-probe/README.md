@@ -128,7 +128,10 @@ on; the classification and the cleaning of names; what `describe_reported`
 reads through a stand-in reader, for SDL's software renderer and for
 others, with the adapter read or skipped, named, failing or blank; the
 video drivers whose windows have a framebuffer of their own; and SDL's
-software renderer on the dummy video driver described.
+software renderer on the dummy video driver described. On Windows it reads
+its own executable's import table, delay-loaded libraries included, and
+finds none of the graphics libraries: Direct3D 9, 11 and 12, DXGI, OpenGL,
+EGL with OpenGL ES 2, and Vulkan.
 
 The readers of the graphics interfaces themselves have no automated test:
 the checks run on the dummy video driver, where SDL makes only its software
@@ -139,9 +142,6 @@ limit at 8192 and a skipped read left the adapter empty.
 ## Known limitations
 
 - It does not report an OpenGL out-of-memory error.
-- The test does not read its own executable's imports on Windows to show
-  that no graphics library is linked; list a Windows build's imports to
-  check it.
 - The Windows readers have been compiled only by the cross-compiled
   Windows build (x86-64), not by the compiler of the Windows build CI
   makes. The Direct3D 12 read calls `ID3D12Device::GetAdapterLuid`, whose
