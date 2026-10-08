@@ -137,13 +137,12 @@ The readers of the graphics interfaces themselves have no automated test:
 the checks run on the dummy video driver, where SDL makes only its software
 renderer. They were checked by hand on a Mac, where the Metal, OpenGL and
 `gpu` renderers each named the Apple GPU, the start-up line capped `gpu`'s
-limit at 8192 and a skipped read left the adapter empty.
+limit at 8192 and a skipped read left the adapter empty. On Windows 10,
+built by Visual Studio 2022 as the Windows build CI makes is, the
+`direct3d`, `direct3d11`, `direct3d12`, `opengl` and `vulkan` renderers
+each named an NVIDIA GeForce RTX 3070 Ti in the start-up line, OpenGL with
+the driver's own `/PCIe/SSE2` after it.
 
 ## Known limitations
 
 - It does not report an OpenGL out-of-memory error.
-- The Windows readers have been compiled only by the cross-compiled
-  Windows build (x86-64), not by the compiler of the Windows build CI
-  makes. The Direct3D 12 read calls `ID3D12Device::GetAdapterLuid`, whose
-  returned structure each toolchain's headers declare in their own way;
-  build the module with that compiler before relying on it there.
